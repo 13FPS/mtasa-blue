@@ -8,10 +8,12 @@
 // the normal Core objects. No test exports are added to the installed client.
 #include "../../Client/core/StdInc.h"
 #include "../../Client/core/CGameAdapterModule.h"
+#include <xml/CXML.h>
 
 #include <array>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <stdexcept>
 
 namespace
@@ -77,7 +79,7 @@ namespace
             keys.RemoveAllFunctions();
             keys.RemoveAllCommands();
             keys.CallAllGTAControlBinds(CONTROL_BOTH, false);
-            for (const auto* key : {"i", "k", "j", "u", "v", "w", "arrow_u", "mouse_wheel_up", "mouse_wheel_down"})
+            for (const auto* key : {"i", "k", "j", "u", "v", "w", "h", "lshift", "rshift", "num_8", "arrow_u", "mouse_wheel_up", "mouse_wheel_down"})
                 keys.ProcessConfiguredControlKey(key, false, false);
             keys.FinishConfiguredControlFrame();
             keys.SetAllControlsEnabled(true, false, true);
@@ -243,6 +245,161 @@ namespace
         test.keys.ProcessConfiguredControlKey("k", true);
         Check(test.Pulse().controller.LeftStickY == -128, "dead frame does not advance classic opposing-direction history");
     }
+
+    struct PhysicalKeys
+    {
+        std::array<bool, 256>     down{};
+        std::vector<unsigned int> sampled;
+        static bool               Sample(unsigned int code, void* context)
+        {
+            auto& keys = *static_cast<PhysicalKeys*>(context);
+            Check(code < keys.down.size(), "table-derived sampler receives a bounded physical virtual key");
+            keys.sampled.push_back(code);
+            return keys.down[code];
+        }
+    };
+
+    class ActualXml
+    {
+    public:
+        ~ActualXml()
+        {
+            if (file)
+                xml->DeleteXML(file);
+            if (release)
+                release();
+            if (module)
+                FreeLibrary(module);
+        }
+        void Open()
+        {
+            Check(GetModuleHandleW(L"xmll.dll") == nullptr, "fixture owns the real XML singleton exclusively");
+            static int anchor = 0;
+            HMODULE    self = nullptr;
+            Check(GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, reinterpret_cast<LPCWSTR>(&anchor),
+                                     &self) != FALSE,
+                  "fixture module identity is available");
+            std::array<wchar_t, 32768> filename{};
+            const auto                 length = GetModuleFileNameW(self, filename.data(), static_cast<DWORD>(filename.size()));
+            Check(length && length < filename.size(), "owned fixture module path is bounded");
+            const auto directory = std::filesystem::path(std::wstring(filename.data(), length)).parent_path();
+            module = LoadLibraryExW((directory / L"xmll.dll").c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+            Check(module != nullptr, "actual x64 MTA XML module loads beside the fixture");
+            using Initialize = CXML* (*)(const char*);
+            const auto initialize = reinterpret_cast<Initialize>(GetProcAddress(module, "InitXMLInterface"));
+            release = reinterpret_cast<void (*)()>(GetProcAddress(module, "ReleaseXMLInterface"));
+            Check(initialize && release, "actual XML ABI factory and release exports are present");
+            // A read-only observation must not run the XML module's optional
+            // save-file recovery, which can rename unrelated saved files.
+            xml = initialize(nullptr);
+            Check(xml != nullptr, "actual XML interface initializes without recovery writes");
+            const auto savedPath = ToUTF8((directory / L"configured-input.xml").wstring());
+            file = xml->CreateXML(savedPath.c_str(), false, true);
+            Check(file && file->Parse(), "actual XML module parses the preserved saved configuration file");
+            Check(!file->Write(), "configuration handle enforces real read-only XML behavior");
+        }
+        HMODULE   module = nullptr;
+        CXML*     xml = nullptr;
+        CXMLFile* file = nullptr;
+        void (*release)() = nullptr;
+    };
+
+    void SavedXmlAndPhysicalPolling(CGameAdapterModule& module)
+    {
+        ActualXml xml;
+        xml.Open();
+        auto* node = xml.file->GetRootNode()->FindSubNode("binds");
+        Check(node && node->GetSubNodeCount() > 0, "saved nonempty MTA binds node is available");
+        bool legacyResourceActive = false;
+        {
+            Scenario legacy(module);
+            Check(legacy.keys.LoadFromXML(node), "actual classic loader accepts nonempty configured XML without CGame");
+            Check(legacy.keys.Count(KeyBindType::GTA_CONTROL) == 8 && legacy.keys.Count(KeyBindType::COMMAND) == 3,
+                  "classic parser retains configured deduplication and command precedence");
+            auto* resource = legacy.keys.GetBindFromCommand("fixture_resource");
+            Check(resource != nullptr, "classic parser retains the saved resource command");
+            legacyResourceActive = resource->isActive;
+        }
+        {
+            Scenario test(module);
+            Check(!test.keys.LoadConfiguredBindsFromXML(nullptr), "configured-only loader rejects missing XML without importing game defaults");
+            auto empty = xml.xml->ParseString("<binds/>");
+            Check(empty && test.keys.LoadConfiguredBindsFromXML(empty->node) && test.keys.Count() == 0,
+                  "configured-only empty XML remains empty without a CGame/default dependency");
+            Check(test.keys.LoadConfiguredBindsFromXML(node), "actual configured-only parser ingests real saved XML");
+            Check(test.keys.Count(KeyBindType::GTA_CONTROL) == 8 && test.keys.Count(KeyBindType::COMMAND) == 3,
+                  "saved aliases, case-insensitive deduplication and ignored invalid records match classic loading");
+            Check(!test.keys.GTAControlExists("k", "backwards") && !test.keys.GTAControlExists("v", "forwards"),
+                  "present command attributes take precedence over control attributes, including empty commands");
+            auto* resource = test.keys.GetBindFromCommand("fixture_resource");
+            Check(resource && resource->isActive == legacyResourceActive && resource->originalScriptKey == "h" && resource->resource == "res",
+                  "saved resource command metadata and activation match the unchanged classic parser");
+            Check(test.keys.AddFunction("i", KeyFunction) && test.keys.AddControlFunction("jump", ControlCallback, true),
+                  "physical polling fixture includes command/key-function and excluded-action callbacks");
+            PhysicalKeys physical;
+            const auto   movement = MtaInput::ActionBit(FORWARDS) | MtaInput::ActionBit(BACKWARDS) | MtaInput::ActionBit(LEFT) | MtaInput::ActionBit(RIGHT) |
+                                  MtaInput::ActionBit(SPRINT) | MtaInput::ActionBit(WALK);
+            auto poll = [&](bool focused, std::uint64_t mask)
+            {
+                physical.sampled.clear();
+                return test.keys.PollConfiguredControlKeys(focused, PhysicalKeys::Sample, &physical, mask);
+            };
+            physical.down['I'] = physical.down[VK_LSHIFT] = true;
+            auto result = poll(true, movement);
+            Check(!result.armed && result.eligibleKeys == 4 && result.unsupportedKeys == 2 && result.supportedBindings == 4 && result.ignoredBindings == 4,
+                  "poll reports actual unique supported keys and skipped route/action binding counts");
+            Check(test.Pulse().heldActions == 0, "startup held keys cannot enter configured control state");
+            Check(physical.sampled.size() == 4 && std::count(physical.sampled.begin(), physical.sampled.end(), VK_LSHIFT) == 1 &&
+                      std::count(physical.sampled.begin(), physical.sampled.end(), VK_RSHIFT) == 1 &&
+                      std::find(physical.sampled.begin(), physical.sampled.end(), 'J') == physical.sampled.end(),
+                  "sampler uses actual Shift sides once and never samples excluded fire or ambiguous devices");
+            physical.down = {};
+            Check(poll(true, movement).armed, "all eligible keys released establishes the initial neutral baseline");
+            test.Pulse();
+            physical.down['I'] = true;
+            physical.down[VK_LSHIFT] = true;
+            physical.down['J'] = true;
+            Check(poll(true, movement).changedKeys == 2, "new physical presses update only supported configured key states");
+            auto frame = test.Pulse();
+            Check(frame.controller.LeftStickY == -128 && frame.controller.ButtonCross == 255 && frame.controller.ButtonSquare == 0 &&
+                      frame.controller.ButtonCircle == 0 && keyFunctions == 0 && presses == 0,
+                  "real remapped walking/sprint publish while commands, key functions and excluded shared-key actions stay inert");
+            physical.down[VK_LSHIFT] = false;
+            physical.down[VK_RSHIFT] = true;
+            poll(true, movement);
+            frame = test.Pulse();
+            Check(frame.controller.ButtonCross == 0 && frame.controller.m_bPedWalk == 255,
+                  "left and right Shift remain independent configured sprint/walk inputs");
+            physical.down['U'] = true;
+            physical.down['I'] = false;
+            poll(true, movement);
+            Check(test.Pulse().controller.LeftStickY == -128, "physical alias release retains another held configured alias");
+            result = poll(false, movement);
+            Check(!result.armed && !result.focused && physical.sampled.empty() && test.Pulse().heldActions == 0,
+                  "focus loss releases real binds and key caches without sampling background physical state");
+            Check(!poll(true, movement).armed && test.Pulse().heldActions == 0, "refocus with held keys requires another neutral baseline");
+            physical.down['U'] = false;
+            Check(!poll(true, movement).armed, "a still-held configured Shift prevents rearming");
+            physical.down = {};
+            Check(poll(true, movement).armed, "refocus re-arms only after all eligible keys release");
+            physical.down['I'] = physical.down[VK_LSHIFT] = true;
+            poll(true, movement);
+            Check(test.Pulse().controller.LeftStickY == -128, "new post-focus press reaches the actual adapter frame");
+            result = poll(true, MtaInput::ActionBit(SPRINT));
+            Check(!result.armed && result.eligibleKeys == 1 && result.supportedBindings == 1 && result.ignoredBindings == 7 &&
+                      physical.sampled == std::vector<unsigned int>{VK_LSHIFT} && test.Pulse().heldActions == 0,
+                  "changing allowed action scope releases excluded binds and requires a fresh restricted baseline");
+            physical.down[VK_LSHIFT] = false;
+            Check(poll(true, MtaInput::ActionBit(SPRINT)).armed, "restricted input baseline ignores physically held excluded keys");
+            physical.down[VK_LSHIFT] = true;
+            poll(true, MtaInput::ActionBit(SPRINT));
+            frame = test.Pulse();
+            Check(frame.controller.ButtonCross == 255 && frame.controller.LeftStickY == 0, "restricted polling publishes only its explicitly allowed action");
+            test.keys.RemoveAllGTAControls();
+            Check(!poll(true, MtaInput::ActionBit(SPRINT)).armed && physical.sampled.empty() && test.Pulse().heldActions == 0,
+                  "removing the last eligible binding disarms polling and clears aggregate configured controls");
+        }
+    }
 }
 
 extern "C" __declspec(dllexport) int MTA_RunConfiguredInputTests(std::uint32_t* count) noexcept
@@ -264,6 +421,8 @@ extern "C" __declspec(dllexport) int MTA_RunConfiguredInputTests(std::uint32_t* 
         ContextTransition(module);
         MouseWheelBoundary(module);
         DirectionAndDeadContext(module);
+        SavedXmlAndPhysicalPolling(module);
+        Check(GetModuleHandleW(L"xmll.dll") == nullptr, "actual XML wrappers/interface/module are released before Core cleanup");
         module.Stop();
         Check(!module.IsStarted() && GetModuleHandleW(L"game_de.dll") == nullptr, "actual consumer releases the real backend after configured input checks");
         *count = checks;

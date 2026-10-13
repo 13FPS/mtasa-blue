@@ -18,6 +18,7 @@
 #include "SharedUtil.Win32Utf8FileHooks.hpp"
 #include "SharedUtil.Memory.h"
 #include "DefinitiveStartupState.h"
+#include "DefinitiveInputReference.h"
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
     #include "DefinitiveProcess.h"
 #endif
@@ -40,6 +41,71 @@ namespace
     bool g_utf8FileHooksInstalled = false;
     bool g_isDefinitiveProcessCandidate = false;
 }
+
+#if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
+namespace DefinitiveInputReference
+{
+    namespace
+    {
+        SRWLOCK requestLock = SRWLOCK_INIT;
+        Request configuredRequest;
+        DWORD   requestOwner = 0;
+        bool    pending = false;
+        bool    active = false;
+    }
+
+    bool Configure(const Request& request) noexcept
+    {
+        if (!request.durationMs || request.durationMs > MaximumDurationMs || !request.cancelled || !request.publish ||
+            !TryAcquireSRWLockExclusive(&requestLock))
+            return false;
+        const bool accepted = !pending && !active;
+        if (accepted)
+        {
+            configuredRequest = request;
+            requestOwner = GetCurrentThreadId();
+            pending = true;
+        }
+        ReleaseSRWLockExclusive(&requestLock);
+        return accepted;
+    }
+
+    bool Activate() noexcept
+    {
+        AcquireSRWLockExclusive(&requestLock);
+        const bool accepted = pending && !active && requestOwner == GetCurrentThreadId();
+        if (accepted)
+        {
+            pending = false;
+            active = true;
+        }
+        ReleaseSRWLockExclusive(&requestLock);
+        return accepted;
+    }
+
+    bool GetActiveRequest(Request& request) noexcept
+    {
+        AcquireSRWLockShared(&requestLock);
+        const bool available = active && requestOwner == GetCurrentThreadId();
+        if (available)
+            request = configuredRequest;
+        ReleaseSRWLockShared(&requestLock);
+        return available;
+    }
+
+    void Complete() noexcept
+    {
+        AcquireSRWLockExclusive(&requestLock);
+        if (active && requestOwner == GetCurrentThreadId())
+        {
+            configuredRequest = {};
+            requestOwner = 0;
+            active = false;
+        }
+        ReleaseSRWLockExclusive(&requestLock);
+    }
+}
+#endif
 
 BOOL WINAPI DllMain(HINSTANCE dll, DWORD reason, LPVOID)
 {
@@ -118,6 +184,20 @@ CORE_API int InitializeCore()
     if (g_gtaDirectory.empty())
         return DefinitiveStartup::CompleteResult(4);
 
+#if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
+    // A request belongs to this one real initialization attempt. The worker
+    // keeps callback storage alive until this scope and the partial Core unwind.
+    struct InputReferenceAttempt
+    {
+        bool active = DefinitiveInputReference::Activate();
+        ~InputReferenceAttempt()
+        {
+            if (active)
+                DefinitiveInputReference::Complete();
+        }
+    } inputReferenceAttempt;
+#endif
+
     DefinitiveStartup::SetPhase(DefinitiveStartup::Phase::DirectoriesReady);
 
     // Group our processes and windows under a single taskbar button
@@ -156,5 +236,16 @@ CORE_API std::uint32_t MTA_DEStartupApiVersion()
 CORE_API std::uint32_t MTA_ReadDEStartupState(std::uint32_t field)
 {
     return DefinitiveStartup::Read(field);
+}
+
+CORE_API std::uint32_t MTA_DEInputReferenceApiVersion()
+{
+    return DefinitiveInputReference::ApiVersion;
+}
+
+CORE_API std::uint32_t MTA_ConfigureDEInputReference(std::uint32_t durationMs, DefinitiveInputReference::CancelCallback cancel,
+                                                     DefinitiveInputReference::PublishCallback publish)
+{
+    return g_isDefinitiveProcessCandidate && DefinitiveInputReference::Configure({durationMs, cancel, publish}) ? 1u : 0u;
 }
 #endif

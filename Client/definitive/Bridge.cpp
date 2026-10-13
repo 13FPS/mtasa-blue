@@ -278,6 +278,23 @@ std::uint32_t DE_CoreStartupRead(std::uint32_t component)
     return ControllerAccessAllowed() ? coreStartup.Read(component) : 0;
 }
 
+int DE_CoreInputBegin()
+{
+    // Share the startup worker's ownership and cancellation instead of loading
+    // a second Core or retaining a Core export across its terminal unload.
+    return ControllerAccessAllowed() && !movementAdapter && !client && coreStartup.BeginInputReference(&moduleAnchor) ? 1 : 0;
+}
+
+int DE_CoreInputCapture()
+{
+    return ControllerAccessAllowed() && coreStartup.CaptureInput() ? 1 : 0;
+}
+
+std::uint32_t DE_CoreInputRead(std::uint32_t component)
+{
+    return ControllerAccessAllowed() ? coreStartup.ReadInput(component) : 0;
+}
+
 int DE_Pump()
 {
     try

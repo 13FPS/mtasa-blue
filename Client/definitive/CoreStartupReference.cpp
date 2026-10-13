@@ -4,6 +4,7 @@
  *****************************************************************************/
 
 #include "CoreStartupReference.h"
+#include <algorithm>
 #include <filesystem>
 #include <process.h>
 
@@ -11,7 +12,8 @@ namespace deonline
 {
     namespace
     {
-        std::uint32_t LegacyRendererModules()
+        thread_local CoreStartupReference* inputOwner = nullptr;
+        std::uint32_t                      LegacyRendererModules()
         {
             return (GetModuleHandleW(L"d3dx9_43.dll") ? 1u : 0u) | (GetModuleHandleW(L"d3d9.dll") ? 2u : 0u);
         }
@@ -19,11 +21,27 @@ namespace deonline
 
     bool CoreStartupReference::Begin(const void* moduleAddress) noexcept
     {
+        return Start(moduleAddress, false);
+    }
+
+    bool CoreStartupReference::BeginInputReference(const void* moduleAddress) noexcept
+    {
+        return Start(moduleAddress, true);
+    }
+
+    bool CoreStartupReference::Start(const void* moduleAddress, bool configuredInput) noexcept
+    {
         DWORD      expected = 0;
         const auto current = GetCurrentThreadId();
         if ((!ownerThread.compare_exchange_strong(expected, current) && expected != current) || !moduleAddress || IsPending() || thread)
             return false;
         address = moduleAddress;
+        inputRequested = configuredInput;
+        AcquireSRWLockExclusive(&inputLock);
+        inputAvailable = false;
+        publishedInput = {};
+        ReleaseSRWLockExclusive(&inputLock);
+        capturedInput = {};
         cancellation.store(false);
         state.store(1, std::memory_order_release);
         // Use the existing CRT worker convention instead of a joinable global
@@ -60,6 +78,39 @@ namespace deonline
     std::uint32_t CoreStartupReference::Read(std::uint32_t field) const noexcept
     {
         return ownerThread.load() == GetCurrentThreadId() && state.load(std::memory_order_acquire) == 3 && field < values.size() ? values[field] : 0;
+    }
+
+    bool CoreStartupReference::CaptureInput() noexcept
+    {
+        if (ownerThread.load() != GetCurrentThreadId() || !TryAcquireSRWLockShared(&inputLock))
+            return false;
+        const bool available = inputAvailable;
+        if (available)
+            capturedInput = publishedInput;
+        ReleaseSRWLockShared(&inputLock);
+        return available;
+    }
+
+    std::uint32_t CoreStartupReference::ReadInput(std::uint32_t field) const noexcept
+    {
+        // Reads use the one captured owner-thread copy, never independently
+        // sampled atomics or a Core export that the worker may be unloading.
+        return ownerThread.load() == GetCurrentThreadId() && field < capturedInput.size() ? capturedInput[field] : 0;
+    }
+
+    bool CoreStartupReference::InputCancelled()
+    {
+        return !inputOwner || inputOwner->cancellation.load(std::memory_order_acquire);
+    }
+
+    void CoreStartupReference::PublishInput(const std::uint32_t* snapshot, std::uint32_t count)
+    {
+        if (!inputOwner || !snapshot || count != DefinitiveInputReference::FieldCount)
+            return;
+        AcquireSRWLockExclusive(&inputOwner->inputLock);
+        std::copy_n(snapshot, count, inputOwner->publishedInput.begin());
+        inputOwner->inputAvailable = true;
+        ReleaseSRWLockExclusive(&inputOwner->inputLock);
     }
 
     bool CoreStartupReference::Cancel() noexcept
@@ -170,11 +221,41 @@ namespace deonline
                 if (CheckCancellation())
                     return;
                 setGta(gta.c_str(), gta.size());
+                if (inputRequested)
+                {
+                    using Configure = std::uint32_t (*)(std::uint32_t, DefinitiveInputReference::CancelCallback, DefinitiveInputReference::PublishCallback);
+                    const auto inputVersion = reinterpret_cast<Version>(GetProcAddress(core, "MTA_DEInputReferenceApiVersion"));
+                    const auto configure = reinterpret_cast<Configure>(GetProcAddress(core, "MTA_ConfigureDEInputReference"));
+                    if (!inputVersion || !configure || inputVersion() != DefinitiveInputReference::ApiVersion)
+                    {
+                        values[16] = 13;
+                        return;
+                    }
+                    inputOwner = this;
+                    if (configure(DefinitiveInputReference::MaximumDurationMs, InputCancelled, PublishInput) != 1)
+                    {
+                        values[16] = 14;
+                        return;
+                    }
+                }
                 values[10] = static_cast<std::uint32_t>(initialize());
                 // The real diagnostic export rejects foreign threads. All
                 // Core calls, including readback and unload, stay on this worker.
                 for (std::uint32_t field = 0; field < 8; ++field)
                     values[field] = read(field);
+                if (inputRequested)
+                {
+                    AcquireSRWLockShared(&inputLock);
+                    const bool inputComplete = inputAvailable && publishedInput[DefinitiveInputReference::Version] == DefinitiveInputReference::ApiVersion &&
+                                               publishedInput[DefinitiveInputReference::Phase] == 2 &&
+                                               publishedInput[DefinitiveInputReference::InputCleanupComplete] == 1;
+                    ReleaseSRWLockShared(&inputLock);
+                    if (!inputComplete)
+                    {
+                        values[16] = 15;
+                        return;
+                    }
+                }
                 if (CheckCancellation())
                     return;
                 if (values[8] != 3 || values[9] != 4 || values[10] != 5)
@@ -195,6 +276,7 @@ namespace deonline
         {
             values[16] = 11;
         }
+        inputOwner = nullptr;
         // Cancellation never interrupts the loader or unloads Core from a
         // second thread. Completion is published only after this owned cleanup.
         if (core && !FreeLibrary(core))

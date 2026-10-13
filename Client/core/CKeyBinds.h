@@ -164,6 +164,19 @@ public:
     ConfiguredControlFrame BuildConfiguredControlFrame(const MtaInput::Context& context);
     void                   FinishConfiguredControlFrame();
 
+    using ConfiguredKeyStateSampler = bool (*)(unsigned int virtualKey, void* context);
+    struct ConfiguredControlPollResult
+    {
+        std::uint32_t eligibleKeys = 0, unsupportedKeys = 0, supportedBindings = 0, ignoredBindings = 0, changedKeys = 0;
+        bool          focused = false, armed = false;
+    };
+    // Poll the actual configured keyboard routes. Unsupported device/ambiguous
+    // routes remain visible in counts, and focus/startup require a neutral
+    // baseline before held keys can become new control presses.
+    ConfiguredControlPollResult PollConfiguredControlKeys(bool focused, ConfiguredKeyStateSampler sampler = nullptr, void* context = nullptr,
+                                                          std::uint64_t allowedActions = MtaInput::KnownActionMask);
+    bool                        LoadConfiguredBindsFromXML(CXMLNode* pMainNode);
+
     bool LoadFromXML(CXMLNode* pMainNode);
     bool SaveToXML(CXMLNode* pMainNode);
     void LoadDefaultBinds();
@@ -180,6 +193,7 @@ public:
 
 private:
     bool DispatchConfiguredControlBind(CGTAControlBind* bind, bool down, bool allowPress);
+    bool ProcessConfiguredControlKey(const SBindableKey* key, bool down, bool allowPress, std::uint64_t allowedActions);
 
     CCore* m_pCore;
 
@@ -194,4 +208,6 @@ private:
     CharacterKeyHandler        m_CharacterKeyHandler{nullptr};
     bool                       m_bWaitingToLoadDefaults{false};
     MtaInput::DirectionHistory m_DirectionHistory;
+    bool                       m_bConfiguredPollArmed = false;
+    std::uint64_t              m_ConfiguredPollActions = MtaInput::KnownActionMask;
 };

@@ -51,7 +51,7 @@ namespace
     }
     struct Fixture
     {
-        HANDLE         mapping{}, entered{}, release{};
+        HANDLE         mapping{}, entered{}, release{}, inputRelease{};
         volatile LONG* counters{};
         explicit Fixture(unsigned serial)
         {
@@ -59,17 +59,20 @@ namespace
             const auto mapName = L"Local\\MtaCoreMap-" + suffix;
             const auto enteredName = L"Local\\MtaCoreEntered-" + suffix;
             const auto releaseName = L"Local\\MtaCoreRelease-" + suffix;
+            const auto inputReleaseName = L"Local\\MtaCoreInputRelease-" + suffix;
             mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, 64 * sizeof(LONG), mapName.c_str());
             entered = CreateEventW(nullptr, TRUE, FALSE, enteredName.c_str());
             release = CreateEventW(nullptr, TRUE, FALSE, releaseName.c_str());
-            Check(mapping && entered && release, "fixture kernel objects failed");
+            inputRelease = CreateEventW(nullptr, TRUE, FALSE, inputReleaseName.c_str());
+            Check(mapping && entered && release && inputRelease, "fixture kernel objects failed");
             counters = static_cast<volatile LONG*>(MapViewOfFile(mapping, FILE_MAP_ALL_ACCESS, 0, 0, 64 * sizeof(LONG)));
             Check(counters != nullptr, "fixture shared telemetry failed");
             Set(L"MTA_CORE_FIXTURE_MAP", mapName);
             Set(L"MTA_CORE_FIXTURE_ENTERED", enteredName);
             Set(L"MTA_CORE_FIXTURE_RELEASE", releaseName);
+            Set(L"MTA_CORE_FIXTURE_INPUT_RELEASE", inputReleaseName);
             for (const auto* name : {L"MTA_CORE_FIXTURE_DELAY_MS", L"MTA_CORE_FIXTURE_BAD_VERSION", L"MTA_CORE_FIXTURE_BAD_STATE",
-                                     L"MTA_CORE_FIXTURE_BAD_INITIALIZE", L"MTA_CORE_FIXTURE_FAIL_ATTACH"})
+                                     L"MTA_CORE_FIXTURE_BAD_INITIALIZE", L"MTA_CORE_FIXTURE_FAIL_ATTACH", L"MTA_CORE_FIXTURE_INPUT_MODE"})
                 Set(name, L"0");
         }
         ~Fixture()
@@ -82,6 +85,8 @@ namespace
                 CloseHandle(entered);
             if (release)
                 CloseHandle(release);
+            if (inputRelease)
+                CloseHandle(inputRelease);
         }
     };
     void CopyCore(const std::filesystem::path& source, const std::filesystem::path& root)
@@ -243,6 +248,63 @@ int wmain(int argc, wchar_t** argv)
             Wait(worker);
             VerifyCleanup(worker, 0);
             Check(worker.Read(17) == 1, "successful retry must replace the cancelled cache");
+
+            // The controlled DLL below is explicitly not Core. It exercises the
+            // production worker's callback ownership and coherent cache while a
+            // real Core/actual-class fixture separately proves MTA semantics.
+            for (unsigned scenario = 0; scenario < 4; ++scenario)
+            {
+                Fixture input(30 + scenario);
+                CopyCore(normal, root);
+                Set(L"MTA_CORE_FIXTURE_INPUT_MODE", std::to_wstring(scenario));
+                SetEvent(input.release);
+                Check(worker.BeginInputReference(&anchor), "configured input worker failed to begin");
+                Check(worker.ReadInput(0) == 0, "a new attempt must not leak its predecessor's captured sample");
+                if (scenario < 2)
+                {
+                    const auto deadline = GetTickCount64() + 5000;
+                    while (!worker.CaptureInput())
+                    {
+                        Check(worker.Poll() == 0 && GetTickCount64() < deadline, "configured callback failed to publish while pending");
+                        Sleep(5);
+                    }
+                    Check(worker.ReadInput(DefinitiveInputReference::Version) == 1 && worker.ReadInput(DefinitiveInputReference::Phase) == 1 &&
+                              worker.ReadInput(DefinitiveInputReference::Sequence) == 1,
+                          "first live callback must be captured before completion");
+                    Check(
+                        worker.ReadInput(DefinitiveInputReference::Current + 1) == 0xffffff80u && worker.ReadInput(DefinitiveInputReference::Previous + 1) == 0,
+                        "signed controller values and actual previous callback state must survive the cache");
+                    bool        rejected = false;
+                    std::thread foreignInput([&] { rejected = !worker.CaptureInput() && worker.ReadInput(0) == 0 && !worker.BeginInputReference(&anchor); });
+                    foreignInput.join();
+                    Check(rejected, "foreign configured cache reads and Begin must be rejected");
+                    if (scenario)
+                        Check(Fast([&] { return worker.Cancel(); }), "pending configured input cancellation must stay nonblocking");
+                    SetEvent(input.inputRelease);
+                    Wait(worker);
+                    // Completion can replace the worker's published sample, but
+                    // individual field reads stay on one previously captured copy.
+                    Check(worker.ReadInput(DefinitiveInputReference::Phase) == 1 && worker.ReadInput(DefinitiveInputReference::Sequence) == 1,
+                          "worker publication must not tear or mutate the owner's captured sample");
+                    Check(worker.CaptureInput(), "terminal configured snapshot must survive Core unload");
+                    Check(worker.ReadInput(DefinitiveInputReference::Phase) == 2 && worker.ReadInput(DefinitiveInputReference::Sequence) == 2 &&
+                              worker.ReadInput(DefinitiveInputReference::InputCleanupComplete) == 1,
+                          "terminal callback must advance sequence and retain cleanup evidence");
+                    for (unsigned field = DefinitiveInputReference::Current; field < DefinitiveInputReference::FieldCount; ++field)
+                        Check(worker.ReadInput(field) == 0, "terminal configured current/previous must be neutral");
+                    Check(worker.ReadInput(DefinitiveInputReference::Reason) == (scenario ? 2u : 1u), "normal/cancelled callback reason mismatch");
+                    Check(worker.ReadInput(DefinitiveInputReference::FieldCount) == 0, "unknown configured cache field must be neutral");
+                    VerifyCleanup(worker, scenario ? 12u : 0u);
+                }
+                else
+                {
+                    SetEvent(input.inputRelease);
+                    Wait(worker);
+                    VerifyCleanup(worker, scenario == 2 ? 15u : 13u);
+                    Check(worker.Read(17) == 0, "bad configured API or cleanup must not claim completion");
+                }
+                Check(input.counters[2] == 0 && input.counters[1] == input.counters[0], "configured Core callbacks and unload must stay on their worker");
+            }
         }
         std::printf("{\"success\":true,\"checks\":%d,\"worst_api_ms\":%llu,\"actual_mode\":%s,\"game_loaded\":false}\n", checks,
                     static_cast<unsigned long long>(worstApiMs), std::wstring(argv[2]) == L"actual" ? "true" : "false");

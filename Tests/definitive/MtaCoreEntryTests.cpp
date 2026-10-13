@@ -14,10 +14,20 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include "../../Client/core/DefinitiveInputReference.h"
 
 namespace
 {
-    int  checks = 0;
+    int          checks = 0;
+    unsigned int inputPublications = 0;
+    bool         CancelInput()
+    {
+        return false;
+    }
+    void PublishInput(const std::uint32_t*, std::uint32_t)
+    {
+        ++inputPublications;
+    }
     void Check(bool value, const char* reason)
     {
         ++checks;
@@ -84,6 +94,20 @@ int wmain(int argc, wchar_t** argv)
         const auto initialize = Resolve<Initialize>(core, "InitializeCore");
         const auto startupVersion = Resolve<unsigned int (*)()>(core, "MTA_DEStartupApiVersion");
         const auto readStartup = Resolve<ReadStartup>(core, "MTA_ReadDEStartupState");
+        const auto inputVersion = Resolve<std::uint32_t (*)()>(core, "MTA_DEInputReferenceApiVersion");
+        using ConfigureInput = std::uint32_t (*)(std::uint32_t, DefinitiveInputReference::CancelCallback, DefinitiveInputReference::PublishCallback);
+        const auto configureInput = Resolve<ConfigureInput>(core, "MTA_ConfigureDEInputReference");
+        Check(inputVersion() == 1, "configured input reference ABI must be explicit");
+        Check(configureInput(0, CancelInput, PublishInput) == 0, "zero-duration input request must be rejected");
+        Check(configureInput(60001, CancelInput, PublishInput) == 0, "unbounded input request must be rejected");
+        Check(configureInput(1, nullptr, PublishInput) == 0, "input request must carry worker cancellation");
+        Check(configureInput(1, CancelInput, nullptr) == 0, "input request must carry value-only publication");
+        Check(configureInput(1, CancelInput, PublishInput) == 1, "bounded configured input request must be accepted");
+        Check(configureInput(1, CancelInput, PublishInput) == 0, "a pending input request must not be overwritten");
+        unsigned int foreignConfigure = 1;
+        std::thread  requester([&] { foreignConfigure = configureInput(1, CancelInput, PublishInput); });
+        requester.join();
+        Check(foreignConfigure == 0, "a foreign caller must not replace the owned input request");
         Check(startupVersion() == 1, "the additive DE startup diagnostics ABI must be explicit");
         Check(readStartup(0) == 0xffffffffu, "startup state has no read owner before InitializeCore");
         std::array<int, 4> results{};
@@ -104,12 +128,15 @@ int wmain(int argc, wchar_t** argv)
         setGta(gta.c_str(), gta.size());
         for (std::size_t index = 2; index < results.size(); ++index)
         {
+            if (index == 3)
+                Check(configureInput(1, CancelInput, PublishInput) == 1, "failed binding must consume the old request and permit an owned retry");
             results[index] = initialize();
             Check(results[index] == 5, "real incomplete adapter must reject construction and allow clean retry");
             CheckStartup(readStartup, 5, 3, 33);
             Check(GetModuleHandleW(L"game_de.dll") == nullptr, "partial Core construction must release the backend DLL");
             NoGameModules();
             NoClassicRendererModules();
+            Check(inputPublications == 0, "wrong-image rejection must happen before configured input or XML access");
         }
         // A diagnostic reader cannot accidentally become a cross-thread Core
         // control channel or erase the completed owner-thread failure snapshot.

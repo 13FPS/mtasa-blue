@@ -19,6 +19,7 @@
 #include <array>
 #include <algorithm>
 #include <stdexcept>
+#include <cstring>
 #include "Userenv.h"  // This will enable SharedUtil::ExpandEnvString
 #define ALLOC_STATS_MODULE_NAME "core"
 #include "SharedUtil.hpp"
@@ -34,6 +35,7 @@
 #include "CCrashDumpWriter.h"
 #include "FastFailCrashHandler/WerCrashHandler.h"
 #include "DefinitiveStartupState.h"
+#include "DefinitiveInputReference.h"
 
 using SharedUtil::CalcMTASAPath;
 using namespace std;
@@ -52,6 +54,256 @@ bool          g_bBoundsChecker = false;
 SString       g_strJingleBells;
 
 extern fs::path g_gtaDirectory;
+#if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
+extern fs::path g_mtaDirectory;
+
+namespace
+{
+    struct InputReferenceXml
+    {
+        HMODULE   module = nullptr;
+        CXML*     xml = nullptr;
+        CXMLFile* file = nullptr;
+        void (*release)() = nullptr;
+        bool retainModule = false;
+
+        ~InputReferenceXml() { Close(); }
+        bool Close() noexcept
+        {
+            bool clean = true;
+            // File wrappers must die before their factory and DLL. Attempt each
+            // release independently so one failure cannot skip the remaining owner.
+            if (file)
+            {
+                auto* owned = file;
+                file = nullptr;
+                try
+                {
+                    xml->DeleteXML(owned);
+                }
+                catch (...)
+                {
+                    clean = false;
+                    retainModule = true;
+                }
+            }
+            if (xml)
+            {
+                xml = nullptr;
+                try
+                {
+                    release();
+                }
+                catch (...)
+                {
+                    clean = false;
+                    retainModule = true;
+                }
+            }
+            if (module && !retainModule)
+            {
+                const auto owned = module;
+                module = nullptr;
+                if (!FreeLibrary(owned))
+                    clean = false;
+            }
+            // A failed foreign factory release may leave live XML objects. Keep
+            // their code loaded and report failure instead of inventing cleanup.
+            return clean && !retainModule;
+        }
+
+        bool Open()
+        {
+            // XML owns a singleton interface. A pre-existing owner cannot safely
+            // be borrowed or released by this short-lived Core diagnostic.
+            if (!g_mtaDirectory.is_absolute() || GetModuleHandleW(L"xmll.dll"))
+                return false;
+            module = LoadLibraryExW((g_mtaDirectory / L"xmll.dll").c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+            if (!module)
+                return false;
+            using Initialize = CXML* (*)(const char*);
+            const auto initialize = reinterpret_cast<Initialize>(GetProcAddress(module, "InitXMLInterface"));
+            release = reinterpret_cast<void (*)()>(GetProcAddress(module, "ReleaseXMLInterface"));
+            if (!initialize || !release)
+                return false;
+            // nullptr explicitly skips XML save-file recovery, which may rename
+            // files. This session parses existing configuration without writing.
+            xml = initialize(nullptr);
+            if (!xml)
+                return false;
+            const auto configPath = ToUTF8((g_mtaDirectory / MTA_CONFIG_PATH).wstring());
+            file = xml->CreateXML(configPath.c_str(), false, true);
+            return file && file->Parse();
+        }
+    };
+
+    bool InputReferenceFocused() noexcept
+    {
+        DWORD      process = 0;
+        const auto foreground = GetForegroundWindow();
+        return foreground && GetWindowThreadProcessId(foreground, &process) && process == GetCurrentProcessId();
+    }
+
+    void CopyInputReferenceController(DefinitiveInputReference::Snapshot& snapshot, std::uint32_t first, const CControllerState& state) noexcept
+    {
+        static_assert(sizeof(CControllerState) == 24 * sizeof(std::int16_t));
+        std::array<std::int16_t, 24> fields{};
+        std::memcpy(fields.data(), &state, sizeof(state));
+        for (std::size_t index = 0; index < fields.size(); ++index)
+            snapshot[first + index] = static_cast<std::uint32_t>(static_cast<std::int32_t>(fields[index]));
+    }
+
+    void RunConfiguredInputReference(CCore* owner, CGameAdapterModule& adapter, const DefinitiveInputReference::Request& request) noexcept
+    {
+        using namespace DefinitiveInputReference;
+        constexpr auto allowedActions = MtaInput::ActionBit(FORWARDS) | MtaInput::ActionBit(BACKWARDS) | MtaInput::ActionBit(LEFT) |
+                                        MtaInput::ActionBit(RIGHT) | MtaInput::ActionBit(SPRINT) | MtaInput::ActionBit(WALK);
+        Snapshot snapshot{};
+        snapshot[Version] = ApiVersion;
+        snapshot[Flags] = 4;  // Context is an explicit assumption, never an engine observation.
+        auto reason = StopReason::ConfigError;
+        bool clean = true;
+        auto started = static_cast<std::uint64_t>(GetTickCount64_());
+        auto lastPulse = started;
+        try
+        {
+            // This is the real, partially constructed Core owner. Keep binds/XML
+            // on its worker stack because a rejected CCore constructor does not
+            // run the classic destructor, which depends on a full game and GUI.
+            CKeyBinds         binds(owner);
+            InputReferenceXml xml;
+            binds.CallAllGTAControlBinds(CONTROL_BOTH, false);
+            binds.ResetAllGTAControlStates();
+            try
+            {
+                auto* root = xml.Open() ? xml.file->GetRootNode() : nullptr;
+                auto* configured = root && root->GetTagName() == CONFIG_ROOT ? root->FindSubNode(CONFIG_NODE_KEYBINDS) : nullptr;
+                if (configured && configured->GetSubNodeCount() && binds.LoadConfiguredBindsFromXML(configured))
+                {
+                    started = lastPulse = static_cast<std::uint64_t>(GetTickCount64_());
+                    bool previousFocus = false, previousArmed = false;
+                    reason = StopReason::Running;
+                    for (;;)
+                    {
+                        const auto now = static_cast<std::uint64_t>(GetTickCount64_());
+                        snapshot[ElapsedMs] = static_cast<std::uint32_t>((std::min)(now - started, std::uint64_t{0xffffffffu}));
+                        if (request.cancelled())
+                        {
+                            reason = StopReason::Cancelled;
+                            break;
+                        }
+                        if (now - lastPulse > MaximumPulseGapMs)
+                        {
+                            reason = StopReason::PulseGap;
+                            break;
+                        }
+                        if (now - started >= request.durationMs)
+                        {
+                            reason = StopReason::TimeBudget;
+                            break;
+                        }
+                        if (snapshot[SampleCount] >= MaximumSamples)
+                        {
+                            reason = StopReason::SampleBudget;
+                            break;
+                        }
+                        lastPulse = now;
+                        const auto poll = binds.PollConfiguredControlKeys(InputReferenceFocused(), nullptr, nullptr, allowedActions);
+                        snapshot[SupportedBindings] = poll.supportedBindings;
+                        snapshot[IgnoredBindings] = poll.ignoredBindings;
+                        snapshot[EligibleKeys] = poll.eligibleKeys;
+                        snapshot[UnsupportedKeys] = poll.unsupportedKeys;
+                        snapshot[Flags] = 4u | (poll.focused ? 1u : 0u) | (poll.armed ? 2u : 0u);
+                        if (previousFocus && !poll.focused)
+                            ++snapshot[FocusLosses];
+                        if (!previousArmed && poll.armed)
+                            ++snapshot[Rearms];
+                        previousFocus = poll.focused;
+                        previousArmed = poll.armed;
+                        if (!poll.eligibleKeys)
+                        {
+                            reason = StopReason::NoSupportedKeys;
+                            break;
+                        }
+
+                        // Only movement is admitted while full engine context is
+                        // unavailable. Commands remain configured but inert; this
+                        // publishes MTA synthesis and never begins native writes.
+                        const auto                  frame = binds.BuildConfiguredControlFrame({});
+                        mta::game_de::MtaInputState state;
+                        if ((frame.heldActions & ~allowedActions) || !adapter.Pulse() || !adapter.SubmitControlActions({frame.heldActions, frame.context}) ||
+                            !adapter.GetMtaInputState(state) || std::memcmp(&frame.controller, &state.current, sizeof(state.current)) != 0)
+                        {
+                            reason = StopReason::AdapterError;
+                            break;
+                        }
+                        binds.FinishConfiguredControlFrame();
+                        snapshot[Phase] = 1;
+                        ++snapshot[Sequence];
+                        ++snapshot[SampleCount];
+                        snapshot[HeldActionsLow] = static_cast<std::uint32_t>(frame.heldActions);
+                        snapshot[HeldActionsHigh] = static_cast<std::uint32_t>(frame.heldActions >> 32);
+                        CopyInputReferenceController(snapshot, Current, state.current);
+                        CopyInputReferenceController(snapshot, Previous, state.previous);
+                        request.publish(snapshot.data(), FieldCount);
+                        Sleep(SampleIntervalMs);
+                    }
+                }
+            }
+            catch (...)
+            {
+                reason = StopReason::Exception;
+            }
+
+            try
+            {
+                binds.CallAllGTAControlBinds(CONTROL_BOTH, false);
+                binds.ResetAllGTAControlStates();
+                binds.PollConfiguredControlKeys(false, nullptr, nullptr, allowedActions);
+                const auto                  neutral = binds.BuildConfiguredControlFrame({});
+                mta::game_de::MtaInputState state;
+                // Two explicit neutral publications clear both real snapshots,
+                // rather than claiming that release also erases previous input.
+                clean =
+                    !neutral.heldActions && adapter.SubmitControlActions({0, {}}) && adapter.SubmitControlActions({0, {}}) && adapter.GetMtaInputState(state);
+                if (clean)
+                {
+                    CopyInputReferenceController(snapshot, Current, state.current);
+                    CopyInputReferenceController(snapshot, Previous, state.previous);
+                    for (std::uint32_t field = Current; field < FieldCount; ++field)
+                        clean = clean && !snapshot[field];
+                }
+                binds.FinishConfiguredControlFrame();
+            }
+            catch (...)
+            {
+                clean = false;
+            }
+            clean = xml.Close() && clean;
+        }
+        catch (...)
+        {
+            reason = StopReason::Exception;
+            clean = false;
+        }
+        // This final callback runs only after the actual bind and XML owners
+        // have gone. Adapter teardown follows in the existing constructor catch.
+        snapshot[Phase] = 2;
+        ++snapshot[Sequence];
+        snapshot[Flags] = 4;
+        snapshot[HeldActionsLow] = snapshot[HeldActionsHigh] = 0;
+        snapshot[InputCleanupComplete] = clean ? 1u : 0u;
+        snapshot[Reason] = static_cast<std::uint32_t>(clean ? reason : StopReason::CleanupError);
+        try
+        {
+            request.publish(snapshot.data(), FieldCount);
+        }
+        catch (...)
+        {
+        }
+    }
+}
+#endif
 
 template <>
 CCore* CSingleton<CCore>::m_pSingleton = NULL;
@@ -113,6 +365,11 @@ CCore::CCore()
         if (!m_DefinitiveAdapter.Pulse())
             throw std::runtime_error("DE adapter pulse: " + m_DefinitiveAdapter.GetError());
         DefinitiveStartup::SetPhase(DefinitiveStartup::Phase::PulseComplete);
+    #if defined(_WIN64)
+        DefinitiveInputReference::Request inputReference;
+        if (DefinitiveInputReference::GetActiveRequest(inputReference))
+            RunConfiguredInputReference(this, m_DefinitiveAdapter, inputReference);
+    #endif
         const bool gameplayReady = m_DefinitiveAdapter.IsGameplayReady();
         DefinitiveStartup::SetGameplayReady(gameplayReady);
         DefinitiveStartup::SetPhase(DefinitiveStartup::Phase::GameplayChecked);

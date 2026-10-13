@@ -84,8 +84,15 @@ consumer into this unchanged module. It passes 185 binding/adapter checks plus
 33 host checks, including aliases, remapping, callbacks, context mutation,
 wheel publication and canonical current/previous state. The test DLL reuses
 normal Core objects and adds test-only exports; normal client exports are
-unchanged. DE live event/context ownership and XML/default loading remain
-unwired, and the source change is not installed in the validated game baseline.
+unchanged. A new opt-in Core-owned 60-second reference loads actual MTA XML
+records and polls configured keyboard routes through the same bind manager,
+publishing movement actions into this unchanged adapter. It ends with neutral
+current/previous frames and releases its XML/bind owners before Core teardown.
+The on-foot context is explicitly assumed, and the reference performs no
+engine writes. The extended actual XML/bind-manager/adapter fixture passes
+318 checks plus 34 host checks. Its live validation, engine context and
+GTA-default imports remain incomplete; the earlier validated game baseline is
+preserved separately from this new candidate.
 
 The current offline checks pass 351 production callback cases, 7,413 routing
 cases per architecture, 1,512 module cases and 76 x64 Core-consumer cases.

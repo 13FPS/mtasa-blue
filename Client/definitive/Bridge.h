@@ -91,3 +91,10 @@ DE_BRIDGE_API int DE_CoreStartupBegin();
 DE_BRIDGE_API int DE_CoreStartupPoll();
 DE_BRIDGE_API int DE_CoreStartupCancel();
 DE_BRIDGE_API std::uint32_t DE_CoreStartupRead(std::uint32_t component);
+
+// This opt-in job keeps the actual Core's configured-input owner alive for a
+// bounded read-only session. Capture freezes one worker-published sample before
+// individual FFI reads, so a script cannot combine fields from different pulses.
+DE_BRIDGE_API int DE_CoreInputBegin();
+DE_BRIDGE_API int DE_CoreInputCapture();
+DE_BRIDGE_API std::uint32_t DE_CoreInputRead(std::uint32_t component);

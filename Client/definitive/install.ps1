@@ -19,6 +19,7 @@ $allowedPaths = @(
     'CLEO/de-online/native-pad-reference.mjs',
     'CLEO/de-online/native-movement-trial.mjs', 'CLEO/de-online/game_de.dll',
     'CLEO/de-online/core.dll', 'CLEO/de-online/pthread.dll',
+    'CLEO/de-online/xmll.dll', 'CLEO/de-online/mta/config/coreconfig.xml',
     'DE_ONLINE_LICENSES/CLEO_REDUX_LICENSE.txt', 'DE_ONLINE_LICENSES/ULTIMATE_ASI_LOADER_LICENSE.txt',
     'DE_ONLINE_LICENSES/MTA_GPLv3.txt', 'DE_ONLINE_LICENSES/SANNY_BUILDER_LIBRARY_README.md'
 )

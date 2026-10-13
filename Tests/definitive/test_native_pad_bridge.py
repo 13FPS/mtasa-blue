@@ -44,6 +44,9 @@ def main():
         "DE_CoreStartupPoll": (ctypes.c_int, []),
         "DE_CoreStartupCancel": (ctypes.c_int, []),
         "DE_CoreStartupRead": (ctypes.c_uint32, [ctypes.c_uint32]),
+        "DE_CoreInputBegin": (ctypes.c_int, []),
+        "DE_CoreInputCapture": (ctypes.c_int, []),
+        "DE_CoreInputRead": (ctypes.c_uint32, [ctypes.c_uint32]),
     }
     for name, (result, arguments) in signatures.items():
         function = getattr(bridge, name)
@@ -62,6 +65,10 @@ def main():
     for name in ("core.dll", "game_de.dll"):
         check(not kernel32.GetModuleHandleW(name), f"Rejected host starts without {name}")
     check(bridge.DE_CoreStartupBegin() == 0, "Wrong executable cannot begin Core startup")
+    check(bridge.DE_CoreInputBegin() == 0, "Wrong executable cannot begin configured Core input")
+    check(bridge.DE_CoreInputCapture() == 0, "Rejected host cannot freeze an input sample")
+    for component in (*range(64), 64, 0xFFFFFFFF):
+        check(bridge.DE_CoreInputRead(component) == 0, "Rejected host cannot manufacture configured input")
     check(bridge.DE_CoreStartupPoll() == -1, "Rejected startup cannot publish a worker status")
     check(bridge.DE_CoreStartupCancel() == 0, "Rejected startup cannot acquire worker cancellation ownership")
     for component in (*range(19), 19, 0xFFFFFFFF):
@@ -93,6 +100,10 @@ def main():
         check(bridge.DE_NativeDeviceRead(index) == 0, "Unbound or invalid device source must remain unavailable")
     bridge.DE_NativePadReset()
     bridge.DE_Disconnect()
+    check(bridge.DE_CoreInputBegin() == 0, "Cleanup cannot authorize configured Core input")
+    check(bridge.DE_CoreInputCapture() == 0, "Cleanup cannot manufacture configured input coverage")
+    for component in (*range(64), 64, 0xFFFFFFFF):
+        check(bridge.DE_CoreInputRead(component) == 0, "Cleanup cannot retain configured input coverage")
     check(bridge.DE_CoreStartupBegin() == 0, "Cleanup cannot authorize Core startup")
     check(bridge.DE_CoreStartupCancel() == 0, "Cleanup cannot create cancellation ownership")
     check(bridge.DE_CoreStartupPoll() == -1, "Cleanup cannot create worker completion")

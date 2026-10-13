@@ -7,6 +7,16 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+function Assert-NoLinks([string]$Path) {
+    $candidate = [IO.Path]::GetFullPath($Path)
+    while ($candidate) {
+        if (Test-Path -LiteralPath $candidate) {
+            $item = Get-Item -LiteralPath $candidate -Force
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Refusing a linked path: $candidate" }
+        }
+        $candidate = [IO.Path]::GetDirectoryName($candidate)
+    }
+}
 $gameRoot = (Resolve-Path -LiteralPath $GameDirectory).Path.TrimEnd('\', '/')
 & (Join-Path $PSScriptRoot 'uninstall.ps1') -GameDirectory $gameRoot -ValidateOnly 6>$null
 $manifestPath = Join-Path $gameRoot 'de-online-install-manifest.json'
@@ -28,7 +38,8 @@ $addedPaths = @($packagePaths | Where-Object { $_ -notin $installedPaths })
 # Admit only the named MTA probe/backend files from the newer package. All
 # additions are checked for existing user bytes before any update is applied.
 $allowedAdditions = @('CLEO/de-online/native-pad-reference.mjs', 'CLEO/de-online/native-movement-trial.mjs', 'CLEO/de-online/game_de.dll',
-    'CLEO/de-online/core.dll', 'CLEO/de-online/pthread.dll')
+    'CLEO/de-online/core.dll', 'CLEO/de-online/pthread.dll',
+    'CLEO/de-online/xmll.dll', 'CLEO/de-online/mta/config/coreconfig.xml')
 if (@($addedPaths | Where-Object { $_ -notin $allowedAdditions }).Count -ne 0) {
     throw 'Unsupported additive package path.'
 }
@@ -46,9 +57,15 @@ $hasPthread = $packagePaths -contains 'CLEO/de-online/pthread.dll'
 if ($hasCore -ne $hasPthread -or ($hasCore -and -not $hasMovementScript)) {
     throw 'Incomplete MTA Core startup package ownership.'
 }
+$hasXml = $packagePaths -contains 'CLEO/de-online/xmll.dll'
+$hasBindConfig = $packagePaths -contains 'CLEO/de-online/mta/config/coreconfig.xml'
+if ($hasXml -ne $hasBindConfig -or ($hasXml -and -not $hasCore)) {
+    throw 'Incomplete MTA Core configured input package ownership.'
+}
 $changes = @()
 foreach ($entry in $package.files) {
     $sourcePath = Join-Path $packageRoot ('Win64/' + $entry.path)
+    Assert-NoLinks $sourcePath
     $sourceBytes = [IO.File]::ReadAllBytes($sourcePath)
     $actualHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($sourceBytes)).ToLowerInvariant()
     if ($actualHash -ne $entry.sha256) { throw 'Package hash mismatch.' }
@@ -56,8 +73,19 @@ foreach ($entry in $package.files) {
     if ($records.Count -gt 1) { throw 'Duplicate installed file record.' }
     if ($records.Count -eq 0) {
         $destination = [IO.Path]::GetFullPath((Join-Path $gameRoot $entry.path))
+        Assert-NoLinks $destination
         if (-not $destination.StartsWith($gameRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or
             (Test-Path -LiteralPath $destination)) { throw 'New owned reference path already exists or escapes game directory.' }
+        # The nested standard MTA configuration may share existing user folders.
+        # Refuse a file/linked ancestor before backups or changes, and never
+        # claim those folders as owned when they already exist.
+        $parent = [IO.Path]::GetDirectoryName($destination)
+        while ($parent.StartsWith($gameRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+            if ((Test-Path -LiteralPath $parent) -and -not (Test-Path -LiteralPath $parent -PathType Container)) {
+                throw 'New owned reference parent is not a directory.'
+            }
+            $parent = [IO.Path]::GetDirectoryName($parent)
+        }
         $record = [pscustomobject]@{ path=$entry.path; destination=$destination; sha256=$entry.sha256 }
         $installed.files = @($installed.files) + @($record)
         $changes += [pscustomobject]@{ path=$destination; bytes=$sourceBytes; original=$null; additive=$true; applied=$false }
@@ -89,8 +117,21 @@ for ($index = 0; $index -lt $changes.Count; $index++) {
         [IO.File]::WriteAllBytes((Join-Path $backupRoot "$index.original"), $changes[$index].original)
     }
 }
+$createdDirectories = [Collections.Generic.List[string]]::new()
 try {
     foreach ($change in $changes) {
+        $parent = [IO.Path]::GetDirectoryName($change.path)
+        $missing = [Collections.Generic.List[string]]::new()
+        while (-not (Test-Path -LiteralPath $parent)) {
+            $missing.Add($parent)
+            $parent = [IO.Path]::GetDirectoryName($parent)
+        }
+        for ($index = $missing.Count - 1; $index -ge 0; $index--) {
+            Assert-NoLinks $missing[$index]
+            [IO.Directory]::CreateDirectory($missing[$index]) | Out-Null
+            $createdDirectories.Add($missing[$index])
+        }
+        Assert-NoLinks $change.path
         Write-AtomicFile $change.path $change.bytes (-not $change.additive)
         $change.applied = $true
     }
@@ -106,6 +147,12 @@ try {
         }
     }
     Write-AtomicFile $manifestPath $originalManifest
+    foreach ($directory in @($createdDirectories | Sort-Object Length -Descending)) {
+        Assert-NoLinks $directory
+        if ((Test-Path -LiteralPath $directory) -and @(Get-ChildItem -LiteralPath $directory -Force).Count -eq 0) {
+            Remove-Item -LiteralPath $directory
+        }
+    }
     throw $failure
 }
 Write-Host "Updated $($changes.Count) owned files; prior bytes saved under $backupRoot"

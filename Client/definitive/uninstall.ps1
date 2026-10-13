@@ -64,6 +64,14 @@ if ($hasCore -ne $hasPthread -or ($hasCore -and -not $hasMovementScript)) {
     throw 'Incomplete MTA Core startup package ownership.'
 }
 if ($hasCore) { $allowedPaths += @('CLEO/de-online/core.dll', 'CLEO/de-online/pthread.dll') }
+# XML/config are a separate additive pair. Historical installations have no
+# ownership over either path, while the new probe requires the real Core pair.
+$hasXml = $relativePaths -contains 'CLEO/de-online/xmll.dll'
+$hasBindConfig = $relativePaths -contains 'CLEO/de-online/mta/config/coreconfig.xml'
+if ($hasXml -ne $hasBindConfig -or ($hasXml -and -not $hasCore)) {
+    throw 'Incomplete MTA Core configured input package ownership.'
+}
+if ($hasXml) { $allowedPaths += @('CLEO/de-online/xmll.dll', 'CLEO/de-online/mta/config/coreconfig.xml') }
 if ($relativePaths.Count -ne $allowedPaths.Count -or @($relativePaths | Select-Object -Unique).Count -ne $allowedPaths.Count -or
     @(Compare-Object $allowedPaths $relativePaths).Count -ne 0) {
     throw 'Installation manifest does not contain exactly the known owned files.'
@@ -94,7 +102,7 @@ foreach ($target in $targets) {
     Remove-Item -LiteralPath $target
 }
 Remove-Item -LiteralPath $manifestPath
-$directories = @('CLEO/de-online', 'CLEO/CLEO_PLUGINS', 'CLEO/.config', 'DE_ONLINE_LICENSES', 'CLEO')
+$directories = @('CLEO/de-online/mta/config', 'CLEO/de-online/mta', 'CLEO/de-online', 'CLEO/CLEO_PLUGINS', 'CLEO/.config', 'DE_ONLINE_LICENSES', 'CLEO')
 foreach ($relative in $directories) {
     $directory = Join-Path $gameRoot $relative
     Assert-NoLinks $directory

@@ -18,6 +18,7 @@ $outputRoot = Join-Path $repositoryRoot ('Build/mta-core-startup-worker/' + (Get
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
 function Hash([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 $sourceNames = @('Client/definitive/CoreStartupReference.h','Client/definitive/CoreStartupReference.cpp',
+    'Client/core/DefinitiveInputReference.h',
     'Tests/definitive/CoreStartupReferenceTests.cpp','Tests/definitive/CoreStartupFixture.cpp','Tests/definitive/test_core_startup_worker.ps1')
 $sourceHashes = [ordered]@{}
 foreach ($name in $sourceNames) {

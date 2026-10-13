@@ -58,13 +58,14 @@ int wmain(int argc, wchar_t** argv)
         }
         Check(bodyChecks > 100, "actual CKeyBinds and Game DE fixture must execute its complete behavioral checks");
         Check(GetModuleHandleW(L"game_de.dll") == nullptr, "actual consumer releases its backend before Core unload");
+        Check(GetModuleHandleW(L"xmll.dll") == nullptr, "actual XML module releases its wrappers and singleton before Core unload");
         NoGameplayModules();
         Check(FreeLibrary(module) != FALSE, "test-only Core DLL releases normally");
         Check(GetModuleHandleW(path.filename().c_str()) == nullptr, "test DLL does not remain loaded");
         NoGameplayModules();
         std::printf(
             "{\"success\":true,\"host_checks\":%d,\"body_checks\":%u,\"actual_keybinds\":true,\"actual_game_adapter_module\":true,"
-            "\"backend_unloaded\":true,\"continued_after_free_library\":true,\"xml_loaded\":false,\"native_input_written\":false,\"full_mta_boot_verified\":"
+            "\"backend_unloaded\":true,\"continued_after_free_library\":true,\"xml_loaded\":true,\"native_input_written\":false,\"full_mta_boot_verified\":"
             "false}\n",
             checks, bodyChecks);
         return 0;

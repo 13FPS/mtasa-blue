@@ -44,6 +44,17 @@ and a separate post-cleanup module snapshot pass. Normal exit and the complete
 5,730-byte shutdown log are verified.
 Full gameplay capabilities remain gated.
 
+The current candidate now holds the actual Core owner on that worker for a
+bounded configured-input session. It loads the real x64 XML module and explicit
+MTA bind records, polls eligible keyboard routes from MTA's own key table and
+publishes through the normal DE adapter. Focus loss releases controls and
+refocus requires a clean key baseline. Both canonical frames are neutral before
+the bind/XML owners are destroyed and the original startup gate cleans up.
+The compatibility script only schedules and logs this session. It creates no
+bind manager, key map or game input writer. Engine context is explicitly assumed
+on-foot; full context discovery and unsupported input routes remain work ahead.
+The new candidate still needs its human in-game validation.
+
 The next input boundary is now implemented inside actual `CKeyBinds`:
 `ProcessConfiguredControlKey` uses its existing bind list/control policy,
 `BuildConfiguredControlFrame` snapshots context before transition callbacks

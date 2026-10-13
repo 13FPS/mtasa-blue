@@ -73,6 +73,14 @@ if ($hasCore -ne $hasPthread -or ($hasCore -and -not $hasMovementScript)) {
     throw 'Incomplete MTA Core startup package ownership.'
 }
 if ($hasCore) { $allowedPaths += @('CLEO/de-online/core.dll', 'CLEO/de-online/pthread.dll') }
+$hasXml = $relativePaths -ccontains 'CLEO/de-online/xmll.dll'
+$hasBindConfig = $relativePaths -ccontains 'CLEO/de-online/mta/config/coreconfig.xml'
+# Loader status and removal must agree on the complete XML/config ownership
+# pair, including when validating a renamed loader from an older generation.
+if ($hasXml -ne $hasBindConfig -or ($hasXml -and -not $hasCore)) {
+    throw 'Incomplete MTA Core configured input package ownership.'
+}
+if ($hasXml) { $allowedPaths += @('CLEO/de-online/xmll.dll', 'CLEO/de-online/mta/config/coreconfig.xml') }
 $uniquePaths = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 foreach ($relative in $relativePaths) {
     if ($relative -cnotin $allowedPaths -or -not $uniquePaths.Add($relative)) {

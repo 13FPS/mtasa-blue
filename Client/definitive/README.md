@@ -55,9 +55,41 @@ builder and post-publication wheel cleanup. The actual-class fixture relinks
 normal Core objects with test-only exports and passes 185 binding/adapter
 checks plus 33 host checks through the real Game DE module. The old Core object
 fails on exactly the three new methods. Normal Core builds and both Win32
-configurations pass. DE live events, context ownership, XML/default loading
-and full gameplay remain to be connected; this source change has not replaced
-the installed, runtime-validated Core.
+configurations pass.
+
+**Next live check: Core-owned configured keyboard input.**
+`package.ps1 -Mode Smoke -MtaCoreInputReference` stages 23 owned files,
+including the actual x64 XML module and an explicit `mta/config/coreconfig.xml`.
+After F9 activation, the real Core remains on its startup worker for 60 seconds.
+Its actual `CKeyBinds` loads the existing XML schema and polls configured keys
+through MTA's key table, then publishes movement actions through the real DE
+module. No commands, engine writes or networking are started. Focus loss
+releases controls; refocus waits for all eligible keys to be released.
+The session ends with both canonical controller frames neutral, destroys its
+bind/XML owners and retains Core's existing gameplay rejection and teardown.
+The script reads one frozen 64-field sample at a time; it never calls into Core
+while the worker unloads it.
+
+This candidate assumes an alive on-foot player without aiming, a detonator or
+an enter-vehicle task. It does not detect those engine contexts. The keyboard
+poller reports unsupported mouse, wheel, joystick, numpad and ambiguous modifier
+routes rather than guessing. The explicit diagnostic XML binds W/S/A/D,
+left Shift for sprint and right Shift for walk. Classic missing/empty
+configuration still imports GTA defaults;
+the DE reference requires explicit saved bindings. Use
+`utils/definitive_edition/core_input_log.py` to assess the entire saved log,
+adding `--require-exit` after normal shutdown. A clean lifecycle alone cannot
+pass the movement coverage check: all four directions, forward sprint, forward
+walk and neutral input must be recorded. Live validation of this candidate is pending.
+Full game context, gameplay and rendering remain unfinished.
+
+The extended actual XML/bind-manager/adapter fixture passes 318 checks plus
+34 host checks with unchanged saved configuration. Normal Core builds and both
+classic Win32 configurations pass; real Core entry passes 106 checks in each
+layout. The asynchronous worker passes 2,162 controlled callback/loader checks
+and 46 checks against the real Core's wrong-image rejection. These offline
+checks validate the producer and ownership boundaries; the exact-image
+60-second Core session still requires the in-game check.
 
 **ABI5 adds an explicit MTA-owned engine movement trial.** Build the normal
 Game DE Release/x64 module and this bridge, then package with

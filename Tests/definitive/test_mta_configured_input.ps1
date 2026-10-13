@@ -6,10 +6,12 @@
 param(
     [Parameter(Mandatory)][string]$GameDeDll,
     [Parameter(Mandatory)][string]$PthreadDll,
+    [Parameter(Mandatory)][string]$XmlDll,
     [string]$CoreObjectDirectory,
     [string]$OldKeyBindsObject,
     [ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ExpectedGameDeSha256,
     [ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ExpectedPthreadSha256,
+    [ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ExpectedXmlSha256,
     [switch]$ExpectMissingApi
 )
 $ErrorActionPreference='Stop'
@@ -24,6 +26,7 @@ $sourceNames=@('Tests/definitive/MtaConfiguredInputTests.cpp','Tests/definitive/
     'Tests/definitive/test_mta_configured_input.ps1','Client/core/CKeyBinds.h','Client/core/CKeyBinds.cpp',
     'Client/core/CGameAdapterModule.h','Client/core/CGameAdapterModule.cpp','Client/sdk/core/CKeyBindsInterface.h',
     'Client/sdk/game/CGameAdapter.h','Shared/sdk/CControlStateSynthesis.h','Shared/sdk/CControlBindState.h','Shared/sdk/CControllerState.h')
+$sourceNames+=@('Shared/sdk/xml/CXML.h','Shared/sdk/xml/CXMLFile.h','Shared/XML/XML.cpp','Shared/XML/CXMLImpl.cpp','Shared/XML/CXMLFileImpl.cpp')
 $sourceHashes=[ordered]@{}
 foreach ($name in $sourceNames) {
     $source=Join-Path $taskRoot $name
@@ -83,7 +86,8 @@ Copy-Item -LiteralPath $compileTlog -Destination (Join-Path $outputRoot 'normal-
 Copy-Item -LiteralPath $linkTlog -Destination (Join-Path $outputRoot 'normal-link.command.tlog')
 $artifacts=@()
 foreach ($item in @(@{source=$GameDeDll;name='game_de.dll';expected=$ExpectedGameDeSha256},
-                    @{source=$PthreadDll;name='pthread.dll';expected=$ExpectedPthreadSha256})) {
+                    @{source=$PthreadDll;name='pthread.dll';expected=$ExpectedPthreadSha256},
+                    @{source=$XmlDll;name='xmll.dll';expected=$ExpectedXmlSha256})) {
     $source=(Resolve-Path -LiteralPath $item.source).Path
     $sha=(Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($item.expected -and $sha -ne $item.expected.ToLowerInvariant()) { throw 'Supplied actual module fingerprint changed.' }
@@ -91,6 +95,31 @@ foreach ($item in @(@{source=$GameDeDll;name='game_de.dll';expected=$ExpectedGam
     Copy-Item -LiteralPath $source -Destination $saved
     $artifacts+=@{source=$source;saved=$saved;sha256=$sha}
 }
+# This owned saved file exercises the real MTA XML module and parser. It cannot
+# read or overwrite a user's installed coreconfig.xml.
+$configurationPath=Join-Path $outputRoot 'configured-input.xml'
+$configuration=@'
+<config><binds>
+  <bind key="I" control="FORWARDS"/>
+  <bind key="i" control="forwards"/>
+  <bind key="u" control="forwards"/>
+  <bind key="lshift" control="sprint"/>
+  <bind key="rshift" control="walk"/>
+  <bind key="mouse_wheel_up" control="forwards"/>
+  <bind key="num_8" control="forwards"/>
+  <bind key="j" control="fire"/>
+  <bind key="i" control="jump"/>
+  <bind key="v" command="fixture_command" control="forwards" state="up" arguments="text"/>
+  <bind key="k" command="" control="backwards"/>
+  <bind key="h" command="fixture_resource" state="down" resource="res" default="h"/>
+  <bind key="j" command="fixture_command"/>
+  <bind key="not_a_key" control="forwards"/>
+  <bind key="i" control="not_a_control"/>
+  <ignore/>
+</binds></config>
+'@
+[IO.File]::WriteAllText($configurationPath,$configuration,[Text.UTF8Encoding]::new($false))
+$configurationHash=(Get-FileHash -LiteralPath $configurationPath -Algorithm SHA256).Hash.ToLowerInvariant()
 $vswhere=Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
 $visualStudio= & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
 if (-not $visualStudio) { throw 'Visual Studio native x64 tools are required.' }
@@ -161,17 +190,19 @@ $inputsUnchanged=$true
 foreach ($entry in $inputHashes.GetEnumerator()) { if ((Get-FileHash -LiteralPath $entry.Key -Algorithm SHA256).Hash.ToLowerInvariant() -ne $entry.Value) { $inputsUnchanged=$false } }
 $normalOutputsUnchanged=$true
 foreach ($entry in $normalOutputHashes.GetEnumerator()) { if ((Get-FileHash -LiteralPath $entry.Key -Algorithm SHA256).Hash.ToLowerInvariant() -ne $entry.Value) { $normalOutputsUnchanged=$false } }
+$configurationUnchanged=(Get-FileHash -LiteralPath $configurationPath -Algorithm SHA256).Hash.ToLowerInvariant() -eq $configurationHash
 $causalMissingApi=$compileExit -eq 0 -and $null -ne $linkExit -and $linkExit -ne 0 -and
     (($linkOutput -join "`n") -match 'unresolved external symbol.*(?:ProcessConfiguredControlKey|BuildConfiguredControlFrame|FinishConfiguredControlFrame)')
-$success=$compileExit -eq 0 -and $linkExit -eq 0 -and $hostCompileExit -eq 0 -and $hostExit -eq 0 -and $null -ne $hostResult -and $hostResult.success -and $sourcesUnchanged -and $inputsUnchanged -and $normalOutputsUnchanged
+$success=$compileExit -eq 0 -and $linkExit -eq 0 -and $hostCompileExit -eq 0 -and $hostExit -eq 0 -and $null -ne $hostResult -and $hostResult.success -and $sourcesUnchanged -and $inputsUnchanged -and $normalOutputsUnchanged -and $configurationUnchanged
 $record=[ordered]@{success=$success;expected_missing_api=$ExpectMissingApi.IsPresent;causal_missing_api=$causalMissingApi;
     directory=$outputRoot;recorded_at=[DateTimeOffset]::Now.ToString('o');source_hashes=$sourceHashes;source_unchanged=$sourcesUnchanged;
     normal_link_input_hashes=$inputHashes;normal_link_inputs_unchanged=$inputsUnchanged;normal_core_objects_reused=$true;causal_old_keybinds_object=$OldKeyBindsObject;
     normal_output_hashes=$normalOutputHashes;normal_outputs_unchanged=$normalOutputsUnchanged;
+    saved_configuration=$configurationPath;saved_configuration_sha256=$configurationHash;saved_configuration_unchanged=$configurationUnchanged;
     compile_exit=$compileExit;link_exit=$linkExit;host_compile_exit=$hostCompileExit;host_exit=$hostExit;host_result=$hostResult;
     artifacts=$artifacts;fixture_dll=$fixtureDll;fixture_dll_sha256=$(if (Test-Path -LiteralPath $fixtureDll) {(Get-FileHash -LiteralPath $fixtureDll -Algorithm SHA256).Hash.ToLowerInvariant()}else{$null});
     test_exports_only_in_disposable_dll=$true;game_launched=$false;game_memory_read=$false;game_hooks_or_input_writes=$false;
-    installed_files_changed=$false;xml_loaded=$false;game_default_binds_imported=$false;live_de_configured_input_verified=$false;full_mta_boot_verified=$false}
+    installed_files_changed=$false;actual_xml_module_tested=($null -ne $hostResult -and $hostResult.xml_loaded);game_default_binds_imported=$false;live_de_configured_input_verified=$false;full_mta_boot_verified=$false}
 $record | ConvertTo-Json -Depth 7 | Set-Content -LiteralPath (Join-Path $outputRoot 'test-result.json') -Encoding utf8
 $record | ConvertTo-Json -Depth 7 -Compress
 if ($ExpectMissingApi) { if (-not $causalMissingApi -or -not $sourcesUnchanged -or -not $inputsUnchanged -or -not $normalOutputsUnchanged) { throw ('Expected actual missing-API red was not observed; see '+$outputRoot) } }

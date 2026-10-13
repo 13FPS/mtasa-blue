@@ -1174,6 +1174,8 @@ async function main() {
             DE_MtaMovementEnd: () => { movementActive = 0; return 1; },
             DE_CoreStartupBegin: () => 1, DE_CoreStartupPoll: () => 1, DE_CoreStartupCancel: () => 1,
             DE_CoreStartupRead: index => [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5, 0, 0, 1, 0, 0, 0, 1, 0][index],
+            DE_CoreInputBegin: () => 1, DE_CoreInputCapture: () => 1,
+            DE_CoreInputRead: index => coreInputState()[index],
             ...(overrides.functions || {}) };
         const names = Object.keys(functions).filter(name => typeof functions[name] === 'function');
         const record = (name, ...args) => { calls.push([name, ...args]); callFrames.push({ frame, name }); };
@@ -1193,6 +1195,7 @@ async function main() {
             MTA_NATIVE_PAD_REFERENCE: overrides.mtaNativePadReference ?? false,
             MTA_NATIVE_MOVEMENT_TRIAL: overrides.mtaNativeMovementTrial ?? false,
             MTA_CORE_STARTUP_REFERENCE: overrides.mtaCoreStartupReference ?? false,
+            MTA_CORE_INPUT_REFERENCE: overrides.mtaCoreInputReference ?? false,
             Date: { now: () => overrides.times ? overrides.times[frame] : frame * 50 },
             CLEO: { version: overrides.version || '1.5.1', apiVersion: overrides.definitions || '0.500', hostVersion: '1.0.113.49697469' },
             native: (name, ...args) => { record(name, ...args);
@@ -1227,6 +1230,80 @@ async function main() {
         vm.runInNewContext(entry, sandbox, { timeout: 1000 });
         return { calls, callFrames, runtimeAccess, waits, logs, fromFloat };
     }
+    const coreInputState = (overrides = {}) => {
+        const state = Array(64).fill(0);
+        Object.assign(state, { 0: 1, 1: 2, 2: 1201, 3: 60000, 4: 4, 5: 6, 7: 6, 11: 1200, 14: 1, 15: 1 }, overrides);
+        return state;
+    };
+    const coreInput = overrides => runEntry({ mtaCoreInputReference: true,
+        keyFrames: [[17, 16, 120], [16], []], ...overrides });
+    test('Core configured input uses the protected64 snapshot and final19 without engine input writes', () => {
+        const result = coreInput();
+        assert.equal(result.callFrames.find(call => call.name === 'DynamicLibrary.Load').frame, 2);
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreInputBegin').length, 1);
+        assert.deepEqual(result.calls.filter(call => call[0] === 'DE_CoreInputRead').map(call => call[1]), Array.from({ length: 64 }, (_, i) => i));
+        const start = result.logs.find(e => e.event === 'core_input_reference_started');
+        assert.equal(start.context_source, 'assumed_on_foot');
+        assert.ok(Object.values(start.context).every(value => value === false));
+        const finish = result.logs.find(e => e.event === 'core_input_reference_finished');
+        assert.equal(finish.passed, true); assert.equal(finish.samples, 1); assert.equal(finish.input_writes, false);
+        assert.ok(!result.calls.some(call => ['DE_ConnectLocal', 'GET_PLAYER_CHAR', 'DE_MtaMovementBegin', 'DE_CoreStartupBegin'].includes(call[0])));
+    });
+    test('Core configured input yields while empty then preserves skipped sequences and terminal publication', () => {
+        let polls = 0;
+        const frames = [null, coreInputState({ 1: 1, 2: 1, 3: 0, 4: 7, 11: 1, 14: 0, 15: 0 }),
+            coreInputState({ 1: 1, 2: 5, 3: 200, 4: 7, 11: 5, 14: 0, 15: 0 }), coreInputState()];
+        const result = coreInput({ keyFrames: [[17, 16, 120], [], [], [], []], functions: {
+            DE_CoreStartupPoll: () => ++polls === 4 ? 1 : 0,
+            DE_CoreInputCapture: () => frames[polls - 1] ? 1 : 0,
+            DE_CoreInputRead: index => frames[polls - 1][index]
+        } });
+        assert.deepEqual(result.logs.filter(e => e.event === 'core_input_reference_sample').map(e => e.state[2]), [1, 5, 1201]);
+        assert.equal(result.logs.find(e => e.event === 'core_input_reference_finished').passed, true);
+        assert.ok(result.waits.slice(1).every(call => call.milliseconds === 100));
+    });
+    test('Core configured input emits an unchanged sequence once', () => {
+        let polls = 0;
+        const result = coreInput({ keyFrames: [[17, 16, 120], [], [], []], functions: {
+            DE_CoreStartupPoll: () => ++polls === 3 ? 1 : 0
+        } });
+        assert.equal(result.logs.filter(e => e.event === 'core_input_reference_sample').length, 1);
+        assert.equal(result.logs.find(e => e.event === 'core_input_reference_finished').samples, 1);
+    });
+    for (const kind of ['same_sequence_mutation', 'sequence_reversed', 'elapsed_reversed', 'bad_unsigned', 'bad_version', 'bad_phase'])
+        test('Core configured input rejects ' + kind + ' and requests worker cleanup', () => {
+            let polls = 0;
+            const first = coreInputState({ 1: 1, 2: 2, 3: 100, 14: 0, 15: 0 });
+            const second = first.slice(); second[2] = 3;
+            if (kind === 'same_sequence_mutation') { second[2] = 2; second[9] = 1; }
+            if (kind === 'sequence_reversed') second[2] = 1;
+            if (kind === 'elapsed_reversed') second[3] = 99;
+            if (kind === 'bad_unsigned') second[16] = -1;
+            if (kind === 'bad_version') second[0] = 2;
+            if (kind === 'bad_phase') second[1] = 3;
+            const result = coreInput({ keyFrames: [[17, 16, 120], [], []], functions: {
+                DE_CoreStartupPoll: () => { ++polls; return 0; }, DE_CoreInputRead: index => (polls === 1 ? first : second)[index]
+            } });
+            assert.ok(result.logs.some(e => e.event === 'adapter_failed'));
+            assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 1);
+            assert.ok(!result.calls.some(call => call[0] === 'DE_CoreStartupRead'));
+        });
+    for (const reason of ['Ctrl+Shift+End', 'loading']) test('Core configured input ' + reason + ' cancels once and waits for owner cleanup', () => {
+        let polls = 0;
+        const result = coreInput({ keyFrames: [[17, 16, 120], [], [], [17, 16, 35], []],
+            readyFrames: reason === 'loading' ? [true, true, true, false, false] : undefined,
+            functions: { DE_CoreStartupPoll: () => ++polls === 4 ? 1 : 0,
+                DE_CoreInputRead: index => coreInputState({ 14: 2 })[index] } });
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 1);
+        const finish = result.logs.find(e => e.event === 'core_input_reference_finished');
+        assert.equal(finish.stop_requested, true); assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true);
+    });
+    for (const options of [{ inputReference: true }, { reference: true }, { mtaNativePadReference: true },
+        { mtaNativeMovementTrial: true }, { mtaCoreStartupReference: true }, { gaitRate: true }, { gaitRootLock: true },
+        { mode: 'online' }, { mode: 'diagnostic' }]) test('Core configured input rejects combined mode ' + JSON.stringify(options), () => {
+            const result = coreInput({ ...options, forbidRuntimeAccess: true });
+            assert.equal(result.calls.length, 0); assert.ok(result.logs.some(e => e.event === 'adapter_failed'));
+        });
     const coreStartup = overrides => runEntry({ mtaCoreStartupReference: true,
         keyFrames: [[17, 16, 120], [16], []], ...overrides });
     test('real Core startup entry waits for all F9 modifiers to release and records the gated result once', () => {
@@ -2007,6 +2084,7 @@ async function main() {
         assert.equal(sourceConfig.MTA_NATIVE_PAD_REFERENCE, false);
         assert.equal(sourceConfig.MTA_NATIVE_MOVEMENT_TRIAL, false);
         assert.equal(sourceConfig.MTA_CORE_STARTUP_REFERENCE, false);
+        assert.equal(sourceConfig.MTA_CORE_INPUT_REFERENCE, false);
     });
     test('manual online remains armed with no DLL, procedure, memory, player-handle, coordinate, UDP or remote access', () => {
         const result = manual({ keyFrames: [[], [], [], [], [], [17, 16, 35]] });

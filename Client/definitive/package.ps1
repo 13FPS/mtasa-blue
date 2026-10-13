@@ -4,10 +4,13 @@
 [CmdletBinding()]
 param([ValidateSet('Diagnostic', 'Smoke', 'Online')][string]$Mode = 'Smoke',
     [switch]$NativeGaitReference, [switch]$MatchedGaitRate, [switch]$LockWalkRoot, [switch]$NativeInputReference,
-    [switch]$MtaNativePadReference, [switch]$MtaNativeMovementTrial, [switch]$MtaCoreStartupReference)
+    [switch]$MtaNativePadReference, [switch]$MtaNativeMovementTrial, [switch]$MtaCoreStartupReference, [switch]$MtaCoreInputReference)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+if ($MtaCoreInputReference -and ($Mode -ne 'Smoke' -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot)) {
+    throw 'MTA Core configured input reference requires separate opt-in Smoke mode.'
+}
 if ($MtaCoreStartupReference -and ($Mode -ne 'Smoke' -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot)) {
     throw 'MTA Core startup reference requires separate opt-in Smoke mode.'
 }
@@ -89,10 +92,17 @@ $bridgePath = Join-Path $repositoryRoot 'Build/definitive-online/de_client_bridg
 $gameDePath = Join-Path $repositoryRoot 'Bin/mta/game_de.dll'
 $corePath = Join-Path $repositoryRoot 'Bin/mta/x64/core.dll'
 $pthreadPath = Join-Path $repositoryRoot 'Bin/mta/x64/pthread.dll'
+$xmlPath = Join-Path $repositoryRoot 'Bin/server/x64/xmll.dll'
+$bindConfigPath = Join-Path $PSScriptRoot 'coreconfig.xml'
 Assert-NoLinks $bridgePath
 Assert-NoLinks $gameDePath
 Assert-NoLinks $corePath
 Assert-NoLinks $pthreadPath
+Assert-NoLinks $xmlPath
+Assert-NoLinks $bindConfigPath
+if (-not (Test-Path -LiteralPath $xmlPath -PathType Leaf) -or -not (Test-Path -LiteralPath $bindConfigPath -PathType Leaf)) {
+    throw 'Build the normal XML Release/x64 module and retain the explicit configured-input XML before packaging.'
+}
 if (-not (Test-Path -LiteralPath $bridgePath -PathType Leaf)) {
     throw 'Build the current native bridge with Client/definitive/build.ps1 before packaging.'
 }
@@ -148,6 +158,12 @@ foreach ($name in $sourceNames) {
 # loading in the adapter and ordinary package modes leave that flag disabled.
 [IO.File]::Copy($corePath, (Join-Path $adapterDirectory 'core.dll'), $false)
 [IO.File]::Copy($pthreadPath, (Join-Path $adapterDirectory 'pthread.dll'), $false)
+# Core parses these explicit records through the existing MTA XML/keybind code.
+# Keep both files owned so a foreign configuration is never replaced on upgrade.
+[IO.File]::Copy($xmlPath, (Join-Path $adapterDirectory 'xmll.dll'), $false)
+$bindConfigDirectory = Join-Path $adapterDirectory 'mta/config'
+[IO.Directory]::CreateDirectory($bindConfigDirectory) | Out-Null
+[IO.File]::Copy($bindConfigPath, (Join-Path $bindConfigDirectory 'coreconfig.xml'), $false)
 $configPath = Join-Path $adapterDirectory 'config.mjs'
 $configText = [IO.File]::ReadAllText($configPath)
 $modeMarker = "export const MODE = 'smoke';"
@@ -187,6 +203,10 @@ $coreStartupMarker = 'export const MTA_CORE_STARTUP_REFERENCE = false;'
 if ([regex]::Matches($configText, [regex]::Escape($coreStartupMarker)).Count -ne 1) { throw 'Expected disabled MTA Core startup reference in source configuration.' }
 $configText = $configText.Replace($coreStartupMarker,
     "export const MTA_CORE_STARTUP_REFERENCE = $($MtaCoreStartupReference.IsPresent.ToString().ToLowerInvariant());")
+$coreInputMarker = 'export const MTA_CORE_INPUT_REFERENCE = false;'
+if ([regex]::Matches($configText, [regex]::Escape($coreInputMarker)).Count -ne 1) { throw 'Expected disabled MTA Core configured input reference in source configuration.' }
+$configText = $configText.Replace($coreInputMarker,
+    "export const MTA_CORE_INPUT_REFERENCE = $($MtaCoreInputReference.IsPresent.ToString().ToLowerInvariant());")
 [IO.File]::WriteAllText($configPath, $configText, $utf8)
 foreach ($name in @('sa_unreal.json', 'unknown_x64.json')) {
     [IO.File]::Copy($downloads[$name], (Join-Path $configDirectory $name), $false)

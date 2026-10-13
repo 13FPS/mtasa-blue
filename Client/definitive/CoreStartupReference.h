@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cstdint>
 #include <windows.h>
+#include "../core/DefinitiveInputReference.h"
 
 namespace deonline
 {
@@ -19,8 +20,11 @@ namespace deonline
     {
     public:
         bool          Begin(const void* moduleAddress) noexcept;
+        bool          BeginInputReference(const void* moduleAddress) noexcept;
         int           Poll() noexcept;
         std::uint32_t Read(std::uint32_t field) const noexcept;
+        bool          CaptureInput() noexcept;
+        std::uint32_t ReadInput(std::uint32_t field) const noexcept;
         bool          Cancel() noexcept;
         bool          IsPending() const noexcept;
 
@@ -28,15 +32,23 @@ namespace deonline
         static unsigned __stdcall ThreadMain(void* context) noexcept;
         void                      Run() noexcept;
         bool                      CheckCancellation() noexcept;
+        bool                      Start(const void* moduleAddress, bool configuredInput) noexcept;
+        static bool               InputCancelled();
+        static void               PublishInput(const std::uint32_t* values, std::uint32_t count);
 
         // Only Begin/Poll's owning thread touches the handle or input address.
         // State2 publishes the worker's immutable values; State3 also proves
         // the thread has exited, allowing another attempt without a live job.
-        std::atomic<DWORD>            ownerThread{0};
-        std::atomic<unsigned>         state{0};
-        std::atomic<bool>             cancellation{false};
-        HANDLE                        thread = nullptr;
-        const void*                   address = nullptr;
-        std::array<std::uint32_t, 19> values{};
+        std::atomic<DWORD>                 ownerThread{0};
+        std::atomic<unsigned>              state{0};
+        std::atomic<bool>                  cancellation{false};
+        HANDLE                             thread = nullptr;
+        const void*                        address = nullptr;
+        std::array<std::uint32_t, 19>      values{};
+        bool                               inputRequested = false;
+        SRWLOCK                            inputLock = SRWLOCK_INIT;
+        bool                               inputAvailable = false;
+        DefinitiveInputReference::Snapshot publishedInput{};
+        DefinitiveInputReference::Snapshot capturedInput{};
     };
 }

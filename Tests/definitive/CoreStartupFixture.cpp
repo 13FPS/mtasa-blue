@@ -10,12 +10,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <cwchar>
+#include "../../Client/core/DefinitiveInputReference.h"
 
 namespace
 {
-    HANDLE         mapping = nullptr;
-    volatile LONG* counters = nullptr;
-    bool           mtaSet = false, gtaSet = false;
+    HANDLE                            mapping = nullptr;
+    volatile LONG*                    counters = nullptr;
+    bool                              mtaSet = false, gtaSet = false;
+    DefinitiveInputReference::Request inputRequest;
 
     DWORD Setting(const wchar_t* name)
     {
@@ -38,6 +40,22 @@ namespace
             return nullptr;
         return OpenEventW(access, FALSE, name);
     }
+}
+
+extern "C" __declspec(dllexport) std::uint32_t MTA_DEInputReferenceApiVersion()
+{
+    Call(7);
+    return Setting(L"MTA_CORE_FIXTURE_INPUT_MODE") == 3 ? 2u : 1u;
+}
+
+extern "C" __declspec(dllexport) std::uint32_t MTA_ConfigureDEInputReference(std::uint32_t duration, DefinitiveInputReference::CancelCallback cancelled,
+                                                                             DefinitiveInputReference::PublishCallback publish)
+{
+    Call(8);
+    if (duration != DefinitiveInputReference::MaximumDurationMs || !cancelled || !publish)
+        return 0;
+    inputRequest = {duration, cancelled, publish};
+    return 1;
 }
 
 extern "C" __declspec(dllexport) std::uint32_t MTA_DEStartupApiVersion()
@@ -68,6 +86,41 @@ extern "C" __declspec(dllexport) int InitializeCore()
     Call(3);
     if (Setting(L"MTA_CORE_FIXTURE_BAD_INITIALIZE"))
         return 0;
+    if (mtaSet && gtaSet && inputRequest.publish)
+    {
+        using namespace DefinitiveInputReference;
+        Snapshot sample{};
+        sample[Version] = 1;
+        sample[Phase] = 1;
+        sample[Sequence] = 1;
+        sample[Flags] = 7;
+        sample[SupportedBindings] = sample[EligibleKeys] = 5;
+        sample[Rearms] = sample[SampleCount] = 1;
+        sample[HeldActionsLow] = 1u << 4;
+        sample[Current + 1] = 0xffffff80u;
+        if (Setting(L"MTA_CORE_FIXTURE_INPUT_MODE") != 2)
+        {
+            Call(9);
+            inputRequest.publish(sample.data(), FieldCount);
+            const auto release = Event(L"MTA_CORE_FIXTURE_INPUT_RELEASE", SYNCHRONIZE);
+            if (release)
+            {
+                while (WaitForSingleObject(release, 5) == WAIT_TIMEOUT && !inputRequest.cancelled())
+                    Call(10);
+                CloseHandle(release);
+            }
+        }
+        const bool cancelled = inputRequest.cancelled();
+        sample[Phase] = sample[Sequence] = 2;
+        sample[ElapsedMs] = cancelled ? 50u : MaximumDurationMs;
+        sample[Flags] = 4;
+        sample[HeldActionsLow] = 0;
+        sample[Reason] = cancelled ? 2u : 1u;
+        sample[InputCleanupComplete] = Setting(L"MTA_CORE_FIXTURE_INPUT_MODE") == 2 ? 0u : 1u;
+        sample[Current + 1] = 0;
+        Call(9);
+        inputRequest.publish(sample.data(), FieldCount);
+    }
     return !mtaSet ? 3 : !gtaSet ? 4 : 5;
 }
 

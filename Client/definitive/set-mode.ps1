@@ -11,11 +11,15 @@ param(
     [switch]$MtaNativePadReference,
     [switch]$MtaNativeMovementTrial,
     [switch]$MtaCoreStartupReference,
+    [switch]$MtaCoreInputReference,
     [string]$GameDirectory = 'C:\Program Files (x86)\Steam\steamapps\common\GTA San Andreas - The Definitive Edition\Gameface\Binaries\Win64'
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+if ($MtaCoreInputReference -and ($Mode -ne 'Smoke' -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot)) {
+    throw 'MTA Core configured input reference requires separate opt-in Smoke mode.'
+}
 if ($MtaCoreStartupReference -and ($Mode -ne 'Smoke' -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot)) {
     throw 'MTA Core startup reference requires separate opt-in Smoke mode.'
 }
@@ -116,6 +120,20 @@ if ($coreStartupMatches -eq 1) {
     $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $coreStartupPattern,
         "export const MTA_CORE_STARTUP_REFERENCE = $($MtaCoreStartupReference.IsPresent.ToString().ToLowerInvariant());"))
 }
+$coreInputPattern = 'export const MTA_CORE_INPUT_REFERENCE = (true|false);'
+$coreInputMatches = [regex]::Matches($configText, $coreInputPattern).Count
+if ($coreInputMatches -gt 1 -or ($MtaCoreInputReference -and $coreInputMatches -ne 1)) {
+    throw 'Update the adapter before selecting MTA Core configured input reference.'
+}
+if ($MtaCoreInputReference -and @($installed.files | Where-Object {
+    $_.path -in @('CLEO/de-online/xmll.dll', 'CLEO/de-online/mta/config/coreconfig.xml', 'CLEO/de-online/core.dll', 'CLEO/de-online/pthread.dll')
+}).Count -ne 4) { throw 'Update the adapter before selecting MTA Core configured input reference: its owned XML/config files are missing.' }
+# Ordinary modes must clear this input reference while remaining compatible
+# with historical intact configurations that predate the marker entirely.
+if ($coreInputMatches -eq 1) {
+    $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $coreInputPattern,
+        "export const MTA_CORE_INPUT_REFERENCE = $($MtaCoreInputReference.IsPresent.ToString().ToLowerInvariant());"))
+}
 $configEntry = @($installed.files | Where-Object { $_.path -eq 'CLEO/de-online/config.mjs' })
 if ($configEntry.Count -ne 1) { throw 'Missing owned configuration record.' }
 $configEntry[0].sha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($newConfig)).ToLowerInvariant()
@@ -148,7 +166,9 @@ try {
     Write-AtomicFile $manifestPath $originalManifest
     throw $failure
 }
-if ($MtaCoreStartupReference) {
+if ($MtaCoreInputReference) {
+    Write-Host 'Installed adapter mode: Smoke, read-only Core configured input reference armed. Ctrl+Shift+F9 starts after release; Ctrl+Shift+End cancels.'
+} elseif ($MtaCoreStartupReference) {
     Write-Host 'Installed adapter mode: Smoke, MTA Core startup reference armed. Follow the bounded startup plan; Ctrl+Shift+End stops the adapter.'
 } elseif ($MtaNativePadReference) {
     Write-Host 'Installed adapter mode: Smoke, read-only MTA native pad reference armed. Follow the bounded probe plan; Ctrl+Shift+End stops the adapter.'

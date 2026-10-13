@@ -563,6 +563,11 @@ bool CKeyBinds::ProcessConfiguredControlKey(const char* key, bool down, bool all
     if (!bindable)
         return false;
 
+    return ProcessConfiguredControlKey(bindable, down, allowPress, MtaInput::KnownActionMask);
+}
+
+bool CKeyBinds::ProcessConfiguredControlKey(const SBindableKey* bindable, bool down, bool allowPress, std::uint64_t allowedActions)
+{
     // This path intentionally handles controls only. Classic GUI, Lua key
     // cancellation and mixed command/function dispatch remain in ProcessKeyStroke.
     // Defer callback-driven removals just as that real key path already does.
@@ -578,7 +583,10 @@ bool CKeyBinds::ProcessConfiguredControlKey(const char* key, bool down, bool all
         {
             if (bind->isBeingDeleted || !bind->isActive || bind->type != KeyBindType::GTA_CONTROL || bind->boundKey != bindable)
                 continue;
-            if (DispatchConfiguredControlBind(static_cast<CGTAControlBind*>(bind.get()), down, allowPress))
+            auto* control = static_cast<CGTAControlBind*>(bind.get());
+            if (!(allowedActions & MtaInput::ActionBit(control->control->action)))
+                continue;
+            if (DispatchConfiguredControlBind(control, down, allowPress))
                 found = true;
         }
     }
@@ -593,6 +601,129 @@ bool CKeyBinds::ProcessConfiguredControlKey(const char* key, bool down, bool all
     if (!alreadyProcessing)
         RemoveDeletedBinds();
     return found;
+}
+
+CKeyBinds::ConfiguredControlPollResult CKeyBinds::PollConfiguredControlKeys(bool focused, ConfiguredKeyStateSampler sampler, void* context,
+                                                                            std::uint64_t allowedActions)
+{
+    struct KeySample
+    {
+        const SBindableKey* key;
+        unsigned int        code;
+        bool                eligible = false, unsupported = false, down = false;
+    };
+    auto keyboardRoute = [](const SBindableKey& key) -> unsigned int
+    {
+        // MTA's table distinguishes Shift sides through GTA-relative identity,
+        // while both entries use VK_SHIFT. Poll their real physical VKs rather
+        // than inventing a second key-name map or aliasing both sides together.
+        if (key.iGTARelative == GTA_KEY_LSHIFT)
+            return VK_LSHIFT;
+        if (key.iGTARelative == GTA_KEY_RSHIFT)
+            return VK_RSHIFT;
+        const auto code = key.ulCode;
+        if (key.data != DATA_NONE || code < VK_BACK || code > 0xfe || code == VK_CLEAR || code == VK_SHIFT || code == VK_CONTROL || code == VK_MENU ||
+            (code >= VK_NUMPAD0 && code <= VK_DIVIDE))
+            return 0;
+        // Wheel/mouse/joy and NumLock/AltGr-dependent routes need their existing
+        // message/device context. Report and skip them instead of guessing.
+        return static_cast<unsigned int>(code);
+    };
+    if (!sampler)
+        sampler = [](unsigned int code, void*) { return (GetAsyncKeyState(static_cast<int>(code)) & 0x8000) != 0; };
+
+    ConfiguredControlPollResult result;
+    result.focused = focused;
+    allowedActions &= MtaInput::KnownActionMask;
+    if (allowedActions != m_ConfiguredPollActions)
+    {
+        m_ConfiguredPollActions = allowedActions;
+        m_bConfiguredPollArmed = false;
+    }
+    // A release callback can remove any later bind. Keep all such removals
+    // deferred until snapshots and dispatch finish, including nested callers.
+    const bool alreadyProcessing = m_bProcessingKeyStroke;
+    m_bProcessingKeyStroke = true;
+    try
+    {
+        std::vector<KeySample>        samples;
+        std::vector<CGTAControlBind*> ignored;
+        for (const auto& bind : m_binds)
+        {
+            if (bind->isBeingDeleted || !bind->isActive || bind->type != KeyBindType::GTA_CONTROL)
+                continue;
+            auto*       control = static_cast<CGTAControlBind*>(bind.get());
+            const auto* key = control->boundKey;
+            const auto  code = keyboardRoute(*key);
+            const bool  allowed = (allowedActions & MtaInput::ActionBit(control->control->action)) != 0;
+            auto        found = std::find_if(samples.begin(), samples.end(), [key](const KeySample& sample) { return sample.key == key; });
+            if (found == samples.end())
+            {
+                samples.push_back({key, code});
+                found = samples.end() - 1;
+            }
+            if (allowed && code)
+            {
+                ++result.supportedBindings;
+                found->eligible = true;
+            }
+            else
+            {
+                ++result.ignoredBindings;
+                ignored.push_back(control);
+                found->unsupported |= allowed && !code;
+            }
+        }
+        bool anyHeld = false;
+        for (auto& sample : samples)
+        {
+            if (sample.eligible)
+            {
+                ++result.eligibleKeys;
+                if (focused)
+                    sample.down = sampler(sample.code, context);
+                anyHeld |= sample.down;
+            }
+            if (sample.unsupported)
+                ++result.unsupportedKeys;
+        }
+        for (auto* bind : ignored)
+        {
+            if (!bind->isBeingDeleted && bind->state)
+                CallGTAControlBind(bind, false);
+        }
+        if (!focused || !result.eligibleKeys)
+            m_bConfiguredPollArmed = false;
+        // Removing the last binding can leave a prior aggregate control held;
+        // an owner with no eligible source must remain neutral and unarmed.
+        if (!result.eligibleKeys)
+            ResetAllGTAControlStates();
+        const bool acceptPresses = focused && m_bConfiguredPollArmed;
+        for (const auto& sample : samples)
+        {
+            const bool down = acceptPresses && sample.eligible && sample.down;
+            if (GetBindableKeyState(sample.key) != down)
+                ++result.changedKeys;
+            // Baseline/focus loss releases actual bind state as well as the
+            // named-key cache; a held key cannot be resurrected on refocus.
+            ProcessConfiguredControlKey(sample.key, down, acceptPresses, acceptPresses ? allowedActions : MtaInput::KnownActionMask);
+        }
+        if (focused && !anyHeld && result.eligibleKeys)
+            m_bConfiguredPollArmed = true;
+        result.armed = m_bConfiguredPollArmed;
+    }
+    catch (...)
+    {
+        m_bConfiguredPollArmed = false;
+        m_bProcessingKeyStroke = alreadyProcessing;
+        if (!alreadyProcessing)
+            RemoveDeletedBinds();
+        throw;
+    }
+    m_bProcessingKeyStroke = alreadyProcessing;
+    if (!alreadyProcessing)
+        RemoveDeletedBinds();
+    return result;
 }
 
 void CKeyBinds::Remove(CKeyBind* keyBind)
@@ -2030,17 +2161,13 @@ void CKeyBinds::FinishConfiguredControlFrame()
     }
 }
 
-bool CKeyBinds::LoadFromXML(CXMLNode* pMainNode)
+bool CKeyBinds::LoadConfiguredBindsFromXML(CXMLNode* pMainNode)
 {
     bool bSuccess = false;
-    bool bLoadDefaults = false;
     if (pMainNode)
     {
         CXMLNode*    pNode = NULL;
         unsigned int uiCount = pMainNode->GetSubNodeCount();
-
-        if (uiCount == 0)
-            bLoadDefaults = true;
 
         for (unsigned int i = 0; i < uiCount; i++)
         {
@@ -2133,12 +2260,19 @@ bool CKeyBinds::LoadFromXML(CXMLNode* pMainNode)
         }
         bSuccess = true;
     }
-    else
-        bLoadDefaults = true;
 
-    SystemState::Enum systemState = CCore::GetSingleton().GetGame()->GetSystemState();
-    if (bLoadDefaults)
+    return bSuccess;
+}
+
+bool CKeyBinds::LoadFromXML(CXMLNode* pMainNode)
+{
+    // Configured records only need the real bind tables. GTA defaults still
+    // require its controller configuration, preserving classic missing/empty
+    // node behavior without forcing configured DE input through a CGame facade.
+    const bool bSuccess = LoadConfiguredBindsFromXML(pMainNode);
+    if (!pMainNode || pMainNode->GetSubNodeCount() == 0)
     {
+        const SystemState::Enum systemState = CCore::GetSingleton().GetGame()->GetSystemState();
         if (systemState == SystemState::GS_FRONTEND || systemState == SystemState::GS_PLAYING_GAME)  // Are GTA controls actually initialized?
             LoadDefaultBinds();
         else

@@ -32,3 +32,6 @@ export const MTA_NATIVE_MOVEMENT_TRIAL = false;
 // Load the real x64 MTA Core only on explicit activation, observe its unchanged
 // incomplete-gameplay gate, then unload it before normal play continues.
 export const MTA_CORE_STARTUP_REFERENCE = false;
+// Observe the real Core-owned configured binds and their canonical frames.
+// This separate reference never submits those frames to the engine.
+export const MTA_CORE_INPUT_REFERENCE = false;

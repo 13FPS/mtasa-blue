@@ -17,6 +17,21 @@ neutral, focused baseline before the 30-second write window starts.
 Ctrl+Shift+End requests cleanup. Source defaults and ordinary mode switches
 disable this mutually exclusive Smoke trial.
 
+The first live configured-write candidate stopped after **1,049 ms** when a
+producer eligibility observation became unavailable. It recorded 20 native
+samples, 10 script snapshots and 63 applied/restored scopes without native
+failures. Right Shift reached MTA's walk action, but forward walking and sprint
+were not captured. The human reported normal movement; this does not establish
+the combined Core path because the trial had already stopped. Cleanup, normal
+exit and all 23 installed hashes passed.
+
+The correction publishes verified eligibility from the native callback for
+the active Core producer. Each publication is tied to the trial generation,
+local identity and a 250 ms freshness deadline. This avoids reading engine globals
+while they are temporarily borrowed for another character. Before Begin,
+unavailable observations wait within the existing readiness budget with no
+writes. Every native write still requires the complete live eligibility guard.
+
 ABI6 admission requires the exact local player/provider binding, native
 InVehicle flag clear, `PED_IDLE` and the native controls-disable word zero.
 The known mask and positive flags must both be `0xF`; the six allowed actions
@@ -38,7 +53,7 @@ remain active. Use
 after normal shutdown. Its complete result requires forward, isolated forward
 walk, isolated forward sprint and neutral coverage, matching applied/restored
 scopes, cleanup and the reported backend PIN. Visual movement still requires
-the human report. Focused offline suites pass 1,190 native callback checks and
+the human report. Focused offline suites pass 1,259 native callback checks and
 1,520 adapter-module checks. Normal Core/Game DE builds and 114 actual Core
 entry checks in each classic/DE layout pass. Package and live results remain
 separate evidence. Full MTA startup, CGame, DE rendering, resources and networking

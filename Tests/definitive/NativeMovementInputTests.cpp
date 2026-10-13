@@ -30,7 +30,7 @@ namespace
         ++checks;
         if (!condition)
         {
-            std::fprintf(stderr, "Failed: %s\n", label);
+            std::fprintf(stderr, "Failed after %u checks: %s\n", checks.load(), label);
             std::exit(1);
         }
     }
@@ -192,6 +192,28 @@ namespace
         auto* provider = reinterpret_cast<void*>(runtime.provider);
         HookQuery(provider, 2, &value);
         HookQuery(provider, 0xfe, &value);
+    }
+
+    void OriginalEligibilityPublication(void*)
+    {
+        ++originalCalls;
+        Check((Pad() != physical) == scope.routed, "eligibility fixture original sees only its owned pad context");
+    }
+
+    bool ReadFixtureProducerEligibility(NativeMovementInput& owner, NativeMovementEligibility& eligibility)
+    {
+#if defined(MTA_NATIVE_ELIGIBILITY_SAVED_OBSERVER)
+        // The saved observer used GetModuleHandle(main EXE) before entering
+        // this exact production helper. Supply the same synthetic image as the
+        // callbacks so RED isolates borrowed context, not wrong-exe rejection.
+        // Production Begin and its executable/hash checks remain unchanged.
+        (void)owner;
+        ApiOperation    operation;
+        BindingIdentity identity;
+        return operation.acquired && ReadLocalEligibility(runtime.image, {runtime.ped, runtime.provider}, nullptr, eligibility, identity);
+#else
+        return owner.ReadEligibility(eligibility);
+#endif
     }
 
     void OriginalBlockedControl(void* ped)
@@ -784,6 +806,157 @@ int main()
               queryEntry(reinterpret_cast<void*>(runtime.provider), 2, &value) == 3 && value == 0.75f,
           "detached provider entries return their original physical results");
     Check(runtime.counters.callbacks.load() == callbacksAfterDetach && !runtime.inFlight.load(), "detached entries no longer enter production hooks");
+
+    // A producer does not own the engine's temporary provider selection. Keep
+    // one actual engine thread alive across these callbacks so a foreign global
+    // context cannot be mistaken for a foreign callback-thread passthrough.
+    NativeMovementInput eligibilityOwner;
+    Check(!eligibilityOwner.Begin(neutral), "eligibility race fixture still rejects executable admission");
+    runtime.image = fixtureImage;
+    runtime.ped = fixturePed;
+    runtime.provider = fixtureProvider;
+    Configure(OriginalEligibilityPublication, false);
+    runtime.engineThread.store(0);
+    HANDLE eligibilityRequest = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    HANDLE eligibilityDone = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    Check(eligibilityRequest && eligibilityDone, "eligibility producer/engine events created");
+    std::thread eligibilityEngine(
+        [&]
+        {
+            for (unsigned step = 0; step < 3; ++step)
+            {
+                Check(WaitForSingleObject(eligibilityRequest, 5000) == WAIT_OBJECT_0, "eligibility engine receives callback request");
+                HookControl(reinterpret_cast<void*>(runtime.ped));
+                Check(SetEvent(eligibilityDone) != FALSE, "eligibility engine publishes callback completion");
+            }
+        });
+    Check(SetEvent(eligibilityRequest) != FALSE && WaitForSingleObject(eligibilityDone, 5000) == WAIT_OBJECT_0,
+          "verified engine callback publishes and restores eligibility scope");
+    Check(runtime.counters.steps.load() == 1 && runtime.counters.restored.load() == 1 && runtime.active.load(),
+          "first eligibility publication follows a healthy scoped callback");
+    NativeMovementEligibility publishedEligibility;
+    Check(ReadFixtureProducerEligibility(eligibilityOwner, publishedEligibility) && publishedEligibility.eligible,
+          "old observer and new publication both accept the same owned baseline");
+    Put(runtime.image + 0x5726120, std::int32_t{1});
+    Put(runtime.image + 0x5067940, runtime.image + padRva + NativePadStride);
+    NativeMovementEligibility directGuard;
+    directGuard.knownMask = 0xabcdef12;
+    BindingIdentity directIdentity;
+    Check(!ReadLocalEligibility(runtime.image, {runtime.ped, runtime.provider}, nullptr, directGuard, directIdentity) && directGuard.knownMask == 0xabcdef12,
+          "unchanged direct engine guard refuses the isolated foreign context");
+    Check(ReadFixtureProducerEligibility(eligibilityOwner, publishedEligibility) && publishedEligibility.eligible &&
+              publishedEligibility.knownMask == NativeMovementEligibilityMask && publishedEligibility.flags == NativeMovementEligibilityMask,
+          "active producer reads engine publication during foreign transient provider context");
+    Check(runtime.active.load() && !runtime.counters.reason.load() && runtime.counters.steps.load() == 1 && Pad() == physical,
+          "producer observation neither disarms nor applies a pad in foreign context");
+    Check(SetEvent(eligibilityRequest) != FALSE && WaitForSingleObject(eligibilityDone, 5000) == WAIT_OBJECT_0,
+          "same adopted engine reaches callback during foreign context");
+    Check(!runtime.active.load() && runtime.counters.reason.load() == static_cast<std::uint32_t>(Failure::BindingChanged) &&
+              runtime.counters.steps.load() == 1 && runtime.counters.restored.load() == 1 && Pad() == physical,
+          "native callback still refuses foreign context before any replacement");
+    Put(runtime.image + 0x5726120, std::int32_t{0});
+    Put(runtime.image + 0x5067940, runtime.image + padRva);
+    Check(SetEvent(eligibilityRequest) != FALSE && WaitForSingleObject(eligibilityDone, 5000) == WAIT_OBJECT_0,
+          "engine receives restored context after disarm");
+    eligibilityEngine.join();
+    Check(!runtime.active.load() && runtime.counters.steps.load() == 1 && Pad() == physical, "restoring transient globals never resumes a disarmed writer");
+    publishedEligibility.knownMask = 0x13572468;
+    Check(!eligibilityOwner.ReadEligibility(publishedEligibility) && publishedEligibility.knownMask == 0x13572468,
+          "disarmed eligibility publication cannot replace caller output");
+    Check(eligibilityOwner.End(), "eligibility race owner ends after callback rejection");
+    Check(CloseHandle(eligibilityRequest) != FALSE && CloseHandle(eligibilityDone) != FALSE, "eligibility coordination handles closed");
+
+    // Native control updates unrelated flags in this same word. Repeated OS
+    // memory reads must compare the InVehicle predicate, not require unrelated
+    // engine bits to stay frozen throughout a producer observation.
+    std::atomic<bool>     stopFlagUpdates{false};
+    std::atomic<unsigned> flagUpdates{0};
+    std::thread           flagEngine(
+        [&]
+        {
+            while (!stopFlagUpdates.load())
+            {
+                InterlockedXor(reinterpret_cast<volatile LONG*>(runtime.ped + 0x634), 0x10000000);
+                flagUpdates.fetch_add(1);
+            }
+        });
+    bool relevantFlagStable = true;
+    for (unsigned attempt = 0; attempt < 1000; ++attempt)
+    {
+        NativeMovementEligibility sampled;
+        BindingIdentity           sampledIdentity;
+        relevantFlagStable = ReadLocalEligibility(runtime.image, {runtime.ped, runtime.provider}, nullptr, sampled, sampledIdentity) && sampled.eligible &&
+                             !sampled.context.inVehicle && relevantFlagStable;
+    }
+    stopFlagUpdates.store(true);
+    flagEngine.join();
+    Put(runtime.ped + 0x634, std::uint32_t{0});
+    Check(flagUpdates.load() > 0, "unrelated native flag updates overlap producer observations");
+    Check(relevantFlagStable, "only InVehicle bit stability is required during unrelated native flag changes");
+
+    Check(!eligibilityOwner.Begin(neutral), "fresh cache fixture keeps production executable rejection");
+    runtime.image = fixtureImage;
+    runtime.ped = fixturePed;
+    runtime.provider = fixtureProvider;
+    Configure(OriginalEligibilityPublication, false);
+    publishedEligibility.knownMask = 0x24681357;
+    Check(!eligibilityOwner.ReadEligibility(publishedEligibility) && publishedEligibility.knownMask == 0x24681357,
+          "new generation cannot reuse an earlier callback publication");
+    HookControl(reinterpret_cast<void*>(runtime.ped));
+    Check(eligibilityOwner.ReadEligibility(publishedEligibility) && publishedEligibility.eligible, "fresh callback refreshes new generation eligibility");
+    const auto publishedPed = runtime.ped;
+    runtime.ped += 8;
+    publishedEligibility.knownMask = 0x11223344;
+    Check(!eligibilityOwner.ReadEligibility(publishedEligibility) && publishedEligibility.knownMask == 0x11223344,
+          "publication identity tag rejects a different owned ped without output mutation");
+    runtime.ped = publishedPed;
+    Check(eligibilityOwner.ReadEligibility(publishedEligibility) && publishedEligibility.eligible,
+          "matching immutable identity can consume its fresh publication");
+    // Expiry is a real producer observation after wall-clock time, rather than
+    // mutating private timestamps to make the intended condition tautological.
+    Sleep(300);
+    publishedEligibility.knownMask = 0x55667788;
+    Check(!eligibilityOwner.ReadEligibility(publishedEligibility) && publishedEligibility.knownMask == 0x55667788,
+          "unrefreshed eligibility publication expires beyond 250 milliseconds");
+    Check(runtime.active.load() && !runtime.counters.reason.load(), "expired observation does not invent a native callback failure");
+    HookControl(reinterpret_cast<void*>(runtime.ped));
+    Check(eligibilityOwner.ReadEligibility(publishedEligibility) && publishedEligibility.eligible,
+          "verified callback refreshes an expired producer observation");
+#if defined(MTA_NATIVE_ELIGIBILITY_PUBLISHED_CACHE)
+    // Publishing must remain nonblocking even when a producer holds a read
+    // snapshot. The existing fresh value remains valid until its own expiry.
+    const auto beforeContendedPublication = runtime.counters.steps.load();
+    runtime.engineThread.store(0);
+    AcquireSRWLockShared(&runtime.eligibilityLock);
+    std::thread publicationContender([] { HookControl(reinterpret_cast<void*>(runtime.ped)); });
+    publicationContender.join();
+    ReleaseSRWLockShared(&runtime.eligibilityLock);
+    Check(runtime.active.load() && !runtime.counters.reason.load() && runtime.counters.steps.load() == beforeContendedPublication + 1 &&
+              runtime.counters.restored.load() == runtime.counters.steps.load() && Pad() == physical,
+          "actual adopted callback completes while eligibility publication lock is held");
+#endif
+    runtime.active.store(false);
+    publishedEligibility.knownMask = 0x99aabbcc;
+    Check(!eligibilityOwner.ReadEligibility(publishedEligibility) && publishedEligibility.knownMask == 0x99aabbcc,
+          "inactive writer cannot publish cached eligible state");
+    Check(eligibilityOwner.End(), "fresh eligibility cache owner ends cleanly");
+    publishedEligibility.knownMask = 0xaabbccdd;
+    Check(!eligibilityOwner.ReadEligibility(publishedEligibility) && publishedEligibility.knownMask == 0xaabbccdd,
+          "ended writer clears its publication and preserves output");
+
+    NativeMovementInput nextEligibilityOwner;
+    Check(!nextEligibilityOwner.Begin(neutral), "replacement owner preserves wrong-executable guard");
+    runtime.image = fixtureImage;
+    runtime.ped = fixturePed;
+    runtime.provider = fixtureProvider;
+    Configure(OriginalEligibilityPublication, false);
+    HookControl(reinterpret_cast<void*>(runtime.ped));
+    Check(nextEligibilityOwner.ReadEligibility(publishedEligibility) && publishedEligibility.eligible,
+          "replacement owner receives only its own callback generation");
+    publishedEligibility.knownMask = 0xdeadbeef;
+    Check(!eligibilityOwner.ReadEligibility(publishedEligibility) && publishedEligibility.knownMask == 0xdeadbeef,
+          "retired adapter owner cannot consume the next generation publication");
+    Check(nextEligibilityOwner.End(), "replacement eligibility owner ends cleanly");
     for (HANDLE event : {splitEntered, splitResume, splitFinished, splitNext})
         Check(CloseHandle(event) != FALSE, "coordination event closed");
 

@@ -15,7 +15,13 @@ positive flags must both be `0xF`. Only forwards, backwards, left, right, sprint
 and walk are admitted. Weapon/task context and health-based death detection
 remain unknown or excluded; this is not a general gameplay-context API.
 
-The Core producer and every prewrite native callback use the same guard.
+Every prewrite native callback uses the complete live guard. During an active
+trial, Core consumes eligibility published by that callback, tied to its
+generation and local identity, and no more than 250 ms old. The pre-install guard seeds the publication;
+callback observations refresh it. This avoids treating engine globals borrowed
+for other characters as the active local callback's context. Stale, inactive or
+other-generation publications cannot authorize a new Core frame. Before Begin,
+Core may wait within its existing readiness budget without applying input.
 The writer sends MTA's shared synthesized current/previous controller state
 through the verified DE player-control callback. Real repository Detours scopes
 the pad replacement and action-provider membership, availability and value
@@ -48,10 +54,18 @@ DLL absence. Assess the 96-field log with
 `python utils/definitive_edition/core_movement_log.py --log <saved-log> --output <assessment> --require-exit`.
 Coverage requires forward, isolated forward walk, isolated forward sprint and
 neutral, together with scoped-application/restoration and cleanup proof.
-Focused offline checks pass 1,190 production callback checks and 1,520 module
+Focused offline checks pass 1,259 production callback checks and 1,520 module
 checks. Normal Core/Game DE builds and 114 real Core entry checks in each
 classic/DE layout pass. Live validation remains pending; full MTA startup,
 CGame, rendering, resources and networking remain gated.
+
+The first live configured-write attempt stopped after **1,049 ms** on an
+unavailable producer eligibility observation. Its 20 native samples and 10
+script snapshots show 63 applied/restored scopes with zero native failures.
+Right Shift reached MTA's walk action, but forward walk/sprint were not captured.
+Normal exit, Core/XML cleanup, expected backend PIN and all 23 hashes passed.
+The human reported normal movement after a trial too short to establish the
+combined path; the callback-publication correction still needs a live retest.
 
 The preceding **read-only actual Core** session completed in **60,003 ms**:
 **1,188 native samples and 515 script snapshots** show four directions, sprint

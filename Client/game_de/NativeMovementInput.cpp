@@ -34,8 +34,23 @@ namespace mta::game_de
         constexpr std::uintptr_t padRva = 0x53e8810;
         constexpr ULONGLONG      maximumTrialMs = 35000;
         constexpr ULONGLONG      maximumInputAgeMs = 2000;
+        constexpr ULONGLONG      maximumEligibilityAgeMs = 250;
         constexpr unsigned       exclusivePadAccess = 1u << 31;
         static_assert(PedState::PED_IDLE == 1 && PedState::PED_DIE == 0x36 && PedState::PED_DEAD == 0x37);
+
+        struct BindingIdentity
+        {
+            std::uintptr_t ped = 0, provider = 0;
+        };
+
+        struct EligibilityPublication
+        {
+            NativeMovementEligibility eligibility;
+            BindingIdentity           identity;
+            std::uint64_t             generation = 0;
+            ULONGLONG                 refreshed = 0;
+            bool                      valid = false;
+        };
 
         struct Counters
         {
@@ -47,6 +62,8 @@ namespace mta::game_de
         struct Runtime
         {
             SRWLOCK                    mailboxLock = SRWLOCK_INIT;
+            SRWLOCK                    eligibilityLock = SRWLOCK_INIT;
+            EligibilityPublication     eligibilityPublication;
             std::atomic<bool>          apiBusy{false};
             NativePadReader            reader;
             std::atomic<bool>          bound{false}, active{false}, hooked{false};
@@ -89,6 +106,44 @@ namespace mta::game_de
             unsigned         callbackDepth = 0;
         };
         thread_local Scope scope;
+
+        void ClearEligibility() noexcept
+        {
+            AcquireSRWLockExclusive(&runtime.eligibilityLock);
+            runtime.eligibilityPublication = {};
+            ReleaseSRWLockExclusive(&runtime.eligibilityLock);
+        }
+
+        bool TryPublishEligibility(const NativeMovementEligibility& eligibility, const BindingIdentity& identity) noexcept
+        {
+            // A simulation callback must never wait for a producer which a
+            // Detours transaction may suspend. A missed publication is safe:
+            // the producer rejects old evidence after the short freshness bound.
+            if (!TryAcquireSRWLockExclusive(&runtime.eligibilityLock))
+                return false;
+            const bool publish = runtime.bound.load() && runtime.active.load() && identity.ped == runtime.ped && identity.provider == runtime.provider &&
+                                 eligibility.knownMask == NativeMovementEligibilityMask && eligibility.flags == NativeMovementEligibilityMask &&
+                                 eligibility.eligible;
+            if (publish)
+                runtime.eligibilityPublication = {eligibility, identity, runtime.generation.load(), GetTickCount64(), true};
+            ReleaseSRWLockExclusive(&runtime.eligibilityLock);
+            return publish;
+        }
+
+        bool ReadPublishedEligibility(std::uint64_t generation, NativeMovementEligibility& eligibility) noexcept
+        {
+            AcquireSRWLockShared(&runtime.eligibilityLock);
+            const auto publication = runtime.eligibilityPublication;
+            ReleaseSRWLockShared(&runtime.eligibilityLock);
+            const auto now = GetTickCount64();
+            if (!generation || generation != runtime.generation.load() || !runtime.bound.load() || !runtime.active.load() || !publication.valid ||
+                publication.generation != generation || publication.identity.ped != runtime.ped || publication.identity.provider != runtime.provider ||
+                publication.eligibility.knownMask != NativeMovementEligibilityMask || publication.eligibility.flags != NativeMovementEligibilityMask ||
+                !publication.eligibility.eligible || now < publication.refreshed || now - publication.refreshed > maximumEligibilityAgeMs)
+                return false;
+            eligibility = publication.eligibility;
+            return true;
+        }
 
         // API calls never wait for another API operation, and callbacks never
         // acquire this gate. Detours can suspend threads without stranding a
@@ -166,11 +221,6 @@ namespace mta::game_de
             return Read(runtime.image + 0x5726120, index) && Read(runtime.image + 0x5067940, alternate);
         }
 
-        struct BindingIdentity
-        {
-            std::uintptr_t ped = 0, provider = 0;
-        };
-
         template <std::size_t N>
         bool PinAt(std::uintptr_t image, std::uintptr_t rva, const std::array<unsigned char, N>& expected) noexcept
         {
@@ -230,10 +280,13 @@ namespace mta::game_de
             std::uint32_t  flagsAgain = 0, stateAgain = 0;
             std::uint16_t  disabledAgain = 0;
             unsigned char  playerAgain = 0;
+            // Only the verified vehicle bit contributes to this admission.
+            // Unrelated ped flags can change without invalidating on-foot
+            // eligibility; state and the complete controls gate remain stable.
             if (!Read(image + 0x53eb720, pedAgain) || pedAgain != ped || !Read(image + 0x5726100, providerAgain) || providerAgain != provider ||
                 !Read(image + 0x5726120, indexAgain) || indexAgain != index || !Read(image + 0x5067940, alternateAgain) || alternateAgain != alternate ||
                 !Read(ped + 0x7e0, selectorAgain) || selectorAgain != selector || !Read(image + 0x522bcf6, playerAgain) || playerAgain != playerIndex ||
-                !Read(ped + 0x634, flagsAgain) || flagsAgain != pedFlags || !Read(ped + 0x5fc, stateAgain) || stateAgain != pedState ||
+                !Read(ped + 0x634, flagsAgain) || ((flagsAgain ^ pedFlags) & 0x100) || !Read(ped + 0x5fc, stateAgain) || stateAgain != pedState ||
                 !Read(image + padRva + 0x30, disabledAgain) || disabledAgain != disabledControls ||
                 !Pages(image + padRva + NativePadCurrentOffset, sizeof(CControllerState) * 2, true))
                 return false;
@@ -260,7 +313,7 @@ namespace mta::game_de
             return true;
         }
 
-        bool CheckBinding(void* candidate = nullptr, bool capture = false) noexcept
+        bool CheckBinding(void* candidate = nullptr, bool capture = false, NativeMovementEligibility* observed = nullptr) noexcept
         {
             NativeMovementEligibility eligibility{};
             BindingIdentity           identity{};
@@ -278,6 +331,14 @@ namespace mta::game_de
                 runtime.ped = identity.ped;
                 runtime.provider = identity.provider;
             }
+            if (observed)
+                *observed = eligibility;
+            // Ambient globals are temporarily borrowed for other peds between
+            // callbacks. Only the adopted local callback may refresh active
+            // producer evidence; it still executes the full guard before every
+            // write and after the original call instead of trusting this cache.
+            if (!capture && scope.callbackDepth && runtime.engineThread.load() == GetCurrentThreadId())
+                TryPublishEligibility(eligibility, identity);
             return true;
         }
 
@@ -719,6 +780,7 @@ namespace mta::game_de
         ClearCounters();
         generation = runtime.generation.fetch_add(1) + 1;
         runtime.bound.store(false);
+        ClearEligibility();
         runtime.producerThread = GetCurrentThreadId();
         runtime.engineThread.store(0);
         runtime.ped = runtime.provider = 0;
@@ -733,11 +795,15 @@ namespace mta::game_de
             ready = false;
         }
         runtime.image = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
-        if (ready && (!CheckEntryPins() || !CheckBinding(nullptr, true)))
+        NativeMovementEligibility initialEligibility;
+        ULONGLONG                 initialEligibilityAt = 0;
+        if (ready && (!CheckEntryPins() || !CheckBinding(nullptr, true, &initialEligibility)))
         {
             Fail(Failure::BindingChanged);
             ready = false;
         }
+        if (ready)
+            initialEligibilityAt = GetTickCount64();
         HMODULE retained = nullptr;
         if (ready)
         {
@@ -765,6 +831,12 @@ namespace mta::game_de
             runtime.bound.store(true);
             runtime.frame = state;
             runtime.started = runtime.refreshed = GetTickCount64();
+            // The first producer poll can precede the first engine callback.
+            // Seed from the already successful pre-install guard, preserving
+            // its real observation time rather than manufacturing a fresh read.
+            AcquireSRWLockExclusive(&runtime.eligibilityLock);
+            runtime.eligibilityPublication = {initialEligibility, {runtime.ped, runtime.provider}, generation, initialEligibilityAt, true};
+            ReleaseSRWLockExclusive(&runtime.eligibilityLock);
             runtime.active.store(true);
         }
         else
@@ -818,6 +890,7 @@ namespace mta::game_de
             return harmless;
         }
         runtime.active.store(false);
+        ClearEligibility();
         if (scope.callbackDepth || GetCurrentThreadId() != runtime.producerThread)
         {
             Fail(scope.callbackDepth ? Failure::ScopeActive : Failure::WrongThread);
@@ -857,13 +930,18 @@ namespace mta::game_de
         ApiOperation operation;
         if (!operation.acquired)
             return false;
-        // The adapter requires its existing exact-image NativePadReader binding
-        // before entering this observation API. No hash, native call, hook or
-        // module pin is repeated here; the same pure guard protects each write.
-        const auto            image = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
-        const BindingIdentity expected = IsBound() ? BindingIdentity{runtime.ped, runtime.provider} : BindingIdentity{};
-        BindingIdentity       identity{};
-        return ReadLocalEligibility(image, expected, nullptr, eligibility, identity);
+        // Active producers cannot interpret another ped's borrowed global pad
+        // context as local eligibility. Consume only recent, identity-bound
+        // evidence from this generation's seed or authoritative engine callback.
+        // ApiOperation excludes Begin/End and their Detours transactions while
+        // the short shared-lock copy runs; the callback publisher never blocks.
+        if (generation)
+            return ReadPublishedEligibility(generation, eligibility);
+        // Before Begin the adapter requires its exact-image reader binding.
+        // This admission observation installs no hooks and owns no old cache.
+        const auto      image = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
+        BindingIdentity identity{};
+        return ReadLocalEligibility(image, {}, nullptr, eligibility, identity);
     }
 
     void NativeMovementInput::ReadState(NativeMovementTrialState& state) const noexcept

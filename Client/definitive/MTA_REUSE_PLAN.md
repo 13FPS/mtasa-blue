@@ -22,14 +22,24 @@ source defaults and ordinary mode changes disable it. The 23-file package uses
 the real Core, Game DE and XML modules plus saved MTA binding records. The
 bridge schedules one worker and captures coherent value-only snapshots. It
 contains no replacement bind manager, physical-key map or fixed action sweep.
-This combined configured-input write path has not been validated live.
+The first live combined trial stopped after 1,049 ms because a producer
+eligibility observation became unavailable. Its 20 native samples and 10
+script snapshots record 63 applied/restored scopes without native failures.
+Right Shift reached the walk action without forward input; combined forward
+walking and sprint remain unverified. Cleanup, normal exit and all 23 hashes
+passed. The human's normal movement report does not extend this short capture.
 
 ABI6 provides build-pinned local movement eligibility. Admission requires the
 verified local player/provider/pad0 identity, native InVehicle flag clear,
 `PED_IDLE` and controls-disable word zero. Known mask and positive flags must
 both equal `0xF`; only forwards/backwards/left/right/sprint/walk are admitted.
 Other context defaults remain unknown and cannot authorize weapon/task actions.
-The same guard runs in the producer and before every native callback write.
+The active producer uses fresh, generation/identity-bound eligibility published
+by the verified callback. Engine code temporarily borrows the provider index
+and alternate-pad globals for other characters, so concurrent worker reads
+cannot establish the local callback's current phase. Before Begin, unavailable
+observations wait within the bounded readiness window with no writes. The
+complete live guard still runs before every native callback write.
 There is no full task/death/health discovery or remote ownership claim.
 
 After F9 activation and release, focused configured keys must reach a neutral
@@ -47,7 +57,7 @@ Assess the saved combined trial with
 `python utils/definitive_edition/core_movement_log.py --log <saved-log> --output <assessment> --require-exit`.
 A complete report requires forward, isolated forward walk, isolated forward
 sprint and neutral coverage plus native scope/restoration and worker-cleanup
-proof. The new guard's focused suites pass 1,190 native callback checks and
+proof. The new guard's focused suites pass 1,259 native callback checks and
 1,520 adapter-module checks. Normal Core/Game DE builds and 114 actual Core
 entry checks in each classic/DE layout pass. These are offline checks; package
 and live evidence remain separately qualified. Full MTA startup, CGame,

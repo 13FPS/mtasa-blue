@@ -253,7 +253,18 @@ namespace
                             mta::game_de::NativeMovementEligibility eligibility;
                             if (!adapter.GetNativeMovementEligibility(eligibility))
                             {
-                                reason = static_cast<StopReason>(DefinitiveMovementReference::StopReason::EligibilityError);
+                                // Before hooks exist, the worker may observe an
+                                // engine input context borrowed for another ped.
+                                // Wait within the existing readiness budget;
+                                // no frame can authorize writes in this state.
+                                if (!snapshot[DefinitiveMovementReference::WriterStarted] && now - started < DefinitiveMovementReference::ReadinessBudgetMs)
+                                {
+                                    Sleep(SampleIntervalMs);
+                                    continue;
+                                }
+                                reason = static_cast<StopReason>(snapshot[DefinitiveMovementReference::WriterStarted]
+                                                                     ? DefinitiveMovementReference::StopReason::EligibilityError
+                                                                     : DefinitiveMovementReference::StopReason::ReadinessTimeout);
                                 break;
                             }
                             snapshot[DefinitiveMovementReference::ContextKnownMask] = eligibility.knownMask;

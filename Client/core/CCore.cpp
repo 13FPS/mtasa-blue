@@ -97,6 +97,10 @@ CCore::CCore()
     // backends here rather than applying San Andreas addresses to a DE process.
     if (!m_DefinitiveAdapter.StartAdjacent(this))
         throw std::runtime_error("DE adapter startup: " + m_DefinitiveAdapter.GetError());
+    // The entry point only recognizes the DE filename. Bind here, outside
+    // loader lock, so the backend verifies the exact image before engine access.
+    if (!m_DefinitiveAdapter.BindNativeInput())
+        throw std::runtime_error("DE adapter input binding: " + m_DefinitiveAdapter.GetError());
     if (!m_DefinitiveAdapter.Pulse())
         throw std::runtime_error("DE adapter pulse: " + m_DefinitiveAdapter.GetError());
     if (!m_DefinitiveAdapter.IsGameplayReady())

@@ -17,6 +17,9 @@
 #define UTF8_FILE_HOOKS_PERSONALITY_Core
 #include "SharedUtil.Win32Utf8FileHooks.hpp"
 #include "SharedUtil.Memory.h"
+#if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
+    #include "DefinitiveProcess.h"
+#endif
 
 #define CORE_API extern "C" __declspec(dllexport)
 
@@ -31,19 +34,35 @@ HINSTANCE g_hModule = NULL;
 fs::path g_gtaDirectory;
 fs::path g_mtaDirectory;
 
+namespace
+{
+    bool g_utf8FileHooksInstalled = false;
+    bool g_isDefinitiveProcessCandidate = false;
+}
+
 BOOL WINAPI DllMain(HINSTANCE dll, DWORD reason, LPVOID)
 {
     if (reason == DLL_PROCESS_ATTACH)
     {
         g_hModule = dll;
         DisableThreadLibraryCalls(dll);
-        AddUtf8FileHooks();
+#if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
+        g_isDefinitiveProcessCandidate = DefinitiveProcess::IsCurrentCandidate();
+#endif
+        // The classic file-hook setup predates DE. Defer DE engine validation
+        // to InitializeCore instead of installing legacy hooks under loader lock.
+        if (!g_isDefinitiveProcessCandidate)
+        {
+            AddUtf8FileHooks();
+            g_utf8FileHooksInstalled = true;
+        }
     }
     else if (reason == DLL_PROCESS_DETACH)
     {
-        RemoveUtf8FileHooks();
+        if (g_utf8FileHooksInstalled)
+            RemoveUtf8FileHooks();
 
-        if (IsGTAProcess())
+        if (!g_isDefinitiveProcessCandidate && IsGTAProcess())
         {
             // For now, ExitProcess if any destruction is attempted (or we'll crash)
             ExitProcess(0);
@@ -82,7 +101,7 @@ CORE_API int InitializeCore()
     if (g_pCore)
         return 1;
 
-    if (!IsGTAProcess())
+    if (!g_isDefinitiveProcessCandidate && !IsGTAProcess())
         return 2;
 
     if (g_mtaDirectory.empty())

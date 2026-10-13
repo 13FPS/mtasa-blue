@@ -20,6 +20,9 @@ public:
     virtual const char*  GetModuleBaseName() = 0;
     virtual uint         GetAddressModuleOffset() = 0;
 
+    // The EAX through EIP ABI fields describe x86 registers. An x64 Core reports
+    // those unavailable (zero), and captures native registers/addresses through
+    // its CONTEXT-based diagnostics rather than truncating them into this API.
     virtual unsigned long GetEAX() = 0;
     virtual unsigned long GetEBX() = 0;
     virtual unsigned long GetECX() = 0;

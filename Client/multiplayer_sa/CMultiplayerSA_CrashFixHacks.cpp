@@ -11,6 +11,9 @@
 
 #include "StdInc.h"
 #include <game/CAnimManager.h>
+// These classic crash fixes inspect concrete animation nodes and associations,
+// whose layouts must not be imported by the shared multiplayer SDK.
+#include "../game_sa/CAnimBlendAssociationSA.h"
 #include "../game_sa/CTrainSA.h"
 #include "../game_sa/CAnimBlendSequenceSA.h"
 #include "../game_sa/CAnimBlendHierarchySA.h"

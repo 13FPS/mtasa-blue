@@ -11,7 +11,9 @@
 
 #pragma once
 
+#include <cstddef>
 #include <string>
+#include <type_traits>
 
 class CCVarsInterface
 {
@@ -37,8 +39,19 @@ public:
     template <class T>
     T GetValue(const std::string& strVariable, const T& defaultValue = {})
     {
-        T value = defaultValue;
-        Get(strVariable, value);
-        return value;
+        if constexpr (std::is_same_v<T, std::size_t> && !std::is_same_v<T, unsigned int>)
+        {
+            // CVars retain their unsigned-int storage/ABI. A pointer-sized
+            // consumer can widen that value without narrowing its default or
+            // adding an architecture-dependent virtual overload.
+            unsigned int value = 0;
+            return Get(strVariable, value) ? static_cast<T>(value) : defaultValue;
+        }
+        else
+        {
+            T value = defaultValue;
+            Get(strVariable, value);
+            return value;
+        }
     }
 };

@@ -10,6 +10,9 @@
 
 #include "StdInc.h"
 
+// This classic hook allocates the concrete association layout; the shared
+// multiplayer SDK exposes only opaque pointers for other host architectures.
+#include <../game_sa/CAnimBlendAssociationSA.h>
 #include <../game_sa/CAnimBlendAssocGroupSA.h>
 #include <../game_sa/CAnimManagerSA.h>
 

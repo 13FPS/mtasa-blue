@@ -11,6 +11,7 @@
 
 #include "StdInc.h"
 #include "StackTraceHelpers.h"
+#include "NativeContextDiagnostics.h"
 #include <SharedUtil.Misc.h>
 #include <game/CGame.h>
 #include <game/CPools.h>
@@ -129,9 +130,9 @@ namespace EmergencyCrashLogging
         {
             if (pException->ExceptionRecord != nullptr)
             {
-                sprintf_s(buf, bufSize, "Code=0x%08lX Addr=0x%08lX ThreadId=%lu", static_cast<unsigned long>(pException->ExceptionRecord->ExceptionCode),
-                          static_cast<unsigned long>(reinterpret_cast<uintptr_t>(pException->ExceptionRecord->ExceptionAddress)),
-                          static_cast<unsigned long>(GetCurrentThreadId()));
+                NativeContextDiagnostics::FormatException(pException->ExceptionRecord->ExceptionCode,
+                                                          reinterpret_cast<uintptr_t>(pException->ExceptionRecord->ExceptionAddress), GetCurrentThreadId(), buf,
+                                                          bufSize);
                 result = ReadResult::Success;
             }
             else
@@ -156,10 +157,7 @@ namespace EmergencyCrashLogging
             {
                 const CONTEXT* ctx = pException->ContextRecord;
 
-                sprintf_s(buf1, buf1Size, "EAX=0x%08lX EBX=0x%08lX ECX=0x%08lX EDX=0x%08lX", ctx->Eax, ctx->Ebx, ctx->Ecx, ctx->Edx);
-
-                sprintf_s(buf2, buf2Size, "ESI=0x%08lX EDI=0x%08lX EBP=0x%08lX ESP=0x%08lX EIP=0x%08lX EFL=0x%08lX", ctx->Esi, ctx->Edi, ctx->Ebp, ctx->Esp,
-                          ctx->Eip, ctx->EFlags);
+                NativeContextDiagnostics::FormatRegisters(*ctx, buf1, buf1Size, buf2, buf2Size);
 
                 result = ReadResult::Success;
             }
@@ -174,6 +172,25 @@ namespace EmergencyCrashLogging
         }
         return result;
     }
+
+#if defined(_M_X64)
+    static ReadResult TryCopyNativeContext(const CONTEXT* source, CONTEXT& destination)
+    {
+        // A callback exception may supply a non-null but unreadable context.
+        // Copy under SEH before native text replaces cached legacy diagnostics.
+        __try
+        {
+            if (!source)
+                return ReadResult::NullPointer;
+            destination = *source;
+            return ReadResult::Success;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return ReadResult::AccessFault;
+        }
+    }
+#endif
 #pragma warning(pop)
 
 }
@@ -208,8 +225,8 @@ static void LogEmergencyContextRecord(const _EXCEPTION_POINTERS* pException)
 {
     using namespace EmergencyCrashLogging;
 
-    std::array<char, 128> buf1{};
-    std::array<char, 128> buf2{};
+    std::array<char, NativeContextDiagnostics::RegisterLineCapacity> buf1{};
+    std::array<char, NativeContextDiagnostics::RegisterLineCapacity> buf2{};
 
     const auto result = TryReadContextRecord(pException, buf1.data(), buf1.size(), buf2.data(), buf2.size());
 
@@ -702,16 +719,8 @@ static void AppendCrashDiagnostics(const SString& text)
     const auto hProcess = GetCurrentProcess();
     const auto hThread = GetCurrentThread();
 
-    CONTEXT      context = *pException->ContextRecord;
-    STACKFRAME64 frame{};
-
-    frame.AddrPC.Offset = context.Eip;
-    frame.AddrFrame.Offset = context.Ebp;
-    frame.AddrStack.Offset = context.Esp;
-
-    frame.AddrPC.Mode = AddrModeFlat;
-    frame.AddrFrame.Mode = AddrModeFlat;
-    frame.AddrStack.Mode = AddrModeFlat;
+    CONTEXT context = *pException->ContextRecord;
+    auto    frame = StackTraceHelpers::InitializeStackFrame(context);
 
     bool useDbgHelp = false;
     if (hasSymbols)
@@ -732,7 +741,7 @@ static void AppendCrashDiagnostics(const SString& text)
 
     for (std::size_t frameIndex = 0; frameIndex < MAX_FALLBACK_STACK_FRAMES; ++frameIndex)
     {
-        BOOL bWalked = StackWalk64(IMAGE_FILE_MACHINE_I386, hProcess, hThread, &frame, &context, routines.readMemory, routines.functionTableAccess,
+        BOOL bWalked = StackWalk64(StackTraceHelpers::NativeMachineType, hProcess, hThread, &frame, &context, routines.readMemory, routines.functionTableAccess,
                                    routines.moduleBase, nullptr);
         if (bWalked == FALSE)
             break;
@@ -807,8 +816,13 @@ static void TryLogCallbackContext(_EXCEPTION_POINTERS* pException)
         if (pException->ContextRecord != nullptr)
         {
             std::array<char, DEBUG_BUFFER_SIZE> szDebug;
+#if defined(_M_X64)
+            SAFE_DEBUG_PRINT_C(szDebug.data(), szDebug.size(), "CCrashDumpWriter: Callback context RIP=0x%016llX RSP=0x%016llX\n",
+                               pException->ContextRecord->Rip, pException->ContextRecord->Rsp);
+#else
             SAFE_DEBUG_PRINT_C(szDebug.data(), szDebug.size(), "CCrashDumpWriter: Callback context EIP=0x%08X ESP=0x%08X\n", pException->ContextRecord->Eip,
                                pException->ContextRecord->Esp);
+#endif
         }
     }
     __except (EXCEPTION_EXECUTE_HANDLER)
@@ -971,8 +985,31 @@ namespace
         return traceText;
     }
 
-    std::string FormatRegisterDump(const ENHANCED_EXCEPTION_INFO& info)
+#if defined(_M_X64)
+    std::string FormatNativeRegisterDump(const CONTEXT* context, bool* isNullJump = nullptr)
     {
+        // The enhanced/report register fields are an unchanged x86 ABI. Use
+        // the original native CONTEXT for x64 text rather than truncating it.
+        if (isNullJump)
+            *isNullJump = false;
+        CONTEXT snapshot{};
+        if (EmergencyCrashLogging::TryCopyNativeContext(context, snapshot) != EmergencyCrashLogging::ReadResult::Success)
+            return "CPU Registers: unavailable (native CONTEXT missing/unreadable; legacy x86 register fields are unavailable on x64)\n";
+        std::array<char, NativeContextDiagnostics::RegisterLineCapacity> first{}, second{};
+        NativeContextDiagnostics::FormatRegisters(snapshot, first.data(), first.size(), second.data(), second.size());
+        if (isNullJump)
+            *isNullJump = StackTraceHelpers::GetInstructionPointer(snapshot) == 0;
+        return std::string("CPU Registers (native CONTEXT):\n  ") + first.data() + "\n  " + second.data() + "\n";
+    }
+#endif
+
+    std::string FormatRegisterDump(const ENHANCED_EXCEPTION_INFO& info, const CONTEXT* context = nullptr)
+    {
+#if defined(_M_X64)
+        (void)info;
+        return FormatNativeRegisterDump(context);
+#else
+        (void)context;
         std::string registers;
         registers.reserve(256);
         char line[160]{};
@@ -992,6 +1029,7 @@ namespace
         registers += line;
 
         return registers;
+#endif
     }
 
     std::string FormatCapturedExceptionInfo(const ENHANCED_EXCEPTION_INFO& info)
@@ -1025,7 +1063,8 @@ namespace
         return text;
     }
 
-    std::string BuildAdditionalInfoPayload(const ENHANCED_EXCEPTION_INFO* info, std::string_view telemetryFallback, std::string_view fallbackSummary = {})
+    std::string BuildAdditionalInfoPayload(const ENHANCED_EXCEPTION_INFO* info, std::string_view telemetryFallback, std::string_view fallbackSummary = {},
+                                           const CONTEXT* context = nullptr)
     {
         std::string payload;
 
@@ -1052,7 +1091,7 @@ namespace
             const std::string capturedMeta = FormatCapturedExceptionInfo(*info);
             appendBlock(capturedMeta);
 
-            const std::string registers = FormatRegisterDump(*info);
+            const std::string registers = FormatRegisterDump(*info, context);
             appendBlock(registers);
 
             const std::string stackTrace = FormatStackTrace(*info);
@@ -1734,6 +1773,7 @@ void CCrashDumpWriter::DumpCoreLog(_EXCEPTION_POINTERS* pException, CExceptionIn
 
     const auto strMTAVersionFull = SString("%s.%s", MTA_DM_BUILDTAG_LONG, *GetApplicationSetting("mta-version-ext").SplitRight(".", nullptr, -2));
 
+#if !defined(_M_X64)
     constexpr auto kNullInstructionPointer = 0u;
     static_assert(kNullInstructionPointer == 0u, "Null instruction pointer must be zero");
 
@@ -1743,6 +1783,7 @@ void CCrashDumpWriter::DumpCoreLog(_EXCEPTION_POINTERS* pException, CExceptionIn
     constexpr std::string_view kNullJumpAnnotation = " (attempted jump to null)";
     constexpr std::string_view kEmptyAnnotation = "";
     const auto                 eipAnnotation = isNullJump ? kNullJumpAnnotation : kEmptyAnnotation;
+#endif
 
     SString strInfo{};
     strInfo += SString("Version = %s\n", strMTAVersionFull.c_str());
@@ -1762,6 +1803,16 @@ void CCrashDumpWriter::DumpCoreLog(_EXCEPTION_POINTERS* pException, CExceptionIn
         strInfo += SString{kWatchdogBanner.data(), kWatchdogBanner.size()};
     }
 
+#if defined(_M_X64)
+    // GetEIP and the other public legacy getters cannot represent native x64
+    // registers. In particular, their unavailable zero is not a null jump.
+    const auto* nativeContext = pException ? pException->ContextRecord : nullptr;
+    bool        nativeNullJump = false;
+    strInfo += FormatNativeRegisterDump(nativeContext, &nativeNullJump).c_str();
+    if (nativeNullJump)
+        strInfo += "RIP=0 (attempted jump to null)\n";
+    strInfo += "Classic SA pool diagnostics: unavailable on x64\n\n";
+#else
     strInfo += SString(
         "EAX=%08X  EBX=%08X  ECX=%08X  EDX=%08X  ESI=%08X\n"
         "EDI=%08X  EBP=%08X  ESP=%08X  EIP=%08X%.*s  FLG=%08X\n"
@@ -1771,6 +1822,7 @@ void CCrashDumpWriter::DumpCoreLog(_EXCEPTION_POINTERS* pException, CExceptionIn
         pExceptionInformation->GetEIP(), static_cast<int>(eipAnnotation.size()), eipAnnotation.data(), pExceptionInformation->GetEFlags(),
         pExceptionInformation->GetCS(), pExceptionInformation->GetDS(), pExceptionInformation->GetSS(), pExceptionInformation->GetES(),
         pExceptionInformation->GetFS(), pExceptionInformation->GetGS());
+#endif
 
     const auto invalidParameterCount = ms_uiInvalidParameterCount.load(std::memory_order_relaxed);
     strInfo += SString("InvalidParameterCount = %u\n", invalidParameterCount);
@@ -2031,7 +2083,7 @@ void CCrashDumpWriter::DumpCoreLog(_EXCEPTION_POINTERS* pException, CExceptionIn
                 }
             }
         }
-        else if (pException->ContextRecord != nullptr && pException->ContextRecord->Eip == 0)
+        else if (pException->ContextRecord != nullptr && StackTraceHelpers::GetInstructionPointer(*pException->ContextRecord) == 0)
         {
             // Special case: EIP=0 means we cannot walk the stack
             // Provide register-based context instead
@@ -2042,13 +2094,23 @@ void CCrashDumpWriter::DumpCoreLog(_EXCEPTION_POINTERS* pException, CExceptionIn
             registerFrames.reserve(kRegisterFrameCount);
 
             const auto* ctx = pException->ContextRecord;
+#if defined(_M_X64)
+            registerFrames.emplace_back(SString("RIP=0x%016llX (null instruction pointer - cannot walk stack)", ctx->Rip).c_str());
+            registerFrames.emplace_back(SString("RSP=0x%016llX RBP=0x%016llX (stack pointers)", ctx->Rsp, ctx->Rbp).c_str());
+            registerFrames.emplace_back("Last known address: check return address at [RSP] or recent call history");
+#else
             registerFrames.emplace_back(SString("EIP=0x%08X (null instruction pointer - cannot walk stack)", ctx->Eip).c_str());
             registerFrames.emplace_back(SString("ESP=0x%08X EBP=0x%08X (stack pointers)", ctx->Esp, ctx->Ebp).c_str());
             registerFrames.emplace_back(SString("Last known address: check return address at [ESP] or recent call history", 0).c_str());
+#endif
 
             fallbackStackStorage = std::move(registerFrames);
             stackFrames = std::addressof(*fallbackStackStorage);
+#if defined(_M_X64)
+            stackHeader = "Stack trace (RIP=0 - register context only):\n";
+#else
             stackHeader = "Stack trace (EIP=0 - register context only):\n";
+#endif
         }
     }
 
@@ -2282,22 +2344,31 @@ void CCrashDumpWriter::DumpMiniDump(_EXCEPTION_POINTERS* pException, CExceptionI
                 std::string             basicSummary;
                 ENHANCED_EXCEPTION_INFO enhancedInfo{};
                 const bool              hasEnhancedInfo = (GetEnhancedExceptionInfo(&enhancedInfo) != FALSE);
+#if defined(_M_X64)
+                const CONTEXT* registerContext = pException ? pException->ContextRecord : nullptr;
+#else
+                const CONTEXT* registerContext = nullptr;
+#endif
 
                 if (hasEnhancedInfo)
                 {
                     userStreams.AddTextStream(kStreamExceptionSummary, FormatExceptionSummary(enhancedInfo));
                     userStreams.AddTextStream(kStreamStackTrace, FormatStackTrace(enhancedInfo));
-                    userStreams.AddTextStream(kStreamRegisterState, FormatRegisterDump(enhancedInfo));
+                    userStreams.AddTextStream(kStreamRegisterState, FormatRegisterDump(enhancedInfo, registerContext));
                     userStreams.AddTextStream(kStreamCapturedException, FormatCapturedExceptionInfo(enhancedInfo));
                 }
                 else
                 {
                     basicSummary = BuildBasicExceptionSummary(pException, pExceptionInformation);
                     userStreams.AddTextStream(kStreamExceptionSummary, basicSummary);
+#if defined(_M_X64)
+                    userStreams.AddTextStream(kStreamRegisterState, FormatRegisterDump(enhancedInfo, registerContext));
+#endif
                 }
 
-                const std::string additionalInfoPayload = BuildAdditionalInfoPayload(hasEnhancedInfo ? &enhancedInfo : nullptr, telemetryNote,
-                                                                                     hasEnhancedInfo ? std::string_view{} : std::string_view{basicSummary});
+                const std::string additionalInfoPayload =
+                    BuildAdditionalInfoPayload(hasEnhancedInfo ? &enhancedInfo : nullptr, telemetryNote,
+                                               hasEnhancedInfo ? std::string_view{} : std::string_view{basicSummary}, registerContext);
                 userStreams.AddTextStream(kStreamAdditionalInfo, additionalInfoPayload);
 
                 PMINIDUMP_USER_STREAM_INFORMATION userStreamParam = userStreams.Build();
@@ -2426,8 +2497,14 @@ void CCrashDumpWriter::DumpMiniDump(_EXCEPTION_POINTERS* pException, CExceptionI
                         SetApplicationSetting("diagnostics", "last-dump-save", strPathFilename);
                         SetApplicationSetting("diagnostics", "last-dump-complete", "");
 
+#if defined(_M_IX86)
                         AppendDumpSection(strPathFilename, "try-pools", "added-pools", 'POLs', 'POLe',
                                           [](CBuffer& buffer) { CCrashDumpWriter::GetPoolInfo(buffer); });
+#else
+                        // Pool addresses and native methods belong to classic
+                        // SA. Do not serialize fabricated DE capacity/usage.
+                        SAFE_DEBUG_OUTPUT("CCrashDumpWriter: Classic SA pool diagnostics unavailable on x64\n");
+#endif
 
                         AppendDumpSection(strPathFilename, "try-d3d", "added-d3d", 'D3Ds', 'D3De',
                                           [](CBuffer& buffer) { CCrashDumpWriter::GetD3DInfo(buffer); });
@@ -2511,6 +2588,10 @@ void CCrashDumpWriter::DumpMiniDump(_EXCEPTION_POINTERS* pException, CExceptionI
         AddReportLog(7210, SString("Core - Fail-fast crash detected (0x%08X), debugger capture flag SET for next launch", exceptionCode));
     }
 
+#if defined(_M_X64)
+    SString strMessage("Crash 0x%08X 0x%08X %s; legacy x86 register report unavailable on x64 (see native CONTEXT diagnostics when captured)",
+                       pExceptionInformation->GetCode(), pExceptionInformation->GetAddressModuleOffset(), pExceptionInformation->GetModulePathName());
+#else
     SString strMessage(
         "Crash 0x%08X 0x%08X %s"
         " EAX=%08X EBX=%08X ECX=%08X EDX=%08X ESI=%08X"
@@ -2522,6 +2603,7 @@ void CCrashDumpWriter::DumpMiniDump(_EXCEPTION_POINTERS* pException, CExceptionI
         pExceptionInformation->GetESI(), pExceptionInformation->GetEDI(), pExceptionInformation->GetEBP(), pExceptionInformation->GetESP(),
         pExceptionInformation->GetEIP(), pExceptionInformation->GetEFlags(), pExceptionInformation->GetCS(), pExceptionInformation->GetDS(),
         pExceptionInformation->GetSS(), pExceptionInformation->GetES(), pExceptionInformation->GetFS(), pExceptionInformation->GetGS());
+#endif
 
     AddReportLog(3120, strMessage);
 
@@ -2978,11 +3060,14 @@ void CCrashDumpWriter::AppendToDumpFile(const SString& strPathFilename, const CB
 
 namespace
 {
+#if defined(_M_IX86)
     constexpr int POOL_INFO_VERSION = 1;
+#endif
     constexpr int D3D_INFO_VERSION = 2;
     constexpr int CRASH_AVERTED_STATS_VERSION = 1;
     constexpr int LOG_INFO_VERSION = 1;
 
+#if defined(_M_IX86)
     constexpr DWORD CLASS_CBuildingPool = 0xb74498;
     constexpr DWORD CLASS_CPedPool = 0xb74490;
     constexpr DWORD CLASS_CObjectPool = 0xb7449c;
@@ -3189,10 +3274,12 @@ namespace
 
         return iOut;
     }
+#endif
 }  // namespace
 
 void CCrashDumpWriter::GetPoolInfo(CBuffer& buffer)
 {
+#if defined(_M_IX86)
     CBufferWriteStream stream(buffer);
 
     stream.Write(POOL_INFO_VERSION);
@@ -3207,6 +3294,10 @@ void CCrashDumpWriter::GetPoolInfo(CBuffer& buffer)
         stream.Write(iCapacity);
         stream.Write(iUsedSpaces);
     }
+#else
+    (void)buffer;
+    SAFE_DEBUG_OUTPUT("CCrashDumpWriter::GetPoolInfo: Classic SA pool diagnostics unavailable on x64\n");
+#endif
 }
 
 void CCrashDumpWriter::GetD3DInfo(CBuffer& buffer)

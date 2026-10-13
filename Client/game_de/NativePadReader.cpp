@@ -20,7 +20,7 @@ namespace mta::game_de
         constexpr std::size_t                   imageSize = 97141760;
         constexpr std::size_t                   instructionRva = 17844674;
         constexpr std::size_t                   padsRva = 87984144;
-        constexpr std::size_t                   padStride = 0x158;
+        constexpr std::size_t                   padStride = NativePadStride;
         constexpr std::size_t                   padsSize = 2 * padStride;
         constexpr std::array<unsigned char, 12> expectedInstruction = {0x4c, 0x8d, 0x35, 0x47, 0x3e, 0x2e, 0x04, 0xf3, 0x44, 0x0f, 0x10, 0x3d};
         constexpr std::size_t                   deviceStateRva = 0x5709a40;
@@ -163,6 +163,40 @@ namespace mta::game_de
             return instructionSection && padsSection && (!requireDeviceState || (deviceSection && deviceBaseCodeSection && deviceLoadCodeSection));
         }
 
+        template <std::size_t Size>
+        bool CheckCode(std::uintptr_t image, std::size_t rva, const std::array<unsigned char, Size>& expected) noexcept
+        {
+            std::array<unsigned char, Size> actual;
+            return ReadImage(image, image + rva, actual.data(), actual.size(), false, true) && actual == expected;
+        }
+
+        bool CheckLayoutInstructions(std::uintptr_t image) noexcept
+        {
+            // Guard the actual native caller and updater, not just the public
+            // signature locating the array. These relative instructions retain
+            // their bytes under ASLR and establish both object/state offsets.
+            constexpr std::array<unsigned char, 7>  firstPad = {0x48, 0x8d, 0x0d, 0xd7, 0x37, 0x29, 0x04};
+            constexpr std::array<unsigned char, 26> dispatch = {0xe8, 0x17, 0x03, 0x00, 0x00, 0xba, 0x01, 0x00, 0x00, 0x00, 0x48, 0x8d, 0x0d,
+                                                                0x43, 0x39, 0x29, 0x04, 0x48, 0x83, 0xc4, 0x28, 0xe9, 0x02, 0x03, 0x00, 0x00};
+            constexpr std::array<unsigned char, 80> savePrevious = {
+                0x0f, 0x10, 0x41, 0x38, 0x49, 0x89, 0x5b, 0x10, 0x4c, 0x8b, 0xf1, 0x0f, 0x10, 0x49, 0x48, 0x49, 0x89, 0x73, 0x18, 0x48,
+                0x8d, 0xb1, 0xb4, 0x00, 0x00, 0x00, 0x0f, 0x11, 0x41, 0x68, 0x49, 0x89, 0x7b, 0x20, 0x48, 0x8d, 0xb9, 0xe4, 0x00, 0x00,
+                0x00, 0x0f, 0x10, 0x41, 0x58, 0x4d, 0x89, 0x7b, 0xd8, 0x4c, 0x8b, 0xcf, 0x44, 0x0f, 0xb7, 0xfa, 0x41, 0x0f, 0x29, 0x73,
+                0xc8, 0x0f, 0x11, 0x49, 0x78, 0x4c, 0x8b, 0xc6, 0x48, 0x8d, 0x54, 0x24, 0x70, 0x0f, 0x11, 0x81, 0x88, 0x00, 0x00, 0x00};
+            constexpr std::array<unsigned char, 29> commitCurrent = {0x49, 0x8b, 0xce, 0x0f, 0x10, 0x00, 0x41, 0x0f, 0x11, 0x46, 0x38, 0x0f, 0x10, 0x48, 0x10,
+                                                                     0x41, 0x0f, 0x11, 0x4e, 0x48, 0x0f, 0x10, 0x40, 0x20, 0x41, 0x0f, 0x11, 0x46, 0x58};
+            // These getter paths independently corroborate the four signed
+            // analogue lanes. Other paths can use an action provider instead;
+            // matching this layout does not establish all gameplay semantics.
+            constexpr std::array<unsigned char, 4> firstAxis = {0x0f, 0xbf, 0x47, 0x38};
+            constexpr std::array<unsigned char, 4> secondAxis = {0x0f, 0xbf, 0x47, 0x3a};
+            constexpr std::array<unsigned char, 4> thirdAxis = {0x0f, 0xb7, 0x47, 0x3c};
+            constexpr std::array<unsigned char, 4> fourthAxis = {0x0f, 0xb7, 0x4f, 0x3e};
+            return CheckCode(image, 0x1155032, firstPad) && CheckCode(image, 0x1155044, dispatch) && CheckCode(image, 0x1155387, savePrevious) &&
+                   CheckCode(image, 0x115540e, commitCurrent) && CheckCode(image, 0x1157723, firstAxis) && CheckCode(image, 0x1157732, secondAxis) &&
+                   CheckCode(image, 0x1157977, thirdAxis) && CheckCode(image, 0x115798d, fourthAxis);
+        }
+
         bool CheckInstruction(std::uintptr_t image) noexcept
         {
             std::array<unsigned char, expectedInstruction.size()> instruction;
@@ -171,7 +205,7 @@ namespace mta::game_de
             std::int32_t displacement = 0;
             std::memcpy(&displacement, instruction.data() + 3, sizeof(displacement));
             const auto decodedRva = static_cast<std::int64_t>(instructionRva) + 7 + displacement;
-            return decodedRva == static_cast<std::int64_t>(padsRva);
+            return decodedRva == static_cast<std::int64_t>(padsRva) && CheckLayoutInstructions(image);
         }
 
         bool CheckDeviceInstructions(std::uintptr_t image) noexcept
@@ -201,10 +235,11 @@ namespace mta::game_de
         if (sizeof(void*) != 8 || !CheckExecutableBuild())
             return false;
         const auto image = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
-        // Public signature/layout provenance: DK22Pac/plugin-sdk, Zlib,
+        // Public array-signature provenance: DK22Pac/plugin-sdk, Zlib,
         // commit15f15b60bbf74c106e1b496ff92c98764abf4605, CPad.cpp/h under
-        // plugin_sa_unreal. The exact executable was independently scanned;
-        // those declarations alone do not verify keyboard aggregation or writes.
+        // plugin_sa_unreal. Native caller/updater/getter code establishes this
+        // build's corrected enclosing layout; neither that evidence nor these
+        // reads verify every named field, keyboard aggregation or engine writes.
         if (!image || !CheckImage(image) || !CheckInstruction(image) || !ImagePages(image, image + padsRva, padsSize, true))
             return false;
         imageAddress.store(image);

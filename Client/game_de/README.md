@@ -153,8 +153,67 @@ context are unavailable. `--with-definitive-adapter` enables Core's early startu
 check, which rejects these missing capabilities before the CCore constructor's
 classic configuration, GUI, hooks and game factories. Full Core/multiplayer/
 render startup remains gated even if a future adapter supplies those features.
-The default classic startup is unchanged. Existing DLL file hooks and classic
-process detection still precede this check; x64 Core remains unported.
+The default classic startup is unchanged. In an opt-in x64 Core, the entry
+point now recognizes the `SanAndreas.exe` basename before classic process
+detection and skips classic DLL file-hook installation for that candidate.
+This classification performs no file hashing or module loading under loader
+lock. The constructor explicitly calls `BindNativeInput` outside `DllMain`,
+where the backend verifies the exact executable and live instructions before
+any engine access. A matching filename alone cannot enable gameplay.
+
+The three existing Core stack walkers now initialize native PC/SP/FP registers
+and select AMD64 on x64. Their no-symbol fallback uses the process's runtime
+unwind metadata. The existing x86 crash-report/register SDK stays unchanged.
+Focused checks pass 47 x86 / 48 x64 stack cases and 14 host-entry cases on each
+architecture. The real classic Core translation units compile in Release/Win32
+with the adapter option enabled and disabled; full x64 Core remains unported.
+Certificates:
+`Build/mta-core-stack-trace/20261013-151215-5409d36d1de64394a34b22bda3a87d0c/test-result.json`,
+`Build/mta-core-definitive-entry/20261013-151228-a8b10ae865f04dce985b92cf2263fe51/test-result.json`
+and `Build/mta-core-startup-check/20261013-153512-c674dfff31844486af06d93fa743a344/test-result.json`.
+
+The subsequent real opt-in x64 compile passes all **99 Core C++ translation
+units**, using an isolated generated project with its exclusion cleared for
+diagnosis. This removes concrete classic animation layouts from the shared
+multiplayer SDK, uses pointer-sized window procedures and widens stored CVars
+for `size_t` consumers. Classic animation consumers include their concrete
+backend headers explicitly. Native crash text retains full addresses; the old
+DWORD register/registry schema and classic pool diagnostics are explicitly
+unavailable on x64. The original native minidump is retained. This does not
+establish linkage or DE startup/rendering, and production architecture filters
+remain in place. Source-bound compile evidence:
+`Build/mta-x64-core-diagnostic/20261013-151313-6a609396/final-02/test-result.json`.
+Native crash-text checks pass 7 x86 / 8 x64 cases:
+`Build/mta-core-native-context/20261013-154019-93fc8f54e0a94d00b87863c5703bc908/test-result.json`.
+
+The next engine trace finds that the pinned executable updates pads `0x188`
+bytes apart, copies current/previous 48-byte blocks at `+0x38` / `+0x68`, and
+stores the game timer at `+0x164`. This explains the old candidate's apparent
+changing buttons: that old second-pad offset read the first pad's timer.
+The raw keyboard states and pending edge queues are process-global. Neither
+the mouse-oriented `BaseUpdatePad` hook nor a saved keyboard-table copy proves
+a remote-player input scope. Field interpretation and the simulation boundary
+must be established before enabling engine writes or advertising readiness.
+
+The diagnostic reader now uses that corrected stride and block offsets, with
+eight exact live caller/updater/getter instruction guards. A poisoned-prefix
+regression fails with the rejected old layout. The corrected reader passes
+1,527 checks on each architecture; the normal module passes 1,484 checks and
+the real x64 Core consumer passes 64. Its DLL SHA-256 is
+`ba0e134fdb7c33b2fde4ac491c44acb69bb2abcd5b986193a8249192a1afecc7`.
+Backend certificate:
+`Build/mta-owned-adapter-check/20261013-152908-dcdb17980528448ba321f8600eb72fac/test-result.json`.
+The later crash-handling review fixes are covered by the newer Core compile
+certificate above; the backend sources and module stayed unchanged.
+
+A bounded native trace identifies a player-control class candidate whose
+vtable is at RVA `0x4319730`, slot `+0x50` targeting `0x124EAF0`. Its constructor
+selects indexed player information and its control callback saves/restores the
+active input provider. This is structural evidence for MTA's per-ped context
+port, not a live identity or write validation. Scalar input methods can bypass
+the pad block through action providers, so an override must also route those
+queries inside the same owned simulation scope. The 127 physical sources and
+pending edge queues must remain independent of remote input.
 
 Generate normally with `utils/premake5.exe vs2026`, then build `Game DE` and
 `Game DE Host Tests` in **Release/x64**. Run the host executable with the absolute

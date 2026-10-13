@@ -78,7 +78,7 @@ static void DebugPrintExceptionInfo([[maybe_unused]] const char* /*message*/)
 
     if (pContext->ContextFlags & CONTEXT_CONTROL)
     {
-        if (pContext->Esp == 0)
+        if (StackTraceHelpers::GetStackPointer(*pContext) == 0)
         {
             return false;
         }
@@ -149,17 +149,8 @@ constexpr std::size_t MAX_FILE_NAME = 260;
     HANDLE hProcess = GetCurrentProcess();
     HANDLE hThread = GetCurrentThread();
 
-    CONTEXT      context = *pException->ContextRecord;
-    STACKFRAME64 frame;
-    memset(&frame, 0, sizeof(frame));
-
-    frame.AddrPC.Offset = context.Eip;
-    frame.AddrFrame.Offset = context.Ebp;
-    frame.AddrStack.Offset = context.Esp;
-
-    frame.AddrPC.Mode = AddrModeFlat;
-    frame.AddrFrame.Mode = AddrModeFlat;
-    frame.AddrStack.Mode = AddrModeFlat;
+    CONTEXT context = *pException->ContextRecord;
+    auto    frame = StackTraceHelpers::InitializeStackFrame(context);
 
     bool useDbgHelp = false;
     if (hasSymbols)
@@ -176,7 +167,7 @@ constexpr std::size_t MAX_FILE_NAME = 260;
 
     for (std::size_t frameIndex = 0; frameIndex < MAX_STACK_FRAMES; ++frameIndex)
     {
-        BOOL bWalked = StackWalk64(IMAGE_FILE_MACHINE_I386, hProcess, hThread, &frame, &context, routines.readMemory, routines.functionTableAccess,
+        BOOL bWalked = StackWalk64(StackTraceHelpers::NativeMachineType, hProcess, hThread, &frame, &context, routines.readMemory, routines.functionTableAccess,
                                    routines.moduleBase, nullptr);
         if (bWalked == FALSE)
             break;
@@ -249,6 +240,7 @@ constexpr std::size_t MAX_FILE_NAME = 260;
 // can fail in a corrupted crash state.
 //
 //////////////////////////////////////////////////////////
+#if defined(_M_IX86)
 struct ResolutionDiagnostics
 {
     DWORD eipUsed = 0;
@@ -315,6 +307,7 @@ static bool ResolveModuleFromRegistrySafe_SEH(_EXCEPTION_POINTERS* pException, v
         return false;
     }
 }
+#endif
 
 void CExceptionInformation_Impl::ResolveModuleFromRegistrySafe(_EXCEPTION_POINTERS* pException)
 {
@@ -323,6 +316,13 @@ void CExceptionInformation_Impl::ResolveModuleFromRegistrySafe(_EXCEPTION_POINTE
     m_resolvedModuleInfo = {};
     m_resolvedModuleNameStorage.clear();
 
+#if defined(_M_X64)
+    // The persisted WerCrash registry schema stores DWORD bases/addresses.
+    // Keep it unavailable here instead of resolving a truncated native PC to
+    // an unrelated module; normal module lookup and stack walking use pointers.
+    static_cast<void>(pException);
+    OutputDebugStringA("ResolveModule: legacy DWORD registry resolution unavailable for x64 context\n");
+#else
     if (pException == nullptr)
     {
         OutputDebugStringA("ResolveModule: pException is NULL\n");
@@ -348,6 +348,7 @@ void CExceptionInformation_Impl::ResolveModuleFromRegistrySafe(_EXCEPTION_POINTE
         m_resolvedModuleInfo = {};
         m_resolvedModuleNameStorage.clear();
     }
+#endif
 }
 
 CExceptionInformation_Impl::CExceptionInformation_Impl()
@@ -422,6 +423,14 @@ void CExceptionInformation_Impl::Set(std::uint32_t iCode, _EXCEPTION_POINTERS* p
     m_pAddress = pException->ExceptionRecord->ExceptionAddress;
     ClearModulePathState();
 
+#if defined(_M_X64)
+    // The existing SDK promises x86 unsigned-long registers. Preserve its ABI
+    // and explicitly leave those unavailable on x64; native crash text and
+    // stack/module lookup use the actual CONTEXT without narrowing addresses.
+    m_ulEAX = m_ulEBX = m_ulECX = m_ulEDX = m_ulESI = m_ulEDI = m_ulEBP = m_ulESP = m_ulEIP = 0;
+    OutputDebugStringA("Set: legacy x86 register fields unavailable; retaining native CONTEXT for x64 diagnostics\n");
+#endif
+
     OutputDebugStringA(">>> Set: Passed all validation, checking enhanced info <<<\n");
 
     ENHANCED_EXCEPTION_INFO enhancedInfo = {};
@@ -486,6 +495,7 @@ void CExceptionInformation_Impl::Set(std::uint32_t iCode, _EXCEPTION_POINTERS* p
             }
         }
 
+#if defined(_M_IX86)
         m_ulEAX = enhancedInfo.eax;
         m_ulEBX = enhancedInfo.ebx;
         m_ulECX = enhancedInfo.ecx;
@@ -495,6 +505,7 @@ void CExceptionInformation_Impl::Set(std::uint32_t iCode, _EXCEPTION_POINTERS* p
         m_ulEBP = enhancedInfo.ebp;
         m_ulESP = enhancedInfo.esp;
         m_ulEIP = enhancedInfo.eip;
+#endif
         m_ulCS = enhancedInfo.cs;
         m_ulDS = enhancedInfo.ds;
         m_ulES = enhancedInfo.es;
@@ -513,6 +524,11 @@ void CExceptionInformation_Impl::Set(std::uint32_t iCode, _EXCEPTION_POINTERS* p
         ResolveModuleFromRegistrySafe(pException);
         return;
     }
+
+    // Cached enhanced reports can be used without reading a damaged CONTEXT.
+    // Only the manual path below needs native registers for module lookup.
+    const auto nativeProgramCounter = pException->ContextRecord ? StackTraceHelpers::GetInstructionPointer(*pException->ContextRecord) : 0;
+    const auto nativeStackPointer = pException->ContextRecord ? StackTraceHelpers::GetStackPointer(*pException->ContextRecord) : 0;
 
     try
     {
@@ -548,6 +564,7 @@ void CExceptionInformation_Impl::Set(std::uint32_t iCode, _EXCEPTION_POINTERS* p
     // Only access ContextRecord if it's not null (can be null for certain exception types)
     if (pException->ContextRecord != nullptr)
     {
+#if defined(_M_IX86)
         m_ulEAX = pException->ContextRecord->Eax;
         m_ulEBX = pException->ContextRecord->Ebx;
         m_ulECX = pException->ContextRecord->Ecx;
@@ -557,6 +574,7 @@ void CExceptionInformation_Impl::Set(std::uint32_t iCode, _EXCEPTION_POINTERS* p
         m_ulEBP = pException->ContextRecord->Ebp;
         m_ulESP = pException->ContextRecord->Esp;
         m_ulEIP = pException->ContextRecord->Eip;
+#endif
         m_ulCS = pException->ContextRecord->SegCs;
         m_ulDS = pException->ContextRecord->SegDs;
         m_ulES = pException->ContextRecord->SegEs;
@@ -603,20 +621,25 @@ void CExceptionInformation_Impl::Set(std::uint32_t iCode, _EXCEPTION_POINTERS* p
     void* pExceptionAddress = m_pAddress;
     void* pQueryAddress = m_pAddress;
 
-    // Special handling for EIP=0: Start from return address at [ESP] instead
+    // Null jumps use the native return address, never the legacy SDK registers.
     constexpr auto kNullAddress = uintptr_t{0};
     static_assert(kNullAddress == 0, "Null address must be zero");
 
     const auto queryAddressValue = reinterpret_cast<uintptr_t>(pQueryAddress);
 
-    if (queryAddressValue == kNullAddress && m_ulEIP == kNullAddress)
+    if (queryAddressValue == kNullAddress && nativeProgramCounter == kNullAddress)
     {
-        const auto espAddr = static_cast<uintptr_t>(m_ulESP);
+        const auto espAddr = static_cast<uintptr_t>(nativeStackPointer);
         const auto pReturnAddress = reinterpret_cast<void* const*>(espAddr);
 
         char debugBuffer[DEBUG_BUFFER_SIZE] = {};
+#if defined(_M_X64)
+        SAFE_DEBUG_PRINT_C(debugBuffer, DEBUG_BUFFER_SIZE, "%.*sSet - RIP=0 detected (RSP=%p), attempting to read return address...\n",
+                           static_cast<int>(DEBUG_PREFIX_EXCEPTION_INFO.size()), DEBUG_PREFIX_EXCEPTION_INFO.data(), reinterpret_cast<void*>(espAddr));
+#else
         SAFE_DEBUG_PRINT_C(debugBuffer, DEBUG_BUFFER_SIZE, "%.*sSet - EIP=0 detected (ESP=0x%08X), attempting to read return address...\n",
                            static_cast<int>(DEBUG_PREFIX_EXCEPTION_INFO.size()), DEBUG_PREFIX_EXCEPTION_INFO.data(), static_cast<unsigned int>(espAddr));
+#endif
 
         if (SharedUtil::IsReadablePointer(pReturnAddress, sizeof(void*)))
         {
@@ -624,14 +647,25 @@ void CExceptionInformation_Impl::Set(std::uint32_t iCode, _EXCEPTION_POINTERS* p
             pExceptionAddress = pQueryAddress;
 
             const auto returnAddressValue = reinterpret_cast<uintptr_t>(pQueryAddress);
+#if defined(_M_X64)
+            SAFE_DEBUG_PRINT_C(debugBuffer, DEBUG_BUFFER_SIZE, "%.*sSet - Successfully read return address: %p\n",
+                               static_cast<int>(DEBUG_PREFIX_EXCEPTION_INFO.size()), DEBUG_PREFIX_EXCEPTION_INFO.data(),
+                               reinterpret_cast<void*>(returnAddressValue));
+#else
             SAFE_DEBUG_PRINT_C(debugBuffer, DEBUG_BUFFER_SIZE, "%.*sSet - Successfully read return address: 0x%08X\n",
                                static_cast<int>(DEBUG_PREFIX_EXCEPTION_INFO.size()), DEBUG_PREFIX_EXCEPTION_INFO.data(),
                                static_cast<unsigned int>(returnAddressValue));
+#endif
         }
         else
         {
+#if defined(_M_X64)
+            SAFE_DEBUG_PRINT_C(debugBuffer, DEBUG_BUFFER_SIZE, "%.*sSet - Failed to read return address at RSP=%p (not readable)\n",
+                               static_cast<int>(DEBUG_PREFIX_EXCEPTION_INFO.size()), DEBUG_PREFIX_EXCEPTION_INFO.data(), reinterpret_cast<void*>(espAddr));
+#else
             SAFE_DEBUG_PRINT_C(debugBuffer, DEBUG_BUFFER_SIZE, "%.*sSet - Failed to read return address at ESP=0x%08X (not readable)\n",
                                static_cast<int>(DEBUG_PREFIX_EXCEPTION_INFO.size()), DEBUG_PREFIX_EXCEPTION_INFO.data(), static_cast<unsigned int>(espAddr));
+#endif
         }
     }
 
@@ -687,7 +721,7 @@ void CExceptionInformation_Impl::Set(std::uint32_t iCode, _EXCEPTION_POINTERS* p
             break;
         }
 
-        const uintptr_t espAddr = static_cast<uintptr_t>(m_ulESP);
+        const uintptr_t espAddr = static_cast<uintptr_t>(nativeStackPointer);
         const uintptr_t offset = i * sizeof(void*);
 
         if (offset > UINTPTR_MAX - espAddr)

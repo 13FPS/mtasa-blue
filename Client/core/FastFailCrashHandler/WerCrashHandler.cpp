@@ -115,6 +115,14 @@ namespace WerCrash
     {
         MinidumpRegisters regs{};
 
+#if defined(_M_X64)
+        // This parser and its persisted report schema describe x86 registers.
+        // Keep the original minidump available without interpreting native x64
+        // CONTEXT bytes as DWORD fields or returning truncated register values.
+        static_cast<void>(dumpPath);
+        OutputDebugStringA("WER legacy x86 register extraction unavailable in x64 Core; original minidump retained\n");
+        return regs;
+#else
         const HANDLE hFile = CreateFileA(dumpPath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (hFile == INVALID_HANDLE_VALUE)
             return regs;
@@ -203,6 +211,7 @@ namespace WerCrash
         CloseHandle(hMapping);
         CloseHandle(hFile);
         return regs;
+#endif
     }
 
     SString ExtractStackTraceFromMinidump(const SString& dumpPath, const MinidumpRegisters& regs)

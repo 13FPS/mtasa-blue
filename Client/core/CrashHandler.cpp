@@ -376,6 +376,35 @@ static void StoreBasicExceptionInfo(_EXCEPTION_POINTERS* pException)
     }
 }
 
+static void CaptureLegacyRegisters(ENHANCED_EXCEPTION_INFO& info, const CONTEXT& context)
+{
+#if defined(_M_IX86)
+    info.eax = context.Eax;
+    info.ebx = context.Ebx;
+    info.ecx = context.Ecx;
+    info.edx = context.Edx;
+    info.esi = context.Esi;
+    info.edi = context.Edi;
+    info.ebp = context.Ebp;
+    info.esp = context.Esp;
+    info.eip = context.Eip;
+#else
+    // Preserve the legacy DWORD report ABI without presenting truncated native
+    // addresses as x86 registers. Lookups and stack walks use CONTEXT directly.
+    info.eax = info.ebx = info.ecx = info.edx = info.esi = info.edi = info.ebp = info.esp = info.eip = 0;
+    SafeDebugPrintPrefixed(DEBUG_PREFIX_CRASH, "Legacy x86 register fields unavailable; native PC=%p SP=%p\n",
+                           reinterpret_cast<void*>(static_cast<uintptr_t>(StackTraceHelpers::GetInstructionPointer(context))),
+                           reinterpret_cast<void*>(static_cast<uintptr_t>(StackTraceHelpers::GetStackPointer(context))));
+#endif
+    info.cs = context.SegCs;
+    info.ds = context.SegDs;
+    info.es = context.SegEs;
+    info.fs = context.SegFs;
+    info.gs = context.SegGs;
+    info.ss = context.SegSs;
+    info.eflags = context.EFlags;
+}
+
 static void LogEnhancedExceptionInfo(_EXCEPTION_POINTERS* pException)
 {
     if (pException == nullptr || pException->ExceptionRecord == nullptr)
@@ -408,53 +437,39 @@ static void LogEnhancedExceptionInfo(_EXCEPTION_POINTERS* pException)
         info.threadId = GetCurrentThreadId();
         info.processId = GetCurrentProcessId();
 
-        info.eax = pException->ContextRecord->Eax;
-        info.ebx = pException->ContextRecord->Ebx;
-        info.ecx = pException->ContextRecord->Ecx;
-        info.edx = pException->ContextRecord->Edx;
-        info.esi = pException->ContextRecord->Esi;
-        info.edi = pException->ContextRecord->Edi;
-        info.ebp = pException->ContextRecord->Ebp;
-        info.esp = pException->ContextRecord->Esp;
-        info.eip = pException->ContextRecord->Eip;
-        info.cs = pException->ContextRecord->SegCs;
-        info.ds = pException->ContextRecord->SegDs;
-        info.es = pException->ContextRecord->SegEs;
-        info.fs = pException->ContextRecord->SegFs;
-        info.gs = pException->ContextRecord->SegGs;
-        info.ss = pException->ContextRecord->SegSs;
-        info.eflags = pException->ContextRecord->EFlags;
+        CaptureLegacyRegisters(info, *pException->ContextRecord);
 
         CExceptionInformation_Impl moduleHelper;
         std::array<char, 512>      moduleBuffer{};
         void*                      moduleBase{nullptr};
 
-        // For EIP=0 crashes, resolve module from return address at [ESP] instead of EIP
+        // For a null instruction pointer, resolve the module from the native
+        // stack. The legacy report's DWORD fields cannot carry x64 addresses.
         void*          addressToResolve{info.exceptionAddress};
         constexpr auto kNullAddress{uintptr_t{0}};
 
         const auto exceptionAddressValue{reinterpret_cast<uintptr_t>(info.exceptionAddress)};
 
-        if (exceptionAddressValue == kNullAddress && info.eip == kNullAddress)
+        if (exceptionAddressValue == kNullAddress && StackTraceHelpers::GetInstructionPointer(*pException->ContextRecord) == kNullAddress)
         {
-            const auto espAddr{static_cast<uintptr_t>(info.esp)};
+            const auto espAddr{static_cast<uintptr_t>(StackTraceHelpers::GetStackPointer(*pException->ContextRecord))};
             const auto pReturnAddress{reinterpret_cast<void* const*>(espAddr)};
 
-            SafeDebugPrintPrefixed(DEBUG_PREFIX_CRASH, "LogEnhancedExceptionInfo - EIP=0 detected (ESP=0x%08X), reading return address...\n",
-                                   static_cast<unsigned int>(espAddr));
+            SafeDebugPrintPrefixed(DEBUG_PREFIX_CRASH, "LogEnhancedExceptionInfo - IP=0 detected (SP=%p), reading return address...\n",
+                                   reinterpret_cast<void*>(espAddr));
 
             if (SharedUtil::IsReadablePointer(pReturnAddress, sizeof(void*)))
             {
                 addressToResolve = *pReturnAddress;
 
                 const auto returnAddressValue{reinterpret_cast<uintptr_t>(addressToResolve)};
-                SafeDebugPrintPrefixed(DEBUG_PREFIX_CRASH, "LogEnhancedExceptionInfo - Return address: 0x%08X (resolving module from this)\n",
-                                       static_cast<unsigned int>(returnAddressValue));
+                SafeDebugPrintPrefixed(DEBUG_PREFIX_CRASH, "LogEnhancedExceptionInfo - Return address: %p (resolving module from this)\n",
+                                       reinterpret_cast<void*>(returnAddressValue));
             }
             else
             {
-                SafeDebugPrintPrefixed(DEBUG_PREFIX_CRASH, "LogEnhancedExceptionInfo - ESP not readable (0x%08X), cannot read return address\n",
-                                       static_cast<unsigned int>(espAddr));
+                SafeDebugPrintPrefixed(DEBUG_PREFIX_CRASH, "LogEnhancedExceptionInfo - SP not readable (%p), cannot read return address\n",
+                                       reinterpret_cast<void*>(espAddr));
             }
         }
 
@@ -1929,10 +1944,9 @@ static bool SafeSymGetLineFromAddr64(HANDLE hProcess, DWORD64 address, DWORD* pD
     HANDLE hProcess = GetCurrentProcess();
     HANDLE hThread = GetCurrentThread();
 
-    CONTEXT      context = *pException->ContextRecord;
-    STACKFRAME64 frame{};
+    CONTEXT context = *pException->ContextRecord;
 
-    // Verify CONTEXT_CONTROL is present before using Eip/Ebp/Esp for stack walking
+    // Verify CONTEXT_CONTROL before using the native instruction/stack registers.
     const bool hasControlContext = (context.ContextFlags & CONTEXT_CONTROL) != 0;
     if (!hasControlContext)
     {
@@ -1941,47 +1955,46 @@ static bool SafeSymGetLineFromAddr64(HANDLE hProcess, DWORD64 address, DWORD* pD
         return FALSE;
     }
 
-    // For EIP=0 crashes, start stack walk from return address at [ESP]
+    auto frame = StackTraceHelpers::InitializeStackFrame(context);
+
+    // For null instruction jumps, start from the native-width return address.
     constexpr auto kNullAddress = uintptr_t{0};
     static_assert(kNullAddress == 0, "Null address constant must be zero");
 
-    const auto isNullJump = (context.Eip == kNullAddress);
+    const auto isNullJump = (frame.AddrPC.Offset == kNullAddress);
 
     if (isNullJump)
     {
-        // Try to read return address from [ESP]
-        const auto espAddr{static_cast<uintptr_t>(context.Esp)};
-        const auto pReturnAddress{reinterpret_cast<void* const*>(espAddr)};
+        const auto stackAddr{static_cast<uintptr_t>(frame.AddrStack.Offset)};
+        const auto pReturnAddress{reinterpret_cast<void* const*>(stackAddr)};
 
         if (SharedUtil::IsReadablePointer(pReturnAddress, sizeof(void*)))
         {
             const auto returnAddr{reinterpret_cast<uintptr_t>(*pReturnAddress)};
 
+#if defined(_M_X64)
+            SafeDebugPrintPrefixed(DEBUG_PREFIX_CRASH, "CaptureUnifiedStackTrace - RIP=0, starting stack walk from return address: 0x%llX\n",
+                                   static_cast<unsigned long long>(returnAddr));
+#else
             SafeDebugPrintPrefixed(DEBUG_PREFIX_CRASH, "CaptureUnifiedStackTrace - EIP=0, starting stack walk from return address: 0x%08X\n",
                                    static_cast<unsigned int>(returnAddr));
+#endif
 
-            // Start stack walk from return address instead of null EIP
+            // Override only the null PC; frame/stack addresses retain all bits.
             frame.AddrPC.Offset = returnAddr;
-            frame.AddrFrame.Offset = context.Ebp;
-            frame.AddrStack.Offset = context.Esp;
         }
         else
         {
+#if defined(_M_X64)
+            SafeDebugPrintPrefixed(DEBUG_PREFIX_CRASH, "CaptureUnifiedStackTrace - RIP=0, RSP not readable (0x%llX), cannot capture stack\n",
+                                   static_cast<unsigned long long>(stackAddr));
+#else
             SafeDebugPrintPrefixed(DEBUG_PREFIX_CRASH, "CaptureUnifiedStackTrace - EIP=0, ESP not readable (0x%08X), cannot capture stack\n",
-                                   static_cast<unsigned int>(espAddr));
+                                   static_cast<unsigned int>(stackAddr));
+#endif
             return FALSE;
         }
     }
-    else
-    {
-        frame.AddrPC.Offset = context.Eip;
-        frame.AddrFrame.Offset = context.Ebp;
-        frame.AddrStack.Offset = context.Esp;
-    }
-
-    frame.AddrPC.Mode = AddrModeFlat;
-    frame.AddrFrame.Mode = AddrModeFlat;
-    frame.AddrStack.Mode = AddrModeFlat;
 
     auto symbolsAvailable = hasSymbols && initializedAtEntry;
 
@@ -2022,7 +2035,7 @@ static bool SafeSymGetLineFromAddr64(HANDLE hProcess, DWORD64 address, DWORD* pD
     pSymbol->SizeOfStruct = sizeof(SYMBOL_INFO);
     pSymbol->MaxNameLen = kMaxSymbolNameLength;
 
-    constexpr auto machineType = IMAGE_FILE_MACHINE_I386;
+    constexpr auto machineType = StackTraceHelpers::NativeMachineType;
 
     for (auto frameIndex : std::views::iota(DWORD{0}, actualMaxFrames))
     {
@@ -2944,7 +2957,7 @@ namespace
         EXCEPTION_RECORD exceptionRecord{};
         exceptionRecord.ExceptionCode = CUSTOM_EXCEPTION_CODE_WATCHDOG_TIMEOUT;
         exceptionRecord.ExceptionFlags = EXCEPTION_NONCONTINUABLE;
-        exceptionRecord.ExceptionAddress = reinterpret_cast<PVOID>(static_cast<uintptr_t>(context.Eip));
+        exceptionRecord.ExceptionAddress = reinterpret_cast<PVOID>(static_cast<uintptr_t>(StackTraceHelpers::GetInstructionPointer(context)));
         exceptionRecord.NumberParameters = 2;
         exceptionRecord.ExceptionInformation[0] = targetThreadId;
         exceptionRecord.ExceptionInformation[1] = g_watchdogState.timeoutSeconds.load(std::memory_order_relaxed);
@@ -2992,22 +3005,7 @@ namespace
                     const auto timeoutSecs = g_watchdogState.timeoutSeconds.load(std::memory_order_relaxed);
                     info.additionalInfo = "Application became unresponsive for " + std::to_string(timeoutSecs) + " seconds";
 
-                    info.eax = s_capturedContext.Eax;
-                    info.ebx = s_capturedContext.Ebx;
-                    info.ecx = s_capturedContext.Ecx;
-                    info.edx = s_capturedContext.Edx;
-                    info.esi = s_capturedContext.Esi;
-                    info.edi = s_capturedContext.Edi;
-                    info.ebp = s_capturedContext.Ebp;
-                    info.esp = s_capturedContext.Esp;
-                    info.eip = s_capturedContext.Eip;
-                    info.cs = s_capturedContext.SegCs;
-                    info.ds = s_capturedContext.SegDs;
-                    info.ss = s_capturedContext.SegSs;
-                    info.es = s_capturedContext.SegEs;
-                    info.fs = s_capturedContext.SegFs;
-                    info.gs = s_capturedContext.SegGs;
-                    info.eflags = s_capturedContext.EFlags;
+                    CaptureLegacyRegisters(info, s_capturedContext);
 
                     // Use the stack trace we captured while thread was suspended
                     if (stackCaptured != FALSE && !stackTraceVec.empty())

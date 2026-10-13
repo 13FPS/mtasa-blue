@@ -14,7 +14,7 @@ if (-not $visualStudio) { throw 'Visual Studio x86/x64 tools are required.' }
 $developerCommand = Join-Path $visualStudio 'Common7/Tools/VsDevCmd.bat'
 $outputRoot = Join-Path $taskRoot ('Build/mta-core-stack-trace/' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
-$sourceNames = @('Client/core/StackTraceHelpers.h', 'Tests/definitive/StackTraceHelpersTests.cpp', 'Tests/definitive/test_stack_trace_helpers.ps1')
+$sourceNames = @('Client/core/StackTraceHelpers.h', 'Client/core/CExceptionInformation_Impl.cpp', 'Client/core/CCrashDumpWriter.cpp', 'Client/core/CrashHandler.cpp', 'Tests/definitive/StackTraceHelpersTests.cpp', 'Tests/definitive/test_stack_trace_helpers.ps1')
 $sourceHashes = @($sourceNames | ForEach-Object {
     $taskPath = Join-Path $taskRoot $_
     [ordered]@{ path=$_; sha256=(Get-FileHash -LiteralPath $taskPath -Algorithm SHA256).Hash.ToLowerInvariant() }
@@ -35,6 +35,8 @@ foreach ($architecture in @('x86', 'x64')) {
     $arguments = @('/nologo','/std:c++20','/EHsc','/W4','/WX','/O2','/MD','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN',
         (Join-Path $PSScriptRoot 'StackTraceHelpersTests.cpp'), ('/Fo' + (Join-Path $outputDirectory 'test.obj')),
         ('/Fe' + $executable), '/link', 'dbghelp.lib')
+    # x86 fallback uses frame chains; x64 deliberately retains optimized unwind metadata.
+    if ($architecture -eq 'x86') { $arguments = @('/Oy-') + $arguments }
     $compilerOutput = @(& $compiler @arguments 2>&1)
     $compilerExit = $LASTEXITCODE
     $compilerOutput | Set-Content -LiteralPath (Join-Path $outputDirectory 'compile.log') -Encoding utf8

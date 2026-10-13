@@ -31,19 +31,25 @@ namespace
             throw std::runtime_error(reason);
     }
 
-    constexpr std::size_t stride = 0x158;
+    // Independent exact-build evidence: caller 0x1155044/0x1155059 selects
+    // objects 0x188 apart; updater 0x1155387..0x11553D0 saves +0x38 at +0x68.
+    // Poisoning the prefix catches the rejected public SDK's enclosing layout.
+    constexpr std::size_t stride = 0x188;
+    constexpr std::size_t currentOffset = 0x38;
+    constexpr std::size_t previousOffset = 0x68;
     constexpr std::size_t stateBytes = 0x30;
     using NativeState = std::array<std::int16_t, 24>;
     struct PadFixture
     {
-        NativeState                                    current;
-        NativeState                                    previous;
-        std::array<std::byte, stride - 2 * stateBytes> unrelated;
+        std::array<std::byte, currentOffset>                           prefix;
+        NativeState                                                    current;
+        NativeState                                                    previous;
+        std::array<std::byte, stride - currentOffset - 2 * stateBytes> unrelated;
     };
     using Fixture = std::array<PadFixture, 2>;
     static_assert(sizeof(NativeState) == stateBytes && sizeof(PadFixture) == stride);
-    static_assert(offsetof(PadFixture, current) == 0 && offsetof(PadFixture, previous) == stateBytes);
-    static_assert(std::is_trivially_copyable_v<Fixture> && sizeof(Fixture) == 0x2b0);
+    static_assert(offsetof(PadFixture, current) == currentOffset && offsetof(PadFixture, previous) == previousOffset);
+    static_assert(std::is_trivially_copyable_v<Fixture> && sizeof(Fixture) == 0x310);
     static_assert(sizeof(CControllerState) == 48);
     static_assert(noexcept(mta::game_de::CopyNativePadStates(nullptr, std::size_t{}, std::uint32_t{}, std::declval<CControllerState&>(),
                                                              std::declval<CControllerState&>())));
@@ -80,6 +86,7 @@ namespace
         Fixture result{};
         for (std::size_t pad = 0; pad < result.size(); ++pad)
         {
+            result[pad].prefix.fill(std::byte{0x5a});
             for (std::size_t field = 0; field < 24; ++field)
             {
                 const auto magnitude = static_cast<std::int16_t>(100 + pad * 1000 + field * 7);
@@ -172,7 +179,8 @@ namespace
         for (std::uint32_t pad = 0; pad < 2; ++pad)
         {
             const auto required = (static_cast<std::size_t>(pad) + 1) * stride;
-            for (const auto count : {std::size_t{0}, std::size_t{47}, std::size_t{48}, std::size_t{95}, std::size_t{96}, required - 1})
+            for (const auto count : {std::size_t{0}, std::size_t{47}, std::size_t{48}, std::size_t{95}, std::size_t{96}, previousOffset + stateBytes,
+                                     std::size_t{0x158}, required - 1})
                 reject(&fixture, count, pad);
         }
     }

@@ -33,7 +33,9 @@ ported. The default classic build retains its original backend.
 This is an MTA-owned integration and build boundary. A focused x64 host compiles
 the same Core consumer and loads the actual adapter DLL; it does not construct
 the full Core or launch GTA. The existing Core is still x86 and uses D3D9, and
-its process detection does not yet accept the DE executable.
+its opt-in x64 entry now recognizes the DE executable candidate. Exact native
+binding runs outside loader lock and rejects an unrecognized engine image;
+the gameplay capability gate remains in place.
 
 Normal MTA project builds and the real-DLL consumer tests pass. The module has
 1,079 checks; the x64 consumer has 45 and its x86 rejection path has three.
@@ -98,6 +100,35 @@ overflow rejection. The actual header passes protected-memory and real-module
 checks on x86/x64, including x64 image addresses above 4 GiB. This keeps the
 current crash SDK/report ABI intact; register capture, native pool diagnostics
 and full startup remain separate port work.
+
+The next startup slice also initializes the three production stack walkers
+from native CONTEXT registers, including AMD64 unwind lookup without symbols.
+Core's opt-in DE entry skips classic file hooks for an x64 `SanAndreas.exe`
+candidate and binds the exact engine image from the constructor. The default
+classic route is preserved. This is production startup preparation; no fake
+game facade or bypass of missing multiplayer/render capabilities is supplied.
+
+For engine writes, trace the actual pinned pad updater rather than overwriting
+the global physical keyboard table. The updater identifies a `0x188` pad stride
+and 48-byte current/previous blocks at `+0x38` / `+0x68`; its timer at `+0x164`
+explains the earlier rejected layout. A remote override must enclose native
+player simulation and restore local context, as MTA's existing keysync hook
+does. The public mouse-update hook alone does not establish that boundary.
+
+The corrected native reader now uses those block offsets and eight exact
+instruction guards, with the diagnostic capability unchanged. A native
+player-control callback candidate was traced at `0x124EAF0`, referenced by
+vtable `0x4319730` slot `+0x50`; it already saves/restores provider context.
+Runtime entity identity and query routing remain necessary before a remote
+override can call this the engine-write boundary. Physical source queues must
+not become remote controller storage.
+
+The existing Core now also passes all 99 C++ translation units in an isolated
+opt-in x64 diagnostic compile. Pointer-sized window APIs, opaque SDK animation
+types and native crash handling remove the observed compiler blockers while
+preserving the classic SDK ABI. Classic Release/Win32 compiles still pass.
+Linkage, the launcher and a DE renderer remain separate prerequisites; the
+production architecture exclusions and gameplay gate are retained.
 
 MTA's ordinary remote movement already combines synchronized controls and
 sender velocity, GTA player simulation, and correction of network position

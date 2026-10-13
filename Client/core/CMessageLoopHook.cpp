@@ -55,8 +55,9 @@ void CMessageLoopHook::ApplyHook(HWND hFocusWindow)
         // Subclass the window procedure.
         m_HookedWindowProc = SubclassWindow(hFocusWindow, ProcessMessage);
 
-        // Enable Unicode (UTF-16) characters in WM_CHAR messages
-        SetWindowLongW(hFocusWindow, GWL_WNDPROC, GetWindowLong(hFocusWindow, GWL_WNDPROC));
+        // Enable Unicode (UTF-16) characters in WM_CHAR messages. A window
+        // procedure is pointer-sized even though ordinary window styles are not.
+        SetWindowLongPtrW(hFocusWindow, GWLP_WNDPROC, GetWindowLongPtr(hFocusWindow, GWLP_WNDPROC));
 
         // Register window class for dummy movement window
         WNDCLASSEX wcDummy;

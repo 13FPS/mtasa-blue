@@ -120,13 +120,106 @@ namespace
     void TestCallbacks()
     {
         const auto fallback = StackTraceHelpers::MakeStackWalkRoutines(false);
-        Check(fallback.readMemory == &StackTraceHelpers::LocalReadProcessMemory && fallback.functionTableAccess == nullptr &&
+        Check(fallback.readMemory == &StackTraceHelpers::LocalReadProcessMemory &&
+#if defined(_M_X64)
+                  fallback.functionTableAccess == &StackTraceHelpers::LocalFunctionTableAccess &&
+#else
+                  fallback.functionTableAccess == nullptr &&
+#endif
                   fallback.moduleBase == &StackTraceHelpers::LocalGetModuleBase,
               "fallback callbacks remain the actual Core helpers");
         const auto symbols = StackTraceHelpers::MakeStackWalkRoutines(true);
         Check(symbols.readMemory == &StackTraceHelpers::LocalReadProcessMemory && symbols.functionTableAccess == &SymFunctionTableAccess64 &&
                   symbols.moduleBase == &SymGetModuleBase64,
               "symbol callbacks retain existing DbgHelp API contracts");
+    }
+
+    void TestNativeFrameInitialization()
+    {
+        CONTEXT context{};
+#if defined(_M_X64)
+        context.Rip = 0x123456789abcdef0ULL;
+        context.Rbp = 0x23456789abcdef01ULL;
+        context.Rsp = 0x3456789abcdef012ULL;
+        constexpr DWORD64 instruction = 0x123456789abcdef0ULL;
+        constexpr DWORD64 frameAddress = 0x23456789abcdef01ULL;
+        constexpr DWORD64 stackAddress = 0x3456789abcdef012ULL;
+        Check(StackTraceHelpers::NativeMachineType == IMAGE_FILE_MACHINE_AMD64, "x64 stack walks must select AMD64");
+#else
+        context.Eip = 0x89abcdef;
+        context.Ebp = 0x9abcdef0;
+        context.Esp = 0xabcdef01;
+        constexpr DWORD64 instruction = 0x89abcdef;
+        constexpr DWORD64 frameAddress = 0x9abcdef0;
+        constexpr DWORD64 stackAddress = 0xabcdef01;
+        Check(StackTraceHelpers::NativeMachineType == IMAGE_FILE_MACHINE_I386, "x86 retains the I386 stack walker");
+#endif
+        Check(StackTraceHelpers::GetInstructionPointer(context) == instruction, "instruction address retains every native register bit");
+        Check(StackTraceHelpers::GetFramePointer(context) == frameAddress, "frame address retains every native register bit");
+        Check(StackTraceHelpers::GetStackPointer(context) == stackAddress, "stack address retains every native register bit");
+        const auto frame = StackTraceHelpers::InitializeStackFrame(context);
+        Check(frame.AddrPC.Offset == instruction && frame.AddrFrame.Offset == frameAddress && frame.AddrStack.Offset == stackAddress,
+              "all three stack frame addresses use the native context");
+        Check(frame.AddrPC.Mode == AddrModeFlat && frame.AddrFrame.Mode == AddrModeFlat && frame.AddrStack.Mode == AddrModeFlat,
+              "native frame keeps the original flat address modes");
+        Check(frame.AddrReturn.Offset == 0 && frame.FuncTableEntry == nullptr && frame.Far == FALSE && frame.Virtual == FALSE,
+              "frame initialization retains zeroed walker state");
+        const auto empty = StackTraceHelpers::InitializeStackFrame(CONTEXT{});
+        Check(empty.AddrPC.Offset == 0 && empty.AddrFrame.Offset == 0 && empty.AddrStack.Offset == 0, "null context addresses remain null");
+    }
+
+    // Real optimized x64 callers require unwind metadata even without symbols.
+    // Walk only our current thread; this fixture never attaches to a game.
+    __declspec(noinline) std::size_t CaptureFrames(std::array<DWORD64, 16>& addresses)
+    {
+        CONTEXT context{};
+        RtlCaptureContext(&context);
+        auto       frame = StackTraceHelpers::InitializeStackFrame(context);
+        const auto routines = StackTraceHelpers::MakeStackWalkRoutines(false);
+#if defined(_M_X64)
+        Check(StackTraceHelpers::LocalFunctionTableAccess(nullptr, frame.AddrPC.Offset) != nullptr,
+              "current non-leaf x64 frame has real runtime unwind metadata");
+        Check(StackTraceHelpers::LocalFunctionTableAccess(nullptr, 0) == nullptr, "null address has no runtime function entry");
+        Check(StackTraceHelpers::LocalFunctionTableAccess(nullptr, UINT64_MAX) == nullptr, "invalid address has no runtime function entry");
+#endif
+        std::size_t count = 0;
+        while (count < addresses.size() && StackWalk64(StackTraceHelpers::NativeMachineType, GetCurrentProcess(), GetCurrentThread(), &frame, &context,
+                                                       routines.readMemory, routines.functionTableAccess, routines.moduleBase, nullptr) != FALSE)
+        {
+            if (frame.AddrPC.Offset == 0 || (count != 0 && addresses[count - 1] == frame.AddrPC.Offset))
+                break;
+            addresses[count++] = frame.AddrPC.Offset;
+        }
+        return count;
+    }
+
+    __declspec(noinline) std::size_t CaptureChild(std::array<DWORD64, 16>& addresses)
+    {
+        const auto    count = CaptureFrames(addresses);
+        volatile auto keepCallerFrame = count;
+        return keepCallerFrame;
+    }
+
+    __declspec(noinline) std::size_t CaptureParent(std::array<DWORD64, 16>& addresses)
+    {
+        const auto    count = CaptureChild(addresses);
+        volatile auto keepCallerFrame = count;
+        return keepCallerFrame;
+    }
+
+    void TestCurrentThreadWalk()
+    {
+        std::array<DWORD64, 16> addresses{};
+        const auto              count = CaptureParent(addresses);
+        Check(count >= 3, "native walker traverses real nested current-thread frames without symbol initialization");
+        const auto module = Address(GetModuleHandleW(nullptr));
+        for (std::size_t index = 0; index < 3; ++index)
+        {
+            Check(StackTraceHelpers::LocalGetModuleBase(nullptr, addresses[index]) == module, "nested frame belongs to this actual test image");
+#if defined(_M_X64)
+            Check(addresses[index] > UINT32_MAX, "real x64 frame address is not truncated to the legacy register width");
+#endif
+        }
     }
 }
 
@@ -137,6 +230,8 @@ int main()
         TestOwnModule();
         TestOwnMemoryAndFailureBounds();
         TestCallbacks();
+        TestNativeFrameInitialization();
+        TestCurrentThreadWalk();
         std::cout << "Passed " << checks << " Core stack trace helper checks\n";
         return 0;
     }

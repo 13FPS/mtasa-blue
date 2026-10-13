@@ -26,6 +26,55 @@
 
 namespace StackTraceHelpers
 {
+    // Core's native stack walker must use the process architecture rather than
+    // the legacy x86 register/report fields, which cannot hold x64 addresses.
+#if defined(_M_X64)
+    inline constexpr DWORD NativeMachineType = IMAGE_FILE_MACHINE_AMD64;
+#elif defined(_M_IX86)
+    inline constexpr DWORD NativeMachineType = IMAGE_FILE_MACHINE_I386;
+#else
+    #error StackTraceHelpers requires an x86 or x64 Windows target
+#endif
+
+    [[nodiscard]] inline DWORD64 GetInstructionPointer(const CONTEXT& context) noexcept
+    {
+#if defined(_M_X64)
+        return context.Rip;
+#else
+        return context.Eip;
+#endif
+    }
+
+    [[nodiscard]] inline DWORD64 GetFramePointer(const CONTEXT& context) noexcept
+    {
+#if defined(_M_X64)
+        return context.Rbp;
+#else
+        return context.Ebp;
+#endif
+    }
+
+    [[nodiscard]] inline DWORD64 GetStackPointer(const CONTEXT& context) noexcept
+    {
+#if defined(_M_X64)
+        return context.Rsp;
+#else
+        return context.Esp;
+#endif
+    }
+
+    [[nodiscard]] inline STACKFRAME64 InitializeStackFrame(const CONTEXT& context) noexcept
+    {
+        STACKFRAME64 frame{};
+        frame.AddrPC.Offset = GetInstructionPointer(context);
+        frame.AddrFrame.Offset = GetFramePointer(context);
+        frame.AddrStack.Offset = GetStackPointer(context);
+        frame.AddrPC.Mode = AddrModeFlat;
+        frame.AddrFrame.Mode = AddrModeFlat;
+        frame.AddrStack.Mode = AddrModeFlat;
+        return frame;
+    }
+
     struct StackWalkRoutines
     {
         PREAD_PROCESS_MEMORY_ROUTINE64   readMemory = nullptr;
@@ -90,6 +139,17 @@ namespace StackTraceHelpers
         return static_cast<DWORD64>(reinterpret_cast<std::uintptr_t>(mbi.AllocationBase));
     }
 
+#if defined(_M_X64)
+    inline PVOID __stdcall LocalFunctionTableAccess(HANDLE /*process*/, DWORD64 address) noexcept
+    {
+        // x64 unwinding needs image unwind metadata even when no PDB/symbol
+        // handler is available. Query only this process, like the local read
+        // and module-base callbacks used by the same fallback walker.
+        DWORD64 imageBase = 0;
+        return RtlLookupFunctionEntry(address, &imageBase, nullptr);
+    }
+#endif
+
     [[nodiscard]] inline StackWalkRoutines MakeStackWalkRoutines(bool useDbgHelp) noexcept
     {
         if (useDbgHelp)
@@ -97,7 +157,13 @@ namespace StackTraceHelpers
             return StackWalkRoutines{.readMemory = &LocalReadProcessMemory, .functionTableAccess = SymFunctionTableAccess64, .moduleBase = SymGetModuleBase64};
         }
 
-        return StackWalkRoutines{.readMemory = &LocalReadProcessMemory, .functionTableAccess = nullptr, .moduleBase = &LocalGetModuleBase};
+        return StackWalkRoutines{.readMemory = &LocalReadProcessMemory,
+#if defined(_M_X64)
+                                 .functionTableAccess = &LocalFunctionTableAccess,
+#else
+                                 .functionTableAccess = nullptr,
+#endif
+                                 .moduleBase = &LocalGetModuleBase};
     }
 
     struct ModuleAddressInfo

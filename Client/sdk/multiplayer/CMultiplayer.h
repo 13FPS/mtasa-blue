@@ -16,9 +16,8 @@
 
 #include <game/CExplosion.h>
 #include <game/CStats.h>
+#include <game/RenderWare.h>
 #include "CLimits.h"
-#include <../Client/game_sa/CAnimBlendAssociationSA.h>
-#include <../Client/game_sa/CAnimBlendStaticAssociationSA.h>
 
 class CEntitySAInterface;
 
@@ -67,9 +66,13 @@ struct SVehicleWeaponHitEvent
     int                 iColSurface;
 };
 
+// The multiplayer ABI passes opaque animation pointers. Concrete classic
+// layouts belong to their backend, so including this SDK must not instantiate
+// 32-bit game structures in another MTA host architecture.
 class CAnimBlendAssociationSAInterface;
 class CAnimBlendStaticAssociationSAInterface;
 class CAnimBlendAssocGroupSAInterface;
+class CAnimBlendHierarchySAInterface;
 class CIFPAnimations;
 typedef unsigned long AssocGroupId;
 typedef unsigned long AnimationId;

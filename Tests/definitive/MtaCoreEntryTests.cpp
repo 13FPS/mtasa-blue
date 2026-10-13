@@ -60,10 +60,13 @@ int wmain(int argc, wchar_t** argv)
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
     try
     {
-        Check(sizeof(void*) == 8 && argc == 2, "fixture requires x64 and its owned absolute directory");
+        Check(sizeof(void*) == 8 && (argc == 2 || (argc == 3 && std::wcscmp(argv[2], L"nonclassic") == 0)),
+              "fixture requires x64 and its owned absolute directory/layout");
         const auto root = std::filesystem::path(argv[1]);
         Check(root.is_absolute(), "fixture path must be explicit and absolute");
-        const auto corePath = root / L"mta" / L"core.dll";
+        const bool nonclassic = argc == 3;
+        const auto moduleDirectory = nonclassic ? root / L"CLEO" / L"de-online" : root / L"mta";
+        const auto corePath = moduleDirectory / L"core.dll";
         NoGameModules();
         NoClassicRendererModules();
         Check(GetModuleHandleW(L"game_de.dll") == nullptr, "backend starts unloaded");
@@ -89,7 +92,9 @@ int wmain(int argc, wchar_t** argv)
         CheckStartup(readStartup, 3, 1, 0);
         Check(readStartup(8) == 0xffffffffu, "unknown startup fields must be rejected");
         NoClassicRendererModules();
-        const auto mta = (root / L"mta").wstring();
+        // The legacy loader supplies the MTA root, while the DE diagnostic
+        // supplies its owned adapter directory. Neither requires registry state.
+        const auto mta = (nonclassic ? moduleDirectory : root).wstring();
         setMta(mta.c_str(), mta.size());
         results[1] = initialize();
         Check(results[1] == 4, "DE candidate must request GTA directory before construction");

@@ -1,6 +1,6 @@
 # GTA San Andreas Definitive Edition: findings and port tracker
 
-Last updated: **2026-10-13 18:33** (Europe/Luxembourg).
+Last updated: **2026-10-13 19:17** (Europe/Luxembourg).
 Experimental branch: `definitive-edition-port`.
 Source baseline: `860e41ddeb6635b5dd138fef6c8a492d2f982ce0`.
 
@@ -25,11 +25,24 @@ shutdown passed and all 19 installed hashes match. This validates scoped local
 movement; complete controls, configured binds and remote contexts remain.
 
 Real Core builds and links in opt-in Release/x64 and passes 93 actual entry
-checks in a non-game host, with the legacy D3DX9 import delayed. Both classic
+checks in each of two non-game folder layouts, with the legacy D3DX9 import delayed. Both classic
 Win32 option/default configurations compile without the new diagnostic exports.
-The next 21-file candidate loads the actual Core inside DE after manual F9
-activation, reads binding/pulse/gameplay-gate diagnostics and unloads it.
-This read-only startup check needs no walking; its live result is pending.
+The first actual Core load failed in static timing-log construction before
+its initializer ran. The Windows dump's null read at Core RVA `0x41FAB` matches
+an independent nonclassic-layout reproduction. The later UE dump executes at
+the former Core CRT FLS cleanup address after unload; the initial loader fault
+is the demonstrated source defect. Timing-path discovery is now deferred and
+the x64 owner supplies the existing explicit install-root override. The old
+classic-layout fixture had hidden this dependency.
+The corrected 21-file candidate loads Core on one owned worker after manual F9
+activation, reads binding/pulse/gameplay-gate diagnostics and unloads it. CLEO
+yields between value-only polls, keeping slow native loads off its watchdog.
+This read-only check needs no walking; its corrected live result is pending.
+The production worker passes 1,901 controlled-loader checks and 46 checks with
+the actual Core on one worker, including cleanup, retry and a deliberate slow
+DLL initializer. Bridge ABI checks (447), adapter checks (319), saved-log tests
+(23 methods) and ownership checks (335) pass. The corrected 21-file candidate
+is installed and hash-verified; neither test host launches the real game.
 It does not complete the DE launcher,
 rendering, full CGame backend or multiplayer. The bounded candidate capability
 keeps those gameplay requirements gated. Historical milestones below describe

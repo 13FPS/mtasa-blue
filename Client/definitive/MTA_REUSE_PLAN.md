@@ -31,6 +31,16 @@ actual Core entry checks and both classic Win32 configurations pass; an in-game
 Core load is pending. This is the next startup boundary, while configured binds,
 the complete game facade and DE rendering still require implementation.
 
+The first actual DE Core load exposed a pre-entry classic-layout dependency:
+global timing-log construction resolved the install root before localization
+existed. A nonclassic-layout host reproduces the same fault as the saved game
+dump. Core now defers that path until timing is enabled and reuses its existing
+explicit root override from the x64 directory setter. Both real Core layout
+fixtures pass. The startup reference now keeps all Core calls and cleanup on
+one worker while CLEO polls value-only results, avoiding its synchronous-call
+watchdog. Full gameplay capabilities remain gated; the corrected live check is
+pending.
+
 ```mermaid
 flowchart LR
     Core[MTA Core] --> Adapter[Game DE adapter module]

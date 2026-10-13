@@ -87,6 +87,12 @@ CORE_API void SetMTADirectory(const wchar_t* path, size_t length)
         return;
 
     g_mtaDirectory.assign(std::wstring_view{path, length});
+#if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
+    // The DE owner supplies its explicit diagnostic root outside loader lock.
+    // It need not resemble a classic MTA installation; use the existing root
+    // override before startup logging can fall back to registry/localization.
+    SharedUtil::SetMTASABaseDirOverride(ToUTF8(g_mtaDirectory.wstring()));
+#endif
 }
 
 CORE_API void SetGTADirectory(const wchar_t* path, size_t length)

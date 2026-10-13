@@ -156,28 +156,62 @@ function runAdapter() {
         // Exercise Core's real entry and adapter ownership inside the verified
         // game. Result five is expected at its complete-gameplay gate; treating
         // that as a playable client would hide the remaining CGame/render work.
-        const run = bind('DE_CoreStartupRun');
+        const begin = bind('DE_CoreStartupBegin');
+        const poll = bind('DE_CoreStartupPoll');
+        const cancel = bind('DE_CoreStartupCancel');
         const read = bind('DE_CoreStartupRead', 'X64U32');
         emit({ event: 'adapter_start', host: HOST, cleo: String(CLEO.version), host_version: String(CLEO.hostVersion),
             definitions: String(CLEO.apiVersion), mode: MODE, endpoint: null, stop_key: stopKey,
-            core_startup_reference: true, provenance: 'mta_core_de_startup', core_api: 1,
+            core_startup_reference: true, provenance: 'mta_core_de_startup', core_api: 2,
             network_active: false, input_writes: false, remote_peds_created: false });
         enterPhase('core_startup_reference');
         const startedAt = Date.now();
         if (!Number.isSafeInteger(startedAt) || startedAt < 0) throw new Error('Invalid Core startup clock');
-        emit({ event: 'core_startup_reference_started', at_ms: startedAt, core_api: 1 });
-        const runResult = run();
-        const state = Array.from({ length: 18 }, (_, field) => read(field));
+        emit({ event: 'core_startup_reference_started', at_ms: startedAt, core_api: 2 });
+        if (begin() !== 1) throw new Error('MTA Core startup worker could not start');
+        let terminal = false, stopRequested = false, lastAt = startedAt;
+        try {
+            while (true) {
+                const at = Date.now();
+                if (!Number.isSafeInteger(at) || at < lastAt) throw new Error('Invalid Core startup clock');
+                lastAt = at;
+                if (!stopRequested) {
+                    const stop = chordHeld([17, 16, 35]);
+                    if (stop || !native('IS_PLAYER_PLAYING', 0)) {
+                        if (cancel() !== 1) throw new Error('MTA Core startup cancellation was rejected');
+                        stopRequested = true;
+                        emit({ event: 'core_startup_reference_stop_requested', at_ms: at,
+                            reason: stop ? stopKey : 'loading' });
+                    }
+                }
+                const status = poll();
+                if (status === 1) { terminal = true; break; }
+                if (status !== 0) throw new Error('MTA Core startup worker status unavailable');
+                // Native loading can exceed CLEO's two-second watchdog. The
+                // bridge owns the entire Core lifecycle on one worker; this
+                // loop yields and observes only completed value snapshots.
+                // Cancellation still polls until owner-thread cleanup ends.
+                wait(50);
+            }
+        } catch (error) {
+            // An invalid FFI/clock result cannot authorize cached reads. Ask
+            // the pinned worker to unwind without blocking script execution.
+            if (!terminal) { try { cancel(); } catch (_) {} }
+            throw error;
+        }
+        const state = Array.from({ length: 19 }, (_, field) => read(field));
         if (!state.every(value => Number.isInteger(value) && value >= 0 && value <= 0xffffffff))
             throw new Error('Core startup returned invalid unsigned state');
         const now = Date.now();
-        if (!Number.isSafeInteger(now) || now < startedAt) throw new Error('Invalid Core startup clock');
+        if (!Number.isSafeInteger(now) || now < lastAt) throw new Error('Invalid Core startup clock');
         const cleanupPassed = state[7] === 1 && state[13] === 1 && state[14] === 0 && state[15] === 0;
         const expected = [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5];
-        const passed = runResult === 1 && expected.every((value, field) => state[field] === value) &&
-            state[11] <= 3 && state[12] <= 3 && (state[12] & ~state[11]) === 0 && cleanupPassed && state[16] === 0 && state[17] === 1;
+        const runResult = state[17] === 1 && state[16] === 0 ? 1 : 0;
+        const passed = !stopRequested && runResult === 1 && expected.every((value, field) => state[field] === value) &&
+            state[11] <= 3 && state[12] <= 3 && (state[12] & ~state[11]) === 0 && cleanupPassed && state[18] === 0;
         emit({ event: 'core_startup_reference_finished', at_ms: now, elapsed_ms: now - startedAt, run_result: runResult,
-            state, passed, cleanup_passed: cleanupPassed, full_core_ready: state[6] === 1, rendering_started: false,
+            state, passed, cleanup_passed: cleanupPassed, stop_requested: stopRequested,
+            full_core_ready: state[6] === 1, rendering_started: false,
             network_active: false, input_writes: false, remote_peds_created: false });
         if (!passed) throw new Error('MTA Core startup reference failed; inspect its saved state');
         return;

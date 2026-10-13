@@ -21,7 +21,7 @@ FIELD_NAMES = (
     "version", "initialize_result", "phase", "capabilities_low", "capabilities_high",
     "gameplay_ready", "full_core_ready", "adapter_cleanup_complete", "first_initialize_result",
     "second_initialize_result", "last_initialize_result", "legacy_renderer_before", "legacy_renderer_after",
-    "core_unloaded", "backend_before", "backend_after", "error_reason", "completed",
+    "core_unloaded", "backend_before", "backend_after", "error_reason", "completed", "win32_load_error",
 )
 EXPECTED_PREFIX = [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5]
 NOTICE = (
@@ -68,7 +68,8 @@ def analyze_log(text, require_exit=False):
         raise ValueError("CLEO log exceeds the 16 MiB read limit")
     events, issues, failures, shutdowns, exits = [], [], [], [], []
     counts = Counter()
-    entry = adapter = armed = requested = released = started = finished = None
+    entry = adapter = armed = requested = released = started = finished = stopped = None
+    expected_result = False
     issue_count = 0
 
     def invalid(event, reason):
@@ -133,7 +134,7 @@ def analyze_log(text, require_exit=False):
         if kind == "adapter_start":
             if (adapter is not None or not entry or not released or started or event.get("mode") != "smoke" or
                     event.get("core_startup_reference") is not True or event.get("provenance") != PROVENANCE or
-                    type(event.get("core_api")) is not int or event["core_api"] != 1 or event.get("endpoint", 1) is not None or
+                    type(event.get("core_api")) is not int or event["core_api"] not in (1, 2) or event.get("endpoint", 1) is not None or
                     any(event.get(flag) is not False for flag in FLAGS)):
                 invalid(event, "Adapter start must identify one isolated read-only Core reference")
             if any(event.get(flag) is True for flag in ("native_pad_reference", "native_movement_trial", "native_input_reference", "gait_reference")):
@@ -141,28 +142,56 @@ def analyze_log(text, require_exit=False):
             adapter = event
         if kind == "core_startup_reference_started":
             if (set(payload) != {"event", "at_ms", "core_api"} or started is not None or finished or not adapter or
-                    type(event.get("core_api")) is not int or event["core_api"] != 1 or not integer(event.get("at_ms")) or
+                    type(event.get("core_api")) is not int or not adapter or event["core_api"] != adapter.get("core_api") or
+                    not integer(event.get("at_ms")) or
                     (released and integer(released.get("at_ms")) and event.get("at_ms", -1) < released["at_ms"])):
                 invalid(event, "Core start must bind one safe clock after activation release")
             started = event
+        elif kind == "core_startup_reference_stop_requested":
+            if (set(payload) != {"event", "at_ms", "reason"} or stopped or finished or not started or
+                    started.get("core_api") != 2 or not integer(event.get("at_ms")) or
+                    not integer(started.get("at_ms")) or event.get("at_ms", -1) < started["at_ms"] or
+                    event.get("reason") not in ("Ctrl+Shift+End", "loading")):
+                invalid(event, "One cooperative stop request must follow worker start and precede its terminal result")
+            stopped = event
         elif kind == "core_startup_reference_finished":
             expected_keys = {"event", "at_ms", "elapsed_ms", "run_result", "state", "passed", "cleanup_passed", "full_core_ready", "rendering_started"} | FLAGS
+            api = started.get("core_api") if started else None
+            if api == 2:
+                expected_keys.add("stop_requested")
             if set(payload) != expected_keys or finished is not None or not started:
                 invalid(event, "One complete terminal payload must follow startup")
             if (not integer(event.get("at_ms")) or not integer(event.get("elapsed_ms")) or not started or
                     not integer(started.get("at_ms")) or event.get("at_ms", -1) - started.get("at_ms", 0) != event.get("elapsed_ms")):
-                invalid(event, "Terminal elapsed clock must match the nonnegative synchronous startup duration")
+                invalid(event, "Terminal elapsed clock must match the nonnegative startup duration")
+            if api == 2 and (type(event.get("stop_requested")) is not bool or event["stop_requested"] != bool(stopped)):
+                invalid(event, "Terminal stop flag must match the single logged cooperative request")
+            if stopped and (not integer(stopped.get("at_ms")) or not integer(event.get("at_ms")) or event["at_ms"] < stopped["at_ms"]):
+                invalid(event, "Terminal cleanup must finish after the cooperative request")
             state = event.get("state")
-            valid_state = isinstance(state, list) and len(state) == 18 and all(integer(value, 0xffffffff) for value in state)
+            valid_state = isinstance(state, list) and len(state) == (19 if api == 2 else 18) and all(integer(value, 0xffffffff) for value in state)
             if not valid_state:
-                invalid(event, "Expected exactly eighteen unsigned integer startup fields")
-            elif (state[:11] != EXPECTED_PREFIX or state[11] > 3 or state[12] > 3 or state[12] & ~state[11] or
-                    state[13:] != [1, 0, 0, 0, 1]):
-                invalid(event, "Actual Core gates, capabilities, no-new-renderer delta or module cleanup disagree")
-            if (type(event.get("run_result")) is not int or event["run_result"] != 1 or event.get("passed") is not True or
-                    event.get("cleanup_passed") is not True or event.get("full_core_ready") is not False or event.get("rendering_started") is not False or
+                invalid(event, "Expected the protocol's exact unsigned integer startup field count")
+            else:
+                expected_state = (state[:11] == EXPECTED_PREFIX and state[11] <= 3 and state[12] <= 3 and
+                                  not state[12] & ~state[11] and state[13:18] == [1, 0, 0, 0, 1] and
+                                  (api != 2 or state[18] == 0))
+                # Preserve the old synchronous failure and its native load
+                # diagnostics, but certify success only from the yielding API.
+                expected_result = bool(api == 2 and expected_state and not stopped and event.get("passed") is True and
+                                       event.get("run_result") == 1 and event.get("cleanup_passed") is True)
+                if event.get("passed") is True and (api != 2 or not expected_state or stopped):
+                    invalid(event, "Only uncancelled asynchronous startup with exact gates and cleanup can pass")
+                if api == 2 and event.get("run_result") != (1 if state[17] == 1 and state[16] == 0 else 0):
+                    invalid(event, "Terminal run result must derive from the completed worker snapshot")
+                cleanup = state[7] == 1 and state[13] == 1 and state[14] == 0 and state[15] == 0
+                if event.get("cleanup_passed") is not cleanup:
+                    invalid(event, "Terminal cleanup flag disagrees with module and adapter diagnostics")
+            if (type(event.get("run_result")) is not int or event["run_result"] not in (0, 1) or
+                    type(event.get("passed")) is not bool or type(event.get("cleanup_passed")) is not bool or
+                    event.get("full_core_ready") is not False or event.get("rendering_started") is not False or
                     any(event.get(flag) is not False for flag in FLAGS)):
-                invalid(event, "Reference result must report read-only success and complete cleanup while full Core/rendering remain unavailable")
+                invalid(event, "Terminal result must use typed read-only flags while full Core and rendering remain unavailable")
             finished = event
         elif kind.startswith("core_startup_reference_"):
             invalid(event, "Unknown Core startup marker")
@@ -176,13 +205,14 @@ def analyze_log(text, require_exit=False):
         "one_adapter_start": counts["adapter_start"] == 1,
         "one_reference_started": counts["core_startup_reference_started"] == 1,
         "one_reference_finished": counts["core_startup_reference_finished"] == 1,
+        "expected_async_result": expected_result,
         "valid_payloads": issue_count == 0,
         "no_failures": not failures,
         "required_exit_verified": not require_exit or normal_exit,
     }
     complete = all(flags.values())
     state = finished.get("state") if finished else None
-    named_state = dict(zip(FIELD_NAMES, state)) if isinstance(state, list) and len(state) == 18 else None
+    named_state = dict(zip(FIELD_NAMES, state)) if isinstance(state, list) and len(state) in (18, 19) else None
     return {
         "schema_version": 1,
         "status": "core_startup_reference_observed" if complete else "adapter_failed" if failures else "invalid_evidence" if issue_count else "incomplete",

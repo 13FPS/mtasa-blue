@@ -22,12 +22,12 @@ def fixture(exit=True, before=0, after=0, elapsed=123):
         {"event": "adapter_activation_released", "mode": "smoke", "activate_key": "Ctrl+Shift+F9", "at_ms": 990,
          "release_wait_ms": 50, "bridge_loaded": False, "game_adapter_active": False, "network_active": False},
         {"event": "adapter_start", "mode": "smoke", "host": "sa_unreal", "cleo": "1.5.1", "host_version": "1.0", "definitions": "0.5",
-         "core_startup_reference": True, "provenance": "mta_core_de_startup", "core_api": 1, "endpoint": None,
+         "core_startup_reference": True, "provenance": "mta_core_de_startup", "core_api": 2, "endpoint": None,
          "network_active": False, "input_writes": False, "remote_peds_created": False},
-        {"event": "core_startup_reference_started", "at_ms": 1000, "core_api": 1},
+        {"event": "core_startup_reference_started", "at_ms": 1000, "core_api": 2},
         {"event": "core_startup_reference_finished", "at_ms": 1000 + elapsed, "elapsed_ms": elapsed,
-         "run_result": 1, "state": [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5, before, after, 1, 0, 0, 0, 1],
-         "passed": True, "cleanup_passed": True, "full_core_ready": False, "rendering_started": False,
+         "run_result": 1, "state": [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5, before, after, 1, 0, 0, 0, 1, 0],
+         "passed": True, "cleanup_passed": True, "stop_requested": False, "full_core_ready": False, "rendering_started": False,
          "network_active": False, "input_writes": False, "remote_peds_created": False},
     ]
     if exit:
@@ -57,8 +57,72 @@ class CoreStartupLogTests(unittest.TestCase):
                 with self.subTest(before=before, after=after):
                     self.assertEqual(self.analyze(fixture(before=before, after=after))["core_startup_reference_complete"], after & ~before == 0)
 
-    def test_synchronous_startup_has_no_invented_small_time_limit(self):
+    def test_yielding_startup_has_no_invented_small_time_limit(self):
         self.assertTrue(self.analyze(fixture(elapsed=2**40))["core_startup_reference_complete"])
+
+    def test_legacy_failed_snapshot_remains_readable_without_certifying_old_success(self):
+        rows = fixture()
+        rows[4]["core_api"] = rows[5]["core_api"] = 1
+        rows[6].pop("stop_requested")
+        rows[6]["state"].pop()
+        self.assertFalse(self.analyze(rows)["core_startup_reference_complete"])
+        rows[6].update(run_result=0, passed=False, cleanup_passed=False)
+        rows[6]["state"] = [0] * 8 + [0xffffffff] * 3 + [2, 2, 1, 0, 0, 4, 0]
+        rows.insert(7, {"event": "adapter_failed", "error": "old synchronous load failure"})
+        result = self.analyze(rows)
+        self.assertEqual(result["status"], "adapter_failed")
+        self.assertEqual(result["issue_count"], 0)
+        self.assertEqual(result["state"]["error_reason"], 4)
+        self.assertNotIn("win32_load_error", result["state"])
+        self.assertFalse(result["core_startup_reference_complete"])
+
+    def test_worker_load_error_is_preserved_as_failure(self):
+        rows = fixture()
+        rows[6].update(run_result=0, passed=False, cleanup_passed=False)
+        rows[6]["state"] = [0] * 8 + [0xffffffff] * 3 + [2, 2, 1, 0, 0, 4, 0, 126]
+        rows.insert(7, {"event": "adapter_failed", "error": "worker load failed"})
+        result = self.analyze(rows)
+        self.assertEqual(result["issue_count"], 0)
+        self.assertEqual(result["state"]["win32_load_error"], 126)
+        self.assertFalse(result["core_startup_reference_complete"])
+
+    def test_cancelled_worker_cleanup_and_racing_success_are_never_success_evidence(self):
+        for reason in ("Ctrl+Shift+End", "loading"):
+            for raced_success in (False, True):
+                with self.subTest(reason=reason, raced_success=raced_success):
+                    rows = fixture()
+                    rows[6].update(stop_requested=True, passed=False, run_result=int(raced_success))
+                    if not raced_success:
+                        rows[6]["state"][16:18] = [12, 0]
+                    rows.insert(6, {"event": "core_startup_reference_stop_requested", "at_ms": 1050, "reason": reason})
+                    rows.insert(8, {"event": "adapter_failed", "error": "cooperative cancellation"})
+                    result = self.analyze(rows)
+                    self.assertEqual(result["issue_count"], 0)
+                    self.assertFalse(result["core_startup_reference_complete"])
+                    self.assertTrue(result["normal_exit_verified"])
+
+    def test_stop_request_schema_order_and_terminal_flag_are_strict(self):
+        stop = {"event": "core_startup_reference_stop_requested", "at_ms": 1050, "reason": "loading"}
+        for change in ({"at_ms": 999}, {"at_ms": 1124}, {"at_ms": True}, {"reason": "other"},
+                       {"reason": []}, {"extra": 1}):
+            rows = fixture(); rows[6].update(stop_requested=True, passed=False)
+            rows.insert(6, {**stop, **change})
+            with self.subTest(change=change):
+                self.assertFalse(self.analyze(rows)["flags"]["valid_payloads"])
+        rows = fixture(); rows[6].update(stop_requested=True, passed=False)
+        rows.insert(6, stop); rows.insert(6, stop)
+        self.assertFalse(self.analyze(rows)["flags"]["valid_payloads"])
+        for at in (5, 7):
+            rows = fixture(); rows[6].update(stop_requested=True, passed=False)
+            rows.insert(at, stop)
+            self.assertFalse(self.analyze(rows)["flags"]["valid_payloads"])
+        rows = fixture(); rows[6]["passed"] = False; rows.insert(6, stop)
+        self.assertFalse(self.analyze(rows)["flags"]["valid_payloads"])
+
+    def test_worker_run_and_cleanup_flags_must_match_its_terminal_snapshot(self):
+        for fields in ({"run_result": 0}, {"cleanup_passed": False}):
+            rows = fixture(); rows[6].update(fields)
+            self.assertFalse(self.analyze(rows)["flags"]["valid_payloads"])
 
     def test_quoted_cleo_messages(self):
         raw = "\n".join(row if isinstance(row, str) else "[INFO] " + json.dumps(json.dumps(row)) for row in fixture())
@@ -71,7 +135,7 @@ class CoreStartupLogTests(unittest.TestCase):
                 self.assertFalse(self.analyze(rows)["core_startup_reference_complete"])
 
     def test_every_uint32_field_is_typed_and_required(self):
-        for index in range(18):
+        for index in range(19):
             for value in (-1, 2**32, True, 1.0, None):
                 with self.subTest(index=index, value=value):
                     rows = fixture(); rows[6]["state"][index] = value
@@ -81,7 +145,7 @@ class CoreStartupLogTests(unittest.TestCase):
             self.assertFalse(self.analyze(rows)["core_startup_reference_complete"])
 
     def test_every_gate_and_cleanup_field_is_checked(self):
-        for index in (*range(11), *range(13, 18)):
+        for index in (*range(11), *range(13, 19)):
             with self.subTest(index=index):
                 rows = fixture(); rows[6]["state"][index] += 1
                 self.assertFalse(self.analyze(rows)["core_startup_reference_complete"])
@@ -91,7 +155,7 @@ class CoreStartupLogTests(unittest.TestCase):
 
     def test_adapter_contract_and_activity_flags(self):
         for key, value in (("core_startup_reference", False), ("provenance", "other"), ("core_api", True),
-                           ("core_api", 2), ("mode", "online"), ("endpoint", "localhost"),
+                           ("core_api", 1), ("core_api", 3), ("mode", "online"), ("endpoint", "localhost"),
                            ("network_active", True), ("input_writes", True), ("remote_peds_created", True),
                            ("native_movement_trial", True)):
             with self.subTest(key=key):
@@ -101,7 +165,8 @@ class CoreStartupLogTests(unittest.TestCase):
     def test_terminal_result_flags_are_strict(self):
         for key, value in (("run_result", 0), ("run_result", True), ("passed", False), ("cleanup_passed", False),
                            ("full_core_ready", True), ("rendering_started", True), ("input_writes", True),
-                           ("network_active", True), ("remote_peds_created", True)):
+                           ("network_active", True), ("remote_peds_created", True), ("stop_requested", True),
+                           ("stop_requested", 0)):
             with self.subTest(key=key):
                 rows = fixture(); rows[6][key] = value
                 self.assertFalse(self.analyze(rows)["core_startup_reference_complete"])

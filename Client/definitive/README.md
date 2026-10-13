@@ -9,23 +9,39 @@ interfaces and synchronization code.
 **Next live check: actual MTA Core startup.**
 `package.ps1 -Mode Smoke -MtaCoreStartupReference` stages 21 owned files,
 including the normal opt-in x64 `core.dll` and its `pthread.dll` dependency.
-After manual Ctrl+Shift+F9 activation and release, the bridge loads that actual
-Core, sets its MTA/game directories, calls `InitializeCore`, reads its startup
-diagnostics and releases it. No walking, NPC, network session or input write is
+After manual Ctrl+Shift+F9 activation and release, one bridge worker loads that
+actual Core, sets its MTA/game directories, calls `InitializeCore`, reads its
+startup diagnostics and releases it. The script yields between completion polls
+so a slow loader cannot consume CLEO's two-second watchdog. Ctrl+Shift+End
+requests cancellation and keeps polling until worker cleanup finishes.
+No walking, NPC, network session or input write is
 part of this check. The expected result is the unchanged incomplete-gameplay
 gate after exact-image binding and a backend pulse, followed by clean unloading.
 It does not start the full MTA client or a DE renderer. Arming waits indefinitely.
 
 The x64 Core now delay-loads its legacy D3DX9 dependency so this early startup
-path does not load a D3D9 renderer. Real Core entry checks pass 93 cases; the
+path does not load a D3D9 renderer. Real Core entry checks pass 93 cases in each
+of the classic and `CLEO/de-online` layouts; the
 classic Win32 option/default builds retain their existing exports and behavior.
-The in-game Core check is pending. Use `utils/definitive_edition/core_startup_log.py`
+The first in-game attempt failed during DLL initialization: a global timing
+logger resolved the classic install root before localization existed. Its null
+read at Core RVA `0x41FAB` matches an independently reproduced loader fault.
+The old classic-layout fixture hid that assumption. Timing-path discovery now
+waits until diagnostics are enabled, and the x64 owner supplies Core's existing
+install-root override before startup logging. The corrected in-game check is
+pending. Probe API2 publishes 19 fields, including the original Win32 load error,
+only after worker cleanup. Use `utils/definitive_edition/core_startup_log.py`
 to assess its saved log. Source defaults and ordinary mode switches disable it;
 it is mutually exclusive with the other Smoke trials. Intact 16/17/19-file
 installs upgrade with ownership/collision checks, and the Core dependency pair
 is always installed or removed together.
 The 21-file ownership suite passes 335 checks across 30 cases, including all
 four historical install generations and loader disable/enable round trips.
+`Tests/definitive/test_core_startup_worker.ps1` compiles the production worker
+and passes 1,901 controlled-loader checks plus 46 checks with the real Core in
+an owned non-game host. A deliberate 2.2-second DLL initializer proves that
+polling/cancellation do not wait on the loader lock. The actual Core run keeps
+its expected wrong-image rejection; it does not validate GTA startup.
 
 **ABI5 adds an explicit MTA-owned engine movement trial.** Build the normal
 Game DE Release/x64 module and this bridge, then package with

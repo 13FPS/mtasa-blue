@@ -9,7 +9,8 @@ param(
     [Parameter(Mandatory)][string]$PthreadDll,
     [ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ExpectedCoreSha256,
     [ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ExpectedGameDeSha256,
-    [ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ExpectedPthreadSha256
+    [ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ExpectedPthreadSha256,
+    [switch]$NonClassicLayout
 )
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
@@ -17,9 +18,15 @@ if ([IntPtr]::Size -ne 8) { throw 'This fixture runner requires a native x64 Pow
 $taskRoot=(Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
 $outputRoot=Join-Path $taskRoot ('Build/mta-core-entry/' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path (Join-Path $outputRoot 'mta/logs') | Out-Null
+$moduleRelative=if ($NonClassicLayout) { 'CLEO/de-online' } else { 'mta' }
+if ($NonClassicLayout) {
+    # Core's existing event logger does not create its parent directories. Keep
+    # its optional diagnostics inside this fixture's explicit nonclassic root.
+    New-Item -ItemType Directory -Path (Join-Path $outputRoot ($moduleRelative+'/mta/logs')) | Out-Null
+}
 $sourceNames=@('Tests/definitive/MtaCoreEntryTests.cpp','Tests/definitive/test_mta_core_entry.ps1',
     'Client/core/Core.cpp','Client/core/CCore.cpp','Client/core/CCore.h','Client/core/premake5.lua','Client/core/CGameAdapterModule.cpp',
-    'Client/core/CGameAdapterModule.h','Client/core/DefinitiveProcess.h','Client/core/DefinitiveStartupState.h','Client/game_de/GameAdapter.cpp',
+    'Client/core/CGameAdapterModule.h','Client/core/DefinitiveProcess.h','Client/core/DefinitiveStartupState.h','Client/core/CTimingCheckpoints.hpp','Client/game_de/GameAdapter.cpp',
     'Client/game_de/NativePadReader.cpp','Client/game_de/NativePadReader.h','Client/sdk/game/CGameAdapter.h',
     'Client/game_de/NativeMovementInput.cpp','Client/game_de/NativeMovementInput.h','Client/game_de/NativeInputRouting.h',
     'Client/game_de/premake5.lua','vendor/detours/premake5.lua','vendor/detours/4.0.1/src/detours.h',
@@ -110,7 +117,7 @@ foreach ($item in @(
             throw 'Opt-in x64 Core must defer its classic D3DX9 dependency and have no eager D3D9 renderer import.'
         }
     }
-    $destination=Join-Path $outputRoot ('mta/'+$item.name)
+    $destination=Join-Path $outputRoot ($moduleRelative+'/'+$item.name)
     Copy-Item -LiteralPath $resolved -Destination $destination
     if ((Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant() -ne $sha) { throw 'Staged artifact fingerprint mismatch.' }
     $staged += [ordered]@{source=$resolved;staged=$destination;sha256=$sha;machine='AMD64';bytes=$bytes.Length}
@@ -147,11 +154,13 @@ if ($compilerExit -eq 0) {
     $hostHash=(Get-FileHash -LiteralPath $hostPath -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($hostHash -eq '63e633bb51c35fe35ca98f503b62e7ddb8403abe4c9d501cfa9162892453846f') { throw 'Fixture unexpectedly matches the real game image.' }
     Push-Location -LiteralPath $outputRoot
-    try { $hostOutput=@(& $hostPath $outputRoot 2>&1);$hostExit=$LASTEXITCODE } finally { Pop-Location }
+    $hostArguments=@($outputRoot)
+    if ($NonClassicLayout) { $hostArguments+='nonclassic' }
+    try { $hostOutput=@(& $hostPath @hostArguments 2>&1);$hostExit=$LASTEXITCODE } finally { Pop-Location }
     $hostOutput | Set-Content -LiteralPath (Join-Path $outputRoot 'host.log') -Encoding utf8
     try { $hostResult=($hostOutput -join "`n") | ConvertFrom-Json } catch { $failure='Host did not publish its complete result.' }
 } else { $failure='Fixture compilation failed.' }
-$coreLog=Join-Path $outputRoot 'mta/logs/logfile.txt'
+$coreLog=Join-Path $outputRoot $(if ($NonClassicLayout) { 'CLEO/de-online/mta/logs/logfile.txt' } else { 'mta/logs/logfile.txt' })
 $coreLogText=if (Test-Path -LiteralPath $coreLog) { Get-Content -LiteralPath $coreLog -Raw } else { '' }
 $bindingRejections=[regex]::Matches($coreLogText,'DE adapter initialization rejected: DE adapter input binding: BindNativeInput: Unsupported').Count
 $sourcesUnchanged=$true
@@ -161,7 +170,7 @@ foreach ($name in $sourceNames) {
 $success=$compilerExit -eq 0 -and $hostExit -eq 0 -and $null -ne $hostResult -and $hostResult.success -and $bindingRejections -eq 2 -and $sourcesUnchanged
 $record=[ordered]@{recorded_at=[DateTimeOffset]::Now.ToString('o');success=$success;directory=$outputRoot;
     scope='Actual supplied Core/Game DE DLL entry point in a separate non-game host named SanAndreas.exe';
-    compiler_exit=$compilerExit;host_exit=$hostExit;host_result=$hostResult;failure=$failure;host_sha256=$hostHash;
+    compiler_exit=$compilerExit;host_exit=$hostExit;host_result=$hostResult;failure=$failure;host_sha256=$hostHash;nonclassic_layout=$NonClassicLayout.IsPresent;
     source_hashes=$sourceHashes;sources_unchanged_during_fixture=$sourcesUnchanged;artifacts=$staged;system_dependencies=$systemDependencies;core_imports=$coreImports;
     core_log_path=$coreLog;exact_binding_rejection_messages=$bindingRejections;
     core_log_sha256=$(if (Test-Path -LiteralPath $coreLog) {(Get-FileHash -LiteralPath $coreLog -Algorithm SHA256).Hash.ToLowerInvariant()}else{$null});

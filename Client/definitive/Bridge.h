@@ -84,7 +84,10 @@ DE_BRIDGE_API int DE_MtaMovementCapture();
 DE_BRIDGE_API std::uint32_t DE_MtaMovementRead(std::uint32_t component);
 DE_BRIDGE_API int           DE_MtaMovementEnd();
 
-// Exercise the actual adjacent x64 Core entry point without enabling gameplay.
-// Read returns the fixed startup/cleanup snapshot captured before Core unload.
-DE_BRIDGE_API int DE_CoreStartupRun();
+// ProbeAPI2 schedules actual Core startup on one owned worker. Poll returns
+// 0=pending,1=terminal,-1=unavailable. Cancel requests cooperative cleanup.
+// Read exposes19 values only after terminal cleanup; field18=Win32 load error.
+DE_BRIDGE_API int DE_CoreStartupBegin();
+DE_BRIDGE_API int DE_CoreStartupPoll();
+DE_BRIDGE_API int DE_CoreStartupCancel();
 DE_BRIDGE_API std::uint32_t DE_CoreStartupRead(std::uint32_t component);

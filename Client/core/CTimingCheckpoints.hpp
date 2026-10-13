@@ -40,7 +40,6 @@ public:
         m_FrameStartTimeUs = 0;
         m_PrevFrameTimeUs = 0;
         m_CheckpointsStartUs = 0;
-        m_LogFileName = CalcMTASAPath("timings.log");
     }
 
     ////////////////////////////////////////
@@ -57,6 +56,12 @@ public:
             m_bEnabled = bEnabled;
             if (bEnabled)
             {
+                // This object is constructed while Core's DLL is loading.
+                // Install-root discovery can require localization and loader
+                // configuration, so resolve the unchanged log path only when
+                // an initialized Core actually enables timing diagnostics.
+                if (m_LogFileName.empty())
+                    m_LogFileName = CalcMTASAPath("timings.log");
                 ClearLog();
                 AppendLog(SString("Started timing checkpoints [Ver:%d.%d.%d-%d.%05d] [Date:%s]", MTASA_VERSION_MAJOR, MTASA_VERSION_MINOR,
                                   MTASA_VERSION_MAINTENANCE, MTASA_VERSION_TYPE, MTASA_VERSION_BUILD, *GetLocalTimeString(true).SplitLeft(" ")));

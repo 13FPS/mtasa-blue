@@ -1172,8 +1172,8 @@ async function main() {
             DE_MtaMovementBegin: () => 1, DE_MtaMovementSubmit: () => 1, DE_MtaMovementCapture: () => 1,
             DE_MtaMovementRead: index => [movementActive, movementActive, 1, 1, 1, 0, 1, 0, 0, 0, 0, 0][index],
             DE_MtaMovementEnd: () => { movementActive = 0; return 1; },
-            DE_CoreStartupRun: () => 1,
-            DE_CoreStartupRead: index => [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5, 0, 0, 1, 0, 0, 0, 1][index],
+            DE_CoreStartupBegin: () => 1, DE_CoreStartupPoll: () => 1, DE_CoreStartupCancel: () => 1,
+            DE_CoreStartupRead: index => [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5, 0, 0, 1, 0, 0, 0, 1, 0][index],
             ...(overrides.functions || {}) };
         const names = Object.keys(functions).filter(name => typeof functions[name] === 'function');
         const record = (name, ...args) => { calls.push([name, ...args]); callFrames.push({ frame, name }); };
@@ -1232,15 +1232,19 @@ async function main() {
     test('real Core startup entry waits for all F9 modifiers to release and records the gated result once', () => {
         const result = coreStartup();
         assert.equal(result.callFrames.find(call => call.name === 'DynamicLibrary.Load').frame, 2);
-        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupRun').length, 1);
-        assert.deepEqual(result.calls.filter(call => call[0] === 'DE_CoreStartupRead').map(call => call[1]), Array.from({ length: 18 }, (_, i) => i));
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupBegin').length, 1);
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupPoll').length, 1);
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 0);
+        assert.deepEqual(result.calls.filter(call => call[0] === 'DE_CoreStartupRead').map(call => call[1]), Array.from({ length: 19 }, (_, i) => i));
         const finish = result.logs.find(event => event.event === 'core_startup_reference_finished');
         assert.equal(finish.passed, true); assert.equal(finish.cleanup_passed, true);
+        assert.equal(finish.stop_requested, false); assert.equal(finish.run_result, 1);
         assert.equal(finish.full_core_ready, false); assert.equal(finish.rendering_started, false);
         assert.ok(!result.calls.some(call => ['DE_ConnectLocal', 'GET_PLAYER_CHAR', 'GET_CHAR_COORDINATES', 'GET_CHAR_VELOCITY',
             'CREATE_CHAR', 'DE_MtaMovementBegin', 'DE_NativePadBind'].includes(call[0])));
         const start = result.logs.find(event => event.event === 'adapter_start');
         assert.equal(start.core_startup_reference, true); assert.equal(start.input_writes, false);
+        assert.equal(start.core_api, 2);
         assert.equal(start.network_active, false); assert.equal(start.remote_peds_created, false);
     });
     test('Core startup waits indefinitely before activation even with automatic preferences', () => {
@@ -1259,21 +1263,79 @@ async function main() {
         assert.equal(result.runtimeAccess.length, 0);
         assert.ok(result.logs.some(e => e.event === 'adapter_activation_release_timeout'));
     });
-    test('Core startup rejects missing bridge exports before calling Core', () => {
-        const result = coreStartup({ functions: { DE_CoreStartupRead: null } });
-        assert.ok(result.logs.some(e => e.event === 'adapter_failed' && e.error.includes('DE_CoreStartupRead')));
-        assert.ok(!result.calls.some(call => call[0] === 'DE_CoreStartupRun'));
+    for (const name of ['DE_CoreStartupBegin', 'DE_CoreStartupPoll', 'DE_CoreStartupCancel', 'DE_CoreStartupRead'])
+        test('Core startup rejects missing worker export ' + name + ' before calling Core', () => {
+            const result = coreStartup({ functions: { [name]: null } });
+            assert.ok(result.logs.some(e => e.event === 'adapter_failed' && e.error.includes(name)));
+            assert.ok(!result.calls.some(call => call[0] === 'DE_CoreStartupBegin'));
+        });
+    test('Core startup rejected Begin never polls or reads an unowned worker', () => {
+        const result = coreStartup({ functions: { DE_CoreStartupBegin: () => 0 } });
+        assert.ok(result.logs.some(e => e.event === 'adapter_failed'));
+        assert.ok(!result.calls.some(call => ['DE_CoreStartupPoll', 'DE_CoreStartupRead', 'DE_CoreStartupCancel'].includes(call[0])));
+        assert.ok(!result.logs.some(e => e.event === 'core_startup_reference_finished'));
+    });
+    test('Core startup yields until terminal without abandoning a slow loader or reading pending state', () => {
+        let polls = 0;
+        const result = coreStartup({ keyFrames: [[17, 16, 120], [], [], [], [], []],
+            times: [0, 50, 3000, 30000, 300000, 3000000], functions: {
+                DE_CoreStartupPoll: () => ++polls === 5 ? 1 : 0,
+                DE_CoreStartupRead: index => { assert.equal(polls, 5); return [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5, 0, 0, 1, 0, 0, 0, 1, 0][index]; }
+            } });
+        assert.equal(polls, 5);
+        assert.equal(result.logs.find(e => e.event === 'core_startup_reference_finished').elapsed_ms, 2999950);
+        assert.ok(result.waits.every(call => call.milliseconds === 50));
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 0);
+    });
+    for (const reason of ['Ctrl+Shift+End', 'loading']) test('Core startup ' + reason + ' requests stop once and polls owner cleanup to terminal', () => {
+        let polls = 0, cancels = 0;
+        const values = [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5, 0, 0, 1, 0, 0, 12, 0, 0];
+        const result = coreStartup({ keyFrames: reason === 'loading' ? [[17, 16, 120], [], [], [], []] :
+                [[17, 16, 120], [], [], [17, 16, 35], [17, 16, 35]],
+            readyFrames: reason === 'loading' ? [true, true, true, false, false] : undefined,
+            functions: { DE_CoreStartupPoll: () => ++polls === 4 ? 1 : 0,
+                DE_CoreStartupCancel: () => { ++cancels; return 1; },
+                DE_CoreStartupRead: index => { assert.equal(polls, 4); return values[index]; } } });
+        assert.equal(cancels, 1); assert.equal(polls, 4);
+        const stop = result.logs.filter(e => e.event === 'core_startup_reference_stop_requested');
+        assert.equal(stop.length, 1); assert.equal(stop[0].reason, reason);
+        const finish = result.logs.find(e => e.event === 'core_startup_reference_finished');
+        assert.equal(finish.stop_requested, true); assert.equal(finish.passed, false);
+        assert.equal(finish.cleanup_passed, true); assert.equal(finish.run_result, 0);
+        assert.ok(result.logs.some(e => e.event === 'adapter_failed'));
+    });
+    test('Core startup cancellation cannot certify a worker that finishes success concurrently', () => {
+        let polls = 0;
+        const result = coreStartup({ keyFrames: [[17, 16, 120], [], [17, 16, 35]],
+            functions: { DE_CoreStartupPoll: () => ++polls === 2 ? 1 : 0 } });
+        const finish = result.logs.find(e => e.event === 'core_startup_reference_finished');
+        assert.equal(finish.run_result, 1); assert.equal(finish.stop_requested, true); assert.equal(finish.passed, false);
+    });
+    for (const value of [-1, 2, 0.5, NaN]) test('Core startup invalid Poll requests cooperative cleanup without cached reads: ' + value, () => {
+        const result = coreStartup({ functions: { DE_CoreStartupPoll: () => value } });
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 1);
+        assert.ok(!result.calls.some(call => call[0] === 'DE_CoreStartupRead'));
+        assert.ok(result.logs.some(e => e.event === 'adapter_failed'));
+    });
+    test('Core startup a reversed pending clock requests cooperative cleanup without cached reads', () => {
+        const result = coreStartup({ keyFrames: [[17, 16, 120], [], []], times: [0, 100, 99],
+            functions: { DE_CoreStartupPoll: () => 0 } });
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 1);
+        assert.ok(!result.calls.some(call => call[0] === 'DE_CoreStartupRead'));
+        assert.ok(result.logs.some(e => e.event === 'adapter_failed' && e.error.includes('clock')));
     });
     test('Core startup preserves a rejected native result and cleanup diagnostics', () => {
-        const result = coreStartup({ functions: { DE_CoreStartupRun: () => 0 } });
+        const values = [0, 0, 0, 0, 0, 0, 0, 0, 0xffffffff, 0xffffffff, 0xffffffff, 2, 2, 1, 0, 0, 4, 0, 126];
+        const result = coreStartup({ functions: { DE_CoreStartupRead: index => values[index] } });
         const finish = result.logs.find(e => e.event === 'core_startup_reference_finished');
-        assert.equal(finish.run_result, 0); assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true);
+        assert.equal(finish.run_result, 0); assert.equal(finish.passed, false); assert.equal(finish.state[18], 126);
+        assert.equal(finish.cleanup_passed, false);
         assert.ok(result.logs.some(e => e.event === 'adapter_failed'));
     });
     for (const [field, value] of [[1, 0], [2, 3], [3, 33], [5, 1], [6, 1], [7, 0], [8, 4], [9, 3], [10, 0],
-        [11, 4], [12, 1], [13, 0], [14, 1], [15, 1], [16, 8], [17, 0]]) {
+        [11, 4], [12, 1], [13, 0], [14, 1], [15, 1], [16, 8], [17, 0], [18, 126]]) {
         test('Core startup rejects misleading state field ' + field, () => {
-            const values = [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5, 0, 0, 1, 0, 0, 0, 1]; values[field] = value;
+            const values = [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5, 0, 0, 1, 0, 0, 0, 1, 0]; values[field] = value;
             const result = coreStartup({ functions: { DE_CoreStartupRead: index => values[index] } });
             assert.equal(result.logs.find(e => e.event === 'core_startup_reference_finished').passed, false);
             assert.ok(result.logs.some(e => e.event === 'adapter_failed'));

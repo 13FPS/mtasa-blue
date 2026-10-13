@@ -64,6 +64,15 @@ without loading D3D9/D3DX9, and classic Win32 option/default compilation passes.
 In-game Core startup remains pending; full input/game/remote capabilities stay
 disabled. The earlier movement result remains a validated local slice.
 
+The first real Core load failed before this adapter was initialized. Its global
+timing logger assumed a classic folder layout and touched missing localization;
+the saved null-read dump matches an ordinary-host reproduction. Core's timing
+path is now lazy and its x64 directory setter supplies the existing root
+override. The actual Core fixture now checks both classic and DE adapter
+layouts. The diagnostic bridge owns the whole Core lifecycle on one worker and
+the script yields between polls; cleanup and diagnostics remain on that worker.
+The corrected live startup result remains pending.
+
 The current offline checks pass 351 production callback cases, 7,413 routing
 cases per architecture, 1,512 module cases and 76 x64 Core-consumer cases.
 Normal Release/x64 Core/Game DE builds, the real Core entry fixture (26 checks)

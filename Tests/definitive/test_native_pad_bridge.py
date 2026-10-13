@@ -40,7 +40,9 @@ def main():
         "DE_MtaMovementCapture": (ctypes.c_int, []),
         "DE_MtaMovementRead": (ctypes.c_uint32, [ctypes.c_uint32]),
         "DE_MtaMovementEnd": (ctypes.c_int, []),
-        "DE_CoreStartupRun": (ctypes.c_int, []),
+        "DE_CoreStartupBegin": (ctypes.c_int, []),
+        "DE_CoreStartupPoll": (ctypes.c_int, []),
+        "DE_CoreStartupCancel": (ctypes.c_int, []),
         "DE_CoreStartupRead": (ctypes.c_uint32, [ctypes.c_uint32]),
     }
     for name, (result, arguments) in signatures.items():
@@ -50,6 +52,7 @@ def main():
         check(bool(function), f"Missing ABI export {name}")
 
     check(bridge.DE_ApiVersion() == 2, "Additive diagnostic exports retain bridge ABI2")
+    check(getattr(bridge, "DE_CoreStartupRun", None) is None, "Unsafe synchronous startup export must be absent")
     # A regular Python executable must never masquerade as the verified GTA host
     # or obtain engine access merely by loading this DLL and resolving its ABI.
     check(bridge.DE_BindRuntime() == 0, "Wrong executable must reject runtime binding")
@@ -58,10 +61,13 @@ def main():
     # not load Core merely because all diagnostic exports can be resolved.
     for name in ("core.dll", "game_de.dll"):
         check(not kernel32.GetModuleHandleW(name), f"Rejected host starts without {name}")
-    check(bridge.DE_CoreStartupRun() == 0, "Wrong executable cannot run Core startup")
-    for component in (*range(18), 18, 0xFFFFFFFF):
+    check(bridge.DE_CoreStartupBegin() == 0, "Wrong executable cannot begin Core startup")
+    check(bridge.DE_CoreStartupPoll() == -1, "Rejected startup cannot publish a worker status")
+    check(bridge.DE_CoreStartupCancel() == 0, "Rejected startup cannot acquire worker cancellation ownership")
+    for component in (*range(19), 19, 0xFFFFFFFF):
         check(bridge.DE_CoreStartupRead(component) == 0, "Rejected startup cannot manufacture cached diagnostics")
-    check(bridge.DE_CoreStartupRun() == 0, "Repeated rejected startup remains unavailable")
+    check(bridge.DE_CoreStartupBegin() == 0, "Repeated rejected startup remains unavailable")
+    check(bridge.DE_CoreStartupPoll() == -1, "Repeated rejection never manufactures terminal completion")
     for name in ("core.dll", "game_de.dll"):
         check(not kernel32.GetModuleHandleW(name), f"Rejected startup cannot load {name}")
     for name, handle in renderer_before.items():
@@ -87,8 +93,10 @@ def main():
         check(bridge.DE_NativeDeviceRead(index) == 0, "Unbound or invalid device source must remain unavailable")
     bridge.DE_NativePadReset()
     bridge.DE_Disconnect()
-    check(bridge.DE_CoreStartupRun() == 0, "Cleanup cannot authorize Core startup")
-    for component in (*range(18), 18, 0xFFFFFFFF):
+    check(bridge.DE_CoreStartupBegin() == 0, "Cleanup cannot authorize Core startup")
+    check(bridge.DE_CoreStartupCancel() == 0, "Cleanup cannot create cancellation ownership")
+    check(bridge.DE_CoreStartupPoll() == -1, "Cleanup cannot create worker completion")
+    for component in (*range(19), 19, 0xFFFFFFFF):
         check(bridge.DE_CoreStartupRead(component) == 0, "Cleanup cannot retain or create startup diagnostics")
     for name in ("core.dll", "game_de.dll"):
         check(not kernel32.GetModuleHandleW(name), f"Cleanup cannot load {name}")

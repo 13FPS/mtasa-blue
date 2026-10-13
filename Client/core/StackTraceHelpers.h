@@ -14,6 +14,7 @@
 #include <array>
 #include <cstdint>
 #include <format>
+#include <limits>
 #include <optional>
 #include <ranges>
 #include <span>
@@ -43,7 +44,10 @@ namespace StackTraceHelpers
             return FALSE;
         }
 
-        if (baseAddress > static_cast<DWORD64>(UINT32_MAX)) [[unlikely]]
+        // x64 Core images can live above 4 GiB. Validate against this process's
+        // pointer width, including the entire read range, before any cast/copy.
+        constexpr DWORD64 maxNativeAddress = static_cast<DWORD64>((std::numeric_limits<std::uintptr_t>::max)());
+        if (baseAddress > maxNativeAddress || static_cast<DWORD64>(size) > maxNativeAddress - baseAddress) [[unlikely]]
         {
             if (bytesRead)
                 *bytesRead = 0;
@@ -52,8 +56,8 @@ namespace StackTraceHelpers
 
         __try
         {
-            const auto srcAddr = static_cast<std::uint32_t>(baseAddress);
-            const auto srcPtr = reinterpret_cast<const std::byte*>(static_cast<std::uintptr_t>(srcAddr));
+            const auto srcAddr = static_cast<std::uintptr_t>(baseAddress);
+            const auto srcPtr = reinterpret_cast<const std::byte*>(srcAddr);
             const auto dest = std::span{reinterpret_cast<std::byte*>(buffer), size};
             const auto srcSpan = std::span{srcPtr, size};
             std::ranges::copy(srcSpan, dest.begin());
@@ -71,13 +75,13 @@ namespace StackTraceHelpers
 
     inline DWORD64 __stdcall LocalGetModuleBase(HANDLE /*process*/, DWORD64 address) noexcept
     {
-        constexpr DWORD64 max32BitAddress = static_cast<DWORD64>(UINT32_MAX);
-        if (address > max32BitAddress) [[unlikely]]
+        constexpr DWORD64 maxNativeAddress = static_cast<DWORD64>((std::numeric_limits<std::uintptr_t>::max)());
+        if (address > maxNativeAddress) [[unlikely]]
             return 0;
 
         MEMORY_BASIC_INFORMATION mbi{};
-        const auto               addr32 = static_cast<std::uint32_t>(address);
-        if (VirtualQuery(reinterpret_cast<LPCVOID>(static_cast<std::uintptr_t>(addr32)), &mbi, sizeof(mbi)) == 0) [[unlikely]]
+        const auto               nativeAddress = static_cast<std::uintptr_t>(address);
+        if (VirtualQuery(reinterpret_cast<LPCVOID>(nativeAddress), &mbi, sizeof(mbi)) == 0) [[unlikely]]
             return 0;
 
         if (mbi.AllocationBase == nullptr) [[unlikely]]
@@ -109,13 +113,13 @@ namespace StackTraceHelpers
         if (address == 0) [[unlikely]]
             return std::nullopt;
 
-        constexpr DWORD64 max32BitAddress = static_cast<DWORD64>(UINT32_MAX);
-        if (address > max32BitAddress) [[unlikely]]
+        constexpr DWORD64 maxNativeAddress = static_cast<DWORD64>((std::numeric_limits<std::uintptr_t>::max)());
+        if (address > maxNativeAddress) [[unlikely]]
             return std::nullopt;
 
         MEMORY_BASIC_INFORMATION mbi{};
-        if (const auto addr32 = static_cast<std::uint32_t>(address);
-            VirtualQuery(reinterpret_cast<LPCVOID>(static_cast<std::uintptr_t>(addr32)), &mbi, sizeof(mbi)) == 0) [[unlikely]]
+        if (const auto nativeAddress = static_cast<std::uintptr_t>(address); VirtualQuery(reinterpret_cast<LPCVOID>(nativeAddress), &mbi, sizeof(mbi)) == 0)
+            [[unlikely]]
             return std::nullopt;
 
         if (mbi.AllocationBase == nullptr) [[unlikely]]

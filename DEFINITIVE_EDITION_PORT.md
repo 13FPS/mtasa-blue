@@ -1,6 +1,6 @@
 # GTA San Andreas Definitive Edition: findings and port tracker
 
-Last updated: **2026-10-13 13:20** (Europe/Luxembourg).
+Last updated: **2026-10-13 13:35** (Europe/Luxembourg).
 Experimental branch: `definitive-edition-port`.
 Source baseline: `860e41ddeb6635b5dd138fef6c8a492d2f982ce0`.
 
@@ -112,7 +112,33 @@ The current runtime result is linked from
 `Build/definitive-manual-test/current-native-pad-reference-test.json`.
 Bounded offline disassembly identifies the static candidate as a fallback:
 code substitutes an alternate pointer at RVA 0x5067940 before querying separate
-action providers. No live alternate pointer or provider API is validated yet.
+action providers. That selection alone does not establish a controller layout.
+
+Normal exit is now preserved separately: the 205,673-byte final log has SHA-256
+`f58e4840b009735b110e3512dc1be81bd86ee9e444716145b3023581a9c7231b`,
+contains `host shut down`/`Exit`, and still passes all 225 captures with zero
+parser issues. All 17 installed files retain their hashes.
+
+After the trial, a bounded passive metadata read identified the active provider
+at slot 0 and its main-image virtual implementations. The alternate pointer was
+equal to the static candidate in that snapshot; its gate at +0x30 was 1. These
+post-trial values do not describe the entire walking trial. Offline analysis
+distinguishes slot 0's binding-membership check from slot 4's actual state read.
+For ordinary binding source indices 0..126, that state read accesses signed
+32-bit entries at image RVA `0x5709A40`. The engine tests values 2/3 as active;
+physical key/action mapping and frame semantics remain unverified. No engine
+method was invoked and no game memory was changed. The complete bounded report
+is saved under the trial's `passive-input-metadata-132605-15f6318d/` directory.
+
+**One existing Core x64 pointer blocker is fixed.** `StackTraceHelpers.h` no
+longer truncates stack-read/module-description addresses to 32 bits. Native-width
+range checks also reject overflowing reads before copying. The original helper
+fails the real x64 own-module case; the corrected helper passes 35 x86 and 30
+x64 checks, including real image addresses above 4 GiB, protected pages and
+module/absolute formatting. Repository formatting and diff checks pass.
+Certificate: `Build/mta-core-stack-trace/20261013-133022-556c65e367164c0a8bd598431ecba77a/test-result.json`.
+Run `Tests/definitive/test_stack_trace_helpers.ps1`. Core's x86 register context,
+native pool diagnostics, dependencies and rendering/startup still require porting.
 
 The native-reader checkpoint builds the normal Game DE/host projects and passes
 1,474 module checks, 59 x64 host checks, three x86 rejections and 1,325 bounded

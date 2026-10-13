@@ -74,6 +74,13 @@ unavailable. Offline consumer code also substitutes an alternate object pointer
 before querying separate action providers. Further binding work must follow that
 active input path; neither readable bytes nor the public signature establish it.
 
+The first Core x64 cleanup fixes the existing `StackTraceHelpers.h` callbacks
+and module descriptions to preserve native pointer widths, with read-range
+overflow rejection. The actual header passes protected-memory and real-module
+checks on x86/x64, including x64 image addresses above 4 GiB. This keeps the
+current crash SDK/report ABI intact; register capture, native pool diagnostics
+and full startup remain separate port work.
+
 MTA's ordinary remote movement already combines synchronized controls and
 sender velocity, GTA player simulation, and correction of network position
 error. The next work follows those existing paths. A new receipt-speed estimator

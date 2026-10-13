@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { MODE, ONLINE_ACTIVATION, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE } from './config.mjs';
+import { MODE, ONLINE_ACTIVATION, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE, MTA_CORE_MOVEMENT_REFERENCE } from './config.mjs';
 import { AdapterController, NativeGaitReferenceController, NativeInputReferenceController } from './controller.mjs';
 import { MtaNativePadReferenceController } from './native-pad-reference.mjs';
 import { MtaNativeMovementTrialController } from './native-movement-trial.mjs';
@@ -13,6 +13,10 @@ function runAdapter() {
     emit({ event: 'adapter_phase', phase, mode: MODE, host: HOST, cleo: String(CLEO.version),
         host_version: String(CLEO.hostVersion), definitions: String(CLEO.apiVersion) });
     if (!['diagnostic', 'smoke', 'online'].includes(MODE)) throw new Error('Unknown adapter mode');
+    if (typeof MTA_CORE_MOVEMENT_REFERENCE !== 'boolean' ||
+        (MTA_CORE_MOVEMENT_REFERENCE && (MODE !== 'smoke' || INPUT_REFERENCE || GAIT_REFERENCE || GAIT_RATE || GAIT_ROOT_LOCK ||
+            MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE)))
+        throw new Error('MTA Core configured movement reference requires separate opt-in Smoke mode');
     if (typeof MTA_CORE_INPUT_REFERENCE !== 'boolean' ||
         (MTA_CORE_INPUT_REFERENCE && (MODE !== 'smoke' || INPUT_REFERENCE || GAIT_REFERENCE || GAIT_RATE || GAIT_ROOT_LOCK ||
             MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE)))
@@ -56,20 +60,20 @@ function runAdapter() {
         throw new Error('SA Unreal API definitions 0.493 or newer are required');
     // These untested input/velocity bindings come from the pinned 0.500 API.
     // Reject older definitions before activation reads, DLL access, or CJ reads.
-    if ((INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE) && definitionVersion < 0.500)
+    if ((INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE) && definitionVersion < 0.500)
         throw new Error('Native input reference requires SA Unreal API definitions 0.500 or newer');
 
     const stopKey = 'Ctrl+Shift+End';
     // Home opens the Rockstar console on the tested build and interrupts this
     // read-only observation, so the input reference needs its own shortcut.
-    const activateKey = (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE) ? 'Ctrl+Shift+F9' : 'Ctrl+Shift+Home';
+    const activateKey = (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE) ? 'Ctrl+Shift+F9' : 'Ctrl+Shift+Home';
     const chordHeld = keys => keys.every(key => native('IS_KEY_PRESSED', key));
-    if (MODE === 'online' || GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE) {
+    if (MODE === 'online' || GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE) {
         if (MODE === 'online' && !['manual', 'automatic'].includes(ONLINE_ACTIVATION))
             throw new Error('Unknown online activation mode');
         // The reference changes one owned NPC, so even an automatic Online
         // preference cannot start this separate experiment during save loading.
-        if (GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || ONLINE_ACTIVATION === 'manual') {
+        if (GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || ONLINE_ACTIVATION === 'manual') {
             // Startup freezes have also occurred before this script enters.
             // Waiting here cannot prevent those loader failures, but it gives
             // a usable game session a separate, observable boundary before
@@ -85,7 +89,7 @@ function runAdapter() {
                         bridge_loaded: false, game_adapter_active: false, network_active: false });
                     return;
                 }
-                if (chordHeld([17, 16, (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE) ? 120 : 36]) && native('IS_PLAYER_PLAYING', 0)) {
+                if (chordHeld([17, 16, (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE) ? 120 : 36]) && native('IS_PLAYER_PLAYING', 0)) {
                     emit({ event: 'adapter_activation_requested', mode: MODE, activate_key: activateKey });
                     break;
                 }
@@ -93,7 +97,7 @@ function runAdapter() {
             }
         }
     }
-    if (MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE) {
+    if (MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE) {
         // Holding the activation modifiers contaminated the prior source-state
         // window. Begin DLL access and the recorder only after their release,
         // while keeping cancellation and a finite pre-binding deadline.
@@ -156,6 +160,100 @@ function runAdapter() {
     enterPhase('runtime_bind');
     if (bindRuntime() !== 1) throw new Error('CLEO runtime lifecycle binding failed');
     enterPhase('runtime_bound');
+    if (MTA_CORE_MOVEMENT_REFERENCE) {
+        // Core owns XML, configured bindings and the eligible local write scope.
+        // JS only observes coherent value snapshots and requests cancellation;
+        // pending native restoration retains the worker instead of faking unload.
+        const begin = bind('DE_CoreMovementBegin');
+        const capture = bind('DE_CoreMovementCapture');
+        const readMovement = bind('DE_CoreMovementRead', 'X64U32');
+        const poll = bind('DE_CoreStartupPoll');
+        const cancel = bind('DE_CoreStartupCancel');
+        const read = bind('DE_CoreStartupRead', 'X64U32');
+        emit({ event: 'adapter_start', host: HOST, cleo: String(CLEO.version), host_version: String(CLEO.hostVersion),
+            definitions: String(CLEO.apiVersion), mode: MODE, endpoint: null, stop_key: stopKey,
+            core_movement_reference: true, provenance: 'mta_core_configured_movement', core_api: 4, adapter_abi: 6,
+            network_active: false, input_writes: true, remote_peds_created: false });
+        enterPhase('core_movement_reference');
+        const startedAt = Date.now();
+        if (!Number.isSafeInteger(startedAt) || startedAt < 0) throw new Error('Invalid Core movement clock');
+        emit({ event: 'core_movement_reference_started', at_ms: startedAt, core_api: 4, adapter_abi: 6, sample_interval_ms: 100,
+            budget_ms: 30000, readiness_budget_ms: 10000, cleanup_deadline_ms: 2000, context_source: 'engine_eligibility' });
+        if (begin() !== 1) throw new Error('MTA Core configured movement worker could not start');
+        let terminal = false, stopRequested = false, lastAt = startedAt, lastSequence = 0, lastElapsed = -1;
+        let latest = null, samples = 0;
+        const captureSample = at => {
+            const captured = capture();
+            if (captured !== 0 && captured !== 1) throw new Error('Core movement capture status unavailable');
+            if (!captured) return false;
+            const state = Array.from({ length: 96 }, (_, field) => readMovement(field));
+            if (!state.every(value => Number.isInteger(value) && value >= 0 && value <= 0xffffffff))
+                throw new Error('Core movement returned invalid unsigned state');
+            if (state[0] !== 1 || ![1, 2, 3].includes(state[1]) || state[2] < lastSequence || state[3] < lastElapsed)
+                throw new Error('Core movement publication order is invalid');
+            // CLEO may sample the same protected frame twice or skip native
+            // pulses. Preserve each distinct sequence once, including terminal.
+            if (state[2] === lastSequence) {
+                if (!latest || state.some((value, field) => value !== latest[field]))
+                    throw new Error('Core movement publication changed without a new sequence');
+                return true;
+            }
+            lastSequence = state[2]; lastElapsed = state[3]; latest = state;
+            ++samples;
+            emit({ event: 'core_movement_reference_sample', at_ms: at, elapsed_ms: at - startedAt, state });
+            return true;
+        };
+        try {
+            while (true) {
+                const at = Date.now();
+                if (!Number.isSafeInteger(at) || at < lastAt) throw new Error('Invalid Core movement clock');
+                lastAt = at;
+                if (!stopRequested) {
+                    const stop = chordHeld([17, 16, 35]);
+                    if (stop || !native('IS_PLAYER_PLAYING', 0)) {
+                        if (cancel() !== 1) throw new Error('MTA Core movement cancellation was rejected');
+                        stopRequested = true;
+                        emit({ event: 'core_movement_reference_stop_requested', at_ms: at, reason: stop ? stopKey : 'loading' });
+                    }
+                }
+                const status = poll();
+                if (status !== 0 && status !== 1) throw new Error('MTA Core movement worker status unavailable');
+                captureSample(at);
+                if (status === 1) { terminal = true; break; }
+                // DLL loading and owner cleanup may exceed CLEO's watchdog;
+                // pending work always yields instead of blocking script ticks.
+                wait(100);
+            }
+        } catch (error) {
+            if (!terminal) { try { cancel(); } catch (_) {} }
+            throw error;
+        }
+        const state = Array.from({ length: 19 }, (_, field) => read(field));
+        if (!state.every(value => Number.isInteger(value) && value >= 0 && value <= 0xffffffff))
+            throw new Error('Core movement returned invalid unsigned final state');
+        const now = Date.now();
+        if (!Number.isSafeInteger(now) || now < lastAt) throw new Error('Invalid Core movement clock');
+        const cleanupPassed = state[7] === 1 && state[13] === 1 && state[14] === 0 && state[15] === (latest === null ? 0 : latest[94]);
+        const expected = [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5];
+        const runResult = state[17] === 1 && state[16] === 0 ? 1 : 0;
+        const pairZero = index => latest !== null && latest[64 + index * 2] === 0 && latest[65 + index * 2] === 0;
+        const pairEqual = (left, right) => latest !== null && latest[64 + left * 2] === latest[64 + right * 2] &&
+            latest[65 + left * 2] === latest[65 + right * 2];
+        const passed = !stopRequested && runResult === 1 && expected.every((value, field) => state[field] === value) &&
+            state[11] <= 3 && state[12] <= 3 && (state[12] & ~state[11]) === 0 && cleanupPassed && state[18] === 0 &&
+            latest !== null && latest[1] === 2 && latest[14] === 1 && latest[15] === 1 &&
+            latest[4] === 0 && latest[88] === 15 && latest[89] === 15 && latest[90] === 1 &&
+            latest[91] === 1 && latest[92] >= 1 && latest[93] === 0 && latest[94] === 1 && latest[95] === 0 &&
+            latest.slice(16, 64).every(value => value === 0) && latest[12] === 0 && latest[13] === 0 &&
+            pairZero(0) && pairZero(1) && !pairZero(3) && !pairZero(4) && pairEqual(3, 6) && latest[87] === 0 && latest[86] !== 0xffffffff &&
+            [7, 8, 9, 10].every(pairZero);
+        emit({ event: 'core_movement_reference_finished', at_ms: now, elapsed_ms: now - startedAt, state, run_result: runResult,
+            passed, cleanup_passed: cleanupPassed, stop_requested: stopRequested, samples,
+            full_core_ready: state[6] === 1, rendering_started: false, network_active: false,
+            input_writes: true, remote_peds_created: false });
+        if (!passed) throw new Error('MTA Core configured movement reference failed; inspect its saved state');
+        return;
+    }
     if (MTA_CORE_INPUT_REFERENCE) {
         // The worker loads real XML records and pulses Core's existing bind
         // owner. Capture copies one publication before field reads; it never
@@ -316,7 +414,7 @@ function runAdapter() {
             readTransform: handle => ({ ...native('GET_CHAR_COORDINATES', handle), heading: native('GET_CHAR_HEADING', handle) }) };
         emit({ event: 'adapter_start', host: HOST, cleo: String(CLEO.version), host_version: String(CLEO.hostVersion),
             definitions: String(CLEO.apiVersion), mode: MODE, endpoint: null, stop_key: stopKey,
-            native_movement_trial: true, provenance: 'mta_game_de_scoped_local_movement', adapter_abi: 5,
+            native_movement_trial: true, provenance: 'mta_game_de_scoped_local_movement', adapter_abi: 6,
             network_active: false, input_writes: true, remote_peds_created: false });
         controller = new MtaNativeMovementTrialController(game, reader, { log: emit, stopReason: stopKey });
         enterPhase('controller_run');

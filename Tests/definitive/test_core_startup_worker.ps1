@@ -18,7 +18,7 @@ $outputRoot = Join-Path $repositoryRoot ('Build/mta-core-startup-worker/' + (Get
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
 function Hash([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 $sourceNames = @('Client/definitive/CoreStartupReference.h','Client/definitive/CoreStartupReference.cpp',
-    'Client/core/DefinitiveInputReference.h',
+    'Client/core/DefinitiveInputReference.h','Client/core/DefinitiveMovementReference.h',
     'Tests/definitive/CoreStartupReferenceTests.cpp','Tests/definitive/CoreStartupFixture.cpp','Tests/definitive/test_core_startup_worker.ps1')
 $sourceHashes = [ordered]@{}
 foreach ($name in $sourceNames) {
@@ -99,12 +99,22 @@ try {
         $artifacts += [ordered]@{source=$source;path=$destination;sha256=$hash;machine='AMD64';bytes=$bytes.Length}
     }
     $runs += Run-Host 'actual-core-wrong-image' $actualRoot @($actualRoot,'actual')
+    foreach ($mode in @('movement','movement-cancel')) {
+        $movementRoot = Join-Path $outputRoot ($mode + '-host')
+        New-Item -ItemType Directory -Path $movementRoot -Force | Out-Null
+        Copy-Item -LiteralPath $hostPath -Destination (Join-Path $movementRoot 'SanAndreas.exe')
+        # This is the real backend DLL loaded/PINned without invoking its factory
+        # or native methods. The controlled Core tests worker lifetime only.
+        Copy-Item -LiteralPath $GameDeDll -Destination (Join-Path $movementRoot 'game_de.dll')
+        if ((Hash (Join-Path $movementRoot 'game_de.dll')) -ne $ExpectedGameDeSha256.ToLowerInvariant()) { throw 'Movement PIN fixture backend hash differs.' }
+        $runs += Run-Host $mode $movementRoot @($movementRoot,$mode,$normalFixture)
+    }
 } catch { $failure = $_.Exception.Message }
 $unchanged = $true
 foreach ($name in $sourceNames) { if ((Hash (Join-Path $repositoryRoot $name)) -ne $sourceHashes[$name]) { $unchanged=$false } }
 foreach ($artifact in $artifacts) { if ((Hash $artifact.source) -ne $artifact.sha256) { $unchanged=$false } }
 $record = [ordered]@{
-    recorded_at=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=($null -eq $failure -and $unchanged -and $runs.Count -eq 2);
+    recorded_at=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=($null -eq $failure -and $unchanged -and $runs.Count -eq 4);
     failure=$failure;source_hashes=$sourceHashes;sources_unchanged=$unchanged;compiles=$compiles;runs=$runs;normal_artifacts=$artifacts;
     fixture_executable_is_game=$false;game_launched=$false;game_memory_read=$false;game_process_attached=$false;game_files_changed=$false;
     synthetic_core_is_mta=$false;full_mta_boot_verified=$false;engine_input_write_verified=$false;

@@ -17,7 +17,7 @@ New-Item -ItemType Directory -Path $outputRoot | Out-Null
 $sourceNames = @('Client/sdk/game/CGameAdapter.h', 'Client/game_de/GameAdapter.cpp', 'Client/game_de/ControllerSnapshot.h',
     'Client/game_de/NativePadReader.h', 'Client/game_de/NativePadReader.cpp',
     'Client/game_de/NativeMovementInput.h', 'Client/game_de/NativeMovementInput.cpp', 'Client/game_de/NativeInputRouting.h',
-    'Client/definitive/MtaControllerSnapshot.h', 'Shared/sdk/CControllerState.h',
+    'Client/definitive/MtaControllerSnapshot.h', 'Shared/sdk/CControllerState.h', 'Shared/sdk/enums/PedState.h',
     'Shared/sdk/CControllerActions.h', 'Shared/sdk/CControlStateSynthesis.h',
     'Tests/definitive/GameAdapterModuleTests.cpp', 'Tests/definitive/test_game_adapter_module.ps1')
 $detoursSourceRoot = Join-Path $taskRoot 'vendor/detours/4.0.1/src'

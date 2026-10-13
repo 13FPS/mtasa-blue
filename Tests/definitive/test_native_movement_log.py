@@ -73,6 +73,18 @@ class MovementLogTests(unittest.TestCase):
         raw = '\n'.join(row if isinstance(row, str) else '[INFO] ' + json.dumps(json.dumps(row)) for row in fixture())
         self.assertTrue(reader.analyze_log(raw)['native_movement_trial_complete'])
 
+    def test_new_abi6_retains_the_same_scoped_legacy_trial_contract(self):
+        rows = fixture()
+        for row in rows:
+            if isinstance(row, dict) and 'adapter_abi' in row:
+                row['adapter_abi'] = 6
+        self.assertTrue(self.analyze(rows, True)['native_movement_trial_complete'])
+
+    def test_mixed_abi_versions_cannot_share_a_single_trial(self):
+        rows = fixture()
+        rows[3]['adapter_abi'] = 6
+        self.assertFalse(self.analyze(rows)['native_movement_trial_complete'])
+
     def test_require_exit(self):
         self.assertTrue(self.analyze(fixture(False))['native_movement_trial_complete'])
         self.assertFalse(self.analyze(fixture(False), True)['native_movement_trial_complete'])

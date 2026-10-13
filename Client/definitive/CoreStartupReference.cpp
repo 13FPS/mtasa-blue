@@ -29,7 +29,12 @@ namespace deonline
         return Start(moduleAddress, true);
     }
 
-    bool CoreStartupReference::Start(const void* moduleAddress, bool configuredInput) noexcept
+    bool CoreStartupReference::BeginMovementReference(const void* moduleAddress) noexcept
+    {
+        return Start(moduleAddress, true, true);
+    }
+
+    bool CoreStartupReference::Start(const void* moduleAddress, bool configuredInput, bool configuredMovement) noexcept
     {
         DWORD      expected = 0;
         const auto current = GetCurrentThreadId();
@@ -37,11 +42,15 @@ namespace deonline
             return false;
         address = moduleAddress;
         inputRequested = configuredInput;
+        movementRequested = configuredMovement;
         AcquireSRWLockExclusive(&inputLock);
         inputAvailable = false;
         publishedInput = {};
+        movementAvailable = false;
+        publishedMovement = {};
         ReleaseSRWLockExclusive(&inputLock);
         capturedInput = {};
+        capturedMovement = {};
         cancellation.store(false);
         state.store(1, std::memory_order_release);
         // Use the existing CRT worker convention instead of a joinable global
@@ -98,6 +107,22 @@ namespace deonline
         return ownerThread.load() == GetCurrentThreadId() && field < capturedInput.size() ? capturedInput[field] : 0;
     }
 
+    bool CoreStartupReference::CaptureMovement() noexcept
+    {
+        if (ownerThread.load() != GetCurrentThreadId() || !TryAcquireSRWLockShared(&inputLock))
+            return false;
+        const bool available = movementAvailable;
+        if (available)
+            capturedMovement = publishedMovement;
+        ReleaseSRWLockShared(&inputLock);
+        return available;
+    }
+
+    std::uint32_t CoreStartupReference::ReadMovement(std::uint32_t field) const noexcept
+    {
+        return ownerThread.load() == GetCurrentThreadId() && field < capturedMovement.size() ? capturedMovement[field] : 0;
+    }
+
     bool CoreStartupReference::InputCancelled()
     {
         return !inputOwner || inputOwner->cancellation.load(std::memory_order_acquire);
@@ -105,11 +130,20 @@ namespace deonline
 
     void CoreStartupReference::PublishInput(const std::uint32_t* snapshot, std::uint32_t count)
     {
-        if (!inputOwner || !snapshot || count != DefinitiveInputReference::FieldCount)
+        if (!inputOwner || !snapshot ||
+            count != (inputOwner->movementRequested ? DefinitiveMovementReference::FieldCount : DefinitiveInputReference::FieldCount))
             return;
         AcquireSRWLockExclusive(&inputOwner->inputLock);
-        std::copy_n(snapshot, count, inputOwner->publishedInput.begin());
-        inputOwner->inputAvailable = true;
+        if (inputOwner->movementRequested)
+        {
+            std::copy_n(snapshot, count, inputOwner->publishedMovement.begin());
+            inputOwner->movementAvailable = true;
+        }
+        else
+        {
+            std::copy_n(snapshot, count, inputOwner->publishedInput.begin());
+            inputOwner->inputAvailable = true;
+        }
         ReleaseSRWLockExclusive(&inputOwner->inputLock);
     }
 
@@ -224,15 +258,18 @@ namespace deonline
                 if (inputRequested)
                 {
                     using Configure = std::uint32_t (*)(std::uint32_t, DefinitiveInputReference::CancelCallback, DefinitiveInputReference::PublishCallback);
-                    const auto inputVersion = reinterpret_cast<Version>(GetProcAddress(core, "MTA_DEInputReferenceApiVersion"));
-                    const auto configure = reinterpret_cast<Configure>(GetProcAddress(core, "MTA_ConfigureDEInputReference"));
+                    const auto inputVersion = reinterpret_cast<Version>(
+                        GetProcAddress(core, movementRequested ? "MTA_DEMovementReferenceApiVersion" : "MTA_DEInputReferenceApiVersion"));
+                    const auto configure = reinterpret_cast<Configure>(
+                        GetProcAddress(core, movementRequested ? "MTA_ConfigureDEMovementReference" : "MTA_ConfigureDEInputReference"));
                     if (!inputVersion || !configure || inputVersion() != DefinitiveInputReference::ApiVersion)
                     {
                         values[16] = 13;
                         return;
                     }
                     inputOwner = this;
-                    if (configure(DefinitiveInputReference::MaximumDurationMs, InputCancelled, PublishInput) != 1)
+                    const auto duration = movementRequested ? DefinitiveMovementReference::MaximumDurationMs : DefinitiveInputReference::MaximumDurationMs;
+                    if (configure(duration, InputCancelled, PublishInput) != 1)
                     {
                         values[16] = 14;
                         return;
@@ -246,9 +283,14 @@ namespace deonline
                 if (inputRequested)
                 {
                     AcquireSRWLockShared(&inputLock);
-                    const bool inputComplete = inputAvailable && publishedInput[DefinitiveInputReference::Version] == DefinitiveInputReference::ApiVersion &&
-                                               publishedInput[DefinitiveInputReference::Phase] == 2 &&
-                                               publishedInput[DefinitiveInputReference::InputCleanupComplete] == 1;
+                    const auto complete = [](const auto& sample)
+                    {
+                        return sample[DefinitiveInputReference::Version] == DefinitiveInputReference::ApiVersion &&
+                               sample[DefinitiveInputReference::Phase] == 2 && sample[DefinitiveInputReference::InputCleanupComplete] == 1;
+                    };
+                    const bool inputComplete =
+                        movementRequested ? movementAvailable && complete(publishedMovement) && !publishedMovement[DefinitiveMovementReference::CleanupPending]
+                                          : inputAvailable && complete(publishedInput);
                     ReleaseSRWLockShared(&inputLock);
                     if (!inputComplete)
                     {
@@ -286,7 +328,8 @@ namespace deonline
         values[15] = GetModuleHandleW(L"game_de.dll") ? 1u : 0u;
         if ((values[12] & ~values[11]) && !values[16])
             values[16] = 10;
-        if ((!values[13] || values[15]) && !values[16])
+        const auto expectedBackend = movementRequested && movementAvailable ? publishedMovement[DefinitiveMovementReference::BackendPinnedExpected] : 0u;
+        if ((!values[13] || values[15] != expectedBackend) && !values[16])
             values[16] = 9;
     }
 }

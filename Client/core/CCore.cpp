@@ -36,6 +36,7 @@
 #include "FastFailCrashHandler/WerCrashHandler.h"
 #include "DefinitiveStartupState.h"
 #include "DefinitiveInputReference.h"
+#include "DefinitiveMovementReference.h"
 
 using SharedUtil::CalcMTASAPath;
 using namespace std;
@@ -144,7 +145,8 @@ namespace
         return foreground && GetWindowThreadProcessId(foreground, &process) && process == GetCurrentProcessId();
     }
 
-    void CopyInputReferenceController(DefinitiveInputReference::Snapshot& snapshot, std::uint32_t first, const CControllerState& state) noexcept
+    template <std::size_t N>
+    void CopyInputReferenceController(std::array<std::uint32_t, N>& snapshot, std::uint32_t first, const CControllerState& state) noexcept
     {
         static_assert(sizeof(CControllerState) == 24 * sizeof(std::int16_t));
         std::array<std::int16_t, 24> fields{};
@@ -153,14 +155,33 @@ namespace
             snapshot[first + index] = static_cast<std::uint32_t>(static_cast<std::int32_t>(fields[index]));
     }
 
+    bool CopyMovementReferenceState(CGameAdapterModule& adapter, DefinitiveMovementReference::Snapshot& snapshot)
+    {
+        mta::game_de::NativeMovementTrialState state;
+        if (!adapter.GetNativeMovementTrialState(state))
+            return false;
+        const std::array<std::uint64_t, 12> values = {
+            state.bound,         state.active,          state.callbackCount,          state.scopedSteps,     state.routedQueries, state.neutralQueries,
+            state.restoredSteps, state.restoreFailures, state.foreignThreadCallbacks, state.nestedCallbacks, state.failureReason, state.lastMoveState};
+        for (std::size_t index = 0; index < values.size(); ++index)
+        {
+            snapshot[DefinitiveMovementReference::NativeMetrics + index * 2] = static_cast<std::uint32_t>(values[index]);
+            snapshot[DefinitiveMovementReference::NativeMetrics + index * 2 + 1] = static_cast<std::uint32_t>(values[index] >> 32);
+        }
+        snapshot[DefinitiveMovementReference::BackendPinnedExpected] = state.modulePinned ? 1u : 0u;
+        return true;
+    }
+
     void RunConfiguredInputReference(CCore* owner, CGameAdapterModule& adapter, const DefinitiveInputReference::Request& request) noexcept
     {
         using namespace DefinitiveInputReference;
         constexpr auto allowedActions = MtaInput::ActionBit(FORWARDS) | MtaInput::ActionBit(BACKWARDS) | MtaInput::ActionBit(LEFT) |
                                         MtaInput::ActionBit(RIGHT) | MtaInput::ActionBit(SPRINT) | MtaInput::ActionBit(WALK);
-        Snapshot snapshot{};
+        DefinitiveMovementReference::Snapshot snapshot{};
+        const auto                            fieldCount = request.nativeMovement ? DefinitiveMovementReference::FieldCount : FieldCount;
+        const auto                            maximumSamples = request.nativeMovement ? DefinitiveMovementReference::MaximumSamples : MaximumSamples;
         snapshot[Version] = ApiVersion;
-        snapshot[Flags] = 4;  // Context is an explicit assumption, never an engine observation.
+        snapshot[Flags] = request.nativeMovement ? 0u : 4u;  // Observation mode retains its explicitly assumed context.
         auto reason = StopReason::ConfigError;
         bool clean = true;
         auto started = static_cast<std::uint64_t>(GetTickCount64_());
@@ -197,12 +218,12 @@ namespace
                             reason = StopReason::PulseGap;
                             break;
                         }
-                        if (now - started >= request.durationMs)
+                        if ((!request.nativeMovement || snapshot[DefinitiveMovementReference::WriterStarted]) && now - started >= request.durationMs)
                         {
                             reason = StopReason::TimeBudget;
                             break;
                         }
-                        if (snapshot[SampleCount] >= MaximumSamples)
+                        if (snapshot[SampleCount] >= maximumSamples)
                         {
                             reason = StopReason::SampleBudget;
                             break;
@@ -213,7 +234,7 @@ namespace
                         snapshot[IgnoredBindings] = poll.ignoredBindings;
                         snapshot[EligibleKeys] = poll.eligibleKeys;
                         snapshot[UnsupportedKeys] = poll.unsupportedKeys;
-                        snapshot[Flags] = 4u | (poll.focused ? 1u : 0u) | (poll.armed ? 2u : 0u);
+                        snapshot[Flags] = (request.nativeMovement ? 0u : 4u) | (poll.focused ? 1u : 0u) | (poll.armed ? 2u : 0u);
                         if (previousFocus && !poll.focused)
                             ++snapshot[FocusLosses];
                         if (!previousArmed && poll.armed)
@@ -226,16 +247,75 @@ namespace
                             break;
                         }
 
-                        // Only movement is admitted while full engine context is
-                        // unavailable. Commands remain configured but inert; this
-                        // publishes MTA synthesis and never begins native writes.
-                        const auto                  frame = binds.BuildConfiguredControlFrame({});
+                        MtaInput::Context context;
+                        if (request.nativeMovement)
+                        {
+                            mta::game_de::NativeMovementEligibility eligibility;
+                            if (!adapter.GetNativeMovementEligibility(eligibility))
+                            {
+                                reason = static_cast<StopReason>(DefinitiveMovementReference::StopReason::EligibilityError);
+                                break;
+                            }
+                            snapshot[DefinitiveMovementReference::ContextKnownMask] = eligibility.knownMask;
+                            snapshot[DefinitiveMovementReference::ContextFlags] = eligibility.flags;
+                            snapshot[DefinitiveMovementReference::Eligible] = eligibility.eligible ? 1u : 0u;
+                            if (eligibility.knownMask != mta::game_de::NativeMovementEligibilityMask ||
+                                eligibility.flags != mta::game_de::NativeMovementEligibilityMask || !eligibility.eligible)
+                            {
+                                reason = static_cast<StopReason>(DefinitiveMovementReference::StopReason::EligibilityError);
+                                break;
+                            }
+                            context = eligibility.context;
+                            if (snapshot[DefinitiveMovementReference::WriterStarted] && (!poll.focused || !poll.armed))
+                            {
+                                reason = static_cast<StopReason>(DefinitiveMovementReference::StopReason::FocusLost);
+                                break;
+                            }
+                            if (!snapshot[DefinitiveMovementReference::WriterStarted] && now - started >= DefinitiveMovementReference::ReadinessBudgetMs)
+                            {
+                                reason = static_cast<StopReason>(DefinitiveMovementReference::StopReason::ReadinessTimeout);
+                                break;
+                            }
+                        }
+                        // The same actual configured manager publishes both modes.
+                        // Write admission additionally uses verified eligibility;
+                        // excluded weapon/vehicle actions never reach this route.
+                        const auto                  frame = binds.BuildConfiguredControlFrame(context);
                         mta::game_de::MtaInputState state;
                         if ((frame.heldActions & ~allowedActions) || !adapter.Pulse() || !adapter.SubmitControlActions({frame.heldActions, frame.context}) ||
                             !adapter.GetMtaInputState(state) || std::memcmp(&frame.controller, &state.current, sizeof(state.current)) != 0)
                         {
                             reason = StopReason::AdapterError;
                             break;
+                        }
+                        if (request.nativeMovement)
+                        {
+                            if (!snapshot[DefinitiveMovementReference::WriterStarted] && poll.focused && poll.armed)
+                            {
+                                if (frame.heldActions || !adapter.BeginNativeMovementTrial())
+                                {
+                                    reason = static_cast<StopReason>(DefinitiveMovementReference::StopReason::NativeFailure);
+                                    break;
+                                }
+                                snapshot[DefinitiveMovementReference::WriterStarted] = 1;
+                                started = lastPulse = static_cast<std::uint64_t>(GetTickCount64_());
+                                snapshot[ElapsedMs] = 0;
+                            }
+                            if (!CopyMovementReferenceState(adapter, snapshot) ||
+                                (snapshot[DefinitiveMovementReference::WriterStarted] &&
+                                 (!snapshot[DefinitiveMovementReference::NativeMetrics + 2] || snapshot[DefinitiveMovementReference::NativeMetrics + 20])))
+                            {
+                                reason = static_cast<StopReason>(DefinitiveMovementReference::StopReason::NativeFailure);
+                                break;
+                            }
+                            if (!snapshot[DefinitiveMovementReference::WriterStarted])
+                            {
+                                // Baseline keys must be released before one
+                                // native trial starts. Keep the published clock
+                                // at zero until that owned write window begins.
+                                Sleep(SampleIntervalMs);
+                                continue;
+                            }
                         }
                         binds.FinishConfiguredControlFrame();
                         snapshot[Phase] = 1;
@@ -245,7 +325,7 @@ namespace
                         snapshot[HeldActionsHigh] = static_cast<std::uint32_t>(frame.heldActions >> 32);
                         CopyInputReferenceController(snapshot, Current, state.current);
                         CopyInputReferenceController(snapshot, Previous, state.previous);
-                        request.publish(snapshot.data(), FieldCount);
+                        request.publish(snapshot.data(), fieldCount);
                         Sleep(SampleIntervalMs);
                     }
                 }
@@ -253,6 +333,84 @@ namespace
             catch (...)
             {
                 reason = StopReason::Exception;
+            }
+
+            if (request.nativeMovement)
+            {
+                // End disarms first, but an engine callback may still own the
+                // restoration snapshot. Keep this real Core and its producer
+                // thread alive until End proves detachment, even after deadline.
+                const auto cleanupStarted = static_cast<std::uint64_t>(GetTickCount64_());
+                snapshot[DefinitiveMovementReference::CleanupPending] = 1;
+                bool inputReleased = false;
+                for (;;)
+                {
+                    if (snapshot[DefinitiveMovementReference::CleanupAttempts] != 0xffffffffu)
+                        ++snapshot[DefinitiveMovementReference::CleanupAttempts];
+                    bool ended = false;
+                    try
+                    {
+                        ended = adapter.EndNativeMovementTrial();
+                    }
+                    catch (...)
+                    {
+                        reason = StopReason::CleanupError;
+                    }
+                    if (!inputReleased)
+                    {
+                        try
+                        {
+                            binds.CallAllGTAControlBinds(CONTROL_BOTH, false);
+                            binds.ResetAllGTAControlStates();
+                            binds.PollConfiguredControlKeys(false, nullptr, nullptr, allowedActions);
+                            mta::game_de::MtaInputState state;
+                            inputReleased = adapter.SubmitControlActions({0, {}}) && adapter.SubmitControlActions({0, {}}) && adapter.GetMtaInputState(state);
+                            if (inputReleased)
+                            {
+                                CopyInputReferenceController(snapshot, Current, state.current);
+                                CopyInputReferenceController(snapshot, Previous, state.previous);
+                                snapshot[HeldActionsLow] = snapshot[HeldActionsHigh] = snapshot[Flags] = 0;
+                            }
+                        }
+                        catch (...)
+                        {
+                            reason = StopReason::CleanupError;
+                        }
+                    }
+                    if (ended)
+                        break;
+                    const auto now = static_cast<std::uint64_t>(GetTickCount64_());
+                    if (now - cleanupStarted >= DefinitiveMovementReference::CleanupDeadlineMs)
+                    {
+                        snapshot[DefinitiveMovementReference::CleanupDeadlineExceeded] = 1;
+                        reason = StopReason::CleanupError;
+                    }
+                    try
+                    {
+                        CopyMovementReferenceState(adapter, snapshot);
+                    }
+                    catch (...)
+                    {
+                    }
+                    snapshot[Phase] = 3;
+                    ++snapshot[Sequence];
+                    snapshot[Reason] = static_cast<std::uint32_t>(reason);
+                    try
+                    {
+                        request.publish(snapshot.data(), fieldCount);
+                    }
+                    catch (...)
+                    {
+                    }
+                    Sleep(snapshot[DefinitiveMovementReference::CleanupDeadlineExceeded] ? DefinitiveMovementReference::CleanupBackoffMs : SampleIntervalMs);
+                }
+                snapshot[DefinitiveMovementReference::CleanupPending] = 0;
+                if (!CopyMovementReferenceState(adapter, snapshot) || snapshot[DefinitiveMovementReference::NativeMetrics] ||
+                    snapshot[DefinitiveMovementReference::NativeMetrics + 2] || snapshot[DefinitiveMovementReference::NativeMetrics + 14] ||
+                    snapshot[DefinitiveMovementReference::NativeMetrics + 15] ||
+                    snapshot[DefinitiveMovementReference::NativeMetrics + 6] != snapshot[DefinitiveMovementReference::NativeMetrics + 12] ||
+                    snapshot[DefinitiveMovementReference::NativeMetrics + 7] != snapshot[DefinitiveMovementReference::NativeMetrics + 13])
+                    clean = false;
             }
 
             try
@@ -264,8 +422,8 @@ namespace
                 mta::game_de::MtaInputState state;
                 // Two explicit neutral publications clear both real snapshots,
                 // rather than claiming that release also erases previous input.
-                clean =
-                    !neutral.heldActions && adapter.SubmitControlActions({0, {}}) && adapter.SubmitControlActions({0, {}}) && adapter.GetMtaInputState(state);
+                clean = !neutral.heldActions && adapter.SubmitControlActions({0, {}}) && adapter.SubmitControlActions({0, {}}) &&
+                        adapter.GetMtaInputState(state) && clean;
                 if (clean)
                 {
                     CopyInputReferenceController(snapshot, Current, state.current);
@@ -290,13 +448,13 @@ namespace
         // have gone. Adapter teardown follows in the existing constructor catch.
         snapshot[Phase] = 2;
         ++snapshot[Sequence];
-        snapshot[Flags] = 4;
+        snapshot[Flags] = request.nativeMovement ? 0u : 4u;
         snapshot[HeldActionsLow] = snapshot[HeldActionsHigh] = 0;
         snapshot[InputCleanupComplete] = clean ? 1u : 0u;
         snapshot[Reason] = static_cast<std::uint32_t>(clean ? reason : StopReason::CleanupError);
         try
         {
-            request.publish(snapshot.data(), FieldCount);
+            request.publish(snapshot.data(), fieldCount);
         }
         catch (...)
         {

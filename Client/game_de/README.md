@@ -5,8 +5,18 @@ MTA Core owns its loading, initialization, pulse, reset, shutdown and release
 through `CGameAdapterModule` and the versioned SDK `game/CGameAdapter.h`.
 The module provides no separate transport or script-host lifecycle.
 
-The current factory contract is **ABI5**. An explicit local on-foot movement
-trial now sends MTA's shared synthesized current/previous controller state
+The current factory contract is **ABI6**. Actual Core configured input can now
+use the existing local on-foot movement writer after build-pinned eligibility
+checks. `GetNativeMovementEligibility` requires the adapter's existing exact
+image binding and preserves caller output on unavailable identity/readback.
+Admission requires the verified local player/provider/pad0 identity, native
+InVehicle flag clear, `PED_IDLE` and controls-disable word zero. Known mask and
+positive flags must both be `0xF`. Only forwards, backwards, left, right, sprint
+and walk are admitted. Weapon/task context and health-based death detection
+remain unknown or excluded; this is not a general gameplay-context API.
+
+The Core producer and every prewrite native callback use the same guard.
+The writer sends MTA's shared synthesized current/previous controller state
 through the verified DE player-control callback. Real repository Detours scopes
 the pad replacement and action-provider membership, availability and value
 queries to that callback. Ordinary unowned callers retain the original engine path.
@@ -17,6 +27,42 @@ it disarms on changed identity/context and retains its module if cleanup fails.
 Its separate `NativeMovementWriteCandidate` capability does not enable the
 full `EngineInputWrite`, remote-player or `CGame` gameplay requirements.
 
+`package.ps1 -Mode Smoke -MtaCoreMovementReference` stages the separate
+23-file configured-write candidate. **It is not live-verified yet.** Actual
+Core owns the XML module, saved MTA bindings, `CKeyBinds`, pulse and synthesis;
+the bridge only schedules its worker and copies value-only snapshots for logs.
+After manual F9 activation/release and a focused neutral key baseline, Core
+starts a 30-second write window. Ctrl+Shift+End requests cleanup. The source
+flag defaults false, ordinary mode changes clear it, and it cannot be combined
+with other Smoke trials.
+
+Pending End keeps the actual Core and worker alive until the scoped pad and
+hooks are safely released. Cleanup deadline reporting does not abandon their
+ownership. Two neutral action publications clear current and previous state,
+then bind/XML owners are destroyed before terminal publication and adapter
+teardown. A successful native module PIN persists for the game process;
+snapshot field 94 records that actual PIN even after a later Begin failure.
+Core unloads, but the backend may remain loaded with no live hooks or adapter.
+Worker cleanup compares backend presence with reported PIN instead of requiring
+DLL absence. Assess the 96-field log with
+`python utils/definitive_edition/core_movement_log.py --log <saved-log> --output <assessment> --require-exit`.
+Coverage requires forward, isolated forward walk, isolated forward sprint and
+neutral, together with scoped-application/restoration and cleanup proof.
+Focused offline checks pass 1,190 production callback checks and 1,520 module
+checks. Normal Core/Game DE builds and 114 real Core entry checks in each
+classic/DE layout pass. Live validation remains pending; full MTA startup,
+CGame, rendering, resources and networking remain gated.
+
+The preceding **read-only actual Core** session completed in **60,003 ms**:
+**1,188 native samples and 515 script snapshots** show four directions, sprint
+and neutral. Walk was not observed; the human was unsure which Shift was used,
+so it remains untested. The strict reader reports `movement_coverage_missing`
+with a clean lifecycle. Current/previous ended neutral, Core/Game DE/XML
+unloaded, all 23 installed hashes matched and normal GTA exit passed. That
+session assumed on-foot context and performed no engine writes; it does not
+validate the new ABI6 combined write candidate.
+
+**Historical ABI5 fixed-phase writer evidence.**
 `package.ps1 -Mode Smoke -MtaNativeMovementTrial` stages the real normal-build
 `game_de.dll` beside the diagnostic bridge. The bridge uses Core's actual
 `CGameAdapterModule` consumer; JavaScript schedules logical MTA actions and
@@ -84,17 +130,18 @@ consumer into this unchanged module. It passes 185 binding/adapter checks plus
 33 host checks, including aliases, remapping, callbacks, context mutation,
 wheel publication and canonical current/previous state. The test DLL reuses
 normal Core objects and adds test-only exports; normal client exports are
-unchanged. A new opt-in Core-owned 60-second reference loads actual MTA XML
+unchanged. The subsequent Core-owned 60-second reference loads actual MTA XML
 records and polls configured keyboard routes through the same bind manager,
 publishing movement actions into this unchanged adapter. It ends with neutral
 current/previous frames and releases its XML/bind owners before Core teardown.
 The on-foot context is explicitly assumed, and the reference performs no
 engine writes. The extended actual XML/bind-manager/adapter fixture passes
-318 checks plus 34 host checks. Its live validation, engine context and
-GTA-default imports remain incomplete; the earlier validated game baseline is
-preserved separately from this new candidate.
+318 checks plus 34 host checks. Its completed live result is qualified above:
+Walk was untested, and engine context remained assumed. DE GTA-default imports
+remain incomplete. The earlier fixed-phase writer proof is preserved separately
+from the new Core-owned configured-write candidate.
 
-The current offline checks pass 351 production callback cases, 7,413 routing
+The earlier ABI5 offline checkpoint passed 351 production callback cases, 7,413 routing
 cases per architecture, 1,512 module cases and 76 x64 Core-consumer cases.
 Normal Release/x64 Core/Game DE builds, the real Core entry fixture (26 checks)
 and classic Win32 compiles with the option enabled/disabled pass. The package
@@ -127,7 +174,8 @@ apply joystick overrides, or itself write an engine pad. Core retains key bindin
 context-transition callbacks, focus/cursor policy and joystick merging. The
 action interface was introduced in ABI2. Native binding/read methods arrived in
 ABI3, raw device-source readback in ABI4, and the bounded write trial in ABI5.
-ABI1 through ABI4 are rejected before returning an incompatible
+ABI6 adds the eligibility method and actual PIN diagnostic used by Core's
+configured movement trial. ABI1 through ABI5 are rejected before returning an incompatible
 vtable. The historical probe's bridge
 ABI is independent.
 

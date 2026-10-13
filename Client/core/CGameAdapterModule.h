@@ -33,6 +33,7 @@ public:
     bool                BeginNativeMovementTrial();
     bool                GetNativeMovementTrialState(mta::game_de::NativeMovementTrialState& state);
     bool                EndNativeMovementTrial();
+    bool                GetNativeMovementEligibility(mta::game_de::NativeMovementEligibility& state);
     void                Stop() noexcept;
 
     bool               IsStarted() const noexcept { return m_adapter != nullptr; }

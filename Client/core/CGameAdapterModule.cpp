@@ -103,7 +103,7 @@ bool CGameAdapterModule::Start(CCoreInterface* owner, const std::wstring& absolu
     if (!adapter)
     {
         FreeLibrary(module);
-        SetError("Game DE factory rejected adapter ABI5 or could not allocate an instance");
+        SetError("Game DE factory rejected the requested adapter ABI or could not allocate an instance");
         return false;
     }
     const auto status = adapter->Initialize(owner);
@@ -234,6 +234,11 @@ bool CGameAdapterModule::GetNativeMovementTrialState(mta::game_de::NativeMovemen
 bool CGameAdapterModule::EndNativeMovementTrial()
 {
     return RequireOwnerThread("EndNativeMovementTrial") && RecordStatus(m_adapter->EndNativeMovementTrial(), "EndNativeMovementTrial");
+}
+
+bool CGameAdapterModule::GetNativeMovementEligibility(mta::game_de::NativeMovementEligibility& state)
+{
+    return RequireOwnerThread("GetNativeMovementEligibility") && RecordStatus(m_adapter->GetNativeMovementEligibility(state), "GetNativeMovementEligibility");
 }
 
 void CGameAdapterModule::Stop() noexcept

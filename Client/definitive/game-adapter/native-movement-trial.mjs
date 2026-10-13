@@ -27,7 +27,7 @@ export class MtaNativeMovementTrialController {
     evidence(now) {
         return { reference_id: this.referenceId, ped: this.ped, at_ms: now,
             elapsed_ms: this.startedAt === null || now === null ? null : now - this.startedAt,
-            provenance, adapter_abi: 5, scope: 'local_on_foot_callback', input_writes: true,
+            provenance, adapter_abi: 6, scope: 'local_on_foot_callback', input_writes: true,
             network_active: false, remote_peds_created: false, velocity_units: null };
     }
 

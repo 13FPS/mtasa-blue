@@ -26,7 +26,7 @@ if ($NonClassicLayout) {
 }
 $sourceNames=@('Tests/definitive/MtaCoreEntryTests.cpp','Tests/definitive/test_mta_core_entry.ps1',
     'Client/core/Core.cpp','Client/core/CCore.cpp','Client/core/CCore.h','Client/core/premake5.lua','Client/core/CGameAdapterModule.cpp',
-    'Client/core/CGameAdapterModule.h','Client/core/DefinitiveProcess.h','Client/core/DefinitiveStartupState.h','Client/core/DefinitiveInputReference.h',
+    'Client/core/CGameAdapterModule.h','Client/core/DefinitiveProcess.h','Client/core/DefinitiveStartupState.h','Client/core/DefinitiveInputReference.h','Client/core/DefinitiveMovementReference.h',
     'Client/core/CKeyBinds.h','Client/core/CKeyBinds.cpp','Client/core/CTimingCheckpoints.hpp','Client/game_de/GameAdapter.cpp',
     'Client/game_de/NativePadReader.cpp','Client/game_de/NativePadReader.h','Client/sdk/game/CGameAdapter.h',
     'Client/game_de/NativeMovementInput.cpp','Client/game_de/NativeMovementInput.h','Client/game_de/NativeInputRouting.h',

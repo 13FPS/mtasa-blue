@@ -1173,9 +1173,11 @@ async function main() {
             DE_MtaMovementRead: index => [movementActive, movementActive, 1, 1, 1, 0, 1, 0, 0, 0, 0, 0][index],
             DE_MtaMovementEnd: () => { movementActive = 0; return 1; },
             DE_CoreStartupBegin: () => 1, DE_CoreStartupPoll: () => 1, DE_CoreStartupCancel: () => 1,
-            DE_CoreStartupRead: index => [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5, 0, 0, 1, 0, 0, 0, 1, 0][index],
+            DE_CoreStartupRead: index => [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5, 0, 0, 1, 0, overrides.mtaCoreMovementReference ? 1 : 0, 0, 1, 0][index],
             DE_CoreInputBegin: () => 1, DE_CoreInputCapture: () => 1,
             DE_CoreInputRead: index => coreInputState()[index],
+            DE_CoreMovementBegin: () => 1, DE_CoreMovementCapture: () => 1,
+            DE_CoreMovementRead: index => coreMovementState()[index],
             ...(overrides.functions || {}) };
         const names = Object.keys(functions).filter(name => typeof functions[name] === 'function');
         const record = (name, ...args) => { calls.push([name, ...args]); callFrames.push({ frame, name }); };
@@ -1196,6 +1198,7 @@ async function main() {
             MTA_NATIVE_MOVEMENT_TRIAL: overrides.mtaNativeMovementTrial ?? false,
             MTA_CORE_STARTUP_REFERENCE: overrides.mtaCoreStartupReference ?? false,
             MTA_CORE_INPUT_REFERENCE: overrides.mtaCoreInputReference ?? false,
+            MTA_CORE_MOVEMENT_REFERENCE: overrides.mtaCoreMovementReference ?? false,
             Date: { now: () => overrides.times ? overrides.times[frame] : frame * 50 },
             CLEO: { version: overrides.version || '1.5.1', apiVersion: overrides.definitions || '0.500', hostVersion: '1.0.113.49697469' },
             native: (name, ...args) => { record(name, ...args);
@@ -1237,6 +1240,46 @@ async function main() {
     };
     const coreInput = overrides => runEntry({ mtaCoreInputReference: true,
         keyFrames: [[17, 16, 120], [16], []], ...overrides });
+    const coreMovementState = (overrides = {}) => {
+        const state = coreInputState({ 2: 601, 3: 30000, 4: 0, 11: 600 }).concat(Array(32).fill(0));
+        for (const [index, value] of [[2, 5], [3, 5], [4, 15], [5, 2], [6, 5], [11, 1]]) state[64 + index * 2] = value;
+        Object.assign(state, { 88: 15, 89: 15, 90: 1, 91: 1, 92: 1, 94: 1 }, overrides);
+        return state;
+    };
+    const coreMovement = overrides => runEntry({ mtaCoreMovementReference: true,
+        keyFrames: [[17, 16, 120], [16], []], ...overrides });
+    test('Core configured movement selects96 snapshot writes and expected retained Game DE pin', () => {
+        const result = coreMovement();
+        assert.equal(result.callFrames.find(call => call.name === 'DynamicLibrary.Load').frame, 2);
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreMovementBegin').length, 1);
+        assert.deepEqual(result.calls.filter(call => call[0] === 'DE_CoreMovementRead').map(call => call[1]), Array.from({ length: 96 }, (_, i) => i));
+        const finish = result.logs.find(e => e.event === 'core_movement_reference_finished');
+        assert.equal(finish.passed, true); assert.equal(finish.cleanup_passed, true); assert.equal(finish.state[15], 1);
+        assert.equal(finish.input_writes, true); assert.equal(finish.full_core_ready, false);
+        assert.ok(!result.calls.some(call => ['DE_CoreInputBegin', 'DE_CoreStartupBegin', 'DE_MtaMovementBegin', 'DE_ConnectLocal'].includes(call[0])));
+    });
+    test('Core configured movement retains pending cleanup beyond deadline until native safe completion', () => {
+        let polls = 0;
+        const result = coreMovement({ keyFrames: [[17, 16, 120], [], [], [], []], times: [0, 50, 5000, 9000, 10000],
+            functions: { DE_CoreStartupPoll: () => ++polls === 4 ? 1 : 0,
+                DE_CoreMovementRead: field => coreMovementState({ 1: polls === 4 ? 2 : 3, 2: polls, 92: polls, 93: 1, 95: polls === 4 ? 0 : 1 })[field] } });
+        assert.equal(polls, 4);
+        assert.deepEqual(result.logs.filter(e => e.event === 'core_movement_reference_sample').map(e => e.state[1]), [3, 3, 3, 2]);
+        assert.equal(result.logs.find(e => e.event === 'core_movement_reference_finished').passed, false);
+        assert.ok(result.waits.slice(1).every(call => call.milliseconds === 100));
+    });
+    for (const [field, value] of [[1, 3], [15, 0], [64, 1], [66, 1], [70, 0], [72, 0], [76, 4], [78, 1], [80, 1],
+        [82, 1], [84, 1], [91, 0], [92, 0], [93, 1], [94, 0], [95, 1], [16, 128], [4, 3], [88, 7], [89, 7], [90, 0], [86, 0xffffffff], [87, 1]])
+        test('Core configured movement cannot pass misleading terminal field ' + field, () => {
+            const result = coreMovement({ functions: { DE_CoreMovementRead: index => coreMovementState({ [field]: value })[index] } });
+            assert.equal(result.logs.find(e => e.event === 'core_movement_reference_finished').passed, false);
+        });
+    for (const options of [{ mtaCoreInputReference: true }, { mtaCoreStartupReference: true }, { mtaNativeMovementTrial: true },
+        { mtaNativePadReference: true }, { inputReference: true }, { reference: true }, { gaitRate: true }, { gaitRootLock: true },
+        { mode: 'online' }, { mode: 'diagnostic' }]) test('Core configured movement rejects conflicting selection ' + JSON.stringify(options), () => {
+            const result = coreMovement({ ...options, forbidRuntimeAccess: true });
+            assert.equal(result.calls.length, 0); assert.ok(result.logs.some(e => e.event === 'adapter_failed'));
+        });
     test('Core configured input uses the protected64 snapshot and final19 without engine input writes', () => {
         const result = coreInput();
         assert.equal(result.callFrames.find(call => call.name === 'DynamicLibrary.Load').frame, 2);
@@ -1438,7 +1481,7 @@ async function main() {
         assert.equal(result.callFrames.find(call => call.name === 'DynamicLibrary.Load').frame, 2);
         assert.equal(result.calls.filter(call => call[0] === 'DE_MtaMovementBegin').length, 1);
         assert.equal(result.calls.filter(call => call[0] === 'DE_MtaMovementEnd').length, 1);
-        assert.ok(result.logs.some(e => e.event === 'adapter_start' && e.native_movement_trial && e.adapter_abi === 5));
+        assert.ok(result.logs.some(e => e.event === 'adapter_start' && e.native_movement_trial && e.adapter_abi === 6));
         assert.ok(result.logs.some(e => e.event === 'native_movement_trial_finished' && e.cleanup_passed));
         assert.ok(!result.calls.some(call => ['DE_ConnectLocal', 'GET_PAD_STATE', 'CREATE_CHAR', 'DE_NativePadBind'].includes(call[0])));
     });
@@ -2085,6 +2128,7 @@ async function main() {
         assert.equal(sourceConfig.MTA_NATIVE_MOVEMENT_TRIAL, false);
         assert.equal(sourceConfig.MTA_CORE_STARTUP_REFERENCE, false);
         assert.equal(sourceConfig.MTA_CORE_INPUT_REFERENCE, false);
+        assert.equal(sourceConfig.MTA_CORE_MOVEMENT_REFERENCE, false);
     });
     test('manual online remains armed with no DLL, procedure, memory, player-handle, coordinate, UDP or remote access', () => {
         const result = manual({ keyFrames: [[], [], [], [], [], [17, 16, 35]] });

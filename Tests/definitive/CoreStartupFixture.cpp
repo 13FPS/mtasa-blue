@@ -11,6 +11,8 @@
 #include <cstdint>
 #include <cwchar>
 #include "../../Client/core/DefinitiveInputReference.h"
+#include "../../Client/core/DefinitiveMovementReference.h"
+#include <filesystem>
 
 namespace
 {
@@ -58,6 +60,83 @@ extern "C" __declspec(dllexport) std::uint32_t MTA_ConfigureDEInputReference(std
     return 1;
 }
 
+extern "C" __declspec(dllexport) std::uint32_t MTA_DEMovementReferenceApiVersion()
+{
+    Call(7);
+    return 1;
+}
+
+extern "C" __declspec(dllexport) std::uint32_t MTA_ConfigureDEMovementReference(std::uint32_t duration, DefinitiveInputReference::CancelCallback cancelled,
+                                                                                DefinitiveInputReference::PublishCallback publish)
+{
+    Call(8);
+    if (duration != DefinitiveMovementReference::MaximumDurationMs || !cancelled || !publish)
+        return 0;
+    inputRequest = {duration, cancelled, publish, true};
+    return 1;
+}
+
+void ControlledMovement()
+{
+    using namespace DefinitiveInputReference;
+    DefinitiveMovementReference::Snapshot sample{};
+    sample[Version] = 1;
+    sample[Phase] = sample[Sequence] = 1;
+    sample[Flags] = 3;
+    sample[SupportedBindings] = sample[EligibleKeys] = 6;
+    sample[Rearms] = sample[SampleCount] = 1;
+    sample[DefinitiveMovementReference::ContextKnownMask] = sample[DefinitiveMovementReference::ContextFlags] = 15;
+    sample[DefinitiveMovementReference::Eligible] = sample[DefinitiveMovementReference::WriterStarted] = 1;
+    sample[DefinitiveMovementReference::NativeMetrics] = sample[DefinitiveMovementReference::NativeMetrics + 2] = 1;
+    sample[DefinitiveMovementReference::NativeMetrics + 4] = 120;
+    sample[DefinitiveMovementReference::NativeMetrics + 6] = 100;
+    sample[DefinitiveMovementReference::NativeMetrics + 12] = 99;
+    // PIN the real backend without calling its factory or native API. This
+    // controlled Core is not MTA and proves only the worker's unload policy.
+    wchar_t path[32768]{};
+    GetModuleFileNameW(nullptr, path, 32768);
+    const auto backendPath = std::filesystem::path(path).parent_path() / L"game_de.dll";
+    const auto backend = LoadLibraryExW(backendPath.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+    HMODULE    retained = nullptr;
+    const auto factory = backend ? GetProcAddress(backend, "CreateGameAdapter") : nullptr;
+    sample[DefinitiveMovementReference::BackendPinnedExpected] =
+        factory && GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN, reinterpret_cast<LPCWSTR>(factory), &retained)
+            ? 1u
+            : 0u;
+    if (backend)
+        FreeLibrary(backend);
+    Call(9);
+    inputRequest.publish(sample.data(), DefinitiveMovementReference::FieldCount);
+    const auto release = Event(L"MTA_CORE_FIXTURE_INPUT_RELEASE", SYNCHRONIZE);
+    if (release)
+    {
+        WaitForSingleObject(release, 10000);
+        CloseHandle(release);
+    }
+    sample[Phase] = 3;
+    ++sample[Sequence];
+    sample[DefinitiveMovementReference::NativeMetrics + 2] = 0;
+    sample[DefinitiveMovementReference::CleanupPending] = sample[DefinitiveMovementReference::CleanupAttempts] = 1;
+    inputRequest.publish(sample.data(), DefinitiveMovementReference::FieldCount);
+    const auto cleanupRelease = Event(L"MTA_CORE_FIXTURE_MOVEMENT_RELEASE", SYNCHRONIZE);
+    if (cleanupRelease)
+    {
+        WaitForSingleObject(cleanupRelease, 10000);
+        CloseHandle(cleanupRelease);
+    }
+    const bool cancelled = inputRequest.cancelled();
+    sample[Phase] = 2;
+    ++sample[Sequence];
+    sample[ElapsedMs] = cancelled ? 50u : DefinitiveMovementReference::MaximumDurationMs;
+    sample[Flags] = 0;
+    sample[Reason] = cancelled ? 2u : 1u;
+    sample[InputCleanupComplete] = 1;
+    sample[DefinitiveMovementReference::CleanupPending] = sample[DefinitiveMovementReference::NativeMetrics] = 0;
+    sample[DefinitiveMovementReference::CleanupAttempts] = 2;
+    sample[DefinitiveMovementReference::NativeMetrics + 12] = 100;
+    inputRequest.publish(sample.data(), DefinitiveMovementReference::FieldCount);
+}
+
 extern "C" __declspec(dllexport) std::uint32_t MTA_DEStartupApiVersion()
 {
     Call(7);
@@ -86,6 +165,11 @@ extern "C" __declspec(dllexport) int InitializeCore()
     Call(3);
     if (Setting(L"MTA_CORE_FIXTURE_BAD_INITIALIZE"))
         return 0;
+    if (mtaSet && gtaSet && inputRequest.nativeMovement)
+    {
+        ControlledMovement();
+        return 5;
+    }
     if (mtaSet && gtaSet && inputRequest.publish)
     {
         using namespace DefinitiveInputReference;

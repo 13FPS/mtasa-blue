@@ -162,6 +162,9 @@ function Install-Legacy([object]$Fixture, [int]$Count) {
             # Historical configurations lacked this opt-in. Different owned
             # bytes also prove update replaces existing files, not just adds.
             $text = [IO.File]::ReadAllText($destination)
+            # The first23-file generation was read-only and had no Core write
+            # marker, even though the new candidate owns the same file paths.
+            $text = [regex]::Replace($text, '(?m)^export const MTA_CORE_MOVEMENT_REFERENCE = (true|false);\r?\n', '')
             if ($Count -lt 23) { $text = [regex]::Replace($text, '(?m)^export const MTA_CORE_INPUT_REFERENCE = (true|false);\r?\n', '') }
             if ($Count -lt 21) { $text = [regex]::Replace($text, '(?m)^export const MTA_CORE_STARTUP_REFERENCE = (true|false);\r?\n', '') }
             if ($Count -lt 19) { $text = [regex]::Replace($text, '(?m)^export const MTA_NATIVE_MOVEMENT_TRIAL = (true|false);\r?\n', '') }
@@ -366,7 +369,7 @@ try {
             Assert-Refused { Invoke-Production $fixture 'package.ps1' @{ Mode=$invalidMode; MtaCoreStartupReference=$true } } 'separate opt-in Smoke mode' 'Core package invalid mode'
             Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Invalid Core startup mode changes no bytes'
         }
-        foreach ($conflict in @('MtaNativeMovementTrial', 'MtaNativePadReference', 'NativeInputReference', 'NativeGaitReference', 'MatchedGaitRate', 'LockWalkRoot', 'MtaCoreInputReference')) {
+        foreach ($conflict in @('MtaNativeMovementTrial', 'MtaNativePadReference', 'NativeInputReference', 'NativeGaitReference', 'MatchedGaitRate', 'LockWalkRoot', 'MtaCoreInputReference', 'MtaCoreMovementReference')) {
             $arguments = @{ Mode='Smoke'; MtaCoreStartupReference=$true; GameDirectory=$fixture.game }
             $arguments[$conflict] = $true
             Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' $arguments } 'separate opt-in Smoke mode' 'Conflicting Core startup opt-in'
@@ -415,7 +418,7 @@ try {
             Assert-Refused { Invoke-Production $fixture 'package.ps1' @{ Mode=$invalidMode; MtaCoreInputReference=$true } } 'separate opt-in Smoke mode' 'Core input package invalid mode'
             Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Invalid Core input mode changes no bytes'
         }
-        foreach ($conflict in @('MtaCoreStartupReference', 'MtaNativeMovementTrial', 'MtaNativePadReference', 'NativeInputReference', 'NativeGaitReference', 'MatchedGaitRate', 'LockWalkRoot')) {
+        foreach ($conflict in @('MtaCoreStartupReference', 'MtaNativeMovementTrial', 'MtaNativePadReference', 'NativeInputReference', 'NativeGaitReference', 'MatchedGaitRate', 'LockWalkRoot', 'MtaCoreMovementReference')) {
             $arguments = @{ Mode='Smoke'; MtaCoreInputReference=$true; GameDirectory=$fixture.game }
             $arguments[$conflict] = $true
             Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' $arguments } 'separate opt-in Smoke mode' 'Conflicting Core input opt-in'
@@ -463,6 +466,44 @@ try {
         $before = Get-TreeFingerprint $fixture.root
         Assert-Refused { Invoke-Production $fixture 'update.ps1' @{ GameDirectory=$fixture.game } } 'Installed file was modified' 'Edited MTA configuration'
         Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Edited MTA configuration is retained unchanged'
+    }
+    Invoke-Case 'explicit-core-movement-opt-in' {
+        param($fixture)
+        Install-Fresh $fixture
+        $config = Join-Path $fixture.game 'CLEO/de-online/config.mjs'
+        Invoke-Production $fixture 'set-mode.ps1' @{ Mode='Smoke'; MtaCoreMovementReference=$true; GameDirectory=$fixture.game }
+        Assert-Check ([IO.File]::ReadAllText($config) -match 'export const MTA_CORE_MOVEMENT_REFERENCE = true;') 'Separate Smoke opt-in arms Core configured writes'
+        Assert-Check ([IO.File]::ReadAllText($config) -match 'export const MTA_CORE_INPUT_REFERENCE = false;') 'Core writes clear read-only Core input'
+        Assert-Check ([IO.File]::ReadAllText($config) -match 'export const MTA_CORE_STARTUP_REFERENCE = false;') 'Core writes clear startup reference'
+        Invoke-Production $fixture 'uninstall.ps1' @{ GameDirectory=$fixture.game; ValidateOnly=$true }
+        $before = Get-TreeFingerprint $fixture.root
+        foreach ($invalidMode in @('Diagnostic', 'Online')) {
+            Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' @{ Mode=$invalidMode; MtaCoreMovementReference=$true; GameDirectory=$fixture.game } } 'separate opt-in Smoke mode' 'Core write invalid mode'
+            Assert-Refused { Invoke-Production $fixture 'package.ps1' @{ Mode=$invalidMode; MtaCoreMovementReference=$true } } 'separate opt-in Smoke mode' 'Core write package invalid mode'
+            Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Invalid Core write mode changes no bytes'
+        }
+        foreach ($conflict in @('MtaCoreInputReference', 'MtaCoreStartupReference', 'MtaNativeMovementTrial', 'MtaNativePadReference', 'NativeInputReference', 'NativeGaitReference', 'MatchedGaitRate', 'LockWalkRoot')) {
+            $arguments = @{ Mode='Smoke'; MtaCoreMovementReference=$true; GameDirectory=$fixture.game }
+            $arguments[$conflict] = $true
+            Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' $arguments } 'separate opt-in Smoke mode' 'Conflicting Core write opt-in'
+            $arguments.Remove('GameDirectory')
+            Assert-Refused { Invoke-Production $fixture 'package.ps1' $arguments } 'separate opt-in Smoke mode' 'Conflicting Core write package opt-in'
+            Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Conflicting Core write selection changes no bytes'
+        }
+        foreach ($mode in @('Diagnostic', 'Smoke', 'Online', 'Smoke')) {
+            Invoke-Production $fixture 'set-mode.ps1' @{ Mode=$mode; GameDirectory=$fixture.game }
+            Assert-Check ([IO.File]::ReadAllText($config) -match 'export const MTA_CORE_MOVEMENT_REFERENCE = false;') "Ordinary $mode clears Core writes"
+        }
+    }
+    Invoke-Case 'legacy23-core-movement-requires-new-marker' {
+        param($fixture)
+        Install-Legacy $fixture 23
+        $config = Join-Path $fixture.game 'CLEO/de-online/config.mjs'
+        Invoke-Production $fixture 'set-mode.ps1' @{ Mode='Smoke'; GameDirectory=$fixture.game }
+        Assert-Check ([IO.File]::ReadAllText($config) -notmatch 'MTA_CORE_MOVEMENT_REFERENCE') 'Ordinary mode accepts historical23-file configuration'
+        $before = Get-TreeFingerprint $fixture.root
+        Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' @{ Mode='Smoke'; MtaCoreMovementReference=$true; GameDirectory=$fixture.game } } 'Update the adapter before selecting MTA Core configured movement reference' 'Historical23 cannot infer write opt-in'
+        Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Missing Core write marker changes no bytes'
     }
 } catch { $failure = $_.Exception.Message }
 $sourceUnchanged = $true

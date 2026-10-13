@@ -58,6 +58,7 @@ def analyze_log(text, require_exit=False):
     counts = Counter()
     entries, shutdowns, exits, seen_phases = [], [], [], []
     started = finished = identity = origin = last_at = last_sample = last_state = None
+    adapter_abi = None
     current_phase = -1
     overflow = False
     issue_total = 0
@@ -76,7 +77,8 @@ def analyze_log(text, require_exit=False):
 
     def common(event):
         nonlocal identity, origin, last_at
-        if (event.get('provenance') != PROVENANCE or type(event.get('adapter_abi')) is not int or event['adapter_abi'] != 5
+        if (event.get('provenance') != PROVENANCE or type(event.get('adapter_abi')) is not int or event['adapter_abi'] not in (5, 6)
+                or event['adapter_abi'] != adapter_abi
                 or event.get('scope') != 'local_on_foot_callback' or event.get('input_writes') is not True
                 or event.get('network_active') is not False or event.get('remote_peds_created') is not False
                 or event.get('velocity_units', 1) is not None):
@@ -158,13 +160,14 @@ def analyze_log(text, require_exit=False):
         if event.get('input_writes') is True and not (kind.startswith('native_movement_trial_') or kind == 'adapter_start'):
             invalid(event, 'Input-write activity lacks the scoped trial provenance')
         if kind == 'adapter_start':
+            adapter_abi = event.get('adapter_abi')
             if (counts[kind] != 1 or started is not None or len(entries) != 1 or event.get('mode') != 'smoke'
                     or event.get('host') != 'sa_unreal' or event.get('endpoint', 1) is not None
                     or event.get('stop_key') != 'Ctrl+Shift+End' or event.get('native_movement_trial') is not True
-                    or event.get('provenance') != PROVENANCE or type(event.get('adapter_abi')) is not int or event['adapter_abi'] != 5
+                    or event.get('provenance') != PROVENANCE or type(event.get('adapter_abi')) is not int or event['adapter_abi'] not in (5, 6)
                     or event.get('input_writes') is not True or event.get('network_active') is not False or event.get('remote_peds_created') is not False
                     or any(not isinstance(event.get(key), str) or not event[key] for key in ('cleo', 'host_version', 'definitions'))):
-                invalid(event, 'Adapter start must identify the single isolated ABI5 Smoke movement trial')
+                invalid(event, 'Adapter start must identify one isolated ABI5 or ABI6 Smoke movement trial')
         if not kind.startswith('native_movement_trial_'): continue
         before = issue_total; owned = common(event)
         if len(entries) != 1 or counts['adapter_start'] != 1: invalid(event, 'Trial markers must follow one isolated Smoke adapter start')

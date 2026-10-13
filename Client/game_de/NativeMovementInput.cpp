@@ -13,6 +13,7 @@
 #include <cstring>
 #include <limits>
 #include <vector>
+#include <enums/PedState.h>
 #include <windows.h>
 #include <tlhelp32.h>
 #include <detours.h>
@@ -34,6 +35,7 @@ namespace mta::game_de
         constexpr ULONGLONG      maximumTrialMs = 35000;
         constexpr ULONGLONG      maximumInputAgeMs = 2000;
         constexpr unsigned       exclusivePadAccess = 1u << 31;
+        static_assert(PedState::PED_IDLE == 1 && PedState::PED_DIE == 0x36 && PedState::PED_DEAD == 0x37);
 
         struct Counters
         {
@@ -48,6 +50,7 @@ namespace mta::game_de
             std::atomic<bool>          apiBusy{false};
             NativePadReader            reader;
             std::atomic<bool>          bound{false}, active{false}, hooked{false};
+            std::atomic<bool>          modulePinned{false};
             std::atomic<unsigned>      scopes{0}, inFlight{0};
             std::atomic<unsigned>      padAccess{0};
             std::atomic<std::uint64_t> generation{0};
@@ -163,33 +166,55 @@ namespace mta::game_de
             return Read(runtime.image + 0x5726120, index) && Read(runtime.image + 0x5067940, alternate);
         }
 
-        bool CheckBinding(void* candidate = nullptr, bool capture = false) noexcept
+        struct BindingIdentity
+        {
+            std::uintptr_t ped = 0, provider = 0;
+        };
+
+        template <std::size_t N>
+        bool PinAt(std::uintptr_t image, std::uintptr_t rva, const std::array<unsigned char, N>& expected) noexcept
+        {
+            std::array<unsigned char, N> actual{};
+            return Pages(image + rva, N, false, true) && Read(image + rva, actual) && actual == expected;
+        }
+
+        bool CheckEligibilityPins(std::uintptr_t image) noexcept
+        {
+            // These instructions establish the state member independently of
+            // move state, and the native input gate independently of the public
+            // SDK's incompatible enclosing CPad layout. They are outside every
+            // Detours entry, so they remain checkable while this trial is active.
+            constexpr std::array<unsigned char, 5>  baseConstructor = {0xe8, 0x59, 0xb8, 0xfc, 0xff};
+            constexpr std::array<unsigned char, 10> idleState = {0xc7, 0x87, 0xfc, 0x05, 0, 0, 1, 0, 0, 0};
+            constexpr std::array<unsigned char, 10> onFoot = {0xf7, 0x83, 0x34, 0x06, 0, 0, 0, 1, 0, 0};
+            constexpr std::array<unsigned char, 4>  controlsEnabled = {0x66, 0x39, 0x79, 0x30};
+            return PinAt(image, 0x124e002, baseConstructor) && PinAt(image, 0x1219cce, idleState) && PinAt(image, 0x124eb5e, onFoot) &&
+                   PinAt(image, 0x11579bf, controlsEnabled);
+        }
+
+        bool ReadLocalEligibility(std::uintptr_t image, const BindingIdentity& expectedIdentity, void* candidate, NativeMovementEligibility& eligibility,
+                                  BindingIdentity& identity) noexcept
         {
             std::uintptr_t ped = 0, vtable = 0, callback = 0, info = 0, provider = 0, providerVtable = 0, alternate = 0;
             std::int32_t   selector = -1, index = -1;
-            std::uint32_t  pedFlags = 0;
+            std::uint32_t  pedFlags = 0, pedState = 0;
+            std::uint16_t  disabledControls = 0;
             unsigned char  playerIndex = 0;
-            if (!Read(runtime.image + 0x53eb720, ped) || !ped || (runtime.ped && ped != runtime.ped) ||
-                (candidate && reinterpret_cast<std::uintptr_t>(candidate) != ped) || !Read(ped, vtable) || vtable != runtime.image + 0x4319730 ||
-                !Read(vtable + 0x50, callback) || callback != runtime.image + controlRva || !Read(ped + 0x5f0, info) || info != runtime.image + 0x53eb728 ||
-                !Read(ped + 0x7e0, selector) || selector != 0 || !Read(runtime.image + 0x522bcf6, playerIndex) || playerIndex != 0 ||
-                !ReadContext(index, alternate) || index != 0 || alternate != runtime.image + padRva || !Read(runtime.image + 0x5726100, provider) ||
-                !provider || (runtime.provider && provider != runtime.provider) || !Read(provider, providerVtable) ||
-                providerVtable != runtime.image + 0x4226b20 || !Read(ped + 0x634, pedFlags))
+            if (!image || !CheckEligibilityPins(image) || !Read(image + 0x53eb720, ped) || !ped || (expectedIdentity.ped && ped != expectedIdentity.ped) ||
+                (candidate && reinterpret_cast<std::uintptr_t>(candidate) != ped) || !Read(ped, vtable) || vtable != image + 0x4319730 ||
+                !Read(vtable + 0x50, callback) || callback != image + controlRva || !Read(ped + 0x5f0, info) || info != image + 0x53eb728 ||
+                !Read(ped + 0x7e0, selector) || selector != 0 || !Read(image + 0x522bcf6, playerIndex) || playerIndex != 0 || !Read(image + 0x5726120, index) ||
+                index != 0 || !Read(image + 0x5067940, alternate) || alternate != image + padRva || !Read(image + 0x5726100, provider) || !provider ||
+                (expectedIdentity.provider && provider != expectedIdentity.provider) || !Read(provider, providerVtable) ||
+                providerVtable != image + 0x4226b20 || !Read(ped + 0x634, pedFlags) || !Read(ped + 0x5fc, pedState) ||
+                !Read(image + padRva + 0x30, disabledControls))
                 return false;
-            // A cached vehicle pointer can outlive the on-foot transition.
-            // The native InVehicle flag decides whether this trial owns input.
-            if (pedFlags & 0x100)
-            {
-                Fail(Failure::Vehicle);
-                return false;
-            }
             const std::array<std::uintptr_t, 7> expected = {0xc09750, 0xc097d0, 0xc09810, 0xc09950, 0xc09970, 0xc09ae0, 0xae3c00};
             std::array<std::uintptr_t, 7>       actual{};
             if (!Read(providerVtable, actual.data(), sizeof(actual)))
                 return false;
             for (std::size_t i = 0; i < actual.size(); ++i)
-                if (actual[i] != runtime.image + expected[i])
+                if (actual[i] != image + expected[i])
                     return false;
             // Type2 is checked as code, rather than invoking an unowned native
             // virtual method merely to decide whether the trial can start.
@@ -197,21 +222,69 @@ namespace mta::game_de
             std::array<unsigned char, 6>           typeCode{};
             if (!Read(actual[6], typeCode) || typeCode != type2)
                 return false;
+            // Producer reads are observations rather than a lock on the game.
+            // Recheck the identity roots before publishing one coherent result;
+            // the callback repeats this same guard immediately before each write.
+            std::uintptr_t pedAgain = 0, providerAgain = 0, alternateAgain = 0;
+            std::int32_t   indexAgain = -1, selectorAgain = -1;
+            std::uint32_t  flagsAgain = 0, stateAgain = 0;
+            std::uint16_t  disabledAgain = 0;
+            unsigned char  playerAgain = 0;
+            if (!Read(image + 0x53eb720, pedAgain) || pedAgain != ped || !Read(image + 0x5726100, providerAgain) || providerAgain != provider ||
+                !Read(image + 0x5726120, indexAgain) || indexAgain != index || !Read(image + 0x5067940, alternateAgain) || alternateAgain != alternate ||
+                !Read(ped + 0x7e0, selectorAgain) || selectorAgain != selector || !Read(image + 0x522bcf6, playerAgain) || playerAgain != playerIndex ||
+                !Read(ped + 0x634, flagsAgain) || flagsAgain != pedFlags || !Read(ped + 0x5fc, stateAgain) || stateAgain != pedState ||
+                !Read(image + padRva + 0x30, disabledAgain) || disabledAgain != disabledControls ||
+                !Pages(image + padRva + NativePadCurrentOffset, sizeof(CControllerState) * 2, true))
+                return false;
+
+            NativeMovementEligibility next{};
+            next.knownMask = NativeMovementEligibilityMask;
+            next.flags = static_cast<std::uint32_t>(NativeMovementEligibilityFlag::LocalIdentity);
+            next.rawPedState = pedState;
+            next.rawDisabledControls = disabledControls;
+            // Only IDLE is admitted. Die/dead recognition does not claim full
+            // task or health discovery; every other state, including vehicle
+            // transitions and unknown states, is refused before synthesis/write.
+            next.context.inVehicle = (pedFlags & 0x100) != 0;
+            next.context.isDead = pedState == PedState::PED_DIE || pedState == PedState::PED_DEAD;
+            if (!next.context.inVehicle)
+                next.flags |= static_cast<std::uint32_t>(NativeMovementEligibilityFlag::OnFoot);
+            if (pedState == PedState::PED_IDLE)
+                next.flags |= static_cast<std::uint32_t>(NativeMovementEligibilityFlag::MovementState);
+            if (!disabledControls)
+                next.flags |= static_cast<std::uint32_t>(NativeMovementEligibilityFlag::ControlsEnabled);
+            next.eligible = next.flags == next.knownMask;
+            eligibility = next;
+            identity = {ped, provider};
+            return true;
+        }
+
+        bool CheckBinding(void* candidate = nullptr, bool capture = false) noexcept
+        {
+            NativeMovementEligibility eligibility{};
+            BindingIdentity           identity{};
+            if (!ReadLocalEligibility(runtime.image, {runtime.ped, runtime.provider}, candidate, eligibility, identity))
+                return false;
+            if (!eligibility.eligible)
+            {
+                Fail(eligibility.context.inVehicle ? Failure::Vehicle : Failure::IneligibleContext);
+                return false;
+            }
             // The identity is captured before hooks are installed. Validation
             // during a session must not race producer reads by rewriting it.
             if (capture)
             {
-                runtime.ped = ped;
-                runtime.provider = provider;
+                runtime.ped = identity.ped;
+                runtime.provider = identity.provider;
             }
-            return Pages(runtime.image + padRva + NativePadCurrentOffset, sizeof(CControllerState) * 2, true);
+            return true;
         }
 
         template <std::size_t N>
         bool Pin(std::uintptr_t rva, const std::array<unsigned char, N>& expected) noexcept
         {
-            std::array<unsigned char, N> actual{};
-            return Pages(runtime.image + rva, N, false, true) && Read(runtime.image + rva, actual) && actual == expected;
+            return PinAt(runtime.image, rva, expected);
         }
 
         bool CheckEntryPins() noexcept
@@ -666,11 +739,15 @@ namespace mta::game_de
             ready = false;
         }
         HMODULE retained = nullptr;
-        if (ready &&
-            !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN, reinterpret_cast<LPCWSTR>(&HookControl), &retained))
+        if (ready)
         {
-            Fail(Failure::HookInstall);
-            ready = false;
+            if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN, reinterpret_cast<LPCWSTR>(&HookControl), &retained))
+            {
+                Fail(Failure::HookInstall);
+                ready = false;
+            }
+            else
+                runtime.modulePinned.store(true);
         }
         if (ready)
         {
@@ -775,9 +852,26 @@ namespace mta::game_de
         return IsBound() && runtime.active.load();
     }
 
+    bool NativeMovementInput::ReadEligibility(NativeMovementEligibility& eligibility) const noexcept
+    {
+        ApiOperation operation;
+        if (!operation.acquired)
+            return false;
+        // The adapter requires its existing exact-image NativePadReader binding
+        // before entering this observation API. No hash, native call, hook or
+        // module pin is repeated here; the same pure guard protects each write.
+        const auto            image = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
+        const BindingIdentity expected = IsBound() ? BindingIdentity{runtime.ped, runtime.provider} : BindingIdentity{};
+        BindingIdentity       identity{};
+        return ReadLocalEligibility(image, expected, nullptr, eligibility, identity);
+    }
+
     void NativeMovementInput::ReadState(NativeMovementTrialState& state) const noexcept
     {
         state = hasFinalState ? finalState : NativeMovementTrialState{};
+        // A successful PIN is process lifetime state even when installation
+        // later fails or the adapter releases all trial ownership.
+        state.modulePinned = runtime.modulePinned.load();
         if (!generation || generation != runtime.generation.load())
             return;
         state.bound = IsBound();

@@ -4,10 +4,14 @@
 [CmdletBinding()]
 param([ValidateSet('Diagnostic', 'Smoke', 'Online')][string]$Mode = 'Smoke',
     [switch]$NativeGaitReference, [switch]$MatchedGaitRate, [switch]$LockWalkRoot, [switch]$NativeInputReference,
-    [switch]$MtaNativePadReference, [switch]$MtaNativeMovementTrial, [switch]$MtaCoreStartupReference, [switch]$MtaCoreInputReference)
+    [switch]$MtaNativePadReference, [switch]$MtaNativeMovementTrial, [switch]$MtaCoreStartupReference, [switch]$MtaCoreInputReference,
+    [switch]$MtaCoreMovementReference)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+if ($MtaCoreMovementReference -and ($Mode -ne 'Smoke' -or $MtaCoreInputReference -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot)) {
+    throw 'MTA Core configured movement reference requires separate opt-in Smoke mode.'
+}
 if ($MtaCoreInputReference -and ($Mode -ne 'Smoke' -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot)) {
     throw 'MTA Core configured input reference requires separate opt-in Smoke mode.'
 }
@@ -207,6 +211,10 @@ $coreInputMarker = 'export const MTA_CORE_INPUT_REFERENCE = false;'
 if ([regex]::Matches($configText, [regex]::Escape($coreInputMarker)).Count -ne 1) { throw 'Expected disabled MTA Core configured input reference in source configuration.' }
 $configText = $configText.Replace($coreInputMarker,
     "export const MTA_CORE_INPUT_REFERENCE = $($MtaCoreInputReference.IsPresent.ToString().ToLowerInvariant());")
+$coreMovementMarker = 'export const MTA_CORE_MOVEMENT_REFERENCE = false;'
+if ([regex]::Matches($configText, [regex]::Escape($coreMovementMarker)).Count -ne 1) { throw 'Expected disabled MTA Core configured movement reference in source configuration.' }
+$configText = $configText.Replace($coreMovementMarker,
+    "export const MTA_CORE_MOVEMENT_REFERENCE = $($MtaCoreMovementReference.IsPresent.ToString().ToLowerInvariant());")
 [IO.File]::WriteAllText($configPath, $configText, $utf8)
 foreach ($name in @('sa_unreal.json', 'unknown_x64.json')) {
     [IO.File]::Copy($downloads[$name], (Join-Path $configDirectory $name), $false)

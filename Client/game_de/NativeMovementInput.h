@@ -25,6 +25,10 @@ namespace mta::game_de
         bool End() noexcept;
         bool IsBound() const noexcept;
         bool IsActive() const noexcept;
+        // The adapter first verifies its existing native-reader binding. This
+        // reports only exact local on-foot/IDLE/controls-enabled admission;
+        // weapon/task context and general gameplay readiness remain unknown.
+        bool ReadEligibility(NativeMovementEligibility& eligibility) const noexcept;
         void ReadState(NativeMovementTrialState& state) const noexcept;
 
     private:

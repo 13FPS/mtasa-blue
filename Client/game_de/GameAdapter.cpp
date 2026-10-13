@@ -250,6 +250,22 @@ namespace mta::game_de
                 return EndMovement() ? Status::Ok : Status::Unsupported;
             }
 
+            Status GetNativeMovementEligibility(NativeMovementEligibility& state) noexcept override
+            {
+                const auto status = Access();
+                if (status != Status::Ok)
+                    return status;
+                // Reuse the adapter's exact-image binding. Unknown or changed
+                // identity cannot authorize a Core producer or an engine write.
+                if (!nativePad.IsBound())
+                    return Status::Unsupported;
+                NativeMovementEligibility next;
+                if (!nativeMovement.ReadEligibility(next))
+                    return Status::Unsupported;
+                state = next;
+                return Status::Ok;
+            }
+
         private:
             static bool TrialFrame(const ControlActionFrame& frame) noexcept
             {

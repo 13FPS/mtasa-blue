@@ -12,11 +12,15 @@ param(
     [switch]$MtaNativeMovementTrial,
     [switch]$MtaCoreStartupReference,
     [switch]$MtaCoreInputReference,
+    [switch]$MtaCoreMovementReference,
     [string]$GameDirectory = 'C:\Program Files (x86)\Steam\steamapps\common\GTA San Andreas - The Definitive Edition\Gameface\Binaries\Win64'
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+if ($MtaCoreMovementReference -and ($Mode -ne 'Smoke' -or $MtaCoreInputReference -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot)) {
+    throw 'MTA Core configured movement reference requires separate opt-in Smoke mode.'
+}
 if ($MtaCoreInputReference -and ($Mode -ne 'Smoke' -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot)) {
     throw 'MTA Core configured input reference requires separate opt-in Smoke mode.'
 }
@@ -134,6 +138,22 @@ if ($coreInputMatches -eq 1) {
     $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $coreInputPattern,
         "export const MTA_CORE_INPUT_REFERENCE = $($MtaCoreInputReference.IsPresent.ToString().ToLowerInvariant());"))
 }
+$coreMovementPattern = 'export const MTA_CORE_MOVEMENT_REFERENCE = (true|false);'
+$coreMovementMatches = [regex]::Matches($configText, $coreMovementPattern).Count
+if ($coreMovementMatches -gt 1 -or ($MtaCoreMovementReference -and $coreMovementMatches -ne 1)) {
+    throw 'Update the adapter before selecting MTA Core configured movement reference.'
+}
+if ($MtaCoreMovementReference -and @($installed.files | Where-Object {
+    $_.path -in @('CLEO/de-online/xmll.dll', 'CLEO/de-online/mta/config/coreconfig.xml', 'CLEO/de-online/core.dll',
+        'CLEO/de-online/pthread.dll', 'CLEO/de-online/game_de.dll', 'CLEO/de-online/native-movement-trial.mjs',
+        'CLEO/de-online/native-pad-reference.mjs')
+}).Count -ne 7) { throw 'Update the adapter before selecting MTA Core configured movement reference: its owned Core/backend/XML files are missing.' }
+# A prior read-only selection must never leave the separate engine-write trial
+# active. Historical intact configurations remain usable without this marker.
+if ($coreMovementMatches -eq 1) {
+    $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $coreMovementPattern,
+        "export const MTA_CORE_MOVEMENT_REFERENCE = $($MtaCoreMovementReference.IsPresent.ToString().ToLowerInvariant());"))
+}
 $configEntry = @($installed.files | Where-Object { $_.path -eq 'CLEO/de-online/config.mjs' })
 if ($configEntry.Count -ne 1) { throw 'Missing owned configuration record.' }
 $configEntry[0].sha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($newConfig)).ToLowerInvariant()
@@ -166,7 +186,9 @@ try {
     Write-AtomicFile $manifestPath $originalManifest
     throw $failure
 }
-if ($MtaCoreInputReference) {
+if ($MtaCoreMovementReference) {
+    Write-Host 'Installed adapter mode: Smoke, bounded Core configured movement writes armed. Ctrl+Shift+F9 activates after release; Ctrl+Shift+End requests cleanup.'
+} elseif ($MtaCoreInputReference) {
     Write-Host 'Installed adapter mode: Smoke, read-only Core configured input reference armed. Ctrl+Shift+F9 starts after release; Ctrl+Shift+End cancels.'
 } elseif ($MtaCoreStartupReference) {
     Write-Host 'Installed adapter mode: Smoke, MTA Core startup reference armed. Follow the bounded startup plan; Ctrl+Shift+End stops the adapter.'

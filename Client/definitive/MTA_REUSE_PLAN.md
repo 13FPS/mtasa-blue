@@ -5,67 +5,81 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
-Current checkpoint: real opt-in Release/x64 Core builds and links, and ABI5
-implements a bounded local movement-write trial inside the normal Game DE
-backend. The existing Core module consumer loads that backend for diagnostic
-testing. Shared MTA action synthesis supplies walk/forwards/sprint state;
-native callback/provider routing applies it only within the verified player
-control call and restores the saved pad pair afterward. The trial retains
-failed cleanup state for retry and does not claim remote ownership or full
-input coverage. The full CGame, launcher, rendering and multiplayer paths
-remain required. Earlier checkpoints below retain their original limits.
+Current checkpoint: actual MTA Core now owns saved XML configuration, its
+existing `CKeyBinds` manager, adapter pulse and digital action synthesis on the
+startup worker. The completed read-only live session ran for **60,003 ms**,
+with **1,188 native samples and 515 script snapshots**. Four directions, sprint
+and neutral were observed. Walk remains untested because the human was unsure
+which Shift key was used; the strict reader reports `movement_coverage_missing`
+while confirming a clean lifecycle. Both controller frames ended neutral,
+bind/XML/adapter owners were released, Core and Game DE unloaded, normal GTA
+exit passed and all 23 installed hashes matched. That run explicitly assumed
+on-foot context and performed no engine writes.
 
-The corrected local movement trial is now validated in the game: the human
-confirmed walking and sprinting, with 1,317 applied/restored callback scopes and
-zero recorded failures. Normal shutdown and installed ownership pass. The
-compatibility script still schedules fixed MTA action masks; configured Core
-bindings and its backend-neutral context/pulse boundary remain to be connected.
-No new walking-rate estimator or replacement multiplayer implementation is used.
+The next candidate connects this actual Core producer to the existing scoped
+native writer. Select `package.ps1 -Mode Smoke -MtaCoreMovementReference`;
+source defaults and ordinary mode changes disable it. The 23-file package uses
+the real Core, Game DE and XML modules plus saved MTA binding records. The
+bridge schedules one worker and captures coherent value-only snapshots. It
+contains no replacement bind manager, physical-key map or fixed action sweep.
+This combined configured-input write path has not been validated live.
 
-The next candidate loads the real normal-build x64 MTA Core in DE, rather than
-only compiling Core's module consumer into the diagnostic bridge. Its explicit
-Smoke startup reference calls the real exported initializer and records exact
-image binding, backend pulse, the retained gameplay gate and adapter teardown.
-The legacy D3DX9 import is delayed only for the opt-in x64 build. Ninety-three
-actual Core entry checks and both classic Win32 configurations pass. The corrected
-in-game Core probe now passes exact-image binding, pulse, expected gameplay
-rejection and cleanup in 70 ms. This establishes that startup boundary, while configured binds,
-the complete game facade and DE rendering still require implementation.
+ABI6 provides build-pinned local movement eligibility. Admission requires the
+verified local player/provider/pad0 identity, native InVehicle flag clear,
+`PED_IDLE` and controls-disable word zero. Known mask and positive flags must
+both equal `0xF`; only forwards/backwards/left/right/sprint/walk are admitted.
+Other context defaults remain unknown and cannot authorize weapon/task actions.
+The same guard runs in the producer and before every native callback write.
+There is no full task/death/health discovery or remote ownership claim.
 
-The first actual DE Core load exposed a pre-entry classic-layout dependency:
-global timing-log construction resolved the install root before localization
-existed. A nonclassic-layout host reproduces the same fault as the saved game
-dump. Core now defers that path until timing is enabled and reuses its existing
-explicit root override from the x64 directory setter. Both real Core layout
-fixtures pass. The startup reference now keeps all Core calls and cleanup on
-one worker while CLEO polls value-only results, avoiding its synchronous-call
-watchdog. The human reported normal GTA continuation; all 21 installed hashes
-and a separate post-cleanup module snapshot pass. Normal exit and the complete
-5,730-byte shutdown log are verified.
-Full gameplay capabilities remain gated.
+After F9 activation and release, focused configured keys must reach a neutral
+baseline. Core then starts a 30-second write window using the existing native
+mailbox, provider routing and 96-byte pad transaction. The native writer retains
+its independent 35-second expiry and two-second freshness limit. End disarms
+first; a pending restoration/detachment keeps the real Core and worker alive
+for retries even after cleanup deadline reporting. Two neutral publications
+clear canonical current and previous state before bind/XML cleanup and the
+terminal snapshot. Core is released afterward. Snapshot field 94 reports the
+actual successful Game DE module PIN: its continued presence is expected after
+PIN, while native hooks and adapter ownership must be fully ended.
 
-The current candidate now holds the actual Core owner on that worker for a
-bounded configured-input session. It loads the real x64 XML module and explicit
-MTA bind records, polls eligible keyboard routes from MTA's own key table and
-publishes through the normal DE adapter. Focus loss releases controls and
-refocus requires a clean key baseline. Both canonical frames are neutral before
-the bind/XML owners are destroyed and the original startup gate cleans up.
-The compatibility script only schedules and logs this session. It creates no
-bind manager, key map or game input writer. Engine context is explicitly assumed
-on-foot; full context discovery and unsupported input routes remain work ahead.
-The new candidate still needs its human in-game validation.
+Assess the saved combined trial with
+`python utils/definitive_edition/core_movement_log.py --log <saved-log> --output <assessment> --require-exit`.
+A complete report requires forward, isolated forward walk, isolated forward
+sprint and neutral coverage plus native scope/restoration and worker-cleanup
+proof. The new guard's focused suites pass 1,190 native callback checks and
+1,520 adapter-module checks. Normal Core/Game DE builds and 114 actual Core
+entry checks in each classic/DE layout pass. These are offline checks; package
+and live evidence remain separately qualified. Full MTA startup, CGame,
+resources, networking, launcher integration and DE rendering remain gated.
 
-The next input boundary is now implemented inside actual `CKeyBinds`:
-`ProcessConfiguredControlKey` uses its existing bind list/control policy,
-`BuildConfiguredControlFrame` snapshots context before transition callbacks
-and actions afterward, and `FinishConfiguredControlFrame` retains wheel
+Earlier validated boundaries remain useful evidence. The ABI5 fixed-phase
+script trial recorded 1,317 applied/restored local scopes with no failures and
+a human report of walking/sprinting, followed by normal exit. Its producer was
+the compatibility script, so it does not establish the new configured Core
+write path. No new walking-rate estimator or replacement multiplayer is used.
+The real Core startup probe separately passed exact-image binding, pulse,
+expected gameplay rejection and cleanup in 70 ms. Its legacy D3DX9 dependency
+is delayed only for the opt-in x64 build.
+
+The first real Core load exposed a classic-layout dependency in global timing
+log initialization before localization existed. Core now defers that path and
+reuses its explicit install-root override. Classic and DE-layout fixtures pass;
+all Core calls and cleanup stay on one worker while CLEO polls, avoiding its
+synchronous-call watchdog. The completed startup probe's normal exit and
+21-file ownership evidence remain historical, separate from the later
+23-file configured-input run.
+
+Actual `CKeyBinds` uses its existing bind/control tables and real XML parser.
+`ProcessConfiguredControlKey` shares control policy,
+`BuildConfiguredControlFrame` copies context before transition callbacks and
+captures actions afterward, and `FinishConfiguredControlFrame` retains wheel
 release after publication. Classic input delegates to the same methods while
-retaining its joystick and native pad policy. A disposable DLL linked from
-normal Core objects passes 185 actual-class/adapter checks and 33 host checks;
-the preserved old object fails to resolve all three methods. This reuses MTA's
-configured controls without a second bind manager. A live DE event/context
-owner and existing XML/default imports remain required before claiming live
-configured input. The tested in-game Core remains the earlier validated build.
+keeping joystick/native-pad policy and missing/empty-config GTA defaults.
+The DE diagnostic requires explicit saved bindings; unsupported polling routes
+are reported instead of guessed. The actual XML/bind-manager/adapter fixture
+passes 318 checks plus 34 host checks. Historical 185+33 checks and the
+three-method missing-symbol failure establish the initial extraction boundary.
 
 ```mermaid
 flowchart LR
@@ -99,11 +113,12 @@ its opt-in x64 entry now recognizes the DE executable candidate. Exact native
 binding runs outside loader lock and rejects an unrecognized engine image;
 the gameplay capability gate remains in place.
 
-Normal MTA project builds and the real-DLL consumer tests pass. The module has
+The initial module checkpoint passed normal MTA project builds and real-DLL
+consumer tests. At that point the module had
 1,079 checks; the x64 consumer has 45 and its x86 rejection path has three.
 Migrated controller storage passes 930 checks on each architecture. Classic
 Release/Win32 Core translation units compile with the option enabled and with
-the default configuration. Core was not linked or launched by these checks.
+the default configuration. Core was not linked or launched by those initial checks.
 The final certificate binds 73 source files:
 `Build/mta-owned-adapter-check/20261013-113152-f54e411c11b540eb9e6ec7f8b57577cc/test-result.json`.
 See `Client/game_de/README.md` for the module/build contract.

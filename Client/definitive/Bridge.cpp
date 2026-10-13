@@ -295,6 +295,21 @@ std::uint32_t DE_CoreInputRead(std::uint32_t component)
     return ControllerAccessAllowed() ? coreStartup.ReadInput(component) : 0;
 }
 
+int DE_CoreMovementBegin()
+{
+    return ControllerAccessAllowed() && !movementAdapter && !client && coreStartup.BeginMovementReference(&moduleAnchor) ? 1 : 0;
+}
+
+int DE_CoreMovementCapture()
+{
+    return ControllerAccessAllowed() && coreStartup.CaptureMovement() ? 1 : 0;
+}
+
+std::uint32_t DE_CoreMovementRead(std::uint32_t component)
+{
+    return ControllerAccessAllowed() ? coreStartup.ReadMovement(component) : 0;
+}
+
 int DE_Pump()
 {
     try

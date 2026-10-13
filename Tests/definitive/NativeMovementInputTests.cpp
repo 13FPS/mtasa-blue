@@ -116,6 +116,13 @@ namespace
         Put(runtime.image + 0x5726120, std::int32_t{1});
     }
 
+    void OriginalEligibilityChange(void*)
+    {
+        ++originalCalls;
+        Check(Pad() != physical, "native eligibility transition starts inside replacement scope");
+        Put(runtime.ped + 0x5fc, std::uint32_t{58});
+    }
+
     void OriginalQueryContextChange(void*)
     {
         ++originalCalls;
@@ -290,6 +297,8 @@ namespace
         originalCalls = 0;
         Put(runtime.image + 0x5726120, std::int32_t{0});
         Put(runtime.ped + 0x634, std::uint32_t{0});
+        Put(runtime.ped + 0x5fc, std::uint32_t{1});
+        Put(runtime.image + padRva + 0x30, std::uint16_t{0});
         Put(runtime.ped + 0x7c8, std::uintptr_t{0});
         Put(runtime.ped + 0x7e0, std::int32_t{0});
         Check(WritePad(physical), "reset fixture physical pad");
@@ -304,6 +313,7 @@ int main()
     NativeMovementTrialState rejection;
     rejected.ReadState(rejection);
     Check(!rejection.bound && !rejection.active, "wrong executable never bound");
+    Check(!rejection.modulePinned && !runtime.modulePinned.load(), "wrong executable rejection never pins callback module");
     Check(rejection.failureReason == static_cast<std::uint32_t>(Failure::UnsupportedBuild), "wrong executable has build rejection reason");
     Check(!runtime.hooked.load() && !runtime.scopes.load(), "wrong executable installs no hooks or scopes");
     Check(rejected.End() && rejected.End(), "unbound End is idempotent");
@@ -312,6 +322,10 @@ int main()
     rejected.ReadState(rejection);
     Check(rejection.failureReason == static_cast<std::uint32_t>(Failure::UnsupportedBuild), "earlier owner preserves final diagnostic");
     Check(anotherRejected.End(), "second rejection cleans up");
+    NativeMovementEligibility rejectedEligibility;
+    rejectedEligibility.knownMask = 0x76543210;
+    Check(!rejected.ReadEligibility(rejectedEligibility) && rejectedEligibility.knownMask == 0x76543210,
+          "wrong executable eligibility read preserves output without hooks");
 
     runtime.image = reinterpret_cast<std::uintptr_t>(VirtualAlloc(nullptr, 97141760, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
     runtime.ped = reinterpret_cast<std::uintptr_t>(VirtualAlloc(nullptr, 0x1000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
@@ -330,8 +344,108 @@ int main()
         Put(runtime.image + 0x4226b20 + i * sizeof(std::uintptr_t), runtime.image + methods[i]);
     const std::array<unsigned char, 6> type2 = {0xb8, 0x02, 0, 0, 0, 0xc3};
     std::memcpy(reinterpret_cast<void*>(runtime.image + 0xae3c00), type2.data(), type2.size());
+    // Reproduce the exact independently disassembled instructions in our own
+    // allocation. Production Begin still rejects this executable; only the
+    // private observation/callback path consumes this controlled fixture image.
+    const std::array<unsigned char, 5>  baseConstructor = {0xe8, 0x59, 0xb8, 0xfc, 0xff};
+    const std::array<unsigned char, 10> idleState = {0xc7, 0x87, 0xfc, 0x05, 0, 0, 1, 0, 0, 0};
+    const std::array<unsigned char, 10> onFoot = {0xf7, 0x83, 0x34, 0x06, 0, 0, 0, 1, 0, 0};
+    const std::array<unsigned char, 4>  controlsEnabled = {0x66, 0x39, 0x79, 0x30};
+    Put(runtime.image + 0x124e002, baseConstructor);
+    Put(runtime.image + 0x1219cce, idleState);
+    Put(runtime.image + 0x124eb5e, onFoot);
+    Put(runtime.image + 0x11579bf, controlsEnabled);
+    for (const auto code : {0x124e002, 0x1219cce, 0x124eb5e, 0x11579bf})
+    {
+        DWORD old = 0;
+        Check(VirtualProtect(reinterpret_cast<void*>(runtime.image + code), 16, PAGE_EXECUTE_READ, &old) != FALSE,
+              "fixture eligibility instructions are executable and read only");
+    }
     for (std::size_t i = 0; i < physical.size(); ++i)
         physical[i] = static_cast<std::byte>(i + 1);
+
+    Configure(OriginalPhysical, false);
+    NativeMovementEligibility eligibility;
+    BindingIdentity           identity;
+    const BindingIdentity     expected{runtime.ped, runtime.provider};
+    Check(ReadLocalEligibility(runtime.image, expected, nullptr, eligibility, identity) && eligibility.eligible &&
+              eligibility.knownMask == NativeMovementEligibilityMask && eligibility.flags == NativeMovementEligibilityMask && eligibility.rawPedState == 1 &&
+              eligibility.rawDisabledControls == 0,
+          "exact local IDLE enabled context has complete positive admission");
+    Check(!eligibility.context.inVehicle && !eligibility.context.isDead && identity.ped == runtime.ped && identity.provider == runtime.provider,
+          "eligible context only supplies relevant on-foot and alive values");
+    Check(runtime.counters.steps.load() == 0 && Pad() == physical, "eligibility observation never applies input");
+    for (std::uint32_t state = 0; state <= 64; ++state)
+    {
+        if (state == 1)
+            continue;
+        Configure(OriginalPhysical, false);
+        Put(runtime.ped + 0x5fc, state);
+        Check(ReadLocalEligibility(runtime.image, expected, nullptr, eligibility, identity) && !eligibility.eligible && eligibility.rawPedState == state &&
+                  !(eligibility.flags & static_cast<std::uint32_t>(NativeMovementEligibilityFlag::MovementState)),
+              "every non-IDLE state fails closed including NONE and transitions");
+        Check(eligibility.context.isDead == (state == 0x36 || state == 0x37), "only exact die/dead enum states are recognized");
+        HookControl(reinterpret_cast<void*>(runtime.ped));
+        Check(!runtime.active.load() && runtime.counters.reason.load() == static_cast<std::uint32_t>(Failure::IneligibleContext) &&
+                  runtime.counters.steps.load() == 0 && Pad() == physical && originalCalls == 1,
+              "non-IDLE native callback forwards physical input before any replacement");
+    }
+    for (unsigned bit = 0; bit < 16; ++bit)
+    {
+        Configure(OriginalPhysical, false);
+        Put(runtime.image + padRva + 0x30, static_cast<std::uint16_t>(1u << bit));
+        Check(ReadLocalEligibility(runtime.image, expected, nullptr, eligibility, identity) && !eligibility.eligible &&
+                  eligibility.rawDisabledControls == (1u << bit) &&
+                  !(eligibility.flags & static_cast<std::uint32_t>(NativeMovementEligibilityFlag::ControlsEnabled)),
+              "every controls-disable bit rejects observed admission");
+        HookControl(reinterpret_cast<void*>(runtime.ped));
+        Check(!runtime.active.load() && runtime.counters.reason.load() == static_cast<std::uint32_t>(Failure::IneligibleContext) &&
+                  runtime.counters.steps.load() == 0 && Pad() == physical,
+              "disabled native callback preserves physical state and never writes");
+    }
+    Configure(OriginalPhysical, false);
+    Check(ReadLocalEligibility(runtime.image, expected, nullptr, eligibility, identity) && eligibility.eligible,
+          "producer can observe eligible frame before transition");
+    Put(runtime.ped + 0x5fc, std::uint32_t{58});
+    HookControl(reinterpret_cast<void*>(runtime.ped));
+    Check(!runtime.active.load() && runtime.counters.steps.load() == 0 && Pad() == physical, "native boundary rechecks eligibility after producer observation");
+    Configure(OriginalPhysical, false);
+    Put(runtime.ped + 0x634, std::uint32_t{0x100});
+    Check(ReadLocalEligibility(runtime.image, expected, nullptr, eligibility, identity) && !eligibility.eligible && eligibility.context.inVehicle &&
+              !(eligibility.flags & static_cast<std::uint32_t>(NativeMovementEligibilityFlag::OnFoot)),
+          "vehicle flag reports an explicitly ineligible context");
+    eligibility.knownMask = 0x12345678;
+    const BindingIdentity wrongIdentity{runtime.ped + 8, runtime.provider};
+    Check(!ReadLocalEligibility(runtime.image, wrongIdentity, nullptr, eligibility, identity) && eligibility.knownMask == 0x12345678,
+          "identity mismatch preserves prior observation");
+    Configure(OriginalPhysical, false);
+    Put(runtime.ped + 0x5fc, UINT32_MAX);
+    Check(ReadLocalEligibility(runtime.image, expected, nullptr, eligibility, identity) && !eligibility.eligible && eligibility.rawPedState == UINT32_MAX,
+          "out-of-domain native state remains explicitly ineligible");
+    Configure(OriginalPhysical, false);
+    DWORD pinProtection = 0;
+    Check(VirtualProtect(reinterpret_cast<void*>(runtime.image + 0x1219cce), idleState.size(), PAGE_READWRITE, &pinProtection) != FALSE,
+          "fixture can invalidate state-layout evidence");
+    Put(runtime.image + 0x1219cce, std::uint8_t{0x90});
+    Check(VirtualProtect(reinterpret_cast<void*>(runtime.image + 0x1219cce), idleState.size(), PAGE_EXECUTE_READ, &pinProtection) != FALSE,
+          "poisoned instruction keeps executable page classification");
+    eligibility.knownMask = 0x87654321;
+    Check(!ReadLocalEligibility(runtime.image, expected, nullptr, eligibility, identity) && eligibility.knownMask == 0x87654321,
+          "changed native state instruction refuses observation without modifying output");
+    HookControl(reinterpret_cast<void*>(runtime.ped));
+    Check(!runtime.active.load() && runtime.counters.steps.load() == 0 && Pad() == physical,
+          "changed native state instruction rejects before any callback write");
+    Check(VirtualProtect(reinterpret_cast<void*>(runtime.image + 0x1219cce), idleState.size(), PAGE_READWRITE, &pinProtection) != FALSE,
+          "fixture restores native evidence page for remaining tests");
+    Put(runtime.image + 0x1219cce, idleState);
+    Check(VirtualProtect(reinterpret_cast<void*>(runtime.image + 0x1219cce), idleState.size(), PAGE_EXECUTE_READ, &pinProtection) != FALSE,
+          "restored instruction page remains read only and executable");
+
+    Configure(OriginalEligibilityChange, false);
+    HookControl(reinterpret_cast<void*>(runtime.ped));
+    Check(!runtime.active.load() && runtime.counters.reason.load() == static_cast<std::uint32_t>(Failure::IneligibleContext) &&
+              runtime.counters.steps.load() == 1 && runtime.counters.restored.load() == 1 && Pad() == physical,
+          "native state transition during original always restores owned pad and disarms");
 
     Configure(OriginalPhysical, false);
     bool        wrongThreadUpdated = true;

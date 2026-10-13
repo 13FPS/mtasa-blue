@@ -47,6 +47,9 @@ def main():
         "DE_CoreInputBegin": (ctypes.c_int, []),
         "DE_CoreInputCapture": (ctypes.c_int, []),
         "DE_CoreInputRead": (ctypes.c_uint32, [ctypes.c_uint32]),
+        "DE_CoreMovementBegin": (ctypes.c_int, []),
+        "DE_CoreMovementCapture": (ctypes.c_int, []),
+        "DE_CoreMovementRead": (ctypes.c_uint32, [ctypes.c_uint32]),
     }
     for name, (result, arguments) in signatures.items():
         function = getattr(bridge, name)
@@ -67,6 +70,10 @@ def main():
     check(bridge.DE_CoreStartupBegin() == 0, "Wrong executable cannot begin Core startup")
     check(bridge.DE_CoreInputBegin() == 0, "Wrong executable cannot begin configured Core input")
     check(bridge.DE_CoreInputCapture() == 0, "Rejected host cannot freeze an input sample")
+    check(bridge.DE_CoreMovementBegin() == 0, "Wrong executable cannot start Core-owned input writes")
+    check(bridge.DE_CoreMovementCapture() == 0, "Rejected host cannot freeze Core movement metrics")
+    for component in (*range(96), 96, 0xFFFFFFFF):
+        check(bridge.DE_CoreMovementRead(component) == 0, "Rejected host cannot manufacture Core movement evidence")
     for component in (*range(64), 64, 0xFFFFFFFF):
         check(bridge.DE_CoreInputRead(component) == 0, "Rejected host cannot manufacture configured input")
     check(bridge.DE_CoreStartupPoll() == -1, "Rejected startup cannot publish a worker status")

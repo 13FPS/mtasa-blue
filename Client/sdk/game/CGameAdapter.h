@@ -17,9 +17,9 @@ class CGame;
 
 namespace mta::game_de
 {
-    // ABI5 adds the explicit, bounded local movement trial. Earlier consumers
+    // ABI6 adds build-pinned eligibility for Core's configured movement trial. Earlier consumers
     // must not receive this changed vtable even though their methods remain.
-    inline constexpr std::uint32_t AdapterAbiVersion = 5;
+    inline constexpr std::uint32_t AdapterAbiVersion = 6;
     inline constexpr std::uint32_t AdapterControllerMask = 0xfffffu;
 
     enum class AdapterCapability : std::uint64_t
@@ -130,7 +130,8 @@ namespace mta::game_de
         ContextChanged = 14,
         ScopeActive = 15,
         OwnerConflict = 16,
-        OriginalException = 17
+        OriginalException = 17,
+        IneligibleContext = 18
     };
 
     struct NativeMovementTrialState
@@ -149,6 +150,32 @@ namespace mta::game_de
         // This is the observed native field after an original control callback;
         // it remains a raw value rather than a validated locomotion mapping.
         std::uint32_t lastMoveState = 0;
+        // Pinning succeeds before hook installation can fail. Report its real
+        // lifetime independently of active/bound so Core can qualify cleanup.
+        bool modulePinned = false;
+    };
+
+    enum class NativeMovementEligibilityFlag : std::uint32_t
+    {
+        LocalIdentity = 1,
+        OnFoot = 2,
+        MovementState = 4,
+        ControlsEnabled = 8
+    };
+    inline constexpr std::uint32_t NativeMovementEligibilityMask = 0xf;
+
+    // Known fields describe the exact local-player identity, native InVehicle
+    // flag, PED_IDLE state and controls-disable word. This deliberately admits
+    // only the existing six movement actions; weapon/task context remains
+    // unknown and must not be inferred from the other Context defaults.
+    struct NativeMovementEligibility
+    {
+        std::uint32_t     knownMask = 0;
+        std::uint32_t     flags = 0;
+        std::uint32_t     rawPedState = 0;
+        std::uint32_t     rawDisabledControls = 0;
+        bool              eligible = false;
+        MtaInput::Context context;
     };
 
     class IGameAdapter
@@ -174,6 +201,7 @@ namespace mta::game_de
         virtual Status        BeginNativeMovementTrial() noexcept = 0;
         virtual Status        GetNativeMovementTrialState(NativeMovementTrialState& state) noexcept = 0;
         virtual Status        EndNativeMovementTrial() noexcept = 0;
+        virtual Status        GetNativeMovementEligibility(NativeMovementEligibility& state) noexcept = 0;
 
     protected:
         // Release keeps allocation/deallocation in the factory's module. The

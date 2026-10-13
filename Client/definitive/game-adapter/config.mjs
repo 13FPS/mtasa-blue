@@ -35,3 +35,6 @@ export const MTA_CORE_STARTUP_REFERENCE = false;
 // Observe the real Core-owned configured binds and their canonical frames.
 // This separate reference never submits those frames to the engine.
 export const MTA_CORE_INPUT_REFERENCE = false;
+// Drive only the bounded eligible local on-foot scope from Core's configured
+// bindings. Keep this write trial separate from both read-only Core references.
+export const MTA_CORE_MOVEMENT_REFERENCE = false;

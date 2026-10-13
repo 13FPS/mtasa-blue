@@ -19,6 +19,7 @@
 #include "SharedUtil.Memory.h"
 #include "DefinitiveStartupState.h"
 #include "DefinitiveInputReference.h"
+#include "DefinitiveMovementReference.h"
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
     #include "DefinitiveProcess.h"
 #endif
@@ -56,8 +57,8 @@ namespace DefinitiveInputReference
 
     bool Configure(const Request& request) noexcept
     {
-        if (!request.durationMs || request.durationMs > MaximumDurationMs || !request.cancelled || !request.publish ||
-            !TryAcquireSRWLockExclusive(&requestLock))
+        const auto maximum = request.nativeMovement ? DefinitiveMovementReference::MaximumDurationMs : MaximumDurationMs;
+        if (!request.durationMs || request.durationMs > maximum || !request.cancelled || !request.publish || !TryAcquireSRWLockExclusive(&requestLock))
             return false;
         const bool accepted = !pending && !active;
         if (accepted)
@@ -247,5 +248,16 @@ CORE_API std::uint32_t MTA_ConfigureDEInputReference(std::uint32_t durationMs, D
                                                      DefinitiveInputReference::PublishCallback publish)
 {
     return g_isDefinitiveProcessCandidate && DefinitiveInputReference::Configure({durationMs, cancel, publish}) ? 1u : 0u;
+}
+
+CORE_API std::uint32_t MTA_DEMovementReferenceApiVersion()
+{
+    return DefinitiveMovementReference::ApiVersion;
+}
+
+CORE_API std::uint32_t MTA_ConfigureDEMovementReference(std::uint32_t durationMs, DefinitiveInputReference::CancelCallback cancel,
+                                                        DefinitiveInputReference::PublishCallback publish)
+{
+    return g_isDefinitiveProcessCandidate && DefinitiveInputReference::Configure({durationMs, cancel, publish, true}) ? 1u : 0u;
 }
 #endif

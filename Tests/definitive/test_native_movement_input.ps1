@@ -14,7 +14,7 @@ $outputRoot = Join-Path $taskRoot ('Build/mta-native-movement-input/' + (Get-Dat
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
 $sourceNames = @('Client/game_de/NativeMovementInput.h','Client/game_de/NativeMovementInput.cpp',
     'Client/game_de/NativeInputRouting.h','Client/game_de/NativePadReader.h','Client/game_de/NativePadReader.cpp',
-    'Client/sdk/game/CGameAdapter.h','Shared/sdk/CControllerState.h','Tests/definitive/NativeMovementInputTests.cpp',
+    'Client/sdk/game/CGameAdapter.h','Shared/sdk/CControllerState.h','Shared/sdk/enums/PedState.h','Tests/definitive/NativeMovementInputTests.cpp',
     'Tests/definitive/test_native_movement_input.ps1',
     'vendor/detours/4.0.1/src/detours.h','vendor/detours/4.0.1/src/detours.cpp','vendor/detours/4.0.1/src/modules.cpp',
     'vendor/detours/4.0.1/src/disasm.cpp','vendor/detours/4.0.1/src/image.cpp','vendor/detours/4.0.1/src/creatwth.cpp')

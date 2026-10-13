@@ -101,7 +101,7 @@ namespace
     void TestFactoryAndLifecycle()
     {
         Check(CreateGameAdapter(0) == nullptr && CreateGameAdapter(1) == nullptr && CreateGameAdapter(2) == nullptr && CreateGameAdapter(3) == nullptr &&
-                  CreateGameAdapter(4) == nullptr && CreateGameAdapter(AdapterAbiVersion + 1) == nullptr,
+                  CreateGameAdapter(4) == nullptr && CreateGameAdapter(5) == nullptr && CreateGameAdapter(AdapterAbiVersion + 1) == nullptr,
               "reject old and unknown factory ABIs before exposing the changed vtable");
         OwnedAdapter adapter;
         Check(adapter.value != nullptr, "matching ABI creates a module-owned adapter");
@@ -235,7 +235,7 @@ namespace
         Check(adapter.value && adapter.value->Initialize(owner.Get()) == Status::Ok, "bind the operational game thread");
         const auto sample = Observation();
         Check(adapter.value->PublishLocalObservation(sample) == Status::Ok, "publish before a foreign-thread attempt");
-        std::array<Status, 14> statuses{};
+        std::array<Status, 15> statuses{};
         LocalObservation       foreignOutput = Observation(999);
         MtaInputState          foreignInput;
         foreignInput.current.ButtonCross = 19;
@@ -245,6 +245,8 @@ namespace
         foreignDevice.sources.fill(-1234567);
         NativeMovementTrialState foreignTrial;
         foreignTrial.callbackCount = 123;
+        NativeMovementEligibility foreignEligibility;
+        foreignEligibility.knownMask = 123;
         std::thread other(
             [&]
             {
@@ -261,7 +263,8 @@ namespace
                             adapter.value->ReadNativeDeviceState(foreignDevice),
                             adapter.value->BeginNativeMovementTrial(),
                             adapter.value->GetNativeMovementTrialState(foreignTrial),
-                            adapter.value->EndNativeMovementTrial()};
+                            adapter.value->EndNativeMovementTrial(),
+                            adapter.value->GetNativeMovementEligibility(foreignEligibility)};
             });
         other.join();
         for (const auto status : statuses)
@@ -270,6 +273,7 @@ namespace
         Check(foreignInput.current.ButtonCross == 19, "foreign logical input read leaves caller output untouched");
         Check(foreignNative.current.ButtonCross == 23, "foreign native read leaves caller output untouched");
         Check(foreignTrial.callbackCount == 123, "foreign trial reads preserve caller metrics without starting or ending hooks");
+        Check(foreignEligibility.knownMask == 123, "foreign eligibility reads cannot replace caller context");
         Check(std::all_of(foreignDevice.sources.begin(), foreignDevice.sources.end(), [](std::int32_t value) { return value == -1234567; }),
               "foreign native device read leaves all caller values untouched");
         LocalObservation output;
@@ -409,6 +413,36 @@ namespace
               "shutdown prevents native device reads");
     }
 
+    void TestNativeMovementEligibilityRejection()
+    {
+        OwnedAdapter              adapter;
+        NativeMovementEligibility state;
+        state.knownMask = 123;
+        state.flags = 456;
+        state.rawPedState = 789;
+        state.rawDisabledControls = 42;
+        state.eligible = true;
+        state.context.inVehicle = true;
+        const auto unchanged = [&]
+        {
+            return state.knownMask == 123 && state.flags == 456 && state.rawPedState == 789 && state.rawDisabledControls == 42 && state.eligible &&
+                   state.context.inVehicle;
+        };
+        Check(adapter.value && adapter.value->GetNativeMovementEligibility(state) == Status::NotInitialized && unchanged(),
+              "eligibility requires initialization and preserves unknown caller storage");
+        OwnerIdentity owner;
+        Check(adapter.value->Initialize(owner.Get()) == Status::Ok, "initialize the eligibility owner without binding a game");
+        Check(adapter.value->GetNativeMovementEligibility(state) == Status::Unsupported && unchanged(),
+              "unbound eligibility cannot fabricate valid native context");
+        Check(
+            adapter.value->BindNativeInput() == Status::Unsupported && adapter.value->GetNativeMovementEligibility(state) == Status::Unsupported && unchanged(),
+            "wrong-image rejection precedes native eligibility reads");
+        Check(adapter.value->Reset() == Status::Ok && adapter.value->GetNativeMovementEligibility(state) == Status::Unsupported && unchanged(),
+              "reset leaves eligibility unknown until exact native binding");
+        Check(adapter.value->Shutdown() == Status::Ok && adapter.value->GetNativeMovementEligibility(state) == Status::NotInitialized && unchanged(),
+              "shutdown revokes native context access");
+    }
+
     void TestNativeMovementRejection()
     {
         OwnerIdentity owner;
@@ -469,7 +503,7 @@ namespace
 
 int main()
 {
-    static_assert(AdapterAbiVersion == 5 && AdapterControllerMask == 0xfffff);
+    static_assert(AdapterAbiVersion == 6 && AdapterControllerMask == 0xfffff);
     static_assert(static_cast<std::uint64_t>(AdapterCapability::NativeMovementWriteCandidate) == 256);
     static_assert(NativeDeviceStateCount == 127 && sizeof(NativeDeviceState) == 508);
     static_assert(static_cast<std::uint64_t>(AdapterCapability::NativeDeviceStateCandidateRead) == 128);
@@ -486,6 +520,7 @@ int main()
         TestNativeInputRejection();
         TestNativeDeviceRejection();
         TestNativeMovementRejection();
+        TestNativeMovementEligibilityRejection();
         std::cout << "Passed " << checks << " MTA Game DE adapter checks\n";
         return 0;
     }

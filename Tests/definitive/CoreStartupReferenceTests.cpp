@@ -51,7 +51,7 @@ namespace
     }
     struct Fixture
     {
-        HANDLE         mapping{}, entered{}, release{}, inputRelease{};
+        HANDLE         mapping{}, entered{}, release{}, inputRelease{}, movementRelease{};
         volatile LONG* counters{};
         explicit Fixture(unsigned serial)
         {
@@ -60,17 +60,20 @@ namespace
             const auto enteredName = L"Local\\MtaCoreEntered-" + suffix;
             const auto releaseName = L"Local\\MtaCoreRelease-" + suffix;
             const auto inputReleaseName = L"Local\\MtaCoreInputRelease-" + suffix;
+            const auto movementReleaseName = L"Local\\MtaCoreMovementRelease-" + suffix;
             mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, 64 * sizeof(LONG), mapName.c_str());
             entered = CreateEventW(nullptr, TRUE, FALSE, enteredName.c_str());
             release = CreateEventW(nullptr, TRUE, FALSE, releaseName.c_str());
             inputRelease = CreateEventW(nullptr, TRUE, FALSE, inputReleaseName.c_str());
-            Check(mapping && entered && release && inputRelease, "fixture kernel objects failed");
+            movementRelease = CreateEventW(nullptr, TRUE, FALSE, movementReleaseName.c_str());
+            Check(mapping && entered && release && inputRelease && movementRelease, "fixture kernel objects failed");
             counters = static_cast<volatile LONG*>(MapViewOfFile(mapping, FILE_MAP_ALL_ACCESS, 0, 0, 64 * sizeof(LONG)));
             Check(counters != nullptr, "fixture shared telemetry failed");
             Set(L"MTA_CORE_FIXTURE_MAP", mapName);
             Set(L"MTA_CORE_FIXTURE_ENTERED", enteredName);
             Set(L"MTA_CORE_FIXTURE_RELEASE", releaseName);
             Set(L"MTA_CORE_FIXTURE_INPUT_RELEASE", inputReleaseName);
+            Set(L"MTA_CORE_FIXTURE_MOVEMENT_RELEASE", movementReleaseName);
             for (const auto* name : {L"MTA_CORE_FIXTURE_DELAY_MS", L"MTA_CORE_FIXTURE_BAD_VERSION", L"MTA_CORE_FIXTURE_BAD_STATE",
                                      L"MTA_CORE_FIXTURE_BAD_INITIALIZE", L"MTA_CORE_FIXTURE_FAIL_ATTACH", L"MTA_CORE_FIXTURE_INPUT_MODE"})
                 Set(name, L"0");
@@ -87,6 +90,8 @@ namespace
                 CloseHandle(release);
             if (inputRelease)
                 CloseHandle(inputRelease);
+            if (movementRelease)
+                CloseHandle(movementRelease);
         }
     };
     void CopyCore(const std::filesystem::path& source, const std::filesystem::path& root)
@@ -134,7 +139,62 @@ int wmain(int argc, wchar_t** argv)
         Check(!worker.Begin(nullptr), "null anchor must be rejected");
         for (unsigned field = 0; field < 20; ++field)
             Check(worker.Read(field) == 0, "idle cache must be neutral");
-        if (std::wstring(argv[2]) == L"actual")
+        if (std::wstring(argv[2]).find(L"movement") == 0)
+        {
+            Check(argc == 4, "movement worker fixture requires controlled Core DLL");
+            const bool cancel = std::wstring(argv[2]) == L"movement-cancel";
+            Fixture    fixture(100);
+            CopyCore(std::filesystem::absolute(argv[3]), root);
+            SetEvent(fixture.release);
+            Check(worker.BeginMovementReference(&anchor), "Core movement worker failed to begin");
+            const auto deadline = GetTickCount64() + 5000;
+            while (!worker.CaptureMovement())
+            {
+                Check(worker.Poll() == 0 && GetTickCount64() < deadline, "movement callback failed to publish while pending");
+                Sleep(5);
+            }
+            Check(worker.ReadMovement(DefinitiveInputReference::Phase) == 1 && worker.ReadMovement(DefinitiveMovementReference::WriterStarted) == 1 &&
+                      worker.ReadMovement(DefinitiveMovementReference::ContextKnownMask) == 15 &&
+                      worker.ReadMovement(DefinitiveMovementReference::BackendPinnedExpected) == 1,
+                  "configured movement admission/PIN cache mismatch");
+            bool        foreignRejected = false;
+            std::thread foreign([&] { foreignRejected = !worker.CaptureMovement() && worker.ReadMovement(0) == 0 && !worker.BeginMovementReference(&anchor); });
+            foreign.join();
+            Check(foreignRejected, "movement capture and lifecycle must stay with the script owner");
+            if (cancel)
+                Check(Fast([&] { return worker.Cancel(); }), "movement cancellation must remain a value-only request");
+            SetEvent(fixture.inputRelease);
+            while (worker.ReadMovement(DefinitiveInputReference::Phase) != 3)
+            {
+                Check(worker.Poll() == 0 && GetTickCount64() < deadline, "movement cleanup must remain pending with its Core owner");
+                worker.CaptureMovement();
+                Sleep(5);
+            }
+            Check(worker.ReadMovement(DefinitiveMovementReference::CleanupPending) == 1 && GetModuleHandleW(L"core.dll") != nullptr,
+                  "a busy writer must retain the actual worker-owned Core module");
+            const auto held = GetTickCount64();
+            while (GetTickCount64() - held < 100)
+            {
+                Check(Fast([&] { return worker.Poll(); }) == 0, "pending native cleanup must not publish worker completion");
+                Sleep(5);
+            }
+            SetEvent(fixture.movementRelease);
+            Wait(worker);
+            Check(worker.ReadMovement(DefinitiveInputReference::Phase) == 3, "completion must not mutate the owner's captured movement array");
+            Check(worker.CaptureMovement() && worker.ReadMovement(DefinitiveInputReference::Phase) == 2 &&
+                      worker.ReadMovement(DefinitiveMovementReference::CleanupPending) == 0 &&
+                      worker.ReadMovement(DefinitiveInputReference::InputCleanupComplete) == 1,
+                  "terminal movement cleanup cache missing");
+            Check(worker.Read(13) == 1 && worker.Read(15) == 1 && worker.Read(16) == (cancel ? 12u : 0u),
+                  "a pinned backend must be distinguished from a live Core owner");
+            Check(
+                worker.ReadMovement(DefinitiveMovementReference::NativeMetrics) == 0 &&
+                    worker.ReadMovement(DefinitiveMovementReference::NativeMetrics + 2) == 0 &&
+                    worker.ReadMovement(DefinitiveMovementReference::NativeMetrics + 6) == worker.ReadMovement(DefinitiveMovementReference::NativeMetrics + 12),
+                "final movement metrics must prove inactive restored scopes");
+            Check(fixture.counters[2] == 0 && fixture.counters[1] == fixture.counters[0], "movement callback/unload must share the worker thread");
+        }
+        else if (std::wstring(argv[2]) == L"actual")
         {
             Check(Fast([&] { return worker.Begin(&anchor); }), "actual Core worker failed to begin");
             Wait(worker);

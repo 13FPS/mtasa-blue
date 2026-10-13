@@ -6,8 +6,46 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
+**Current candidate: actual Core configured bindings drive the existing native writer.**
+`package.ps1 -Mode Smoke -MtaCoreMovementReference` selects this separate,
+explicitly enabled 23-file candidate. It has not been validated in the game.
+The real Core owns the XML module, saved bind configuration, `CKeyBinds`,
+adapter pulse and action synthesis. The bridge schedules the worker and copies
+value-only log snapshots; JavaScript supplies no replacement key map or fixed
+movement phases. After Ctrl+Shift+F9 and release, configured keys must reach a
+neutral, focused baseline before the 30-second write window starts.
+Ctrl+Shift+End requests cleanup. Source defaults and ordinary mode switches
+disable this mutually exclusive Smoke trial.
+
+ABI6 admission requires the exact local player/provider binding, native
+InVehicle flag clear, `PED_IDLE` and the native controls-disable word zero.
+The known mask and positive flags must both be `0xF`; the six allowed actions
+are forwards, backwards, left, right, sprint and walk. Weapon/task context,
+health-based death detection and other actions remain unknown or excluded.
+The native callback repeats the same eligibility check before every scoped
+write. This reuses the existing producer/engine mailbox and 96-byte pad
+save/apply/restore path, with its 35-second native limit and two-second input
+freshness guard.
+
+An unfinished End keeps the actual Core and worker alive while restoration and
+detachment are retried. Two neutral action frames clear canonical current and
+previous state before bind/XML cleanup and terminal publication. The 96-field
+snapshot includes native metrics and actual module-PIN status at field 94.
+Core unloads after cleanup; Game DE is expected to remain loaded when that PIN
+succeeded. A loaded pinned DLL alone does not mean hooks or adapter ownership
+remain active. Use
+`python utils/definitive_edition/core_movement_log.py --log <saved-log> --output <assessment> --require-exit`
+after normal shutdown. Its complete result requires forward, isolated forward
+walk, isolated forward sprint and neutral coverage, matching applied/restored
+scopes, cleanup and the reported backend PIN. Visual movement still requires
+the human report. Focused offline suites pass 1,190 native callback checks and
+1,520 adapter-module checks. Normal Core/Game DE builds and 114 actual Core
+entry checks in each classic/DE layout pass. Package and live results remain
+separate evidence. Full MTA startup, CGame, DE rendering, resources and networking
+remain gated.
+
 **Completed live check: actual MTA Core startup.**
-`package.ps1 -Mode Smoke -MtaCoreStartupReference` stages 21 owned files,
+The validated `-MtaCoreStartupReference` package contained 21 owned files,
 including the normal opt-in x64 `core.dll` and its `pthread.dll` dependency.
 After manual Ctrl+Shift+F9 activation and release, one bridge worker loads that
 actual Core, sets its MTA/game directories, calls `InitializeCore`, reads its
@@ -57,7 +95,7 @@ checks plus 33 host checks through the real Game DE module. The old Core object
 fails on exactly the three new methods. Normal Core builds and both Win32
 configurations pass.
 
-**Next live check: Core-owned configured keyboard input.**
+**Completed read-only live check: Core-owned configured keyboard input.**
 `package.ps1 -Mode Smoke -MtaCoreInputReference` stages 23 owned files,
 including the actual x64 XML module and an explicit `mta/config/coreconfig.xml`.
 After F9 activation, the real Core remains on its startup worker for 60 seconds.
@@ -80,20 +118,32 @@ the DE reference requires explicit saved bindings. Use
 `utils/definitive_edition/core_input_log.py` to assess the entire saved log,
 adding `--require-exit` after normal shutdown. A clean lifecycle alone cannot
 pass the movement coverage check: all four directions, forward sprint, forward
-walk and neutral input must be recorded. Live validation of this candidate is pending.
-Full game context, gameplay and rendering remain unfinished.
+walk and neutral input must be recorded.
+
+The actual Core session completed in **60,003 ms**, with **1,188 native
+samples and 515 script snapshots**. Four directions, sprint and neutral are
+recorded; Walk was never observed. The human was unsure which Shift key was
+used for that step, so Walk remains untested. The strict reader reports
+`movement_coverage_missing` with a clean session lifecycle, not six-action
+success. Canonical current/previous state ended neutral; bind/XML/adapter
+cleanup, Core/backend unloading, normal GTA exit and all 23 installed hashes
+passed. This read-only run retained its explicitly assumed on-foot context.
+Its final 150,553-byte log is preserved under
+`Build/definitive-manual-test/20261013-203218-mta-core-input-ready-7054a113/actual-20261013-210222-999b0c6d/post-exit-20261013-211208-4050840d/`.
+It establishes configured-input reuse through actual Core; the new ABI6 write
+candidate and full game context, gameplay and rendering remain unverified live.
 
 The extended actual XML/bind-manager/adapter fixture passes 318 checks plus
 34 host checks with unchanged saved configuration. Normal Core builds and both
 classic Win32 configurations pass; real Core entry passes 106 checks in each
 layout. The asynchronous worker passes 2,162 controlled callback/loader checks
 and 46 checks against the real Core's wrong-image rejection. These offline
-checks validate the producer and ownership boundaries; the exact-image
-60-second Core session still requires the in-game check.
+checks validate the producer and ownership boundaries. The completed live
+session above supplies the exact-image evidence with partial action coverage.
 
-**ABI5 adds an explicit MTA-owned engine movement trial.** Build the normal
+**Historical ABI5 fixed-phase MTA-owned engine movement trial.** Build the normal
 Game DE Release/x64 module and this bridge, then package with
-`package.ps1 -Mode Smoke -MtaNativeMovementTrial`. The current package includes
+`package.ps1 -Mode Smoke -MtaNativeMovementTrial`. The historical package included
 the real `game_de.dll`, loaded through Core's actual module consumer only after
 activation. Intact 16/17-file installs can be upgraded; occupied new paths
 reject the update before any writes. An ordinary mode switch clears the trial.
@@ -108,7 +158,7 @@ owns native callback routing, scoped pad writes and restoration. This trial
 does not create an NPC or network session. Logs establish callback/query and
 cleanup evidence; the human checks how movement looks.
 
-The thread-corrected trial has completed successfully in the game. The human
+The historical thread-corrected trial completed successfully in the game. The human
 reported movement phases and sprinting working; its 165 samples record 1,317
 applied/restored callback scopes, 44,655 routed queries and no recorded failures.
 Normal exit and all 19 installed hashes pass. This proves the scoped local
@@ -124,15 +174,16 @@ action synthesis through ABI2. Logical walk/sprint state stays separate from
 native observations. ABI3 also provides an explicit build-pinned native pad
 reader in `game_de`; the first live trial rejected the proposed controller layout.
 ABI4 added raw provider-source readback through the same Core-owned interface.
-Both reads expose only diagnostic candidate data. ABI5's scoped local write
-candidate leaves full engine input and remote player capabilities unavailable. Classic Core
+Both reads expose only diagnostic candidate data. ABI5 introduced the scoped
+local writer; ABI6 adds build-pinned eligibility for actual Core configured
+input. Full engine input and remote player capabilities remain unavailable. Classic Core
 calls the same helper while retaining its bind callbacks and joystick/native
 write policy. Real opt-in Release/x64 Core now builds and links; full
 game/multiplayer, launcher and rendering services remain required.
 Current build and regression results are recorded in the
 [module documentation](../game_de/README.md) and [integration plan](MTA_REUSE_PLAN.md).
 
-**Completed live test of MTA's native reader.**
+**Historical completed live test of MTA's native reader.**
 `-MtaNativePadReference` selects a separate read-only Smoke trial that compiles
 the actual `Client/game_de/NativePadReader.cpp` into this diagnostic bridge.
 It records both candidates' proposed 24-field current/previous states, position and raw

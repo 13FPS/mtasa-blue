@@ -41,6 +41,7 @@ namespace mta::game_de
             Status        BeginNativeMovementTrial() noexcept override { return Status::Unsupported; }
             Status        GetNativeMovementTrialState(NativeMovementTrialState&) noexcept override { return Status::Unsupported; }
             Status        EndNativeMovementTrial() noexcept override { return Status::Unsupported; }
+            Status        GetNativeMovementEligibility(NativeMovementEligibility&) noexcept override { return Status::Unsupported; }
 
         private:
             unsigned int shutdownCount = 0;
@@ -156,12 +157,17 @@ namespace
             native.current.ButtonCross = 23;
             mta::game_de::NativeDeviceState device;
             device.sources.fill(-1234567);
-            const auto deviceOriginal = device.sources;
+            const auto                              deviceOriginal = device.sources;
+            mta::game_de::NativeMovementEligibility eligibility;
+            eligibility.knownMask = 123;
+            Check(!host.GetNativeMovementEligibility(eligibility) && eligibility.knownMask == 123, "unbound Core eligibility preserves unknown caller context");
             Check(!host.ReadNativeDeviceState(device) && device.sources == deviceOriginal,
                   "Core cannot read unbound raw device sources or replace caller output");
             Check(!host.ReadNativeControllerState(0, native) && native.current.ButtonCross == 23,
                   "Core cannot read native input without explicit game binding");
             Check(!host.BindNativeInput(), "the real module rejects native binding in this non-game host");
+            Check(!host.GetNativeMovementEligibility(eligibility) && eligibility.knownMask == 123,
+                  "wrong-image binding cannot authorize Core movement eligibility");
             Check(!host.ReadNativeDeviceState(device) && device.sources == deviceOriginal &&
                       (host.GetCapabilities() & static_cast<std::uint64_t>(mta::game_de::AdapterCapability::NativeDeviceStateCandidateRead)) == 0,
                   "failed binding cannot claim a captured device table");
@@ -179,6 +185,7 @@ namespace
             bool foreignBeginTrial = true;
             bool foreignReadTrial = true;
             bool foreignEndTrial = true;
+            bool foreignEligibility = true;
             trial.callbackCount = 123;
             mta::game_de::MtaInputState foreignInput;
             foreignInput.current.ButtonCross = 19;
@@ -197,6 +204,7 @@ namespace
                     foreignBeginTrial = host.BeginNativeMovementTrial();
                     foreignReadTrial = host.GetNativeMovementTrialState(trial);
                     foreignEndTrial = host.EndNativeMovementTrial();
+                    foreignEligibility = host.GetNativeMovementEligibility(eligibility);
                     host.Stop();
                 });
             foreign.join();
@@ -207,6 +215,7 @@ namespace
             Check(!foreignDeviceRead && device.sources == deviceOriginal, "foreign Core device reads preserve the complete caller state");
             Check(!foreignBeginTrial && !foreignReadTrial && !foreignEndTrial && trial.callbackCount == 123,
                   "foreign Core cannot mutate trial lifetime or replace metrics");
+            Check(!foreignEligibility && eligibility.knownMask == 123, "foreign Core cannot read or replace native eligibility");
             Check(host.IsStarted() && GetModuleHandleW(modulePath.c_str()) != nullptr, "foreign teardown cannot unload code owned by Core");
             Check(host.GetLocalObservation(readback) && readback.sampleAtMs == 1100, "rejected foreign reset preserves caller evidence");
             Check(host.Reset(), "owning Core can reset the initialized real module");

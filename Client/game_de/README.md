@@ -250,6 +250,17 @@ the pad block through action providers, so an override must also route those
 queries inside the same owned simulation scope. The 127 physical sources and
 pending edge queues must remain independent of remote input.
 
+The on-foot trace further maps provider actions `0x1E` / `0x1F` to horizontal /
+vertical movement and action `2` to sprint. The movement object scales provider
+floats by 128. Native modifier action `0x6D` applies a 0.25 walk scale; the
+canonical `m_bPedWalk` is also read directly by the on-foot task. The intended
+write port must route membership (`0xC09750`), gated availability (`0xC097D0`)
+and state (`0xC09990`) inside the owned player-control scope (`0x124EAF0`).
+Returning unavailable alone permits widget queries to fall through to physical
+mouse/touch input. These mappings are exact-build static evidence, not installed
+hooks or a runtime write claim. Full control coverage, callback ordering and
+restoration still need implementation and live validation.
+
 Generate normally with `utils/premake5.exe vs2026`, then build `Game DE` and
 `Game DE Host Tests` in **Release/x64**. Run the host executable with the absolute
 path to `Bin/mta/game_de.dll`. It loads the actual module through the same Core

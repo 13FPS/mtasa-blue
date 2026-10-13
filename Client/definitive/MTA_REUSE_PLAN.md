@@ -126,6 +126,15 @@ identity. Remote ownership, callback ordering and scoped query routing remain
 necessary before engine writes; physical source queues must not become remote
 controller storage.
 
+The concrete next input boundary is the common native provider route, rather
+than a timer writing the pad: movement actions `0x1E` / `0x1F` and sprint action
+`2` are proven in the normal on-foot chain. Membership, availability and state
+must be routed together during the owned player callback; otherwise inactive
+remote actions can fall through to physical mouse/touch controls. Preserve
+native getter/task gates and MTA's canonical current/previous state, with local
+context restored after simulation. The hooks and engine writes are not yet
+implemented.
+
 The existing Core now also compiles and links in the normal opt-in Release/x64
 project, with all 99 C++ translation units and real vendor dependencies.
 Pointer-sized window APIs, opaque SDK animation types and native crash handling

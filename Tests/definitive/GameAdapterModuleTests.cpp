@@ -7,6 +7,7 @@
 #include <game/CGameAdapter.h>
 
 #include <array>
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <iostream>
@@ -99,7 +100,7 @@ namespace
 
     void TestFactoryAndLifecycle()
     {
-        Check(CreateGameAdapter(0) == nullptr && CreateGameAdapter(1) == nullptr && CreateGameAdapter(2) == nullptr &&
+        Check(CreateGameAdapter(0) == nullptr && CreateGameAdapter(1) == nullptr && CreateGameAdapter(2) == nullptr && CreateGameAdapter(3) == nullptr &&
                   CreateGameAdapter(AdapterAbiVersion + 1) == nullptr,
               "reject old and unknown factory ABIs before exposing the changed vtable");
         OwnedAdapter adapter;
@@ -234,12 +235,14 @@ namespace
         Check(adapter.value && adapter.value->Initialize(owner.Get()) == Status::Ok, "bind the operational game thread");
         const auto sample = Observation();
         Check(adapter.value->PublishLocalObservation(sample) == Status::Ok, "publish before a foreign-thread attempt");
-        std::array<Status, 10> statuses{};
+        std::array<Status, 11> statuses{};
         LocalObservation       foreignOutput = Observation(999);
         MtaInputState          foreignInput;
         foreignInput.current.ButtonCross = 19;
         NativeControllerState foreignNative;
         foreignNative.current.ButtonCross = 23;
+        NativeDeviceState foreignDevice;
+        foreignDevice.sources.fill(-1234567);
         std::thread other(
             [&]
             {
@@ -252,7 +255,8 @@ namespace
                             adapter.value->SubmitControlActions({MtaInput::ActionBit(SPRINT), {}}),
                             adapter.value->GetMtaInputState(foreignInput),
                             adapter.value->BindNativeInput(),
-                            adapter.value->ReadNativeControllerState(0, foreignNative)};
+                            adapter.value->ReadNativeControllerState(0, foreignNative),
+                            adapter.value->ReadNativeDeviceState(foreignDevice)};
             });
         other.join();
         for (const auto status : statuses)
@@ -260,6 +264,8 @@ namespace
         Check(foreignOutput.sampleAtMs == 999, "foreign read leaves caller output untouched");
         Check(foreignInput.current.ButtonCross == 19, "foreign logical input read leaves caller output untouched");
         Check(foreignNative.current.ButtonCross == 23, "foreign native read leaves caller output untouched");
+        Check(std::all_of(foreignDevice.sources.begin(), foreignDevice.sources.end(), [](std::int32_t value) { return value == -1234567; }),
+              "foreign native device read leaves all caller values untouched");
         LocalObservation output;
         Check(adapter.value->GetLocalObservation(output) == Status::Ok, "foreign thread attempts leave the owner publication intact");
         SameObservation(output, sample);
@@ -372,11 +378,37 @@ namespace
               "reset retains only the non-engine capabilities");
         Check(adapter.value->Shutdown() == Status::Ok && adapter.value->BindNativeInput() == Status::NotInitialized, "shutdown prevents late native binding");
     }
+
+    void TestNativeDeviceRejection()
+    {
+        OwnerIdentity owner;
+        OwnedAdapter  adapter;
+        Check(adapter.value != nullptr, "create native device fixture");
+        NativeDeviceState state;
+        state.sources.fill((std::numeric_limits<std::int32_t>::min)());
+        state.sources.back() = (std::numeric_limits<std::int32_t>::max)();
+        const auto original = state.sources;
+        Check(adapter.value->ReadNativeDeviceState(state) == Status::NotInitialized && state.sources == original,
+              "device read requires Core initialization and preserves every output");
+        Check(adapter.value->Initialize(owner.Get()) == Status::Ok, "initialize device read ownership");
+        Check(adapter.value->ReadNativeDeviceState(state) == Status::Unsupported && state.sources == original,
+              "unbound device read must not publish a zero-valued invented table");
+        Check(adapter.value->BindNativeInput() == Status::Unsupported && adapter.value->ReadNativeDeviceState(state) == Status::Unsupported,
+              "test executable cannot acquire device read authority");
+        Check(state.sources == original && adapter.value->GetCapabilities() == implementedCapabilities,
+              "rejected device capture preserves output and adds no engine/candidate capability");
+        Check(adapter.value->Reset() == Status::Ok && adapter.value->ReadNativeDeviceState(state) == Status::Unsupported && state.sources == original,
+              "reset clears native binding without publishing device state");
+        Check(adapter.value->Shutdown() == Status::Ok && adapter.value->ReadNativeDeviceState(state) == Status::NotInitialized && state.sources == original,
+              "shutdown prevents native device reads");
+    }
 }
 
 int main()
 {
-    static_assert(AdapterAbiVersion == 3 && AdapterControllerMask == 0xfffff);
+    static_assert(AdapterAbiVersion == 4 && AdapterControllerMask == 0xfffff);
+    static_assert(NativeDeviceStateCount == 127 && sizeof(NativeDeviceState) == 508);
+    static_assert(static_cast<std::uint64_t>(AdapterCapability::NativeDeviceStateCandidateRead) == 128);
     static_assert(NativePadBindingCapabilities == 64, "A raw candidate read must not advertise the unverified EngineInputRead capability");
     static_assert((NativePadBindingCapabilities & static_cast<std::uint64_t>(AdapterCapability::EngineInputRead)) == 0);
     static_assert(std::is_nothrow_invocable_v<decltype(CreateGameAdapter), std::uint32_t>);
@@ -388,6 +420,7 @@ int main()
         TestThreadOwnership();
         TestMtaInput();
         TestNativeInputRejection();
+        TestNativeDeviceRejection();
         std::cout << "Passed " << checks << " MTA Game DE adapter checks\n";
         return 0;
     }

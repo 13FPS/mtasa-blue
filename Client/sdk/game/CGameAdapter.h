@@ -8,6 +8,8 @@
 
 #include <CControllerState.h>
 #include <CControlStateSynthesis.h>
+#include <array>
+#include <cstddef>
 #include <cstdint>
 
 class CCoreInterface;
@@ -15,9 +17,9 @@ class CGame;
 
 namespace mta::game_de
 {
-    // ABI3 adds explicit native input binding/read virtuals. Earlier consumers
+    // ABI4 adds raw native device-source readback. Earlier consumers
     // must not receive this changed vtable even though their methods remain.
-    inline constexpr std::uint32_t AdapterAbiVersion = 3;
+    inline constexpr std::uint32_t AdapterAbiVersion = 4;
     inline constexpr std::uint32_t AdapterControllerMask = 0xfffffu;
 
     enum class AdapterCapability : std::uint64_t
@@ -28,7 +30,8 @@ namespace mta::game_de
         EngineInputWrite = 8,
         RemotePlayerContext = 16,
         MtaInputSynthesis = 32,
-        NativePadCandidateRead = 64
+        NativePadCandidateRead = 64,
+        NativeDeviceStateCandidateRead = 128
     };
 
     // The first live trial contradicted the SDK controller layout: movement
@@ -96,6 +99,15 @@ namespace mta::game_de
         CControllerState previous;
     };
 
+    inline constexpr std::size_t NativeDeviceStateCount = 127;
+
+    // These source values belong to a build-pinned native table. No physical
+    // device, held-action or previous-frame interpretation is established here.
+    struct NativeDeviceState
+    {
+        std::array<std::int32_t, NativeDeviceStateCount> sources{};
+    };
+
     class IGameAdapter
     {
     public:
@@ -115,6 +127,7 @@ namespace mta::game_de
         virtual Status        GetMtaInputState(MtaInputState& state) noexcept = 0;
         virtual Status        BindNativeInput() noexcept = 0;
         virtual Status        ReadNativeControllerState(std::uint32_t padIndex, NativeControllerState& state) noexcept = 0;
+        virtual Status        ReadNativeDeviceState(NativeDeviceState& state) noexcept = 0;
 
     protected:
         // Release keeps allocation/deallocation in the factory's module. The

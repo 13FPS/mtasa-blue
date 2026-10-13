@@ -50,6 +50,16 @@ def samples(rows):
     return [row for row in rows if row["event"] == "native_pad_sample"]
 
 
+def with_device_states(rows):
+    for row in rows:
+        if row["event"].startswith("native_pad_reference_") or row["event"] == "native_pad_sample":
+            row.update(capture_version=2, device_state_source="native_provider_source_states",
+                       device_state_count=127, controller_layout_verified=False)
+        if row["event"] == "native_pad_sample":
+            row["device_states"] = [0] * 127
+    return rows
+
+
 class NativePadLogTests(unittest.TestCase):
     def report(self, rows):
         return reader.analyze_log(encode(rows))
@@ -87,6 +97,51 @@ class NativePadLogTests(unittest.TestCase):
         rows = fixture(4, reason="Ctrl+Shift+End")
         samples(rows)[1]["pads"][0]["previous"] = [-123] * 24
         self.assertTrue(self.report(rows)["native_pad_reference_complete"])
+
+    def test_device_source_states_preserve_activity_without_mapping_claims(self):
+        rows = with_device_states(fixture(4, reason="Ctrl+Shift+End"))
+        samples(rows)[1]["device_states"][17] = 2
+        samples(rows)[2]["device_states"][17] = 3
+        samples(rows)[3]["device_states"][126] = -2147483648
+        report = reader.analyze_log(encode(rows), True, True)
+        self.assertTrue(report["native_pad_reference_complete"], report["issues"])
+        self.assertFalse(report["physical_input_mapping_verified"])
+        states = report["observations"]["device_states"]
+        self.assertEqual(states["changed_indices"], [17, 126])
+        self.assertEqual(states["active_indices"], [17])
+        self.assertEqual(states["sources"][17]["engine_active_samples"], 2)
+        self.assertEqual(states["sources"][126]["observed_values"], [-2147483648, 0])
+
+    def test_legacy_capture_cannot_satisfy_required_device_trial(self):
+        report = reader.analyze_log(encode(fixture()), True, True)
+        self.assertFalse(report["native_pad_reference_complete"])
+        self.assertFalse(report["flags"]["required_device_states_present"])
+        self.assertEqual(report["capture_version"], 1)
+
+    def test_device_state_dimensions_ranges_and_types(self):
+        for bad in (None, [], [0]*126, [0]*128, [True]+[0]*126, [0.0]*127,
+                    [-2147483649]+[0]*126, [2147483648]+[0]*126):
+            rows = with_device_states(fixture(4, reason="Ctrl+Shift+End"))
+            samples(rows)[1]["device_states"] = bad
+            self.assertEqual(self.reject(rows)["rejected_sample_count"], 1)
+
+    def test_device_contract_missing_changed_or_overclaiming(self):
+        for key, value in (("capture_version", 1), ("device_state_source", "physical_keys"),
+                           ("device_state_count", True), ("controller_layout_verified", True)):
+            rows = with_device_states(fixture(4, reason="Ctrl+Shift+End"))
+            samples(rows)[1][key] = value
+            self.reject(rows)
+        rows = with_device_states(fixture(4, reason="Ctrl+Shift+End"))
+        del samples(rows)[1]["device_states"]
+        self.reject(rows)
+
+    def test_device_cli_requires_the_new_capture_contract(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log, output = Path(directory)/"raw.log", Path(directory)/"report.json"
+            for rows, expected in ((fixture(), 2), (with_device_states(fixture()), 0)):
+                log.write_text(encode(rows), encoding="utf-8")
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(reader.main(["--log", str(log), "--output", str(output), "--require-device-states"]), expected)
 
     def test_missing_cleanup_never_completes_and_preserves_data(self):
         rows = [row for row in fixture() if not (row["event"] == "native_pad_reference_reset" and row["reason"] == "cleanup")]

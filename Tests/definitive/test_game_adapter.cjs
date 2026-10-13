@@ -1166,7 +1166,7 @@ async function main() {
             DE_ControllerRead: (which, index) => ((which ? inputPrevious : inputCurrent)?.[index] ?? 0) >>> 0,
             DE_ControllerCurrentMask: () => inputCurrent ? 0xfffff : 0,
             DE_ControllerPreviousMask: () => inputPrevious ? 0xfffff : 0,
-            DE_NativePadBind: () => 1, DE_NativePadCapture: () => 1, DE_NativePadRead: () => 0, DE_NativePadReset: () => {},
+            DE_NativePadBind: () => 1, DE_NativePadCapture: () => 1, DE_NativePadRead: () => 0, DE_NativeDeviceRead: () => 0, DE_NativePadReset: () => {},
             ...(overrides.functions || {}) };
         const names = Object.keys(functions).filter(name => typeof functions[name] === 'function');
         const record = (name, ...args) => { calls.push([name, ...args]); callFrames.push({ frame, name }); };
@@ -1225,9 +1225,18 @@ async function main() {
         assert.ok(result.logs.some(event => event.event === 'native_pad_reference_started'));
         const sample = result.logs.find(event => event.event === 'native_pad_sample');
         assert.equal(sample.pads.length, 2); assert.equal(sample.pads[1].previous.length, 24);
+        assert.equal(sample.device_states.length, 127); assert.equal(sample.capture_version, 2);
+        assert.equal(result.calls.filter(call => call[0] === 'DE_NativeDeviceRead').length,
+            127 * result.logs.filter(event => event.event === 'native_pad_sample').length);
         assert.equal(sample.previous_source, 'native_OldState');
         assert.equal(result.logs.filter(event => event.event === 'native_pad_reference_reset').length, 2);
         assert.ok(!result.calls.some(call => ['DE_ConnectLocal', 'GET_PAD_STATE', 'CREATE_CHAR'].includes(call[0])));
+    });
+    test('MTA source-state entry rejects an older bridge before native input binding', () => {
+        const result = runEntry({ mtaNativePadReference: true, functions: { DE_NativeDeviceRead: null },
+            keyFrames: [[17, 16, 120]], times: [0] });
+        assert.ok(result.logs.some(event => event.event === 'adapter_failed' && event.error.includes('DE_NativeDeviceRead')));
+        assert.ok(!result.calls.some(call => ['DE_NativePadBind', 'DE_NativePadCapture'].includes(call[0])));
     });
     test('MTA native pad entry rejects incompatible modes before DLL access', () => {
         for (const overrides of [{ mode: 'online' }, { inputReference: true }, { reference: true }]) {

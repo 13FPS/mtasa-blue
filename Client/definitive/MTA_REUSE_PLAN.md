@@ -74,6 +74,14 @@ unavailable. Offline consumer code also substitutes an alternate object pointer
 before querying separate action providers. Further binding work must follow that
 active input path; neither readable bytes nor the public signature establish it.
 
+ABI4 follows the observed provider to its raw source-state table, with a
+Core-owned `ReadNativeDeviceState` wrapper. The reader captures all 127 signed
+source values after validating the exact live instructions, image sections and
+pages. It exposes only a diagnostic candidate capability. The next isolated
+capture records this table alongside the rejected SDK offsets, allowing the
+human's physical inputs to be checked without calling native query methods or
+writing engine state. Successful byte capture alone cannot enable EngineInputRead.
+
 The first Core x64 cleanup fixes the existing `StackTraceHelpers.h` callbacks
 and module descriptions to preserve native pointer widths, with read-range
 overflow rejection. The actual header passes protected-memory and real-module

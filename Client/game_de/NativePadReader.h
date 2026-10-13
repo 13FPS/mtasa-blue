@@ -7,6 +7,7 @@
 #pragma once
 
 #include <CControllerState.h>
+#include "../sdk/game/CGameAdapter.h"
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -40,6 +41,7 @@ namespace mta::game_de
     public:
         bool Bind() noexcept;
         bool Read(std::uint32_t padIndex, CControllerState& current, CControllerState& previous) const noexcept;
+        bool ReadDeviceState(NativeDeviceState& state) const noexcept;
         void Reset() noexcept;
         bool IsBound() const noexcept;
 

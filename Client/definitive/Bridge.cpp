@@ -26,6 +26,7 @@ namespace
     mta::game_de::NativePadReader   nativePadReader;
     std::array<CControllerState, 2> nativeCurrent;
     std::array<CControllerState, 2> nativePrevious;
+    mta::game_de::NativeDeviceState nativeDevice;
     bool                            nativeSnapshot = false;
 
     void ClearNativePad()
@@ -33,6 +34,7 @@ namespace
         nativePadReader.Reset();
         nativeCurrent = {};
         nativePrevious = {};
+        nativeDevice = {};
         nativeSnapshot = false;
     }
 
@@ -228,6 +230,7 @@ int DE_NativePadCapture()
         return 0;
     std::array<CControllerState, 2> current;
     std::array<CControllerState, 2> previous;
+    mta::game_de::NativeDeviceState device;
     for (std::uint32_t pad = 0; pad < 2; ++pad)
     {
         if (!nativePadReader.Read(pad, current[pad], previous[pad]))
@@ -236,8 +239,16 @@ int DE_NativePadCapture()
             return 0;
         }
     }
+    if (!nativePadReader.ReadDeviceState(device))
+    {
+        ClearNativePad();
+        return 0;
+    }
+    // Publish all diagnostic caches together. A failed device read must not
+    // leave fresh candidate bytes beside device values from an earlier capture.
     nativeCurrent = current;
     nativePrevious = previous;
+    nativeDevice = device;
     nativeSnapshot = true;
     return 1;
 }
@@ -272,6 +283,15 @@ std::uint32_t DE_NativePadRead(std::uint32_t pad, std::uint32_t which, std::uint
         return 0;
     const auto& state = which == 0 ? nativeCurrent[pad] : nativePrevious[pad];
     return static_cast<std::uint32_t>(static_cast<std::int32_t>(state.*fields[index]));
+}
+
+std::uint32_t DE_NativeDeviceRead(std::uint32_t index)
+{
+    if (!ControllerAccessAllowed() || !nativeSnapshot || index >= mta::game_de::NativeDeviceStateCount)
+        return 0;
+    // The script FFI transports uint32 bits; preserve every raw signed value
+    // without assigning physical key or MTA action semantics to this table.
+    return static_cast<std::uint32_t>(nativeDevice.sources[index]);
 }
 
 void DE_NativePadReset()

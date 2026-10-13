@@ -24,6 +24,7 @@ def main():
         "DE_NativePadBind": (ctypes.c_int, []),
         "DE_NativePadCapture": (ctypes.c_int, []),
         "DE_NativePadRead": (ctypes.c_uint32, [ctypes.c_uint32] * 3),
+        "DE_NativeDeviceRead": (ctypes.c_uint32, [ctypes.c_uint32]),
         "DE_NativePadReset": (None, []),
         "DE_Disconnect": (None, []),
         "DE_ControllerCurrentMask": (ctypes.c_uint32, []),
@@ -44,9 +45,16 @@ def main():
         for which in (0, 1, 2, 0xFFFFFFFF):
             for index in (0, 16, 23, 24, 0xFFFFFFFF):
                 check(bridge.DE_NativePadRead(pad, which, index) == 0, "Unbound component read must remain unavailable")
+    # Every raw source and the range boundary remain unavailable after rejected
+    # binding/capture; loading the bridge cannot manufacture an input snapshot.
+    device_indices = (*range(127), 127, 128, 0xFFFFFFFF)
+    for index in device_indices:
+        check(bridge.DE_NativeDeviceRead(index) == 0, "Unbound or invalid device source must remain unavailable")
     bridge.DE_NativePadReset()
     bridge.DE_Disconnect()
     check(bridge.DE_NativePadCapture() == 0, "Cleanup cannot create a native binding")
+    for index in device_indices:
+        check(bridge.DE_NativeDeviceRead(index) == 0, "Cleanup cannot retain or create raw device coverage")
     check(bridge.DE_ControllerCurrentMask() == 0, "Native diagnostics must not invent canonical controller coverage")
     print(f"Passed {checks} native pad bridge ABI checks")
 

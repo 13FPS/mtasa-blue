@@ -3,8 +3,9 @@ const provenance = 'mta_game_de_native_pad_reader';
 const finiteVector = value => value && ['x', 'y', 'z'].every(key => typeof value[key] === 'number' && Number.isFinite(value[key]));
 const validPed = value => Number.isSafeInteger(value) && value > 0 && value <= 0x7fffffff;
 
-// Native OldState belongs to the engine frame, not our preceding 125 ms sample.
-// Keep this observation separate from MTA action synthesis and transport state.
+// The public SDK pad interpretation failed the first live trial. Retain those
+// bytes for comparison and observe the provider's source table separately;
+// neither representation establishes physical keys or previous-frame semantics.
 export class MtaNativePadReferenceController {
     constructor(game, bridge, { log = () => {}, stopReason = 'Ctrl+Shift+End', durationMs = 30000,
         sampleIntervalMs = 125, maxSamples = 300, renderGapMs = 2000, readinessBudgetMs = 10000 } = {}) {
@@ -23,6 +24,7 @@ export class MtaNativePadReferenceController {
         return { reference_id: this.referenceId, ped: this.localPed, at_ms: now,
             elapsed_ms: this.startedAt === null || now === null ? null : now - this.startedAt,
             provenance, field_count: 24, pad_count: 2, previous_state: 'engine_OldState', previous_source: 'native_OldState',
+            capture_version: 2, device_state_source: 'native_provider_source_states', device_state_count: 127, controller_layout_verified: false,
             network_active: false, input_writes: false, remote_peds_created: false, velocity_units: null };
     }
 
@@ -94,8 +96,8 @@ export class MtaNativePadReferenceController {
         if (now - this.startedAt >= this.durationMs) { this.stop('time_budget', now); return; }
         if (now < this.nextSampleAt) return;
         if (this.lastSampleAt !== null && now - this.lastSampleAt > this.renderGapMs) { this.stop('render_gap', now); return; }
-        // One capture fixes both pads and both engine states before the FFI
-        // reads. Repeated cached ticks cannot create mixed native-frame samples.
+        // One bridge capture fixes candidate pad bytes and provider source
+        // states before the FFI getters; cached ticks cannot add fresh samples.
         if (this.bridge.capture() !== 1) throw new Error('MTA native pad capture failed');
         const pads = [];
         for (let pad = 0; pad < 2; ++pad) {
@@ -113,13 +115,19 @@ export class MtaNativePadReferenceController {
             }
             pads.push({ current: states[0], previous: states[1] });
         }
+        const deviceStates = [];
+        for (let index = 0; index < 127; ++index) {
+            const bits = this.bridge.readDevice(index);
+            if (!Number.isInteger(bits) || bits < 0 || bits > 0xffffffff) throw new Error('Invalid native device uint32 readback');
+            deviceStates.push(bits | 0);
+        }
         const velocity = this.game.readVelocity(ped);
         if (!finiteVector(velocity)) throw new Error('Invalid native pad raw velocity');
         const pose = this.game.readTransform(ped);
         if (!finiteVector(pose) || typeof pose.heading !== 'number' || !Number.isFinite(pose.heading)) throw new Error('Invalid native pad transform');
         if (this.validLocal(now) === null) return;
         this.log({ event: 'native_pad_sample', ...this.evidence(now), position: { x: pose.x, y: pose.y, z: pose.z }, heading: pose.heading,
-            raw_velocity: { x: velocity.x, y: velocity.y, z: velocity.z }, pads });
+            raw_velocity: { x: velocity.x, y: velocity.y, z: velocity.z }, pads, device_states: deviceStates });
         ++this.samples; this.lastSampleAt = now; this.nextSampleAt = now + this.sampleIntervalMs;
         if (this.samples >= this.maxSamples) this.stop('sample_budget', now);
     }

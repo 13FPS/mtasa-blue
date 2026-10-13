@@ -5,6 +5,7 @@
  *****************************************************************************/
 
 #include "../../Client/game_de/NativePadReader.h"
+#include "../../Client/sdk/game/CGameAdapter.h"
 
 #include <array>
 #include <cstddef>
@@ -178,11 +179,13 @@ namespace
 
     void TestUnboundReader()
     {
-        mta::game_de::NativePadReader reader;
-        const auto                    seedCurrent = Sentinel(-9000);
-        const auto                    seedPrevious = Sentinel(9000);
-        auto                          current = seedCurrent;
-        auto                          previous = seedPrevious;
+        mta::game_de::NativePadReader   reader;
+        mta::game_de::NativeDeviceState device;
+        Check(!reader.ReadDeviceState(device), "device sources require explicit native binding");
+        const auto seedCurrent = Sentinel(-9000);
+        const auto seedPrevious = Sentinel(9000);
+        auto       current = seedCurrent;
+        auto       previous = seedPrevious;
         Check(!reader.IsBound(), "reader starts without engine identity or memory authority");
         Check(!reader.Read(0, current, previous), "unbound reader cannot publish input");
         Same(current, seedCurrent);
@@ -203,6 +206,29 @@ namespace
         Same(current, seedCurrent);
         Same(previous, seedPrevious);
     }
+
+    void TestDeviceReadRejection()
+    {
+        using namespace mta::game_de;
+        static_assert(NativeDeviceStateCount == 127 && sizeof(NativeDeviceState) == 508);
+        static_assert(std::is_same_v<decltype(NativeDeviceState::sources), std::array<std::int32_t, 127>>);
+        NativePadReader   reader;
+        NativeDeviceState state;
+        for (std::size_t index = 0; index < state.sources.size(); ++index)
+            state.sources[index] = index % 2 ? static_cast<std::int32_t>(index) : -static_cast<std::int32_t>(index);
+        state.sources.front() = (std::numeric_limits<std::int32_t>::min)();
+        state.sources.back() = (std::numeric_limits<std::int32_t>::max)();
+        const auto original = state.sources;
+        Check(!reader.ReadDeviceState(state) && state.sources == original, "unbound device read preserves all 127 signed32 caller values");
+        Check(!reader.Bind(), "device source binding still rejects an ordinary test image");
+        Check(!reader.ReadDeviceState(state) && state.sources == original, "failed exact-build binding cannot publish table values");
+        bool        foreignRead = true;
+        std::thread foreign([&] { foreignRead = reader.ReadDeviceState(state); });
+        foreign.join();
+        Check(!foreignRead && state.sources == original, "foreign unbound device read preserves the complete caller output");
+        reader.Reset();
+        Check(!reader.ReadDeviceState(state) && state.sources == original, "reset leaves device read unavailable without changing output");
+    }
 }
 
 int main()
@@ -212,6 +238,7 @@ int main()
         TestCopies();
         TestInvalidCopies();
         TestUnboundReader();
+        TestDeviceReadRejection();
         std::cout << "Passed " << checks << " native pad reader checks\n";
         return 0;
     }

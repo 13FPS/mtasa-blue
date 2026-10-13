@@ -15,7 +15,8 @@ The module supports caller observations and now reuses Core's existing digital
 action synthesis through ABI2. Logical walk/sprint state stays separate from
 native observations. ABI3 also provides an explicit build-pinned native pad
 reader in `game_de`; the first live trial rejected the proposed controller layout.
-Its reads now expose only diagnostic candidate data. Engine input
+ABI4 now adds raw provider-source readback through the same Core-owned interface.
+Both reads expose only diagnostic candidate data. Engine input
 writes and remote player context are unavailable. Classic Core
 calls the same helper while retaining its bind callbacks and joystick/native
 write policy. x64 Core, full game/multiplayer and rendering services remain
@@ -37,6 +38,12 @@ The human reported normal walking and sprinting, and all 225 captures and cleanu
 completed. Both candidates' axes, sprint and previous-state fields stayed zero;
 the adapter therefore keeps `EngineInputRead` unavailable. The saved result is
 linked from `Build/definitive-manual-test/current-native-pad-reference-test.json`.
+
+The next candidate also captures all 127 signed source states used by the active
+provider's native axis implementation. Capture version 2 keeps these separate
+from the rejected pad layout. Use the log reader's `--require-device-states`
+option for this candidate; older pad-only recordings remain readable but cannot
+validate the new capture. Physical key/action mapping is still unverified.
 
 The first shared slice extracts MTA's existing incremental ped position
 correction into `Shared/sdk/CPedPositionInterpolation.h`. The classic client

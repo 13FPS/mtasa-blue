@@ -23,6 +23,12 @@ namespace mta::game_de
         constexpr std::size_t                   padStride = 0x158;
         constexpr std::size_t                   padsSize = 2 * padStride;
         constexpr std::array<unsigned char, 12> expectedInstruction = {0x4c, 0x8d, 0x35, 0x47, 0x3e, 0x2e, 0x04, 0xf3, 0x44, 0x0f, 0x10, 0x3d};
+        constexpr std::size_t                   deviceStateRva = 0x5709a40;
+        constexpr std::size_t                   deviceStateBytes = NativeDeviceStateCount * sizeof(std::int32_t);
+        constexpr std::size_t                   deviceBaseInstructionRva = 0xc099d9;
+        constexpr std::array<unsigned char, 7>  deviceBaseInstruction = {0x4c, 0x8d, 0x3d, 0x20, 0x66, 0x3f, 0xff};
+        constexpr std::size_t                   deviceLoadInstructionRva = 0xc09a18;
+        constexpr std::array<unsigned char, 8>  deviceLoadInstruction = {0x45, 0x8b, 0x8c, 0x87, 0x40, 0x9a, 0x70, 0x05};
 
         struct HashResources
         {
@@ -116,7 +122,7 @@ namespace mta::game_de
                    rva - section.VirtualAddress <= section.Misc.VirtualSize && bytes <= section.Misc.VirtualSize - (rva - section.VirtualAddress);
         }
 
-        bool CheckImage(std::uintptr_t image) noexcept
+        bool CheckImage(std::uintptr_t image, bool requireDeviceState = false) noexcept
         {
             if (image > (std::numeric_limits<std::uintptr_t>::max)() - imageSize)
                 return false;
@@ -139,13 +145,22 @@ namespace mta::game_de
                 return false;
             bool instructionSection = false;
             bool padsSection = false;
+            bool deviceSection = false;
+            bool deviceBaseCodeSection = false;
+            bool deviceLoadCodeSection = false;
             for (std::size_t index = 0; index < nt.FileHeader.NumberOfSections; ++index)
             {
                 instructionSection |=
                     SectionContains(sections[index], instructionRva, expectedInstruction.size(), IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE, 0);
                 padsSection |= SectionContains(sections[index], padsRva, padsSize, IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE, IMAGE_SCN_MEM_EXECUTE);
+                deviceSection |=
+                    SectionContains(sections[index], deviceStateRva, deviceStateBytes, IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE, IMAGE_SCN_MEM_EXECUTE);
+                deviceBaseCodeSection |=
+                    SectionContains(sections[index], deviceBaseInstructionRva, deviceBaseInstruction.size(), IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE, 0);
+                deviceLoadCodeSection |=
+                    SectionContains(sections[index], deviceLoadInstructionRva, deviceLoadInstruction.size(), IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE, 0);
             }
-            return instructionSection && padsSection;
+            return instructionSection && padsSection && (!requireDeviceState || (deviceSection && deviceBaseCodeSection && deviceLoadCodeSection));
         }
 
         bool CheckInstruction(std::uintptr_t image) noexcept
@@ -157,6 +172,23 @@ namespace mta::game_de
             std::memcpy(&displacement, instruction.data() + 3, sizeof(displacement));
             const auto decodedRva = static_cast<std::int64_t>(instructionRva) + 7 + displacement;
             return decodedRva == static_cast<std::int64_t>(padsRva);
+        }
+
+        bool CheckDeviceInstructions(std::uintptr_t image) noexcept
+        {
+            std::array<unsigned char, deviceBaseInstruction.size()> base;
+            std::array<unsigned char, deviceLoadInstruction.size()> load;
+            if (!ReadImage(image, image + deviceBaseInstructionRva, base.data(), base.size(), false, true) || base != deviceBaseInstruction ||
+                !ReadImage(image, image + deviceLoadInstructionRva, load.data(), load.size(), false, true) || load != deviceLoadInstruction)
+                return false;
+            std::int32_t  baseDisplacement = 0;
+            std::uint32_t tableDisplacement = 0;
+            std::memcpy(&baseDisplacement, base.data() + 3, sizeof(baseDisplacement));
+            std::memcpy(&tableDisplacement, load.data() + 4, sizeof(tableDisplacement));
+            // The native helper establishes R15=image through RIP-relative LEA,
+            // then reads int32 sources with [R15+RAX*4+tableRva]. Neither native
+            // function is called, and no mapping/held semantics are inferred.
+            return static_cast<std::int64_t>(deviceBaseInstructionRva) + 7 + baseDisplacement == 0 && tableDisplacement == deviceStateRva;
         }
     }
 
@@ -192,6 +224,23 @@ namespace mta::game_de
         std::array<unsigned char, padsSize> snapshot;
         return ReadImage(image, pads, snapshot.data(), snapshot.size(), true) &&
                CopyNativePadStates(snapshot.data(), snapshot.size(), padIndex, current, previous);
+    }
+
+    bool NativePadReader::ReadDeviceState(NativeDeviceState& state) const noexcept
+    {
+        if (!ownerThread.load() || ownerThread.load() != GetCurrentThreadId())
+            return false;
+        const auto image = imageAddress.load();
+        if (!image || padAddress.load() != image + padsRva || !CheckImage(image, true) || !CheckInstruction(image) || !CheckDeviceInstructions(image))
+            return false;
+        // This table is in the main image's writable, non-executable .data
+        // virtual range, including zero-filled runtime storage. Publish only
+        // after a complete OS-checked copy of all 127 raw int32 sources.
+        NativeDeviceState next;
+        if (!ReadImage(image, image + deviceStateRva, next.sources.data(), deviceStateBytes, true))
+            return false;
+        state = next;
+        return true;
     }
 
     void NativePadReader::Reset() noexcept

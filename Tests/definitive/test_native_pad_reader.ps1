@@ -15,6 +15,7 @@ $developerCommand = Join-Path $visualStudio 'Common7/Tools/VsDevCmd.bat'
 $outputRoot = Join-Path $taskRoot ('Build/mta-native-pad-reader/' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
 $sourceNames = @('Client/game_de/NativePadReader.h', 'Client/game_de/NativePadReader.cpp',
+    'Client/sdk/game/CGameAdapter.h', 'Shared/sdk/CControllerActions.h', 'Shared/sdk/CControlStateSynthesis.h',
     'Shared/sdk/CControllerState.h', 'Tests/definitive/NativePadReaderTests.cpp', 'Tests/definitive/test_native_pad_reader.ps1')
 $sourceHashes = @($sourceNames | ForEach-Object {
     $taskPath = Join-Path $taskRoot $_

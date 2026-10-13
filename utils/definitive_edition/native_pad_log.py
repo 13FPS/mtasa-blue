@@ -18,8 +18,9 @@ PROVENANCE = "mta_game_de_native_pad_reader"
 FLAGS = {"network_active", "input_writes", "remote_peds_created"}
 COMMON = {"event", "reference_id", "ped", "at_ms", "elapsed_ms", "provenance", "field_count", "pad_count",
           "previous_state", "previous_source", "velocity_units"} | FLAGS
+DEVICE_COMMON = {"capture_version", "device_state_source", "device_state_count", "controller_layout_verified"}
 NORMAL = {"time_budget", "sample_budget", "Ctrl+Shift+End"}
-NOTICE = ("This verifies a bounded saved native NewState/OldState reference and its cleanup. Nonzero fields and raw "
+NOTICE = ("This verifies a bounded saved candidate-pad/source-state reference and its cleanup. Nonzero fields and raw "
           "velocity are observations, not proof of keyboard/device mapping, velocity units, walk/sprint semantics, "
           "engine writes, multiplayer or full MTA startup.")
 
@@ -41,7 +42,7 @@ def controls(value):
     return isinstance(value, list) and len(value) == 24 and all(type(item) is int and -32768 <= item <= 32767 for item in value)
 
 
-def analyze_log(text, require_complete=False):
+def analyze_log(text, require_complete=False, require_device_states=False):
     """Preserve the whole bounded stream; never select an earlier successful run."""
     if len(text.encode("utf-8", errors="replace")) > MAX_LOG_BYTES:
         raise ValueError("CLEO log exceeds the 16 MiB read limit")
@@ -49,6 +50,7 @@ def analyze_log(text, require_complete=False):
     counts = Counter()
     state, identity, origin, last_at, last_sample = "initial", None, None, None, None
     started = finished = stopped = None
+    capture_version = None
     entries = 0
     overflow = False
     options = {"duration_ms": 30000, "sample_interval_ms": 125, "max_samples": 300,
@@ -58,11 +60,21 @@ def analyze_log(text, require_complete=False):
         issues.append({"line": event.get("line"), "event": event.get("event"), "reason": reason})
 
     def exact(event, extra, optional=()):
-        if set(event) - {"line"} - set(optional) != COMMON | set(extra):
+        expected = COMMON | (DEVICE_COMMON if capture_version == 2 else set()) | set(extra)
+        if set(event) - {"line"} - set(optional) != expected:
             invalid(event, "Reference has missing or unexpected payload fields")
 
     def common(event):
-        nonlocal identity, origin, last_at
+        nonlocal identity, origin, last_at, capture_version
+        declared_version = event.get("capture_version", 1)
+        if capture_version is None:
+            capture_version = declared_version if type(declared_version) is int and declared_version in (1, 2) else 1
+        if type(declared_version) is not int or declared_version != capture_version:
+            invalid(event, "Capture version is unsupported or changed during the reference")
+        if capture_version == 2 and (event.get("device_state_source") != "native_provider_source_states"
+                or type(event.get("device_state_count")) is not int or event["device_state_count"] != 127
+                or event.get("controller_layout_verified") is not False):
+            invalid(event, "Raw device source provenance, dimensions or unverified-layout marker mismatch")
         if (event.get("provenance") != PROVENANCE or type(event.get("field_count")) is not int or event["field_count"] != 24
                 or type(event.get("pad_count")) is not int or event["pad_count"] != 2
                 or event.get("previous_state") != "engine_OldState" or event.get("previous_source") != "native_OldState"
@@ -157,7 +169,12 @@ def analyze_log(text, require_complete=False):
                 invalid(event, "Exactly one successful start must follow start reset")
             started, state = event, "sampling"
         elif kind == "native_pad_sample":
-            exact(event, {"position", "heading", "raw_velocity", "pads"})
+            exact(event, {"position", "heading", "raw_velocity", "pads"} | ({"device_states"} if capture_version == 2 else set()))
+            if capture_version == 2:
+                device = event.get("device_states")
+                if (not isinstance(device, list) or len(device) != 127
+                        or any(type(value) is not int or not -2147483648 <= value <= 2147483647 for value in device)):
+                    invalid(event, "Expected 127 raw signed32 device source states")
             pads = event.get("pads")
             if (not isinstance(pads, list) or len(pads) != 2 or any(not isinstance(pad, dict) or set(pad) != {"current", "previous"}
                     or not controls(pad.get("current")) or not controls(pad.get("previous")) for pad in pads)):
@@ -217,6 +234,7 @@ def analyze_log(text, require_complete=False):
         "one_reference_stopped": counts["native_pad_reference_stopped"] == 1,
         "normal_completion": finished is not None and isinstance(finished.get("reason"), str) and finished["reason"] in NORMAL,
         "samples_present": 0 < len(accepted) <= 300, "valid_payloads": not issues and not rejected, "no_failures": not failures,
+        "required_device_states_present": not require_device_states or capture_version == 2 and bool(accepted),
     }
     complete = all(lifecycle.values())
     activity = []
@@ -232,14 +250,27 @@ def analyze_log(text, require_complete=False):
     velocities = [sample["raw_velocity"] for sample in accepted]
     speeds = [math.hypot(value["x"], value["y"], value["z"]) for value in velocities]
     displacement = None if not accepted else {axis: accepted[-1]["position"][axis] - accepted[0]["position"][axis] for axis in ("x", "y", "z")}
+    # Keep the engine's 2/3 predicate visible without promoting source indices
+    # into physical keys, MTA actions or a previous/current controller contract.
+    device_activity = None
+    if capture_version == 2 and accepted:
+        columns = list(zip(*(sample["device_states"] for sample in accepted)))
+        device_activity = {"source_count": 127, "engine_active_values": [2, 3],
+                           "changed_indices": [i for i, values in enumerate(columns) if len(set(values)) > 1],
+                           "active_indices": [i for i, values in enumerate(columns) if any(value in (2, 3) for value in values)],
+                           "sources": [{"index": i, "observed_values": sorted(set(values)),
+                                        "engine_active_samples": sum(value in (2, 3) for value in values),
+                                        "changes": sum(a != b for a, b in zip(values, values[1:]))}
+                                       for i, values in enumerate(columns)]}
     return {"schema_version": 1, "status": "native_pad_reference_observed" if complete else "adapter_failed" if failures else "invalid_evidence" if issues else "incomplete",
             "native_pad_reference_observed": complete, "native_pad_reference_complete": complete, "require_complete": require_complete,
+            "capture_version": capture_version, "require_device_states": require_device_states,
             "physical_input_mapping_verified": False, "velocity_units_verified": False, "native_walk_jog_states_verified": False,
             "engine_input_write_verified": False, "full_backend_verified": False, "flags": lifecycle,
             "observations": {"pads": activity, "sprint_button_index": 16, "button_16_semantics_verified": False,
                              "raw_velocity_nonzero_samples": sum(any(value.values()) for value in velocities),
                              "raw_velocity_magnitude_max": max(speeds, default=None), "raw_velocity_magnitude_mean": sum(speeds) / len(speeds) if speeds else None,
-                             "displacement": displacement},
+                             "displacement": displacement, "device_states": device_activity},
             "sample_count": counts["native_pad_sample"], "accepted_sample_count": len(accepted), "accepted_samples": accepted,
             "rejected_sample_count": len(rejected), "rejected_samples": rejected, "event_counts": dict(counts), "events": events,
             "issue_count": len(issues), "issues": issues[:64], "failures": failures[:32], "notice": NOTICE}
@@ -250,12 +281,13 @@ def main(argv=None):
     parser.add_argument("--log", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--require-complete", action="store_true")
+    parser.add_argument("--require-device-states", action="store_true", help="Reject older captures that omit the provider source table")
     args = parser.parse_args(argv)
     try:
         if args.log.resolve() == args.output.resolve() or (args.output.exists() and args.log.samefile(args.output)):
             raise ValueError("Output must differ from the raw evidence log")
         snapshot = read_snapshot(args.log)
-        report = analyze_log(snapshot["data"].decode("utf-8-sig", errors="replace"), args.require_complete)
+        report = analyze_log(snapshot["data"].decode("utf-8-sig", errors="replace"), args.require_complete, args.require_device_states)
         report.update(log=str(args.log.resolve()), evidence_scope="entire_log", source_line_origin=str(args.log.resolve()),
                       log_fingerprint={key: snapshot[key] for key in ("size_bytes", "mtime_ns", "sha256")})
     except (OSError, ValueError) as error:
@@ -271,7 +303,7 @@ def main(argv=None):
         print(json.dumps({"status": "write_error", "error": str(error)}), flush=True)
         return 2
     print(json.dumps(report, allow_nan=False), flush=True)
-    return 0 if report["native_pad_reference_complete"] or (not args.require_complete and report["status"] == "incomplete"
+    return 0 if report["native_pad_reference_complete"] or (not args.require_complete and not args.require_device_states and report["status"] == "incomplete"
                                                           and report.get("accepted_sample_count", 0) > 0) else 2
 
 

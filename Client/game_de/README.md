@@ -23,8 +23,9 @@ This is logical MTA input, separate from native controller observations and
 their coverage mask. It does not poll hardcoded keys, infer sprint from velocity,
 apply joystick overrides, or write an engine pad. Core retains key bindings,
 context-transition callbacks, focus/cursor policy and joystick merging. The
-action interface was introduced in ABI2. The factory ABI is now **3** for native
-binding/read methods; ABI1 and ABI2 are rejected before returning an incompatible
+action interface was introduced in ABI2. Native binding/read methods arrived in
+ABI3. The factory ABI is now **4** for raw device-source readback; ABI1 through
+ABI3 are rejected before returning an incompatible
 vtable. The historical probe's bridge
 ABI is independent.
 
@@ -96,6 +97,30 @@ Certificate:
 `Build/mta-owned-adapter-check/20261013-131359-179b301cb5fd43b4a095241b1fe834d4/test-result.json`.
 The corrected module SHA-256 is
 `0f9f42bb6ce3536f019528278ed96ac6f0b9394f09228fae91790cef6c086d85`.
+
+ABI4 adds `ReadNativeDeviceState` through the same owning Core consumer. It
+captures 127 raw signed 32-bit source values from RVA `0x5709A40`. This table
+comes from the observed provider's native axis implementation, rather than the
+rejected SDK controller layout. Exact live image-base/load instructions, PE
+sections and committed main-image pages are checked before the complete copy.
+Failures preserve caller output and discard the binding. A successful read adds
+only `NativeDeviceStateCandidateRead`; physical key/action mapping, held/previous
+semantics and `EngineInputRead` remain unavailable.
+
+The same backend code is compiled into the diagnostic bridge. One capture
+publishes pad and device caches together, and the additive `DE_NativeDeviceRead`
+export retains bridge ABI2. The existing 30-second recorder now emits capture
+version 2 with all 127 sources. Use `native_pad_log.py --require-complete
+--require-device-states` when assessing this trial: an older pad-only capture
+cannot satisfy that requirement. No game method is invoked by the new reader.
+
+The ABI4 checkpoint passes 1,484 module checks, 64 x64 host checks/three x86
+rejections and 1,331 reader checks per architecture. Normal module/host builds,
+shared input regression and opt-in/default classic Core compilation pass.
+All 91 source hashes remain stable. Certificate:
+`Build/mta-owned-adapter-check/20261013-134635-a3a9288303824beb8307a81bee4f038e/test-result.json`.
+The installed source-table trial is linked from the current native-pad reference
+pointer; its physical mapping remains pending the human test.
 
 The factory returns no full `CGame`. Engine input writes and remote player
 context are unavailable. `--with-definitive-adapter` enables Core's early startup

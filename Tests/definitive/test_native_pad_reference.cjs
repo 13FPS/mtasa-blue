@@ -7,7 +7,7 @@ let tests = 0;
 function fixture(Controller, options = {}) {
     const calls = [], events = [];
     const state = { ready: true, ped: 10, exists: true, stop: false, bind: 1, capture: 1,
-        velocity: { x: 0.1, y: -0.2, z: 0 }, pose: { x: 1, y: 2, z: 3, heading: 270 },
+        velocity: { x: 0.1, y: -0.2, z: 0 }, pose: { x: 1, y: 2, z: 3, heading: 270 }, device: Array(127).fill(0),
         pads: Array.from({ length: 2 }, (_, pad) => Array.from({ length: 2 }, (_, which) =>
             Array.from({ length: 24 }, (_, index) => (pad * 1000 + which * 100 + index + 1) * (which ? -1 : 1)))) };
     const call = (name, ...args) => calls.push([name, ...args]);
@@ -16,7 +16,8 @@ function fixture(Controller, options = {}) {
     for (const name of ['createPed', 'deletePed', 'movePed', 'requestModel', 'playRemoteAnimation', 'setRemoteAnimationRate', 'readPadState'])
         game[name] = () => assert.fail('read-only probe must not call ' + name);
     const bridge = { reset: () => call('reset'), bind: () => { call('bind'); return state.bind; },
-        capture: () => { call('capture'); return state.capture; }, read: (pad, which, index) => { call('read', pad, which, index); return state.pads[pad][which][index] >>> 0; } };
+        capture: () => { call('capture'); return state.capture; }, read: (pad, which, index) => { call('read', pad, which, index); return state.pads[pad][which][index] >>> 0; },
+        readDevice: index => { call('readDevice', index); return state.device[index] >>> 0; } };
     const controller = new Controller(game, bridge, { log: event => events.push(event), ...options });
     return { controller, calls, events, state, game, bridge, tick: now => controller.tick(now) };
 }
@@ -31,6 +32,8 @@ const finish = f => f.events.find(e => e.event === 'native_pad_reference_finishe
         const f = fixture(Controller); assert.deepEqual(f.calls, []); f.tick(0);
         assert.deepEqual(f.calls.slice(0, 3).map(c => c[0]), ['reset', 'bind', 'capture']);
         assert.equal(count(f, 'read'), 96); assert.equal(count(f, 'capture'), 1);
+        assert.equal(count(f, 'readDevice'), 127); assert.deepEqual(samples(f)[0].device_states, f.state.device);
+        assert.equal(samples(f)[0].capture_version, 2); assert.equal(samples(f)[0].controller_layout_verified, false);
         assert.deepEqual(samples(f)[0].pads, f.state.pads.map(p => ({ current: p[0], previous: p[1] })));
         assert.equal(samples(f)[0].previous_state, 'engine_OldState'); assert.equal(samples(f)[0].previous_source, 'native_OldState');
         assert.equal(samples(f)[0].provenance, 'mta_game_de_native_pad_reader'); assert.equal(samples(f)[0].input_writes, false);
@@ -47,6 +50,17 @@ const finish = f => f.events.find(e => e.event === 'native_pad_reference_finishe
         const f = fixture(Controller); f.state.pads[0][0][0] = -32768; f.state.pads[1][1][23] = 32767; f.tick(0);
         assert.equal(samples(f)[0].pads[0].current[0], -32768); assert.equal(samples(f)[0].pads[1].previous[23], 32767);
     });
+    test('provider states preserve raw signed32 values without inventing key semantics', () => {
+        const f = fixture(Controller); f.state.device[0] = -2147483648; f.state.device[126] = 2147483647; f.tick(0);
+        assert.deepEqual(samples(f)[0].device_states, f.state.device);
+        assert.equal(samples(f)[0].device_state_source, 'native_provider_source_states');
+        assert.equal(samples(f)[0].device_state_count, 127);
+    });
+    for (const bad of [-1, 0x100000000, 1.5, NaN, Infinity, '1', null, undefined])
+        test('invalid device bits fail before sample publication: ' + String(bad), () => {
+            const f = fixture(Controller); f.bridge.readDevice = () => bad;
+            assert.throws(() => f.tick(0), /Invalid native device/); assert.equal(samples(f).length, 0); assert.equal(count(f, 'reset'), 2);
+        });
     test('cached ticks do not recapture; timely irregular ticks have no catch-up burst', () => {
         const f = fixture(Controller); [0, 0, 50, 124, 125, 125, 200, 260].forEach(f.tick);
         assert.deepEqual(samples(f).map(e => e.at_ms), [0, 125, 260]); assert.equal(count(f, 'capture'), 3);
@@ -94,7 +108,7 @@ const finish = f => f.events.find(e => e.event === 'native_pad_reference_finishe
         assert.equal(samples(f).length, 0); assert.equal(count(f, 'reset'), 2); assert.match(finish(f).error, /failed/);
         if (method === 'bind') assert.equal(count(f, 'capture'), 0);
     });
-    for (const method of ['bind', 'capture', 'read']) test(method + ' exception preserves original failure and cleans up', () => {
+    for (const method of ['bind', 'capture', 'read', 'readDevice']) test(method + ' exception preserves original failure and cleans up', () => {
         const f = fixture(Controller); const error = new Error('original'); f.bridge[method] = () => { throw error; };
         assert.throws(() => f.tick(0), caught => caught === error); assert.equal(count(f, 'reset'), 2); assert.equal(samples(f).length, 0);
     });

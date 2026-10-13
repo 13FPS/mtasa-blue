@@ -176,6 +176,23 @@ namespace mta::game_de
                 return Status::Ok;
             }
 
+            Status ReadNativeDeviceState(NativeDeviceState& state) noexcept override
+            {
+                const auto status = Access();
+                if (status != Status::Ok)
+                    return status;
+                NativeDeviceState next;
+                if (!nativePad.ReadDeviceState(next))
+                {
+                    nativePad.Reset();
+                    capabilities.store(BaseCapabilities);
+                    return Status::Unsupported;
+                }
+                state = next;
+                capabilities.fetch_or(static_cast<std::uint64_t>(AdapterCapability::NativeDeviceStateCandidateRead));
+                return Status::Ok;
+            }
+
         private:
             Status Access() const noexcept
             {

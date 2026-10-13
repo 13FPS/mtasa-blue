@@ -110,11 +110,13 @@ function runAdapter() {
     enterPhase('runtime_bound');
     if (MTA_NATIVE_PAD_REFERENCE) {
         const nativePadRead = bind('DE_NativePadRead', 'X64U32');
+        const nativeDeviceRead = bind('DE_NativeDeviceRead', 'X64U32');
         const resetAddress = library.getProcedure('DE_NativePadReset');
         if (!Number.isSafeInteger(resetAddress) || resetAddress <= 0) throw new Error('Missing bridge procedure: DE_NativePadReset');
         const reader = {
             bind: bind('DE_NativePadBind'), capture: bind('DE_NativePadCapture'),
             read: (pad, which, index) => nativePadRead(pad, which, index),
+            readDevice: index => nativeDeviceRead(index),
             reset: () => Memory.CallFunction(resetAddress, false, 0)
         };
         const game = {

@@ -104,9 +104,17 @@ namespace
                   "logical synthesis neither overwrites native evidence nor opens the gameplay gate");
             mta::game_de::NativeControllerState native;
             native.current.ButtonCross = 23;
+            mta::game_de::NativeDeviceState device;
+            device.sources.fill(-1234567);
+            const auto deviceOriginal = device.sources;
+            Check(!host.ReadNativeDeviceState(device) && device.sources == deviceOriginal,
+                  "Core cannot read unbound raw device sources or replace caller output");
             Check(!host.ReadNativeControllerState(0, native) && native.current.ButtonCross == 23,
                   "Core cannot read native input without explicit game binding");
             Check(!host.BindNativeInput(), "the real module rejects native binding in this non-game host");
+            Check(!host.ReadNativeDeviceState(device) && device.sources == deviceOriginal &&
+                      (host.GetCapabilities() & static_cast<std::uint64_t>(mta::game_de::AdapterCapability::NativeDeviceStateCandidateRead)) == 0,
+                  "failed binding cannot claim a captured device table");
             Check((host.GetCapabilities() & static_cast<std::uint64_t>(mta::game_de::AdapterCapability::EngineInputRead)) == 0 && !host.IsGameplayReady(),
                   "a rejected native binding leaves engine/gameplay capabilities unavailable");
             Check(host.GetMtaInputState(input) && input.current.ButtonCross == 255 && host.GetLocalObservation(readback) && readback.sampleAtMs == 1100,
@@ -117,6 +125,7 @@ namespace
             bool                        foreignRead = true;
             bool                        foreignBind = true;
             bool                        foreignNativeRead = true;
+            bool                        foreignDeviceRead = true;
             mta::game_de::MtaInputState foreignInput;
             foreignInput.current.ButtonCross = 19;
             std::uint64_t foreignCapabilities = 99;
@@ -130,6 +139,7 @@ namespace
                     foreignRead = host.GetMtaInputState(foreignInput);
                     foreignBind = host.BindNativeInput();
                     foreignNativeRead = host.ReadNativeControllerState(0, native);
+                    foreignDeviceRead = host.ReadNativeDeviceState(device);
                     host.Stop();
                 });
             foreign.join();
@@ -137,9 +147,11 @@ namespace
             Check(!foreignSubmit && !foreignRead && foreignInput.current.ButtonCross == 19,
                   "logical input shares Core thread ownership and preserves failed reader output");
             Check(!foreignBind && !foreignNativeRead && native.current.ButtonCross == 23, "native binding and reads retain the owning Core thread boundary");
+            Check(!foreignDeviceRead && device.sources == deviceOriginal, "foreign Core device reads preserve the complete caller state");
             Check(host.IsStarted() && GetModuleHandleW(modulePath.c_str()) != nullptr, "foreign teardown cannot unload code owned by Core");
             Check(host.GetLocalObservation(readback) && readback.sampleAtMs == 1100, "rejected foreign reset preserves caller evidence");
             Check(host.Reset(), "owning Core can reset the initialized real module");
+            Check(!host.ReadNativeDeviceState(device) && device.sources == deviceOriginal, "Core reset clears device authority without publishing state");
             readback.sampleAtMs = 99999;
             readback.controller.LeftStickY = 123;
             Check(!host.GetLocalObservation(readback), "reset clears caller observation coverage in the real module");
@@ -153,6 +165,7 @@ namespace
             Check(!host.IsStarted() && host.GetCapabilities() == 0, "stop removes ownership and capabilities");
             Check(GetModuleHandleW(modulePath.c_str()) == nullptr, "Shutdown and Release finish before module unload");
             Check(!host.Pulse() && !host.Reset(), "no adapter callback is possible after unload");
+            Check(!host.ReadNativeDeviceState(device) && device.sources == deviceOriginal, "unloaded Core consumer cannot publish device sources");
             Check(!host.SubmitControlActions(frame) && !host.GetMtaInputState(input), "no logical input callback is possible after unload");
             Check(host.Start(owner, modulePath), "explicit stop permits a fresh module session");
         }

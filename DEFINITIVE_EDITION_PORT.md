@@ -1,6 +1,6 @@
 # GTA San Andreas Definitive Edition: findings and port tracker
 
-Last updated: **2026-10-13 13:35** (Europe/Luxembourg).
+Last updated: **2026-10-13 13:52** (Europe/Luxembourg).
 Experimental branch: `definitive-edition-port`.
 Source baseline: `860e41ddeb6635b5dd138fef6c8a492d2f982ce0`.
 
@@ -139,6 +139,30 @@ module/absolute formatting. Repository formatting and diff checks pass.
 Certificate: `Build/mta-core-stack-trace/20261013-133022-556c65e367164c0a8bd598431ecba77a/test-result.json`.
 Run `Tests/definitive/test_stack_trace_helpers.ps1`. Core's x86 register context,
 native pool diagnostics, dependencies and rendering/startup still require porting.
+
+**The next MTA-owned input candidate observes the native source table.** ABI4
+adds `ReadNativeDeviceState` and its Core consumer wrapper, preserving all 127
+raw signed 32-bit values. It checks the exact live image-base and table-load
+instructions, PE sections and committed image pages before a complete copy.
+Only `NativeDeviceStateCandidateRead` is added after success; EngineInputRead,
+engine writes and remote-player context remain unavailable.
+
+Normal Game DE/host builds and opt-in/default classic Core compilation pass.
+The module passes 1,484 checks, the host 64 x64 checks/three x86 rejections and
+the reader 1,331 checks per architecture. All 91 source hashes remain stable.
+Certificate:
+`Build/mta-owned-adapter-check/20261013-134635-a3a9288303824beb8307a81bee4f038e/test-result.json`.
+Module SHA-256: `4cd948e61441eb384909704b76a7b42a205da5ba2158c2b723dca3c6ab0b54a2`.
+The diagnostic bridge passes 355 ABI checks; the recorder 53 checks; the log
+reader 24 tests; the entry/adapter 264 mocks; protocol/math 293 checks.
+
+Three owned files were updated after normal exit, with prior bytes backed up.
+All 17 installed files and the enabled loader verify. The installed bridge is
+`75f0292da4d922f7c6acc91668af64f2c88c6859d76ddb54eaf3c6b0453a5b0d`.
+Capture version 2 records source values beside the rejected SDK pad fields.
+The strict assessment must use `--require-complete --require-device-states`;
+an older pad-only capture cannot qualify. The new human trial remains pending,
+linked from `Build/definitive-manual-test/current-native-pad-reference-test.json`.
 
 The native-reader checkpoint builds the normal Game DE/host projects and passes
 1,474 module checks, 59 x64 host checks, three x86 rejections and 1,325 bounded

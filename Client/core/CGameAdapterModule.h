@@ -29,6 +29,7 @@ public:
     bool                GetMtaInputState(mta::game_de::MtaInputState& state);
     bool                BindNativeInput();
     bool                ReadNativeControllerState(std::uint32_t padIndex, mta::game_de::NativeControllerState& state);
+    bool                ReadNativeDeviceState(mta::game_de::NativeDeviceState& state);
     void                Stop() noexcept;
 
     bool               IsStarted() const noexcept { return m_adapter != nullptr; }

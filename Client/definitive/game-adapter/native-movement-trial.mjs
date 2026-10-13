@@ -21,6 +21,7 @@ export class MtaNativeMovementTrialController {
         this.game = game; this.bridge = bridge; this.log = log; this.stopReason = stopReason;
         this.running = true; this.startedAt = null; this.waitStartedAt = null; this.lastTickAt = null;
         this.lastSampleAt = null; this.ped = null; this.phaseIndex = -1; this.samples = 0; this.referenceId = null;
+        this.stopping = null;
     }
 
     evidence(now) {
@@ -42,34 +43,60 @@ export class MtaNativeMovementTrialController {
         return state;
     }
 
-    stop(reason = 'requested', now = this.lastTickAt, error = null) {
+    stop(reason = 'requested', now = this.stopping?.lastAt ?? this.lastTickAt, error = null) {
         if (!this.running) return;
-        this.running = false;
         const at = Number.isSafeInteger(now) && now >= 0 && (this.lastTickAt === null || now >= this.lastTickAt) ? now : this.lastTickAt;
+        this.stopping ||= { reason, at, error, lastAt: at, attempts: 0 };
+        this.cleanup(at);
+    }
+
+    cleanup(now) {
+        const pending = this.stopping;
+        const validClock = Number.isSafeInteger(now) && now >= 0 && now >= pending.lastAt;
+        const at = validClock ? now : pending.lastAt;
         let failure = null, state = null;
-        // End is attempted before terminal logging, even when observations or
-        // the logger failed. Its metrics are captured before module teardown.
+        // Engine control runs on another thread. End disarms immediately, but
+        // can defer detachment until an in-flight callback has restored its pad.
+        // Keep the script alive to retry without sending another action frame.
         try {
-            if (this.bridge.end() !== 1) throw new Error('MTA movement cleanup refused; native module retained');
-            if (this.startedAt !== null) {
+            ++pending.attempts;
+            const ended = this.bridge.end();
+            if (ended !== 0 && ended !== 1) throw new Error('Invalid MTA movement cleanup result');
+            if (this.startedAt !== null && (ended === 1 || this.bridge.capture() === 1))
                 state = this.readState();
+            if (!validClock && pending.at !== null) throw new Error('Invalid MTA movement cleanup clock');
+            if (Number.isSafeInteger(pending.at) && at - pending.at > 2000)
+                throw new Error('MTA movement cleanup deadline exceeded');
+            if (ended === 0) {
+                if (validClock && Number.isSafeInteger(pending.at) && now - pending.at < 2000) {
+                    pending.lastAt = now;
+                    return;
+                }
+                throw new Error('MTA movement cleanup deadline exceeded; native module retained');
+            }
+            if (state) {
                 if (state.bound || state.active || state.restoreFailures || state.restoredSteps !== state.scopedSteps)
                     throw new Error('MTA movement cleanup did not restore every applied scope');
             }
         } catch (caught) { failure = caught; }
+        this.running = false;
         try {
-            this.log({ event: 'native_movement_trial_finished', ...this.evidence(at), reason, samples: this.samples,
-                cleanup_passed: failure === null, state, ...(error ? { error: String(error) } : {}),
+            this.log({ event: 'native_movement_trial_finished', ...this.evidence(at), reason: pending.reason, samples: this.samples,
+                stop_requested_at_ms: pending.at, cleanup_attempts: pending.attempts,
+                cleanup_wait_ms: at === null || pending.at === null ? null : at - pending.at,
+                cleanup_passed: failure === null, state, ...(pending.error ? { error: String(pending.error) } : {}),
                 ...(failure ? { cleanup_error: String(failure) } : {}) });
         } catch (caught) { failure ||= caught; }
         if (failure) throw failure;
+        if (pending.error) throw pending.error;
     }
 
     tick(now) {
         if (!this.running) return;
+        if (this.stopping) { this.cleanup(now); return; }
         try { this.advance(now); } catch (error) {
-            try { this.stop('error', now, error); } catch (_) {}
-            throw error;
+            if (!this.running) throw error;
+            this.stop('error', now, error);
         }
     }
 

@@ -15,7 +15,9 @@ New-Item -ItemType Directory -Path $outputRoot | Out-Null
 $sourceNames = @('Client/game_de/NativeMovementInput.h','Client/game_de/NativeMovementInput.cpp',
     'Client/game_de/NativeInputRouting.h','Client/game_de/NativePadReader.h','Client/game_de/NativePadReader.cpp',
     'Client/sdk/game/CGameAdapter.h','Shared/sdk/CControllerState.h','Tests/definitive/NativeMovementInputTests.cpp',
-    'Tests/definitive/test_native_movement_input.ps1')
+    'Tests/definitive/test_native_movement_input.ps1',
+    'vendor/detours/4.0.1/src/detours.h','vendor/detours/4.0.1/src/detours.cpp','vendor/detours/4.0.1/src/modules.cpp',
+    'vendor/detours/4.0.1/src/disasm.cpp','vendor/detours/4.0.1/src/image.cpp','vendor/detours/4.0.1/src/creatwth.cpp')
 $sourceHashes = @($sourceNames | ForEach-Object {
     [ordered]@{ path=$_; sha256=(Get-FileHash -LiteralPath (Join-Path $taskRoot $_) -Algorithm SHA256).Hash.ToLowerInvariant() }
 })
@@ -45,10 +47,21 @@ $compilerExit = $LASTEXITCODE
 $compilerOutput | Set-Content -LiteralPath (Join-Path $outputRoot 'compile.log') -Encoding utf8
 $testExit = $null
 $testCount = $null
+$testTimedOut = $false
 if ($detoursExit -eq 0 -and $compilerExit -eq 0) {
-    $testOutput = @(& $executable 2>&1)
-    $testExit = $LASTEXITCODE
-    $testOutput | Set-Content -LiteralPath (Join-Path $outputRoot 'test.log') -Encoding utf8
+    # A deadlock in the actual suspension/teardown fixture must fail boundedly
+    # without leaving a test process alive or requiring an operator to stop it.
+    $testLog = Join-Path $outputRoot 'test.log'
+    $testErrors = Join-Path $outputRoot 'test-errors.log'
+    $testProcess = Start-Process -FilePath $executable -WindowStyle Hidden -PassThru -RedirectStandardOutput $testLog -RedirectStandardError $testErrors
+    if (-not $testProcess.WaitForExit(30000)) {
+        $testTimedOut = $true
+        $testProcess.Kill()
+        $testProcess.WaitForExit()
+    }
+    $testExit = $testProcess.ExitCode
+    $testOutput = @(Get-Content -LiteralPath $testLog) + @(Get-Content -LiteralPath $testErrors)
+    $testProcess.Dispose()
     if (($testOutput -join "`n") -match 'Passed (\d+) production native movement callback checks') { $testCount = [int]$Matches[1] }
 }
 $unchanged = $true
@@ -56,11 +69,13 @@ foreach ($entry in $sourceHashes) {
     if ((Get-FileHash -LiteralPath (Join-Path $taskRoot $entry.path) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $entry.sha256) { $unchanged = $false }
 }
 $record = [ordered]@{ recordedAt=[DateTimeOffset]::Now.ToString('o'); directory=$outputRoot;architecture='x64';
-    success=($detoursExit -eq 0 -and $compilerExit -eq 0 -and $testExit -eq 0 -and $null -ne $testCount -and $unchanged);
-    detoursCompilerExit=$detoursExit;compilerExit=$compilerExit;testExit=$testExit;checks=$testCount;
+    success=($detoursExit -eq 0 -and $compilerExit -eq 0 -and $testExit -eq 0 -and $null -ne $testCount -and -not $testTimedOut -and $unchanged);
+    detoursCompilerExit=$detoursExit;compilerExit=$compilerExit;testExit=$testExit;testTimedOut=$testTimedOut;checks=$testCount;
     sourceHashes=$sourceHashes;sourceUnchanged=$unchanged;executable=$executable;
-    gameLaunched=$false;gameProcessAttached=$false;gameInputWritten=$false;nativeHooksInstalled=$false;
-    syntheticOwnProcessPadWritten=$true;productionCallbackTested=$true;nativeRuntimeVerified=$false }
+    gameLaunched=$false;gameProcessAttached=$false;gameInputWritten=$false;gameHooksInstalled=$false;wrongExecutableBeginInstalledHooks=$false;
+    syntheticOwnProcessPadWritten=$true;productionCallbackTested=$true;syntheticOwnProcessDetoursInstalled=$true;
+    executableSha256=$(if (Test-Path -LiteralPath $executable) { (Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null });
+    nativeRuntimeVerified=$false }
 $record | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $outputRoot 'test-result.json') -Encoding utf8
 if (-not $record.success) { throw "Native movement callback checks failed; see $outputRoot" }
 $record | ConvertTo-Json -Depth 8 -Compress

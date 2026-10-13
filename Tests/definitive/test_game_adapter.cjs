@@ -1250,6 +1250,19 @@ async function main() {
         assert.equal(result.logs.find(e => e.event === 'native_movement_trial_started').at_ms, 14400050);
         assert.equal(result.logs.find(e => e.event === 'native_movement_trial_finished').elapsed_ms, 50);
     });
+    test('MTA movement entry keeps polling until cross-thread cleanup completes after an action failure', () => {
+        let ends = 0;
+        const result = runEntry({ mtaNativeMovementTrial: true,
+            keyFrames: [[17, 16, 120], [], [], []], times: [0, 50, 100, 150],
+            functions: { DE_MtaMovementSubmit: () => 0, DE_MtaMovementEnd: () => ++ends >= 3 ? 1 : 0,
+                DE_MtaMovementRead: index => [ends >= 3 ? 0 : 1, 0, 1, 1, 1, 0, 1, 0, 0, 0, 0, 0][index] } });
+        assert.equal(ends, 3);
+        assert.equal(result.callFrames.find(call => call.name === 'DE_MtaMovementSubmit').frame, 1);
+        assert.equal(result.calls.filter(call => call[0] === 'DE_MtaMovementSubmit').length, 1);
+        const finish = result.logs.find(e => e.event === 'native_movement_trial_finished');
+        assert.equal(finish.cleanup_passed, true); assert.equal(finish.elapsed_ms, 100);
+        assert.match(result.logs.at(-1).error, /submission/);
+    });
     test('MTA movement trial rejects incompatible selections before runtime access', () => {
         for (const overrides of [{ mode: 'online' }, { mode: 'diagnostic' }, { inputReference: true },
             { reference: true }, { mtaNativePadReference: true }, { mtaNativeMovementTrial: 'yes' }]) {

@@ -1,6 +1,6 @@
 # GTA San Andreas Definitive Edition: findings and port tracker
 
-Last updated: **2026-10-13 17:16** (Europe/Luxembourg).
+Last updated: **2026-10-13 17:48** (Europe/Luxembourg).
 Experimental branch: `definitive-edition-port`.
 Source baseline: `860e41ddeb6635b5dd138fef6c8a492d2f982ce0`.
 
@@ -14,7 +14,11 @@ verified local on-foot callback, routes its native provider queries, then
 restores the saved bytes. Exception, nested-call and failed-restoration paths
 have executable production-callback fixtures. The diagnostic script schedules
 a 22-second walk/forwards/sprint sequence and observes results without forcing
-an animation or position. Human game validation remains pending.
+an animation or position. The first human trial applied no input because the
+guard assumed the script and engine callback shared a thread. It stopped after
+2,036 ms with zero scoped writes/queries and clean teardown. The correction uses
+a coherent producer mailbox, verified local callback thread adoption and
+retryable asynchronous cleanup. Runtime movement validation remains pending.
 
 Real Core already builds and links in opt-in Release/x64 and passes its actual
 entry fixture in a non-game host. This does not complete the DE launcher,

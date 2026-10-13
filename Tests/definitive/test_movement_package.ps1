@@ -134,7 +134,8 @@ function Install-Fresh([object]$Fixture) {
     Invoke-Production $Fixture 'install.ps1' @{ Mode='Smoke'; PackageDirectory=$Fixture.package; GameDirectory=$Fixture.game }
 }
 function Install-Legacy([object]$Fixture, [int]$Count) {
-    $excluded = @($movementScript, $backend)
+    $excluded = @()
+    if ($Count -lt 19) { $excluded += @($movementScript, $backend) }
     if ($Count -eq 16) { $excluded += $padScript }
     $files = @()
     foreach ($entry in $sourceManifest.files) {
@@ -145,7 +146,7 @@ function Install-Legacy([object]$Fixture, [int]$Count) {
             # Historical configurations lacked this opt-in. Different owned
             # bytes also prove update replaces existing files, not just adds.
             $text = [IO.File]::ReadAllText($destination)
-            $text = [regex]::Replace($text, '(?m)^export const MTA_NATIVE_MOVEMENT_TRIAL = (true|false);\r?\n', '')
+            if ($Count -lt 19) { $text = [regex]::Replace($text, '(?m)^export const MTA_NATIVE_MOVEMENT_TRIAL = (true|false);\r?\n', '') }
             if ($Count -eq 16) { $text = [regex]::Replace($text, '(?m)^export const MTA_NATIVE_PAD_REFERENCE = (true|false);\r?\n', '') }
             Write-FixtureBytes $destination ($utf8.GetBytes($text + "`n// Historical owned configuration fixture.`n"))
         }
@@ -201,7 +202,7 @@ try {
         foreach ($relative in $userPaths) { Assert-Check ((Get-Sha (Join-Path $fixture.game $relative)) -eq $userHashes[$relative]) "Uninstall preserves $relative" }
         Assert-Check ((Get-Sha (Join-Path $fixture.game 'SanAndreas.exe')) -eq $knownGameHash) 'Uninstall preserves executable'
     }
-    foreach ($legacyCount in @(16, 17)) {
+    foreach ($legacyCount in @(16, 17, 19)) {
         Invoke-Case "update-$legacyCount-to-19" {
             param($fixture)
             Install-Legacy $fixture $legacyCount

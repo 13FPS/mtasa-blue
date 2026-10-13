@@ -76,8 +76,57 @@ async function main() {
     });
     test('cleanup refusal remains observable and does not report success', () => {
         const f = fixture(); f.controller.tick(0); f.state.end = 0;
-        assert.throws(() => f.controller.stop('cancelled'), /retained/);
+        f.controller.stop('cancelled'); assert.equal(f.controller.running, true);
+        assert.throws(() => f.controller.tick(2000), /retained/);
         assert.equal(f.events.at(-1).cleanup_passed, false);
+        assert.equal(f.events.at(-1).state.bound, 1);
+    });
+    test('busy engine cleanup retries on later ticks without more submissions or observations', () => {
+        const f = fixture(); f.controller.tick(0); f.state.end = 0;
+        f.controller.stop('cancelled', 50);
+        assert.equal(f.controller.running, true);
+        const submissions = f.calls.filter(c => c[0] === 'submit').length;
+        const observations = f.events.filter(e => e.event.endsWith('_sample')).length;
+        f.controller.tick(100); f.state.end = 1; f.controller.tick(150);
+        assert.equal(f.controller.running, false);
+        assert.equal(f.calls.filter(c => c[0] === 'submit').length, submissions);
+        assert.equal(f.events.filter(e => e.event.endsWith('_sample')).length, observations);
+        assert.equal(f.events.at(-1).reason, 'cancelled'); assert.equal(f.events.at(-1).cleanup_passed, true);
+        assert.equal(f.events.filter(e => e.event.endsWith('_finished')).length, 1);
+    });
+    test('trial error waits for engine cleanup before leaving the script polling loop', () => {
+        const f = fixture(); f.controller.tick(0); f.state.submit = 0; f.state.end = 0;
+        assert.doesNotThrow(() => f.controller.tick(50)); assert.equal(f.controller.running, true);
+        assert.doesNotThrow(() => f.controller.tick(100));
+        f.state.end = 1; assert.throws(() => f.controller.tick(150), /submission/);
+        assert.equal(f.controller.running, false); assert.equal(f.events.at(-1).reason, 'error');
+        assert.match(f.events.at(-1).error, /submission/);
+        assert.equal(f.events.at(-1).cleanup_passed, true);
+    });
+    test('pending cleanup preserves the first stop reason and fails a reversed clock honestly', () => {
+        const f = fixture(); f.controller.tick(100); f.state.end = 0;
+        f.controller.stop('first', 150); f.controller.stop('second', 160);
+        assert.throws(() => f.controller.tick(149), /cleanup clock/);
+        assert.equal(f.events.at(-1).reason, 'first'); assert.equal(f.events.at(-1).cleanup_passed, false);
+    });
+    test('cleanup success exactly at its deadline records the bounded retry evidence', () => {
+        const f = fixture(); f.controller.tick(0); f.state.end = 0; f.controller.stop('cancelled', 50);
+        f.state.end = 1; f.controller.tick(2050);
+        const finish = f.events.at(-1);
+        assert.equal(finish.cleanup_passed, true); assert.equal(finish.cleanup_wait_ms, 2000);
+        assert.equal(finish.stop_requested_at_ms, 50); assert.equal(finish.cleanup_attempts, 2);
+    });
+    test('repeated stop without an explicit clock uses the latest cleanup tick', () => {
+        const f = fixture(); f.controller.tick(0); f.state.end = 0; f.controller.stop('cancelled');
+        f.controller.tick(50); assert.doesNotThrow(() => f.controller.stop('script_exit'));
+        assert.equal(f.controller.running, true); f.state.end = 1; f.controller.tick(100);
+        assert.equal(f.events.at(-1).cleanup_passed, true); assert.equal(f.events.at(-1).reason, 'cancelled');
+    });
+    test('late successful End restores first but cannot claim cleanup met its deadline', () => {
+        const f = fixture(); f.controller.tick(0); f.state.end = 0; f.controller.stop('cancelled', 50);
+        f.state.end = 1; assert.throws(() => f.controller.tick(2051), /deadline/);
+        assert.equal(f.values[0], 0); assert.equal(f.values[1], 0);
+        assert.equal(f.events.at(-1).cleanup_passed, false); assert.equal(f.events.at(-1).cleanup_wait_ms, 2001);
     });
     for (const [name, next, reason] of [['backward clock', 99, 'clock_reversed'], ['render gap', 2101, 'render_gap']])
         test(name + ' ends before another action submission', () => {

@@ -33,6 +33,7 @@ namespace mta::game_de
         constexpr std::uintptr_t padRva = 0x53e8810;
         constexpr ULONGLONG      maximumTrialMs = 35000;
         constexpr ULONGLONG      maximumInputAgeMs = 2000;
+        constexpr unsigned       exclusivePadAccess = 1u << 31;
 
         struct Counters
         {
@@ -43,19 +44,29 @@ namespace mta::game_de
 
         struct Runtime
         {
-            SRWLOCK                    lock = SRWLOCK_INIT;
+            SRWLOCK                    mailboxLock = SRWLOCK_INIT;
+            std::atomic<bool>          apiBusy{false};
             NativePadReader            reader;
             std::atomic<bool>          bound{false}, active{false}, hooked{false};
-            std::atomic<unsigned>      scopes{0};
+            std::atomic<unsigned>      scopes{0}, inFlight{0};
+            std::atomic<unsigned>      padAccess{0};
             std::atomic<std::uint64_t> generation{0};
-            DWORD                      thread = 0;
+            DWORD                      producerThread = 0;
+            std::atomic<DWORD>         engineThread{0};
             std::uintptr_t             image = 0, ped = 0, provider = 0;
             ULONGLONG                  started = 0, refreshed = 0;
             MtaInputState              frame;
-            Counters                   counters;
-            ControlFunction            originalControl = nullptr;
-            MembershipFunction         originalMembership = nullptr, originalAvailability = nullptr;
-            QueryFunction              originalQuery = nullptr;
+            // The adopted callback owns this snapshot while in flight. End
+            // may retry it only after suspending threads and proving quiescence;
+            // an exited engine thread must not take the recovery bytes with it.
+            NativeInputRouting::PadTransaction transaction;
+            std::uint64_t                      scopeGeneration = 0;
+            std::int32_t                       scopeProviderIndex = 0;
+            std::uintptr_t                     scopeAlternate = 0;
+            Counters                           counters;
+            ControlFunction                    originalControl = nullptr;
+            MembershipFunction                 originalMembership = nullptr, originalAvailability = nullptr;
+            QueryFunction                      originalQuery = nullptr;
         };
 
         // Hooks must never retain an adapter instance. A failed detachment may
@@ -65,15 +76,30 @@ namespace mta::game_de
 
         struct Scope
         {
-            NativeInputRouting::PadTransaction transaction;
-            MtaInputState                      frame;
-            std::uint64_t                      generation = 0;
-            std::int32_t                       providerIndex = 0;
-            std::uintptr_t                     alternate = 0;
-            bool                               routed = false;
-            unsigned                           callbackDepth = 0;
+            MtaInputState    frame;
+            CControllerState consumed;
+            std::uint64_t    consumedGeneration = 0;
+            std::uint64_t    generation = 0;
+            std::int32_t     providerIndex = 0;
+            std::uintptr_t   alternate = 0;
+            bool             routed = false;
+            unsigned         callbackDepth = 0;
         };
         thread_local Scope scope;
+
+        // API calls never wait for another API operation, and callbacks never
+        // acquire this gate. Detours can suspend threads without stranding a
+        // waiter on a lock held by the producer doing the transaction.
+        struct ApiOperation
+        {
+            bool acquired;
+            ApiOperation() noexcept : acquired(!runtime.apiBusy.exchange(true)) {}
+            ~ApiOperation()
+            {
+                if (acquired)
+                    runtime.apiBusy.store(false);
+            }
+        };
 
         void Fail(Failure reason) noexcept
         {
@@ -137,7 +163,7 @@ namespace mta::game_de
             return Read(runtime.image + 0x5726120, index) && Read(runtime.image + 0x5067940, alternate);
         }
 
-        bool CheckBinding(void* candidate = nullptr) noexcept
+        bool CheckBinding(void* candidate = nullptr, bool capture = false) noexcept
         {
             std::uintptr_t ped = 0, vtable = 0, callback = 0, info = 0, provider = 0, providerVtable = 0, alternate = 0;
             std::int32_t   selector = -1, index = -1;
@@ -171,8 +197,13 @@ namespace mta::game_de
             std::array<unsigned char, 6>           typeCode{};
             if (!Read(actual[6], typeCode) || typeCode != type2)
                 return false;
-            runtime.ped = ped;
-            runtime.provider = provider;
+            // The identity is captured before hooks are installed. Validation
+            // during a session must not race producer reads by rewriting it.
+            if (capture)
+            {
+                runtime.ped = ped;
+                runtime.provider = provider;
+            }
             return Pages(runtime.image + padRva + NativePadCurrentOffset, sizeof(CControllerState) * 2, true);
         }
 
@@ -194,7 +225,7 @@ namespace mta::game_de
             return Pin(controlRva, control) && Pin(membershipRva, membership) && Pin(availabilityRva, availability) && Pin(queryRva, query);
         }
 
-        bool Fresh() noexcept
+        bool Fresh(ULONGLONG refreshed) noexcept
         {
             const auto now = GetTickCount64();
             if (now - runtime.started >= maximumTrialMs)
@@ -202,7 +233,7 @@ namespace mta::game_de
                 Fail(Failure::Expired);
                 return false;
             }
-            if (now - runtime.refreshed > maximumInputAgeMs)
+            if (now - refreshed > maximumInputAgeMs)
             {
                 Fail(Failure::StaleInput);
                 return false;
@@ -213,11 +244,11 @@ namespace mta::game_de
         bool RestoreScope() noexcept
         {
             scope.routed = false;
-            if (!scope.transaction.Active())
+            if (!runtime.transaction.Active())
                 return true;
             NativeInputRouting::PadStateBytes original{}, observed{};
-            if (!scope.transaction.RestoreBytes(original) || !WritePad(original) ||
-                !Read(runtime.image + padRva + NativePadCurrentOffset, observed.data(), observed.size()) || !scope.transaction.ConfirmRestored(observed))
+            if (!runtime.transaction.RestoreBytes(original) || !WritePad(original) ||
+                !Read(runtime.image + padRva + NativePadCurrentOffset, observed.data(), observed.size()) || !runtime.transaction.ConfirmRestored(observed))
             {
                 runtime.counters.restoreFailures.fetch_add(1);
                 Fail(Failure::RestoreFailure);
@@ -228,16 +259,27 @@ namespace mta::game_de
             }
             runtime.counters.restored.fetch_add(1);
             runtime.scopes.store(0);
+            runtime.padAccess.store(0);
             std::int32_t   index = -1;
             std::uintptr_t alternate = 0;
-            if (!ReadContext(index, alternate) || index != scope.providerIndex || alternate != scope.alternate)
+            if (!ReadContext(index, alternate) || index != runtime.scopeProviderIndex || alternate != runtime.scopeAlternate)
                 Fail(Failure::ContextChanged);
             return true;
         }
 
         bool PrepareScope(void* ped) noexcept
         {
-            if (!runtime.active.load() || !Fresh())
+            if (!runtime.active.load())
+                return false;
+            // CLEO and the native simulation run on different threads. A
+            // callback takes one coherent publication without ever blocking
+            // behind a producer which Detours may need to suspend.
+            if (!TryAcquireSRWLockShared(&runtime.mailboxLock))
+                return false;
+            scope.frame = runtime.frame;
+            const auto refreshed = runtime.refreshed;
+            ReleaseSRWLockShared(&runtime.mailboxLock);
+            if (!Fresh(refreshed))
                 return false;
             if (!CheckBinding(ped))
             {
@@ -245,23 +287,39 @@ namespace mta::game_de
                 return false;
             }
             unsigned expected = 0;
+            if (!runtime.padAccess.compare_exchange_strong(expected, exclusivePadAccess))
+            {
+                Fail(Failure::WrongThread);
+                return false;
+            }
+            expected = 0;
             if (!runtime.scopes.compare_exchange_strong(expected, 1))
             {
+                runtime.padAccess.store(0);
                 runtime.counters.nested.fetch_add(1);
                 Fail(Failure::NestedCallback);
                 return false;
             }
             NativeInputRouting::PadStateBytes physical{}, replacement{};
-            scope.frame = runtime.frame;
             scope.generation = runtime.generation.load();
+            if (scope.consumedGeneration != scope.generation)
+            {
+                scope.consumedGeneration = scope.generation;
+                scope.consumed = scope.frame.previous;
+            }
+            scope.frame.previous = scope.consumed;
             if (!ReadContext(scope.providerIndex, scope.alternate) ||
                 !Read(runtime.image + padRva + NativePadCurrentOffset, physical.data(), physical.size()) ||
-                !scope.transaction.Prepare(physical, scope.frame, replacement))
+                !runtime.transaction.Prepare(physical, scope.frame, replacement))
             {
                 runtime.scopes.store(0);
+                runtime.padAccess.store(0);
                 Fail(Failure::ReadFailure);
                 return false;
             }
+            runtime.scopeGeneration = scope.generation;
+            runtime.scopeProviderIndex = scope.providerIndex;
+            runtime.scopeAlternate = scope.alternate;
             // Count ownership before applying: even a partial failed write has
             // a restoration obligation, which terminal metrics must include.
             runtime.counters.steps.fetch_add(1);
@@ -277,7 +335,7 @@ namespace mta::game_de
 
         bool OwnsQuery(void* provider) noexcept
         {
-            if (!scope.routed || runtime.generation.load() != scope.generation || GetCurrentThreadId() != runtime.thread)
+            if (!scope.routed || runtime.generation.load() != scope.generation || GetCurrentThreadId() != runtime.engineThread.load())
                 return false;
             std::int32_t   index = -1;
             std::uintptr_t alternate = 0;
@@ -297,29 +355,29 @@ namespace mta::game_de
             return false;
         }
 
-        bool HookMembership(void* provider, std::int32_t action)
+        bool MembershipBody(void* provider, std::int32_t action)
         {
             if (OwnsQuery(provider))
                 return true;
-            if (GetCurrentThreadId() == runtime.thread && scope.transaction.Active())
+            if (GetCurrentThreadId() == runtime.engineThread.load() && runtime.transaction.Active())
                 return true;
             return runtime.originalMembership(provider, action);
         }
 
-        bool HookAvailability(void* provider, std::int32_t action)
+        bool AvailabilityBody(void* provider, std::int32_t action)
         {
             if (OwnsQuery(provider))
                 return true;
-            if (GetCurrentThreadId() == runtime.thread && scope.transaction.Active())
+            if (GetCurrentThreadId() == runtime.engineThread.load() && runtime.transaction.Active())
                 return true;
             return runtime.originalAvailability(provider, action);
         }
 
-        std::int32_t HookQuery(void* provider, std::int32_t action, float* value)
+        std::int32_t QueryBody(void* provider, std::int32_t action, float* value)
         {
             if (!OwnsQuery(provider))
             {
-                if (GetCurrentThreadId() == runtime.thread && scope.transaction.Active())
+                if (GetCurrentThreadId() == runtime.engineThread.load() && runtime.transaction.Active())
                 {
                     if (value)
                         *value = 0.0f;
@@ -341,31 +399,74 @@ namespace mta::game_de
             return sample.state;
         }
 
+        void ForwardControl(void* ped)
+        {
+            unsigned access = runtime.padAccess.load();
+            for (;;)
+            {
+                if (access & exclusivePadAccess)
+                {
+                    // Emergency collision abort: a foreign original must not
+                    // consume the adopted thread's temporary global pad. Skip
+                    // this one call; that thread alone restores in finally.
+                    Fail(Failure::WrongThread);
+                    return;
+                }
+                if (runtime.padAccess.compare_exchange_weak(access, access + 1))
+                    break;
+            }
+            __try
+            {
+                runtime.originalControl(ped);
+            }
+            __finally
+            {
+                runtime.padAccess.fetch_sub(1);
+            }
+        }
+
         void ControlBody(void* ped)
         {
             runtime.counters.callbacks.fetch_add(1);
-            if (GetCurrentThreadId() != runtime.thread)
+            const DWORD currentThread = GetCurrentThreadId();
+            DWORD       engineThread = runtime.engineThread.load();
+            if (!engineThread && runtime.active.load() && reinterpret_cast<std::uintptr_t>(ped) == runtime.ped)
             {
-                runtime.counters.foreign.fetch_add(1);
-                runtime.originalControl(ped);
+                if (!CheckBinding(ped))
+                {
+                    Fail(Failure::BindingChanged);
+                    ForwardControl(ped);
+                    return;
+                }
+                // Only a natural callback with the full verified local player
+                // identity may establish the simulation owner. Later callbacks
+                // on other threads cannot inherit its pad or provider routing.
+                runtime.engineThread.compare_exchange_strong(engineThread, currentThread);
+                engineThread = runtime.engineThread.load();
+            }
+            if (currentThread != engineThread)
+            {
+                if (engineThread)
+                    runtime.counters.foreign.fetch_add(1);
+                ForwardControl(ped);
                 return;
             }
-            if (scope.transaction.Active())
+            if (runtime.transaction.Active())
             {
                 runtime.counters.nested.fetch_add(1);
                 Fail(Failure::NestedCallback);
                 if (!RestoreScope())
                     return;
-                runtime.originalControl(ped);
+                ForwardControl(ped);
                 return;
             }
             if (!runtime.active.load() || reinterpret_cast<std::uintptr_t>(ped) != runtime.ped || !PrepareScope(ped))
             {
                 // A partial apply followed by failed restoration must not run
                 // another native consumer against stranded replacement bytes.
-                if (scope.transaction.Active())
+                if (runtime.transaction.Active())
                     return;
-                runtime.originalControl(ped);
+                ForwardControl(ped);
                 return;
             }
             // Keep structured cleanup around the real native call: early
@@ -385,17 +486,13 @@ namespace mta::game_de
                 if (AbnormalTermination())
                     Fail(Failure::OriginalException);
                 if (RestoreScope() && runtime.active.load())
-                    runtime.frame.previous = scope.frame.current;
+                    scope.consumed = scope.frame.current;
             }
         }
 
         void HookControl(void* ped)
         {
-            if (GetCurrentThreadId() != runtime.thread)
-            {
-                ControlBody(ped);
-                return;
-            }
+            runtime.inFlight.fetch_add(1);
             ++scope.callbackDepth;
             __try
             {
@@ -404,10 +501,50 @@ namespace mta::game_de
             __finally
             {
                 --scope.callbackDepth;
+                runtime.inFlight.fetch_sub(1);
             }
         }
 
-        bool ChangeHooks(bool install) noexcept
+        bool HookMembership(void* provider, std::int32_t action)
+        {
+            runtime.inFlight.fetch_add(1);
+            __try
+            {
+                return MembershipBody(provider, action);
+            }
+            __finally
+            {
+                runtime.inFlight.fetch_sub(1);
+            }
+        }
+
+        bool HookAvailability(void* provider, std::int32_t action)
+        {
+            runtime.inFlight.fetch_add(1);
+            __try
+            {
+                return AvailabilityBody(provider, action);
+            }
+            __finally
+            {
+                runtime.inFlight.fetch_sub(1);
+            }
+        }
+
+        std::int32_t HookQuery(void* provider, std::int32_t action, float* value)
+        {
+            runtime.inFlight.fetch_add(1);
+            __try
+            {
+                return QueryBody(provider, action, value);
+            }
+            __finally
+            {
+                runtime.inFlight.fetch_sub(1);
+            }
+        }
+
+        bool ChangeHooks(bool install, bool* pending = nullptr) noexcept
         {
             std::vector<HANDLE> threads;
             const HANDLE        snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
@@ -455,8 +592,20 @@ namespace mta::game_de
                 ready = DetourUpdateThread(GetCurrentThread()) == NO_ERROR;
                 for (HANDLE thread : threads)
                     ready = ready && DetourUpdateThread(thread) == NO_ERROR;
+                // Registration suspends each target immediately. Check again
+                // after suspension: a callback could have entered between End's
+                // optimistic check and this transaction. Its trampoline must
+                // remain alive until that whole hook has returned.
+                if (ready && !install && runtime.inFlight.load())
+                {
+                    if (pending)
+                        *pending = true;
+                    ready = false;
+                }
+                if (ready && !install && runtime.scopes.load())
+                    ready = runtime.scopeGeneration == runtime.generation.load() && RestoreScope();
                 const auto change = install ? DetourAttach : DetourDetach;
-                if (ready)
+                if (ready && (install || runtime.hooked.load()))
                     ready = change(reinterpret_cast<PVOID*>(&runtime.originalControl), reinterpret_cast<PVOID>(&HookControl)) == NO_ERROR &&
                             change(reinterpret_cast<PVOID*>(&runtime.originalMembership), reinterpret_cast<PVOID>(&HookMembership)) == NO_ERROR &&
                             change(reinterpret_cast<PVOID*>(&runtime.originalAvailability), reinterpret_cast<PVOID>(&HookAvailability)) == NO_ERROR &&
@@ -491,16 +640,14 @@ namespace mta::game_de
 
     bool NativeMovementInput::Begin(const MtaInputState& state) noexcept
     {
-        AcquireSRWLockExclusive(&runtime.lock);
-        if (runtime.hooked.load() || runtime.scopes.load() || runtime.active.load())
-        {
-            ReleaseSRWLockExclusive(&runtime.lock);
+        ApiOperation operation;
+        if (!operation.acquired || runtime.hooked.load() || runtime.scopes.load() || runtime.inFlight.load() || runtime.active.load())
             return false;
-        }
         ClearCounters();
         generation = runtime.generation.fetch_add(1) + 1;
         runtime.bound.store(false);
-        runtime.thread = GetCurrentThreadId();
+        runtime.producerThread = GetCurrentThreadId();
+        runtime.engineThread.store(0);
         runtime.ped = runtime.provider = 0;
         bool ready = NativeInputRouting::ValidateMovementState(state);
         if (!ready)
@@ -513,7 +660,7 @@ namespace mta::game_de
             ready = false;
         }
         runtime.image = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
-        if (ready && (!CheckEntryPins() || !CheckBinding()))
+        if (ready && (!CheckEntryPins() || !CheckBinding(nullptr, true)))
         {
             Fail(Failure::BindingChanged);
             ready = false;
@@ -547,15 +694,16 @@ namespace mta::game_de
             runtime.reader.Reset();
         ReadState(finalState);
         hasFinalState = true;
-        ReleaseSRWLockExclusive(&runtime.lock);
         return ready;
     }
 
     bool NativeMovementInput::Update(const MtaInputState& state) noexcept
     {
-        AcquireSRWLockExclusive(&runtime.lock);
-        bool ready = generation && generation == runtime.generation.load() && runtime.active.load() && !runtime.scopes.load();
-        if (ready && GetCurrentThreadId() != runtime.thread)
+        ApiOperation operation;
+        if (!operation.acquired)
+            return false;
+        bool ready = generation && generation == runtime.generation.load() && runtime.active.load();
+        if (ready && GetCurrentThreadId() != runtime.producerThread)
         {
             Fail(Failure::WrongThread);
             ready = false;
@@ -565,59 +713,55 @@ namespace mta::game_de
             Fail(Failure::InvalidState);
             ready = false;
         }
-        if (ready && (!Fresh() || !CheckBinding()))
-        {
-            Fail(Failure::BindingChanged);
-            ready = false;
-        }
         if (ready)
         {
-            // Previous is consumed once by the native simulation, not replayed
-            // as a fresh press on every script refresh of a held MTA frame.
-            runtime.frame.current = state.current;
-            runtime.refreshed = GetTickCount64();
+            AcquireSRWLockExclusive(&runtime.mailboxLock);
+            ready = Fresh(runtime.refreshed) && runtime.active.load();
+            if (ready)
+            {
+                // Submit may overlap native simulation. Only the next coherent
+                // current frame is published; previous belongs to the engine
+                // consumer and cannot be replayed by a script refresh.
+                runtime.frame.current = state.current;
+                runtime.refreshed = GetTickCount64();
+            }
+            ReleaseSRWLockExclusive(&runtime.mailboxLock);
         }
-        ReleaseSRWLockExclusive(&runtime.lock);
         return ready;
     }
 
     bool NativeMovementInput::End() noexcept
     {
-        AcquireSRWLockExclusive(&runtime.lock);
+        ApiOperation operation;
+        if (!operation.acquired)
+            return false;
         if (!generation || generation != runtime.generation.load())
         {
             const bool harmless = !runtime.hooked.load();
-            ReleaseSRWLockExclusive(&runtime.lock);
             return harmless;
         }
         runtime.active.store(false);
-        if (GetCurrentThreadId() != runtime.thread || scope.callbackDepth)
+        if (scope.callbackDepth || GetCurrentThreadId() != runtime.producerThread)
         {
-            Fail(GetCurrentThreadId() != runtime.thread ? Failure::WrongThread : Failure::ScopeActive);
-            ReleaseSRWLockExclusive(&runtime.lock);
+            Fail(scope.callbackDepth ? Failure::ScopeActive : Failure::WrongThread);
             return false;
         }
-        // Failed finally cleanup retains a snapshot after the native call has
-        // returned. Its owner can retry directly; only an in-flight callback
-        // blocks End from restoring and then detaching the hooks.
-        if (runtime.scopes.load() && (!scope.transaction.Active() || scope.generation != generation || !RestoreScope()))
-        {
-            Fail(Failure::RestoreFailure);
-            ReleaseSRWLockExclusive(&runtime.lock);
+        // Busy is ordinary asynchronous cleanup, not a permanent trial fault.
+        // The producer retries after native finally has released its scope.
+        if (runtime.inFlight.load())
             return false;
-        }
-        const bool clean = !runtime.hooked.load() || ChangeHooks(false);
+        bool       pending = false;
+        const bool clean = (!runtime.hooked.load() && !runtime.scopes.load()) || ChangeHooks(false, &pending);
         if (clean)
         {
             runtime.hooked.store(false);
             runtime.bound.store(false);
             runtime.reader.Reset();
         }
-        else
+        else if (!pending && !runtime.counters.reason.load())
             Fail(Failure::HookRemove);
         ReadState(finalState);
         hasFinalState = true;
-        ReleaseSRWLockExclusive(&runtime.lock);
         return clean;
     }
 
@@ -638,14 +782,17 @@ namespace mta::game_de
             return;
         state.bound = IsBound();
         state.active = IsActive();
-        state.callbackCount = runtime.counters.callbacks.load();
-        state.scopedSteps = runtime.counters.steps.load();
-        state.routedQueries = runtime.counters.queries.load();
-        state.neutralQueries = runtime.counters.neutral.load();
+        // Read completed effects before their monotone prerequisites. A
+        // callback may advance between loads, but cannot make a snapshot claim
+        // more restores than scopes, or more neutral routes than queries.
         state.restoredSteps = runtime.counters.restored.load();
+        state.scopedSteps = runtime.counters.steps.load();
+        state.neutralQueries = runtime.counters.neutral.load();
+        state.routedQueries = runtime.counters.queries.load();
         state.restoreFailures = runtime.counters.restoreFailures.load();
         state.foreignThreadCallbacks = runtime.counters.foreign.load();
         state.nestedCallbacks = runtime.counters.nested.load();
+        state.callbackCount = runtime.counters.callbacks.load();
         state.failureReason = runtime.counters.reason.load();
         state.lastMoveState = runtime.counters.lastMoveState.load();
     }

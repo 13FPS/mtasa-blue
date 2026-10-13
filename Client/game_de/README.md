@@ -9,7 +9,7 @@ The current factory contract is **ABI5**. An explicit local on-foot movement
 trial now sends MTA's shared synthesized current/previous controller state
 through the verified DE player-control callback. Real repository Detours scopes
 the pad replacement and action-provider membership, availability and value
-queries to that callback. All other callers retain the original engine path.
+queries to that callback. Ordinary unowned callers retain the original engine path.
 The saved 96 pad bytes are restored before returning or propagating an original
 exception. Physical input-source tables and their event queues are never written.
 The trial is limited to 35 seconds with a two-second input freshness limit;
@@ -27,11 +27,27 @@ Ctrl+Shift+End cancels. The human evaluates actual movement in the game; the log
 checks callback/query activity and restoration independently of visual quality.
 Ordinary packaging and mode switches leave this write experiment disabled.
 
-The current offline checks pass 146 production callback cases, 7,413 routing
+The first live write trial activated correctly but applied no input: its 117
+hooked player-control callbacks ran outside the script's assumed thread, so the
+guard rejected every scope and stopped at 2,036 ms. No local-CJ ownership is
+inferred from that old foreign-thread counter. Cleanup and normal shutdown
+passed. Its raw log and all 19 installed bytes are preserved with the trial.
+
+The correction separates the Core/script producer from the verified engine
+callback consumer. A short mailbox publishes complete MTA frames; the adopted
+local-player callback consumes native previous state once per simulation step.
+Callbacks never wait for the producer's mutex. Detachment disarms first, waits
+through script ticks for in-flight hooks, then rechecks after thread suspension.
+An unexpected overlapping control call that could observe temporary global pad
+bytes aborts the experiment; ordinary passthrough calls remain unchanged.
+Cleanup logs include the request time, retry count and exact bounded wait.
+
+The current offline checks pass 351 production callback cases, 7,413 routing
 cases per architecture, 1,512 module cases and 76 x64 Core-consumer cases.
 Normal Release/x64 Core/Game DE builds, the real Core entry fixture (26 checks)
 and classic Win32 compiles with the option enabled/disabled pass. The package
-passes 135 ownership/mode checks. Script and saved-log tests include logs emitted
+passes 160 ownership/mode checks, including replacement of the 19-file candidate.
+Script and saved-log tests include logs emitted
 by the actual controller simulation; these are explicitly not live movement
 evidence. Assess the human trial with
 `utils/definitive_edition/native_movement_log.py --log <saved-log> --output <assessment>`;

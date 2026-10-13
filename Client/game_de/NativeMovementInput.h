@@ -13,6 +13,10 @@ namespace mta::game_de
 {
     // This bounded experiment uses MTA's canonical controller state and context
     // lifetime. It does not establish a remote entity or a complete CGame port.
+    // Begin/Update/End belong to the producer. The verified native callback
+    // adopts its own simulation thread and consumes coherent published input.
+    // End may return false while that thread finishes restoring its scope;
+    // the producer must retain the adapter and retry cleanup on a later tick.
     class NativeMovementInput final
     {
     public:

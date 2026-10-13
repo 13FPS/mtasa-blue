@@ -25,6 +25,10 @@ MAX_EVENTS, MAX_SAMPLES = 512, 176
 # publication can refresh input without emitting a sample. This capture bound
 # follows that actual scheduling contract; it does not relax native freshness.
 MAX_CAPTURE_GAP = 2000 + 125 - 1
+# Native End can defer detachment until an in-flight scope restores its pad.
+# Keep that shutdown delay separate from the action schedule so clean teardown
+# cannot disguise a stale action frame or an unbounded trial.
+MAX_CLEANUP_WAIT = 2000
 NOTICE = ('This verifies the saved local trial schedule and reported native callback/query/restoration counters. '
           'Raw motion and native state values do not establish visual success, no sliding, velocity units, '
           'remote ownership, all controller actions or a complete MTA backend.')
@@ -201,18 +205,34 @@ def analyze_log(text, require_exit=False):
                 (accepted if issue_total == before else rejected).append(event)
                 last_sample = event
         elif kind == 'native_movement_trial_finished':
-            exact(event, {'reason', 'samples', 'cleanup_passed', 'state'}, {'error', 'cleanup_error'})
+            exact(event, {'reason', 'samples', 'cleanup_passed', 'state', 'stop_requested_at_ms',
+                          'cleanup_attempts', 'cleanup_wait_ms'}, {'error', 'cleanup_error'})
             if finished is not None: invalid(event, 'Trial may finish only once')
             if type(event.get('samples')) is not int or event['samples'] != counts['native_movement_trial_sample']:
                 invalid(event, 'Finish sample count does not match the whole stream')
             if not isinstance(event.get('reason'), str) or not event['reason']: invalid(event, 'Finish reason is malformed')
             if event.get('cleanup_passed') is not True: invalid(event, 'Native cleanup did not report a complete restoration')
+            request, wait, attempts = (event.get(key) for key in ('stop_requested_at_ms', 'cleanup_wait_ms', 'cleanup_attempts'))
+            if type(attempts) is not int or not 1 <= attempts <= 0xffffffff:
+                invalid(event, 'Cleanup must report a positive bounded integer attempt count')
+            terminal_clock = (clock(request) and clock(event.get('at_ms')) and clock(wait)
+                              and request <= event['at_ms'] and event['at_ms'] - request == wait)
+            unknown_unbound_clock = started is None and request is None and wait is None
+            if not terminal_clock and not unknown_unbound_clock:
+                invalid(event, 'Cleanup request and terminal clocks must establish the exact nonnegative wait')
+            if event.get('cleanup_passed') is True and terminal_clock and wait > MAX_CLEANUP_WAIT:
+                invalid(event, 'Successful cleanup exceeds the two-second detachment deadline')
             if started:
                 metrics(event, final=True)
+                if not terminal_clock or not clock(origin) or request < origin:
+                    invalid(event, 'A bound trial requires a cleanup request clock within its original lifetime')
                 if event.get('reason') == 'time_budget':
-                    if (not owned or not 22000 <= event['elapsed_ms'] <= 23999 or last_sample is None
-                            or not clock(last_sample.get('at_ms')) or event['at_ms'] - last_sample['at_ms'] > MAX_CAPTURE_GAP):
-                        invalid(event, 'Time-budget finish must follow the full schedule with a bounded final sample gap')
+                    if (not owned or not terminal_clock or not 22000 <= request - origin <= 23999
+                            or not 22000 <= event['elapsed_ms'] <= 25999 or last_sample is None
+                            or not clock(last_sample.get('at_ms'))
+                            or not 0 <= request - last_sample['at_ms'] <= MAX_CAPTURE_GAP
+                            or event['at_ms'] - last_sample['at_ms'] > MAX_CAPTURE_GAP + MAX_CLEANUP_WAIT):
+                        invalid(event, 'Time-budget finish requires the full action schedule and separately bounded cleanup/final sample clocks')
             elif event.get('state') is not None or event.get('samples') != 0:
                 invalid(event, 'An unbound finish cannot publish native scope evidence')
             if 'error' in event or 'cleanup_error' in event:

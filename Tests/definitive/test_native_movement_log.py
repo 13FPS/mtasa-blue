@@ -44,7 +44,8 @@ def fixture(exit=True):
                           position={'x': elapsed / 1000, 'y': 0, 'z': 3}, heading=0,
                           raw_velocity={'x': code / 3, 'y': 0, 'z': 0}, state=state(index + 1)))
     rows.append(event('native_movement_trial_finished', 22000, reason='time_budget', samples=176,
-                      cleanup_passed=True, state=state(178, 0)))
+                      cleanup_passed=True, state=state(178, 0), stop_requested_at_ms=EPOCH + 22000,
+                      cleanup_attempts=1, cleanup_wait_ms=0))
     if exit:
         rows += ['[INFO] New event received: "host shut down"', '[INFO] Exit']
     return rows
@@ -124,7 +125,52 @@ class MovementLogTests(unittest.TestCase):
     def test_final_unsampled_tick_prefix_is_bounded(self):
         for elapsed, complete in ((23999, True), (24000, False)):
             rows = fixture(); rows[-3]['elapsed_ms'] = elapsed; rows[-3]['at_ms'] = EPOCH + elapsed
+            rows[-3]['stop_requested_at_ms'] = EPOCH + elapsed
             self.assertEqual(self.analyze(rows)['native_movement_trial_complete'], complete)
+
+    def test_cleanup_wait_has_separate_bounded_clock(self):
+        for request, wait, complete in ((22000, 100, True), (22000, 2000, True),
+                                        (23999, 2000, True), (22000, 2001, False), (24000, 0, False)):
+            with self.subTest(request=request, wait=wait):
+                rows = fixture(); finish = rows[-3]
+                finish.update(at_ms=EPOCH + request + wait, elapsed_ms=request + wait,
+                              stop_requested_at_ms=EPOCH + request, cleanup_wait_ms=wait,
+                              cleanup_attempts=3)
+                self.assertEqual(self.analyze(rows)['native_movement_trial_complete'], complete)
+
+    def test_cleanup_terminal_clock_and_attempts_are_strict(self):
+        for key, value in (('stop_requested_at_ms', None), ('stop_requested_at_ms', EPOCH + 22001),
+                           ('stop_requested_at_ms', EPOCH - 1), ('cleanup_wait_ms', None),
+                           ('cleanup_wait_ms', True), ('cleanup_wait_ms', -1), ('cleanup_wait_ms', 1),
+                           ('cleanup_attempts', 0), ('cleanup_attempts', True), ('cleanup_attempts', 2**32)):
+            with self.subTest(key=key, value=value):
+                rows = fixture(); rows[-3][key] = value
+                self.assertFalse(self.analyze(rows)['native_movement_trial_complete'])
+
+    def test_old_terminal_payload_cannot_prove_new_cleanup_contract(self):
+        rows = fixture()
+        for key in ('stop_requested_at_ms', 'cleanup_wait_ms', 'cleanup_attempts'):
+            del rows[-3][key]
+        self.assertFalse(self.analyze(rows)['native_movement_trial_complete'])
+
+    def test_invalid_start_identity_does_not_crash_cleanup_clock_validation(self):
+        rows = fixture(); rows[2]['ped'] = None
+        self.assertFalse(self.analyze(rows)['native_movement_trial_complete'])
+
+    def test_cleanup_cannot_hide_a_stale_last_sample(self):
+        rows = fixture(); finish = rows[-3]
+        finish.update(at_ms=EPOCH + 25000, elapsed_ms=25000,
+                      stop_requested_at_ms=EPOCH + 24000, cleanup_wait_ms=1000, cleanup_attempts=2)
+        self.assertFalse(self.analyze(rows)['native_movement_trial_complete'])
+
+    def test_cleanup_failure_after_two_second_deadline_remains_failure(self):
+        rows = fixture(); finish = rows[-3]
+        finish.update(at_ms=EPOCH + 24001, elapsed_ms=24001,
+                      stop_requested_at_ms=EPOCH + 22000, cleanup_wait_ms=2001, cleanup_attempts=3,
+                      cleanup_passed=False, cleanup_error='MTA movement cleanup deadline exceeded')
+        result = self.analyze(rows)
+        self.assertFalse(result['native_movement_trial_complete'])
+        self.assertTrue(result['failures'])
 
     def test_missing_phase(self):
         rows = fixture(); rows = [row for row in rows if not (isinstance(row, dict) and row['event'] == 'native_movement_trial_phase' and row['phase'] == 'mta_walk')]
@@ -261,7 +307,8 @@ class MovementLogTests(unittest.TestCase):
     def test_unbound_cancel_is_incomplete(self):
         rows = fixture(False)[:2]
         rows.append(event('native_movement_trial_finished', reference_id=None, ped=None, elapsed_ms=None,
-                          reason='Ctrl+Shift+End', samples=0, cleanup_passed=True, state=None))
+                          reason='Ctrl+Shift+End', samples=0, cleanup_passed=True, state=None,
+                          stop_requested_at_ms=EPOCH, cleanup_attempts=1, cleanup_wait_ms=0))
         result = self.analyze(rows)
         self.assertEqual(result['status'], 'incomplete')
         self.assertEqual(result['accepted_sample_count'], 0)

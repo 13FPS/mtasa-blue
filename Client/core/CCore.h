@@ -179,6 +179,7 @@ public:
     bool        CheckDiskSpace(uint uiResourcesPathMinMB = 10, uint uiDataPathMinMB = 10);
 
     // Subsystems
+    void CreateStartupModules();
     void CreateGame();
     void CreateMultiplayer();
     void CreateNetwork();

@@ -17,8 +17,8 @@ remain unknown or excluded; this is not a general gameplay-context API.
 
 Every prewrite native callback uses the complete live guard. During an active
 trial, Core consumes eligibility published by that callback, tied to its
-generation and local identity, and no more than 250 ms old. The pre-install guard seeds the publication;
-callback observations refresh it. This avoids treating engine globals borrowed
+generation and local identity, and no more than 250 ms old. The pre-install guard
+seeds the publication; callback observations refresh it. This avoids treating engine globals borrowed
 for other characters as the active local callback's context. Stale, inactive or
 other-generation publications cannot authorize a new Core frame. Before Begin,
 Core may wait within its existing readiness budget without applying input.
@@ -34,7 +34,7 @@ Its separate `NativeMovementWriteCandidate` capability does not enable the
 full `EngineInputWrite`, remote-player or `CGame` gameplay requirements.
 
 `package.ps1 -Mode Smoke -MtaCoreMovementReference` stages the separate
-23-file configured-write candidate. **It is not live-verified yet.** Actual
+23-file configured-write trial. **Bounded local forward movement is now live-verified.** Actual
 Core owns the XML module, saved MTA bindings, `CKeyBinds`, pulse and synthesis;
 the bridge only schedules its worker and copies value-only snapshots for logs.
 After manual F9 activation/release and a focused neutral key baseline, Core
@@ -56,8 +56,24 @@ Coverage requires forward, isolated forward walk, isolated forward sprint and
 neutral, together with scoped-application/restoration and cleanup proof.
 Focused offline checks pass 1,259 production callback checks and 1,520 module
 checks. Normal Core/Game DE builds and 114 real Core entry checks in each
-classic/DE layout pass. Live validation remains pending; full MTA startup,
-CGame, rendering, resources and networking remain gated.
+classic/DE layout pass. Full MTA startup, CGame, rendering, resources and
+networking remain gated.
+
+The corrected actual Core session completed in **30,009 ms**: **595 native
+samples and 259 script snapshots** captured forward input, isolated forward
+walk, isolated forward sprint and neutral. Its **1,801 scoped applications all
+restored**, with **61,299 routed queries** and zero native failures. The human
+reported normal walking and actual sprinting. Canonical current/previous ended
+neutral; Core/XML unloaded; Game DE remained pinned as expected; all 23 hashes
+matched. Normal GTA exit passed with the complete 99,637-byte shutdown log.
+This proof covers the bounded local forward movement path through
+actual MTA configuration, rather than all controller actions or full gameplay.
+
+Core now owns the existing five-module loading sequence in
+`CreateStartupModules`; both classic render startup paths delegate to it with
+the same order and flag-before-creation behavior. This shared policy does not
+provide DE module factories, a CGame facade or a DE renderer; the gameplay gate
+remains intact.
 
 The first live configured-write attempt stopped after **1,049 ms** on an
 unavailable producer eligibility observation. Its 20 native samples and 10
@@ -65,7 +81,7 @@ script snapshots show 63 applied/restored scopes with zero native failures.
 Right Shift reached MTA's walk action, but forward walk/sprint were not captured.
 Normal exit, Core/XML cleanup, expected backend PIN and all 23 hashes passed.
 The human reported normal movement after a trial too short to establish the
-combined path; the callback-publication correction still needs a live retest.
+combined path. The successful callback-publication retest is qualified above.
 
 The preceding **read-only actual Core** session completed in **60,003 ms**:
 **1,188 native samples and 515 script snapshots** show four directions, sprint

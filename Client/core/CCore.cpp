@@ -1375,15 +1375,7 @@ void CCore::ApplyHooks2()
     {
         // Done a little later to get past the loading time required to decrypt the gta
         // executable into memory...
-        if (!CCore::GetSingleton().AreModulesLoaded())
-        {
-            CCore::GetSingleton().SetModulesLoaded(true);
-            CCore::GetSingleton().CreateNetwork();
-            CCore::GetSingleton().CreateGame();
-            CCore::GetSingleton().CreateMultiplayer();
-            CCore::GetSingleton().CreateXML();
-            CCore::GetSingleton().CreateGUI();
-        }
+        CCore::GetSingleton().CreateStartupModules();
     }
 }
 
@@ -1503,6 +1495,21 @@ T* CreateModule(CModuleLoader& m_Loader, const SString& strName, const SString& 
 {
     LoadModule(m_Loader, strName, strModuleName);
     return InitModule<T>(m_Loader, strName, strInitializer, pObj);
+}
+
+void CCore::CreateStartupModules()
+{
+    // Core owns module startup policy independently of the renderer callback,
+    // so a DE renderer can eventually use the same boundary. Mark entry before
+    // creation to preserve the existing reentrancy and failure behavior.
+    if (AreModulesLoaded())
+        return;
+    SetModulesLoaded(true);
+    CreateNetwork();
+    CreateGame();
+    CreateMultiplayer();
+    CreateXML();
+    CreateGUI();
 }
 
 void CCore::CreateGame()

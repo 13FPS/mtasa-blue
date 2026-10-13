@@ -77,15 +77,7 @@ IDirect3D9* CDirect3DHook9::API_Direct3DCreate9(UINT SDKVersion)
 
     // A little hack to get past the loading time required to decrypt the gta
     // executable into memory...
-    if (!CCore::GetSingleton().AreModulesLoaded())
-    {
-        CCore::GetSingleton().SetModulesLoaded(true);
-        CCore::GetSingleton().CreateNetwork();
-        CCore::GetSingleton().CreateGame();
-        CCore::GetSingleton().CreateMultiplayer();
-        CCore::GetSingleton().CreateXML();
-        CCore::GetSingleton().CreateGUI();
-    }
+    CCore::GetSingleton().CreateStartupModules();
 
 // D3DX_SDK_VERSION checks
 // SDK required for shaders to work properly

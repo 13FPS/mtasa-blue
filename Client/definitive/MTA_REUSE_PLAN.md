@@ -5,9 +5,25 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
-Current checkpoint: actual MTA Core now owns saved XML configuration, its
-existing `CKeyBinds` manager, adapter pulse and digital action synthesis on the
-startup worker. The completed read-only live session ran for **60,003 ms**,
+Current checkpoint: actual MTA Core owns saved XML configuration, its existing
+`CKeyBinds`, adapter pulse and digital synthesis on the startup worker. Its
+corrected scoped-write session passed **30,009 ms**, **595 native samples and
+259 script snapshots** with forward, isolated forward walk, isolated forward
+sprint and neutral coverage. All **1,801 applications restored**, with
+**61,299 routed queries** and zero native failures; the human reported normal
+walking and actual sprinting. Both canonical frames ended neutral, Core/XML
+unloaded, the backend PIN matched and all 23 hashes passed. Normal exit passed
+with the complete 99,637-byte shutdown log. This establishes
+bounded local forward input through MTA, while full gameplay/render/network
+capabilities stay gated and the port stays EXPERIMENTAL.
+
+The next startup foundation reuses Core's existing module-loading sequence in
+one `CreateStartupModules` method. Both classic renderer paths delegate to it,
+preserving Network/Game/Multiplayer/XML/GUI order, the early reentrancy flag and
+existing failure handling. This removes duplicated startup policy from the
+D3D9 callback; it does not implement DE factories or rendering.
+
+The preceding read-only live session ran for **60,003 ms**,
 with **1,188 native samples and 515 script snapshots**. Four directions, sprint
 and neutral were observed. Walk remains untested because the human was unsure
 which Shift key was used; the strict reader reports `movement_coverage_missing`
@@ -16,7 +32,7 @@ bind/XML/adapter owners were released, Core and Game DE unloaded, normal GTA
 exit passed and all 23 installed hashes matched. That run explicitly assumed
 on-foot context and performed no engine writes.
 
-The next candidate connects this actual Core producer to the existing scoped
+The configured-write trial connects this actual Core producer to the existing scoped
 native writer. Select `package.ps1 -Mode Smoke -MtaCoreMovementReference`;
 source defaults and ordinary mode changes disable it. The 23-file package uses
 the real Core, Game DE and XML modules plus saved MTA binding records. The
@@ -25,8 +41,8 @@ contains no replacement bind manager, physical-key map or fixed action sweep.
 The first live combined trial stopped after 1,049 ms because a producer
 eligibility observation became unavailable. Its 20 native samples and 10
 script snapshots record 63 applied/restored scopes without native failures.
-Right Shift reached the walk action without forward input; combined forward
-walking and sprint remain unverified. Cleanup, normal exit and all 23 hashes
+Right Shift reached the walk action without forward input; that first trial did
+not validate combined forward walking or sprint. Cleanup, normal exit and all 23 hashes
 passed. The human's normal movement report does not extend this short capture.
 
 ABI6 provides build-pinned local movement eligibility. Admission requires the

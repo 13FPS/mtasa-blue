@@ -6,9 +6,10 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
-**Current candidate: actual Core configured bindings drive the existing native writer.**
+**Completed live check: actual Core configured bindings drive scoped native movement.**
 `package.ps1 -Mode Smoke -MtaCoreMovementReference` selects this separate,
-explicitly enabled 23-file candidate. It has not been validated in the game.
+explicitly enabled 23-file experimental trial. The corrected trial passed the
+configured local movement check described below.
 The real Core owns the XML module, saved bind configuration, `CKeyBinds`,
 adapter pulse and action synthesis. The bridge schedules the worker and copies
 value-only log snapshots; JavaScript supplies no replacement key map or fixed
@@ -31,6 +32,17 @@ local identity and a 250 ms freshness deadline. This avoids reading engine globa
 while they are temporarily borrowed for another character. Before Begin,
 unavailable observations wait within the existing readiness budget with no
 writes. Every native write still requires the complete live eligibility guard.
+
+The corrected Core-owned session completed in **30,009 ms**, with **595 native
+samples and 259 script snapshots**. Forward input, isolated forward walk,
+isolated forward sprint and neutral were captured. All **1,801 applied scopes
+were restored**, with **61,299 routed queries** and no native failures. The
+human reported normal walking and actual sprinting. Both canonical frames ended
+neutral, Core/XML unloaded, the backend remained pinned as expected, and all
+23 installed hashes matched. Normal GTA exit passed with the complete
+99,637-byte shutdown log. This validates the bounded local forward movement
+path through actual MTA bindings; vehicles, weapons, remote input and full MTA
+startup/rendering remain unfinished.
 
 ABI6 admission requires the exact local player/provider binding, native
 InVehicle flag clear, `PED_IDLE` and the native controls-disable word zero.
@@ -58,6 +70,11 @@ the human report. Focused offline suites pass 1,259 native callback checks and
 entry checks in each classic/DE layout pass. Package and live results remain
 separate evidence. Full MTA startup, CGame, DE rendering, resources and networking
 remain gated.
+
+Core's existing module-loading order now lives in `CreateStartupModules`, used
+by both classic renderer startup paths. It preserves the early reentrancy flag
+and Network/Game/Multiplayer/XML/GUI order. This places startup policy in Core;
+DE module providers and renderer integration remain required.
 
 **Completed live check: actual MTA Core startup.**
 The validated `-MtaCoreStartupReference` package contained 21 owned files,
@@ -145,8 +162,9 @@ cleanup, Core/backend unloading, normal GTA exit and all 23 installed hashes
 passed. This read-only run retained its explicitly assumed on-foot context.
 Its final 150,553-byte log is preserved under
 `Build/definitive-manual-test/20261013-203218-mta-core-input-ready-7054a113/actual-20261013-210222-999b0c6d/post-exit-20261013-211208-4050840d/`.
-It establishes configured-input reuse through actual Core; the new ABI6 write
-candidate and full game context, gameplay and rendering remain unverified live.
+It establishes the earlier configured-input boundary through actual Core. The
+corrected ABI6 forward movement result is qualified above; full game context,
+gameplay and rendering remain unverified live.
 
 The extended actual XML/bind-manager/adapter fixture passes 318 checks plus
 34 host checks with unchanged saved configuration. Normal Core builds and both

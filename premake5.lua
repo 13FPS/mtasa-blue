@@ -28,6 +28,11 @@ newoption {
 	description = "Prefix to be prepended to commands used by the GCC toolchain (for cross-building)",
 }
 
+newoption {
+	trigger     = "with-definitive-adapter",
+	description = "Enable the MTA-owned DE adapter startup gate (DE gameplay remains unavailable)",
+}
+
 workspace "MTASA"
 	configurations {"Debug", "Release", "Nightly"}
 
@@ -165,6 +170,7 @@ workspace "MTASA"
 		include "Client/cefweb"
 		include "Client/core"
 		include "Client/game_sa"
+		include "Client/game_de"
 		include "Client/sdk"
 		include "Client/gui"
 		include "Client/launch"
@@ -199,6 +205,7 @@ workspace "MTASA"
 
 		group "Tests"
 		include "Tests/client"
+		include "Tests/game_de"
 	end
 
 	filter {}

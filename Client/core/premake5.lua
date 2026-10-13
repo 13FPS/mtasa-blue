@@ -32,6 +32,17 @@ project "Client Core"
 	pchheader "StdInc.h"
 	pchsource "StdInc.cpp"
 
+	-- Keep the adapter consumer independent of classic game/PCH dependencies so
+	-- the same MTA-owned lifecycle can be checked by the x64 integration host.
+	filter { "files:CGameAdapterModule.cpp" }
+		flags { "NoPCH" }
+	filter {}
+
+	if _OPTIONS["with-definitive-adapter"] then
+		defines { "MTA_WITH_DEFINITIVE_ADAPTER" }
+		dependson { "Game DE" }
+	end
+
 	filter { "files:FastFailCrashHandler/WerCrashHandler.cpp" }
 		flags { "NoPCH" }
 

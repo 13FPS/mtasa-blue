@@ -18,6 +18,7 @@
 #include <fstream>
 #include <array>
 #include <algorithm>
+#include <stdexcept>
 #include "Userenv.h"  // This will enable SharedUtil::ExpandEnvString
 #define ALLOC_STATS_MODULE_NAME "core"
 #include "SharedUtil.hpp"
@@ -89,6 +90,22 @@ CCore::CCore()
 {
     // Initialize the global pointer
     g_pCore = this;
+
+#ifdef MTA_WITH_DEFINITIVE_ADAPTER
+    // MTA owns the DE module before any classic configuration, hooks or game
+    // factories run. Observations alone cannot satisfy CGame; reject incomplete
+    // backends here rather than applying San Andreas addresses to a DE process.
+    if (!m_DefinitiveAdapter.StartAdjacent(this))
+        throw std::runtime_error("DE adapter startup: " + m_DefinitiveAdapter.GetError());
+    if (!m_DefinitiveAdapter.Pulse())
+        throw std::runtime_error("DE adapter pulse: " + m_DefinitiveAdapter.GetError());
+    if (!m_DefinitiveAdapter.IsGameplayReady())
+        throw std::runtime_error("DE adapter gameplay unavailable: " + m_DefinitiveAdapter.GameplayUnavailableReason());
+
+    // A complete game facade will still require a ported core, multiplayer and
+    // renderer. Keep this gate until those startup paths cease using x86/D3D9.
+    throw std::runtime_error("DE core, multiplayer and rendering startup are not implemented");
+#endif
 
     m_pConfigFile = NULL;
 

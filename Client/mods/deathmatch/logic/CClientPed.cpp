@@ -9,6 +9,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <CPedPositionInterpolation.h>
 #include <game/CAEVehicleAudioEntity.h>
 #include <game/CAnimBlendAssocGroup.h>
 #include <game/CAnimManager.h>
@@ -5581,44 +5582,29 @@ void CClientPed::UpdateTargetPosition()
         GetPosition(vecCurrentPosition);
         vecCurrentPosition -= vecOrigin;
 
-        // Get the factor of time spent from the interpolation start
-        // to the current time.
-        float fAlpha = SharedUtil::Unlerp(m_interp.pos.ulStartTime, ulCurrentTime, m_interp.pos.ulFinishTime);
+        // Share the existing incremental correction with DE without replacing
+        // engine movement or moving jacking/contact-origin policy into math.
+        const MtaPedInterpolation::State state{m_interp.pos.vecError, m_interp.pos.vecTarget, m_interp.pos.ulStartTime, m_interp.pos.ulFinishTime,
+                                               m_interp.pos.fLastAlpha};
+        auto                             correction = MtaPedInterpolation::Advance(vecCurrentPosition, state, ulCurrentTime);
+        m_interp.pos.fLastAlpha = correction.state.lastAlpha;
+        m_interp.pos.ulFinishTime = correction.state.finishTime;
 
-        // Don't let it overcompensate the error
-        fAlpha = SharedUtil::Clamp(0.0f, fAlpha, 1.0f);
-
-        // Get the current error portion to compensate
-        float fCurrentAlpha = fAlpha - m_interp.pos.fLastAlpha;
-        m_interp.pos.fLastAlpha = fAlpha;
-
-        // Apply the error compensation
-        CVector vecCompensation = SharedUtil::Lerp(CVector(), fCurrentAlpha, m_interp.pos.vecError);
-
-        // If we finished compensating the error, finish it for the next pulse
-        if (fAlpha == 1.0f)
-        {
-            m_interp.pos.ulFinishTime = 0;
-        }
-
-        CVector vecNewPosition = vecCurrentPosition + vecCompensation;
-
-        // Check if the distance to interpolate is too far.
+        // Preserve completion before the native velocity read, which can repair
+        // invalid physics. The warp policy still uses native velocity/game speed.
         CVector vecVelocity;
         GetMoveSpeed(vecVelocity);
         float fThreshold =
             (PED_INTERPOLATION_WARP_THRESHOLD + PED_INTERPOLATION_WARP_THRESHOLD_FOR_SPEED * vecVelocity.Length()) * g_pGame->GetGameSpeed() * TICK_RATE / 100;
 
-        // There is a reason to have this condition this way: To prevent NaNs generating new NaNs after interpolating (Comparing with NaNs always results to
-        // false).
-        if (!((vecCurrentPosition - m_interp.pos.vecTarget).Length() <= fThreshold))
-        {
-            // Abort all interpolation
+        // Keep the original live-target comparison after native reads and avoid
+        // overwriting their state changes when the distance does not require warp.
+        correction.state.target = m_interp.pos.vecTarget;
+        MtaPedInterpolation::ApplyWarpThreshold(correction, vecCurrentPosition, fThreshold);
+        if (correction.warped)
             m_interp.pos.ulFinishTime = 0;
-            vecNewPosition = m_interp.pos.vecTarget;
-        }
 
-        SetPosition(vecNewPosition + vecOrigin, false);
+        SetPosition(correction.position + vecOrigin, false);
     }
 }
 

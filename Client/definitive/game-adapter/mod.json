@@ -1,0 +1,7 @@
+{
+  "name": "DE Online local experiment",
+  "version": "0.1.0",
+  "description": "Read-only player smoke test by default; optional local remote-ped experiment",
+  "permissions": ["mem", "dll"],
+  "entries": ["index.js"]
+}

@@ -11,6 +11,7 @@
 
 #include "StdInc.h"
 #include <filesystem>
+#include <stdexcept>
 #define DECLARE_PROFILER_SECTION_Core
 #include "profiler/SharedUtil.Profiler.h"
 #define UTF8_FILE_HOOKS_PERSONALITY_Core
@@ -97,6 +98,22 @@ CORE_API int InitializeCore()
 
     SetMemoryAllocationFailureHandler();
 
+#ifdef MTA_WITH_DEFINITIVE_ADAPTER
+    // Adapter prerequisites are reported through MTA's initialization result;
+    // no C++ exception may escape the exported loader entry point. The partial
+    // constructor's module member releases the backend before this returns.
+    try
+    {
+        g_pCore = new CCore();
+    }
+    catch (const std::exception& error)
+    {
+        g_pCore = nullptr;
+        WriteDebugEvent(SString("DE adapter initialization rejected: %s", error.what()));
+        return 5;
+    }
+#else
     g_pCore = new CCore();
+#endif
     return 0;
 }

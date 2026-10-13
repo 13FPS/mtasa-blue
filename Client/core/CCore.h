@@ -20,6 +20,9 @@ class CDiscordInterface;
 #include "CClientVariables.h"
 #include "CCommands.h"
 #include "CModuleLoader.h"
+#ifdef MTA_WITH_DEFINITIVE_ADAPTER
+    #include "CGameAdapterModule.h"
+#endif
 #include "CSingleton.h"
 #include "CGUI.h"
 #include "CConnectManager.h"
@@ -334,6 +337,9 @@ private:
     uint m_uiNextRenderTargetRetryTime;
 
     // Module loader objects.
+#ifdef MTA_WITH_DEFINITIVE_ADAPTER
+    CGameAdapterModule m_DefinitiveAdapter;
+#endif
     CModuleLoader m_GameModule;
     CModuleLoader m_MultiplayerModule;
     CModuleLoader m_NetModule;

@@ -5,6 +5,40 @@ MTA Core owns its loading, initialization, pulse, reset, shutdown and release
 through `CGameAdapterModule` and the versioned SDK `game/CGameAdapter.h`.
 The module provides no separate transport or script-host lifecycle.
 
+The current factory contract is **ABI5**. An explicit local on-foot movement
+trial now sends MTA's shared synthesized current/previous controller state
+through the verified DE player-control callback. Real repository Detours scopes
+the pad replacement and action-provider membership, availability and value
+queries to that callback. All other callers retain the original engine path.
+The saved 96 pad bytes are restored before returning or propagating an original
+exception. Physical input-source tables and their event queues are never written.
+The trial is limited to 35 seconds with a two-second input freshness limit;
+it disarms on changed identity/context and retains its module if cleanup fails.
+Its separate `NativeMovementWriteCandidate` capability does not enable the
+full `EngineInputWrite`, remote-player or `CGame` gameplay requirements.
+
+`package.ps1 -Mode Smoke -MtaNativeMovementTrial` stages the real normal-build
+`game_de.dll` beside the diagnostic bridge. The bridge uses Core's actual
+`CGameAdapterModule` consumer; JavaScript schedules logical MTA actions and
+observes position/velocity. It does not force positions or animations. Arming
+waits indefinitely for Ctrl+Shift+F9, then waits for all three keys to release.
+The 22-second sequence is neutral, walk, pause, forwards, pause, sprint, neutral.
+Ctrl+Shift+End cancels. The human evaluates actual movement in the game; the log
+checks callback/query activity and restoration independently of visual quality.
+Ordinary packaging and mode switches leave this write experiment disabled.
+
+The current offline checks pass 146 production callback cases, 7,413 routing
+cases per architecture, 1,512 module cases and 76 x64 Core-consumer cases.
+Normal Release/x64 Core/Game DE builds, the real Core entry fixture (26 checks)
+and classic Win32 compiles with the option enabled/disabled pass. The package
+passes 135 ownership/mode checks. Script and saved-log tests include logs emitted
+by the actual controller simulation; these are explicitly not live movement
+evidence. Assess the human trial with
+`utils/definitive_edition/native_movement_log.py --log <saved-log> --output <assessment>`;
+add `--require-exit` after normal game shutdown. The current installed trial
+and preserved prior log are linked from
+`Build/definitive-manual-test/current-native-movement-test.json`.
+
 The module supports **observation ingestion**: it validates and stores
 caller-provided position, raw velocity and explicitly covered controller state.
 The controller snapshot implementation lives here; the earlier probe includes it
@@ -21,11 +55,11 @@ Reset and shutdown clear both frames and the opposing-direction history.
 
 This is logical MTA input, separate from native controller observations and
 their coverage mask. It does not poll hardcoded keys, infer sprint from velocity,
-apply joystick overrides, or write an engine pad. Core retains key bindings,
+apply joystick overrides, or itself write an engine pad. Core retains key bindings,
 context-transition callbacks, focus/cursor policy and joystick merging. The
 action interface was introduced in ABI2. Native binding/read methods arrived in
-ABI3. The factory ABI is now **4** for raw device-source readback; ABI1 through
-ABI3 are rejected before returning an incompatible
+ABI3, raw device-source readback in ABI4, and the bounded write trial in ABI5.
+ABI1 through ABI4 are rejected before returning an incompatible
 vtable. The historical probe's bridge
 ABI is independent.
 
@@ -197,6 +231,13 @@ Windows SDK rather than requiring optional MFC headers, and libpng outputs
 are separated by architecture/configuration for this opt-in build.
 Certificate:
 `Build/mta-x64-core-diagnostic/20261013-151313-6a609396/normal-build/normal-build-certificate.json`.
+
+When building individual `.vcxproj` files, build `Build/Game DE.vcxproj` in
+Release/x64 **before** Core so Core's post-build staging copies the current
+adapter ABI. The normal solution carries this build-order dependency; invoking
+Core's project alone does not build solution-only dependencies. Verify that
+`Bin/mta/game_de.dll` and `Bin/mta/x64/game_de.dll` have the same hash before
+testing the staged bundle.
 
 `Tests/definitive/test_mta_core_entry.ps1` loads those actual DLLs in a separate
 non-game fixture named `SanAndreas.exe`. It passes 26 checks: directory checks

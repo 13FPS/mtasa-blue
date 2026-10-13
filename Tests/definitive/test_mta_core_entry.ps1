@@ -20,7 +20,10 @@ New-Item -ItemType Directory -Path (Join-Path $outputRoot 'mta/logs') | Out-Null
 $sourceNames=@('Tests/definitive/MtaCoreEntryTests.cpp','Tests/definitive/test_mta_core_entry.ps1',
     'Client/core/Core.cpp','Client/core/CCore.cpp','Client/core/CCore.h','Client/core/CGameAdapterModule.cpp',
     'Client/core/CGameAdapterModule.h','Client/core/DefinitiveProcess.h','Client/game_de/GameAdapter.cpp',
-    'Client/game_de/NativePadReader.cpp','Client/game_de/NativePadReader.h','Client/sdk/game/CGameAdapter.h')
+    'Client/game_de/NativePadReader.cpp','Client/game_de/NativePadReader.h','Client/sdk/game/CGameAdapter.h',
+    'Client/game_de/NativeMovementInput.cpp','Client/game_de/NativeMovementInput.h','Client/game_de/NativeInputRouting.h',
+    'Client/game_de/premake5.lua','vendor/detours/premake5.lua','vendor/detours/4.0.1/src/detours.h',
+    'Shared/sdk/CControllerState.h','Shared/sdk/CControllerActions.h','Shared/sdk/CControlStateSynthesis.h')
 $sourceHashes=[ordered]@{}
 foreach ($name in $sourceNames) { $sourceHashes[$name]=(Get-FileHash -LiteralPath (Join-Path $taskRoot $name) -Algorithm SHA256).Hash.ToLowerInvariant() }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'MtaCoreEntryTests.cpp') -Destination (Join-Path $outputRoot 'MtaCoreEntryTests.cpp.snapshot')

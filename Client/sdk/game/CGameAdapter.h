@@ -17,9 +17,9 @@ class CGame;
 
 namespace mta::game_de
 {
-    // ABI4 adds raw native device-source readback. Earlier consumers
+    // ABI5 adds the explicit, bounded local movement trial. Earlier consumers
     // must not receive this changed vtable even though their methods remain.
-    inline constexpr std::uint32_t AdapterAbiVersion = 4;
+    inline constexpr std::uint32_t AdapterAbiVersion = 5;
     inline constexpr std::uint32_t AdapterControllerMask = 0xfffffu;
 
     enum class AdapterCapability : std::uint64_t
@@ -31,7 +31,8 @@ namespace mta::game_de
         RemotePlayerContext = 16,
         MtaInputSynthesis = 32,
         NativePadCandidateRead = 64,
-        NativeDeviceStateCandidateRead = 128
+        NativeDeviceStateCandidateRead = 128,
+        NativeMovementWriteCandidate = 256
     };
 
     // The first live trial contradicted the SDK controller layout: movement
@@ -108,6 +109,48 @@ namespace mta::game_de
         std::array<std::int32_t, NativeDeviceStateCount> sources{};
     };
 
+    // Trial failures are diagnostic outcomes. None does not establish complete
+    // engine input or remote-player support, which retain separate capabilities.
+    enum class NativeMovementTrialFailure : std::uint32_t
+    {
+        None = 0,
+        InvalidState = 1,
+        WrongThread = 2,
+        UnsupportedBuild = 3,
+        BindingChanged = 4,
+        NestedCallback = 5,
+        Vehicle = 6,
+        Expired = 7,
+        StaleInput = 8,
+        ReadFailure = 9,
+        WriteFailure = 10,
+        RestoreFailure = 11,
+        HookInstall = 12,
+        HookRemove = 13,
+        ContextChanged = 14,
+        ScopeActive = 15,
+        OwnerConflict = 16,
+        OriginalException = 17
+    };
+
+    struct NativeMovementTrialState
+    {
+        bool          bound = false;
+        bool          active = false;
+        std::uint64_t callbackCount = 0;
+        std::uint64_t scopedSteps = 0;
+        std::uint64_t routedQueries = 0;
+        std::uint64_t neutralQueries = 0;
+        std::uint64_t restoredSteps = 0;
+        std::uint64_t restoreFailures = 0;
+        std::uint64_t foreignThreadCallbacks = 0;
+        std::uint64_t nestedCallbacks = 0;
+        std::uint32_t failureReason = 0;
+        // This is the observed native field after an original control callback;
+        // it remains a raw value rather than a validated locomotion mapping.
+        std::uint32_t lastMoveState = 0;
+    };
+
     class IGameAdapter
     {
     public:
@@ -128,6 +171,9 @@ namespace mta::game_de
         virtual Status        BindNativeInput() noexcept = 0;
         virtual Status        ReadNativeControllerState(std::uint32_t padIndex, NativeControllerState& state) noexcept = 0;
         virtual Status        ReadNativeDeviceState(NativeDeviceState& state) noexcept = 0;
+        virtual Status        BeginNativeMovementTrial() noexcept = 0;
+        virtual Status        GetNativeMovementTrialState(NativeMovementTrialState& state) noexcept = 0;
+        virtual Status        EndNativeMovementTrial() noexcept = 0;
 
     protected:
         // Release keeps allocation/deallocation in the factory's module. The

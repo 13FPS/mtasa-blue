@@ -6,6 +6,23 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
+**ABI5 adds an explicit MTA-owned engine movement trial.** Build the normal
+Game DE Release/x64 module and this bridge, then package with
+`package.ps1 -Mode Smoke -MtaNativeMovementTrial`. The 19-file package includes
+the real `game_de.dll`, loaded through Core's actual module consumer only after
+activation. Intact 16/17-file installs can be upgraded; occupied new paths
+reject the update before any writes. An ordinary mode switch clears the trial.
+The source configuration defaults to disabled.
+
+Launch the game through Steam on a clear flat street, hold Ctrl+Shift+F9 for
+three seconds, then release all keys and leave the controls alone for 22 seconds.
+The local player receives MTA walk, forwards and sprint inputs separated by
+neutral pauses. Ctrl+Shift+End cancels. Arming has no timeout before F9.
+JavaScript supplies logical actions and observations; the normal MTA backend
+owns native callback routing, scoped pad writes and restoration. This trial
+does not create an NPC or network session. Logs establish callback/query and
+cleanup evidence; the human checks how movement looks.
+
 **Current development integrates the adapter into MTA.** The normal build now
 includes `Client/game_de` and a Core-owned module consumer. MTA controls module
 lifecycle through a versioned SDK interface; controller storage moved into that
@@ -15,12 +32,13 @@ The module supports caller observations and now reuses Core's existing digital
 action synthesis through ABI2. Logical walk/sprint state stays separate from
 native observations. ABI3 also provides an explicit build-pinned native pad
 reader in `game_de`; the first live trial rejected the proposed controller layout.
-ABI4 now adds raw provider-source readback through the same Core-owned interface.
-Both reads expose only diagnostic candidate data. Engine input
-writes and remote player context are unavailable. Classic Core
+ABI4 added raw provider-source readback through the same Core-owned interface.
+Both reads expose only diagnostic candidate data. ABI5's scoped local write
+candidate leaves full engine input and remote player capabilities unavailable. Classic Core
 calls the same helper while retaining its bind callbacks and joystick/native
-write policy. x64 Core, full game/multiplayer and rendering services remain
-required. Current build and regression results are recorded in the
+write policy. Real opt-in Release/x64 Core now builds and links; full
+game/multiplayer, launcher and rendering services remain required.
+Current build and regression results are recorded in the
 [module documentation](../game_de/README.md) and [integration plan](MTA_REUSE_PLAN.md).
 
 **Completed live test of MTA's native reader.**

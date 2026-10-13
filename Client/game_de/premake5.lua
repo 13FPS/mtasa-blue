@@ -7,15 +7,25 @@ project "Game DE"
 	warnings "Extra"
 	flags { "FatalWarnings" }
 	defines { "MTA_GAME_DE_EXPORTS" }
-	links { "bcrypt" }
+	links { "bcrypt", "detours" }
 
 	-- This is an MTA backend module. It has no standalone transport, CLEO
 	-- lifecycle, classic engine addresses or dependency on game_sa's hooks.
-	includedirs { "../../Shared/sdk", "../sdk" }
+	includedirs { "../../Shared/sdk", "../sdk", "../../vendor/detours/4.0.1/src" }
 	files { "premake5.lua", "**.h", "**.cpp" }
 
 	filter "architecture:not x86_64"
 		flags { "ExcludeFromBuild" }
+	-- The native movement candidate shares Core's explicit Release/x64
+	-- experiment and its Detours dependency, rather than enabling new configs.
+	filter { "architecture:x86_64", "configurations:not Release" }
+		flags { "ExcludeFromBuild" }
+	if not _OPTIONS["with-definitive-adapter"] then
+		-- Register the backend normally, but do not add its experimental native
+		-- hook dependency to default builds that exclude x64 Detours and Core.
+		filter "architecture:x86_64"
+			flags { "ExcludeFromBuild" }
+	end
 	filter "system:not windows"
 		flags { "ExcludeFromBuild" }
 	filter {}

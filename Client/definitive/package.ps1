@@ -4,11 +4,14 @@
 [CmdletBinding()]
 param([ValidateSet('Diagnostic', 'Smoke', 'Online')][string]$Mode = 'Smoke',
     [switch]$NativeGaitReference, [switch]$MatchedGaitRate, [switch]$LockWalkRoot, [switch]$NativeInputReference,
-    [switch]$MtaNativePadReference)
+    [switch]$MtaNativePadReference, [switch]$MtaNativeMovementTrial)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if ($MtaNativePadReference -and $Mode -ne 'Smoke') { throw 'MTA native pad reference requires Smoke mode.' }
+if ($MtaNativeMovementTrial -and ($Mode -ne 'Smoke' -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot)) {
+    throw 'MTA movement writes require separate opt-in Smoke mode.'
+}
 if ($MtaNativePadReference -and ($NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot)) {
     throw 'MTA native pad reference conflicts with other input or gait trials.'
 }
@@ -73,17 +76,20 @@ function Copy-ZipEntry([string]$ArchivePath, [string]$EntryName, [string]$Destin
 }
 
 Assert-NoLinks $buildRoot
-$sourceNames = @('index.js', 'controller.mjs', 'native-pad-reference.mjs', 'config.mjs', 'mod.json')
+$sourceNames = @('index.js', 'controller.mjs', 'native-pad-reference.mjs', 'native-movement-trial.mjs', 'config.mjs', 'mod.json')
 foreach ($name in $sourceNames) {
     $source = Join-Path $PSScriptRoot "game-adapter/$name"
     Assert-NoLinks $source
     if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "Adapter source is missing: $source" }
 }
 $bridgePath = Join-Path $repositoryRoot 'Build/definitive-online/de_client_bridge.dll'
+$gameDePath = Join-Path $repositoryRoot 'Bin/mta/game_de.dll'
 Assert-NoLinks $bridgePath
+Assert-NoLinks $gameDePath
 if (-not (Test-Path -LiteralPath $bridgePath -PathType Leaf)) {
     throw 'Build the current native bridge with Client/definitive/build.ps1 before packaging.'
 }
+if (-not (Test-Path -LiteralPath $gameDePath -PathType Leaf)) { throw 'Build the normal Game DE Release/x64 module before packaging.' }
 [IO.Directory]::CreateDirectory($cacheRoot) | Out-Null
 
 # Immutable release URLs and independent hashes make a reviewed package
@@ -124,6 +130,9 @@ foreach ($name in $sourceNames) {
     [IO.File]::Copy((Join-Path $PSScriptRoot "game-adapter/$name"), (Join-Path $adapterDirectory $name), $false)
 }
 [IO.File]::Copy($bridgePath, (Join-Path $adapterDirectory 'de_client_bridge.dll'), $false)
+# The actual Core consumer loads its real backend adjacent to the bridge only
+# after explicit trial activation; ordinary modes do not initialize this module.
+[IO.File]::Copy($gameDePath, (Join-Path $adapterDirectory 'game_de.dll'), $false)
 $configPath = Join-Path $adapterDirectory 'config.mjs'
 $configText = [IO.File]::ReadAllText($configPath)
 $modeMarker = "export const MODE = 'smoke';"
@@ -155,6 +164,10 @@ if ([regex]::Matches($configText, [regex]::Escape($padMarker)).Count -ne 1) { th
 # an ordinary package must never inherit either experiment from a prior trial.
 $configText = $configText.Replace($padMarker,
     "export const MTA_NATIVE_PAD_REFERENCE = $($MtaNativePadReference.IsPresent.ToString().ToLowerInvariant());")
+$movementMarker = 'export const MTA_NATIVE_MOVEMENT_TRIAL = false;'
+if ([regex]::Matches($configText, [regex]::Escape($movementMarker)).Count -ne 1) { throw 'Expected disabled MTA native movement trial in source configuration.' }
+$configText = $configText.Replace($movementMarker,
+    "export const MTA_NATIVE_MOVEMENT_TRIAL = $($MtaNativeMovementTrial.IsPresent.ToString().ToLowerInvariant());")
 [IO.File]::WriteAllText($configPath, $configText, $utf8)
 foreach ($name in @('sa_unreal.json', 'unknown_x64.json')) {
     [IO.File]::Copy($downloads[$name], (Join-Path $configDirectory $name), $false)

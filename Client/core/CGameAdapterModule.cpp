@@ -103,7 +103,7 @@ bool CGameAdapterModule::Start(CCoreInterface* owner, const std::wstring& absolu
     if (!adapter)
     {
         FreeLibrary(module);
-        SetError("Game DE factory rejected adapter ABI4 or could not allocate an instance");
+        SetError("Game DE factory rejected adapter ABI5 or could not allocate an instance");
         return false;
     }
     const auto status = adapter->Initialize(owner);
@@ -221,6 +221,21 @@ bool CGameAdapterModule::ReadNativeDeviceState(mta::game_de::NativeDeviceState& 
     return RequireOwnerThread("ReadNativeDeviceState") && RecordStatus(m_adapter->ReadNativeDeviceState(state), "ReadNativeDeviceState");
 }
 
+bool CGameAdapterModule::BeginNativeMovementTrial()
+{
+    return RequireOwnerThread("BeginNativeMovementTrial") && RecordStatus(m_adapter->BeginNativeMovementTrial(), "BeginNativeMovementTrial");
+}
+
+bool CGameAdapterModule::GetNativeMovementTrialState(mta::game_de::NativeMovementTrialState& state)
+{
+    return RequireOwnerThread("GetNativeMovementTrialState") && RecordStatus(m_adapter->GetNativeMovementTrialState(state), "GetNativeMovementTrialState");
+}
+
+bool CGameAdapterModule::EndNativeMovementTrial()
+{
+    return RequireOwnerThread("EndNativeMovementTrial") && RecordStatus(m_adapter->EndNativeMovementTrial(), "EndNativeMovementTrial");
+}
+
 void CGameAdapterModule::Stop() noexcept
 {
     if (m_adapter && m_ownerThread != GetCurrentThreadId())
@@ -232,7 +247,13 @@ void CGameAdapterModule::Stop() noexcept
     }
     if (m_adapter)
     {
-        m_adapter->Shutdown();
+        if (m_adapter->Shutdown() != mta::game_de::Status::Ok)
+        {
+            // Native hooks can retain module code and state until a later owner
+            // retry succeeds. Releasing or unloading after failure is unsafe.
+            SetError("Game adapter Shutdown failed; adapter and module retained for cleanup retry");
+            return;
+        }
         m_adapter->Release();
         m_adapter = nullptr;
     }

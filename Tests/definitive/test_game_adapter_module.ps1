@@ -16,9 +16,14 @@ $outputRoot = Join-Path $taskRoot ('Build/mta-game-de-module/' + (Get-Date -Form
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
 $sourceNames = @('Client/sdk/game/CGameAdapter.h', 'Client/game_de/GameAdapter.cpp', 'Client/game_de/ControllerSnapshot.h',
     'Client/game_de/NativePadReader.h', 'Client/game_de/NativePadReader.cpp',
+    'Client/game_de/NativeMovementInput.h', 'Client/game_de/NativeMovementInput.cpp', 'Client/game_de/NativeInputRouting.h',
     'Client/definitive/MtaControllerSnapshot.h', 'Shared/sdk/CControllerState.h',
     'Shared/sdk/CControllerActions.h', 'Shared/sdk/CControlStateSynthesis.h',
     'Tests/definitive/GameAdapterModuleTests.cpp', 'Tests/definitive/test_game_adapter_module.ps1')
+$detoursSourceRoot = Join-Path $taskRoot 'vendor/detours/4.0.1/src'
+$sourceNames += @(Get-ChildItem -LiteralPath $detoursSourceRoot -File | ForEach-Object {
+    [IO.Path]::GetRelativePath($taskRoot, $_.FullName).Replace('\', '/')
+})
 $sourceHashes = @($sourceNames | ForEach-Object {
     $taskPath = Join-Path $taskRoot $_
     [ordered]@{ path=$_; exists=(Test-Path -LiteralPath $taskPath); sha256=$(if (Test-Path -LiteralPath $taskPath) {
@@ -37,10 +42,31 @@ $library = Join-Path $outputRoot 'game_de.lib'
 $common = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/MD','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN',
     ('/I' + (Join-Path $taskRoot 'Shared/sdk')), ('/I' + (Join-Path $taskRoot 'Client/sdk')))
 $moduleExit = $null
+$detoursDirectory = Join-Path $outputRoot 'detours'
+New-Item -ItemType Directory -Path $detoursDirectory | Out-Null
+$detoursLibrary = Join-Path $detoursDirectory 'detours.lib'
+# Compile the repository's actual vendor sources separately, so vendor warning
+# policy never weakens /W4 /WX for the adapter that owns the native lifetime.
+$detoursSources = @('creatwth.cpp', 'detours.cpp', 'image.cpp', 'modules.cpp', 'disolx86.cpp', 'disolx64.cpp', 'disasm.cpp') |
+    ForEach-Object { Join-Path $detoursSourceRoot $_ }
+$detoursArguments = @('/nologo','/c','/EHsc','/O2','/MD','/W0','/DWIN32_LEAN_AND_MEAN',
+    ('/Fo' + $detoursDirectory + [IO.Path]::DirectorySeparatorChar)) + $detoursSources
+$detoursOutput = @(& $compiler @detoursArguments 2>&1)
+$detoursCompilerExit = $LASTEXITCODE
+$detoursOutput | Set-Content -LiteralPath (Join-Path $outputRoot 'detours-compile.log') -Encoding utf8
+$detoursLibraryExit = $null
+if ($detoursCompilerExit -eq 0) {
+    $librarian = Join-Path $env:VCToolsInstallDir 'bin/Hostx64/x64/lib.exe'
+    $detoursObjects = @(Get-ChildItem -LiteralPath $detoursDirectory -Filter '*.obj' -File | ForEach-Object FullName)
+    $libraryOutput = @(& $librarian /nologo ('/OUT:' + $detoursLibrary) @detoursObjects 2>&1)
+    $detoursLibraryExit = $LASTEXITCODE
+    $libraryOutput | Set-Content -LiteralPath (Join-Path $outputRoot 'detours-library.log') -Encoding utf8
+}
 $moduleSource = Join-Path $taskRoot 'Client/game_de/GameAdapter.cpp'
-if (Test-Path -LiteralPath $moduleSource) {
+if ((Test-Path -LiteralPath $moduleSource) -and $detoursLibraryExit -eq 0) {
     $moduleArguments = $common + @('/LD','/DMTA_GAME_DE_EXPORTS', $moduleSource, (Join-Path $taskRoot 'Client/game_de/NativePadReader.cpp'),
-        ('/Fo' + $outputRoot + [IO.Path]::DirectorySeparatorChar), ('/Fe' + $module), '/link', ('/IMPLIB:' + $library), 'bcrypt.lib')
+        (Join-Path $taskRoot 'Client/game_de/NativeMovementInput.cpp'), ('/I' + $detoursSourceRoot),
+        ('/Fo' + $outputRoot + [IO.Path]::DirectorySeparatorChar), ('/Fe' + $module), '/link', ('/IMPLIB:' + $library), 'bcrypt.lib', $detoursLibrary)
     $moduleOutput = @(& $compiler @moduleArguments 2>&1)
     $moduleExit = $LASTEXITCODE
     $moduleOutput | Set-Content -LiteralPath (Join-Path $outputRoot 'module-compile.log') -Encoding utf8
@@ -73,6 +99,8 @@ foreach ($entry in $sourceHashes) {
 $record = [ordered]@{ recordedAt=[DateTimeOffset]::Now.ToString('o'); directory=$outputRoot;
     success=($moduleExit -eq 0 -and $compilerExit -eq 0 -and $testExit -eq 0 -and $null -ne $testCount -and $sourceUnchanged);
     sourceHashes=$sourceHashes; sourceUnchanged=$sourceUnchanged; architecture='x64'; moduleCompilerExit=$moduleExit;
+    detoursCompilerExit=$detoursCompilerExit; detoursLibraryExit=$detoursLibraryExit; detoursLibrary=$detoursLibrary;
+    detoursLibrarySha256=$(if (Test-Path -LiteralPath $detoursLibrary) { (Get-FileHash -LiteralPath $detoursLibrary -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null });
     compilerExit=$compilerExit; testExit=$testExit; checks=$testCount; module=$module;
     moduleSha256=$(if (Test-Path -LiteralPath $module) { (Get-FileHash -LiteralPath $module -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null });
     executable=$executable; gameLaunched=$false; installationChanged=$false; cleoLoaded=$false;

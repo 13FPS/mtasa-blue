@@ -39,7 +39,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Transport compilation failed.' }
     & $compilerPath @commonArguments (Join-Path $PSScriptRoot 'Probe.cpp') TransportClient.obj /Fede_client_probe.exe /link ws2_32.lib
     if ($LASTEXITCODE -ne 0) { throw 'Client probe compilation failed.' }
-    & $compilerPath @commonArguments /DDE_BRIDGE_EXPORTS /LD (Join-Path $PSScriptRoot 'Bridge.cpp') (Join-Path $PSScriptRoot 'BuildGuard.cpp') (Join-Path $repositoryRoot 'Client/game_de/NativePadReader.cpp') TransportClient.obj /Fede_client_bridge.dll /link ws2_32.lib bcrypt.lib
+    & $compilerPath @commonArguments ('/I' + (Join-Path $repositoryRoot 'Client/sdk')) /DDE_BRIDGE_EXPORTS /LD (Join-Path $PSScriptRoot 'Bridge.cpp') (Join-Path $PSScriptRoot 'BuildGuard.cpp') (Join-Path $repositoryRoot 'Client/game_de/NativePadReader.cpp') (Join-Path $repositoryRoot 'Client/core/CGameAdapterModule.cpp') TransportClient.obj /Fede_client_bridge.dll /link ws2_32.lib bcrypt.lib
     if ($LASTEXITCODE -ne 0) { throw 'Client bridge compilation failed.' }
     & $compilerPath @commonArguments (Join-Path $repositoryRoot 'Tests/definitive/ProtocolTests.cpp') /Fede_protocol_tests.exe
     if ($LASTEXITCODE -ne 0) { throw 'Protocol test compilation failed.' }

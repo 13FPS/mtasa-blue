@@ -1,10 +1,26 @@
 # GTA San Andreas Definitive Edition: findings and port tracker
 
-Last updated: **2026-10-13 14:56** (Europe/Luxembourg).
+Last updated: **2026-10-13 17:16** (Europe/Luxembourg).
 Experimental branch: `definitive-edition-port`.
 Source baseline: `860e41ddeb6635b5dd138fef6c8a492d2f982ce0`.
 
 ## Current result
+
+**Current implementation: scoped local engine movement writes and a real
+Release/x64 Core build.** ABI5 adds a bounded trial inside the normal Game DE
+module, called through MTA Core's existing module consumer. It reuses shared
+MTA action synthesis, writes only the current/previous pad pair during the
+verified local on-foot callback, routes its native provider queries, then
+restores the saved bytes. Exception, nested-call and failed-restoration paths
+have executable production-callback fixtures. The diagnostic script schedules
+a 22-second walk/forwards/sprint sequence and observes results without forcing
+an animation or position. Human game validation remains pending.
+
+Real Core already builds and links in opt-in Release/x64 and passes its actual
+entry fixture in a non-game host. This does not complete the DE launcher,
+rendering, full CGame backend or multiplayer. The bounded candidate capability
+keeps those gameplay requirements gated. Historical milestones below describe
+the evidence and limitations at each earlier checkpoint.
 
 **The target is MTA on Definitive Edition, reusing the existing MTA codebase.**
 The user's October 13 clarification supersedes the smaller standalone-client

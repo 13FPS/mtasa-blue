@@ -56,6 +56,7 @@ const count = (test, name) => test.calls.filter(call => call[0] === name).length
 async function main() {
     const { AdapterController, NativeGaitReferenceController, NativeInputReferenceController, nativeGaitReferenceSpeed } = await import(pathToFileURL(path.join(adapterDirectory, 'controller.mjs')).href);
     const { MtaNativePadReferenceController } = await import(pathToFileURL(path.join(adapterDirectory, 'native-pad-reference.mjs')).href);
+    const { MtaNativeMovementTrialController } = await import(pathToFileURL(path.join(adapterDirectory, 'native-movement-trial.mjs')).href);
     const test = (name, run) => { run(); ++tests; console.log('PASS ' + name); };
     test('smoke only reads local state, with bounded evidence logs', () => {
         const f = fixture(AdapterController, 'smoke');
@@ -1155,6 +1156,7 @@ async function main() {
         const toFloat = value => { view.setUint32(0, value, true); return view.getFloat32(0, true); };
         let frame = 0;
         let inputCurrent = null, inputPrevious = null, inputPending = null;
+        let movementActive = 1;
         const keyFrames = overrides.keyFrames || [[], [17, 16, 35]];
         const functions = { DE_ApiVersion: () => 2, DE_CheckGameBuild: () => 1, DE_BindRuntime: () => 1,
             DE_ConnectLocal: () => 1, DE_Pump: () => 1, DE_LocalPlayerId: () => 1, DE_SubmitTransformBits: () => 1,
@@ -1167,11 +1169,14 @@ async function main() {
             DE_ControllerCurrentMask: () => inputCurrent ? 0xfffff : 0,
             DE_ControllerPreviousMask: () => inputPrevious ? 0xfffff : 0,
             DE_NativePadBind: () => 1, DE_NativePadCapture: () => 1, DE_NativePadRead: () => 0, DE_NativeDeviceRead: () => 0, DE_NativePadReset: () => {},
+            DE_MtaMovementBegin: () => 1, DE_MtaMovementSubmit: () => 1, DE_MtaMovementCapture: () => 1,
+            DE_MtaMovementRead: index => [movementActive, movementActive, 1, 1, 1, 0, 1, 0, 0, 0, 0, 0][index],
+            DE_MtaMovementEnd: () => { movementActive = 0; return 1; },
             ...(overrides.functions || {}) };
         const names = Object.keys(functions).filter(name => typeof functions[name] === 'function');
         const record = (name, ...args) => { calls.push([name, ...args]); callFrames.push({ frame, name }); };
         const invoke = address => (...args) => { const name = names[address - 1]; record(name, ...args); return functions[name](...args); };
-        const runtimeValues = { AdapterController, NativeGaitReferenceController, NativeInputReferenceController, MtaNativePadReferenceController, DataView, ArrayBuffer,
+        const runtimeValues = { AdapterController, NativeGaitReferenceController, NativeInputReferenceController, MtaNativePadReferenceController, MtaNativeMovementTrialController, DataView, ArrayBuffer,
             Memory: { FromFloat: fromFloat, ToFloat: toFloat, Fn: { X64U32: invoke, X64I32: invoke }, CallFunction: (address) => invoke(address)() },
             DynamicLibrary: { Load: () => { record('DynamicLibrary.Load'); return { getProcedure: name => {
                 runtimeAccess.push({ frame, name: 'getProcedure', procedure: name });
@@ -1184,6 +1189,7 @@ async function main() {
             GAIT_REFERENCE: overrides.reference ?? false, GAIT_RATE: overrides.gaitRate ?? false,
             GAIT_ROOT_LOCK: overrides.gaitRootLock ?? false, INPUT_REFERENCE: overrides.inputReference ?? false, HOST: overrides.host || 'sa_unreal',
             MTA_NATIVE_PAD_REFERENCE: overrides.mtaNativePadReference ?? false,
+            MTA_NATIVE_MOVEMENT_TRIAL: overrides.mtaNativeMovementTrial ?? false,
             Date: { now: () => overrides.times ? overrides.times[frame] : frame * 50 },
             CLEO: { version: overrides.version || '1.5.1', apiVersion: overrides.definitions || '0.500', hostVersion: '1.0.113.49697469' },
             native: (name, ...args) => { record(name, ...args);
@@ -1218,6 +1224,40 @@ async function main() {
         vm.runInNewContext(entry, sandbox, { timeout: 1000 });
         return { calls, callFrames, runtimeAccess, waits, logs, fromFloat };
     }
+    test('MTA movement entry waits for F9 release, submits through the real module ABI and cleans up on End', () => {
+        const result = runEntry({ mtaNativeMovementTrial: true,
+            keyFrames: [[17, 16, 120], [16], [], [17, 16, 35]], times: [0, 50, 100, 150],
+            natives: { GET_CHAR_VELOCITY: () => ({ x: 0, y: 0, z: 0 }) } });
+        assert.equal(result.callFrames.find(call => call.name === 'DynamicLibrary.Load').frame, 2);
+        assert.equal(result.calls.filter(call => call[0] === 'DE_MtaMovementBegin').length, 1);
+        assert.equal(result.calls.filter(call => call[0] === 'DE_MtaMovementEnd').length, 1);
+        assert.ok(result.logs.some(e => e.event === 'adapter_start' && e.native_movement_trial && e.adapter_abi === 5));
+        assert.ok(result.logs.some(e => e.event === 'native_movement_trial_finished' && e.cleanup_passed));
+        assert.ok(!result.calls.some(call => ['DE_ConnectLocal', 'GET_PAD_STATE', 'CREATE_CHAR', 'DE_NativePadBind'].includes(call[0])));
+    });
+    test('MTA movement entry rejects an old bridge before activating the module', () => {
+        const result = runEntry({ mtaNativeMovementTrial: true, functions: { DE_MtaMovementSubmit: null },
+            keyFrames: [[17, 16, 120], []], times: [0, 50] });
+        assert.ok(result.logs.some(e => e.event === 'adapter_failed' && e.error.includes('DE_MtaMovementSubmit')));
+        assert.ok(!result.calls.some(call => call[0] === 'DE_MtaMovementBegin'));
+    });
+    test('MTA movement arming can wait hours without starting its movement timer', () => {
+        const result = runEntry({ mtaNativeMovementTrial: true,
+            keyFrames: [[], [], [17, 16, 120], [], [17, 16, 35]],
+            times: [0, 7200000, 14400000, 14400050, 14400100],
+            natives: { GET_CHAR_VELOCITY: () => ({ x: 0, y: 0, z: 0 }) } });
+        assert.equal(result.callFrames.find(call => call.name === 'DynamicLibrary.Load').frame, 3);
+        assert.equal(result.logs.find(e => e.event === 'native_movement_trial_started').at_ms, 14400050);
+        assert.equal(result.logs.find(e => e.event === 'native_movement_trial_finished').elapsed_ms, 50);
+    });
+    test('MTA movement trial rejects incompatible selections before runtime access', () => {
+        for (const overrides of [{ mode: 'online' }, { mode: 'diagnostic' }, { inputReference: true },
+            { reference: true }, { mtaNativePadReference: true }, { mtaNativeMovementTrial: 'yes' }]) {
+            const result = runEntry({ mtaNativeMovementTrial: true, ...overrides });
+            assert.deepEqual(result.runtimeAccess, []);
+            assert.ok(result.logs.some(e => e.event === 'adapter_failed'));
+        }
+    });
     test('MTA native pad entry captures production-reader snapshots without transport or the old pad opcode', () => {
         const result = runEntry({ mtaNativePadReference: true,
             keyFrames: [[17, 16, 120], [], [17, 16, 35]], times: [0, 150, 200],
@@ -1821,6 +1861,8 @@ async function main() {
         assert.equal(sourceConfig.GAIT_REFERENCE, false);
         assert.equal(sourceConfig.GAIT_RATE, false);
         assert.equal(sourceConfig.INPUT_REFERENCE, false);
+        assert.equal(sourceConfig.MTA_NATIVE_PAD_REFERENCE, false);
+        assert.equal(sourceConfig.MTA_NATIVE_MOVEMENT_TRIAL, false);
     });
     test('manual online remains armed with no DLL, procedure, memory, player-handle, coordinate, UDP or remote access', () => {
         const result = manual({ keyFrames: [[], [], [], [], [], [17, 16, 35]] });

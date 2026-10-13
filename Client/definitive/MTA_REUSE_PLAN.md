@@ -5,6 +5,16 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+Current checkpoint: real opt-in Release/x64 Core builds and links, and ABI5
+implements a bounded local movement-write trial inside the normal Game DE
+backend. The existing Core module consumer loads that backend for diagnostic
+testing. Shared MTA action synthesis supplies walk/forwards/sprint state;
+native callback/provider routing applies it only within the verified player
+control call and restores the saved pad pair afterward. The trial retains
+failed cleanup state for retry and does not claim remote ownership or full
+input coverage. The full CGame, launcher, rendering and multiplayer paths
+remain required. Earlier checkpoints below retain their original limits.
+
 ```mermaid
 flowchart LR
     Core[MTA Core] --> Adapter[Game DE adapter module]
@@ -26,13 +36,13 @@ or game factories in the CCore constructor. Existing DLL-load file hooks and
 the classic process-detection entry gate still precede that constructor.
 The current adapter implements caller-observation ingestion and MTA digital
 action synthesis. It supplies
-no full `CGame`, engine input writes or remote player context, so startup returns
+no full `CGame`, full engine input capability or remote player context, so startup returns
 an explicit failure. Core/multiplayer/render startup also remains gated until
 ported. The default classic build retains its original backend.
 
 This is an MTA-owned integration and build boundary. A focused x64 host compiles
 the same Core consumer and loads the actual adapter DLL; it does not construct
-the full Core or launch GTA. The existing Core is still x86 and uses D3D9, and
+the full Core or launch GTA. The existing renderer uses D3D9, and
 its opt-in x64 entry now recognizes the DE executable candidate. Exact native
 binding runs outside loader lock and rejects an unrecognized engine image;
 the gameplay capability gate remains in place.

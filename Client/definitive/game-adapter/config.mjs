@@ -27,3 +27,5 @@ export const INPUT_REFERENCE = false;
 // Exercise Game DE's actual read-only pad implementation, including both
 // engine NewState/OldState pairs. This is independent of the old 00E2 probe.
 export const MTA_NATIVE_PAD_REFERENCE = false;
+// Explicit local engine-write trial; ordinary Smoke and Online modes leave it off.
+export const MTA_NATIVE_MOVEMENT_TRIAL = false;

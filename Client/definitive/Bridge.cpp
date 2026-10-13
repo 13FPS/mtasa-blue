@@ -7,10 +7,13 @@
 #include "MtaControllerSnapshot.h"
 #include "TransportClient.h"
 #include "../game_de/NativePadReader.h"
+#include "../core/CGameAdapterModule.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstring>
+#include <limits>
+#include <new>
 #include <windows.h>
 
 namespace
@@ -18,16 +21,20 @@ namespace
     // Explicit ownership keeps Winsock setup/shutdown out of DLL static constructors
     // and destructors, which execute under the Windows loader lock. The host must
     // disconnect before unloading the DLL, and call the ABI from one owning thread.
-    deonline::TransportClient*      client = nullptr;
-    bool                            runtimeBound = false;
-    int                             moduleAnchor = 0;
-    std::atomic<DWORD>              controllerThread{0};
-    deonline::ControllerSnapshot    controllerSnapshot;
-    mta::game_de::NativePadReader   nativePadReader;
-    std::array<CControllerState, 2> nativeCurrent;
-    std::array<CControllerState, 2> nativePrevious;
-    mta::game_de::NativeDeviceState nativeDevice;
-    bool                            nativeSnapshot = false;
+    deonline::TransportClient*             client = nullptr;
+    bool                                   runtimeBound = false;
+    int                                    moduleAnchor = 0;
+    std::atomic<DWORD>                     controllerThread{0};
+    deonline::ControllerSnapshot           controllerSnapshot;
+    mta::game_de::NativePadReader          nativePadReader;
+    std::array<CControllerState, 2>        nativeCurrent;
+    std::array<CControllerState, 2>        nativePrevious;
+    mta::game_de::NativeDeviceState        nativeDevice;
+    bool                                   nativeSnapshot = false;
+    CGameAdapterModule*                    movementAdapter = nullptr;
+    int                                    movementOwnerIdentity = 0;
+    mta::game_de::NativeMovementTrialState movementState;
+    bool                                   movementSnapshot = false;
 
     void ClearNativePad()
     {
@@ -113,9 +120,135 @@ void DE_Disconnect()
     // Connection/runtime cleanup must discard input coverage and any unfinished
     // transaction so observations cannot survive an adapter session teardown.
     controllerSnapshot.Reset();
+    DE_MtaMovementEnd();
     ClearNativePad();
     delete client;
     client = nullptr;
+}
+
+int DE_MtaMovementBegin()
+{
+    if (!ControllerAccessAllowed() || movementAdapter)
+        return 0;
+    try
+    {
+        movementState = {};
+        movementSnapshot = false;
+        // Like the existing Core consumer host fixture, this diagnostic owner
+        // is an opaque identity. The actual module implements the trial; the
+        // compatibility bridge supplies no substitute CGame or hook lifecycle.
+        movementAdapter = new (std::nothrow) CGameAdapterModule;
+        if (!movementAdapter || !movementAdapter->StartAdjacent(reinterpret_cast<CCoreInterface*>(&movementOwnerIdentity)) ||
+            !movementAdapter->SubmitControlActions({}) || !movementAdapter->BeginNativeMovementTrial())
+        {
+            DE_MtaMovementEnd();
+            return 0;
+        }
+        if (DE_MtaMovementCapture() != 1)
+        {
+            DE_MtaMovementEnd();
+            return 0;
+        }
+        return 1;
+    }
+    catch (...)
+    {
+        DE_MtaMovementEnd();
+        return 0;
+    }
+}
+
+int DE_MtaMovementSubmit(std::uint32_t phase)
+{
+    if (!ControllerAccessAllowed() || !movementAdapter || !movementAdapter->IsStarted() || phase > 3)
+        return 0;
+    try
+    {
+        mta::game_de::ControlActionFrame frame;
+        if (phase != 0)
+            frame.heldActions = MtaInput::ActionBit(FORWARDS);
+        if (phase == 1)
+            frame.heldActions |= MtaInput::ActionBit(WALK);
+        else if (phase == 3)
+            frame.heldActions |= MtaInput::ActionBit(SPRINT);
+        return movementAdapter->SubmitControlActions(frame) ? 1 : 0;
+    }
+    catch (...)
+    {
+        DE_MtaMovementEnd();
+        return 0;
+    }
+}
+
+int DE_MtaMovementCapture()
+{
+    if (!ControllerAccessAllowed() || !movementAdapter || !movementAdapter->IsStarted())
+        return 0;
+    try
+    {
+        mta::game_de::NativeMovementTrialState next;
+        if (!movementAdapter->GetNativeMovementTrialState(next))
+            return 0;
+        movementState = next;
+        movementSnapshot = true;
+        return 1;
+    }
+    catch (...)
+    {
+        return 0;
+    }
+}
+
+std::uint32_t DE_MtaMovementRead(std::uint32_t component)
+{
+    if (!ControllerAccessAllowed() || !movementSnapshot)
+        return 0;
+    const std::array<std::uint64_t, 12> values = {movementState.bound,
+                                                  movementState.active,
+                                                  movementState.callbackCount,
+                                                  movementState.scopedSteps,
+                                                  movementState.routedQueries,
+                                                  movementState.neutralQueries,
+                                                  movementState.restoredSteps,
+                                                  movementState.restoreFailures,
+                                                  movementState.foreignThreadCallbacks,
+                                                  movementState.nestedCallbacks,
+                                                  static_cast<std::uint32_t>(movementState.failureReason),
+                                                  movementState.lastMoveState};
+    if (component >= values.size() || values[component] > (std::numeric_limits<std::uint32_t>::max)())
+        return 0;
+    return static_cast<std::uint32_t>(values[component]);
+}
+
+int DE_MtaMovementEnd()
+{
+    if (!movementAdapter)
+        return 1;
+    try
+    {
+        // A refused shutdown must retain the real adapter/module; unloading
+        // code with live native hooks would leave an invalid game callback.
+        if (movementAdapter->IsStarted())
+        {
+            if (!movementAdapter->EndNativeMovementTrial())
+                return 0;
+            mta::game_de::NativeMovementTrialState finalState;
+            if (!movementAdapter->GetNativeMovementTrialState(finalState))
+                return 0;
+            movementState = finalState;
+            movementSnapshot = true;
+        }
+        movementAdapter->Stop();
+        if (movementAdapter->IsStarted())
+            return 0;
+        delete movementAdapter;
+        movementAdapter = nullptr;
+        return 1;
+    }
+    catch (...)
+    {
+        return 0;
+    }
 }
 int DE_Pump()
 {

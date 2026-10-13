@@ -29,5 +29,15 @@ project "detours"
     filter "system:not windows"
         flags { "ExcludeFromBuild" }
 
-    filter "architecture:not x86"
-        flags { "ExcludeFromBuild" }
+    -- Only the explicit DE build needs native x64 detours; retain the classic
+    -- default exclusions and avoid enabling unrelated architecture/configs.
+    if _OPTIONS["with-definitive-adapter"] then
+        filter { "architecture:x86_64", "configurations:not Release" }
+            flags { "ExcludeFromBuild" }
+        filter { "architecture:not x86", "architecture:not x86_64" }
+            flags { "ExcludeFromBuild" }
+    else
+        filter "architecture:not x86"
+            flags { "ExcludeFromBuild" }
+    end
+    filter {}

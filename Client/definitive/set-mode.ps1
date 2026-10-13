@@ -9,11 +9,15 @@ param(
     [switch]$LockWalkRoot,
     [switch]$NativeInputReference,
     [switch]$MtaNativePadReference,
+    [switch]$MtaNativeMovementTrial,
     [string]$GameDirectory = 'C:\Program Files (x86)\Steam\steamapps\common\GTA San Andreas - The Definitive Edition\Gameface\Binaries\Win64'
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+if ($MtaNativeMovementTrial -and ($Mode -ne 'Smoke' -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot)) {
+    throw 'MTA movement writes require separate opt-in Smoke mode.'
+}
 if ($MtaNativePadReference -and $Mode -ne 'Smoke') { throw 'MTA native pad reference requires Smoke mode.' }
 if ($MtaNativePadReference -and ($NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot)) {
     throw 'MTA native pad reference conflicts with other input or gait trials.'
@@ -78,6 +82,20 @@ if ($MtaNativePadReference -and @($installed.files | Where-Object { $_.path -eq 
 if ($padMatches -eq 1) {
     $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $padPattern,
         "export const MTA_NATIVE_PAD_REFERENCE = $($MtaNativePadReference.IsPresent.ToString().ToLowerInvariant());"))
+}
+$movementPattern = 'export const MTA_NATIVE_MOVEMENT_TRIAL = (true|false);'
+$movementMatches = [regex]::Matches($configText, $movementPattern).Count
+if ($movementMatches -gt 1 -or ($MtaNativeMovementTrial -and $movementMatches -ne 1)) {
+    throw 'Update the adapter before selecting MTA movement writes.'
+}
+if ($MtaNativeMovementTrial -and @($installed.files | Where-Object {
+    $_.path -in @('CLEO/de-online/native-movement-trial.mjs', 'CLEO/de-online/game_de.dll')
+}).Count -ne 2) { throw 'Update the adapter before selecting MTA movement writes: its owned backend files are missing.' }
+# An ordinary mode switch must clear the explicit write trial, including when
+# returning to Smoke later. Older intact installations have no such marker.
+if ($movementMatches -eq 1) {
+    $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $movementPattern,
+        "export const MTA_NATIVE_MOVEMENT_TRIAL = $($MtaNativeMovementTrial.IsPresent.ToString().ToLowerInvariant());"))
 }
 $configEntry = @($installed.files | Where-Object { $_.path -eq 'CLEO/de-online/config.mjs' })
 if ($configEntry.Count -ne 1) { throw 'Missing owned configuration record.' }

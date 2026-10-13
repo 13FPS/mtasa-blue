@@ -28,6 +28,11 @@ def main():
         "DE_NativePadReset": (None, []),
         "DE_Disconnect": (None, []),
         "DE_ControllerCurrentMask": (ctypes.c_uint32, []),
+        "DE_MtaMovementBegin": (ctypes.c_int, []),
+        "DE_MtaMovementSubmit": (ctypes.c_int, [ctypes.c_uint32]),
+        "DE_MtaMovementCapture": (ctypes.c_int, []),
+        "DE_MtaMovementRead": (ctypes.c_uint32, [ctypes.c_uint32]),
+        "DE_MtaMovementEnd": (ctypes.c_int, []),
     }
     for name, (result, arguments) in signatures.items():
         function = getattr(bridge, name)
@@ -41,6 +46,14 @@ def main():
     check(bridge.DE_BindRuntime() == 0, "Wrong executable must reject runtime binding")
     check(bridge.DE_NativePadBind() == 0, "Native binding requires the owning runtime")
     check(bridge.DE_NativePadCapture() == 0, "Unbound native capture must fail")
+    check(bridge.DE_MtaMovementBegin() == 0, "Wrong executable cannot activate movement writes")
+    check(bridge.DE_MtaMovementCapture() == 0, "Rejected trial cannot manufacture native metrics")
+    for phase in (0, 1, 2, 3, 4, 0xFFFFFFFF):
+        check(bridge.DE_MtaMovementSubmit(phase) == 0, "Unbound action submission must fail")
+    for component in (*range(12), 12, 0xFFFFFFFF):
+        check(bridge.DE_MtaMovementRead(component) == 0, "Unbound movement metrics remain unavailable")
+    check(bridge.DE_MtaMovementEnd() == 1, "Unstarted trial cleanup is idempotent")
+    check(bridge.DE_MtaMovementEnd() == 1, "Repeated unstarted cleanup is idempotent")
     for pad in (0, 1, 2, 0xFFFFFFFF):
         for which in (0, 1, 2, 0xFFFFFFFF):
             for index in (0, 16, 23, 24, 0xFFFFFFFF):

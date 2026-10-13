@@ -39,6 +39,19 @@ foreach ($architecture in @('x86', 'x64')) {
     }
     $compiler = Join-Path $env:VCToolsInstallDir "bin/Hostx64/$architecture/cl.exe"
     $executable = Join-Path $outputDirectory 'mta_game_adapter_host_tests.exe'
+    $fixture = Join-Path $outputDirectory 'shutdown-failure-fixture.dll'
+    $fixtureExit = $null
+    if ($architecture -eq 'x64') {
+        # This explicitly named failure provider tests the consumer's unload
+        # policy; actual movement and capability checks still use ModulePath.
+        $fixtureArguments = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/LD','/DMTA_GAME_DE_EXPORTS','/DMTA_TEST_SHUTDOWN_FAILURE_MODULE',
+            '/DNOMINMAX','/DWIN32_LEAN_AND_MEAN', ('/I' + (Join-Path $taskRoot 'Shared/sdk')), ('/I' + (Join-Path $taskRoot 'Client/sdk')),
+            (Join-Path $PSScriptRoot 'MtaGameAdapterHostTests.cpp'), ('/Fo' + (Join-Path $outputDirectory 'fixture.obj')), ('/Fe' + $fixture))
+        $fixtureOutput = @(& $compiler @fixtureArguments 2>&1)
+        $fixtureExit = $LASTEXITCODE
+        $fixtureOutput | Set-Content -LiteralPath (Join-Path $outputDirectory 'fixture-compile.log') -Encoding utf8
+        if ($fixtureExit -ne 0) { $failure = 'Shutdown failure fixture did not compile'; break }
+    }
     $arguments = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN',
         ('/I' + (Join-Path $taskRoot 'Shared/sdk')), ('/I' + (Join-Path $taskRoot 'Client/sdk')),
         (Join-Path $PSScriptRoot 'MtaGameAdapterHostTests.cpp'), (Join-Path $taskRoot 'Client/core/CGameAdapterModule.cpp'),
@@ -49,13 +62,17 @@ foreach ($architecture in @('x86', 'x64')) {
     $testExit = $null
     $testCount = $null
     if ($compilerExit -eq 0) {
-        $testOutput = @(& $executable $ModulePath 2>&1)
+        $testArguments = @($ModulePath)
+        if ($architecture -eq 'x64') { $testArguments += $fixture }
+        $testOutput = @(& $executable @testArguments 2>&1)
         $testExit = $LASTEXITCODE
         $testOutput | Set-Content -LiteralPath (Join-Path $outputDirectory 'test.log') -Encoding utf8
         $testText = $testOutput -join "`n"
         if ($testText -match 'Passed (\d+) MTA game adapter host checks') { $testCount = [int]$Matches[1] }
     }
     $results += [ordered]@{ architecture=$architecture; compilerExit=$compilerExit; testExit=$testExit; checks=$testCount;
+        shutdownFailureFixtureCompilerExit=$fixtureExit; shutdownFailureFixture=$fixture;
+        shutdownFailureFixtureSha256=$(if (Test-Path -LiteralPath $fixture) { (Get-FileHash -LiteralPath $fixture -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null });
         executable=$executable; executableSha256=$(if (Test-Path -LiteralPath $executable) {
             (Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash.ToLowerInvariant()
         } else { $null }) }

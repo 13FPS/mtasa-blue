@@ -25,10 +25,18 @@ $packagePaths = @($package.files | ForEach-Object { $_.path })
 if (@($packagePaths | Select-Object -Unique).Count -ne $packagePaths.Count -or
     @($installedPaths | Where-Object { $_ -notin $packagePaths }).Count -ne 0) { throw 'Package owned paths differ.' }
 $addedPaths = @($packagePaths | Where-Object { $_ -notin $installedPaths })
-# Admit only the new read-only reference script when upgrading the original
-# sixteen-file install. Never turn a package update into an arbitrary file writer.
-if ($addedPaths.Count -gt 1 -or ($addedPaths.Count -eq 1 -and $addedPaths[0] -ne 'CLEO/de-online/native-pad-reference.mjs')) {
+# Admit only the named MTA probe/backend files from the newer package. All
+# additions are checked for existing user bytes before any update is applied.
+$allowedAdditions = @('CLEO/de-online/native-pad-reference.mjs', 'CLEO/de-online/native-movement-trial.mjs', 'CLEO/de-online/game_de.dll')
+if (@($addedPaths | Where-Object { $_ -notin $allowedAdditions }).Count -ne 0) {
     throw 'Unsupported additive package path.'
+}
+# Validate the complete new ownership contract before touching any bytes; a
+# truncated package must not leave an installation that cannot be uninstalled.
+$hasMovementScript = $packagePaths -contains 'CLEO/de-online/native-movement-trial.mjs'
+$hasGameDe = $packagePaths -contains 'CLEO/de-online/game_de.dll'
+if ($hasMovementScript -ne $hasGameDe -or ($hasMovementScript -and $packagePaths -notcontains 'CLEO/de-online/native-pad-reference.mjs')) {
+    throw 'Incomplete MTA movement package ownership.'
 }
 $changes = @()
 foreach ($entry in $package.files) {

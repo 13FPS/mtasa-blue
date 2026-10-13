@@ -101,7 +101,7 @@ namespace
     void TestFactoryAndLifecycle()
     {
         Check(CreateGameAdapter(0) == nullptr && CreateGameAdapter(1) == nullptr && CreateGameAdapter(2) == nullptr && CreateGameAdapter(3) == nullptr &&
-                  CreateGameAdapter(AdapterAbiVersion + 1) == nullptr,
+                  CreateGameAdapter(4) == nullptr && CreateGameAdapter(AdapterAbiVersion + 1) == nullptr,
               "reject old and unknown factory ABIs before exposing the changed vtable");
         OwnedAdapter adapter;
         Check(adapter.value != nullptr, "matching ABI creates a module-owned adapter");
@@ -235,7 +235,7 @@ namespace
         Check(adapter.value && adapter.value->Initialize(owner.Get()) == Status::Ok, "bind the operational game thread");
         const auto sample = Observation();
         Check(adapter.value->PublishLocalObservation(sample) == Status::Ok, "publish before a foreign-thread attempt");
-        std::array<Status, 11> statuses{};
+        std::array<Status, 14> statuses{};
         LocalObservation       foreignOutput = Observation(999);
         MtaInputState          foreignInput;
         foreignInput.current.ButtonCross = 19;
@@ -243,6 +243,8 @@ namespace
         foreignNative.current.ButtonCross = 23;
         NativeDeviceState foreignDevice;
         foreignDevice.sources.fill(-1234567);
+        NativeMovementTrialState foreignTrial;
+        foreignTrial.callbackCount = 123;
         std::thread other(
             [&]
             {
@@ -256,7 +258,10 @@ namespace
                             adapter.value->GetMtaInputState(foreignInput),
                             adapter.value->BindNativeInput(),
                             adapter.value->ReadNativeControllerState(0, foreignNative),
-                            adapter.value->ReadNativeDeviceState(foreignDevice)};
+                            adapter.value->ReadNativeDeviceState(foreignDevice),
+                            adapter.value->BeginNativeMovementTrial(),
+                            adapter.value->GetNativeMovementTrialState(foreignTrial),
+                            adapter.value->EndNativeMovementTrial()};
             });
         other.join();
         for (const auto status : statuses)
@@ -264,6 +269,7 @@ namespace
         Check(foreignOutput.sampleAtMs == 999, "foreign read leaves caller output untouched");
         Check(foreignInput.current.ButtonCross == 19, "foreign logical input read leaves caller output untouched");
         Check(foreignNative.current.ButtonCross == 23, "foreign native read leaves caller output untouched");
+        Check(foreignTrial.callbackCount == 123, "foreign trial reads preserve caller metrics without starting or ending hooks");
         Check(std::all_of(foreignDevice.sources.begin(), foreignDevice.sources.end(), [](std::int32_t value) { return value == -1234567; }),
               "foreign native device read leaves all caller values untouched");
         LocalObservation output;
@@ -402,11 +408,69 @@ namespace
         Check(adapter.value->Shutdown() == Status::Ok && adapter.value->ReadNativeDeviceState(state) == Status::NotInitialized && state.sources == original,
               "shutdown prevents native device reads");
     }
+
+    void TestNativeMovementRejection()
+    {
+        OwnerIdentity owner;
+        OwnedAdapter  adapter;
+        Check(adapter.value != nullptr, "create explicit movement trial fixture");
+        NativeMovementTrialState state;
+        state.callbackCount = 123;
+        Check(adapter.value->BeginNativeMovementTrial() == Status::NotInitialized &&
+                  adapter.value->GetNativeMovementTrialState(state) == Status::NotInitialized &&
+                  adapter.value->EndNativeMovementTrial() == Status::NotInitialized && state.callbackCount == 123,
+              "movement trial requires initialization and preserves failed read output");
+        Check(adapter.value->Initialize(owner.Get()) == Status::Ok, "initialize movement trial owner");
+        Check(adapter.value->BeginNativeMovementTrial() == Status::NotInitialized, "trial requires a submitted MTA logical frame");
+        for (const auto action : {FIRE, ENTER_EXIT, JUMP, AIM_WEAPON})
+        {
+            Check(adapter.value->SubmitControlActions({MtaInput::ActionBit(action), {}}) == Status::Ok, "ordinary logical synthesis retains nontrial actions");
+            Check(adapter.value->BeginNativeMovementTrial() == Status::InvalidArgument, "trial rejects unrelated gameplay actions before any binding");
+        }
+        for (unsigned int contextBit = 0; contextBit < 5; ++contextBit)
+        {
+            ControlActionFrame frame;
+            switch (contextBit)
+            {
+                case 0:
+                    frame.context.inVehicle = true;
+                    break;
+                case 1:
+                    frame.context.hasDetonator = true;
+                    break;
+                case 2:
+                    frame.context.isDead = true;
+                    break;
+                case 3:
+                    frame.context.aimingWeapon = true;
+                    break;
+                case 4:
+                    frame.context.enteringVehicle = true;
+                    break;
+            }
+            Check(adapter.value->SubmitControlActions(frame) == Status::Ok && adapter.value->BeginNativeMovementTrial() == Status::InvalidArgument,
+                  "trial requires an unambiguous alive on-foot context");
+        }
+        Check(adapter.value->SubmitControlActions({}) == Status::Ok, "neutral MTA frame permits an explicit binding attempt");
+        Check(adapter.value->BeginNativeMovementTrial() == Status::Unsupported && adapter.value->BeginNativeMovementTrial() == Status::Unsupported,
+              "nongame executable rejects trial binding and permits a clean retry");
+        Check(adapter.value->GetNativeMovementTrialState(state) == Status::Ok && !state.bound && !state.active && state.callbackCount == 0 &&
+                  state.scopedSteps == 0 && state.routedQueries == 0 && state.restoredSteps == 0,
+              "rejected binding installs no hooks and executes no native callback");
+        Check(adapter.value->GetCapabilities() == implementedCapabilities && adapter.value->GetGameInterface() == nullptr,
+              "candidate trial cannot manufacture full engine input or gameplay capabilities");
+        Check(adapter.value->EndNativeMovementTrial() == Status::Ok && adapter.value->EndNativeMovementTrial() == Status::Ok,
+              "ending an unbound trial is idempotent");
+        Check(adapter.value->Reset() == Status::Ok && adapter.value->BeginNativeMovementTrial() == Status::NotInitialized,
+              "reset clears the frame before any retry");
+        Check(adapter.value->Shutdown() == Status::Ok, "clean nongame shutdown releases all trial authority");
+    }
 }
 
 int main()
 {
-    static_assert(AdapterAbiVersion == 4 && AdapterControllerMask == 0xfffff);
+    static_assert(AdapterAbiVersion == 5 && AdapterControllerMask == 0xfffff);
+    static_assert(static_cast<std::uint64_t>(AdapterCapability::NativeMovementWriteCandidate) == 256);
     static_assert(NativeDeviceStateCount == 127 && sizeof(NativeDeviceState) == 508);
     static_assert(static_cast<std::uint64_t>(AdapterCapability::NativeDeviceStateCandidateRead) == 128);
     static_assert(NativePadBindingCapabilities == 64, "A raw candidate read must not advertise the unverified EngineInputRead capability");
@@ -421,6 +485,7 @@ int main()
         TestMtaInput();
         TestNativeInputRejection();
         TestNativeDeviceRejection();
+        TestNativeMovementRejection();
         std::cout << "Passed " << checks << " MTA Game DE adapter checks\n";
         return 0;
     }

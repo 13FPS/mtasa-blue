@@ -7,6 +7,7 @@
 #include <game/CGameAdapter.h>
 #include "ControllerSnapshot.h"
 #include "NativePadReader.h"
+#include "NativeMovementInput.h"
 
 #include <atomic>
 #include <cmath>
@@ -47,6 +48,8 @@ namespace mta::game_de
                 const auto status = Access();
                 if (status != Status::Ok)
                     return status;
+                if (!EndMovement())
+                    return Status::Unsupported;
                 Clear();
                 return Status::Ok;
             }
@@ -56,12 +59,21 @@ namespace mta::game_de
                 const auto status = Access();
                 if (status != Status::Ok)
                     return status;
+                if (!EndMovement())
+                    return Status::Unsupported;
                 Clear();
                 initialized = false;
                 return Status::Ok;
             }
 
-            void Release() noexcept override { delete this; }
+            void Release() noexcept override
+            {
+                // A live detour still references this module's state. A caller
+                // cannot turn failed cleanup into a dangling callback by Release.
+                if ((ownerThread.load() && ownerThread.load() != GetCurrentThreadId()) || !EndMovement())
+                    return;
+                delete this;
+            }
 
             std::uint64_t GetCapabilities() const noexcept override
             {
@@ -121,14 +133,27 @@ namespace mta::game_de
                 const auto status = Access();
                 if (status != Status::Ok)
                     return status;
-                if (frame.heldActions & ~MtaInput::KnownActionMask)
+                if ((frame.heldActions & ~MtaInput::KnownActionMask) || (nativeMovement.IsActive() && !TrialFrame(frame)))
+                {
+                    if (!EndMovement())
+                        return Status::Unsupported;
                     return Status::InvalidArgument;
+                }
 
                 // Keep logical MTA inputs separate from native evidence, whose
                 // twenty-field mask cannot describe MTA's walk/radio fields.
-                const auto current = MtaInput::BuildControllerState(frame.heldActions, frame.context, directionHistory);
-                inputState.previous = inputState.current;
-                inputState.current = current;
+                auto          nextHistory = directionHistory;
+                MtaInputState next;
+                next.previous = inputState.current;
+                next.current = MtaInput::BuildControllerState(frame.heldActions, frame.context, nextHistory);
+                if (nativeMovement.IsActive() && !nativeMovement.Update(next))
+                {
+                    EndMovement();
+                    return Status::Unsupported;
+                }
+                directionHistory = nextHistory;
+                inputState = next;
+                inputFrame = frame;
                 hasInputState = true;
                 return Status::Ok;
             }
@@ -152,7 +177,7 @@ namespace mta::game_de
                 // Ordinary module startup does not hash the executable or
                 // touch engine memory before its owning Core requests binding.
                 const bool bound = nativePad.Bind();
-                capabilities.store(BaseCapabilities | (bound ? NativePadBindingCapabilities : 0));
+                capabilities.store(BaseCapabilities | (bound ? NativePadBindingCapabilities : 0) | MovementCapability());
                 return bound ? Status::Ok : Status::Unsupported;
             }
 
@@ -169,7 +194,7 @@ namespace mta::game_de
                 if (!nativePad.Read(padIndex, next.current, next.previous))
                 {
                     nativePad.Reset();
-                    capabilities.store(BaseCapabilities);
+                    capabilities.store(BaseCapabilities | MovementCapability());
                     return Status::Unsupported;
                 }
                 state = next;
@@ -185,7 +210,7 @@ namespace mta::game_de
                 if (!nativePad.ReadDeviceState(next))
                 {
                     nativePad.Reset();
-                    capabilities.store(BaseCapabilities);
+                    capabilities.store(BaseCapabilities | MovementCapability());
                     return Status::Unsupported;
                 }
                 state = next;
@@ -193,7 +218,67 @@ namespace mta::game_de
                 return Status::Ok;
             }
 
+            Status BeginNativeMovementTrial() noexcept override
+            {
+                const auto status = Access();
+                if (status != Status::Ok)
+                    return status;
+                if (!hasInputState)
+                    return Status::NotInitialized;
+                if (!TrialFrame(inputFrame))
+                    return Status::InvalidArgument;
+                const bool started = nativeMovement.Begin(inputState);
+                RefreshMovementCapability();
+                return started ? Status::Ok : Status::Unsupported;
+            }
+
+            Status GetNativeMovementTrialState(NativeMovementTrialState& state) noexcept override
+            {
+                const auto status = Access();
+                if (status != Status::Ok)
+                    return status;
+                nativeMovement.ReadState(state);
+                RefreshMovementCapability();
+                return Status::Ok;
+            }
+
+            Status EndNativeMovementTrial() noexcept override
+            {
+                const auto status = Access();
+                if (status != Status::Ok)
+                    return status;
+                return EndMovement() ? Status::Ok : Status::Unsupported;
+            }
+
         private:
+            static bool TrialFrame(const ControlActionFrame& frame) noexcept
+            {
+                constexpr auto allowed = MtaInput::ActionBit(FORWARDS) | MtaInput::ActionBit(BACKWARDS) | MtaInput::ActionBit(LEFT) |
+                                         MtaInput::ActionBit(RIGHT) | MtaInput::ActionBit(SPRINT) | MtaInput::ActionBit(WALK);
+                return !(frame.heldActions & ~allowed) && !frame.context.inVehicle && !frame.context.hasDetonator && !frame.context.isDead &&
+                       !frame.context.aimingWeapon && !frame.context.enteringVehicle;
+            }
+
+            std::uint64_t MovementCapability() const noexcept
+            {
+                return nativeMovement.IsBound() ? static_cast<std::uint64_t>(AdapterCapability::NativeMovementWriteCandidate) : 0;
+            }
+
+            void RefreshMovementCapability() noexcept
+            {
+                // Binding this bounded candidate must not erase independent read
+                // evidence or advertise full engine/remote-player input support.
+                constexpr auto bit = static_cast<std::uint64_t>(AdapterCapability::NativeMovementWriteCandidate);
+                capabilities.store((capabilities.load() & ~bit) | MovementCapability());
+            }
+
+            bool EndMovement() noexcept
+            {
+                const bool ended = nativeMovement.End();
+                RefreshMovementCapability();
+                return ended;
+            }
+
             Status Access() const noexcept
             {
                 const auto thread = ownerThread.load();
@@ -211,6 +296,7 @@ namespace mta::game_de
                 hasObservation = false;
                 directionHistory = MtaInput::DirectionHistory();
                 inputState = MtaInputState();
+                inputFrame = ControlActionFrame();
                 hasInputState = false;
                 nativePad.Reset();
                 capabilities.store(BaseCapabilities);
@@ -226,11 +312,13 @@ namespace mta::game_de
             deonline::ControllerSnapshot   controller;
             MtaInput::DirectionHistory     directionHistory;
             MtaInputState                  inputState;
+            ControlActionFrame             inputFrame;
             bool                           hasInputState = false;
             static constexpr std::uint64_t BaseCapabilities =
                 static_cast<std::uint64_t>(AdapterCapability::ObservationIngest) | static_cast<std::uint64_t>(AdapterCapability::MtaInputSynthesis);
             std::atomic<std::uint64_t> capabilities{BaseCapabilities};
             NativePadReader            nativePad;
+            NativeMovementInput        nativeMovement;
         };
     }
 

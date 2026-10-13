@@ -30,6 +30,9 @@ public:
     bool                BindNativeInput();
     bool                ReadNativeControllerState(std::uint32_t padIndex, mta::game_de::NativeControllerState& state);
     bool                ReadNativeDeviceState(mta::game_de::NativeDeviceState& state);
+    bool                BeginNativeMovementTrial();
+    bool                GetNativeMovementTrialState(mta::game_de::NativeMovementTrialState& state);
+    bool                EndNativeMovementTrial();
     void                Stop() noexcept;
 
     bool               IsStarted() const noexcept { return m_adapter != nullptr; }

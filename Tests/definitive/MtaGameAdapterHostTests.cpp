@@ -8,11 +8,51 @@
 
 #include <filesystem>
 #include <iostream>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <windows.h>
 
+#if defined(MTA_TEST_SHUTDOWN_FAILURE_MODULE)
+// This deliberately failing provider tests Core's DLL lifetime only. It is not
+// an engine writer, replacement Game DE implementation or gameplay fixture.
+namespace mta::game_de
+{
+    namespace
+    {
+        class ShutdownFailureAdapter final : public IGameAdapter
+        {
+        public:
+            Status        Initialize(CCoreInterface*) noexcept override { return Status::Ok; }
+            Status        Pulse() noexcept override { return Status::Ok; }
+            Status        Reset() noexcept override { return Status::Unsupported; }
+            Status        Shutdown() noexcept override { return ++shutdownCount == 1 ? Status::Unsupported : Status::Ok; }
+            void          Release() noexcept override { delete this; }
+            std::uint64_t GetCapabilities() const noexcept override { return 0; }
+            CGame*        GetGameInterface() const noexcept override { return nullptr; }
+            Status        PublishLocalObservation(const LocalObservation&) noexcept override { return Status::Unsupported; }
+            Status        GetLocalObservation(LocalObservation&) noexcept override { return Status::Unsupported; }
+            Status        SubmitControlActions(const ControlActionFrame&) noexcept override { return Status::Unsupported; }
+            Status        GetMtaInputState(MtaInputState&) noexcept override { return Status::Unsupported; }
+            Status        BindNativeInput() noexcept override { return Status::Unsupported; }
+            Status        ReadNativeControllerState(std::uint32_t, NativeControllerState&) noexcept override { return Status::Unsupported; }
+            Status        ReadNativeDeviceState(NativeDeviceState&) noexcept override { return Status::Unsupported; }
+            Status        BeginNativeMovementTrial() noexcept override { return Status::Unsupported; }
+            Status        GetNativeMovementTrialState(NativeMovementTrialState&) noexcept override { return Status::Unsupported; }
+            Status        EndNativeMovementTrial() noexcept override { return Status::Unsupported; }
+
+        private:
+            unsigned int shutdownCount = 0;
+        };
+    }
+
+    extern "C" __declspec(dllexport) IGameAdapter* CreateGameAdapter(std::uint32_t abiVersion) noexcept
+    {
+        return abiVersion == AdapterAbiVersion ? new (std::nothrow) ShutdownFailureAdapter : nullptr;
+    }
+}
+#else
 namespace
 {
     int checks = 0;
@@ -25,7 +65,7 @@ namespace
             throw std::runtime_error(message);
     }
 
-#if defined(_WIN64)
+    #if defined(_WIN64)
     void TestRejectedArguments(CCoreInterface* owner, const std::wstring& modulePath)
     {
         CGameAdapterModule host;
@@ -46,6 +86,10 @@ namespace
         input.current.ButtonCross = 19;
         Check(!host.SubmitControlActions({}) && !host.GetMtaInputState(input) && input.current.ButtonCross == 19,
               "an uninitialized consumer cannot submit or replace logical input");
+        mta::game_de::NativeMovementTrialState trial;
+        trial.callbackCount = 19;
+        Check(!host.BeginNativeMovementTrial() && !host.GetNativeMovementTrialState(trial) && !host.EndNativeMovementTrial() && trial.callbackCount == 19,
+              "uninitialized Core cannot start, inspect or end a movement trial");
         Check(host.GetCapabilities() == 0 && !host.IsGameplayReady(), "an uninitialized consumer has no capabilities");
         host.Stop();
         host.Stop();
@@ -68,6 +112,7 @@ namespace
             Check(host.GameplayUnavailableReason().find("EngineInputWrite") != std::string::npos, "full-game gate explains missing input write");
             Check(host.GameplayUnavailableReason().find("RemotePlayerContext") != std::string::npos, "full-game gate explains missing remote context");
             Check(host.Pulse(), "owning Core can pulse the initialized real module");
+            Check(!host.BeginNativeMovementTrial(), "movement trial requires an explicit synthesized frame");
             mta::game_de::LocalObservation observation;
             observation.sampleAtMs = 1000;
             observation.localPedHandle = 7;
@@ -99,6 +144,11 @@ namespace
             Check(host.SubmitControlActions(frame) && host.GetMtaInputState(input), "submit the next MTA sprint frame");
             Check(input.current.ButtonCross == 255 && input.current.m_bPedWalk == 0 && input.previous.m_bPedWalk == 255,
                   "walk and sprint are distinct actions with previous-frame history");
+            mta::game_de::NativeMovementTrialState trial;
+            Check(!host.BeginNativeMovementTrial() && !host.BeginNativeMovementTrial(), "nongame trial binding fails and can be retried explicitly");
+            Check(host.GetNativeMovementTrialState(trial) && !trial.bound && !trial.active && trial.callbackCount == 0 && trial.scopedSteps == 0,
+                  "nongame host executes no writer hooks or scoped native steps");
+            Check(host.EndNativeMovementTrial() && host.EndNativeMovementTrial(), "Core trial cleanup is idempotent without hooks");
             Check(host.GetLocalObservation(readback) && readback.sampleAtMs == 1100 && readback.controller.ButtonCross == 255 &&
                       readback.controllerKnownMask == mta::game_de::AdapterControllerMask && !host.IsGameplayReady(),
                   "logical synthesis neither overwrites native evidence nor opens the gameplay gate");
@@ -119,13 +169,17 @@ namespace
                   "a rejected native binding leaves engine/gameplay capabilities unavailable");
             Check(host.GetMtaInputState(input) && input.current.ButtonCross == 255 && host.GetLocalObservation(readback) && readback.sampleAtMs == 1100,
                   "failed native binding preserves MTA logical input and caller observations");
-            bool                        foreignPulse = true;
-            bool                        foreignReset = true;
-            bool                        foreignSubmit = true;
-            bool                        foreignRead = true;
-            bool                        foreignBind = true;
-            bool                        foreignNativeRead = true;
-            bool                        foreignDeviceRead = true;
+            bool foreignPulse = true;
+            bool foreignReset = true;
+            bool foreignSubmit = true;
+            bool foreignRead = true;
+            bool foreignBind = true;
+            bool foreignNativeRead = true;
+            bool foreignDeviceRead = true;
+            bool foreignBeginTrial = true;
+            bool foreignReadTrial = true;
+            bool foreignEndTrial = true;
+            trial.callbackCount = 123;
             mta::game_de::MtaInputState foreignInput;
             foreignInput.current.ButtonCross = 19;
             std::uint64_t foreignCapabilities = 99;
@@ -140,6 +194,9 @@ namespace
                     foreignBind = host.BindNativeInput();
                     foreignNativeRead = host.ReadNativeControllerState(0, native);
                     foreignDeviceRead = host.ReadNativeDeviceState(device);
+                    foreignBeginTrial = host.BeginNativeMovementTrial();
+                    foreignReadTrial = host.GetNativeMovementTrialState(trial);
+                    foreignEndTrial = host.EndNativeMovementTrial();
                     host.Stop();
                 });
             foreign.join();
@@ -148,6 +205,8 @@ namespace
                   "logical input shares Core thread ownership and preserves failed reader output");
             Check(!foreignBind && !foreignNativeRead && native.current.ButtonCross == 23, "native binding and reads retain the owning Core thread boundary");
             Check(!foreignDeviceRead && device.sources == deviceOriginal, "foreign Core device reads preserve the complete caller state");
+            Check(!foreignBeginTrial && !foreignReadTrial && !foreignEndTrial && trial.callbackCount == 123,
+                  "foreign Core cannot mutate trial lifetime or replace metrics");
             Check(host.IsStarted() && GetModuleHandleW(modulePath.c_str()) != nullptr, "foreign teardown cannot unload code owned by Core");
             Check(host.GetLocalObservation(readback) && readback.sampleAtMs == 1100, "rejected foreign reset preserves caller evidence");
             Check(host.Reset(), "owning Core can reset the initialized real module");
@@ -180,30 +239,47 @@ namespace
         Check(std::filesystem::path(path).is_absolute(), "adjacent adapter path is absolute");
         Check(std::filesystem::path(path).filename() == L"game_de.dll", "adjacent module name remains fixed");
     }
-#endif
+
+    void TestFailedShutdownRetention(CCoreInterface* owner, const std::wstring& fixturePath)
+    {
+        Check(GetModuleHandleW(fixturePath.c_str()) == nullptr, "cleanup fixture begins unloaded");
+        CGameAdapterModule host;
+        Check(host.Start(owner, fixturePath), "load an explicit provider whose first Shutdown fails");
+        host.Stop();
+        Check(host.IsStarted() && GetModuleHandleW(fixturePath.c_str()) != nullptr, "failed Shutdown retains both adapter and loaded callback code");
+        Check(host.GetError().find("retained") != std::string::npos && host.GetError().find("Shutdown") != std::string::npos,
+              "failed cleanup reports retained ownership");
+        Check(!host.Start(owner, fixturePath) && host.Pulse(), "cleanup failure neither replaces nor deletes the retained adapter");
+        host.Stop();
+        Check(!host.IsStarted() && GetModuleHandleW(fixturePath.c_str()) == nullptr,
+              "a successful cleanup retry releases the instance before unloading its DLL");
+    }
+    #endif
 }
 
 int wmain(int argc, wchar_t** argv)
 {
     try
     {
-        if (argc != 2)
+        if (argc != 2 && argc != 3)
             throw std::runtime_error("Pass the absolute path of the built Game DE module");
         const std::wstring modulePath = argv[1];
         // The adapter stores this identity but must never dereference it. This
         // is an opaque ownership fixture, not a constructed or running CCore.
         alignas(void*) unsigned char ownerIdentity[sizeof(void*)]{};
         auto*                        owner = reinterpret_cast<CCoreInterface*>(ownerIdentity);
-#if defined(_WIN64)
+    #if defined(_WIN64)
         TestRejectedArguments(owner, modulePath);
         TestActualModule(owner, modulePath);
         TestAdjacentPath();
-#else
+        if (argc == 3)
+            TestFailedShutdownRetention(owner, argv[2]);
+    #else
         CGameAdapterModule host;
         Check(!host.Start(owner, modulePath), "x86 must reject the x64 backend before loading it");
         Check(!host.IsStarted() && GetModuleHandleW(modulePath.c_str()) == nullptr, "wrong architecture cannot create or load Game DE");
         Check(host.GetError().find("x64") != std::string::npos, "architecture rejection is explicit");
-#endif
+    #endif
         std::cout << "Passed " << checks << " MTA game adapter host checks\n";
         return 0;
     }
@@ -213,3 +289,4 @@ int wmain(int argc, wchar_t** argv)
         return 1;
     }
 }
+#endif

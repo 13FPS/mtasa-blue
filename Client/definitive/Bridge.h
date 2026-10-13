@@ -71,3 +71,15 @@ DE_BRIDGE_API std::uint32_t DE_NativePadRead(std::uint32_t pad, std::uint32_t wh
 // Callers must require a successful capture before interpreting observed zero.
 DE_BRIDGE_API std::uint32_t DE_NativeDeviceRead(std::uint32_t index);
 DE_BRIDGE_API void          DE_NativePadReset();
+
+// Exercise the actual MTA-owned backend and Core consumer in the compatibility
+// harness. This is a bounded local movement trial, not a remote-player facade.
+// Phase0=neutral,1=MTA walk forwards,2=forwards,3=forwards+sprint. No OS key
+// mapping or animation commands are used; the module synthesizes MTA actions.
+DE_BRIDGE_API int DE_MtaMovementBegin();
+DE_BRIDGE_API int DE_MtaMovementSubmit(std::uint32_t phase);
+DE_BRIDGE_API int DE_MtaMovementCapture();
+// A successful capture fixes the metrics cache; End also publishes final metrics.
+// Components0/1=bound/active,2..9=counters,10=failureReason,11=raw move state.
+DE_BRIDGE_API std::uint32_t DE_MtaMovementRead(std::uint32_t component);
+DE_BRIDGE_API int           DE_MtaMovementEnd();

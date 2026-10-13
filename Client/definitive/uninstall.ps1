@@ -48,6 +48,14 @@ $relativePaths = @($installed.files | ForEach-Object { $_.path })
 if ($relativePaths -contains 'CLEO/de-online/native-pad-reference.mjs') {
     $allowedPaths += 'CLEO/de-online/native-pad-reference.mjs'
 }
+# Older 16/17-file installs remain removable. The new trial script and the
+# real MTA backend are admitted together, never as arbitrary extra DLL paths.
+$hasMovementScript = $relativePaths -contains 'CLEO/de-online/native-movement-trial.mjs'
+$hasGameDe = $relativePaths -contains 'CLEO/de-online/game_de.dll'
+if ($hasMovementScript -ne $hasGameDe -or ($hasMovementScript -and $relativePaths -notcontains 'CLEO/de-online/native-pad-reference.mjs')) {
+    throw 'Incomplete MTA movement package ownership.'
+}
+if ($hasMovementScript) { $allowedPaths += @('CLEO/de-online/native-movement-trial.mjs', 'CLEO/de-online/game_de.dll') }
 if ($relativePaths.Count -ne $allowedPaths.Count -or @($relativePaths | Select-Object -Unique).Count -ne $allowedPaths.Count -or
     @(Compare-Object $allowedPaths $relativePaths).Count -ne 0) {
     throw 'Installation manifest does not contain exactly the known owned files.'

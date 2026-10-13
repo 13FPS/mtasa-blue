@@ -16,6 +16,14 @@ project "Game DE Host Tests"
 	dependson { "Game DE" }
 	filter "architecture:not x86_64"
 		flags { "ExcludeFromBuild" }
+	filter { "architecture:x86_64", "configurations:not Release" }
+		flags { "ExcludeFromBuild" }
+	if not _OPTIONS["with-definitive-adapter"] then
+		-- This host exercises the opt-in backend; default solutions should not
+		-- implicitly build a backend whose native dependencies are excluded.
+		filter "architecture:x86_64"
+			flags { "ExcludeFromBuild" }
+	end
 	filter "system:not windows"
 		flags { "ExcludeFromBuild" }
 	filter {}

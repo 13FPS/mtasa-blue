@@ -6,7 +6,7 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
-**Next live check: actual MTA Core startup.**
+**Completed live check: actual MTA Core startup.**
 `package.ps1 -Mode Smoke -MtaCoreStartupReference` stages 21 owned files,
 including the normal opt-in x64 `core.dll` and its `pthread.dll` dependency.
 After manual Ctrl+Shift+F9 activation and release, one bridge worker loads that
@@ -28,8 +28,14 @@ logger resolved the classic install root before localization existed. Its null
 read at Core RVA `0x41FAB` matches an independently reproduced loader fault.
 The old classic-layout fixture hid that assumption. Timing-path discovery now
 waits until diagnostics are enabled, and the x64 owner supplies Core's existing
-install-root override before startup logging. The corrected in-game check is
-pending. Probe API2 publishes 19 fields, including the original Win32 load error,
+install-root override before startup logging. The corrected in-game check
+passed in 70 ms: actual Core reached exact-image binding, backend pulse and
+the unchanged gameplay gate, with clean adapter/Core unloading and no loader
+error. All 21 installed hashes match, and a separate process-module snapshot
+confirms Core and Game DE are absent after cleanup. The human reported normal
+gameplay continuation. Normal shutdown and all 21 hashes are verified; the
+5,730-byte final log retains the complete startup record and normal exit.
+Probe API2 publishes 19 fields, including the original Win32 load error,
 only after worker cleanup. Use `utils/definitive_edition/core_startup_log.py`
 to assess its saved log. Source defaults and ordinary mode switches disable it;
 it is mutually exclusive with the other Smoke trials. Intact 16/17/19-file
@@ -42,6 +48,16 @@ and passes 1,901 controlled-loader checks plus 46 checks with the real Core in
 an owned non-game host. A deliberate 2.2-second DLL initializer proves that
 polling/cancellation do not wait on the loader lock. The actual Core run keeps
 its expected wrong-image rejection; it does not validate GTA startup.
+
+Core now also exposes configured-control dispatch and context-fed frame
+processing in its actual `CKeyBinds` class. Classic input calls the same frame
+builder and post-publication wheel cleanup. The actual-class fixture relinks
+normal Core objects with test-only exports and passes 185 binding/adapter
+checks plus 33 host checks through the real Game DE module. The old Core object
+fails on exactly the three new methods. Normal Core builds and both Win32
+configurations pass. DE live events, context ownership, XML/default loading
+and full gameplay remain to be connected; this source change has not replaced
+the installed, runtime-validated Core.
 
 **ABI5 adds an explicit MTA-owned engine movement trial.** Build the normal
 Game DE Release/x64 module and this bridge, then package with

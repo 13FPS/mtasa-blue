@@ -150,6 +150,20 @@ public:
     void DoPreFramePulse();
     void DoPostFramePulse();
 
+    struct ConfiguredControlFrame
+    {
+        std::uint64_t     heldActions = 0;
+        MtaInput::Context context;
+        CControllerState  controller;
+    };
+
+    // Reuse this manager's configured controls without requiring a CGame/GUI
+    // facade. The caller supplies known context and publishes before Finish;
+    // key/control tables remain module-global, so only one owner may drive them.
+    bool                   ProcessConfiguredControlKey(const char* key, bool down, bool allowPress = true);
+    ConfiguredControlFrame BuildConfiguredControlFrame(const MtaInput::Context& context);
+    void                   FinishConfiguredControlFrame();
+
     bool LoadFromXML(CXMLNode* pMainNode);
     bool SaveToXML(CXMLNode* pMainNode);
     void LoadDefaultBinds();
@@ -165,6 +179,8 @@ public:
     bool TriggerKeyStrokeHandler(const SString& strKey, bool bState, bool bIsConsoleInputKey);
 
 private:
+    bool DispatchConfiguredControlBind(CGTAControlBind* bind, bool down, bool allowPress);
+
     CCore* m_pCore;
 
     std::list<std::unique_ptr<CKeyBind>> m_binds;

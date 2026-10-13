@@ -1,13 +1,13 @@
 # GTA San Andreas Definitive Edition: findings and port tracker
 
-Last updated: **2026-10-13 19:17** (Europe/Luxembourg).
+Last updated: **2026-10-13 19:55** (Europe/Luxembourg).
 Experimental branch: `definitive-edition-port`.
 Source baseline: `860e41ddeb6635b5dd138fef6c8a492d2f982ce0`.
 
 ## Current result
 
-**Current implementation: scoped local engine movement writes and a real
-Release/x64 Core build.** ABI5 adds a bounded trial inside the normal Game DE
+**Current implementation: validated local engine movement and actual MTA Core
+startup through its retained gameplay gate.** ABI5 adds a bounded trial inside the normal Game DE
 module, called through MTA Core's existing module consumer. It reuses shared
 MTA action synthesis, writes only the current/previous pad pair during the
 verified local on-foot callback, routes its native provider queries, then
@@ -37,12 +37,27 @@ classic-layout fixture had hidden this dependency.
 The corrected 21-file candidate loads Core on one owned worker after manual F9
 activation, reads binding/pulse/gameplay-gate diagnostics and unloads it. CLEO
 yields between value-only polls, keeping slow native loads off its watchdog.
-This read-only check needs no walking; its corrected live result is pending.
+The corrected live check passed in 70 ms, with exact-image binding, backend
+pulse, phase6/capabilities97 and the expected InitializeCore result5 at the
+unchanged gameplay gate. Loader errors and recorded failures are zero; Core
+and Game DE unload before publication. All 21 installed hashes and a separate
+post-cleanup process-module snapshot pass. The human reported normal GTA
+continuation. Normal exit and all 21 hashes pass. The final 5,730-byte log has
+SHA-256 `bffc94ca4f950f552bb87b361d8e64af8b3c2dd2c6e903dabd93bedd8bdb32e2`.
 The production worker passes 1,901 controlled-loader checks and 46 checks with
 the actual Core on one worker, including cleanup, retry and a deliberate slow
 DLL initializer. Bridge ABI checks (447), adapter checks (319), saved-log tests
 (23 methods) and ownership checks (335) pass. The corrected 21-file candidate
 is installed and hash-verified; neither test host launches the real game.
+
+Configured controls now have a context-fed path inside actual `CKeyBinds`,
+with the classic input path calling the same frame builder/wheel finish.
+Normal x64 Core builds and both Win32 configurations pass. An actual-class
+fixture linked from normal Core objects passes 185 binding/adapter checks
+and 33 host checks through the real Game DE consumer. The old object supplies
+causal missing-method evidence. This is a source-level input boundary; live
+DE events/context, XML/default import and full client startup remain required.
+The installed Core is still the earlier runtime-validated build.
 It does not complete the DE launcher,
 rendering, full CGame backend or multiplayer. The bounded candidate capability
 keeps those gameplay requirements gated. Historical milestones below describe

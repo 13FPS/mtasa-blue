@@ -61,7 +61,7 @@ binding and pulse before rejecting the still-incomplete gameplay contract;
 the bridge copies those diagnostics before unloading Core. Its 21-file package
 includes Core and pthread together. Core's real entry fixture passes 93 checks
 without loading D3D9/D3DX9, and classic Win32 option/default compilation passes.
-In-game Core startup remains pending; full input/game/remote capabilities stay
+In-game Core startup now passes through its retained gameplay gate; full input/game/remote capabilities stay
 disabled. The earlier movement result remains a validated local slice.
 
 The first real Core load failed before this adapter was initialized. Its global
@@ -71,7 +71,21 @@ path is now lazy and its x64 directory setter supplies the existing root
 override. The actual Core fixture now checks both classic and DE adapter
 layouts. The diagnostic bridge owns the whole Core lifecycle on one worker and
 the script yields between polls; cleanup and diagnostics remain on that worker.
-The corrected live startup result remains pending.
+The corrected live startup probe completed in 70 ms with phase6/capabilities97,
+the expected InitializeCore result5, no Win32 load error and clean module
+release. The human reported GTA continued normally. All 21 owned hashes match,
+and a separate module snapshot confirms Core and Game DE unloaded. Normal exit
+and all 21 installed hashes pass. This does not start full MTA gameplay or rendering.
+
+Actual Core configured controls now have a context-fed `CKeyBinds` frame path.
+Classic input calls its shared frame builder and wheel finish; an actual-class
+fixture feeds those configured action/context frames through the real Core
+consumer into this unchanged module. It passes 185 binding/adapter checks plus
+33 host checks, including aliases, remapping, callbacks, context mutation,
+wheel publication and canonical current/previous state. The test DLL reuses
+normal Core objects and adds test-only exports; normal client exports are
+unchanged. DE live event/context ownership and XML/default loading remain
+unwired, and the source change is not installed in the validated game baseline.
 
 The current offline checks pass 351 production callback cases, 7,413 routing
 cases per architecture, 1,512 module cases and 76 x64 Core-consumer cases.

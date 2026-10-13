@@ -468,14 +468,12 @@ bool CKeyBinds::ProcessKeyStroke(const SBindableKey* pKey, bool bState)
         {
             case KeyBindType::GTA_CONTROL:
             {
-                if (bAllowed)
-                {
-                    if (!bState || (!bInputGoesToGUI && (!m_pCore->IsCursorForcedVisible() || !m_pCore->IsCursorControlsToggled())))
-                    {
-                        CallGTAControlBind(static_cast<CGTAControlBind*>(bind.get()), bState);
-                        wasBindFound = true;
-                    }
-                }
+                // Keep this dispatch at its original mixed-bind position: a
+                // control callback can affect a later command/function bind.
+                if (bAllowed &&
+                    DispatchConfiguredControlBind(static_cast<CGTAControlBind*>(bind.get()), bState,
+                                                  !bState || (!bInputGoesToGUI && (!m_pCore->IsCursorForcedVisible() || !m_pCore->IsCursorControlsToggled()))))
+                    wasBindFound = true;
                 break;
             }
             case KeyBindType::COMMAND:
@@ -547,6 +545,54 @@ bool CKeyBinds::ProcessKeyStroke(const SBindableKey* pKey, bool bState)
     m_bProcessingKeyStroke = false;
     RemoveDeletedBinds();
     return wasBindFound;
+}
+
+bool CKeyBinds::DispatchConfiguredControlBind(CGTAControlBind* bind, bool down, bool allowPress)
+{
+    if (down && !allowPress)
+        return false;
+    CallGTAControlBind(bind, down);
+    return true;
+}
+
+bool CKeyBinds::ProcessConfiguredControlKey(const char* key, bool down, bool allowPress)
+{
+    if (!key)
+        return false;
+    const auto* bindable = GetBindableFromKey(key);
+    if (!bindable)
+        return false;
+
+    // This path intentionally handles controls only. Classic GUI, Lua key
+    // cancellation and mixed command/function dispatch remain in ProcessKeyStroke.
+    // Defer callback-driven removals just as that real key path already does.
+    const bool alreadyProcessing = m_bProcessingKeyStroke;
+    m_bProcessingKeyStroke = true;
+    if (bindable->iGTARelative == GTA_KEY_MSCROLLUP || bindable->iGTARelative == GTA_KEY_MSCROLLDOWN)
+        m_bMouseWheel = true;
+    GetBindableKeyState(bindable) = down;
+    bool found = false;
+    try
+    {
+        for (KeyBindPtr& bind : m_binds)
+        {
+            if (bind->isBeingDeleted || !bind->isActive || bind->type != KeyBindType::GTA_CONTROL || bind->boundKey != bindable)
+                continue;
+            if (DispatchConfiguredControlBind(static_cast<CGTAControlBind*>(bind.get()), down, allowPress))
+                found = true;
+        }
+    }
+    catch (...)
+    {
+        m_bProcessingKeyStroke = alreadyProcessing;
+        if (!alreadyProcessing)
+            RemoveDeletedBinds();
+        throw;
+    }
+    m_bProcessingKeyStroke = alreadyProcessing;
+    if (!alreadyProcessing)
+        RemoveDeletedBinds();
+    return found;
 }
 
 void CKeyBinds::Remove(CKeyBind* keyBind)
@@ -1895,26 +1941,9 @@ void CKeyBinds::DoPostFramePulse()
     if (pTask && pTask->GetTaskType() == TASK_SIMPLE_USE_GUN)
         bAimingWeapon = g_bcControls[39].bState;
 
-    if (bInVehicle != m_bInVehicle)
-    {
-        m_bInVehicle = bInVehicle;
-        if (bInVehicle)
-            CallAllGTAControlBinds(CONTROL_FOOT, false);
-        else
-            CallAllGTAControlBinds(CONTROL_VEHICLE, false);
-    }
-
-    // Transition callbacks above can change held controls. Capture actions
-    // afterwards while retaining the task-derived context sampled before them,
-    // then share the exact synthesis with MTA's other game backend.
-    std::uint64_t heldActions = 0;
-    for (const auto& control : g_bcControls)
-    {
-        if (control.bState)
-            heldActions |= MtaInput::ActionBit(control.action);
-    }
     const MtaInput::Context context{bInVehicle, bHasDetonator, bIsDead, bAimingWeapon, bEnteringVehicle};
-    CControllerState        cs = MtaInput::BuildControllerState(heldActions, context, m_DirectionHistory);
+    const auto              frame = BuildConfiguredControlFrame(context);
+    CControllerState        cs = frame.controller;
     if (!bIsDead)
     {
         bool disableGameplayControls = m_pCore->IsCursorForcedVisible() && m_pCore->IsCursorControlsToggled();
@@ -1931,7 +1960,36 @@ void CKeyBinds::DoPostFramePulse()
 
     // Sirens
     m_pCore->GetGame()->GetPad()->SetHornHistoryValue((cs.ShockButtonL == 255));
+    FinishConfiguredControlFrame();
+}
 
+CKeyBinds::ConfiguredControlFrame CKeyBinds::BuildConfiguredControlFrame(const MtaInput::Context& context)
+{
+    ConfiguredControlFrame frame;
+    frame.context = context;
+    if (frame.context.inVehicle != m_bInVehicle)
+    {
+        m_bInVehicle = frame.context.inVehicle;
+        if (frame.context.inVehicle)
+            CallAllGTAControlBinds(CONTROL_FOOT, false);
+        else
+            CallAllGTAControlBinds(CONTROL_VEHICLE, false);
+    }
+
+    // Transition callbacks above can change held controls. Capture actions
+    // afterwards while retaining the caller's context sampled before them,
+    // then share the exact synthesis with MTA's other game backend.
+    for (const auto& control : g_bcControls)
+    {
+        if (control.bState)
+            frame.heldActions |= MtaInput::ActionBit(control.action);
+    }
+    frame.controller = MtaInput::BuildControllerState(frame.heldActions, frame.context, m_DirectionHistory);
+    return frame;
+}
+
+void CKeyBinds::FinishConfiguredControlFrame()
+{
     // Unset the mousewheel states if we have any bound
     if (m_bMouseWheel)
     {

@@ -27,8 +27,9 @@ only compiling Core's module consumer into the diagnostic bridge. Its explicit
 Smoke startup reference calls the real exported initializer and records exact
 image binding, backend pulse, the retained gameplay gate and adapter teardown.
 The legacy D3DX9 import is delayed only for the opt-in x64 build. Ninety-three
-actual Core entry checks and both classic Win32 configurations pass; an in-game
-Core load is pending. This is the next startup boundary, while configured binds,
+actual Core entry checks and both classic Win32 configurations pass. The corrected
+in-game Core probe now passes exact-image binding, pulse, expected gameplay
+rejection and cleanup in 70 ms. This establishes that startup boundary, while configured binds,
 the complete game facade and DE rendering still require implementation.
 
 The first actual DE Core load exposed a pre-entry classic-layout dependency:
@@ -38,8 +39,22 @@ dump. Core now defers that path until timing is enabled and reuses its existing
 explicit root override from the x64 directory setter. Both real Core layout
 fixtures pass. The startup reference now keeps all Core calls and cleanup on
 one worker while CLEO polls value-only results, avoiding its synchronous-call
-watchdog. Full gameplay capabilities remain gated; the corrected live check is
-pending.
+watchdog. The human reported normal GTA continuation; all 21 installed hashes
+and a separate post-cleanup module snapshot pass. Normal exit and the complete
+5,730-byte shutdown log are verified.
+Full gameplay capabilities remain gated.
+
+The next input boundary is now implemented inside actual `CKeyBinds`:
+`ProcessConfiguredControlKey` uses its existing bind list/control policy,
+`BuildConfiguredControlFrame` snapshots context before transition callbacks
+and actions afterward, and `FinishConfiguredControlFrame` retains wheel
+release after publication. Classic input delegates to the same methods while
+retaining its joystick and native pad policy. A disposable DLL linked from
+normal Core objects passes 185 actual-class/adapter checks and 33 host checks;
+the preserved old object fails to resolve all three methods. This reuses MTA's
+configured controls without a second bind manager. A live DE event/context
+owner and existing XML/default imports remain required before claiming live
+configured input. The tested in-game Core remains the earlier validated build.
 
 ```mermaid
 flowchart LR

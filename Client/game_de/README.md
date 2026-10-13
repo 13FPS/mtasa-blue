@@ -23,11 +23,37 @@ This is logical MTA input, separate from native controller observations and
 their coverage mask. It does not poll hardcoded keys, infer sprint from velocity,
 apply joystick overrides, or write an engine pad. Core retains key bindings,
 context-transition callbacks, focus/cursor policy and joystick merging. The
-module's factory ABI is now **2** because its virtual interface grew; ABI1 is
-rejected before returning an incompatible vtable. The historical probe's bridge
+action interface was introduced in ABI2. The factory ABI is now **3** for native
+binding/read methods; ABI1 and ABI2 are rejected before returning an incompatible
+vtable. The historical probe's bridge
 ABI is independent.
 
-The factory returns no full `CGame`. Engine input read/write and remote player
+`BindNativeInput` explicitly binds the read-only `NativePadReader`. It reuses
+[Plugin-SDK's SA Unreal pad signature and layout](https://github.com/DK22Pac/plugin-sdk/blob/15f15b60bbf74c106e1b496ff92c98764abf4605/plugin_sa_unreal/game_sa_unreal/CPad.cpp).
+The exact local executable was scanned offline: the signature occurs once in
+executable code and resolves to the two-pad data array at RVA `0x53e8810`.
+The reader checks the known executable SHA-256, AMD64/PE32+ image bounds, live
+instruction bytes and relative target, section attributes and readable committed
+pages owned by the main image. It copies native NewState/OldState on the binding
+thread and preserves caller output on failed reads. It installs no hooks.
+
+Only a successful explicit binding adds `EngineInputRead`; failed reads, reset
+and shutdown discard that binding. Raw native state is separate from synthesized
+MTA actions and caller observations. Keyboard aggregation, update timing and
+actual in-game behavior remain unverified. The test host rejects binding because
+its executable is not the pinned game. This reader has not been installed in GTA.
+
+The native-reader source/build milestone passes 1,474 module checks, 59 x64
+consumer checks, three x86 rejections and 1,325 reader checks per architecture.
+The normal module and host builds and both classic Core compile-only
+configurations pass. All 84 certified source hashes remain unchanged.
+Certificate:
+`Build/mta-owned-adapter-check/20261013-123815-061c097f099547aabb949f9e5694cf5a/test-result.json`.
+The module SHA-256 is
+`063cd5bc16c0900b498747aba226674f72bca6049145e18cd72b8225354abf7f`;
+its imports are `bcrypt.dll` and `KERNEL32.dll`. Live native input remains unverified.
+
+The factory returns no full `CGame`. Engine input writes and remote player
 context are unavailable. `--with-definitive-adapter` enables Core's early startup
 check, which rejects these missing capabilities before the CCore constructor's
 classic configuration, GUI, hooks and game factories. Full Core/multiplayer/
@@ -65,7 +91,7 @@ Certificate:
 `Build/mta-owned-adapter-check/20261013-121621-e64f282ab4ee4f2ba5158847fc82482f/test-result.json`.
 The actual module SHA-256 is
 `1df11645e19a3562368a1bca3f30b89653e7e22c2662ec4d070cd62a77b7a02e`;
-its only imported DLL is `KERNEL32.dll`. It has not been loaded into GTA.
+that input-milestone DLL imports only `KERNEL32.dll`. It has not been loaded into GTA.
 
 For the classic Core compile, this workspace used Microsoft's signed
 [D3DX package](https://www.nuget.org/packages/Microsoft.DXSDK.D3DX/9.29.952.8)

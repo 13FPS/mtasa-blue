@@ -15,9 +15,9 @@ class CGame;
 
 namespace mta::game_de
 {
-    // ABI2 adds MTA action synthesis virtuals. An ABI1 consumer must not receive
-    // this changed vtable even though the earlier observation methods remain.
-    inline constexpr std::uint32_t AdapterAbiVersion = 2;
+    // ABI3 adds explicit native input binding/read virtuals. Earlier consumers
+    // must not receive this changed vtable even though their methods remain.
+    inline constexpr std::uint32_t AdapterAbiVersion = 3;
     inline constexpr std::uint32_t AdapterControllerMask = 0xfffffu;
 
     enum class AdapterCapability : std::uint64_t
@@ -81,6 +81,15 @@ namespace mta::game_de
         CControllerState previous;
     };
 
+    // Raw values copied from the build-pinned engine's NewState/OldState.
+    // Reading this representation does not certify keyboard/device aggregation
+    // or mean that MTA's logical action state has been applied to the engine.
+    struct NativeControllerState
+    {
+        CControllerState current;
+        CControllerState previous;
+    };
+
     class IGameAdapter
     {
     public:
@@ -98,6 +107,8 @@ namespace mta::game_de
         virtual Status        GetLocalObservation(LocalObservation& observation) noexcept = 0;
         virtual Status        SubmitControlActions(const ControlActionFrame& frame) noexcept = 0;
         virtual Status        GetMtaInputState(MtaInputState& state) noexcept = 0;
+        virtual Status        BindNativeInput() noexcept = 0;
+        virtual Status        ReadNativeControllerState(std::uint32_t padIndex, NativeControllerState& state) noexcept = 0;
 
     protected:
         // Release keeps allocation/deallocation in the factory's module. The

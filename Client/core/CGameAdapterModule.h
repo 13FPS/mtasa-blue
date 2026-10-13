@@ -27,6 +27,8 @@ public:
     bool                GetLocalObservation(mta::game_de::LocalObservation& observation);
     bool                SubmitControlActions(const mta::game_de::ControlActionFrame& frame);
     bool                GetMtaInputState(mta::game_de::MtaInputState& state);
+    bool                BindNativeInput();
+    bool                ReadNativeControllerState(std::uint32_t padIndex, mta::game_de::NativeControllerState& state);
     void                Stop() noexcept;
 
     bool               IsStarted() const noexcept { return m_adapter != nullptr; }

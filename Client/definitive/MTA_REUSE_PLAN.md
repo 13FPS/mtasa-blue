@@ -56,6 +56,16 @@ twenty-field native observation mask. No engine capability is inferred from it.
 The early full-gameplay gate remains in place. The dedicated x86/x64 regression
 runner compares the shared policy with the original committed implementation.
 
+ABI3 adds an explicit read-only native pad binding inside `Client/game_de`.
+It uses Plugin-SDK's SA Unreal signature/layout after an offline unique-match
+check on the exact local executable. `NativePadReader` verifies that fingerprint,
+the loaded instruction/relative data target, image bounds and page protections.
+It copies native current/previous state on its binding thread; invalid reads
+preserve output. No hooks or engine writes are installed. `EngineInputRead` is
+advertised only while explicitly bound, and reset/shutdown discard the binding.
+This is implemented source with static-image and bounded-copy tests, not an
+in-game keyboard or remote-player validation. Full startup remains gated.
+
 MTA's ordinary remote movement already combines synchronized controls and
 sender velocity, GTA player simulation, and correction of network position
 error. The next work follows those existing paths. A new receipt-speed estimator

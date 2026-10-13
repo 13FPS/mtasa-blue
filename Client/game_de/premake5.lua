@@ -7,6 +7,7 @@ project "Game DE"
 	warnings "Extra"
 	flags { "FatalWarnings" }
 	defines { "MTA_GAME_DE_EXPORTS" }
+	links { "bcrypt" }
 
 	-- This is an MTA backend module. It has no standalone transport, CLEO
 	-- lifecycle, classic engine addresses or dependency on game_sa's hooks.

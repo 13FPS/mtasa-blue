@@ -6,6 +6,7 @@
 
 #include <game/CGameAdapter.h>
 #include "ControllerSnapshot.h"
+#include "NativePadReader.h"
 
 #include <atomic>
 #include <cmath>
@@ -64,9 +65,9 @@ namespace mta::game_de
 
             std::uint64_t GetCapabilities() const noexcept override
             {
-                // MTA's digital action policy can produce logical input without
-                // claiming a DE pad read/write or remote player binding.
-                return static_cast<std::uint64_t>(AdapterCapability::ObservationIngest) | static_cast<std::uint64_t>(AdapterCapability::MtaInputSynthesis);
+                // Native read availability is added only after an explicit
+                // build/image binding; synthesis alone cannot establish it.
+                return capabilities.load();
             }
 
             CGame* GetGameInterface() const noexcept override { return nullptr; }
@@ -143,6 +144,38 @@ namespace mta::game_de
                 return Status::Ok;
             }
 
+            Status BindNativeInput() noexcept override
+            {
+                const auto status = Access();
+                if (status != Status::Ok)
+                    return status;
+                // Ordinary module startup does not hash the executable or
+                // touch engine memory before its owning Core requests binding.
+                const bool bound = nativePad.Bind();
+                capabilities.store(BaseCapabilities | (bound ? static_cast<std::uint64_t>(AdapterCapability::EngineInputRead) : 0));
+                return bound ? Status::Ok : Status::Unsupported;
+            }
+
+            Status ReadNativeControllerState(std::uint32_t padIndex, NativeControllerState& state) noexcept override
+            {
+                const auto status = Access();
+                if (status != Status::Ok)
+                    return status;
+                if (padIndex >= 2)
+                    return Status::InvalidArgument;
+                if (!nativePad.IsBound())
+                    return Status::Unsupported;
+                NativeControllerState next;
+                if (!nativePad.Read(padIndex, next.current, next.previous))
+                {
+                    nativePad.Reset();
+                    capabilities.store(BaseCapabilities);
+                    return Status::Unsupported;
+                }
+                state = next;
+                return Status::Ok;
+            }
+
         private:
             Status Access() const noexcept
             {
@@ -162,19 +195,25 @@ namespace mta::game_de
                 directionHistory = MtaInput::DirectionHistory();
                 inputState = MtaInputState();
                 hasInputState = false;
+                nativePad.Reset();
+                capabilities.store(BaseCapabilities);
             }
 
             // Native access will require a real backend binding. For this first
             // module, the Core pointer is identity only and is never dereferenced.
-            CCoreInterface*              owner = nullptr;
-            std::atomic<DWORD>           ownerThread{0};
-            bool                         initialized = false;
-            bool                         hasObservation = false;
-            LocalObservation             latest;
-            deonline::ControllerSnapshot controller;
-            MtaInput::DirectionHistory   directionHistory;
-            MtaInputState                inputState;
-            bool                         hasInputState = false;
+            CCoreInterface*                owner = nullptr;
+            std::atomic<DWORD>             ownerThread{0};
+            bool                           initialized = false;
+            bool                           hasObservation = false;
+            LocalObservation               latest;
+            deonline::ControllerSnapshot   controller;
+            MtaInput::DirectionHistory     directionHistory;
+            MtaInputState                  inputState;
+            bool                           hasInputState = false;
+            static constexpr std::uint64_t BaseCapabilities =
+                static_cast<std::uint64_t>(AdapterCapability::ObservationIngest) | static_cast<std::uint64_t>(AdapterCapability::MtaInputSynthesis);
+            std::atomic<std::uint64_t> capabilities{BaseCapabilities};
+            NativePadReader            nativePad;
         };
     }
 

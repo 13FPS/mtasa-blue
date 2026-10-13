@@ -99,7 +99,8 @@ namespace
 
     void TestFactoryAndLifecycle()
     {
-        Check(CreateGameAdapter(0) == nullptr && CreateGameAdapter(1) == nullptr && CreateGameAdapter(AdapterAbiVersion + 1) == nullptr,
+        Check(CreateGameAdapter(0) == nullptr && CreateGameAdapter(1) == nullptr && CreateGameAdapter(2) == nullptr &&
+                  CreateGameAdapter(AdapterAbiVersion + 1) == nullptr,
               "reject old and unknown factory ABIs before exposing the changed vtable");
         OwnedAdapter adapter;
         Check(adapter.value != nullptr, "matching ABI creates a module-owned adapter");
@@ -233,10 +234,12 @@ namespace
         Check(adapter.value && adapter.value->Initialize(owner.Get()) == Status::Ok, "bind the operational game thread");
         const auto sample = Observation();
         Check(adapter.value->PublishLocalObservation(sample) == Status::Ok, "publish before a foreign-thread attempt");
-        std::array<Status, 8> statuses{};
-        LocalObservation      foreignOutput = Observation(999);
-        MtaInputState         foreignInput;
+        std::array<Status, 10> statuses{};
+        LocalObservation       foreignOutput = Observation(999);
+        MtaInputState          foreignInput;
         foreignInput.current.ButtonCross = 19;
+        NativeControllerState foreignNative;
+        foreignNative.current.ButtonCross = 23;
         std::thread other(
             [&]
             {
@@ -247,13 +250,16 @@ namespace
                             adapter.value->PublishLocalObservation(Observation(2000)),
                             adapter.value->GetLocalObservation(foreignOutput),
                             adapter.value->SubmitControlActions({MtaInput::ActionBit(SPRINT), {}}),
-                            adapter.value->GetMtaInputState(foreignInput)};
+                            adapter.value->GetMtaInputState(foreignInput),
+                            adapter.value->BindNativeInput(),
+                            adapter.value->ReadNativeControllerState(0, foreignNative)};
             });
         other.join();
         for (const auto status : statuses)
             Check(status == Status::WrongThread, "foreign threads cannot operate or tear down the adapter");
         Check(foreignOutput.sampleAtMs == 999, "foreign read leaves caller output untouched");
         Check(foreignInput.current.ButtonCross == 19, "foreign logical input read leaves caller output untouched");
+        Check(foreignNative.current.ButtonCross == 23, "foreign native read leaves caller output untouched");
         LocalObservation output;
         Check(adapter.value->GetLocalObservation(output) == Status::Ok, "foreign thread attempts leave the owner publication intact");
         SameObservation(output, sample);
@@ -341,11 +347,36 @@ namespace
         SameController(output.current, both);
         SameController(output.previous, CControllerState());
     }
+
+    void TestNativeInputRejection()
+    {
+        OwnerIdentity owner;
+        OwnedAdapter  adapter;
+        Check(adapter.value != nullptr, "create native input rejection fixture");
+        NativeControllerState output;
+        output.current.ButtonCross = 23;
+        output.previous.LeftStickX = -19;
+        const auto original = output;
+        Check(adapter.value->BindNativeInput() == Status::NotInitialized && adapter.value->ReadNativeControllerState(0, output) == Status::NotInitialized,
+              "native binding and reads require Core initialization");
+        Check(adapter.value->Initialize(owner.Get()) == Status::Ok, "initialize the native input fixture");
+        Check(adapter.value->ReadNativeControllerState(2, output) == Status::InvalidArgument, "reject a pad outside the two-element native array");
+        Check(adapter.value->ReadNativeControllerState(0, output) == Status::Unsupported, "native reads require an explicit binding");
+        Check(adapter.value->BindNativeInput() == Status::Unsupported, "a test executable cannot bind the pinned commercial game image");
+        Check(adapter.value->GetCapabilities() == implementedCapabilities, "failed binding cannot claim engine input read or write capabilities");
+        for (std::uint32_t pad = 0; pad < 2; ++pad)
+            Check(adapter.value->ReadNativeControllerState(pad, output) == Status::Unsupported, "failed binding keeps both native pads unavailable");
+        SameController(output.current, original.current);
+        SameController(output.previous, original.previous);
+        Check(adapter.value->Reset() == Status::Ok && adapter.value->GetCapabilities() == implementedCapabilities,
+              "reset retains only the non-engine capabilities");
+        Check(adapter.value->Shutdown() == Status::Ok && adapter.value->BindNativeInput() == Status::NotInitialized, "shutdown prevents late native binding");
+    }
 }
 
 int main()
 {
-    static_assert(AdapterAbiVersion == 2 && AdapterControllerMask == 0xfffff);
+    static_assert(AdapterAbiVersion == 3 && AdapterControllerMask == 0xfffff);
     static_assert(std::is_nothrow_invocable_v<decltype(CreateGameAdapter), std::uint32_t>);
     try
     {
@@ -354,6 +385,7 @@ int main()
         TestInvalidObservations();
         TestThreadOwnership();
         TestMtaInput();
+        TestNativeInputRejection();
         std::cout << "Passed " << checks << " MTA Game DE adapter checks\n";
         return 0;
     }

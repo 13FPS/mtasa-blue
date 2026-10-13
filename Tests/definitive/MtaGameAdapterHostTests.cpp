@@ -102,10 +102,21 @@ namespace
             Check(host.GetLocalObservation(readback) && readback.sampleAtMs == 1100 && readback.controller.ButtonCross == 255 &&
                       readback.controllerKnownMask == mta::game_de::AdapterControllerMask && !host.IsGameplayReady(),
                   "logical synthesis neither overwrites native evidence nor opens the gameplay gate");
+            mta::game_de::NativeControllerState native;
+            native.current.ButtonCross = 23;
+            Check(!host.ReadNativeControllerState(0, native) && native.current.ButtonCross == 23,
+                  "Core cannot read native input without explicit game binding");
+            Check(!host.BindNativeInput(), "the real module rejects native binding in this non-game host");
+            Check((host.GetCapabilities() & static_cast<std::uint64_t>(mta::game_de::AdapterCapability::EngineInputRead)) == 0 && !host.IsGameplayReady(),
+                  "a rejected native binding leaves engine/gameplay capabilities unavailable");
+            Check(host.GetMtaInputState(input) && input.current.ButtonCross == 255 && host.GetLocalObservation(readback) && readback.sampleAtMs == 1100,
+                  "failed native binding preserves MTA logical input and caller observations");
             bool                        foreignPulse = true;
             bool                        foreignReset = true;
             bool                        foreignSubmit = true;
             bool                        foreignRead = true;
+            bool                        foreignBind = true;
+            bool                        foreignNativeRead = true;
             mta::game_de::MtaInputState foreignInput;
             foreignInput.current.ButtonCross = 19;
             std::uint64_t foreignCapabilities = 99;
@@ -117,12 +128,15 @@ namespace
                     foreignCapabilities = host.GetCapabilities();
                     foreignSubmit = host.SubmitControlActions({});
                     foreignRead = host.GetMtaInputState(foreignInput);
+                    foreignBind = host.BindNativeInput();
+                    foreignNativeRead = host.ReadNativeControllerState(0, native);
                     host.Stop();
                 });
             foreign.join();
             Check(!foreignPulse && !foreignReset && foreignCapabilities == 0, "foreign thread cannot invoke owned callbacks or claim capabilities");
             Check(!foreignSubmit && !foreignRead && foreignInput.current.ButtonCross == 19,
                   "logical input shares Core thread ownership and preserves failed reader output");
+            Check(!foreignBind && !foreignNativeRead && native.current.ButtonCross == 23, "native binding and reads retain the owning Core thread boundary");
             Check(host.IsStarted() && GetModuleHandleW(modulePath.c_str()) != nullptr, "foreign teardown cannot unload code owned by Core");
             Check(host.GetLocalObservation(readback) && readback.sampleAtMs == 1100, "rejected foreign reset preserves caller evidence");
             Check(host.Reset(), "owning Core can reset the initialized real module");

@@ -15,6 +15,7 @@ $developerCommand = Join-Path $visualStudio 'Common7/Tools/VsDevCmd.bat'
 $outputRoot = Join-Path $taskRoot ('Build/mta-game-de-module/' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
 $sourceNames = @('Client/sdk/game/CGameAdapter.h', 'Client/game_de/GameAdapter.cpp', 'Client/game_de/ControllerSnapshot.h',
+    'Client/game_de/NativePadReader.h', 'Client/game_de/NativePadReader.cpp',
     'Client/definitive/MtaControllerSnapshot.h', 'Shared/sdk/CControllerState.h',
     'Shared/sdk/CControllerActions.h', 'Shared/sdk/CControlStateSynthesis.h',
     'Tests/definitive/GameAdapterModuleTests.cpp', 'Tests/definitive/test_game_adapter_module.ps1')
@@ -38,8 +39,8 @@ $common = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/MD','/DNOMINMAX',
 $moduleExit = $null
 $moduleSource = Join-Path $taskRoot 'Client/game_de/GameAdapter.cpp'
 if (Test-Path -LiteralPath $moduleSource) {
-    $moduleArguments = $common + @('/LD','/DMTA_GAME_DE_EXPORTS', $moduleSource,
-        ('/Fo' + (Join-Path $outputRoot 'module.obj')), ('/Fe' + $module), '/link', ('/IMPLIB:' + $library))
+    $moduleArguments = $common + @('/LD','/DMTA_GAME_DE_EXPORTS', $moduleSource, (Join-Path $taskRoot 'Client/game_de/NativePadReader.cpp'),
+        ('/Fo' + $outputRoot + [IO.Path]::DirectorySeparatorChar), ('/Fe' + $module), '/link', ('/IMPLIB:' + $library), 'bcrypt.lib')
     $moduleOutput = @(& $compiler @moduleArguments 2>&1)
     $moduleExit = $LASTEXITCODE
     $moduleOutput | Set-Content -LiteralPath (Join-Path $outputRoot 'module-compile.log') -Encoding utf8

@@ -13,7 +13,9 @@ module, with this harness retaining a compatibility include. The opt-in Core
 branch rejects missing gameplay capabilities before its classic startup code.
 The module supports caller observations and now reuses Core's existing digital
 action synthesis through ABI2. Logical walk/sprint state stays separate from
-native observations; no engine read/write capability is claimed. Classic Core
+native observations. ABI3 also provides an explicit build-pinned native pad
+reader in `game_de`; its live keyboard semantics remain unverified. Engine input
+writes and remote player context are unavailable. Classic Core
 calls the same helper while retaining its bind callbacks and joystick/native
 write policy. x64 Core, full game/multiplayer and rendering services remain
 required. Current build and regression results are recorded in the

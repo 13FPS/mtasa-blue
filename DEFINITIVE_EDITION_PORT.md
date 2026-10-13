@@ -1,6 +1,6 @@
 # GTA San Andreas Definitive Edition: findings and port tracker
 
-Last updated: **2026-10-13 12:19** (Europe/Luxembourg).
+Last updated: **2026-10-13 12:40** (Europe/Luxembourg).
 Experimental branch: `definitive-edition-port`.
 Source baseline: `860e41ddeb6635b5dd138fef6c8a492d2f982ce0`.
 
@@ -26,7 +26,7 @@ CCore constructor. Missing full-game/input-write/remote-context capabilities
 reject startup before its classic configuration, GUI, hooks or game factories.
 The exported initializer catches that rejection and returns failure. Default
 classic startup is unchanged. Current capabilities are observation ingestion and
-MTA digital action synthesis;
+MTA digital action synthesis, plus an explicit build-pinned native pad read path;
 no fake partial `CGame` is exposed. Core's existing DLL file hooks and classic
 process-detection gate still precede that constructor, and x64 Core/multiplayer/
 render startup remain unported. Normal build and focused host verification are
@@ -83,6 +83,29 @@ usable full client. Those paths still require a DE/x64 implementation. The
 available CLEO 1.5.1 SDK and runtime's 32 exports provide no C++ native invoker;
 the compatibility harness invokes game natives through its JavaScript runtime.
 No unknown function signatures, private layouts or raw offsets were introduced.
+
+**A native pad reader is implemented inside the MTA backend.**
+Plugin-SDK's dedicated SA Unreal source supplies the pad layout and a signature;
+an offline scan of the exact known executable finds one matching instruction,
+resolving to the writable two-pad array at RVA `0x53e8810`. The source pin is
+`15f15b60bbf74c106e1b496ff92c98764abf4605` (Zlib). This does not import the SDK's
+incomplete pool/player/script implementations or its first-match resolver.
+`NativePadReader` checks the executable fingerprint, AMD64/PE32+ bounds, live
+instruction/RIP target and committed image page protections before copying
+NewState/OldState. Its reads run on the binding thread and preserve output on
+failure. ABI3 exposes explicit binding and reads through the existing MTA-owned
+module consumer. EngineInputRead is conditional on successful binding; no writes,
+hooks, remote-player context or gameplay startup are enabled by this slice.
+The native keyboard/device semantics have not been tested in GTA.
+
+The native-reader checkpoint builds the normal Game DE/host projects and passes
+1,474 module checks, 59 x64 host checks, three x86 rejections and 1,325 bounded
+reader checks per architecture. Opt-in/default classic Core compilation passes;
+the full Core is not linked or run. All 84 source hashes remain stable.
+Certificate:
+`Build/mta-owned-adapter-check/20261013-123815-061c097f099547aabb949f9e5694cf5a/test-result.json`.
+The actual module SHA-256 is
+`063cd5bc16c0900b498747aba226674f72bca6049145e18cd72b8225354abf7f`.
 
 **The first shared MTA correction slice is implemented.**
 `Shared/sdk/CPedPositionInterpolation.h` contains the existing incremental

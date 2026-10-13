@@ -65,6 +65,11 @@ def analyze(rows=None, shutdown=True, require_exit=True):
 
 
 class CoreMovementEvidenceTests(unittest.TestCase):
+    def test_partial_renderer_markers_cannot_accompany_an_earlier_movement_success(self):
+        rows = fixture()
+        rows.append(dict(event="core_render_reference_sample", state=[0] * 40))
+        self.assertFalse(analyze(rows)["core_movement_reference_complete"])
+
     def test_complete_scoped_write_keeps_global_claims_false(self):
         result = analyze()
         self.assertTrue(result['core_movement_reference_complete'], result)

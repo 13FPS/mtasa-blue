@@ -51,6 +51,11 @@ class CoreStartupLogTests(unittest.TestCase):
         for claim in ("full_mta_boot_verified", "de_renderer_verified", "engine_input_write_verified", "remote_player_context_verified"):
             self.assertIs(result[claim], False)
 
+    def test_partial_renderer_markers_cannot_accompany_an_earlier_startup_success(self):
+        rows = fixture()
+        rows.insert(-2, {"event": "core_render_reference_sample", "state": [0] * 40})
+        self.assertFalse(self.analyze(rows)["core_startup_reference_complete"])
+
     def test_existing_renderer_baseline_is_permitted_but_new_bits_are_not(self):
         for before in range(4):
             for after in range(4):

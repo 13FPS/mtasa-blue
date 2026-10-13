@@ -105,3 +105,9 @@ DE_BRIDGE_API std::uint32_t DE_CoreInputRead(std::uint32_t component);
 DE_BRIDGE_API int DE_CoreMovementBegin();
 DE_BRIDGE_API int DE_CoreMovementCapture();
 DE_BRIDGE_API std::uint32_t DE_CoreMovementRead(std::uint32_t component);
+
+// Renderer observations share the retained async Core owner; these exports
+// expose only coherent numeric snapshots and never native rendering pointers.
+DE_BRIDGE_API int DE_CoreRenderBegin();
+DE_BRIDGE_API int DE_CoreRenderCapture();
+DE_BRIDGE_API std::uint32_t DE_CoreRenderRead(std::uint32_t component);

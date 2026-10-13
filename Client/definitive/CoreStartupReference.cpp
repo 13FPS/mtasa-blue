@@ -34,23 +34,33 @@ namespace deonline
         return Start(moduleAddress, true, true);
     }
 
-    bool CoreStartupReference::Start(const void* moduleAddress, bool configuredInput, bool configuredMovement) noexcept
+    bool CoreStartupReference::BeginRenderReference(const void* moduleAddress) noexcept
+    {
+        return Start(moduleAddress, true, false, true);
+    }
+
+    bool CoreStartupReference::Start(const void* moduleAddress, bool configuredInput, bool configuredMovement, bool configuredRender) noexcept
     {
         DWORD      expected = 0;
         const auto current = GetCurrentThreadId();
-        if ((!ownerThread.compare_exchange_strong(expected, current) && expected != current) || !moduleAddress || IsPending() || thread)
+        if ((configuredMovement && configuredRender) || (!ownerThread.compare_exchange_strong(expected, current) && expected != current) || !moduleAddress ||
+            IsPending() || thread)
             return false;
         address = moduleAddress;
         inputRequested = configuredInput;
         movementRequested = configuredMovement;
+        renderRequested = configuredRender;
         AcquireSRWLockExclusive(&inputLock);
         inputAvailable = false;
         publishedInput = {};
         movementAvailable = false;
         publishedMovement = {};
+        renderAvailable = false;
+        publishedRender = {};
         ReleaseSRWLockExclusive(&inputLock);
         capturedInput = {};
         capturedMovement = {};
+        capturedRender = {};
         cancellation.store(false);
         state.store(1, std::memory_order_release);
         // Use the existing CRT worker convention instead of a joinable global
@@ -123,6 +133,22 @@ namespace deonline
         return ownerThread.load() == GetCurrentThreadId() && field < capturedMovement.size() ? capturedMovement[field] : 0;
     }
 
+    bool CoreStartupReference::CaptureRender() noexcept
+    {
+        if (ownerThread.load() != GetCurrentThreadId() || !TryAcquireSRWLockShared(&inputLock))
+            return false;
+        const bool available = renderAvailable;
+        if (available)
+            capturedRender = publishedRender;
+        ReleaseSRWLockShared(&inputLock);
+        return available;
+    }
+
+    std::uint32_t CoreStartupReference::ReadRender(std::uint32_t field) const noexcept
+    {
+        return ownerThread.load() == GetCurrentThreadId() && field < capturedRender.size() ? capturedRender[field] : 0;
+    }
+
     bool CoreStartupReference::InputCancelled()
     {
         return !inputOwner || inputOwner->cancellation.load(std::memory_order_acquire);
@@ -131,10 +157,17 @@ namespace deonline
     void CoreStartupReference::PublishInput(const std::uint32_t* snapshot, std::uint32_t count)
     {
         if (!inputOwner || !snapshot ||
-            count != (inputOwner->movementRequested ? DefinitiveMovementReference::FieldCount : DefinitiveInputReference::FieldCount))
+            count != (inputOwner->renderRequested     ? DefinitiveRenderReference::FieldCount
+                      : inputOwner->movementRequested ? DefinitiveMovementReference::FieldCount
+                                                      : DefinitiveInputReference::FieldCount))
             return;
         AcquireSRWLockExclusive(&inputOwner->inputLock);
-        if (inputOwner->movementRequested)
+        if (inputOwner->renderRequested)
+        {
+            std::copy_n(snapshot, count, inputOwner->publishedRender.begin());
+            inputOwner->renderAvailable = true;
+        }
+        else if (inputOwner->movementRequested)
         {
             std::copy_n(snapshot, count, inputOwner->publishedMovement.begin());
             inputOwner->movementAvailable = true;
@@ -258,17 +291,22 @@ namespace deonline
                 if (inputRequested)
                 {
                     using Configure = std::uint32_t (*)(std::uint32_t, DefinitiveInputReference::CancelCallback, DefinitiveInputReference::PublishCallback);
-                    const auto inputVersion = reinterpret_cast<Version>(
-                        GetProcAddress(core, movementRequested ? "MTA_DEMovementReferenceApiVersion" : "MTA_DEInputReferenceApiVersion"));
-                    const auto configure = reinterpret_cast<Configure>(
-                        GetProcAddress(core, movementRequested ? "MTA_ConfigureDEMovementReference" : "MTA_ConfigureDEInputReference"));
-                    if (!inputVersion || !configure || inputVersion() != DefinitiveInputReference::ApiVersion)
+                    const auto inputVersion = reinterpret_cast<Version>(GetProcAddress(core, renderRequested     ? "MTA_DERenderReferenceApiVersion"
+                                                                                             : movementRequested ? "MTA_DEMovementReferenceApiVersion"
+                                                                                                                 : "MTA_DEInputReferenceApiVersion"));
+                    const auto configure = reinterpret_cast<Configure>(GetProcAddress(core, renderRequested     ? "MTA_ConfigureDERenderReference"
+                                                                                            : movementRequested ? "MTA_ConfigureDEMovementReference"
+                                                                                                                : "MTA_ConfigureDEInputReference"));
+                    const auto expectedVersion = renderRequested ? DefinitiveRenderReference::ApiVersion : DefinitiveInputReference::ApiVersion;
+                    if (!inputVersion || !configure || inputVersion() != expectedVersion)
                     {
                         values[16] = 13;
                         return;
                     }
                     inputOwner = this;
-                    const auto duration = movementRequested ? DefinitiveMovementReference::MaximumDurationMs : DefinitiveInputReference::MaximumDurationMs;
+                    const auto duration = renderRequested     ? DefinitiveRenderReference::MaximumDurationMs
+                                          : movementRequested ? DefinitiveMovementReference::MaximumDurationMs
+                                                              : DefinitiveInputReference::MaximumDurationMs;
                     if (configure(duration, InputCancelled, PublishInput) != 1)
                     {
                         values[16] = 14;
@@ -288,9 +326,17 @@ namespace deonline
                         return sample[DefinitiveInputReference::Version] == DefinitiveInputReference::ApiVersion &&
                                sample[DefinitiveInputReference::Phase] == 2 && sample[DefinitiveInputReference::InputCleanupComplete] == 1;
                     };
-                    const bool inputComplete =
-                        movementRequested ? movementAvailable && complete(publishedMovement) && !publishedMovement[DefinitiveMovementReference::CleanupPending]
-                                          : inputAvailable && complete(publishedInput);
+                    const bool renderComplete =
+                        renderAvailable && publishedRender[DefinitiveRenderReference::Version] == DefinitiveRenderReference::ApiVersion &&
+                        publishedRender[DefinitiveRenderReference::Phase] == 2 && publishedRender[DefinitiveRenderReference::CleanupComplete] == 1 &&
+                        !publishedRender[DefinitiveRenderReference::CleanupPending] && !publishedRender[DefinitiveRenderReference::NativeCleanupPending] &&
+                        !publishedRender[DefinitiveRenderReference::CleanupDeadlineExceeded] &&
+                        (publishedRender[DefinitiveRenderReference::Reason] == static_cast<std::uint32_t>(DefinitiveRenderReference::StopReason::TimeBudget) ||
+                         publishedRender[DefinitiveRenderReference::Reason] == static_cast<std::uint32_t>(DefinitiveRenderReference::StopReason::Cancelled));
+                    const bool inputComplete = renderRequested     ? renderComplete
+                                               : movementRequested ? movementAvailable && complete(publishedMovement) &&
+                                                                         !publishedMovement[DefinitiveMovementReference::CleanupPending]
+                                                                   : inputAvailable && complete(publishedInput);
                     ReleaseSRWLockShared(&inputLock);
                     if (!inputComplete)
                     {
@@ -328,7 +374,9 @@ namespace deonline
         values[15] = GetModuleHandleW(L"game_de.dll") ? 1u : 0u;
         if ((values[12] & ~values[11]) && !values[16])
             values[16] = 10;
-        const auto expectedBackend = movementRequested && movementAvailable ? publishedMovement[DefinitiveMovementReference::BackendPinnedExpected] : 0u;
+        const auto expectedBackend = renderRequested && renderAvailable       ? publishedRender[DefinitiveRenderReference::BackendPinnedExpected]
+                                     : movementRequested && movementAvailable ? publishedMovement[DefinitiveMovementReference::BackendPinnedExpected]
+                                                                              : 0u;
         if ((!values[13] || values[15] != expectedBackend) && !values[16])
             values[16] = 9;
     }

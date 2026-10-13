@@ -17,11 +17,39 @@ with the complete 99,637-byte shutdown log. This establishes
 bounded local forward input through MTA, while full gameplay/render/network
 capabilities stay gated and the port stays EXPERIMENTAL.
 
-The next startup foundation reuses Core's existing module-loading sequence in
-one `CreateStartupModules` method. Both classic renderer paths delegate to it,
-preserving Network/Game/Multiplayer/XML/GUI order, the early reentrancy flag and
-existing failure handling. This removes duplicated startup policy from the
-D3D9 callback; it does not implement DE factories or rendering.
+Core's existing module-loading sequence lives in `CreateStartupModules`.
+Both classic renderer paths delegate to it, preserving
+Network/Game/Multiplayer/XML/GUI order, the early reentrancy flag and existing
+failure handling. DE admission now precedes the flag and every classic module
+load, including direct calls to that method. The full startup rejection stays
+in place until the remaining systems are ported.
+
+Core's DE `CreateGame` now requests a borrowed `CGame` facade from its selected
+adapter. The accessor requires the owning thread, an explicit capability and
+a nonnull facade, preserving output on rejection. Core records the ownership
+and leaves teardown to the adapter's successful Shutdown/Release sequence.
+Classic factory/version checks and Terminate behavior remain on the classic
+path. The production DE adapter still exposes no facade; opaque fixture
+pointers verify lease policy without pretending to implement CGame.
+
+The opt-in x64 MTA launcher also has a headless file preflight through its
+existing loader dispatch. It verifies the supported executable and a coherent
+23-file owned bundle without starting GTA or loading Core. Its valid result
+explicitly leaves launch readiness and full MTA readiness false. See the
+[preflight contract](../launch/DefinitivePreflight/README.md).
+
+The next concrete runtime boundary is a ten-second native renderer observation
+owned by the same actual Core worker. A separate optional diagnostics factory
+provides a creation-thread checked lease without changing adapter ABI6 or
+gameplay capabilities. Core consumes scalar snapshots, ends the lease before
+adapter teardown, and retains ownership when detach or final readback fails.
+The producer lifecycle used by Core passes 3,031 checks on each architecture;
+the native observer passes 467 checks including owned Detours transactions.
+The exact D3D11 viewport callback is identified statically, with complete
+function and vtable bindings. No COM operation, GPU drawing or live rendering
+has been established. `-MtaCoreRenderReference` is a separate disabled-by-default
+Smoke trial, with manual F9 activation and strict 40-field saved-log auditing.
+Its first live capture is deferred until the user is available.
 
 The preceding read-only live session ran for **60,003 ms**,
 with **1,188 native samples and 515 script snapshots**. Four directions, sprint

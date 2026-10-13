@@ -13,11 +13,15 @@ param(
     [switch]$MtaCoreStartupReference,
     [switch]$MtaCoreInputReference,
     [switch]$MtaCoreMovementReference,
+    [switch]$MtaCoreRenderReference,
     [string]$GameDirectory = 'C:\Program Files (x86)\Steam\steamapps\common\GTA San Andreas - The Definitive Edition\Gameface\Binaries\Win64'
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+if ($MtaCoreRenderReference -and ($Mode -ne 'Smoke' -or $MtaCoreMovementReference -or $MtaCoreInputReference -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot)) {
+    throw 'MTA Core renderer observation requires separate opt-in Smoke mode.'
+}
 if ($MtaCoreMovementReference -and ($Mode -ne 'Smoke' -or $MtaCoreInputReference -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot)) {
     throw 'MTA Core configured movement reference requires separate opt-in Smoke mode.'
 }
@@ -154,6 +158,20 @@ if ($coreMovementMatches -eq 1) {
     $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $coreMovementPattern,
         "export const MTA_CORE_MOVEMENT_REFERENCE = $($MtaCoreMovementReference.IsPresent.ToString().ToLowerInvariant());"))
 }
+$coreRenderPattern = 'export const MTA_CORE_RENDER_REFERENCE = (true|false);'
+$coreRenderMatches = [regex]::Matches($configText, $coreRenderPattern).Count
+if ($coreRenderMatches -gt 1 -or ($MtaCoreRenderReference -and $coreRenderMatches -ne 1)) {
+    throw 'Update the adapter before selecting MTA Core renderer observation.'
+}
+if ($MtaCoreRenderReference -and @($installed.files | Where-Object {
+    $_.path -in @('CLEO/de-online/core.dll', 'CLEO/de-online/pthread.dll', 'CLEO/de-online/game_de.dll')
+}).Count -ne 3) { throw 'Update the adapter before selecting MTA Core renderer observation: its owned Core/backend files are missing.' }
+# Clear this separate observer on ordinary mode switches; historical intact
+# configurations remain usable without an observer marker.
+if ($coreRenderMatches -eq 1) {
+    $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $coreRenderPattern,
+        "export const MTA_CORE_RENDER_REFERENCE = $($MtaCoreRenderReference.IsPresent.ToString().ToLowerInvariant());"))
+}
 $configEntry = @($installed.files | Where-Object { $_.path -eq 'CLEO/de-online/config.mjs' })
 if ($configEntry.Count -ne 1) { throw 'Missing owned configuration record.' }
 $configEntry[0].sha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($newConfig)).ToLowerInvariant()
@@ -186,7 +204,9 @@ try {
     Write-AtomicFile $manifestPath $originalManifest
     throw $failure
 }
-if ($MtaCoreMovementReference) {
+if ($MtaCoreRenderReference) {
+    Write-Host 'Installed adapter mode: Smoke, Core native renderer observation armed. Ctrl+Shift+F9 starts after release; Ctrl+Shift+End requests cleanup. No drawing or input writes.'
+} elseif ($MtaCoreMovementReference) {
     Write-Host 'Installed adapter mode: Smoke, bounded Core configured movement writes armed. Ctrl+Shift+F9 activates after release; Ctrl+Shift+End requests cleanup.'
 } elseif ($MtaCoreInputReference) {
     Write-Host 'Installed adapter mode: Smoke, read-only Core configured input reference armed. Ctrl+Shift+F9 starts after release; Ctrl+Shift+End cancels.'

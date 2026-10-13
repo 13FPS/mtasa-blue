@@ -51,7 +51,7 @@ def analyze_log(text, require_exit=False):
             translated.append(raw)
             continue
         kind = event["event"]
-        if kind.startswith("core_startup_reference"):
+        if kind.startswith(("core_startup_reference", "core_movement_reference", "core_render_reference")):
             invalid(line, "Another Core reference cannot accompany configured input")
         if kind == "adapter_start":
             if (event.get("core_input_reference") is not True or event.get("provenance") != PROVENANCE or

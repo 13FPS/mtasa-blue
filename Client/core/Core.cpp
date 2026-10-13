@@ -20,6 +20,7 @@
 #include "DefinitiveStartupState.h"
 #include "DefinitiveInputReference.h"
 #include "DefinitiveMovementReference.h"
+#include "DefinitiveRenderReference.h"
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
     #include "DefinitiveProcess.h"
 #endif
@@ -57,8 +58,11 @@ namespace DefinitiveInputReference
 
     bool Configure(const Request& request) noexcept
     {
-        const auto maximum = request.nativeMovement ? DefinitiveMovementReference::MaximumDurationMs : MaximumDurationMs;
-        if (!request.durationMs || request.durationMs > maximum || !request.cancelled || !request.publish || !TryAcquireSRWLockExclusive(&requestLock))
+        const auto maximum = request.renderObservation ? DefinitiveRenderReference::MaximumDurationMs
+                             : request.nativeMovement  ? DefinitiveMovementReference::MaximumDurationMs
+                                                       : MaximumDurationMs;
+        if ((request.nativeMovement && request.renderObservation) || !request.durationMs || request.durationMs > maximum || !request.cancelled ||
+            !request.publish || !TryAcquireSRWLockExclusive(&requestLock))
             return false;
         const bool accepted = !pending && !active;
         if (accepted)
@@ -259,5 +263,16 @@ CORE_API std::uint32_t MTA_ConfigureDEMovementReference(std::uint32_t durationMs
                                                         DefinitiveInputReference::PublishCallback publish)
 {
     return g_isDefinitiveProcessCandidate && DefinitiveInputReference::Configure({durationMs, cancel, publish, true}) ? 1u : 0u;
+}
+
+CORE_API std::uint32_t MTA_DERenderReferenceApiVersion()
+{
+    return DefinitiveRenderReference::ApiVersion;
+}
+
+CORE_API std::uint32_t MTA_ConfigureDERenderReference(std::uint32_t durationMs, DefinitiveInputReference::CancelCallback cancel,
+                                                      DefinitiveInputReference::PublishCallback publish)
+{
+    return g_isDefinitiveProcessCandidate && DefinitiveInputReference::Configure({durationMs, cancel, publish, false, true}) ? 1u : 0u;
 }
 #endif

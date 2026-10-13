@@ -54,6 +54,11 @@ def analyze(rows, shutdown=True, require_exit=True):
 
 
 class CoreInputEvidenceTests(unittest.TestCase):
+    def test_partial_renderer_markers_cannot_accompany_an_earlier_input_success(self):
+        rows = fixture()
+        rows.append(dict(event="core_render_reference_sample", state=[0] * 40))
+        self.assertFalse(analyze(rows)["core_input_reference_complete"])
+
     def test_valid_read_only_trace_keeps_scope_narrow(self):
         result = analyze(fixture())
         self.assertTrue(result["core_input_reference_complete"], result)

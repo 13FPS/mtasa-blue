@@ -351,8 +351,18 @@ private:
     // Mod manager
     CModManager* m_pModManager;
 
+    // Classic factory ownership includes Terminate/delete; an adapter facade
+    // remains owned by the adapter through its Shutdown/Release sequence.
+    enum class GameInterfaceOwnership
+    {
+        None,
+        ClassicModule,
+        AdapterBorrowed
+    };
+    GameInterfaceOwnership m_GameInterfaceOwnership = GameInterfaceOwnership::None;
+
     // Module interfaces.
-    CGame*        m_pGame;
+    CGame*        m_pGame = nullptr;
     CNet*         m_pNet;
     CMultiplayer* m_pMultiplayer;
     CGUI*         m_pGUI;

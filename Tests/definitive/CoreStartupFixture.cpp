@@ -12,6 +12,7 @@
 #include <cwchar>
 #include "../../Client/core/DefinitiveInputReference.h"
 #include "../../Client/core/DefinitiveMovementReference.h"
+#include "../../Client/core/DefinitiveRenderReference.h"
 #include <filesystem>
 
 namespace
@@ -74,6 +75,85 @@ extern "C" __declspec(dllexport) std::uint32_t MTA_ConfigureDEMovementReference(
         return 0;
     inputRequest = {duration, cancelled, publish, true};
     return 1;
+}
+
+extern "C" __declspec(dllexport) std::uint32_t MTA_DERenderReferenceApiVersion()
+{
+    Call(7);
+    return 1;
+}
+
+extern "C" __declspec(dllexport) std::uint32_t MTA_ConfigureDERenderReference(std::uint32_t duration, DefinitiveInputReference::CancelCallback cancelled,
+                                                                              DefinitiveInputReference::PublishCallback publish)
+{
+    Call(8);
+    if (duration != DefinitiveRenderReference::MaximumDurationMs || !cancelled || !publish)
+        return 0;
+    inputRequest = {duration, cancelled, publish, false, true};
+    return 1;
+}
+
+void ControlledRender()
+{
+    using namespace DefinitiveRenderReference;
+    Snapshot sample{};
+    sample[Version] = 1;
+    sample[Phase] = sample[Sequence] = sample[SampleCount] = 1;
+    sample[ObserverStarted] = sample[Bound] = sample[Active] = 1;
+    sample[PresentCallbacksLow] = sample[AcceptedSnapshotsLow] = 10;
+    sample[GenerationHigh] = 2;
+    sample[Width] = 1280;
+    sample[Height] = 720;
+    sample[NativeOriginalReturned] = 1;
+    sample[NativePresence] = 15;
+    // PIN the real backend without creating an observer or running engine code.
+    wchar_t path[32768]{};
+    GetModuleFileNameW(nullptr, path, 32768);
+    const auto backend = LoadLibraryExW((std::filesystem::path(path).parent_path() / L"game_de.dll").c_str(), nullptr,
+                                        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+    HMODULE    retained = nullptr;
+    const auto factory = backend ? GetProcAddress(backend, "CreateGameAdapter") : nullptr;
+    sample[ModulePinned] = sample[BackendPinnedExpected] =
+        factory && GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN, reinterpret_cast<LPCWSTR>(factory), &retained)
+            ? 1u
+            : 0u;
+    if (backend)
+        FreeLibrary(backend);
+    Call(9);
+    inputRequest.publish(sample.data(), FieldCount);
+    const auto release = Event(L"MTA_CORE_FIXTURE_INPUT_RELEASE", SYNCHRONIZE);
+    if (release)
+    {
+        WaitForSingleObject(release, 10000);
+        CloseHandle(release);
+    }
+    sample[Phase] = 3;
+    sample[CleanupPending] = sample[NativeCleanupPending] = sample[CleanupAttempts] = 1;
+    ++sample[Sequence];
+    inputRequest.publish(sample.data(), FieldCount);
+    const auto cleanupRelease = Event(L"MTA_CORE_FIXTURE_MOVEMENT_RELEASE", SYNCHRONIZE);
+    const auto cleanupAt = GetTickCount64();
+    while (cleanupRelease && WaitForSingleObject(cleanupRelease, 50) == WAIT_TIMEOUT)
+    {
+        if (GetTickCount64() - cleanupAt >= CleanupDeadlineMs)
+        {
+            sample[CleanupDeadlineExceeded] = 1;
+            sample[Reason] = static_cast<std::uint32_t>(StopReason::CleanupError);
+        }
+        ++sample[Sequence];
+        ++sample[CleanupAttempts];
+        inputRequest.publish(sample.data(), FieldCount);
+    }
+    if (cleanupRelease)
+        CloseHandle(cleanupRelease);
+    sample[Phase] = 2;
+    ++sample[Sequence];
+    sample[ElapsedMs] = MaximumDurationMs;
+    sample[Active] = sample[CleanupPending] = sample[NativeCleanupPending] = 0;
+    sample[CleanupComplete] = 1;
+    if (!sample[CleanupDeadlineExceeded])
+        sample[Reason] = static_cast<std::uint32_t>(inputRequest.cancelled() ? StopReason::Cancelled : StopReason::TimeBudget);
+    inputRequest.publish(sample.data(), FieldCount);
 }
 
 void ControlledMovement()
@@ -165,6 +245,11 @@ extern "C" __declspec(dllexport) int InitializeCore()
     Call(3);
     if (Setting(L"MTA_CORE_FIXTURE_BAD_INITIALIZE"))
         return 0;
+    if (mtaSet && gtaSet && inputRequest.renderObservation)
+    {
+        ControlledRender();
+        return 5;
+    }
     if (mtaSet && gtaSet && inputRequest.nativeMovement)
     {
         ControlledMovement();

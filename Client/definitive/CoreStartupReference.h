@@ -11,6 +11,7 @@
 #include <windows.h>
 #include "../core/DefinitiveInputReference.h"
 #include "../core/DefinitiveMovementReference.h"
+#include "../core/DefinitiveRenderReference.h"
 
 namespace deonline
 {
@@ -23,12 +24,15 @@ namespace deonline
         bool          Begin(const void* moduleAddress) noexcept;
         bool          BeginInputReference(const void* moduleAddress) noexcept;
         bool          BeginMovementReference(const void* moduleAddress) noexcept;
+        bool          BeginRenderReference(const void* moduleAddress) noexcept;
         int           Poll() noexcept;
         std::uint32_t Read(std::uint32_t field) const noexcept;
         bool          CaptureInput() noexcept;
         std::uint32_t ReadInput(std::uint32_t field) const noexcept;
         bool          CaptureMovement() noexcept;
         std::uint32_t ReadMovement(std::uint32_t field) const noexcept;
+        bool          CaptureRender() noexcept;
+        std::uint32_t ReadRender(std::uint32_t field) const noexcept;
         bool          Cancel() noexcept;
         bool          IsPending() const noexcept;
 
@@ -36,9 +40,9 @@ namespace deonline
         static unsigned __stdcall ThreadMain(void* context) noexcept;
         void                      Run() noexcept;
         bool                      CheckCancellation() noexcept;
-        bool                      Start(const void* moduleAddress, bool configuredInput, bool configuredMovement = false) noexcept;
-        static bool               InputCancelled();
-        static void               PublishInput(const std::uint32_t* values, std::uint32_t count);
+        bool        Start(const void* moduleAddress, bool configuredInput, bool configuredMovement = false, bool configuredRender = false) noexcept;
+        static bool InputCancelled();
+        static void PublishInput(const std::uint32_t* values, std::uint32_t count);
 
         // Only Begin/Poll's owning thread touches the handle or input address.
         // State2 publishes the worker's immutable values; State3 also proves
@@ -51,6 +55,7 @@ namespace deonline
         std::array<std::uint32_t, 19>         values{};
         bool                                  inputRequested = false;
         bool                                  movementRequested = false;
+        bool                                  renderRequested = false;
         SRWLOCK                               inputLock = SRWLOCK_INIT;
         bool                                  inputAvailable = false;
         DefinitiveInputReference::Snapshot    publishedInput{};
@@ -58,5 +63,8 @@ namespace deonline
         bool                                  movementAvailable = false;
         DefinitiveMovementReference::Snapshot publishedMovement{};
         DefinitiveMovementReference::Snapshot capturedMovement{};
+        bool                                  renderAvailable = false;
+        DefinitiveRenderReference::Snapshot   publishedRender{};
+        DefinitiveRenderReference::Snapshot   capturedRender{};
     };
 }

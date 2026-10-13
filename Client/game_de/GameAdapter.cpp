@@ -5,9 +5,11 @@
  *****************************************************************************/
 
 #include <game/CGameAdapter.h>
+#include <game/CGameRenderObservation.h>
 #include "ControllerSnapshot.h"
 #include "NativePadReader.h"
 #include "NativeMovementInput.h"
+#include "NativeRenderObservation.h"
 
 #include <atomic>
 #include <cmath>
@@ -336,6 +338,70 @@ namespace mta::game_de
             NativePadReader            nativePad;
             NativeMovementInput        nativeMovement;
         };
+
+        class GameRenderObservation final : public IGameRenderObservation
+        {
+        public:
+            Status Begin() noexcept override
+            {
+                if (ownerThread != GetCurrentThreadId())
+                    return Status::WrongThread;
+                return observation.Begin() ? Status::Ok : Status::Unsupported;
+            }
+
+            Status ReadState(RenderObservationState& state) noexcept override
+            {
+                if (ownerThread != GetCurrentThreadId())
+                    return Status::WrongThread;
+                NativeRenderObservationState native;
+                observation.ReadState(native);
+                RenderObservationState next;
+                next.bound = native.bound;
+                next.active = native.active;
+                next.modulePinned = native.modulePinned;
+                next.pendingCleanup = native.pendingCleanup;
+                next.generation = native.generation;
+                next.nativePresentCallbacks = native.nativePresentCallbacks;
+                next.acceptedSnapshots = native.acceptedSnapshots;
+                next.rejectedSnapshots = native.rejectedSnapshots;
+                next.nestedCallbacks = native.nestedCallbacks;
+                next.foreignThreadCallbacks = native.foreignThreadCallbacks;
+                next.publicationMisses = native.publicationMisses;
+                next.callbackThreadId = native.callbackThreadId;
+                next.width = native.width;
+                next.height = native.height;
+                next.syncInterval = native.syncInterval;
+                next.failureReason = native.failureReason;
+                next.windowPresent = native.windowPresent;
+                next.swapchainPresent = native.swapchainPresent;
+                next.devicePresent = native.devicePresent;
+                next.contextPresent = native.contextPresent;
+                next.lastOriginalReturned = native.lastOriginalReturned;
+                next.lastOriginalResult = native.lastOriginalResult;
+                state = next;
+                return Status::Ok;
+            }
+
+            Status End() noexcept override
+            {
+                if (ownerThread != GetCurrentThreadId())
+                    return Status::WrongThread;
+                return observation.End() ? Status::Ok : Status::Unsupported;
+            }
+
+            void Release() noexcept override
+            {
+                // A failed detach still owns callbacks in this module. Keep the
+                // lease alive until its creating thread can finish cleanup.
+                if (ownerThread != GetCurrentThreadId() || !observation.End())
+                    return;
+                delete this;
+            }
+
+        private:
+            const DWORD             ownerThread = GetCurrentThreadId();
+            NativeRenderObservation observation;
+        };
     }
 
     extern "C" IGameAdapter* CreateGameAdapter(std::uint32_t abiVersion) noexcept
@@ -349,6 +415,22 @@ namespace mta::game_de
         catch (...)
         {
             // Allocation/constructor failures cannot escape the module ABI.
+            return nullptr;
+        }
+    }
+
+    extern "C" IGameRenderObservation* CreateGameRenderObservation(std::uint32_t apiVersion, CCoreInterface* owner) noexcept
+    {
+        // The opaque identity authorizes a Core-owned lease without calling
+        // host APIs. Allocation alone performs no bind, hook or module pin.
+        if (apiVersion != RenderObservationApiVersion || !owner)
+            return nullptr;
+        try
+        {
+            return new (std::nothrow) GameRenderObservation;
+        }
+        catch (...)
+        {
             return nullptr;
         }
     }

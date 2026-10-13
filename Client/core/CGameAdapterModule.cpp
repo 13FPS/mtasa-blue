@@ -117,6 +117,8 @@ bool CGameAdapterModule::Start(CCoreInterface* owner, const std::wstring& absolu
     m_module = module;
     m_adapter = adapter;
     m_ownerThread = GetCurrentThreadId();
+    m_ownerIdentity = owner;
+    m_hasRenderObservation = false;
     m_error.clear();
     return true;
 #endif
@@ -183,7 +185,10 @@ bool CGameAdapterModule::Pulse()
 
 bool CGameAdapterModule::Reset()
 {
-    return RequireOwnerThread("Reset") && RecordStatus(m_adapter->Reset(), "Reset");
+    if (!RequireOwnerThread("Reset") || !EndNativeRenderObservation() || !RecordStatus(m_adapter->Reset(), "Reset"))
+        return false;
+    m_hasRenderObservation = false;
+    return true;
 }
 
 bool CGameAdapterModule::PublishLocalObservation(const mta::game_de::LocalObservation& observation)
@@ -241,6 +246,117 @@ bool CGameAdapterModule::GetNativeMovementEligibility(mta::game_de::NativeMoveme
     return RequireOwnerThread("GetNativeMovementEligibility") && RecordStatus(m_adapter->GetNativeMovementEligibility(state), "GetNativeMovementEligibility");
 }
 
+bool CGameAdapterModule::BorrowGameInterface(CGame*& game)
+{
+    if (!RequireOwnerThread("BorrowGameInterface"))
+        return false;
+    if (!(m_adapter->GetCapabilities() & Capability(mta::game_de::AdapterCapability::GameInterface)))
+    {
+        SetError("The selected adapter does not provide the CGame interface capability");
+        return false;
+    }
+    auto* provided = m_adapter->GetGameInterface();
+    if (!provided)
+    {
+        SetError("The selected adapter declared CGame support but returned no game interface");
+        return false;
+    }
+    // The adapter owns this facade and its module lifetime. Core may borrow it
+    // without taking the classic factory's Terminate/delete responsibility.
+    game = provided;
+    m_error.clear();
+    return true;
+}
+
+bool CGameAdapterModule::BeginNativeRenderObservation()
+{
+    if (!RequireOwnerThread("BeginNativeRenderObservation"))
+        return false;
+    if (m_renderObservation)
+    {
+        SetError("A render observation lease is already retained; end it before another begin");
+        return false;
+    }
+    const auto address = GetProcAddress(static_cast<HMODULE>(m_module), "CreateGameRenderObservation");
+    if (!address)
+    {
+        SetError("The selected adapter does not export optional render diagnostics");
+        return false;
+    }
+    using Factory = decltype(&mta::game_de::CreateGameRenderObservation);
+    Factory factory = nullptr;
+    static_assert(sizeof(factory) == sizeof(address));
+    std::memcpy(&factory, &address, sizeof(factory));
+    m_renderObservation = factory(mta::game_de::RenderObservationApiVersion, m_ownerIdentity);
+    if (!m_renderObservation)
+    {
+        SetError("The optional render factory rejected its version/owner or could not allocate a lease");
+        return false;
+    }
+    // Failed Begin can still own pinned callback state. Keep the lease until
+    // explicit End proves cleanup rather than releasing on a false start.
+    m_hasRenderObservation = false;
+    return RecordStatus(m_renderObservation->Begin(), "BeginNativeRenderObservation");
+}
+
+bool CGameAdapterModule::GetNativeRenderObservationState(mta::game_de::RenderObservationState& state)
+{
+    if (!RequireOwnerThread("GetNativeRenderObservationState"))
+        return false;
+    if (m_renderObservation)
+    {
+        mta::game_de::RenderObservationState next;
+        if (!RecordStatus(m_renderObservation->ReadState(next), "GetNativeRenderObservationState"))
+            return false;
+        m_lastRenderObservation = next;
+        m_hasRenderObservation = true;
+    }
+    if (!m_hasRenderObservation)
+    {
+        SetError("No native render observation state is available");
+        return false;
+    }
+    state = m_lastRenderObservation;
+    m_error.clear();
+    return true;
+}
+
+bool CGameAdapterModule::EndNativeRenderObservation() noexcept
+{
+    // Stop calls this during cleanup, so errors must not allocate or throw.
+    if (!m_adapter || m_ownerThread != GetCurrentThreadId())
+    {
+        SetError("Render observation cleanup requires an initialized adapter's owning Core thread");
+        return false;
+    }
+    if (!m_renderObservation)
+        return true;
+    if (m_renderObservation->End() != mta::game_de::Status::Ok)
+    {
+        SetError("Render observation End failed; lease, adapter and module retained for cleanup retry");
+        return false;
+    }
+    mta::game_de::RenderObservationState final;
+    if (m_renderObservation->ReadState(final) != mta::game_de::Status::Ok)
+    {
+        SetError("Final render observation read failed; lease, adapter and module retained for cleanup retry");
+        return false;
+    }
+    if (final.active || final.pendingCleanup)
+    {
+        SetError("Ended render observation still reports active cleanup; lease, adapter and module retained");
+        return false;
+    }
+    // Capture actual ended counters before Release. Core's final callback can
+    // read this immutable value after the native observation object is gone.
+    m_lastRenderObservation = final;
+    m_hasRenderObservation = true;
+    m_renderObservation->Release();
+    m_renderObservation = nullptr;
+    m_error.clear();
+    return true;
+}
+
 void CGameAdapterModule::Stop() noexcept
 {
     if (m_adapter && m_ownerThread != GetCurrentThreadId())
@@ -250,6 +366,8 @@ void CGameAdapterModule::Stop() noexcept
         SetError("Game adapter teardown requires its owning Core thread; module retained");
         return;
     }
+    if (m_renderObservation && !EndNativeRenderObservation())
+        return;
     if (m_adapter)
     {
         if (m_adapter->Shutdown() != mta::game_de::Status::Ok)
@@ -268,6 +386,7 @@ void CGameAdapterModule::Stop() noexcept
         m_module = nullptr;
     }
     m_ownerThread = 0;
+    m_ownerIdentity = nullptr;
 }
 
 std::uint64_t CGameAdapterModule::GetCapabilities() const noexcept

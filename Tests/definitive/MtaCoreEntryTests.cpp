@@ -99,6 +99,13 @@ int wmain(int argc, wchar_t** argv)
         const auto configureInput = Resolve<ConfigureInput>(core, "MTA_ConfigureDEInputReference");
         const auto movementVersion = Resolve<std::uint32_t (*)()>(core, "MTA_DEMovementReferenceApiVersion");
         const auto configureMovement = Resolve<ConfigureInput>(core, "MTA_ConfigureDEMovementReference");
+        const auto renderVersion = Resolve<std::uint32_t (*)()>(core, "MTA_DERenderReferenceApiVersion");
+        const auto configureRender = Resolve<ConfigureInput>(core, "MTA_ConfigureDERenderReference");
+        Check(renderVersion() == 1, "Core-owned render observation ABI must be explicit");
+        Check(configureRender(0, CancelInput, PublishInput) == 0, "zero-duration render observation must be rejected");
+        Check(configureRender(10001, CancelInput, PublishInput) == 0, "render observation must stay within ten seconds");
+        Check(configureRender(1, nullptr, PublishInput) == 0 && configureRender(1, CancelInput, nullptr) == 0,
+              "render observation must retain owned cancellation and publication callbacks");
         Check(movementVersion() == 1, "Core-owned configured movement ABI must be explicit");
         Check(configureMovement(0, CancelInput, PublishInput) == 0, "zero-duration movement request must be rejected");
         Check(configureMovement(30001, CancelInput, PublishInput) == 0, "movement request must stay below the native writer deadline");
@@ -110,6 +117,7 @@ int wmain(int argc, wchar_t** argv)
         Check(configureInput(1, nullptr, PublishInput) == 0, "input request must carry worker cancellation");
         Check(configureInput(1, CancelInput, nullptr) == 0, "input request must carry value-only publication");
         Check(configureInput(1, CancelInput, PublishInput) == 1, "bounded configured input request must be accepted");
+        Check(configureRender(1, CancelInput, PublishInput) == 0, "render observation cannot replace pending configured input");
         Check(configureMovement(1, CancelInput, PublishInput) == 0, "movement cannot replace a pending read-only request");
         Check(configureInput(1, CancelInput, PublishInput) == 0, "a pending input request must not be overwritten");
         unsigned int foreignConfigure = 1;
@@ -137,7 +145,10 @@ int wmain(int argc, wchar_t** argv)
         for (std::size_t index = 2; index < results.size(); ++index)
         {
             if (index == 3)
-                Check(configureMovement(1, CancelInput, PublishInput) == 1, "failed binding must consume the old request and permit an owned movement retry");
+            {
+                Check(configureRender(1, CancelInput, PublishInput) == 1, "failed binding must consume old input and permit an owned render request");
+                Check(configureMovement(1, CancelInput, PublishInput) == 0, "pending render observation must exclude movement writes");
+            }
             results[index] = initialize();
             Check(results[index] == 5, "real incomplete adapter must reject construction and allow clean retry");
             CheckStartup(readStartup, 5, 3, 33);

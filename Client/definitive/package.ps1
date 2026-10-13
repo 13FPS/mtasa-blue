@@ -5,10 +5,13 @@
 param([ValidateSet('Diagnostic', 'Smoke', 'Online')][string]$Mode = 'Smoke',
     [switch]$NativeGaitReference, [switch]$MatchedGaitRate, [switch]$LockWalkRoot, [switch]$NativeInputReference,
     [switch]$MtaNativePadReference, [switch]$MtaNativeMovementTrial, [switch]$MtaCoreStartupReference, [switch]$MtaCoreInputReference,
-    [switch]$MtaCoreMovementReference)
+    [switch]$MtaCoreMovementReference, [switch]$MtaCoreRenderReference)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+if ($MtaCoreRenderReference -and ($Mode -ne 'Smoke' -or $MtaCoreMovementReference -or $MtaCoreInputReference -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot)) {
+    throw 'MTA Core renderer observation requires separate opt-in Smoke mode.'
+}
 if ($MtaCoreMovementReference -and ($Mode -ne 'Smoke' -or $MtaCoreInputReference -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot)) {
     throw 'MTA Core configured movement reference requires separate opt-in Smoke mode.'
 }
@@ -215,6 +218,10 @@ $coreMovementMarker = 'export const MTA_CORE_MOVEMENT_REFERENCE = false;'
 if ([regex]::Matches($configText, [regex]::Escape($coreMovementMarker)).Count -ne 1) { throw 'Expected disabled MTA Core configured movement reference in source configuration.' }
 $configText = $configText.Replace($coreMovementMarker,
     "export const MTA_CORE_MOVEMENT_REFERENCE = $($MtaCoreMovementReference.IsPresent.ToString().ToLowerInvariant());")
+$coreRenderMarker = 'export const MTA_CORE_RENDER_REFERENCE = false;'
+if ([regex]::Matches($configText, [regex]::Escape($coreRenderMarker)).Count -ne 1) { throw 'Expected disabled MTA Core renderer observation in source configuration.' }
+$configText = $configText.Replace($coreRenderMarker,
+    "export const MTA_CORE_RENDER_REFERENCE = $($MtaCoreRenderReference.IsPresent.ToString().ToLowerInvariant());")
 [IO.File]::WriteAllText($configPath, $configText, $utf8)
 foreach ($name in @('sa_unreal.json', 'unknown_x64.json')) {
     [IO.File]::Copy($downloads[$name], (Join-Path $configDirectory $name), $false)

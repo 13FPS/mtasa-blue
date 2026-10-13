@@ -67,6 +67,7 @@ namespace DefinitiveInputReference
         CancelCallback  cancelled = nullptr;
         PublishCallback publish = nullptr;
         bool            nativeMovement = false;
+        bool            renderObservation = false;
     };
 
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)

@@ -190,18 +190,22 @@ namespace mta::game_de
         virtual void   Release() noexcept = 0;
 
         virtual std::uint64_t GetCapabilities() const noexcept = 0;
-        virtual CGame*        GetGameInterface() const noexcept = 0;
-        virtual Status        PublishLocalObservation(const LocalObservation& observation) noexcept = 0;
-        virtual Status        GetLocalObservation(LocalObservation& observation) noexcept = 0;
-        virtual Status        SubmitControlActions(const ControlActionFrame& frame) noexcept = 0;
-        virtual Status        GetMtaInputState(MtaInputState& state) noexcept = 0;
-        virtual Status        BindNativeInput() noexcept = 0;
-        virtual Status        ReadNativeControllerState(std::uint32_t padIndex, NativeControllerState& state) noexcept = 0;
-        virtual Status        ReadNativeDeviceState(NativeDeviceState& state) noexcept = 0;
-        virtual Status        BeginNativeMovementTrial() noexcept = 0;
-        virtual Status        GetNativeMovementTrialState(NativeMovementTrialState& state) noexcept = 0;
-        virtual Status        EndNativeMovementTrial() noexcept = 0;
-        virtual Status        GetNativeMovementEligibility(NativeMovementEligibility& state) noexcept = 0;
+        // A provided facade is borrowed until successful Shutdown/Release. Its lifetime
+        // belongs to this adapter; Core must not Terminate or delete it as if
+        // it came from the classic game_sa factory. A pointer alone does not
+        // establish the other capabilities required for gameplay admission.
+        virtual CGame* GetGameInterface() const noexcept = 0;
+        virtual Status PublishLocalObservation(const LocalObservation& observation) noexcept = 0;
+        virtual Status GetLocalObservation(LocalObservation& observation) noexcept = 0;
+        virtual Status SubmitControlActions(const ControlActionFrame& frame) noexcept = 0;
+        virtual Status GetMtaInputState(MtaInputState& state) noexcept = 0;
+        virtual Status BindNativeInput() noexcept = 0;
+        virtual Status ReadNativeControllerState(std::uint32_t padIndex, NativeControllerState& state) noexcept = 0;
+        virtual Status ReadNativeDeviceState(NativeDeviceState& state) noexcept = 0;
+        virtual Status BeginNativeMovementTrial() noexcept = 0;
+        virtual Status GetNativeMovementTrialState(NativeMovementTrialState& state) noexcept = 0;
+        virtual Status EndNativeMovementTrial() noexcept = 0;
+        virtual Status GetNativeMovementEligibility(NativeMovementEligibility& state) noexcept = 0;
 
     protected:
         // Release keeps allocation/deallocation in the factory's module. The

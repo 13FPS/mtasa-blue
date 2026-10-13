@@ -37,6 +37,7 @@
 #include "DefinitiveStartupState.h"
 #include "DefinitiveInputReference.h"
 #include "DefinitiveMovementReference.h"
+#include "DefinitiveRenderReference.h"
 
 using SharedUtil::CalcMTASAPath;
 using namespace std;
@@ -170,6 +171,58 @@ namespace
         }
         snapshot[DefinitiveMovementReference::BackendPinnedExpected] = state.modulePinned ? 1u : 0u;
         return true;
+    }
+
+    bool CopyRenderReferenceState(CGameAdapterModule& adapter, DefinitiveRenderReference::Snapshot& snapshot)
+    {
+        using namespace DefinitiveRenderReference;
+        mta::game_de::RenderObservationState state;
+        if (!adapter.GetNativeRenderObservationState(state))
+            return false;
+        snapshot[Bound] = state.bound;
+        snapshot[Active] = state.active;
+        snapshot[ModulePinned] = snapshot[BackendPinnedExpected] = state.modulePinned;
+        const std::array<std::uint64_t, 5> counters{state.generation, state.nativePresentCallbacks, state.acceptedSnapshots, state.rejectedSnapshots,
+                                                    state.nestedCallbacks};
+        for (std::size_t index = 0; index < counters.size(); ++index)
+        {
+            snapshot[GenerationLow + index * 2] = static_cast<std::uint32_t>(counters[index]);
+            snapshot[GenerationLow + index * 2 + 1] = static_cast<std::uint32_t>(counters[index] >> 32);
+        }
+        snapshot[CallbackThreadId] = state.callbackThreadId;
+        snapshot[Width] = state.width;
+        snapshot[Height] = state.height;
+        snapshot[SyncInterval] = state.syncInterval;
+        snapshot[NativeOriginalResult] = state.lastOriginalResult;
+        snapshot[FailureReason] = state.failureReason;
+        snapshot[NativeOriginalReturned] = state.lastOriginalReturned;
+        snapshot[NativeCleanupPending] = state.pendingCleanup;
+        snapshot[ForeignCallbacksLow] = static_cast<std::uint32_t>(state.foreignThreadCallbacks);
+        snapshot[ForeignCallbacksHigh] = static_cast<std::uint32_t>(state.foreignThreadCallbacks >> 32);
+        snapshot[PublicationMissesLow] = static_cast<std::uint32_t>(state.publicationMisses);
+        snapshot[PublicationMissesHigh] = static_cast<std::uint32_t>(state.publicationMisses >> 32);
+        snapshot[NativePresence] =
+            (state.windowPresent ? 1u : 0u) | (state.swapchainPresent ? 2u : 0u) | (state.devicePresent ? 4u : 0u) | (state.contextPresent ? 8u : 0u);
+        return true;
+    }
+
+    void RunRenderReference(CGameAdapterModule& adapter, const DefinitiveInputReference::Request& request) noexcept
+    {
+        struct Observer
+        {
+            CGameAdapterModule& adapter;
+            bool                Begin() { return adapter.BeginNativeRenderObservation(); }
+            bool                Read(DefinitiveRenderReference::Snapshot& snapshot) { return CopyRenderReferenceState(adapter, snapshot); }
+            bool                End() { return adapter.EndNativeRenderObservation(); }
+        } observer{adapter};
+        struct Clock
+        {
+            std::uint64_t Now() const noexcept { return static_cast<std::uint64_t>(GetTickCount64_()); }
+            void          Wait(std::uint32_t milliseconds) const noexcept { Sleep(milliseconds); }
+        } clock;
+        // Tests execute this exact retained lifecycle with a value-only fake
+        // clock/observer; production supplies the actual Core-owned module.
+        DefinitiveRenderReference::Run(observer, clock, request);
     }
 
     void RunConfiguredInputReference(CCore* owner, CGameAdapterModule& adapter, const DefinitiveInputReference::Request& request) noexcept
@@ -537,7 +590,12 @@ CCore::CCore()
     #if defined(_WIN64)
         DefinitiveInputReference::Request inputReference;
         if (DefinitiveInputReference::GetActiveRequest(inputReference))
-            RunConfiguredInputReference(this, m_DefinitiveAdapter, inputReference);
+        {
+            if (inputReference.renderObservation)
+                RunRenderReference(m_DefinitiveAdapter, inputReference);
+            else
+                RunConfiguredInputReference(this, m_DefinitiveAdapter, inputReference);
+        }
     #endif
         const bool gameplayReady = m_DefinitiveAdapter.IsGameplayReady();
         DefinitiveStartup::SetGameplayReady(gameplayReady);
@@ -1499,6 +1557,14 @@ T* CreateModule(CModuleLoader& m_Loader, const SString& strName, const SString& 
 
 void CCore::CreateStartupModules()
 {
+#ifdef MTA_WITH_DEFINITIVE_ADAPTER
+    // Admission precedes both the reentrancy flag and any classic module load.
+    // Direct callers cannot turn an incomplete DE backend into game_sa or a
+    // D3D9 GUI by bypassing the constructor's separate startup gates.
+    if (!m_DefinitiveAdapter.IsGameplayReady())
+        throw std::runtime_error("DE adapter gameplay unavailable: " + m_DefinitiveAdapter.GameplayUnavailableReason());
+    throw std::runtime_error("DE core, multiplayer and rendering startup are not implemented");
+#else
     // Core owns module startup policy independently of the renderer callback,
     // so a DE renderer can eventually use the same boundary. Mark entry before
     // creation to preserve the existing reentrancy and failure behavior.
@@ -1510,16 +1576,26 @@ void CCore::CreateStartupModules()
     CreateMultiplayer();
     CreateXML();
     CreateGUI();
+#endif
 }
 
 void CCore::CreateGame()
 {
+#ifdef MTA_WITH_DEFINITIVE_ADAPTER
+    CGame* provided = nullptr;
+    if (!m_DefinitiveAdapter.BorrowGameInterface(provided))
+        throw std::runtime_error("DE adapter game interface unavailable: " + m_DefinitiveAdapter.GetError());
+    m_pGame = provided;
+    m_GameInterfaceOwnership = GameInterfaceOwnership::AdapterBorrowed;
+#else
     m_pGame = CreateModule<CGame>(m_GameModule, "Game", "game_sa", "GetGameInterface", this);
+    m_GameInterfaceOwnership = GameInterfaceOwnership::ClassicModule;
     if (m_pGame->GetGameVersion() >= VERSION_11)
     {
         BrowseToSolution("downgrade", TERMINATE_PROCESS,
                          "Only GTA:SA version 1.0 is supported!\n\nYou are now being redirected to a page where you can patch your version.");
     }
+#endif
 }
 
 void CCore::CreateMultiplayer()
@@ -1636,11 +1712,23 @@ void CCore::DestroyGame()
 {
     WriteDebugEvent("CCore::DestroyGame");
 
+    if (m_GameInterfaceOwnership == GameInterfaceOwnership::AdapterBorrowed)
+    {
+        // Relinquish the borrowed view before its owner tears down. Never call
+        // the classic self-deleting Terminate or unload the legacy game module.
+        m_pGame = nullptr;
+        m_GameInterfaceOwnership = GameInterfaceOwnership::None;
+#ifdef MTA_WITH_DEFINITIVE_ADAPTER
+        m_DefinitiveAdapter.Stop();
+#endif
+        return;
+    }
     if (m_pGame)
     {
         m_pGame->Terminate();
         m_pGame = NULL;
     }
+    m_GameInterfaceOwnership = GameInterfaceOwnership::None;
 
     m_GameModule.UnloadModule();
 }

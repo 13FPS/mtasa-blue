@@ -72,7 +72,7 @@ def analyze_log(text, require_exit=False):
         if len(samples) > 4096:
             invalid(line, 'Bounded saved sample count exceeded')
             break
-        if (kind.startswith(('core_input_reference', 'core_startup_reference', 'native_','online_', 'remote_')) or
+        if (kind.startswith(('core_input_reference', 'core_startup_reference', 'core_render_reference', 'native_','online_', 'remote_')) or
                 kind in {'connecting', 'connected', 'joined', 'welcome', 'local_controller_sample', 'game_input_written'} or
                 event.get('network_active') is True or event.get('remote_peds_created') is True or event.get('mode') == 'online'):
             invalid(line, 'Another mode or remote/network activity cannot accompany the Core movement trial')

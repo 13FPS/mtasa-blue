@@ -38,3 +38,6 @@ export const MTA_CORE_INPUT_REFERENCE = false;
 // Drive only the bounded eligible local on-foot scope from Core's configured
 // bindings. Keep this write trial separate from both read-only Core references.
 export const MTA_CORE_MOVEMENT_REFERENCE = false;
+// Observe the native D3D11 viewport callback through the real Core worker.
+// This diagnostic draws nothing and must never enable input or full startup.
+export const MTA_CORE_RENDER_REFERENCE = false;

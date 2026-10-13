@@ -1,13 +1,40 @@
 # GTA San Andreas Definitive Edition: findings and port tracker
 
-Last updated: **2026-10-13 19:55** (Europe/Luxembourg).
+Last updated: **2026-10-13 23:45** (Europe/Luxembourg).
 Experimental branch: `definitive-edition-port`.
 Source baseline: `860e41ddeb6635b5dd138fef6c8a492d2f982ce0`.
 
 ## Current result
 
-**Current implementation: validated local engine movement and actual MTA Core
-startup through its retained gameplay gate.** ABI5 adds a bounded trial inside the normal Game DE
+**EXPERIMENTAL: the full MTA client is not playable on DE.** Actual MTA Core,
+XML and configured CKeyBinds now drive a validated bounded local on-foot
+movement trial. The corrected session ran for 30,009 ms with 595 native
+samples, forward walk/sprint and neutral coverage, 1,801 applied/restored
+scopes, 61,299 routed queries and no native failures. The human reported
+normal walking and actual sprinting; cleanup, normal exit and all 23 owned
+hashes passed. This result does not validate remote gameplay or rendering.
+
+Offline startup work now routes Core's DE game-interface request to its
+selected adapter with explicit borrowed ownership. Full startup rejects
+before any classic module load, and the production backend still supplies no
+CGame facade. An opt-in x64 MTA launcher preflight checks the supported
+executable and owned bundle through the real loader dispatch, with launch
+and full-MTA readiness explicitly false. See the
+[reuse plan](Client/definitive/MTA_REUSE_PLAN.md) and
+[preflight contract](Client/launch/DefinitivePreflight/README.md).
+
+A new ten-second renderer observation also runs through the actual Core worker
+and an optional Game DE diagnostics lease. The pinned native D3D11 viewport
+callback is identified statically and its bounded observer passes owned-host
+tests. It copies scalars and records native return/callback activity without
+COM calls, drawing or input changes. The actual game RHI and callback still
+need live validation; no renderer readiness or visible output is claimed.
+
+The previous runtime's live evidence and recovery package remain separate
+from these offline checks. Further in-game checks are deferred until the
+user is available; no automatic GTA launch is part of this work.
+
+**Earlier engine movement and Core startup milestones.** ABI5 adds a bounded trial inside the normal Game DE
 module, called through MTA Core's existing module consumer. It reuses shared
 MTA action synthesis, writes only the current/previous pad pair during the
 verified local on-foot callback, routes its native provider queries, then

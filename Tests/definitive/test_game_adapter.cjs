@@ -1173,11 +1173,13 @@ async function main() {
             DE_MtaMovementRead: index => [movementActive, movementActive, 1, 1, 1, 0, 1, 0, 0, 0, 0, 0][index],
             DE_MtaMovementEnd: () => { movementActive = 0; return 1; },
             DE_CoreStartupBegin: () => 1, DE_CoreStartupPoll: () => 1, DE_CoreStartupCancel: () => 1,
-            DE_CoreStartupRead: index => [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5, 0, 0, 1, 0, overrides.mtaCoreMovementReference ? 1 : 0, 0, 1, 0][index],
+            DE_CoreStartupRead: index => [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5, 0, 0, 1, 0, overrides.mtaCoreMovementReference || overrides.mtaCoreRenderReference ? 1 : 0, 0, 1, 0][index],
             DE_CoreInputBegin: () => 1, DE_CoreInputCapture: () => 1,
             DE_CoreInputRead: index => coreInputState()[index],
             DE_CoreMovementBegin: () => 1, DE_CoreMovementCapture: () => 1,
             DE_CoreMovementRead: index => coreMovementState()[index],
+            DE_CoreRenderBegin: () => 1, DE_CoreRenderCapture: () => 1,
+            DE_CoreRenderRead: index => coreRenderState()[index],
             ...(overrides.functions || {}) };
         const names = Object.keys(functions).filter(name => typeof functions[name] === 'function');
         const record = (name, ...args) => { calls.push([name, ...args]); callFrames.push({ frame, name }); };
@@ -1199,6 +1201,7 @@ async function main() {
             MTA_CORE_STARTUP_REFERENCE: overrides.mtaCoreStartupReference ?? false,
             MTA_CORE_INPUT_REFERENCE: overrides.mtaCoreInputReference ?? false,
             MTA_CORE_MOVEMENT_REFERENCE: overrides.mtaCoreMovementReference ?? false,
+            MTA_CORE_RENDER_REFERENCE: overrides.mtaCoreRenderReference ?? false,
             Date: { now: () => overrides.times ? overrides.times[frame] : frame * 50 },
             CLEO: { version: overrides.version || '1.5.1', apiVersion: overrides.definitions || '0.500', hostVersion: '1.0.113.49697469' },
             native: (name, ...args) => { record(name, ...args);
@@ -1233,6 +1236,78 @@ async function main() {
         vm.runInNewContext(entry, sandbox, { timeout: 1000 });
         return { calls, callFrames, runtimeAccess, waits, logs, fromFloat };
     }
+    const coreRenderState = (overrides = {}) => {
+        const state = Array(40).fill(0);
+        Object.assign(state, { 0: 1, 1: 2, 2: 201, 3: 10000, 4: 1, 5: 200, 6: 1, 7: 1, 9: 1, 11: 1,
+            12: 1, 14: 1, 15: 1, 17: 600, 19: 600, 25: 42, 26: 1920, 27: 1080, 28: 1, 31: 1, 37: 15 }, overrides);
+        return state;
+    };
+    const coreRender = (overrides = {}) => {
+        let polls = 0;
+        return runEntry({ mtaCoreRenderReference: true, keyFrames: [[17, 16, 120], [16], [], []],
+            times: [0, 50, 100, 10200], ...overrides,
+            functions: { DE_CoreStartupPoll: () => ++polls >= 2 ? 1 : 0,
+                DE_CoreRenderRead: index => coreRenderState({ ...(polls < 2 ? { 1: 1, 2: 1, 3: 0, 4: 0, 5: 1, 6: 0, 7: 0, 13: 1 } : {}),
+                    ...overrides.renderState })[index],
+                ...overrides.functions } });
+    };
+    test('Core render probe waits for F9 release and reads scalar40 snapshots on yielding worker polls', () => {
+        const result = coreRender();
+        assert.equal(result.callFrames.find(call => call.name === 'DynamicLibrary.Load').frame, 2);
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreRenderBegin').length, 1);
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreRenderRead').length, 80);
+        const finish = result.logs.find(event => event.event === 'core_render_reference_finished');
+        assert.equal(finish.passed, true); assert.equal(finish.cleanup_passed, true); assert.equal(finish.state[15], 1);
+        assert.equal(finish.rendering_started, false); assert.equal(finish.input_writes, false);
+        assert.ok(!result.calls.some(call => /DE_Connect|DE_MtaMovement|DE_CoreInput|DE_CoreMovement|GET_CHAR/.test(call[0])));
+        assert.equal(result.waits.at(-1).milliseconds, 100);
+    });
+    test('Core render native false return remains valid scalar observation without a COM Present claim', () => {
+        const finish = coreRender().logs.find(event => event.event === 'core_render_reference_finished');
+        assert.equal(finish.passed, true);
+        assert.equal(finish.full_core_ready, false);
+        assert.equal(finish.rendering_started, false);
+    });
+    for (const [field, value] of [[5, 0], [7, 0], [8, 1], [9, 0], [10, 1], [11, 0], [12, 0], [13, 1], [14, 0], [15, 0], [17, 0], [19, 0],
+            [21, 1], [23, 1], [25, 0], [26, 0], [27, 0], [29, 2], [30, 7], [31, 0], [32, 1], [33, 1], [37, 3], [38, 1], [39, 1]])
+        test('Core render cannot pass missing native/cleanup evidence field ' + field, () => {
+            const result = coreRender({ renderState: { [field]: value } });
+            assert.ok(result.logs.some(event => event.event === 'adapter_failed'));
+            assert.ok(!result.logs.some(event => event.event === 'core_render_reference_finished' && event.passed));
+        });
+    test('Core render cancels on a malformed frozen field and never reads terminal diagnostics while pending', () => {
+        const result = coreRender({ functions: { DE_CoreStartupPoll: () => 0, DE_CoreRenderRead: index => index === 27 ? NaN : coreRenderState({ 3: 0 })[index] } });
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 1);
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupRead').length, 0);
+    });
+    test('Core render keeps polling through cleanup pending and only reads final Core after detachment', () => {
+        let polls = 0;
+        const result = coreRender({ keyFrames: [[17, 16, 120], [16], [], [], []], times: [0, 50, 100, 10150, 10200],
+            functions: { DE_CoreStartupPoll: () => ++polls >= 3 ? 1 : 0,
+                DE_CoreRenderRead: index => coreRenderState({ 2: polls, ...(polls === 1 ?
+                    { 1: 1, 3: 0, 4: 0, 5: 1, 6: 0, 7: 0, 13: 1 } : polls === 2 ? { 1: 3, 6: 0, 10: 1, 32: 1 } : {}) })[index] } });
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupPoll').length, 3);
+        assert.ok(result.callFrames.filter(call => call.name === 'DE_CoreStartupRead').every(call => call.frame === 4));
+        assert.equal(result.logs.find(event => event.event === 'core_render_reference_finished').passed, true);
+    });
+    test('Core render missing DLL export fails before starting an unobservable job', () => {
+        const result = coreRender({ functions: { DE_CoreRenderRead: undefined } });
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreRenderBegin').length, 0);
+        assert.ok(result.logs.some(event => event.event === 'adapter_failed'));
+    });
+    test('Core render impossible publication metrics cancel the worker without certifying observations', () => {
+        const result = coreRender({ renderState: { 35: 1 } });
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 1);
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupRead').length, 0);
+        assert.ok(!result.logs.some(event => event.event === 'core_render_reference_finished' && event.passed));
+    });
+    test('Core render is exclusive with input writes and ordinary Online', () => {
+        for (const override of [{ mtaCoreMovementReference: true }, { mtaCoreInputReference: true }, { mtaCoreStartupReference: true }, { mode: 'online' }]) {
+            const result = coreRender(override);
+            assert.equal(result.calls.length, 0);
+            assert.ok(result.logs.some(event => event.event === 'adapter_failed'));
+        }
+    });
     const coreInputState = (overrides = {}) => {
         const state = Array(64).fill(0);
         Object.assign(state, { 0: 1, 1: 2, 2: 1201, 3: 60000, 4: 4, 5: 6, 7: 6, 11: 1200, 14: 1, 15: 1 }, overrides);

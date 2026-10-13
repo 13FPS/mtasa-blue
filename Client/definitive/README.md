@@ -6,6 +6,41 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
+**Next live boundary: Core-owned native renderer observation.**
+`package.ps1 -Mode Smoke -MtaCoreRenderReference` selects a separate, disabled
+by default 23-file trial. The real Core owns an optional versioned observation
+lease from Game DE and runs it on its existing worker for ten seconds. The
+ordinary gameplay gate remains intact. No XML/binds, input writes, networking,
+NPCs, GUI drawing or COM calls are part of this trial.
+
+The backend checks the exact executable and the complete 421-byte native
+D3D11 viewport function before installing a bounded detour. It copies scalars
+and presence flags only from the naturally invoked callback; no viewport,
+swapchain, device or context pointer reaches Core or JavaScript. It records
+native callback entries, accepted/rejected samples, contention and the
+original function's return. A false native return is valid evidence when the
+original returned normally. Neither entry nor that return proves that the
+function's optional COM Present branch executed or that pixels were drawn.
+D3D12 remains outside this observer.
+
+After manual Ctrl+Shift+F9 activation and release, the script yields while
+reading coherent 40-field snapshots. Ctrl+Shift+End requests cleanup. Failed
+detachment or final readback retains the lease, actual Core and worker for
+retries. A two-second cleanup deadline records failure without permitting
+unload. Ended state is copied before lease release, and the terminal 19-field
+Core diagnostics preserve the actual backend PIN.
+
+The native callback suite passes 467 checks, the exact lifecycle used by Core
+passes 3,031 checks on each architecture, and the actual module suite passes
+1,529 checks including wrong-image admission and foreign-thread rejection.
+Normal Core/Game DE builds, 122 real Core entry checks in each folder layout,
+classic Win32 option/default compilation and all seven worker scenarios pass.
+These are offline results. The active game RHI, live callback identity,
+normal game continuation and rendering remain unverified. Assess the saved
+trial with `python utils/definitive_edition/core_render_log.py --log <saved-log>
+--output <assessment> --require-exit` after normal shutdown. Full MTA remains
+EXPERIMENTAL and unplayable.
+
 **Completed live check: actual Core configured bindings drive scoped native movement.**
 `package.ps1 -Mode Smoke -MtaCoreMovementReference` selects this separate,
 explicitly enabled 23-file experimental trial. The corrected trial passed the
@@ -73,8 +108,17 @@ remain gated.
 
 Core's existing module-loading order now lives in `CreateStartupModules`, used
 by both classic renderer startup paths. It preserves the early reentrancy flag
-and Network/Game/Multiplayer/XML/GUI order. This places startup policy in Core;
-DE module providers and renderer integration remain required.
+and Network/Game/Multiplayer/XML/GUI order. DE admission precedes the flag and
+all classic module loads. DE `CreateGame` requests an owner-thread checked,
+borrowed adapter facade, with teardown ownership distinct from the classic
+self-deleting factory. The production backend still exposes no CGame; the
+full startup rejection remains in place.
+
+The opt-in Release/x64 MTA launcher has a headless file preflight through its
+existing loader dispatch. It checks the supported executable and an owned
+23-file package without starting GTA or loading Core. A valid file result
+still reports launch/full-MTA readiness false. See the
+[preflight contract](../launch/DefinitivePreflight/README.md).
 
 **Completed live check: actual MTA Core startup.**
 The validated `-MtaCoreStartupReference` package contained 21 owned files,

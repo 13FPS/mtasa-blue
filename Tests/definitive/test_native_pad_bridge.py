@@ -50,6 +50,9 @@ def main():
         "DE_CoreMovementBegin": (ctypes.c_int, []),
         "DE_CoreMovementCapture": (ctypes.c_int, []),
         "DE_CoreMovementRead": (ctypes.c_uint32, [ctypes.c_uint32]),
+        "DE_CoreRenderBegin": (ctypes.c_int, []),
+        "DE_CoreRenderCapture": (ctypes.c_int, []),
+        "DE_CoreRenderRead": (ctypes.c_uint32, [ctypes.c_uint32]),
     }
     for name, (result, arguments) in signatures.items():
         function = getattr(bridge, name)
@@ -72,6 +75,10 @@ def main():
     check(bridge.DE_CoreInputCapture() == 0, "Rejected host cannot freeze an input sample")
     check(bridge.DE_CoreMovementBegin() == 0, "Wrong executable cannot start Core-owned input writes")
     check(bridge.DE_CoreMovementCapture() == 0, "Rejected host cannot freeze Core movement metrics")
+    check(bridge.DE_CoreRenderBegin() == 0, "Wrong executable cannot start a native render observation")
+    check(bridge.DE_CoreRenderCapture() == 0, "Rejected host cannot freeze render evidence")
+    for component in (*range(40), 40, 0xFFFFFFFF):
+        check(bridge.DE_CoreRenderRead(component) == 0, "Rejected host cannot manufacture render evidence")
     for component in (*range(96), 96, 0xFFFFFFFF):
         check(bridge.DE_CoreMovementRead(component) == 0, "Rejected host cannot manufacture Core movement evidence")
     for component in (*range(64), 64, 0xFFFFFFFF):
@@ -107,6 +114,10 @@ def main():
         check(bridge.DE_NativeDeviceRead(index) == 0, "Unbound or invalid device source must remain unavailable")
     bridge.DE_NativePadReset()
     bridge.DE_Disconnect()
+    check(bridge.DE_CoreRenderBegin() == 0, "Cleanup cannot authorize native render observation")
+    check(bridge.DE_CoreRenderCapture() == 0, "Cleanup cannot manufacture render evidence")
+    for component in (*range(40), 40, 0xFFFFFFFF):
+        check(bridge.DE_CoreRenderRead(component) == 0, "Cleanup cannot retain render evidence")
     check(bridge.DE_CoreInputBegin() == 0, "Cleanup cannot authorize configured Core input")
     check(bridge.DE_CoreInputCapture() == 0, "Cleanup cannot manufacture configured input coverage")
     for component in (*range(64), 64, 0xFFFFFFFF):

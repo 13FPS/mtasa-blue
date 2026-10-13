@@ -7,6 +7,7 @@
 #include "../../Client/core/CGameAdapterModule.h"
 
 #include <filesystem>
+#include <cstring>
 #include <iostream>
 #include <new>
 #include <stdexcept>
@@ -15,42 +16,161 @@
 #include <windows.h>
 
 #if defined(MTA_TEST_SHUTDOWN_FAILURE_MODULE)
+    #ifndef MTA_TEST_FACADE_MODE
+        #define MTA_TEST_FACADE_MODE 0
+    #endif
+    #ifndef MTA_TEST_RENDER_MODE
+        #define MTA_TEST_RENDER_MODE 0
+    #endif
 // This deliberately failing provider tests Core's DLL lifetime only. It is not
 // an engine writer, replacement Game DE implementation or gameplay fixture.
 namespace mta::game_de
 {
     namespace
     {
+        std::uint32_t* fixtureCounters = nullptr;
+        alignas(void*) unsigned char facadeIdentity[sizeof(void*)]{};
+
         class ShutdownFailureAdapter final : public IGameAdapter
         {
         public:
-            Status        Initialize(CCoreInterface*) noexcept override { return Status::Ok; }
-            Status        Pulse() noexcept override { return Status::Ok; }
-            Status        Reset() noexcept override { return Status::Unsupported; }
-            Status        Shutdown() noexcept override { return ++shutdownCount == 1 ? Status::Unsupported : Status::Ok; }
-            void          Release() noexcept override { delete this; }
-            std::uint64_t GetCapabilities() const noexcept override { return 0; }
-            CGame*        GetGameInterface() const noexcept override { return nullptr; }
-            Status        PublishLocalObservation(const LocalObservation&) noexcept override { return Status::Unsupported; }
-            Status        GetLocalObservation(LocalObservation&) noexcept override { return Status::Unsupported; }
-            Status        SubmitControlActions(const ControlActionFrame&) noexcept override { return Status::Unsupported; }
-            Status        GetMtaInputState(MtaInputState&) noexcept override { return Status::Unsupported; }
-            Status        BindNativeInput() noexcept override { return Status::Unsupported; }
-            Status        ReadNativeControllerState(std::uint32_t, NativeControllerState&) noexcept override { return Status::Unsupported; }
-            Status        ReadNativeDeviceState(NativeDeviceState&) noexcept override { return Status::Unsupported; }
-            Status        BeginNativeMovementTrial() noexcept override { return Status::Unsupported; }
-            Status        GetNativeMovementTrialState(NativeMovementTrialState&) noexcept override { return Status::Unsupported; }
-            Status        EndNativeMovementTrial() noexcept override { return Status::Unsupported; }
-            Status        GetNativeMovementEligibility(NativeMovementEligibility&) noexcept override { return Status::Unsupported; }
+            Status Initialize(CCoreInterface*) noexcept override { return Status::Ok; }
+            Status Pulse() noexcept override { return Status::Ok; }
+            Status Reset() noexcept override
+            {
+                if (fixtureCounters)
+                {
+                    ++fixtureCounters[3];
+                    fixtureCounters[10] = ++fixtureCounters[8];
+                }
+                return MTA_TEST_RENDER_MODE ? Status::Ok : Status::Unsupported;
+            }
+            Status Shutdown() noexcept override
+            {
+                ++shutdownCount;
+                if (fixtureCounters)
+                {
+                    ++fixtureCounters[0];
+                    fixtureCounters[11] = ++fixtureCounters[8];
+                }
+                return !MTA_TEST_RENDER_MODE && (MTA_TEST_FACADE_MODE == 0 || MTA_TEST_FACADE_MODE == 3) && shutdownCount == 1 ? Status::Unsupported
+                                                                                                                               : Status::Ok;
+            }
+            void Release() noexcept override
+            {
+                if (fixtureCounters)
+                {
+                    ++fixtureCounters[1];
+                    fixtureCounters[12] = ++fixtureCounters[8];
+                }
+                delete this;
+            }
+            std::uint64_t GetCapabilities() const noexcept override
+            {
+                return MTA_TEST_FACADE_MODE >= 2 ? static_cast<std::uint64_t>(AdapterCapability::GameInterface) : 0;
+            }
+            CGame* GetGameInterface() const noexcept override
+            {
+                if (fixtureCounters)
+                    ++fixtureCounters[2];
+                return MTA_TEST_FACADE_MODE == 1 || MTA_TEST_FACADE_MODE == 3 ? reinterpret_cast<CGame*>(facadeIdentity) : nullptr;
+            }
+            Status PublishLocalObservation(const LocalObservation&) noexcept override { return Status::Unsupported; }
+            Status GetLocalObservation(LocalObservation&) noexcept override { return Status::Unsupported; }
+            Status SubmitControlActions(const ControlActionFrame&) noexcept override { return Status::Unsupported; }
+            Status GetMtaInputState(MtaInputState&) noexcept override { return Status::Unsupported; }
+            Status BindNativeInput() noexcept override { return Status::Unsupported; }
+            Status ReadNativeControllerState(std::uint32_t, NativeControllerState&) noexcept override { return Status::Unsupported; }
+            Status ReadNativeDeviceState(NativeDeviceState&) noexcept override { return Status::Unsupported; }
+            Status BeginNativeMovementTrial() noexcept override { return Status::Unsupported; }
+            Status GetNativeMovementTrialState(NativeMovementTrialState&) noexcept override { return Status::Unsupported; }
+            Status EndNativeMovementTrial() noexcept override { return Status::Unsupported; }
+            Status GetNativeMovementEligibility(NativeMovementEligibility&) noexcept override { return Status::Unsupported; }
 
         private:
             unsigned int shutdownCount = 0;
+        };
+
+        // Controlled optional-provider values exercise the consumer lifetime;
+        // they are not observations from native rendering or a pinned DLL.
+        class RenderFixture final : public IGameRenderObservation
+        {
+        public:
+            Status Begin() noexcept override
+            {
+                if (fixtureCounters)
+                    ++fixtureCounters[4];
+                state.bound = state.active = 1;
+                state.generation = 17;
+                state.nativePresentCallbacks = 9;
+                state.acceptedSnapshots = 7;
+                state.publicationMisses = 2;
+                state.width = 640;
+                state.height = 480;
+                state.lastOriginalReturned = 1;
+                state.lastOriginalResult = 0;
+                return MTA_TEST_RENDER_MODE == 2 ? Status::Unsupported : Status::Ok;
+            }
+            Status ReadState(RenderObservationState& output) noexcept override
+            {
+                if (fixtureCounters)
+                    ++fixtureCounters[5];
+                if (MTA_TEST_RENDER_MODE == 3 && ended && !failedFinalRead)
+                {
+                    failedFinalRead = true;
+                    return Status::Unsupported;
+                }
+                output = state;
+                return Status::Ok;
+            }
+            Status End() noexcept override
+            {
+                if (fixtureCounters)
+                    ++fixtureCounters[6];
+                ++endCount;
+                ended = true;
+                state.active = 0;
+                state.pendingCleanup = 0;
+                if ((MTA_TEST_RENDER_MODE == 1 || MTA_TEST_RENDER_MODE == 2) && endCount == 1)
+                {
+                    state.pendingCleanup = 1;
+                    return Status::Unsupported;
+                }
+                if (MTA_TEST_RENDER_MODE == 5 && endCount == 1)
+                    state.active = state.pendingCleanup = 1;
+                return Status::Ok;
+            }
+            void Release() noexcept override
+            {
+                if (fixtureCounters)
+                {
+                    ++fixtureCounters[7];
+                    fixtureCounters[9] = ++fixtureCounters[8];
+                }
+                delete this;
+            }
+
+        private:
+            RenderObservationState state;
+            unsigned               endCount = 0;
+            bool                   ended = false;
+            bool                   failedFinalRead = false;
         };
     }
 
     extern "C" __declspec(dllexport) IGameAdapter* CreateGameAdapter(std::uint32_t abiVersion) noexcept
     {
         return abiVersion == AdapterAbiVersion ? new (std::nothrow) ShutdownFailureAdapter : nullptr;
+    }
+
+    extern "C" __declspec(dllexport) void SetFacadeFixtureCounters(std::uint32_t* counters) noexcept
+    {
+        fixtureCounters = counters;
+    }
+
+    extern "C" __declspec(dllexport) IGameRenderObservation* CreateGameRenderObservation(std::uint32_t apiVersion, CCoreInterface* owner) noexcept
+    {
+        return MTA_TEST_RENDER_MODE && apiVersion == RenderObservationApiVersion && owner ? new (std::nothrow) RenderFixture : nullptr;
     }
 }
 #else
@@ -92,6 +212,13 @@ namespace
         Check(!host.BeginNativeMovementTrial() && !host.GetNativeMovementTrialState(trial) && !host.EndNativeMovementTrial() && trial.callbackCount == 19,
               "uninitialized Core cannot start, inspect or end a movement trial");
         Check(host.GetCapabilities() == 0 && !host.IsGameplayReady(), "an uninitialized consumer has no capabilities");
+        CGame* unavailableGame = reinterpret_cast<CGame*>(std::uintptr_t{1});
+        Check(!host.BorrowGameInterface(unavailableGame) && unavailableGame == reinterpret_cast<CGame*>(std::uintptr_t{1}),
+              "an uninitialized consumer preserves the caller's game facade output");
+        mta::game_de::RenderObservationState render;
+        render.width = 17;
+        Check(!host.BeginNativeRenderObservation() && !host.GetNativeRenderObservationState(render) && !host.EndNativeRenderObservation() && render.width == 17,
+              "uninitialized optional renderer calls preserve output and never enter a provider");
         host.Stop();
         host.Stop();
         Check(!host.IsStarted(), "cleanup is idempotent after failure");
@@ -263,6 +390,142 @@ namespace
         Check(!host.IsStarted() && GetModuleHandleW(fixturePath.c_str()) == nullptr,
               "a successful cleanup retry releases the instance before unloading its DLL");
     }
+
+    void TestFacadeProvider(CCoreInterface* owner, const std::wstring& fixturePath, unsigned mode)
+    {
+        Check(GetModuleHandleW(fixturePath.c_str()) == nullptr, "facade fixture begins unloaded");
+        CGameAdapterModule host;
+        Check(host.Start(owner, fixturePath), "Core owns the explicitly selected facade fixture");
+        std::uint32_t counters[13]{};
+        const auto    address = GetProcAddress(GetModuleHandleW(fixturePath.c_str()), "SetFacadeFixtureCounters");
+        using ConfigureCounters = void (*)(std::uint32_t*) noexcept;
+        ConfigureCounters configure = nullptr;
+        static_assert(sizeof(configure) == sizeof(address));
+        std::memcpy(&configure, &address, sizeof(configure));
+        Check(configure != nullptr, "facade fixture exposes lifetime counters without another module reference");
+        configure(counters);
+        // This address has no CGame vtable. The positive fixture proves only a
+        // borrowed pointer's admission and lifetime, never a working game API.
+        CGame* const sentinel = reinterpret_cast<CGame*>(std::uintptr_t{1});
+        CGame*       game = sentinel;
+        const bool   borrowed = host.BorrowGameInterface(game);
+        Check(borrowed == (mode == 3), "facade admission requires both its capability and nonnull pointer");
+        if (mode != 3)
+        {
+            Check(game == sentinel, "rejected facade provider preserves caller output");
+            Check(counters[2] == (mode == 1 ? 0u : 1u), "missing capability never invokes the provider's facade getter");
+            host.Stop();
+            Check(!host.IsStarted() && GetModuleHandleW(fixturePath.c_str()) == nullptr && counters[0] == 1 && counters[1] == 1,
+                  "rejected facade provider shuts down and releases before unload");
+        }
+        else
+        {
+            Check(game && game != sentinel && counters[2] == 1, "positive facade is an explicitly borrowed identity only");
+            Check(!host.IsGameplayReady(), "GameInterface alone cannot claim input, remote context or gameplay readiness");
+            bool        foreignBorrow = true;
+            bool        foreignGameplay = true;
+            CGame*      foreignGame = sentinel;
+            std::thread foreign(
+                [&]
+                {
+                    foreignBorrow = host.BorrowGameInterface(foreignGame);
+                    foreignGameplay = host.IsGameplayReady();
+                });
+            foreign.join();
+            Check(!foreignBorrow && !foreignGameplay && foreignGame == sentinel && counters[2] == 1,
+                  "foreign borrower and gameplay preflight cannot invoke the getter or replace output");
+            CGame* const identity = game;
+            // Core relinquishes its borrowed view before adapter teardown. If
+            // the consumer ever calls Terminate/delete on this identity the
+            // fixture cannot run successfully; only adapter callbacks own it.
+            game = nullptr;
+            host.Stop();
+            Check(host.IsStarted() && GetModuleHandleW(fixturePath.c_str()) != nullptr && counters[0] == 1 && counters[1] == 0,
+                  "failed borrowed-provider Shutdown retains adapter and DLL without releasing the facade");
+            Check(host.BorrowGameInterface(game) && game == identity && counters[2] == 2, "retained adapter still owns the same facade through cleanup retry");
+            game = nullptr;
+            host.Stop();
+            Check(!host.IsStarted() && GetModuleHandleW(fixturePath.c_str()) == nullptr && counters[0] == 2 && counters[1] == 1,
+                  "borrowed teardown uses Shutdown/Release before unload without invoking CGame");
+        }
+        game = sentinel;
+        Check(!host.BorrowGameInterface(game) && game == sentinel, "released provider cannot replace caller facade output");
+    }
+
+    void TestRenderProvider(CCoreInterface* owner, const std::wstring& fixturePath, unsigned mode)
+    {
+        using namespace mta::game_de;
+        Check(GetModuleHandleW(fixturePath.c_str()) == nullptr, "render provider begins unloaded");
+        CGameAdapterModule host;
+        Check(host.Start(owner, fixturePath), "Core owns the controlled optional render provider");
+        std::uint32_t counters[13]{};
+        const auto    address = GetProcAddress(GetModuleHandleW(fixturePath.c_str()), "SetFacadeFixtureCounters");
+        using ConfigureCounters = void (*)(std::uint32_t*) noexcept;
+        ConfigureCounters configure = nullptr;
+        std::memcpy(&configure, &address, sizeof(configure));
+        Check(configure != nullptr, "render provider lifetime counters are available");
+        configure(counters);
+        RenderObservationState readback;
+        readback.width = 123;
+        Check(!host.GetNativeRenderObservationState(readback) && readback.width == 123, "no render lease preserves caller output");
+        const auto factoryAddress = GetProcAddress(GetModuleHandleW(fixturePath.c_str()), "CreateGameRenderObservation");
+        using Factory = decltype(&CreateGameRenderObservation);
+        Factory factory = nullptr;
+        std::memcpy(&factory, &factoryAddress, sizeof(factory));
+        Check(factory && !factory(RenderObservationApiVersion + 1, owner) && !factory(RenderObservationApiVersion, nullptr),
+              "optional factory rejects wrong versions and absent owners before allocation");
+        Check(host.BeginNativeRenderObservation() == (mode != 2), "failed Begin is distinguishable from a successful observation lease");
+        Check(counters[4] == 1 && !host.BeginNativeRenderObservation() && counters[4] == 1, "duplicate Begin cannot replace a retained lease");
+        Check(host.GetNativeRenderObservationState(readback) && readback.active == 1 && readback.generation == 17,
+              "even a failed Begin retains actual provider state for cleanup");
+        const auto             readsBeforeForeign = counters[5];
+        bool                   foreignBegin = true, foreignRead = true, foreignEnd = true, foreignReset = true;
+        RenderObservationState foreignState;
+        foreignState.width = 321;
+        std::thread foreign(
+            [&]
+            {
+                foreignBegin = host.BeginNativeRenderObservation();
+                foreignRead = host.GetNativeRenderObservationState(foreignState);
+                foreignEnd = host.EndNativeRenderObservation();
+                foreignReset = host.Reset();
+                host.Stop();
+            });
+        foreign.join();
+        Check(!foreignBegin && !foreignRead && !foreignEnd && !foreignReset && foreignState.width == 321 && counters[4] == 1 &&
+                  counters[5] == readsBeforeForeign && counters[6] == 0 && counters[0] == 0 && counters[3] == 0,
+              "foreign operations cannot call or clean up an owned observer");
+        if (mode == 4)
+        {
+            Check(host.Reset(), "owner reset ends and releases its optional observer");
+            Check(counters[6] == 1 && counters[7] == 1 && counters[3] == 1 && counters[9] < counters[10], "observer End and Release precede adapter Reset");
+            readback.width = 234;
+            Check(!host.GetNativeRenderObservationState(readback) && readback.width == 234, "successful Reset clears final observation availability");
+        }
+        else
+        {
+            if (mode <= 2)
+                host.Stop();
+            else
+                Check(!host.EndNativeRenderObservation(), "unsafe final observer readback retains the lease");
+            Check(host.IsStarted() && GetModuleHandleW(fixturePath.c_str()) != nullptr && counters[6] == 1 && counters[7] == 0 && counters[0] == 0,
+                  "failed Begin cleanup, End, final read or contradictory state cannot release adapter/module");
+            Check(host.EndNativeRenderObservation(), "owner retries optional observer cleanup safely");
+            const auto finalReads = counters[5];
+            Check(counters[6] == 2 && counters[7] == 1 && host.GetNativeRenderObservationState(readback) && readback.active == 0 &&
+                      readback.pendingCleanup == 0 && readback.generation == 17 && readback.nativePresentCallbacks == 9 && readback.acceptedSnapshots == 7 &&
+                      readback.publicationMisses == 2 && readback.width == 640 && readback.lastOriginalReturned == 1 && readback.lastOriginalResult == 0 &&
+                      counters[5] == finalReads,
+                  "actual final state is cached before Release and preserves a returned false native bool");
+            Check(host.EndNativeRenderObservation() && counters[6] == 2 && counters[7] == 1, "completed observer End is idempotent without another callback");
+        }
+        host.Stop();
+        Check(!host.IsStarted() && GetModuleHandleW(fixturePath.c_str()) == nullptr && counters[0] == 1 && counters[1] == 1 && counters[7] == 1 &&
+                  counters[9] < counters[11] && counters[11] < counters[12],
+              "observer lease release precedes adapter Shutdown/Release and module unload");
+        readback.width = 345;
+        Check(!host.GetNativeRenderObservationState(readback) && readback.width == 345, "unloaded observer state cannot replace caller output");
+    }
     #endif
 }
 
@@ -270,7 +533,7 @@ int wmain(int argc, wchar_t** argv)
 {
     try
     {
-        if (argc != 2 && argc != 3)
+        if (argc != 2 && argc != 3 && argc != 6 && argc != 11)
             throw std::runtime_error("Pass the absolute path of the built Game DE module");
         const std::wstring modulePath = argv[1];
         // The adapter stores this identity but must never dereference it. This
@@ -281,8 +544,14 @@ int wmain(int argc, wchar_t** argv)
         TestRejectedArguments(owner, modulePath);
         TestActualModule(owner, modulePath);
         TestAdjacentPath();
-        if (argc == 3)
+        if (argc >= 3)
             TestFailedShutdownRetention(owner, argv[2]);
+        if (argc >= 6)
+            for (unsigned mode = 1; mode <= 3; ++mode)
+                TestFacadeProvider(owner, argv[mode + 2], mode);
+        if (argc == 11)
+            for (unsigned mode = 1; mode <= 5; ++mode)
+                TestRenderProvider(owner, argv[mode + 5], mode);
     #else
         CGameAdapterModule host;
         Check(!host.Start(owner, modulePath), "x86 must reject the x64 backend before loading it");

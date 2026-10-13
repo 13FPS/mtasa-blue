@@ -5,6 +5,26 @@ MTA Core owns its loading, initialization, pulse, reset, shutdown and release
 through `CGameAdapterModule` and the versioned SDK `game/CGameAdapter.h`.
 The module provides no separate transport or script-host lifecycle.
 
+Optional native rendering diagnostics use the separate API1
+`game/CGameRenderObservation.h` factory. It supplies an owner-thread checked
+lease over `NativeRenderObservation`; allocating it performs no binding or
+detour. Core explicitly begins the observation and copies only scalar state.
+Failed Begin, End or final readback retains the lease and module. The consumer
+caches actual ended values before Release, and Stop/Reset end this lease
+before touching the game adapter. These exports leave ABI6 and every gameplay
+capability unchanged.
+
+The D3D11 candidate verifies the exact executable and complete 421-byte native
+viewport function at RVA `0x1F5A430`. Callback-local vtable/RHI bindings and
+member reads copy dimensions, presence flags and native return/counters.
+No COM call occurs, no native pointer leaves the callback, and no input state
+is changed. Entry and a normal native return do not prove that COM Present ran.
+The native suite passes 467 checks and the actual module suite 1,529; the Core
+lifecycle passes 3,031 checks on each architecture. These are offline fixtures.
+The separate ten-second `-MtaCoreRenderReference` trial uses actual Core and
+its existing worker; it is disabled by default and still needs live validation.
+See the [trial contract](../definitive/README.md).
+
 The current factory contract is **ABI6**. Actual Core configured input can now
 use the existing local on-foot movement writer after build-pinned eligibility
 checks. `GetNativeMovementEligibility` requires the adapter's existing exact
@@ -69,11 +89,13 @@ matched. Normal GTA exit passed with the complete 99,637-byte shutdown log.
 This proof covers the bounded local forward movement path through
 actual MTA configuration, rather than all controller actions or full gameplay.
 
-Core now owns the existing five-module loading sequence in
-`CreateStartupModules`; both classic render startup paths delegate to it with
-the same order and flag-before-creation behavior. This shared policy does not
-provide DE module factories, a CGame facade or a DE renderer; the gameplay gate
-remains intact.
+Core owns the existing five-module loading sequence in `CreateStartupModules`;
+both classic render startup paths delegate with the same order and
+flag-before-creation behavior. DE calls reject incomplete startup before that
+flag or any classic module load. Core's DE `CreateGame` borrows an advertised
+facade from its selected adapter on the owning thread; explicit ownership
+prevents classic Terminate/delete or legacy-module unload of that facade.
+The production backend still supplies no CGame, and full startup remains gated.
 
 The first live configured-write attempt stopped after **1,049 ms** on an
 unavailable producer eligibility observation. Its 20 native samples and 10

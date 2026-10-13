@@ -5,6 +5,7 @@
  *****************************************************************************/
 
 #include <game/CGameAdapter.h>
+#include <game/CGameRenderObservation.h>
 
 #include <array>
 #include <algorithm>
@@ -443,6 +444,41 @@ namespace
               "shutdown revokes native context access");
     }
 
+    void TestRenderObservationFactoryRejection()
+    {
+        OwnerIdentity owner;
+        Check(CreateGameRenderObservation(0, owner.Get()) == nullptr && CreateGameRenderObservation(RenderObservationApiVersion + 1, owner.Get()) == nullptr,
+              "optional render factory requires its independent exact API version");
+        Check(CreateGameRenderObservation(RenderObservationApiVersion, nullptr) == nullptr, "optional render diagnostics require an opaque MTA owner");
+        auto* observation = CreateGameRenderObservation(RenderObservationApiVersion, owner.Get());
+        Check(observation != nullptr, "actual module creates an optional render lease");
+        RenderObservationState state;
+        Check(observation->ReadState(state) == Status::Ok && !state.bound && !state.active && !state.modulePinned && !state.generation,
+              "allocating a render lease performs no engine binding, pin or detour");
+        Status                 foreignBegin = Status::Ok, foreignRead = Status::Ok, foreignEnd = Status::Ok;
+        RenderObservationState foreignState;
+        foreignState.width = 123;
+        std::thread foreign(
+            [&]
+            {
+                foreignBegin = observation->Begin();
+                foreignRead = observation->ReadState(foreignState);
+                foreignEnd = observation->End();
+                observation->Release();
+            });
+        foreign.join();
+        Check(foreignBegin == Status::WrongThread && foreignRead == Status::WrongThread && foreignEnd == Status::WrongThread && foreignState.width == 123,
+              "foreign render calls reject without replacing output or releasing the owner");
+        Check(observation->Begin() == Status::Unsupported, "actual renderer admission rejects the non-game executable");
+        Check(observation->ReadState(state) == Status::Ok && state.generation > 0 && state.failureReason != 0 && !state.bound && !state.active &&
+                  !state.modulePinned && !state.pendingCleanup && !state.nativePresentCallbacks && !state.acceptedSnapshots,
+              "wrong-image render admission installs no hook, pins no DLL and reports no native observation");
+        Check(observation->End() == Status::Ok && observation->End() == Status::Ok, "owner cleanup is idempotent after rejected renderer admission");
+        Check(observation->ReadState(state) == Status::Ok && !state.active && !state.pendingCleanup,
+              "actual ended state remains readable before releasing its lease");
+        observation->Release();
+    }
+
     void TestNativeMovementRejection()
     {
         OwnerIdentity owner;
@@ -521,6 +557,7 @@ int main()
         TestNativeDeviceRejection();
         TestNativeMovementRejection();
         TestNativeMovementEligibilityRejection();
+        TestRenderObservationFactoryRejection();
         std::cout << "Passed " << checks << " MTA Game DE adapter checks\n";
         return 0;
     }

@@ -165,6 +165,7 @@ function Install-Legacy([object]$Fixture, [int]$Count) {
             # The first23-file generation was read-only and had no Core write
             # marker, even though the new candidate owns the same file paths.
             $text = [regex]::Replace($text, '(?m)^export const MTA_CORE_MOVEMENT_REFERENCE = (true|false);\r?\n', '')
+            $text = [regex]::Replace($text, '(?m)^export const MTA_CORE_RENDER_REFERENCE = (true|false);\r?\n', '')
             if ($Count -lt 23) { $text = [regex]::Replace($text, '(?m)^export const MTA_CORE_INPUT_REFERENCE = (true|false);\r?\n', '') }
             if ($Count -lt 21) { $text = [regex]::Replace($text, '(?m)^export const MTA_CORE_STARTUP_REFERENCE = (true|false);\r?\n', '') }
             if ($Count -lt 19) { $text = [regex]::Replace($text, '(?m)^export const MTA_NATIVE_MOVEMENT_TRIAL = (true|false);\r?\n', '') }
@@ -504,6 +505,46 @@ try {
         $before = Get-TreeFingerprint $fixture.root
         Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' @{ Mode='Smoke'; MtaCoreMovementReference=$true; GameDirectory=$fixture.game } } 'Update the adapter before selecting MTA Core configured movement reference' 'Historical23 cannot infer write opt-in'
         Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Missing Core write marker changes no bytes'
+    }
+    Invoke-Case 'explicit-core-render-observation-opt-in' {
+        param($fixture)
+        Install-Fresh $fixture
+        $config = Join-Path $fixture.game 'CLEO/de-online/config.mjs'
+        $before = Get-TreeFingerprint $fixture.root
+        Invoke-Production $fixture 'set-mode.ps1' @{ Mode='Smoke'; MtaCoreRenderReference=$true; GameDirectory=$fixture.game; WhatIf=$true }
+        Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Render WhatIf changes no bytes'
+        Invoke-Production $fixture 'set-mode.ps1' @{ Mode='Smoke'; MtaCoreRenderReference=$true; GameDirectory=$fixture.game }
+        Assert-Check ([IO.File]::ReadAllText($config) -match 'export const MTA_CORE_RENDER_REFERENCE = true;') 'Explicit separate renderer observation is armed'
+        Assert-Check ([IO.File]::ReadAllText($config) -match 'export const MTA_CORE_MOVEMENT_REFERENCE = false;') 'Renderer observation clears Core input writes'
+        Invoke-Production $fixture 'uninstall.ps1' @{ GameDirectory=$fixture.game; ValidateOnly=$true }
+        $before = Get-TreeFingerprint $fixture.root
+        foreach ($mode in @('Diagnostic', 'Online')) {
+            Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' @{ Mode=$mode; MtaCoreRenderReference=$true; GameDirectory=$fixture.game } } 'separate opt-in Smoke mode' 'Render invalid mode'
+            Assert-Refused { Invoke-Production $fixture 'package.ps1' @{ Mode=$mode; MtaCoreRenderReference=$true } } 'separate opt-in Smoke mode' 'Render package invalid mode'
+            Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Rejected render mode changes no bytes'
+        }
+        foreach ($conflict in @('MtaCoreMovementReference', 'MtaCoreInputReference', 'MtaCoreStartupReference', 'MtaNativeMovementTrial', 'MtaNativePadReference', 'NativeInputReference', 'NativeGaitReference', 'MatchedGaitRate', 'LockWalkRoot')) {
+            $arguments = @{ Mode='Smoke'; MtaCoreRenderReference=$true; GameDirectory=$fixture.game }
+            $arguments[$conflict] = $true
+            Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' $arguments } 'separate opt-in Smoke mode' 'Conflicting render opt-in'
+            $arguments.Remove('GameDirectory')
+            Assert-Refused { Invoke-Production $fixture 'package.ps1' $arguments } 'separate opt-in Smoke mode' 'Conflicting render package'
+            Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Conflicting render trial changes no bytes'
+        }
+        foreach ($mode in @('Diagnostic', 'Smoke', 'Online', 'Smoke')) {
+            Invoke-Production $fixture 'set-mode.ps1' @{ Mode=$mode; GameDirectory=$fixture.game }
+            Assert-Check ([IO.File]::ReadAllText($config) -match 'export const MTA_CORE_RENDER_REFERENCE = false;') "Ordinary $mode clears render observation"
+        }
+    }
+    Invoke-Case 'legacy23-render-observation-needs-explicit-marker' {
+        param($fixture)
+        Install-Legacy $fixture 23
+        $config = Join-Path $fixture.game 'CLEO/de-online/config.mjs'
+        Invoke-Production $fixture 'set-mode.ps1' @{ Mode='Smoke'; GameDirectory=$fixture.game }
+        Assert-Check ([IO.File]::ReadAllText($config) -notmatch 'MTA_CORE_RENDER_REFERENCE') 'Historical configuration remains usable without render marker'
+        $before = Get-TreeFingerprint $fixture.root
+        Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' @{ Mode='Smoke'; MtaCoreRenderReference=$true; GameDirectory=$fixture.game } } 'Update the adapter before selecting MTA Core renderer observation' 'Historical config cannot infer render opt-in'
+        Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Missing render marker changes no bytes'
     }
 } catch { $failure = $_.Exception.Message }
 $sourceUnchanged = $true

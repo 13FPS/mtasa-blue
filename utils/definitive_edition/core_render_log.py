@@ -1,0 +1,199 @@
+"""Audit saved Core-owned native renderer observations without operating GTA."""
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+try:
+    from . import core_startup_log as startup
+except ImportError:
+    import core_startup_log as startup
+
+PROVENANCE = "mta_core_native_render_observation"
+PAIRS = dict(generation=15, native_present_callbacks=17, accepted_snapshots=19,
+             rejected_snapshots=21, nested_callbacks=23, foreign_callbacks=33,
+             publication_misses=35)
+NOTICE = (
+    "This checks saved reports of an owned native D3D11 viewport callback and cleanup. "
+    "Callback entry and its native return value do not prove that COM Present executed or pixels were drawn. "
+    "Visual quality, a DE GUI renderer, D3D12, full MTA startup and multiplayer remain unverified."
+)
+
+
+def unsigned_array(values, count):
+    return isinstance(values, list) and len(values) == count and all(startup.integer(v, 0xffffffff) for v in values)
+
+
+def counters(state):
+    return {name: state[index] | state[index + 1] << 32 for name, index in PAIRS.items()}
+
+
+def analyze_log(text, require_exit=False):
+    if len(text.encode("utf-8", errors="replace")) > startup.MAX_LOG_BYTES:
+        raise ValueError("CLEO log exceeds the 16 MiB read limit")
+    translated, issues, samples = [], [], []
+    started = finished = stop = None
+    last_clock = None
+
+    def invalid(line, reason):
+        if len(issues) < 128:
+            issues.append(dict(line=line, reason=reason))
+
+    for line, raw in enumerate(text.splitlines(), 1):
+        try:
+            event = startup.logged_event(raw)
+        except (RecursionError, OverflowError):
+            invalid(line, "JSON exceeds the parser representation")
+            continue
+        if event is None:
+            if "core_render_reference" in raw:
+                invalid(line, "Malformed renderer observation marker")
+            translated.append(raw)
+            continue
+        kind = event["event"]
+        if (any(key in event for key in ("viewport", "swapchain", "device", "native_pointer", "address")) or
+                any(key in event and event[key] is not False for key in ("com_present_verified", "visual_success_verified", "de_renderer_verified"))):
+            invalid(line, "Native pointers or visual/COM readiness claims exceed this scalar diagnostic")
+        if kind.startswith(("core_startup_reference", "core_input_reference", "core_movement_reference")):
+            invalid(line, "Another Core reference cannot accompany renderer observations")
+        if kind == "adapter_start":
+            if (event.get("core_render_reference") is not True or event.get("provenance") != PROVENANCE or
+                    type(event.get("core_api")) is not int or event["core_api"] != 5 or
+                    any(event.get(flag) is True for flag in ("core_input_reference", "core_movement_reference", "core_startup_reference"))):
+                invalid(line, "Adapter must identify the isolated Core renderer observation")
+            event = {**event, "core_startup_reference": True, "provenance": startup.PROVENANCE, "core_api": 2}
+            event.pop("core_render_reference", None)
+        elif kind == "core_render_reference_started":
+            if (set(event) != {"event", "at_ms", "core_api", "sample_interval_ms", "budget_ms"} or
+                    started or finished or type(event.get("core_api")) is not int or event["core_api"] != 5 or
+                    type(event.get("sample_interval_ms")) is not int or event["sample_interval_ms"] != 100 or
+                    type(event.get("budget_ms")) is not int or event["budget_ms"] != 10000):
+                invalid(line, "One explicit ten-second scalar observation contract is required")
+            started = dict(line=line, **event)
+            event = dict(event="core_startup_reference_started", at_ms=event.get("at_ms"), core_api=2)
+        elif kind == "core_render_reference_stop_requested":
+            if stop:
+                invalid(line, "Duplicate cancellation request")
+            stop = dict(line=line, **event)
+            event = {**event, "event": "core_startup_reference_stop_requested"}
+        elif kind == "core_render_reference_sample":
+            state = event.get("state")
+            if (len(samples) >= 4096 or set(event) != {"event", "at_ms", "elapsed_ms", "state"} or
+                    not started or finished or not startup.integer(event.get("at_ms")) or
+                    not startup.integer(event.get("elapsed_ms")) or not startup.integer(started.get("at_ms")) or
+                    event["at_ms"] - started["at_ms"] != event["elapsed_ms"] or not unsigned_array(state, 40)):
+                invalid(line, "Sample requires exactly40 unsigned fields with bound clock/order")
+                continue
+            if last_clock is not None and event["at_ms"] < last_clock:
+                invalid(line, "Script sample clock reversed")
+            last_clock = event["at_ms"]
+            if state[3] > event["elapsed_ms"] + 250:
+                invalid(line, "Native elapsed time exceeds its containing script interval")
+            previous = samples[-1]["state"] if samples else None
+            boolean_fields = (6, 8, 9, 10, 11, 12, 13, 14, 29, 31, 32)
+            if (state[0] != 1 or state[1] not in (1, 2, 3) or not state[2] or state[4] > 8 or
+                    state[5] > 201 or any(state[index] > 1 for index in boolean_fields) or
+                    state[26] > 32768 or state[27] > 32768 or state[37] & ~15 or any(state[38:])):
+                invalid(line, "Snapshot version, flags, field bounds or reserved storage is invalid")
+            native = counters(state)
+            outcomes = ("accepted_snapshots", "rejected_snapshots", "foreign_callbacks", "publication_misses")
+            if (any(native[name] > native["native_present_callbacks"] for name in (*outcomes, "nested_callbacks")) or
+                    sum(native[name] for name in outcomes) > native["native_present_callbacks"]):
+                invalid(line, "Observed snapshots exceed native callback entries")
+            if previous:
+                prior = counters(previous)
+                if (previous[1] == 2 or state[2] <= previous[2] or state[3] < previous[3] or state[5] < previous[5] or
+                        state[7] < previous[7] or state[8] < previous[8] or state[9] < previous[9] or
+                        (previous[30] and state[30] != previous[30]) or state[12] < previous[12] or
+                        (prior["generation"] and native["generation"] != prior["generation"]) or
+                        any(native[name] < prior[name] for name in PAIRS if name != "generation")):
+                    invalid(line, "Snapshot sequence, generation or counters changed inconsistently")
+            if state[1] == 1 and (state[4] or state[6] or state[10]):
+                invalid(line, "A running sample cannot claim terminal cleanup")
+            if state[1] == 3 and (state[6] or state[10] != 1):
+                invalid(line, "Pending cleanup must retain ownership without claiming completion")
+            if state[1] == 2 and (state[6] != 1 or state[10] or state[13] or state[32]):
+                invalid(line, "Terminal cleanup requires inactive, detached native observation")
+            samples.append(dict(line=line, **event))
+            continue
+        elif kind == "core_render_reference_finished":
+            keys = {"event", "at_ms", "elapsed_ms", "state", "run_result", "passed", "cleanup_passed", "stop_requested", "samples",
+                    "full_core_ready", "rendering_started", "network_active", "input_writes", "remote_peds_created"}
+            if (set(event) != keys or finished or not samples or samples[-1]["state"][1] != 2 or
+                    type(event.get("samples")) is not int or event["samples"] != len(samples) or
+                    not startup.integer(event.get("at_ms")) or event["at_ms"] < samples[-1]["at_ms"]):
+                invalid(line, "One result must follow the terminal observation and preserve its sample count")
+            finished = dict(line=line, **event)
+            state = event.get("state")
+            terminal = samples[-1]["state"] if samples else None
+            if unsigned_array(state, 19):
+                cleanup = bool(terminal and terminal[6] == 1 and not terminal[10] and not terminal[13] and not terminal[32] and
+                               state[7] == 1 and state[13] == 1 and state[14] == 0 and state[15] == terminal[9])
+                if event.get("cleanup_passed") is not cleanup:
+                    invalid(line, "Cleanup must match the actual backend PIN and observer detachment")
+                # Reuse the read-only startup lifecycle audit after checking
+                # the observer's actual PIN. Keep original diagnostics in the
+                # returned evidence; this normalization is never a DLL unload claim.
+                state = state.copy()
+                state[15] = 0
+            event = {**event, "event": "core_startup_reference_finished", "state": state}
+            event.pop("samples", None)
+        elif kind.startswith("core_render_reference_"):
+            invalid(line, "Unknown renderer observation marker")
+        translated.append(json.dumps(event, allow_nan=False))
+
+    base = startup.analyze_log("\n".join(translated), require_exit)
+    terminal = samples[-1]["state"] if samples else None
+    native = counters(terminal) if terminal else None
+    clean = bool(terminal and terminal[1] == 2 and 10000 <= terminal[3] <= 12000 and terminal[4] == 1 and
+                 terminal[5] > 0 and terminal[6] == 1 and terminal[7] > 0 and not terminal[8] and terminal[9] == 1 and
+                 not terminal[10] and terminal[11:15] == [1, 1, 0, 1] and native["generation"] > 0 and
+                 native["native_present_callbacks"] > 0 and native["accepted_snapshots"] > 0 and
+                 not any(native[name] for name in ("rejected_snapshots", "nested_callbacks", "foreign_callbacks")) and
+                 terminal[25] > 0 and 0 < terminal[26] <= 32768 and 0 < terminal[27] <= 32768 and
+                 terminal[29] <= 1 and terminal[30:35] == [0, 1, 0, 0, 0] and terminal[37] == 15 and not any(terminal[38:]))
+    lifecycle = bool(base["core_startup_reference_complete"] and not issues and not stop)
+    complete = lifecycle and clean
+    if finished and finished.get("passed") is True and not clean:
+        invalid(finished["line"], "A passed flag cannot replace native observations or cleanup proof")
+        complete = False
+    return dict(schema_version=1, status="native_renderer_callback_observed" if complete else
+                "native_observation_missing" if lifecycle else "invalid_evidence" if issues or base["issue_count"] else "incomplete_or_failed",
+                core_render_reference_complete=complete, render_observation_session_complete=lifecycle,
+                native_renderer_callback_observed=complete, sample_count=len(samples), native_metrics=native,
+                terminal_render_state=terminal, worker_state=finished.get("state") if finished else None,
+                cleanup_pending=bool(terminal and (terminal[1] == 3 or terminal[10] or terminal[32])),
+                issue_count=len(issues) + base["issue_count"], issues=issues, lifecycle=base,
+                normal_exit_verified=base["normal_exit_verified"], require_exit=require_exit,
+                visual_success_verified=False, com_present_verified=False, de_renderer_verified=False,
+                full_mta_boot_verified=False, engine_input_write_verified=False, remote_player_context_verified=False,
+                notice=NOTICE)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--log", required=True, type=Path)
+    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--require-exit", action="store_true")
+    args = parser.parse_args(argv)
+    try:
+        if args.log.resolve() == args.output.resolve() or (args.output.exists() and args.log.samefile(args.output)):
+            raise ValueError("Output must differ from the raw evidence log")
+        raw = startup.read_snapshot(args.log)
+        result = analyze_log(raw["data"].decode("utf-8-sig", errors="replace"), args.require_exit)
+        result.update(log=str(args.log.resolve()), evidence_scope="entire_log",
+                      log_fingerprint={key: raw[key] for key in ("size_bytes", "mtime_ns", "sha256")},
+                      reader_path=str(Path(__file__).resolve()), reader_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
+    except (OSError, ValueError) as error:
+        result = dict(status="read_error", error=str(error), core_render_reference_complete=False)
+        if "Output must differ" in str(error):
+            print(json.dumps(result))
+            return 2
+    args.output.write_text(json.dumps(startup.safe_report(result), indent=2, allow_nan=False) + "\n", encoding="utf-8")
+    print(json.dumps(startup.safe_report(result), allow_nan=False))
+    return 0 if result["core_render_reference_complete"] else 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

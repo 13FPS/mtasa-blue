@@ -101,7 +101,7 @@ def analyze_log(text, require_exit=False):
         counts[kind] += 1
         if any(flag in event and event[flag] is not False for flag in FLAGS) or event.get("mode") == "online":
             invalid(event, "Input writes, networking or remote activity is outside this read-only reference")
-        if (kind.startswith(("native_", "remote_", "online_")) or
+        if (kind.startswith(("native_", "remote_", "online_", "core_input_reference", "core_movement_reference", "core_render_reference")) or
                 kind in {"connecting", "connected", "joined", "welcome", "input_sent", "game_input_written", "local_controller_sample"} or
                 any(key in event for key in ("ped", "position", "heading", "raw_velocity", "localPedHandle"))):
             invalid(event, "Movement, player observations or unrelated native references are outside this startup probe")

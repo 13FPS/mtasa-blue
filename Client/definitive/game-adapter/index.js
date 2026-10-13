@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { MODE, ONLINE_ACTIVATION, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE, MTA_CORE_MOVEMENT_REFERENCE } from './config.mjs';
+import { MODE, ONLINE_ACTIVATION, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE, MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE } from './config.mjs';
 import { AdapterController, NativeGaitReferenceController, NativeInputReferenceController } from './controller.mjs';
 import { MtaNativePadReferenceController } from './native-pad-reference.mjs';
 import { MtaNativeMovementTrialController } from './native-movement-trial.mjs';
@@ -13,6 +13,10 @@ function runAdapter() {
     emit({ event: 'adapter_phase', phase, mode: MODE, host: HOST, cleo: String(CLEO.version),
         host_version: String(CLEO.hostVersion), definitions: String(CLEO.apiVersion) });
     if (!['diagnostic', 'smoke', 'online'].includes(MODE)) throw new Error('Unknown adapter mode');
+    if (typeof MTA_CORE_RENDER_REFERENCE !== 'boolean' ||
+        (MTA_CORE_RENDER_REFERENCE && (MODE !== 'smoke' || INPUT_REFERENCE || GAIT_REFERENCE || GAIT_RATE || GAIT_ROOT_LOCK ||
+            MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE)))
+        throw new Error('MTA Core renderer observation requires separate opt-in Smoke mode');
     if (typeof MTA_CORE_MOVEMENT_REFERENCE !== 'boolean' ||
         (MTA_CORE_MOVEMENT_REFERENCE && (MODE !== 'smoke' || INPUT_REFERENCE || GAIT_REFERENCE || GAIT_RATE || GAIT_ROOT_LOCK ||
             MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE)))
@@ -60,20 +64,20 @@ function runAdapter() {
         throw new Error('SA Unreal API definitions 0.493 or newer are required');
     // These untested input/velocity bindings come from the pinned 0.500 API.
     // Reject older definitions before activation reads, DLL access, or CJ reads.
-    if ((INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE) && definitionVersion < 0.500)
+    if ((INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE) && definitionVersion < 0.500)
         throw new Error('Native input reference requires SA Unreal API definitions 0.500 or newer');
 
     const stopKey = 'Ctrl+Shift+End';
     // Home opens the Rockstar console on the tested build and interrupts this
     // read-only observation, so the input reference needs its own shortcut.
-    const activateKey = (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE) ? 'Ctrl+Shift+F9' : 'Ctrl+Shift+Home';
+    const activateKey = (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE) ? 'Ctrl+Shift+F9' : 'Ctrl+Shift+Home';
     const chordHeld = keys => keys.every(key => native('IS_KEY_PRESSED', key));
-    if (MODE === 'online' || GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE) {
+    if (MODE === 'online' || GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE) {
         if (MODE === 'online' && !['manual', 'automatic'].includes(ONLINE_ACTIVATION))
             throw new Error('Unknown online activation mode');
         // The reference changes one owned NPC, so even an automatic Online
         // preference cannot start this separate experiment during save loading.
-        if (GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || ONLINE_ACTIVATION === 'manual') {
+        if (GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || ONLINE_ACTIVATION === 'manual') {
             // Startup freezes have also occurred before this script enters.
             // Waiting here cannot prevent those loader failures, but it gives
             // a usable game session a separate, observable boundary before
@@ -89,7 +93,7 @@ function runAdapter() {
                         bridge_loaded: false, game_adapter_active: false, network_active: false });
                     return;
                 }
-                if (chordHeld([17, 16, (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE) ? 120 : 36]) && native('IS_PLAYER_PLAYING', 0)) {
+                if (chordHeld([17, 16, (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE) ? 120 : 36]) && native('IS_PLAYER_PLAYING', 0)) {
                     emit({ event: 'adapter_activation_requested', mode: MODE, activate_key: activateKey });
                     break;
                 }
@@ -97,7 +101,7 @@ function runAdapter() {
             }
         }
     }
-    if (MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE) {
+    if (MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE) {
         // Holding the activation modifiers contaminated the prior source-state
         // window. Begin DLL access and the recorder only after their release,
         // while keeping cancellation and a finite pre-binding deadline.
@@ -160,6 +164,108 @@ function runAdapter() {
     enterPhase('runtime_bind');
     if (bindRuntime() !== 1) throw new Error('CLEO runtime lifecycle binding failed');
     enterPhase('runtime_bound');
+    if (MTA_CORE_RENDER_REFERENCE) {
+        // Core owns the optional backend observer and all teardown on its
+        // worker. Script reads coherent scalar snapshots; it draws nothing
+        // and never receives viewport, swapchain or device pointers.
+        const begin = bind('DE_CoreRenderBegin');
+        const capture = bind('DE_CoreRenderCapture');
+        const readRender = bind('DE_CoreRenderRead', 'X64U32');
+        const poll = bind('DE_CoreStartupPoll');
+        const cancel = bind('DE_CoreStartupCancel');
+        const read = bind('DE_CoreStartupRead', 'X64U32');
+        emit({ event: 'adapter_start', host: HOST, cleo: String(CLEO.version), host_version: String(CLEO.hostVersion),
+            definitions: String(CLEO.apiVersion), mode: MODE, endpoint: null, stop_key: stopKey,
+            core_render_reference: true, provenance: 'mta_core_native_render_observation', core_api: 5,
+            network_active: false, input_writes: false, remote_peds_created: false });
+        enterPhase('core_render_reference');
+        const startedAt = Date.now();
+        if (!Number.isSafeInteger(startedAt) || startedAt < 0) throw new Error('Invalid Core render clock');
+        emit({ event: 'core_render_reference_started', at_ms: startedAt, core_api: 5, sample_interval_ms: 100, budget_ms: 10000 });
+        if (begin() !== 1) throw new Error('MTA Core renderer observation worker could not start');
+        let terminal = false, stopRequested = false, lastAt = startedAt, lastSequence = 0, lastElapsed = -1;
+        let latest = null, samples = 0;
+        const captureSample = at => {
+            const captured = capture();
+            if (captured !== 0 && captured !== 1) throw new Error('Core render capture status unavailable');
+            if (!captured) return;
+            const state = Array.from({ length: 40 }, (_, field) => readRender(field));
+            if (!state.every(value => Number.isInteger(value) && value >= 0 && value <= 0xffffffff))
+                throw new Error('Core render returned invalid unsigned state');
+            if (state[0] !== 1 || ![1, 2, 3].includes(state[1]) || state[2] < lastSequence || state[3] < lastElapsed)
+                throw new Error('Core render publication order is invalid');
+            if (state[3] > at - startedAt + 250) throw new Error('Core render elapsed time exceeds its script clock');
+            // Add split64 counters with exact integer arithmetic, without
+            // relying on lossy Number conversion or a new FFI numeric type.
+            const outcomes = [19, 21, 33, 35];
+            const lowSum = outcomes.reduce((sum, field) => sum + state[field], 0);
+            const highSum = outcomes.reduce((sum, field) => sum + state[field + 1], Math.floor(lowSum / 0x100000000));
+            const low = lowSum % 0x100000000;
+            if (highSum > state[18] || (highSum === state[18] && low > state[17]) ||
+                state[24] > state[18] || (state[24] === state[18] && state[23] > state[17]))
+                throw new Error('Core render outcomes exceed native callback entries');
+            if (state[2] === lastSequence) {
+                if (!latest || state.some((value, field) => value !== latest[field]))
+                    throw new Error('Core render publication changed without a new sequence');
+                return;
+            }
+            lastSequence = state[2]; lastElapsed = state[3]; latest = state;
+            ++samples;
+            emit({ event: 'core_render_reference_sample', at_ms: at, elapsed_ms: at - startedAt, state });
+        };
+        try {
+            while (true) {
+                const at = Date.now();
+                if (!Number.isSafeInteger(at) || at < lastAt) throw new Error('Invalid Core render clock');
+                lastAt = at;
+                if (!stopRequested) {
+                    const stop = chordHeld([17, 16, 35]);
+                    if (stop || !native('IS_PLAYER_PLAYING', 0)) {
+                        if (cancel() !== 1) throw new Error('MTA Core render cancellation was rejected');
+                        stopRequested = true;
+                        emit({ event: 'core_render_reference_stop_requested', at_ms: at, reason: stop ? stopKey : 'loading' });
+                    }
+                }
+                const status = poll();
+                if (status !== 0 && status !== 1) throw new Error('MTA Core render worker status unavailable');
+                captureSample(at);
+                if (status === 1) { terminal = true; break; }
+                // Pending hook detachment retains Core and keeps yielding,
+                // including after any diagnostic cleanup deadline has elapsed.
+                wait(100);
+            }
+        } catch (error) {
+            if (!terminal) { try { cancel(); } catch (_) {} }
+            throw error;
+        }
+        const state = Array.from({ length: 19 }, (_, field) => read(field));
+        if (!state.every(value => Number.isInteger(value) && value >= 0 && value <= 0xffffffff))
+            throw new Error('Core render returned invalid unsigned final state');
+        const now = Date.now();
+        if (!Number.isSafeInteger(now) || now < lastAt) throw new Error('Invalid Core render clock');
+        const pinned = latest ? latest[9] : 0;
+        const cleanupPassed = state[7] === 1 && state[13] === 1 && state[14] === 0 && state[15] === pinned &&
+            latest !== null && latest[1] === 2 && latest[6] === 1 && latest[10] === 0 && latest[13] === 0 && latest[32] === 0;
+        const expected = [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5];
+        const runResult = state[17] === 1 && state[16] === 0 ? 1 : 0;
+        const observed = latest !== null && latest[1] === 2 && latest[3] >= 10000 && latest[3] <= 12000 && latest[4] === 1 &&
+            latest[5] > 0 && latest[7] > 0 && (latest[15] !== 0 || latest[16] !== 0) &&
+            latest[8] === 0 && latest[9] === 1 && latest[11] === 1 && latest[12] === 1 && latest[14] === 1 &&
+            (latest[17] !== 0 || latest[18] !== 0) && (latest[19] !== 0 || latest[20] !== 0) &&
+            latest.slice(21, 25).every(value => value === 0) && latest[25] !== 0 &&
+            latest[26] > 0 && latest[26] <= 32768 && latest[27] > 0 && latest[27] <= 32768 &&
+            latest[29] <= 1 && latest[30] === 0 && latest[31] === 1 && latest[32] === 0 &&
+            latest[33] === 0 && latest[34] === 0 && latest[37] === 15 &&
+            latest[38] === 0 && latest[39] === 0;
+        const passed = !stopRequested && runResult === 1 && expected.every((value, field) => state[field] === value) &&
+            state[11] <= 3 && state[12] <= 3 && (state[12] & ~state[11]) === 0 && cleanupPassed && state[18] === 0 && observed;
+        emit({ event: 'core_render_reference_finished', at_ms: now, elapsed_ms: now - startedAt, state, run_result: runResult,
+            passed, cleanup_passed: cleanupPassed, stop_requested: stopRequested, samples,
+            full_core_ready: state[6] === 1, rendering_started: false, network_active: false,
+            input_writes: false, remote_peds_created: false });
+        if (!passed) throw new Error('MTA Core renderer observation incomplete; inspect its saved state');
+        return;
+    }
     if (MTA_CORE_MOVEMENT_REFERENCE) {
         // Core owns XML, configured bindings and the eligible local write scope.
         // JS only observes coherent value snapshots and requests cancellation;

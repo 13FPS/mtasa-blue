@@ -15,7 +15,7 @@ $developerCommand = Join-Path $visualStudio 'Common7/Tools/VsDevCmd.bat'
 $outputRoot = Join-Path $taskRoot ('Build/definitive-game-adapter-host/' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
 $sourceNames = @('Client/core/CGameAdapterModule.h', 'Client/core/CGameAdapterModule.cpp',
-    'Client/sdk/game/CGameAdapter.h', 'Shared/sdk/CControllerState.h',
+    'Client/sdk/game/CGameAdapter.h', 'Client/sdk/game/CGameRenderObservation.h', 'Shared/sdk/CControllerState.h',
     'Shared/sdk/CControllerActions.h', 'Shared/sdk/CControlStateSynthesis.h',
     'Tests/definitive/MtaGameAdapterHostTests.cpp', 'Tests/definitive/test_mta_game_adapter_host.ps1')
 $sourceHashes = @($sourceNames | ForEach-Object {
@@ -41,6 +41,8 @@ foreach ($architecture in @('x86', 'x64')) {
     $executable = Join-Path $outputDirectory 'mta_game_adapter_host_tests.exe'
     $fixture = Join-Path $outputDirectory 'shutdown-failure-fixture.dll'
     $fixtureExit = $null
+    $facadeFixtures = @()
+    $renderFixtures = @()
     if ($architecture -eq 'x64') {
         # This explicitly named failure provider tests the consumer's unload
         # policy; actual movement and capability checks still use ModulePath.
@@ -51,6 +53,36 @@ foreach ($architecture in @('x86', 'x64')) {
         $fixtureExit = $LASTEXITCODE
         $fixtureOutput | Set-Content -LiteralPath (Join-Path $outputDirectory 'fixture-compile.log') -Encoding utf8
         if ($fixtureExit -ne 0) { $failure = 'Shutdown failure fixture did not compile'; break }
+        foreach ($mode in 1..3) {
+            $facadeFixture = Join-Path $outputDirectory ("facade-provider-$mode.dll")
+            $facadeArguments = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/LD','/DMTA_GAME_DE_EXPORTS','/DMTA_TEST_SHUTDOWN_FAILURE_MODULE',
+                "/DMTA_TEST_FACADE_MODE=$mode", '/DNOMINMAX','/DWIN32_LEAN_AND_MEAN',
+                ('/I' + (Join-Path $taskRoot 'Shared/sdk')), ('/I' + (Join-Path $taskRoot 'Client/sdk')),
+                (Join-Path $PSScriptRoot 'MtaGameAdapterHostTests.cpp'), ('/Fo' + (Join-Path $outputDirectory "facade-$mode.obj")), ('/Fe' + $facadeFixture))
+            $facadeOutput = @(& $compiler @facadeArguments 2>&1)
+            $facadeExit = $LASTEXITCODE
+            $facadeLog = Join-Path $outputDirectory "facade-$mode-compile.log"
+            $facadeOutput | Set-Content -LiteralPath $facadeLog -Encoding utf8
+            $facadeFixtures += [ordered]@{ mode=$mode; path=$facadeFixture; compilerExit=$facadeExit; log=$facadeLog;
+                sha256=$(if (Test-Path -LiteralPath $facadeFixture) { (Get-FileHash -LiteralPath $facadeFixture -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null }) }
+            if ($facadeExit -ne 0) { $failure = "Facade fixture $mode did not compile"; break }
+        }
+        if ($failure) { break }
+        foreach ($mode in 1..5) {
+            $renderFixture = Join-Path $outputDirectory ("render-provider-$mode.dll")
+            $renderArguments = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/LD','/DMTA_GAME_DE_EXPORTS','/DMTA_TEST_SHUTDOWN_FAILURE_MODULE',
+                "/DMTA_TEST_RENDER_MODE=$mode", '/DNOMINMAX','/DWIN32_LEAN_AND_MEAN',
+                ('/I' + (Join-Path $taskRoot 'Shared/sdk')), ('/I' + (Join-Path $taskRoot 'Client/sdk')),
+                (Join-Path $PSScriptRoot 'MtaGameAdapterHostTests.cpp'), ('/Fo' + (Join-Path $outputDirectory "render-$mode.obj")), ('/Fe' + $renderFixture))
+            $renderOutput = @(& $compiler @renderArguments 2>&1)
+            $renderExit = $LASTEXITCODE
+            $renderLog = Join-Path $outputDirectory "render-$mode-compile.log"
+            $renderOutput | Set-Content -LiteralPath $renderLog -Encoding utf8
+            $renderFixtures += [ordered]@{ mode=$mode; path=$renderFixture; compilerExit=$renderExit; log=$renderLog;
+                sha256=$(if (Test-Path -LiteralPath $renderFixture) { (Get-FileHash -LiteralPath $renderFixture -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null }) }
+            if ($renderExit -ne 0) { $failure = "Render fixture $mode did not compile"; break }
+        }
+        if ($failure) { break }
     }
     $arguments = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN',
         ('/I' + (Join-Path $taskRoot 'Shared/sdk')), ('/I' + (Join-Path $taskRoot 'Client/sdk')),
@@ -63,7 +95,7 @@ foreach ($architecture in @('x86', 'x64')) {
     $testCount = $null
     if ($compilerExit -eq 0) {
         $testArguments = @($ModulePath)
-        if ($architecture -eq 'x64') { $testArguments += $fixture }
+        if ($architecture -eq 'x64') { $testArguments += $fixture; $testArguments += @($facadeFixtures | ForEach-Object path); $testArguments += @($renderFixtures | ForEach-Object path) }
         $testOutput = @(& $executable @testArguments 2>&1)
         $testExit = $LASTEXITCODE
         $testOutput | Set-Content -LiteralPath (Join-Path $outputDirectory 'test.log') -Encoding utf8
@@ -73,6 +105,8 @@ foreach ($architecture in @('x86', 'x64')) {
     $results += [ordered]@{ architecture=$architecture; compilerExit=$compilerExit; testExit=$testExit; checks=$testCount;
         shutdownFailureFixtureCompilerExit=$fixtureExit; shutdownFailureFixture=$fixture;
         shutdownFailureFixtureSha256=$(if (Test-Path -LiteralPath $fixture) { (Get-FileHash -LiteralPath $fixture -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null });
+        facadeProviderFixtures=$facadeFixtures;
+        renderProviderFixtures=$renderFixtures;
         executable=$executable; executableSha256=$(if (Test-Path -LiteralPath $executable) {
             (Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash.ToLowerInvariant()
         } else { $null }) }
@@ -92,7 +126,7 @@ foreach ($entry in $sourceHashes) {
 $record = [ordered]@{ recordedAt=[DateTimeOffset]::Now.ToString('o'); directory=$outputRoot;
     success=($null -eq $failure -and $sourceUnchanged); sourceHashes=$sourceHashes; sourceUnchanged=$sourceUnchanged;
     results=$results; failure=$failure; modulePath=$ModulePath; moduleSha256=$moduleSha256; gameLaunched=$false; installationChanged=$false;
-    existingBridgeRebuilt=$false; fullMtaClientBuilt=$false }
+    existingBridgeRebuilt=$false; fullMtaClientBuilt=$false; facadeFixtureHasWorkingCGame=$false }
 $record | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $outputRoot 'test-result.json') -Encoding utf8
 if (-not $record.success) { throw "MTA Core adapter host checks failed: $failure; source unchanged=$sourceUnchanged" }
 $record | ConvertTo-Json -Depth 8 -Compress

@@ -1,6 +1,6 @@
 # GTA San Andreas Definitive Edition: findings and port tracker
 
-Last updated: **2026-10-13 17:48** (Europe/Luxembourg).
+Last updated: **2026-10-13 18:33** (Europe/Luxembourg).
 Experimental branch: `definitive-edition-port`.
 Source baseline: `860e41ddeb6635b5dd138fef6c8a492d2f982ce0`.
 
@@ -18,10 +18,19 @@ an animation or position. The first human trial applied no input because the
 guard assumed the script and engine callback shared a thread. It stopped after
 2,036 ms with zero scoped writes/queries and clean teardown. The correction uses
 a coherent producer mailbox, verified local callback thread adoption and
-retryable asynchronous cleanup. Runtime movement validation remains pending.
+retryable asynchronous cleanup. The corrected human trial now passes walking
+and sprinting: 165 samples, all seven phases, 1,317 applied/restored callbacks,
+44,655 routed queries and zero recorded failures. Hooks were removed, normal
+shutdown passed and all 19 installed hashes match. This validates scoped local
+movement; complete controls, configured binds and remote contexts remain.
 
-Real Core already builds and links in opt-in Release/x64 and passes its actual
-entry fixture in a non-game host. This does not complete the DE launcher,
+Real Core builds and links in opt-in Release/x64 and passes 93 actual entry
+checks in a non-game host, with the legacy D3DX9 import delayed. Both classic
+Win32 option/default configurations compile without the new diagnostic exports.
+The next 21-file candidate loads the actual Core inside DE after manual F9
+activation, reads binding/pulse/gameplay-gate diagnostics and unloads it.
+This read-only startup check needs no walking; its live result is pending.
+It does not complete the DE launcher,
 rendering, full CGame backend or multiplayer. The bounded candidate capability
 keeps those gameplay requirements gated. Historical milestones below describe
 the evidence and limitations at each earlier checkpoint.

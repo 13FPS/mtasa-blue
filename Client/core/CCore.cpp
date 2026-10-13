@@ -33,6 +33,7 @@
 #include "CSteamClient.h"
 #include "CCrashDumpWriter.h"
 #include "FastFailCrashHandler/WerCrashHandler.h"
+#include "DefinitiveStartupState.h"
 
 using SharedUtil::CalcMTASAPath;
 using namespace std;
@@ -95,20 +96,41 @@ CCore::CCore()
     // MTA owns the DE module before any classic configuration, hooks or game
     // factories run. Observations alone cannot satisfy CGame; reject incomplete
     // backends here rather than applying San Andreas addresses to a DE process.
-    if (!m_DefinitiveAdapter.StartAdjacent(this))
-        throw std::runtime_error("DE adapter startup: " + m_DefinitiveAdapter.GetError());
-    // The entry point only recognizes the DE filename. Bind here, outside
-    // loader lock, so the backend verifies the exact image before engine access.
-    if (!m_DefinitiveAdapter.BindNativeInput())
-        throw std::runtime_error("DE adapter input binding: " + m_DefinitiveAdapter.GetError());
-    if (!m_DefinitiveAdapter.Pulse())
-        throw std::runtime_error("DE adapter pulse: " + m_DefinitiveAdapter.GetError());
-    if (!m_DefinitiveAdapter.IsGameplayReady())
-        throw std::runtime_error("DE adapter gameplay unavailable: " + m_DefinitiveAdapter.GameplayUnavailableReason());
+    try
+    {
+        if (!m_DefinitiveAdapter.StartAdjacent(this))
+            throw std::runtime_error("DE adapter startup: " + m_DefinitiveAdapter.GetError());
+        DefinitiveStartup::SetCleanupComplete(false);
+        DefinitiveStartup::SetPhase(DefinitiveStartup::Phase::BackendStarted);
+        DefinitiveStartup::SetCapabilities(m_DefinitiveAdapter.GetCapabilities());
+        // The entry point only recognizes the DE filename. Bind here, outside
+        // loader lock, so the backend verifies the exact image before engine access.
+        const bool bound = m_DefinitiveAdapter.BindNativeInput();
+        DefinitiveStartup::SetCapabilities(m_DefinitiveAdapter.GetCapabilities());
+        if (!bound)
+            throw std::runtime_error("DE adapter input binding: " + m_DefinitiveAdapter.GetError());
+        DefinitiveStartup::SetPhase(DefinitiveStartup::Phase::ExactImageBound);
+        if (!m_DefinitiveAdapter.Pulse())
+            throw std::runtime_error("DE adapter pulse: " + m_DefinitiveAdapter.GetError());
+        DefinitiveStartup::SetPhase(DefinitiveStartup::Phase::PulseComplete);
+        const bool gameplayReady = m_DefinitiveAdapter.IsGameplayReady();
+        DefinitiveStartup::SetGameplayReady(gameplayReady);
+        DefinitiveStartup::SetPhase(DefinitiveStartup::Phase::GameplayChecked);
+        if (!gameplayReady)
+            throw std::runtime_error("DE adapter gameplay unavailable: " + m_DefinitiveAdapter.GameplayUnavailableReason());
 
-    // A complete game facade will still require a ported core, multiplayer and
-    // renderer. Keep this gate until those startup paths cease using x86/D3D9.
-    throw std::runtime_error("DE core, multiplayer and rendering startup are not implemented");
+        // A complete game facade will still require a ported core, multiplayer and
+        // renderer. Keep this gate until those startup paths cease using x86/D3D9.
+        throw std::runtime_error("DE core, multiplayer and rendering startup are not implemented");
+    }
+    catch (...)
+    {
+        // Stop before rethrow so diagnostics report the owned adapter lifetime,
+        // including failed teardown, rather than a potentially pinned DLL name.
+        m_DefinitiveAdapter.Stop();
+        DefinitiveStartup::SetCleanupComplete(!m_DefinitiveAdapter.IsStarted());
+        throw;
+    }
 #endif
 
     m_pConfigFile = NULL;

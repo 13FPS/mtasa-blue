@@ -59,6 +59,20 @@ $relativePaths = @($installed.files | ForEach-Object { $_.path })
 if ($relativePaths -ccontains 'CLEO/de-online/native-pad-reference.mjs') {
     $allowedPaths += 'CLEO/de-online/native-pad-reference.mjs'
 }
+$hasMovementScript = $relativePaths -ccontains 'CLEO/de-online/native-movement-trial.mjs'
+$hasGameDe = $relativePaths -ccontains 'CLEO/de-online/game_de.dll'
+if ($hasMovementScript -ne $hasGameDe -or ($hasMovementScript -and $relativePaths -cnotcontains 'CLEO/de-online/native-pad-reference.mjs')) {
+    throw 'Incomplete MTA movement package ownership.'
+}
+if ($hasMovementScript) { $allowedPaths += @('CLEO/de-online/native-movement-trial.mjs', 'CLEO/de-online/game_de.dll') }
+$hasCore = $relativePaths -ccontains 'CLEO/de-online/core.dll'
+$hasPthread = $relativePaths -ccontains 'CLEO/de-online/pthread.dll'
+# Loader bypass must validate the same historical ownership generations as
+# removal. An incomplete Core pair must not become a way around that preflight.
+if ($hasCore -ne $hasPthread -or ($hasCore -and -not $hasMovementScript)) {
+    throw 'Incomplete MTA Core startup package ownership.'
+}
+if ($hasCore) { $allowedPaths += @('CLEO/de-online/core.dll', 'CLEO/de-online/pthread.dll') }
 $uniquePaths = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 foreach ($relative in $relativePaths) {
     if ($relative -cnotin $allowedPaths -or -not $uniquePaths.Add($relative)) {

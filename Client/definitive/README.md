@@ -6,9 +6,30 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
+**Next live check: actual MTA Core startup.**
+`package.ps1 -Mode Smoke -MtaCoreStartupReference` stages 21 owned files,
+including the normal opt-in x64 `core.dll` and its `pthread.dll` dependency.
+After manual Ctrl+Shift+F9 activation and release, the bridge loads that actual
+Core, sets its MTA/game directories, calls `InitializeCore`, reads its startup
+diagnostics and releases it. No walking, NPC, network session or input write is
+part of this check. The expected result is the unchanged incomplete-gameplay
+gate after exact-image binding and a backend pulse, followed by clean unloading.
+It does not start the full MTA client or a DE renderer. Arming waits indefinitely.
+
+The x64 Core now delay-loads its legacy D3DX9 dependency so this early startup
+path does not load a D3D9 renderer. Real Core entry checks pass 93 cases; the
+classic Win32 option/default builds retain their existing exports and behavior.
+The in-game Core check is pending. Use `utils/definitive_edition/core_startup_log.py`
+to assess its saved log. Source defaults and ordinary mode switches disable it;
+it is mutually exclusive with the other Smoke trials. Intact 16/17/19-file
+installs upgrade with ownership/collision checks, and the Core dependency pair
+is always installed or removed together.
+The 21-file ownership suite passes 335 checks across 30 cases, including all
+four historical install generations and loader disable/enable round trips.
+
 **ABI5 adds an explicit MTA-owned engine movement trial.** Build the normal
 Game DE Release/x64 module and this bridge, then package with
-`package.ps1 -Mode Smoke -MtaNativeMovementTrial`. The 19-file package includes
+`package.ps1 -Mode Smoke -MtaNativeMovementTrial`. The current package includes
 the real `game_de.dll`, loaded through Core's actual module consumer only after
 activation. Intact 16/17-file installs can be upgraded; occupied new paths
 reject the update before any writes. An ordinary mode switch clears the trial.
@@ -22,6 +43,12 @@ JavaScript supplies logical actions and observations; the normal MTA backend
 owns native callback routing, scoped pad writes and restoration. This trial
 does not create an NPC or network session. Logs establish callback/query and
 cleanup evidence; the human checks how movement looks.
+
+The thread-corrected trial has completed successfully in the game. The human
+reported movement phases and sprinting working; its 165 samples record 1,317
+applied/restored callback scopes, 44,655 routed queries and no recorded failures.
+Normal exit and all 19 installed hashes pass. This proves the scoped local
+movement slice, with full MTA startup/networking/rendering still required.
 
 **Current development integrates the adapter into MTA.** The normal build now
 includes `Client/game_de` and a Core-owned module consumer. MTA controls module

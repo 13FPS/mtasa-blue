@@ -83,3 +83,8 @@ DE_BRIDGE_API int DE_MtaMovementCapture();
 // Components0/1=bound/active,2..9=counters,10=failureReason,11=raw move state.
 DE_BRIDGE_API std::uint32_t DE_MtaMovementRead(std::uint32_t component);
 DE_BRIDGE_API int           DE_MtaMovementEnd();
+
+// Exercise the actual adjacent x64 Core entry point without enabling gameplay.
+// Read returns the fixed startup/cleanup snapshot captured before Core unload.
+DE_BRIDGE_API int DE_CoreStartupRun();
+DE_BRIDGE_API std::uint32_t DE_CoreStartupRead(std::uint32_t component);

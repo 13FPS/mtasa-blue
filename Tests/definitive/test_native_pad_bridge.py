@@ -9,6 +9,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("module", type=Path)
     args = parser.parse_args()
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetModuleHandleW.restype = ctypes.c_void_p
+    kernel32.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
+    renderer_before = {
+        name: kernel32.GetModuleHandleW(name)
+        for name in ("d3dx9_43.dll", "d3d9.dll")
+    }
     bridge = ctypes.CDLL(str(args.module.resolve(strict=True)))
     checks = 0
 
@@ -33,6 +40,8 @@ def main():
         "DE_MtaMovementCapture": (ctypes.c_int, []),
         "DE_MtaMovementRead": (ctypes.c_uint32, [ctypes.c_uint32]),
         "DE_MtaMovementEnd": (ctypes.c_int, []),
+        "DE_CoreStartupRun": (ctypes.c_int, []),
+        "DE_CoreStartupRead": (ctypes.c_uint32, [ctypes.c_uint32]),
     }
     for name, (result, arguments) in signatures.items():
         function = getattr(bridge, name)
@@ -44,6 +53,19 @@ def main():
     # A regular Python executable must never masquerade as the verified GTA host
     # or obtain engine access merely by loading this DLL and resolving its ABI.
     check(bridge.DE_BindRuntime() == 0, "Wrong executable must reject runtime binding")
+    # The startup diagnostic loads the real adjacent Core only in its verified
+    # owning game runtime. A rejected host must retain an empty cache and must
+    # not load Core merely because all diagnostic exports can be resolved.
+    for name in ("core.dll", "game_de.dll"):
+        check(not kernel32.GetModuleHandleW(name), f"Rejected host starts without {name}")
+    check(bridge.DE_CoreStartupRun() == 0, "Wrong executable cannot run Core startup")
+    for component in (*range(18), 18, 0xFFFFFFFF):
+        check(bridge.DE_CoreStartupRead(component) == 0, "Rejected startup cannot manufacture cached diagnostics")
+    check(bridge.DE_CoreStartupRun() == 0, "Repeated rejected startup remains unavailable")
+    for name in ("core.dll", "game_de.dll"):
+        check(not kernel32.GetModuleHandleW(name), f"Rejected startup cannot load {name}")
+    for name, handle in renderer_before.items():
+        check(kernel32.GetModuleHandleW(name) == handle, f"Rejected startup cannot load legacy renderer {name}")
     check(bridge.DE_NativePadBind() == 0, "Native binding requires the owning runtime")
     check(bridge.DE_NativePadCapture() == 0, "Unbound native capture must fail")
     check(bridge.DE_MtaMovementBegin() == 0, "Wrong executable cannot activate movement writes")
@@ -65,6 +87,11 @@ def main():
         check(bridge.DE_NativeDeviceRead(index) == 0, "Unbound or invalid device source must remain unavailable")
     bridge.DE_NativePadReset()
     bridge.DE_Disconnect()
+    check(bridge.DE_CoreStartupRun() == 0, "Cleanup cannot authorize Core startup")
+    for component in (*range(18), 18, 0xFFFFFFFF):
+        check(bridge.DE_CoreStartupRead(component) == 0, "Cleanup cannot retain or create startup diagnostics")
+    for name in ("core.dll", "game_de.dll"):
+        check(not kernel32.GetModuleHandleW(name), f"Cleanup cannot load {name}")
     check(bridge.DE_NativePadCapture() == 0, "Cleanup cannot create a native binding")
     for index in device_indices:
         check(bridge.DE_NativeDeviceRead(index) == 0, "Cleanup cannot retain or create raw device coverage")

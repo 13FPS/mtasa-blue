@@ -42,6 +42,28 @@ An unexpected overlapping control call that could observe temporary global pad
 bytes aborts the experiment; ordinary passthrough calls remain unchanged.
 Cleanup logs include the request time, retry count and exact bounded wait.
 
+The corrected human trial passed all seven phases, including reported sprinting.
+It recorded **165 samples in 22,031 ms**, with **1,317 scoped callbacks and
+1,317 restores**, **44,655 routed queries**, and zero restoration, thread,
+nesting or binding failures. End removed the hooks on its first attempt.
+The complete saved log passes `--require-exit`, and all 19 installed hashes
+still match after normal shutdown. Its 152,269-byte final log has SHA-256
+`5f8f97e3c0e591bc953a12c54d1b491c6cc674a6322a5fa9d1fc66c4dce37dda`.
+This validates the bounded local movement path. It does not establish every
+controller action, remote contexts, configured-bind startup or the full client.
+The saved phase comparison keeps velocity units and native move-state enum
+meanings unqualified; the exact human report is preserved separately.
+
+The following startup candidate now loads the actual opt-in x64 MTA Core and
+lets that Core own this module. `-MtaCoreStartupReference` is a separate,
+read-only Smoke mode with manual F9 activation. Core records its exact-image
+binding and pulse before rejecting the still-incomplete gameplay contract;
+the bridge copies those diagnostics before unloading Core. Its 21-file package
+includes Core and pthread together. Core's real entry fixture passes 93 checks
+without loading D3D9/D3DX9, and classic Win32 option/default compilation passes.
+In-game Core startup remains pending; full input/game/remote capabilities stay
+disabled. The earlier movement result remains a validated local slice.
+
 The current offline checks pass 351 production callback cases, 7,413 routing
 cases per architecture, 1,512 module cases and 76 x64 Core-consumer cases.
 Normal Release/x64 Core/Game DE builds, the real Core entry fixture (26 checks)

@@ -18,8 +18,8 @@ $taskRoot=(Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
 $outputRoot=Join-Path $taskRoot ('Build/mta-core-entry/' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path (Join-Path $outputRoot 'mta/logs') | Out-Null
 $sourceNames=@('Tests/definitive/MtaCoreEntryTests.cpp','Tests/definitive/test_mta_core_entry.ps1',
-    'Client/core/Core.cpp','Client/core/CCore.cpp','Client/core/CCore.h','Client/core/CGameAdapterModule.cpp',
-    'Client/core/CGameAdapterModule.h','Client/core/DefinitiveProcess.h','Client/game_de/GameAdapter.cpp',
+    'Client/core/Core.cpp','Client/core/CCore.cpp','Client/core/CCore.h','Client/core/premake5.lua','Client/core/CGameAdapterModule.cpp',
+    'Client/core/CGameAdapterModule.h','Client/core/DefinitiveProcess.h','Client/core/DefinitiveStartupState.h','Client/game_de/GameAdapter.cpp',
     'Client/game_de/NativePadReader.cpp','Client/game_de/NativePadReader.h','Client/sdk/game/CGameAdapter.h',
     'Client/game_de/NativeMovementInput.cpp','Client/game_de/NativeMovementInput.h','Client/game_de/NativeInputRouting.h',
     'Client/game_de/premake5.lua','vendor/detours/premake5.lua','vendor/detours/4.0.1/src/detours.h',
@@ -27,7 +27,70 @@ $sourceNames=@('Tests/definitive/MtaCoreEntryTests.cpp','Tests/definitive/test_m
 $sourceHashes=[ordered]@{}
 foreach ($name in $sourceNames) { $sourceHashes[$name]=(Get-FileHash -LiteralPath (Join-Path $taskRoot $name) -Algorithm SHA256).Hash.ToLowerInvariant() }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'MtaCoreEntryTests.cpp') -Destination (Join-Path $outputRoot 'MtaCoreEntryTests.cpp.snapshot')
+# Inspect the actual supplied DLL, rather than treating a linker flag as proof
+# that loading Core no longer requires the classic renderer runtime.
+function Get-PeImportMetadata([byte[]]$image) {
+    function Require-Range([long]$offset,[long]$count) {
+        if ($offset -lt 0 -or $count -lt 0 -or $offset -gt $image.LongLength - $count) { throw 'Truncated PE import metadata.' }
+    }
+    Require-Range 0x3c 4
+    $pe=[BitConverter]::ToInt32($image,0x3c)
+    Require-Range $pe 24
+    $sectionCount=[BitConverter]::ToUInt16($image,$pe+6)
+    $optionalSize=[BitConverter]::ToUInt16($image,$pe+20)
+    $optional=$pe+24
+    Require-Range $optional $optionalSize
+    if ($optionalSize -lt 224 -or [BitConverter]::ToUInt32($image,$optional+108) -lt 14) { throw 'PE32+ import directories are missing.' }
+    $headerSize=[BitConverter]::ToUInt32($image,$optional+60)
+    $sectionTable=$optional+$optionalSize
+    Require-Range $sectionTable (40L*$sectionCount)
+    $sections=@()
+    for ($index=0;$index -lt $sectionCount;$index++) {
+        $offset=$sectionTable+40*$index
+        $sections+=@{rva=[long][BitConverter]::ToUInt32($image,$offset+12);raw_size=[long][BitConverter]::ToUInt32($image,$offset+16);raw=[long][BitConverter]::ToUInt32($image,$offset+20)}
+    }
+    function Get-FileOffset([long]$rva,[long]$count) {
+        if ($rva -ge 0 -and $rva -lt $headerSize -and $count -le $headerSize-$rva) { Require-Range $rva $count;return [int]$rva }
+        foreach ($section in $sections) {
+            $delta=$rva-$section.rva
+            if ($delta -ge 0 -and $delta -lt $section.raw_size -and $count -le $section.raw_size-$delta) {
+                $offset=$section.raw+$delta;Require-Range $offset $count;return [int]$offset
+            }
+        }
+        throw 'PE import RVA is outside initialized file data.'
+    }
+    function Get-ImportName([long]$rva) {
+        $name=[Collections.Generic.List[byte]]::new()
+        for ($length=0;$length -lt 512;$length++) {
+            $value=$image[(Get-FileOffset ($rva+$length) 1)]
+            if ($value -eq 0) { return [Text.Encoding]::ASCII.GetString($name.ToArray()).ToLowerInvariant() }
+            if ($value -lt 32 -or $value -gt 126) { throw 'Invalid PE import name.' }
+            $name.Add($value)
+        }
+        throw 'Unterminated PE import name.'
+    }
+    function Get-DirectoryNames([int]$directory,[int]$stride,[int]$nameOffset) {
+        $entry=$optional+112+8*$directory
+        $rva=[long][BitConverter]::ToUInt32($image,$entry)
+        $size=[long][BitConverter]::ToUInt32($image,$entry+4)
+        if ($rva -eq 0 -and $size -eq 0) { return }
+        if ($rva -eq 0 -or $size -lt $stride -or $size -gt 1048576) { throw 'Invalid PE import directory extent.' }
+        for ($offset=0L;$offset+$stride -le $size;$offset+=$stride) {
+            $descriptor=Get-FileOffset ($rva+$offset) $stride
+            $nonzero=$false
+            for ($byte=0;$byte -lt $stride;$byte++) { if ($image[$descriptor+$byte] -ne 0) { $nonzero=$true;break } }
+            if (-not $nonzero) { return }
+            if ($directory -eq 13 -and [BitConverter]::ToUInt32($image,$descriptor) -ne 1) { throw 'Expected RVA-based x64 delay imports.' }
+            $nameRva=[BitConverter]::ToUInt32($image,$descriptor+$nameOffset)
+            if ($nameRva -eq 0) { throw 'Missing PE import name.' }
+            Get-ImportName $nameRva
+        }
+        throw 'Unterminated PE import descriptor table.'
+    }
+    return [ordered]@{eager=@(Get-DirectoryNames 1 20 12);delayed=@(Get-DirectoryNames 13 32 4)}
+}
 $staged=@()
+$coreImports=$null
 foreach ($item in @(
     @{source=$CoreDll;name='core.dll';expected=$ExpectedCoreSha256},
     @{source=$GameDeDll;name='game_de.dll';expected=$ExpectedGameDeSha256},
@@ -41,15 +104,21 @@ foreach ($item in @(
         -not ([BitConverter]::ToUInt16($bytes,$pe+22) -band 0x2000)) { throw ('Expected an AMD64 PE32+ DLL: '+$resolved) }
     $sha=(Get-FileHash -LiteralPath $resolved -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($item.expected -and $sha -ne $item.expected.ToLowerInvariant()) { throw ('Artifact fingerprint changed: '+$resolved) }
+    if ($item.name -eq 'core.dll') {
+        $coreImports=Get-PeImportMetadata $bytes
+        if ($coreImports.eager -contains 'd3dx9_43.dll' -or $coreImports.eager -contains 'd3d9.dll' -or $coreImports.delayed -notcontains 'd3dx9_43.dll') {
+            throw 'Opt-in x64 Core must defer its classic D3DX9 dependency and have no eager D3D9 renderer import.'
+        }
+    }
     $destination=Join-Path $outputRoot ('mta/'+$item.name)
     Copy-Item -LiteralPath $resolved -Destination $destination
     if ((Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant() -ne $sha) { throw 'Staged artifact fingerprint mismatch.' }
     $staged += [ordered]@{source=$resolved;staged=$destination;sha256=$sha;machine='AMD64';bytes=$bytes.Length}
 }
-# These legacy import dependencies are not a DE renderer claim. Use installed,
-# signed Microsoft system copies; do not execute newly downloaded runtime DLLs.
+# XInput is an existing Core import. The deferred classic D3DX9 runtime is
+# intentionally not staged or required for this DE startup fixture.
 $systemDependencies=@()
-foreach ($name in @('d3dx9_43.dll','XINPUT1_4.dll')) {
+foreach ($name in @('XINPUT1_4.dll')) {
     $path=Join-Path $env:windir ('System32/'+$name)
     $signature=Get-AuthenticodeSignature -LiteralPath $path
     if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Microsoft') { throw ('Missing/unverified system dependency: '+$path) }
@@ -93,7 +162,7 @@ $success=$compilerExit -eq 0 -and $hostExit -eq 0 -and $null -ne $hostResult -an
 $record=[ordered]@{recorded_at=[DateTimeOffset]::Now.ToString('o');success=$success;directory=$outputRoot;
     scope='Actual supplied Core/Game DE DLL entry point in a separate non-game host named SanAndreas.exe';
     compiler_exit=$compilerExit;host_exit=$hostExit;host_result=$hostResult;failure=$failure;host_sha256=$hostHash;
-    source_hashes=$sourceHashes;sources_unchanged_during_fixture=$sourcesUnchanged;artifacts=$staged;system_dependencies=$systemDependencies;
+    source_hashes=$sourceHashes;sources_unchanged_during_fixture=$sourcesUnchanged;artifacts=$staged;system_dependencies=$systemDependencies;core_imports=$coreImports;
     core_log_path=$coreLog;exact_binding_rejection_messages=$bindingRejections;
     core_log_sha256=$(if (Test-Path -LiteralPath $coreLog) {(Get-FileHash -LiteralPath $coreLog -Algorithm SHA256).Hash.ToLowerInvariant()}else{$null});
     host_executable_is_game=$false;game_launched=$false;game_memory_read=$false;game_calls_or_hooks=$false;game_files_changed=$false;

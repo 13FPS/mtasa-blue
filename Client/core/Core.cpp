@@ -17,6 +17,7 @@
 #define UTF8_FILE_HOOKS_PERSONALITY_Core
 #include "SharedUtil.Win32Utf8FileHooks.hpp"
 #include "SharedUtil.Memory.h"
+#include "DefinitiveStartupState.h"
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
     #include "DefinitiveProcess.h"
 #endif
@@ -98,17 +99,20 @@ CORE_API void SetGTADirectory(const wchar_t* path, size_t length)
 
 CORE_API int InitializeCore()
 {
+    DefinitiveStartup::BeginAttempt();
     if (g_pCore)
-        return 1;
+        return DefinitiveStartup::CompleteResult(1);
 
     if (!g_isDefinitiveProcessCandidate && !IsGTAProcess())
-        return 2;
+        return DefinitiveStartup::CompleteResult(2);
 
     if (g_mtaDirectory.empty())
-        return 3;
+        return DefinitiveStartup::CompleteResult(3);
 
     if (g_gtaDirectory.empty())
-        return 4;
+        return DefinitiveStartup::CompleteResult(4);
+
+    DefinitiveStartup::SetPhase(DefinitiveStartup::Phase::DirectoriesReady);
 
     // Group our processes and windows under a single taskbar button
     SetCurrentProcessExplicitAppUserModelID(L"Multi Theft Auto " MTA_STR(MTASA_VERSION_MAJOR) L"." MTA_STR(MTASA_VERSION_MINOR));
@@ -129,10 +133,22 @@ CORE_API int InitializeCore()
     {
         g_pCore = nullptr;
         WriteDebugEvent(SString("DE adapter initialization rejected: %s", error.what()));
-        return 5;
+        return DefinitiveStartup::CompleteResult(5);
     }
 #else
     g_pCore = new CCore();
 #endif
-    return 0;
+    return DefinitiveStartup::CompleteResult(0);
 }
+
+#if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
+CORE_API std::uint32_t MTA_DEStartupApiVersion()
+{
+    return 1;
+}
+
+CORE_API std::uint32_t MTA_ReadDEStartupState(std::uint32_t field)
+{
+    return DefinitiveStartup::Read(field);
+}
+#endif

@@ -1172,6 +1172,8 @@ async function main() {
             DE_MtaMovementBegin: () => 1, DE_MtaMovementSubmit: () => 1, DE_MtaMovementCapture: () => 1,
             DE_MtaMovementRead: index => [movementActive, movementActive, 1, 1, 1, 0, 1, 0, 0, 0, 0, 0][index],
             DE_MtaMovementEnd: () => { movementActive = 0; return 1; },
+            DE_CoreStartupRun: () => 1,
+            DE_CoreStartupRead: index => [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5, 0, 0, 1, 0, 0, 0, 1][index],
             ...(overrides.functions || {}) };
         const names = Object.keys(functions).filter(name => typeof functions[name] === 'function');
         const record = (name, ...args) => { calls.push([name, ...args]); callFrames.push({ frame, name }); };
@@ -1190,6 +1192,7 @@ async function main() {
             GAIT_ROOT_LOCK: overrides.gaitRootLock ?? false, INPUT_REFERENCE: overrides.inputReference ?? false, HOST: overrides.host || 'sa_unreal',
             MTA_NATIVE_PAD_REFERENCE: overrides.mtaNativePadReference ?? false,
             MTA_NATIVE_MOVEMENT_TRIAL: overrides.mtaNativeMovementTrial ?? false,
+            MTA_CORE_STARTUP_REFERENCE: overrides.mtaCoreStartupReference ?? false,
             Date: { now: () => overrides.times ? overrides.times[frame] : frame * 50 },
             CLEO: { version: overrides.version || '1.5.1', apiVersion: overrides.definitions || '0.500', hostVersion: '1.0.113.49697469' },
             native: (name, ...args) => { record(name, ...args);
@@ -1223,6 +1226,71 @@ async function main() {
         }
         vm.runInNewContext(entry, sandbox, { timeout: 1000 });
         return { calls, callFrames, runtimeAccess, waits, logs, fromFloat };
+    }
+    const coreStartup = overrides => runEntry({ mtaCoreStartupReference: true,
+        keyFrames: [[17, 16, 120], [16], []], ...overrides });
+    test('real Core startup entry waits for all F9 modifiers to release and records the gated result once', () => {
+        const result = coreStartup();
+        assert.equal(result.callFrames.find(call => call.name === 'DynamicLibrary.Load').frame, 2);
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupRun').length, 1);
+        assert.deepEqual(result.calls.filter(call => call[0] === 'DE_CoreStartupRead').map(call => call[1]), Array.from({ length: 18 }, (_, i) => i));
+        const finish = result.logs.find(event => event.event === 'core_startup_reference_finished');
+        assert.equal(finish.passed, true); assert.equal(finish.cleanup_passed, true);
+        assert.equal(finish.full_core_ready, false); assert.equal(finish.rendering_started, false);
+        assert.ok(!result.calls.some(call => ['DE_ConnectLocal', 'GET_PLAYER_CHAR', 'GET_CHAR_COORDINATES', 'GET_CHAR_VELOCITY',
+            'CREATE_CHAR', 'DE_MtaMovementBegin', 'DE_NativePadBind'].includes(call[0])));
+        const start = result.logs.find(event => event.event === 'adapter_start');
+        assert.equal(start.core_startup_reference, true); assert.equal(start.input_writes, false);
+        assert.equal(start.network_active, false); assert.equal(start.remote_peds_created, false);
+    });
+    test('Core startup waits indefinitely before activation even with automatic preferences', () => {
+        const result = coreStartup({ activation: 'automatic', keyFrames: [[], [], [17, 16, 120], []],
+            times: [0, 7200000, 14400000, 14400050] });
+        assert.equal(result.callFrames.find(call => call.name === 'DynamicLibrary.Load').frame, 3);
+        assert.equal(result.logs.find(e => e.event === 'core_startup_reference_started').at_ms, 14400050);
+    });
+    test('Core startup End cancellation takes priority before binding', () => {
+        const result = coreStartup({ keyFrames: [[17, 16, 120, 35]] });
+        assert.equal(result.runtimeAccess.length, 0);
+        assert.ok(result.logs.some(e => e.event === 'adapter_activation_cancelled'));
+    });
+    test('Core startup holding F9 to the release deadline never loads a DLL', () => {
+        const result = coreStartup({ keyFrames: [[17, 16, 120], [120]], times: [0, 10000] });
+        assert.equal(result.runtimeAccess.length, 0);
+        assert.ok(result.logs.some(e => e.event === 'adapter_activation_release_timeout'));
+    });
+    test('Core startup rejects missing bridge exports before calling Core', () => {
+        const result = coreStartup({ functions: { DE_CoreStartupRead: null } });
+        assert.ok(result.logs.some(e => e.event === 'adapter_failed' && e.error.includes('DE_CoreStartupRead')));
+        assert.ok(!result.calls.some(call => call[0] === 'DE_CoreStartupRun'));
+    });
+    test('Core startup preserves a rejected native result and cleanup diagnostics', () => {
+        const result = coreStartup({ functions: { DE_CoreStartupRun: () => 0 } });
+        const finish = result.logs.find(e => e.event === 'core_startup_reference_finished');
+        assert.equal(finish.run_result, 0); assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true);
+        assert.ok(result.logs.some(e => e.event === 'adapter_failed'));
+    });
+    for (const [field, value] of [[1, 0], [2, 3], [3, 33], [5, 1], [6, 1], [7, 0], [8, 4], [9, 3], [10, 0],
+        [11, 4], [12, 1], [13, 0], [14, 1], [15, 1], [16, 8], [17, 0]]) {
+        test('Core startup rejects misleading state field ' + field, () => {
+            const values = [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5, 0, 0, 1, 0, 0, 0, 1]; values[field] = value;
+            const result = coreStartup({ functions: { DE_CoreStartupRead: index => values[index] } });
+            assert.equal(result.logs.find(e => e.event === 'core_startup_reference_finished').passed, false);
+            assert.ok(result.logs.some(e => e.event === 'adapter_failed'));
+        });
+    }
+    for (const value of [-1, 0x100000000, NaN, 1.5]) test('Core startup rejects unsigned readback ' + value, () => {
+        const result = coreStartup({ functions: { DE_CoreStartupRead: () => value } });
+        assert.ok(result.logs.some(e => e.event === 'adapter_failed' && e.error.includes('invalid unsigned')));
+        assert.ok(!result.logs.some(e => e.event === 'core_startup_reference_finished'));
+    });
+    for (const options of [{ inputReference: true }, { reference: true }, { mtaNativePadReference: true },
+        { mtaNativeMovementTrial: true }, { mode: 'online' }, { mode: 'diagnostic' }]) {
+        test('Core startup rejects combined mode ' + JSON.stringify(options), () => {
+            const result = coreStartup({ ...options, forbidRuntimeAccess: true });
+            assert.equal(result.calls.length, 0);
+            assert.ok(result.logs.some(e => e.event === 'adapter_failed'));
+        });
     }
     test('MTA movement entry waits for F9 release, submits through the real module ABI and cleans up on End', () => {
         const result = runEntry({ mtaNativeMovementTrial: true,
@@ -1876,6 +1944,7 @@ async function main() {
         assert.equal(sourceConfig.INPUT_REFERENCE, false);
         assert.equal(sourceConfig.MTA_NATIVE_PAD_REFERENCE, false);
         assert.equal(sourceConfig.MTA_NATIVE_MOVEMENT_TRIAL, false);
+        assert.equal(sourceConfig.MTA_CORE_STARTUP_REFERENCE, false);
     });
     test('manual online remains armed with no DLL, procedure, memory, player-handle, coordinate, UDP or remote access', () => {
         const result = manual({ keyFrames: [[], [], [], [], [], [17, 16, 35]] });

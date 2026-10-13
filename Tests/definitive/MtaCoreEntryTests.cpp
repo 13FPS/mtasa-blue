@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 namespace
 {
@@ -28,6 +29,14 @@ namespace
         for (const auto* name : {L"game_sa.dll", L"multiplayer_sa.dll", L"client.dll"})
             Check(GetModuleHandleW(name) == nullptr, "classic gameplay module must remain unloaded");
     }
+    void NoClassicRendererModules()
+    {
+        // DE startup cannot require the legacy renderer runtime before any
+        // graphics backend is selected. A real module check catches eager
+        // imports even on a machine where the old runtime happens to exist.
+        for (const auto* name : {L"d3dx9_43.dll", L"d3d9.dll"})
+            Check(GetModuleHandleW(name) == nullptr, "DE startup must not load a classic D3D9 renderer dependency");
+    }
     template <class Function>
     Function Resolve(HMODULE module, const char* name)
     {
@@ -37,6 +46,13 @@ namespace
         static_assert(sizeof(result) == sizeof(address));
         std::memcpy(&result, &address, sizeof(result));
         return result;
+    }
+    using ReadStartup = unsigned int (*)(unsigned int);
+    void CheckStartup(ReadStartup read, unsigned int result, unsigned int phase, unsigned int capabilities)
+    {
+        const std::array<unsigned int, 8> expected{1, result, phase, capabilities, 0, 0, 0, 1};
+        for (unsigned int field = 0; field < expected.size(); ++field)
+            Check(read(field) == expected[field], "actual Core startup snapshot must preserve its completed attempt and cleanup");
     }
 }
 int wmain(int argc, wchar_t** argv)
@@ -49,6 +65,7 @@ int wmain(int argc, wchar_t** argv)
         Check(root.is_absolute(), "fixture path must be explicit and absolute");
         const auto corePath = root / L"mta" / L"core.dll";
         NoGameModules();
+        NoClassicRendererModules();
         Check(GetModuleHandleW(L"game_de.dll") == nullptr, "backend starts unloaded");
         const auto core = LoadLibraryExW(corePath.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
         if (!core)
@@ -56,34 +73,60 @@ int wmain(int argc, wchar_t** argv)
             std::printf("{\"success\":false,\"stage\":\"LoadLibraryEx\",\"win32_error\":%lu}\n", GetLastError());
             return 2;
         }
+        NoClassicRendererModules();
         using SetDirectory = void (*)(const wchar_t*, std::size_t);
         using Initialize = int (*)();
-        const auto         setMta = Resolve<SetDirectory>(core, "SetMTADirectory");
-        const auto         setGta = Resolve<SetDirectory>(core, "SetGTADirectory");
-        const auto         initialize = Resolve<Initialize>(core, "InitializeCore");
+        const auto setMta = Resolve<SetDirectory>(core, "SetMTADirectory");
+        const auto setGta = Resolve<SetDirectory>(core, "SetGTADirectory");
+        const auto initialize = Resolve<Initialize>(core, "InitializeCore");
+        const auto startupVersion = Resolve<unsigned int (*)()>(core, "MTA_DEStartupApiVersion");
+        const auto readStartup = Resolve<ReadStartup>(core, "MTA_ReadDEStartupState");
+        Check(startupVersion() == 1, "the additive DE startup diagnostics ABI must be explicit");
+        Check(readStartup(0) == 0xffffffffu, "startup state has no read owner before InitializeCore");
         std::array<int, 4> results{};
         results[0] = initialize();
         Check(results[0] == 3, "DE candidate must request MTA directory before construction");
+        CheckStartup(readStartup, 3, 1, 0);
+        Check(readStartup(8) == 0xffffffffu, "unknown startup fields must be rejected");
+        NoClassicRendererModules();
         const auto mta = (root / L"mta").wstring();
         setMta(mta.c_str(), mta.size());
         results[1] = initialize();
         Check(results[1] == 4, "DE candidate must request GTA directory before construction");
+        CheckStartup(readStartup, 4, 1, 0);
+        NoClassicRendererModules();
         const auto gta = root.wstring();
         setGta(gta.c_str(), gta.size());
         for (std::size_t index = 2; index < results.size(); ++index)
         {
             results[index] = initialize();
             Check(results[index] == 5, "real incomplete adapter must reject construction and allow clean retry");
+            CheckStartup(readStartup, 5, 3, 33);
             Check(GetModuleHandleW(L"game_de.dll") == nullptr, "partial Core construction must release the backend DLL");
             NoGameModules();
+            NoClassicRendererModules();
         }
+        // A diagnostic reader cannot accidentally become a cross-thread Core
+        // control channel or erase the completed owner-thread failure snapshot.
+        std::array<unsigned int, 8> foreign{};
+        std::thread                 reader(
+            [&]
+            {
+                for (unsigned int field = 0; field < foreign.size(); ++field)
+                    foreign[field] = readStartup(field);
+            });
+        reader.join();
+        for (const auto value : foreign)
+            Check(value == 0xffffffffu, "foreign startup reads must be rejected");
+        CheckStartup(readStartup, 5, 3, 33);
         Check(FreeLibrary(core) != FALSE, "real Core must unload normally");
         Check(GetModuleHandleW(L"core.dll") == nullptr && GetModuleHandleW(L"game_de.dll") == nullptr, "no fixture DLL remains after unload");
         NoGameModules();
+        NoClassicRendererModules();
         // Reaching this statement proves DE detach did not take legacy ExitProcess.
         std::printf(
             "{\"success\":true,\"checks\":%d,\"initialize_results\":[%d,%d,%d,%d],\"continued_after_free_library\":true,\"backend_unloaded_after_each_"
-            "failure\":true,\"classic_modules_unloaded\":true}\n",
+            "failure\":true,\"classic_modules_unloaded\":true,\"legacy_renderer_modules_unloaded\":true,\"startup_diagnostics_verified\":true}\n",
             checks, results[0], results[1], results[2], results[3]);
         return 0;
     }

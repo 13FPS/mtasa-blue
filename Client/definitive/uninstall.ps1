@@ -56,6 +56,14 @@ if ($hasMovementScript -ne $hasGameDe -or ($hasMovementScript -and $relativePath
     throw 'Incomplete MTA movement package ownership.'
 }
 if ($hasMovementScript) { $allowedPaths += @('CLEO/de-online/native-movement-trial.mjs', 'CLEO/de-online/game_de.dll') }
+$hasCore = $relativePaths -contains 'CLEO/de-online/core.dll'
+$hasPthread = $relativePaths -contains 'CLEO/de-online/pthread.dll'
+# Preserve the historical 16/17/19-file removal contracts. New installations
+# own the reviewed Core/dependency pair only alongside the complete DE backend.
+if ($hasCore -ne $hasPthread -or ($hasCore -and -not $hasMovementScript)) {
+    throw 'Incomplete MTA Core startup package ownership.'
+}
+if ($hasCore) { $allowedPaths += @('CLEO/de-online/core.dll', 'CLEO/de-online/pthread.dll') }
 if ($relativePaths.Count -ne $allowedPaths.Count -or @($relativePaths | Select-Object -Unique).Count -ne $allowedPaths.Count -or
     @(Compare-Object $allowedPaths $relativePaths).Count -ne 0) {
     throw 'Installation manifest does not contain exactly the known owned files.'

@@ -20,12 +20,15 @@ $utf8 = [Text.UTF8Encoding]::new($false)
 $movementScript = 'CLEO/de-online/native-movement-trial.mjs'
 $backend = 'CLEO/de-online/game_de.dll'
 $padScript = 'CLEO/de-online/native-pad-reference.mjs'
-$scriptNames = @('install.ps1', 'update.ps1', 'uninstall.ps1', 'set-mode.ps1')
+$coreModule = 'CLEO/de-online/core.dll'
+$pthreadModule = 'CLEO/de-online/pthread.dll'
+$scriptNames = @('install.ps1', 'update.ps1', 'uninstall.ps1', 'set-mode.ps1', 'package.ps1', 'set-loader.ps1')
 $expectedPaths = @(
     'version.dll', 'cleo_redux64.asi', 'CLEO/CLEO_PLUGINS/dylib64.cleo', 'CLEO/CLEO_PLUGINS/Input64.cleo',
     'CLEO/.config/cleo.ini', 'CLEO/.config/sa_unreal.json', 'CLEO/.config/unknown_x64.json',
     'CLEO/de-online/index.js', 'CLEO/de-online/controller.mjs', 'CLEO/de-online/config.mjs',
     'CLEO/de-online/mod.json', 'CLEO/de-online/de_client_bridge.dll', $padScript, $movementScript, $backend,
+    $coreModule, $pthreadModule,
     'DE_ONLINE_LICENSES/CLEO_REDUX_LICENSE.txt', 'DE_ONLINE_LICENSES/ULTIMATE_ASI_LOADER_LICENSE.txt',
     'DE_ONLINE_LICENSES/MTA_GPLv3.txt', 'DE_ONLINE_LICENSES/SANNY_BUILDER_LIBRARY_README.md'
 )
@@ -38,10 +41,10 @@ if (Get-Process -Name SanAndreas, PlayGTASanAndreas -ErrorAction SilentlyContinu
 $sourceManifest = Get-Content -LiteralPath (Join-Path $sourcePackage 'manifest.json') -Raw | ConvertFrom-Json
 if ($sourceManifest.packageId -ne 'de-online-prototype' -or $sourceManifest.mode -ne 'Smoke' -or
     $sourceManifest.gameSha256 -ne $knownGameHash -or $sourceManifest.formatVersion -ne 1 -or
-    @($sourceManifest.files).Count -ne 19 -or
+    @($sourceManifest.files).Count -ne 21 -or
     @(Compare-Object $expectedPaths @($sourceManifest.files.path)).Count -ne 0 -or
-    @($sourceManifest.files.path | Select-Object -Unique).Count -ne 19) {
-    throw 'Supply the complete real 19-file Smoke package; synthetic backend binaries are not accepted.'
+    @($sourceManifest.files.path | Select-Object -Unique).Count -ne 21) {
+    throw 'Supply the complete real 21-file Smoke package; synthetic backend binaries are not accepted.'
 }
 foreach ($entry in $sourceManifest.files) {
     if ((Get-Sha (Join-Path $sourcePackage ('Win64/' + $entry.path))) -ne $entry.sha256) {
@@ -96,7 +99,7 @@ function Get-TreeFingerprint([string]$Root) {
 }
 function Invoke-Production([object]$Fixture, [string]$Name, [hashtable]$Arguments) {
     # update.ps1 derives its package root from its own repository. Copying all
-    # four unchanged scripts prevents a test from updating the real game root.
+    # unchanged scripts prevents a test from updating the real game root.
     $scriptPath = Join-Path $Fixture.scripts $Name
     Add-Content -LiteralPath $logPath -Value "$($Fixture.name): $Name" -Encoding utf8
     try {
@@ -111,6 +114,15 @@ function Assert-Refused([scriptblock]$Action, [string]$Pattern, [string]$Label) 
     $message = $null
     try { & $Action } catch { $message = $_.Exception.Message }
     Assert-Check ($null -ne $message -and $message -match $Pattern) "$Label (expected refusal)"
+}
+function Invoke-Loader([object]$Fixture, [string]$Action) {
+    # The copied helper derives its journal root from the disposable repository,
+    # so even loader recovery records remain inside the fixture under test.
+    $scriptPath = Join-Path $Fixture.scripts 'set-loader.ps1'
+    Add-Content -LiteralPath $logPath -Value "$($Fixture.name): set-loader.ps1 $Action" -Encoding utf8
+    $result = & $scriptPath -GameDirectory $Fixture.game -Action $Action 6>$null
+    Add-Content -LiteralPath $logPath -Value ($result | ConvertTo-Json -Compress) -Encoding utf8
+    return $result
 }
 function New-GameDirectory([string]$Path) {
     [IO.Directory]::CreateDirectory((Assert-FixturePath $Path)) | Out-Null
@@ -135,6 +147,7 @@ function Install-Fresh([object]$Fixture) {
 }
 function Install-Legacy([object]$Fixture, [int]$Count) {
     $excluded = @()
+    if ($Count -lt 21) { $excluded += @($coreModule, $pthreadModule) }
     if ($Count -lt 19) { $excluded += @($movementScript, $backend) }
     if ($Count -eq 16) { $excluded += $padScript }
     $files = @()
@@ -146,6 +159,7 @@ function Install-Legacy([object]$Fixture, [int]$Count) {
             # Historical configurations lacked this opt-in. Different owned
             # bytes also prove update replaces existing files, not just adds.
             $text = [IO.File]::ReadAllText($destination)
+            if ($Count -lt 21) { $text = [regex]::Replace($text, '(?m)^export const MTA_CORE_STARTUP_REFERENCE = (true|false);\r?\n', '') }
             if ($Count -lt 19) { $text = [regex]::Replace($text, '(?m)^export const MTA_NATIVE_MOVEMENT_TRIAL = (true|false);\r?\n', '') }
             if ($Count -eq 16) { $text = [regex]::Replace($text, '(?m)^export const MTA_NATIVE_PAD_REFERENCE = (true|false);\r?\n', '') }
             Write-FixtureBytes $destination ($utf8.GetBytes($text + "`n// Historical owned configuration fixture.`n"))
@@ -160,7 +174,7 @@ function Install-Legacy([object]$Fixture, [int]$Count) {
 }
 function Assert-InstalledPackage([object]$Fixture) {
     $manifest = Get-Content -LiteralPath (Join-Path $Fixture.game 'de-online-install-manifest.json') -Raw | ConvertFrom-Json
-    Assert-Check (@($manifest.files).Count -eq 19) "$($Fixture.name): 19 owned records"
+    Assert-Check (@($manifest.files).Count -eq 21) "$($Fixture.name): 21 owned records"
     Assert-Check (@(Compare-Object $expectedPaths @($manifest.files.path)).Count -eq 0) "$($Fixture.name): exact owned paths"
     foreach ($entry in $manifest.files) {
         $expected = @($sourceManifest.files | Where-Object path -eq $entry.path)[0]
@@ -182,7 +196,7 @@ function Invoke-Case([string]$Name, [scriptblock]$Action) {
 
 $failure = $null
 try {
-    Invoke-Case 'fresh-19-validate-uninstall' {
+    Invoke-Case 'fresh-21-validate-uninstall' {
         param($fixture)
         Install-Fresh $fixture
         Assert-InstalledPackage $fixture
@@ -202,8 +216,8 @@ try {
         foreach ($relative in $userPaths) { Assert-Check ((Get-Sha (Join-Path $fixture.game $relative)) -eq $userHashes[$relative]) "Uninstall preserves $relative" }
         Assert-Check ((Get-Sha (Join-Path $fixture.game 'SanAndreas.exe')) -eq $knownGameHash) 'Uninstall preserves executable'
     }
-    foreach ($legacyCount in @(16, 17, 19)) {
-        Invoke-Case "update-$legacyCount-to-19" {
+    foreach ($legacyCount in @(16, 17, 19, 21)) {
+        Invoke-Case "update-$legacyCount-to-21" {
             param($fixture)
             Install-Legacy $fixture $legacyCount
             $config = Join-Path $fixture.game 'CLEO/de-online/config.mjs'
@@ -218,8 +232,9 @@ try {
             Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) "$legacyCount migration repeated update is a no-op"
         }
     }
-    foreach ($legacyCount in @(16, 17)) {
-        $occupiedPaths = @($movementScript, $backend)
+    foreach ($legacyCount in @(16, 17, 19)) {
+        $occupiedPaths = @($coreModule, $pthreadModule)
+        if ($legacyCount -lt 19) { $occupiedPaths += @($movementScript, $backend) }
         if ($legacyCount -eq 16) { $occupiedPaths += $padScript }
         foreach ($occupied in $occupiedPaths) {
             Invoke-Case ("occupied-$legacyCount-" + [IO.Path]::GetFileName($occupied)) {
@@ -232,7 +247,7 @@ try {
             }
         }
     }
-    foreach ($missing in @($movementScript, $backend)) {
+    foreach ($missing in @($movementScript, $backend, $coreModule, $pthreadModule)) {
         Invoke-Case ('unpaired-package-' + [IO.Path]::GetFileName($missing)) {
             param($fixture)
             Install-Legacy $fixture 17
@@ -243,10 +258,61 @@ try {
             Remove-Item -LiteralPath (Assert-FixturePath (Join-Path $fixture.package ('Win64/' + $missing)))
             $freshGame = New-GameDirectory (Join-Path $fixture.root 'fresh-game')
             $before = Get-TreeFingerprint $fixture.root
-            Assert-Refused { Invoke-Production $fixture 'update.ps1' @{ GameDirectory=$fixture.game } } 'Incomplete MTA movement package ownership' 'Unpaired update package'
+            $expectedRefusal = if ($missing -in @($coreModule, $pthreadModule)) { 'Incomplete MTA Core startup package ownership' } else { 'Incomplete MTA movement package ownership' }
+            Assert-Refused { Invoke-Production $fixture 'update.ps1' @{ GameDirectory=$fixture.game } } $expectedRefusal 'Unpaired update package'
             Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Unpaired update refusal precedes all writes'
             Assert-Refused { Invoke-Production $fixture 'install.ps1' @{ Mode='Smoke'; PackageDirectory=$fixture.package; GameDirectory=$freshGame } } 'Package manifest must contain exactly' 'Unpaired fresh package'
             Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Unpaired install refusal precedes all writes'
+        }
+    }
+    foreach ($missing in @($coreModule, $pthreadModule)) {
+        Invoke-Case ('unpaired-installed-' + [IO.Path]::GetFileName($missing)) {
+            param($fixture)
+            Install-Legacy $fixture 21
+            $manifestPath = Join-Path $fixture.game 'de-online-install-manifest.json'
+            $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+            $manifest.files = @($manifest.files | Where-Object path -ne $missing)
+            Write-FixtureJson $manifestPath $manifest
+            $before = Get-TreeFingerprint $fixture.root
+            Assert-Refused { Invoke-Production $fixture 'uninstall.ps1' @{ GameDirectory=$fixture.game; ValidateOnly=$true } } 'Incomplete MTA Core startup package ownership' 'Unpaired installed validation'
+            Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Unpaired installed validation changes no bytes'
+            Assert-Refused { Invoke-Production $fixture 'uninstall.ps1' @{ GameDirectory=$fixture.game } } 'Incomplete MTA Core startup package ownership' 'Unpaired uninstall'
+            Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Unpaired uninstall removes no bytes'
+            Assert-Refused { Invoke-Production $fixture 'set-loader.ps1' @{ GameDirectory=$fixture.game; Action='Disable' } } 'Incomplete MTA Core startup package ownership' 'Unpaired loader bypass'
+            Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Unpaired loader bypass changes no bytes'
+        }
+    }
+    foreach ($ownedCount in @(16, 17, 19, 21)) {
+        Invoke-Case "loader-round-trip-$ownedCount" {
+            param($fixture)
+            Install-Legacy $fixture $ownedCount
+            Write-FixtureBytes (Join-Path $fixture.game 'CLEO/de-online/user-loader-state.json') ($utf8.GetBytes('Retained user bytes'))
+            $manifestPath = Join-Path $fixture.game 'de-online-install-manifest.json'
+            $manifestHash = Get-Sha $manifestPath
+            $loaderHash = Get-Sha (Join-Path $fixture.game 'version.dll')
+            $gameBefore = Get-TreeFingerprint $fixture.game
+            $beforeStatus = Get-TreeFingerprint $fixture.root
+            $status = Invoke-Loader $fixture 'Status'
+            Assert-Check ($status.state -eq 'Enabled' -and $status.verifiedFiles -eq $ownedCount) "$ownedCount loader status validates every owned file"
+            Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $beforeStatus) "$ownedCount loader status changes no bytes"
+            $disabled = Invoke-Loader $fixture 'Disable'
+            Assert-Check ($disabled.state -eq 'Disabled' -and $disabled.verifiedFiles -eq $ownedCount) "$ownedCount loader disable returns validated state"
+            Assert-Check (-not (Test-Path -LiteralPath (Join-Path $fixture.game 'version.dll')) -and
+                (Get-Sha (Join-Path $fixture.game 'version.dll.de-online-disabled')) -eq $loaderHash) "$ownedCount loader disable only renames the verified loader"
+            Assert-Check ((Get-Sha $manifestPath) -eq $manifestHash) "$ownedCount loader disable preserves manifest"
+            $beforeStatus = Get-TreeFingerprint $fixture.root
+            $status = Invoke-Loader $fixture 'Status'
+            Assert-Check ($status.state -eq 'Disabled' -and $status.verifiedFiles -eq $ownedCount) "$ownedCount disabled status validates every owned file"
+            Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $beforeStatus) "$ownedCount disabled status changes no bytes"
+            $enabled = Invoke-Loader $fixture 'Enable'
+            Assert-Check ($enabled.state -eq 'Enabled' -and $enabled.verifiedFiles -eq $ownedCount) "$ownedCount loader enable returns validated state"
+            Assert-Check ((Get-TreeFingerprint $fixture.game) -eq $gameBefore) "$ownedCount loader round trip restores every game/user byte and path"
+            Assert-Check ((Get-Sha $manifestPath) -eq $manifestHash) "$ownedCount loader round trip preserves manifest"
+            foreach ($record in @($disabled, $enabled)) {
+                Assert-Check ($record.recoveryDirectory.StartsWith($fixture.repository + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) "$ownedCount loader journal remains in disposable repository"
+                Assert-Check ((Test-Path -LiteralPath (Join-Path $record.recoveryDirectory 'prepared.json')) -and
+                    (Test-Path -LiteralPath (Join-Path $record.recoveryDirectory 'completed.json'))) "$ownedCount loader move has durable intent/completion records"
+            }
         }
     }
     Invoke-Case 'explicit-mode-opt-in' {
@@ -279,6 +345,52 @@ try {
         $before = Get-TreeFingerprint $fixture.root
         Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' @{ Mode='Smoke'; MtaNativeMovementTrial=$true; GameDirectory=$fixture.game } } 'owned backend files are missing' 'Missing owned backend pair'
         Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Missing backend opt-in leaves bytes unchanged'
+    }
+    Invoke-Case 'explicit-core-startup-opt-in' {
+        param($fixture)
+        Install-Fresh $fixture
+        $config = Join-Path $fixture.game 'CLEO/de-online/config.mjs'
+        Invoke-Production $fixture 'set-mode.ps1' @{ Mode='Smoke'; MtaCoreStartupReference=$true; GameDirectory=$fixture.game }
+        Assert-Check ([IO.File]::ReadAllText($config) -match 'export const MTA_CORE_STARTUP_REFERENCE = true;') 'Separate Smoke opt-in arms Core startup reference'
+        Assert-Check ([IO.File]::ReadAllText($config) -match 'export const MTA_NATIVE_MOVEMENT_TRIAL = false;') 'Core startup reference clears movement writes'
+        Invoke-Production $fixture 'uninstall.ps1' @{ GameDirectory=$fixture.game; ValidateOnly=$true }
+        $before = Get-TreeFingerprint $fixture.root
+        foreach ($invalidMode in @('Diagnostic', 'Online')) {
+            Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' @{ Mode=$invalidMode; MtaCoreStartupReference=$true; GameDirectory=$fixture.game } } 'separate opt-in Smoke mode' 'Core startup invalid mode'
+            Assert-Refused { Invoke-Production $fixture 'package.ps1' @{ Mode=$invalidMode; MtaCoreStartupReference=$true } } 'separate opt-in Smoke mode' 'Core package invalid mode'
+            Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Invalid Core startup mode changes no bytes'
+        }
+        foreach ($conflict in @('MtaNativeMovementTrial', 'MtaNativePadReference', 'NativeInputReference', 'NativeGaitReference', 'MatchedGaitRate', 'LockWalkRoot')) {
+            $arguments = @{ Mode='Smoke'; MtaCoreStartupReference=$true; GameDirectory=$fixture.game }
+            $arguments[$conflict] = $true
+            Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' $arguments } 'separate opt-in Smoke mode' 'Conflicting Core startup opt-in'
+            $arguments.Remove('GameDirectory')
+            Assert-Refused { Invoke-Production $fixture 'package.ps1' $arguments } 'separate opt-in Smoke mode' 'Conflicting Core package opt-in'
+            Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Conflicting Core startup opt-in changes no bytes'
+        }
+        foreach ($mode in @('Diagnostic', 'Smoke', 'Online', 'Smoke')) {
+            Invoke-Production $fixture 'set-mode.ps1' @{ Mode=$mode; GameDirectory=$fixture.game }
+            Assert-Check ([IO.File]::ReadAllText($config) -match 'export const MTA_CORE_STARTUP_REFERENCE = false;') "Ordinary $mode clears Core startup flag"
+            Invoke-Production $fixture 'uninstall.ps1' @{ GameDirectory=$fixture.game; ValidateOnly=$true }
+        }
+    }
+    Invoke-Case 'legacy-core-startup-requires-owned-pair' {
+        param($fixture)
+        Install-Legacy $fixture 19
+        $config = Join-Path $fixture.game 'CLEO/de-online/config.mjs'
+        Invoke-Production $fixture 'set-mode.ps1' @{ Mode='Smoke'; GameDirectory=$fixture.game }
+        Assert-Check ([IO.File]::ReadAllText($config) -notmatch 'MTA_CORE_STARTUP_REFERENCE') 'Ordinary mode accepts intact older configuration without Core marker'
+        $before = Get-TreeFingerprint $fixture.root
+        Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' @{ Mode='Smoke'; MtaCoreStartupReference=$true; GameDirectory=$fixture.game } } 'Update the adapter before selecting MTA Core startup reference' 'Legacy missing Core marker'
+        Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Missing Core marker changes no bytes'
+        Write-FixtureBytes $config ($utf8.GetBytes([IO.File]::ReadAllText($config) + "`nexport const MTA_CORE_STARTUP_REFERENCE = false;`n"))
+        $manifestPath = Join-Path $fixture.game 'de-online-install-manifest.json'
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+        @($manifest.files | Where-Object path -eq 'CLEO/de-online/config.mjs')[0].sha256 = Get-Sha $config
+        Write-FixtureJson $manifestPath $manifest
+        $before = Get-TreeFingerprint $fixture.root
+        Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' @{ Mode='Smoke'; MtaCoreStartupReference=$true; GameDirectory=$fixture.game } } 'owned Core backend files are missing' 'Legacy missing owned Core pair'
+        Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Missing owned Core pair changes no bytes'
     }
 } catch { $failure = $_.Exception.Message }
 $sourceUnchanged = $true

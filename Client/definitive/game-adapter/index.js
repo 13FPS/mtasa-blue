@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { MODE, ONLINE_ACTIVATION, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL } from './config.mjs';
+import { MODE, ONLINE_ACTIVATION, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE } from './config.mjs';
 import { AdapterController, NativeGaitReferenceController, NativeInputReferenceController } from './controller.mjs';
 import { MtaNativePadReferenceController } from './native-pad-reference.mjs';
 import { MtaNativeMovementTrialController } from './native-movement-trial.mjs';
@@ -21,6 +21,9 @@ function runAdapter() {
     if (typeof MTA_NATIVE_MOVEMENT_TRIAL !== 'boolean' ||
         (MTA_NATIVE_MOVEMENT_TRIAL && (MODE !== 'smoke' || INPUT_REFERENCE || GAIT_REFERENCE || MTA_NATIVE_PAD_REFERENCE)))
         throw new Error('MTA native movement trial requires separate opt-in Smoke mode');
+    if (typeof MTA_CORE_STARTUP_REFERENCE !== 'boolean' ||
+        (MTA_CORE_STARTUP_REFERENCE && (MODE !== 'smoke' || INPUT_REFERENCE || GAIT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL)))
+        throw new Error('MTA Core startup reference requires separate opt-in Smoke mode');
     if (MODE === 'diagnostic') {
         // Keep the installed loader/runtime available while separating its
         // startup from our DLL, FFI, player reads and transport. This finite
@@ -49,20 +52,20 @@ function runAdapter() {
         throw new Error('SA Unreal API definitions 0.493 or newer are required');
     // These untested input/velocity bindings come from the pinned 0.500 API.
     // Reject older definitions before activation reads, DLL access, or CJ reads.
-    if ((INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL) && definitionVersion < 0.500)
+    if ((INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE) && definitionVersion < 0.500)
         throw new Error('Native input reference requires SA Unreal API definitions 0.500 or newer');
 
     const stopKey = 'Ctrl+Shift+End';
     // Home opens the Rockstar console on the tested build and interrupts this
     // read-only observation, so the input reference needs its own shortcut.
-    const activateKey = (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL) ? 'Ctrl+Shift+F9' : 'Ctrl+Shift+Home';
+    const activateKey = (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE) ? 'Ctrl+Shift+F9' : 'Ctrl+Shift+Home';
     const chordHeld = keys => keys.every(key => native('IS_KEY_PRESSED', key));
-    if (MODE === 'online' || GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL) {
+    if (MODE === 'online' || GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE) {
         if (MODE === 'online' && !['manual', 'automatic'].includes(ONLINE_ACTIVATION))
             throw new Error('Unknown online activation mode');
         // The reference changes one owned NPC, so even an automatic Online
         // preference cannot start this separate experiment during save loading.
-        if (GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || ONLINE_ACTIVATION === 'manual') {
+        if (GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || ONLINE_ACTIVATION === 'manual') {
             // Startup freezes have also occurred before this script enters.
             // Waiting here cannot prevent those loader failures, but it gives
             // a usable game session a separate, observable boundary before
@@ -78,7 +81,7 @@ function runAdapter() {
                         bridge_loaded: false, game_adapter_active: false, network_active: false });
                     return;
                 }
-                if (chordHeld([17, 16, (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL) ? 120 : 36]) && native('IS_PLAYER_PLAYING', 0)) {
+                if (chordHeld([17, 16, (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE) ? 120 : 36]) && native('IS_PLAYER_PLAYING', 0)) {
                     emit({ event: 'adapter_activation_requested', mode: MODE, activate_key: activateKey });
                     break;
                 }
@@ -86,7 +89,7 @@ function runAdapter() {
             }
         }
     }
-    if (MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL) {
+    if (MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE) {
         // Holding the activation modifiers contaminated the prior source-state
         // window. Begin DLL access and the recorder only after their release,
         // while keeping cancellation and a finite pre-binding deadline.
@@ -149,6 +152,36 @@ function runAdapter() {
     enterPhase('runtime_bind');
     if (bindRuntime() !== 1) throw new Error('CLEO runtime lifecycle binding failed');
     enterPhase('runtime_bound');
+    if (MTA_CORE_STARTUP_REFERENCE) {
+        // Exercise Core's real entry and adapter ownership inside the verified
+        // game. Result five is expected at its complete-gameplay gate; treating
+        // that as a playable client would hide the remaining CGame/render work.
+        const run = bind('DE_CoreStartupRun');
+        const read = bind('DE_CoreStartupRead', 'X64U32');
+        emit({ event: 'adapter_start', host: HOST, cleo: String(CLEO.version), host_version: String(CLEO.hostVersion),
+            definitions: String(CLEO.apiVersion), mode: MODE, endpoint: null, stop_key: stopKey,
+            core_startup_reference: true, provenance: 'mta_core_de_startup', core_api: 1,
+            network_active: false, input_writes: false, remote_peds_created: false });
+        enterPhase('core_startup_reference');
+        const startedAt = Date.now();
+        if (!Number.isSafeInteger(startedAt) || startedAt < 0) throw new Error('Invalid Core startup clock');
+        emit({ event: 'core_startup_reference_started', at_ms: startedAt, core_api: 1 });
+        const runResult = run();
+        const state = Array.from({ length: 18 }, (_, field) => read(field));
+        if (!state.every(value => Number.isInteger(value) && value >= 0 && value <= 0xffffffff))
+            throw new Error('Core startup returned invalid unsigned state');
+        const now = Date.now();
+        if (!Number.isSafeInteger(now) || now < startedAt) throw new Error('Invalid Core startup clock');
+        const cleanupPassed = state[7] === 1 && state[13] === 1 && state[14] === 0 && state[15] === 0;
+        const expected = [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5];
+        const passed = runResult === 1 && expected.every((value, field) => state[field] === value) &&
+            state[11] <= 3 && state[12] <= 3 && (state[12] & ~state[11]) === 0 && cleanupPassed && state[16] === 0 && state[17] === 1;
+        emit({ event: 'core_startup_reference_finished', at_ms: now, elapsed_ms: now - startedAt, run_result: runResult,
+            state, passed, cleanup_passed: cleanupPassed, full_core_ready: state[6] === 1, rendering_started: false,
+            network_active: false, input_writes: false, remote_peds_created: false });
+        if (!passed) throw new Error('MTA Core startup reference failed; inspect its saved state');
+        return;
+    }
     if (MTA_NATIVE_MOVEMENT_TRIAL) {
         const reader = { begin: bind('DE_MtaMovementBegin'), submit: bind('DE_MtaMovementSubmit'),
             capture: bind('DE_MtaMovementCapture'), read: bind('DE_MtaMovementRead', 'X64U32'), end: bind('DE_MtaMovementEnd') };

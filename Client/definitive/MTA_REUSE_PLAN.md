@@ -15,6 +15,22 @@ failed cleanup state for retry and does not claim remote ownership or full
 input coverage. The full CGame, launcher, rendering and multiplayer paths
 remain required. Earlier checkpoints below retain their original limits.
 
+The corrected local movement trial is now validated in the game: the human
+confirmed walking and sprinting, with 1,317 applied/restored callback scopes and
+zero recorded failures. Normal shutdown and installed ownership pass. The
+compatibility script still schedules fixed MTA action masks; configured Core
+bindings and its backend-neutral context/pulse boundary remain to be connected.
+No new walking-rate estimator or replacement multiplayer implementation is used.
+
+The next candidate loads the real normal-build x64 MTA Core in DE, rather than
+only compiling Core's module consumer into the diagnostic bridge. Its explicit
+Smoke startup reference calls the real exported initializer and records exact
+image binding, backend pulse, the retained gameplay gate and adapter teardown.
+The legacy D3DX9 import is delayed only for the opt-in x64 build. Ninety-three
+actual Core entry checks and both classic Win32 configurations pass; an in-game
+Core load is pending. This is the next startup boundary, while configured binds,
+the complete game facade and DE rendering still require implementation.
+
 ```mermaid
 flowchart LR
     Core[MTA Core] --> Adapter[Game DE adapter module]

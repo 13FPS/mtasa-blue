@@ -27,7 +27,8 @@ if (@($packagePaths | Select-Object -Unique).Count -ne $packagePaths.Count -or
 $addedPaths = @($packagePaths | Where-Object { $_ -notin $installedPaths })
 # Admit only the named MTA probe/backend files from the newer package. All
 # additions are checked for existing user bytes before any update is applied.
-$allowedAdditions = @('CLEO/de-online/native-pad-reference.mjs', 'CLEO/de-online/native-movement-trial.mjs', 'CLEO/de-online/game_de.dll')
+$allowedAdditions = @('CLEO/de-online/native-pad-reference.mjs', 'CLEO/de-online/native-movement-trial.mjs', 'CLEO/de-online/game_de.dll',
+    'CLEO/de-online/core.dll', 'CLEO/de-online/pthread.dll')
 if (@($addedPaths | Where-Object { $_ -notin $allowedAdditions }).Count -ne 0) {
     throw 'Unsupported additive package path.'
 }
@@ -37,6 +38,13 @@ $hasMovementScript = $packagePaths -contains 'CLEO/de-online/native-movement-tri
 $hasGameDe = $packagePaths -contains 'CLEO/de-online/game_de.dll'
 if ($hasMovementScript -ne $hasGameDe -or ($hasMovementScript -and $packagePaths -notcontains 'CLEO/de-online/native-pad-reference.mjs')) {
     throw 'Incomplete MTA movement package ownership.'
+}
+$hasCore = $packagePaths -contains 'CLEO/de-online/core.dll'
+$hasPthread = $packagePaths -contains 'CLEO/de-online/pthread.dll'
+# A partially added Core cannot be loaded safely or removed under the same
+# ownership contract. Refuse the complete update before staging any file.
+if ($hasCore -ne $hasPthread -or ($hasCore -and -not $hasMovementScript)) {
+    throw 'Incomplete MTA Core startup package ownership.'
 }
 $changes = @()
 foreach ($entry in $package.files) {

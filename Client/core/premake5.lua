@@ -87,6 +87,11 @@ project "Client Core"
 		-- architectures/configurations still lack a supported startup path.
 		filter { "architecture:x86_64", "configurations:Release" }
 			targetdir(buildpath("mta/x64"))
+			-- DE startup rejects incomplete game/render backends before any
+			-- D3D9 call. Do not require the legacy June 2010 runtime merely to
+			-- load Core; retain classic linkage and defer this renderer's import.
+			links { "delayimp" }
+			linkoptions { "/DELAYLOAD:d3dx9_43.dll" }
 			-- The backend loader resolves adjacent modules. Stage real build
 			-- outputs together without installing anything into the game.
 			postbuildcommands {

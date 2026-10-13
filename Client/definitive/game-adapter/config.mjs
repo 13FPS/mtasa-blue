@@ -29,3 +29,6 @@ export const INPUT_REFERENCE = false;
 export const MTA_NATIVE_PAD_REFERENCE = false;
 // Explicit local engine-write trial; ordinary Smoke and Online modes leave it off.
 export const MTA_NATIVE_MOVEMENT_TRIAL = false;
+// Load the real x64 MTA Core only on explicit activation, observe its unchanged
+// incomplete-gameplay gate, then unload it before normal play continues.
+export const MTA_CORE_STARTUP_REFERENCE = false;

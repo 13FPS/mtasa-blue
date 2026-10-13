@@ -12,6 +12,7 @@
 #include <array>
 #include <atomic>
 #include <cstring>
+#include <filesystem>
 #include <limits>
 #include <new>
 #include <windows.h>
@@ -35,6 +36,8 @@ namespace
     int                                    movementOwnerIdentity = 0;
     mta::game_de::NativeMovementTrialState movementState;
     bool                                   movementSnapshot = false;
+    std::array<std::uint32_t, 18>          coreStartupState{};
+    bool                                   coreStartupSnapshot = false;
 
     void ClearNativePad()
     {
@@ -57,6 +60,11 @@ namespace
         float value;
         std::memcpy(&value, &bits, sizeof(value));
         return value;
+    }
+
+    std::uint32_t LegacyRendererModules()
+    {
+        return (GetModuleHandleW(L"d3dx9_43.dll") ? 1u : 0u) | (GetModuleHandleW(L"d3d9.dll") ? 2u : 0u);
     }
 }
 
@@ -250,6 +258,118 @@ int DE_MtaMovementEnd()
         return 0;
     }
 }
+int DE_CoreStartupRun()
+{
+    if (!ControllerAccessAllowed() || movementAdapter)
+        return 0;
+    coreStartupState = {};
+    coreStartupState[1] = coreStartupState[8] = coreStartupState[9] = coreStartupState[10] = 0xffffffffu;
+    coreStartupState[11] = LegacyRendererModules();
+    coreStartupState[14] = GetModuleHandleW(L"game_de.dll") ? 1u : 0u;
+    coreStartupSnapshot = false;
+    HMODULE core = nullptr;
+    try
+    {
+        // A fresh process isolates this reference from already owned modules.
+        // Never reuse another owner's initialized Core or pinned movement DLL.
+        const auto run = [&]()
+        {
+            if (GetModuleHandleW(L"core.dll") || coreStartupState[14])
+            {
+                coreStartupState[16] = 2;
+                return;
+            }
+            HMODULE                    self = nullptr;
+            std::array<wchar_t, 32768> ownPath{}, gamePath{};
+            if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                    reinterpret_cast<LPCWSTR>(&moduleAnchor), &self))
+            {
+                coreStartupState[16] = 3;
+                return;
+            }
+            const auto ownLength = GetModuleFileNameW(self, ownPath.data(), static_cast<DWORD>(ownPath.size()));
+            const auto gameLength = GetModuleFileNameW(nullptr, gamePath.data(), static_cast<DWORD>(gamePath.size()));
+            if (!ownLength || ownLength >= ownPath.size() || !gameLength || gameLength >= gamePath.size())
+            {
+                coreStartupState[16] = 3;
+                return;
+            }
+            const auto mtaDirectory = std::filesystem::path(std::wstring(ownPath.data(), ownLength)).parent_path();
+            const auto gtaDirectory = std::filesystem::path(std::wstring(gamePath.data(), gameLength)).parent_path();
+            core = LoadLibraryExW((mtaDirectory / L"core.dll").c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+            if (!core)
+            {
+                coreStartupState[16] = 4;
+                return;
+            }
+            using Version = std::uint32_t (*)();
+            using Read = std::uint32_t (*)(std::uint32_t);
+            using SetDirectory = void (*)(const wchar_t*, std::size_t);
+            using Initialize = int (*)();
+            const auto version = reinterpret_cast<Version>(GetProcAddress(core, "MTA_DEStartupApiVersion"));
+            const auto read = reinterpret_cast<Read>(GetProcAddress(core, "MTA_ReadDEStartupState"));
+            const auto setMta = reinterpret_cast<SetDirectory>(GetProcAddress(core, "SetMTADirectory"));
+            const auto setGta = reinterpret_cast<SetDirectory>(GetProcAddress(core, "SetGTADirectory"));
+            const auto initialize = reinterpret_cast<Initialize>(GetProcAddress(core, "InitializeCore"));
+            if (!version || !read || !setMta || !setGta || !initialize)
+            {
+                coreStartupState[16] = 5;
+                return;
+            }
+            if (version() != 1)
+            {
+                coreStartupState[16] = 6;
+                return;
+            }
+            coreStartupState[8] = static_cast<std::uint32_t>(initialize());
+            const auto mta = mtaDirectory.wstring(), gta = gtaDirectory.wstring();
+            setMta(mta.c_str(), mta.size());
+            coreStartupState[9] = static_cast<std::uint32_t>(initialize());
+            setGta(gta.c_str(), gta.size());
+            coreStartupState[10] = static_cast<std::uint32_t>(initialize());
+            for (std::uint32_t field = 0; field < 8; ++field)
+                coreStartupState[field] = read(field);
+            if (coreStartupState[8] != 3 || coreStartupState[9] != 4 || coreStartupState[10] != 5)
+            {
+                coreStartupState[16] = 7;
+                return;
+            }
+            // Result5 is expected only after the real backend verified this
+            // image and reached the unchanged complete-gameplay gate.
+            if (coreStartupState[0] != 1 || coreStartupState[1] != 5 || coreStartupState[2] != 6 || coreStartupState[3] != 97 || coreStartupState[4] ||
+                coreStartupState[5] || coreStartupState[6] || coreStartupState[7] != 1)
+            {
+                coreStartupState[16] = 8;
+                return;
+            }
+            coreStartupState[17] = 1;
+        };
+        run();
+    }
+    catch (...)
+    {
+        coreStartupState[16] = 11;
+    }
+    // Copy the real Core snapshot before releasing its code. A failed startup
+    // must still release the explicit module reference owned by this probe.
+    if (core && !FreeLibrary(core))
+        coreStartupState[16] = 9;
+    coreStartupState[12] = LegacyRendererModules();
+    coreStartupState[13] = GetModuleHandleW(L"core.dll") ? 0u : 1u;
+    coreStartupState[15] = GetModuleHandleW(L"game_de.dll") ? 1u : 0u;
+    if ((coreStartupState[12] & ~coreStartupState[11]) && !coreStartupState[16])
+        coreStartupState[16] = 10;
+    if ((!coreStartupState[13] || coreStartupState[15]) && !coreStartupState[16])
+        coreStartupState[16] = 9;
+    coreStartupSnapshot = true;
+    return coreStartupState[17] && !coreStartupState[16] ? 1 : 0;
+}
+
+std::uint32_t DE_CoreStartupRead(std::uint32_t component)
+{
+    return ControllerAccessAllowed() && coreStartupSnapshot && component < coreStartupState.size() ? coreStartupState[component] : 0;
+}
+
 int DE_Pump()
 {
     try

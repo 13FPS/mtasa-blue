@@ -113,7 +113,10 @@ def analyze_log(text, require_exit=False):
                 or any(type(value) is not int or not 0 <= value <= 0xffffffff for value in state.values())):
             invalid(event, 'Expected all twelve unsigned integer metrics')
             return False
-        if state['bound'] > 1 or state['active'] > 1 or state['failureReason'] > 17 or state['lastMoveState'] > 1000:
+        # ABI6 added a fail-closed context result. Retain raw uint32 state values
+        # without inventing a locomotion enum or invalidating historical ABI5.
+        maximum_failure = 18 if adapter_abi == 6 else 17
+        if state['bound'] > 1 or state['active'] > 1 or state['failureReason'] > maximum_failure:
             invalid(event, 'Native state flags or raw move-state bounds mismatch')
         if state['scopedSteps'] > state['callbackCount'] or state['restoredSteps'] > state['scopedSteps'] or state['neutralQueries'] > state['routedQueries']:
             invalid(event, 'Native callback, routed-query or restoration counter relation is impossible')

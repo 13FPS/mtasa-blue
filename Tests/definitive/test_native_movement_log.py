@@ -85,6 +85,29 @@ class MovementLogTests(unittest.TestCase):
         rows[3]['adapter_abi'] = 6
         self.assertFalse(self.analyze(rows)['native_movement_trial_complete'])
 
+    def test_abi6_context_failure_retains_unknown_raw_state_as_failed_evidence(self):
+        rows = fixture()
+        for row in rows:
+            if isinstance(row, dict) and 'adapter_abi' in row:
+                row['adapter_abi'] = 6
+        terminal = rows[-3]
+        terminal['reason'] = 'native_failure'
+        terminal['state']['failureReason'] = 18
+        terminal['state']['lastMoveState'] = 0xffffffff
+        result = self.analyze(rows, True)
+        self.assertEqual(result['issue_count'], 0, result)
+        self.assertEqual(result['status'], 'adapter_failed')
+        self.assertFalse(result['native_movement_trial_complete'])
+        self.assertEqual(result['failures'][0]['state']['failureReason'], 18)
+        self.assertEqual(result['failures'][0]['state']['lastMoveState'], 0xffffffff)
+
+    def test_historical_abi5_cannot_claim_the_new_context_failure_enum(self):
+        rows = fixture()
+        rows[-3]['state']['failureReason'] = 18
+        result = self.analyze(rows)
+        self.assertGreater(result['issue_count'], 0)
+        self.assertFalse(result['native_movement_trial_complete'])
+
     def test_require_exit(self):
         self.assertTrue(self.analyze(fixture(False))['native_movement_trial_complete'])
         self.assertFalse(self.analyze(fixture(False), True)['native_movement_trial_complete'])
@@ -211,7 +234,7 @@ class MovementLogTests(unittest.TestCase):
         self.assertFalse(result['native_movement_trial_complete'])
 
     def test_metrics_schema_and_ranges(self):
-        for key, value in [('bound', 2), ('active', False), ('scopedSteps', -1), ('callbackCount', 2**32), ('lastMoveState', 1001), ('failureReason', 18)]:
+        for key, value in [('bound', 2), ('active', False), ('scopedSteps', -1), ('callbackCount', 2**32), ('lastMoveState', 0x100000000), ('failureReason', 18)]:
             with self.subTest(key=key):
                 rows = fixture(); samples(rows)[2]['state'][key] = value
                 self.assertFalse(self.analyze(rows)['native_movement_trial_complete'])

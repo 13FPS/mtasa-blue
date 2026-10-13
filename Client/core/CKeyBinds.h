@@ -13,6 +13,8 @@ class CKeyBinds;
 
 #pragma once
 
+#include <CControlStateSynthesis.h>
+
 #include <windows.h>
 #include <string.h>
 #include <list>
@@ -145,9 +147,6 @@ public:
 
     unsigned int Count(KeyBindType bindType = KeyBindType::UNDEFINED);
 
-    bool ControlForwardsBackWards(CControllerState& cs);
-    bool ControlLeftAndRight(CControllerState& cs);
-
     void DoPreFramePulse();
     void DoPostFramePulse();
 
@@ -170,18 +169,13 @@ private:
 
     std::list<std::unique_ptr<CKeyBind>> m_binds;
 
-    bool                   m_bMouseWheel{false};
-    bool                   m_bInVehicle{false};
-    CCommandBind*          m_pChatBoxBind{nullptr};
-    std::vector<CKeyBind*> m_vecBindQueue;
-    bool                   m_bProcessingKeyStroke{false};
-    KeyStrokeHandler       m_KeyStrokeHandler{nullptr};
-    CharacterKeyHandler    m_CharacterKeyHandler{nullptr};
-    bool                   m_bWaitingToLoadDefaults{false};
-    bool                   m_bLastStateForwards{false};
-    bool                   m_bLastStateBackwards{false};
-    bool                   m_bMoveForwards{false};
-    bool                   m_bLastStateLeft{false};
-    bool                   m_bLastStateRight{false};
-    bool                   m_bMoveLeft{false};
+    bool                       m_bMouseWheel{false};
+    bool                       m_bInVehicle{false};
+    CCommandBind*              m_pChatBoxBind{nullptr};
+    std::vector<CKeyBind*>     m_vecBindQueue;
+    bool                       m_bProcessingKeyStroke{false};
+    KeyStrokeHandler           m_KeyStrokeHandler{nullptr};
+    CharacterKeyHandler        m_CharacterKeyHandler{nullptr};
+    bool                       m_bWaitingToLoadDefaults{false};
+    MtaInput::DirectionHistory m_DirectionHistory;
 };

@@ -1,7 +1,7 @@
 # GTA San Andreas Definitive Edition: findings and port tracker
 
-Last updated: **2026-10-13 11:39** (Europe/Luxembourg).
-Experimental branch: `codex/definitive-edition-port`.
+Last updated: **2026-10-13 12:19** (Europe/Luxembourg).
+Experimental branch: `definitive-edition-port`.
 Source baseline: `860e41ddeb6635b5dd138fef6c8a492d2f982ce0`.
 
 ## Current result
@@ -25,13 +25,15 @@ The opt-in `--with-definitive-adapter` path is checked at the beginning of the
 CCore constructor. Missing full-game/input-write/remote-context capabilities
 reject startup before its classic configuration, GUI, hooks or game factories.
 The exported initializer catches that rejection and returns failure. Default
-classic startup is unchanged. Current capability is observation ingestion only;
+classic startup is unchanged. Current capabilities are observation ingestion and
+MTA digital action synthesis;
 no fake partial `CGame` is exposed. Core's existing DLL file hooks and classic
 process-detection gate still precede that constructor, and x64 Core/multiplayer/
 render startup remain unported. Normal build and focused host verification are
 tracked separately from an actual MTA-on-DE runtime.
 
-Normal `Game DE` and `Game DE Host Tests` builds now pass. The actual x64 module
+The preceding observation-only milestone built `Game DE` and `Game DE Host Tests`.
+Its actual x64 module
 SHA-256 is `8f28b05db45bfa5dbff6d1afd1e30f842d16883c3b5897fb4fbd553d86341e2c`.
 The same Core consumer loads it and passes 45 checks; the x86 path passes three
 checks rejecting an incompatible module before load. Focused module checks pass
@@ -44,6 +46,43 @@ and diff checks passing. Final certificate:
 Microsoft's signed D3DX package supplied missing build headers/import libraries;
 repository tools supplied pinned Discord headers and generated language data.
 No downloaded runtime DLL or new backend was loaded into GTA.
+
+**MTA's existing digital input policy is now shared with the DE module.**
+The original 44 action identifiers moved unchanged to
+`Shared/sdk/CControllerActions.h`. `Shared/sdk/CControlStateSynthesis.h` contains
+the existing action-to-controller synthesis and opposing-direction history.
+Classic `CKeyBinds` calls that helper after its existing context-transition
+callbacks, before its existing joystick merge and native pad/horn writes.
+The DE module's ABI2 accepts configured MTA actions through
+`SubmitControlActions` and returns separate current/previous `MtaInputState`.
+Walk and sprint remain separate MTA actions. Invalid action bits are rejected
+without changing history; reset/shutdown discard logical input and observations.
+This does not establish physical-key aggregation or DE engine pad writes.
+
+The dedicated regression suite freezes the original indexed formulas and
+compares all 24 controller fields and six history flags. It covers all 32
+contexts, all 44 actions and action pairs, all initial histories and opposing
+directions, plus deterministic mixed frames. Its ordinary premake target is
+`MTA Control Synthesis Tests`; the focused x86/x64 runner is
+`Tests/definitive/test_mta_control_state_synthesis.ps1`. The current build/input
+certificate is `Build/mta-owned-adapter-check/current-candidate.json`.
+
+The input milestone passes 298,447 differential frames per architecture.
+Normal module/consumer/synthesis test projects build, with 1,412 module checks,
+54 x64 consumer checks, three x86 rejections and 930 controller snapshot checks
+per architecture. Opt-in/default Release/Win32 Core compile-only targets pass;
+Core is not linked or run. All 80 certified source hashes are stable. Certificate:
+`Build/mta-owned-adapter-check/20261013-121621-e64f282ab4ee4f2ba5158847fc82482f/test-result.json`.
+Its actual `game_de.dll` SHA-256 is
+`1df11645e19a3562368a1bca3f30b89653e7e22c2662ec4d070cd62a77b7a02e`.
+The DLL exports `CreateGameAdapter` and imports only `KERNEL32.dll`.
+
+The startup audit also confirms that classic executable patching, PE32 loader
+imports, classic process detection and D3D9-dependent initialization precede a
+usable full client. Those paths still require a DE/x64 implementation. The
+available CLEO 1.5.1 SDK and runtime's 32 exports provide no C++ native invoker;
+the compatibility harness invokes game natives through its JavaScript runtime.
+No unknown function signatures, private layouts or raw offsets were introduced.
 
 **The first shared MTA correction slice is implemented.**
 `Shared/sdk/CPedPositionInterpolation.h` contains the existing incremental

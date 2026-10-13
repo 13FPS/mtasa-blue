@@ -24,7 +24,8 @@ that implementation for compatibility.
 module and its gameplay capabilities before classic configuration, GUI, hooks
 or game factories in the CCore constructor. Existing DLL-load file hooks and
 the classic process-detection entry gate still precede that constructor.
-The current adapter implements caller-observation ingestion only. It supplies
+The current adapter implements caller-observation ingestion and MTA digital
+action synthesis. It supplies
 no full `CGame`, engine input writes or remote player context, so startup returns
 an explicit failure. Core/multiplayer/render startup also remains gated until
 ported. The default classic build retains its original backend.
@@ -42,6 +43,18 @@ the default configuration. Core was not linked or launched by these checks.
 The final certificate binds 73 source files:
 `Build/mta-owned-adapter-check/20261013-113152-f54e411c11b540eb9e6ec7f8b57577cc/test-result.json`.
 See `Client/game_de/README.md` for the module/build contract.
+
+The following input slice extracts the existing `CKeyBinds` digital controller
+synthesis into `Shared/sdk/CControlStateSynthesis.h`. Classic Core now calls that
+helper after its existing context-transition callbacks and before its existing
+joystick merge and native pad writes. The DE module consumes the same helper
+through ABI2 `SubmitControlActions` / `GetMtaInputState`, with per-instance
+current/previous state and direction history. All 44 original action values are
+retained in a shared header; invalid mask bits are rejected before mutation.
+Logical MTA state includes walk and radio flags and remains separate from the
+twenty-field native observation mask. No engine capability is inferred from it.
+The early full-gameplay gate remains in place. The dedicated x86/x64 regression
+runner compares the shared policy with the original committed implementation.
 
 MTA's ordinary remote movement already combines synchronized controls and
 sender velocity, GTA player simulation, and correction of network position

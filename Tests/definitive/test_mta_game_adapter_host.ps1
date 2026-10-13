@@ -16,6 +16,7 @@ $outputRoot = Join-Path $taskRoot ('Build/definitive-game-adapter-host/' + (Get-
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
 $sourceNames = @('Client/core/CGameAdapterModule.h', 'Client/core/CGameAdapterModule.cpp',
     'Client/sdk/game/CGameAdapter.h', 'Shared/sdk/CControllerState.h',
+    'Shared/sdk/CControllerActions.h', 'Shared/sdk/CControlStateSynthesis.h',
     'Tests/definitive/MtaGameAdapterHostTests.cpp', 'Tests/definitive/test_mta_game_adapter_host.ps1')
 $sourceHashes = @($sourceNames | ForEach-Object {
     $taskPath = Join-Path $taskRoot $_

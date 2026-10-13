@@ -42,6 +42,10 @@ namespace
         Check(!host.Start(owner, missingFactory), "a real DLL without the adapter factory cannot initialize");
         Check(host.GetError().find("CreateGameAdapter") != std::string::npos && !host.IsStarted(), "missing-factory rejection reports its ABI boundary");
         Check(!host.Pulse() && !host.Reset(), "an uninitialized consumer cannot invoke adapter callbacks");
+        mta::game_de::MtaInputState input;
+        input.current.ButtonCross = 19;
+        Check(!host.SubmitControlActions({}) && !host.GetMtaInputState(input) && input.current.ButtonCross == 19,
+              "an uninitialized consumer cannot submit or replace logical input");
         Check(host.GetCapabilities() == 0 && !host.IsGameplayReady(), "an uninitialized consumer has no capabilities");
         host.Stop();
         host.Stop();
@@ -56,8 +60,9 @@ namespace
             Check(host.Start(owner, modulePath), "Core consumer initializes the actual Game DE module: " + host.GetError());
             Check(host.IsStarted(), "successful factory initialization establishes ownership");
             Check(GetModuleHandleW(modulePath.c_str()) != nullptr, "owned module remains loaded while its instance exists");
-            Check(host.GetCapabilities() == static_cast<std::uint64_t>(mta::game_de::AdapterCapability::ObservationIngest),
-                  "module declares only its actual observation ingestion capability");
+            Check(host.GetCapabilities() == (static_cast<std::uint64_t>(mta::game_de::AdapterCapability::ObservationIngest) |
+                                             static_cast<std::uint64_t>(mta::game_de::AdapterCapability::MtaInputSynthesis)),
+                  "module declares only observation ingestion and MTA action synthesis");
             Check(!host.IsGameplayReady(), "observation ingestion cannot satisfy full gameplay readiness");
             Check(host.GameplayUnavailableReason().find("GameInterface") != std::string::npos, "full-game gate explains missing game interface");
             Check(host.GameplayUnavailableReason().find("EngineInputWrite") != std::string::npos, "full-game gate explains missing input write");
@@ -83,8 +88,26 @@ namespace
             Check(readback.controller.LeftStickY == -128 && readback.controller.ButtonCross == 255 &&
                       readback.controllerKnownMask == mta::game_de::AdapterControllerMask,
                   "real module retains the canonical typed controller evidence");
-            bool          foreignPulse = true;
-            bool          foreignReset = true;
+            mta::game_de::ControlActionFrame frame;
+            frame.heldActions = MtaInput::ActionBit(FORWARDS) | MtaInput::ActionBit(WALK);
+            mta::game_de::MtaInputState input;
+            Check(host.SubmitControlActions(frame) && host.GetMtaInputState(input), "Core sends configured MTA actions through the actual module ABI");
+            Check(input.current.LeftStickY == -128 && input.current.m_bPedWalk == 255 && input.current.ButtonCross == 0 && input.previous.LeftStickY == 0 &&
+                      input.previous.m_bPedWalk == 0,
+                  "MTA walk output includes its logical walk field without claiming native coverage");
+            frame.heldActions = MtaInput::ActionBit(FORWARDS) | MtaInput::ActionBit(SPRINT);
+            Check(host.SubmitControlActions(frame) && host.GetMtaInputState(input), "submit the next MTA sprint frame");
+            Check(input.current.ButtonCross == 255 && input.current.m_bPedWalk == 0 && input.previous.m_bPedWalk == 255,
+                  "walk and sprint are distinct actions with previous-frame history");
+            Check(host.GetLocalObservation(readback) && readback.sampleAtMs == 1100 && readback.controller.ButtonCross == 255 &&
+                      readback.controllerKnownMask == mta::game_de::AdapterControllerMask && !host.IsGameplayReady(),
+                  "logical synthesis neither overwrites native evidence nor opens the gameplay gate");
+            bool                        foreignPulse = true;
+            bool                        foreignReset = true;
+            bool                        foreignSubmit = true;
+            bool                        foreignRead = true;
+            mta::game_de::MtaInputState foreignInput;
+            foreignInput.current.ButtonCross = 19;
             std::uint64_t foreignCapabilities = 99;
             std::thread   foreign(
                 [&]()
@@ -92,10 +115,14 @@ namespace
                     foreignPulse = host.Pulse();
                     foreignReset = host.Reset();
                     foreignCapabilities = host.GetCapabilities();
+                    foreignSubmit = host.SubmitControlActions({});
+                    foreignRead = host.GetMtaInputState(foreignInput);
                     host.Stop();
                 });
             foreign.join();
             Check(!foreignPulse && !foreignReset && foreignCapabilities == 0, "foreign thread cannot invoke owned callbacks or claim capabilities");
+            Check(!foreignSubmit && !foreignRead && foreignInput.current.ButtonCross == 19,
+                  "logical input shares Core thread ownership and preserves failed reader output");
             Check(host.IsStarted() && GetModuleHandleW(modulePath.c_str()) != nullptr, "foreign teardown cannot unload code owned by Core");
             Check(host.GetLocalObservation(readback) && readback.sampleAtMs == 1100, "rejected foreign reset preserves caller evidence");
             Check(host.Reset(), "owning Core can reset the initialized real module");
@@ -103,6 +130,8 @@ namespace
             readback.controller.LeftStickY = 123;
             Check(!host.GetLocalObservation(readback), "reset clears caller observation coverage in the real module");
             Check(readback.sampleAtMs == 99999 && readback.controller.LeftStickY == 123, "failed readback preserves the caller's existing output");
+            input.current.ButtonCross = 19;
+            Check(!host.GetMtaInputState(input) && input.current.ButtonCross == 19, "reset clears logical input as well as observations");
             Check(!host.Start(owner, modulePath), "a second start cannot replace a live owned instance");
             Check(host.IsStarted(), "a rejected duplicate start retains the original owned instance");
             Check(host.Pulse(), "the original instance remains usable after rejected duplicate start");
@@ -110,6 +139,7 @@ namespace
             Check(!host.IsStarted() && host.GetCapabilities() == 0, "stop removes ownership and capabilities");
             Check(GetModuleHandleW(modulePath.c_str()) == nullptr, "Shutdown and Release finish before module unload");
             Check(!host.Pulse() && !host.Reset(), "no adapter callback is possible after unload");
+            Check(!host.SubmitControlActions(frame) && !host.GetMtaInputState(input), "no logical input callback is possible after unload");
             Check(host.Start(owner, modulePath), "explicit stop permits a fresh module session");
         }
         Check(GetModuleHandleW(modulePath.c_str()) == nullptr, "RAII destruction releases and unloads the second session");

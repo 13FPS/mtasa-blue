@@ -1862,78 +1862,6 @@ void CKeyBinds::DoPreFramePulse()
     }
 }
 
-bool CKeyBinds::ControlForwardsBackWards(CControllerState& cs)
-{
-    bool bCurrentStateForwards = g_bcControls[3].bState;
-    bool bCurrentStateBackwards = g_bcControls[4].bState;
-    if (bCurrentStateForwards && !bCurrentStateBackwards)
-    {
-        m_bLastStateForwards = true;
-        m_bLastStateBackwards = false;
-    }
-    else if (!bCurrentStateForwards && bCurrentStateBackwards)
-    {
-        m_bLastStateForwards = false;
-        m_bLastStateBackwards = true;
-    }
-
-    bool bBothKeysPressed = false;
-    if (bCurrentStateForwards && bCurrentStateBackwards)
-    {
-        bBothKeysPressed = true;
-        if (!m_bLastStateForwards && m_bLastStateBackwards)
-        {
-            m_bMoveForwards = true;
-        }
-        else if (m_bLastStateForwards && !m_bLastStateBackwards)
-        {
-            m_bMoveForwards = false;
-        }
-
-        bool bForwardsState = m_bMoveForwards;
-        bool bBackwardsState = !m_bMoveForwards;
-        cs.LeftStickY = (short)((bForwardsState) ? bForwardsState * -128 : bBackwardsState * 128);
-    }
-
-    return bBothKeysPressed;
-}
-
-bool CKeyBinds::ControlLeftAndRight(CControllerState& cs)
-{
-    bool bCurrentStateLeft = g_bcControls[5].bState;
-    bool bCurrentStateRight = g_bcControls[6].bState;
-    if (bCurrentStateLeft && !bCurrentStateRight)
-    {
-        m_bLastStateLeft = true;
-        m_bLastStateRight = false;
-    }
-    else if (!bCurrentStateLeft && bCurrentStateRight)
-    {
-        m_bLastStateLeft = false;
-        m_bLastStateRight = true;
-    }
-
-    bool bBothKeysPressed = false;
-    if (bCurrentStateLeft && bCurrentStateRight)
-    {
-        bBothKeysPressed = true;
-        if (!m_bLastStateLeft && m_bLastStateRight)
-        {
-            m_bMoveLeft = true;
-        }
-        else if (m_bLastStateLeft && !m_bLastStateRight)
-        {
-            m_bMoveLeft = false;
-        }
-
-        bool bLeftState = m_bMoveLeft;
-        bool bRightState = !m_bMoveLeft;
-        cs.LeftStickX = (short)((bLeftState) ? bLeftState * -128 : bRightState * 128);
-    }
-
-    return bBothKeysPressed;
-}
-
 void CKeyBinds::DoPostFramePulse()
 {
     // Same reason as DoPreFramePulse: control binds can invoke Lua handlers that
@@ -1990,87 +1918,19 @@ void CKeyBinds::DoPostFramePulse()
             CallAllGTAControlBinds(CONTROL_VEHICLE, false);
     }
 
-    CControllerState cs;
-    memset(&cs, 0, sizeof(CControllerState));
+    // Transition callbacks above can change held controls. Capture actions
+    // afterwards while retaining the task-derived context sampled before them,
+    // then share the exact synthesis with MTA's other game backend.
+    std::uint64_t heldActions = 0;
+    for (const auto& control : g_bcControls)
+    {
+        if (control.bState)
+            heldActions |= MtaInput::ActionBit(control.action);
+    }
+    const MtaInput::Context context{bInVehicle, bHasDetonator, bIsDead, bAimingWeapon, bEnteringVehicle};
+    CControllerState        cs = MtaInput::BuildControllerState(heldActions, context, m_DirectionHistory);
     if (!bIsDead)
     {
-        if (!bInVehicle)
-        {
-            cs.ButtonCircle = (g_bcControls[0].bState && !bHasDetonator) ? 255 : 0;  // Fire
-            if (bAimingWeapon)
-            {
-                cs.RightShoulder2 = g_bcControls[8].bState ? 255 : 0;  // Zoom Out
-                cs.LeftShoulder2 = g_bcControls[7].bState ? 255 : 0;   // Zoom In
-            }
-            else
-            {
-                bool bNextWeapon = g_bcControls[1].bState;
-                bool bPreviousWeapon = g_bcControls[2].bState;
-
-                if (bNextWeapon && bPreviousWeapon)
-                    bNextWeapon = bPreviousWeapon = false;
-
-                cs.RightShoulder2 = bNextWeapon ? 255 : 0;     // Next Weapon
-                cs.LeftShoulder2 = bPreviousWeapon ? 255 : 0;  // Previous Weapon
-            }
-
-            if (!ControlForwardsBackWards(cs))
-            {
-                cs.LeftStickY = (!g_bcControls[3].bState && !g_bcControls[4].bState) ? 0 : (g_bcControls[3].bState) ? -128 : 128;
-            }
-
-            if (!ControlLeftAndRight(cs))
-            {
-                cs.LeftStickX = (!g_bcControls[5].bState && !g_bcControls[6].bState) ? 0 : (g_bcControls[5].bState) ? -128 : 128;
-            }
-
-            // * Enter Exit
-            // * Change View
-            cs.ButtonSquare = (!bEnteringVehicle && !bAimingWeapon && g_bcControls[11].bState) ? 255 : 0;  // Jump
-            cs.ButtonCross = (g_bcControls[12].bState) ? 255 : 0;                                          // Sprint
-            cs.ShockButtonR = (g_bcControls[13].bState) ? 255 : 0;                                         // Look Behind
-            cs.ShockButtonL = (g_bcControls[14].bState) ? 255 : 0;                                         // Crouch
-            cs.LeftShoulder1 = (g_bcControls[15].bState) ? 255 : 0;                                        // Action
-            cs.m_bPedWalk = (g_bcControls[16].bState) ? 255 : 0;                                           // Walk
-            // * Vehicle Keys
-            cs.RightShoulder1 = (g_bcControls[39].bState) ? 255 : 0;  // Aim Weapon
-            cs.DPadRight = (g_bcControls[40].bState) ? 255 : 0;       // Conversation Yes
-            cs.DPadLeft = (g_bcControls[41].bState) ? 255 : 0;        // Conversation No
-            cs.DPadUp = (g_bcControls[42].bState) ? 255 : 0;          // Group Control Forwards
-            cs.DPadDown = (g_bcControls[43].bState) ? 255 : 0;        // Group Control Backwards
-        }
-        else
-        {
-            cs.ButtonCircle = (g_bcControls[17].bState) ? 255 : 0;   // Fire
-            cs.LeftShoulder1 = (g_bcControls[18].bState) ? 255 : 0;  // Secondary Fire
-            cs.LeftStickX = ((g_bcControls[19].bState && g_bcControls[20].bState) || (!g_bcControls[19].bState && !g_bcControls[20].bState)) ? 0
-                            : (g_bcControls[19].bState)                                                                                      ? -128
-                                                                                                                                             : 128;
-            cs.LeftStickY = ((g_bcControls[21].bState && g_bcControls[22].bState) || (!g_bcControls[21].bState && !g_bcControls[22].bState)) ? 0
-                            : (g_bcControls[21].bState)                                                                                      ? -128
-                                                                                                                                             : 128;
-            cs.ButtonCross = (g_bcControls[23].bState) ? 255 : 0;                                // Accelerate
-            cs.ButtonSquare = (g_bcControls[24].bState) ? 255 : 0;                               // Reverse
-            cs.DPadUp = (g_bcControls[25].bState) ? 255 : 0;                                     // Radio Next
-            cs.DPadDown = (g_bcControls[26].bState) ? 255 : 0;                                   // Radio Previous
-            cs.m_bRadioTrackSkip = (g_bcControls[27].bState) ? 255 : 0;                          // Radio Skip
-            cs.ShockButtonL = (g_bcControls[28].bState) ? 255 : 0;                               // Horn
-            cs.ShockButtonR = (g_bcControls[29].bState) ? 255 : 0;                               // Sub Mission
-            cs.RightShoulder1 = (g_bcControls[30].bState) ? 255 : 0;                             // Handbrake
-            cs.LeftShoulder2 = (g_bcControls[31].bState || g_bcControls[33].bState) ? 255 : 0;   // Look Left
-            cs.RightShoulder2 = (g_bcControls[32].bState || g_bcControls[33].bState) ? 255 : 0;  // Look Right
-            // * Look Behind - uses both keys above simultaneously
-            // Mouse Look
-            cs.RightStickX = ((g_bcControls[35].bState && g_bcControls[36].bState) || (!g_bcControls[35].bState && !g_bcControls[36].bState)) ? 0
-                             : (g_bcControls[35].bState)                                                                                      ? 128
-                                                                                                                                              : -128;
-            cs.RightStickY = ((g_bcControls[37].bState && g_bcControls[38].bState) || (!g_bcControls[37].bState && !g_bcControls[38].bState)) ? 0
-                             : (g_bcControls[37].bState)                                                                                      ? 128
-                                                                                                                                              : -128;
-        }
-        cs.ButtonTriangle = (g_bcControls[9].bState) ? 255 : 0;  // Enter Exit
-        cs.Select = (g_bcControls[10].bState) ? 255 : 0;         // Change View
-
         bool disableGameplayControls = m_pCore->IsCursorForcedVisible() && m_pCore->IsCursorControlsToggled();
 
         if (!disableGameplayControls)

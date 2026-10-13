@@ -19,6 +19,8 @@
 namespace
 {
     using namespace mta::game_de;
+    constexpr auto implementedCapabilities =
+        static_cast<std::uint64_t>(AdapterCapability::ObservationIngest) | static_cast<std::uint64_t>(AdapterCapability::MtaInputSynthesis);
     int checks = 0;
 
     void Check(bool value, const char* why)
@@ -97,11 +99,11 @@ namespace
 
     void TestFactoryAndLifecycle()
     {
-        Check(CreateGameAdapter(0) == nullptr && CreateGameAdapter(AdapterAbiVersion + 1) == nullptr, "reject an incompatible factory ABI");
+        Check(CreateGameAdapter(0) == nullptr && CreateGameAdapter(1) == nullptr && CreateGameAdapter(AdapterAbiVersion + 1) == nullptr,
+              "reject old and unknown factory ABIs before exposing the changed vtable");
         OwnedAdapter adapter;
         Check(adapter.value != nullptr, "matching ABI creates a module-owned adapter");
-        Check(adapter.value->GetCapabilities() == static_cast<std::uint64_t>(AdapterCapability::ObservationIngest),
-              "only observation ingestion is implemented");
+        Check(adapter.value->GetCapabilities() == implementedCapabilities, "only observation ingestion and MTA action synthesis are implemented");
         Check(adapter.value->GetGameInterface() == nullptr, "do not fabricate the full CGame interface");
         auto output = Observation(999);
         Check(adapter.value->Pulse() == Status::NotInitialized && adapter.value->Reset() == Status::NotInitialized &&
@@ -153,7 +155,7 @@ namespace
         Check(first.value->PublishLocalObservation(noControls) == Status::Ok && first.value->GetLocalObservation(output) == Status::Ok,
               "a pose-only observation explicitly discards earlier controller coverage");
         SameObservation(output, noControls);
-        Check(first.value->GetCapabilities() == 1 && first.value->GetGameInterface() == nullptr,
+        Check(first.value->GetCapabilities() == implementedCapabilities && first.value->GetGameInterface() == nullptr,
               "publishing controls does not enable engine input or gameplay capabilities");
     }
 
@@ -231,9 +233,11 @@ namespace
         Check(adapter.value && adapter.value->Initialize(owner.Get()) == Status::Ok, "bind the operational game thread");
         const auto sample = Observation();
         Check(adapter.value->PublishLocalObservation(sample) == Status::Ok, "publish before a foreign-thread attempt");
-        std::array<Status, 6> statuses{};
+        std::array<Status, 8> statuses{};
         LocalObservation      foreignOutput = Observation(999);
-        std::thread           other(
+        MtaInputState         foreignInput;
+        foreignInput.current.ButtonCross = 19;
+        std::thread other(
             [&]
             {
                 statuses = {adapter.value->Initialize(owner.Get()),
@@ -241,22 +245,107 @@ namespace
                             adapter.value->Reset(),
                             adapter.value->Shutdown(),
                             adapter.value->PublishLocalObservation(Observation(2000)),
-                            adapter.value->GetLocalObservation(foreignOutput)};
+                            adapter.value->GetLocalObservation(foreignOutput),
+                            adapter.value->SubmitControlActions({MtaInput::ActionBit(SPRINT), {}}),
+                            adapter.value->GetMtaInputState(foreignInput)};
             });
         other.join();
         for (const auto status : statuses)
             Check(status == Status::WrongThread, "foreign threads cannot operate or tear down the adapter");
         Check(foreignOutput.sampleAtMs == 999, "foreign read leaves caller output untouched");
+        Check(foreignInput.current.ButtonCross == 19, "foreign logical input read leaves caller output untouched");
         LocalObservation output;
         Check(adapter.value->GetLocalObservation(output) == Status::Ok, "foreign thread attempts leave the owner publication intact");
         SameObservation(output, sample);
         Check(adapter.value->Shutdown() == Status::Ok, "the owner can still shut down after foreign operations");
     }
+
+    void SameController(const CControllerState& actual, const CControllerState& expected)
+    {
+        for (const auto field : fields)
+            Check(actual.*field == expected.*field, "all logical controller fields retain their independently specified values");
+    }
+
+    void TestMtaInput()
+    {
+        OwnerIdentity owner;
+        OwnedAdapter  adapter, isolated;
+        Check(adapter.value && isolated.value, "create independent logical input instances");
+        MtaInputState output;
+        output.current.ButtonCross = 19;
+        Check(adapter.value->SubmitControlActions({}) == Status::NotInitialized && adapter.value->GetMtaInputState(output) == Status::NotInitialized &&
+                  output.current.ButtonCross == 19,
+              "logical input requires initialization and failed reads preserve output");
+        Check(adapter.value->Initialize(owner.Get()) == Status::Ok && isolated.value->Initialize(owner.Get()) == Status::Ok,
+              "initialize logical input fixtures");
+        Check(adapter.value->GetMtaInputState(output) == Status::NotInitialized, "initialization invents no logical frame");
+        const auto nativeSample = Observation();
+        Check(adapter.value->PublishLocalObservation(nativeSample) == Status::Ok, "seed independent native evidence");
+        ControlActionFrame frame;
+        frame.heldActions = MtaInput::ActionBit(FORWARDS) | MtaInput::ActionBit(WALK);
+        Check(adapter.value->SubmitControlActions(frame) == Status::Ok && adapter.value->GetMtaInputState(output) == Status::Ok,
+              "MTA action state reaches the adapter");
+        CControllerState walk;
+        walk.LeftStickY = -128;
+        walk.m_bPedWalk = 255;
+        SameController(output.current, walk);
+        SameController(output.previous, CControllerState());
+
+        for (unsigned int bit = 0; bit < 64; ++bit)
+        {
+            if (MtaInput::KnownActionMask & (std::uint64_t{1} << bit))
+                continue;
+            auto invalid = frame;
+            invalid.heldActions = MtaInput::ActionBit(BACKWARDS) | (std::uint64_t{1} << bit);
+            Check(adapter.value->SubmitControlActions(invalid) == Status::InvalidArgument, "undefined actions are rejected before changing history");
+        }
+        Check(adapter.value->GetMtaInputState(output) == Status::Ok, "invalid action frames retain the preceding state");
+        SameController(output.current, walk);
+        SameController(output.previous, CControllerState());
+        frame.heldActions = MtaInput::ActionBit(FORWARDS) | MtaInput::ActionBit(BACKWARDS) | MtaInput::ActionBit(SPRINT);
+        Check(adapter.value->SubmitControlActions(frame) == Status::Ok && adapter.value->GetMtaInputState(output) == Status::Ok,
+              "direction history survives rejected frames");
+        CControllerState sprint;
+        sprint.LeftStickY = 128;
+        sprint.ButtonCross = 255;
+        SameController(output.current, sprint);
+        SameController(output.previous, walk);
+        LocalObservation nativeOutput;
+        Check(adapter.value->GetLocalObservation(nativeOutput) == Status::Ok, "logical synthesis retains separate native evidence");
+        SameObservation(nativeOutput, nativeSample);
+        Check(isolated.value->GetMtaInputState(output) == Status::NotInitialized, "logical input does not leak between instances");
+        Check(adapter.value->Pulse() == Status::Ok && adapter.value->GetMtaInputState(output) == Status::Ok, "pulse does not synthesize an unsubmitted frame");
+        SameController(output.previous, walk);
+        frame.context.isDead = true;
+        Check(adapter.value->SubmitControlActions(frame) == Status::Ok && adapter.value->GetMtaInputState(output) == Status::Ok,
+              "dead-player frames release digital controls");
+        SameController(output.current, CControllerState());
+        SameController(output.previous, sprint);
+
+        Check(adapter.value->Reset() == Status::Ok, "reset releases logical state and direction history");
+        output.current.ButtonCross = 19;
+        Check(adapter.value->GetMtaInputState(output) == Status::NotInitialized && output.current.ButtonCross == 19,
+              "reset leaves no frame and preserves a failed reader's output");
+        frame.context = {};
+        frame.heldActions = MtaInput::ActionBit(FORWARDS);
+        Check(adapter.value->SubmitControlActions(frame) == Status::Ok, "seed direction history before shutdown");
+        Check(adapter.value->Shutdown() == Status::Ok && adapter.value->GetMtaInputState(output) == Status::NotInitialized &&
+                  adapter.value->SubmitControlActions(frame) == Status::NotInitialized,
+              "shutdown prevents reads and action application");
+        Check(adapter.value->Initialize(owner.Get()) == Status::Ok, "restart a cleared logical input session");
+        frame.heldActions = MtaInput::ActionBit(FORWARDS) | MtaInput::ActionBit(BACKWARDS);
+        Check(adapter.value->SubmitControlActions(frame) == Status::Ok && adapter.value->GetMtaInputState(output) == Status::Ok,
+              "a fresh session uses original simultaneous-key defaults");
+        CControllerState both;
+        both.LeftStickY = 128;
+        SameController(output.current, both);
+        SameController(output.previous, CControllerState());
+    }
 }
 
 int main()
 {
-    static_assert(AdapterAbiVersion == 1 && AdapterControllerMask == 0xfffff);
+    static_assert(AdapterAbiVersion == 2 && AdapterControllerMask == 0xfffff);
     static_assert(std::is_nothrow_invocable_v<decltype(CreateGameAdapter), std::uint32_t>);
     try
     {
@@ -264,6 +353,7 @@ int main()
         TestCoverageAndIsolation();
         TestInvalidObservations();
         TestThreadOwnership();
+        TestMtaInput();
         std::cout << "Passed " << checks << " MTA Game DE adapter checks\n";
         return 0;
     }

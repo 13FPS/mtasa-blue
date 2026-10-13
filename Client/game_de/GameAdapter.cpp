@@ -64,9 +64,9 @@ namespace mta::game_de
 
             std::uint64_t GetCapabilities() const noexcept override
             {
-                // Validating caller evidence is the implemented capability.
-                // It does not bind an engine pad, remote player or full CGame.
-                return static_cast<std::uint64_t>(AdapterCapability::ObservationIngest);
+                // MTA's digital action policy can produce logical input without
+                // claiming a DE pad read/write or remote player binding.
+                return static_cast<std::uint64_t>(AdapterCapability::ObservationIngest) | static_cast<std::uint64_t>(AdapterCapability::MtaInputSynthesis);
             }
 
             CGame* GetGameInterface() const noexcept override { return nullptr; }
@@ -115,6 +115,34 @@ namespace mta::game_de
                 return Status::Ok;
             }
 
+            Status SubmitControlActions(const ControlActionFrame& frame) noexcept override
+            {
+                const auto status = Access();
+                if (status != Status::Ok)
+                    return status;
+                if (frame.heldActions & ~MtaInput::KnownActionMask)
+                    return Status::InvalidArgument;
+
+                // Keep logical MTA inputs separate from native evidence, whose
+                // twenty-field mask cannot describe MTA's walk/radio fields.
+                const auto current = MtaInput::BuildControllerState(frame.heldActions, frame.context, directionHistory);
+                inputState.previous = inputState.current;
+                inputState.current = current;
+                hasInputState = true;
+                return Status::Ok;
+            }
+
+            Status GetMtaInputState(MtaInputState& state) noexcept override
+            {
+                const auto status = Access();
+                if (status != Status::Ok)
+                    return status;
+                if (!hasInputState)
+                    return Status::NotInitialized;
+                state = inputState;
+                return Status::Ok;
+            }
+
         private:
             Status Access() const noexcept
             {
@@ -131,6 +159,9 @@ namespace mta::game_de
                 controller.Reset();
                 latest = LocalObservation();
                 hasObservation = false;
+                directionHistory = MtaInput::DirectionHistory();
+                inputState = MtaInputState();
+                hasInputState = false;
             }
 
             // Native access will require a real backend binding. For this first
@@ -141,6 +172,9 @@ namespace mta::game_de
             bool                         hasObservation = false;
             LocalObservation             latest;
             deonline::ControllerSnapshot controller;
+            MtaInput::DirectionHistory   directionHistory;
+            MtaInputState                inputState;
+            bool                         hasInputState = false;
         };
     }
 

@@ -16,6 +16,7 @@ $outputRoot = Join-Path $taskRoot ('Build/mta-game-de-module/' + (Get-Date -Form
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
 $sourceNames = @('Client/sdk/game/CGameAdapter.h', 'Client/game_de/GameAdapter.cpp', 'Client/game_de/ControllerSnapshot.h',
     'Client/definitive/MtaControllerSnapshot.h', 'Shared/sdk/CControllerState.h',
+    'Shared/sdk/CControllerActions.h', 'Shared/sdk/CControlStateSynthesis.h',
     'Tests/definitive/GameAdapterModuleTests.cpp', 'Tests/definitive/test_game_adapter_module.ps1')
 $sourceHashes = @($sourceNames | ForEach-Object {
     $taskPath = Join-Path $taskRoot $_

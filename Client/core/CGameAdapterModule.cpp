@@ -103,7 +103,7 @@ bool CGameAdapterModule::Start(CCoreInterface* owner, const std::wstring& absolu
     if (!adapter)
     {
         FreeLibrary(module);
-        SetError("Game DE factory rejected adapter ABI1 or could not allocate an instance");
+        SetError("Game DE factory rejected adapter ABI2 or could not allocate an instance");
         return false;
     }
     const auto status = adapter->Initialize(owner);
@@ -194,6 +194,16 @@ bool CGameAdapterModule::PublishLocalObservation(const mta::game_de::LocalObserv
 bool CGameAdapterModule::GetLocalObservation(mta::game_de::LocalObservation& observation)
 {
     return RequireOwnerThread("GetLocalObservation") && RecordStatus(m_adapter->GetLocalObservation(observation), "GetLocalObservation");
+}
+
+bool CGameAdapterModule::SubmitControlActions(const mta::game_de::ControlActionFrame& frame)
+{
+    return RequireOwnerThread("SubmitControlActions") && RecordStatus(m_adapter->SubmitControlActions(frame), "SubmitControlActions");
+}
+
+bool CGameAdapterModule::GetMtaInputState(mta::game_de::MtaInputState& state)
+{
+    return RequireOwnerThread("GetMtaInputState") && RecordStatus(m_adapter->GetMtaInputState(state), "GetMtaInputState");
 }
 
 void CGameAdapterModule::Stop() noexcept

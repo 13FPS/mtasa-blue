@@ -25,6 +25,8 @@ public:
     bool                Reset();
     bool                PublishLocalObservation(const mta::game_de::LocalObservation& observation);
     bool                GetLocalObservation(mta::game_de::LocalObservation& observation);
+    bool                SubmitControlActions(const mta::game_de::ControlActionFrame& frame);
+    bool                GetMtaInputState(mta::game_de::MtaInputState& state);
     void                Stop() noexcept;
 
     bool               IsStarted() const noexcept { return m_adapter != nullptr; }

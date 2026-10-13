@@ -11,10 +11,12 @@ includes `Client/game_de` and a Core-owned module consumer. MTA controls module
 lifecycle through a versioned SDK interface; controller storage moved into that
 module, with this harness retaining a compatibility include. The opt-in Core
 branch rejects missing gameplay capabilities before its classic startup code.
-Only observation ingestion exists so far; x64 Core, full game/multiplayer and
-rendering services remain required. Normal module/consumer builds pass, as do
-1,079 module checks, 45 x64 consumer checks and the x86 rejection checks. Classic
-Core compiles with the option enabled and disabled. See the
+The module supports caller observations and now reuses Core's existing digital
+action synthesis through ABI2. Logical walk/sprint state stays separate from
+native observations; no engine read/write capability is claimed. Classic Core
+calls the same helper while retaining its bind callbacks and joystick/native
+write policy. x64 Core, full game/multiplayer and rendering services remain
+required. Current build and regression results are recorded in the
 [module documentation](../game_de/README.md) and [integration plan](MTA_REUSE_PLAN.md).
 
 The first shared slice extracts MTA's existing incremental ped position

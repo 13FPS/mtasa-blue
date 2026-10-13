@@ -7,6 +7,7 @@
 #pragma once
 
 #include <CControllerState.h>
+#include <CControlStateSynthesis.h>
 #include <cstdint>
 
 class CCoreInterface;
@@ -14,7 +15,9 @@ class CGame;
 
 namespace mta::game_de
 {
-    inline constexpr std::uint32_t AdapterAbiVersion = 1;
+    // ABI2 adds MTA action synthesis virtuals. An ABI1 consumer must not receive
+    // this changed vtable even though the earlier observation methods remain.
+    inline constexpr std::uint32_t AdapterAbiVersion = 2;
     inline constexpr std::uint32_t AdapterControllerMask = 0xfffffu;
 
     enum class AdapterCapability : std::uint64_t
@@ -23,7 +26,8 @@ namespace mta::game_de
         GameInterface = 2,
         EngineInputRead = 4,
         EngineInputWrite = 8,
-        RemotePlayerContext = 16
+        RemotePlayerContext = 16,
+        MtaInputSynthesis = 32
     };
 
     enum class Status : std::uint32_t
@@ -62,6 +66,21 @@ namespace mta::game_de
         std::uint32_t    controllerKnownMask = 0;
     };
 
+    // These actions come from MTA's configured bind state, after its context
+    // transitions. They are not raw OS keys or observations of an engine pad.
+    // Joystick overrides remain a separate Core policy after digital synthesis.
+    struct ControlActionFrame
+    {
+        std::uint64_t     heldActions = 0;
+        MtaInput::Context context;
+    };
+
+    struct MtaInputState
+    {
+        CControllerState current;
+        CControllerState previous;
+    };
+
     class IGameAdapter
     {
     public:
@@ -77,6 +96,8 @@ namespace mta::game_de
         virtual CGame*        GetGameInterface() const noexcept = 0;
         virtual Status        PublishLocalObservation(const LocalObservation& observation) noexcept = 0;
         virtual Status        GetLocalObservation(LocalObservation& observation) noexcept = 0;
+        virtual Status        SubmitControlActions(const ControlActionFrame& frame) noexcept = 0;
+        virtual Status        GetMtaInputState(MtaInputState& state) noexcept = 0;
 
     protected:
         // Release keeps allocation/deallocation in the factory's module. The

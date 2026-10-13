@@ -179,12 +179,36 @@ multiplayer SDK, uses pointer-sized window procedures and widens stored CVars
 for `size_t` consumers. Classic animation consumers include their concrete
 backend headers explicitly. Native crash text retains full addresses; the old
 DWORD register/registry schema and classic pool diagnostics are explicitly
-unavailable on x64. The original native minidump is retained. This does not
-establish linkage or DE startup/rendering, and production architecture filters
-remain in place. Source-bound compile evidence:
+unavailable on x64. The original native minidump is retained. This initial
+diagnostic compile did not establish linkage or DE startup/rendering.
+Source-bound compile evidence:
 `Build/mta-x64-core-diagnostic/20261013-151313-6a609396/final-02/test-result.json`.
 Native crash-text checks pass 7 x86 / 8 x64 cases:
 `Build/mta-core-native-context/20261013-154019-93fc8f54e0a94d00b87863c5703bc908/test-result.json`.
+
+The normal opt-in **Release/x64 Core now builds and links** all its real vendor
+dependencies. Generate with `utils/premake5.exe --with-definitive-adapter vs2026`,
+then build `Build/Client Core.vcxproj` in Release/x64. Configure `DXSDK_DIR` with
+the D3DX headers and matching x64 import libraries. The output is
+`Bin/mta/x64/core.dll`, with the real `game_de.dll` and `pthread.dll` staged
+adjacent. Default classic project generation remains unchanged. Other Core
+architectures/configurations retain their exclusions. The resource uses the
+Windows SDK rather than requiring optional MFC headers, and libpng outputs
+are separated by architecture/configuration for this opt-in build.
+Certificate:
+`Build/mta-x64-core-diagnostic/20261013-151313-6a609396/normal-build/normal-build-certificate.json`.
+
+`Tests/definitive/test_mta_core_entry.ps1` loads those actual DLLs in a separate
+non-game fixture named `SanAndreas.exe`. It passes 26 checks: directory checks
+return 3/4, exact image rejection returns 5 twice, the backend unloads after
+both failed constructions, classic gameplay modules remain unloaded, and
+Core unload returns normally. The log verifies rejection by the engine-build
+gate rather than a missing DLL. Native memory access is rejected before it
+starts. This executes the real Core entry; it does not launch GTA or establish
+full DE startup/rendering. The Core DLL SHA-256 is
+`80d7b32b3da3a73fe8c627f66d99ed4a9d3bf5a2de4e6696b5dee7607cbb5ca8`.
+Certificate:
+`Build/mta-core-entry/20261013-160014-38ecc56c59884f87b0c5a90cf3a68e68/test-result.json`.
 
 The next engine trace finds that the pinned executable updates pads `0x188`
 bytes apart, copies current/previous 48-byte blocks at `+0x38` / `+0x68`, and
@@ -206,11 +230,22 @@ Backend certificate:
 The later crash-handling review fixes are covered by the newer Core compile
 certificate above; the backend sources and module stayed unchanged.
 
+The corrected-layout human trial completes 440 captures in 60,049 ms with no
+issues, clean disposal and normal shutdown. The human reports normal movement.
+W/S/A/D and W+LeftShift sources are active while raw velocity changes, but all
+corrected current/previous pad fields stay zero. This supports the observed
+provider-query path; copying the pad blocks does not establish keyboard input
+materialization. No input writes ran. The raw log SHA-256 is
+`f0200560bfc824657ef9199027be973aeee2db5f59f5b482b9640fdf50c11502`;
+the trial is linked from `Build/definitive-manual-test/current-native-pad-reference-test.json`.
+
 A bounded native trace identifies a player-control class candidate whose
 vtable is at RVA `0x4319730`, slot `+0x50` targeting `0x124EAF0`. Its constructor
 selects indexed player information and its control callback saves/restores the
-active input provider. This is structural evidence for MTA's per-ped context
-port, not a live identity or write validation. Scalar input methods can bypass
+active input provider. A bounded passive read during the human trial also
+confirms the live local player's vtable, callback slot, player-information
+pointer and pad selector against these exact-build values. Remote ownership,
+callback thread/ordering and engine writes remain unverified. Scalar input methods can bypass
 the pad block through action providers, so an override must also route those
 queries inside the same owned simulation scope. The 127 physical sources and
 pending edge queues must remain independent of remote input.

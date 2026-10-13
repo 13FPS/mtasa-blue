@@ -82,8 +82,25 @@ project "Client Core"
 		"%[%{!wks.location}/../utils/gen_language_list.exe] %[%{!wks.location}/../Shared/data/MTA San Andreas/MTA/locale] %[languages.generated.h]"
 	}
 
-	filter "architecture:not x86"
-		flags { "ExcludeFromBuild" }
+	if _OPTIONS["with-definitive-adapter"] then
+		-- Keep the checked x64 Core separate from the classic DLL. Other
+		-- architectures/configurations still lack a supported startup path.
+		filter { "architecture:x86_64", "configurations:Release" }
+			targetdir(buildpath("mta/x64"))
+			-- The backend loader resolves adjacent modules. Stage real build
+			-- outputs together without installing anything into the game.
+			postbuildcommands {
+				"{COPY} \"%{wks.location}/../Bin/mta/game_de.dll\" \"%{wks.location}/../Bin/mta/x64/\"",
+				"{COPY} \"%{wks.location}/../Bin/server/x64/pthread.dll\" \"%{wks.location}/../Bin/mta/x64/\""
+			}
+		filter { "architecture:not x86", "configurations:not Release" }
+			flags { "ExcludeFromBuild" }
+		filter { "architecture:not x86", "architecture:not x86_64" }
+			flags { "ExcludeFromBuild" }
+	else
+		filter "architecture:not x86"
+			flags { "ExcludeFromBuild" }
+	end
 
 	filter "system:not windows"
 		flags { "ExcludeFromBuild" }

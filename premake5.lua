@@ -137,13 +137,22 @@ workspace "MTASA"
 		includedirs {
 			path.join(dxdir, "Include")
 		}
-		libdirs {
-			path.join(dxdir, "Lib/x86")
-		}
+		if not _OPTIONS["with-definitive-adapter"] then
+			libdirs { path.join(dxdir, "Lib/x86") }
+		end
 
 		if MTA_MAETRO then
 			flags { "NoImplicitLink" }
 		end
+
+	if _OPTIONS["with-definitive-adapter"] then
+		-- Import libraries must match the opted-in Core's pointer width;
+		-- retaining the x86 directory here can silently select the wrong ABI.
+		filter { "system:windows", "platforms:x64" }
+			libdirs { path.join(dxdir, "Lib/x64") }
+		filter { "system:windows", "platforms:not x64" }
+			libdirs { path.join(dxdir, "Lib/x86") }
+	end
 
 	filter {"system:windows", "configurations:Debug"}
 		runtime "Release" -- Always use Release runtime

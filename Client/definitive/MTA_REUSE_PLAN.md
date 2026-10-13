@@ -119,16 +119,22 @@ The corrected native reader now uses those block offsets and eight exact
 instruction guards, with the diagnostic capability unchanged. A native
 player-control callback candidate was traced at `0x124EAF0`, referenced by
 vtable `0x4319730` slot `+0x50`; it already saves/restores provider context.
-Runtime entity identity and query routing remain necessary before a remote
-override can call this the engine-write boundary. Physical source queues must
-not become remote controller storage.
+The human's corrected-layout trial completes 440 clean captures with normal
+movement and changing physical sources/velocity, while the pad blocks remain
+zero. A passive read also confirms the actual local player's vtable/callback
+identity. Remote ownership, callback ordering and scoped query routing remain
+necessary before engine writes; physical source queues must not become remote
+controller storage.
 
-The existing Core now also passes all 99 C++ translation units in an isolated
-opt-in x64 diagnostic compile. Pointer-sized window APIs, opaque SDK animation
-types and native crash handling remove the observed compiler blockers while
-preserving the classic SDK ABI. Classic Release/Win32 compiles still pass.
-Linkage, the launcher and a DE renderer remain separate prerequisites; the
-production architecture exclusions and gameplay gate are retained.
+The existing Core now also compiles and links in the normal opt-in Release/x64
+project, with all 99 C++ translation units and real vendor dependencies.
+Pointer-sized window APIs, opaque SDK animation types and native crash handling
+remove the observed compiler blockers while preserving the classic SDK ABI.
+Classic Release/Win32 compiles still pass; default project generation is unchanged.
+The actual x64 Core entry passes 26 isolated-host checks for directory validation,
+exact-image rejection, retry, backend cleanup and unload. Its x64 bundle is
+`Bin/mta/x64`, keeping the classic output separate. The launcher, DE rendering
+and full game facade remain prerequisites; the gameplay gate is retained.
 
 MTA's ordinary remote movement already combines synchronized controls and
 sender velocity, GTA player simulation, and correction of network position

@@ -7,9 +7,9 @@
 //
 // Generated from the TEXTINCLUDE 2 resource.
 //
-#if !defined USING_VCEXPRESS
-#include "afxres.h"
-#endif
+// Core uses standard icon resources, so the Windows SDK is sufficient without
+// requiring the optional MFC headers in either native architecture.
+#include "winres.h"
 
 /////////////////////////////////////////////////////////////////////////////
 #undef APSTUDIO_READONLY_SYMBOLS
@@ -33,7 +33,7 @@ END
 
 2 TEXTINCLUDE 
 BEGIN
-    "#include ""afxres.h""\r\n"
+    "#include ""winres.h""\r\n"
     "\0"
 END
 

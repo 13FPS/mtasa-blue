@@ -7,6 +7,8 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $repositoryRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
 $helper = Join-Path $repositoryRoot 'Client/definitive/set-loader.ps1'
+$uninstaller = Join-Path $repositoryRoot 'Client/definitive/uninstall.ps1'
+$modeHelper = Join-Path $repositoryRoot 'Client/definitive/set-mode.ps1'
 $fixtureRoot = Join-Path $repositoryRoot ('Build/definitive-loader-test/fixtures-' + [Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($fixtureRoot) | Out-Null
 $paths = @(
@@ -27,10 +29,12 @@ function Hash([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA25
 function Loader([string]$Directory, [string]$Action, [switch]$WhatIf) {
     & $helper -GameDirectory $Directory -Action $Action -WhatIf:$WhatIf 6>$null
 }
-function New-Fixture([string]$Omit = '') {
+function New-Fixture([string]$Omit = '', [switch]$PadModule) {
     $root = Join-Path $fixtureRoot ([Guid]::NewGuid().ToString('N'))
     [IO.Directory]::CreateDirectory($root) | Out-Null
-    $files = foreach ($relative in $paths) {
+    $fixturePaths = @($paths)
+    if ($PadModule) { $fixturePaths += 'CLEO/de-online/native-pad-reference.mjs' }
+    $files = foreach ($relative in $fixturePaths) {
         $destination = [IO.Path]::GetFullPath((Join-Path $root $relative))
         $bytes = [Text.Encoding]::UTF8.GetBytes("Fixture bytes: $relative`n")
         if ($relative -ne $Omit) {
@@ -58,6 +62,92 @@ function Case([string]$Name, [scriptblock]$Operation) {
     & $Operation
     $script:passed++
     Write-Host "PASS $Name"
+}
+
+function New-ModeFixture([switch]$PadModule, [switch]$PadMarker, [switch]$PadEnabled) {
+    $root = New-Fixture -PadModule:$PadModule
+    $config = @"
+export const MODE = 'smoke';
+export const GAIT_REFERENCE = false;
+export const GAIT_RATE = false;
+export const GAIT_ROOT_LOCK = false;
+export const INPUT_REFERENCE = false;
+"@
+    if ($PadMarker) { $config += "`nexport const MTA_NATIVE_PAD_REFERENCE = $($PadEnabled.IsPresent.ToString().ToLowerInvariant());`n" }
+    $configPath = Join-Path $root 'CLEO/de-online/config.mjs'
+    [IO.File]::WriteAllText($configPath, $config)
+    # The mode helper compares the fixture executable to its recorded hash;
+    # no game binary or known-game fingerprint is needed for this configuration test.
+    [IO.File]::WriteAllText((Join-Path $root 'SanAndreas.exe'), 'Non-executable fixture bytes')
+    Edit-Manifest $root {
+        param($manifest)
+        $manifest | Add-Member -NotePropertyName mode -NotePropertyValue 'Smoke'
+        $manifest | Add-Member -NotePropertyName gameSha256 -NotePropertyValue ((Hash (Join-Path $root 'SanAndreas.exe')).ToLowerInvariant())
+        @($manifest.files | Where-Object path -eq 'CLEO/de-online/config.mjs')[0].sha256 = (Hash $configPath).ToLowerInvariant()
+    }
+    return $root
+}
+
+Case 'Removal validation preserves both legacy 16-file and new 17-file installations' {
+    foreach ($pad in @($false, $true)) {
+        $root = New-Fixture -PadModule:$pad
+        $manifestPath = Join-Path $root 'de-online-install-manifest.json'
+        $before = Hash $manifestPath
+        & $uninstaller -GameDirectory $root -ValidateOnly 6>$null
+        Assert ((Hash $manifestPath) -eq $before) 'Validation modified the manifest.'
+        Assert (@(Get-ChildItem -LiteralPath $root -File -Recurse).Count -eq (17 + [int]$pad)) 'Validation removed an owned file.'
+    }
+}
+Case 'Removal supports both ownership generations and preserves unrelated files' {
+    foreach ($pad in @($false, $true)) {
+        $root = New-Fixture -PadModule:$pad
+        $retained = Join-Path $root 'CLEO/de-online/user-notes.txt'
+        [IO.File]::WriteAllText($retained, 'User bytes')
+        & $uninstaller -GameDirectory $root 6>$null
+        Assert (Test-Path -LiteralPath $retained) 'Removal deleted an unrelated file.'
+        Assert (-not (Test-Path -LiteralPath (Join-Path $root 'de-online-install-manifest.json'))) 'Removal retained its manifest.'
+        Assert (@(Get-ChildItem -LiteralPath $root -File -Recurse).Count -eq 1) 'Removal left an owned file.'
+    }
+}
+Case 'A modified native pad module blocks removal before deleting legacy files' {
+    $root = New-Fixture -PadModule
+    [IO.File]::WriteAllText((Join-Path $root 'CLEO/de-online/native-pad-reference.mjs'), 'User edit')
+    Must-Fail { & $uninstaller -GameDirectory $root 6>$null } 'modified'
+    Assert (Test-Path -LiteralPath (Join-Path $root 'version.dll')) 'Removal began before module validation.'
+}
+Case 'The optional pad record cannot replace a required legacy owned record' {
+    $root = New-Fixture -PadModule
+    Edit-Manifest $root { param($m) $m.files = @($m.files | Where-Object path -ne 'CLEO/de-online/index.js') }
+    Must-Fail { & $uninstaller -GameDirectory $root -ValidateOnly 6>$null } 'known owned files'
+}
+Case 'Ordinary mode changes remain available without the newer pad marker' {
+    $root = New-ModeFixture
+    & $modeHelper -GameDirectory $root -Mode Diagnostic 6>$null
+    Assert ((Get-Content -LiteralPath (Join-Path $root 'CLEO/de-online/config.mjs') -Raw).Contains("MODE = 'diagnostic'")) 'Legacy mode change failed.'
+    & $uninstaller -GameDirectory $root -ValidateOnly 6>$null
+}
+Case 'The native pad opt-in requires both its configuration marker and owned module' {
+    $root = New-ModeFixture -PadModule
+    Must-Fail { & $modeHelper -GameDirectory $root -Mode Smoke -MtaNativePadReference 6>$null } 'Update the adapter'
+    $root = New-ModeFixture -PadMarker
+    Must-Fail { & $modeHelper -GameDirectory $root -Mode Smoke -MtaNativePadReference 6>$null } 'owned module is missing'
+}
+Case 'Native pad selection and ordinary mode clearing maintain all owned hashes' {
+    $root = New-ModeFixture -PadModule -PadMarker
+    & $modeHelper -GameDirectory $root -Mode Smoke -MtaNativePadReference 6>$null
+    $configPath = Join-Path $root 'CLEO/de-online/config.mjs'
+    Assert ((Get-Content -LiteralPath $configPath -Raw).Contains('MTA_NATIVE_PAD_REFERENCE = true;')) 'Probe was not armed.'
+    & $uninstaller -GameDirectory $root -ValidateOnly 6>$null
+    & $modeHelper -GameDirectory $root -Mode Smoke 6>$null
+    Assert ((Get-Content -LiteralPath $configPath -Raw).Contains('MTA_NATIVE_PAD_REFERENCE = false;')) 'Ordinary mode retained probe opt-in.'
+    & $uninstaller -GameDirectory $root -ValidateOnly 6>$null
+}
+Case 'The native pad opt-in rejects Online mode and simultaneous input or gait trials' {
+    Must-Fail { & $modeHelper -GameDirectory $fixtureRoot -Mode Online -MtaNativePadReference 6>$null } 'Smoke mode'
+    foreach ($trial in @('NativeInputReference', 'NativeGaitReference', 'MatchedGaitRate', 'LockWalkRoot')) {
+        $flags = @{ MtaNativePadReference = $true; $trial = $true }
+        Must-Fail { & $modeHelper -GameDirectory $fixtureRoot -Mode Smoke @flags 6>$null } 'conflicts'
+    }
 }
 
 Case 'Round trip preserves every owned byte and the manifest; journals describe both moves' {

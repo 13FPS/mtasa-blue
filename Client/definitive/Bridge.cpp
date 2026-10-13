@@ -6,7 +6,9 @@
 #include "Bridge.h"
 #include "MtaControllerSnapshot.h"
 #include "TransportClient.h"
+#include "../game_de/NativePadReader.h"
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstring>
 #include <windows.h>
@@ -16,11 +18,23 @@ namespace
     // Explicit ownership keeps Winsock setup/shutdown out of DLL static constructors
     // and destructors, which execute under the Windows loader lock. The host must
     // disconnect before unloading the DLL, and call the ABI from one owning thread.
-    deonline::TransportClient*   client = nullptr;
-    bool                         runtimeBound = false;
-    int                          moduleAnchor = 0;
-    std::atomic<DWORD>           controllerThread{0};
-    deonline::ControllerSnapshot controllerSnapshot;
+    deonline::TransportClient*      client = nullptr;
+    bool                            runtimeBound = false;
+    int                             moduleAnchor = 0;
+    std::atomic<DWORD>              controllerThread{0};
+    deonline::ControllerSnapshot    controllerSnapshot;
+    mta::game_de::NativePadReader   nativePadReader;
+    std::array<CControllerState, 2> nativeCurrent;
+    std::array<CControllerState, 2> nativePrevious;
+    bool                            nativeSnapshot = false;
+
+    void ClearNativePad()
+    {
+        nativePadReader.Reset();
+        nativeCurrent = {};
+        nativePrevious = {};
+        nativeSnapshot = false;
+    }
 
     bool ControllerAccessAllowed()
     {
@@ -97,6 +111,7 @@ void DE_Disconnect()
     // Connection/runtime cleanup must discard input coverage and any unfinished
     // transaction so observations cannot survive an adapter session teardown.
     controllerSnapshot.Reset();
+    ClearNativePad();
     delete client;
     client = nullptr;
 }
@@ -197,4 +212,70 @@ void DE_ControllerReset()
 {
     if (ControllerAccessAllowed())
         controllerSnapshot.Reset();
+}
+
+int DE_NativePadBind()
+{
+    if (!ControllerAccessAllowed())
+        return 0;
+    ClearNativePad();
+    return nativePadReader.Bind() ? 1 : 0;
+}
+
+int DE_NativePadCapture()
+{
+    if (!ControllerAccessAllowed())
+        return 0;
+    std::array<CControllerState, 2> current;
+    std::array<CControllerState, 2> previous;
+    for (std::uint32_t pad = 0; pad < 2; ++pad)
+    {
+        if (!nativePadReader.Read(pad, current[pad], previous[pad]))
+        {
+            ClearNativePad();
+            return 0;
+        }
+    }
+    nativeCurrent = current;
+    nativePrevious = previous;
+    nativeSnapshot = true;
+    return 1;
+}
+
+std::uint32_t DE_NativePadRead(std::uint32_t pad, std::uint32_t which, std::uint32_t index)
+{
+    static constexpr std::array<signed short CControllerState::*, 24> fields = {&CControllerState::LeftStickX,
+                                                                                &CControllerState::LeftStickY,
+                                                                                &CControllerState::RightStickX,
+                                                                                &CControllerState::RightStickY,
+                                                                                &CControllerState::LeftShoulder1,
+                                                                                &CControllerState::LeftShoulder2,
+                                                                                &CControllerState::RightShoulder1,
+                                                                                &CControllerState::RightShoulder2,
+                                                                                &CControllerState::DPadUp,
+                                                                                &CControllerState::DPadDown,
+                                                                                &CControllerState::DPadLeft,
+                                                                                &CControllerState::DPadRight,
+                                                                                &CControllerState::Start,
+                                                                                &CControllerState::Select,
+                                                                                &CControllerState::ButtonSquare,
+                                                                                &CControllerState::ButtonTriangle,
+                                                                                &CControllerState::ButtonCross,
+                                                                                &CControllerState::ButtonCircle,
+                                                                                &CControllerState::ShockButtonL,
+                                                                                &CControllerState::ShockButtonR,
+                                                                                &CControllerState::m_bChatIndicated,
+                                                                                &CControllerState::m_bPedWalk,
+                                                                                &CControllerState::m_bVehicleMouseLook,
+                                                                                &CControllerState::m_bRadioTrackSkip};
+    if (!ControllerAccessAllowed() || !nativeSnapshot || pad >= 2 || which >= 2 || index >= fields.size())
+        return 0;
+    const auto& state = which == 0 ? nativeCurrent[pad] : nativePrevious[pad];
+    return static_cast<std::uint32_t>(static_cast<std::int32_t>(state.*fields[index]));
+}
+
+void DE_NativePadReset()
+{
+    if (ControllerAccessAllowed())
+        ClearNativePad();
 }

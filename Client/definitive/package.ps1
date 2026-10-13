@@ -3,10 +3,15 @@
 # This file is part of Multi Theft Auto. See LICENSE in the repository root.
 [CmdletBinding()]
 param([ValidateSet('Diagnostic', 'Smoke', 'Online')][string]$Mode = 'Smoke',
-    [switch]$NativeGaitReference, [switch]$MatchedGaitRate, [switch]$LockWalkRoot, [switch]$NativeInputReference)
+    [switch]$NativeGaitReference, [switch]$MatchedGaitRate, [switch]$LockWalkRoot, [switch]$NativeInputReference,
+    [switch]$MtaNativePadReference)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+if ($MtaNativePadReference -and $Mode -ne 'Smoke') { throw 'MTA native pad reference requires Smoke mode.' }
+if ($MtaNativePadReference -and ($NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot)) {
+    throw 'MTA native pad reference conflicts with other input or gait trials.'
+}
 if ($NativeGaitReference -and $Mode -ne 'Smoke') { throw 'Native gait reference requires Smoke mode.' }
 if ($MatchedGaitRate -and $Mode -ne 'Online') { throw 'Matched gait rate requires Online mode.' }
 if ($LockWalkRoot -and $Mode -ne 'Online') { throw 'Walk-root locking requires Online mode.' }
@@ -68,7 +73,7 @@ function Copy-ZipEntry([string]$ArchivePath, [string]$EntryName, [string]$Destin
 }
 
 Assert-NoLinks $buildRoot
-$sourceNames = @('index.js', 'controller.mjs', 'config.mjs', 'mod.json')
+$sourceNames = @('index.js', 'controller.mjs', 'native-pad-reference.mjs', 'config.mjs', 'mod.json')
 foreach ($name in $sourceNames) {
     $source = Join-Path $PSScriptRoot "game-adapter/$name"
     Assert-NoLinks $source
@@ -144,6 +149,12 @@ $inputMarker = 'export const INPUT_REFERENCE = false;'
 if ([regex]::Matches($configText, [regex]::Escape($inputMarker)).Count -ne 1) { throw 'Expected disabled input reference in source configuration.' }
 $configText = $configText.Replace($inputMarker,
     "export const INPUT_REFERENCE = $($NativeInputReference.IsPresent.ToString().ToLowerInvariant());")
+$padMarker = 'export const MTA_NATIVE_PAD_REFERENCE = false;'
+if ([regex]::Matches($configText, [regex]::Escape($padMarker)).Count -ne 1) { throw 'Expected disabled MTA native pad reference in source configuration.' }
+# Keep the native reader opt-in independent from the previous CLEO pad probe;
+# an ordinary package must never inherit either experiment from a prior trial.
+$configText = $configText.Replace($padMarker,
+    "export const MTA_NATIVE_PAD_REFERENCE = $($MtaNativePadReference.IsPresent.ToString().ToLowerInvariant());")
 [IO.File]::WriteAllText($configPath, $configText, $utf8)
 foreach ($name in @('sa_unreal.json', 'unknown_x64.json')) {
     [IO.File]::Copy($downloads[$name], (Join-Path $configDirectory $name), $false)

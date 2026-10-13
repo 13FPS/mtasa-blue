@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { MODE, ONLINE_ACTIVATION, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE } from './config.mjs';
+import { MODE, ONLINE_ACTIVATION, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE } from './config.mjs';
 import { AdapterController, NativeGaitReferenceController, NativeInputReferenceController } from './controller.mjs';
+import { MtaNativePadReferenceController } from './native-pad-reference.mjs';
 
 let controller = null;
 let phase = 'entry';
@@ -13,6 +14,9 @@ function runAdapter() {
     if (!['diagnostic', 'smoke', 'online'].includes(MODE)) throw new Error('Unknown adapter mode');
     if (typeof INPUT_REFERENCE !== 'boolean' || (INPUT_REFERENCE && (MODE !== 'smoke' || GAIT_REFERENCE)))
         throw new Error('Native input reference requires opt-in Smoke mode without gait reference');
+    if (typeof MTA_NATIVE_PAD_REFERENCE !== 'boolean' ||
+        (MTA_NATIVE_PAD_REFERENCE && (MODE !== 'smoke' || INPUT_REFERENCE || GAIT_REFERENCE)))
+        throw new Error('MTA native pad reference requires separate opt-in Smoke mode');
     if (MODE === 'diagnostic') {
         // Keep the installed loader/runtime available while separating its
         // startup from our DLL, FFI, player reads and transport. This finite
@@ -41,20 +45,20 @@ function runAdapter() {
         throw new Error('SA Unreal API definitions 0.493 or newer are required');
     // These untested input/velocity bindings come from the pinned 0.500 API.
     // Reject older definitions before activation reads, DLL access, or CJ reads.
-    if (INPUT_REFERENCE && definitionVersion < 0.500)
+    if ((INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE) && definitionVersion < 0.500)
         throw new Error('Native input reference requires SA Unreal API definitions 0.500 or newer');
 
     const stopKey = 'Ctrl+Shift+End';
     // Home opens the Rockstar console on the tested build and interrupts this
     // read-only observation, so the input reference needs its own shortcut.
-    const activateKey = INPUT_REFERENCE ? 'Ctrl+Shift+F9' : 'Ctrl+Shift+Home';
+    const activateKey = (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE) ? 'Ctrl+Shift+F9' : 'Ctrl+Shift+Home';
     const chordHeld = keys => keys.every(key => native('IS_KEY_PRESSED', key));
-    if (MODE === 'online' || GAIT_REFERENCE || INPUT_REFERENCE) {
+    if (MODE === 'online' || GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE) {
         if (MODE === 'online' && !['manual', 'automatic'].includes(ONLINE_ACTIVATION))
             throw new Error('Unknown online activation mode');
         // The reference changes one owned NPC, so even an automatic Online
         // preference cannot start this separate experiment during save loading.
-        if (GAIT_REFERENCE || INPUT_REFERENCE || ONLINE_ACTIVATION === 'manual') {
+        if (GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || ONLINE_ACTIVATION === 'manual') {
             // Startup freezes have also occurred before this script enters.
             // Waiting here cannot prevent those loader failures, but it gives
             // a usable game session a separate, observable boundary before
@@ -70,7 +74,7 @@ function runAdapter() {
                         bridge_loaded: false, game_adapter_active: false, network_active: false });
                     return;
                 }
-                if (chordHeld([17, 16, INPUT_REFERENCE ? 120 : 36]) && native('IS_PLAYER_PLAYING', 0)) {
+                if (chordHeld([17, 16, (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE) ? 120 : 36]) && native('IS_PLAYER_PLAYING', 0)) {
                     emit({ event: 'adapter_activation_requested', mode: MODE, activate_key: activateKey });
                     break;
                 }
@@ -104,6 +108,35 @@ function runAdapter() {
     enterPhase('runtime_bind');
     if (bindRuntime() !== 1) throw new Error('CLEO runtime lifecycle binding failed');
     enterPhase('runtime_bound');
+    if (MTA_NATIVE_PAD_REFERENCE) {
+        const nativePadRead = bind('DE_NativePadRead', 'X64U32');
+        const resetAddress = library.getProcedure('DE_NativePadReset');
+        if (!Number.isSafeInteger(resetAddress) || resetAddress <= 0) throw new Error('Missing bridge procedure: DE_NativePadReset');
+        const reader = {
+            bind: bind('DE_NativePadBind'), capture: bind('DE_NativePadCapture'),
+            read: (pad, which, index) => nativePadRead(pad, which, index),
+            reset: () => Memory.CallFunction(resetAddress, false, 0)
+        };
+        const game = {
+            stopRequested: () => chordHeld([17, 16, 35]),
+            isReady: () => native('IS_PLAYER_PLAYING', 0),
+            localPed: () => native('GET_PLAYER_CHAR', 0),
+            doesPedExist: handle => native('DOES_CHAR_EXIST', handle),
+            readVelocity: handle => native('GET_CHAR_VELOCITY', handle),
+            readTransform: handle => ({ ...native('GET_CHAR_COORDINATES', handle), heading: native('GET_CHAR_HEADING', handle) })
+        };
+        emit({ event: 'adapter_start', host: HOST, cleo: String(CLEO.version), host_version: String(CLEO.hostVersion),
+            definitions: String(CLEO.apiVersion), mode: MODE, endpoint: null, stop_key: stopKey,
+            native_pad_reference: true, provenance: 'mta_game_de_native_pad_reader',
+            network_active: false, input_writes: false, remote_peds_created: false });
+        controller = new MtaNativePadReferenceController(game, reader, { log: emit, stopReason: stopKey });
+        enterPhase('controller_run');
+        while (controller.running) {
+            controller.tick(Date.now());
+            if (controller.running) wait(50);
+        }
+        return;
+    }
     if (INPUT_REFERENCE) {
         // Keep this probe before transport bindings and provide only native
         // reads. Canonical state publication changes our C++ snapshots, not

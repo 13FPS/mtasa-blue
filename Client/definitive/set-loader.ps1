@@ -54,6 +54,11 @@ if ($installed.packageId -cne 'de-online-prototype' -or $installed.formatVersion
     throw 'Installation manifest identity or target directory does not match.'
 }
 $relativePaths = @($installed.files | ForEach-Object { $_.path })
+# The additive read-only probe script is optional for the original intact
+# sixteen-file install. Once recorded it receives the same hash/path checks.
+if ($relativePaths -ccontains 'CLEO/de-online/native-pad-reference.mjs') {
+    $allowedPaths += 'CLEO/de-online/native-pad-reference.mjs'
+}
 $uniquePaths = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 foreach ($relative in $relativePaths) {
     if ($relative -cnotin $allowedPaths -or -not $uniquePaths.Add($relative)) {

@@ -55,6 +55,7 @@ const count = (test, name) => test.calls.filter(call => call[0] === name).length
 
 async function main() {
     const { AdapterController, NativeGaitReferenceController, NativeInputReferenceController, nativeGaitReferenceSpeed } = await import(pathToFileURL(path.join(adapterDirectory, 'controller.mjs')).href);
+    const { MtaNativePadReferenceController } = await import(pathToFileURL(path.join(adapterDirectory, 'native-pad-reference.mjs')).href);
     const test = (name, run) => { run(); ++tests; console.log('PASS ' + name); };
     test('smoke only reads local state, with bounded evidence logs', () => {
         const f = fixture(AdapterController, 'smoke');
@@ -1165,11 +1166,12 @@ async function main() {
             DE_ControllerRead: (which, index) => ((which ? inputPrevious : inputCurrent)?.[index] ?? 0) >>> 0,
             DE_ControllerCurrentMask: () => inputCurrent ? 0xfffff : 0,
             DE_ControllerPreviousMask: () => inputPrevious ? 0xfffff : 0,
+            DE_NativePadBind: () => 1, DE_NativePadCapture: () => 1, DE_NativePadRead: () => 0, DE_NativePadReset: () => {},
             ...(overrides.functions || {}) };
         const names = Object.keys(functions).filter(name => typeof functions[name] === 'function');
         const record = (name, ...args) => { calls.push([name, ...args]); callFrames.push({ frame, name }); };
         const invoke = address => (...args) => { const name = names[address - 1]; record(name, ...args); return functions[name](...args); };
-        const runtimeValues = { AdapterController, NativeGaitReferenceController, NativeInputReferenceController, DataView, ArrayBuffer,
+        const runtimeValues = { AdapterController, NativeGaitReferenceController, NativeInputReferenceController, MtaNativePadReferenceController, DataView, ArrayBuffer,
             Memory: { FromFloat: fromFloat, ToFloat: toFloat, Fn: { X64U32: invoke, X64I32: invoke }, CallFunction: (address) => invoke(address)() },
             DynamicLibrary: { Load: () => { record('DynamicLibrary.Load'); return { getProcedure: name => {
                 runtimeAccess.push({ frame, name: 'getProcedure', procedure: name });
@@ -1181,6 +1183,7 @@ async function main() {
         const sandbox = { MODE: overrides.mode || 'smoke', ONLINE_ACTIVATION: overrides.activation ?? 'manual',
             GAIT_REFERENCE: overrides.reference ?? false, GAIT_RATE: overrides.gaitRate ?? false,
             GAIT_ROOT_LOCK: overrides.gaitRootLock ?? false, INPUT_REFERENCE: overrides.inputReference ?? false, HOST: overrides.host || 'sa_unreal',
+            MTA_NATIVE_PAD_REFERENCE: overrides.mtaNativePadReference ?? false,
             Date: { now: () => overrides.times ? overrides.times[frame] : frame * 50 },
             CLEO: { version: overrides.version || '1.5.1', apiVersion: overrides.definitions || '0.500', hostVersion: '1.0.113.49697469' },
             native: (name, ...args) => { record(name, ...args);
@@ -1215,6 +1218,24 @@ async function main() {
         vm.runInNewContext(entry, sandbox, { timeout: 1000 });
         return { calls, callFrames, runtimeAccess, waits, logs, fromFloat };
     }
+    test('MTA native pad entry captures production-reader snapshots without transport or the old pad opcode', () => {
+        const result = runEntry({ mtaNativePadReference: true,
+            keyFrames: [[17, 16, 120], [], [17, 16, 35]], times: [0, 150, 200],
+            natives: { GET_CHAR_VELOCITY: () => ({ x: 1, y: 0, z: 0 }) } });
+        assert.ok(result.logs.some(event => event.event === 'native_pad_reference_started'));
+        const sample = result.logs.find(event => event.event === 'native_pad_sample');
+        assert.equal(sample.pads.length, 2); assert.equal(sample.pads[1].previous.length, 24);
+        assert.equal(sample.previous_source, 'native_OldState');
+        assert.equal(result.logs.filter(event => event.event === 'native_pad_reference_reset').length, 2);
+        assert.ok(!result.calls.some(call => ['DE_ConnectLocal', 'GET_PAD_STATE', 'CREATE_CHAR'].includes(call[0])));
+    });
+    test('MTA native pad entry rejects incompatible modes before DLL access', () => {
+        for (const overrides of [{ mode: 'online' }, { inputReference: true }, { reference: true }]) {
+            const result = runEntry({ mtaNativePadReference: true, ...overrides });
+            assert.ok(!result.calls.some(call => call[0] === 'DynamicLibrary.Load'));
+            assert.ok(result.logs.some(event => event.event === 'adapter_failed'));
+        }
+    });
     function runRemoteEntry(players, overrides = {}) {
         const view = new DataView(new ArrayBuffer(4));
         const bits = value => { view.setFloat32(0, value, true); return view.getUint32(0, true); };

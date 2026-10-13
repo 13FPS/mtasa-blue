@@ -58,3 +58,11 @@ DE_BRIDGE_API std::uint32_t DE_ControllerRead(std::uint32_t which, std::uint32_t
 DE_BRIDGE_API std::uint32_t DE_ControllerCurrentMask();
 DE_BRIDGE_API std::uint32_t DE_ControllerPreviousMask();
 DE_BRIDGE_API void          DE_ControllerReset();
+
+// The compatibility harness exercises the exact reader compiled into Game DE.
+// Capture copies both native NewState/OldState pairs once; component reads are
+// from that snapshot, so script FFI does not sample each field at a new time.
+DE_BRIDGE_API int DE_NativePadBind();
+DE_BRIDGE_API int DE_NativePadCapture();
+DE_BRIDGE_API std::uint32_t DE_NativePadRead(std::uint32_t pad, std::uint32_t which, std::uint32_t index);
+DE_BRIDGE_API void          DE_NativePadReset();

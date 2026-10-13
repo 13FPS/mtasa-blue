@@ -43,6 +43,11 @@ if ($installed.packageId -ne 'de-online-prototype' -or $installed.formatVersion 
     throw 'Installation manifest identity or target directory does not match.'
 }
 $relativePaths = @($installed.files | ForEach-Object { $_.path })
+# Version 1 installations existed before the native pad module. Preserve their
+# exact 16-file removal contract while validating all 17 files in newer installs.
+if ($relativePaths -contains 'CLEO/de-online/native-pad-reference.mjs') {
+    $allowedPaths += 'CLEO/de-online/native-pad-reference.mjs'
+}
 if ($relativePaths.Count -ne $allowedPaths.Count -or @($relativePaths | Select-Object -Unique).Count -ne $allowedPaths.Count -or
     @(Compare-Object $allowedPaths $relativePaths).Count -ne 0) {
     throw 'Installation manifest does not contain exactly the known owned files.'

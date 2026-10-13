@@ -8,11 +8,16 @@ param(
     [switch]$MatchedGaitRate,
     [switch]$LockWalkRoot,
     [switch]$NativeInputReference,
+    [switch]$MtaNativePadReference,
     [string]$GameDirectory = 'C:\Program Files (x86)\Steam\steamapps\common\GTA San Andreas - The Definitive Edition\Gameface\Binaries\Win64'
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+if ($MtaNativePadReference -and $Mode -ne 'Smoke') { throw 'MTA native pad reference requires Smoke mode.' }
+if ($MtaNativePadReference -and ($NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot)) {
+    throw 'MTA native pad reference conflicts with other input or gait trials.'
+}
 if ($NativeGaitReference -and $Mode -ne 'Smoke') { throw 'Native gait reference requires Smoke mode.' }
 if ($MatchedGaitRate -and $Mode -ne 'Online') { throw 'Matched gait rate requires Online mode.' }
 if ($LockWalkRoot -and $Mode -ne 'Online') { throw 'Walk-root locking requires Online mode.' }
@@ -60,6 +65,20 @@ if ($inputMatches -eq 1) {
     $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $inputPattern,
         "export const INPUT_REFERENCE = $($NativeInputReference.IsPresent.ToString().ToLowerInvariant());"))
 }
+$padPattern = 'export const MTA_NATIVE_PAD_REFERENCE = (true|false);'
+$padMatches = [regex]::Matches($configText, $padPattern).Count
+if ($padMatches -gt 1 -or ($MtaNativePadReference -and $padMatches -ne 1)) {
+    throw 'Update the adapter before selecting MTA native pad reference.'
+}
+if ($MtaNativePadReference -and @($installed.files | Where-Object { $_.path -eq 'CLEO/de-online/native-pad-reference.mjs' }).Count -ne 1) {
+    throw 'Update the adapter before selecting MTA native pad reference: its owned module is missing.'
+}
+# Older intact installations lack this marker and module. Ordinary mode changes
+# remain available, but enabling the probe requires both reviewed package pieces.
+if ($padMatches -eq 1) {
+    $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $padPattern,
+        "export const MTA_NATIVE_PAD_REFERENCE = $($MtaNativePadReference.IsPresent.ToString().ToLowerInvariant());"))
+}
 $configEntry = @($installed.files | Where-Object { $_.path -eq 'CLEO/de-online/config.mjs' })
 if ($configEntry.Count -ne 1) { throw 'Missing owned configuration record.' }
 $configEntry[0].sha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($newConfig)).ToLowerInvariant()
@@ -92,7 +111,9 @@ try {
     Write-AtomicFile $manifestPath $originalManifest
     throw $failure
 }
-if ($NativeInputReference) {
+if ($MtaNativePadReference) {
+    Write-Host 'Installed adapter mode: Smoke, read-only MTA native pad reference armed. Follow the bounded probe plan; Ctrl+Shift+End stops the adapter.'
+} elseif ($NativeInputReference) {
     Write-Host 'Installed adapter mode: Smoke, read-only local input reference armed. Ctrl+Shift+F9 starts a bounded 30-second observation; Ctrl+Shift+End cancels or stops it.'
 } elseif ($LockWalkRoot) {
     Write-Host 'Installed adapter mode: Online, horizontal walk-root comparison armed. Ctrl+Shift+Home activates it; Ctrl+Shift+End stops it.'

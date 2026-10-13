@@ -107,6 +107,20 @@ Certificate:
 The actual module SHA-256 is
 `063cd5bc16c0900b498747aba226674f72bca6049145e18cd72b8225354abf7f`.
 
+**A human-run native-reader trial is installed and awaiting observation.**
+The diagnostic bridge now compiles the exact MTA `NativePadReader.cpp`, exposes
+an additive read-only capture ABI, and snapshots both engine current/previous
+24-field states before component reads. A separate bounded Smoke recorder uses
+Ctrl+Shift+F9 and logs position/raw velocity with the native states. This test
+does not instantiate full Core or write game input. The old 00E2 result remains
+preserved separately. The bridge is
+`a35be5c2ccb0ed34060874df04c4353c13bda32ff44cdda5d862fe669132e7f4`.
+Build/protocol, 43 recorder checks, 94 real-DLL ABI checks, 19 log-reader tests,
+existing adapter/transport and loader/mode checks pass. Disposable collision and
+16-to-17 migration checks pass. The actual 17-file installation and loader hashes
+are verified. Preparation and pending runtime evidence are recorded in
+`Build/definitive-manual-test/current-native-pad-reference-test.json`.
+
 **The first shared MTA correction slice is implemented.**
 `Shared/sdk/CPedPositionInterpolation.h` contains the existing incremental
 position-error correction; `CClientPed::UpdateTargetPosition` now calls it.

@@ -22,29 +22,46 @@ if ($package.packageId -ne $installed.packageId -or $package.formatVersion -ne 1
     $package.mode -ne $installed.mode -or $package.gameSha256 -ne $installed.gameSha256) { throw 'Package identity or mode differs.' }
 $installedPaths = @($installed.files | ForEach-Object { $_.path })
 $packagePaths = @($package.files | ForEach-Object { $_.path })
-if ($packagePaths.Count -ne $installedPaths.Count -or @($packagePaths | Select-Object -Unique).Count -ne $installedPaths.Count -or
-    @(Compare-Object $installedPaths $packagePaths).Count -ne 0) { throw 'Package owned paths differ.' }
+if (@($packagePaths | Select-Object -Unique).Count -ne $packagePaths.Count -or
+    @($installedPaths | Where-Object { $_ -notin $packagePaths }).Count -ne 0) { throw 'Package owned paths differ.' }
+$addedPaths = @($packagePaths | Where-Object { $_ -notin $installedPaths })
+# Admit only the new read-only reference script when upgrading the original
+# sixteen-file install. Never turn a package update into an arbitrary file writer.
+if ($addedPaths.Count -gt 1 -or ($addedPaths.Count -eq 1 -and $addedPaths[0] -ne 'CLEO/de-online/native-pad-reference.mjs')) {
+    throw 'Unsupported additive package path.'
+}
 $changes = @()
 foreach ($entry in $package.files) {
     $sourcePath = Join-Path $packageRoot ('Win64/' + $entry.path)
     $sourceBytes = [IO.File]::ReadAllBytes($sourcePath)
     $actualHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($sourceBytes)).ToLowerInvariant()
     if ($actualHash -ne $entry.sha256) { throw 'Package hash mismatch.' }
-    $record = $installed.files | Where-Object { $_.path -eq $entry.path }
+    $records = @($installed.files | Where-Object { $_.path -eq $entry.path })
+    if ($records.Count -gt 1) { throw 'Duplicate installed file record.' }
+    if ($records.Count -eq 0) {
+        $destination = [IO.Path]::GetFullPath((Join-Path $gameRoot $entry.path))
+        if (-not $destination.StartsWith($gameRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or
+            (Test-Path -LiteralPath $destination)) { throw 'New owned reference path already exists or escapes game directory.' }
+        $record = [pscustomobject]@{ path=$entry.path; destination=$destination; sha256=$entry.sha256 }
+        $installed.files = @($installed.files) + @($record)
+        $changes += [pscustomobject]@{ path=$destination; bytes=$sourceBytes; original=$null; additive=$true; applied=$false }
+        continue
+    }
+    $record = $records[0]
     if ($record.sha256 -ne $entry.sha256) {
-        $changes += [pscustomobject]@{ path=$record.destination; bytes=$sourceBytes; original=[IO.File]::ReadAllBytes($record.destination) }
+        $changes += [pscustomobject]@{ path=$record.destination; bytes=$sourceBytes; original=[IO.File]::ReadAllBytes($record.destination); additive=$false; applied=$false }
         $record.sha256 = $entry.sha256
     }
 }
 if (-not $changes.Count) { Write-Host 'Installed package is current.'; return }
 if (-not $PSCmdlet.ShouldProcess($gameRoot, "Update $($changes.Count) verified owned files")) { return }
 
-function Write-AtomicFile([string]$Path, [byte[]]$Bytes) {
+function Write-AtomicFile([string]$Path, [byte[]]$Bytes, [bool]$Replace = $true) {
     $temporary = $Path + '.de-online-' + [Guid]::NewGuid().ToString('N') + '.tmp'
     try {
         $stream = [IO.File]::Open($temporary, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write)
         try { $stream.Write($Bytes, 0, $Bytes.Length); $stream.Flush($true) } finally { $stream.Dispose() }
-        [IO.File]::Move($temporary, $Path, $true)
+        [IO.File]::Move($temporary, $Path, $Replace)
     } finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary } }
 }
 # Keep an on-disk recovery copy before changing files, independent of chat memory.
@@ -52,15 +69,26 @@ $backupRoot = Join-Path $repositoryRoot ('Build/definitive-update-backups/' + [G
 New-Item -ItemType Directory -Path $backupRoot | Out-Null
 [IO.File]::WriteAllBytes((Join-Path $backupRoot 'manifest.json'), $originalManifest)
 for ($index = 0; $index -lt $changes.Count; $index++) {
-    [IO.File]::WriteAllBytes((Join-Path $backupRoot "$index.original"), $changes[$index].original)
+    if (-not $changes[$index].additive) {
+        [IO.File]::WriteAllBytes((Join-Path $backupRoot "$index.original"), $changes[$index].original)
+    }
 }
 try {
-    foreach ($change in $changes) { Write-AtomicFile $change.path $change.bytes }
+    foreach ($change in $changes) {
+        Write-AtomicFile $change.path $change.bytes (-not $change.additive)
+        $change.applied = $true
+    }
     $newManifest = [Text.UTF8Encoding]::new($false).GetBytes(($installed | ConvertTo-Json -Depth 6) + "`n")
     Write-AtomicFile $manifestPath $newManifest
 } catch {
     $failure = $_
-    foreach ($change in $changes) { Write-AtomicFile $change.path $change.original }
+    foreach ($change in $changes) {
+        if ($change.additive) {
+            if ($change.applied -and (Test-Path -LiteralPath $change.path)) { Remove-Item -LiteralPath $change.path }
+        } else {
+            Write-AtomicFile $change.path $change.original
+        }
+    }
     Write-AtomicFile $manifestPath $originalManifest
     throw $failure
 }

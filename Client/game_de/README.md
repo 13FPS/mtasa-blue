@@ -41,7 +41,9 @@ Only a successful explicit binding adds `EngineInputRead`; failed reads, reset
 and shutdown discard that binding. Raw native state is separate from synthesized
 MTA actions and caller observations. Keyboard aggregation, update timing and
 actual in-game behavior remain unverified. The test host rejects binding because
-its executable is not the pinned game. This reader has not been installed in GTA.
+its executable is not the pinned game. A read-only reference now compiles this
+same reader into the existing diagnostic bridge for a human-run game trial.
+That trial exercises backend code; it does not construct a full MTA Core.
 
 The native-reader source/build milestone passes 1,474 module checks, 59 x64
 consumer checks, three x86 rejections and 1,325 reader checks per architecture.
@@ -52,6 +54,24 @@ Certificate:
 The module SHA-256 is
 `063cd5bc16c0900b498747aba226674f72bca6049145e18cd72b8225354abf7f`;
 its imports are `bcrypt.dll` and `KERNEL32.dll`. Live native input remains unverified.
+
+The live reference is selected with `package.ps1 -Mode Smoke -MtaNativePadReference`.
+It captures both pads and their 24-field NewState/OldState pairs once per sample.
+The native previous state is the engine's OldState, independent of the previous
+125 ms probe sample. The existing CLEO script only schedules this read-only
+test and supplies position/velocity observations. It creates no NPCs or network
+session and sends no input writes. Ctrl+Shift+F9 starts its 30-second budget;
+Ctrl+Shift+End cancels. The human remains responsible for walking and sprinting.
+
+The prepared trial is recorded under
+`Build/definitive-manual-test/current-native-pad-reference-test.json`.
+Its bridge SHA-256 is
+`a35be5c2ccb0ed34060874df04c4353c13bda32ff44cdda5d862fe669132e7f4`.
+Build/protocol, recorder, log-reader, real bridge ABI, transport and installer
+compatibility checks pass. A disposable 16-to-17-file upgrade also rejects an
+occupied new script path without changing user bytes, then upgrades and verifies
+the complete new install. The actual installation is verified and awaiting the
+human trial; runtime keyboard mapping is still unverified.
 
 The factory returns no full `CGame`. Engine input writes and remote player
 context are unavailable. `--with-definitive-adapter` enables Core's early startup

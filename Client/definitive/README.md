@@ -21,6 +21,18 @@ write policy. x64 Core, full game/multiplayer and rendering services remain
 required. Current build and regression results are recorded in the
 [module documentation](../game_de/README.md) and [integration plan](MTA_REUSE_PLAN.md).
 
+**Prepared live test of MTA's native reader.**
+`-MtaNativePadReference` selects a separate read-only Smoke trial that compiles
+the actual `Client/game_de/NativePadReader.cpp` into this diagnostic bridge.
+It records both pads' 24-field current/previous engine states, position and raw
+velocity for 30 seconds. It is separate from the earlier zero-valued
+`GET_PAD_STATE` experiment and MTA's synthesized logical actions. The existing
+loader schedules observations; it does not host a complete MTA gameplay client.
+Ctrl+Shift+F9 starts the trial and Ctrl+Shift+End cancels it. No NPC, transport or
+game-input writes are used. Packages now contain 17 owned files; intact older
+16-file installs remain valid, with a narrowly checked additive script upgrade.
+Use `utils/definitive_edition/native_pad_log.py` for this trial's evidence.
+
 The first shared slice extracts MTA's existing incremental ped position
 correction into `Shared/sdk/CPedPositionInterpolation.h`. The classic client
 calls it, and the same code passes 117 independent checks on both x86 and x64.

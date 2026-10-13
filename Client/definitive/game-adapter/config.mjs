@@ -24,3 +24,6 @@ export const GAIT_ROOT_LOCK = false;
 // through the shared canonical controller contract. This read-only Smoke
 // probe always needs manual activation and keeps unbound logical flags unknown.
 export const INPUT_REFERENCE = false;
+// Exercise Game DE's actual read-only pad implementation, including both
+// engine NewState/OldState pairs. This is independent of the old 00E2 probe.
+export const MTA_NATIVE_PAD_REFERENCE = false;

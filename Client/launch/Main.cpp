@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include "DefinitivePreflight/Preflight.h"
 
 // C++ STL
 #include <array>        // std::array for safe command buffer
@@ -167,11 +168,21 @@ namespace mta::launcher
     }
 
     // Library loading with optimized string conversion
-    [[nodiscard]] std::expected<HMODULE, DllLoadError> LoadLibrarySafe(const SString& dll_path, std::string_view dll_name, const SString& mta_path)
+    [[nodiscard]] std::expected<HMODULE, DllLoadError> LoadLibrarySafe(const SString& dll_path, std::string_view dll_name, const SString& mta_path,
+                                                                       bool preflight = false)
     {
         WString dll_path_w = FromUTF8(dll_path);
         if (dll_path_w.empty()) [[unlikely]]
             return std::unexpected(DllLoadError::InvalidPath);
+
+        if (preflight)
+        {
+            // Headless validation loads only its adjacent MTA-owned validator;
+            // neither the working directory nor the game bundle supplies DLLs.
+            if (HMODULE module = LoadLibraryExW(dll_path_w.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32))
+                return module;
+            return std::unexpected(DllLoadError::LoadFailed);
+        }
 
         if (HMODULE module = LoadLibraryW(dll_path_w.c_str()))
             return module;
@@ -214,7 +225,7 @@ namespace mta::launcher
     }
 
     // Function execution with bounds checking and secure conversion
-    [[nodiscard]] std::expected<int, LoadResult> ExecuteDoWinMain(HMODULE module, HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
+    [[nodiscard]] std::expected<int, LoadResult> ExecuteDoWinMain(HMODULE module, HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show, bool preflight = false)
     {
         using DoWinMainFunc = int (*)(HINSTANCE, HINSTANCE, LPSTR, int);
 
@@ -224,7 +235,8 @@ namespace mta::launcher
         FARPROC proc = GetProcAddress(module, "DoWinMain");
         if (!proc) [[unlikely]]
         {
-            AddReportLog(5713, "Launcher Main: DoWinMain function not found");
+            if (!preflight)
+                AddReportLog(5713, "Launcher Main: DoWinMain function not found");
             return std::unexpected(LoadResult::FunctionError);
         }
 
@@ -238,7 +250,8 @@ namespace mta::launcher
 
         if (func_ptr < module_span.data() || func_ptr >= (module_span.data() + module_span.size()))
         {
-            AddReportLog(5713, "Launcher Main: Function pointer outside module bounds");
+            if (!preflight)
+                AddReportLog(5713, "Launcher Main: Function pointer outside module bounds");
             return std::unexpected(LoadResult::FunctionError);
         }
 
@@ -269,7 +282,8 @@ namespace mta::launcher
         }
         catch (...)
         {
-            AddReportLog(5722, "Launcher Main: Exception in DoWinMain");
+            if (!preflight)
+                AddReportLog(5722, "Launcher Main: Exception in DoWinMain");
             return std::unexpected(LoadResult::FunctionError);
         }
     }
@@ -313,6 +327,34 @@ namespace mta::launcher
 int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPSTR lpCmdLine, _In_ int nCmdShow)
 {
     using namespace mta::launcher;
+
+    if (DefinitivePreflight::Requested())
+    {
+#if defined(MTA_DE_LAUNCHER_PREFLIGHT) && defined(_WIN64)
+        // Use the actual launcher dispatch without entering classic install,
+        // localization, patching, networking, or process creation paths.
+        SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+        std::array<wchar_t, 32768> executable{};
+        const DWORD                length = GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
+        if (!length || length >= executable.size())
+            return DefinitivePreflight::Status("launcher_path_invalid", 1, GetLastError());
+        const SString directory = PathJoin(ExtractPath(ToUTF8(executable.data())), "mta");
+        const SString path = PathJoin(directory, "de_preflight.dll");
+        const auto    loaded = LoadLibrarySafe(path, "de_preflight.dll", directory, true);
+        if (!loaded)
+            return DefinitivePreflight::Status("preflight_loader_load_failed", 2, GetLastError());
+        const auto unload = make_scope_exit([module = loaded.value()] { FreeLibrary(module); });
+        const auto result = ExecuteDoWinMain(loaded.value(), hInstance, hPrevInstance, lpCmdLine, nCmdShow, true);
+        return result ? result.value() : DefinitivePreflight::Status("preflight_loader_export_failed", 3);
+#else
+        return DefinitivePreflight::Status("preflight_requires_optin_x64_launcher", 1);
+#endif
+    }
+#if defined(MTA_DE_LAUNCHER_PREFLIGHT)
+    // The x64 target has no implicit launch behavior until a real DE startup
+    // integration exists. This is an engineering CLI, not a finished client UI.
+    return DefinitivePreflight::Status("explicit_de_preflight_required", 1);
+#endif
 
     // Configure silent error handling
     _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);

@@ -40,8 +40,24 @@ project "Client Launcher"
 			"resource/mtaicon.ico"
 		}
 
-	filter "architecture:not x86"
-		flags { "ExcludeFromBuild" }
+	if _OPTIONS["with-definitive-adapter"] then
+		filter { "architecture:x86_64", "configurations:Release" }
+			defines { "MTA_DE_LAUNCHER_PREFLIGHT" }
+			targetdir(buildpath("mta-launcher/x64"))
+			debugdir(buildpath("mta-launcher/x64"))
+			-- The engineering CLI has no classic GUI resources or MFC dependency.
+			removefiles { "launch.rc", "Multi Theft Auto.rc" }
+			dependson { "DE Preflight Loader" }
+		filter { "architecture:not x86", "architecture:not x86_64" }
+			flags { "ExcludeFromBuild" }
+		filter { "architecture:x86_64", "configurations:not Release" }
+			flags { "ExcludeFromBuild" }
+	else
+		filter "architecture:not x86"
+			flags { "ExcludeFromBuild" }
+	end
 
 	filter "system:not windows"
 		flags { "ExcludeFromBuild" }
+	filter {}
+	include "DefinitivePreflight"

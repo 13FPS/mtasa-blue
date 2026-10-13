@@ -31,16 +31,16 @@ ABI is independent.
 `BindNativeInput` explicitly binds the read-only `NativePadReader`. It reuses
 [Plugin-SDK's SA Unreal pad signature and layout](https://github.com/DK22Pac/plugin-sdk/blob/15f15b60bbf74c106e1b496ff92c98764abf4605/plugin_sa_unreal/game_sa_unreal/CPad.cpp).
 The exact local executable was scanned offline: the signature occurs once in
-executable code and resolves to the two-pad data array at RVA `0x53e8810`.
+executable code and resolves to the proposed two-pad candidate at RVA `0x53e8810`.
 The reader checks the known executable SHA-256, AMD64/PE32+ image bounds, live
 instruction bytes and relative target, section attributes and readable committed
-pages owned by the main image. It copies native NewState/OldState on the binding
+pages owned by the main image. It copies the proposed NewState/OldState offsets on the binding
 thread and preserves caller output on failed reads. It installs no hooks.
 
-Only a successful explicit binding adds `EngineInputRead`; failed reads, reset
+Only a successful explicit binding adds `NativePadCandidateRead`; failed reads, reset
 and shutdown discard that binding. Raw native state is separate from synthesized
 MTA actions and caller observations. Keyboard aggregation, update timing and
-actual in-game behavior remain unverified. The test host rejects binding because
+actual controller semantics remain unverified. The test host rejects binding because
 its executable is not the pinned game. A read-only reference now compiles this
 same reader into the existing diagnostic bridge for a human-run game trial.
 That trial exercises backend code; it does not construct a full MTA Core.
@@ -57,21 +57,45 @@ its imports are `bcrypt.dll` and `KERNEL32.dll`. Live native input remains unver
 
 The live reference is selected with `package.ps1 -Mode Smoke -MtaNativePadReference`.
 It captures both pads and their 24-field NewState/OldState pairs once per sample.
-The native previous state is the engine's OldState, independent of the previous
+The proposed previous state comes from the SDK's OldState offset, independent of the previous
 125 ms probe sample. The existing CLEO script only schedules this read-only
 test and supplies position/velocity observations. It creates no NPCs or network
 session and sends no input writes. Ctrl+Shift+F9 starts its 30-second budget;
 Ctrl+Shift+End cancels. The human remains responsible for walking and sprinting.
 
-The prepared trial is recorded under
+The completed trial is recorded under
 `Build/definitive-manual-test/current-native-pad-reference-test.json`.
 Its bridge SHA-256 is
 `a35be5c2ccb0ed34060874df04c4353c13bda32ff44cdda5d862fe669132e7f4`.
 Build/protocol, recorder, log-reader, real bridge ABI, transport and installer
 compatibility checks pass. A disposable 16-to-17-file upgrade also rejects an
 occupied new script path without changing user bytes, then upgrades and verifies
-the complete new install. The actual installation is verified and awaiting the
-human trial; runtime keyboard mapping is still unverified.
+the complete new install.
+
+The first live trial completed **225 captures in 30,057 ms**, with cleanup and
+all 17 installed hashes intact. The human reported normal walking and sprinting.
+However, both proposed pads' axes, sprint field and complete OldState arrays
+stayed zero. Pad 0's last byte pairs decode to constant floats 960/540; pad 1's
+changing pair forms a monotone 32-bit value, not plausible button values.
+The capture is preserved; this controller layout is rejected for input use.
+`EngineInputRead` is **not advertised** by this reader. Its binding exposes only
+raw candidate data for diagnosis, never engine writes or gameplay readiness.
+
+Bounded disassembly shows the static address can be replaced by a pointer at
+RVA `0x5067940`, followed by queries to separate action providers. That explains
+why the signature alone cannot identify usable controller state. The live
+alternate pointer and provider contract are not yet validated. The trial's
+result and exact raw-log fingerprint are linked by
+`Build/definitive-manual-test/current-native-pad-reference-test.json`.
+
+The capability correction passes the normal module/host builds, 1,474 module
+checks, 59 x64 host checks and three x86 rejections. Reader, snapshot and shared
+MTA synthesis checks pass on both architectures; opt-in/default classic Core
+compile-only checks pass. All 89 certified source hashes remain stable.
+Certificate:
+`Build/mta-owned-adapter-check/20261013-131359-179b301cb5fd43b4a095241b1fe834d4/test-result.json`.
+The corrected module SHA-256 is
+`0f9f42bb6ce3536f019528278ed96ac6f0b9394f09228fae91790cef6c086d85`.
 
 The factory returns no full `CGame`. Engine input writes and remote player
 context are unavailable. `--with-definitive-adapter` enables Core's early startup

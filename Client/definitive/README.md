@@ -14,17 +14,18 @@ branch rejects missing gameplay capabilities before its classic startup code.
 The module supports caller observations and now reuses Core's existing digital
 action synthesis through ABI2. Logical walk/sprint state stays separate from
 native observations. ABI3 also provides an explicit build-pinned native pad
-reader in `game_de`; its live keyboard semantics remain unverified. Engine input
+reader in `game_de`; the first live trial rejected the proposed controller layout.
+Its reads now expose only diagnostic candidate data. Engine input
 writes and remote player context are unavailable. Classic Core
 calls the same helper while retaining its bind callbacks and joystick/native
 write policy. x64 Core, full game/multiplayer and rendering services remain
 required. Current build and regression results are recorded in the
 [module documentation](../game_de/README.md) and [integration plan](MTA_REUSE_PLAN.md).
 
-**Prepared live test of MTA's native reader.**
+**Completed live test of MTA's native reader.**
 `-MtaNativePadReference` selects a separate read-only Smoke trial that compiles
 the actual `Client/game_de/NativePadReader.cpp` into this diagnostic bridge.
-It records both pads' 24-field current/previous engine states, position and raw
+It records both candidates' proposed 24-field current/previous states, position and raw
 velocity for 30 seconds. It is separate from the earlier zero-valued
 `GET_PAD_STATE` experiment and MTA's synthesized logical actions. The existing
 loader schedules observations; it does not host a complete MTA gameplay client.
@@ -32,6 +33,10 @@ Ctrl+Shift+F9 starts the trial and Ctrl+Shift+End cancels it. No NPC, transport 
 game-input writes are used. Packages now contain 17 owned files; intact older
 16-file installs remain valid, with a narrowly checked additive script upgrade.
 Use `utils/definitive_edition/native_pad_log.py` for this trial's evidence.
+The human reported normal walking and sprinting, and all 225 captures and cleanup
+completed. Both candidates' axes, sprint and previous-state fields stayed zero;
+the adapter therefore keeps `EngineInputRead` unavailable. The saved result is
+linked from `Build/definitive-manual-test/current-native-pad-reference-test.json`.
 
 The first shared slice extracts MTA's existing incremental ped position
 correction into `Shared/sdk/CPedPositionInterpolation.h`. The classic client

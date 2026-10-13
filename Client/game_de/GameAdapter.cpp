@@ -65,8 +65,8 @@ namespace mta::game_de
 
             std::uint64_t GetCapabilities() const noexcept override
             {
-                // Native read availability is added only after an explicit
-                // build/image binding; synthesis alone cannot establish it.
+                // A successful address read remains a diagnostic capability;
+                // the live trial did not establish an engine controller layout.
                 return capabilities.load();
             }
 
@@ -152,7 +152,7 @@ namespace mta::game_de
                 // Ordinary module startup does not hash the executable or
                 // touch engine memory before its owning Core requests binding.
                 const bool bound = nativePad.Bind();
-                capabilities.store(BaseCapabilities | (bound ? static_cast<std::uint64_t>(AdapterCapability::EngineInputRead) : 0));
+                capabilities.store(BaseCapabilities | (bound ? NativePadBindingCapabilities : 0));
                 return bound ? Status::Ok : Status::Unsupported;
             }
 

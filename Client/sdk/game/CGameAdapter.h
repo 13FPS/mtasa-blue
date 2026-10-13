@@ -27,8 +27,14 @@ namespace mta::game_de
         EngineInputRead = 4,
         EngineInputWrite = 8,
         RemotePlayerContext = 16,
-        MtaInputSynthesis = 32
+        MtaInputSynthesis = 32,
+        NativePadCandidateRead = 64
     };
+
+    // The first live trial contradicted the SDK controller layout: movement
+    // axes/sprint stayed zero while unrelated-looking fields changed. Reading
+    // this address is diagnostic evidence, not a verified engine input binding.
+    inline constexpr std::uint64_t NativePadBindingCapabilities = static_cast<std::uint64_t>(AdapterCapability::NativePadCandidateRead);
 
     enum class Status : std::uint32_t
     {
@@ -81,9 +87,9 @@ namespace mta::game_de
         CControllerState previous;
     };
 
-    // Raw values copied from the build-pinned engine's NewState/OldState.
-    // Reading this representation does not certify keyboard/device aggregation
-    // or mean that MTA's logical action state has been applied to the engine.
+    // Raw candidate bytes copied at the public SDK's proposed state offsets.
+    // The live trial did not validate that layout. Retain this representation
+    // for diagnosis without treating it as engine controls or applying it back.
     struct NativeControllerState
     {
         CControllerState current;

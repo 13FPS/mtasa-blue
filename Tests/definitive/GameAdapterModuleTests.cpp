@@ -377,6 +377,8 @@ namespace
 int main()
 {
     static_assert(AdapterAbiVersion == 3 && AdapterControllerMask == 0xfffff);
+    static_assert(NativePadBindingCapabilities == 64, "A raw candidate read must not advertise the unverified EngineInputRead capability");
+    static_assert((NativePadBindingCapabilities & static_cast<std::uint64_t>(AdapterCapability::EngineInputRead)) == 0);
     static_assert(std::is_nothrow_invocable_v<decltype(CreateGameAdapter), std::uint32_t>);
     try
     {

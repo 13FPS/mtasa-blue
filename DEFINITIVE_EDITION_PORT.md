@@ -1,6 +1,6 @@
 # GTA San Andreas Definitive Edition: findings and port tracker
 
-Last updated: **2026-10-13 12:40** (Europe/Luxembourg).
+Last updated: **2026-10-13 13:20** (Europe/Luxembourg).
 Experimental branch: `definitive-edition-port`.
 Source baseline: `860e41ddeb6635b5dd138fef6c8a492d2f982ce0`.
 
@@ -87,16 +87,32 @@ No unknown function signatures, private layouts or raw offsets were introduced.
 **A native pad reader is implemented inside the MTA backend.**
 Plugin-SDK's dedicated SA Unreal source supplies the pad layout and a signature;
 an offline scan of the exact known executable finds one matching instruction,
-resolving to the writable two-pad array at RVA `0x53e8810`. The source pin is
+resolving to the proposed writable two-pad candidate at RVA `0x53e8810`. The source pin is
 `15f15b60bbf74c106e1b496ff92c98764abf4605` (Zlib). This does not import the SDK's
 incomplete pool/player/script implementations or its first-match resolver.
 `NativePadReader` checks the executable fingerprint, AMD64/PE32+ bounds, live
 instruction/RIP target and committed image page protections before copying
-NewState/OldState. Its reads run on the binding thread and preserve output on
+the proposed NewState/OldState offsets. Its reads run on the binding thread and preserve output on
 failure. ABI3 exposes explicit binding and reads through the existing MTA-owned
-module consumer. EngineInputRead is conditional on successful binding; no writes,
+module consumer. A successful binding exposes only diagnostic candidate reads; no writes,
 hooks, remote-player context or gameplay startup are enabled by this slice.
-The native keyboard/device semantics have not been tested in GTA.
+The live trial below did not validate native controller semantics.
+
+**Live candidate trial: controller-layout acceptance rejected.**
+The human reported normal walking and sprinting. The reference completed 225
+captures in 30,057 ms, cleanup and script disposal; all 17 installed hashes match.
+Both proposed pads' movement axes, sprint field and entire previous-state arrays
+stayed zero. Pad 0 byte pairs decode to floats 960/540; pad 1 contains a changing
+monotone 32-bit value. These are raw observations, not verified controls.
+The module now exposes only NativePadCandidateRead for this binding and never
+EngineInputRead. No engine write or remote-player capability is enabled.
+The exact captured log is 205,599 bytes / SHA-256
+`76e4e2ca930d33487af58d6aab1924c1fc9a159ac035e9819c164c6b69a8cc14`.
+The current runtime result is linked from
+`Build/definitive-manual-test/current-native-pad-reference-test.json`.
+Bounded offline disassembly identifies the static candidate as a fallback:
+code substitutes an alternate pointer at RVA 0x5067940 before querying separate
+action providers. No live alternate pointer or provider API is validated yet.
 
 The native-reader checkpoint builds the normal Game DE/host projects and passes
 1,474 module checks, 59 x64 host checks, three x86 rejections and 1,325 bounded
@@ -107,9 +123,9 @@ Certificate:
 The actual module SHA-256 is
 `063cd5bc16c0900b498747aba226674f72bca6049145e18cd72b8225354abf7f`.
 
-**A human-run native-reader trial is installed and awaiting observation.**
+**The human-run native-reader trial completed and its evidence is saved.**
 The diagnostic bridge now compiles the exact MTA `NativePadReader.cpp`, exposes
-an additive read-only capture ABI, and snapshots both engine current/previous
+an additive read-only capture ABI, and snapshots both proposed current/previous
 24-field states before component reads. A separate bounded Smoke recorder uses
 Ctrl+Shift+F9 and logs position/raw velocity with the native states. This test
 does not instantiate full Core or write game input. The old 00E2 result remains
@@ -118,8 +134,17 @@ preserved separately. The bridge is
 Build/protocol, 43 recorder checks, 94 real-DLL ABI checks, 19 log-reader tests,
 existing adapter/transport and loader/mode checks pass. Disposable collision and
 16-to-17 migration checks pass. The actual 17-file installation and loader hashes
-are verified. Preparation and pending runtime evidence are recorded in
+are verified. Preparation and the completed runtime result are recorded in
 `Build/definitive-manual-test/current-native-pad-reference-test.json`.
+
+The corrected capability mask passes the normal Game DE/host builds, 1,474
+module checks, 59 x64 host checks and three x86 rejections. Reader and snapshot
+checks and 298,447 shared-input differential frames pass per architecture;
+opt-in/default classic Core compilation passes. All 89 certified source hashes
+remain stable. Certificate:
+`Build/mta-owned-adapter-check/20261013-131359-179b301cb5fd43b4a095241b1fe834d4/test-result.json`.
+The corrected module SHA-256 is
+`0f9f42bb6ce3536f019528278ed96ac6f0b9394f09228fae91790cef6c086d85`.
 
 **The first shared MTA correction slice is implemented.**
 `Shared/sdk/CPedPositionInterpolation.h` contains the existing incremental

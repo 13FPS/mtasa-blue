@@ -61,10 +61,18 @@ It uses Plugin-SDK's SA Unreal signature/layout after an offline unique-match
 check on the exact local executable. `NativePadReader` verifies that fingerprint,
 the loaded instruction/relative data target, image bounds and page protections.
 It copies native current/previous state on its binding thread; invalid reads
-preserve output. No hooks or engine writes are installed. `EngineInputRead` is
-advertised only while explicitly bound, and reset/shutdown discard the binding.
-This is implemented source with static-image and bounded-copy tests, not an
-in-game keyboard or remote-player validation. Full startup remains gated.
+preserve output. No hooks or engine writes are installed. `NativePadCandidateRead`
+is advertised only while explicitly bound, and reset/shutdown discard the binding.
+Static-image and bounded-copy tests establish the read contract; the live trial
+below rejects its controller interpretation. Full startup remains gated.
+
+The first live candidate trial completed 225 samples and cleanup while the
+human walked and sprinted normally. The proposed axes/sprint and OldState stayed
+zero; other bytes decode as static floats and a changing 32-bit value. The SDK
+layout is therefore not accepted as controller state, and EngineInputRead remains
+unavailable. Offline consumer code also substitutes an alternate object pointer
+before querying separate action providers. Further binding work must follow that
+active input path; neither readable bytes nor the public signature establish it.
 
 MTA's ordinary remote movement already combines synchronized controls and
 sender velocity, GTA player simulation, and correction of network position

@@ -1,6 +1,6 @@
 # GTA San Andreas Definitive Edition: findings and port tracker
 
-Last updated: **2026-10-13 14:28** (Europe/Luxembourg).
+Last updated: **2026-10-13 14:56** (Europe/Luxembourg).
 Experimental branch: `definitive-edition-port`.
 Source baseline: `860e41ddeb6635b5dd138fef6c8a492d2f982ce0`.
 
@@ -187,6 +187,35 @@ Focused checks pass: 53 recorder, 268 entry/adapter and 27 log-reader tests;
 the previous 30-second capture still passes all 225 samples. Two scripts were
 updated with backups, all 17 installed hashes verify, and the bridge is unchanged.
 The current pointer links the installed candidate, awaiting a convenient human test.
+
+**The release-started minute capture is complete.** All 449 samples validate,
+with clean disposal, normal shutdown and all 17 installed hashes intact.
+Activation release at line 44 precedes DLL access at line 45; the first capture
+is 53 ms after release, with all 127 sources at released value 1. D source 44
+is corroborated by its native key-object initializer. The capture contains D
+alone and W+LeftShift, plus 76 triple-held W/D/LeftShift captures despite the
+human's reported uncertainty in that segment. The combined segment's movement
+outcome is not established by key overlap. No repeat is required for source-read
+validation, and no engine input writes were performed.
+Final shutdown log: 589,431 bytes, SHA-256
+`9c99d9c89613109c97c642aa4e6f5fedd293eb811e872ec7dbfe20b7a1783fd6`.
+The runtime result, independent interval analysis and source-44 proof are saved
+under the current trial's `actual-source-state-20261013-143627/` directory.
+
+**Existing MTA bind-state policy is now shared.**
+`Shared/sdk/CControlBindState.h` factors the original `CallGTAControlBind` state
+decision: radio skip before mutation, release storage before the lazy other-bind
+query, multi-bind aggregation, disabled controls and wheel zoom. Classic Core
+calls it while retaining the token-identical callback loop and its context
+filtering. The helper passes 12,650 comparisons with the frozen original per
+architecture; required formatting and independent review pass. Classic Core
+Release/Win32 compile-only checks pass with the adapter option on/off, with
+all five checked source hashes stable. The current game installation is unchanged.
+Certificates:
+`Build/definitive-control-bind-state/20261013-145232-4e1b86db67ca420ba8ba8f3269c54d17/test-result.json`
+and `Build/mta-core-control-bind-check/20261013-145446-ae11adf5769745c387d3ba95b8fba81a/test-result.json`.
+This prepares Core-owned configured-input integration; DE binding-manager startup,
+engine writes and complete x64 rendering/gameplay startup remain unported.
 
 The native-reader checkpoint builds the normal Game DE/host projects and passes
 1,474 module checks, 59 x64 host checks, three x86 rejections and 1,325 bounded

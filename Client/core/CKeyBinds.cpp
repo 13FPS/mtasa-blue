@@ -16,6 +16,7 @@
 #include <game/CPools.h>
 #include <game/CTaskManager.h>
 #include <game/Task.h>
+#include <CControlBindState.h>
 
 const SBindableKey g_bkKeys[] = {{"mouse1", VK_LBUTTON, GTA_KEY_LMOUSE, DATA_NONE, 0},
                                  {"mouse2", VK_RBUTTON, GTA_KEY_RMOUSE, DATA_NONE, 0},
@@ -1138,26 +1139,11 @@ void CKeyBinds::CallGTAControlBind(CGTAControlBind* pBind, bool bState)
     if (!pBind)
         return;
 
-    // Don't allow custom track skips. Crashes for some reason.
-    if (pBind->control->action == RADIO_USER_TRACK_SKIP)
-        return;
-
-    // Set this binds state
-    pBind->state = bState;
-
-    // If its keydown, or there isnt another bind for this control down
-    if (bState || !GetMultiGTAControlState(pBind))
+    // Share configured-bind state policy while retaining Core's callback
+    // ordering, control-type filtering and function-bind state updates below.
+    if (MtaInput::UpdateControlBindState(pBind->control->action, bState, pBind->control->bEnabled, m_bMouseWheel, pBind->state, pBind->control->bState,
+                                         [&] { return GetMultiGTAControlState(pBind); }))
     {
-        // HACK: Are we're trying to ZOOM IN or ZOOM OUT using the mouse wheel?
-        bool bZoomWheel = m_bMouseWheel && (pBind->control->action == ZOOM_IN || pBind->control->action == ZOOM_OUT);
-
-        // If this control is enabled
-        // HACK: Prevent the game from using the mouse wheel to zoom *again* (it still does this itself)
-        if (pBind->control->bEnabled && !bZoomWheel)
-        {
-            pBind->control->bState = bState;
-        }
-
         for (KeyBindPtr& bind : m_binds)
         {
             if (bind->isBeingDeleted || bind->type != KeyBindType::CONTROL_FUNCTION)

@@ -51,6 +51,15 @@ keys are released and allows 60 seconds. It waits indefinitely before F9;
 the human can run the test whenever available. Complete controller mapping and
 engine writes remain unverified.
 
+The release-started minute trial completed 449 captures, clean disposal and
+normal exit. D and W+LeftShift are observed, along with 76 triple-held captures
+in the uncertain W/D/LeftShift segment. Key capture is sufficient to continue;
+that segment's movement outcome and complete controller mapping remain open.
+Core's original control-bind state policy is now shared in
+`Shared/sdk/CControlBindState.h`, with its existing callback loop retained.
+The extraction passes 12,650 oracle checks on each architecture and classic
+Core compile-only checks with the adapter option both enabled and disabled.
+
 The first shared slice extracts MTA's existing incremental ped position
 correction into `Shared/sdk/CPedPositionInterpolation.h`. The classic client
 calls it, and the same code passes 117 independent checks on both x86 and x64.

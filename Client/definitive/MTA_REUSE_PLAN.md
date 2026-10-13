@@ -82,6 +82,16 @@ capture records this table alongside the rejected SDK offsets, allowing the
 human's physical inputs to be checked without calling native query methods or
 writing engine state. Successful byte capture alone cannot enable EngineInputRead.
 
+The minute trial completes 449 captures, with D and W+LeftShift observed and
+overlapping W/D/LeftShift sources despite the uncertain combined movement.
+The binding bridge now has a shared production policy boundary:
+`CControlBindState.h` contains the original bind mutation, multi-bind release,
+disabled-control, wheel-zoom and radio-skip rules. Classic `CallGTAControlBind`
+uses it while keeping its callback loop and context filtering unchanged.
+The helper matches the frozen original policy on x86/x64. Loading DE bindings
+and feeding them through Core remain follow-up integration work; a callback-free
+replacement would lose existing MTA behavior and is not introduced here.
+
 The first Core x64 cleanup fixes the existing `StackTraceHelpers.h` callbacks
 and module descriptions to preserve native pointer widths, with read-range
 overflow rejection. The actual header passes protected-memory and real-module

@@ -130,6 +130,24 @@ activation keys to release, then allows 60 seconds. Arming before F9 has no
 deadline. This low-rate diagnostic still does not establish a complete controller
 or lossless input-event source; the adapter capabilities remain diagnostic only.
 
+The release-started minute trial completed 449 captures with zero issues and
+normal shutdown. It records D alone, W+LeftShift and 76 captures with W/D/LeftShift
+held together. The human reported normal movement and uncertainty in the combined
+segment; that segment's movement outcome remains unverified. Source 44's native
+key initializer independently identifies it as D. Activation release preceded
+DLL access, and all 127 sources were released in the first capture.
+
+The next reuse slice extracts Core's existing bind-state decision into
+`Shared/sdk/CControlBindState.h`. Classic `CallGTAControlBind` uses that helper
+while retaining its original callback loop. This prepares the configured-input
+bridge; it does not yet load MTA's bindings or write input in DE.
+
+The extracted policy passes 12,650 frozen-original comparisons per architecture;
+the callback loop remains token-identical. Classic Release/Win32 Core compiles
+with the adapter option on/off. Formatting and source-hash stability pass.
+Certificates: `Build/definitive-control-bind-state/20261013-145232-4e1b86db67ca420ba8ba8f3269c54d17/test-result.json`
+and `Build/mta-core-control-bind-check/20261013-145446-ae11adf5769745c387d3ba95b8fba81a/test-result.json`.
+
 The factory returns no full `CGame`. Engine input writes and remote player
 context are unavailable. `--with-definitive-adapter` enables Core's early startup
 check, which rejects these missing capabilities before the CCore constructor's

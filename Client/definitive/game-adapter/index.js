@@ -82,6 +82,43 @@ function runAdapter() {
             }
         }
     }
+    if (MTA_NATIVE_PAD_REFERENCE) {
+        // Holding the activation modifiers contaminated the prior source-state
+        // window. Begin DLL access and the recorder only after their release,
+        // while keeping cancellation and a finite pre-binding deadline.
+        enterPhase('awaiting_activation_release');
+        const releaseStartedAt = Date.now();
+        if (!Number.isSafeInteger(releaseStartedAt) || releaseStartedAt < 0)
+            throw new Error('Invalid native source activation release clock');
+        let lastReleaseAt = releaseStartedAt;
+        while (true) {
+            if (chordHeld([17, 16, 35])) {
+                emit({ event: 'adapter_activation_cancelled', reason: stopKey, mode: MODE,
+                    bridge_loaded: false, game_adapter_active: false, network_active: false });
+                return;
+            }
+            const now = Date.now();
+            if (!Number.isSafeInteger(now) || now < lastReleaseAt)
+                throw new Error('Invalid native source activation release clock');
+            lastReleaseAt = now;
+            if (now - releaseStartedAt >= 10000) {
+                emit({ event: 'adapter_activation_release_timeout', mode: MODE, activate_key: activateKey,
+                    at_ms: now, release_wait_ms: now - releaseStartedAt,
+                    bridge_loaded: false, game_adapter_active: false, network_active: false });
+                throw new Error('Native source activation release timed out');
+            }
+            if (!native('IS_PLAYER_PLAYING', 0))
+                throw new Error('Player readiness lost while waiting for native source activation release');
+            const activationHeld = [17, 16, 120].map(key => native('IS_KEY_PRESSED', key));
+            if (activationHeld.every(held => !held)) {
+                emit({ event: 'adapter_activation_released', mode: MODE, activate_key: activateKey,
+                    at_ms: now, release_wait_ms: now - releaseStartedAt,
+                    bridge_loaded: false, game_adapter_active: false, network_active: false });
+                break;
+            }
+            wait(50);
+        }
+    }
     if (!Memory.Fn || typeof DataView !== 'function')
         throw new Error('CLEO x64 memory helpers are unavailable');
 

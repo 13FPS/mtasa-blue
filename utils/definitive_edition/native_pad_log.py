@@ -13,7 +13,7 @@ try:
 except ImportError:
     from session_log import MAX_LOG_BYTES, json_event, read_snapshot
 
-MAX_EVENTS = 512
+MAX_EVENTS = 1024
 PROVENANCE = "mta_game_de_native_pad_reader"
 FLAGS = {"network_active", "input_writes", "remote_peds_created"}
 COMMON = {"event", "reference_id", "ped", "at_ms", "elapsed_ms", "provenance", "field_count", "pad_count",
@@ -159,7 +159,7 @@ def analyze_log(text, require_complete=False, require_device_states=False):
                 invalid(event, "Unknown reset reason")
         elif kind == "native_pad_reference_started":
             exact(event, {"duration_ms", "sample_interval_ms", "max_samples", "render_gap_ms", "readiness_budget_ms"})
-            for key, low, high in (("duration_ms", 1, 30000), ("sample_interval_ms", 100, 2000), ("max_samples", 1, 300),
+            for key, low, high in (("duration_ms", 1, 60000), ("sample_interval_ms", 100, 2000), ("max_samples", 1, 600),
                                    ("render_gap_ms", 1, 2000), ("readiness_budget_ms", 1, 10000)):
                 if type(event.get(key)) is not int or not low <= event[key] <= high:
                     invalid(event, "Unbounded declared sampling option: " + key)
@@ -233,7 +233,7 @@ def analyze_log(text, require_complete=False, require_device_states=False):
         "one_reference_finished": counts["native_pad_reference_finished"] == 1,
         "one_reference_stopped": counts["native_pad_reference_stopped"] == 1,
         "normal_completion": finished is not None and isinstance(finished.get("reason"), str) and finished["reason"] in NORMAL,
-        "samples_present": 0 < len(accepted) <= 300, "valid_payloads": not issues and not rejected, "no_failures": not failures,
+        "samples_present": 0 < len(accepted) <= 600, "valid_payloads": not issues and not rejected, "no_failures": not failures,
         "required_device_states_present": not require_device_states or capture_version == 2 and bool(accepted),
     }
     complete = all(lifecycle.values())

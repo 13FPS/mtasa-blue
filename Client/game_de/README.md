@@ -122,6 +122,14 @@ All 91 source hashes remain stable. Certificate:
 The installed source-table trial is linked from the current native-pad reference
 pointer; its physical mapping remains pending the human test.
 
+The first source-table trial completed 225 captures and normal shutdown. Native
+key-name initialization corroborates W=29, S=43 and A=42 in their recorded spans.
+The native state writer distinguishes press/held (2/3) from release/rest (0/1).
+D and sprint were beyond the 30-second window. The next recorder waits for all
+activation keys to release, then allows 60 seconds. Arming before F9 has no
+deadline. This low-rate diagnostic still does not establish a complete controller
+or lossless input-event source; the adapter capabilities remain diagnostic only.
+
 The factory returns no full `CGame`. Engine input writes and remote player
 context are unavailable. `--with-definitive-adapter` enables Core's early startup
 check, which rejects these missing capabilities before the CCore constructor's

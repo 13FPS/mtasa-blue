@@ -143,6 +143,28 @@ class NativePadLogTests(unittest.TestCase):
                 with contextlib.redirect_stdout(io.StringIO()):
                     self.assertEqual(reader.main(["--log", str(log), "--output", str(output), "--require-device-states"]), expected)
 
+    def test_full_minute_device_reference_and_cleanup(self):
+        rows = with_device_states(fixture(480, finish_at=EPOCH+60000))
+        rows[3].update(duration_ms=60000, max_samples=600)
+        report = reader.analyze_log(encode(rows), True, True)
+        self.assertTrue(report["native_pad_reference_complete"], report["issues"])
+        self.assertEqual(report["accepted_sample_count"], 480)
+
+    def test_six_hundred_capture_budget_remains_bounded(self):
+        rows = with_device_states(fixture(600, 100, "sample_budget"))
+        rows[3].update(duration_ms=60000, max_samples=600)
+        self.assertTrue(self.report(rows)["native_pad_reference_complete"])
+        rows[3]["max_samples"] = 601
+        self.reject(rows)
+
+    def test_longer_reference_still_rejects_deadline_and_capture_gaps(self):
+        rows = with_device_states(fixture(480, finish_at=EPOCH+60000))
+        rows[3].update(duration_ms=60001, max_samples=600)
+        self.reject(rows)
+        rows[3]["duration_ms"] = 60000
+        samples(rows)[200]["at_ms"] += 2001
+        self.reject(rows)
+
     def test_missing_cleanup_never_completes_and_preserves_data(self):
         rows = [row for row in fixture() if not (row["event"] == "native_pad_reference_reset" and row["reason"] == "cleanup")]
         report = self.reject(rows)

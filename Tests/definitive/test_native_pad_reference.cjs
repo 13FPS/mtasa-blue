@@ -65,13 +65,15 @@ const finish = f => f.events.find(e => e.event === 'native_pad_reference_finishe
         const f = fixture(Controller); [0, 0, 50, 124, 125, 125, 200, 260].forEach(f.tick);
         assert.deepEqual(samples(f).map(e => e.at_ms), [0, 125, 260]); assert.equal(count(f, 'capture'), 3);
     });
-    test('default trial stops at 30 seconds with 240 samples and cleanup', () => {
-        const f = fixture(Controller); for (let t = 0; t <= 30000; t += 125) f.tick(t);
-        assert.equal(samples(f).length, 240); assert.equal(finish(f).reason, 'time_budget'); assert.equal(count(f, 'reset'), 2);
+    test('default trial stops at 60 seconds with 480 samples and cleanup', () => {
+        const f = fixture(Controller); for (let t = 0; t <= 60000; t += 125) f.tick(t);
+        assert.equal(samples(f).length, 480); assert.equal(finish(f).reason, 'time_budget'); assert.equal(count(f, 'reset'), 2);
+        const start = f.events.find(event => event.event === 'native_pad_reference_started');
+        assert.equal(start.duration_ms, 60000); assert.equal(start.max_samples, 600); assert.equal(start.sample_interval_ms, 125);
     });
-    test('hard sample cap prevents more than 300 captures', () => {
-        const f = fixture(Controller, { sampleIntervalMs: 100 }); for (let t = 0; t <= 30100; t += 100) f.tick(t);
-        assert.equal(samples(f).length, 300); assert.equal(finish(f).reason, 'sample_budget'); assert.equal(count(f, 'capture'), 300);
+    test('hard sample cap prevents more than 600 captures', () => {
+        const f = fixture(Controller, { sampleIntervalMs: 100 }); for (let t = 0; t <= 60100; t += 100) f.tick(t);
+        assert.equal(samples(f).length, 600); assert.equal(finish(f).reason, 'sample_budget'); assert.equal(count(f, 'capture'), 600);
     });
     test('waiting for first readiness is bounded and does not bind', () => {
         const f = fixture(Controller); f.state.ready = false;
@@ -132,7 +134,7 @@ const finish = f => f.events.find(e => e.event === 'native_pad_reference_finishe
         f.bridge.reset = () => { throw new Error('reset failure'); }; assert.throws(() => f.tick(125), caught => caught === original);
         assert.ok(f.events.some(e => e.event === 'cleanup_failed')); assert.equal(f.controller.running, false);
     });
-    for (const options of [{ durationMs: 30001 }, { durationMs: Infinity }, { sampleIntervalMs: 99 }, { maxSamples: 301 }, { renderGapMs: 2001 }])
+    for (const options of [{ durationMs: 60001 }, { durationMs: Infinity }, { sampleIntervalMs: 99 }, { maxSamples: 601 }, { renderGapMs: 2001 }])
         test('unbounded options fail before native access', () => assert.throws(() => fixture(Controller, options), /Invalid native pad option/));
     console.log('Passed ' + tests + ' native pad reference checks');
 })().catch(error => { console.error(error); process.exitCode = 1; });

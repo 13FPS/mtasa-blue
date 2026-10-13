@@ -45,6 +45,12 @@ from the rejected pad layout. Use the log reader's `--require-device-states`
 option for this candidate; older pad-only recordings remain readable but cannot
 validate the new capture. Physical key/action mapping is still unverified.
 
+The first source capture now confirms the native W/S/A sources. D and sprint
+were beyond its 30-second window, so the recorder now starts after all activation
+keys are released and allows 60 seconds. It waits indefinitely before F9;
+the human can run the test whenever available. Complete controller mapping and
+engine writes remain unverified.
+
 The first shared slice extracts MTA's existing incremental ped position
 correction into `Shared/sdk/CPedPositionInterpolation.h`. The classic client
 calls it, and the same code passes 117 independent checks on both x86 and x64.

@@ -1234,9 +1234,43 @@ async function main() {
     });
     test('MTA source-state entry rejects an older bridge before native input binding', () => {
         const result = runEntry({ mtaNativePadReference: true, functions: { DE_NativeDeviceRead: null },
-            keyFrames: [[17, 16, 120]], times: [0] });
+            keyFrames: [[17, 16, 120], []], times: [0, 50] });
         assert.ok(result.logs.some(event => event.event === 'adapter_failed' && event.error.includes('DE_NativeDeviceRead')));
         assert.ok(!result.calls.some(call => ['DE_NativePadBind', 'DE_NativePadCapture'].includes(call[0])));
+    });
+    test('native source reference waits until all activation keys are released before DLL access or recording', () => {
+        const result = runEntry({ mtaNativePadReference: true,
+            keyFrames: [[17, 16, 120], [17, 16], [16], [120], [], [17, 16, 35]], times: [0, 50, 100, 150, 200, 250],
+            natives: { GET_CHAR_VELOCITY: () => ({ x: 0, y: 0, z: 0 }) } });
+        assert.equal(result.calls.filter(call => call[0] === 'DynamicLibrary.Load').length, 1);
+        assert.equal(result.callFrames.find(call => call.name === 'DynamicLibrary.Load').frame, 4);
+        assert.ok(!result.runtimeAccess.some(access => access.frame < 4));
+        const released = result.logs.find(event => event.event === 'adapter_activation_released');
+        assert.equal(released.mode, 'smoke'); assert.equal(released.activate_key, 'Ctrl+Shift+F9'); assert.equal(released.release_wait_ms, 200);
+        assert.ok(result.logs.indexOf(released) < result.logs.findIndex(event => event.phase === 'bridge_load'));
+        const first = result.logs.find(event => event.event === 'native_pad_sample');
+        assert.equal(first.at_ms, 200); assert.equal(first.elapsed_ms, 0);
+        assert.ok(result.waits.every(wait => wait.milliseconds === 50));
+    });
+    test('native source release wait gives End cancellation priority without DLL access', () => {
+        const result = runEntry({ mtaNativePadReference: true, keyFrames: [[17, 16, 120], [17, 16, 120, 35]], times: [0, 10000] });
+        assert.equal(result.logs.at(-1).event, 'adapter_activation_cancelled');
+        assert.ok(!result.calls.some(call => call[0] === 'DynamicLibrary.Load'));
+        assert.ok(!result.logs.some(event => event.event === 'adapter_failed' || event.event === 'native_pad_reference_started'));
+    });
+    test('native source release wait times out before DLL access even if a single key remains', () => {
+        const result = runEntry({ mtaNativePadReference: true,
+            keyFrames: [[17, 16, 120], [120], [120]], times: [0, 9999, 10000] });
+        assert.ok(result.logs.some(event => event.event === 'adapter_activation_release_timeout'));
+        assert.match(result.logs.at(-1).error, /release timed out/);
+        assert.ok(!result.calls.some(call => call[0] === 'DynamicLibrary.Load'));
+        assert.deepEqual(result.runtimeAccess, []);
+    });
+    test('native source readiness loss while waiting for release fails before binding', () => {
+        const result = runEntry({ mtaNativePadReference: true,
+            keyFrames: [[17, 16, 120], []], readyFrames: [true, false], times: [0, 50] });
+        assert.match(result.logs.at(-1).error, /readiness lost/);
+        assert.ok(!result.calls.some(call => call[0] === 'DynamicLibrary.Load'));
     });
     test('MTA native pad entry rejects incompatible modes before DLL access', () => {
         for (const overrides of [{ mode: 'online' }, { inputReference: true }, { reference: true }]) {

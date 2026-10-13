@@ -7,11 +7,11 @@ const validPed = value => Number.isSafeInteger(value) && value > 0 && value <= 0
 // bytes for comparison and observe the provider's source table separately;
 // neither representation establishes physical keys or previous-frame semantics.
 export class MtaNativePadReferenceController {
-    constructor(game, bridge, { log = () => {}, stopReason = 'Ctrl+Shift+End', durationMs = 30000,
-        sampleIntervalMs = 125, maxSamples = 300, renderGapMs = 2000, readinessBudgetMs = 10000 } = {}) {
+    constructor(game, bridge, { log = () => {}, stopReason = 'Ctrl+Shift+End', durationMs = 60000,
+        sampleIntervalMs = 125, maxSamples = 600, renderGapMs = 2000, readinessBudgetMs = 10000 } = {}) {
         for (const [name, value, low, high] of [
-            ['durationMs', durationMs, 1, 30000], ['sampleIntervalMs', sampleIntervalMs, 100, 2000],
-            ['maxSamples', maxSamples, 1, 300], ['renderGapMs', renderGapMs, 1, 2000], ['readinessBudgetMs', readinessBudgetMs, 1, 10000]
+            ['durationMs', durationMs, 1, 60000], ['sampleIntervalMs', sampleIntervalMs, 100, 2000],
+            ['maxSamples', maxSamples, 1, 600], ['renderGapMs', renderGapMs, 1, 2000], ['readinessBudgetMs', readinessBudgetMs, 1, 10000]
         ]) if (!Number.isSafeInteger(value) || value < low || value > high) throw new Error('Invalid native pad option ' + name);
         this.game = game; this.bridge = bridge; this.log = log; this.stopReason = stopReason;
         this.durationMs = durationMs; this.sampleIntervalMs = sampleIntervalMs; this.maxSamples = maxSamples;

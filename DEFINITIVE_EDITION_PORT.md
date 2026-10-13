@@ -1,6 +1,6 @@
 # GTA San Andreas Definitive Edition: findings and port tracker
 
-Last updated: **2026-10-13 13:52** (Europe/Luxembourg).
+Last updated: **2026-10-13 14:28** (Europe/Luxembourg).
 Experimental branch: `definitive-edition-port`.
 Source baseline: `860e41ddeb6635b5dd138fef6c8a492d2f982ce0`.
 
@@ -163,6 +163,30 @@ Capture version 2 records source values beside the rejected SDK pad fields.
 The strict assessment must use `--require-complete --require-device-states`;
 an older pad-only capture cannot qualify. The new human trial remains pending,
 linked from `Build/definitive-manual-test/current-native-pad-reference-test.json`.
+
+**The source-table trial now has live W/S/A evidence.** Its 225 version-2
+captures complete with zero issues and clean disposal. The game's key-object
+initializers identify source 29 as W, 43 as S and 42 as A; their held spans
+match the reported sequence. Sources 9/54/66 identify F9/LeftShift/LeftControl
+and cover the initial shortcut hold. The state writer establishes 2=new press,
+3=continued held, 0=new release and 1=resting released. These indices are not
+Windows virtual-key codes. The 125 ms recorder can miss transition edges and
+does not establish a complete canonical controller or lossless event source.
+
+D and sprint were outside the captured window; the reported extra D during
+sprint does not invalidate the observed W/S/A spans. The final shutdown log
+is 302,125 bytes, SHA-256
+`01f1e33b801dc6b1ccaec93e93b4391c810d9b765d5619a47437bc02930d432c`.
+Exact intervals and the bounded source-name/state-writer proof are saved under
+the previous trial's `actual-source-state-20261013-141428/` directory.
+
+The timing fix waits for all Ctrl/Shift/F9 keys to be released before DLL access
+or recorder timing. Only that release wait has a 10-second deadline; arming
+before F9 remains indefinite. The observation now allows 60 seconds/600 samples.
+Focused checks pass: 53 recorder, 268 entry/adapter and 27 log-reader tests;
+the previous 30-second capture still passes all 225 samples. Two scripts were
+updated with backups, all 17 installed hashes verify, and the bridge is unchanged.
+The current pointer links the installed candidate, awaiting a convenient human test.
 
 The native-reader checkpoint builds the normal Game DE/host projects and passes
 1,474 module checks, 59 x64 host checks, three x86 rejections and 1,325 bounded

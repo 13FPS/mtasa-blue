@@ -142,13 +142,29 @@ extern "C" __declspec(dllexport) std::uint32_t MTA_ConfigureDERenderReferenceV4(
     return 1;
 }
 
+extern "C" __declspec(dllexport) std::uint32_t MTA_DERenderReferenceApiVersionV5()
+{
+    Call(7);
+    return 5;
+}
+extern "C" __declspec(dllexport) std::uint32_t MTA_ConfigureDERenderReferenceV5(std::uint32_t duration, std::uint32_t route,
+                                                                                DefinitiveInputReference::CancelCallback  cancelled,
+                                                                                DefinitiveInputReference::PublishCallback publish)
+{
+    Call(8);
+    if (duration != DefinitiveRenderReference::MaximumDurationMs || route != 2 || !cancelled || !publish)
+        return 0;
+    inputRequest = {duration, cancelled, publish, false, true, route, 5};
+    return 1;
+}
+
 template <typename SnapshotType>
 void ControlledRender()
 {
     using namespace DefinitiveRenderReference;
     constexpr auto count = static_cast<std::uint32_t>(std::tuple_size<SnapshotType>::value);
     SnapshotType   sample{};
-    sample[Version] = count == FieldCountV4 ? 4u : count == FieldCountV3 ? 3u : count == FieldCountV2 ? 2u : 1u;
+    sample[Version] = count == FieldCountV5 ? 5u : count == FieldCountV4 ? 4u : count == FieldCountV3 ? 3u : count == FieldCountV2 ? 2u : 1u;
     sample[Phase] = sample[Sequence] = sample[SampleCount] = 1;
     sample[ObserverStarted] = sample[Bound] = sample[Active] = 1;
     sample[PresentCallbacksLow] = sample[AcceptedSnapshotsLow] = 10;
@@ -197,6 +213,7 @@ void ControlledRender()
             sample[QueuePresent] = inputRequest.renderRoute == 2 ? 1u : 0u;
             sample[PresentCallbacksLow] = sample[AcceptedSnapshotsLow] = 10;
             sample[NativeOriginalReturned] = 1;
+            sample[25] = GetCurrentThreadId();
             sample[Width] = 1280;
             sample[Height] = 720;
         }
@@ -222,7 +239,7 @@ void ControlledRender()
             sample[SwapchainFormat] = sample[BackbufferFormat] = 87;
             sample[BackbufferSampleCount] = 1;
             sample[QueryStatus] = failed ? 3u : 1u;
-            if constexpr (count == FieldCountV4)
+            if constexpr (count >= FieldCountV4)
             {
                 // Classification is transported independently of COM success
                 // and cannot turn the custom-present GPU exclusion into support.
@@ -235,6 +252,23 @@ void ControlledRender()
                 sample[81] = unknown ? 0u : 1u;
                 sample[82] = unknown ? 0u : 127u;
                 sample[83] = unknown ? 0u : 15u;
+                if constexpr (count == FieldCountV5)
+                {
+                    // Controlled scalars prove transport and retained teardown,
+                    // not the actual system Present or engine buffer association.
+                    sample[84] = unknown ? 10u : failed ? 5u : 2u;
+                    sample[85] = 1;
+                    sample[86] = unknown ? 0u : failed ? 1u : 255u;
+                    sample[88] = sample[89] = unknown ? 0u : 1u;
+                    sample[91] = failed || unknown ? 0u : 1u;
+                    sample[92] = 10;
+                    sample[93] = 2;
+                    sample[95] = 1;
+                    sample[94] = failed ? 10u : 0u;
+                    sample[104] = unknown ? 0u : sample[25];
+                    sample[108] = unknown ? 0u : failed ? 3u : 9u;
+                    sample[109] = failed ? static_cast<std::uint32_t>(E_NOINTERFACE) : 0u;
+                }
             }
         }
     }
@@ -367,7 +401,9 @@ extern "C" __declspec(dllexport) int InitializeCore()
         return 0;
     if (mtaSet && gtaSet && inputRequest.renderObservation)
     {
-        if (inputRequest.renderApiVersion == 4)
+        if (inputRequest.renderApiVersion == 5)
+            ControlledRender<DefinitiveRenderReference::SnapshotV5>();
+        else if (inputRequest.renderApiVersion == 4)
             ControlledRender<DefinitiveRenderReference::SnapshotV4>();
         else if (inputRequest.renderApiVersion == 3)
             ControlledRender<DefinitiveRenderReference::SnapshotV3>();

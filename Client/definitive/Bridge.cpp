@@ -385,6 +385,26 @@ std::uint32_t DE_CoreRenderReadV4(std::uint32_t component)
     return ControllerAccessAllowed() ? coreStartup.ReadRenderV4(component) : 0;
 }
 
+std::uint32_t DE_CoreRenderApiVersionV5()
+{
+    return DefinitiveRenderReference::ApiVersionV5;
+}
+
+int DE_CoreRenderBeginV5(std::uint32_t route)
+{
+    return ControllerAccessAllowed() && !movementAdapter && !client && coreStartup.BeginRenderReferenceV5(&moduleAnchor, route) ? 1 : 0;
+}
+
+int DE_CoreRenderCaptureV5()
+{
+    return ControllerAccessAllowed() && coreStartup.CaptureRenderV5() ? 1 : 0;
+}
+
+std::uint32_t DE_CoreRenderReadV5(std::uint32_t component)
+{
+    return ControllerAccessAllowed() ? coreStartup.ReadRenderV5(component) : 0;
+}
+
 int DE_Pump()
 {
     try

@@ -23,6 +23,22 @@ account for the presenter's Social Club callback and release GUI-held
 backbuffers after the native queue drain and before resize. No MTA GUI is
 installed into GTA yet; the tested read-only runtime remains installed.
 
+**Next read-only trial: actual standard Present and backbuffer association.**
+The API5 candidate checks the standard DXGI Present entry after the native
+Social Club callback, using the existing MTA Core owner and startup worker.
+Live validation is pending. Its object and CPU tracker observations cannot
+establish GPU completion, resource state or permission to draw. No GUI, input
+writes or GPU commands are included; the port remains EXPERIMENTAL.
+
+The final offline suites pass 2,606 native checks, 1,618 module checks,
+892 x64/3 x86 normal-module consumer checks, 10,280 lifecycle checks on each
+architecture, 41 worker scenarios, 293 bridge protocol/1,482 ABI checks,
+542 script checks and 64 reader methods. Package ownership passes 663 checks.
+The normal Core/Game DE build passes 219 actual Core startup checks in each
+folder layout, with classic Win32 compilation and default x64 exclusion intact.
+The separately sealed GUI asset-root proof remains historical; this trial
+ships the 23-file diagnostic bundle without cgui or GUI assets.
+
 **Historical live renderer diagnostic: clean lifecycle, no D3D11 callbacks.**
 The ten-second Core-owned trial ran for **10,004 ms**, with **198 Core samples
 and 87 script snapshots**. All native callback counters stayed zero. The user
@@ -275,7 +291,7 @@ Core and worker for retries. A two-second cleanup deadline records failure
 without permitting unload. Ended state is copied before lease release, and the
 terminal Core diagnostics preserve the actual backend PIN.
 
-Final offline checks pass: 2,466 native callback checks, 1,579 module checks,
+The preceding API4 offline checks passed: 2,466 native callback checks, 1,579 module checks,
 718 x64/3 x86 Core consumer checks against the exact normal Game DE DLL,
 8,448 lifecycle checks on each architecture, all 32 worker scenarios,
 293 bridge protocol/1,247 ABI checks, 503 script checks and 46 renderer log-reader tests.
@@ -1210,3 +1226,14 @@ is preserved. Public redistribution compatibility remains unresolved.
 See [DEFINITIVE_EDITION_PORT.md](../../DEFINITIVE_EDITION_PORT.md) for the complete
 audit and tracker. Commit messages should state goals, motivation, implementation
 reasoning, tests performed and remaining limitations.
+
+
+### API5 scoped Present association reference
+
+`-MtaCoreRenderFrameBoundaryReference` separately admits the read-only API5 observer in Smoke mode. It also requires `-MtaCoreRenderReference -MtaCoreRenderRoute D3D12 -MtaCoreRenderGpuReference -MtaCoreRenderCustomPresentReference`. Every source flag defaults to false; ordinary mode changes clear this additional lease, and historical configurations cannot infer it from API4 recognition.
+
+The worker requests API5 explicitly and transports 110 unsigned scalar fields. The first 84 preserve API4, with version5, followed by scoped natural Present status, endpoint profile, CPU buffer/queue association facts, original and query HRESULTs, split64 lifecycle counters, thread IDs and query stage. API1 through API4 retain their separate factories and snapshot widths.
+
+`ObservedCoherent=2`, endpoint profile1 and facts255 identify a logged coherent Present-entry association sample. Reader outputs `native_present_observed` and `buffer_association_observed` count only valid sampled coherent reports without native failure or any whole-log issue; cumulative counters cannot reconstruct unsampled successes. A later fatal callback can retain an earlier boundary cache without becoming a new positive sample. These facts do not establish GPU completion, resource state, visible presentation, a drawing boundary or permission to issue GPU commands. GPU ownership, frame-boundary verification, drawing and full startup remain unverified.
+
+Core, the backend and installed files remain retained while cleanup is pending. Cancellation and cleanup deadlines never authorize unloading active hooks. The frontend only polls scalar caches and requests worker cancellation; it receives no native interface pointers and does not call Present, draw, copy or engine input functions.

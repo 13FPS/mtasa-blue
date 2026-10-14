@@ -1205,6 +1205,7 @@ async function main() {
             MTA_CORE_RENDER_ROUTE: overrides.mtaCoreRenderRoute ?? 'd3d11',
             MTA_CORE_RENDER_GPU_REFERENCE: overrides.mtaCoreRenderGpuReference ?? false,
             MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE: overrides.mtaCoreRenderCustomPresentReference ?? false,
+            MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE: overrides.mtaCoreRenderFrameBoundaryReference ?? false,
             Date: { now: () => overrides.times ? overrides.times[frame] : frame * 50 },
             CLEO: { version: overrides.version || '1.5.1', apiVersion: overrides.definitions || '0.500', hostVersion: '1.0.113.49697469' },
             native: (name, ...args) => { record(name, ...args);
@@ -1281,6 +1282,109 @@ async function main() {
                 DE_CoreRenderReadV4: field => coreCustomState({ ...(polls < 2 ? { 1: 1, 2: 1, 3: 0, 4: 0, 5: 1, 6: 0, 7: 0, 13: 1 } : {}),
                     ...overrides.renderState })[field], ...overrides.functions } });
     };
+    const coreBoundaryState = (overrides = {}) => {
+        const state = coreCustomState({ 0: 5 }).concat(Array(26).fill(0));
+        Object.assign(state, { 84: 2, 85: 1, 86: 255, 88: 1, 89: 1, 91: 1, 92: 600, 104: 42, 108: 9 }, overrides);
+        return state;
+    };
+    const coreBoundary = (overrides = {}) => {
+        let polls = 0;
+        return coreCustom({ mtaCoreRenderFrameBoundaryReference: true, ...overrides,
+            functions: { DE_CoreRenderApiVersionV5: () => 5, DE_CoreRenderBeginV5: () => 1, DE_CoreRenderCaptureV5: () => 1,
+                DE_CoreStartupPoll: () => ++polls >= 2 ? 1 : 0,
+                DE_CoreRenderReadV5: field => coreBoundaryState({ ...(polls < 2 ? { 1: 1, 2: 1, 3: 0, 4: 0, 5: 1, 6: 0, 7: 0, 13: 1 } : {}),
+                    ...overrides.renderState })[field], ...overrides.functions } });
+    };
+    test('API5 carries scalar110 separately and never promotes coherent CPU association to GPU readiness', () => {
+        const result = coreBoundary();
+        assert.deepEqual(result.calls.find(call => call[0] === 'DE_CoreRenderBeginV5'), ['DE_CoreRenderBeginV5', 2]);
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreRenderReadV5').length, 220);
+        assert.ok(!result.calls.some(call => /DE_CoreRender.*V[234]/.test(call[0])));
+        const start = result.logs.find(event => event.event === 'core_render_reference_started');
+        assert.equal(start.core_api, 9); assert.equal(start.observation_api, 5); assert.equal(start.requested_route, 2);
+        const finish = result.logs.find(event => event.event === 'core_render_reference_finished');
+        assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true);
+        for (const flag of ['full_core_ready', 'rendering_started', 'network_active', 'input_writes', 'remote_peds_created']) assert.equal(finish[flag], false);
+        for (const { state } of result.logs.filter(event => event.event === 'core_render_reference_sample')) {
+            assert.equal(state.length, 110); assert.equal(state[53], 0); assert.equal(state[80], 2);
+            assert.deepEqual(Array.from(state.slice(84, 87)), [2, 1, 255]);
+        }
+        assert.ok(!result.calls.some(call => /DE_Connect|DE_MtaMovement|DE_CoreInput|DE_CoreMovement|GET_CHAR/.test(call[0])));
+    });
+    for (const override of [{ mtaCoreRenderCustomPresentReference: false }, { mtaCoreRenderGpuReference: false },
+            { mtaCoreRenderReference: false }, { mtaCoreRenderRoute: 'd3d11' }, { mtaCoreRenderFrameBoundaryReference: 'true' }])
+        test('API5 requires each explicit independent admission ' + JSON.stringify(override), () => {
+            const result = coreBoundary(override); assert.equal(result.calls.length, 0);
+            assert.ok(result.logs.some(event => event.event === 'adapter_failed'));
+        });
+    for (const value of [undefined, () => 4, () => 6])
+        test('API5 missing or wrong version cannot fall back to classification ' + String(value), () => {
+            const result = coreBoundary({ functions: { DE_CoreRenderApiVersionV5: value } });
+            assert.ok(!result.calls.some(call => /DE_CoreRenderBegin/.test(call[0])));
+        });
+    for (const [field, value] of [[84, 0], [84, 11], [85, 0], [85, 2], [86, 254], [86, 256], [87, 0x80004005],
+            [88, 2], [89, 16], [90, 1], [91, 0], [91, 2], [94, 601], [104, 43], [107, 1], [107, 4], [108, 8], [108, 10], [109, 1]])
+        test('API5 rejects contradictory complete association ' + field + ':' + value, () => {
+            const result = coreBoundary({ renderState: { [field]: value } });
+            assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 1);
+            assert.ok(!result.logs.some(event => event.event === 'core_render_reference_finished'));
+        });
+    for (const tail of [
+        { 84: 1, 85: 0, 86: 0, 88: 0, 89: 0, 91: 0, 104: 0, 108: 0 },
+        { 84: 10, 86: 0, 88: 0, 89: 0, 91: 0, 104: 0, 108: 0 },
+        { 84: 3, 86: 25, 91: 0, 94: 600, 108: 4, 109: 1 },
+        { 84: 5, 86: 25, 91: 0, 94: 600, 108: 3, 109: 0x80004002 },
+        { 84: 5, 94: 600, 109: 0x8000ffff },
+        { 84: 6, 86: 127, 94: 600, 108: 8, 109: 1 },
+        { 84: 7, 86: 127, 94: 600, 107: 1 },
+        { 84: 9, 87: 0x80004005, 94: 600 }])
+        test('API5 preserves an incomplete boundary diagnostic and clean lifecycle ' + JSON.stringify(tail), () => {
+            const result = coreBoundary({ renderState: tail });
+            const finish = result.logs.find(event => event.event === 'core_render_reference_finished');
+            assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true);
+            assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 0);
+        });
+    test('API5 pre-entry endpoint change preserves zero/current historical counters without fabricating Present', () => {
+        for (const cumulative of [0, 600]) {
+            const state = { 84: 8, 86: 0, 88: 0, 89: 0, 91: 0, 92: cumulative, 94: cumulative, 104: 0, 108: 0 };
+            const result = coreBoundary({ renderState: state });
+            assert.equal(result.logs.find(event => event.event === 'core_render_reference_finished').passed, false);
+            const forged = coreBoundary({ renderState: { ...state, 87: 1 } });
+            assert.ok(!forged.logs.some(event => event.event === 'core_render_reference_finished'));
+        }
+        const staleRoots = coreBoundary({ renderState: { 84: 7, 94: 600, 107: 1 } });
+        assert.ok(!staleRoots.logs.some(event => event.event === 'core_render_reference_finished'));
+    });
+    test('API5 all split64 counters preserve carry and reject later regression', () => {
+        let polls = 0;
+        const initial = coreBoundaryState({ 1: 1, 2: 1, 3: 0, 4: 0, 5: 1, 6: 0, 7: 0, 13: 1, 92: 0xffffffff });
+        const terminal = coreBoundaryState({ 92: 0, 93: 1 });
+        const good = coreBoundary({ functions: { DE_CoreStartupPoll: () => ++polls >= 2 ? 1 : 0,
+            DE_CoreRenderReadV5: field => (polls < 2 ? initial : terminal)[field] } });
+        assert.equal(good.logs.find(event => event.event === 'core_render_reference_finished').cleanup_passed, true);
+        for (const pair of [92, 94, 96, 98, 100, 102]) {
+            polls = 0; const prior = coreBoundaryState({ 1: 1, 2: 1, 3: 0, 4: 0, 5: 1, 6: 0, 7: 0, 13: 1, [pair]: pair === 92 ? 601 : 1 });
+            const later = coreBoundaryState();
+            const bad = coreBoundary({ functions: { DE_CoreStartupPoll: () => ++polls >= 2 ? 1 : 0,
+                DE_CoreRenderReadV5: field => (polls < 2 ? prior : later)[field] } });
+            assert.ok(!bad.logs.some(event => event.event === 'core_render_reference_finished'));
+        }
+    });
+    test('API5 fatal earlier GPU cleanup may have no boundary attempt or retain historical cached association', () => {
+        const fatal = coreBoundaryState({ 13: 0, 30: 10, 50: 18, 51: 0x8000ffff, 52: 0, 75: 6 });
+        fatal.fill(0, 84);
+        let polls = 0;
+        const noAttempt = coreBoundary({ functions: { DE_CoreStartupPoll: () => ++polls >= 2 ? 1 : 0,
+            DE_CoreRenderReadV5: field => ({ ...fatal, ...(polls < 2 ? { 1: 1, 2: 1, 3: 0, 4: 0, 5: 1, 6: 0, 7: 0 } : {}) })[field] } });
+        assert.equal(noAttempt.logs.find(event => event.event === 'core_render_reference_finished').passed, false);
+        polls = 0;
+        const initial = coreBoundaryState({ 1: 1, 2: 1, 3: 0, 4: 0, 5: 1, 6: 0, 7: 0, 13: 1 });
+        const retained = coreBoundaryState({ 13: 0, 30: 10, 50: 18, 51: 0x8000ffff, 52: 0, 75: 6 });
+        const cached = coreBoundary({ functions: { DE_CoreStartupPoll: () => ++polls >= 2 ? 1 : 0,
+            DE_CoreRenderReadV5: field => (polls < 2 ? initial : retained)[field] } });
+        assert.equal(cached.logs.find(event => event.event === 'core_render_reference_finished').passed, false);
+        assert.equal(cached.logs.find(event => event.event === 'core_render_reference_finished').full_core_ready, false);
+    });
     test('API4 static recognition retains scalar84 and API3 custom-present refusal without drawing', () => {
         const result = coreCustom();
         assert.deepEqual(result.calls.find(call => call[0] === 'DE_CoreRenderBeginV4'), ['DE_CoreRenderBeginV4', 2]);

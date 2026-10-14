@@ -5,11 +5,15 @@
 param([ValidateSet('Diagnostic', 'Smoke', 'Online')][string]$Mode = 'Smoke',
     [switch]$NativeGaitReference, [switch]$MatchedGaitRate, [switch]$LockWalkRoot, [switch]$NativeInputReference,
     [switch]$MtaNativePadReference, [switch]$MtaNativeMovementTrial, [switch]$MtaCoreStartupReference, [switch]$MtaCoreInputReference,
-    [switch]$MtaCoreMovementReference, [switch]$MtaCoreRenderReference, [switch]$MtaCoreRenderGpuReference, [switch]$MtaCoreRenderCustomPresentReference,
+    [switch]$MtaCoreMovementReference, [switch]$MtaCoreRenderReference, [switch]$MtaCoreRenderGpuReference, [switch]$MtaCoreRenderCustomPresentReference, [switch]$MtaCoreRenderFrameBoundaryReference,
     [ValidateSet('D3D11', 'D3D12')][string]$MtaCoreRenderRoute = 'D3D11')
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+# Frame association is a separate read-only hook lease, never implicit in recognition.
+if ($MtaCoreRenderFrameBoundaryReference -and (-not $MtaCoreRenderCustomPresentReference -or -not $MtaCoreRenderGpuReference -or -not $MtaCoreRenderReference -or $MtaCoreRenderRoute -ne 'D3D12')) {
+    throw 'Frame-boundary observation requires explicit D3D12 Core GPU and custom-present observation.'
+}
 if ($MtaCoreRenderCustomPresentReference -and (-not $MtaCoreRenderGpuReference -or -not $MtaCoreRenderReference -or $MtaCoreRenderRoute -ne 'D3D12')) {
     throw 'Custom-present recognition requires explicit D3D12 Core GPU observation.'
 }
@@ -244,6 +248,10 @@ $coreRenderCustomPresentMarker = 'export const MTA_CORE_RENDER_CUSTOM_PRESENT_RE
 if ([regex]::Matches($configText, [regex]::Escape($coreRenderCustomPresentMarker)).Count -ne 1) { throw 'Expected disabled custom-present recognition in source configuration.' }
 $configText = $configText.Replace($coreRenderCustomPresentMarker,
     "export const MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE = $($MtaCoreRenderCustomPresentReference.IsPresent.ToString().ToLowerInvariant());")
+$coreRenderFrameBoundaryMarker = 'export const MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE = false;'
+if ([regex]::Matches($configText, [regex]::Escape($coreRenderFrameBoundaryMarker)).Count -ne 1) { throw 'Expected disabled frame-boundary observation in source configuration.' }
+$configText = $configText.Replace($coreRenderFrameBoundaryMarker,
+    "export const MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE = $($MtaCoreRenderFrameBoundaryReference.IsPresent.ToString().ToLowerInvariant());")
 [IO.File]::WriteAllText($configPath, $configText, $utf8)
 foreach ($name in @('sa_unreal.json', 'unknown_x64.json')) {
     [IO.File]::Copy($downloads[$name], (Join-Path $configDirectory $name), $false)

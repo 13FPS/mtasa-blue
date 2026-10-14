@@ -110,6 +110,15 @@ int wmain(int argc, wchar_t** argv)
         const auto configureRenderV3 = Resolve<ConfigureRenderV2>(core, "MTA_ConfigureDERenderReferenceV3");
         const auto renderVersionV4 = Resolve<std::uint32_t (*)()>(core, "MTA_DERenderReferenceApiVersionV4");
         const auto configureRenderV4 = Resolve<ConfigureRenderV2>(core, "MTA_ConfigureDERenderReferenceV4");
+        const auto renderVersionV5 = Resolve<std::uint32_t (*)()>(core, "MTA_DERenderReferenceApiVersionV5");
+        const auto configureRenderV5 = Resolve<ConfigureRenderV2>(core, "MTA_ConfigureDERenderReferenceV5");
+        Check(renderVersionV5() == 5 && DefinitiveRenderReference::FieldCountV5 == 110, "API5 exports a distinct actual Present association contract");
+        for (const auto route : {0u, 1u, 3u, 0xffffffffu})
+            Check(configureRenderV5(1, route, CancelInput, PublishInput) == 0, "API5 requires explicit D3D12 without fallback");
+        Check(configureRenderV5(0, 2, CancelInput, PublishInput) == 0 && configureRenderV5(10001, 2, CancelInput, PublishInput) == 0,
+              "API5 duration is bounded before retaining a Core request");
+        Check(configureRenderV5(1, 2, nullptr, PublishInput) == 0 && configureRenderV5(1, 2, CancelInput, nullptr) == 0,
+              "API5 requires cancellation and value publication callbacks");
         Check(renderVersionV4() == 4 && DefinitiveRenderReference::FieldCountV4 == 84, "API4 exports bind a separate additive classification contract");
         for (const auto route : {0u, 1u, 3u, 0xffffffffu})
             Check(configureRenderV4(1, route, CancelInput, PublishInput) == 0, "API4 classification cannot fall back to a legacy renderer route");
@@ -151,6 +160,7 @@ int wmain(int argc, wchar_t** argv)
         Check(configureRenderV2(1, 2, CancelInput, PublishInput) == 0, "API2 route cannot replace a pending input request");
         Check(configureRenderV3(1, 2, CancelInput, PublishInput) == 0, "API3 cannot replace a pending configured input owner");
         Check(configureRenderV4(1, 2, CancelInput, PublishInput) == 0, "API4 cannot replace a pending configured input owner");
+        Check(configureRenderV5(1, 2, CancelInput, PublishInput) == 0, "API5 cannot replace a pending configured input owner");
         Check(configureMovement(1, CancelInput, PublishInput) == 0, "movement cannot replace a pending read-only request");
         Check(configureInput(1, CancelInput, PublishInput) == 0, "a pending input request must not be overwritten");
         unsigned int foreignConfigure = 1;
@@ -227,6 +237,22 @@ int wmain(int argc, wchar_t** argv)
         NoGameModules();
         NoClassicRendererModules();
         Check(inputPublications == 0, "wrong-image API4 cannot inspect custom presenter memory or publish evidence");
+        Check(configureRenderV5(1, 2, CancelInput, PublishInput) == 1, "consumed API4 request permits a distinct API5 owner");
+        Check(configureRender(1, CancelInput, PublishInput) == 0 && configureRenderV2(1, 2, CancelInput, PublishInput) == 0 &&
+                  configureRenderV3(1, 2, CancelInput, PublishInput) == 0 && configureRenderV4(1, 2, CancelInput, PublishInput) == 0 &&
+                  configureMovement(1, CancelInput, PublishInput) == 0 && configureInput(1, CancelInput, PublishInput) == 0,
+              "pending API5 excludes all older observers and movement/input requests");
+        std::uint32_t foreignBoundaryRequest = 1;
+        std::thread   boundaryRequester([&] { foreignBoundaryRequest = configureRenderV5(1, 2, CancelInput, PublishInput); });
+        boundaryRequester.join();
+        Check(foreignBoundaryRequest == 0, "foreign API5 requester cannot replace its owning worker");
+        const int api5Result = initialize();
+        Check(api5Result == 5, "actual API5 request still rejects the nongame exact-image host");
+        CheckStartup(readStartup, 5, 3, 33);
+        Check(GetModuleHandleW(L"game_de.dll") == nullptr, "failed API5 startup releases its backend lease");
+        NoGameModules();
+        NoClassicRendererModules();
+        Check(inputPublications == 0, "wrong-image API5 cannot detour system Present or inspect native resources");
         // A diagnostic reader cannot accidentally become a cross-thread Core
         // control channel or erase the completed owner-thread failure snapshot.
         std::array<unsigned int, 8> foreign{};
@@ -248,8 +274,8 @@ int wmain(int argc, wchar_t** argv)
         std::printf(
             "{\"success\":true,\"checks\":%d,\"initialize_results\":[%d,%d,%d,%d],\"continued_after_free_library\":true,\"backend_unloaded_after_each_"
             "failure\":true,\"classic_modules_unloaded\":true,\"legacy_renderer_modules_unloaded\":true,\"startup_diagnostics_verified\":true,\"api3_"
-            "initialize_result\":%d,\"api4_initialize_result\":%d}\n",
-            checks, results[0], results[1], results[2], results[3], api3Result, api4Result);
+            "initialize_result\":%d,\"api4_initialize_result\":%d,\"api5_initialize_result\":%d}\n",
+            checks, results[0], results[1], results[2], results[3], api3Result, api4Result, api5Result);
         return 0;
     }
     catch (const std::exception& error)

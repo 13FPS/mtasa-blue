@@ -47,6 +47,16 @@ The final log is 36,311 bytes, SHA-256
 The installed runtime remains the tested read-only candidate; no automatic
 GTA launch is part of this work.
 
+The next read-only API5 candidate moves association checks to the actual
+standard DXGI Present entry, after the native Social Club callback. It checks
+the exact swapchain, backbuffer and queue association, CPU-side tracker values,
+and resize/destruction overlap without issuing GPU commands. A coherent sample
+will establish object association at that callback, not GPU resource state,
+submission ordering or drawing readiness. Live API5 validation is pending.
+The normal Core/Game DE build passes 219 actual startup checks per folder
+layout; native, module and package suites pass 2,606, 1,618 and 663 checks.
+Older observation interfaces and the full-startup gate are preserved.
+
 **Earlier engine movement and Core startup milestones.** ABI5 adds a bounded trial inside the normal Game DE
 module, called through MTA Core's existing module consumer. It reuses shared
 MTA action synthesis, writes only the current/previous pad pair during the

@@ -50,3 +50,6 @@ export const MTA_CORE_RENDER_GPU_REFERENCE = false;
 // Static custom-presenter recognition is a separate diagnostic. Matching a
 // reviewed implementation does not establish its frame sink or permit drawing.
 export const MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE = false;
+// Observe the scoped natural Present and CPU buffer association separately.
+// This does not verify GPU resource state, a drawing boundary or startup.
+export const MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE = false;

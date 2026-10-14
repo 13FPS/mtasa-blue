@@ -16,6 +16,8 @@
 #include <unknwn.h>
 
 using namespace mta::game_de;
+void CheckFrameBoundaryProbe(const char* customFixture, unsigned& checks);
+bool BoundaryFixtureOriginal(void*, std::uint32_t);
 
 namespace
 {
@@ -77,6 +79,18 @@ namespace
         }
         return false;
     }
+    bool CatchBoundaryException(void* object)
+    {
+        __try
+        {
+            HookPresent(object, 2);
+        }
+        __except (GetExceptionCode() == 0xe0424242 ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
+        {
+            return true;
+        }
+        return false;
+    }
     void Configure(std::uintptr_t image, PresentFunction original = Original, RenderObservationRoute route = RenderObservationRoute::D3D11)
     {
         runtime.image = image;
@@ -86,6 +100,7 @@ namespace
         // API1/2 never inherit opt-in COM work from a previously rejected API3 Begin.
         runtime.queryGpuOwnership = false;
         runtime.classifyCustomPresent = false;
+        runtime.queryFrameBoundary = false;
         runtime.producerThread = GetCurrentThreadId();
         runtime.bound.store(true);
         runtime.active.store(true);
@@ -363,6 +378,12 @@ int main(int argc, char** argv)
               !state.custom.slotSignatureMask && !state.custom.staticPolicyFlags && !state.gpu.attempts,
           "failed API4 image admission cannot fabricate static policy or COM metadata");
     Check(owner.End(), "wrong-image API4 cleanup");
+    Check(!owner.Begin(RenderObservationRoute::D3D12, true, true, true), "API5 rejects a nongame image before endpoint or lifecycle preparation");
+    owner.ReadState(state);
+    Check(!state.bound && !state.modulePinned && !runtime.hooked.load() && !state.gpu.attempts && !state.boundary.status && !state.boundary.endpointProfileId &&
+              !state.boundary.presentEntries && !state.boundary.resizeEpoch,
+          "wrong-image API5 leaves the additive initial tail zero");
+    Check(owner.End(), "wrong-image API5 cleanup");
 
     const auto image = reinterpret_cast<std::uintptr_t>(VirtualAlloc(nullptr, 0x5770000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
     Check(image != 0, "owned synthetic image allocation");
@@ -641,6 +662,54 @@ int main(int argc, char** argv)
           "native root readback cannot erase a fatal COM cleanup failure");
     ownedSwapchain.changeAddress = 0;
     ownedSwapchain.succeed = ownedSwapchain.failRelease = false;
+    const auto configureBoundaryPublication = [&]
+    {
+        Configure(image, BoundaryFixtureOriginal, RenderObservationRoute::D3D12);
+        EnableOwnership(image, 2, 1);
+        runtime.classifyCustomPresent = runtime.queryFrameBoundary = true;
+    };
+    configureBoundaryPublication();
+    Check(HookPresent(viewport.data(), 1) && !HookPresent(viewport.data(), 0), "API5 completed scopes preserve both native original results");
+    owner.ReadState(state);
+    Check(state.boundary.presentEntries == 2 && state.boundary.rejectedEntries == 0 && state.boundary.status == 2 && state.boundary.factsMask == 255 &&
+              state.gpu.attempts == 2 && !state.gpu.supportPredicate,
+          "API5 cumulative boundary values publish atomically with historical unsupported GPU metadata");
+    AcquireSRWLockShared(&runtime.snapshotLock);
+    HookPresent(viewport.data(), 1);
+    ReleaseSRWLockShared(&runtime.snapshotLock);
+    owner.ReadState(state);
+    Check(state.boundary.presentEntries == 2 && state.gpu.attempts == 2 && state.publicationMisses == 1,
+          "publication miss cannot attach new boundary counters to an old snapshot");
+    EnableOwnership(image);
+    Put(object + 0x1d0, std::uintptr_t{0x1234});
+    Put(object + 0x60, reinterpret_cast<std::uintptr_t>(&ownedSwapchain));
+    Put(queueMember, reinterpret_cast<std::uintptr_t>(&ownedQueue));
+    ownedSwapchain.succeed = ownedSwapchain.failRelease = true;
+    Check(HookPresent(viewport.data(), 1), "later fatal API3 cleanup still forwards native original");
+    owner.ReadState(state);
+    Check(!state.active && state.failureReason == 10 && state.gpu.attempts == 3 && state.boundary.presentEntries == 2 && state.boundary.status == 2,
+          "later fatal API3 cleanup retains explicitly historical boundary cache without new API5 calls");
+    configureCleanupFailure(Original);
+    runtime.queryFrameBoundary = true;
+    HookPresent(viewport.data(), 1);
+    owner.ReadState(state);
+    Check(state.failureReason == 10 && state.gpu.attempts == 1 && !state.boundary.status && !state.boundary.presentEntries,
+          "first fatal API3 cleanup leaves API5 unattempted rather than inventing a boundary query");
+    ownedSwapchain.succeed = ownedSwapchain.failRelease = false;
+    configureBoundaryPublication();
+    HookPresent(viewport.data(), 1);
+    Check(CatchBoundaryException(viewport.data()), "boundary cleanup failure preserves original SEH propagation");
+    owner.ReadState(state);
+    Check(!state.active && state.failureReason == 10 && state.boundary.presentEntries == 1 && state.gpu.attempts == 1 && runtime.inFlight == 0,
+          "fatal boundary cleanup survives original SEH while prior coherent snapshot remains intact");
+    configureBoundaryPublication();
+    HookPresent(viewport.data(), 1);
+    AcquireSRWLockShared(&runtime.snapshotLock);
+    HookPresent(viewport.data(), 3);
+    ReleaseSRWLockShared(&runtime.snapshotLock);
+    owner.ReadState(state);
+    Check(!state.active && state.failureReason == 10 && state.publicationMisses == 1 && state.boundary.presentEntries == 1 && state.gpu.attempts == 1,
+          "fatal boundary cleanup disarm survives a missed coherent publication");
     for (const auto route : {RenderObservationRoute::D3D11, RenderObservationRoute::D3D12})
     {
         Configure(image, Original, route);
@@ -857,6 +926,7 @@ int main(int argc, char** argv)
           "retired owner preserves own final evidence across generations");
     Check(nextOwner.End(), "failed next generation cleanup");
     Check(!runtime.modulePinned.load(), "synthetic fixtures never pin executable/module");
+    CheckFrameBoundaryProbe(argv[3], checks);
     VirtualFree(reinterpret_cast<void*>(image), 0, MEM_RELEASE);
     std::printf("Passed %u production native render observation checks\n", checks);
     return 0;

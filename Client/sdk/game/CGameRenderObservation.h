@@ -234,4 +234,72 @@ namespace mta::game_de
 #else
     extern "C" IGameRenderObservationV4* CreateGameRenderObservationV4(std::uint32_t apiVersion, CCoreInterface* owner, RenderObservationRoute route) noexcept;
 #endif
+
+    // API5 observes associations at the pinned standard Present entry. Even a
+    // coherent result describes CPU bookkeeping and object identity only: it
+    // cannot verify GPU execution, resource state, or permission to draw.
+    inline constexpr std::uint32_t RenderObservationApiVersionV5 = 5;
+    enum class FrameBoundaryObservationStatus : std::uint32_t
+    {
+        NotAttempted = 0,
+        EndpointUnadmitted,
+        ObservedCoherent,
+        UnsupportedAssociation,
+        WrongThreadOrNested,
+        QueryFailed,
+        RootsChanged,
+        ResizeOverlap,
+        EndpointChanged,
+        PresentFailed,
+        NoScopedPresent
+    };
+    enum class FrameBoundaryQueryStage : std::uint32_t
+    {
+        NotAttempted = 0,
+        NativeRoots,
+        SwapchainInterface,
+        Backbuffer,
+        NativeResourceComparison,
+        QueueInterface,
+        QueueIdentity,
+        NativeTrackedState,
+        RootReadback,
+        Complete
+    };
+    struct FrameBoundaryObservationState
+    {
+        // endpointProfileId1 is this machine's fully pinned System32 DXGI.
+        // Facts: canonical SC1, exact held buffer/native resource pointer2,
+        // canonical native/creation queue4, direct context association8,
+        // current index16, uniform CPU tracker32, tracked decoded zero64,
+        // coherent roots/resize epoch128. None is a measured GPU fact.
+        std::uint32_t status = 0, endpointProfileId = 0, factsMask = 0, presentHresult = 0;
+        std::uint32_t nativeBufferIndex = 0, dxgiBufferIndex = 0, nativeTrackedState = 0, nativeTrackedMode = 0;
+        // Lifecycle counters are copied with the completed native callback,
+        // never attached later to an older published association snapshot.
+        std::uint64_t presentEntries = 0, rejectedEntries = 0, resizeEpoch = 0, resizeEntries = 0, preReleaseEntries = 0, foreignLifecycleEntries = 0;
+        std::uint32_t presentThreadId = 0, resizeThreadId = 0, preReleaseThreadId = 0, lifecycleFlags = 0, queryStage = 0, queryHresult = 0;
+    };
+    struct RenderObservationStateV5
+    {
+        RenderObservationStateV4      base;
+        FrameBoundaryObservationState boundary;
+    };
+    class IGameRenderObservationV5
+    {
+    public:
+        virtual Status Begin() noexcept = 0;
+        virtual Status ReadState(RenderObservationStateV5& state) noexcept = 0;
+        virtual Status End() noexcept = 0;
+        virtual void   Release() noexcept = 0;
+
+    protected:
+        virtual ~IGameRenderObservationV5() = default;
+    };
+#if defined(_WIN32) && defined(MTA_GAME_DE_EXPORTS)
+    extern "C" __declspec(dllexport)
+    IGameRenderObservationV5* CreateGameRenderObservationV5(std::uint32_t apiVersion, CCoreInterface* owner, RenderObservationRoute route) noexcept;
+#else
+    extern "C" IGameRenderObservationV5* CreateGameRenderObservationV5(std::uint32_t apiVersion, CCoreInterface* owner, RenderObservationRoute route) noexcept;
+#endif
 }

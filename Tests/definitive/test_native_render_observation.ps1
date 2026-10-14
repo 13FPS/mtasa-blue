@@ -10,6 +10,8 @@ New-Item -ItemType Directory -Path $outputRoot | Out-Null
 $sourceNames = @('Client/game_de/NativeRenderObservation.h','Client/game_de/NativeRenderObservation.cpp',
     'Client/game_de/NativeD3D12OwnershipProbe.h','Client/game_de/NativeD3D12OwnershipProbe.cpp',
     'Client/game_de/NativeCustomPresentProbe.h','Client/game_de/NativeCustomPresentProbe.cpp',
+    'Client/game_de/NativeFrameBoundaryProbe.h','Client/game_de/NativeFrameBoundaryProbe.cpp',
+    'Tests/definitive/NativeFrameBoundaryProbeTests.cpp',
     'Tests/definitive/NativeRenderObservationTests.cpp','Tests/definitive/test_native_render_observation.ps1',
     'Client/sdk/game/CGameRenderObservation.h','Client/sdk/game/CGameAdapter.h',
     'Shared/sdk/CControllerState.h','Shared/sdk/CControlStateSynthesis.h','Shared/sdk/CControllerActions.h',
@@ -90,6 +92,7 @@ $detoursOutput | Set-Content -LiteralPath (Join-Path $outputRoot 'detours-compil
 $executable = Join-Path $outputRoot 'native_render_observation_tests.exe'
 $objects = @('detours.obj','modules.obj','disasm.obj','image.obj','creatwth.obj') | ForEach-Object { Join-Path $outputRoot $_ }
 $arguments = $common + @('/W4','/WX',(Join-Path $PSScriptRoot 'NativeRenderObservationTests.cpp'),
+    (Join-Path $PSScriptRoot 'NativeFrameBoundaryProbeTests.cpp'),
     (Join-Path $taskRoot 'Client/game_de/NativeD3D12OwnershipProbe.cpp'),
     (Join-Path $taskRoot 'Client/game_de/NativeCustomPresentProbe.cpp'),('/Fo'+$outputRoot+[IO.Path]::DirectorySeparatorChar),('/Fe'+$executable),'/link','bcrypt.lib')+$objects
 $compilerOutput = @(& $compiler @arguments 2>&1)

@@ -554,6 +554,52 @@ namespace mta::game_de
             const RenderObservationRoute route;
             NativeRenderObservation      observation;
         };
+        class GameRenderObservationV5 final : public IGameRenderObservationV5
+        {
+        public:
+            explicit GameRenderObservationV5(RenderObservationRoute requested) noexcept : route(requested) {}
+            Status Begin() noexcept override
+            {
+                if (ownerThread != GetCurrentThreadId())
+                    return Status::WrongThread;
+                return observation.Begin(route, true, true, true) ? Status::Ok : Status::Unsupported;
+            }
+            Status ReadState(RenderObservationStateV5& state) noexcept override
+            {
+                if (ownerThread != GetCurrentThreadId())
+                    return Status::WrongThread;
+                NativeRenderObservationState native;
+                observation.ReadState(native);
+                RenderObservationStateV5 next;
+                next.base.base.base.base = CopyRenderObservation(native);
+                next.base.base.base.requestedRoute = native.requestedRoute;
+                next.base.base.base.observedRoute = native.observedRoute;
+                next.base.base.base.presenceKnownMask = native.presenceKnownMask;
+                next.base.base.base.queuePresent = native.queuePresent;
+                next.base.base.gpu = native.gpu;
+                next.base.custom = native.custom;
+                next.boundary = native.boundary;
+                state = next;
+                return Status::Ok;
+            }
+            Status End() noexcept override
+            {
+                if (ownerThread != GetCurrentThreadId())
+                    return Status::WrongThread;
+                return observation.End() ? Status::Ok : Status::Unsupported;
+            }
+            void Release() noexcept override
+            {
+                if (ownerThread != GetCurrentThreadId() || !observation.End())
+                    return;
+                delete this;
+            }
+
+        private:
+            const DWORD                  ownerThread = GetCurrentThreadId();
+            const RenderObservationRoute route;
+            NativeRenderObservation      observation;
+        };
     }
 
     extern "C" IGameAdapter* CreateGameAdapter(std::uint32_t abiVersion) noexcept
@@ -626,6 +672,21 @@ namespace mta::game_de
         try
         {
             return new (std::nothrow) GameRenderObservationV4(route);
+        }
+        catch (...)
+        {
+            return nullptr;
+        }
+    }
+
+    extern "C" IGameRenderObservationV5* CreateGameRenderObservationV5(std::uint32_t apiVersion, CCoreInterface* owner, RenderObservationRoute route) noexcept
+    {
+        // A separate lease keeps all four historical ABI layouts unchanged.
+        if (apiVersion != RenderObservationApiVersionV5 || !owner || route != RenderObservationRoute::D3D12)
+            return nullptr;
+        try
+        {
+            return new (std::nothrow) GameRenderObservationV5(route);
         }
         catch (...)
         {

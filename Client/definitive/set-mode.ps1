@@ -15,13 +15,17 @@ param(
     [switch]$MtaCoreMovementReference,
     [switch]$MtaCoreRenderReference,
     [switch]$MtaCoreRenderGpuReference,
-    [switch]$MtaCoreRenderCustomPresentReference,
+    [switch]$MtaCoreRenderCustomPresentReference, [switch]$MtaCoreRenderFrameBoundaryReference,
     [ValidateSet('D3D11', 'D3D12')][string]$MtaCoreRenderRoute = 'D3D11',
     [string]$GameDirectory = 'C:\Program Files (x86)\Steam\steamapps\common\GTA San Andreas - The Definitive Edition\Gameface\Binaries\Win64'
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+# Frame association is a separate read-only hook lease, never implicit in recognition.
+if ($MtaCoreRenderFrameBoundaryReference -and (-not $MtaCoreRenderCustomPresentReference -or -not $MtaCoreRenderGpuReference -or -not $MtaCoreRenderReference -or $MtaCoreRenderRoute -ne 'D3D12')) {
+    throw 'Frame-boundary observation requires explicit D3D12 Core GPU and custom-present observation.'
+}
 if ($MtaCoreRenderCustomPresentReference -and (-not $MtaCoreRenderGpuReference -or -not $MtaCoreRenderReference -or $MtaCoreRenderRoute -ne 'D3D12')) {
     throw 'Custom-present recognition requires explicit D3D12 Core GPU observation.'
 }
@@ -217,6 +221,17 @@ if ($coreRenderCustomPresentMatches -eq 1) {
     $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $coreRenderCustomPresentPattern,
         "export const MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE = $($MtaCoreRenderCustomPresentReference.IsPresent.ToString().ToLowerInvariant());"))
 }
+$coreRenderFrameBoundaryPattern = 'export const MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE = (true|false);'
+$coreRenderFrameBoundaryMatches = [regex]::Matches($configText, $coreRenderFrameBoundaryPattern).Count
+if ($coreRenderFrameBoundaryMatches -gt 1 -or ($MtaCoreRenderFrameBoundaryReference -and $coreRenderFrameBoundaryMatches -ne 1)) {
+    throw 'Update the adapter before selecting frame-boundary observation.'
+}
+# API5 must be cleared on every ordinary mode switch; older intact markers
+# cannot grant this new hook lease merely by requesting API4 recognition.
+if ($coreRenderFrameBoundaryMatches -eq 1) {
+    $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $coreRenderFrameBoundaryPattern,
+        "export const MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE = $($MtaCoreRenderFrameBoundaryReference.IsPresent.ToString().ToLowerInvariant());"))
+}
 $configEntry = @($installed.files | Where-Object { $_.path -eq 'CLEO/de-online/config.mjs' })
 if ($configEntry.Count -ne 1) { throw 'Missing owned configuration record.' }
 $configEntry[0].sha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($newConfig)).ToLowerInvariant()
@@ -249,7 +264,9 @@ try {
     Write-AtomicFile $manifestPath $originalManifest
     throw $failure
 }
-if ($MtaCoreRenderCustomPresentReference) {
+if ($MtaCoreRenderFrameBoundaryReference) {
+    Write-Host 'Installed adapter mode: Smoke, read-only scoped D3D12 Present association armed. Ctrl+Shift+F9 starts after release; Ctrl+Shift+End requests cleanup. No drawing or input writes.'
+} elseif ($MtaCoreRenderCustomPresentReference) {
     Write-Host 'Installed adapter mode: Smoke, read-only D3D12 custom-present code recognition armed. Ctrl+Shift+F9 starts after release; Ctrl+Shift+End requests cleanup. No drawing or input writes.'
 } elseif ($MtaCoreRenderGpuReference) {
     Write-Host 'Installed adapter mode: Smoke, read-only D3D12 GPU ownership queries armed. Ctrl+Shift+F9 starts after release; Ctrl+Shift+End requests cleanup. No drawing or input writes.'

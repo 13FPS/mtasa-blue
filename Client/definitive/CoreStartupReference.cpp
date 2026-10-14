@@ -56,6 +56,13 @@ namespace deonline
         return route == 2 && Start(moduleAddress, true, false, true, route, 4);
     }
 
+    bool CoreStartupReference::BeginRenderReferenceV5(const void* moduleAddress, std::uint32_t route) noexcept
+    {
+        // A scoped Present association needs an independent lease and cache;
+        // earlier protocols must never expose or silently request its hooks.
+        return route == 2 && Start(moduleAddress, true, false, true, route, 5);
+    }
+
     bool CoreStartupReference::Start(const void* moduleAddress, bool configuredInput, bool configuredMovement, bool configuredRender,
                                      std::uint32_t configuredRenderRoute, std::uint32_t configuredRenderApi) noexcept
     {
@@ -81,6 +88,8 @@ namespace deonline
         publishedRenderV3 = {};
         renderV4Available = false;
         publishedRenderV4 = {};
+        renderV5Available = false;
+        publishedRenderV5 = {};
         renderV2Available = false;
         publishedRenderV2 = {};
         ReleaseSRWLockExclusive(&inputLock);
@@ -90,6 +99,7 @@ namespace deonline
         capturedRenderV2 = {};
         capturedRenderV3 = {};
         capturedRenderV4 = {};
+        capturedRenderV5 = {};
         cancellation.store(false);
         state.store(1, std::memory_order_release);
         // Use the existing CRT worker convention instead of a joinable global
@@ -226,6 +236,22 @@ namespace deonline
         return ownerThread.load() == GetCurrentThreadId() && renderApi == 4 && renderRoute && field < capturedRenderV4.size() ? capturedRenderV4[field] : 0;
     }
 
+    bool CoreStartupReference::CaptureRenderV5() noexcept
+    {
+        if (ownerThread.load() != GetCurrentThreadId() || renderApi != 5 || !renderRoute || !TryAcquireSRWLockShared(&inputLock))
+            return false;
+        const bool available = renderV5Available;
+        if (available)
+            capturedRenderV5 = publishedRenderV5;
+        ReleaseSRWLockShared(&inputLock);
+        return available;
+    }
+
+    std::uint32_t CoreStartupReference::ReadRenderV5(std::uint32_t field) const noexcept
+    {
+        return ownerThread.load() == GetCurrentThreadId() && renderApi == 5 && renderRoute && field < capturedRenderV5.size() ? capturedRenderV5[field] : 0;
+    }
+
     bool CoreStartupReference::InputCancelled()
     {
         return !inputOwner || inputOwner->cancellation.load(std::memory_order_acquire);
@@ -234,7 +260,8 @@ namespace deonline
     void CoreStartupReference::PublishInput(const std::uint32_t* snapshot, std::uint32_t count)
     {
         if (!inputOwner || !snapshot ||
-            count != (inputOwner->renderRequested     ? (inputOwner->renderApi == 4   ? DefinitiveRenderReference::FieldCountV4
+            count != (inputOwner->renderRequested     ? (inputOwner->renderApi == 5   ? DefinitiveRenderReference::FieldCountV5
+                                                         : inputOwner->renderApi == 4 ? DefinitiveRenderReference::FieldCountV4
                                                          : inputOwner->renderApi == 3 ? DefinitiveRenderReference::FieldCountV3
                                                          : inputOwner->renderRoute    ? DefinitiveRenderReference::FieldCountV2
                                                                                       : DefinitiveRenderReference::FieldCount)
@@ -242,7 +269,12 @@ namespace deonline
                                                       : DefinitiveInputReference::FieldCount))
             return;
         AcquireSRWLockExclusive(&inputOwner->inputLock);
-        if (inputOwner->renderRequested && inputOwner->renderApi == 4)
+        if (inputOwner->renderRequested && inputOwner->renderApi == 5)
+        {
+            std::copy_n(snapshot, count, inputOwner->publishedRenderV5.begin());
+            inputOwner->renderV5Available = true;
+        }
+        else if (inputOwner->renderRequested && inputOwner->renderApi == 4)
         {
             std::copy_n(snapshot, count, inputOwner->publishedRenderV4.begin());
             inputOwner->renderV4Available = true;
@@ -389,7 +421,8 @@ namespace deonline
                     using ConfigureRenderV2 =
                         std::uint32_t (*)(std::uint32_t, std::uint32_t, DefinitiveInputReference::CancelCallback, DefinitiveInputReference::PublishCallback);
                     const auto inputVersion =
-                        reinterpret_cast<Version>(GetProcAddress(core, renderRequested && renderApi == 4   ? "MTA_DERenderReferenceApiVersionV4"
+                        reinterpret_cast<Version>(GetProcAddress(core, renderRequested && renderApi == 5   ? "MTA_DERenderReferenceApiVersionV5"
+                                                                       : renderRequested && renderApi == 4 ? "MTA_DERenderReferenceApiVersionV4"
                                                                        : renderRequested && renderApi == 3 ? "MTA_DERenderReferenceApiVersionV3"
                                                                        : renderRoute                       ? "MTA_DERenderReferenceApiVersionV2"
                                                                        : renderRequested                   ? "MTA_DERenderReferenceApiVersion"
@@ -398,10 +431,12 @@ namespace deonline
                     const auto configure = reinterpret_cast<Configure>(GetProcAddress(core, renderRequested     ? "MTA_ConfigureDERenderReference"
                                                                                             : movementRequested ? "MTA_ConfigureDEMovementReference"
                                                                                                                 : "MTA_ConfigureDEInputReference"));
-                    const auto configureV2 = reinterpret_cast<ConfigureRenderV2>(GetProcAddress(core, renderApi == 4   ? "MTA_ConfigureDERenderReferenceV4"
+                    const auto configureV2 = reinterpret_cast<ConfigureRenderV2>(GetProcAddress(core, renderApi == 5   ? "MTA_ConfigureDERenderReferenceV5"
+                                                                                                      : renderApi == 4 ? "MTA_ConfigureDERenderReferenceV4"
                                                                                                       : renderApi == 3 ? "MTA_ConfigureDERenderReferenceV3"
                                                                                                                        : "MTA_ConfigureDERenderReferenceV2"));
-                    const auto expectedVersion = renderRequested && renderApi == 4   ? DefinitiveRenderReference::ApiVersionV4
+                    const auto expectedVersion = renderRequested && renderApi == 5   ? DefinitiveRenderReference::ApiVersionV5
+                                                 : renderRequested && renderApi == 4 ? DefinitiveRenderReference::ApiVersionV4
                                                  : renderRequested && renderApi == 3 ? DefinitiveRenderReference::ApiVersionV3
                                                  : renderRoute                       ? DefinitiveRenderReference::ApiVersionV2
                                                  : renderRequested                   ? DefinitiveRenderReference::ApiVersion
@@ -454,7 +489,8 @@ namespace deonline
                                sample[PresenceKnownMask] == (sample[ObservedRoute] ? (renderRoute == 2 ? 19u : 15u) : 0u);
                     };
                     const bool renderComplete =
-                        renderApi == 4   ? explicitRouteEnded(publishedRenderV4, renderV4Available, DefinitiveRenderReference::ApiVersionV4)
+                        renderApi == 5   ? explicitRouteEnded(publishedRenderV5, renderV5Available, DefinitiveRenderReference::ApiVersionV5)
+                        : renderApi == 4 ? explicitRouteEnded(publishedRenderV4, renderV4Available, DefinitiveRenderReference::ApiVersionV4)
                         : renderApi == 3 ? explicitRouteEnded(publishedRenderV3, renderV3Available, DefinitiveRenderReference::ApiVersionV3)
                         : renderRoute    ? renderV2Available && renderEnded(publishedRenderV2, DefinitiveRenderReference::ApiVersionV2) &&
                                             publishedRenderV2[DefinitiveRenderReference::RequestedRoute] == renderRoute &&
@@ -505,7 +541,8 @@ namespace deonline
         if ((values[12] & ~values[11]) && !values[16])
             values[16] = 10;
         const auto expectedBackend =
-            renderRequested && renderApi == 4 && renderV4Available   ? publishedRenderV4[DefinitiveRenderReference::BackendPinnedExpected]
+            renderRequested && renderApi == 5 && renderV5Available   ? publishedRenderV5[DefinitiveRenderReference::BackendPinnedExpected]
+            : renderRequested && renderApi == 4 && renderV4Available ? publishedRenderV4[DefinitiveRenderReference::BackendPinnedExpected]
             : renderRequested && renderApi == 3 && renderV3Available ? publishedRenderV3[DefinitiveRenderReference::BackendPinnedExpected]
             : renderRequested && renderRoute && renderV2Available    ? publishedRenderV2[DefinitiveRenderReference::BackendPinnedExpected]
             : renderRequested && renderAvailable                     ? publishedRender[DefinitiveRenderReference::BackendPinnedExpected]

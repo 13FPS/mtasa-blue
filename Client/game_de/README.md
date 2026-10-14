@@ -28,6 +28,12 @@ presenter recognition, cleanup and normal exit through actual Core. Its 87
 logged snapshots all identify the known presenter, while GPU ownership
 remains unsupported: 603 rejected probes and zero accepted. No GPU commands
 are issued, and recognition alone cannot authorize drawing.
+API5 adds a separate D3D12-only lease over the natural standard Present entry,
+scoped by the pinned native caller and exact system DXGI endpoint. It observes
+backbuffer/queue association and CPU tracker values, and invalidates samples
+on resize or destruction overlap. These checks preserve the earlier factories
+and cannot establish GPU resource state or permission to draw. The normal
+module and offline fixtures pass; actual-game API5 validation remains pending.
 See the [trial contract](../definitive/README.md) and
 [current reuse boundary](../definitive/MTA_REUSE_PLAN.md).
 

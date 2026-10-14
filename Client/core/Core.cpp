@@ -64,7 +64,7 @@ namespace DefinitiveInputReference
         if ((request.nativeMovement && request.renderObservation) || (request.renderRoute && (!request.renderObservation || request.renderRoute > 2)) ||
             (request.renderObservation &&
              ((request.renderApiVersion == 1 && request.renderRoute) || (request.renderApiVersion == 2 && !request.renderRoute) ||
-              (request.renderApiVersion >= 3 && request.renderRoute != 2) || !request.renderApiVersion || request.renderApiVersion > 4)) ||
+              (request.renderApiVersion >= 3 && request.renderRoute != 2) || !request.renderApiVersion || request.renderApiVersion > 5)) ||
             !request.durationMs || request.durationMs > maximum || !request.cancelled || !request.publish || !TryAcquireSRWLockExclusive(&requestLock))
             return false;
         const bool accepted = !pending && !active;
@@ -313,5 +313,16 @@ CORE_API std::uint32_t MTA_ConfigureDERenderReferenceV4(std::uint32_t durationMs
     // A distinct export admits classification explicitly; historical callers
     // retain their existing field counts and cannot silently opt into API4.
     return route == 2 && g_isDefinitiveProcessCandidate && DefinitiveInputReference::Configure({durationMs, cancel, publish, false, true, route, 4}) ? 1u : 0u;
+}
+CORE_API std::uint32_t MTA_DERenderReferenceApiVersionV5()
+{
+    return DefinitiveRenderReference::ApiVersionV5;
+}
+CORE_API std::uint32_t MTA_ConfigureDERenderReferenceV5(std::uint32_t durationMs, std::uint32_t route, DefinitiveInputReference::CancelCallback cancel,
+                                                        DefinitiveInputReference::PublishCallback publish)
+{
+    // Observing the later standard Present endpoint is an explicit opt-in;
+    // older diagnostics keep their existing callback and scalar contracts.
+    return route == 2 && g_isDefinitiveProcessCandidate && DefinitiveInputReference::Configure({durationMs, cancel, publish, false, true, route, 5}) ? 1u : 0u;
 }
 #endif

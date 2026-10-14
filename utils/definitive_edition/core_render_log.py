@@ -16,17 +16,24 @@ PAIRS = dict(generation=15, native_present_callbacks=17, accepted_snapshots=19,
              rejected_snapshots=21, nested_callbacks=23, foreign_callbacks=33,
              publication_misses=35)
 GPU_PAIRS = dict(attempts=44, accepted=46, rejected=48)
+BOUNDARY_PAIRS = dict(present_entries=92, rejected_entries=94, resize_epoch=96,
+                      resize_entries=98, pre_release_entries=100, foreign_lifecycle_entries=102)
 POINTER_KEYS = frozenset(("viewport", "swapchain", "device", "native_pointer", "address", "command_queue", "resource_pointer",
                           "custom_present", "custom_presenter", "presenter_pointer", "vtable", "vtable_address", "function_pointer"))
 UNVERIFIED_CLAIMS = frozenset(("com_present_verified", "visual_success_verified", "de_renderer_verified", "full_mta_boot_verified",
                               "full_core_ready", "gameplay_ready", "rendering_started", "engine_input_write_verified",
                               "remote_player_context_verified", "network_active", "input_writes", "remote_peds_created", "native_gpu_metadata_observed",
                               "custom_presenter_recognized", "custom_presenter_sample_count", "gpu_ownership_verified",
-                              "gpu_frame_boundary_verified", "queue_submission_verified", "custom_present_frame_sink_verified"))
+                              "gpu_frame_boundary_verified", "queue_submission_verified", "custom_present_frame_sink_verified",
+                              "native_present_observed", "native_present_sample_count", "buffer_association_observed",
+                              "buffer_association_sample_count", "nativePresentObserved", "bufferAssociationObserved",
+                              "gpuOwnershipVerified", "gpuFrameBoundaryVerified", "queueSubmissionVerified",
+                              "customPresentFrameSinkVerified"))
 NOTICE = (
     "This checks saved reports of an explicitly selected owned native viewport callback and cleanup. "
     "Callback entry and its native return value do not prove that COM Present executed or pixels were drawn. "
     "Custom-present recognition identifies reviewed code and a native association, not the actual frame sink or GPU synchronization. "
+    "API5 records scoped standard Present entry and CPU buffer associations without proving GPU execution or resource state. "
     "Visual quality, a DE GUI renderer, full MTA startup and multiplayer remain unverified."
 )
 
@@ -47,7 +54,8 @@ def event_contract(event):
     if (type(event.get("observation_api")) is int and type(event.get("requested_route")) is int and
             ((event["core_api"] == 6 and event["observation_api"] == 2 and event["requested_route"] in (1, 2)) or
              (event["core_api"] == 7 and event["observation_api"] == 3 and event["requested_route"] == 2) or
-             (event["core_api"] == 8 and event["observation_api"] == 4 and event["requested_route"] == 2))):
+             (event["core_api"] == 8 and event["observation_api"] == 4 and event["requested_route"] == 2) or
+             (event["core_api"] == 9 and event["observation_api"] == 5 and event["requested_route"] == 2))):
         return (event["observation_api"], event["requested_route"])
     return None
 
@@ -136,6 +144,72 @@ def custom_present_consistent(state):
     return state[74] == 0 if status == 1 else status in (5, 7) or state[74] == 1
 
 
+def boundary_metrics(state):
+    return {name: state[index] | state[index + 1] << 32 for name, index in BOUNDARY_PAIRS.items()}
+
+
+def boundary_coherent(state):
+    # Count only the complete sampled association contract. Aggregate entry
+    # counters cannot reconstruct unsampled Present or buffer-query outcomes.
+    # A fatal later callback preserves its last published boundary wholesale.
+    # That cached report cannot count as another fresh observed association.
+    return state[30] == 0 and state[84:87] == [2, 1, 255]
+
+
+def boundary_consistent(state, previous=None):
+    metrics = boundary_metrics(state)
+    status, profile, facts, present_hr = state[84:88]
+    stage, query_hr = state[108:110]
+    if (status > 10 or profile > 1 or facts > 255 or state[90] > 0x7fffffff or state[91] > 1 or
+            (not state[91] and state[90]) or state[107] > 3 or stage > 9 or
+            metrics["rejected_entries"] > metrics["present_entries"]):
+        return False
+    if previous and any(metrics[key] < boundary_metrics(previous)[key] for key in BOUNDARY_PAIRS):
+        return False
+    if not (state[44] or state[45]):
+        return not any(state[84:110])
+    if not status:
+        # Fatal cleanup in the earlier GPU probe can stop admission before the
+        # first Present scope exists. Preserve that explicit inactive failure.
+        return not any(state[84:110]) and state[30] == 10 and state[13] == 0
+    if status in (1, 10):
+        return (profile == int(status == 10) and not facts and not present_hr and not stage and not query_hr and
+                not any(state[88:92]) and not state[104])
+    if status == 5:
+        # Releasing a held query interface can fail even after Complete. Keep
+        # that cleanup failure visible instead of accepting the earlier facts.
+        before_present = stage == 1 and facts == 0 and state[104] == 0
+        return (1 <= stage <= 9 and query_hr >= 0x80000000 and
+                (stage != 9 or query_hr == 0x8000ffff) and
+                ((before_present and present_hr == 0) or
+                 (profile == 1 and state[104] > 0 and metrics["present_entries"] > 0 and metrics["rejected_entries"] > 0)))
+    # The owned patch can change before the original reaches Present. Keep
+    # that pre-entry refusal without manufacturing a new invocation.
+    if status == 8 and state[104] == 0:
+        return profile == 1 and not facts and not present_hr and not stage and not query_hr and not any(state[88:92])
+    if profile != 1 or not metrics["present_entries"] or not state[104]:
+        return False
+    if status in (2, 9):
+        # The Present query is independent of the earlier API3 query: its index
+        # must not depend on metadata that an earlier COM failure left absent.
+        return bool(facts == 255 and state[80] == 2 and state[88] == state[89] < 16 and
+                    state[90:92] == [0, 1] and state[104] == state[25] and not state[107] and
+                    stage == 9 and query_hr == 0 and
+                    (present_hr < 0x80000000 and metrics["present_entries"] > metrics["rejected_entries"] if status == 2 else
+                     present_hr >= 0x80000000 and metrics["rejected_entries"] > 0))
+    if not metrics["rejected_entries"]:
+        return False
+    if status in (4, 8):
+        return not facts and not stage and not query_hr and not any(state[88:92])
+    if status == 3:
+        return 1 <= stage <= 8 and query_hr == 1
+    if status == 6:
+        return stage == 8 and query_hr == 1 and facts == 127
+    return status == 7 and ((stage == 0 and query_hr == 0 and facts == 0) or
+                           (stage == 8 and query_hr == 1 and facts == 127) or
+                           (stage == 9 and query_hr == 0 and facts == 127))
+
+
 def unsafe_event_claims(event):
     # Inspect nested objects as well: moving a readiness flag or pointer below
     # `details` must not turn the same unsupported claim into accepted evidence.
@@ -217,7 +291,7 @@ def analyze_log(text, require_exit=False):
             if (len(samples) >= 4096 or set(event) != {"event", "at_ms", "elapsed_ms", "state"} or
                     not started or finished or not startup.integer(event.get("at_ms")) or
                     not startup.integer(event.get("elapsed_ms")) or not startup.integer(started.get("at_ms")) or
-                    event["at_ms"] - started["at_ms"] != event["elapsed_ms"] or not unsigned_array(state, {1: 40, 2: 44, 3: 80, 4: 84}[version])):
+                    event["at_ms"] - started["at_ms"] != event["elapsed_ms"] or not unsigned_array(state, {1: 40, 2: 44, 3: 80, 4: 84, 5: 110}[version])):
                 invalid(line, "Sample requires the versioned unsigned fields with bound clock/order")
                 continue
             if last_clock is not None and event["at_ms"] < last_clock:
@@ -234,8 +308,10 @@ def analyze_log(text, require_exit=False):
                 invalid(line, "Snapshot version, flags, field bounds or reserved storage is invalid")
             if version >= 3 and not gpu_consistent(state, previous):
                 invalid(line, "GPU ownership metadata or coherent published counters are contradictory")
-            if version == 4 and not custom_present_consistent(state):
+            if version >= 4 and not custom_present_consistent(state):
                 invalid(line, "Custom-present code classification is contradictory")
+            if version == 5 and not boundary_consistent(state, previous):
+                invalid(line, "Scoped Present association or lifecycle counters are contradictory")
             native = counters(state)
             outcomes = ("accepted_snapshots", "rejected_snapshots", "foreign_callbacks", "publication_misses")
             if (any(native[name] > native["native_present_callbacks"] for name in (*outcomes, "nested_callbacks")) or
@@ -313,7 +389,9 @@ def analyze_log(text, require_exit=False):
     native_clean = clean
     gpu_clean = bool(version >= 3 and terminal and gpu_supported(terminal) and
                      gpu_metrics(terminal)["accepted"] > 0 and not gpu_metrics(terminal)["rejected"])
-    clean = clean and (version < 3 or gpu_clean)
+    # API5 deliberately reports a read-only association result. Its historical
+    # prefix cannot promote that session into ownership or renderer readiness.
+    clean = clean and (version < 3 or gpu_clean) and version != 5
     lifecycle = bool(base["core_startup_reference_complete"] and not issues and not stop)
     complete = lifecycle and clean
     if finished and finished.get("passed") is True and not clean:
@@ -341,8 +419,13 @@ def analyze_log(text, require_exit=False):
                            sample["state"][52] == 1 and sample["state"][75] in (1, 2) and gpu_consistent(sample["state"]))
     # This is a count of valid sampled classification reports, not every
     # callback or probe, and recognition cannot change the API3 ownership gate.
-    custom_samples = sum(1 for sample in samples if version == 4 and sample["state"][80] == 2 and
+    custom_samples = sum(1 for sample in samples if version >= 4 and sample["state"][80] == 2 and
                          custom_present_consistent(sample["state"]) and gpu_consistent(sample["state"]))
+    boundary_samples = sum(1 for sample in samples if version == 5 and boundary_coherent(sample["state"]) and
+                           boundary_consistent(sample["state"]))
+    if issues or base["issue_count"]:
+        boundary_samples = 0
+    association_observed = bool(boundary_samples and not issues and not base["issue_count"])
     return dict(schema_version=1, status=("native_gpu_ownership_observed" if version >= 3 else "native_renderer_callback_observed") if complete else
                 "invalid_evidence" if issues or base["issue_count"] else
                 ("native_gpu_ownership_incomplete" if version >= 3 and native_clean else "native_observation_missing") if diagnostic_lifecycle else "incomplete_or_failed",
@@ -354,6 +437,10 @@ def analyze_log(text, require_exit=False):
                 gpu_metadata_sample_count=metadata_samples,
                 custom_presenter_recognized=bool(custom_samples and not issues and not base["issue_count"]),
                 custom_presenter_sample_count=custom_samples,
+                native_present_observed=association_observed, native_present_sample_count=boundary_samples,
+                buffer_association_observed=association_observed, buffer_association_sample_count=boundary_samples,
+                boundary_metrics=boundary_metrics(terminal) if version == 5 and terminal else None,
+                gpu_frame_boundary_verified=False,
                 gpu_metrics=gpu_metrics(terminal) if version >= 3 and terminal else None,
                 observation_api=version, requested_route=requested,
                 observed_route=(terminal[41] if version >= 2 else 1 if complete else 0) if terminal else 0,

@@ -31,6 +31,9 @@ static_assert(mta::game_de::RenderObservationApiVersionV4 == 4);
 static_assert(offsetof(mta::game_de::RenderObservationStateV4, base) == 0);
 static_assert(offsetof(mta::game_de::RenderObservationStateV4, custom) == 272);
 static_assert(sizeof(mta::game_de::RenderObservationStateV4) == 288);
+static_assert(mta::game_de::RenderObservationApiVersionV5 == 5);
+static_assert(offsetof(mta::game_de::RenderObservationStateV5, boundary) == 288);
+static_assert(sizeof(mta::game_de::RenderObservationStateV5) == 392);
 static_assert(offsetof(mta::game_de::RenderObservationStateV3, base) == 0);
 static_assert(offsetof(mta::game_de::RenderObservationStateV3, gpu) == sizeof(mta::game_de::RenderObservationStateV2));
 
@@ -46,6 +49,9 @@ static_assert(offsetof(mta::game_de::RenderObservationStateV3, gpu) == sizeof(mt
     #endif
     #ifndef MTA_TEST_RENDER_V3
         #define MTA_TEST_RENDER_V3 0
+    #endif
+    #ifndef MTA_TEST_RENDER_V5
+        #define MTA_TEST_RENDER_V5 0
     #endif
     #ifndef MTA_TEST_RENDER_V4
         #define MTA_TEST_RENDER_V4 0
@@ -325,6 +331,42 @@ namespace mta::game_de
         private:
             RenderFixtureV3 observation;
         };
+
+        class RenderFixtureV5 final : public IGameRenderObservationV5
+        {
+        public:
+            Status Begin() noexcept override { return observation.Begin(); }
+            Status End() noexcept override { return observation.End(); }
+            Status ReadState(RenderObservationStateV5& output) noexcept override
+            {
+                RenderObservationStateV5 next;
+                const auto               status = observation.ReadState(next.base);
+                if (status != Status::Ok)
+                    return status;
+                if (MTA_TEST_RENDER_MODE != 6)
+                {
+                    // These controlled CPU facts exercise Core's typed cache;
+                    // they cannot change the historical GPU support predicate.
+                    next.boundary.status = MTA_TEST_RENDER_MODE == 8 ? 1u : 2u;
+                    if (MTA_TEST_RENDER_MODE != 8)
+                        next.boundary = {2, 1, 255, 0, 2, 2, 0, 1, 7, 0, 2, 1, 1, 0, 100, 100, 100, 0, 9, 0};
+                }
+                output = next;
+                return Status::Ok;
+            }
+            void Release() noexcept override
+            {
+                if (fixtureCounters)
+                {
+                    ++fixtureCounters[7];
+                    fixtureCounters[9] = ++fixtureCounters[8];
+                }
+                delete this;
+            }
+
+        private:
+            RenderFixtureV4 observation;
+        };
     }
 
     extern "C" IGameAdapter* CreateGameAdapter(std::uint32_t abiVersion) noexcept
@@ -360,6 +402,13 @@ namespace mta::game_de
     extern "C" IGameRenderObservationV4* CreateGameRenderObservationV4(std::uint32_t apiVersion, CCoreInterface* owner, RenderObservationRoute route) noexcept
     {
         return apiVersion == RenderObservationApiVersionV4 && owner && route == RenderObservationRoute::D3D12 ? new (std::nothrow) RenderFixtureV4 : nullptr;
+    }
+    #endif
+
+    #if MTA_TEST_RENDER_V5
+    extern "C" IGameRenderObservationV5* CreateGameRenderObservationV5(std::uint32_t apiVersion, CCoreInterface* owner, RenderObservationRoute route) noexcept
+    {
+        return apiVersion == RenderObservationApiVersionV5 && owner && route == RenderObservationRoute::D3D12 ? new (std::nothrow) RenderFixtureV5 : nullptr;
     }
     #endif
 
@@ -460,6 +509,16 @@ namespace
                   "actual API3 factory reports failed admission without native references or inferred GPU ownership");
             Check(host.EndNativeRenderObservation() && host.GetNativeRenderObservationState(gpu) && !gpu.gpu.attempts,
                   "actual API3 final cache preserves no-query wrong-image evidence");
+            Check(!host.BeginNativeRenderFrameBoundaryObservation(mta::game_de::RenderObservationRoute::D3D12),
+                  "actual API5 rejects the nongame image before installing any system or native hook");
+            mta::game_de::RenderObservationStateV5 boundary;
+            Check(host.GetNativeRenderObservationState(boundary) && boundary.base.base.base.requestedRoute == 2 && !boundary.base.base.base.observedRoute &&
+                      boundary.base.base.base.base.failureReason && !boundary.base.base.gpu.attempts && !boundary.boundary.presentEntries &&
+                      !boundary.boundary.factsMask && !boundary.boundary.status,
+                  "actual API5 factory preserves wrong-image failure without inventing endpoint or buffer facts");
+            Check(host.EndNativeRenderObservation() && host.GetNativeRenderObservationState(boundary) && !boundary.base.base.base.base.active &&
+                      !boundary.base.base.base.base.pendingCleanup && !boundary.boundary.presentEntries,
+                  "actual API5 caches completed zero-query admission failure before releasing its typed lease");
             Check(!host.BeginNativeMovementTrial(), "movement trial requires an explicit synthesized frame");
             mta::game_de::LocalObservation observation;
             observation.sampleAtMs = 1000;
@@ -1027,7 +1086,8 @@ namespace
               "API4 failed Begin remains distinguishable and cleanup-owned");
         Check(!host.BeginNativeRenderClassificationObservation(RenderObservationRoute::D3D12) && !host.BeginNativeRenderObservation() &&
                   !host.BeginNativeRenderObservation(RenderObservationRoute::D3D12) &&
-                  !host.BeginNativeRenderOwnershipObservation(RenderObservationRoute::D3D12) && counters[4] == 1,
+                  !host.BeginNativeRenderOwnershipObservation(RenderObservationRoute::D3D12) &&
+                  !host.BeginNativeRenderFrameBoundaryObservation(RenderObservationRoute::D3D12) && counters[4] == 1,
               "retained API4 lease excludes every renderer version and duplicate Begin");
         Check(host.GetNativeRenderObservationState(output) && output.base.base.requestedRoute == 2,
               "API4 reports its immutable explicit route through its own state layout");
@@ -1115,6 +1175,155 @@ namespace
         Check(!host.GetNativeRenderObservationState(output) && output.base.gpu.queryStage == 99 && output.custom.status == 99,
               "unloaded API4 cannot replace caller output");
     }
+    void TestMissingRenderV5(CCoreInterface* owner, const std::wstring& path)
+    {
+        using namespace mta::game_de;
+        CGameAdapterModule host;
+        Check(host.Start(owner, path), "own a real API4-only provider for missing API5 admission");
+        Check(!GetProcAddress(GetModuleHandleW(path.c_str()), "CreateGameRenderObservationV5"), "API4 provider genuinely has no API5 export");
+        RenderObservationStateV5 output;
+        output.base.base.gpu.queryStage = 99;
+        Check(!host.BeginNativeRenderFrameBoundaryObservation(RenderObservationRoute::D3D12) && host.GetError().find("no legacy route") != std::string::npos &&
+                  !host.GetNativeRenderObservationState(output) && output.base.base.gpu.queryStage == 99,
+              "missing API5 never falls back to API1/2/3 or publishes their state as classification evidence");
+        Check(host.BeginNativeRenderClassificationObservation(RenderObservationRoute::D3D12), "explicit API4 remains usable after API5 rejection");
+        Check(!host.EndNativeRenderObservation() && host.EndNativeRenderObservation(), "older API4 keeps its original retry lifetime");
+        host.Stop();
+        Check(!host.IsStarted() && !GetModuleHandleW(path.c_str()), "missing API5 leaves normal owner cleanup available");
+    }
+
+    void TestRenderProviderV5(CCoreInterface* owner, const std::wstring& path, unsigned mode)
+    {
+        using namespace mta::game_de;
+        CGameAdapterModule host;
+        Check(host.Start(owner, path), "own controlled separately versioned API5 provider");
+        std::uint32_t counters[14]{};
+        using Configure = void (*)(std::uint32_t*) noexcept;
+        Configure configure = nullptr;
+        auto      address = GetProcAddress(GetModuleHandleW(path.c_str()), "SetFacadeFixtureCounters");
+        std::memcpy(&configure, &address, sizeof(configure));
+        Check(configure != nullptr, "API5 controlled lifetime counters available");
+        configure(counters);
+        using Factory = decltype(&CreateGameRenderObservationV5);
+        Factory factory = nullptr;
+        address = GetProcAddress(GetModuleHandleW(path.c_str()), "CreateGameRenderObservationV5");
+        std::memcpy(&factory, &address, sizeof(factory));
+        Check(factory && !factory(4, owner, RenderObservationRoute::D3D12) && !factory(6, owner, RenderObservationRoute::D3D12) &&
+                  !factory(5, nullptr, RenderObservationRoute::D3D12) && !factory(5, owner, RenderObservationRoute::D3D11),
+              "API5 factory rejects wrong version/owner and earlier route");
+        RenderObservationStateV5 output;
+        output.base.base.gpu.queryStage = 99;
+        output.base.custom.status = 99;
+        Check(!host.BeginNativeRenderFrameBoundaryObservation(RenderObservationRoute::Unknown) &&
+                  !host.BeginNativeRenderFrameBoundaryObservation(RenderObservationRoute::D3D11) && !host.GetNativeRenderObservationState(output) &&
+                  output.base.base.gpu.queryStage == 99 && output.base.custom.status == 99 && !counters[4],
+              "invalid API5 route rejects before provider entry and preserves output");
+        Check(host.BeginNativeRenderFrameBoundaryObservation(RenderObservationRoute::D3D12) == (mode != 2),
+              "API5 failed Begin remains distinguishable and cleanup-owned");
+        Check(!host.BeginNativeRenderFrameBoundaryObservation(RenderObservationRoute::D3D12) && !host.BeginNativeRenderObservation() &&
+                  !host.BeginNativeRenderObservation(RenderObservationRoute::D3D12) &&
+                  !host.BeginNativeRenderOwnershipObservation(RenderObservationRoute::D3D12) &&
+                  !host.BeginNativeRenderClassificationObservation(RenderObservationRoute::D3D12) && counters[4] == 1,
+              "retained API5 lease excludes every renderer version and duplicate Begin");
+        Check(host.GetNativeRenderObservationState(output) && output.base.base.base.requestedRoute == 2,
+              "API5 reports its immutable explicit route through its own state layout");
+        Check(mode == 6 ? !output.base.base.base.observedRoute && !output.base.base.gpu.attempts && !output.base.base.gpu.metadataValid
+                        : output.base.base.base.observedRoute == 2 && output.base.base.gpu.attempts == 7 && output.base.base.gpu.queryStage == 19 &&
+                              output.base.base.gpu.accepted == 0 && output.base.base.gpu.rejected == 7,
+              "API5 copies actual controlled zero-query or custom-unsupported metadata without promotion");
+        RenderObservationState   legacy;
+        RenderObservationStateV2 older;
+        RenderObservationStateV3 previous;
+        previous.gpu.queryStage = 99;
+        legacy.width = older.requestedRoute = 99;
+        Check(!host.GetNativeRenderObservationState(legacy) && !host.GetNativeRenderObservationState(older) &&
+                  !host.GetNativeRenderObservationState(previous) && previous.gpu.queryStage == 99 && legacy.width == 99 && older.requestedRoute == 99,
+              "API1/2/3 output cannot reinterpret the API5 lease");
+        Check(mode == 6 ? output.base.custom.status == 0 && output.base.custom.implementationId == 0 && output.base.custom.slotSignatureMask == 0 &&
+                              output.base.custom.staticPolicyFlags == 0
+              : mode == 8 ? output.base.custom.status == 3 && output.base.custom.implementationId == 0
+                          : output.base.custom.status == 2 && output.base.custom.implementationId == 1 && output.base.custom.slotSignatureMask == 127 &&
+                                output.base.custom.staticPolicyFlags == 15,
+              "API5 classification must preserve unknown/known scalars without promoting GPU support");
+        RenderObservationStateV4 classificationOutput;
+        classificationOutput.custom.status = 99;
+        Check(!host.GetNativeRenderObservationState(classificationOutput) && classificationOutput.custom.status == 99,
+              "API4 cannot reinterpret the API5 endpoint lease");
+        Check(mode == 6   ? output.boundary.status == 0 && !output.boundary.presentEntries
+              : mode == 8 ? output.boundary.status == 1 && !output.boundary.endpointProfileId
+                          : output.boundary.status == 2 && output.boundary.factsMask == 255 && output.boundary.presentEntries == 7 &&
+                                output.boundary.queryStage == 9 && output.boundary.nativeBufferIndex == output.boundary.dxgiBufferIndex,
+              "API5 preserves actual zero, unadmitted and coherent association reports in its own typed state");
+        const auto               reads = counters[5];
+        bool                     foreignBegin = true, foreignRead = true, foreignEnd = true;
+        RenderObservationStateV5 foreignOutput;
+        foreignOutput.base.base.gpu.queryStage = 77;
+        foreignOutput.base.custom.status = 77;
+        std::thread foreign(
+            [&]
+            {
+                foreignBegin = host.BeginNativeRenderFrameBoundaryObservation(RenderObservationRoute::D3D12);
+                foreignRead = host.GetNativeRenderObservationState(foreignOutput);
+                foreignEnd = host.EndNativeRenderObservation();
+                host.Stop();
+            });
+        foreign.join();
+        Check(!foreignBegin && !foreignRead && !foreignEnd && foreignOutput.base.base.gpu.queryStage == 77 && foreignOutput.base.custom.status == 77 &&
+                  counters[5] == reads && !counters[6] && !counters[0],
+              "foreign API5 calls cannot publish output or touch the provider lifetime");
+        if (mode == 7)
+        {
+            counters[13] = 1;
+            output.base.base.gpu.queryStage = 88;
+            output.base.custom.status = 88;
+            Check(!host.GetNativeRenderObservationState(output) && output.base.base.gpu.queryStage == 88 && output.base.custom.status == 88,
+                  "cross-observed route preserves API5 caller output");
+            counters[13] = 2;
+            Check(!host.GetNativeRenderObservationState(output) && output.base.base.gpu.queryStage == 88 && output.base.custom.status == 88,
+                  "cross-requested route preserves API5 caller output");
+        }
+        if (mode == 4)
+        {
+            Check(host.Reset() && counters[6] == 1 && counters[7] == 1 && counters[3] == 1 && counters[9] < counters[10],
+                  "API5 End/Release precede adapter Reset");
+            output.base.base.gpu.queryStage = 88;
+            output.base.custom.status = 88;
+            Check(!host.GetNativeRenderObservationState(output) && output.base.base.gpu.queryStage == 88 && output.base.custom.status == 88,
+                  "Reset clears API5 final state availability");
+        }
+        else
+        {
+            if (mode <= 2 || mode == 7)
+                host.Stop();
+            else if (mode == 3 || mode == 5)
+                Check(!host.EndNativeRenderObservation(), "failed API5 final read or active end state retains the lease");
+            if (mode <= 3 || mode == 5 || mode == 7)
+                Check(host.IsStarted() && counters[6] == 1 && !counters[7] && !counters[0] && GetModuleHandleW(path.c_str()),
+                      "API5 Begin/End/read/route failure retains adapter and module for retry");
+            counters[13] = 0;
+            Check(host.EndNativeRenderObservation(), "owner completes API5 End after the retained failure");
+            const auto finalReads = counters[5];
+            Check(host.GetNativeRenderObservationState(output) && !output.base.base.base.base.active && !output.base.base.base.base.pendingCleanup &&
+                      counters[5] == finalReads && counters[7] == 1 && output.base.base.gpu.queryStage == (mode == 6 ? 0u : 19u),
+                  "ended API5 cache contains actual final metadata without touching released provider");
+            if (mode != 6)
+                Check(!output.base.base.gpu.supportPredicate && output.base.base.gpu.queryStatus == 2 && output.base.base.gpu.rejected == 7 &&
+                          !host.IsGameplayReady(),
+                      "unsupported GPU metadata remains unsupported after End and grants no gameplay readiness");
+            Check(output.base.custom.status == (mode == 6   ? 0u
+                                                : mode == 8 ? 3u
+                                                            : 2u),
+                  "API5 final cache preserves classification before releasing its provider");
+            Check(host.EndNativeRenderObservation() && counters[7] == 1, "API5 completed End is idempotent");
+        }
+        host.Stop();
+        Check(!host.IsStarted() && !GetModuleHandleW(path.c_str()) && counters[7] == 1 && counters[0] == 1 && counters[1] == 1 && counters[9] < counters[11],
+              "API5 observer release precedes adapter shutdown and unload");
+        output.base.base.gpu.queryStage = 99;
+        output.base.custom.status = 99;
+        Check(!host.GetNativeRenderObservationState(output) && output.base.base.gpu.queryStage == 99 && output.base.custom.status == 99,
+              "unloaded API5 cannot replace caller output");
+    }
     #endif
 }
 
@@ -1122,7 +1331,7 @@ int wmain(int argc, wchar_t** argv)
 {
     try
     {
-        if (argc != 2 && argc != 3 && argc != 6 && argc != 11 && argc != 18 && argc != 26 && argc != 34)
+        if (argc != 2 && argc != 3 && argc != 6 && argc != 11 && argc != 18 && argc != 26 && argc != 34 && argc != 42)
             throw std::runtime_error("Pass the absolute path of the built Game DE module");
         const std::wstring modulePath = argv[1];
         // The adapter stores this identity but must never dereference it. This
@@ -1154,11 +1363,17 @@ int wmain(int argc, wchar_t** argv)
             for (unsigned mode = 1; mode <= 8; ++mode)
                 TestRenderProviderV3(owner, argv[mode + 17], mode);
         }
-        if (argc == 34)
+        if (argc >= 34)
         {
             TestMissingRenderV4(owner, argv[18]);
             for (unsigned mode = 1; mode <= 8; ++mode)
                 TestRenderProviderV4(owner, argv[mode + 25], mode);
+        }
+        if (argc == 42)
+        {
+            TestMissingRenderV5(owner, argv[26]);
+            for (unsigned mode = 1; mode <= 8; ++mode)
+                TestRenderProviderV5(owner, argv[mode + 33], mode);
         }
     #else
         CGameAdapterModule host;

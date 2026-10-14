@@ -37,6 +37,7 @@ namespace mta::game_de
         std::uint32_t                    requestedRoute = 0, observedRoute = 0, presenceKnownMask = 0, queuePresent = 0;
         GpuOwnershipProbeState           gpu;
         CustomPresentClassificationState custom;
+        FrameBoundaryObservationState    boundary;
     };
 
     // This is an observation of a naturally invoked native viewport callback,
@@ -58,7 +59,8 @@ namespace mta::game_de
         NativeRenderObservation& operator=(const NativeRenderObservation&) = delete;
         // A zero-callback run cannot choose a backend. The route is explicit;
         // observedRoute remains unknown until a validated original returns.
-        bool Begin(RenderObservationRoute route = RenderObservationRoute::D3D11, bool queryGpuOwnership = false, bool classifyCustomPresent = false) noexcept;
+        bool Begin(RenderObservationRoute route = RenderObservationRoute::D3D11, bool queryGpuOwnership = false, bool classifyCustomPresent = false,
+                   bool queryFrameBoundary = false) noexcept;
         bool End() noexcept;
         void ReadState(NativeRenderObservationState& state) const noexcept;
 

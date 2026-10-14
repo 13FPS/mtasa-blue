@@ -7,6 +7,7 @@
 #include "NativeRenderObservation.h"
 #include "NativeD3D12OwnershipProbe.h"
 #include "NativeCustomPresentProbe.h"
+#include "NativeFrameBoundaryProbe.h"
 #include <array>
 #include <atomic>
 #include <limits>
@@ -73,6 +74,7 @@ namespace mta::game_de
             std::uint32_t                requestedRoute = 0;
             bool                         queryGpuOwnership = false;
             bool                         classifyCustomPresent = false;
+            bool                         queryFrameBoundary = false;
         };
         // Failed teardown must retain its trampoline and callback storage.
         // Nothing in this process-lifetime state points at a released owner.
@@ -93,6 +95,7 @@ namespace mta::game_de
         void Fail(Failure failure) noexcept
         {
             runtime.active.store(false);
+            StopFrameBoundaryAdmission();
             std::uint32_t expected = 0;
             runtime.failure.compare_exchange_strong(expected, static_cast<std::uint32_t>(failure));
         }
@@ -288,6 +291,11 @@ namespace mta::game_de
             bool Object(std::uintptr_t address, void* output, std::size_t bytes) override { return Read(address, output, bytes); }
             bool Image(std::uintptr_t address, void* output, std::size_t bytes, bool executable) override
             {
+                // API5 owns one detour inside a known policy function. Recover
+                // its pinned bytes only after verifying the entire exact owned
+                // patch; historical API4 still checks the ordinary live image.
+                if (runtime.queryFrameBoundary && executable && address == runtime.image + 0xc20780 && bytes == 44)
+                    return ReadFrameBoundaryOwnedOriginal(address, output, bytes);
                 return Read(address, output, bytes, runtime.image, executable);
             }
         };
@@ -364,6 +372,26 @@ namespace mta::game_de
             }
         }
 
+        bool InvokeOriginal(void* viewport, std::uint32_t syncInterval, FrameBoundaryScope& scope, bool observe)
+        {
+            __try
+            {
+                return runtime.original(viewport, syncInterval);
+            }
+            __finally
+            {
+                if (observe)
+                    LeaveFrameBoundaryScope(scope);
+            }
+        }
+
+        void BoundaryCleanupFailure() noexcept
+        {
+            // The original Present may raise before publication. Preserve the
+            // fatal release fault now rather than relying on its return path.
+            Fail(Failure::GpuOwnershipCleanup);
+        }
+
         bool PresentBody(void* viewport, std::uint32_t syncInterval)
         {
             runtime.callbacks.fetch_add(1);
@@ -408,7 +436,20 @@ namespace mta::game_de
                 if (fatalCleanup)
                     Fail(Failure::GpuOwnershipCleanup);
             }
-            const bool result = runtime.original(viewport, syncInterval);
+            FrameBoundaryScope boundary;
+            const bool         observeBoundary = accepted && runtime.queryFrameBoundary && !fatalCleanup && runtime.active.load();
+            if (observeBoundary)
+                EnterFrameBoundaryScope(boundary, runtime.image, viewport, runtime.callbackThread.load(), capture.custom, &BoundaryCleanupFailure);
+            const bool result = InvokeOriginal(viewport, syncInterval, boundary, observeBoundary);
+            if (observeBoundary)
+            {
+                capture.boundary = boundary.state;
+                if (boundary.cleanupFailed)
+                {
+                    fatalCleanup = true;
+                    Fail(Failure::GpuOwnershipCleanup);
+                }
+            }
             if (accepted && (runtime.active.load() || fatalCleanup))
             {
                 if (TryAcquireSRWLockExclusive(&runtime.snapshotLock))
@@ -423,6 +464,16 @@ namespace mta::game_de
                         capture.gpu.attempts = previous.attempts + 1;
                         capture.gpu.accepted = previous.accepted + (capture.gpu.queryStatus == static_cast<std::uint32_t>(GpuOwnershipQueryStatus::Accepted));
                         capture.gpu.rejected = previous.rejected + (capture.gpu.queryStatus != static_cast<std::uint32_t>(GpuOwnershipQueryStatus::Accepted));
+                    }
+                    if (runtime.queryFrameBoundary)
+                    {
+                        if (!observeBoundary && fatalCleanup)
+                            capture.boundary = runtime.snapshot.boundary;
+                        else
+                        {
+                            capture.boundary.presentEntries += runtime.snapshot.boundary.presentEntries;
+                            capture.boundary.rejectedEntries += runtime.snapshot.boundary.rejectedEntries;
+                        }
                     }
                     runtime.snapshot = capture;
                     runtime.accepted.fetch_add(1);
@@ -500,7 +551,7 @@ namespace mta::game_de
                 // No callback-shared lock is held while Detours suspends threads.
                 // A callback can enter after End's optimistic check; abort and
                 // resume it rather than freeing its live trampoline.
-                if (ready && !install && runtime.inFlight.load())
+                if (ready && !install && (runtime.inFlight.load() || (runtime.queryFrameBoundary && FrameBoundaryInFlight())))
                 {
                     pending = true;
                     ready = false;
@@ -508,10 +559,21 @@ namespace mta::game_de
                 if (ready)
                     ready =
                         (install ? DetourAttach : DetourDetach)(reinterpret_cast<PVOID*>(&runtime.original), reinterpret_cast<PVOID>(&HookPresent)) == NO_ERROR;
+                if (ready && runtime.queryFrameBoundary)
+                    ready = install || FrameBoundaryHooksOwned();
+                if (ready && runtime.queryFrameBoundary)
+                    ready = ChangeFrameBoundaryHooks(install);
                 if (ready)
                 {
                     ready = DetourTransactionCommit() == NO_ERROR;
                     transaction = false;
+                    if (ready && runtime.queryFrameBoundary)
+                    {
+                        // A committed hook remains owned even if post-attach
+                        // verification refuses observation; End must remove it.
+                        runtime.hooked.store(install);
+                        ready = FrameBoundaryHooksCommitted(install);
+                    }
                 }
             }
             if (transaction)
@@ -542,10 +604,10 @@ namespace mta::game_de
         End();
     }
 
-    bool NativeRenderObservation::Begin(RenderObservationRoute route, bool queryGpuOwnership, bool classifyCustomPresent) noexcept
+    bool NativeRenderObservation::Begin(RenderObservationRoute route, bool queryGpuOwnership, bool classifyCustomPresent, bool queryFrameBoundary) noexcept
     {
         ApiOperation operation;
-        if (!operation.acquired || runtime.hooked.load() || runtime.inFlight.load() || runtime.active.load())
+        if (!operation.acquired || runtime.hooked.load() || runtime.inFlight.load() || FrameBoundaryInFlight() || runtime.active.load())
             return false;
         generation = runtime.generation.fetch_add(1) + 1;
         finalState = {};
@@ -556,9 +618,11 @@ namespace mta::game_de
         runtime.requestedRoute = static_cast<std::uint32_t>(route);
         runtime.queryGpuOwnership = queryGpuOwnership;
         runtime.classifyCustomPresent = classifyCustomPresent;
+        runtime.queryFrameBoundary = queryFrameBoundary;
+        ResetFrameBoundaryObservation();
         runtime.route = SelectRoute(route);
         if (!runtime.route || ((queryGpuOwnership || classifyCustomPresent) && route != RenderObservationRoute::D3D12) ||
-            (classifyCustomPresent && !queryGpuOwnership))
+            (classifyCustomPresent && !queryGpuOwnership) || (queryFrameBoundary && (!classifyCustomPresent || route != RenderObservationRoute::D3D12)))
         {
             Fail(Failure::UnsupportedRoute);
             ReadState(finalState);
@@ -584,6 +648,12 @@ namespace mta::game_de
             return false;
         }
         runtime.modulePinned.store(true);
+        if (queryFrameBoundary && !PrepareFrameBoundaryHooks(runtime.image))
+        {
+            Fail(Failure::FingerprintMismatch);
+            ReadState(finalState);
+            return false;
+        }
         runtime.original = reinterpret_cast<PresentFunction>(runtime.image + runtime.route->presentRva);
         bool pending = false;
         if (!ChangeHooks(true, pending))
@@ -608,12 +678,13 @@ namespace mta::game_de
         if (!generation || generation != runtime.generation.load())
             return !runtime.hooked.load();
         runtime.active.store(false);
+        StopFrameBoundaryAdmission();
         if (GetCurrentThreadId() != runtime.producerThread)
         {
             Fail(Failure::WrongProducerThread);
             return false;
         }
-        if (runtime.inFlight.load())
+        if (runtime.inFlight.load() || (runtime.queryFrameBoundary && FrameBoundaryInFlight()))
         {
             ReadState(finalState);
             return false;

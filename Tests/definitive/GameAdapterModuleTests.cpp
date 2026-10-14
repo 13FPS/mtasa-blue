@@ -677,6 +677,106 @@ namespace
               "actual ended API4 readback keeps failed admission and zero-query evidence");
         observation->Release();
     }
+
+    void TestRenderObservationV5FactoryRejection()
+    {
+        OwnerIdentity owner;
+        for (const auto version : {0u, 1u, 2u, 3u, 4u, 6u, std::numeric_limits<std::uint32_t>::max()})
+            Check(!CreateGameRenderObservationV5(version, owner.Get(), RenderObservationRoute::D3D12),
+                  "API5 rejects every earlier contract and unknown versions before constructing a boundary lease");
+        Check(!CreateGameRenderObservationV5(RenderObservationApiVersionV5, nullptr, RenderObservationRoute::D3D12),
+              "API5 boundary diagnostics require an opaque MTA owner");
+        for (const auto route : {RenderObservationRoute::Unknown, RenderObservationRoute::D3D11, static_cast<RenderObservationRoute>(99)})
+            Check(!CreateGameRenderObservationV5(RenderObservationApiVersionV5, owner.Get(), route),
+                  "API5 never interprets a missing or different renderer request as D3D12 admission");
+        Check(!CreateGameRenderObservation(RenderObservationApiVersionV5, owner.Get()) &&
+                  !CreateGameRenderObservationV2(RenderObservationApiVersionV5, owner.Get(), RenderObservationRoute::D3D12) &&
+                  !CreateGameRenderObservationV3(RenderObservationApiVersionV5, owner.Get(), RenderObservationRoute::D3D12) &&
+                  !CreateGameRenderObservationV4(RenderObservationApiVersionV5, owner.Get(), RenderObservationRoute::D3D12),
+              "all four historical factories refuse API5 instead of returning an incompatible output layout");
+
+        const auto boundaryZero = [](const FrameBoundaryObservationState& value)
+        {
+            return !value.status && !value.endpointProfileId && !value.factsMask && !value.presentHresult && !value.nativeBufferIndex &&
+                   !value.dxgiBufferIndex && !value.nativeTrackedState && !value.nativeTrackedMode && !value.presentEntries && !value.rejectedEntries &&
+                   !value.resizeEpoch && !value.resizeEntries && !value.preReleaseEntries && !value.foreignLifecycleEntries && !value.presentThreadId &&
+                   !value.resizeThreadId && !value.preReleaseThreadId && !value.lifecycleFlags && !value.queryStage && !value.queryHresult;
+        };
+        auto* observation = CreateGameRenderObservationV5(RenderObservationApiVersionV5, owner.Get(), RenderObservationRoute::D3D12);
+        Check(observation != nullptr, "actual API5 factory allocates its separate module-owned boundary observer");
+        RenderObservationStateV5 state;
+        const auto&              historical = state.base.base.base.base;
+        const auto&              route = state.base.base.base;
+        const auto&              gpu = state.base.base.gpu;
+        const auto&              custom = state.base.custom;
+        Check(observation->ReadState(state) == Status::Ok && !historical.bound && !historical.active && !historical.modulePinned &&
+                  !historical.pendingCleanup && !historical.generation && !historical.nativePresentCallbacks && !historical.acceptedSnapshots &&
+                  !historical.rejectedSnapshots && !route.observedRoute && !route.presenceKnownMask && !gpu.attempts && !gpu.accepted && !gpu.rejected &&
+                  !gpu.queryStage && !gpu.metadataValid && !gpu.supportPredicate && !custom.status && !custom.implementationId && !custom.slotSignatureMask &&
+                  !custom.staticPolicyFlags && boundaryZero(state.boundary),
+              "API5 construction performs no hook, endpoint admission, COM query, lifecycle callback or inferred association");
+
+        Status                   foreignBegin = Status::Ok, foreignRead = Status::Ok, foreignEnd = Status::Ok;
+        RenderObservationStateV5 foreignState;
+        foreignState.base.base.base.base.width = 321;
+        foreignState.base.base.gpu.queryStage = 98;
+        foreignState.base.custom.staticPolicyFlags = 97;
+        const std::array<std::uint32_t FrameBoundaryObservationState::*, 14> boundaryScalars = {&FrameBoundaryObservationState::status,
+                                                                                                &FrameBoundaryObservationState::endpointProfileId,
+                                                                                                &FrameBoundaryObservationState::factsMask,
+                                                                                                &FrameBoundaryObservationState::presentHresult,
+                                                                                                &FrameBoundaryObservationState::nativeBufferIndex,
+                                                                                                &FrameBoundaryObservationState::dxgiBufferIndex,
+                                                                                                &FrameBoundaryObservationState::nativeTrackedState,
+                                                                                                &FrameBoundaryObservationState::nativeTrackedMode,
+                                                                                                &FrameBoundaryObservationState::presentThreadId,
+                                                                                                &FrameBoundaryObservationState::resizeThreadId,
+                                                                                                &FrameBoundaryObservationState::preReleaseThreadId,
+                                                                                                &FrameBoundaryObservationState::lifecycleFlags,
+                                                                                                &FrameBoundaryObservationState::queryStage,
+                                                                                                &FrameBoundaryObservationState::queryHresult};
+        const std::array<std::uint64_t FrameBoundaryObservationState::*, 6>  boundaryCounters = {
+            &FrameBoundaryObservationState::presentEntries,    &FrameBoundaryObservationState::rejectedEntries,
+            &FrameBoundaryObservationState::resizeEpoch,       &FrameBoundaryObservationState::resizeEntries,
+            &FrameBoundaryObservationState::preReleaseEntries, &FrameBoundaryObservationState::foreignLifecycleEntries};
+        for (const auto field : boundaryScalars)
+            foreignState.boundary.*field = 0xa5a5a5a5u;
+        for (const auto field : boundaryCounters)
+            foreignState.boundary.*field = 0xfedcba9876543210ull;
+        std::thread foreign(
+            [&]
+            {
+                foreignBegin = observation->Begin();
+                foreignRead = observation->ReadState(foreignState);
+                foreignEnd = observation->End();
+                observation->Release();
+            });
+        foreign.join();
+        Check(foreignBegin == Status::WrongThread && foreignRead == Status::WrongThread && foreignEnd == Status::WrongThread &&
+                  foreignState.base.base.base.base.width == 321 && foreignState.base.base.gpu.queryStage == 98 &&
+                  foreignState.base.custom.staticPolicyFlags == 97,
+              "foreign API5 methods preserve historical caller output and cannot end or release the owner lease");
+        for (const auto field : boundaryScalars)
+            Check(foreignState.boundary.*field == 0xa5a5a5a5u, "wrong-thread API5 reads preserve every new scalar without partial publication");
+        for (const auto field : boundaryCounters)
+            Check(foreignState.boundary.*field == 0xfedcba9876543210ull, "wrong-thread API5 reads preserve every new 64-bit lifecycle counter");
+
+        // API5 adds another native hook only after exact image admission. An
+        // ordinary module host must reject before touching system DXGI or COM;
+        // zero boundary state is therefore evidence of no attempted observation.
+        Check(observation->Begin() == Status::Unsupported, "real API5 rejects the owned nongame executable before endpoint installation");
+        Check(observation->ReadState(state) == Status::Ok && route.requestedRoute == 2 && !route.observedRoute && !route.presenceKnownMask &&
+                  historical.generation && historical.failureReason && !historical.bound && !historical.active && !historical.modulePinned &&
+                  !historical.pendingCleanup && !historical.nativePresentCallbacks && !historical.acceptedSnapshots && !gpu.attempts && !gpu.queryStage &&
+                  !gpu.metadataValid && !gpu.supportPredicate && !custom.status && !custom.implementationId && !custom.slotSignatureMask &&
+                  !custom.staticPolicyFlags && boundaryZero(state.boundary),
+              "wrong-image API5 records only its requested route and failure, with no endpoints, references, frame facts or GPU permission");
+        Check(observation->End() == Status::Ok && observation->End() == Status::Ok, "API5 owner cleanup is idempotent after unsupported admission");
+        Check(observation->ReadState(state) == Status::Ok && route.requestedRoute == 2 && !route.observedRoute && !historical.active &&
+                  !historical.pendingCleanup && !historical.modulePinned && !gpu.attempts && boundaryZero(state.boundary),
+              "ended API5 state remains readable with all new observations unattempted until owner release");
+        observation->Release();
+    }
 }
 
 int main()
@@ -688,6 +788,8 @@ int main()
     static_assert(NativePadBindingCapabilities == 64, "A raw candidate read must not advertise the unverified EngineInputRead capability");
     static_assert((NativePadBindingCapabilities & static_cast<std::uint64_t>(AdapterCapability::EngineInputRead)) == 0);
     static_assert(std::is_nothrow_invocable_v<decltype(CreateGameAdapter), std::uint32_t>);
+    static_assert(RenderObservationApiVersionV5 == 5);
+    static_assert(std::is_nothrow_invocable_v<decltype(CreateGameRenderObservationV5), std::uint32_t, CCoreInterface*, RenderObservationRoute>);
     try
     {
         TestFactoryAndLifecycle();
@@ -699,6 +801,9 @@ int main()
         TestNativeDeviceRejection();
         TestNativeMovementRejection();
         TestNativeMovementEligibilityRejection();
+        // Exercise historical factory layouts after the additive lease has
+        // completed, so API5 cannot silently replace their module contract.
+        TestRenderObservationV5FactoryRejection();
         TestRenderObservationFactoryRejection();
         TestRenderObservationV2FactoryRejection();
         TestRenderObservationV3FactoryRejection();

@@ -145,10 +145,11 @@ int wmain(int argc, wchar_t** argv)
             using namespace DefinitiveRenderReference;
             Check(argc == 4, "render worker fixture requires its controlled Core DLL");
             const std::wstring mode = argv[2];
+            const bool         v5 = mode.find(L"render-v5") == 0;
             const bool         v4 = mode.find(L"render-v4") == 0;
             const bool         v3 = mode.find(L"render-v3") == 0;
             const bool         v2 = mode.find(L"render-v2") == 0;
-            const bool         explicitRoute = v2 || v3 || v4;
+            const bool         explicitRoute = v2 || v3 || v4 || v5;
             const bool         cancel = mode.find(L"cancel") != std::wstring::npos;
             const bool         deadlineFailure = mode.find(L"deadline") != std::wstring::npos;
             const bool         noCallbacks = mode.find(L"missing") != std::wstring::npos;
@@ -173,22 +174,34 @@ int wmain(int argc, wchar_t** argv)
             Check(!worker.BeginRenderReferenceV4(&anchor, 0) && !worker.BeginRenderReferenceV4(&anchor, 1) && !worker.BeginRenderReferenceV4(&anchor, 3) &&
                       !worker.BeginRenderReferenceV4(&anchor, 0xffffffffu),
                   "API4 classification must explicitly select D3D12 before scheduling");
-            Check(v4   ? worker.BeginRenderReferenceV4(&anchor, route)
+            Check(!worker.BeginRenderReferenceV5(&anchor, 0) && !worker.BeginRenderReferenceV5(&anchor, 1) && !worker.BeginRenderReferenceV5(&anchor, 3) &&
+                      !worker.BeginRenderReferenceV5(&anchor, 0xffffffffu),
+                  "API5 must explicitly select D3D12 before scheduling Present hooks");
+            Check(v5   ? worker.BeginRenderReferenceV5(&anchor, route)
+                  : v4 ? worker.BeginRenderReferenceV4(&anchor, route)
                   : v3 ? worker.BeginRenderReferenceV3(&anchor, route)
                   : v2 ? worker.BeginRenderReferenceV2(&anchor, route)
                        : worker.BeginRenderReference(&anchor),
                   "Core render worker failed to begin");
             Check(!worker.BeginInputReference(&anchor) && !worker.BeginMovementReference(&anchor), "render job must exclude input and movement lifetimes");
             Check(!worker.BeginRenderReference(&anchor) && !worker.BeginRenderReferenceV2(&anchor, route) && !worker.BeginRenderReferenceV3(&anchor, 2) &&
-                      !worker.BeginRenderReferenceV4(&anchor, 2),
+                      !worker.BeginRenderReferenceV4(&anchor, 2) && !worker.BeginRenderReferenceV5(&anchor, 2),
                   "all renderer protocols must share one retained owner");
             const auto capture = [&]
             {
-                return v4 ? worker.CaptureRenderV4() : v3 ? worker.CaptureRenderV3() : v2 ? worker.CaptureRenderV2() : worker.CaptureRender();
+                return v5   ? worker.CaptureRenderV5()
+                       : v4 ? worker.CaptureRenderV4()
+                       : v3 ? worker.CaptureRenderV3()
+                       : v2 ? worker.CaptureRenderV2()
+                            : worker.CaptureRender();
             };
             const auto read = [&](std::uint32_t field)
             {
-                return v4 ? worker.ReadRenderV4(field) : v3 ? worker.ReadRenderV3(field) : v2 ? worker.ReadRenderV2(field) : worker.ReadRender(field);
+                return v5   ? worker.ReadRenderV5(field)
+                       : v4 ? worker.ReadRenderV4(field)
+                       : v3 ? worker.ReadRenderV3(field)
+                       : v2 ? worker.ReadRenderV2(field)
+                            : worker.ReadRender(field);
             };
             const auto deadline = GetTickCount64() + 6000;
             while (!capture())
@@ -197,25 +210,34 @@ int wmain(int argc, wchar_t** argv)
                 Sleep(5);
             }
             Check(read(Phase) == 1 && read(GenerationHigh) == 2 && read(Width) == (explicitRoute ? 0u : 1280u) && read(BackendPinnedExpected) == 1 &&
-                      read(v4   ? FieldCountV4
+                      read(v5   ? FieldCountV5
+                           : v4 ? FieldCountV4
                            : v3 ? FieldCountV3
                            : v2 ? FieldCountV2
                                 : FieldCount) == 0,
                   "render cache must preserve the coherent numeric publication and high counter halves");
-            Check(v4 ? !worker.CaptureRender() && !worker.CaptureRenderV2() && !worker.CaptureRenderV3() && !worker.ReadRender(Version) &&
-                           !worker.ReadRenderV2(Version) && !worker.ReadRenderV3(Version)
+            Check(v5 ? !worker.CaptureRenderV4() && !worker.ReadRenderV4(Version) && !worker.CaptureRenderV3() && !worker.CaptureRenderV2() &&
+                           !worker.CaptureRender()
+                  : v4 ? !worker.CaptureRender() && !worker.CaptureRenderV2() && !worker.CaptureRenderV3() && !worker.ReadRender(Version) &&
+                             !worker.ReadRenderV2(Version) && !worker.ReadRenderV3(Version)
                   : v3 ? !worker.CaptureRender() && !worker.CaptureRenderV2() && !worker.ReadRender(Version) && !worker.ReadRenderV2(Version) &&
                              !worker.CaptureRenderV4()
                   : v2 ? !worker.CaptureRender() && !worker.ReadRender(Version) && !worker.CaptureRenderV3()
                        : !worker.CaptureRenderV2() && !worker.ReadRenderV2(Version) && !worker.CaptureRenderV3(),
                   "a cache cannot be read through the other protocol");
-            if (!v4)
+            if (!v5)
+                Check(!worker.CaptureRenderV5() && !worker.ReadRenderV5(Version), "historical protocols cannot expose Present association fields");
+            else
+                for (unsigned field = 84; field < FieldCountV5; ++field)
+                    Check(read(field) == 0, "API5 warmup cannot invent a scoped Present or association");
+            if (!v4 && !v5)
                 Check(!worker.CaptureRenderV4() && !worker.ReadRenderV4(Version), "legacy caches cannot expose classification tail fields");
             else
                 Check(read(80) == 0 && read(81) == 0 && read(82) == 0 && read(83) == 0,
                       "warmup cannot invent a classified custom presenter before a publication");
             if (explicitRoute)
-                Check(read(Version) == (v4   ? 4u
+                Check(read(Version) == (v5   ? 5u
+                                        : v4 ? 4u
                                         : v3 ? 3u
                                              : 2u) &&
                           read(RequestedRoute) == route && !read(ObservedRoute) && !read(PresenceKnownMask) && !read(QueuePresent),
@@ -225,7 +247,8 @@ int wmain(int argc, wchar_t** argv)
                 [&]
                 {
                     foreignRejected = !capture() && read(0) == 0 && !worker.BeginRenderReference(&anchor) && !worker.BeginRenderReferenceV2(&anchor, route) &&
-                                      !worker.BeginRenderReferenceV3(&anchor, 2) && !worker.BeginRenderReferenceV4(&anchor, 2);
+                                      !worker.BeginRenderReferenceV3(&anchor, 2) && !worker.BeginRenderReferenceV4(&anchor, 2) &&
+                                      !worker.BeginRenderReferenceV5(&anchor, 2);
                 });
             foreign.join();
             Check(foreignRejected, "render cache and lifecycle must stay with the script owner");
@@ -261,6 +284,13 @@ int wmain(int argc, wchar_t** argv)
                                           : (deadlineFailure || malformed) ? 15u
                                                                            : 0u),
                   "render backend PIN must remain separate from the unloaded Core owner");
+            if (v5 && !noCallbacks)
+                Check(read(84) == (mode.find(L"unknown-presenter") != std::wstring::npos ? 10u
+                                   : mode.find(L"query-failed") != std::wstring::npos    ? 5u
+                                                                                         : 2u) &&
+                          read(85) == 1 && read(92) == 10 && read(93) == 2 && read(95) == 1 &&
+                          read(104) == (mode.find(L"unknown-presenter") != std::wstring::npos ? 0u : read(25)) && read(110) == 0,
+                      "API5 association tail must survive retained cleanup without aliasing older cache widths");
             if (explicitRoute && !malformed)
                 Check(read(RequestedRoute) == route && read(ObservedRoute) == (noCallbacks ? 0u : route) &&
                           read(PresenceKnownMask) == (noCallbacks  ? 0u
@@ -278,7 +308,7 @@ int wmain(int argc, wchar_t** argv)
                 Check(!worker.CaptureRenderV2() && !worker.ReadRenderV2(Version) && read(ReservedV3) == 0 && read(ReservedHighV3) == 0,
                       "API3 cache cannot be reinterpreted as a legacy observation");
             }
-            if (v4 && !malformed && !noCallbacks)
+            if ((v4 || v5) && !malformed && !noCallbacks)
             {
                 const bool failed = mode.find(L"query-failed") != std::wstring::npos;
                 const bool unknown = mode.find(L"unknown-presenter") != std::wstring::npos;

@@ -62,6 +62,366 @@ def missing_observation_fixture():
 
 class CoreRenderEvidenceTests(unittest.TestCase):
     @classmethod
+    def version5(cls, rows):
+        cls.version4(rows)
+        for row in rows:
+            if row.get("event") in ("adapter_start", "core_render_reference_started"):
+                row.update(core_api=9, observation_api=5)
+            if row.get("event") == "core_render_reference_sample":
+                native = row["state"]
+                native[0] = 5
+                native += [0] * 26
+                if native[44] or native[45]:
+                    native[84:92] = [2, 1, 255, 0, 1, 1, 0, 1]
+                    native[92:94] = native[19:21]
+                    native[104] = native[25]
+                    native[108] = 9
+        return rows
+
+    def test_api5_coherent_present_and_association_remain_read_only(self):
+        result = analyze(self.version5(fixture()))
+        self.assertEqual(result["issue_count"], 0, result)
+        self.assertEqual(result["observation_api"], 5)
+        self.assertEqual(result["status"], "native_gpu_ownership_incomplete")
+        self.assertTrue(result["diagnostic_lifecycle_complete"])
+        self.assertTrue(result["native_renderer_callback_observed"])
+        self.assertTrue(result["custom_presenter_recognized"])
+        self.assertTrue(result["native_present_observed"])
+        self.assertTrue(result["buffer_association_observed"])
+        self.assertEqual(result["native_present_sample_count"], 2)
+        self.assertEqual(result["buffer_association_sample_count"], 2)
+        self.assertEqual(result["boundary_metrics"], dict(present_entries=603, rejected_entries=0, resize_epoch=0,
+                                                         resize_entries=0, pre_release_entries=0, foreign_lifecycle_entries=0))
+        for flag in ("gpu_ownership_verified", "gpu_frame_boundary_verified", "core_render_reference_complete",
+                     "render_observation_session_complete", "visual_success_verified", "com_present_verified",
+                     "de_renderer_verified", "full_mta_boot_verified", "engine_input_write_verified",
+                     "remote_player_context_verified"):
+            self.assertFalse(result[flag], flag)
+
+    def test_api5_all110_fields_require_exact_unsigned_integers(self):
+        for field in range(110):
+            for value in (True, -1, .5, 0x100000000):
+                with self.subTest(field=field, value=value):
+                    rows = self.version5(fixture())
+                    rows[6]["state"][field] = value
+                    result = analyze(rows)
+                    self.assertEqual(result["status"], "invalid_evidence")
+                    self.assertFalse(result["native_present_observed"])
+                    self.assertFalse(result["buffer_association_observed"])
+                    self.assertEqual(result["native_present_sample_count"], 0)
+                    self.assertEqual(result["buffer_association_sample_count"], 0)
+
+    def test_api5_never_derives_new_claims_from_historical_protocols(self):
+        for rows in (fixture(), self.version2(fixture()), self.version3(fixture()), self.version4(fixture())):
+            result = analyze(rows)
+            self.assertEqual(result["issue_count"], 0, result)
+            self.assertFalse(result["native_present_observed"])
+            self.assertFalse(result["buffer_association_observed"])
+            self.assertEqual(result["native_present_sample_count"], 0)
+            self.assertEqual(result["buffer_association_sample_count"], 0)
+            self.assertIsNone(result["boundary_metrics"])
+            self.assertFalse(result["gpu_frame_boundary_verified"])
+
+    def test_api5_rejects_protocol_relabel_route_and_width_mismatches(self):
+        for observation, core, route in ((4, 9, 2), (5, 8, 2), (5, 9, 1), (6, 10, 2)):
+            rows = self.version5(fixture())
+            rows[5].update(observation_api=observation, core_api=core, requested_route=route)
+            self.assertEqual(analyze(rows)["status"], "invalid_evidence")
+        for length in (40, 44, 80, 84, 109, 111):
+            rows = self.version5(fixture())
+            rows[7]["state"] = (rows[7]["state"] + [0])[:length]
+            self.assertEqual(analyze(rows)["status"], "invalid_evidence")
+        rows = self.version5(fixture())
+        rows[7]["state"][0] = 4
+        self.assertEqual(analyze(rows)["status"], "invalid_evidence")
+
+    def test_api5_zero_callbacks_cannot_fabricate_boundary_tail(self):
+        rows = self.version5(missing_observation_fixture())
+        result = analyze(rows)
+        self.assertEqual(result["issue_count"], 0, result)
+        self.assertTrue(result["diagnostic_lifecycle_complete"])
+        self.assertFalse(result["native_present_observed"])
+        self.assertEqual(result["native_present_sample_count"], 0)
+        for field in range(84, 110):
+            mutated = deepcopy(rows)
+            mutated[7]["state"][field] = 1
+            self.assertEqual(analyze(mutated)["status"], "invalid_evidence", field)
+
+    def test_api5_present_association_does_not_depend_on_earlier_gpu_query_success(self):
+        rows = self.version5(fixture())
+        for row in rows[6:8]:
+            row["state"][50:54] = [8, 0x80004002, 0, 0]
+            row["state"][54:74] = [0] * 20
+            row["state"][75] = 3
+        result = analyze(rows)
+        self.assertEqual(result["issue_count"], 0, result)
+        self.assertTrue(result["native_present_observed"])
+        self.assertTrue(result["buffer_association_observed"])
+        self.assertFalse(result["native_gpu_metadata_observed"])
+        self.assertFalse(result["gpu_ownership_verified"])
+
+    def test_api5_nested_forged_claims_cannot_replace_scalar_evidence(self):
+        for claims in (dict(native_present_observed=True), dict(buffer_association_observed=True),
+                       dict(native_present_sample_count=603), dict(buffer_association_sample_count=603),
+                       dict(nativePresentObserved=True), dict(bufferAssociationObserved=True),
+                       dict(gpu_frame_boundary_verified=True), dict(gpuOwnershipVerified=True),
+                       dict(gpuFrameBoundaryVerified=True), dict(queueSubmissionVerified=True),
+                       dict(customPresentFrameSinkVerified=True), dict(resource_pointer=0)):
+            rows = self.version5(fixture())
+            rows[4]["details"] = [dict(nested=claims)]
+            result = analyze(rows)
+            self.assertEqual(result["status"], "invalid_evidence", claims)
+            self.assertFalse(result["native_present_observed"])
+            self.assertFalse(result["buffer_association_observed"])
+            self.assertFalse(result["gpu_ownership_verified"])
+
+    def test_api5_rejects_contradictory_complete_association(self):
+        for changes in ({84: 0}, {84: 11}, {85: 0}, {85: 2}, {86: 254}, {86: 256},
+                        {87: 0x80004005}, {88: 0}, {89: 2}, {88: 16, 89: 16}, {90: 1}, {91: 0}, {91: 2},
+                        {92: 0}, {92: 1, 94: 1}, {94: 604}, {95: 1}, {104: 0}, {104: 43},
+                        {107: 1}, {107: 2}, {107: 4}, {108: 8}, {108: 10}, {109: 1}, {80: 3, 81: 0, 82: 0, 83: 0}):
+            with self.subTest(changes=changes):
+                rows = self.version5(fixture())
+                for field, value in changes.items():
+                    rows[7]["state"][field] = value
+                result = analyze(rows)
+                self.assertEqual(result["status"], "invalid_evidence", result)
+                self.assertFalse(result["native_present_observed"])
+                self.assertFalse(result["buffer_association_observed"])
+                self.assertFalse(result["gpu_frame_boundary_verified"])
+
+    def test_api5_sparse_coherent_sample_does_not_infer_unsampled_or_later_success(self):
+        rows = self.version5(fixture())
+        terminal = rows[7]["state"]
+        terminal[84] = 5
+        terminal[86] = 127
+        terminal[94] = 600
+        terminal[108:110] = [8, 0x80004003]
+        result = analyze(rows)
+        self.assertEqual(result["issue_count"], 0, result)
+        self.assertTrue(result["native_present_observed"])
+        self.assertTrue(result["buffer_association_observed"])
+        self.assertEqual(result["native_present_sample_count"], 1)
+        self.assertEqual(result["buffer_association_sample_count"], 1)
+        self.assertEqual(result["boundary_metrics"]["present_entries"], 603)
+        self.assertEqual(result["boundary_metrics"]["rejected_entries"], 600)
+        self.assertEqual(result["terminal_render_state"][84], 5)
+        self.assertFalse(result["gpu_ownership_verified"])
+        self.assertFalse(result["gpu_frame_boundary_verified"])
+
+    def test_api5_entry_aggregate_without_coherent_sample_cannot_invent_observation(self):
+        rows = self.version5(fixture())
+        for row in rows[6:8]:
+            native = row["state"]
+            native[84] = 3
+            native[86] = 25
+            native[88:92] = [1, 1, 0, 0]
+            native[94:96] = native[92:94]
+            native[108:110] = [4, 1]
+        result = analyze(rows)
+        self.assertEqual(result["issue_count"], 0, result)
+        self.assertTrue(result["diagnostic_lifecycle_complete"])
+        self.assertFalse(result["native_present_observed"])
+        self.assertFalse(result["buffer_association_observed"])
+        self.assertEqual(result["native_present_sample_count"], 0)
+        self.assertEqual(result["buffer_association_sample_count"], 0)
+        self.assertEqual(result["boundary_metrics"]["present_entries"], 603)
+
+    def test_api5_64bit_present_counters_keep_exact_halves_across_carry(self):
+        rows = self.version5(fixture())
+        for row, low, high in ((rows[6], 0xffffffff, 0x200000), (rows[7], 0, 0x200001)):
+            for field in (17, 19, 44, 48, 92):
+                row["state"][field:field + 2] = [low, high]
+        result = analyze(rows)
+        self.assertEqual(result["issue_count"], 0, result)
+        self.assertTrue(result["native_present_observed"])
+        self.assertEqual(result["boundary_metrics"]["present_entries"], 0x20000100000000)
+        rows[7]["state"][92:94] = [0xfffffffe, 0x200000]
+        self.assertEqual(analyze(rows)["status"], "invalid_evidence")
+
+    def test_api5_supported_historical_prefix_cannot_promote_ownership_or_passed_flag(self):
+        rows = self.version5(fixture())
+        for row in rows[6:8]:
+            native = row["state"]
+            native[46:50] = [native[44], native[45], 0, 0]
+            native[53] = 1
+            native[74:76] = [0, 1]
+            native[80:84] = [1, 0, 0, 0]
+            native[84:110] = [10, 1] + [0] * 24
+        result = analyze(rows)
+        self.assertEqual(result["issue_count"], 0, result)
+        self.assertTrue(result["diagnostic_lifecycle_complete"])
+        self.assertTrue(result["native_gpu_metadata_observed"])
+        self.assertFalse(result["core_render_reference_complete"])
+        self.assertFalse(result["gpu_ownership_verified"])
+        self.assertFalse(result["gpu_frame_boundary_verified"])
+        self.assertFalse(result["native_present_observed"])
+        rows[-2]["passed"] = True
+        rows.pop()
+        forged = analyze(rows)
+        self.assertEqual(forged["status"], "invalid_evidence")
+        self.assertFalse(forged["gpu_ownership_verified"])
+        self.assertFalse(forged["core_render_reference_complete"])
+
+    def test_api5_initial_fatal_gpu_cleanup_can_precede_any_boundary_attempt(self):
+        rows = self.version5(fixture())
+        for row in rows[6:8]:
+            row["state"][84:110] = [0] * 26
+            row["state"][13] = 0
+            row["state"][30] = 10
+            row["state"][50:54] = [18, 0x8000ffff, 0, 0]
+            row["state"][54:74] = [0] * 20
+            row["state"][75] = 6
+        result = analyze(rows)
+        self.assertEqual(result["issue_count"], 0, result)
+        self.assertFalse(result["diagnostic_lifecycle_complete"])
+        self.assertFalse(result["native_present_observed"])
+        self.assertFalse(result["buffer_association_observed"])
+        self.assertEqual(result["native_present_sample_count"], 0)
+        for field, value in ((30, 0), (30, 9), (13, 1), (85, 1), (92, 1)):
+            mutated = deepcopy(rows)
+            mutated[6]["state"][field] = value
+            self.assertEqual(analyze(mutated)["status"], "invalid_evidence", (field, value))
+
+    def test_api5_later_fatal_cleanup_cannot_recount_preserved_coherent_boundary(self):
+        rows = self.version5(fixture())
+        terminal = rows[7]["state"]
+        terminal[84:110] = rows[6]["state"][84:110]
+        terminal[13] = 0
+        terminal[30] = 10
+        terminal[50:54] = [18, 0x8000ffff, 0, 0]
+        terminal[54:74] = [0] * 20
+        terminal[75] = 6
+        result = analyze(rows)
+        self.assertEqual(result["issue_count"], 0, result)
+        self.assertFalse(result["diagnostic_lifecycle_complete"])
+        self.assertTrue(result["native_present_observed"])
+        self.assertTrue(result["buffer_association_observed"])
+        self.assertEqual(result["native_present_sample_count"], 1)
+        self.assertEqual(result["buffer_association_sample_count"], 1)
+        self.assertEqual(result["boundary_metrics"]["present_entries"], 3)
+        self.assertFalse(result["gpu_ownership_verified"])
+        for row in rows[6:8]:
+            row["state"][13] = 0
+            row["state"][30] = 10
+        cached_only = analyze(rows)
+        self.assertEqual(cached_only["issue_count"], 0, cached_only)
+        self.assertFalse(cached_only["native_present_observed"])
+        self.assertFalse(cached_only["buffer_association_observed"])
+        self.assertEqual(cached_only["native_present_sample_count"], 0)
+
+    def test_api5_noncoherent_statuses_preserve_actual_failure_stage_and_hresult(self):
+        cases = (
+            (1, 0, 0, 0, 0, 0, 0, 0, 0),
+            (10, 1, 0, 0, 0, 0, 0, 0, 0),
+            (4, 1, 0, 0, 0, 0, 0, 0, 43),
+            (8, 1, 0, 0, 0, 0, 0, 0, 42),
+            (5, 0, 0, 0, 1, 0x80004003, 0, 0, 0),
+            (5, 1, 127, 0, 8, 0x80004003, 0, 1, 42),
+            (5, 1, 255, 0, 9, 0x8000ffff, 0, 1, 42),
+            (3, 1, 0, 0, 1, 1, 0, 0, 42),
+            (3, 1, 9, 0, 2, 1, 0, 0, 42),
+            (3, 1, 31, 0, 7, 1, 0, 0, 42),
+            (3, 1, 63, 0, 7, 1, 3, 1, 42),
+            (6, 1, 127, 0, 8, 1, 0, 1, 42),
+            (7, 1, 0, 0, 0, 0, 0, 0, 42),
+            (7, 1, 127, 0, 8, 1, 0, 1, 42),
+            (7, 1, 127, 0, 9, 0, 0, 1, 42),
+            (9, 1, 255, 0x887a0005, 9, 0, 0, 1, 42),
+        )
+        for status, profile, facts, present_hr, stage, query_hr, tracked, mode, thread in cases:
+            with self.subTest(status=status, stage=stage, facts=facts):
+                rows = self.version5(fixture())
+                for row in rows[6:8]:
+                    native = row["state"]
+                    native[84:110] = [0] * 26
+                    native[84:88] = [status, profile, facts, present_hr]
+                    native[90:92] = [tracked, mode]
+                    native[108:110] = [stage, query_hr]
+                    if thread:
+                        native[92:94] = native[94:96] = native[19:21]
+                        native[104] = thread
+                    if facts:
+                        native[88:90] = [1, 1]
+                    if status == 3 and stage == 2:
+                        # Failed root/index comparisons preserve the raw native
+                        # uint32 value without pretending it is a valid buffer.
+                        native[88] = 0xffffffff
+                result = analyze(rows)
+                self.assertEqual(result["issue_count"], 0, result)
+                self.assertTrue(result["diagnostic_lifecycle_complete"])
+                self.assertFalse(result["native_present_observed"])
+                self.assertFalse(result["buffer_association_observed"])
+                self.assertEqual(result["native_present_sample_count"], 0)
+                self.assertEqual(result["terminal_render_state"][108:110], [stage, query_hr])
+
+    def test_api5_preentry_endpoint_change_cannot_invent_a_present(self):
+        for cumulative in (0, 600):
+            rows = self.version5(fixture())
+            for row in rows[6:8]:
+                native = row["state"]
+                native[84:110] = [0] * 26
+                native[84:86] = [8, 1]
+                native[92] = native[94] = cumulative
+            result = analyze(rows)
+            self.assertEqual(result["issue_count"], 0, result)
+            self.assertFalse(result["native_present_observed"])
+            self.assertEqual(result["native_present_sample_count"], 0)
+            self.assertFalse(result["buffer_association_observed"])
+            rows[7]["state"][87] = 1
+            self.assertEqual(analyze(rows)["status"], "invalid_evidence")
+
+    def test_api5_all_lifecycle_counter_halves_are_monotonic_and_exact(self):
+        rows = self.version5(fixture())
+        for row, low, high in ((rows[6], 0xffffffff, 0x200000), (rows[7], 0, 0x200001)):
+            native = row["state"]
+            native[84] = 7
+            native[86] = 127
+            for field in (17, 19, 44, 48, *reader.BOUNDARY_PAIRS.values()):
+                native[field:field + 2] = [low, high]
+        result = analyze(rows)
+        self.assertEqual(result["issue_count"], 0, result)
+        self.assertFalse(result["native_present_observed"])
+        self.assertEqual(set(result["boundary_metrics"].values()), {0x20000100000000})
+        for field in reader.BOUNDARY_PAIRS.values():
+            mutated = deepcopy(rows)
+            mutated[7]["state"][field:field + 2] = [0xfffffffe, 0x200000]
+            self.assertEqual(analyze(mutated)["status"], "invalid_evidence", field)
+
+    def test_api5_noncoherent_status_cannot_hide_contradictory_fields(self):
+        for status, changes in ((1, {85: 1}), (1, {86: 1}), (1, {87: 1}), (1, {108: 1}), (1, {109: 1}),
+                                (10, {85: 0}), (10, {104: 42}), (4, {86: 1}), (8, {108: 1}),
+                                (5, {108: 0}), (5, {109: 0}), (5, {108: 9, 109: 0x80004003}),
+                                (5, {108: 9, 109: 0x8000ffff, 92: 0}), (5, {108: 9, 109: 0x8000ffff, 104: 0}),
+                                (5, {108: 9, 109: 0x8000ffff, 94: 0}), (5, {108: 9, 109: 0x8000ffff, 85: 0}),
+                                (3, {108: 9}), (3, {109: 0x80004003}), (6, {108: 7}), (6, {109: 0}),
+                                (7, {108: 7}), (7, {109: 1}), (7, {86: 255}), (9, {87: 0}), (9, {107: 1}),
+                                (3, {90: 1, 91: 0}), (3, {90: 0x80000000, 91: 1})):
+            with self.subTest(status=status, changes=changes):
+                rows = self.version5(fixture())
+                native = rows[7]["state"]
+                native[84:110] = [0] * 26
+                native[84] = status
+                native[85] = int(status != 1)
+                if status not in (1, 10):
+                    native[92:94] = native[94:96] = native[19:21]
+                    native[104] = native[25]
+                if status in (3, 5, 6):
+                    native[108:110] = [1, 0x80004003] if status == 5 else [8, 1] if status == 6 else [1, 1]
+                if status == 6:
+                    native[86] = 127
+                if status in (7, 9):
+                    native[86] = 127 if status == 7 else 255
+                    native[90:92] = [0, 1]
+                    native[108] = 9
+                    if status == 9:
+                        native[87] = 0x80004005
+                self.assertTrue(reader.boundary_consistent(native), (status, native))
+                for field, value in changes.items():
+                    native[field] = value
+                self.assertEqual(analyze(rows)["status"], "invalid_evidence")
+
+    @classmethod
     def version4(cls, rows):
         cls.version3(rows)
         for row in rows:

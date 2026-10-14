@@ -32,6 +32,9 @@ namespace deonline
         bool          BeginRenderReferenceV4(const void* moduleAddress, std::uint32_t route) noexcept;
         bool          CaptureRenderV4() noexcept;
         std::uint32_t ReadRenderV4(std::uint32_t field) const noexcept;
+        bool          BeginRenderReferenceV5(const void* moduleAddress, std::uint32_t route) noexcept;
+        bool          CaptureRenderV5() noexcept;
+        std::uint32_t ReadRenderV5(std::uint32_t field) const noexcept;
         int           Poll() noexcept;
         std::uint32_t Read(std::uint32_t field) const noexcept;
         bool          CaptureInput() noexcept;
@@ -72,6 +75,8 @@ namespace deonline
         DefinitiveRenderReference::SnapshotV3 publishedRenderV3{}, capturedRenderV3{};
         bool                                  renderV4Available = false;
         DefinitiveRenderReference::SnapshotV4 publishedRenderV4{}, capturedRenderV4{};
+        bool                                  renderV5Available = false;
+        DefinitiveRenderReference::SnapshotV5 publishedRenderV5{}, capturedRenderV5{};
         SRWLOCK                               inputLock = SRWLOCK_INIT;
         bool                                  inputAvailable = false;
         DefinitiveInputReference::Snapshot    publishedInput{};

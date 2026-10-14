@@ -20,6 +20,8 @@ namespace DefinitiveRenderReference
     inline constexpr std::uint32_t FieldCountV3 = 80;
     inline constexpr std::uint32_t ApiVersionV4 = 4;
     inline constexpr std::uint32_t FieldCountV4 = 84;
+    inline constexpr std::uint32_t ApiVersionV5 = 5;
+    inline constexpr std::uint32_t FieldCountV5 = 110;
     inline constexpr std::uint32_t MaximumDurationMs = 10000;
     inline constexpr std::uint32_t SampleIntervalMs = 50;
     inline constexpr std::uint32_t MaximumSamples = 200;
@@ -113,6 +115,32 @@ namespace DefinitiveRenderReference
         CustomPresentImplementationId,
         CustomPresentSlotSignatureMask,
         CustomPresentStaticPolicyFlags,
+        BoundaryStatus,
+        BoundaryEndpointProfileId,
+        BoundaryFactsMask,
+        BoundaryPresentHresult,
+        BoundaryNativeBufferIndex,
+        BoundaryDxgiBufferIndex,
+        BoundaryNativeTrackedState,
+        BoundaryNativeTrackedMode,
+        BoundaryPresentEntriesLow,
+        BoundaryPresentEntriesHigh,
+        BoundaryRejectedEntriesLow,
+        BoundaryRejectedEntriesHigh,
+        BoundaryResizeEpochLow,
+        BoundaryResizeEpochHigh,
+        BoundaryResizeEntriesLow,
+        BoundaryResizeEntriesHigh,
+        BoundaryPreReleaseEntriesLow,
+        BoundaryPreReleaseEntriesHigh,
+        BoundaryForeignLifecycleEntriesLow,
+        BoundaryForeignLifecycleEntriesHigh,
+        BoundaryPresentThreadId,
+        BoundaryResizeThreadId,
+        BoundaryPreReleaseThreadId,
+        BoundaryLifecycleFlags,
+        BoundaryQueryStage,
+        BoundaryQueryHresult,
     };
 
     enum class StopReason : std::uint32_t
@@ -134,6 +162,7 @@ namespace DefinitiveRenderReference
     using SnapshotV2 = std::array<std::uint32_t, FieldCountV2>;
     using SnapshotV3 = std::array<std::uint32_t, FieldCountV3>;
     using SnapshotV4 = std::array<std::uint32_t, FieldCountV4>;
+    using SnapshotV5 = std::array<std::uint32_t, FieldCountV5>;
 
     // Both protocols copy the actual observer's scalar state. Keeping this
     // shared with focused tests prevents route selection from inventing a
@@ -141,7 +170,7 @@ namespace DefinitiveRenderReference
     template <std::size_t N, typename State>
     void CopyNativeState(std::array<std::uint32_t, N>& snapshot, const State& state) noexcept
     {
-        static_assert(N == FieldCount || N == FieldCountV2 || N == FieldCountV3 || N == FieldCountV4);
+        static_assert(N == FieldCount || N == FieldCountV2 || N == FieldCountV3 || N == FieldCountV4 || N == FieldCountV5);
         snapshot[Bound] = state.bound;
         snapshot[Active] = state.active;
         snapshot[ModulePinned] = snapshot[BackendPinnedExpected] = state.modulePinned;
@@ -181,7 +210,7 @@ namespace DefinitiveRenderReference
     template <std::size_t N, typename State>
     void CopyNativeStateV3(std::array<std::uint32_t, N>& snapshot, const State& state) noexcept
     {
-        static_assert(N == FieldCountV3 || N == FieldCountV4);
+        static_assert(N == FieldCountV3 || N == FieldCountV4 || N == FieldCountV5);
         CopyNativeStateV2(snapshot, state.base);
         const auto&                        gpu = state.gpu;
         const std::array<std::uint64_t, 3> counters{gpu.attempts, gpu.accepted, gpu.rejected};
@@ -216,9 +245,10 @@ namespace DefinitiveRenderReference
         std::copy(tail.begin(), tail.end(), snapshot.begin() + BackbufferHeight);
     }
 
-    template <typename State>
-    void CopyNativeStateV4(SnapshotV4& snapshot, const State& state) noexcept
+    template <std::size_t N, typename State>
+    void CopyNativeStateV4(std::array<std::uint32_t, N>& snapshot, const State& state) noexcept
     {
+        static_assert(N == FieldCountV4 || N == FieldCountV5);
         // Classification extends the scalar report without reinterpreting the
         // API3 prefix or turning a known custom presenter into draw admission.
         CopyNativeStateV3(snapshot, state.base);
@@ -227,6 +257,29 @@ namespace DefinitiveRenderReference
         snapshot[CustomPresentImplementationId] = state.custom.implementationId;
         snapshot[CustomPresentSlotSignatureMask] = state.custom.slotSignatureMask;
         snapshot[CustomPresentStaticPolicyFlags] = state.custom.staticPolicyFlags;
+    }
+
+    template <typename State>
+    void CopyNativeStateV5(SnapshotV5& snapshot, const State& state) noexcept
+    {
+        // Keep entry/association facts separate from the historical ownership
+        // predicate. CPU tracker values cannot certify a GPU resource state.
+        CopyNativeStateV4(snapshot, state.base);
+        const auto&                        boundary = state.boundary;
+        const std::array<std::uint32_t, 8> facts{
+            boundary.status,          boundary.endpointProfileId,  boundary.factsMask,        boundary.presentHresult, boundary.nativeBufferIndex,
+            boundary.dxgiBufferIndex, boundary.nativeTrackedState, boundary.nativeTrackedMode};
+        std::copy(facts.begin(), facts.end(), snapshot.begin() + BoundaryStatus);
+        const std::array<std::uint64_t, 6> counters{boundary.presentEntries, boundary.rejectedEntries,   boundary.resizeEpoch,
+                                                    boundary.resizeEntries,  boundary.preReleaseEntries, boundary.foreignLifecycleEntries};
+        for (std::size_t index = 0; index < counters.size(); ++index)
+        {
+            snapshot[BoundaryPresentEntriesLow + index * 2] = static_cast<std::uint32_t>(counters[index]);
+            snapshot[BoundaryPresentEntriesLow + index * 2 + 1] = static_cast<std::uint32_t>(counters[index] >> 32);
+        }
+        const std::array<std::uint32_t, 6> tail{boundary.presentThreadId, boundary.resizeThreadId, boundary.preReleaseThreadId,
+                                                boundary.lifecycleFlags,  boundary.queryStage,     boundary.queryHresult};
+        std::copy(tail.begin(), tail.end(), snapshot.begin() + BoundaryPresentThreadId);
     }
 
     // The real Core uses this same value-only lifecycle. Injecting only the
@@ -238,8 +291,12 @@ namespace DefinitiveRenderReference
         static_assert(noexcept(clock.Now()) && noexcept(clock.Wait(std::uint32_t{})), "Lifecycle clock must not throw during retained cleanup");
         SnapshotType   snapshot{};
         constexpr auto count = std::tuple_size<SnapshotType>::value;
-        static_assert(count == FieldCount || count == FieldCountV2 || count == FieldCountV3 || count == FieldCountV4);
-        snapshot[Version] = count == FieldCountV4 ? ApiVersionV4 : count == FieldCountV3 ? ApiVersionV3 : count == FieldCountV2 ? ApiVersionV2 : ApiVersion;
+        static_assert(count == FieldCount || count == FieldCountV2 || count == FieldCountV3 || count == FieldCountV4 || count == FieldCountV5);
+        snapshot[Version] = count == FieldCountV5   ? ApiVersionV5
+                            : count == FieldCountV4 ? ApiVersionV4
+                            : count == FieldCountV3 ? ApiVersionV3
+                            : count == FieldCountV2 ? ApiVersionV2
+                                                    : ApiVersion;
         bool validRoute = true;
         if constexpr (count >= FieldCountV2)
         {

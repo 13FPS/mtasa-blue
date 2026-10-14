@@ -535,6 +535,64 @@ namespace
               "reset clears the frame before any retry");
         Check(adapter.value->Shutdown() == Status::Ok, "clean nongame shutdown releases all trial authority");
     }
+
+    void TestRenderObservationV2FactoryRejection()
+    {
+        OwnerIdentity owner;
+        Check(!CreateGameRenderObservationV2(RenderObservationApiVersion, owner.Get(), RenderObservationRoute::D3D12) &&
+                  !CreateGameRenderObservationV2(RenderObservationApiVersionV2 + 1, owner.Get(), RenderObservationRoute::D3D12),
+              "actual version2 factory never returns its new vtable to a legacy or unknown version");
+        Check(!CreateGameRenderObservationV2(RenderObservationApiVersionV2, nullptr, RenderObservationRoute::D3D12) &&
+                  !CreateGameRenderObservationV2(RenderObservationApiVersionV2, owner.Get(), RenderObservationRoute::Unknown) &&
+                  !CreateGameRenderObservationV2(RenderObservationApiVersionV2, owner.Get(), static_cast<RenderObservationRoute>(99)),
+              "actual version2 factory rejects absent owner and unsupported route before engine admission");
+        for (const auto route : {RenderObservationRoute::D3D11, RenderObservationRoute::D3D12})
+        {
+            auto* observation = CreateGameRenderObservationV2(RenderObservationApiVersionV2, owner.Get(), route);
+            Check(observation != nullptr, "actual factory creates a separately selected route lease");
+            RenderObservationStateV2 state;
+            Check(observation->ReadState(state) == Status::Ok && !state.base.bound && !state.base.active && !state.base.modulePinned &&
+                      !state.base.generation && !state.observedRoute && !state.presenceKnownMask && !state.queuePresent,
+                  "version2 allocation performs no hook, module pin or observed-route inference");
+            Status                   foreignBegin = Status::Ok, foreignRead = Status::Ok, foreignEnd = Status::Ok;
+            RenderObservationStateV2 foreignState;
+            foreignState.base.width = 123;
+            foreignState.observedRoute = 99;
+            std::thread foreign(
+                [&]
+                {
+                    foreignBegin = observation->Begin();
+                    foreignRead = observation->ReadState(foreignState);
+                    foreignEnd = observation->End();
+                    observation->Release();
+                });
+            foreign.join();
+            Check(foreignBegin == Status::WrongThread && foreignRead == Status::WrongThread && foreignEnd == Status::WrongThread &&
+                      foreignState.base.width == 123 && foreignState.observedRoute == 99,
+                  "version2 foreign calls preserve caller values and cannot release the creating owner's lease");
+            Check(observation->Begin() == Status::Unsupported, "each selected route retains the production wrong-executable rejection");
+            Check(observation->ReadState(state) == Status::Ok && state.requestedRoute == static_cast<std::uint32_t>(route) && !state.observedRoute &&
+                      !state.presenceKnownMask && !state.queuePresent && state.base.generation && state.base.failureReason && !state.base.bound &&
+                      !state.base.active && !state.base.modulePinned && !state.base.pendingCleanup && !state.base.nativePresentCallbacks &&
+                      !state.base.acceptedSnapshots,
+                  "failed exact-image admission retains only the selected request, no callbacks, hooks, pins or fallback route");
+            Check(observation->End() == Status::Ok && observation->End() == Status::Ok, "version2 owner cleanup is idempotent after rejected admission");
+            Check(observation->ReadState(state) == Status::Ok && state.requestedRoute == static_cast<std::uint32_t>(route) && !state.observedRoute &&
+                      !state.base.active && !state.base.pendingCleanup,
+                  "ended version2 actual state preserves the explicit request and unknown observation before release");
+            observation->Release();
+        }
+        // API1 still allocates its historical interface after API2 attempts;
+        // the two factory contracts do not share a changed vtable or state.
+        auto* legacy = CreateGameRenderObservation(RenderObservationApiVersion, owner.Get());
+        Check(legacy && legacy->Begin() == Status::Unsupported, "legacy D3D11 API1 remains callable after version2 requests");
+        RenderObservationState legacyState;
+        Check(legacy->ReadState(legacyState) == Status::Ok && !legacyState.bound && !legacyState.active && !legacyState.modulePinned &&
+                  !legacyState.nativePresentCallbacks,
+              "API1 reports the unchanged wrong-image state layout");
+        Check(legacy->End() == Status::Ok, "legacy lease still ends through the old interface");
+        legacy->Release();
+    }
 }
 
 int main()
@@ -558,6 +616,7 @@ int main()
         TestNativeMovementRejection();
         TestNativeMovementEligibilityRejection();
         TestRenderObservationFactoryRejection();
+        TestRenderObservationV2FactoryRejection();
         std::cout << "Passed " << checks << " MTA Game DE adapter checks\n";
         return 0;
     }

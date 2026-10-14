@@ -37,7 +37,9 @@ public:
     bool                GetNativeMovementEligibility(mta::game_de::NativeMovementEligibility& state);
     bool                BorrowGameInterface(CGame*& game);
     bool                BeginNativeRenderObservation();
+    bool                BeginNativeRenderObservation(mta::game_de::RenderObservationRoute route);
     bool                GetNativeRenderObservationState(mta::game_de::RenderObservationState& state);
+    bool                GetNativeRenderObservationState(mta::game_de::RenderObservationStateV2& state);
     bool                EndNativeRenderObservation() noexcept;
     void                Stop() noexcept;
 
@@ -54,12 +56,16 @@ private:
 
     // Instance callbacks and teardown belong to the same Core thread. Keeping
     // the DLL alive until Release avoids retaining a vtable into unloaded code.
-    void*                                 m_module = nullptr;
-    mta::game_de::IGameAdapter*           m_adapter = nullptr;
-    mta::game_de::IGameRenderObservation* m_renderObservation = nullptr;
-    mta::game_de::RenderObservationState  m_lastRenderObservation;
-    bool                                  m_hasRenderObservation = false;
-    CCoreInterface*                       m_ownerIdentity = nullptr;
-    std::uint32_t                         m_ownerThread = 0;
-    std::string                           m_error;
+    void*                                   m_module = nullptr;
+    mta::game_de::IGameAdapter*             m_adapter = nullptr;
+    mta::game_de::IGameRenderObservation*   m_renderObservation = nullptr;
+    mta::game_de::IGameRenderObservationV2* m_renderObservationV2 = nullptr;
+    mta::game_de::RenderObservationState    m_lastRenderObservation;
+    mta::game_de::RenderObservationStateV2  m_lastRenderObservationV2;
+    bool                                    m_hasRenderObservation = false;
+    bool                                    m_hasRenderObservationV2 = false;
+    mta::game_de::RenderObservationRoute    m_renderRoute = mta::game_de::RenderObservationRoute::Unknown;
+    CCoreInterface*                         m_ownerIdentity = nullptr;
+    std::uint32_t                           m_ownerThread = 0;
+    std::string                             m_error;
 };

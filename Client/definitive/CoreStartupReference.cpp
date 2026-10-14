@@ -39,7 +39,13 @@ namespace deonline
         return Start(moduleAddress, true, false, true);
     }
 
-    bool CoreStartupReference::Start(const void* moduleAddress, bool configuredInput, bool configuredMovement, bool configuredRender) noexcept
+    bool CoreStartupReference::BeginRenderReferenceV2(const void* moduleAddress, std::uint32_t route) noexcept
+    {
+        return (route == 1 || route == 2) && Start(moduleAddress, true, false, true, route);
+    }
+
+    bool CoreStartupReference::Start(const void* moduleAddress, bool configuredInput, bool configuredMovement, bool configuredRender,
+                                     std::uint32_t configuredRenderRoute) noexcept
     {
         DWORD      expected = 0;
         const auto current = GetCurrentThreadId();
@@ -50,6 +56,7 @@ namespace deonline
         inputRequested = configuredInput;
         movementRequested = configuredMovement;
         renderRequested = configuredRender;
+        renderRoute = configuredRenderRoute;
         AcquireSRWLockExclusive(&inputLock);
         inputAvailable = false;
         publishedInput = {};
@@ -57,10 +64,13 @@ namespace deonline
         publishedMovement = {};
         renderAvailable = false;
         publishedRender = {};
+        renderV2Available = false;
+        publishedRenderV2 = {};
         ReleaseSRWLockExclusive(&inputLock);
         capturedInput = {};
         capturedMovement = {};
         capturedRender = {};
+        capturedRenderV2 = {};
         cancellation.store(false);
         state.store(1, std::memory_order_release);
         // Use the existing CRT worker convention instead of a joinable global
@@ -135,7 +145,7 @@ namespace deonline
 
     bool CoreStartupReference::CaptureRender() noexcept
     {
-        if (ownerThread.load() != GetCurrentThreadId() || !TryAcquireSRWLockShared(&inputLock))
+        if (ownerThread.load() != GetCurrentThreadId() || renderRoute || !TryAcquireSRWLockShared(&inputLock))
             return false;
         const bool available = renderAvailable;
         if (available)
@@ -146,7 +156,23 @@ namespace deonline
 
     std::uint32_t CoreStartupReference::ReadRender(std::uint32_t field) const noexcept
     {
-        return ownerThread.load() == GetCurrentThreadId() && field < capturedRender.size() ? capturedRender[field] : 0;
+        return ownerThread.load() == GetCurrentThreadId() && !renderRoute && field < capturedRender.size() ? capturedRender[field] : 0;
+    }
+
+    bool CoreStartupReference::CaptureRenderV2() noexcept
+    {
+        if (ownerThread.load() != GetCurrentThreadId() || !renderRoute || !TryAcquireSRWLockShared(&inputLock))
+            return false;
+        const bool available = renderV2Available;
+        if (available)
+            capturedRenderV2 = publishedRenderV2;
+        ReleaseSRWLockShared(&inputLock);
+        return available;
+    }
+
+    std::uint32_t CoreStartupReference::ReadRenderV2(std::uint32_t field) const noexcept
+    {
+        return ownerThread.load() == GetCurrentThreadId() && renderRoute && field < capturedRenderV2.size() ? capturedRenderV2[field] : 0;
     }
 
     bool CoreStartupReference::InputCancelled()
@@ -157,12 +183,17 @@ namespace deonline
     void CoreStartupReference::PublishInput(const std::uint32_t* snapshot, std::uint32_t count)
     {
         if (!inputOwner || !snapshot ||
-            count != (inputOwner->renderRequested     ? DefinitiveRenderReference::FieldCount
+            count != (inputOwner->renderRequested ? (inputOwner->renderRoute ? DefinitiveRenderReference::FieldCountV2 : DefinitiveRenderReference::FieldCount)
                       : inputOwner->movementRequested ? DefinitiveMovementReference::FieldCount
                                                       : DefinitiveInputReference::FieldCount))
             return;
         AcquireSRWLockExclusive(&inputOwner->inputLock);
-        if (inputOwner->renderRequested)
+        if (inputOwner->renderRequested && inputOwner->renderRoute)
+        {
+            std::copy_n(snapshot, count, inputOwner->publishedRenderV2.begin());
+            inputOwner->renderV2Available = true;
+        }
+        else if (inputOwner->renderRequested)
         {
             std::copy_n(snapshot, count, inputOwner->publishedRender.begin());
             inputOwner->renderAvailable = true;
@@ -291,14 +322,20 @@ namespace deonline
                 if (inputRequested)
                 {
                     using Configure = std::uint32_t (*)(std::uint32_t, DefinitiveInputReference::CancelCallback, DefinitiveInputReference::PublishCallback);
-                    const auto inputVersion = reinterpret_cast<Version>(GetProcAddress(core, renderRequested     ? "MTA_DERenderReferenceApiVersion"
+                    using ConfigureRenderV2 =
+                        std::uint32_t (*)(std::uint32_t, std::uint32_t, DefinitiveInputReference::CancelCallback, DefinitiveInputReference::PublishCallback);
+                    const auto inputVersion = reinterpret_cast<Version>(GetProcAddress(core, renderRoute         ? "MTA_DERenderReferenceApiVersionV2"
+                                                                                             : renderRequested   ? "MTA_DERenderReferenceApiVersion"
                                                                                              : movementRequested ? "MTA_DEMovementReferenceApiVersion"
                                                                                                                  : "MTA_DEInputReferenceApiVersion"));
                     const auto configure = reinterpret_cast<Configure>(GetProcAddress(core, renderRequested     ? "MTA_ConfigureDERenderReference"
                                                                                             : movementRequested ? "MTA_ConfigureDEMovementReference"
                                                                                                                 : "MTA_ConfigureDEInputReference"));
-                    const auto expectedVersion = renderRequested ? DefinitiveRenderReference::ApiVersion : DefinitiveInputReference::ApiVersion;
-                    if (!inputVersion || !configure || inputVersion() != expectedVersion)
+                    const auto configureV2 = reinterpret_cast<ConfigureRenderV2>(GetProcAddress(core, "MTA_ConfigureDERenderReferenceV2"));
+                    const auto expectedVersion = renderRoute       ? DefinitiveRenderReference::ApiVersionV2
+                                                 : renderRequested ? DefinitiveRenderReference::ApiVersion
+                                                                   : DefinitiveInputReference::ApiVersion;
+                    if (!inputVersion || (renderRoute ? !configureV2 : !configure) || inputVersion() != expectedVersion)
                     {
                         values[16] = 13;
                         return;
@@ -307,7 +344,8 @@ namespace deonline
                     const auto duration = renderRequested     ? DefinitiveRenderReference::MaximumDurationMs
                                           : movementRequested ? DefinitiveMovementReference::MaximumDurationMs
                                                               : DefinitiveInputReference::MaximumDurationMs;
-                    if (configure(duration, InputCancelled, PublishInput) != 1)
+                    if ((renderRoute ? configureV2(duration, renderRoute, InputCancelled, PublishInput) : configure(duration, InputCancelled, PublishInput)) !=
+                        1)
                     {
                         values[16] = 14;
                         return;
@@ -326,13 +364,25 @@ namespace deonline
                         return sample[DefinitiveInputReference::Version] == DefinitiveInputReference::ApiVersion &&
                                sample[DefinitiveInputReference::Phase] == 2 && sample[DefinitiveInputReference::InputCleanupComplete] == 1;
                     };
+                    const auto renderEnded = [](const auto& sample, std::uint32_t expected)
+                    {
+                        using namespace DefinitiveRenderReference;
+                        return sample[DefinitiveRenderReference::Version] == expected && sample[Phase] == 2 && sample[CleanupComplete] == 1 &&
+                               !sample[CleanupPending] && !sample[NativeCleanupPending] && !sample[CleanupDeadlineExceeded] &&
+                               (sample[Reason] == static_cast<std::uint32_t>(StopReason::TimeBudget) ||
+                                sample[Reason] == static_cast<std::uint32_t>(StopReason::Cancelled));
+                    };
+                    // Completing a diagnostic lease is separate from observing
+                    // a callback. Even a zero-callback run must end and unload
+                    // safely, with the requested protocol/route still intact.
                     const bool renderComplete =
-                        renderAvailable && publishedRender[DefinitiveRenderReference::Version] == DefinitiveRenderReference::ApiVersion &&
-                        publishedRender[DefinitiveRenderReference::Phase] == 2 && publishedRender[DefinitiveRenderReference::CleanupComplete] == 1 &&
-                        !publishedRender[DefinitiveRenderReference::CleanupPending] && !publishedRender[DefinitiveRenderReference::NativeCleanupPending] &&
-                        !publishedRender[DefinitiveRenderReference::CleanupDeadlineExceeded] &&
-                        (publishedRender[DefinitiveRenderReference::Reason] == static_cast<std::uint32_t>(DefinitiveRenderReference::StopReason::TimeBudget) ||
-                         publishedRender[DefinitiveRenderReference::Reason] == static_cast<std::uint32_t>(DefinitiveRenderReference::StopReason::Cancelled));
+                        renderRoute ? renderV2Available && renderEnded(publishedRenderV2, DefinitiveRenderReference::ApiVersionV2) &&
+                                          publishedRenderV2[DefinitiveRenderReference::RequestedRoute] == renderRoute &&
+                                          (publishedRenderV2[DefinitiveRenderReference::ObservedRoute] == 0 ||
+                                           publishedRenderV2[DefinitiveRenderReference::ObservedRoute] == renderRoute) &&
+                                          publishedRenderV2[DefinitiveRenderReference::PresenceKnownMask] ==
+                                              (publishedRenderV2[DefinitiveRenderReference::ObservedRoute] ? (renderRoute == 2 ? 19u : 15u) : 0u)
+                                    : renderAvailable && renderEnded(publishedRender, DefinitiveRenderReference::ApiVersion);
                     const bool inputComplete = renderRequested     ? renderComplete
                                                : movementRequested ? movementAvailable && complete(publishedMovement) &&
                                                                          !publishedMovement[DefinitiveMovementReference::CleanupPending]
@@ -374,9 +424,10 @@ namespace deonline
         values[15] = GetModuleHandleW(L"game_de.dll") ? 1u : 0u;
         if ((values[12] & ~values[11]) && !values[16])
             values[16] = 10;
-        const auto expectedBackend = renderRequested && renderAvailable       ? publishedRender[DefinitiveRenderReference::BackendPinnedExpected]
-                                     : movementRequested && movementAvailable ? publishedMovement[DefinitiveMovementReference::BackendPinnedExpected]
-                                                                              : 0u;
+        const auto expectedBackend = renderRequested && renderRoute && renderV2Available ? publishedRenderV2[DefinitiveRenderReference::BackendPinnedExpected]
+                                     : renderRequested && renderAvailable                ? publishedRender[DefinitiveRenderReference::BackendPinnedExpected]
+                                     : movementRequested && movementAvailable            ? publishedMovement[DefinitiveMovementReference::BackendPinnedExpected]
+                                                                                         : 0u;
         if ((!values[13] || values[15] != expectedBackend) && !values[16])
             values[16] = 9;
     }

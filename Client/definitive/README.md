@@ -6,40 +6,64 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
-**Next live boundary: Core-owned native renderer observation.**
-`package.ps1 -Mode Smoke -MtaCoreRenderReference` selects a separate, disabled
-by default 23-file trial. The real Core owns an optional versioned observation
-lease from Game DE and runs it on its existing worker for ten seconds. The
-ordinary gameplay gate remains intact. No XML/binds, input writes, networking,
-NPCs, GUI drawing or COM calls are part of this trial.
+**Completed live renderer diagnostic: clean lifecycle, no D3D11 callbacks.**
+The ten-second Core-owned trial ran for **10,004 ms**, with **198 Core samples
+and 87 script snapshots**. All native callback counters stayed zero. The user
+reported that GTA continued normally. Core/XML unloaded, the observer detached,
+the backend PIN matched, all 23 installed hashes matched, and normal shutdown
+was saved in the complete 24,886-byte log. The reader reports
+`native_observation_missing` with `diagnostic_lifecycle_complete=true`.
+This validates diagnostic cleanup; the active renderer path remains unconfirmed.
+Loaded D3D11/D3D12 modules and missing D3D11 callbacks do not identify that path.
 
-The backend checks the exact executable and the complete 421-byte native
-D3D11 viewport function before installing a bounded detour. It copies scalars
-and presence flags only from the naturally invoked callback; no viewport,
-swapchain, device or context pointer reaches Core or JavaScript. It records
-native callback entries, accepted/rejected samples, contention and the
-original function's return. A false native return is valid evidence when the
-original returned normally. Neither entry nor that return proves that the
-function's optional COM Present branch executed or that pixels were drawn.
-D3D12 remains outside this observer.
+**Next live boundary: explicitly selected D3D12 observation through MTA Core.**
+`package.ps1 -Mode Smoke -MtaCoreRenderReference -MtaCoreRenderRoute D3D12`
+selects the separate, disabled by default 23-file trial. The real Core owns a
+versioned observation lease from Game DE and runs it on its existing worker for
+ten seconds. The ordinary gameplay gate remains intact. This trial draws
+nothing and applies no input, networking or NPC changes.
+
+The backend checks the exact executable and the complete selected function:
+the 421-byte D3D11 callback or 429-byte D3D12 callback. The D3D12 viewport
+constructor, destructor, native callers and swapchain creation establish its
+owned callback and command-queue chain. For D3D12, `CreateSwapChainForHwnd`
+receives a direct command queue, as specified by
+[Microsoft's API contract](https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_2/nf-dxgi1_2-idxgifactory2-createswapchainforhwnd).
+The observer copies only dimensions, counters and presence flags from a natural
+callback; no viewport, swapchain, queue, device or context address reaches Core
+or JavaScript. D3D12 window/swapchain/queue knowledge is `19`; COM device and
+immediate context remain unknown. D3D11 keeps its existing knowledge mask `15`.
+
+API1 retains its original D3D11 factory, vtable and 40-field wire layout. The
+additive API2 factory and exports use 44 fields, including requested route,
+observed route, known presence mask and queue presence. Requested route is an
+explicit choice; observed route stays zero until an accepted natural callback
+returns and publishes. No automatic route guessing or API1 fallback occurs.
+A false native return is valid when the original returned normally. Neither
+callback entry nor return proves that COM Present ran or pixels were drawn.
 
 After manual Ctrl+Shift+F9 activation and release, the script yields while
-reading coherent 40-field snapshots. Ctrl+Shift+End requests cleanup. Failed
-detachment or final readback retains the lease, actual Core and worker for
-retries. A two-second cleanup deadline records failure without permitting
-unload. Ended state is copied before lease release, and the terminal 19-field
-Core diagnostics preserve the actual backend PIN.
+reading coherent scalar snapshots. Arming waits indefinitely. Ctrl+Shift+End
+requests cleanup. Failed detachment or final readback retains the lease, actual
+Core and worker for retries. A two-second cleanup deadline records failure
+without permitting unload. Ended state is copied before lease release, and the
+terminal Core diagnostics preserve the actual backend PIN.
 
-The native callback suite passes 467 checks, the exact lifecycle used by Core
-passes 3,031 checks on each architecture, and the actual module suite passes
-1,529 checks including wrong-image admission and foreign-thread rejection.
-Normal Core/Game DE builds, 122 real Core entry checks in each folder layout,
-classic Win32 option/default compilation and all seven worker scenarios pass.
-These are offline results. The active game RHI, live callback identity,
-normal game continuation and rendering remain unverified. Assess the saved
-trial with `python utils/definitive_edition/core_render_log.py --log <saved-log>
---output <assessment> --require-exit` after normal shutdown. Full MTA remains
-EXPERIMENTAL and unplayable.
+Final offline checks pass: 1,970 native callback checks, 1,548 module checks,
+424 x64/3 x86 Core consumer checks against the exact normal Game DE DLL,
+5,634 lifecycle checks on each architecture, all 15 worker scenarios,
+293 bridge protocol/885 ABI checks, 425 script checks and 79 log-reader tests.
+The normal Core/Game DE build passes 132 actual Core entry checks in each
+folder layout and preserves classic Win32 compilation and default x64 exclusion.
+The packaged launcher preflight verifies all 23 files while keeping full startup
+unavailable. These checks use owned fixtures; they do not execute GTA.
+
+Assess each complete saved trial with
+`python utils/definitive_edition/core_render_log.py --log <saved-log> --output <assessment> --require-exit`
+after normal shutdown. The reader keeps a clean diagnostic lifecycle separate
+from native callback acceptance and rejects contradictory route or unknown COM
+claims. Offline fixtures do not establish a live renderer, visible output, a
+working MTA GUI or full startup. Full MTA remains EXPERIMENTAL and unplayable.
 
 **Completed live check: actual Core configured bindings drive scoped native movement.**
 `package.ps1 -Mode Smoke -MtaCoreMovementReference` selects this separate,

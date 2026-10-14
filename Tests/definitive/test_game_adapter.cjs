@@ -1178,8 +1178,8 @@ async function main() {
             DE_CoreInputRead: index => coreInputState()[index],
             DE_CoreMovementBegin: () => 1, DE_CoreMovementCapture: () => 1,
             DE_CoreMovementRead: index => coreMovementState()[index],
-            DE_CoreRenderBegin: () => 1, DE_CoreRenderCapture: () => 1,
-            DE_CoreRenderRead: index => coreRenderState()[index],
+            DE_CoreRenderApiVersionV2: () => 2, DE_CoreRenderBeginV2: () => 1, DE_CoreRenderCaptureV2: () => 1,
+            DE_CoreRenderReadV2: index => coreRenderState()[index],
             ...(overrides.functions || {}) };
         const names = Object.keys(functions).filter(name => typeof functions[name] === 'function');
         const record = (name, ...args) => { calls.push([name, ...args]); callFrames.push({ frame, name }); };
@@ -1202,6 +1202,7 @@ async function main() {
             MTA_CORE_INPUT_REFERENCE: overrides.mtaCoreInputReference ?? false,
             MTA_CORE_MOVEMENT_REFERENCE: overrides.mtaCoreMovementReference ?? false,
             MTA_CORE_RENDER_REFERENCE: overrides.mtaCoreRenderReference ?? false,
+            MTA_CORE_RENDER_ROUTE: overrides.mtaCoreRenderRoute ?? 'd3d11',
             Date: { now: () => overrides.times ? overrides.times[frame] : frame * 50 },
             CLEO: { version: overrides.version || '1.5.1', apiVersion: overrides.definitions || '0.500', hostVersion: '1.0.113.49697469' },
             native: (name, ...args) => { record(name, ...args);
@@ -1236,10 +1237,10 @@ async function main() {
         vm.runInNewContext(entry, sandbox, { timeout: 1000 });
         return { calls, callFrames, runtimeAccess, waits, logs, fromFloat };
     }
-    const coreRenderState = (overrides = {}) => {
-        const state = Array(40).fill(0);
-        Object.assign(state, { 0: 1, 1: 2, 2: 201, 3: 10000, 4: 1, 5: 200, 6: 1, 7: 1, 9: 1, 11: 1,
-            12: 1, 14: 1, 15: 1, 17: 600, 19: 600, 25: 42, 26: 1920, 27: 1080, 28: 1, 31: 1, 37: 15 }, overrides);
+    const coreRenderState = (overrides = {}, route = 1) => {
+        const state = Array(44).fill(0);
+        Object.assign(state, { 0: 2, 1: 2, 2: 201, 3: 10000, 4: 1, 5: 200, 6: 1, 7: 1, 9: 1, 11: 1,
+            12: 1, 14: 1, 15: 1, 17: 600, 19: 600, 25: 42, 26: 1920, 27: 1080, 28: 1, 31: 1, 37: route === 1 ? 15 : 3, 40: route, 41: route, 42: route === 1 ? 15 : 19, 43: route === 2 ? 1 : 0 }, overrides);
         return state;
     };
     const coreRender = (overrides = {}) => {
@@ -1247,15 +1248,15 @@ async function main() {
         return runEntry({ mtaCoreRenderReference: true, keyFrames: [[17, 16, 120], [16], [], []],
             times: [0, 50, 100, 10200], ...overrides,
             functions: { DE_CoreStartupPoll: () => ++polls >= 2 ? 1 : 0,
-                DE_CoreRenderRead: index => coreRenderState({ ...(polls < 2 ? { 1: 1, 2: 1, 3: 0, 4: 0, 5: 1, 6: 0, 7: 0, 13: 1 } : {}),
-                    ...overrides.renderState })[index],
+                DE_CoreRenderReadV2: index => coreRenderState({ ...(polls < 2 ? { 1: 1, 2: 1, 3: 0, 4: 0, 5: 1, 6: 0, 7: 0, 13: 1 } : {}),
+                    ...overrides.renderState }, overrides.mtaCoreRenderRoute === 'd3d12' ? 2 : 1)[index],
                 ...overrides.functions } });
     };
-    test('Core render probe waits for F9 release and reads scalar40 snapshots on yielding worker polls', () => {
+    test('Core render probe waits for F9 release and reads scalar44 snapshots on yielding worker polls', () => {
         const result = coreRender();
         assert.equal(result.callFrames.find(call => call.name === 'DynamicLibrary.Load').frame, 2);
-        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreRenderBegin').length, 1);
-        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreRenderRead').length, 80);
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreRenderBeginV2').length, 1);
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreRenderReadV2').length, 88);
         const finish = result.logs.find(event => event.event === 'core_render_reference_finished');
         assert.equal(finish.passed, true); assert.equal(finish.cleanup_passed, true); assert.equal(finish.state[15], 1);
         assert.equal(finish.rendering_started, false); assert.equal(finish.input_writes, false);
@@ -1268,6 +1269,47 @@ async function main() {
         assert.equal(finish.full_core_ready, false);
         assert.equal(finish.rendering_started, false);
     });
+    test('Core selects D3D12 explicitly and keeps queue separate from unknown COM device/context', () => {
+        const result = coreRender({ mtaCoreRenderRoute: 'd3d12' });
+        assert.deepEqual(result.calls.find(call => call[0] === 'DE_CoreRenderBeginV2'), ['DE_CoreRenderBeginV2', 2]);
+        const sample = result.logs.find(event => event.event === 'core_render_reference_sample').state;
+        assert.equal(sample[37], 3); assert.deepEqual(Array.from(sample.slice(40)), [2, 2, 19, 1]);
+        assert.equal(result.logs.find(event => event.event === 'core_render_reference_started').requested_route, 2);
+        assert.equal(result.logs.find(event => event.event === 'core_render_reference_finished').passed, true);
+    });
+    test('Core missing D3D12 callbacks leave observed route unknown and still report actual cleanup', () => {
+        const zeros = Object.fromEntries([...Array.from({ length: 12 }, (_, n) => n + 17), 31, 33, 34, 35, 36, 37, 41, 42, 43].map(n => [n, 0]));
+        const result = coreRender({ mtaCoreRenderRoute: 'd3d12', renderState: zeros });
+        const finish = result.logs.find(event => event.event === 'core_render_reference_finished');
+        assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true);
+        assert.equal(result.logs.find(event => event.event === 'core_render_reference_sample').state[41], 0);
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreRenderBeginV2').length, 1);
+        assert.ok(!result.calls.some(call => call[0] === 'DE_CoreRenderBegin'));
+    });
+    for (const [field, value] of [[0, 1], [37, 15], [40, 1], [41, 1], [42, 15], [42, 23], [43, 0]])
+        test('Core D3D12 rejects contradictory route or COM knowledge field ' + field + ':' + value, () => {
+            const result = coreRender({ mtaCoreRenderRoute: 'd3d12', renderState: { [field]: value } });
+            assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 1);
+            assert.ok(!result.logs.some(event => event.event === 'core_render_reference_finished' && event.passed));
+        });
+    for (const field of [25, 26, 27, 28, 29, 31])
+        test('Core unobserved route rejects fabricated callback scalar ' + field, () => {
+            const zeros = Object.fromEntries([...Array.from({ length: 12 }, (_, n) => n + 17), 31, 33, 34, 35, 36, 37, 41, 42, 43].map(n => [n, 0]));
+            const result = coreRender({ mtaCoreRenderRoute: 'd3d12', renderState: { ...zeros, [field]: 1 } });
+            assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 1);
+            assert.ok(!result.logs.some(event => event.event === 'core_render_reference_finished'));
+        });
+    for (const value of [undefined, () => 1, () => 3])
+        test('Core API2 admission never falls back to API1 when version/export is unavailable ' + String(value), () => {
+            const result = coreRender({ functions: { DE_CoreRenderApiVersionV2: value } });
+            assert.equal(result.calls.filter(call => call[0] === 'DE_CoreRenderBeginV2').length, 0);
+            assert.ok(result.logs.some(event => event.event === 'adapter_failed'));
+        });
+    test('Core rejects an unknown renderer route before loading the bridge', () => {
+        const result = coreRender({ mtaCoreRenderRoute: 'automatic' });
+        assert.equal(result.calls.length, 0);
+        assert.ok(result.logs.some(event => event.event === 'adapter_failed'));
+    });
     for (const [field, value] of [[5, 0], [7, 0], [8, 1], [9, 0], [10, 1], [11, 0], [12, 0], [13, 1], [14, 0], [15, 0], [17, 0], [19, 0],
             [21, 1], [23, 1], [25, 0], [26, 0], [27, 0], [29, 2], [30, 7], [31, 0], [32, 1], [33, 1], [37, 3], [38, 1], [39, 1]])
         test('Core render cannot pass missing native/cleanup evidence field ' + field, () => {
@@ -1276,7 +1318,7 @@ async function main() {
             assert.ok(!result.logs.some(event => event.event === 'core_render_reference_finished' && event.passed));
         });
     test('Core render cancels on a malformed frozen field and never reads terminal diagnostics while pending', () => {
-        const result = coreRender({ functions: { DE_CoreStartupPoll: () => 0, DE_CoreRenderRead: index => index === 27 ? NaN : coreRenderState({ 3: 0 })[index] } });
+        const result = coreRender({ functions: { DE_CoreStartupPoll: () => 0, DE_CoreRenderReadV2: index => index === 27 ? NaN : coreRenderState({ 3: 0 })[index] } });
         assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 1);
         assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupRead').length, 0);
     });
@@ -1284,15 +1326,15 @@ async function main() {
         let polls = 0;
         const result = coreRender({ keyFrames: [[17, 16, 120], [16], [], [], []], times: [0, 50, 100, 10150, 10200],
             functions: { DE_CoreStartupPoll: () => ++polls >= 3 ? 1 : 0,
-                DE_CoreRenderRead: index => coreRenderState({ 2: polls, ...(polls === 1 ?
+                DE_CoreRenderReadV2: index => coreRenderState({ 2: polls, ...(polls === 1 ?
                     { 1: 1, 3: 0, 4: 0, 5: 1, 6: 0, 7: 0, 13: 1 } : polls === 2 ? { 1: 3, 6: 0, 10: 1, 32: 1 } : {}) })[index] } });
         assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupPoll').length, 3);
         assert.ok(result.callFrames.filter(call => call.name === 'DE_CoreStartupRead').every(call => call.frame === 4));
         assert.equal(result.logs.find(event => event.event === 'core_render_reference_finished').passed, true);
     });
     test('Core render missing DLL export fails before starting an unobservable job', () => {
-        const result = coreRender({ functions: { DE_CoreRenderRead: undefined } });
-        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreRenderBegin').length, 0);
+        const result = coreRender({ functions: { DE_CoreRenderReadV2: undefined } });
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreRenderBeginV2').length, 0);
         assert.ok(result.logs.some(event => event.event === 'adapter_failed'));
     });
     test('Core render impossible publication metrics cancel the worker without certifying observations', () => {

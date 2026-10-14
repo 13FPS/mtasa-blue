@@ -25,6 +25,7 @@ namespace deonline
         bool          BeginInputReference(const void* moduleAddress) noexcept;
         bool          BeginMovementReference(const void* moduleAddress) noexcept;
         bool          BeginRenderReference(const void* moduleAddress) noexcept;
+        bool          BeginRenderReferenceV2(const void* moduleAddress, std::uint32_t route) noexcept;
         int           Poll() noexcept;
         std::uint32_t Read(std::uint32_t field) const noexcept;
         bool          CaptureInput() noexcept;
@@ -33,6 +34,8 @@ namespace deonline
         std::uint32_t ReadMovement(std::uint32_t field) const noexcept;
         bool          CaptureRender() noexcept;
         std::uint32_t ReadRender(std::uint32_t field) const noexcept;
+        bool          CaptureRenderV2() noexcept;
+        std::uint32_t ReadRenderV2(std::uint32_t field) const noexcept;
         bool          Cancel() noexcept;
         bool          IsPending() const noexcept;
 
@@ -40,9 +43,10 @@ namespace deonline
         static unsigned __stdcall ThreadMain(void* context) noexcept;
         void                      Run() noexcept;
         bool                      CheckCancellation() noexcept;
-        bool        Start(const void* moduleAddress, bool configuredInput, bool configuredMovement = false, bool configuredRender = false) noexcept;
-        static bool InputCancelled();
-        static void PublishInput(const std::uint32_t* values, std::uint32_t count);
+        bool                      Start(const void* moduleAddress, bool configuredInput, bool configuredMovement = false, bool configuredRender = false,
+                                        std::uint32_t configuredRenderRoute = 0) noexcept;
+        static bool               InputCancelled();
+        static void               PublishInput(const std::uint32_t* values, std::uint32_t count);
 
         // Only Begin/Poll's owning thread touches the handle or input address.
         // State2 publishes the worker's immutable values; State3 also proves
@@ -56,6 +60,7 @@ namespace deonline
         bool                                  inputRequested = false;
         bool                                  movementRequested = false;
         bool                                  renderRequested = false;
+        std::uint32_t                         renderRoute = 0;
         SRWLOCK                               inputLock = SRWLOCK_INIT;
         bool                                  inputAvailable = false;
         DefinitiveInputReference::Snapshot    publishedInput{};
@@ -66,5 +71,8 @@ namespace deonline
         bool                                  renderAvailable = false;
         DefinitiveRenderReference::Snapshot   publishedRender{};
         DefinitiveRenderReference::Snapshot   capturedRender{};
+        bool                                  renderV2Available = false;
+        DefinitiveRenderReference::SnapshotV2 publishedRenderV2{};
+        DefinitiveRenderReference::SnapshotV2 capturedRenderV2{};
     };
 }

@@ -5,10 +5,14 @@
 param([ValidateSet('Diagnostic', 'Smoke', 'Online')][string]$Mode = 'Smoke',
     [switch]$NativeGaitReference, [switch]$MatchedGaitRate, [switch]$LockWalkRoot, [switch]$NativeInputReference,
     [switch]$MtaNativePadReference, [switch]$MtaNativeMovementTrial, [switch]$MtaCoreStartupReference, [switch]$MtaCoreInputReference,
-    [switch]$MtaCoreMovementReference, [switch]$MtaCoreRenderReference)
+    [switch]$MtaCoreMovementReference, [switch]$MtaCoreRenderReference,
+    [ValidateSet('D3D11', 'D3D12')][string]$MtaCoreRenderRoute = 'D3D11')
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+if ($PSBoundParameters.ContainsKey('MtaCoreRenderRoute') -and -not $MtaCoreRenderReference) {
+    throw 'An explicit renderer route requires MtaCoreRenderReference.'
+}
 if ($MtaCoreRenderReference -and ($Mode -ne 'Smoke' -or $MtaCoreMovementReference -or $MtaCoreInputReference -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot)) {
     throw 'MTA Core renderer observation requires separate opt-in Smoke mode.'
 }
@@ -222,6 +226,10 @@ $coreRenderMarker = 'export const MTA_CORE_RENDER_REFERENCE = false;'
 if ([regex]::Matches($configText, [regex]::Escape($coreRenderMarker)).Count -ne 1) { throw 'Expected disabled MTA Core renderer observation in source configuration.' }
 $configText = $configText.Replace($coreRenderMarker,
     "export const MTA_CORE_RENDER_REFERENCE = $($MtaCoreRenderReference.IsPresent.ToString().ToLowerInvariant());")
+$coreRenderRouteMarker = "export const MTA_CORE_RENDER_ROUTE = 'd3d11';"
+if ([regex]::Matches($configText, [regex]::Escape($coreRenderRouteMarker)).Count -ne 1) { throw 'Expected explicit renderer route in source configuration.' }
+$configText = $configText.Replace($coreRenderRouteMarker,
+    "export const MTA_CORE_RENDER_ROUTE = '$($MtaCoreRenderRoute.ToLowerInvariant())';")
 [IO.File]::WriteAllText($configPath, $configText, $utf8)
 foreach ($name in @('sa_unreal.json', 'unknown_x64.json')) {
     [IO.File]::Copy($downloads[$name], (Join-Path $configDirectory $name), $false)

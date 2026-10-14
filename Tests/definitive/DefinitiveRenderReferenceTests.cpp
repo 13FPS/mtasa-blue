@@ -5,6 +5,7 @@
  *****************************************************************************/
 
 #include "../../Client/core/DefinitiveRenderReference.h"
+#include "../../Client/sdk/game/CGameRenderObservation.h"
 #include <cstdio>
 #include <functional>
 #include <stdexcept>
@@ -34,13 +35,16 @@ namespace
         bool          began = false, ended = false, rejectBegin = false, rejectRead = false, rejectFinalRead = false;
         bool          nativeFailure = false, throwRead = false, throwFirstEnd = false;
         std::uint32_t lateEnd = 0;
+        std::uint32_t route = 2;
+        bool          noCallbacks = false;
         bool          Begin()
         {
             ++begins;
             began = !rejectBegin;
             return began;
         }
-        bool Read(Snapshot& snapshot)
+        template <typename SnapshotType>
+        bool Read(SnapshotType& snapshot)
         {
             ++reads;
             if (!began || rejectRead || (ended && rejectFinalRead))
@@ -60,6 +64,19 @@ namespace
             snapshot[NativeOriginalReturned] = 1;
             snapshot[NativeOriginalResult] = 0;  // A returned false bool is not an observer failure.
             snapshot[FailureReason] = nativeFailure ? 4u : 0u;
+            if constexpr (std::tuple_size<SnapshotType>::value == FieldCountV2)
+            {
+                snapshot[RequestedRoute] = route;
+                snapshot[ObservedRoute] = noCallbacks ? 0u : route;
+                snapshot[PresenceKnownMask] = noCallbacks ? 0u : route == 2 ? 19u : 15u;
+                snapshot[QueuePresent] = !noCallbacks && route == 2 ? 1u : 0u;
+                snapshot[NativePresence] = noCallbacks ? 0u : route == 2 ? 3u : 15u;
+                if (noCallbacks)
+                {
+                    snapshot[PresentCallbacksLow] = snapshot[AcceptedSnapshotsLow] = 0;
+                    snapshot[Width] = snapshot[Height] = snapshot[NativeOriginalReturned] = 0;
+                }
+            }
             return true;
         }
         bool End()
@@ -77,26 +94,28 @@ namespace
     struct Request
     {
         std::uint32_t                                            durationMs = MaximumDurationMs;
+        std::uint32_t                                            renderRoute = 2;
         std::function<bool()>                                    cancelled;
         std::function<void(const std::uint32_t*, std::uint32_t)> publish;
     };
-    struct Fixture
+    template <typename SnapshotType>
+    struct FixtureT
     {
-        Clock                 clock;
-        Observer              observer{clock};
-        Request               request;
-        std::vector<Snapshot> publications;
-        bool                  cancel = false, throwPublish = false;
-        Fixture()
+        Clock                     clock;
+        Observer                  observer{clock};
+        Request                   request;
+        std::vector<SnapshotType> publications;
+        bool                      cancel = false, throwPublish = false;
+        FixtureT()
         {
             request.cancelled = [&] { return cancel; };
             request.publish = [&](const std::uint32_t* state, std::uint32_t count)
             {
-                Check(count == FieldCount, "Core must publish the exact forty-field contract");
+                Check(count == std::tuple_size<SnapshotType>::value, "Core must publish the exact selected protocol length");
                 if (throwPublish && state[Phase] == 1)
                     throw std::runtime_error("controlled publication failure");
-                Snapshot copy{};
-                std::copy_n(state, FieldCount, copy.begin());
+                SnapshotType copy{};
+                std::copy_n(state, count, copy.begin());
                 if (!publications.empty())
                     Check(copy[Sequence] > publications.back()[Sequence], "every publication must advance sequence");
                 if (copy[Phase] == 3)
@@ -104,12 +123,16 @@ namespace
                 publications.push_back(copy);
             };
         }
-        Snapshot Run() { return DefinitiveRenderReference::Run(observer, clock, request); }
+        SnapshotType Run() { return DefinitiveRenderReference::Run<SnapshotType>(observer, clock, request); }
     };
-    void Terminal(const Fixture& fixture, const Snapshot& state, StopReason reason, bool clean = true)
+    using Fixture = FixtureT<Snapshot>;
+    using FixtureV2 = FixtureT<SnapshotV2>;
+    template <typename SnapshotType>
+    void Terminal(const FixtureT<SnapshotType>& fixture, const SnapshotType& state, StopReason reason, bool clean = true)
     {
         Check(fixture.observer.ended && fixture.observer.ends > 0, "every exit must finish actual observer End");
-        Check(state[Version] == 1 && state[Phase] == 2 && state[CleanupPending] == 0 && state[CleanupComplete] == (clean ? 1u : 0u),
+        Check(state[Version] == (std::tuple_size<SnapshotType>::value == FieldCountV2 ? 2u : 1u) && state[Phase] == 2 && state[CleanupPending] == 0 &&
+                  state[CleanupComplete] == (clean ? 1u : 0u),
               "terminal publication must accurately describe cleanup");
         Check(state[Reason] == static_cast<std::uint32_t>(reason), "stop reason must survive the cleanup path");
         Check(state[Reserved] == 0 && state[ReservedHigh] == 0, "reserved fields must remain neutral");
@@ -214,6 +237,84 @@ int main()
             f.observer.throwFirstEnd = true;
             Terminal(f, f.Run(), StopReason::Exception);
             Check(f.observer.ends == 2, "unexpected End exception must retain the owner for another cleanup attempt");
+        }
+        for (const auto route : {1u, 2u})
+        {
+            FixtureV2 f;
+            f.request.renderRoute = f.observer.route = route;
+            const auto state = f.Run();
+            Terminal(f, state, StopReason::TimeBudget);
+            Check(state[RequestedRoute] == route && state[ObservedRoute] == route && state[PresenceKnownMask] == (route == 2 ? 19u : 15u) &&
+                      state[QueuePresent] == (route == 2 ? 1u : 0u) && state[NativePresence] == (route == 2 ? 3u : 15u),
+                  "explicit protocol must preserve the actual selected route and known presence fields");
+            Check(state[SampleCount] == 200 && f.publications.size() == 201 && state[NativeOriginalResult] == 0,
+                  "API2 must retain the bounded lifecycle and distinguish a returned false native bool");
+        }
+        {
+            FixtureV2 f;
+            f.observer.noCallbacks = true;
+            const auto state = f.Run();
+            Terminal(f, state, StopReason::TimeBudget);
+            Check(state[RequestedRoute] == 2 && !state[ObservedRoute] && !state[PresenceKnownMask] && !state[QueuePresent] && !state[AcceptedSnapshotsLow],
+                  "requesting D3D12 must not invent a callback, queue, or known presence before publication");
+        }
+        for (const auto invalid : {0u, 3u, 0xffffffffu})
+        {
+            FixtureV2 f;
+            f.request.renderRoute = invalid;
+            const auto state = f.Run();
+            Terminal(f, state, StopReason::BeginError);
+            Check(!f.observer.begins && !state[ObserverStarted], "unknown API2 route must reject before installing an observer");
+        }
+        for (unsigned scenario = 0; scenario < 6; ++scenario)
+        {
+            FixtureV2 f;
+            if (scenario == 0)
+                f.request.cancelled = [&] { return f.clock.now >= 1150; };
+            else if (scenario == 1)
+                f.observer.rejectBegin = true;
+            else if (scenario == 2)
+                f.observer.throwRead = true;
+            else if (scenario == 3)
+                f.observer.busyEnds = 42;
+            else if (scenario == 4)
+                f.observer.lateEnd = 2001;
+            else
+                f.observer.rejectFinalRead = true;
+            const auto reason = scenario == 0   ? StopReason::Cancelled
+                                : scenario == 1 ? StopReason::BeginError
+                                : scenario == 2 ? StopReason::Exception
+                                                : StopReason::CleanupError;
+            Terminal(f, f.Run(), reason, scenario != 5);
+        }
+        {
+            // Use the actual SDK POD and production copy function. Distinct high
+            // halves and unknown device/context fields catch layout or route
+            // assumptions which a lifecycle-only fake observer would miss.
+            mta::game_de::RenderObservationStateV2 state;
+            state.base.bound = state.base.modulePinned = 1;
+            state.base.generation = 0x1234567887654321ull;
+            state.base.nativePresentCallbacks = 0x1122334455667788ull;
+            state.base.foreignThreadCallbacks = 0x9988776655443322ull;
+            state.base.publicationMisses = 0xffeeddccbbaa0099ull;
+            state.base.windowPresent = state.base.swapchainPresent = 1;
+            state.base.lastOriginalReturned = 1;
+            state.requestedRoute = state.observedRoute = 2;
+            state.presenceKnownMask = 19;
+            state.queuePresent = 1;
+            SnapshotV2 copied{};
+            copied[Version] = 2;
+            CopyNativeStateV2(copied, state);
+            Check(copied[GenerationLow] == 0x87654321u && copied[GenerationHigh] == 0x12345678u && copied[PresentCallbacksHigh] == 0x11223344u &&
+                      copied[ForeignCallbacksHigh] == 0x99887766u && copied[PublicationMissesHigh] == 0xffeeddccu,
+                  "production scalar copy must preserve all observed uint64 halves");
+            Check(copied[NativePresence] == 3 && copied[PresenceKnownMask] == 19 && copied[QueuePresent] == 1 && copied[ObservedRoute] == 2 &&
+                      !state.base.devicePresent && !state.base.contextPresent && copied[NativeOriginalReturned] == 1 && !copied[NativeOriginalResult],
+                  "D3D12 copy must carry queue presence without advertising D3D11 device/context knowledge");
+            Snapshot legacy{};
+            CopyNativeState(legacy, state.base);
+            Check(legacy[NativePresence] == 3 && legacy[GenerationHigh] == copied[GenerationHigh] && legacy[Reserved] == 0,
+                  "API1 base copy must never append API2 queue presence");
         }
         std::printf("{\"success\":true,\"checks\":%u,\"game_operations\":false}\n", checks);
         return 0;

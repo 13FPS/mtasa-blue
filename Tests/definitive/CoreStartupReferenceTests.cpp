@@ -74,8 +74,9 @@ namespace
             Set(L"MTA_CORE_FIXTURE_RELEASE", releaseName);
             Set(L"MTA_CORE_FIXTURE_INPUT_RELEASE", inputReleaseName);
             Set(L"MTA_CORE_FIXTURE_MOVEMENT_RELEASE", movementReleaseName);
-            for (const auto* name : {L"MTA_CORE_FIXTURE_DELAY_MS", L"MTA_CORE_FIXTURE_BAD_VERSION", L"MTA_CORE_FIXTURE_BAD_STATE",
-                                     L"MTA_CORE_FIXTURE_BAD_INITIALIZE", L"MTA_CORE_FIXTURE_FAIL_ATTACH", L"MTA_CORE_FIXTURE_INPUT_MODE"})
+            for (const auto* name :
+                 {L"MTA_CORE_FIXTURE_DELAY_MS", L"MTA_CORE_FIXTURE_BAD_VERSION", L"MTA_CORE_FIXTURE_BAD_STATE", L"MTA_CORE_FIXTURE_BAD_INITIALIZE",
+                  L"MTA_CORE_FIXTURE_FAIL_ATTACH", L"MTA_CORE_FIXTURE_INPUT_MODE", L"MTA_CORE_FIXTURE_RENDER_MODE"})
                 Set(name, L"0");
         }
         ~Fixture()
@@ -143,58 +144,88 @@ int wmain(int argc, wchar_t** argv)
         {
             using namespace DefinitiveRenderReference;
             Check(argc == 4, "render worker fixture requires its controlled Core DLL");
-            const bool cancel = std::wstring(argv[2]) == L"render-cancel";
-            const bool deadlineFailure = std::wstring(argv[2]) == L"render-deadline";
-            Fixture    fixture(110);
+            const std::wstring mode = argv[2];
+            const bool         v2 = mode.find(L"render-v2") == 0;
+            const bool         cancel = mode.find(L"cancel") != std::wstring::npos;
+            const bool         deadlineFailure = mode.find(L"deadline") != std::wstring::npos;
+            const bool         noCallbacks = mode.find(L"missing") != std::wstring::npos;
+            const unsigned     malformed = mode.find(L"cross-route") != std::wstring::npos     ? 2u
+                                           : mode.find(L"mixed-version") != std::wstring::npos ? 3u
+                                           : mode.find(L"wrong-mask") != std::wstring::npos    ? 4u
+                                                                                               : 0u;
+            const auto         route = mode.find(L"d3d11") != std::wstring::npos ? 1u : 2u;
+            Fixture            fixture(110);
             CopyCore(std::filesystem::absolute(argv[3]), root);
             SetEvent(fixture.release);
-            Check(worker.BeginRenderReference(&anchor), "Core render worker failed to begin");
+            Set(L"MTA_CORE_FIXTURE_RENDER_MODE", std::to_wstring(noCallbacks ? 1u : malformed));
+            Check(!worker.BeginRenderReferenceV2(&anchor, 0) && !worker.BeginRenderReferenceV2(&anchor, 3) &&
+                      !worker.BeginRenderReferenceV2(&anchor, 0xffffffffu),
+                  "unknown route must reject before scheduling a worker");
+            Check(v2 ? worker.BeginRenderReferenceV2(&anchor, route) : worker.BeginRenderReference(&anchor), "Core render worker failed to begin");
             Check(!worker.BeginInputReference(&anchor) && !worker.BeginMovementReference(&anchor), "render job must exclude input and movement lifetimes");
+            Check(!worker.BeginRenderReference(&anchor) && !worker.BeginRenderReferenceV2(&anchor, route),
+                  "both renderer protocols must share one retained owner");
+            const auto capture = [&] { return v2 ? worker.CaptureRenderV2() : worker.CaptureRender(); };
+            const auto read = [&](std::uint32_t field) { return v2 ? worker.ReadRenderV2(field) : worker.ReadRender(field); };
             const auto deadline = GetTickCount64() + 6000;
-            while (!worker.CaptureRender())
+            while (!capture())
             {
                 Check(worker.Poll() == 0 && GetTickCount64() < deadline, "render callback failed to publish while pending");
                 Sleep(5);
             }
-            Check(worker.ReadRender(Phase) == 1 && worker.ReadRender(GenerationHigh) == 2 && worker.ReadRender(Width) == 1280 &&
-                      worker.ReadRender(BackendPinnedExpected) == 1 && worker.ReadRender(FieldCount) == 0,
+            Check(read(Phase) == 1 && read(GenerationHigh) == 2 && read(Width) == (v2 ? 0u : 1280u) && read(BackendPinnedExpected) == 1 &&
+                      read(v2 ? FieldCountV2 : FieldCount) == 0,
                   "render cache must preserve the coherent numeric publication and high counter halves");
+            Check(v2 ? !worker.CaptureRender() && !worker.ReadRender(Version) : !worker.CaptureRenderV2() && !worker.ReadRenderV2(Version),
+                  "a cache cannot be read through the other protocol");
+            if (v2)
+                Check(read(Version) == 2 && read(RequestedRoute) == route && !read(ObservedRoute) && !read(PresenceKnownMask) && !read(QueuePresent),
+                      "warmup must preserve the explicit request without inventing a naturally observed route");
             bool        foreignRejected = false;
-            std::thread foreign([&] { foreignRejected = !worker.CaptureRender() && worker.ReadRender(0) == 0 && !worker.BeginRenderReference(&anchor); });
+            std::thread foreign(
+                [&]
+                { foreignRejected = !capture() && read(0) == 0 && !worker.BeginRenderReference(&anchor) && !worker.BeginRenderReferenceV2(&anchor, route); });
             foreign.join();
             Check(foreignRejected, "render cache and lifecycle must stay with the script owner");
             if (cancel)
                 Check(Fast([&] { return worker.Cancel(); }), "render cancellation must remain value-only");
             SetEvent(fixture.inputRelease);
-            while (worker.ReadRender(Phase) != 3)
+            while (read(Phase) != 3)
             {
                 Check(worker.Poll() == 0 && GetTickCount64() < deadline, "render cleanup must retain its Core owner");
-                worker.CaptureRender();
+                capture();
                 Sleep(5);
             }
-            Check(worker.ReadRender(CleanupPending) == 1 && GetModuleHandleW(L"core.dll"), "render cleanup cannot release loaded Core");
+            Check(read(CleanupPending) == 1 && GetModuleHandleW(L"core.dll"), "render cleanup cannot release loaded Core");
             if (deadlineFailure)
             {
-                while (!worker.ReadRender(CleanupDeadlineExceeded))
+                while (!read(CleanupDeadlineExceeded))
                 {
                     Check(Fast([&] { return worker.Poll(); }) == 0 && GetTickCount64() < deadline, "deadline must not authorize unsafe Core unload");
-                    worker.CaptureRender();
+                    capture();
                     Sleep(10);
                 }
-                Check(worker.ReadRender(Reason) == static_cast<unsigned>(StopReason::CleanupError) && GetModuleHandleW(L"core.dll"),
+                Check(read(Reason) == static_cast<unsigned>(StopReason::CleanupError) && GetModuleHandleW(L"core.dll"),
                       "cleanup deadline must report failure while retaining the actual owner");
             }
             SetEvent(fixture.movementRelease);
             Wait(worker);
-            Check(worker.ReadRender(Phase) == 3, "worker completion cannot mutate the owner's captured render array");
-            Check(worker.CaptureRender() && worker.ReadRender(Phase) == 2 && worker.ReadRender(CleanupComplete) == 1 &&
-                      worker.ReadRender(CleanupPending) == 0 && worker.ReadRender(NativeCleanupPending) == 0 && worker.ReadRender(Active) == 0,
+            Check(read(Phase) == 3, "worker completion cannot mutate the owner's captured render array");
+            Check(capture() && read(Phase) == 2 && read(CleanupComplete) == 1 && read(CleanupPending) == 0 && read(NativeCleanupPending) == 0 &&
+                      read(Active) == 0,
                   "terminal render state must be captured only after safe cleanup");
             Check(worker.Read(13) == 1 && worker.Read(15) == 1 &&
-                      worker.Read(16) == (cancel            ? 12u
-                                          : deadlineFailure ? 15u
-                                                            : 0u),
+                      worker.Read(16) == (cancel                           ? 12u
+                                          : (deadlineFailure || malformed) ? 15u
+                                                                           : 0u),
                   "render backend PIN must remain separate from the unloaded Core owner");
+            if (v2 && !malformed)
+                Check(read(RequestedRoute) == route && read(ObservedRoute) == (noCallbacks ? 0u : route) &&
+                          read(PresenceKnownMask) == (noCallbacks  ? 0u
+                                                      : route == 2 ? 19u
+                                                                   : 15u) &&
+                          read(QueuePresent) == (!noCallbacks && route == 2 ? 1u : 0u),
+                      "terminal provenance must reflect publication, including clean zero-callback completion");
             Check(fixture.counters[2] == 0 && fixture.counters[1] == fixture.counters[0], "render callbacks and unload must share the worker thread");
         }
         else if (std::wstring(argv[2]).find(L"movement") == 0)

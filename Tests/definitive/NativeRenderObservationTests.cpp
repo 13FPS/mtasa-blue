@@ -21,8 +21,9 @@ namespace
     unsigned                         checks = 0;
     std::atomic<unsigned>            originalCalls{0};
     HANDLE                           entered = nullptr, resume = nullptr;
-    std::array<unsigned char, 0xc0>  viewport{};
-    std::array<unsigned char, 0x200> rhi{};
+    std::array<unsigned char, 0x1e0> viewport{};
+    std::array<unsigned char, 0x900> rhi{};
+    std::array<unsigned char, 0x40>  deviceObject{}, queueManager{};
 
     void Check(bool condition, const char* label)
     {
@@ -75,10 +76,12 @@ namespace
         }
         return false;
     }
-    void Configure(std::uintptr_t image, PresentFunction original = Original)
+    void Configure(std::uintptr_t image, PresentFunction original = Original, RenderObservationRoute route = RenderObservationRoute::D3D11)
     {
         runtime.image = image;
         runtime.original = original;
+        runtime.route = SelectRoute(route);
+        runtime.requestedRoute = static_cast<std::uint32_t>(route);
         runtime.producerThread = GetCurrentThreadId();
         runtime.bound.store(true);
         runtime.active.store(true);
@@ -87,44 +90,65 @@ namespace
         ResetCounters();
         viewport.fill(0);
         rhi.fill(0);
+        deviceObject.fill(0);
+        queueManager.fill(0);
         const auto object = reinterpret_cast<std::uintptr_t>(viewport.data());
         const auto owner = reinterpret_cast<std::uintptr_t>(rhi.data());
-        Put(object, image + 0x44fbc08);
+        Put(object, image + runtime.route->viewportTable);
         Put(object + 0x18, owner);
         Put(object + 0x40, std::uintptr_t{0x1234});
         Put(object + 0x4c, std::uint32_t{1920});
         Put(object + 0x50, std::uint32_t{1080});
         // Deliberately unreadable object addresses prove that neither Capture
         // nor the producer tries COM or dereferences these borrowed interfaces.
-        Put(object + 0x78, std::uintptr_t{1});
+        Put(object + runtime.route->swapchainOffset, std::uintptr_t{1});
         Put(owner, image + 0x44fb2b8);
         Put(owner + 0x18, image + 0x44fafa8);
         Put(owner + 0x170, std::uintptr_t{2});
         Put(owner + 0x158, std::uintptr_t{3});
         Put(image + 0x576fb60, owner);
+        if (route == RenderObservationRoute::D3D12)
+        {
+            Put(owner + 0x8a8, reinterpret_cast<std::uintptr_t>(deviceObject.data()));
+            Put(reinterpret_cast<std::uintptr_t>(deviceObject.data()) + 0x38, reinterpret_cast<std::uintptr_t>(queueManager.data()));
+            Put(reinterpret_cast<std::uintptr_t>(queueManager.data()) + 0x28, std::uintptr_t{4});
+            // The D3D12 callback does not borrow a D3D11 global root or assume
+            // its device/context layout. The queue remains undereferenceable.
+            Put(image + 0x576fb60, std::uintptr_t{1});
+        }
+    }
+    void CheckCodeFixture(const char* path, const RouteDescriptor& route)
+    {
+        std::vector<unsigned char> fingerprint(route.presentBytes);
+        std::ifstream              file(path, std::ios::binary);
+        file.read(reinterpret_cast<char*>(fingerprint.data()), static_cast<std::streamsize>(fingerprint.size()));
+        Check(file.gcount() == static_cast<std::streamsize>(fingerprint.size()) && file.peek() == std::char_traits<char>::eof(),
+              "exact complete route function fixture");
+        HashResources original;
+        Check(original.Open() && BCryptHashData(original.hash, fingerprint.data(), static_cast<ULONG>(fingerprint.size()), 0) >= 0 &&
+                  original.Finish(route.presentHash),
+              "production route digest accepts full pinned function");
+        for (std::size_t index = 0; index < fingerprint.size(); ++index)
+        {
+            auto altered = fingerprint;
+            altered[index] ^= 1;
+            HashResources hash;
+            Check(hash.Open() && BCryptHashData(hash.hash, altered.data(), static_cast<ULONG>(altered.size()), 0) >= 0 && !hash.Finish(route.presentHash),
+                  "every route native function byte is fingerprinted");
+        }
+        HashResources foreign;
+        const auto&   other = route.route == RenderObservationRoute::D3D11 ? d3d12Route : d3d11Route;
+        Check(foreign.Open() && BCryptHashData(foreign.hash, fingerprint.data(), static_cast<ULONG>(fingerprint.size()), 0) >= 0 &&
+                  !foreign.Finish(other.presentHash),
+              "one route cannot borrow another full function fingerprint");
     }
 }
 
 int main(int argc, char** argv)
 {
-    Check(argc == 2, "pinned code fixture path supplied");
-    std::array<unsigned char, presentBytes> fingerprint{};
-    std::ifstream                           file(argv[1], std::ios::binary);
-    file.read(reinterpret_cast<char*>(fingerprint.data()), fingerprint.size());
-    Check(file.gcount() == static_cast<std::streamsize>(fingerprint.size()) && file.peek() == std::char_traits<char>::eof(), "exact complete421 byte fixture");
-    {
-        HashResources hash;
-        Check(hash.Open() && BCryptHashData(hash.hash, fingerprint.data(), static_cast<ULONG>(fingerprint.size()), 0) >= 0 && hash.Finish(presentHash),
-              "production digest accepts full pinned function");
-    }
-    for (std::size_t index = 0; index < fingerprint.size(); ++index)
-    {
-        auto altered = fingerprint;
-        altered[index] ^= 1;
-        HashResources hash;
-        Check(hash.Open() && BCryptHashData(hash.hash, altered.data(), static_cast<ULONG>(altered.size()), 0) >= 0 && !hash.Finish(presentHash),
-              "every native function byte is fingerprinted");
-    }
+    Check(argc == 3, "both pinned route code fixture paths supplied");
+    CheckCodeFixture(argv[1], d3d11Route);
+    CheckCodeFixture(argv[2], d3d12Route);
     NativeRenderObservation owner;
     Check(!owner.Begin(), "ordinary executable rejected");
     NativeRenderObservationState state;
@@ -132,7 +156,21 @@ int main(int argc, char** argv)
     Check(!state.bound && !state.active && !state.modulePinned && !runtime.hooked.load() && !runtime.original,
           "wrong image installs no hook and pins no module");
     Check(state.failureReason == static_cast<unsigned>(Failure::UnsupportedBuild), "wrong image has precise failure");
+    Check(state.requestedRoute == 1 && state.observedRoute == 0 && state.presenceKnownMask == 0, "default API1 route remains D3D11, unobserved until callback");
     Check(owner.End() && owner.End(), "unbound End idempotent");
+    Check(!owner.Begin(RenderObservationRoute::Unknown), "unknown route is never guessed");
+    owner.ReadState(state);
+    Check(state.failureReason == static_cast<unsigned>(Failure::UnsupportedRoute) && state.requestedRoute == 0 && !state.modulePinned && !runtime.hooked.load(),
+          "unknown route rejected before image pin or hooks");
+    Check(owner.End(), "unknown route cleanup");
+    Check(!owner.Begin(static_cast<RenderObservationRoute>(3)), "out of domain route rejected");
+    Check(owner.End(), "out of domain route cleanup");
+    Check(!owner.Begin(RenderObservationRoute::D3D12), "ordinary executable rejects D3D12 without relaxed guard");
+    owner.ReadState(state);
+    Check(state.failureReason == static_cast<unsigned>(Failure::UnsupportedBuild) && state.requestedRoute == 2 && state.observedRoute == 0 &&
+              !state.modulePinned && !runtime.hooked.load(),
+          "explicit D3D12 wrong-image rejection remains unobserved and unpinned");
+    Check(owner.End(), "wrong-image D3D12 cleanup");
     const auto image = reinterpret_cast<std::uintptr_t>(VirtualAlloc(nullptr, 0x5770000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
     Check(image != 0, "owned synthetic image allocation");
     Configure(image);
@@ -144,12 +182,84 @@ int main(int argc, char** argv)
     Check(state.width == 1920 && state.height == 1080 && state.syncInterval == 2 && state.callbackThreadId == GetCurrentThreadId(),
           "native dimensions and callback thread");
     Check(state.windowPresent && state.swapchainPresent && state.devicePresent && state.contextPresent, "native member presence observed without COM");
+    Check(state.requestedRoute == 1 && state.observedRoute == 1 && state.presenceKnownMask == 15 && !state.queuePresent,
+          "D3D11 published route and known fields");
     Check(state.lastOriginalReturned && state.lastOriginalResult && state.failureReason == 0, "completed original evidence");
     Check(viewport == originalViewport && rhi == originalRhi, "observation never writes native objects");
     Check(!HookPresent(viewport.data(), 0), "false native bool preserved without trial failure");
     owner.ReadState(state);
     Check(state.acceptedSnapshots == 2 && state.lastOriginalReturned && !state.lastOriginalResult && state.failureReason == 0,
           "false original is valid observation");
+
+    Configure(image, Original, RenderObservationRoute::D3D12);
+    owner.ReadState(state);
+    Check(state.requestedRoute == 2 && state.observedRoute == 0 && state.presenceKnownMask == 0 && !state.queuePresent,
+          "zero D3D12 callbacks never fabricate observed route or presence");
+    const auto d3d12Viewport = viewport;
+    const auto d3d12Owner = rhi;
+    const auto d3d12Device = deviceObject, d3d12Manager = queueManager;
+    Check(HookPresent(viewport.data(), 2), "D3D12 original result preserved");
+    owner.ReadState(state);
+    Check(state.requestedRoute == 2 && state.observedRoute == 2 && state.presenceKnownMask == 19 && state.queuePresent == 1,
+          "D3D12 returned callback records queue separately from unknown device/context");
+    Check(state.windowPresent && state.swapchainPresent && !state.devicePresent && !state.contextPresent && state.width == 1920 && state.height == 1080,
+          "D3D12 constructor-pinned scalar and swapchain fields");
+    Check(viewport == d3d12Viewport && rhi == d3d12Owner && deviceObject == d3d12Device && queueManager == d3d12Manager,
+          "D3D12 observation never writes or invokes native objects/interfaces");
+    Check(!HookPresent(viewport.data(), 0), "false D3D12 original remains valid");
+    owner.ReadState(state);
+    Check(state.acceptedSnapshots == 2 && state.lastOriginalReturned && !state.lastOriginalResult && state.failureReason == 0,
+          "D3D12 native boolfalse does not imply COM or failure");
+    for (const auto route : {RenderObservationRoute::D3D11, RenderObservationRoute::D3D12})
+    {
+        Configure(image, Original, route);
+        NativeRenderObservationState preserved;
+        preserved.width = 777;
+        Put(reinterpret_cast<std::uintptr_t>(viewport.data()),
+            image + (route == RenderObservationRoute::D3D11 ? d3d12Route.viewportTable : d3d11Route.viewportTable));
+        Check(!Capture(viewport.data(), 1, preserved) && preserved.width == 777, "cross-route native object identity rejected without publishing");
+        Check(HookPresent(viewport.data(), 1), "cross-route callback still forwards physical original");
+        owner.ReadState(state);
+        Check(state.rejectedSnapshots == 1 && !state.active && !state.observedRoute && !state.presenceKnownMask, "rejected route cannot fabricate observation");
+    }
+    Configure(image, Original, RenderObservationRoute::D3D12);
+    Put(reinterpret_cast<std::uintptr_t>(queueManager.data()) + 0x28, std::uintptr_t{0});
+    Check(HookPresent(viewport.data(), 1), "missing D3D12 queue still forwards original");
+    owner.ReadState(state);
+    Check(state.rejectedSnapshots == 1 && !state.active && !state.observedRoute && !state.queuePresent,
+          "missing queue fails closed without claiming knowledge");
+    Put(reinterpret_cast<std::uintptr_t>(queueManager.data()) + 0x28, std::uintptr_t{4});
+    HookPresent(viewport.data(), 1);
+    owner.ReadState(state);
+    Check(state.acceptedSnapshots == 0, "repaired D3D12 context cannot silently rearm");
+    Configure(image, OriginalException, RenderObservationRoute::D3D12);
+    Check(CatchOriginalException(viewport.data()), "D3D12 original SEH propagates");
+    owner.ReadState(state);
+    Check(!state.observedRoute && !state.presenceKnownMask && !state.queuePresent && !state.lastOriginalReturned && runtime.inFlight.load() == 0,
+          "D3D12 exception never publishes a returned route");
+    Configure(image, OriginalNested, RenderObservationRoute::D3D12);
+    HookPresent(viewport.data(), 1);
+    owner.ReadState(state);
+    Check(state.nestedCallbacks == 1 && !state.active && !state.observedRoute && !state.presenceKnownMask && runtime.inFlight.load() == 0,
+          "nested D3D12 callback disarms and unwinds without publishing");
+    Configure(image, Original, RenderObservationRoute::D3D12);
+    std::thread d3d12Engine([] { HookPresent(viewport.data(), 1); });
+    d3d12Engine.join();
+    owner.ReadState(state);
+    const auto d3d12Thread = state.callbackThreadId;
+    Check(state.observedRoute == 2 && d3d12Thread != GetCurrentThreadId(), "D3D12 engine thread adopts only after validated capture");
+    HookPresent(viewport.data(), 2);
+    owner.ReadState(state);
+    Check(state.foreignThreadCallbacks == 1 && state.acceptedSnapshots == 1 && state.callbackThreadId == d3d12Thread && state.active,
+          "foreign D3D12 original forwards without replacing route evidence");
+    Configure(image, Original, RenderObservationRoute::D3D12);
+    AcquireSRWLockShared(&runtime.snapshotLock);
+    std::thread d3d12Contended([] { HookPresent(viewport.data(), 1); });
+    d3d12Contended.join();
+    ReleaseSRWLockShared(&runtime.snapshotLock);
+    owner.ReadState(state);
+    Check(state.publicationMisses == 1 && !state.observedRoute && !state.presenceKnownMask && state.active,
+          "missed D3D12 publication never fabricates observed route or blocks native thread");
 
     Configure(image);
     NativeRenderObservationState unchanged;
@@ -205,34 +315,85 @@ int main(int argc, char** argv)
     Check(!state.active && state.acceptedSnapshots == 0 && state.failureReason == static_cast<unsigned>(Failure::TimeBudget),
           "bounded observation expires before native capture");
 
-    Configure(image, OriginalBlocked);
-    entered = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    resume = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    Check(entered && resume, "owned cross-thread barriers");
-    bool pending = false;
-    Check(ChangeHooks(true, pending), "genuine Detours attach on owned test function");
-    runtime.hooked.store(true);
-    PresentFunction volatile target = &OriginalBlocked;
-    std::thread blocked([&] { target(viewport.data(), 1); });
-    Check(WaitForSingleObject(entered, 2000) == WAIT_OBJECT_0, "actual detoured engine callback entered");
-    Check(!owner.End(), "producer End disarms and retains active callback");
-    owner.ReadState(state);
-    Check(!state.active && state.pendingCleanup && state.failureReason == 0 && runtime.hooked.load(), "busy cleanup is retryable without permanent failure");
-    Check(!ChangeHooks(false, pending) && pending && runtime.hooked.load(), "post-suspension inFlight check aborts detach safely");
-    SetEvent(resume);
-    blocked.join();
-    Check(runtime.inFlight.load() == 0, "aborted transaction resumes owned engine thread");
-    Check(owner.End(), "producer cleanup retry genuinely detaches");
-    owner.ReadState(state);
-    Check(state.bound && !state.active && !state.pendingCleanup && state.nativePresentCallbacks == 1 && state.failureReason == 0,
-          "End retains actual bound evidence and counters");
-    const auto countAfterEnd = state.nativePresentCallbacks;
-    target(viewport.data(), 1);
-    owner.ReadState(state);
-    Check(state.nativePresentCallbacks == countAfterEnd, "detached target stops entering observer");
-    Check(owner.End(), "detached End remains idempotent");
-    CloseHandle(entered);
-    CloseHandle(resume);
+    for (const auto route : {RenderObservationRoute::D3D11, RenderObservationRoute::D3D12})
+    {
+        Configure(image, OriginalBlocked, route);
+        entered = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        resume = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        Check(entered && resume, "owned cross-thread barriers");
+        bool pending = false;
+        Check(ChangeHooks(true, pending), "genuine Detours attach on owned test function");
+        runtime.hooked.store(true);
+        PresentFunction volatile target = &OriginalBlocked;
+        std::thread blocked([&] { target(viewport.data(), 1); });
+        Check(WaitForSingleObject(entered, 2000) == WAIT_OBJECT_0, "actual detoured engine callback entered");
+        Check(!owner.End(), "producer End disarms and retains active callback");
+        owner.ReadState(state);
+        Check(!state.active && state.pendingCleanup && state.failureReason == 0 && runtime.hooked.load(),
+              "busy cleanup is retryable without permanent failure");
+        Check(!ChangeHooks(false, pending) && pending && runtime.hooked.load(), "post-suspension inFlight check aborts detach safely");
+        SetEvent(resume);
+        blocked.join();
+        Check(runtime.inFlight.load() == 0, "aborted transaction resumes owned engine thread");
+        Check(owner.End(), "producer cleanup retry genuinely detaches");
+        owner.ReadState(state);
+        Check(state.bound && !state.active && !state.pendingCleanup && state.nativePresentCallbacks == 1 && state.failureReason == 0,
+              "End retains actual bound evidence and counters");
+        const auto countAfterEnd = state.nativePresentCallbacks;
+        target(viewport.data(), 1);
+        owner.ReadState(state);
+        Check(state.nativePresentCallbacks == countAfterEnd, "detached target stops entering observer");
+        Check(owner.End(), "detached End remains idempotent");
+        CloseHandle(entered);
+        CloseHandle(resume);
+    }
+
+    // Each round races the production producer read with a first publication
+    // on one reused engine thread. Route/scalars must belong to the same
+    // accepted-count sample even if the nonblocking publisher misses its lock.
+    HANDLE publish = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    HANDLE published = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    Check(publish && published, "owned route-publication barriers");
+    std::atomic<bool> stopPublication{false};
+    std::thread       publisher(
+        [&]
+        {
+            for (;;)
+            {
+                WaitForSingleObject(publish, 5000);
+                if (stopPublication.load())
+                    break;
+                HookPresent(viewport.data(), 1);
+                SetEvent(published);
+            }
+        });
+    for (const auto route : {RenderObservationRoute::D3D11, RenderObservationRoute::D3D12})
+    {
+        unsigned publishedRounds = 0;
+        for (unsigned round = 0; round < 512; ++round)
+        {
+            Configure(image, Original, route);
+            SetEvent(publish);
+            bool coherent = true;
+            do
+            {
+                owner.ReadState(state);
+                const bool observed = state.acceptedSnapshots != 0;
+                coherent = coherent && state.observedRoute == (observed ? static_cast<unsigned>(route) : 0) && state.lastOriginalReturned == observed &&
+                           state.width == (observed ? 1920u : 0u) &&
+                           state.presenceKnownMask == (observed ? (route == RenderObservationRoute::D3D11 ? 15u : 19u) : 0u);
+            } while (WaitForSingleObject(published, 0) != WAIT_OBJECT_0);
+            Check(coherent, "first returned route and accepted count are one coherent snapshot");
+            owner.ReadState(state);
+            publishedRounds += state.acceptedSnapshots != 0;
+        }
+        Check(publishedRounds != 0, "publication stress exercised actual returned route snapshots");
+    }
+    stopPublication.store(true);
+    SetEvent(publish);
+    publisher.join();
+    CloseHandle(publish);
+    CloseHandle(published);
 
     Configure(image);
     HookPresent(viewport.data(), 1);

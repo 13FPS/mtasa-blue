@@ -46,19 +46,21 @@ foreach ($architecture in @('x86', 'x64')) {
     if ($architecture -eq 'x64') {
         # This explicitly named failure provider tests the consumer's unload
         # policy; actual movement and capability checks still use ModulePath.
-        $fixtureArguments = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/LD','/DMTA_GAME_DE_EXPORTS','/DMTA_TEST_SHUTDOWN_FAILURE_MODULE',
+        $fixtureArguments = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/LD','/DMTA_TEST_SHUTDOWN_FAILURE_MODULE',
             '/DNOMINMAX','/DWIN32_LEAN_AND_MEAN', ('/I' + (Join-Path $taskRoot 'Shared/sdk')), ('/I' + (Join-Path $taskRoot 'Client/sdk')),
-            (Join-Path $PSScriptRoot 'MtaGameAdapterHostTests.cpp'), ('/Fo' + (Join-Path $outputDirectory 'fixture.obj')), ('/Fe' + $fixture))
+            (Join-Path $PSScriptRoot 'MtaGameAdapterHostTests.cpp'), ('/Fo' + (Join-Path $outputDirectory 'fixture.obj')), ('/Fe' + $fixture),
+            '/link', '/EXPORT:CreateGameAdapter', '/EXPORT:CreateGameRenderObservation')
         $fixtureOutput = @(& $compiler @fixtureArguments 2>&1)
         $fixtureExit = $LASTEXITCODE
         $fixtureOutput | Set-Content -LiteralPath (Join-Path $outputDirectory 'fixture-compile.log') -Encoding utf8
         if ($fixtureExit -ne 0) { $failure = 'Shutdown failure fixture did not compile'; break }
         foreach ($mode in 1..3) {
             $facadeFixture = Join-Path $outputDirectory ("facade-provider-$mode.dll")
-            $facadeArguments = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/LD','/DMTA_GAME_DE_EXPORTS','/DMTA_TEST_SHUTDOWN_FAILURE_MODULE',
+            $facadeArguments = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/LD','/DMTA_TEST_SHUTDOWN_FAILURE_MODULE',
                 "/DMTA_TEST_FACADE_MODE=$mode", '/DNOMINMAX','/DWIN32_LEAN_AND_MEAN',
                 ('/I' + (Join-Path $taskRoot 'Shared/sdk')), ('/I' + (Join-Path $taskRoot 'Client/sdk')),
-                (Join-Path $PSScriptRoot 'MtaGameAdapterHostTests.cpp'), ('/Fo' + (Join-Path $outputDirectory "facade-$mode.obj")), ('/Fe' + $facadeFixture))
+                (Join-Path $PSScriptRoot 'MtaGameAdapterHostTests.cpp'), ('/Fo' + (Join-Path $outputDirectory "facade-$mode.obj")), ('/Fe' + $facadeFixture),
+                '/link', '/EXPORT:CreateGameAdapter', '/EXPORT:CreateGameRenderObservation')
             $facadeOutput = @(& $compiler @facadeArguments 2>&1)
             $facadeExit = $LASTEXITCODE
             $facadeLog = Join-Path $outputDirectory "facade-$mode-compile.log"
@@ -70,10 +72,11 @@ foreach ($architecture in @('x86', 'x64')) {
         if ($failure) { break }
         foreach ($mode in 1..5) {
             $renderFixture = Join-Path $outputDirectory ("render-provider-$mode.dll")
-            $renderArguments = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/LD','/DMTA_GAME_DE_EXPORTS','/DMTA_TEST_SHUTDOWN_FAILURE_MODULE',
+            $renderArguments = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/LD','/DMTA_TEST_SHUTDOWN_FAILURE_MODULE',
                 "/DMTA_TEST_RENDER_MODE=$mode", '/DNOMINMAX','/DWIN32_LEAN_AND_MEAN',
                 ('/I' + (Join-Path $taskRoot 'Shared/sdk')), ('/I' + (Join-Path $taskRoot 'Client/sdk')),
-                (Join-Path $PSScriptRoot 'MtaGameAdapterHostTests.cpp'), ('/Fo' + (Join-Path $outputDirectory "render-$mode.obj")), ('/Fe' + $renderFixture))
+                (Join-Path $PSScriptRoot 'MtaGameAdapterHostTests.cpp'), ('/Fo' + (Join-Path $outputDirectory "render-$mode.obj")), ('/Fe' + $renderFixture),
+                '/link', '/EXPORT:CreateGameAdapter', '/EXPORT:CreateGameRenderObservation')
             $renderOutput = @(& $compiler @renderArguments 2>&1)
             $renderExit = $LASTEXITCODE
             $renderLog = Join-Path $outputDirectory "render-$mode-compile.log"
@@ -81,6 +84,23 @@ foreach ($architecture in @('x86', 'x64')) {
             $renderFixtures += [ordered]@{ mode=$mode; path=$renderFixture; compilerExit=$renderExit; log=$renderLog;
                 sha256=$(if (Test-Path -LiteralPath $renderFixture) { (Get-FileHash -LiteralPath $renderFixture -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null }) }
             if ($renderExit -ne 0) { $failure = "Render fixture $mode did not compile"; break }
+        }
+        if ($failure) { break }
+        $renderV2Fixtures = @()
+        foreach ($mode in 1..7) {
+            $renderFixture = Join-Path $outputDirectory ("render-v2-provider-$mode.dll")
+            $renderArguments = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/LD','/DMTA_TEST_SHUTDOWN_FAILURE_MODULE','/DMTA_TEST_RENDER_V2=1',
+                "/DMTA_TEST_RENDER_MODE=$mode", '/DNOMINMAX','/DWIN32_LEAN_AND_MEAN',
+                ('/I' + (Join-Path $taskRoot 'Shared/sdk')), ('/I' + (Join-Path $taskRoot 'Client/sdk')),
+                (Join-Path $PSScriptRoot 'MtaGameAdapterHostTests.cpp'), ('/Fo' + (Join-Path $outputDirectory "render-v2-$mode.obj")), ('/Fe' + $renderFixture),
+                '/link', '/EXPORT:CreateGameAdapter', '/EXPORT:CreateGameRenderObservation', '/EXPORT:CreateGameRenderObservationV2')
+            $renderOutput = @(& $compiler @renderArguments 2>&1)
+            $renderExit = $LASTEXITCODE
+            $renderLog = Join-Path $outputDirectory "render-v2-$mode-compile.log"
+            $renderOutput | Set-Content -LiteralPath $renderLog -Encoding utf8
+            $renderV2Fixtures += [ordered]@{ mode=$mode; path=$renderFixture; compilerExit=$renderExit; log=$renderLog;
+                sha256=$(if (Test-Path -LiteralPath $renderFixture) { (Get-FileHash -LiteralPath $renderFixture -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null }) }
+            if ($renderExit -ne 0) { $failure = "Render version2 fixture $mode did not compile"; break }
         }
         if ($failure) { break }
     }
@@ -95,7 +115,7 @@ foreach ($architecture in @('x86', 'x64')) {
     $testCount = $null
     if ($compilerExit -eq 0) {
         $testArguments = @($ModulePath)
-        if ($architecture -eq 'x64') { $testArguments += $fixture; $testArguments += @($facadeFixtures | ForEach-Object path); $testArguments += @($renderFixtures | ForEach-Object path) }
+        if ($architecture -eq 'x64') { $testArguments += $fixture; $testArguments += @($facadeFixtures | ForEach-Object path); $testArguments += @($renderFixtures | ForEach-Object path); $testArguments += @($renderV2Fixtures | ForEach-Object path) }
         $testOutput = @(& $executable @testArguments 2>&1)
         $testExit = $LASTEXITCODE
         $testOutput | Set-Content -LiteralPath (Join-Path $outputDirectory 'test.log') -Encoding utf8
@@ -107,6 +127,7 @@ foreach ($architecture in @('x86', 'x64')) {
         shutdownFailureFixtureSha256=$(if (Test-Path -LiteralPath $fixture) { (Get-FileHash -LiteralPath $fixture -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null });
         facadeProviderFixtures=$facadeFixtures;
         renderProviderFixtures=$renderFixtures;
+        renderV2ProviderFixtures=$(if ($architecture -eq 'x64') { $renderV2Fixtures } else { @() });
         executable=$executable; executableSha256=$(if (Test-Path -LiteralPath $executable) {
             (Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash.ToLowerInvariant()
         } else { $null }) }

@@ -516,8 +516,17 @@ try {
         Invoke-Production $fixture 'set-mode.ps1' @{ Mode='Smoke'; MtaCoreRenderReference=$true; GameDirectory=$fixture.game }
         Assert-Check ([IO.File]::ReadAllText($config) -match 'export const MTA_CORE_RENDER_REFERENCE = true;') 'Explicit separate renderer observation is armed'
         Assert-Check ([IO.File]::ReadAllText($config) -match 'export const MTA_CORE_MOVEMENT_REFERENCE = false;') 'Renderer observation clears Core input writes'
+        Assert-Check ([IO.File]::ReadAllText($config) -match "export const MTA_CORE_RENDER_ROUTE = 'd3d11';") 'Default explicit observer retains D3D11 route'
+        $before = Get-TreeFingerprint $fixture.root
+        Invoke-Production $fixture 'set-mode.ps1' @{ Mode='Smoke'; MtaCoreRenderReference=$true; MtaCoreRenderRoute='D3D12'; GameDirectory=$fixture.game; WhatIf=$true }
+        Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'D3D12 route WhatIf changes no bytes'
+        Invoke-Production $fixture 'set-mode.ps1' @{ Mode='Smoke'; MtaCoreRenderReference=$true; MtaCoreRenderRoute='D3D12'; GameDirectory=$fixture.game }
+        Assert-Check ([IO.File]::ReadAllText($config) -match "export const MTA_CORE_RENDER_ROUTE = 'd3d12';") 'D3D12 observer route requires explicit selection'
         Invoke-Production $fixture 'uninstall.ps1' @{ GameDirectory=$fixture.game; ValidateOnly=$true }
         $before = Get-TreeFingerprint $fixture.root
+        Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' @{ Mode='Smoke'; MtaCoreRenderRoute='D3D12'; GameDirectory=$fixture.game } } 'explicit renderer route requires' 'Route cannot enable an observer by itself'
+        Assert-Refused { Invoke-Production $fixture 'package.ps1' @{ Mode='Smoke'; MtaCoreRenderRoute='D3D12' } } 'explicit renderer route requires' 'Route package requires separate opt-in'
+        Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Route-only rejection changes no bytes'
         foreach ($mode in @('Diagnostic', 'Online')) {
             Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' @{ Mode=$mode; MtaCoreRenderReference=$true; GameDirectory=$fixture.game } } 'separate opt-in Smoke mode' 'Render invalid mode'
             Assert-Refused { Invoke-Production $fixture 'package.ps1' @{ Mode=$mode; MtaCoreRenderReference=$true } } 'separate opt-in Smoke mode' 'Render package invalid mode'
@@ -534,7 +543,23 @@ try {
         foreach ($mode in @('Diagnostic', 'Smoke', 'Online', 'Smoke')) {
             Invoke-Production $fixture 'set-mode.ps1' @{ Mode=$mode; GameDirectory=$fixture.game }
             Assert-Check ([IO.File]::ReadAllText($config) -match 'export const MTA_CORE_RENDER_REFERENCE = false;') "Ordinary $mode clears render observation"
+            Assert-Check ([IO.File]::ReadAllText($config) -match "export const MTA_CORE_RENDER_ROUTE = 'd3d11';") "Ordinary $mode resets the inactive route"
         }
+    }
+    Invoke-Case 'historical-render-api1-cannot-infer-api2-route' {
+        param($fixture)
+        Install-Fresh $fixture
+        $config = Join-Path $fixture.game 'CLEO/de-online/config.mjs'
+        $text = [regex]::Replace([IO.File]::ReadAllText($config), "export const MTA_CORE_RENDER_ROUTE = '(d3d11|d3d12)';", '')
+        Write-FixtureBytes $config ($utf8.GetBytes($text))
+        $manifestPath = Join-Path $fixture.game 'de-online-install-manifest.json'
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+        @($manifest.files | Where-Object path -eq 'CLEO/de-online/config.mjs')[0].sha256 = Get-Sha $config
+        Write-FixtureJson $manifestPath $manifest
+        Invoke-Production $fixture 'set-mode.ps1' @{ Mode='Smoke'; GameDirectory=$fixture.game }
+        $before = Get-TreeFingerprint $fixture.root
+        Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' @{ Mode='Smoke'; MtaCoreRenderReference=$true; MtaCoreRenderRoute='D3D12'; GameDirectory=$fixture.game } } 'Update the adapter before selecting an explicit' 'Historical API1 configuration cannot guess route'
+        Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Historical route refusal changes no bytes'
     }
     Invoke-Case 'legacy23-render-observation-needs-explicit-marker' {
         param($fixture)

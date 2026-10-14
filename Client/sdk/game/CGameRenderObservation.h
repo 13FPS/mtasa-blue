@@ -61,4 +61,46 @@ namespace mta::game_de
 #else
     extern "C" IGameRenderObservation* CreateGameRenderObservation(std::uint32_t apiVersion, CCoreInterface* owner) noexcept;
 #endif
+
+    // API1 remains the historical D3D11-only contract. A separate factory and
+    // vtable keep route selection from changing any existing caller's layout.
+    enum class RenderObservationRoute : std::uint32_t
+    {
+        Unknown = 0,
+        D3D11 = 1,
+        D3D12 = 2,
+    };
+    inline constexpr std::uint32_t RenderObservationApiVersionV2 = 2;
+
+    struct RenderObservationStateV2
+    {
+        RenderObservationState base;
+        std::uint32_t          requestedRoute = 0;
+        // A request is not evidence of the active RHI. This stays unknown until
+        // the selected route accepts and publishes a naturally invoked callback.
+        std::uint32_t observedRoute = 0;
+        // Known presence bits: window1, swapchain2, device4, immediateContext8,
+        // commandQueue16. Unknown members stay zero, not implicitly absent.
+        std::uint32_t presenceKnownMask = 0;
+        std::uint32_t queuePresent = 0;
+    };
+
+    class IGameRenderObservationV2
+    {
+    public:
+        virtual Status Begin() noexcept = 0;
+        virtual Status ReadState(RenderObservationStateV2& state) noexcept = 0;
+        virtual Status End() noexcept = 0;
+        virtual void   Release() noexcept = 0;
+
+    protected:
+        virtual ~IGameRenderObservationV2() = default;
+    };
+
+#if defined(_WIN32) && defined(MTA_GAME_DE_EXPORTS)
+    extern "C" __declspec(dllexport)
+    IGameRenderObservationV2* CreateGameRenderObservationV2(std::uint32_t apiVersion, CCoreInterface* owner, RenderObservationRoute route) noexcept;
+#else
+    extern "C" IGameRenderObservationV2* CreateGameRenderObservationV2(std::uint32_t apiVersion, CCoreInterface* owner, RenderObservationRoute route) noexcept;
+#endif
 }

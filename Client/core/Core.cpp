@@ -61,8 +61,8 @@ namespace DefinitiveInputReference
         const auto maximum = request.renderObservation ? DefinitiveRenderReference::MaximumDurationMs
                              : request.nativeMovement  ? DefinitiveMovementReference::MaximumDurationMs
                                                        : MaximumDurationMs;
-        if ((request.nativeMovement && request.renderObservation) || !request.durationMs || request.durationMs > maximum || !request.cancelled ||
-            !request.publish || !TryAcquireSRWLockExclusive(&requestLock))
+        if ((request.nativeMovement && request.renderObservation) || (request.renderRoute && (!request.renderObservation || request.renderRoute > 2)) ||
+            !request.durationMs || request.durationMs > maximum || !request.cancelled || !request.publish || !TryAcquireSRWLockExclusive(&requestLock))
             return false;
         const bool accepted = !pending && !active;
         if (accepted)
@@ -274,5 +274,21 @@ CORE_API std::uint32_t MTA_ConfigureDERenderReference(std::uint32_t durationMs, 
                                                       DefinitiveInputReference::PublishCallback publish)
 {
     return g_isDefinitiveProcessCandidate && DefinitiveInputReference::Configure({durationMs, cancel, publish, false, true}) ? 1u : 0u;
+}
+
+CORE_API std::uint32_t MTA_DERenderReferenceApiVersionV2()
+{
+    return DefinitiveRenderReference::ApiVersionV2;
+}
+
+CORE_API std::uint32_t MTA_ConfigureDERenderReferenceV2(std::uint32_t durationMs, std::uint32_t route, DefinitiveInputReference::CancelCallback cancel,
+                                                        DefinitiveInputReference::PublishCallback publish)
+{
+    // A separate export makes route choice explicit without changing API1's
+    // signature or silently claiming that the requested RHI is active.
+    return (route == 1 || route == 2) && g_isDefinitiveProcessCandidate &&
+                   DefinitiveInputReference::Configure({durationMs, cancel, publish, false, true, route})
+               ? 1u
+               : 0u;
 }
 #endif

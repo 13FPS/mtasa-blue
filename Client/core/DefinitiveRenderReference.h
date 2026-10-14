@@ -14,6 +14,8 @@ namespace DefinitiveRenderReference
 {
     inline constexpr std::uint32_t ApiVersion = 1;
     inline constexpr std::uint32_t FieldCount = 40;
+    inline constexpr std::uint32_t ApiVersionV2 = 2;
+    inline constexpr std::uint32_t FieldCountV2 = 44;
     inline constexpr std::uint32_t MaximumDurationMs = 10000;
     inline constexpr std::uint32_t SampleIntervalMs = 50;
     inline constexpr std::uint32_t MaximumSamples = 200;
@@ -63,6 +65,10 @@ namespace DefinitiveRenderReference
         NativePresence,
         Reserved,
         ReservedHigh,
+        RequestedRoute,
+        ObservedRoute,
+        PresenceKnownMask,
+        QueuePresent,
     };
 
     enum class StopReason : std::uint32_t
@@ -81,16 +87,68 @@ namespace DefinitiveRenderReference
     // Phase3 is an actual retained Core/worker owner, not terminal failure. A
     // cleanup deadline reports failure but cannot authorize unloading live code.
     using Snapshot = std::array<std::uint32_t, FieldCount>;
+    using SnapshotV2 = std::array<std::uint32_t, FieldCountV2>;
+
+    // Both protocols copy the actual observer's scalar state. Keeping this
+    // shared with focused tests prevents route selection from inventing a
+    // device/context or treating an unobserved RHI as an accepted callback.
+    template <std::size_t N, typename State>
+    void CopyNativeState(std::array<std::uint32_t, N>& snapshot, const State& state) noexcept
+    {
+        static_assert(N == FieldCount || N == FieldCountV2);
+        snapshot[Bound] = state.bound;
+        snapshot[Active] = state.active;
+        snapshot[ModulePinned] = snapshot[BackendPinnedExpected] = state.modulePinned;
+        const std::array<std::uint64_t, 5> counters{state.generation, state.nativePresentCallbacks, state.acceptedSnapshots, state.rejectedSnapshots,
+                                                    state.nestedCallbacks};
+        for (std::size_t index = 0; index < counters.size(); ++index)
+        {
+            snapshot[GenerationLow + index * 2] = static_cast<std::uint32_t>(counters[index]);
+            snapshot[GenerationLow + index * 2 + 1] = static_cast<std::uint32_t>(counters[index] >> 32);
+        }
+        snapshot[CallbackThreadId] = state.callbackThreadId;
+        snapshot[Width] = state.width;
+        snapshot[Height] = state.height;
+        snapshot[SyncInterval] = state.syncInterval;
+        snapshot[NativeOriginalResult] = state.lastOriginalResult;
+        snapshot[FailureReason] = state.failureReason;
+        snapshot[NativeOriginalReturned] = state.lastOriginalReturned;
+        snapshot[NativeCleanupPending] = state.pendingCleanup;
+        snapshot[ForeignCallbacksLow] = static_cast<std::uint32_t>(state.foreignThreadCallbacks);
+        snapshot[ForeignCallbacksHigh] = static_cast<std::uint32_t>(state.foreignThreadCallbacks >> 32);
+        snapshot[PublicationMissesLow] = static_cast<std::uint32_t>(state.publicationMisses);
+        snapshot[PublicationMissesHigh] = static_cast<std::uint32_t>(state.publicationMisses >> 32);
+        snapshot[NativePresence] =
+            (state.windowPresent ? 1u : 0u) | (state.swapchainPresent ? 2u : 0u) | (state.devicePresent ? 4u : 0u) | (state.contextPresent ? 8u : 0u);
+    }
+
+    template <typename State>
+    void CopyNativeStateV2(SnapshotV2& snapshot, const State& state) noexcept
+    {
+        CopyNativeState(snapshot, state.base);
+        snapshot[RequestedRoute] = state.requestedRoute;
+        snapshot[ObservedRoute] = state.observedRoute;
+        snapshot[PresenceKnownMask] = state.presenceKnownMask;
+        snapshot[QueuePresent] = state.queuePresent;
+    }
 
     // The real Core uses this same value-only lifecycle. Injecting only the
     // observer and monotonic clock makes cleanup/cancel/deadline behavior
     // testable without substituting Core or invoking a game/render function.
-    template <typename Observer, typename Clock, typename Request>
-    Snapshot Run(Observer& observer, Clock& clock, const Request& request) noexcept
+    template <typename SnapshotType = Snapshot, typename Observer, typename Clock, typename Request>
+    SnapshotType Run(Observer& observer, Clock& clock, const Request& request) noexcept
     {
         static_assert(noexcept(clock.Now()) && noexcept(clock.Wait(std::uint32_t{})), "Lifecycle clock must not throw during retained cleanup");
-        Snapshot snapshot{};
-        snapshot[Version] = ApiVersion;
+        SnapshotType   snapshot{};
+        constexpr auto count = std::tuple_size<SnapshotType>::value;
+        static_assert(count == FieldCount || count == FieldCountV2);
+        snapshot[Version] = count == FieldCountV2 ? ApiVersionV2 : ApiVersion;
+        bool validRoute = true;
+        if constexpr (count == FieldCountV2)
+        {
+            snapshot[RequestedRoute] = request.renderRoute;
+            validRoute = request.renderRoute == 1 || request.renderRoute == 2;
+        }
         auto reason = StopReason::BeginError;
         auto started = clock.Now();
         auto lastPulse = started;
@@ -98,7 +156,7 @@ namespace DefinitiveRenderReference
         {
             if (request.cancelled())
                 reason = StopReason::Cancelled;
-            else if (observer.Begin())
+            else if (validRoute && observer.Begin())
             {
                 snapshot[ObserverStarted] = 1;
                 started = lastPulse = clock.Now();
@@ -137,7 +195,7 @@ namespace DefinitiveRenderReference
                     snapshot[Phase] = 1;
                     ++snapshot[Sequence];
                     ++snapshot[SampleCount];
-                    request.publish(snapshot.data(), FieldCount);
+                    request.publish(snapshot.data(), static_cast<std::uint32_t>(count));
                     clock.Wait(SampleIntervalMs);
                 }
             }
@@ -184,7 +242,7 @@ namespace DefinitiveRenderReference
             ++snapshot[Sequence];
             try
             {
-                request.publish(snapshot.data(), FieldCount);
+                request.publish(snapshot.data(), static_cast<std::uint32_t>(count));
             }
             catch (...)
             {
@@ -210,7 +268,7 @@ namespace DefinitiveRenderReference
         snapshot[Reason] = static_cast<std::uint32_t>(snapshot[CleanupComplete] ? reason : StopReason::CleanupError);
         try
         {
-            request.publish(snapshot.data(), FieldCount);
+            request.publish(snapshot.data(), static_cast<std::uint32_t>(count));
         }
         catch (...)
         {

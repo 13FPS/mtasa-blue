@@ -11,13 +11,14 @@ except ImportError:
     import core_startup_log as startup
 
 PROVENANCE = "mta_core_native_render_observation"
+INCOMPLETE_ERROR = "Error: MTA Core renderer observation incomplete; inspect its saved state"
 PAIRS = dict(generation=15, native_present_callbacks=17, accepted_snapshots=19,
              rejected_snapshots=21, nested_callbacks=23, foreign_callbacks=33,
              publication_misses=35)
 NOTICE = (
-    "This checks saved reports of an owned native D3D11 viewport callback and cleanup. "
+    "This checks saved reports of an explicitly selected owned native viewport callback and cleanup. "
     "Callback entry and its native return value do not prove that COM Present executed or pixels were drawn. "
-    "Visual quality, a DE GUI renderer, D3D12, full MTA startup and multiplayer remain unverified."
+    "Visual quality, a DE GUI renderer, full MTA startup and multiplayer remain unverified."
 )
 
 
@@ -29,12 +30,40 @@ def counters(state):
     return {name: state[index] | state[index + 1] << 32 for name, index in PAIRS.items()}
 
 
+def event_contract(event):
+    if type(event.get("core_api")) is not int:
+        return None
+    if event["core_api"] == 5 and "observation_api" not in event and "requested_route" not in event:
+        return (1, 1)
+    if (event["core_api"] == 6 and type(event.get("observation_api")) is int and event["observation_api"] == 2 and
+            type(event.get("requested_route")) is int and event["requested_route"] in (1, 2)):
+        return (2, event["requested_route"])
+    return None
+
+
+def route_consistent(state, version, requested):
+    if version == 1:
+        return True
+    observed = state[41]
+    known, presence = (15, 15) if requested == 1 else (19, 3)
+    # API2 separates explicit admission from a returned natural callback. A
+    # queue is not an immediate context, and unknown COM fields stay clear.
+    return (state[40] == requested and observed in (0, requested) and
+            state[42] == (known if observed else 0) and
+            state[43] == int(bool(observed) and requested == 2) and
+            state[37] == (presence if observed else 0) and
+            (bool(state[19] or state[20]) == bool(observed)) and (not observed or state[31] == 1) and
+            (bool(observed) or not any(state[25:30]) and state[31] == 0))
+
+
 def analyze_log(text, require_exit=False):
     if len(text.encode("utf-8", errors="replace")) > startup.MAX_LOG_BYTES:
         raise ValueError("CLEO log exceeds the 16 MiB read limit")
     translated, issues, samples = [], [], []
-    started = finished = stop = None
+    started = finished = stop = deliberate_incomplete = None
     last_clock = None
+    adapter_contract = None
+    version, requested = 1, 1
 
     def invalid(line, reason):
         if len(issues) < 128:
@@ -58,18 +87,27 @@ def analyze_log(text, require_exit=False):
         if kind.startswith(("core_startup_reference", "core_input_reference", "core_movement_reference")):
             invalid(line, "Another Core reference cannot accompany renderer observations")
         if kind == "adapter_start":
+            adapter_contract = event_contract(event)
             if (event.get("core_render_reference") is not True or event.get("provenance") != PROVENANCE or
-                    type(event.get("core_api")) is not int or event["core_api"] != 5 or
+                    adapter_contract is None or
                     any(event.get(flag) is True for flag in ("core_input_reference", "core_movement_reference", "core_startup_reference"))):
                 invalid(line, "Adapter must identify the isolated Core renderer observation")
             event = {**event, "core_startup_reference": True, "provenance": startup.PROVENANCE, "core_api": 2}
             event.pop("core_render_reference", None)
+            event.pop("observation_api", None)
+            event.pop("requested_route", None)
         elif kind == "core_render_reference_started":
-            if (set(event) != {"event", "at_ms", "core_api", "sample_interval_ms", "budget_ms"} or
-                    started or finished or type(event.get("core_api")) is not int or event["core_api"] != 5 or
+            contract = event_contract(event)
+            keys = {"event", "at_ms", "core_api", "sample_interval_ms", "budget_ms"}
+            if contract and contract[0] == 2:
+                keys |= {"observation_api", "requested_route"}
+            if (set(event) != keys or contract is None or contract != adapter_contract or
+                    started or finished or
                     type(event.get("sample_interval_ms")) is not int or event["sample_interval_ms"] != 100 or
                     type(event.get("budget_ms")) is not int or event["budget_ms"] != 10000):
                 invalid(line, "One explicit ten-second scalar observation contract is required")
+            if contract:
+                version, requested = contract
             started = dict(line=line, **event)
             event = dict(event="core_startup_reference_started", at_ms=event.get("at_ms"), core_api=2)
         elif kind == "core_render_reference_stop_requested":
@@ -82,8 +120,8 @@ def analyze_log(text, require_exit=False):
             if (len(samples) >= 4096 or set(event) != {"event", "at_ms", "elapsed_ms", "state"} or
                     not started or finished or not startup.integer(event.get("at_ms")) or
                     not startup.integer(event.get("elapsed_ms")) or not startup.integer(started.get("at_ms")) or
-                    event["at_ms"] - started["at_ms"] != event["elapsed_ms"] or not unsigned_array(state, 40)):
-                invalid(line, "Sample requires exactly40 unsigned fields with bound clock/order")
+                    event["at_ms"] - started["at_ms"] != event["elapsed_ms"] or not unsigned_array(state, 44 if version == 2 else 40)):
+                invalid(line, "Sample requires the versioned unsigned fields with bound clock/order")
                 continue
             if last_clock is not None and event["at_ms"] < last_clock:
                 invalid(line, "Script sample clock reversed")
@@ -92,9 +130,10 @@ def analyze_log(text, require_exit=False):
                 invalid(line, "Native elapsed time exceeds its containing script interval")
             previous = samples[-1]["state"] if samples else None
             boolean_fields = (6, 8, 9, 10, 11, 12, 13, 14, 29, 31, 32)
-            if (state[0] != 1 or state[1] not in (1, 2, 3) or not state[2] or state[4] > 8 or
+            if (state[0] != version or state[1] not in (1, 2, 3) or not state[2] or state[4] > 8 or
                     state[5] > 201 or any(state[index] > 1 for index in boolean_fields) or
-                    state[26] > 32768 or state[27] > 32768 or state[37] & ~15 or any(state[38:])):
+                    state[26] > 32768 or state[27] > 32768 or state[37] & ~15 or any(state[38:40]) or
+                    not route_consistent(state, version, requested)):
                 invalid(line, "Snapshot version, flags, field bounds or reserved storage is invalid")
             native = counters(state)
             outcomes = ("accepted_snapshots", "rejected_snapshots", "foreign_callbacks", "publication_misses")
@@ -107,6 +146,7 @@ def analyze_log(text, require_exit=False):
                         state[7] < previous[7] or state[8] < previous[8] or state[9] < previous[9] or
                         (previous[30] and state[30] != previous[30]) or state[12] < previous[12] or
                         (prior["generation"] and native["generation"] != prior["generation"]) or
+                        (version == 2 and previous[41] and state[41] != previous[41]) or
                         any(native[name] < prior[name] for name in PAIRS if name != "generation")):
                     invalid(line, "Snapshot sequence, generation or counters changed inconsistently")
             if state[1] == 1 and (state[4] or state[6] or state[10]):
@@ -139,6 +179,15 @@ def analyze_log(text, require_exit=False):
                 state[15] = 0
             event = {**event, "event": "core_startup_reference_finished", "state": state}
             event.pop("samples", None)
+        elif kind == "adapter_failed":
+            # The producer deliberately throws after reporting a clean but
+            # unobserved result. Preserve that failure in the startup audit;
+            # only this exact adjacent payload can qualify diagnostic cleanup.
+            if (finished and finished.get("passed") is False and line == finished["line"] + 1 and
+                    set(event) == {"event", "phase", "error", "game_adapter_active"} and
+                    event.get("phase") == "core_render_reference" and event.get("error") == INCOMPLETE_ERROR and
+                    event.get("game_adapter_active") is False and deliberate_incomplete is None):
+                deliberate_incomplete = dict(line=line, **event)
         elif kind.startswith("core_render_reference_"):
             invalid(line, "Unknown renderer observation marker")
         translated.append(json.dumps(event, allow_nan=False))
@@ -146,22 +195,50 @@ def analyze_log(text, require_exit=False):
     base = startup.analyze_log("\n".join(translated), require_exit)
     terminal = samples[-1]["state"] if samples else None
     native = counters(terminal) if terminal else None
+    diagnostic_native_clean = bool(terminal and terminal[1] == 2 and 10000 <= terminal[3] <= 12000 and terminal[4] == 1 and
+                                   terminal[5] > 0 and terminal[6] == 1 and terminal[7] > 0 and not terminal[8] and terminal[9] == 1 and
+                                   not terminal[10] and terminal[11:15] == [1, 1, 0, 1] and native["generation"] > 0 and
+                                   not any(native[name] for name in ("rejected_snapshots", "nested_callbacks", "foreign_callbacks")) and
+                                   terminal[30] == terminal[32] == 0 and not any(terminal[38:40]))
     clean = bool(terminal and terminal[1] == 2 and 10000 <= terminal[3] <= 12000 and terminal[4] == 1 and
                  terminal[5] > 0 and terminal[6] == 1 and terminal[7] > 0 and not terminal[8] and terminal[9] == 1 and
                  not terminal[10] and terminal[11:15] == [1, 1, 0, 1] and native["generation"] > 0 and
                  native["native_present_callbacks"] > 0 and native["accepted_snapshots"] > 0 and
                  not any(native[name] for name in ("rejected_snapshots", "nested_callbacks", "foreign_callbacks")) and
                  terminal[25] > 0 and 0 < terminal[26] <= 32768 and 0 < terminal[27] <= 32768 and
-                 terminal[29] <= 1 and terminal[30:35] == [0, 1, 0, 0, 0] and terminal[37] == 15 and not any(terminal[38:]))
+                 terminal[29] <= 1 and terminal[30:35] == [0, 1, 0, 0, 0] and
+                 terminal[37] == (15 if requested == 1 else 3) and not any(terminal[38:40]) and
+                 (version == 1 or terminal[41] == requested))
     lifecycle = bool(base["core_startup_reference_complete"] and not issues and not stop)
     complete = lifecycle and clean
     if finished and finished.get("passed") is True and not clean:
         invalid(finished["line"], "A passed flag cannot replace native observations or cleanup proof")
         complete = False
+    state = finished.get("state") if finished else None
+    worker_clean = bool(unsigned_array(state, 19) and state[:11] == startup.EXPECTED_PREFIX and
+                        state[11] <= 3 and state[12] <= 3 and not state[12] & ~state[11] and state[13:] == [1, 0, 1, 0, 1, 0])
+    expected_failure_only = bool(deliberate_incomplete and len(base["failures"]) == 1 and
+                                 {key: value for key, value in base["failures"][0].items() if key != "line"} ==
+                                 {key: value for key, value in deliberate_incomplete.items() if key != "line"})
+    diagnostic_flags = all(value for key, value in base["flags"].items() if key not in ("expected_async_result", "no_failures"))
+    # A value-derived clean diagnostic lifecycle is independent of callback
+    # acceptance. Never rewrite passed=False or hide an unrelated failure to
+    # make the reused startup reader report success.
+    diagnostic_lifecycle = bool(diagnostic_flags and not issues and not stop and diagnostic_native_clean and worker_clean and finished and
+                                finished.get("run_result") == 1 and finished.get("cleanup_passed") is True and
+                                finished.get("stop_requested") is False and
+                                ((finished.get("passed") is True and not base["failures"]) or
+                                 (finished.get("passed") is False and expected_failure_only)))
     return dict(schema_version=1, status="native_renderer_callback_observed" if complete else
-                "native_observation_missing" if lifecycle else "invalid_evidence" if issues or base["issue_count"] else "incomplete_or_failed",
+                "invalid_evidence" if issues or base["issue_count"] else
+                "native_observation_missing" if diagnostic_lifecycle else "incomplete_or_failed",
                 core_render_reference_complete=complete, render_observation_session_complete=lifecycle,
+                diagnostic_lifecycle_complete=diagnostic_lifecycle, deliberate_incomplete_event=deliberate_incomplete,
                 native_renderer_callback_observed=complete, sample_count=len(samples), native_metrics=native,
+                observation_api=version, requested_route=requested,
+                observed_route=(terminal[41] if version == 2 else 1 if complete else 0) if terminal else 0,
+                presence_known_mask=(terminal[42] if version == 2 else 15 if complete else 0) if terminal else 0,
+                queue_present=bool(version == 2 and terminal and terminal[43]),
                 terminal_render_state=terminal, worker_state=finished.get("state") if finished else None,
                 cleanup_pending=bool(terminal and (terminal[1] == 3 or terminal[10] or terminal[32])),
                 issue_count=len(issues) + base["issue_count"], issues=issues, lifecycle=base,

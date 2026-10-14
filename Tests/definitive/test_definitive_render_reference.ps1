@@ -8,7 +8,9 @@ $root=(Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
 $output=Join-Path $root ('Build/mta-core-render-lifecycle/'+(Get-Date -Format 'yyyyMMdd-HHmmss')+'-'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $output | Out-Null
 function Sha([string]$path){return (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()}
-$sources=@('Client/core/DefinitiveRenderReference.h','Tests/definitive/DefinitiveRenderReferenceTests.cpp','Tests/definitive/test_definitive_render_reference.ps1')
+$sources=@('Client/core/DefinitiveRenderReference.h','Client/sdk/game/CGameRenderObservation.h','Client/sdk/game/CGameAdapter.h',
+    'Shared/sdk/CControllerState.h','Shared/sdk/CControllerActions.h','Shared/sdk/CControlStateSynthesis.h',
+    'Tests/definitive/DefinitiveRenderReferenceTests.cpp','Tests/definitive/test_definitive_render_reference.ps1')
 $hashes=[ordered]@{}
 foreach($name in $sources){$hashes[$name]=Sha (Join-Path $root $name)}
 $vswhere=Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
@@ -22,7 +24,7 @@ foreach($architecture in @('x86','x64')){
     $compiler=Join-Path $env:VCToolsInstallDir ('bin/Hostx64/'+$architecture+'/cl.exe')
     $binary=Join-Path $output ('render-lifecycle-'+$architecture+'.exe')
     $compileLog=Join-Path $output ('compile-'+$architecture+'.log')
-    & $compiler /nologo /std:c++17 /EHsc /MT /O2 /W4 /WX (Join-Path $PSScriptRoot 'DefinitiveRenderReferenceTests.cpp') ("/Fo"+(Join-Path $output ($architecture+'.obj'))) ("/Fe"+$binary) /link /NOLOGO 2>&1 | Set-Content -LiteralPath $compileLog -Encoding utf8
+    & $compiler /nologo /std:c++17 /EHsc /MT /O2 /W4 /WX ("/I"+(Join-Path $root 'Shared/sdk')) (Join-Path $PSScriptRoot 'DefinitiveRenderReferenceTests.cpp') ("/Fo"+(Join-Path $output ($architecture+'.obj'))) ("/Fe"+$binary) /link /NOLOGO 2>&1 | Set-Content -LiteralPath $compileLog -Encoding utf8
     if($LASTEXITCODE -ne 0){throw "Render lifecycle compilation failed: $compileLog"}
     $runLog=Join-Path $output ('run-'+$architecture+'.json')
     & $binary 2>&1 | Set-Content -LiteralPath $runLog -Encoding utf8

@@ -93,11 +93,30 @@ extern "C" __declspec(dllexport) std::uint32_t MTA_ConfigureDERenderReference(st
     return 1;
 }
 
+extern "C" __declspec(dllexport) std::uint32_t MTA_DERenderReferenceApiVersionV2()
+{
+    Call(7);
+    return 2;
+}
+
+extern "C" __declspec(dllexport) std::uint32_t MTA_ConfigureDERenderReferenceV2(std::uint32_t duration, std::uint32_t route,
+                                                                                DefinitiveInputReference::CancelCallback  cancelled,
+                                                                                DefinitiveInputReference::PublishCallback publish)
+{
+    Call(8);
+    if (duration != DefinitiveRenderReference::MaximumDurationMs || (route != 1 && route != 2) || !cancelled || !publish)
+        return 0;
+    inputRequest = {duration, cancelled, publish, false, true, route};
+    return 1;
+}
+
+template <typename SnapshotType>
 void ControlledRender()
 {
     using namespace DefinitiveRenderReference;
-    Snapshot sample{};
-    sample[Version] = 1;
+    constexpr auto count = static_cast<std::uint32_t>(std::tuple_size<SnapshotType>::value);
+    SnapshotType   sample{};
+    sample[Version] = count == FieldCountV2 ? 2u : 1u;
     sample[Phase] = sample[Sequence] = sample[SampleCount] = 1;
     sample[ObserverStarted] = sample[Bound] = sample[Active] = 1;
     sample[PresentCallbacksLow] = sample[AcceptedSnapshotsLow] = 10;
@@ -106,6 +125,14 @@ void ControlledRender()
     sample[Height] = 720;
     sample[NativeOriginalReturned] = 1;
     sample[NativePresence] = 15;
+    if constexpr (count == FieldCountV2)
+    {
+        // Warmup is intentionally unobserved. A route request alone cannot
+        // make an RHI callback, queue, or presence field known.
+        sample[RequestedRoute] = inputRequest.renderRoute;
+        sample[PresentCallbacksLow] = sample[AcceptedSnapshotsLow] = 0;
+        sample[NativeOriginalReturned] = sample[NativePresence] = sample[Width] = sample[Height] = 0;
+    }
     // PIN the real backend without creating an observer or running engine code.
     wchar_t path[32768]{};
     GetModuleFileNameW(nullptr, path, 32768);
@@ -120,7 +147,7 @@ void ControlledRender()
     if (backend)
         FreeLibrary(backend);
     Call(9);
-    inputRequest.publish(sample.data(), FieldCount);
+    inputRequest.publish(sample.data(), count);
     const auto release = Event(L"MTA_CORE_FIXTURE_INPUT_RELEASE", SYNCHRONIZE);
     if (release)
     {
@@ -128,9 +155,23 @@ void ControlledRender()
         CloseHandle(release);
     }
     sample[Phase] = 3;
+    if constexpr (count == FieldCountV2)
+    {
+        if (Setting(L"MTA_CORE_FIXTURE_RENDER_MODE") != 1)
+        {
+            sample[ObservedRoute] = inputRequest.renderRoute;
+            sample[PresenceKnownMask] = inputRequest.renderRoute == 2 ? 19u : 15u;
+            sample[NativePresence] = inputRequest.renderRoute == 2 ? 3u : 15u;
+            sample[QueuePresent] = inputRequest.renderRoute == 2 ? 1u : 0u;
+            sample[PresentCallbacksLow] = sample[AcceptedSnapshotsLow] = 10;
+            sample[NativeOriginalReturned] = 1;
+            sample[Width] = 1280;
+            sample[Height] = 720;
+        }
+    }
     sample[CleanupPending] = sample[NativeCleanupPending] = sample[CleanupAttempts] = 1;
     ++sample[Sequence];
-    inputRequest.publish(sample.data(), FieldCount);
+    inputRequest.publish(sample.data(), count);
     const auto cleanupRelease = Event(L"MTA_CORE_FIXTURE_MOVEMENT_RELEASE", SYNCHRONIZE);
     const auto cleanupAt = GetTickCount64();
     while (cleanupRelease && WaitForSingleObject(cleanupRelease, 50) == WAIT_TIMEOUT)
@@ -142,7 +183,7 @@ void ControlledRender()
         }
         ++sample[Sequence];
         ++sample[CleanupAttempts];
-        inputRequest.publish(sample.data(), FieldCount);
+        inputRequest.publish(sample.data(), count);
     }
     if (cleanupRelease)
         CloseHandle(cleanupRelease);
@@ -153,7 +194,17 @@ void ControlledRender()
     sample[CleanupComplete] = 1;
     if (!sample[CleanupDeadlineExceeded])
         sample[Reason] = static_cast<std::uint32_t>(inputRequest.cancelled() ? StopReason::Cancelled : StopReason::TimeBudget);
-    inputRequest.publish(sample.data(), FieldCount);
+    if constexpr (count == FieldCountV2)
+    {
+        const auto malformed = Setting(L"MTA_CORE_FIXTURE_RENDER_MODE");
+        if (malformed == 2)
+            sample[ObservedRoute] = inputRequest.renderRoute == 1 ? 2u : 1u;
+        else if (malformed == 3)
+            sample[Version] = 1;
+        else if (malformed == 4)
+            sample[PresenceKnownMask] = inputRequest.renderRoute == 2 ? 15u : 19u;
+    }
+    inputRequest.publish(sample.data(), count);
 }
 
 void ControlledMovement()
@@ -247,7 +298,10 @@ extern "C" __declspec(dllexport) int InitializeCore()
         return 0;
     if (mtaSet && gtaSet && inputRequest.renderObservation)
     {
-        ControlledRender();
+        if (inputRequest.renderRoute)
+            ControlledRender<DefinitiveRenderReference::SnapshotV2>();
+        else
+            ControlledRender<DefinitiveRenderReference::Snapshot>();
         return 5;
     }
     if (mtaSet && gtaSet && inputRequest.nativeMovement)

@@ -20,14 +20,39 @@ namespace mta::game_de
     {
         using Failure = NativeRenderObservationFailure;
         using PresentFunction = bool (*)(void*, std::uint32_t);
-        constexpr std::uintptr_t                presentRva = 0x1f5a430;
-        constexpr std::size_t                   presentBytes = 421;
         constexpr ULONGLONG                     maximumObservationMs = 30000;
         constexpr std::array<unsigned char, 32> executableHash = {0x63, 0xe6, 0x33, 0xbb, 0x51, 0xc3, 0x5f, 0xe3, 0x5c, 0xa9, 0x8f,
                                                                   0x50, 0x3b, 0x62, 0xe7, 0xdd, 0xb8, 0x40, 0x3a, 0xbe, 0x4c, 0x9d,
                                                                   0x50, 0x1c, 0xfa, 0x91, 0x62, 0x89, 0x24, 0x53, 0x84, 0x6f};
-        constexpr std::array<unsigned char, 32> presentHash = {0x60, 0x5f, 0xf6, 0x63, 0x24, 0x56, 0x99, 0x2a, 0xb7, 0x4e, 0x61, 0xcb, 0x14, 0xff, 0x2f, 0xdb,
-                                                               0xb5, 0x74, 0xaf, 0x74, 0xf7, 0x49, 0x35, 0x74, 0x0e, 0x66, 0xfd, 0xf6, 0x3b, 0x2a, 0x98, 0x8f};
+        struct RouteDescriptor
+        {
+            RenderObservationRoute        route;
+            std::uintptr_t                presentRva;
+            std::size_t                   presentBytes;
+            std::array<unsigned char, 32> presentHash;
+            std::uintptr_t                viewportTable, swapchainOffset;
+        };
+        constexpr RouteDescriptor d3d11Route = {RenderObservationRoute::D3D11,
+                                                0x1f5a430,
+                                                421,
+                                                {0x60, 0x5f, 0xf6, 0x63, 0x24, 0x56, 0x99, 0x2a, 0xb7, 0x4e, 0x61, 0xcb, 0x14, 0xff, 0x2f, 0xdb,
+                                                 0xb5, 0x74, 0xaf, 0x74, 0xf7, 0x49, 0x35, 0x74, 0x0e, 0x66, 0xfd, 0xf6, 0x3b, 0x2a, 0x98, 0x8f},
+                                                0x44fbc08,
+                                                0x78};
+        // These are complete unwind-bounded functions in the same pinned PE,
+        // not old SDK hints or a guess based on an inactive D3D11 route.
+        constexpr RouteDescriptor d3d12Route = {RenderObservationRoute::D3D12,
+                                                0x1fd5da0,
+                                                429,
+                                                {0x37, 0x6c, 0xfc, 0x00, 0xed, 0x38, 0x24, 0x9e, 0x3e, 0x22, 0x6a, 0x32, 0xde, 0xab, 0xc2, 0x5d,
+                                                 0x2d, 0xd1, 0xe5, 0x25, 0x62, 0x1b, 0xab, 0xa6, 0x9f, 0x23, 0x62, 0xc2, 0x9a, 0x99, 0x93, 0x4e},
+                                                0x4504060,
+                                                0x60};
+
+        const RouteDescriptor* SelectRoute(RenderObservationRoute route) noexcept
+        {
+            return route == RenderObservationRoute::D3D11 ? &d3d11Route : route == RenderObservationRoute::D3D12 ? &d3d12Route : nullptr;
+        }
 
         struct Runtime
         {
@@ -42,6 +67,8 @@ namespace mta::game_de
             std::uintptr_t               image = 0;
             ULONGLONG                    started = 0;
             PresentFunction              original = nullptr;
+            const RouteDescriptor*       route = nullptr;
+            std::uint32_t                requestedRoute = 0;
         };
         // Failed teardown must retain its trampoline and callback storage.
         // Nothing in this process-lifetime state points at a released owner.
@@ -153,7 +180,7 @@ namespace mta::game_de
             return hash.Finish(executableHash);
         }
 
-        bool CheckFingerprint(std::uintptr_t image) noexcept
+        bool CheckFingerprint(std::uintptr_t image, const RouteDescriptor& route) noexcept
         {
             IMAGE_DOS_HEADER   dos{};
             IMAGE_NT_HEADERS64 nt{};
@@ -162,34 +189,63 @@ namespace mta::game_de
                 nt.FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 || nt.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC ||
                 nt.OptionalHeader.SizeOfImage != 97141760)
                 return false;
-            std::array<unsigned char, presentBytes> code{};
-            HashResources                           hash;
+            std::array<unsigned char, 429> code{};
+            HashResources                  hash;
             // The complete unwind-bounded function has no base relocations;
             // hashing only a prologue could miss a changed member/vcall path.
-            return Read(image + presentRva, code.data(), code.size(), image, true) && hash.Open() &&
-                   BCryptHashData(hash.hash, code.data(), static_cast<ULONG>(code.size()), 0) >= 0 && hash.Finish(presentHash);
+            return route.presentBytes <= code.size() && Read(image + route.presentRva, code.data(), route.presentBytes, image, true) && hash.Open() &&
+                   BCryptHashData(hash.hash, code.data(), static_cast<ULONG>(route.presentBytes), 0) >= 0 && hash.Finish(route.presentHash);
         }
 
         bool Capture(void* viewport, std::uint32_t syncInterval, NativeRenderObservationState& output) noexcept
         {
-            const auto                   object = reinterpret_cast<std::uintptr_t>(viewport);
-            std::uintptr_t               table = 0, rhi = 0, rhiTable = 0, secondary = 0, global = 0, window = 0, swapchain = 0, device = 0, context = 0;
-            NativeRenderObservationState next;
-            if (!Read(object, table) || table != runtime.image + 0x44fbc08 || !Read(object + 0x18, rhi) || !rhi || !Read(rhi, rhiTable) ||
-                rhiTable != runtime.image + 0x44fb2b8 || !Read(rhi + 0x18, secondary) || secondary != runtime.image + 0x44fafa8 ||
-                !Read(runtime.image + 0x576fb60, global) || global != rhi || !Read(object + 0x40, window) || !window || !Read(object + 0x4c, next.width) ||
-                !next.width || !Read(object + 0x50, next.height) || !next.height || !Read(object + 0x78, swapchain) || !swapchain ||
-                !Read(rhi + 0x170, device) || !device || !Read(rhi + 0x158, context) || !context)
+            const auto object = reinterpret_cast<std::uintptr_t>(viewport);
+            if (!runtime.route)
                 return false;
-            std::uintptr_t tableAgain = 0, rhiAgain = 0, globalAgain = 0, swapchainAgain = 0;
-            if (!Read(object, tableAgain) || tableAgain != table || !Read(object + 0x18, rhiAgain) || rhiAgain != rhi ||
-                !Read(runtime.image + 0x576fb60, globalAgain) || globalAgain != global || !Read(object + 0x78, swapchainAgain) || swapchainAgain != swapchain)
+            const auto&                  route = *runtime.route;
+            std::uintptr_t               table = 0, owner = 0, window = 0, swapchain = 0;
+            NativeRenderObservationState next;
+            if (!Read(object, table) || table != runtime.image + route.viewportTable || !Read(object + 0x18, owner) || !owner || !Read(object + 0x40, window) ||
+                !window || !Read(object + 0x4c, next.width) || !next.width || next.width > 32768 || !Read(object + 0x50, next.height) || !next.height ||
+                next.height > 32768 || !Read(object + route.swapchainOffset, swapchain) || !swapchain)
+                return false;
+            if (route.route == RenderObservationRoute::D3D11)
+            {
+                std::uintptr_t primary = 0, secondary = 0, global = 0, device = 0, context = 0;
+                if (!Read(owner, primary) || primary != runtime.image + 0x44fb2b8 || !Read(owner + 0x18, secondary) || secondary != runtime.image + 0x44fafa8 ||
+                    !Read(runtime.image + 0x576fb60, global) || global != owner || !Read(owner + 0x170, device) || !device || !Read(owner + 0x158, context) ||
+                    !context)
+                    return false;
+                std::uintptr_t globalAgain = 0;
+                if (!Read(runtime.image + 0x576fb60, globalAgain) || globalAgain != global)
+                    return false;
+                next.devicePresent = next.contextPresent = true;
+                next.presenceKnownMask = 15;
+            }
+            else
+            {
+                // The pinned D3D12 creator explicitly passes pCommandQueue:
+                // owner+8A8 -> device object+38 -> manager+28. Neither the
+                // device object nor this queue is an immediate D3D11 context.
+                // Only non-null queue presence is borrowed within this call.
+                std::uintptr_t deviceObject = 0, manager = 0, queue = 0, deviceAgain = 0, managerAgain = 0, queueAgain = 0;
+                if (!Read(owner + 0x8a8, deviceObject) || !deviceObject || !Read(deviceObject + 0x38, manager) || !manager || !Read(manager + 0x28, queue) ||
+                    !queue || !Read(owner + 0x8a8, deviceAgain) || deviceAgain != deviceObject || !Read(deviceObject + 0x38, managerAgain) ||
+                    managerAgain != manager || !Read(manager + 0x28, queueAgain) || queueAgain != queue)
+                    return false;
+                next.presenceKnownMask = 19;
+                next.queuePresent = 1;
+            }
+            std::uintptr_t tableAgain = 0, ownerAgain = 0, swapchainAgain = 0;
+            if (!Read(object, tableAgain) || tableAgain != table || !Read(object + 0x18, ownerAgain) || ownerAgain != owner ||
+                !Read(object + route.swapchainOffset, swapchainAgain) || swapchainAgain != swapchain)
                 return false;
             // The engine owns these pointers only for its natural call. Copy
             // presence/scalars, never AddRef/QI or transfer a raw pointer to Core.
             next.callbackThreadId = GetCurrentThreadId();
             next.syncInterval = syncInterval;
-            next.windowPresent = next.swapchainPresent = next.devicePresent = next.contextPresent = true;
+            next.windowPresent = next.swapchainPresent = true;
+            next.observedRoute = static_cast<std::uint32_t>(route.route);
             output = next;
             return true;
         }
@@ -352,7 +408,7 @@ namespace mta::game_de
         End();
     }
 
-    bool NativeRenderObservation::Begin() noexcept
+    bool NativeRenderObservation::Begin(RenderObservationRoute route) noexcept
     {
         ApiOperation operation;
         if (!operation.acquired || runtime.hooked.load() || runtime.inFlight.load() || runtime.active.load())
@@ -363,13 +419,21 @@ namespace mta::game_de
         runtime.producerThread = GetCurrentThreadId();
         runtime.image = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
         ResetCounters();
+        runtime.requestedRoute = static_cast<std::uint32_t>(route);
+        runtime.route = SelectRoute(route);
+        if (!runtime.route)
+        {
+            Fail(Failure::UnsupportedRoute);
+            ReadState(finalState);
+            return false;
+        }
         if (!ExactExecutable())
         {
             Fail(Failure::UnsupportedBuild);
             ReadState(finalState);
             return false;
         }
-        if (!CheckFingerprint(runtime.image))
+        if (!CheckFingerprint(runtime.image, *runtime.route))
         {
             Fail(Failure::FingerprintMismatch);
             ReadState(finalState);
@@ -383,7 +447,7 @@ namespace mta::game_de
             return false;
         }
         runtime.modulePinned.store(true);
-        runtime.original = reinterpret_cast<PresentFunction>(runtime.image + presentRva);
+        runtime.original = reinterpret_cast<PresentFunction>(runtime.image + runtime.route->presentRva);
         bool pending = false;
         if (!ChangeHooks(true, pending))
         {
@@ -444,14 +508,18 @@ namespace mta::game_de
         }
         AcquireSRWLockShared(&runtime.snapshotLock);
         state = runtime.snapshot;
+        // A first publication changes route/scalars and accepted together.
+        // Sampling the count after unlocking could attach accepted=1 to an
+        // older unobserved snapshot, contradicting the value-only contract.
+        state.acceptedSnapshots = runtime.accepted.load();
         ReleaseSRWLockShared(&runtime.snapshotLock);
         state.generation = generation;
+        state.requestedRoute = runtime.requestedRoute;
         state.modulePinned = runtime.modulePinned.load();
         state.bound = runtime.bound.load();
         state.active = runtime.active.load();
         state.pendingCleanup = runtime.hooked.load() && !state.active;
         // Completed effects precede their monotonically increasing prerequisite.
-        state.acceptedSnapshots = runtime.accepted.load();
         state.rejectedSnapshots = runtime.rejected.load();
         state.nestedCallbacks = runtime.nested.load();
         state.foreignThreadCallbacks = runtime.foreign.load();

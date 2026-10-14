@@ -111,3 +111,10 @@ DE_BRIDGE_API std::uint32_t DE_CoreMovementRead(std::uint32_t component);
 DE_BRIDGE_API int DE_CoreRenderBegin();
 DE_BRIDGE_API int DE_CoreRenderCapture();
 DE_BRIDGE_API std::uint32_t DE_CoreRenderRead(std::uint32_t component);
+
+// API2 selects an explicit native route and carries four additional scalar
+// provenance fields. API1's forty-field cache and exports remain independent.
+DE_BRIDGE_API std::uint32_t DE_CoreRenderApiVersionV2();
+DE_BRIDGE_API int           DE_CoreRenderBeginV2(std::uint32_t route);
+DE_BRIDGE_API int           DE_CoreRenderCaptureV2();
+DE_BRIDGE_API std::uint32_t DE_CoreRenderReadV2(std::uint32_t component);

@@ -8,6 +8,7 @@
 
 #include <filesystem>
 #include <cstring>
+#include <cstddef>
 #include <iostream>
 #include <new>
 #include <stdexcept>
@@ -15,12 +16,25 @@
 #include <thread>
 #include <windows.h>
 
+// These independently fixed API1 offsets prevent adding route fields to the
+// old public state by accident. API2 composes it rather than extending its ABI.
+static_assert(mta::game_de::RenderObservationApiVersion == 1);
+static_assert(sizeof(mta::game_de::RenderObservationState) == 120);
+static_assert(offsetof(mta::game_de::RenderObservationState, generation) == 16);
+static_assert(offsetof(mta::game_de::RenderObservationState, lastOriginalResult) == 112);
+static_assert(offsetof(mta::game_de::RenderObservationStateV2, base) == 0);
+static_assert(offsetof(mta::game_de::RenderObservationStateV2, requestedRoute) == 120);
+static_assert(sizeof(mta::game_de::RenderObservationStateV2) == 136);
+
 #if defined(MTA_TEST_SHUTDOWN_FAILURE_MODULE)
     #ifndef MTA_TEST_FACADE_MODE
         #define MTA_TEST_FACADE_MODE 0
     #endif
     #ifndef MTA_TEST_RENDER_MODE
         #define MTA_TEST_RENDER_MODE 0
+    #endif
+    #ifndef MTA_TEST_RENDER_V2
+        #define MTA_TEST_RENDER_V2 0
     #endif
 // This deliberately failing provider tests Core's DLL lifetime only. It is not
 // an engine writer, replacement Game DE implementation or gameplay fixture.
@@ -156,9 +170,58 @@ namespace mta::game_de
             bool                   ended = false;
             bool                   failedFinalRead = false;
         };
+
+        class RenderFixtureV2 final : public IGameRenderObservationV2
+        {
+        public:
+            explicit RenderFixtureV2(RenderObservationRoute selected) : route(selected) {}
+            Status Begin() noexcept override { return observation.Begin(); }
+            Status End() noexcept override { return observation.End(); }
+            Status ReadState(RenderObservationStateV2& output) noexcept override
+            {
+                RenderObservationStateV2 next;
+                const auto               status = observation.ReadState(next.base);
+                if (status != Status::Ok)
+                    return status;
+                next.requestedRoute = static_cast<std::uint32_t>(route);
+                if (MTA_TEST_RENDER_MODE == 6)
+                {
+                    // A bound request with no native callbacks is still unknown.
+                    next.base.nativePresentCallbacks = next.base.acceptedSnapshots = next.base.publicationMisses = 0;
+                    next.base.lastOriginalReturned = next.base.lastOriginalResult = 0;
+                    next.base.width = next.base.height = 0;
+                }
+                else
+                {
+                    next.observedRoute = next.requestedRoute;
+                    next.presenceKnownMask = route == RenderObservationRoute::D3D11 ? 15u : 19u;
+                    next.base.windowPresent = next.base.swapchainPresent = 1;
+                    next.base.devicePresent = route == RenderObservationRoute::D3D11 ? 1u : 0u;
+                    next.base.contextPresent = route == RenderObservationRoute::D3D11 ? 1u : 0u;
+                    next.queuePresent = route == RenderObservationRoute::D3D12 ? 1u : 0u;
+                }
+                if (MTA_TEST_RENDER_MODE == 7 && fixtureCounters && fixtureCounters[13])
+                    next.observedRoute = route == RenderObservationRoute::D3D11 ? 2u : 1u;
+                output = next;
+                return Status::Ok;
+            }
+            void Release() noexcept override
+            {
+                if (fixtureCounters)
+                {
+                    ++fixtureCounters[7];
+                    fixtureCounters[9] = ++fixtureCounters[8];
+                }
+                delete this;
+            }
+
+        private:
+            const RenderObservationRoute route;
+            RenderFixture                observation;
+        };
     }
 
-    extern "C" __declspec(dllexport) IGameAdapter* CreateGameAdapter(std::uint32_t abiVersion) noexcept
+    extern "C" IGameAdapter* CreateGameAdapter(std::uint32_t abiVersion) noexcept
     {
         return abiVersion == AdapterAbiVersion ? new (std::nothrow) ShutdownFailureAdapter : nullptr;
     }
@@ -168,10 +231,19 @@ namespace mta::game_de
         fixtureCounters = counters;
     }
 
-    extern "C" __declspec(dllexport) IGameRenderObservation* CreateGameRenderObservation(std::uint32_t apiVersion, CCoreInterface* owner) noexcept
+    extern "C" IGameRenderObservation* CreateGameRenderObservation(std::uint32_t apiVersion, CCoreInterface* owner) noexcept
     {
         return MTA_TEST_RENDER_MODE && apiVersion == RenderObservationApiVersion && owner ? new (std::nothrow) RenderFixture : nullptr;
     }
+
+    #if MTA_TEST_RENDER_V2
+    extern "C" IGameRenderObservationV2* CreateGameRenderObservationV2(std::uint32_t apiVersion, CCoreInterface* owner, RenderObservationRoute route) noexcept
+    {
+        return apiVersion == RenderObservationApiVersionV2 && owner && (route == RenderObservationRoute::D3D11 || route == RenderObservationRoute::D3D12)
+                   ? new (std::nothrow) RenderFixtureV2(route)
+                   : nullptr;
+    }
+    #endif
 }
 #else
 namespace
@@ -219,6 +291,11 @@ namespace
         render.width = 17;
         Check(!host.BeginNativeRenderObservation() && !host.GetNativeRenderObservationState(render) && !host.EndNativeRenderObservation() && render.width == 17,
               "uninitialized optional renderer calls preserve output and never enter a provider");
+        mta::game_de::RenderObservationStateV2 renderV2;
+        renderV2.requestedRoute = 99;
+        Check(!host.BeginNativeRenderObservation(mta::game_de::RenderObservationRoute::D3D12) && !host.GetNativeRenderObservationState(renderV2) &&
+                  renderV2.requestedRoute == 99,
+              "uninitialized route-aware renderer calls preserve output");
         host.Stop();
         host.Stop();
         Check(!host.IsStarted(), "cleanup is idempotent after failure");
@@ -240,6 +317,18 @@ namespace
             Check(host.GameplayUnavailableReason().find("EngineInputWrite") != std::string::npos, "full-game gate explains missing input write");
             Check(host.GameplayUnavailableReason().find("RemotePlayerContext") != std::string::npos, "full-game gate explains missing remote context");
             Check(host.Pulse(), "owning Core can pulse the initialized real module");
+            for (const auto route : {mta::game_de::RenderObservationRoute::D3D11, mta::game_de::RenderObservationRoute::D3D12})
+            {
+                Check(!host.BeginNativeRenderObservation(route), "actual optional route binding rejects this non-game host");
+                mta::game_de::RenderObservationStateV2 render;
+                Check(host.GetNativeRenderObservationState(render) && render.requestedRoute == static_cast<std::uint32_t>(route) && !render.observedRoute &&
+                          !render.presenceKnownMask && !render.queuePresent && render.base.failureReason && !render.base.bound && !render.base.active &&
+                          !render.base.modulePinned && !render.base.nativePresentCallbacks,
+                      "actual version2 export reports explicit failed admission without a fallback or inferred RHI");
+                Check(host.EndNativeRenderObservation() && host.GetNativeRenderObservationState(render) && !render.base.active && !render.base.pendingCleanup &&
+                          !render.observedRoute,
+                      "actual route lease cleanup caches ended values before release");
+            }
             Check(!host.BeginNativeMovementTrial(), "movement trial requires an explicit synthesized frame");
             mta::game_de::LocalObservation observation;
             observation.sampleAtMs = 1000;
@@ -396,7 +485,7 @@ namespace
         Check(GetModuleHandleW(fixturePath.c_str()) == nullptr, "facade fixture begins unloaded");
         CGameAdapterModule host;
         Check(host.Start(owner, fixturePath), "Core owns the explicitly selected facade fixture");
-        std::uint32_t counters[13]{};
+        std::uint32_t counters[14]{};
         const auto    address = GetProcAddress(GetModuleHandleW(fixturePath.c_str()), "SetFacadeFixtureCounters");
         using ConfigureCounters = void (*)(std::uint32_t*) noexcept;
         ConfigureCounters configure = nullptr;
@@ -458,7 +547,7 @@ namespace
         Check(GetModuleHandleW(fixturePath.c_str()) == nullptr, "render provider begins unloaded");
         CGameAdapterModule host;
         Check(host.Start(owner, fixturePath), "Core owns the controlled optional render provider");
-        std::uint32_t counters[13]{};
+        std::uint32_t counters[14]{};
         const auto    address = GetProcAddress(GetModuleHandleW(fixturePath.c_str()), "SetFacadeFixtureCounters");
         using ConfigureCounters = void (*)(std::uint32_t*) noexcept;
         ConfigureCounters configure = nullptr;
@@ -526,6 +615,126 @@ namespace
         readback.width = 345;
         Check(!host.GetNativeRenderObservationState(readback) && readback.width == 345, "unloaded observer state cannot replace caller output");
     }
+
+    void TestMissingRenderV2(CCoreInterface* owner, const std::wstring& fixturePath)
+    {
+        using namespace mta::game_de;
+        CGameAdapterModule host;
+        Check(host.Start(owner, fixturePath), "own an API1-only provider for missing-version2 admission");
+        Check(!GetProcAddress(GetModuleHandleW(fixturePath.c_str()), "CreateGameRenderObservationV2"), "legacy provider has no version2 export");
+        Check(!host.BeginNativeRenderObservation(RenderObservationRoute::D3D12) && host.GetError().find("no legacy route") != std::string::npos,
+              "missing version2 export never substitutes the legacy D3D11 factory");
+        RenderObservationStateV2 output;
+        output.requestedRoute = 99;
+        Check(!host.GetNativeRenderObservationState(output) && output.requestedRoute == 99, "missing version2 lease preserves output");
+        Check(host.BeginNativeRenderObservation(), "missing optional version2 export leaves explicit API1 usable");
+        host.Stop();
+        Check(host.IsStarted(), "legacy cleanup failure remains retained after version2 rejection");
+        host.Stop();
+        Check(!host.IsStarted() && !GetModuleHandleW(fixturePath.c_str()), "legacy cleanup retry releases the API1-only provider");
+    }
+
+    void TestRenderProviderV2(CCoreInterface* owner, const std::wstring& fixturePath, unsigned mode, mta::game_de::RenderObservationRoute route)
+    {
+        using namespace mta::game_de;
+        CGameAdapterModule host;
+        Check(host.Start(owner, fixturePath), "own an explicitly selected version2 provider");
+        std::uint32_t counters[14]{};
+        using ConfigureCounters = void (*)(std::uint32_t*) noexcept;
+        ConfigureCounters configure = nullptr;
+        auto              address = GetProcAddress(GetModuleHandleW(fixturePath.c_str()), "SetFacadeFixtureCounters");
+        std::memcpy(&configure, &address, sizeof(configure));
+        Check(configure != nullptr, "version2 provider counters available");
+        configure(counters);
+        using Factory = decltype(&CreateGameRenderObservationV2);
+        Factory factory = nullptr;
+        address = GetProcAddress(GetModuleHandleW(fixturePath.c_str()), "CreateGameRenderObservationV2");
+        std::memcpy(&factory, &address, sizeof(factory));
+        Check(factory && !factory(RenderObservationApiVersion, owner, route) && !factory(RenderObservationApiVersionV2, nullptr, route) &&
+                  !factory(RenderObservationApiVersionV2, owner, RenderObservationRoute::Unknown) &&
+                  !factory(RenderObservationApiVersionV2, owner, static_cast<RenderObservationRoute>(99)),
+              "version2 factory rejects legacy version, absent owner and unsupported route");
+        RenderObservationStateV2 output;
+        output.base.width = 123;
+        output.requestedRoute = 99;
+        Check(!host.BeginNativeRenderObservation(RenderObservationRoute::Unknown) &&
+                  !host.BeginNativeRenderObservation(static_cast<RenderObservationRoute>(99)) && !host.GetNativeRenderObservationState(output) &&
+                  output.base.width == 123 && output.requestedRoute == 99 && counters[4] == 0,
+              "unsupported route rejection occurs before provider Begin and preserves unknown output");
+        Check(host.BeginNativeRenderObservation(route) == (mode != 2), "explicit version2 route Begin retains both success and cleanup failure");
+        const auto other = route == RenderObservationRoute::D3D11 ? RenderObservationRoute::D3D12 : RenderObservationRoute::D3D11;
+        Check(!host.BeginNativeRenderObservation() && !host.BeginNativeRenderObservation(other) && counters[4] == 1,
+              "a retained route lease cannot be replaced by API1 or another route");
+        Check(host.GetNativeRenderObservationState(output) && output.requestedRoute == static_cast<std::uint32_t>(route),
+              "version2 provider reports its explicit immutable requested route");
+        if (mode == 6)
+            Check(output.observedRoute == 0 && output.presenceKnownMask == 0 && output.queuePresent == 0 && !output.base.nativePresentCallbacks &&
+                      !output.base.acceptedSnapshots && !output.base.lastOriginalReturned,
+                  "no callback cannot infer observed route or member presence from a request");
+        else
+            Check(output.observedRoute == output.requestedRoute && output.presenceKnownMask == (route == RenderObservationRoute::D3D11 ? 15u : 19u) &&
+                      output.queuePresent == (route == RenderObservationRoute::D3D12 ? 1u : 0u) &&
+                      output.base.devicePresent == (route == RenderObservationRoute::D3D11 ? 1u : 0u) &&
+                      output.base.contextPresent == (route == RenderObservationRoute::D3D11 ? 1u : 0u),
+                  "route-specific known fields distinguish D3D12 queue from unknown device and immediate context");
+        RenderObservationState legacyOutput;
+        legacyOutput.width = 77;
+        Check(!host.GetNativeRenderObservationState(legacyOutput) && legacyOutput.width == 77, "API1 read cannot reinterpret a version2 lease");
+        const auto               priorReads = counters[5];
+        bool                     foreignBegin = true, foreignRead = true, foreignEnd = true;
+        RenderObservationStateV2 foreignOutput;
+        foreignOutput.observedRoute = 99;
+        std::thread foreign(
+            [&]
+            {
+                foreignBegin = host.BeginNativeRenderObservation(route);
+                foreignRead = host.GetNativeRenderObservationState(foreignOutput);
+                foreignEnd = host.EndNativeRenderObservation();
+                host.Stop();
+            });
+        foreign.join();
+        Check(!foreignBegin && !foreignRead && !foreignEnd && foreignOutput.observedRoute == 99 && counters[5] == priorReads && !counters[6] && !counters[0],
+              "foreign version2 calls preserve output without invoking the provider or teardown");
+        if (mode == 7)
+        {
+            counters[13] = 1;
+            output.observedRoute = 77;
+            Check(!host.GetNativeRenderObservationState(output) && output.observedRoute == 77,
+                  "cross-route observed identity is rejected without publishing caller output");
+        }
+        if (mode == 4)
+        {
+            Check(host.Reset() && counters[6] == 1 && counters[7] == 1 && counters[3] == 1 && counters[9] < counters[10],
+                  "version2 End and Release precede adapter Reset");
+            output.requestedRoute = 77;
+            Check(!host.GetNativeRenderObservationState(output) && output.requestedRoute == 77, "Reset clears the version2 final cache");
+        }
+        else
+        {
+            if (mode <= 2 || mode == 7)
+                host.Stop();
+            else if (mode != 6)
+                Check(!host.EndNativeRenderObservation(), "version2 failed final read or unsafe active state retains lease");
+            if (mode != 6)
+                Check(host.IsStarted() && counters[6] == 1 && !counters[7] && !counters[0] && GetModuleHandleW(fixturePath.c_str()),
+                      "failed version2 End, read or route validation retains the adapter and DLL");
+            counters[13] = 0;
+            Check(host.EndNativeRenderObservation(), "owner finishes version2 cleanup after transient failure");
+            const auto finalReads = counters[5];
+            Check(host.GetNativeRenderObservationState(output) && !output.base.active && !output.base.pendingCleanup &&
+                      output.requestedRoute == static_cast<std::uint32_t>(route) && counters[5] == finalReads && counters[7] == 1,
+                  "actual final version2 state is cached before Release without another provider call");
+            if (mode == 6)
+                Check(output.observedRoute == 0 && !output.base.nativePresentCallbacks, "clean End with no callbacks still leaves observed route unknown");
+            Check(host.EndNativeRenderObservation() && counters[7] == 1, "version2 completed End is idempotent");
+        }
+        host.Stop();
+        Check(!host.IsStarted() && !GetModuleHandleW(fixturePath.c_str()) && counters[7] == 1 && counters[0] == 1 && counters[1] == 1 &&
+                  counters[9] < counters[11],
+              "version2 lease Release precedes adapter Shutdown and module unload");
+        output.requestedRoute = 99;
+        Check(!host.GetNativeRenderObservationState(output) && output.requestedRoute == 99, "released version2 state preserves caller output");
+    }
     #endif
 }
 
@@ -533,7 +742,7 @@ int wmain(int argc, wchar_t** argv)
 {
     try
     {
-        if (argc != 2 && argc != 3 && argc != 6 && argc != 11)
+        if (argc != 2 && argc != 3 && argc != 6 && argc != 11 && argc != 18)
             throw std::runtime_error("Pass the absolute path of the built Game DE module");
         const std::wstring modulePath = argv[1];
         // The adapter stores this identity but must never dereference it. This
@@ -549,9 +758,16 @@ int wmain(int argc, wchar_t** argv)
         if (argc >= 6)
             for (unsigned mode = 1; mode <= 3; ++mode)
                 TestFacadeProvider(owner, argv[mode + 2], mode);
-        if (argc == 11)
+        if (argc >= 11)
             for (unsigned mode = 1; mode <= 5; ++mode)
                 TestRenderProvider(owner, argv[mode + 5], mode);
+        if (argc == 18)
+        {
+            TestMissingRenderV2(owner, argv[6]);
+            for (unsigned mode = 1; mode <= 7; ++mode)
+                for (const auto route : {mta::game_de::RenderObservationRoute::D3D11, mta::game_de::RenderObservationRoute::D3D12})
+                    TestRenderProviderV2(owner, argv[mode + 10], mode, route);
+        }
     #else
         CGameAdapterModule host;
         Check(!host.Start(owner, modulePath), "x86 must reject the x64 backend before loading it");

@@ -339,6 +339,34 @@ namespace mta::game_de
             NativeMovementInput        nativeMovement;
         };
 
+        RenderObservationState CopyRenderObservation(const NativeRenderObservationState& native) noexcept
+        {
+            RenderObservationState next;
+            next.bound = native.bound;
+            next.active = native.active;
+            next.modulePinned = native.modulePinned;
+            next.pendingCleanup = native.pendingCleanup;
+            next.generation = native.generation;
+            next.nativePresentCallbacks = native.nativePresentCallbacks;
+            next.acceptedSnapshots = native.acceptedSnapshots;
+            next.rejectedSnapshots = native.rejectedSnapshots;
+            next.nestedCallbacks = native.nestedCallbacks;
+            next.foreignThreadCallbacks = native.foreignThreadCallbacks;
+            next.publicationMisses = native.publicationMisses;
+            next.callbackThreadId = native.callbackThreadId;
+            next.width = native.width;
+            next.height = native.height;
+            next.syncInterval = native.syncInterval;
+            next.failureReason = native.failureReason;
+            next.windowPresent = native.windowPresent;
+            next.swapchainPresent = native.swapchainPresent;
+            next.devicePresent = native.devicePresent;
+            next.contextPresent = native.contextPresent;
+            next.lastOriginalReturned = native.lastOriginalReturned;
+            next.lastOriginalResult = native.lastOriginalResult;
+            return next;
+        }
+
         class GameRenderObservation final : public IGameRenderObservation
         {
         public:
@@ -346,7 +374,9 @@ namespace mta::game_de
             {
                 if (ownerThread != GetCurrentThreadId())
                     return Status::WrongThread;
-                return observation.Begin() ? Status::Ok : Status::Unsupported;
+                // API1 always requests its original D3D11 path; it cannot gain
+                // a different route when the newer optional contract is used.
+                return observation.Begin(RenderObservationRoute::D3D11) ? Status::Ok : Status::Unsupported;
             }
 
             Status ReadState(RenderObservationState& state) noexcept override
@@ -355,30 +385,7 @@ namespace mta::game_de
                     return Status::WrongThread;
                 NativeRenderObservationState native;
                 observation.ReadState(native);
-                RenderObservationState next;
-                next.bound = native.bound;
-                next.active = native.active;
-                next.modulePinned = native.modulePinned;
-                next.pendingCleanup = native.pendingCleanup;
-                next.generation = native.generation;
-                next.nativePresentCallbacks = native.nativePresentCallbacks;
-                next.acceptedSnapshots = native.acceptedSnapshots;
-                next.rejectedSnapshots = native.rejectedSnapshots;
-                next.nestedCallbacks = native.nestedCallbacks;
-                next.foreignThreadCallbacks = native.foreignThreadCallbacks;
-                next.publicationMisses = native.publicationMisses;
-                next.callbackThreadId = native.callbackThreadId;
-                next.width = native.width;
-                next.height = native.height;
-                next.syncInterval = native.syncInterval;
-                next.failureReason = native.failureReason;
-                next.windowPresent = native.windowPresent;
-                next.swapchainPresent = native.swapchainPresent;
-                next.devicePresent = native.devicePresent;
-                next.contextPresent = native.contextPresent;
-                next.lastOriginalReturned = native.lastOriginalReturned;
-                next.lastOriginalResult = native.lastOriginalResult;
-                state = next;
+                state = CopyRenderObservation(native);
                 return Status::Ok;
             }
 
@@ -401,6 +408,54 @@ namespace mta::game_de
         private:
             const DWORD             ownerThread = GetCurrentThreadId();
             NativeRenderObservation observation;
+        };
+
+        class GameRenderObservationV2 final : public IGameRenderObservationV2
+        {
+        public:
+            explicit GameRenderObservationV2(RenderObservationRoute requested) noexcept : route(requested) {}
+
+            Status Begin() noexcept override
+            {
+                if (ownerThread != GetCurrentThreadId())
+                    return Status::WrongThread;
+                return observation.Begin(route) ? Status::Ok : Status::Unsupported;
+            }
+
+            Status ReadState(RenderObservationStateV2& state) noexcept override
+            {
+                if (ownerThread != GetCurrentThreadId())
+                    return Status::WrongThread;
+                NativeRenderObservationState native;
+                observation.ReadState(native);
+                RenderObservationStateV2 next;
+                next.base = CopyRenderObservation(native);
+                next.requestedRoute = native.requestedRoute;
+                next.observedRoute = native.observedRoute;
+                next.presenceKnownMask = native.presenceKnownMask;
+                next.queuePresent = native.queuePresent;
+                state = next;
+                return Status::Ok;
+            }
+
+            Status End() noexcept override
+            {
+                if (ownerThread != GetCurrentThreadId())
+                    return Status::WrongThread;
+                return observation.End() ? Status::Ok : Status::Unsupported;
+            }
+
+            void Release() noexcept override
+            {
+                if (ownerThread != GetCurrentThreadId() || !observation.End())
+                    return;
+                delete this;
+            }
+
+        private:
+            const DWORD                  ownerThread = GetCurrentThreadId();
+            const RenderObservationRoute route;
+            NativeRenderObservation      observation;
         };
     }
 
@@ -428,6 +483,22 @@ namespace mta::game_de
         try
         {
             return new (std::nothrow) GameRenderObservation;
+        }
+        catch (...)
+        {
+            return nullptr;
+        }
+    }
+
+    extern "C" IGameRenderObservationV2* CreateGameRenderObservationV2(std::uint32_t apiVersion, CCoreInterface* owner, RenderObservationRoute route) noexcept
+    {
+        // Explicit selection precedes allocation, binding and pinning. A
+        // missing callback never authorizes an automatic switch to another RHI.
+        if (apiVersion != RenderObservationApiVersionV2 || !owner || (route != RenderObservationRoute::D3D11 && route != RenderObservationRoute::D3D12))
+            return nullptr;
+        try
+        {
+            return new (std::nothrow) GameRenderObservationV2(route);
         }
         catch (...)
         {

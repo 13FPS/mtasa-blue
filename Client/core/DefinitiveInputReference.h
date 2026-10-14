@@ -68,6 +68,9 @@ namespace DefinitiveInputReference
         PublishCallback publish = nullptr;
         bool            nativeMovement = false;
         bool            renderObservation = false;
+        // Zero preserves API1's implicit D3D11 route. Explicit API2 requests
+        // carry their route through Core rather than inferring an active RHI.
+        std::uint32_t renderRoute = 0;
     };
 
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)

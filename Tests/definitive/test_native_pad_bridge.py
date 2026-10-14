@@ -53,6 +53,10 @@ def main():
         "DE_CoreRenderBegin": (ctypes.c_int, []),
         "DE_CoreRenderCapture": (ctypes.c_int, []),
         "DE_CoreRenderRead": (ctypes.c_uint32, [ctypes.c_uint32]),
+        "DE_CoreRenderApiVersionV2": (ctypes.c_uint32, []),
+        "DE_CoreRenderBeginV2": (ctypes.c_int, [ctypes.c_uint32]),
+        "DE_CoreRenderCaptureV2": (ctypes.c_int, []),
+        "DE_CoreRenderReadV2": (ctypes.c_uint32, [ctypes.c_uint32]),
     }
     for name, (result, arguments) in signatures.items():
         function = getattr(bridge, name)
@@ -61,6 +65,7 @@ def main():
         check(bool(function), f"Missing ABI export {name}")
 
     check(bridge.DE_ApiVersion() == 2, "Additive diagnostic exports retain bridge ABI2")
+    check(bridge.DE_CoreRenderApiVersionV2() == 2, "Explicit renderer routes have a separate API2 protocol")
     check(getattr(bridge, "DE_CoreStartupRun", None) is None, "Unsafe synchronous startup export must be absent")
     # A regular Python executable must never masquerade as the verified GTA host
     # or obtain engine access merely by loading this DLL and resolving its ABI.
@@ -77,6 +82,11 @@ def main():
     check(bridge.DE_CoreMovementCapture() == 0, "Rejected host cannot freeze Core movement metrics")
     check(bridge.DE_CoreRenderBegin() == 0, "Wrong executable cannot start a native render observation")
     check(bridge.DE_CoreRenderCapture() == 0, "Rejected host cannot freeze render evidence")
+    for route in (0, 1, 2, 3, 0xFFFFFFFF):
+        check(bridge.DE_CoreRenderBeginV2(route) == 0, "Wrong executable cannot start any explicit renderer route")
+    check(bridge.DE_CoreRenderCaptureV2() == 0, "Rejected host cannot freeze API2 render evidence")
+    for component in (*range(44), 44, 0xFFFFFFFF):
+        check(bridge.DE_CoreRenderReadV2(component) == 0, "Rejected host cannot manufacture API2 render evidence")
     for component in (*range(40), 40, 0xFFFFFFFF):
         check(bridge.DE_CoreRenderRead(component) == 0, "Rejected host cannot manufacture render evidence")
     for component in (*range(96), 96, 0xFFFFFFFF):
@@ -116,6 +126,10 @@ def main():
     bridge.DE_Disconnect()
     check(bridge.DE_CoreRenderBegin() == 0, "Cleanup cannot authorize native render observation")
     check(bridge.DE_CoreRenderCapture() == 0, "Cleanup cannot manufacture render evidence")
+    check(bridge.DE_CoreRenderBeginV2(2) == 0, "Cleanup cannot authorize the explicit D3D12 route")
+    check(bridge.DE_CoreRenderCaptureV2() == 0, "Cleanup cannot manufacture API2 evidence")
+    for component in (*range(44), 44, 0xFFFFFFFF):
+        check(bridge.DE_CoreRenderReadV2(component) == 0, "Cleanup cannot retain API2 render evidence")
     for component in (*range(40), 40, 0xFFFFFFFF):
         check(bridge.DE_CoreRenderRead(component) == 0, "Cleanup cannot retain render evidence")
     check(bridge.DE_CoreInputBegin() == 0, "Cleanup cannot authorize configured Core input")

@@ -14,11 +14,15 @@ param(
     [switch]$MtaCoreInputReference,
     [switch]$MtaCoreMovementReference,
     [switch]$MtaCoreRenderReference,
+    [ValidateSet('D3D11', 'D3D12')][string]$MtaCoreRenderRoute = 'D3D11',
     [string]$GameDirectory = 'C:\Program Files (x86)\Steam\steamapps\common\GTA San Andreas - The Definitive Edition\Gameface\Binaries\Win64'
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+if ($PSBoundParameters.ContainsKey('MtaCoreRenderRoute') -and -not $MtaCoreRenderReference) {
+    throw 'An explicit renderer route requires MtaCoreRenderReference.'
+}
 if ($MtaCoreRenderReference -and ($Mode -ne 'Smoke' -or $MtaCoreMovementReference -or $MtaCoreInputReference -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot)) {
     throw 'MTA Core renderer observation requires separate opt-in Smoke mode.'
 }
@@ -172,6 +176,17 @@ if ($coreRenderMatches -eq 1) {
     $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $coreRenderPattern,
         "export const MTA_CORE_RENDER_REFERENCE = $($MtaCoreRenderReference.IsPresent.ToString().ToLowerInvariant());"))
 }
+# A historical observer has no route contract. Keep ordinary switches usable,
+# but require the reviewed route marker before activating the newer observer.
+$coreRenderRoutePattern = "export const MTA_CORE_RENDER_ROUTE = '(d3d11|d3d12)';"
+$coreRenderRouteMatches = [regex]::Matches($configText, $coreRenderRoutePattern).Count
+if ($coreRenderRouteMatches -gt 1 -or ($MtaCoreRenderReference -and $coreRenderRouteMatches -ne 1)) {
+    throw 'Update the adapter before selecting an explicit MTA Core renderer route.'
+}
+if ($coreRenderRouteMatches -eq 1) {
+    $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $coreRenderRoutePattern,
+        "export const MTA_CORE_RENDER_ROUTE = '$($MtaCoreRenderRoute.ToLowerInvariant())';"))
+}
 $configEntry = @($installed.files | Where-Object { $_.path -eq 'CLEO/de-online/config.mjs' })
 if ($configEntry.Count -ne 1) { throw 'Missing owned configuration record.' }
 $configEntry[0].sha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($newConfig)).ToLowerInvariant()
@@ -205,7 +220,7 @@ try {
     throw $failure
 }
 if ($MtaCoreRenderReference) {
-    Write-Host 'Installed adapter mode: Smoke, Core native renderer observation armed. Ctrl+Shift+F9 starts after release; Ctrl+Shift+End requests cleanup. No drawing or input writes.'
+    Write-Host "Installed adapter mode: Smoke, Core $MtaCoreRenderRoute observation armed. Ctrl+Shift+F9 starts after release; Ctrl+Shift+End requests cleanup. No drawing or input writes."
 } elseif ($MtaCoreMovementReference) {
     Write-Host 'Installed adapter mode: Smoke, bounded Core configured movement writes armed. Ctrl+Shift+F9 activates after release; Ctrl+Shift+End requests cleanup.'
 } elseif ($MtaCoreInputReference) {

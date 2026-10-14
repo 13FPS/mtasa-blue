@@ -1,12 +1,13 @@
 /*****************************************************************************
  * PROJECT: Multi Theft Auto
  * LICENSE: See LICENSE in the repository root
- * PURPOSE: Bounded observation of the native DE D3D11 viewport callback
+ * PURPOSE: Bounded observation of an explicitly selected native DE viewport callback
  *****************************************************************************/
 
 #pragma once
 
 #include <cstdint>
+#include "../sdk/game/CGameRenderObservation.h"
 
 namespace mta::game_de
 {
@@ -20,7 +21,8 @@ namespace mta::game_de
         WrongProducerThread = 5,
         NestedCallback = 6,
         InvalidViewport = 7,
-        TimeBudget = 8
+        TimeBudget = 8,
+        UnsupportedRoute = 9
     };
 
     struct NativeRenderObservationState
@@ -31,6 +33,7 @@ namespace mta::game_de
         std::uint32_t callbackThreadId = 0, width = 0, height = 0, syncInterval = 0, failureReason = 0;
         bool          windowPresent = false, swapchainPresent = false, devicePresent = false, contextPresent = false;
         bool          lastOriginalReturned = false, lastOriginalResult = false;
+        std::uint32_t requestedRoute = 0, observedRoute = 0, presenceKnownMask = 0, queuePresent = 0;
     };
 
     // This is an observation of a naturally invoked native viewport callback,
@@ -48,9 +51,11 @@ namespace mta::game_de
         ~NativeRenderObservation();
         NativeRenderObservation(const NativeRenderObservation&) = delete;
         NativeRenderObservation& operator=(const NativeRenderObservation&) = delete;
-        bool                     Begin() noexcept;
-        bool                     End() noexcept;
-        void                     ReadState(NativeRenderObservationState& state) const noexcept;
+        // A zero-callback run cannot choose a backend. The route is explicit;
+        // observedRoute remains unknown until a validated original returns.
+        bool Begin(RenderObservationRoute route = RenderObservationRoute::D3D11) noexcept;
+        bool End() noexcept;
+        void ReadState(NativeRenderObservationState& state) const noexcept;
 
     private:
         std::uint64_t                generation = 0;

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { MODE, ONLINE_ACTIVATION, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE, MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE } from './config.mjs';
+import { MODE, ONLINE_ACTIVATION, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE, MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE, MTA_CORE_RENDER_ROUTE } from './config.mjs';
 import { AdapterController, NativeGaitReferenceController, NativeInputReferenceController } from './controller.mjs';
 import { MtaNativePadReferenceController } from './native-pad-reference.mjs';
 import { MtaNativeMovementTrialController } from './native-movement-trial.mjs';
@@ -17,6 +17,8 @@ function runAdapter() {
         (MTA_CORE_RENDER_REFERENCE && (MODE !== 'smoke' || INPUT_REFERENCE || GAIT_REFERENCE || GAIT_RATE || GAIT_ROOT_LOCK ||
             MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE)))
         throw new Error('MTA Core renderer observation requires separate opt-in Smoke mode');
+    if (MTA_CORE_RENDER_REFERENCE && !['d3d11', 'd3d12'].includes(MTA_CORE_RENDER_ROUTE))
+        throw new Error('MTA Core renderer observation requires an explicit supported route');
     if (typeof MTA_CORE_MOVEMENT_REFERENCE !== 'boolean' ||
         (MTA_CORE_MOVEMENT_REFERENCE && (MODE !== 'smoke' || INPUT_REFERENCE || GAIT_REFERENCE || GAIT_RATE || GAIT_ROOT_LOCK ||
             MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE)))
@@ -168,32 +170,47 @@ function runAdapter() {
         // Core owns the optional backend observer and all teardown on its
         // worker. Script reads coherent scalar snapshots; it draws nothing
         // and never receives viewport, swapchain or device pointers.
-        const begin = bind('DE_CoreRenderBegin');
-        const capture = bind('DE_CoreRenderCapture');
-        const readRender = bind('DE_CoreRenderRead', 'X64U32');
+        const renderApiVersion = bind('DE_CoreRenderApiVersionV2', 'X64U32');
+        const begin = bind('DE_CoreRenderBeginV2');
+        const capture = bind('DE_CoreRenderCaptureV2');
+        const readRender = bind('DE_CoreRenderReadV2', 'X64U32');
         const poll = bind('DE_CoreStartupPoll');
         const cancel = bind('DE_CoreStartupCancel');
         const read = bind('DE_CoreStartupRead', 'X64U32');
+        if (renderApiVersion() !== 2) throw new Error('Core renderer observation API 2 is required');
+        const requestedRoute = MTA_CORE_RENDER_ROUTE === 'd3d11' ? 1 : 2;
+        const expectedPresence = requestedRoute === 1 ? 15 : 3;
+        const expectedKnown = requestedRoute === 1 ? 15 : 19;
         emit({ event: 'adapter_start', host: HOST, cleo: String(CLEO.version), host_version: String(CLEO.hostVersion),
             definitions: String(CLEO.apiVersion), mode: MODE, endpoint: null, stop_key: stopKey,
-            core_render_reference: true, provenance: 'mta_core_native_render_observation', core_api: 5,
+            core_render_reference: true, provenance: 'mta_core_native_render_observation', core_api: 6,
+            observation_api: 2, requested_route: requestedRoute,
             network_active: false, input_writes: false, remote_peds_created: false });
         enterPhase('core_render_reference');
         const startedAt = Date.now();
         if (!Number.isSafeInteger(startedAt) || startedAt < 0) throw new Error('Invalid Core render clock');
-        emit({ event: 'core_render_reference_started', at_ms: startedAt, core_api: 5, sample_interval_ms: 100, budget_ms: 10000 });
-        if (begin() !== 1) throw new Error('MTA Core renderer observation worker could not start');
+        emit({ event: 'core_render_reference_started', at_ms: startedAt, core_api: 6, observation_api: 2,
+            requested_route: requestedRoute, sample_interval_ms: 100, budget_ms: 10000 });
+        if (begin(requestedRoute) !== 1) throw new Error('MTA Core renderer observation worker could not start');
         let terminal = false, stopRequested = false, lastAt = startedAt, lastSequence = 0, lastElapsed = -1;
         let latest = null, samples = 0;
         const captureSample = at => {
             const captured = capture();
             if (captured !== 0 && captured !== 1) throw new Error('Core render capture status unavailable');
             if (!captured) return;
-            const state = Array.from({ length: 40 }, (_, field) => readRender(field));
+            const state = Array.from({ length: 44 }, (_, field) => readRender(field));
             if (!state.every(value => Number.isInteger(value) && value >= 0 && value <= 0xffffffff))
                 throw new Error('Core render returned invalid unsigned state');
-            if (state[0] !== 1 || ![1, 2, 3].includes(state[1]) || state[2] < lastSequence || state[3] < lastElapsed)
+            if (state[0] !== 2 || ![1, 2, 3].includes(state[1]) || state[2] < lastSequence || state[3] < lastElapsed)
                 throw new Error('Core render publication order is invalid');
+            // Requested route is an admission choice, while observed route
+            // requires a returned native callback. Never infer it from DLLs.
+            if (state[40] !== requestedRoute || ![0, requestedRoute].includes(state[41]) ||
+                state[42] !== (state[41] ? expectedKnown : 0) || state[43] !== (state[41] && requestedRoute === 2 ? 1 : 0) ||
+                state[37] !== (state[41] ? expectedPresence : 0) || state[38] !== 0 || state[39] !== 0 ||
+                (state[41] !== 0 && ((state[19] === 0 && state[20] === 0) || state[31] !== 1)) ||
+                (state[41] === 0 && (state[19] !== 0 || state[20] !== 0 || state.slice(25, 30).some(value => value !== 0) || state[31] !== 0)))
+                throw new Error('Core render route or presence evidence is contradictory');
             if (state[3] > at - startedAt + 250) throw new Error('Core render elapsed time exceeds its script clock');
             // Add split64 counters with exact integer arithmetic, without
             // relying on lossy Number conversion or a new FFI numeric type.
@@ -255,8 +272,9 @@ function runAdapter() {
             latest.slice(21, 25).every(value => value === 0) && latest[25] !== 0 &&
             latest[26] > 0 && latest[26] <= 32768 && latest[27] > 0 && latest[27] <= 32768 &&
             latest[29] <= 1 && latest[30] === 0 && latest[31] === 1 && latest[32] === 0 &&
-            latest[33] === 0 && latest[34] === 0 && latest[37] === 15 &&
-            latest[38] === 0 && latest[39] === 0;
+            latest[33] === 0 && latest[34] === 0 && latest[37] === expectedPresence &&
+            latest[38] === 0 && latest[39] === 0 && latest[40] === requestedRoute &&
+            latest[41] === requestedRoute && latest[42] === expectedKnown && latest[43] === (requestedRoute === 2 ? 1 : 0);
         const passed = !stopRequested && runResult === 1 && expected.every((value, field) => state[field] === value) &&
             state[11] <= 3 && state[12] <= 3 && (state[12] & ~state[11]) === 0 && cleanupPassed && state[18] === 0 && observed;
         emit({ event: 'core_render_reference_finished', at_ms: now, elapsed_ms: now - startedAt, state, run_result: runResult,

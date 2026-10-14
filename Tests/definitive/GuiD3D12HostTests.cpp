@@ -11,10 +11,12 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <vector>
 #include <SharedUtil.Defines.h>
@@ -26,9 +28,26 @@ using Microsoft::WRL::ComPtr;
 using namespace mta::gui;
 namespace
 {
-    unsigned                checks = 0, clicks = 0;
-    constexpr std::uint32_t background = 0xff111d2b;
-    void                    Check(bool value, const char* why)
+    unsigned checks = 0, clicks = 0;
+    struct Channels
+    {
+        unsigned red, green, blue, alpha, maximumColor, maximumAlpha;
+    };
+
+    Channels Decode(DXGI_FORMAT format, std::uint32_t value)
+    {
+        if (format == DXGI_FORMAT_R10G10B10A2_UNORM)
+            return {value & 1023, (value >> 10) & 1023, (value >> 20) & 1023, value >> 30, 1023, 3};
+        if (format == DXGI_FORMAT_R8G8B8A8_UNORM)
+            return {value & 255, (value >> 8) & 255, (value >> 16) & 255, value >> 24, 255, 255};
+        return {(value >> 16) & 255, (value >> 8) & 255, value & 255, value >> 24, 255, 255};
+    }
+
+    bool Near(unsigned actual, double expected)
+    {
+        return std::abs(static_cast<double>(actual) - expected) <= 2;
+    }
+    void Check(bool value, const char* why)
     {
         ++checks;
         if (!value)
@@ -84,6 +103,7 @@ namespace
         HANDLE                             event = nullptr;
         UINT64                             nextFence = 1;
         UINT                               width = 640, height = 480;
+        DXGI_FORMAT                        format = DXGI_FORMAT_UNKNOWN;
         HMODULE                            core = nullptr, guiModule = nullptr;
         IGuiD3D12Session*                  session = nullptr;
         CGUI*                              gui = nullptr;
@@ -161,14 +181,14 @@ namespace
         desc.Width = owned.width;
         desc.Height = owned.height;
         desc.DepthOrArraySize = desc.MipLevels = 1;
-        desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        desc.Format = owned.format;
         desc.SampleDesc.Count = 1;
         desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
         D3D12_HEAP_PROPERTIES heap{};
         heap.Type = D3D12_HEAP_TYPE_DEFAULT;
         heap.CreationNodeMask = heap.VisibleNodeMask = 1;
         Hr(owned.device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr, IID_PPV_ARGS(&owned.target)),
-           "create owned offscreen BGRA render target");
+           "create owned offscreen target in the requested normalized format");
         owned.device->CreateRenderTargetView(owned.target.Get(), nullptr, owned.rtv->GetCPUDescriptorHandleForHeapStart());
         UINT64 bytes = 0;
         owned.device->GetCopyableFootprints(&desc, 0, 1, 0, &owned.footprint, nullptr, nullptr, &bytes);
@@ -223,8 +243,25 @@ namespace
         return pixels;
     }
 
-    void Save(const std::filesystem::path& path, UINT width, UINT height, const std::vector<std::uint32_t>& pixels)
+    void Save(const std::filesystem::path& path, DXGI_FORMAT format, UINT width, UINT height, const std::vector<std::uint32_t>& rawPixels)
     {
+        // A BI_RGB bitmap requires BGRA bytes. Preserve the native packed
+        // readback independently so artifact normalization cannot hide errors
+        // in the 10-bit channels or the target's two-bit alpha.
+        auto rawPath = path;
+        rawPath.replace_extension(L".raw");
+        std::ofstream raw(rawPath, std::ios::binary);
+        raw.write(reinterpret_cast<const char*>(rawPixels.data()), static_cast<std::streamsize>(rawPixels.size() * 4));
+        Check(raw.good(), "save untouched tightly packed native-format GPU readback");
+        std::vector<std::uint32_t> pixels;
+        pixels.reserve(rawPixels.size());
+        for (const auto value : rawPixels)
+        {
+            const auto channels = Decode(format, value);
+            const auto byte = [](unsigned channel, unsigned maximum) { return (channel * 255 + maximum / 2) / maximum; };
+            pixels.push_back((byte(channels.alpha, channels.maximumAlpha) << 24) | (byte(channels.red, channels.maximumColor) << 16) |
+                             (byte(channels.green, channels.maximumColor) << 8) | byte(channels.blue, channels.maximumColor));
+        }
         BITMAPFILEHEADER file{};
         BITMAPINFOHEADER info{};
         file.bfType = 0x4d42;
@@ -240,7 +277,7 @@ namespace
         output.write(reinterpret_cast<const char*>(&file), sizeof(file));
         output.write(reinterpret_cast<const char*>(&info), sizeof(info));
         output.write(reinterpret_cast<const char*>(pixels.data()), static_cast<std::streamsize>(pixels.size() * 4));
-        Check(output.good(), "save actual offscreen GUI pixel artifact");
+        Check(output.good(), "save normalized BGRA8 GUI artifact separately from native readback");
     }
 
     void CheckDebugErrors(Owned& owned)
@@ -272,10 +309,19 @@ int wmain(int argc, wchar_t** argv)
     setvbuf(stderr, nullptr, _IONBF, 0);
     try
     {
-        Check(argc == 2 && sizeof(void*) == 8, "owned x64 D3D12 fixture root supplied");
+        Check(argc == 3 && sizeof(void*) == 8, "owned x64 D3D12 fixture root and target format supplied");
         const std::filesystem::path root(argv[1]);
         Check(root.is_absolute(), "fixture root is an absolute owned path");
-        Owned               owned;
+        Owned              owned;
+        const std::wstring formatArgument(argv[2]);
+        if (formatArgument == L"87")
+            owned.format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        else if (formatArgument == L"28")
+            owned.format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        else if (formatArgument == L"24")
+            owned.format = DXGI_FORMAT_R10G10B10A2_UNORM;
+        Check(owned.format != DXGI_FORMAT_UNKNOWN, "fixture accepts only the three explicit normalized target layouts");
+        std::printf("GUI target format=%u\n", static_cast<unsigned>(owned.format));
         ComPtr<ID3D12Debug> debug;
         const bool          debugAvailable = SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug)));
         if (debugAvailable)
@@ -284,6 +330,10 @@ int wmain(int argc, wchar_t** argv)
         Hr(CreateDXGIFactory1(IID_PPV_ARGS(&owned.factory)), "create actual system DXGI factory");
         Hr(owned.factory->EnumWarpAdapter(IID_PPV_ARGS(&owned.adapter)), "select actual Microsoft WARP adapter");
         Hr(D3D12CreateDevice(owned.adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&owned.device)), "create actual owned D3D12 WARP device");
+        D3D12_FEATURE_DATA_FORMAT_SUPPORT support{owned.format};
+        Hr(owned.device->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &support, sizeof(support)), "query actual WARP target format support");
+        const UINT required = D3D12_FORMAT_SUPPORT1_TEXTURE2D | D3D12_FORMAT_SUPPORT1_RENDER_TARGET | D3D12_FORMAT_SUPPORT1_BLENDABLE;
+        Check((support.Support1 & required) == required, "requested normalized format supports texture2D, render targets and blending");
         if (debugAvailable)
             Hr(owned.device.As(&owned.info), "read actual D3D12 debug queue");
         D3D12_COMMAND_QUEUE_DESC queue{};
@@ -312,7 +362,7 @@ int wmain(int argc, wchar_t** argv)
         GuiD3D12CreateInfo info;
         info.device = owned.device.Get();
         info.queue = owned.queue.Get();
-        info.targetFormat = DXGI_FORMAT_B8G8R8A8_UNORM;
+        info.targetFormat = owned.format;
         info.width = owned.width;
         info.height = owned.height;
         Check(!create(0, &info) && !create(GuiD3D12ApiVersion, nullptr), "reject unknown ABI and missing create information");
@@ -322,6 +372,12 @@ int wmain(int argc, wchar_t** argv)
         invalid = info;
         invalid.targetFormat = DXGI_FORMAT_UNKNOWN;
         Check(!create(GuiD3D12ApiVersion, &invalid), "reject unsupported target format and release failed factory ownership");
+        for (const auto unsupported : {DXGI_FORMAT_R10G10B10A2_TYPELESS, DXGI_FORMAT_R10G10B10A2_UINT, DXGI_FORMAT_R11G11B10_FLOAT})
+        {
+            invalid = info;
+            invalid.targetFormat = unsupported;
+            Check(!create(GuiD3D12ApiVersion, &invalid), "reject neighboring typeless, integer and float layouts outside the target contract");
+        }
         invalid = info;
         invalid.width = 0;
         Check(!create(GuiD3D12ApiVersion, &invalid), "reject zero dimensions without constructing CEGUI");
@@ -436,16 +492,39 @@ int wmain(int argc, wchar_t** argv)
         invalidFrame = Frame(owned);
         invalidFrame.beforeState = UINT32_MAX;
         Check(owned.session->RenderFrame(invalidFrame) == GuiD3D12Status::InvalidArgument, "reject unsupported target state instead of guessing barriers");
+        ComPtr<ID3D12Resource> mismatchedTarget;
+        auto                   mismatchedDesc = owned.target->GetDesc();
+        mismatchedDesc.Format = owned.format == DXGI_FORMAT_B8G8R8A8_UNORM ? DXGI_FORMAT_R10G10B10A2_UNORM : DXGI_FORMAT_B8G8R8A8_UNORM;
+        D3D12_HEAP_PROPERTIES mismatchedHeap{};
+        mismatchedHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        mismatchedHeap.CreationNodeMask = mismatchedHeap.VisibleNodeMask = 1;
+        Hr(owned.device->CreateCommittedResource(&mismatchedHeap, D3D12_HEAP_FLAG_NONE, &mismatchedDesc, D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr,
+                                                 IID_PPV_ARGS(&mismatchedTarget)),
+           "create another valid normalized layout for an exact target-format mismatch");
+        invalidFrame = Frame(owned);
+        invalidFrame.resource = mismatchedTarget.Get();
+        Check(owned.session->RenderFrame(invalidFrame) == GuiD3D12Status::InvalidArgument,
+              "reject another supported resource layout instead of recording against the wrong PSO format");
+        mismatchedTarget.Reset();
         Clear(owned, D3D12_RESOURCE_STATE_RENDER_TARGET);
         Check(owned.session->RenderFrame(Frame(owned)) == GuiD3D12Status::Ok, "submit actual CEGUI skin/fonts/widget quads on WARP");
         const auto before = Read(owned);
-        const auto rasterized = std::count_if(before.begin(), before.end(), [](auto pixel) { return pixel != background; });
+        const auto background = before.front();
+        const auto clear = Decode(owned.format, background);
+        Check(Near(clear.red, 17.0 / 255 * clear.maximumColor) && Near(clear.green, 29.0 / 255 * clear.maximumColor) &&
+                  Near(clear.blue, 43.0 / 255 * clear.maximumColor) && clear.alpha == clear.maximumAlpha,
+              "untouched background has the requested clear channels and fully opaque native alpha");
+        const auto rasterized = std::count_if(before.begin(), before.end(), [background](auto pixel) { return pixel != background; });
         Check(rasterized > 10000, "actual GPU readback contains substantial widget pixels");
-        const auto sample = before[132 * owned.width + 532];
-        const int  r = (sample >> 16) & 255, g = (sample >> 8) & 255, b = sample & 255;
-        std::printf("BGRA/straight-alpha sample=%08x red=%d green=%d blue=%d\n", sample, r, g, b);
-        Check(r >= 134 && r <= 138 && g >= 13 && g <= 15 && b >= 20 && b <= 22, "CEGUI ARGB memory channels and straight alpha match actual BGRA GPU pixels");
-        Save(root / L"d3d12-before.bmp", owned.width, owned.height, before);
+        const auto       sample = before[132 * owned.width + 532];
+        const auto       blended = Decode(owned.format, sample);
+        constexpr double alpha = 128.0 / 255;
+        std::printf("Native straight-alpha sample=%08x format=%u red=%u green=%u blue=%u alpha=%u\n", sample, static_cast<unsigned>(owned.format), blended.red,
+                    blended.green, blended.blue, blended.alpha);
+        Check(Near(blended.red, alpha * blended.maximumColor + clear.red * (1 - alpha)) && Near(blended.green, clear.green * (1 - alpha)) &&
+                  Near(blended.blue, clear.blue * (1 - alpha)) && blended.alpha == blended.maximumAlpha,
+              "CEGUI BGRA texture channels and straight alpha match native target precision and opaque alpha");
+        Save(root / L"d3d12-before.bmp", owned.format, owned.width, owned.height, before);
         InputClick(owned.gui, 170, 105);
         Check(clicks == 1, "actual GUI callback fires through the D3D12-backed widget");
         InputClick(owned.gui, 80, 167);
@@ -458,7 +537,7 @@ int wmain(int argc, wchar_t** argv)
         Check(owned.session->RenderFrame(Frame(owned)) == GuiD3D12Status::Ok, "submit changed actual widgets");
         const auto after = Read(owned);
         Check(after != before, "actual widget input changes rasterized GPU output");
-        Save(root / L"d3d12-after.bmp", owned.width, owned.height, after);
+        Save(root / L"d3d12-after.bmp", owned.format, owned.width, owned.height, after);
 
         // Block only our private queue with a CPU-signaled fence. This makes
         // pending GPU ownership deterministic without sleeps or driver timing.
@@ -488,7 +567,9 @@ int wmain(int argc, wchar_t** argv)
         Clear(owned, D3D12_RESOURCE_STATE_COPY_SOURCE);
         Check(owned.session->RenderFrame(Frame(owned)) == GuiD3D12Status::Ok, "completed fence slots can be reused safely");
         const auto replacement = Read(owned);
-        Check(replacement[132 * owned.width + 532] == 0xff00ff00, "new descriptor/texture version produces exact green without stale submitted red");
+        const auto greenSample = Decode(owned.format, replacement[132 * owned.width + 532]);
+        Check(greenSample.red == 0 && greenSample.green == greenSample.maximumColor && greenSample.blue == 0 && greenSample.alpha == greenSample.maximumAlpha,
+              "new descriptor/texture version produces exact native green and opaque alpha without stale submitted red");
         owned.width = 800;
         owned.height = 600;
         Check(owned.session->Resize(owned.width, owned.height) == GuiD3D12Status::Ok, "resize renderer and notify the actual CEGUI display event");
@@ -498,8 +579,11 @@ int wmain(int argc, wchar_t** argv)
         Clear(owned, D3D12_RESOURCE_STATE_RENDER_TARGET);
         Check(owned.session->RenderFrame(Frame(owned)) == GuiD3D12Status::Ok, "render same actual MTA widgets into a new sized target");
         const auto resized = Read(owned);
-        Check(resized[132 * owned.width + 532] == 0xff00ff00, "pixel-to-clip transform preserves absolute widget coordinates after resize");
-        Save(root / L"d3d12-resized.bmp", owned.width, owned.height, resized);
+        const auto resizedSample = Decode(owned.format, resized[132 * owned.width + 532]);
+        Check(resizedSample.red == 0 && resizedSample.green == resizedSample.maximumColor && resizedSample.blue == 0 &&
+                  resizedSample.alpha == resizedSample.maximumAlpha,
+              "pixel-to-clip transform preserves absolute widget coordinates and native channels after resize");
+        Save(root / L"d3d12-resized.bmp", owned.format, owned.width, owned.height, resized);
         image->Clear();
         delete texture;
         texture = nullptr;

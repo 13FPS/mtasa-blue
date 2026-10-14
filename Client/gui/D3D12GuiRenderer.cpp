@@ -252,8 +252,12 @@ float4 PS(Output input):SV_TARGET { return image.Sample(imageSampler,input.uv)*i
 
     D3D12GuiRenderer::D3D12GuiRenderer(ID3D12Device* device, ID3D12CommandQueue* queue, DXGI_FORMAT format, std::uint32_t width, std::uint32_t height)
     {
+        // DE's observed native target uses normalized 10-bit RGB. The existing
+        // float shader/blend path can target that layout without changing the
+        // BGRA textures; accepting it here does not establish engine frame ownership.
         if (!device || !queue || !width || !height || width > 16384 || height > 16384 ||
-            (format != DXGI_FORMAT_R8G8B8A8_UNORM && format != DXGI_FORMAT_B8G8R8A8_UNORM) || queue->GetDesc().Type != D3D12_COMMAND_LIST_TYPE_DIRECT)
+            (format != DXGI_FORMAT_R8G8B8A8_UNORM && format != DXGI_FORMAT_B8G8R8A8_UNORM && format != DXGI_FORMAT_R10G10B10A2_UNORM) ||
+            queue->GetDesc().Type != D3D12_COMMAND_LIST_TYPE_DIRECT)
             RendererError("D3D12 GUI requires an owned device, direct queue, and supported target");
         ComPtr<ID3D12Device> queueDevice;
         Check(queue->GetDevice(IID_PPV_ARGS(&queueDevice)), "D3D12 GUI queue device lookup failed");

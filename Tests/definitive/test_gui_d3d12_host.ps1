@@ -73,14 +73,44 @@ $arguments=@('/nologo','/std:c++17','/EHsc','/O2','/MT','/W4','/WX','/DNOMINMAX'
     '/link','d3d12.lib','dxgi.lib','user32.lib','ole32.lib')
 $compileOutput=@(& $compiler @arguments 2>&1);$compileExit=$LASTEXITCODE
 $compileOutput | Set-Content -LiteralPath (Join-Path $outputRoot 'compile.log') -Encoding utf8
-$testExit=$null;$testCount=$null;$timedOut=$false;$testText=''
+$testExit=$null;$testCount=0;$timedOut=$false;$testText='';$runs=@()
 if ($compileExit -eq 0) {
-    $process=Start-Process -FilePath $executable -ArgumentList ('"'+$outputRoot+'"') -WorkingDirectory $outputRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $outputRoot 'stdout.log') -RedirectStandardError (Join-Path $outputRoot 'stderr.log')
-    # This exact owned Process is the only process this fixture may terminate.
-    if (-not $process.WaitForExit(45000)) { $timedOut=$true;$process.Kill();$process.WaitForExit() }
-    $testExit=$process.ExitCode;$process.Dispose()
-    $testText=(@(Get-Content -LiteralPath (Join-Path $outputRoot 'stdout.log'))+@(Get-Content -LiteralPath (Join-Path $outputRoot 'stderr.log'))) -join "`n"
-    if ($testText -match 'Passed (\d+) actual D3D12 GUI host checks') { $testCount=[int]$Matches[1] }
+    $testExit=0
+    # Each format gets a fresh process and staged asset tree. CEGUI's global
+    # session, lifetime negatives and readback artifacts must be exercised for
+    # the actual layout rather than inherited from a previous format's run.
+    foreach ($format in @(87,28,24)) {
+        $formatRoot=Join-Path $outputRoot ('format-'+$format)
+        New-Item -ItemType Directory -Path (Join-Path $formatRoot 'MTA/logs') -Force | Out-Null
+        foreach ($entry in @($artifacts | Where-Object { [IO.Path]::GetDirectoryName($_.staged) -eq (Join-Path $outputRoot 'MTA') })) {
+            $staged=Join-Path $formatRoot ([IO.Path]::GetRelativePath($outputRoot,$entry.staged))
+            New-Item -ItemType Directory -Path (Split-Path $staged) -Force | Out-Null
+            Copy-Item -LiteralPath $entry.staged -Destination $staged
+            $artifacts+=@([ordered]@{source=$entry.source;staged=$staged;sha256=$entry.sha256;targetFormat=$format})
+        }
+        foreach ($entry in @($assets | Where-Object { -not $_.Contains('targetFormat') })) {
+            $staged=Join-Path $formatRoot ([IO.Path]::GetRelativePath($outputRoot,$entry.staged))
+            New-Item -ItemType Directory -Path (Split-Path $staged) -Force | Out-Null
+            Copy-Item -LiteralPath $entry.staged -Destination $staged
+            $assets+=@([ordered]@{source=$entry.source;staged=$staged;sha256=$entry.sha256;targetFormat=$format})
+        }
+        $stdout=Join-Path $formatRoot 'stdout.log';$stderr=Join-Path $formatRoot 'stderr.log'
+        $process=Start-Process -FilePath $executable -ArgumentList ('"'+$formatRoot+'" '+$format) -WorkingDirectory $formatRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+        # This exact disposable Process is the only process this fixture may terminate.
+        $runTimedOut=-not $process.WaitForExit(45000)
+        if ($runTimedOut) { $timedOut=$true;$process.Kill();$process.WaitForExit() }
+        $runExit=$process.ExitCode;$process.Dispose()
+        $runText=(@(Get-Content -LiteralPath $stdout)+@(Get-Content -LiteralPath $stderr)) -join "`n"
+        $runChecks=$null
+        if ($runText -match 'Passed (\d+) actual D3D12 GUI host checks') { $runChecks=[int]$Matches[1];$testCount+=$runChecks }
+        $runSuccess=$runExit -eq 0 -and $null -ne $runChecks -and -not $runTimedOut -and $runText.Contains('GUI target format='+$format)
+        if (-not $runSuccess -and $testExit -eq 0) { $testExit=if ($runExit -ne 0) {$runExit} else {1} }
+        $runs+=@([ordered]@{targetFormat=$format;directory=$formatRoot;success=$runSuccess;checks=$runChecks;testExit=$runExit;timedOut=$runTimedOut;
+            stdout=$stdout;stdoutSha256=(Get-FileHash -Algorithm SHA256 -LiteralPath $stdout).Hash.ToLowerInvariant();
+            stderr=$stderr;stderrSha256=(Get-FileHash -Algorithm SHA256 -LiteralPath $stderr).Hash.ToLowerInvariant();
+            debugLayerAvailable=$runText.Contains('D3D12 debug layer available=1');nativePixelEncoding=if($format -eq 24){'R10G10B10A2_UNORM packed little-endian uint32'}elseif($format -eq 28){'R8G8B8A8_UNORM'}else{'B8G8R8A8_UNORM'}})
+        $testText+=$runText+"`n"
+    }
 }
 $sourceUnchanged=$true;$artifactsUnchanged=$true;$assetsUnchanged=$true
 foreach ($entry in $sourceHashes) { if ((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $taskRoot $entry.path)).Hash.ToLowerInvariant() -ne $entry.sha256) { $sourceUnchanged=$false } }
@@ -90,14 +120,16 @@ foreach ($entry in $artifacts) {
 foreach ($entry in $assets) {
     foreach ($path in @($entry.source,$entry.staged)) { if ((Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant() -ne $entry.sha256) { $assetsUnchanged=$false } }
 }
-$images=@(Get-ChildItem -LiteralPath $outputRoot -File -Filter 'd3d12-*.bmp' | ForEach-Object { [ordered]@{path=$_.FullName;bytes=$_.Length;sha256=(Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant()} })
-$success=$compileExit -eq 0 -and $testExit -eq 0 -and $null -ne $testCount -and -not $timedOut -and $sourceUnchanged -and $artifactsUnchanged -and $assetsUnchanged
+$images=@(Get-ChildItem -LiteralPath $outputRoot -Recurse -File -Filter 'd3d12-*.bmp' | ForEach-Object { [ordered]@{path=$_.FullName;bytes=$_.Length;sha256=(Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant();pixelEncoding='normalized B8G8R8A8_UNORM for BI_RGB preview only'} })
+$nativeReadbacks=@(Get-ChildItem -LiteralPath $outputRoot -Recurse -File -Filter 'd3d12-*.raw' | ForEach-Object { [ordered]@{path=$_.FullName;bytes=$_.Length;sha256=(Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant();layout='tightly packed rows, four bytes per pixel in the format named by the parent directory'} })
+$success=$compileExit -eq 0 -and $testExit -eq 0 -and $testCount -gt 0 -and $runs.Count -eq 3 -and @($runs | Where-Object { -not $_.success }).Count -eq 0 -and -not $timedOut -and $sourceUnchanged -and $artifactsUnchanged -and $assetsUnchanged
 $receipt=[ordered]@{recordedAt=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=$success;checks=$testCount;compileExit=$compileExit;testExit=$testExit;timedOut=$timedOut;
     sourceHashes=$sourceHashes;sourceSnapshotScope='Fixture, GUI ABI, renderer and selected CEGUI/widget sources; not the complete normal compiler dependency trace';sourceUnchanged=$sourceUnchanged;
-    artifacts=$artifacts;artifactsUnchanged=$artifactsUnchanged;assets=$assets;assetsUnchanged=$assetsUnchanged;windowsFonts=$fonts;images=$images;
+    artifacts=$artifacts;artifactsUnchanged=$artifactsUnchanged;assets=$assets;assetsUnchanged=$assetsUnchanged;windowsFonts=$fonts;images=$images;nativeReadbacks=$nativeReadbacks;
+    targetFormats=@(87,28,24);formatRuns=$runs;artifactNormalization='Only BMP copies are normalized to BGRA8; numerical assertions and .raw artifacts use untouched native target precision.';
     actualMtaWidgetsRenderedOnOwnedD3D12Warp=$success;debugLayerAvailable=$testText.Contains('D3D12 debug layer available=1');
     installedFilesChanged=$false;gameLaunched=$false;gameAttached=$false;coreInitialized=$false;deDrawingVerified=$false;fullMtaReady=$false;
-    scope='Actual MTA CGUI/CEGUI widgets, fonts and textures on an owned offscreen WARP device/queue; no engine target, real game device, or visible GTA drawing.'}
+    scope='Actual MTA CGUI/CEGUI widgets, fonts and textures on separate owned offscreen WARP sessions for BGRA8, RGBA8 and R10G10B10A2_UNORM targets; no engine target, real game device, color-space/HDR claim, or visible GTA drawing.'}
 $receipt | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $outputRoot 'test-result.json') -Encoding utf8
 [pscustomobject]@{directory=$outputRoot;success=$success;checks=$testCount;compileExit=$compileExit;testExit=$testExit;sourceUnchanged=$sourceUnchanged;artifactsUnchanged=$artifactsUnchanged;assetsUnchanged=$assetsUnchanged} | ConvertTo-Json -Compress
 if (-not $success) { throw "Actual owned D3D12 GUI fixture failed; see $outputRoot" }

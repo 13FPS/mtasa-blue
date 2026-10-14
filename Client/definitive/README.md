@@ -46,6 +46,25 @@ files matched, and normal exit was verified in the **33,440-byte** whole log,
 including the exact captured prefix and 74 appended shutdown bytes. The reader
 reports a clean diagnostic lifecycle with GPU ownership still unverified.
 
+**Completed live native metadata check: custom-present remains unsupported.**
+The next API3 trial ran for **10,011 ms**, with **198 Core samples, 88 script
+snapshots, 604 callback entries and 600 accepted native snapshots**. Native
+rejections, nesting, foreign callbacks, publication misses and failure stayed
+zero. **87 logged snapshots** contained complete native swapchain, queue and
+backbuffer metadata. All 600 aggregate published GPU probes were rejected;
+each complete logged query reported Unsupported with custom-present set and
+the drawing support predicate false.
+
+The sampled native objects share the same canonical device, report one device
+node and a direct queue, and describe three 1920×1080 buffers in DXGI format
+24 (`R10G10B10A2_UNORM`). These facts do not identify the custom presenter's
+actual frame sink, color space or synchronization boundary. The user reported
+normal game continuation. Cleanup detached the observer and unloaded
+Core/XML/pthread; the expected backend PIN remained. All 23 installed files
+matched. Normal exit passed in the **35,646-byte** whole log, with the exact
+captured prefix and 74 appended shutdown bytes. Native metadata is observed;
+GPU drawing ownership remains unverified.
+
 **Offline prerequisite: MTA's existing GUI layer on x64.**
 The CEGUI, Falagard, DirectX9GUIRenderer and `cgui` projects now admit only
 opt-in `--with-definitive-adapter` Release/x64 builds. Default x64 exclusion and
@@ -101,13 +120,20 @@ against a private offscreen WARP device with MTA's actual assets, GPU pixel
 readback, widget input, blocked-queue cleanup and resize. It does not run GTA
 or use an engine-owned target. The GUI DLL is not included in the live probe.
 
-The normal opt-in GUI build passed 69 policy/artifact guards, including classic
-Win32 compile checks. The actual D3D12 WARP host passed 141 checks and produced
-133,058 non-background pixels, including verified BGRA colour/straight alpha.
+The latest normal opt-in GUI build passed 69 policy/artifact guards, including
+classic Win32 compile checks. The actual D3D12 WARP host passed **459 checks:
+153 each for BGRA8 (87), RGBA8 (28) and R10G10B10A2_UNORM (24)**. All three
+fresh sessions render MTA's existing widgets, fonts and textures. Native
+readbacks verify channel order, straight-alpha RGB blending and opaque alpha
+preservation, including raw 10-bit RGB 547/58/86 and two-bit alpha 3. Numerical
+checks use untouched target pixels; nine separate BMP previews normalize only
+artifact copies to BGRA8. Unsupported neighboring formats and a supported
+resource with the wrong target format are rejected before submission.
 Blocked-queue tests covered all three slots, texture destruction, resize and
 busy shutdown/release. The final owned device release reached zero. The D3D12
 debug layer was unavailable; these results come from actual GPU readback,
-fences and ownership checks. The existing D3D9 host still passed its 91 checks.
+fences and ownership checks. Color space, HDR behavior and actual DE drawing
+remain unverified. The prior D3D9 host passed 91 checks; its renderer is unchanged.
 An earlier candidate aborts on an invalid-format constructor before CEGUI has
 created its logger; the corrected backend throws without that singleton and
 then successfully constructs the real GUI after the rejected attempt.
@@ -149,7 +175,7 @@ drawing. The native callback fixture covers both the single-node query path
 and the retained custom/multi-GPU refusal.
 The focused checks pass 265 ownership and 2,072 native callback cases,
 including repeated real custom-present metadata queries and balanced COM
-references. The renderer itself is unchanged.
+references. These observer checks issue no rendering work.
 Cleanup-release faults disable further queries before calling the
 engine original; that failure survives a missed publication, a changed root
 and an original exception. No GPU commands are submitted by this observer.

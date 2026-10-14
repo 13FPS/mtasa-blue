@@ -9,6 +9,7 @@ $outputRoot = Join-Path $taskRoot ('Build/mta-native-render-observation/' + (Get
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
 $sourceNames = @('Client/game_de/NativeRenderObservation.h','Client/game_de/NativeRenderObservation.cpp',
     'Client/game_de/NativeD3D12OwnershipProbe.h','Client/game_de/NativeD3D12OwnershipProbe.cpp',
+    'Client/game_de/NativeCustomPresentProbe.h','Client/game_de/NativeCustomPresentProbe.cpp',
     'Tests/definitive/NativeRenderObservationTests.cpp','Tests/definitive/test_native_render_observation.ps1',
     'Client/sdk/game/CGameRenderObservation.h','Client/sdk/game/CGameAdapter.h',
     'Shared/sdk/CControllerState.h','Shared/sdk/CControlStateSynthesis.h','Shared/sdk/CControllerActions.h',
@@ -42,6 +43,36 @@ foreach ($route in @(@{name='d3d11';rva=0x1f5a430;bytes=421;sha='605ff6632456992
     if ((Get-FileHash -LiteralPath $fixture -Algorithm SHA256).Hash.ToLowerInvariant() -ne $route.sha) { throw 'Pinned native route fingerprint differs.' }
     $codeFixtures += $fixture
 }
+# The classifier fixtures are complete pinned functions, never executable game
+# mappings. Its injected owned reader exercises exactly the production hashes.
+$customFunctions = @(
+    @{rva=0xacb9c0;bytes=66;sha='1857592da09f0219dfbb41e81b94c02d62308df520e0be2f5e1358d455411e9d'},
+    @{rva=0xc20780;bytes=44;sha='f3b4a18798b293c12b9184eaefa26a2b1aaff29543c79524615fcf6fb4275540'},
+    @{rva=0xab6580;bytes=3;sha='e18aacce29affcdddaa5f641ac1ec12552e0fe9d066e6408941b1792818b8619'},
+    @{rva=0xac66d0;bytes=3;sha='01cb47d078b4841b8408ec4fe278efa83115c6f6e101972987507d2b2b57dcf0'},
+    @{rva=0xab4f10;bytes=3;sha='b6cbececf1b07e74f37d57710c68c31f0b92cb08d51093252b321b07542e177b'},
+    @{rva=0xc20bf0;bytes=213;sha='eb9b8abefd6c0a758069f99229d293ddbac82432d9543a0d22d91c9cc26352ee'},
+    @{rva=0xab4f10;bytes=3;sha='b6cbececf1b07e74f37d57710c68c31f0b92cb08d51093252b321b07542e177b'})
+$customFixture=Join-Path $outputRoot 'custom-present-signatures.bin'
+$customStream=[IO.MemoryStream]::new()
+try {
+    foreach($function in $customFunctions) {
+        $functionOffset=$null
+        for($index=0;$index -lt $sections;++$index) {
+            $at=$pe+24+$optional+$index*40
+            $rva=[BitConverter]::ToUInt32($raw,$at+12);$size=[BitConverter]::ToUInt32($raw,$at+16);$start=[BitConverter]::ToUInt32($raw,$at+20)
+            if($function.rva -ge $rva -and $function.rva+$function.bytes -le $rva+$size) {$functionOffset=[int]($start+$function.rva-$rva)}
+        }
+        if($null -eq $functionOffset){throw 'Complete presenter function is not file-backed.'}
+        $code=[byte[]]::new($function.bytes);[Array]::Copy($raw,$functionOffset,$code,0,$function.bytes)
+        $sha=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($code)).ToLowerInvariant()
+        if($sha -ne $function.sha){throw 'Complete presenter code signature differs.'}
+        $customStream.Write($code,0,$code.Length)
+    }
+    [IO.File]::WriteAllBytes($customFixture,$customStream.ToArray())
+} finally {$customStream.Dispose()}
+$codeFixtures += $customFixture
+
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
 $visualStudio = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
 if (-not $visualStudio) { throw 'Visual Studio x64 tools are required.' }
@@ -59,7 +90,8 @@ $detoursOutput | Set-Content -LiteralPath (Join-Path $outputRoot 'detours-compil
 $executable = Join-Path $outputRoot 'native_render_observation_tests.exe'
 $objects = @('detours.obj','modules.obj','disasm.obj','image.obj','creatwth.obj') | ForEach-Object { Join-Path $outputRoot $_ }
 $arguments = $common + @('/W4','/WX',(Join-Path $PSScriptRoot 'NativeRenderObservationTests.cpp'),
-    (Join-Path $taskRoot 'Client/game_de/NativeD3D12OwnershipProbe.cpp'),('/Fo'+$outputRoot+[IO.Path]::DirectorySeparatorChar),('/Fe'+$executable),'/link','bcrypt.lib')+$objects
+    (Join-Path $taskRoot 'Client/game_de/NativeD3D12OwnershipProbe.cpp'),
+    (Join-Path $taskRoot 'Client/game_de/NativeCustomPresentProbe.cpp'),('/Fo'+$outputRoot+[IO.Path]::DirectorySeparatorChar),('/Fe'+$executable),'/link','bcrypt.lib')+$objects
 $compilerOutput = @(& $compiler @arguments 2>&1)
 $compilerExit = $LASTEXITCODE
 $compilerOutput | Set-Content -LiteralPath (Join-Path $outputRoot 'compile.log') -Encoding utf8

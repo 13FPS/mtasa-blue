@@ -6,6 +6,7 @@
 
 #include "NativeRenderObservation.h"
 #include "NativeD3D12OwnershipProbe.h"
+#include "NativeCustomPresentProbe.h"
 #include <array>
 #include <atomic>
 #include <limits>
@@ -71,6 +72,7 @@ namespace mta::game_de
             const RouteDescriptor*       route = nullptr;
             std::uint32_t                requestedRoute = 0;
             bool                         queryGpuOwnership = false;
+            bool                         classifyCustomPresent = false;
         };
         // Failed teardown must retain its trampoline and callback storage.
         // Nothing in this process-lifetime state points at a released owner.
@@ -280,51 +282,85 @@ namespace mta::game_de
             return Read(object, table) && Read(table, queryInterface) && Pages(queryInterface, 1, 0, true);
         }
 
-        void CaptureOwnership(void* viewport, GpuOwnershipProbeState& state) noexcept
+        class ImageCustomPresentReads final : public CustomPresentReads
+        {
+        public:
+            bool Object(std::uintptr_t address, void* output, std::size_t bytes) override { return Read(address, output, bytes); }
+            bool Image(std::uintptr_t address, void* output, std::size_t bytes, bool executable) override
+            {
+                return Read(address, output, bytes, runtime.image, executable);
+            }
+        };
+
+        void CaptureOwnership(void* viewport, GpuOwnershipProbeState& state, CustomPresentClassificationState* custom = nullptr) noexcept
         {
             using Stage = GpuOwnershipQueryStage;
             using QueryStatus = GpuOwnershipQueryStatus;
+            if (custom)
+                *custom = {};
             state.queryStage = static_cast<std::uint32_t>(Stage::NativeRoots);
             state.queryStatus = static_cast<std::uint32_t>(QueryStatus::Failed);
             ProbeRoots roots;
             if (!ReadProbeRoots(viewport, roots))
             {
                 state.hresult = static_cast<std::uint32_t>(E_POINTER);
+                if (custom)
+                    custom->status = static_cast<std::uint32_t>(CustomPresentClassificationStatus::ReadFault);
                 return;
             }
             state.customPresentPresent = roots.customPresent ? 1u : 0u;
             state.nativeExplicitGPUCount = roots.explicitGpuCount;
             state.nativeAFRCount = roots.afrCount;
-            // Indexed multi-GPU routes may choose another native queue. Keep
-            // their historical refusal stage rather than query device zero.
-            const bool singleNativeGpu = roots.explicitGpuCount == 1 && roots.afrCount == 1;
-            state.queryStatus = static_cast<std::uint32_t>(QueryStatus::Unsupported);
-            state.queryStage = static_cast<std::uint32_t>(Stage::CustomPresent);
-            if (roots.customPresent && !singleNativeGpu)
-                return;
-            state.queryStage = static_cast<std::uint32_t>(Stage::SingleNode);
-            if (!singleNativeGpu)
-                return;
-            if (!BorrowedComRoot(roots.swapchain) || !BorrowedComRoot(roots.queue))
+            ImageCustomPresentReads customReads;
+            CustomPresentProbeRoots customRoots;
+            if (custom)
+                ClassifyCustomPresent(customReads, runtime.image, roots.customPresent, roots.device, *custom, customRoots);
+            bool       queried = false;
+            const auto query = [&]() noexcept
             {
-                state.queryStatus = static_cast<std::uint32_t>(QueryStatus::Failed);
-                state.hresult = static_cast<std::uint32_t>(E_POINTER);
+                // Indexed multi-GPU routes may choose another native queue. Keep
+                // their historical refusal stage rather than query device zero.
+                const bool singleNativeGpu = roots.explicitGpuCount == 1 && roots.afrCount == 1;
+                state.queryStatus = static_cast<std::uint32_t>(QueryStatus::Unsupported);
+                state.queryStage = static_cast<std::uint32_t>(Stage::CustomPresent);
+                if (roots.customPresent && !singleNativeGpu)
+                    return;
+                state.queryStage = static_cast<std::uint32_t>(Stage::SingleNode);
+                if (!singleNativeGpu)
+                    return;
+                if (!BorrowedComRoot(roots.swapchain) || !BorrowedComRoot(roots.queue))
+                {
+                    state.queryStatus = static_cast<std::uint32_t>(QueryStatus::Failed);
+                    state.hresult = static_cast<std::uint32_t>(E_POINTER);
+                    return;
+                }
+                // These are the existing native swapchain and creation queue even
+                // when a custom presenter exists; their metadata does not identify
+                // its chosen frame sink. The query's support predicate still
+                // excludes that route. Release every local ref before the original
+                // can present or rotate buffers; issue no GPU work or waits.
+                queried = true;
+                ProbeD3D12Ownership(reinterpret_cast<void*>(roots.swapchain), reinterpret_cast<void*>(roots.queue), state);
+            };
+            query();
+            // API4's class policy belongs to the same borrowed native roots as
+            // its COM metadata, including refused/failed COM attempts. API3
+            // retains its historical readback only after an actual COM query.
+            if (!queried && !custom)
                 return;
-            }
-            // These are the existing native swapchain and creation queue even
-            // when a custom presenter exists; their metadata does not identify
-            // its chosen frame sink. The query's support predicate still
-            // excludes that route. Release every local ref before the original
-            // can present or rotate buffers; issue no GPU work or waits.
-            ProbeD3D12Ownership(reinterpret_cast<void*>(roots.swapchain), reinterpret_cast<void*>(roots.queue), state);
             ProbeRoots after;
-            if ((!ReadProbeRoots(viewport, after) || !SameProbeRoots(roots, after)) &&
-                state.queryStatus != static_cast<std::uint32_t>(QueryStatus::CleanupFailed))
+            const bool changed = !ReadProbeRoots(viewport, after) || !SameProbeRoots(roots, after);
+            if (changed && state.queryStatus != static_cast<std::uint32_t>(QueryStatus::CleanupFailed))
             {
                 state.queryStage = static_cast<std::uint32_t>(Stage::RootReadback);
                 state.queryStatus = static_cast<std::uint32_t>(QueryStatus::RootsChanged);
                 state.metadataValid = state.supportPredicate = 0;
                 state.hresult = 0;
+            }
+            if (custom && (changed || !CustomPresentRootsUnchanged(customReads, customRoots)))
+            {
+                *custom = {};
+                custom->status = static_cast<std::uint32_t>(CustomPresentClassificationStatus::RootsChanged);
             }
         }
 
@@ -364,7 +400,7 @@ namespace mta::game_de
             bool fatalCleanup = false;
             if (accepted && runtime.queryGpuOwnership)
             {
-                CaptureOwnership(viewport, capture.gpu);
+                CaptureOwnership(viewport, capture.gpu, runtime.classifyCustomPresent ? &capture.custom : nullptr);
                 fatalCleanup = capture.gpu.queryStatus == static_cast<std::uint32_t>(GpuOwnershipQueryStatus::CleanupFailed);
                 // Disarm before either the original or a contended publication
                 // can throw/drop this metadata. Unknown Release effects must
@@ -506,7 +542,7 @@ namespace mta::game_de
         End();
     }
 
-    bool NativeRenderObservation::Begin(RenderObservationRoute route, bool queryGpuOwnership) noexcept
+    bool NativeRenderObservation::Begin(RenderObservationRoute route, bool queryGpuOwnership, bool classifyCustomPresent) noexcept
     {
         ApiOperation operation;
         if (!operation.acquired || runtime.hooked.load() || runtime.inFlight.load() || runtime.active.load())
@@ -519,8 +555,10 @@ namespace mta::game_de
         ResetCounters();
         runtime.requestedRoute = static_cast<std::uint32_t>(route);
         runtime.queryGpuOwnership = queryGpuOwnership;
+        runtime.classifyCustomPresent = classifyCustomPresent;
         runtime.route = SelectRoute(route);
-        if (!runtime.route || (queryGpuOwnership && route != RenderObservationRoute::D3D12))
+        if (!runtime.route || ((queryGpuOwnership || classifyCustomPresent) && route != RenderObservationRoute::D3D12) ||
+            (classifyCustomPresent && !queryGpuOwnership))
         {
             Fail(Failure::UnsupportedRoute);
             ReadState(finalState);

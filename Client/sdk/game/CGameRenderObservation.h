@@ -62,6 +62,37 @@ namespace mta::game_de
     extern "C" IGameRenderObservation* CreateGameRenderObservation(std::uint32_t apiVersion, CCoreInterface* owner) noexcept;
 #endif
 
+    // API4 identifies a pinned custom-present implementation by guarded reads.
+    // Its static callback policy never changes API3 support or proves that a
+    // native Present branch executed, a GPU frame completed, or drawing is safe.
+    inline constexpr std::uint32_t RenderObservationApiVersionV4 = 4;
+    enum class CustomPresentClassificationStatus : std::uint32_t
+    {
+        NotAttempted = 0,
+        Absent,
+        KnownNativePresenter,
+        UnknownImplementation,
+        SignatureMismatch,
+        ReadFault,
+        DeviceMismatch,
+        RootsChanged
+    };
+    enum class CustomPresentImplementation : std::uint32_t
+    {
+        None = 0,
+        GamefaceD3D12NativePresenter = 1
+    };
+    struct CustomPresentClassificationState
+    {
+        // Only KnownNativePresenter publishes implementation1, all seven slot
+        // bits, and policy15. SignatureMismatch/ReadFault/DeviceMismatch may
+        // retain verified slot bits; every other status clears that mask.
+        // Policy bits: native Present requested1, no fallback advance2,
+        // post-Present no-op4, resize notification8. A known implementation is
+        // independent of COM query success and still cannot admit GPU writes.
+        std::uint32_t status = 0, implementationId = 0, slotSignatureMask = 0, staticPolicyFlags = 0;
+    };
+
     // API1 remains the historical D3D11-only contract. A separate factory and
     // vtable keep route selection from changing any existing caller's layout.
     enum class RenderObservationRoute : std::uint32_t
@@ -179,5 +210,28 @@ namespace mta::game_de
     IGameRenderObservationV3* CreateGameRenderObservationV3(std::uint32_t apiVersion, CCoreInterface* owner, RenderObservationRoute route) noexcept;
 #else
     extern "C" IGameRenderObservationV3* CreateGameRenderObservationV3(std::uint32_t apiVersion, CCoreInterface* owner, RenderObservationRoute route) noexcept;
+#endif
+
+    struct RenderObservationStateV4
+    {
+        RenderObservationStateV3         base;
+        CustomPresentClassificationState custom;
+    };
+    class IGameRenderObservationV4
+    {
+    public:
+        virtual Status Begin() noexcept = 0;
+        virtual Status ReadState(RenderObservationStateV4& state) noexcept = 0;
+        virtual Status End() noexcept = 0;
+        virtual void   Release() noexcept = 0;
+
+    protected:
+        virtual ~IGameRenderObservationV4() = default;
+    };
+#if defined(_WIN32) && defined(MTA_GAME_DE_EXPORTS)
+    extern "C" __declspec(dllexport)
+    IGameRenderObservationV4* CreateGameRenderObservationV4(std::uint32_t apiVersion, CCoreInterface* owner, RenderObservationRoute route) noexcept;
+#else
+    extern "C" IGameRenderObservationV4* CreateGameRenderObservationV4(std::uint32_t apiVersion, CCoreInterface* owner, RenderObservationRoute route) noexcept;
 #endif
 }

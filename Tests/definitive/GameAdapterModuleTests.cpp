@@ -633,6 +633,50 @@ namespace
               "actual ended API3 readback keeps failed admission and zero-query evidence");
         observation->Release();
     }
+    void TestRenderObservationV4FactoryRejection()
+    {
+        OwnerIdentity owner;
+        for (const auto version : {0u, 1u, 2u, 3u, 5u})
+            Check(!CreateGameRenderObservationV4(version, owner.Get(), RenderObservationRoute::D3D12),
+                  "actual API4 never substitutes an earlier or unknown diagnostics contract");
+        Check(!CreateGameRenderObservationV4(4, nullptr, RenderObservationRoute::D3D12), "API4 requires an opaque MTA owner identity");
+        for (const auto route : {RenderObservationRoute::Unknown, RenderObservationRoute::D3D11, static_cast<RenderObservationRoute>(99)})
+            Check(!CreateGameRenderObservationV4(4, owner.Get(), route), "API4 COM queries require the explicit D3D12 route");
+        auto* observation = CreateGameRenderObservationV4(4, owner.Get(), RenderObservationRoute::D3D12);
+        Check(observation != nullptr, "actual API4 allocates its separate owner lease");
+        RenderObservationStateV4 state;
+        Check(observation->ReadState(state) == Status::Ok && !state.base.base.base.bound && !state.base.base.base.active &&
+                  !state.base.base.base.modulePinned && !state.custom.status && !state.custom.implementationId && !state.custom.slotSignatureMask &&
+                  !state.custom.staticPolicyFlags && !state.base.gpu.attempts && !state.base.gpu.accepted && !state.base.gpu.rejected &&
+                  !state.base.gpu.queryStage && !state.base.gpu.metadataValid,
+              "API4 allocation acquires no engine references and invents no GPU metadata");
+        Status                   foreignBegin = Status::Ok, foreignRead = Status::Ok, foreignEnd = Status::Ok;
+        RenderObservationStateV4 foreignState;
+        foreignState.base.gpu.queryStage = 99;
+        foreignState.custom.staticPolicyFlags = 99;
+        std::thread foreign(
+            [&]
+            {
+                foreignBegin = observation->Begin();
+                foreignRead = observation->ReadState(foreignState);
+                foreignEnd = observation->End();
+                observation->Release();
+            });
+        foreign.join();
+        Check(foreignBegin == Status::WrongThread && foreignRead == Status::WrongThread && foreignEnd == Status::WrongThread &&
+                  foreignState.base.gpu.queryStage == 99 && foreignState.custom.staticPolicyFlags == 99,
+              "foreign API4 calls preserve output and cannot release an owned lease");
+        Check(observation->Begin() == Status::Unsupported, "real API4 binding rejects the owned nongame executable");
+        Check(observation->ReadState(state) == Status::Ok && state.base.base.requestedRoute == 2 && !state.base.base.observedRoute &&
+                  !state.base.base.base.bound && !state.base.base.base.active && !state.base.base.base.modulePinned && state.base.base.base.failureReason &&
+                  !state.base.gpu.attempts && !state.base.gpu.queryStage && !state.base.gpu.metadataValid && !state.base.gpu.supportPredicate &&
+                  !state.custom.status && !state.custom.implementationId && !state.custom.slotSignatureMask && !state.custom.staticPolicyFlags,
+              "failed image binding performs no COM queries, hook, PIN or inferred D3D12 observation");
+        Check(observation->End() == Status::Ok && observation->End() == Status::Ok, "wrong-image API4 End is idempotent");
+        Check(observation->ReadState(state) == Status::Ok && !state.base.base.base.active && !state.base.base.base.pendingCleanup && !state.base.gpu.attempts,
+              "actual ended API4 readback keeps failed admission and zero-query evidence");
+        observation->Release();
+    }
 }
 
 int main()
@@ -658,6 +702,7 @@ int main()
         TestRenderObservationFactoryRejection();
         TestRenderObservationV2FactoryRejection();
         TestRenderObservationV3FactoryRejection();
+        TestRenderObservationV4FactoryRejection();
         std::cout << "Passed " << checks << " MTA Game DE adapter checks\n";
         return 0;
     }

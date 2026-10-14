@@ -108,6 +108,15 @@ int wmain(int argc, wchar_t** argv)
         const auto configureRenderV2 = Resolve<ConfigureRenderV2>(core, "MTA_ConfigureDERenderReferenceV2");
         const auto renderVersionV3 = Resolve<std::uint32_t (*)()>(core, "MTA_DERenderReferenceApiVersionV3");
         const auto configureRenderV3 = Resolve<ConfigureRenderV2>(core, "MTA_ConfigureDERenderReferenceV3");
+        const auto renderVersionV4 = Resolve<std::uint32_t (*)()>(core, "MTA_DERenderReferenceApiVersionV4");
+        const auto configureRenderV4 = Resolve<ConfigureRenderV2>(core, "MTA_ConfigureDERenderReferenceV4");
+        Check(renderVersionV4() == 4 && DefinitiveRenderReference::FieldCountV4 == 84, "API4 exports bind a separate additive classification contract");
+        for (const auto route : {0u, 1u, 3u, 0xffffffffu})
+            Check(configureRenderV4(1, route, CancelInput, PublishInput) == 0, "API4 classification cannot fall back to a legacy renderer route");
+        Check(configureRenderV4(0, 2, CancelInput, PublishInput) == 0 && configureRenderV4(10001, 2, CancelInput, PublishInput) == 0,
+              "API4 retains the bounded renderer diagnostic duration");
+        Check(configureRenderV4(1, 2, nullptr, PublishInput) == 0 && configureRenderV4(1, 2, CancelInput, nullptr) == 0,
+              "API4 requires owner cancellation and value publication callbacks");
         Check(renderVersionV3() == 3 && DefinitiveRenderReference::FieldCountV3 == 80, "API3 exports bind the separate 80-field scalar ownership contract");
         for (const auto route : {0u, 1u, 3u, 0xffffffffu})
             Check(configureRenderV3(1, route, CancelInput, PublishInput) == 0, "API3 requires explicit D3D12 without an earlier-version fallback");
@@ -141,6 +150,7 @@ int wmain(int argc, wchar_t** argv)
         Check(configureRender(1, CancelInput, PublishInput) == 0, "render observation cannot replace pending configured input");
         Check(configureRenderV2(1, 2, CancelInput, PublishInput) == 0, "API2 route cannot replace a pending input request");
         Check(configureRenderV3(1, 2, CancelInput, PublishInput) == 0, "API3 cannot replace a pending configured input owner");
+        Check(configureRenderV4(1, 2, CancelInput, PublishInput) == 0, "API4 cannot replace a pending configured input owner");
         Check(configureMovement(1, CancelInput, PublishInput) == 0, "movement cannot replace a pending read-only request");
         Check(configureInput(1, CancelInput, PublishInput) == 0, "a pending input request must not be overwritten");
         unsigned int foreignConfigure = 1;
@@ -199,6 +209,24 @@ int wmain(int argc, wchar_t** argv)
         NoGameModules();
         NoClassicRendererModules();
         Check(inputPublications == 0, "wrong-image API3 never reaches native ownership queries or publication");
+        // The actual new export must consume and release its request through
+        // the real Core, while the exact-image gate prevents native inspection.
+        Check(configureRenderV4(1, 2, CancelInput, PublishInput) == 1, "consumed API3 request permits an explicit API4 owner");
+        Check(configureRender(1, CancelInput, PublishInput) == 0 && configureRenderV2(1, 2, CancelInput, PublishInput) == 0 &&
+                  configureRenderV3(1, 2, CancelInput, PublishInput) == 0 && configureMovement(1, CancelInput, PublishInput) == 0 &&
+                  configureInput(1, CancelInput, PublishInput) == 0,
+              "pending classification retains one owner and excludes earlier observers, input and writes");
+        std::uint32_t foreignClassificationRequest = 1;
+        std::thread   classificationRequester([&] { foreignClassificationRequest = configureRenderV4(1, 2, CancelInput, PublishInput); });
+        classificationRequester.join();
+        Check(foreignClassificationRequest == 0, "foreign classification request cannot replace its owner");
+        const int api4Result = initialize();
+        Check(api4Result == 5, "actual API4 request still fails the nongame exact-image gate");
+        CheckStartup(readStartup, 5, 3, 33);
+        Check(GetModuleHandleW(L"game_de.dll") == nullptr, "failed API4 construction releases the backend before return");
+        NoGameModules();
+        NoClassicRendererModules();
+        Check(inputPublications == 0, "wrong-image API4 cannot inspect custom presenter memory or publish evidence");
         // A diagnostic reader cannot accidentally become a cross-thread Core
         // control channel or erase the completed owner-thread failure snapshot.
         std::array<unsigned int, 8> foreign{};
@@ -220,8 +248,8 @@ int wmain(int argc, wchar_t** argv)
         std::printf(
             "{\"success\":true,\"checks\":%d,\"initialize_results\":[%d,%d,%d,%d],\"continued_after_free_library\":true,\"backend_unloaded_after_each_"
             "failure\":true,\"classic_modules_unloaded\":true,\"legacy_renderer_modules_unloaded\":true,\"startup_diagnostics_verified\":true,\"api3_"
-            "initialize_result\":%d}\n",
-            checks, results[0], results[1], results[2], results[3], api3Result);
+            "initialize_result\":%d,\"api4_initialize_result\":%d}\n",
+            checks, results[0], results[1], results[2], results[3], api3Result, api4Result);
         return 0;
     }
     catch (const std::exception& error)

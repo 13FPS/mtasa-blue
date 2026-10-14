@@ -47,3 +47,6 @@ export const MTA_CORE_RENDER_ROUTE = 'd3d11';
 // COM metadata queries need their own explicit admission. They release every
 // borrowed frame interface before returning and never submit GPU commands.
 export const MTA_CORE_RENDER_GPU_REFERENCE = false;
+// Static custom-presenter recognition is a separate diagnostic. Matching a
+// reviewed implementation does not establish its frame sink or permit drawing.
+export const MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE = false;

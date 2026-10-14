@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { MODE, ONLINE_ACTIVATION, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE, MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE, MTA_CORE_RENDER_ROUTE, MTA_CORE_RENDER_GPU_REFERENCE } from './config.mjs';
+import { MODE, ONLINE_ACTIVATION, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE, MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE, MTA_CORE_RENDER_ROUTE, MTA_CORE_RENDER_GPU_REFERENCE, MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE } from './config.mjs';
 import { AdapterController, NativeGaitReferenceController, NativeInputReferenceController } from './controller.mjs';
 import { MtaNativePadReferenceController } from './native-pad-reference.mjs';
 import { MtaNativeMovementTrialController } from './native-movement-trial.mjs';
@@ -22,6 +22,9 @@ function runAdapter() {
     if (typeof MTA_CORE_RENDER_GPU_REFERENCE !== 'boolean' ||
         (MTA_CORE_RENDER_GPU_REFERENCE && (!MTA_CORE_RENDER_REFERENCE || MTA_CORE_RENDER_ROUTE !== 'd3d12')))
         throw new Error('GPU ownership queries require explicit D3D12 Core renderer observation');
+    if (typeof MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE !== 'boolean' ||
+        (MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE && (!MTA_CORE_RENDER_GPU_REFERENCE || !MTA_CORE_RENDER_REFERENCE || MTA_CORE_RENDER_ROUTE !== 'd3d12')))
+        throw new Error('Custom-present recognition requires explicit D3D12 Core GPU observation');
     if (typeof MTA_CORE_MOVEMENT_REFERENCE !== 'boolean' ||
         (MTA_CORE_MOVEMENT_REFERENCE && (MODE !== 'smoke' || INPUT_REFERENCE || GAIT_REFERENCE || GAIT_RATE || GAIT_ROOT_LOCK ||
             MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE)))
@@ -173,8 +176,8 @@ function runAdapter() {
         // Core owns the optional backend observer and all teardown on its
         // worker. Script reads coherent scalar snapshots; it draws nothing
         // and never receives viewport, swapchain or device pointers.
-        const observationApi = MTA_CORE_RENDER_GPU_REFERENCE ? 3 : 2;
-        const coreApi = MTA_CORE_RENDER_GPU_REFERENCE ? 7 : 6;
+        const observationApi = MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE ? 4 : MTA_CORE_RENDER_GPU_REFERENCE ? 3 : 2;
+        const coreApi = MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE ? 8 : MTA_CORE_RENDER_GPU_REFERENCE ? 7 : 6;
         const renderApiVersion = bind('DE_CoreRenderApiVersionV' + observationApi, 'X64U32');
         const begin = bind('DE_CoreRenderBeginV' + observationApi);
         const capture = bind('DE_CoreRenderCaptureV' + observationApi);
@@ -204,7 +207,7 @@ function runAdapter() {
                     (state[field + 1] === previous[field + 1] && state[field] < previous[field])))
                 return false;
             if (state[44] === 0 && state[45] === 0)
-                return state.slice(46).every(value => value === 0);
+                return state.slice(46, 80).every(value => value === 0);
             if (state[50] === 0 || state[75] === 0 || (state[53] && !gpuSupported(state)))
                 return false;
             if (state[75] === 1)
@@ -220,6 +223,17 @@ function runAdapter() {
             if (state[75] === 4) return state[50] >= 4 && state[50] <= 16 && state[51] === 0x8000ffff;
             if (state[75] === 5) return state[50] === 17 && state[51] === 0;
             return state[75] === 6 && state[50] === 18 && state[51] === 0x8000ffff;
+        };
+        const customPresentConsistent = state => {
+            const [status, implementation, signatures, policies] = state.slice(80);
+            if (status > 7 || signatures > 127) return false;
+            if (state[44] === 0 && state[45] === 0)
+                return status === 0 && implementation === 0 && signatures === 0 && policies === 0;
+            if (status === 0) return false;
+            if (status === 2)
+                return state[74] === 1 && implementation === 1 && signatures === 127 && policies === 15;
+            if (implementation !== 0 || policies !== 0 || ([1, 3, 7].includes(status) && signatures !== 0)) return false;
+            return status === 1 ? state[74] === 0 : [5, 7].includes(status) || state[74] === 1;
         };
         emit({ event: 'adapter_start', host: HOST, cleo: String(CLEO.version), host_version: String(CLEO.hostVersion),
             definitions: String(CLEO.apiVersion), mode: MODE, endpoint: null, stop_key: stopKey,
@@ -238,7 +252,7 @@ function runAdapter() {
             const captured = capture();
             if (captured !== 0 && captured !== 1) throw new Error('Core render capture status unavailable');
             if (!captured) return;
-            const state = Array.from({ length: observationApi === 3 ? 80 : 44 }, (_, field) => readRender(field));
+            const state = Array.from({ length: observationApi === 4 ? 84 : observationApi === 3 ? 80 : 44 }, (_, field) => readRender(field));
             if (!state.every(value => Number.isInteger(value) && value >= 0 && value <= 0xffffffff))
                 throw new Error('Core render returned invalid unsigned state');
             if (state[0] !== observationApi || ![1, 2, 3].includes(state[1]) || state[2] < lastSequence || state[3] < lastElapsed)
@@ -261,8 +275,12 @@ function runAdapter() {
             if (highSum > state[18] || (highSum === state[18] && low > state[17]) ||
                 state[24] > state[18] || (state[24] === state[18] && state[23] > state[17]))
                 throw new Error('Core render outcomes exceed native callback entries');
-            if (observationApi === 3 && !gpuConsistent(state, latest))
+            if (observationApi >= 3 && !gpuConsistent(state, latest))
                 throw new Error('Core GPU ownership metadata or counters are contradictory');
+            // Classification preserves API3's unsupported custom-present result.
+            // The additive tail describes checked code/association, never a GPU frame boundary.
+            if (observationApi === 4 && !customPresentConsistent(state))
+                throw new Error('Core custom-present classification is contradictory');
             if (state[2] === lastSequence) {
                 if (!latest || state.some((value, field) => value !== latest[field]))
                     throw new Error('Core render publication changed without a new sequence');
@@ -317,7 +335,7 @@ function runAdapter() {
             latest[33] === 0 && latest[34] === 0 && latest[37] === expectedPresence &&
             latest[38] === 0 && latest[39] === 0 && latest[40] === requestedRoute &&
             latest[41] === requestedRoute && latest[42] === expectedKnown && latest[43] === (requestedRoute === 2 ? 1 : 0);
-        const gpuObserved = observationApi !== 3 || (latest !== null && gpuSupported(latest) &&
+        const gpuObserved = observationApi < 3 || (latest !== null && gpuSupported(latest) &&
             (latest[46] !== 0 || latest[47] !== 0) && latest[48] === 0 && latest[49] === 0);
         const passed = !stopRequested && runResult === 1 && expected.every((value, field) => state[field] === value) &&
             state[11] <= 3 && state[12] <= 3 && (state[12] & ~state[11]) === 0 && cleanupPassed && state[18] === 0 && observed && gpuObserved;

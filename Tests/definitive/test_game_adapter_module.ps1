@@ -19,6 +19,7 @@ $sourceNames = @('Client/sdk/game/CGameAdapter.h', 'Client/game_de/GameAdapter.c
     'Client/game_de/NativeMovementInput.h', 'Client/game_de/NativeMovementInput.cpp', 'Client/game_de/NativeInputRouting.h',
     'Client/sdk/game/CGameRenderObservation.h', 'Client/game_de/NativeRenderObservation.h', 'Client/game_de/NativeRenderObservation.cpp',
     'Client/game_de/NativeD3D12OwnershipProbe.h', 'Client/game_de/NativeD3D12OwnershipProbe.cpp',
+    'Client/game_de/NativeCustomPresentProbe.h', 'Client/game_de/NativeCustomPresentProbe.cpp',
     'Client/definitive/MtaControllerSnapshot.h', 'Shared/sdk/CControllerState.h', 'Shared/sdk/enums/PedState.h',
     'Shared/sdk/CControllerActions.h', 'Shared/sdk/CControlStateSynthesis.h',
     'Tests/definitive/GameAdapterModuleTests.cpp', 'Tests/definitive/test_game_adapter_module.ps1')
@@ -68,7 +69,8 @@ $moduleSource = Join-Path $taskRoot 'Client/game_de/GameAdapter.cpp'
 if ((Test-Path -LiteralPath $moduleSource) -and $detoursLibraryExit -eq 0) {
     $moduleArguments = $common + @('/LD','/DMTA_GAME_DE_EXPORTS', $moduleSource, (Join-Path $taskRoot 'Client/game_de/NativePadReader.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeMovementInput.cpp'), (Join-Path $taskRoot 'Client/game_de/NativeRenderObservation.cpp'),
-        (Join-Path $taskRoot 'Client/game_de/NativeD3D12OwnershipProbe.cpp'), ('/I' + $detoursSourceRoot),
+        (Join-Path $taskRoot 'Client/game_de/NativeD3D12OwnershipProbe.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativeCustomPresentProbe.cpp'), ('/I' + $detoursSourceRoot),
         ('/Fo' + $outputRoot + [IO.Path]::DirectorySeparatorChar), ('/Fe' + $module), '/link', ('/IMPLIB:' + $library), 'bcrypt.lib', 'd3d12.lib', 'dxgi.lib', $detoursLibrary)
     $moduleOutput = @(& $compiler @moduleArguments 2>&1)
     $moduleExit = $LASTEXITCODE

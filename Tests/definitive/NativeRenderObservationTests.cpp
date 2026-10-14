@@ -85,6 +85,7 @@ namespace
         runtime.requestedRoute = static_cast<std::uint32_t>(route);
         // API1/2 never inherit opt-in COM work from a previously rejected API3 Begin.
         runtime.queryGpuOwnership = false;
+        runtime.classifyCustomPresent = false;
         runtime.producerThread = GetCurrentThreadId();
         runtime.bound.store(true);
         runtime.active.store(true);
@@ -178,13 +179,157 @@ namespace
                   !foreign.Finish(other.presentHash),
               "one route cannot borrow another full function fingerprint");
     }
+    struct OwnedCustomReads final : CustomPresentReads
+    {
+        std::uintptr_t                            image = 0x140000000, presenter = 0x10000, table = image + CustomPresentTableRva, device = 0x20000;
+        std::array<std::uintptr_t, 7>             slots{};
+        std::array<std::vector<unsigned char>, 7> code;
+        unsigned                                  reads = 0, fail = 0;
+        bool                                      exception = false, imageOwned = true, executable = true;
+        bool                                      Fault()
+        {
+            if (++reads != fail)
+                return false;
+            if (exception)
+                RaiseException(EXCEPTION_ACCESS_VIOLATION, 0, 0, nullptr);
+            return true;
+        }
+        bool Object(std::uintptr_t address, void* output, std::size_t bytes) override
+        {
+            if (Fault() || bytes != sizeof(std::uintptr_t))
+                return false;
+            if (address == presenter)
+                std::memcpy(output, &table, bytes);
+            else if (address == presenter + 0x18)
+                std::memcpy(output, &device, bytes);
+            else
+                return false;
+            return true;
+        }
+        bool Image(std::uintptr_t address, void* output, std::size_t bytes, bool execute) override
+        {
+            if (Fault() || !imageOwned || (execute && !executable))
+                return false;
+            if (address == image + CustomPresentTableRva && bytes == sizeof(slots) && !execute)
+            {
+                std::memcpy(output, slots.data(), bytes);
+                return true;
+            }
+            const auto& signatures = CustomPresentSignatures();
+            for (std::size_t index = 0; index < signatures.size(); ++index)
+            {
+                if (execute && address == image + signatures[index].functionRva && bytes == code[index].size())
+                {
+                    std::memcpy(output, code[index].data(), bytes);
+                    return true;
+                }
+            }
+            return false;
+        }
+    };
+    void CheckCustomFixture(const char* path)
+    {
+        using Classification = CustomPresentClassificationStatus;
+        const auto       number = [](Classification status) { return static_cast<std::uint32_t>(status); };
+        OwnedCustomReads fixture;
+        const auto&      signatures = CustomPresentSignatures();
+        std::ifstream    file(path, std::ios::binary);
+        for (std::size_t index = 0; index < signatures.size(); ++index)
+        {
+            fixture.slots[index] = fixture.image + signatures[index].functionRva;
+            fixture.code[index].resize(signatures[index].bytes);
+            file.read(reinterpret_cast<char*>(fixture.code[index].data()), static_cast<std::streamsize>(fixture.code[index].size()));
+            Check(file.gcount() == static_cast<std::streamsize>(fixture.code[index].size()), "complete presenter function fixture bytes supplied");
+        }
+        Check(file.peek() == std::char_traits<char>::eof() && fixture.code[4] == fixture.code[6], "shared no-op slots use the same complete three-byte leaf");
+        CustomPresentClassificationState state;
+        CustomPresentProbeRoots          roots;
+        ClassifyCustomPresent(fixture, fixture.image, fixture.presenter, fixture.device, state, roots);
+        Check(state.status == number(Classification::KnownNativePresenter) && state.implementationId == 1 && state.slotSignatureMask == 127 &&
+                  state.staticPolicyFlags == 15 && CustomPresentRootsUnchanged(fixture, roots),
+              "all seven actual signatures and native device association identify only static presenter policy");
+        auto absent = fixture;
+        absent.reads = 0;
+        ClassifyCustomPresent(absent, absent.image, 0, absent.device, state, roots);
+        Check(
+            state.status == number(Classification::Absent) && !state.implementationId && !state.slotSignatureMask && !state.staticPolicyFlags && !absent.reads,
+            "absent presenter clears reused success without object or image reads");
+        auto unknown = fixture;
+        unknown.table = 0x30000;
+        ClassifyCustomPresent(unknown, unknown.image, unknown.presenter, unknown.device, state, roots);
+        Check(state.status == number(Classification::UnknownImplementation) && !state.implementationId && !state.slotSignatureMask && !state.staticPolicyFlags,
+              "an unknown or third-party table is never followed or classified as native");
+        for (std::size_t slot = 0; slot < signatures.size(); ++slot)
+        {
+            auto altered = fixture;
+            altered.slots[slot] += 1;
+            ClassifyCustomPresent(altered, altered.image, altered.presenter, altered.device, state, roots);
+            Check(state.status == number(Classification::SignatureMismatch) && state.slotSignatureMask == (1u << slot) - 1 && !state.implementationId &&
+                      !state.staticPolicyFlags,
+                  "each mismatched vtable slot rejects the known class and retains only its verified prefix");
+        }
+        // Mutation of every byte, including leaf immediates and function tails,
+        // proves that a recognizable prologue cannot admit a changed policy.
+        for (std::size_t slot = 0; slot < 6; ++slot)
+        {
+            for (std::size_t byte = 0; byte < fixture.code[slot].size(); ++byte)
+            {
+                auto altered = fixture;
+                altered.code[slot][byte] ^= 1;
+                ClassifyCustomPresent(altered, altered.image, altered.presenter, altered.device, state, roots);
+                Check(state.status == number(Classification::SignatureMismatch) && state.slotSignatureMask == (1u << slot) - 1 && !state.implementationId &&
+                          !state.staticPolicyFlags,
+                      "every complete presenter code byte is checked before policy publication");
+            }
+        }
+        for (unsigned read = 1; read <= 10; ++read)
+        {
+            for (const bool exception : {false, true})
+            {
+                auto failed = fixture;
+                failed.reads = 0;
+                failed.fail = read;
+                failed.exception = exception;
+                ClassifyCustomPresent(failed, failed.image, failed.presenter, failed.device, state, roots);
+                const auto verifiedMask = read <= 3 ? 0u : (1u << (read - 3)) - 1;
+                Check(state.status == number(Classification::ReadFault) && state.slotSignatureMask == verifiedMask && !state.implementationId &&
+                          !state.staticPolicyFlags,
+                      "every object/table/code/device read fault or SEH clears known implementation and policy");
+            }
+        }
+        for (const bool ownerFault : {false, true})
+        {
+            auto failed = fixture;
+            failed.imageOwned = !ownerFault;
+            failed.executable = ownerFault;
+            ClassifyCustomPresent(failed, failed.image, failed.presenter, failed.device, state, roots);
+            Check(state.status == number(Classification::ReadFault) && !state.implementationId && !state.staticPolicyFlags,
+                  "foreign image pages or nonexecutable code cannot satisfy signature admission");
+        }
+        ClassifyCustomPresent(fixture, fixture.image, fixture.presenter, fixture.device + 1, state, roots);
+        Check(state.status == number(Classification::DeviceMismatch) && state.slotSignatureMask == 127 && !state.implementationId && !state.staticPolicyFlags,
+              "a complete known table cannot claim another native device association");
+        ClassifyCustomPresent(fixture, fixture.image, fixture.presenter, fixture.device, state, roots);
+        auto changed = fixture;
+        changed.table += 8;
+        Check(!CustomPresentRootsUnchanged(changed, roots), "post-query table mutation rejects the borrowed classification");
+        changed = fixture;
+        changed.device += 8;
+        Check(!CustomPresentRootsUnchanged(changed, roots), "post-query native device mutation rejects the borrowed classification");
+        changed = fixture;
+        changed.reads = 0;
+        changed.fail = 1;
+        Check(!CustomPresentRootsUnchanged(changed, roots), "post-query read failure cannot retain a known policy");
+    }
+
 }
 
 int main(int argc, char** argv)
 {
-    Check(argc == 3, "both pinned route code fixture paths supplied");
+    Check(argc == 4, "both route and complete presenter signature fixture paths supplied");
     CheckCodeFixture(argv[1], d3d11Route);
     CheckCodeFixture(argv[2], d3d12Route);
+    CheckCustomFixture(argv[3]);
     NativeRenderObservation owner;
     Check(!owner.Begin(), "ordinary executable rejected");
     NativeRenderObservationState state;
@@ -212,6 +357,13 @@ int main(int argc, char** argv)
     Check(!state.bound && !state.modulePinned && !runtime.hooked.load() && state.gpu.attempts == 0 && state.gpu.metadataValid == 0,
           "wrong-image API3 cannot publish borrowed GPU ownership or install a hook");
     Check(owner.End(), "wrong-image API3 cleanup");
+    Check(!owner.Begin(RenderObservationRoute::D3D12, true, true), "API4 rejects a nongame image before reading presenter objects");
+    owner.ReadState(state);
+    Check(!state.bound && !state.modulePinned && !runtime.hooked.load() && !state.custom.status && !state.custom.implementationId &&
+              !state.custom.slotSignatureMask && !state.custom.staticPolicyFlags && !state.gpu.attempts,
+          "failed API4 image admission cannot fabricate static policy or COM metadata");
+    Check(owner.End(), "wrong-image API4 cleanup");
+
     const auto image = reinterpret_cast<std::uintptr_t>(VirtualAlloc(nullptr, 0x5770000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
     Check(image != 0, "owned synthetic image allocation");
     Configure(image);
@@ -314,6 +466,77 @@ int main(int argc, char** argv)
     ownedQueue.calls = 0;
     Configure(image, Original, RenderObservationRoute::D3D12);
     EnableOwnership(image);
+    runtime.classifyCustomPresent = true;
+    Put(object + 0x60, reinterpret_cast<std::uintptr_t>(&ownedSwapchain));
+    Put(queueMember, reinterpret_cast<std::uintptr_t>(&ownedQueue));
+    Check(HookPresent(viewport.data(), 1), "API4 absent classification forwards the original even when native QI fails");
+    owner.ReadState(state);
+    Check(state.custom.status == static_cast<unsigned>(CustomPresentClassificationStatus::Absent) && !state.custom.implementationId &&
+              !state.custom.slotSignatureMask && !state.custom.staticPolicyFlags && !state.gpu.customPresentPresent && state.gpu.attempts == 1,
+          "absent API4 classification is coherent with the same published native snapshot");
+    std::array<std::uintptr_t, 4> ownedPresenter{1, 0, 0, reinterpret_cast<std::uintptr_t>(deviceObject.data())};
+    const auto                    configureClassification = [&](PresentFunction original = Original)
+    {
+        Configure(image, original, RenderObservationRoute::D3D12);
+        EnableOwnership(image);
+        runtime.classifyCustomPresent = true;
+        Put(object + 0x1d0, reinterpret_cast<std::uintptr_t>(ownedPresenter.data()));
+        Put(object + 0x60, reinterpret_cast<std::uintptr_t>(&ownedSwapchain));
+        Put(queueMember, reinterpret_cast<std::uintptr_t>(&ownedQueue));
+    };
+    configureClassification();
+    Check(HookPresent(viewport.data(), 1), "unknown API4 presenter is not invoked by diagnostics");
+    owner.ReadState(state);
+    Check(state.custom.status == static_cast<unsigned>(CustomPresentClassificationStatus::UnknownImplementation) && !state.custom.implementationId &&
+              !state.custom.slotSignatureMask && !state.custom.staticPolicyFlags && state.gpu.customPresentPresent && !state.gpu.supportPredicate,
+          "an unknown presenter retains unsupported GPU admission and publishes no guessed policy");
+    ownedPresenter[0] = image + CustomPresentTableRva;
+    configureClassification();
+    Check(HookPresent(viewport.data(), 1), "private fixture pages do not impersonate the admitted executable image");
+    owner.ReadState(state);
+    Check(state.custom.status == static_cast<unsigned>(CustomPresentClassificationStatus::ReadFault) && !state.custom.implementationId &&
+              !state.custom.staticPolicyFlags && !state.custom.slotSignatureMask,
+          "production image reader rejects a known numeric table address backed by private memory");
+    ownedPresenter[0] = 1;
+    configureClassification();
+    ownedSwapchain.changeAddress = reinterpret_cast<std::uintptr_t>(ownedPresenter.data());
+    Check(HookPresent(viewport.data(), 1), "presenter-table mutation during QI still forwards the original");
+    owner.ReadState(state);
+    Check(state.custom.status == static_cast<unsigned>(CustomPresentClassificationStatus::RootsChanged) && !state.custom.implementationId &&
+              !state.custom.slotSignatureMask && !state.custom.staticPolicyFlags &&
+              state.gpu.queryStage == static_cast<unsigned>(GpuOwnershipQueryStage::SwapchainQuery),
+          "API4 table readback rejects changed policy without replacing independent GPU query provenance");
+    ownedSwapchain.changeAddress = 0;
+    ownedPresenter[0] = 1;
+    configureClassification(OriginalException);
+    Check(CatchOriginalException(viewport.data()), "API4 original SEH propagates after classification and metadata reads");
+    owner.ReadState(state);
+    Check(!state.custom.status && !state.gpu.attempts && !state.acceptedSnapshots && !runtime.inFlight.load(),
+          "API4 cannot publish classification for an original that never returned");
+    configureClassification();
+    AcquireSRWLockShared(&runtime.snapshotLock);
+    std::thread missedClassification([&] { HookPresent(viewport.data(), 1); });
+    missedClassification.join();
+    ReleaseSRWLockShared(&runtime.snapshotLock);
+    owner.ReadState(state);
+    Check(state.publicationMisses == 1 && !state.custom.status && !state.gpu.attempts && !state.acceptedSnapshots,
+          "API4 missed publication cannot mix a new class policy with old GPU counters");
+    configureClassification();
+    DWORD priorProtection = 0, restoredProtection = 0;
+    Check(VirtualProtect(reinterpret_cast<void*>(image + 0x503e000), 4096, PAGE_NOACCESS, &priorProtection) != FALSE,
+          "owned native-count page can model a failed ownership root read");
+    Check(HookPresent(viewport.data(), 1), "API4 native root read fault preserves original execution");
+    Check(VirtualProtect(reinterpret_cast<void*>(image + 0x503e000), 4096, priorProtection, &restoredProtection) != FALSE,
+          "owned native-count page protection restores after fault fixture");
+    owner.ReadState(state);
+    Check(state.custom.status == static_cast<unsigned>(CustomPresentClassificationStatus::ReadFault) && !state.gpu.customPresentPresent &&
+              state.gpu.queryStage == static_cast<unsigned>(GpuOwnershipQueryStage::NativeRoots) && !state.custom.implementationId &&
+              !state.custom.slotSignatureMask && !state.custom.staticPolicyFlags,
+          "API4 root read failure reports unknown custom presence without inventing a policy");
+    ownedSwapchain.calls = ownedQueue.calls = 0;
+
+    Configure(image, Original, RenderObservationRoute::D3D12);
+    EnableOwnership(image);
     Check(HookPresent(viewport.data(), 1), "invalid API3 COM root never prevents original forwarding");
     owner.ReadState(state);
     Check(state.gpu.attempts == 1 && state.gpu.rejected == 1 && state.gpu.hresult == static_cast<std::uint32_t>(E_POINTER) &&
@@ -373,6 +596,7 @@ int main(int argc, char** argv)
     {
         Configure(image, original, RenderObservationRoute::D3D12);
         EnableOwnership(image);
+        runtime.classifyCustomPresent = true;
         Put(object + 0x1d0, std::uintptr_t{0x1234});
         Put(object + 0x60, reinterpret_cast<std::uintptr_t>(&ownedSwapchain));
         Put(queueMember, reinterpret_cast<std::uintptr_t>(&ownedQueue));

@@ -26,6 +26,11 @@ static_assert(offsetof(mta::game_de::RenderObservationStateV2, base) == 0);
 static_assert(offsetof(mta::game_de::RenderObservationStateV2, requestedRoute) == 120);
 static_assert(sizeof(mta::game_de::RenderObservationStateV2) == 136);
 static_assert(mta::game_de::RenderObservationApiVersionV3 == 3);
+static_assert(sizeof(mta::game_de::RenderObservationStateV3) == 272);
+static_assert(mta::game_de::RenderObservationApiVersionV4 == 4);
+static_assert(offsetof(mta::game_de::RenderObservationStateV4, base) == 0);
+static_assert(offsetof(mta::game_de::RenderObservationStateV4, custom) == 272);
+static_assert(sizeof(mta::game_de::RenderObservationStateV4) == 288);
 static_assert(offsetof(mta::game_de::RenderObservationStateV3, base) == 0);
 static_assert(offsetof(mta::game_de::RenderObservationStateV3, gpu) == sizeof(mta::game_de::RenderObservationStateV2));
 
@@ -41,6 +46,9 @@ static_assert(offsetof(mta::game_de::RenderObservationStateV3, gpu) == sizeof(mt
     #endif
     #ifndef MTA_TEST_RENDER_V3
         #define MTA_TEST_RENDER_V3 0
+    #endif
+    #ifndef MTA_TEST_RENDER_V4
+        #define MTA_TEST_RENDER_V4 0
     #endif
 // This deliberately failing provider tests Core's DLL lifetime only. It is not
 // an engine writer, replacement Game DE implementation or gameplay fixture.
@@ -279,6 +287,44 @@ namespace mta::game_de
         private:
             RenderFixtureV2 observation{RenderObservationRoute::D3D12};
         };
+
+        class RenderFixtureV4 final : public IGameRenderObservationV4
+        {
+        public:
+            Status Begin() noexcept override { return observation.Begin(); }
+            Status End() noexcept override { return observation.End(); }
+            Status ReadState(RenderObservationStateV4& output) noexcept override
+            {
+                RenderObservationStateV4 next;
+                const auto               status = observation.ReadState(next.base);
+                if (status != Status::Ok)
+                    return status;
+                if (MTA_TEST_RENDER_MODE != 6)
+                {
+                    // Classification is separate diagnostic evidence. Even a
+                    // known implementation must leave custom GPU support off.
+                    next.base.gpu.accepted = next.base.gpu.supportPredicate = 0;
+                    next.base.gpu.rejected = next.base.gpu.attempts;
+                    next.base.gpu.customPresentPresent = 1;
+                    next.base.gpu.queryStatus = static_cast<std::uint32_t>(GpuOwnershipQueryStatus::Unsupported);
+                    next.custom = MTA_TEST_RENDER_MODE == 8 ? CustomPresentClassificationState{3, 0, 0, 0} : CustomPresentClassificationState{2, 1, 127, 15};
+                }
+                output = next;
+                return Status::Ok;
+            }
+            void Release() noexcept override
+            {
+                if (fixtureCounters)
+                {
+                    ++fixtureCounters[7];
+                    fixtureCounters[9] = ++fixtureCounters[8];
+                }
+                delete this;
+            }
+
+        private:
+            RenderFixtureV3 observation;
+        };
     }
 
     extern "C" IGameAdapter* CreateGameAdapter(std::uint32_t abiVersion) noexcept
@@ -310,6 +356,13 @@ namespace mta::game_de
         return apiVersion == RenderObservationApiVersionV3 && owner && route == RenderObservationRoute::D3D12 ? new (std::nothrow) RenderFixtureV3 : nullptr;
     }
     #endif
+    #if MTA_TEST_RENDER_V4
+    extern "C" IGameRenderObservationV4* CreateGameRenderObservationV4(std::uint32_t apiVersion, CCoreInterface* owner, RenderObservationRoute route) noexcept
+    {
+        return apiVersion == RenderObservationApiVersionV4 && owner && route == RenderObservationRoute::D3D12 ? new (std::nothrow) RenderFixtureV4 : nullptr;
+    }
+    #endif
+
 }
 #else
 namespace
@@ -927,6 +980,141 @@ namespace
         output.gpu.queryStage = 99;
         Check(!host.GetNativeRenderObservationState(output) && output.gpu.queryStage == 99, "unloaded API3 cannot replace caller output");
     }
+    void TestMissingRenderV4(CCoreInterface* owner, const std::wstring& path)
+    {
+        using namespace mta::game_de;
+        CGameAdapterModule host;
+        Check(host.Start(owner, path), "own a real API3-only provider for missing API4 admission");
+        Check(!GetProcAddress(GetModuleHandleW(path.c_str()), "CreateGameRenderObservationV4"), "API3 provider genuinely has no API4 export");
+        RenderObservationStateV4 output;
+        output.base.gpu.queryStage = 99;
+        Check(!host.BeginNativeRenderClassificationObservation(RenderObservationRoute::D3D12) && host.GetError().find("no legacy route") != std::string::npos &&
+                  !host.GetNativeRenderObservationState(output) && output.base.gpu.queryStage == 99,
+              "missing API4 never falls back to API1/2/3 or publishes their state as classification evidence");
+        Check(host.BeginNativeRenderOwnershipObservation(RenderObservationRoute::D3D12), "explicit API3 remains usable after API4 rejection");
+        Check(!host.EndNativeRenderObservation() && host.EndNativeRenderObservation(), "older API3 keeps its original retry lifetime");
+        host.Stop();
+        Check(!host.IsStarted() && !GetModuleHandleW(path.c_str()), "missing API4 leaves normal owner cleanup available");
+    }
+
+    void TestRenderProviderV4(CCoreInterface* owner, const std::wstring& path, unsigned mode)
+    {
+        using namespace mta::game_de;
+        CGameAdapterModule host;
+        Check(host.Start(owner, path), "own controlled separately versioned API4 provider");
+        std::uint32_t counters[14]{};
+        using Configure = void (*)(std::uint32_t*) noexcept;
+        Configure configure = nullptr;
+        auto      address = GetProcAddress(GetModuleHandleW(path.c_str()), "SetFacadeFixtureCounters");
+        std::memcpy(&configure, &address, sizeof(configure));
+        Check(configure != nullptr, "API4 controlled lifetime counters available");
+        configure(counters);
+        using Factory = decltype(&CreateGameRenderObservationV4);
+        Factory factory = nullptr;
+        address = GetProcAddress(GetModuleHandleW(path.c_str()), "CreateGameRenderObservationV4");
+        std::memcpy(&factory, &address, sizeof(factory));
+        Check(factory && !factory(3, owner, RenderObservationRoute::D3D12) && !factory(5, owner, RenderObservationRoute::D3D12) &&
+                  !factory(4, nullptr, RenderObservationRoute::D3D12) && !factory(4, owner, RenderObservationRoute::D3D11),
+              "API4 factory rejects wrong version/owner and earlier route");
+        RenderObservationStateV4 output;
+        output.base.gpu.queryStage = 99;
+        output.custom.status = 99;
+        Check(!host.BeginNativeRenderClassificationObservation(RenderObservationRoute::Unknown) &&
+                  !host.BeginNativeRenderClassificationObservation(RenderObservationRoute::D3D11) && !host.GetNativeRenderObservationState(output) &&
+                  output.base.gpu.queryStage == 99 && output.custom.status == 99 && !counters[4],
+              "invalid API4 route rejects before provider entry and preserves output");
+        Check(host.BeginNativeRenderClassificationObservation(RenderObservationRoute::D3D12) == (mode != 2),
+              "API4 failed Begin remains distinguishable and cleanup-owned");
+        Check(!host.BeginNativeRenderClassificationObservation(RenderObservationRoute::D3D12) && !host.BeginNativeRenderObservation() &&
+                  !host.BeginNativeRenderObservation(RenderObservationRoute::D3D12) &&
+                  !host.BeginNativeRenderOwnershipObservation(RenderObservationRoute::D3D12) && counters[4] == 1,
+              "retained API4 lease excludes every renderer version and duplicate Begin");
+        Check(host.GetNativeRenderObservationState(output) && output.base.base.requestedRoute == 2,
+              "API4 reports its immutable explicit route through its own state layout");
+        Check(mode == 6 ? !output.base.base.observedRoute && !output.base.gpu.attempts && !output.base.gpu.metadataValid
+                        : output.base.base.observedRoute == 2 && output.base.gpu.attempts == 7 && output.base.gpu.queryStage == 19 &&
+                              output.base.gpu.accepted == 0 && output.base.gpu.rejected == 7,
+              "API4 copies actual controlled zero-query or custom-unsupported metadata without promotion");
+        RenderObservationState   legacy;
+        RenderObservationStateV2 older;
+        RenderObservationStateV3 previous;
+        previous.gpu.queryStage = 99;
+        legacy.width = older.requestedRoute = 99;
+        Check(!host.GetNativeRenderObservationState(legacy) && !host.GetNativeRenderObservationState(older) &&
+                  !host.GetNativeRenderObservationState(previous) && previous.gpu.queryStage == 99 && legacy.width == 99 && older.requestedRoute == 99,
+              "API1/2/3 output cannot reinterpret the API4 lease");
+        Check(mode == 6 ? output.custom.status == 0 && output.custom.implementationId == 0 && output.custom.slotSignatureMask == 0 &&
+                              output.custom.staticPolicyFlags == 0
+              : mode == 8 ? output.custom.status == 3 && output.custom.implementationId == 0
+                          : output.custom.status == 2 && output.custom.implementationId == 1 && output.custom.slotSignatureMask == 127 &&
+                                output.custom.staticPolicyFlags == 15,
+              "API4 classification must preserve unknown/known scalars without promoting GPU support");
+        const auto               reads = counters[5];
+        bool                     foreignBegin = true, foreignRead = true, foreignEnd = true;
+        RenderObservationStateV4 foreignOutput;
+        foreignOutput.base.gpu.queryStage = 77;
+        foreignOutput.custom.status = 77;
+        std::thread foreign(
+            [&]
+            {
+                foreignBegin = host.BeginNativeRenderClassificationObservation(RenderObservationRoute::D3D12);
+                foreignRead = host.GetNativeRenderObservationState(foreignOutput);
+                foreignEnd = host.EndNativeRenderObservation();
+                host.Stop();
+            });
+        foreign.join();
+        Check(!foreignBegin && !foreignRead && !foreignEnd && foreignOutput.base.gpu.queryStage == 77 && foreignOutput.custom.status == 77 &&
+                  counters[5] == reads && !counters[6] && !counters[0],
+              "foreign API4 calls cannot publish output or touch the provider lifetime");
+        if (mode == 7)
+        {
+            counters[13] = 1;
+            output.base.gpu.queryStage = 88;
+            output.custom.status = 88;
+            Check(!host.GetNativeRenderObservationState(output) && output.base.gpu.queryStage == 88 && output.custom.status == 88,
+                  "cross-observed route preserves API4 caller output");
+            counters[13] = 2;
+            Check(!host.GetNativeRenderObservationState(output) && output.base.gpu.queryStage == 88 && output.custom.status == 88,
+                  "cross-requested route preserves API4 caller output");
+        }
+        if (mode == 4)
+        {
+            Check(host.Reset() && counters[6] == 1 && counters[7] == 1 && counters[3] == 1 && counters[9] < counters[10],
+                  "API4 End/Release precede adapter Reset");
+            output.base.gpu.queryStage = 88;
+            output.custom.status = 88;
+            Check(!host.GetNativeRenderObservationState(output) && output.base.gpu.queryStage == 88 && output.custom.status == 88,
+                  "Reset clears API4 final state availability");
+        }
+        else
+        {
+            if (mode <= 2 || mode == 7)
+                host.Stop();
+            else if (mode == 3 || mode == 5)
+                Check(!host.EndNativeRenderObservation(), "failed API4 final read or active end state retains the lease");
+            if (mode <= 3 || mode == 5 || mode == 7)
+                Check(host.IsStarted() && counters[6] == 1 && !counters[7] && !counters[0] && GetModuleHandleW(path.c_str()),
+                      "API4 Begin/End/read/route failure retains adapter and module for retry");
+            counters[13] = 0;
+            Check(host.EndNativeRenderObservation(), "owner completes API4 End after the retained failure");
+            const auto finalReads = counters[5];
+            Check(host.GetNativeRenderObservationState(output) && !output.base.base.base.active && !output.base.base.base.pendingCleanup &&
+                      counters[5] == finalReads && counters[7] == 1 && output.base.gpu.queryStage == (mode == 6 ? 0u : 19u),
+                  "ended API4 cache contains actual final metadata without touching released provider");
+            if (mode != 6)
+                Check(!output.base.gpu.supportPredicate && output.base.gpu.queryStatus == 2 && output.base.gpu.rejected == 7 && !host.IsGameplayReady(),
+                      "unsupported GPU metadata remains unsupported after End and grants no gameplay readiness");
+            Check(output.custom.status == (mode == 6 ? 0u : mode == 8 ? 3u : 2u), "API4 final cache preserves classification before releasing its provider");
+            Check(host.EndNativeRenderObservation() && counters[7] == 1, "API4 completed End is idempotent");
+        }
+        host.Stop();
+        Check(!host.IsStarted() && !GetModuleHandleW(path.c_str()) && counters[7] == 1 && counters[0] == 1 && counters[1] == 1 && counters[9] < counters[11],
+              "API4 observer release precedes adapter shutdown and unload");
+        output.base.gpu.queryStage = 99;
+        output.custom.status = 99;
+        Check(!host.GetNativeRenderObservationState(output) && output.base.gpu.queryStage == 99 && output.custom.status == 99,
+              "unloaded API4 cannot replace caller output");
+    }
     #endif
 }
 
@@ -934,7 +1122,7 @@ int wmain(int argc, wchar_t** argv)
 {
     try
     {
-        if (argc != 2 && argc != 3 && argc != 6 && argc != 11 && argc != 18 && argc != 26)
+        if (argc != 2 && argc != 3 && argc != 6 && argc != 11 && argc != 18 && argc != 26 && argc != 34)
             throw std::runtime_error("Pass the absolute path of the built Game DE module");
         const std::wstring modulePath = argv[1];
         // The adapter stores this identity but must never dereference it. This
@@ -960,11 +1148,17 @@ int wmain(int argc, wchar_t** argv)
                 for (const auto route : {mta::game_de::RenderObservationRoute::D3D11, mta::game_de::RenderObservationRoute::D3D12})
                     TestRenderProviderV2(owner, argv[mode + 10], mode, route);
         }
-        if (argc == 26)
+        if (argc >= 26)
         {
             TestMissingRenderV3(owner, argv[11]);
             for (unsigned mode = 1; mode <= 8; ++mode)
                 TestRenderProviderV3(owner, argv[mode + 17], mode);
+        }
+        if (argc == 34)
+        {
+            TestMissingRenderV4(owner, argv[18]);
+            for (unsigned mode = 1; mode <= 8; ++mode)
+                TestRenderProviderV4(owner, argv[mode + 25], mode);
         }
     #else
         CGameAdapterModule host;

@@ -126,13 +126,29 @@ extern "C" __declspec(dllexport) std::uint32_t MTA_ConfigureDERenderReferenceV3(
     return 1;
 }
 
+extern "C" __declspec(dllexport) std::uint32_t MTA_DERenderReferenceApiVersionV4()
+{
+    Call(7);
+    return 4;
+}
+extern "C" __declspec(dllexport) std::uint32_t MTA_ConfigureDERenderReferenceV4(std::uint32_t duration, std::uint32_t route,
+                                                                                DefinitiveInputReference::CancelCallback  cancelled,
+                                                                                DefinitiveInputReference::PublishCallback publish)
+{
+    Call(8);
+    if (duration != DefinitiveRenderReference::MaximumDurationMs || route != 2 || !cancelled || !publish)
+        return 0;
+    inputRequest = {duration, cancelled, publish, false, true, route, 4};
+    return 1;
+}
+
 template <typename SnapshotType>
 void ControlledRender()
 {
     using namespace DefinitiveRenderReference;
     constexpr auto count = static_cast<std::uint32_t>(std::tuple_size<SnapshotType>::value);
     SnapshotType   sample{};
-    sample[Version] = count == FieldCountV3 ? 3u : count == FieldCountV2 ? 2u : 1u;
+    sample[Version] = count == FieldCountV4 ? 4u : count == FieldCountV3 ? 3u : count == FieldCountV2 ? 2u : 1u;
     sample[Phase] = sample[Sequence] = sample[SampleCount] = 1;
     sample[ObserverStarted] = sample[Bound] = sample[Active] = 1;
     sample[PresentCallbacksLow] = sample[AcceptedSnapshotsLow] = 10;
@@ -185,7 +201,7 @@ void ControlledRender()
             sample[Height] = 720;
         }
     }
-    if constexpr (count == FieldCountV3)
+    if constexpr (count >= FieldCountV3)
     {
         // These are controlled worker transport values, not native evidence.
         // The actual COM provider is exercised by the independent WARP fixture.
@@ -206,6 +222,20 @@ void ControlledRender()
             sample[SwapchainFormat] = sample[BackbufferFormat] = 87;
             sample[BackbufferSampleCount] = 1;
             sample[QueryStatus] = failed ? 3u : 1u;
+            if constexpr (count == FieldCountV4)
+            {
+                // Classification is transported independently of COM success
+                // and cannot turn the custom-present GPU exclusion into support.
+                const bool unknown = Setting(L"MTA_CORE_FIXTURE_RENDER_MODE") == 6;
+                sample[ProbeAcceptedLow] = sample[SupportPredicate] = 0;
+                sample[ProbeRejectedLow] = 10;
+                sample[CustomPresentPresent] = 1;
+                sample[QueryStatus] = failed ? 3u : 2u;
+                sample[80] = unknown ? 3u : 2u;
+                sample[81] = unknown ? 0u : 1u;
+                sample[82] = unknown ? 0u : 127u;
+                sample[83] = unknown ? 0u : 15u;
+            }
         }
     }
     sample[CleanupPending] = sample[NativeCleanupPending] = sample[CleanupAttempts] = 1;
@@ -337,7 +367,9 @@ extern "C" __declspec(dllexport) int InitializeCore()
         return 0;
     if (mtaSet && gtaSet && inputRequest.renderObservation)
     {
-        if (inputRequest.renderApiVersion == 3)
+        if (inputRequest.renderApiVersion == 4)
+            ControlledRender<DefinitiveRenderReference::SnapshotV4>();
+        else if (inputRequest.renderApiVersion == 3)
             ControlledRender<DefinitiveRenderReference::SnapshotV3>();
         else if (inputRequest.renderRoute)
             ControlledRender<DefinitiveRenderReference::SnapshotV2>();

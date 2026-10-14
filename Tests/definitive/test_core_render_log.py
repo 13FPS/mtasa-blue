@@ -62,6 +62,167 @@ def missing_observation_fixture():
 
 class CoreRenderEvidenceTests(unittest.TestCase):
     @classmethod
+    def version4(cls, rows):
+        cls.version3(rows)
+        for row in rows:
+            if row.get("event") in ("adapter_start", "core_render_reference_started"):
+                row.update(core_api=8, observation_api=4)
+            if row.get("event") == "core_render_reference_sample":
+                native = row["state"]
+                native[0] = 4
+                native += [0] * 4
+                if native[44] or native[45]:
+                    native[46:50] = [0, 0, native[44], native[45]]
+                    native[53] = 0
+                    native[64] = native[71] = 24
+                    native[74:76] = [1, 2]
+                    native[80:84] = [2, 1, 127, 15]
+            if row.get("event") == "core_render_reference_finished":
+                row["passed"] = False
+        if not any(row.get("event") == "adapter_failed" for row in rows):
+            rows.append(dict(event="adapter_failed", phase="core_render_reference", error=reader.INCOMPLETE_ERROR,
+                             game_adapter_active=False))
+        return rows
+
+    def test_api4_recognizes_static_code_without_promoting_gpu_or_drawing(self):
+        result = analyze(self.version4(fixture()))
+        self.assertEqual(result["issue_count"], 0, result)
+        self.assertEqual(result["status"], "native_gpu_ownership_incomplete")
+        self.assertTrue(result["diagnostic_lifecycle_complete"])
+        self.assertTrue(result["native_renderer_callback_observed"])
+        self.assertTrue(result["native_gpu_metadata_observed"])
+        self.assertTrue(result["custom_presenter_recognized"])
+        self.assertEqual(result["custom_presenter_sample_count"], 2)
+        self.assertEqual(result["gpu_metrics"], dict(attempts=603, accepted=0, rejected=603))
+        self.assertEqual(result["terminal_render_state"][78:], [0, 0, 2, 1, 127, 15])
+        for flag in ("gpu_ownership_verified", "core_render_reference_complete", "render_observation_session_complete",
+                     "visual_success_verified", "com_present_verified", "de_renderer_verified", "full_mta_boot_verified"):
+            self.assertFalse(result[flag], flag)
+
+    def test_api4_initial_missing_callbacks_keep_both_tails_zero(self):
+        rows = self.version4(missing_observation_fixture())
+        result = analyze(rows)
+        self.assertEqual(result["issue_count"], 0, result)
+        self.assertTrue(result["diagnostic_lifecycle_complete"])
+        self.assertFalse(result["custom_presenter_recognized"])
+        self.assertEqual(result["custom_presenter_sample_count"], 0)
+        for field in range(80, 84):
+            mutated = deepcopy(rows)
+            mutated[7]["state"][field] = 1
+            self.assertEqual(analyze(mutated)["status"], "invalid_evidence", field)
+
+    def test_api4_absent_presenter_preserves_independent_gpu_eligibility(self):
+        rows = self.version4(fixture())
+        for row in rows[6:8]:
+            native = row["state"]
+            native[46:50] = [native[44], native[45], 0, 0]
+            native[53] = 1
+            native[74:76] = [0, 1]
+            native[80:84] = [1, 0, 0, 0]
+        rows[-2]["passed"] = True
+        rows.pop()
+        result = analyze(rows)
+        self.assertEqual(result["issue_count"], 0, result)
+        self.assertTrue(result["gpu_ownership_verified"])
+        self.assertFalse(result["custom_presenter_recognized"])
+        self.assertEqual(result["custom_presenter_sample_count"], 0)
+        self.assertFalse(result["de_renderer_verified"])
+
+    def test_api4_known_code_is_independent_of_com_failure(self):
+        rows = self.version4(fixture())
+        for row in rows[6:8]:
+            row["state"][50:54] = [8, 0x80004002, 0, 0]
+            row["state"][75] = 3
+        result = analyze(rows)
+        self.assertEqual(result["issue_count"], 0, result)
+        self.assertTrue(result["custom_presenter_recognized"])
+        self.assertEqual(result["custom_presenter_sample_count"], 2)
+        self.assertFalse(result["native_gpu_metadata_observed"])
+        self.assertFalse(result["gpu_ownership_verified"])
+
+    def test_api4_unknown_signature_device_read_and_root_failures_remain_diagnostics(self):
+        for status, mask in ((3, 0), (4, 0), (4, 63), (5, 0), (5, 127), (6, 127), (7, 0)):
+            with self.subTest(status=status, mask=mask):
+                rows = self.version4(fixture())
+                for row in rows[6:8]:
+                    row["state"][80:84] = [status, 0, mask, 0]
+                result = analyze(rows)
+                self.assertEqual(result["issue_count"], 0, result)
+                self.assertTrue(result["diagnostic_lifecycle_complete"])
+                self.assertFalse(result["custom_presenter_recognized"])
+                self.assertEqual(result["custom_presenter_sample_count"], 0)
+                self.assertEqual(result["terminal_render_state"][80:], [status, 0, mask, 0])
+                self.assertFalse(result["gpu_ownership_verified"])
+
+    def test_api4_root_fault_can_precede_knowledge_of_custom_presence(self):
+        for status in (5, 7):
+            rows = self.version4(fixture())
+            for row in rows[6:8]:
+                row["state"][58] = 2
+                row["state"][74] = 0
+                row["state"][80:84] = [status, 0, 0, 0]
+            result = analyze(rows)
+            self.assertEqual(result["issue_count"], 0, result)
+            self.assertTrue(result["diagnostic_lifecycle_complete"])
+            self.assertFalse(result["custom_presenter_recognized"])
+
+    def test_api4_classification_samples_do_not_override_later_unknown_code(self):
+        rows = self.version4(fixture())
+        rows[7]["state"][80:84] = [3, 0, 0, 0]
+        result = analyze(rows)
+        self.assertEqual(result["issue_count"], 0, result)
+        self.assertTrue(result["custom_presenter_recognized"])
+        self.assertEqual(result["custom_presenter_sample_count"], 1)
+        self.assertEqual(result["gpu_metrics"]["attempts"], 603)
+        self.assertEqual(result["terminal_render_state"][80:], [3, 0, 0, 0])
+        self.assertFalse(result["gpu_ownership_verified"])
+
+    def test_api4_rejects_forged_or_contradictory_classification(self):
+        for changes in ({80: 0}, {80: 8}, {81: 0}, {81: 2}, {82: 126}, {82: 128}, {83: 0}, {83: 16},
+                        {78: 1}, {79: 1}, {80: 1, 81: 0, 82: 0, 83: 0},
+                        {80: 3, 81: 0, 82: 127, 83: 0}, {80: 7, 81: 0, 82: 1, 83: 0},
+                        {58: 2, 74: 0}, {58: 2, 74: 0, 80: 4, 81: 0, 82: 0, 83: 0},
+                        {58: 2, 74: 0, 80: 6, 81: 0, 82: 0, 83: 0},
+                        {80: 5, 81: 1, 82: 0, 83: 0}, {80: 6, 81: 0, 82: 127, 83: 15}):
+            with self.subTest(changes=changes):
+                rows = self.version4(fixture())
+                for field, value in changes.items():
+                    rows[7]["state"][field] = value
+                result = analyze(rows)
+                self.assertEqual(result["status"], "invalid_evidence", result)
+                self.assertFalse(result["custom_presenter_recognized"])
+                self.assertFalse(result["gpu_ownership_verified"])
+
+    def test_api4_cannot_relabel_older_versions_or_mix_widths(self):
+        for version, core_api, route in ((3, 8, 2), (4, 7, 2), (4, 8, 1)):
+            rows = self.version4(fixture())
+            rows[5].update(observation_api=version, core_api=core_api, requested_route=route)
+            self.assertEqual(analyze(rows)["status"], "invalid_evidence")
+        for width in (44, 80, 83, 85):
+            rows = self.version4(fixture())
+            rows[7]["state"] = (rows[7]["state"] + [0])[:width]
+            self.assertEqual(analyze(rows)["status"], "invalid_evidence", width)
+
+    def test_api4_derived_classification_and_native_pointer_claims_cannot_be_injected(self):
+        for claims in (dict(custom_presenter_recognized=True), dict(custom_presenter_sample_count=2),
+                       dict(vtable="0x12345678"), dict(custom_presenter="0x12345678"),
+                       dict(gpu_frame_boundary_verified=True), dict(custom_present_frame_sink_verified=True),
+                       dict(gpu_ownership_verified=True)):
+            with self.subTest(claims=claims):
+                rows = self.version4(fixture())
+                rows[4]["details"] = [dict(nested=claims)]
+                result = analyze(rows)
+                self.assertEqual(result["status"], "invalid_evidence")
+                self.assertFalse(result["custom_presenter_recognized"])
+
+    def test_historical_api1_api2_api3_never_infer_custom_recognition(self):
+        for rows in (fixture(), self.version2(fixture()), self.version3(fixture())):
+            result = analyze(rows)
+            self.assertEqual(result["issue_count"], 0, result)
+            self.assertFalse(result["custom_presenter_recognized"])
+            self.assertEqual(result["custom_presenter_sample_count"], 0)
+
+    @classmethod
     def version3(cls, rows):
         cls.version2(rows)
         for row in rows:

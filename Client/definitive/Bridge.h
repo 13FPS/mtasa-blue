@@ -122,3 +122,7 @@ DE_BRIDGE_API std::uint32_t DE_CoreRenderApiVersionV3();
 DE_BRIDGE_API int           DE_CoreRenderBeginV3(std::uint32_t route);
 DE_BRIDGE_API int           DE_CoreRenderCaptureV3();
 DE_BRIDGE_API std::uint32_t DE_CoreRenderReadV3(std::uint32_t component);
+DE_BRIDGE_API std::uint32_t DE_CoreRenderApiVersionV4();
+DE_BRIDGE_API int           DE_CoreRenderBeginV4(std::uint32_t route);
+DE_BRIDGE_API int           DE_CoreRenderCaptureV4();
+DE_BRIDGE_API std::uint32_t DE_CoreRenderReadV4(std::uint32_t component);

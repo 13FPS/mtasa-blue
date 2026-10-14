@@ -28,22 +28,24 @@ namespace mta::game_de
 
     struct NativeRenderObservationState
     {
-        bool                   bound = false, active = false, modulePinned = false, pendingCleanup = false;
-        std::uint64_t          generation = 0, nativePresentCallbacks = 0, acceptedSnapshots = 0, rejectedSnapshots = 0;
-        std::uint64_t          nestedCallbacks = 0, foreignThreadCallbacks = 0, publicationMisses = 0;
-        std::uint32_t          callbackThreadId = 0, width = 0, height = 0, syncInterval = 0, failureReason = 0;
-        bool                   windowPresent = false, swapchainPresent = false, devicePresent = false, contextPresent = false;
-        bool                   lastOriginalReturned = false, lastOriginalResult = false;
-        std::uint32_t          requestedRoute = 0, observedRoute = 0, presenceKnownMask = 0, queuePresent = 0;
-        GpuOwnershipProbeState gpu;
+        bool                             bound = false, active = false, modulePinned = false, pendingCleanup = false;
+        std::uint64_t                    generation = 0, nativePresentCallbacks = 0, acceptedSnapshots = 0, rejectedSnapshots = 0;
+        std::uint64_t                    nestedCallbacks = 0, foreignThreadCallbacks = 0, publicationMisses = 0;
+        std::uint32_t                    callbackThreadId = 0, width = 0, height = 0, syncInterval = 0, failureReason = 0;
+        bool                             windowPresent = false, swapchainPresent = false, devicePresent = false, contextPresent = false;
+        bool                             lastOriginalReturned = false, lastOriginalResult = false;
+        std::uint32_t                    requestedRoute = 0, observedRoute = 0, presenceKnownMask = 0, queuePresent = 0;
+        GpuOwnershipProbeState           gpu;
+        CustomPresentClassificationState custom;
     };
 
     // This is an observation of a naturally invoked native viewport callback,
     // not proof that its optional COM Present branch ran or pixels were drawn.
     // Bound records the successful build/function admission and stays true
     // after End; active/pendingCleanup describe observation and hook cleanup.
-    // API1/2 make no COM calls. Explicit API3 queries and releases only inside
-    // the callback; none issue GPU work or export native object pointers.
+    // API1/2 make no COM calls. Explicit API3/4 queries and releases only inside
+    // the callback; API4 also reads pinned custom-present policy without vcalls.
+    // None issue GPU work or export native object pointers.
     // Begin/ReadState/End belong to one producer thread. End
     // disarms immediately but may require a later retry; retain the owner and
     // module until it succeeds. Static pinned hook state never retains this.
@@ -56,7 +58,7 @@ namespace mta::game_de
         NativeRenderObservation& operator=(const NativeRenderObservation&) = delete;
         // A zero-callback run cannot choose a backend. The route is explicit;
         // observedRoute remains unknown until a validated original returns.
-        bool Begin(RenderObservationRoute route = RenderObservationRoute::D3D11, bool queryGpuOwnership = false) noexcept;
+        bool Begin(RenderObservationRoute route = RenderObservationRoute::D3D11, bool queryGpuOwnership = false, bool classifyCustomPresent = false) noexcept;
         bool End() noexcept;
         void ReadState(NativeRenderObservationState& state) const noexcept;
 

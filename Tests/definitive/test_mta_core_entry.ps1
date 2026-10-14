@@ -172,7 +172,10 @@ foreach ($name in $sourceNames) {
 }
 # The separate API3 InitializeCore attempt adds a third genuine exact-image
 # rejection; all three must occur before any native game binding is admitted.
-$success=$compilerExit -eq 0 -and $hostExit -eq 0 -and $null -ne $hostResult -and $hostResult.success -and $bindingRejections -eq 3 -and $sourcesUnchanged
+# API4 adds one real rejected initialization attempt. Require its exact-image
+# failure as well as the previous attempts instead of accepting an extra log
+# entry without checking which diagnostic produced it.
+$success=$compilerExit -eq 0 -and $hostExit -eq 0 -and $null -ne $hostResult -and $hostResult.success -and $hostResult.api4_initialize_result -eq 5 -and $bindingRejections -eq 4 -and $sourcesUnchanged
 $record=[ordered]@{recorded_at=[DateTimeOffset]::Now.ToString('o');success=$success;directory=$outputRoot;
     scope='Actual supplied Core/Game DE DLL entry point in a separate non-game host named SanAndreas.exe';
     compiler_exit=$compilerExit;host_exit=$hostExit;host_result=$hostResult;failure=$failure;host_sha256=$hostHash;nonclassic_layout=$NonClassicLayout.IsPresent;

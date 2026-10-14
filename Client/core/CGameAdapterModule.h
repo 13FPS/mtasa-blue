@@ -42,6 +42,8 @@ public:
     bool                GetNativeRenderObservationState(mta::game_de::RenderObservationStateV2& state);
     bool                BeginNativeRenderOwnershipObservation(mta::game_de::RenderObservationRoute route);
     bool                GetNativeRenderObservationState(mta::game_de::RenderObservationStateV3& state);
+    bool                BeginNativeRenderClassificationObservation(mta::game_de::RenderObservationRoute route);
+    bool                GetNativeRenderObservationState(mta::game_de::RenderObservationStateV4& state);
     bool                EndNativeRenderObservation() noexcept;
     void                Stop() noexcept;
 
@@ -69,6 +71,9 @@ private:
     mta::game_de::IGameRenderObservationV3* m_renderObservationV3 = nullptr;
     mta::game_de::RenderObservationStateV3  m_lastRenderObservationV3;
     bool                                    m_hasRenderObservationV3 = false;
+    mta::game_de::IGameRenderObservationV4* m_renderObservationV4 = nullptr;
+    mta::game_de::RenderObservationStateV4  m_lastRenderObservationV4;
+    bool                                    m_hasRenderObservationV4 = false;
     mta::game_de::RenderObservationRoute    m_renderRoute = mta::game_de::RenderObservationRoute::Unknown;
     CCoreInterface*                         m_ownerIdentity = nullptr;
     std::uint32_t                           m_ownerThread = 0;

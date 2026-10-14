@@ -49,6 +49,13 @@ namespace deonline
         return route == 2 && Start(moduleAddress, true, false, true, route, 3);
     }
 
+    bool CoreStartupReference::BeginRenderReferenceV4(const void* moduleAddress, std::uint32_t route) noexcept
+    {
+        // The classification is additive: requesting it must not change the
+        // old ownership snapshots or silently select another native route.
+        return route == 2 && Start(moduleAddress, true, false, true, route, 4);
+    }
+
     bool CoreStartupReference::Start(const void* moduleAddress, bool configuredInput, bool configuredMovement, bool configuredRender,
                                      std::uint32_t configuredRenderRoute, std::uint32_t configuredRenderApi) noexcept
     {
@@ -72,6 +79,8 @@ namespace deonline
         publishedRender = {};
         renderV3Available = false;
         publishedRenderV3 = {};
+        renderV4Available = false;
+        publishedRenderV4 = {};
         renderV2Available = false;
         publishedRenderV2 = {};
         ReleaseSRWLockExclusive(&inputLock);
@@ -80,6 +89,7 @@ namespace deonline
         capturedRender = {};
         capturedRenderV2 = {};
         capturedRenderV3 = {};
+        capturedRenderV4 = {};
         cancellation.store(false);
         state.store(1, std::memory_order_release);
         // Use the existing CRT worker convention instead of a joinable global
@@ -200,6 +210,22 @@ namespace deonline
         return ownerThread.load() == GetCurrentThreadId() && renderApi == 3 && renderRoute && field < capturedRenderV3.size() ? capturedRenderV3[field] : 0;
     }
 
+    bool CoreStartupReference::CaptureRenderV4() noexcept
+    {
+        if (ownerThread.load() != GetCurrentThreadId() || renderApi != 4 || !renderRoute || !TryAcquireSRWLockShared(&inputLock))
+            return false;
+        const bool available = renderV4Available;
+        if (available)
+            capturedRenderV4 = publishedRenderV4;
+        ReleaseSRWLockShared(&inputLock);
+        return available;
+    }
+
+    std::uint32_t CoreStartupReference::ReadRenderV4(std::uint32_t field) const noexcept
+    {
+        return ownerThread.load() == GetCurrentThreadId() && renderApi == 4 && renderRoute && field < capturedRenderV4.size() ? capturedRenderV4[field] : 0;
+    }
+
     bool CoreStartupReference::InputCancelled()
     {
         return !inputOwner || inputOwner->cancellation.load(std::memory_order_acquire);
@@ -208,14 +234,20 @@ namespace deonline
     void CoreStartupReference::PublishInput(const std::uint32_t* snapshot, std::uint32_t count)
     {
         if (!inputOwner || !snapshot ||
-            count != (inputOwner->renderRequested     ? (inputOwner->renderApi == 3 ? DefinitiveRenderReference::FieldCountV3
-                                                         : inputOwner->renderRoute  ? DefinitiveRenderReference::FieldCountV2
-                                                                                    : DefinitiveRenderReference::FieldCount)
+            count != (inputOwner->renderRequested     ? (inputOwner->renderApi == 4   ? DefinitiveRenderReference::FieldCountV4
+                                                         : inputOwner->renderApi == 3 ? DefinitiveRenderReference::FieldCountV3
+                                                         : inputOwner->renderRoute    ? DefinitiveRenderReference::FieldCountV2
+                                                                                      : DefinitiveRenderReference::FieldCount)
                       : inputOwner->movementRequested ? DefinitiveMovementReference::FieldCount
                                                       : DefinitiveInputReference::FieldCount))
             return;
         AcquireSRWLockExclusive(&inputOwner->inputLock);
-        if (inputOwner->renderRequested && inputOwner->renderApi == 3)
+        if (inputOwner->renderRequested && inputOwner->renderApi == 4)
+        {
+            std::copy_n(snapshot, count, inputOwner->publishedRenderV4.begin());
+            inputOwner->renderV4Available = true;
+        }
+        else if (inputOwner->renderRequested && inputOwner->renderApi == 3)
         {
             std::copy_n(snapshot, count, inputOwner->publishedRenderV3.begin());
             inputOwner->renderV3Available = true;
@@ -357,20 +389,23 @@ namespace deonline
                     using ConfigureRenderV2 =
                         std::uint32_t (*)(std::uint32_t, std::uint32_t, DefinitiveInputReference::CancelCallback, DefinitiveInputReference::PublishCallback);
                     const auto inputVersion =
-                        reinterpret_cast<Version>(GetProcAddress(core, renderRequested && renderApi == 3 ? "MTA_DERenderReferenceApiVersionV3"
-                                                                       : renderRoute                     ? "MTA_DERenderReferenceApiVersionV2"
-                                                                       : renderRequested                 ? "MTA_DERenderReferenceApiVersion"
-                                                                       : movementRequested               ? "MTA_DEMovementReferenceApiVersion"
-                                                                                                         : "MTA_DEInputReferenceApiVersion"));
+                        reinterpret_cast<Version>(GetProcAddress(core, renderRequested && renderApi == 4   ? "MTA_DERenderReferenceApiVersionV4"
+                                                                       : renderRequested && renderApi == 3 ? "MTA_DERenderReferenceApiVersionV3"
+                                                                       : renderRoute                       ? "MTA_DERenderReferenceApiVersionV2"
+                                                                       : renderRequested                   ? "MTA_DERenderReferenceApiVersion"
+                                                                       : movementRequested                 ? "MTA_DEMovementReferenceApiVersion"
+                                                                                                           : "MTA_DEInputReferenceApiVersion"));
                     const auto configure = reinterpret_cast<Configure>(GetProcAddress(core, renderRequested     ? "MTA_ConfigureDERenderReference"
                                                                                             : movementRequested ? "MTA_ConfigureDEMovementReference"
                                                                                                                 : "MTA_ConfigureDEInputReference"));
-                    const auto configureV2 = reinterpret_cast<ConfigureRenderV2>(
-                        GetProcAddress(core, renderApi == 3 ? "MTA_ConfigureDERenderReferenceV3" : "MTA_ConfigureDERenderReferenceV2"));
-                    const auto expectedVersion = renderRequested && renderApi == 3 ? DefinitiveRenderReference::ApiVersionV3
-                                                 : renderRoute                     ? DefinitiveRenderReference::ApiVersionV2
-                                                 : renderRequested                 ? DefinitiveRenderReference::ApiVersion
-                                                                                   : DefinitiveInputReference::ApiVersion;
+                    const auto configureV2 = reinterpret_cast<ConfigureRenderV2>(GetProcAddress(core, renderApi == 4   ? "MTA_ConfigureDERenderReferenceV4"
+                                                                                                      : renderApi == 3 ? "MTA_ConfigureDERenderReferenceV3"
+                                                                                                                       : "MTA_ConfigureDERenderReferenceV2"));
+                    const auto expectedVersion = renderRequested && renderApi == 4   ? DefinitiveRenderReference::ApiVersionV4
+                                                 : renderRequested && renderApi == 3 ? DefinitiveRenderReference::ApiVersionV3
+                                                 : renderRoute                       ? DefinitiveRenderReference::ApiVersionV2
+                                                 : renderRequested                   ? DefinitiveRenderReference::ApiVersion
+                                                                                     : DefinitiveInputReference::ApiVersion;
                     if (!inputVersion || (renderRoute ? !configureV2 : !configure) || inputVersion() != expectedVersion)
                     {
                         values[16] = 13;
@@ -419,8 +454,9 @@ namespace deonline
                                sample[PresenceKnownMask] == (sample[ObservedRoute] ? (renderRoute == 2 ? 19u : 15u) : 0u);
                     };
                     const bool renderComplete =
-                        renderApi == 3 ? explicitRouteEnded(publishedRenderV3, renderV3Available, DefinitiveRenderReference::ApiVersionV3)
-                        : renderRoute  ? renderV2Available && renderEnded(publishedRenderV2, DefinitiveRenderReference::ApiVersionV2) &&
+                        renderApi == 4   ? explicitRouteEnded(publishedRenderV4, renderV4Available, DefinitiveRenderReference::ApiVersionV4)
+                        : renderApi == 3 ? explicitRouteEnded(publishedRenderV3, renderV3Available, DefinitiveRenderReference::ApiVersionV3)
+                        : renderRoute    ? renderV2Available && renderEnded(publishedRenderV2, DefinitiveRenderReference::ApiVersionV2) &&
                                             publishedRenderV2[DefinitiveRenderReference::RequestedRoute] == renderRoute &&
                                             (publishedRenderV2[DefinitiveRenderReference::ObservedRoute] == 0 ||
                                              publishedRenderV2[DefinitiveRenderReference::ObservedRoute] == renderRoute) &&
@@ -468,12 +504,13 @@ namespace deonline
         values[15] = GetModuleHandleW(L"game_de.dll") ? 1u : 0u;
         if ((values[12] & ~values[11]) && !values[16])
             values[16] = 10;
-        const auto expectedBackend = renderRequested && renderApi == 3 && renderV3Available
-                                         ? publishedRenderV3[DefinitiveRenderReference::BackendPinnedExpected]
-                                     : renderRequested && renderRoute && renderV2Available ? publishedRenderV2[DefinitiveRenderReference::BackendPinnedExpected]
-                                     : renderRequested && renderAvailable                  ? publishedRender[DefinitiveRenderReference::BackendPinnedExpected]
-                                     : movementRequested && movementAvailable ? publishedMovement[DefinitiveMovementReference::BackendPinnedExpected]
-                                                                              : 0u;
+        const auto expectedBackend =
+            renderRequested && renderApi == 4 && renderV4Available   ? publishedRenderV4[DefinitiveRenderReference::BackendPinnedExpected]
+            : renderRequested && renderApi == 3 && renderV3Available ? publishedRenderV3[DefinitiveRenderReference::BackendPinnedExpected]
+            : renderRequested && renderRoute && renderV2Available    ? publishedRenderV2[DefinitiveRenderReference::BackendPinnedExpected]
+            : renderRequested && renderAvailable                     ? publishedRender[DefinitiveRenderReference::BackendPinnedExpected]
+            : movementRequested && movementAvailable                 ? publishedMovement[DefinitiveMovementReference::BackendPinnedExpected]
+                                                                     : 0u;
         if ((!values[13] || values[15] != expectedBackend) && !values[16])
             values[16] = 9;
     }

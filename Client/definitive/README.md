@@ -169,11 +169,38 @@ drawing. ABI3 and its 80 fields remain unchanged. The reader's
 `native_gpu_metadata_observed` reports complete sampled queries separately
 from GPU ownership; its sample count does not describe unlogged probes.
 
+**Additive API4: identify the native custom presenter without calling it.**
+The separate factory, Core exports and 84-field wire compose the existing
+API3 state and append status, implementation ID, seven-slot signature mask and
+static policy flags. API1/2/3 factories and layouts remain intact; fields 78/79
+stay reserved and zero. The explicit package opt-in is
+`-MtaCoreRenderCustomPresentReference`, together with the existing Core render,
+GPU-reference and D3D12 selections. The source flag defaults to false. Package
+and mode changes reject invalid combinations and clear classification when
+returning to earlier diagnostics or ordinary modes.
+
+The classifier checks the exact image-owned table, every slot and six unique
+complete function signatures through guarded reads. Its device association
+must match the native roots and survive coherent readback after the COM
+attempt. It never calls a custom-present method or exports its address. Known
+status 2 has implementation 1, signature mask 127 and static policy flags 15;
+unknown, signature, read, device and root failures cannot become Known. These
+policies describe the pinned implementation's native-present request, disabled
+fallback advance, no-op post-present callback and resize notification. They do
+not prove that a branch ran, identify current resource states or authorize
+drawing. API3's custom-present support exclusion remains unchanged.
+
+MTA Core retains the classification lease through the existing worker and
+cleanup lifecycle. The reader's `custom_presenter_recognized` and sample count
+describe logged recognized classifications independently of COM query success.
+They do not promote GPU ownership or full startup. No live API4 result is
+claimed until the installed candidate is tested manually.
+
 The owned COM-query fixture covers a real WARP swapchain and balanced
 references, including custom-present metadata that remains unsupported for
 drawing. The native callback fixture covers both the single-node query path
 and the retained custom/multi-GPU refusal.
-The focused checks pass 265 ownership and 2,072 native callback cases,
+The focused checks pass 265 ownership and 2,466 native callback cases,
 including repeated real custom-present metadata queries and balanced COM
 references. These observer checks issue no rendering work.
 Cleanup-release faults disable further queries before calling the
@@ -212,12 +239,18 @@ Core and worker for retries. A two-second cleanup deadline records failure
 without permitting unload. Ended state is copied before lease release, and the
 terminal Core diagnostics preserve the actual backend PIN.
 
-Final offline checks pass: 2,072 native callback checks, 1,563 module checks,
-563 x64/3 x86 Core consumer checks against the exact normal Game DE DLL,
-6,600 lifecycle checks on each architecture, all 23 worker scenarios,
-293 bridge protocol/1,062 ABI checks, 467 script checks and 35 renderer log-reader tests.
-The normal Core/Game DE build passes 161 actual Core entry checks in each
+Final offline checks pass: 2,466 native callback checks, 1,579 module checks,
+718 x64/3 x86 Core consumer checks against the exact normal Game DE DLL,
+8,448 lifecycle checks on each architecture, all 32 worker scenarios,
+293 bridge protocol/1,247 ABI checks, 503 script checks and 46 renderer log-reader tests.
+The normal Core/Game DE build passes 190 actual Core entry checks in each
 folder layout and preserves classic Win32 compilation and default x64 exclusion.
+Fresh GUI builds and actual D3D12/D3D9 hosts bind the new Core binary; the
+three D3D12 formats pass 459 checks and the D3D9 host passes 91. The ownership
+suite passes 642 checks against updated package/configuration scripts with
+previously built native fixture binaries; final package hashes separately bind
+the newly built API4 binaries. Those ownership tests do not claim API4 runtime
+execution in GTA.
 The packaged launcher preflight verifies all 23 files while keeping full startup
 unavailable. These checks use owned fixtures; they do not execute GTA.
 

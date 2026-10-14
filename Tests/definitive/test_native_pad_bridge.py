@@ -61,6 +61,10 @@ def main():
         "DE_CoreRenderBeginV3": (ctypes.c_int, [ctypes.c_uint32]),
         "DE_CoreRenderCaptureV3": (ctypes.c_int, []),
         "DE_CoreRenderReadV3": (ctypes.c_uint32, [ctypes.c_uint32]),
+        "DE_CoreRenderApiVersionV4": (ctypes.c_uint32, []),
+        "DE_CoreRenderBeginV4": (ctypes.c_int, [ctypes.c_uint32]),
+        "DE_CoreRenderCaptureV4": (ctypes.c_int, []),
+        "DE_CoreRenderReadV4": (ctypes.c_uint32, [ctypes.c_uint32]),
     }
     for name, (result, arguments) in signatures.items():
         function = getattr(bridge, name)
@@ -71,6 +75,7 @@ def main():
     check(bridge.DE_ApiVersion() == 2, "Additive diagnostic exports retain bridge ABI2")
     check(bridge.DE_CoreRenderApiVersionV2() == 2, "Explicit renderer routes have a separate API2 protocol")
     check(bridge.DE_CoreRenderApiVersionV3() == 3, "Read-only COM queries require a separate API3 protocol")
+    check(bridge.DE_CoreRenderApiVersionV4() == 4, "Presenter classification requires a separate additive API4 protocol")
     check(getattr(bridge, "DE_CoreStartupRun", None) is None, "Unsafe synchronous startup export must be absent")
     # A regular Python executable must never masquerade as the verified GTA host
     # or obtain engine access merely by loading this DLL and resolving its ABI.
@@ -90,6 +95,10 @@ def main():
     for route in (0, 1, 2, 3, 0xFFFFFFFF):
         check(bridge.DE_CoreRenderBeginV2(route) == 0, "Wrong executable cannot start any explicit renderer route")
         check(bridge.DE_CoreRenderBeginV3(route) == 0, "Wrong executable cannot acquire a GPU ownership query lease")
+        check(bridge.DE_CoreRenderBeginV4(route) == 0, "Wrong executable cannot acquire a custom-present classification lease")
+    check(bridge.DE_CoreRenderCaptureV4() == 0, "Rejected host cannot freeze custom-present classifications")
+    for component in (*range(84), 84, 0xFFFFFFFF):
+        check(bridge.DE_CoreRenderReadV4(component) == 0, "Rejected host cannot manufacture static presenter policies")
     check(bridge.DE_CoreRenderCaptureV3() == 0, "Rejected host cannot freeze GPU metadata")
     for component in (*range(80), 80, 0xFFFFFFFF):
         check(bridge.DE_CoreRenderReadV3(component) == 0, "Rejected host cannot manufacture GPU ownership metadata")
@@ -139,6 +148,10 @@ def main():
     check(bridge.DE_CoreRenderCaptureV2() == 0, "Cleanup cannot manufacture API2 evidence")
     check(bridge.DE_CoreRenderBeginV3(2) == 0, "Cleanup cannot authorize GPU ownership queries")
     check(bridge.DE_CoreRenderCaptureV3() == 0, "Cleanup cannot manufacture GPU metadata")
+    check(bridge.DE_CoreRenderBeginV4(2) == 0, "Cleanup cannot authorize custom-present classification")
+    check(bridge.DE_CoreRenderCaptureV4() == 0, "Cleanup cannot manufacture custom-present classifications")
+    for component in (*range(84), 84, 0xFFFFFFFF):
+        check(bridge.DE_CoreRenderReadV4(component) == 0, "Cleanup cannot retain custom-present classification evidence")
     for component in (*range(80), 80, 0xFFFFFFFF):
         check(bridge.DE_CoreRenderReadV3(component) == 0, "Cleanup cannot retain GPU ownership evidence")
     for component in (*range(44), 44, 0xFFFFFFFF):

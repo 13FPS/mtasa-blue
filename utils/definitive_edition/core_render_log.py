@@ -16,13 +16,17 @@ PAIRS = dict(generation=15, native_present_callbacks=17, accepted_snapshots=19,
              rejected_snapshots=21, nested_callbacks=23, foreign_callbacks=33,
              publication_misses=35)
 GPU_PAIRS = dict(attempts=44, accepted=46, rejected=48)
-POINTER_KEYS = frozenset(("viewport", "swapchain", "device", "native_pointer", "address", "command_queue", "resource_pointer"))
+POINTER_KEYS = frozenset(("viewport", "swapchain", "device", "native_pointer", "address", "command_queue", "resource_pointer",
+                          "custom_present", "custom_presenter", "presenter_pointer", "vtable", "vtable_address", "function_pointer"))
 UNVERIFIED_CLAIMS = frozenset(("com_present_verified", "visual_success_verified", "de_renderer_verified", "full_mta_boot_verified",
                               "full_core_ready", "gameplay_ready", "rendering_started", "engine_input_write_verified",
-                              "remote_player_context_verified", "network_active", "input_writes", "remote_peds_created", "native_gpu_metadata_observed"))
+                              "remote_player_context_verified", "network_active", "input_writes", "remote_peds_created", "native_gpu_metadata_observed",
+                              "custom_presenter_recognized", "custom_presenter_sample_count", "gpu_ownership_verified",
+                              "gpu_frame_boundary_verified", "queue_submission_verified", "custom_present_frame_sink_verified"))
 NOTICE = (
     "This checks saved reports of an explicitly selected owned native viewport callback and cleanup. "
     "Callback entry and its native return value do not prove that COM Present executed or pixels were drawn. "
+    "Custom-present recognition identifies reviewed code and a native association, not the actual frame sink or GPU synchronization. "
     "Visual quality, a DE GUI renderer, full MTA startup and multiplayer remain unverified."
 )
 
@@ -42,7 +46,8 @@ def event_contract(event):
         return (1, 1)
     if (type(event.get("observation_api")) is int and type(event.get("requested_route")) is int and
             ((event["core_api"] == 6 and event["observation_api"] == 2 and event["requested_route"] in (1, 2)) or
-             (event["core_api"] == 7 and event["observation_api"] == 3 and event["requested_route"] == 2))):
+             (event["core_api"] == 7 and event["observation_api"] == 3 and event["requested_route"] == 2) or
+             (event["core_api"] == 8 and event["observation_api"] == 4 and event["requested_route"] == 2))):
         return (event["observation_api"], event["requested_route"])
     return None
 
@@ -110,6 +115,25 @@ def gpu_consistent(state, previous=None):
     if state[75] == 5:
         return state[50] == 17 and state[51] == 0
     return state[75] == 6 and state[50] == 18 and state[51] == 0x8000ffff
+
+
+def custom_present_consistent(state):
+    # The tail identifies reviewed native code and its association only. It
+    # remains independent of COM-query success and cannot authorize rendering.
+    status, implementation, signatures, policies = state[80:84]
+    if status > 7 or signatures > 127:
+        return False
+    if not (state[44] or state[45]):
+        return not any(state[80:84])
+    if not status:
+        return False
+    if status == 2:
+        return state[74] == 1 and [implementation, signatures, policies] == [1, 127, 15]
+    if implementation or policies or (status in (1, 3, 7) and signatures):
+        return False
+    # A root read fault can precede knowledge of custom presence. Root changes
+    # likewise invalidate that association without inventing a presence value.
+    return state[74] == 0 if status == 1 else status in (5, 7) or state[74] == 1
 
 
 def unsafe_event_claims(event):
@@ -193,7 +217,7 @@ def analyze_log(text, require_exit=False):
             if (len(samples) >= 4096 or set(event) != {"event", "at_ms", "elapsed_ms", "state"} or
                     not started or finished or not startup.integer(event.get("at_ms")) or
                     not startup.integer(event.get("elapsed_ms")) or not startup.integer(started.get("at_ms")) or
-                    event["at_ms"] - started["at_ms"] != event["elapsed_ms"] or not unsigned_array(state, {1: 40, 2: 44, 3: 80}[version])):
+                    event["at_ms"] - started["at_ms"] != event["elapsed_ms"] or not unsigned_array(state, {1: 40, 2: 44, 3: 80, 4: 84}[version])):
                 invalid(line, "Sample requires the versioned unsigned fields with bound clock/order")
                 continue
             if last_clock is not None and event["at_ms"] < last_clock:
@@ -208,8 +232,10 @@ def analyze_log(text, require_exit=False):
                     state[26] > 32768 or state[27] > 32768 or state[37] & ~15 or any(state[38:40]) or
                     not route_consistent(state, version, requested)):
                 invalid(line, "Snapshot version, flags, field bounds or reserved storage is invalid")
-            if version == 3 and not gpu_consistent(state, previous):
+            if version >= 3 and not gpu_consistent(state, previous):
                 invalid(line, "GPU ownership metadata or coherent published counters are contradictory")
+            if version == 4 and not custom_present_consistent(state):
+                invalid(line, "Custom-present code classification is contradictory")
             native = counters(state)
             outcomes = ("accepted_snapshots", "rejected_snapshots", "foreign_callbacks", "publication_misses")
             if (any(native[name] > native["native_present_callbacks"] for name in (*outcomes, "nested_callbacks")) or
@@ -285,9 +311,9 @@ def analyze_log(text, require_exit=False):
                  terminal[37] == (15 if requested == 1 else 3) and not any(terminal[38:40]) and
                  (version == 1 or terminal[41] == requested))
     native_clean = clean
-    gpu_clean = bool(version == 3 and terminal and gpu_supported(terminal) and
+    gpu_clean = bool(version >= 3 and terminal and gpu_supported(terminal) and
                      gpu_metrics(terminal)["accepted"] > 0 and not gpu_metrics(terminal)["rejected"])
-    clean = clean and (version != 3 or gpu_clean)
+    clean = clean and (version < 3 or gpu_clean)
     lifecycle = bool(base["core_startup_reference_complete"] and not issues and not stop)
     complete = lifecycle and clean
     if finished and finished.get("passed") is True and not clean:
@@ -311,18 +337,24 @@ def analyze_log(text, require_exit=False):
     # A complete native-object query can still be unsupported for drawing when
     # a custom presenter owns the actual frame sink. Count sampled reports only;
     # sparse logs cannot establish the outcomes of every intermediate probe.
-    metadata_samples = sum(1 for sample in samples if version == 3 and sample["state"][50] == 19 and
+    metadata_samples = sum(1 for sample in samples if version >= 3 and sample["state"][50] == 19 and
                            sample["state"][52] == 1 and sample["state"][75] in (1, 2) and gpu_consistent(sample["state"]))
-    return dict(schema_version=1, status=("native_gpu_ownership_observed" if version == 3 else "native_renderer_callback_observed") if complete else
+    # This is a count of valid sampled classification reports, not every
+    # callback or probe, and recognition cannot change the API3 ownership gate.
+    custom_samples = sum(1 for sample in samples if version == 4 and sample["state"][80] == 2 and
+                         custom_present_consistent(sample["state"]) and gpu_consistent(sample["state"]))
+    return dict(schema_version=1, status=("native_gpu_ownership_observed" if version >= 3 else "native_renderer_callback_observed") if complete else
                 "invalid_evidence" if issues or base["issue_count"] else
-                ("native_gpu_ownership_incomplete" if version == 3 and native_clean else "native_observation_missing") if diagnostic_lifecycle else "incomplete_or_failed",
+                ("native_gpu_ownership_incomplete" if version >= 3 and native_clean else "native_observation_missing") if diagnostic_lifecycle else "incomplete_or_failed",
                 core_render_reference_complete=complete, render_observation_session_complete=lifecycle,
                 diagnostic_lifecycle_complete=diagnostic_lifecycle, deliberate_incomplete_event=deliberate_incomplete,
                 native_renderer_callback_observed=bool(native_clean and (lifecycle or diagnostic_lifecycle)), sample_count=len(samples), native_metrics=native,
-                gpu_ownership_verified=bool(version == 3 and complete),
+                gpu_ownership_verified=bool(version >= 3 and complete),
                 native_gpu_metadata_observed=bool(metadata_samples and not issues and not base["issue_count"]),
                 gpu_metadata_sample_count=metadata_samples,
-                gpu_metrics=gpu_metrics(terminal) if version == 3 and terminal else None,
+                custom_presenter_recognized=bool(custom_samples and not issues and not base["issue_count"]),
+                custom_presenter_sample_count=custom_samples,
+                gpu_metrics=gpu_metrics(terminal) if version >= 3 and terminal else None,
                 observation_api=version, requested_route=requested,
                 observed_route=(terminal[41] if version >= 2 else 1 if complete else 0) if terminal else 0,
                 presence_known_mask=(terminal[42] if version >= 2 else 15 if complete else 0) if terminal else 0,

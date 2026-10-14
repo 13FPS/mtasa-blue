@@ -128,17 +128,23 @@ namespace
     using Fixture = FixtureT<Snapshot>;
     using FixtureV2 = FixtureT<SnapshotV2>;
     using FixtureV3 = FixtureT<SnapshotV3>;
+    using FixtureV4 = FixtureT<SnapshotV4>;
+    static_assert(CustomPresentStatus == 80 && CustomPresentStaticPolicyFlags == 83);
+    static_assert(sizeof(SnapshotV4) == 84 * sizeof(std::uint32_t));
     template <typename SnapshotType>
     void Terminal(const FixtureT<SnapshotType>& fixture, const SnapshotType& state, StopReason reason, bool clean = true)
     {
         Check(fixture.observer.ended && fixture.observer.ends > 0, "every exit must finish actual observer End");
-        Check(state[Version] == (std::tuple_size<SnapshotType>::value == FieldCountV3   ? 3u
+        Check(state[Version] == (std::tuple_size<SnapshotType>::value == FieldCountV4   ? 4u
+                                 : std::tuple_size<SnapshotType>::value == FieldCountV3 ? 3u
                                  : std::tuple_size<SnapshotType>::value == FieldCountV2 ? 2u
                                                                                         : 1u) &&
                   state[Phase] == 2 && state[CleanupPending] == 0 && state[CleanupComplete] == (clean ? 1u : 0u),
               "terminal publication must accurately describe cleanup");
         Check(state[Reason] == static_cast<std::uint32_t>(reason), "stop reason must survive the cleanup path");
         Check(state[Reserved] == 0 && state[ReservedHigh] == 0, "reserved fields must remain neutral");
+        if constexpr (std::tuple_size<SnapshotType>::value >= FieldCountV3)
+            Check(state[ReservedV3] == 0 && state[ReservedHighV3] == 0, "classification cannot repurpose API3 reserved words");
     }
 }
 
@@ -376,6 +382,72 @@ int main()
                   "API3 metadata tail must preserve exact SDK field ordering");
             Check(copied[NativePresence] == 3 && copied[PresenceKnownMask] == 19 && copied[QueuePresent] == 1 && !copied[ReservedV3] && !copied[ReservedHighV3],
                   "API3 must not merge queue into historical presence bits or populate reserved fields");
+            mta::game_de::RenderObservationStateV4 classified;
+            classified.base = state;
+            classified.base.gpu.metadataValid = classified.base.gpu.supportPredicate = 0;
+            classified.base.gpu.customPresentPresent = 1;
+            for (const auto status : {0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u})
+            {
+                classified.custom = {status, status == 2 ? 1u : 0u, status == 2 ? 127u : 0u, status == 2 ? 15u : 0u};
+                SnapshotV3 prefix{};
+                CopyNativeStateV3(prefix, classified.base);
+                SnapshotV4 extended{};
+                extended[ReservedV3] = extended[ReservedHighV3] = 99;
+                CopyNativeStateV4(extended, classified);
+                Check(std::equal(prefix.begin(), prefix.end(), extended.begin()),
+                      "API4 must retain the exact eighty-field API3 prefix and neutral reserved storage");
+                Check(extended[CustomPresentStatus] == status && extended[CustomPresentImplementationId] == classified.custom.implementationId &&
+                          extended[CustomPresentSlotSignatureMask] == classified.custom.slotSignatureMask &&
+                          extended[CustomPresentStaticPolicyFlags] == classified.custom.staticPolicyFlags,
+                      "classification, including read/root failures, must survive scalar copying without becoming COM or draw support");
+                Check(!extended[MetadataValid] && !extended[SupportPredicate] && extended[QueryHresult] == 0x80004002u,
+                      "a known presenter may coexist with failed COM metadata and cannot change GPU support");
+            }
+        }
+        {
+            FixtureV4  f;
+            const auto state = f.Run();
+            Terminal(f, state, StopReason::TimeBudget);
+            Check(f.publications.size() == 201 && state[RequestedRoute] == 2 && state[NativePresence] == 3,
+                  "API4 retains the bounded D3D12 lifecycle while publishing exactly eighty-four scalars");
+        }
+        for (const auto invalid : {0u, 1u, 3u, 0xffffffffu})
+        {
+            FixtureV4 f;
+            f.request.renderRoute = invalid;
+            Terminal(f, f.Run(), StopReason::BeginError);
+            Check(!f.observer.begins, "classification cannot begin through an implicit or D3D11 route");
+        }
+        // The longer report must retain the same real cleanup owner on every
+        // cancellation, callback/read failure and deadline path as API1-3.
+        for (unsigned scenario = 0; scenario < 8; ++scenario)
+        {
+            FixtureV4 f;
+            if (scenario == 0)
+                f.request.cancelled = [&] { return f.clock.now >= 1150; };
+            else if (scenario == 1)
+                f.observer.rejectBegin = true;
+            else if (scenario == 2)
+                f.observer.throwRead = true;
+            else if (scenario == 3)
+                f.observer.busyEnds = 42;
+            else if (scenario == 4)
+                f.observer.lateEnd = 2001;
+            else if (scenario == 5)
+                f.observer.rejectFinalRead = true;
+            else if (scenario == 6)
+                f.observer.nativeFailure = true;
+            else
+                f.clock.regularWait = 1001;
+            const auto reason = scenario == 0   ? StopReason::Cancelled
+                                : scenario == 1 ? StopReason::BeginError
+                                : scenario == 2 ? StopReason::Exception
+                                : scenario <= 5 ? StopReason::CleanupError
+                                : scenario == 6 ? StopReason::ReadError
+                                                : StopReason::PulseGap;
+            Terminal(f, f.Run(), reason, scenario != 5);
+            if (scenario == 3)
+                Check(f.observer.ends == 43, "an API4 cleanup deadline cannot authorize owner release before End succeeds");
         }
         std::printf("{\"success\":true,\"checks\":%u,\"game_operations\":false}\n", checks);
         return 0;

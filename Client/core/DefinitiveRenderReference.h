@@ -18,6 +18,8 @@ namespace DefinitiveRenderReference
     inline constexpr std::uint32_t FieldCountV2 = 44;
     inline constexpr std::uint32_t ApiVersionV3 = 3;
     inline constexpr std::uint32_t FieldCountV3 = 80;
+    inline constexpr std::uint32_t ApiVersionV4 = 4;
+    inline constexpr std::uint32_t FieldCountV4 = 84;
     inline constexpr std::uint32_t MaximumDurationMs = 10000;
     inline constexpr std::uint32_t SampleIntervalMs = 50;
     inline constexpr std::uint32_t MaximumSamples = 200;
@@ -107,6 +109,10 @@ namespace DefinitiveRenderReference
         NativeAFRCount,
         ReservedV3,
         ReservedHighV3,
+        CustomPresentStatus,
+        CustomPresentImplementationId,
+        CustomPresentSlotSignatureMask,
+        CustomPresentStaticPolicyFlags,
     };
 
     enum class StopReason : std::uint32_t
@@ -127,6 +133,7 @@ namespace DefinitiveRenderReference
     using Snapshot = std::array<std::uint32_t, FieldCount>;
     using SnapshotV2 = std::array<std::uint32_t, FieldCountV2>;
     using SnapshotV3 = std::array<std::uint32_t, FieldCountV3>;
+    using SnapshotV4 = std::array<std::uint32_t, FieldCountV4>;
 
     // Both protocols copy the actual observer's scalar state. Keeping this
     // shared with focused tests prevents route selection from inventing a
@@ -134,7 +141,7 @@ namespace DefinitiveRenderReference
     template <std::size_t N, typename State>
     void CopyNativeState(std::array<std::uint32_t, N>& snapshot, const State& state) noexcept
     {
-        static_assert(N == FieldCount || N == FieldCountV2 || N == FieldCountV3);
+        static_assert(N == FieldCount || N == FieldCountV2 || N == FieldCountV3 || N == FieldCountV4);
         snapshot[Bound] = state.bound;
         snapshot[Active] = state.active;
         snapshot[ModulePinned] = snapshot[BackendPinnedExpected] = state.modulePinned;
@@ -171,9 +178,10 @@ namespace DefinitiveRenderReference
         snapshot[QueuePresent] = state.queuePresent;
     }
 
-    template <typename State>
-    void CopyNativeStateV3(SnapshotV3& snapshot, const State& state) noexcept
+    template <std::size_t N, typename State>
+    void CopyNativeStateV3(std::array<std::uint32_t, N>& snapshot, const State& state) noexcept
     {
+        static_assert(N == FieldCountV3 || N == FieldCountV4);
         CopyNativeStateV2(snapshot, state.base);
         const auto&                        gpu = state.gpu;
         const std::array<std::uint64_t, 3> counters{gpu.attempts, gpu.accepted, gpu.rejected};
@@ -208,6 +216,19 @@ namespace DefinitiveRenderReference
         std::copy(tail.begin(), tail.end(), snapshot.begin() + BackbufferHeight);
     }
 
+    template <typename State>
+    void CopyNativeStateV4(SnapshotV4& snapshot, const State& state) noexcept
+    {
+        // Classification extends the scalar report without reinterpreting the
+        // API3 prefix or turning a known custom presenter into draw admission.
+        CopyNativeStateV3(snapshot, state.base);
+        snapshot[ReservedV3] = snapshot[ReservedHighV3] = 0;
+        snapshot[CustomPresentStatus] = state.custom.status;
+        snapshot[CustomPresentImplementationId] = state.custom.implementationId;
+        snapshot[CustomPresentSlotSignatureMask] = state.custom.slotSignatureMask;
+        snapshot[CustomPresentStaticPolicyFlags] = state.custom.staticPolicyFlags;
+    }
+
     // The real Core uses this same value-only lifecycle. Injecting only the
     // observer and monotonic clock makes cleanup/cancel/deadline behavior
     // testable without substituting Core or invoking a game/render function.
@@ -217,8 +238,8 @@ namespace DefinitiveRenderReference
         static_assert(noexcept(clock.Now()) && noexcept(clock.Wait(std::uint32_t{})), "Lifecycle clock must not throw during retained cleanup");
         SnapshotType   snapshot{};
         constexpr auto count = std::tuple_size<SnapshotType>::value;
-        static_assert(count == FieldCount || count == FieldCountV2 || count == FieldCountV3);
-        snapshot[Version] = count == FieldCountV3 ? ApiVersionV3 : count == FieldCountV2 ? ApiVersionV2 : ApiVersion;
+        static_assert(count == FieldCount || count == FieldCountV2 || count == FieldCountV3 || count == FieldCountV4);
+        snapshot[Version] = count == FieldCountV4 ? ApiVersionV4 : count == FieldCountV3 ? ApiVersionV3 : count == FieldCountV2 ? ApiVersionV2 : ApiVersion;
         bool validRoute = true;
         if constexpr (count >= FieldCountV2)
         {

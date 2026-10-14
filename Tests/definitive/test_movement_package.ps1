@@ -560,6 +560,70 @@ try {
             Assert-Check ([IO.File]::ReadAllText($config) -match 'export const MTA_CORE_RENDER_GPU_REFERENCE = false;') "Ordinary $mode clears COM queries"
         }
     }
+    Invoke-Case 'explicit-custom-present-classification-opt-in' {
+        param($fixture)
+        Install-Fresh $fixture
+        $config = Join-Path $fixture.game 'CLEO/de-online/config.mjs'
+        Assert-Check ([IO.File]::ReadAllText($config) -match 'export const MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE = false;') 'Custom-present recognition is disabled in the ordinary Smoke package'
+        $selection = @{Mode='Smoke'; MtaCoreRenderReference=$true; MtaCoreRenderRoute='D3D12'; MtaCoreRenderGpuReference=$true; MtaCoreRenderCustomPresentReference=$true; GameDirectory=$fixture.game}
+        $before = Get-TreeFingerprint $fixture.root
+        Invoke-Production $fixture 'set-mode.ps1' ($selection + @{WhatIf=$true})
+        Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'API4 classification WhatIf changes no bytes'
+        Invoke-Production $fixture 'set-mode.ps1' $selection
+        Assert-Check ([IO.File]::ReadAllText($config) -match 'export const MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE = true;') 'API4 classification requires its separate explicit opt-in'
+        Invoke-Production $fixture 'uninstall.ps1' @{GameDirectory=$fixture.game; ValidateOnly=$true}
+        foreach ($gpu in @($true,$false)) {
+            Invoke-Production $fixture 'set-mode.ps1' @{Mode='Smoke'; MtaCoreRenderReference=$true; MtaCoreRenderRoute='D3D12'; MtaCoreRenderGpuReference=$gpu; GameDirectory=$fixture.game}
+            Assert-Check ([IO.File]::ReadAllText($config) -match 'export const MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE = false;') 'Returning to API2/API3 clears static custom-present recognition'
+            Invoke-Production $fixture 'set-mode.ps1' $selection
+        }
+        $before = Get-TreeFingerprint $fixture.root
+        foreach ($invalid in @(@{MtaCoreRenderCustomPresentReference=$true},
+                @{MtaCoreRenderCustomPresentReference=$true;MtaCoreRenderGpuReference=$true},
+                @{MtaCoreRenderCustomPresentReference=$true;MtaCoreRenderReference=$true;MtaCoreRenderRoute='D3D12'},
+                @{MtaCoreRenderCustomPresentReference=$true;MtaCoreRenderGpuReference=$true;MtaCoreRenderReference=$true;MtaCoreRenderRoute='D3D11'})) {
+            $arguments = @{Mode='Smoke';GameDirectory=$fixture.game} + $invalid
+            Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' $arguments } 'Custom-present recognition requires explicit D3D12 Core GPU observation' 'API4 selection requires observer, GPU queries and D3D12'
+            $arguments.Remove('GameDirectory')
+            Assert-Refused { Invoke-Production $fixture 'package.ps1' $arguments } 'Custom-present recognition requires explicit D3D12 Core GPU observation' 'API4 package requires observer, GPU queries and D3D12'
+            Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Rejected API4 prerequisites change no bytes'
+        }
+        foreach ($mode in @('Diagnostic','Online')) {
+            $arguments = $selection.Clone();$arguments.Mode=$mode
+            Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' $arguments } 'separate opt-in Smoke mode' 'API4 classification refuses non-Smoke modes'
+            $arguments.Remove('GameDirectory')
+            Assert-Refused { Invoke-Production $fixture 'package.ps1' $arguments } 'separate opt-in Smoke mode' 'API4 package refuses non-Smoke modes'
+            Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Rejected API4 mode changes no bytes'
+        }
+        foreach ($mode in @('Diagnostic','Smoke','Online','Smoke')) {
+            Invoke-Production $fixture 'set-mode.ps1' $selection
+            Invoke-Production $fixture 'set-mode.ps1' @{Mode=$mode;GameDirectory=$fixture.game}
+            Assert-Check ([IO.File]::ReadAllText($config) -match 'export const MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE = false;') "Ordinary $mode explicitly clears prior API4 recognition"
+        }
+    }
+    Invoke-Case 'historical-api3-cannot-infer-custom-present-classification' {
+        param($fixture)
+        Install-Fresh $fixture
+        $config = Join-Path $fixture.game 'CLEO/de-online/config.mjs'
+        Write-FixtureBytes $config ($utf8.GetBytes([regex]::Replace([IO.File]::ReadAllText($config), 'export const MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE = (true|false);', '')))
+        $manifestPath = Join-Path $fixture.game 'de-online-install-manifest.json'
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+        @($manifest.files | Where-Object path -eq 'CLEO/de-online/config.mjs')[0].sha256 = Get-Sha $config
+        Write-FixtureJson $manifestPath $manifest
+        $selection = @{Mode='Smoke';MtaCoreRenderReference=$true;MtaCoreRenderRoute='D3D12';MtaCoreRenderGpuReference=$true;GameDirectory=$fixture.game}
+        Invoke-Production $fixture 'set-mode.ps1' $selection
+        Assert-Check ([IO.File]::ReadAllText($config) -notmatch 'export const MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE') 'Historical API3 remains usable without guessing classification admission'
+        $before = Get-TreeFingerprint $fixture.root
+        Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' ($selection + @{MtaCoreRenderCustomPresentReference=$true}) } 'Update the adapter before selecting custom-present recognition' 'Historical API3 cannot enable classification without its marker'
+        Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Historical classification refusal changes no bytes'
+        $text = [IO.File]::ReadAllText($config) + "`nexport const MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE = false;`nexport const MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE = false;`n"
+        Write-FixtureBytes $config ($utf8.GetBytes($text))
+        @($manifest.files | Where-Object path -eq 'CLEO/de-online/config.mjs')[0].sha256 = Get-Sha $config
+        Write-FixtureJson $manifestPath $manifest
+        $before = Get-TreeFingerprint $fixture.root
+        Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' @{Mode='Smoke';GameDirectory=$fixture.game} } 'Update the adapter before selecting custom-present recognition' 'Duplicate classification markers are ambiguous even for ordinary mode switches'
+        Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Duplicate-marker refusal changes no bytes'
+    }
     Invoke-Case 'historical-api2-cannot-infer-gpu-query-admission' {
         param($fixture)
         Install-Fresh $fixture

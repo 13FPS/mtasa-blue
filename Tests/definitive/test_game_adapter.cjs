@@ -1204,6 +1204,7 @@ async function main() {
             MTA_CORE_RENDER_REFERENCE: overrides.mtaCoreRenderReference ?? false,
             MTA_CORE_RENDER_ROUTE: overrides.mtaCoreRenderRoute ?? 'd3d11',
             MTA_CORE_RENDER_GPU_REFERENCE: overrides.mtaCoreRenderGpuReference ?? false,
+            MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE: overrides.mtaCoreRenderCustomPresentReference ?? false,
             Date: { now: () => overrides.times ? overrides.times[frame] : frame * 50 },
             CLEO: { version: overrides.version || '1.5.1', apiVersion: overrides.definitions || '0.500', hostVersion: '1.0.113.49697469' },
             native: (name, ...args) => { record(name, ...args);
@@ -1267,6 +1268,104 @@ async function main() {
                 DE_CoreRenderReadV3: field => coreGpuState({ ...(polls < 2 ? { 1: 1, 2: 1, 3: 0, 4: 0, 5: 1, 6: 0, 7: 0, 13: 1 } : {}),
                     ...overrides.renderState })[field], ...overrides.functions } });
     };
+    const coreCustomState = (overrides = {}) => {
+        const state = coreGpuState({ 0: 4, 46: 0, 48: 600, 53: 0, 64: 24, 71: 24, 74: 1, 75: 2 }).concat([2, 1, 127, 15]);
+        Object.assign(state, overrides);
+        return state;
+    };
+    const coreCustom = (overrides = {}) => {
+        let polls = 0;
+        return coreGpu({ mtaCoreRenderCustomPresentReference: true, ...overrides,
+            functions: { DE_CoreRenderApiVersionV4: () => 4, DE_CoreRenderBeginV4: () => 1, DE_CoreRenderCaptureV4: () => 1,
+                DE_CoreStartupPoll: () => ++polls >= 2 ? 1 : 0,
+                DE_CoreRenderReadV4: field => coreCustomState({ ...(polls < 2 ? { 1: 1, 2: 1, 3: 0, 4: 0, 5: 1, 6: 0, 7: 0, 13: 1 } : {}),
+                    ...overrides.renderState })[field], ...overrides.functions } });
+    };
+    test('API4 static recognition retains scalar84 and API3 custom-present refusal without drawing', () => {
+        const result = coreCustom();
+        assert.deepEqual(result.calls.find(call => call[0] === 'DE_CoreRenderBeginV4'), ['DE_CoreRenderBeginV4', 2]);
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreRenderReadV4').length, 168);
+        assert.ok(!result.calls.some(call => /DE_CoreRender.*V[23]/.test(call[0])));
+        const start = result.logs.find(event => event.event === 'core_render_reference_started');
+        assert.equal(start.core_api, 8); assert.equal(start.observation_api, 4); assert.equal(start.requested_route, 2);
+        const finish = result.logs.find(event => event.event === 'core_render_reference_finished');
+        assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true);
+        for (const { state } of result.logs.filter(event => event.event === 'core_render_reference_sample')) {
+            assert.equal(state.length, 84);
+            assert.deepEqual(Array.from(state.slice(78)), [0, 0, 2, 1, 127, 15]);
+            assert.equal(state[53], 0); assert.equal(state[74], 1); assert.equal(state[75], 2);
+        }
+        for (const flag of ['full_core_ready', 'rendering_started', 'network_active', 'input_writes', 'remote_peds_created'])
+            assert.equal(finish[flag], false);
+        assert.ok(result.logs.some(event => event.event === 'adapter_failed' && event.error.includes('renderer observation incomplete')));
+        assert.ok(!result.calls.some(call => /DE_Connect|DE_MtaMovement|DE_CoreInput|DE_CoreMovement|GET_CHAR/.test(call[0])));
+    });
+    for (const override of [{ mtaCoreRenderGpuReference: false }, { mtaCoreRenderReference: false },
+            { mtaCoreRenderRoute: 'd3d11' }, { mtaCoreRenderCustomPresentReference: 'true' }])
+        test('API4 cannot activate without independent consistent admission ' + JSON.stringify(override), () => {
+            const result = coreCustom(override);
+            assert.equal(result.calls.length, 0);
+            assert.ok(result.logs.some(event => event.event === 'adapter_failed'));
+        });
+    for (const value of [undefined, () => 3, () => 5])
+        test('API4 missing or wrong version cannot fall back to API3 ' + String(value), () => {
+            const result = coreCustom({ functions: { DE_CoreRenderApiVersionV4: value } });
+            assert.ok(!result.calls.some(call => /DE_CoreRenderBegin/.test(call[0])));
+            assert.ok(result.logs.some(event => event.event === 'adapter_failed'));
+        });
+    for (const [status, mask] of [[3, 0], [4, 0], [4, 63], [5, 0], [5, 127], [6, 127], [7, 0]])
+        test('API4 preserves unrecognized/fault outcome ' + status + ':' + mask + ' and cleanup', () => {
+            const result = coreCustom({ renderState: { 80: status, 81: 0, 82: mask, 83: 0 } });
+            const finish = result.logs.find(event => event.event === 'core_render_reference_finished');
+            assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true);
+            assert.deepEqual(Array.from(result.logs.find(event => event.event === 'core_render_reference_sample').state.slice(80)), [status, 0, mask, 0]);
+            assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 0);
+        });
+    test('API4 absent presenter preserves independent API3 GPU result without recognition', () => {
+        const result = coreCustom({ renderState: { 46: 600, 48: 0, 53: 1, 74: 0, 75: 1, 80: 1, 81: 0, 82: 0, 83: 0 } });
+        assert.equal(result.logs.find(event => event.event === 'core_render_reference_finished').passed, true);
+        assert.equal(result.logs.find(event => event.event === 'core_render_reference_sample').state[80], 1);
+    });
+    test('API4 known static code remains independent of a failed COM query', () => {
+        const result = coreCustom({ renderState: { 50: 8, 51: 0x80004002, 52: 0, 75: 3 } });
+        const finish = result.logs.find(event => event.event === 'core_render_reference_finished');
+        assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true);
+        assert.equal(result.logs.find(event => event.event === 'core_render_reference_sample').state[80], 2);
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 0);
+    });
+    for (const [field, value] of [[80, 0], [80, 8], [81, 0], [81, 2], [82, 126], [82, 128], [83, 0], [83, 16], [78, 1], [79, 1]])
+        test('API4 rejects contradictory classification or old reserved field ' + field + ':' + value, () => {
+            const result = coreCustom({ renderState: { [field]: value } });
+            assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 1);
+            assert.ok(!result.logs.some(event => event.event === 'core_render_reference_finished'));
+        });
+    for (const [status, mask] of [[1, 1], [3, 127], [7, 127]])
+        test('API4 unrecognized outcome cannot retain signatures ' + status, () => {
+            const result = coreCustom({ renderState: { 80: status, 81: 0, 82: mask, 83: 0 } });
+            assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 1);
+        });
+    for (const status of [3, 4, 6])
+        test('API4 classification requires custom presence for status ' + status, () => {
+            const result = coreCustom({ renderState: { 58: 2, 74: 0, 80: status, 81: 0, 82: 0, 83: 0 } });
+            assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 1);
+        });
+    for (const status of [5, 7])
+        test('API4 incomplete root knowledge permits unknown custom presence for status ' + status, () => {
+            const result = coreCustom({ renderState: { 58: 2, 74: 0, 80: status, 81: 0, 82: 0, 83: 0 } });
+            const finish = result.logs.find(event => event.event === 'core_render_reference_finished');
+            assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true);
+        });
+    test('API4 initial zero-attempt state keeps GPU and classification tails independently zero', () => {
+        let polls = 0;
+        const initial = coreCustomState({ 1: 1, 2: 1, 3: 0, 4: 0, 5: 1, 6: 0, 7: 0, 13: 1, 17: 0, 19: 0, 25: 0, 26: 0, 27: 0,
+            28: 0, 31: 0, 37: 0, 41: 0, 42: 0, 43: 0 });
+        initial.fill(0, 44);
+        const result = coreCustom({ functions: { DE_CoreStartupPoll: () => ++polls >= 2 ? 1 : 0,
+            DE_CoreRenderReadV4: field => (polls < 2 ? initial : coreCustomState())[field] } });
+        const samples = result.logs.filter(event => event.event === 'core_render_reference_sample');
+        assert.equal(samples.length, 2); assert.ok(Array.from(samples[0].state.slice(44)).every(value => value === 0));
+        assert.equal(result.logs.find(event => event.event === 'core_render_reference_finished').cleanup_passed, true);
+    });
     test('GPU queries require independent API3 admission and preserve scalar80 evidence without drawing', () => {
         const result = coreGpu();
         assert.deepEqual(result.calls.find(call => call[0] === 'DE_CoreRenderBeginV3'), ['DE_CoreRenderBeginV3', 2]);
@@ -2336,6 +2435,10 @@ async function main() {
         assert.equal(sourceConfig.MTA_CORE_STARTUP_REFERENCE, false);
         assert.equal(sourceConfig.MTA_CORE_INPUT_REFERENCE, false);
         assert.equal(sourceConfig.MTA_CORE_MOVEMENT_REFERENCE, false);
+        assert.equal(sourceConfig.MTA_CORE_RENDER_REFERENCE, false);
+        assert.equal(sourceConfig.MTA_CORE_RENDER_ROUTE, 'd3d11');
+        assert.equal(sourceConfig.MTA_CORE_RENDER_GPU_REFERENCE, false);
+        assert.equal(sourceConfig.MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE, false);
     });
     test('manual online remains armed with no DLL, procedure, memory, player-handle, coordinate, UDP or remote access', () => {
         const result = manual({ keyFrames: [[], [], [], [], [], [17, 16, 35]] });

@@ -201,6 +201,15 @@ namespace
         return true;
     }
 
+    bool CopyRenderReferenceState(CGameAdapterModule& adapter, DefinitiveRenderReference::SnapshotV4& snapshot)
+    {
+        mta::game_de::RenderObservationStateV4 state;
+        if (!adapter.GetNativeRenderObservationState(state))
+            return false;
+        DefinitiveRenderReference::CopyNativeStateV4(snapshot, state);
+        return true;
+    }
+
     void RunRenderReference(CGameAdapterModule& adapter, const DefinitiveInputReference::Request& request) noexcept
     {
         struct Observer
@@ -217,7 +226,19 @@ namespace
         } clock;
         // Tests execute this exact retained lifecycle with a value-only fake
         // clock/observer; production supplies the actual Core-owned module.
-        if (request.renderApiVersion == 3)
+        if (request.renderApiVersion == 4)
+        {
+            struct ObserverV4
+            {
+                CGameAdapterModule&                  adapter;
+                mta::game_de::RenderObservationRoute route;
+                bool                                 Begin() { return adapter.BeginNativeRenderClassificationObservation(route); }
+                bool Read(DefinitiveRenderReference::SnapshotV4& snapshot) { return CopyRenderReferenceState(adapter, snapshot); }
+                bool End() { return adapter.EndNativeRenderObservation(); }
+            } classificationObserver{adapter, static_cast<mta::game_de::RenderObservationRoute>(request.renderRoute)};
+            DefinitiveRenderReference::Run<DefinitiveRenderReference::SnapshotV4>(classificationObserver, clock, request);
+        }
+        else if (request.renderApiVersion == 3)
         {
             struct ObserverV3
             {

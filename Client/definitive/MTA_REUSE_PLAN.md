@@ -38,18 +38,35 @@ existing loader dispatch. It verifies the supported executable and a coherent
 explicitly leaves launch readiness and full MTA readiness false. See the
 [preflight contract](../launch/DefinitivePreflight/README.md).
 
-The next concrete runtime boundary is a ten-second native renderer observation
-owned by the same actual Core worker. A separate optional diagnostics factory
-provides a creation-thread checked lease without changing adapter ABI6 or
-gameplay capabilities. Core consumes scalar snapshots, ends the lease before
-adapter teardown, and retains ownership when detach or final readback fails.
-The producer lifecycle used by Core passes 3,031 checks on each architecture;
-the native observer passes 467 checks including owned Detours transactions.
-The exact D3D11 viewport callback is identified statically, with complete
-function and vtable bindings. No COM operation, GPU drawing or live rendering
-has been established. `-MtaCoreRenderReference` is a separate disabled-by-default
-Smoke trial, with manual F9 activation and strict 40-field saved-log auditing.
-Its first live capture is deferred until the user is available.
+The active native renderer is now observed through actual Core on D3D12.
+The latest ten-second API4 trial recorded 606 native callback entries and 603
+accepted scalar snapshots. All 87 logged snapshots contain complete GPU
+metadata and recognize the pinned Gameface native custom presenter. The
+human reported normal GTA continuation; cleanup, all 23 installed hashes
+and normal exit passed. The read-only probe still rejects GPU ownership:
+603 rejected probes, zero accepted. Presenter identity does not establish
+the resource state, final queue ordering or a safe drawing boundary.
+
+The optional render factories preserve adapter ABI6 and older observation
+ABIs. Core ends each lease before adapter teardown and retains ownership on
+detach or final-readback failure. API1/2 copy scalars without COM calls;
+API3/4 query and release callback-local COM references without issuing GPU
+commands. The source flags remain disabled by default, with indefinite
+manual F9 arming before each bounded trial.
+
+The GUI backend reuses MTA's actual CGUI/CEGUI widgets, skins, fonts and
+textures. Owned offscreen WARP tests cover BGRA8, RGBA8 and the observed
+R10G10B10A2_UNORM target, including pending-frame retention and teardown.
+Those tests do not establish visible GTA rendering, HDR or color-space
+correctness. No GUI DLL or GUI assets have been installed into GTA yet.
+An additive asset-root export now configures cgui independently of Core,
+avoiding classic folder discovery when both DLLs live beside the DE bridge.
+The actual `Win64/CLEO/de-online` layout passes 510 offscreen D3D12 checks
+across the three formats; the existing D3D9 path passes 93 checks.
+The remaining integration must place drawing after the custom presenter's
+Social Club callback and release retained backbuffer references before
+native resize. Core and GUI leases must survive a pending drain; full
+startup and multiplayer stay gated.
 
 The preceding read-only live session ran for **60,003 ms**,
 with **1,188 native samples and 515 script snapshots**. Four directions, sprint

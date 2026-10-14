@@ -15,6 +15,7 @@ struct ID3D12Resource;
 namespace mta::gui
 {
     constexpr std::uint32_t GuiD3D12ApiVersion = 1;
+    constexpr std::uint32_t GuiD3D12AssetRootApiVersion = 1;
 
     enum class GuiD3D12Status : std::uint32_t
     {
@@ -65,11 +66,18 @@ namespace mta::gui
     };
 
     using CreateGuiD3D12Session = IGuiD3D12Session* (*)(std::uint32_t apiVersion, const GuiD3D12CreateInfo* info) noexcept;
+    // Configure this DLL's existing asset resolver before creating any GUI.
+    // The counted path need not be terminated, must be absolute, and is bounded
+    // to 32767 wide characters. Failure preserves the previous root. An active
+    // legacy GUI or explicit session excludes configuration on every thread.
+    using ConfigureGuiD3D12AssetRoot = std::uint32_t (*)(std::uint32_t apiVersion, const wchar_t* root, std::uint32_t length) noexcept;
 }
 
 // Optional export; the original InitGUIInterface and CGUI vtable stay unchanged.
 #if defined(_WIN32) && defined(MTA_GUI_EXPORTS)
 extern "C" __declspec(dllexport) mta::gui::IGuiD3D12Session* CreateGUID3D12Session(std::uint32_t apiVersion, const mta::gui::GuiD3D12CreateInfo* info) noexcept;
+extern "C" __declspec(dllexport) std::uint32_t ConfigureGUID3D12AssetRoot(std::uint32_t apiVersion, const wchar_t* root, std::uint32_t length) noexcept;
 #else
 extern "C" mta::gui::IGuiD3D12Session* CreateGUID3D12Session(std::uint32_t apiVersion, const mta::gui::GuiD3D12CreateInfo* info) noexcept;
+extern "C" std::uint32_t               ConfigureGUID3D12AssetRoot(std::uint32_t apiVersion, const wchar_t* root, std::uint32_t length) noexcept;
 #endif

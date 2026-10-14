@@ -1,8 +1,8 @@
 # GTA San Andreas Definitive Edition: findings and port tracker
 
-Last updated: **2026-10-13 23:45** (Europe/Luxembourg).
+Last updated: **2026-10-14** (Europe/Luxembourg).
 Experimental branch: `definitive-edition-port`.
-Source baseline: `860e41ddeb6635b5dd138fef6c8a492d2f982ce0`.
+Live renderer source baseline: `05e80a41ecfcdd27165c7eefa3912a809c5546a4`.
 
 ## Current result
 
@@ -23,16 +23,29 @@ and full-MTA readiness explicitly false. See the
 [reuse plan](Client/definitive/MTA_REUSE_PLAN.md) and
 [preflight contract](Client/launch/DefinitivePreflight/README.md).
 
-A new ten-second renderer observation also runs through the actual Core worker
-and an optional Game DE diagnostics lease. The pinned native D3D11 viewport
-callback is identified statically and its bounded observer passes owned-host
-tests. It copies scalars and records native return/callback activity without
-COM calls, drawing or input changes. The actual game RHI and callback still
-need live validation; no renderer readiness or visible output is claimed.
+The active D3D12 renderer now has a live-verified native callback through
+actual Core. The latest API4 session ran for 10,049 ms with 606 native entries,
+603 accepted scalar snapshots and 87 logged metadata reports. All logged
+reports recognize the pinned Gameface native custom presenter and show the
+1920x1080, three-buffer R10G10B10A2_UNORM swapchain. This identifies the
+implementation; the GPU ownership predicate still rejects all 603 probes.
+No GPU commands were issued. GTA continued normally, cleanup passed, all 23
+installed hashes matched and normal exit was independently verified.
 
-The previous runtime's live evidence and recovery package remain separate
-from these offline checks. Further in-game checks are deferred until the
-user is available; no automatic GTA launch is part of this work.
+The existing MTA CGUI/CEGUI backend renders actual widgets, fonts and textures
+in owned offscreen D3D12 tests for BGRA8, RGBA8 and the observed 10-bit format.
+Visible GTA drawing remains unverified. The current native hook precedes a
+Social Club callback, and resize must release GUI-held backbuffers after the
+game's queue drain. These ordering and lifetime requirements remain before
+Core can safely use this backend in GTA. See the
+[reuse plan](Client/definitive/MTA_REUSE_PLAN.md) for the current boundary.
+
+The complete API4 log, independent reviews and matching candidate archives
+are sealed under `Build/definitive-manual-test/20261014-134311-mta-core-render-actual-1a7e51e2/`.
+The final log is 36,311 bytes, SHA-256
+`7790f9c39f49493c340d221e2f569104a7dd2ec951e125745825fcfaa9480854`.
+The installed runtime remains the tested read-only candidate; no automatic
+GTA launch is part of this work.
 
 **Earlier engine movement and Core startup milestones.** ABI5 adds a bounded trial inside the normal Game DE
 module, called through MTA Core's existing module consumer. It reuses shared

@@ -19,11 +19,17 @@ viewport function at RVA `0x1F5A430`. Callback-local vtable/RHI bindings and
 member reads copy dimensions, presence flags and native return/counters.
 No COM call occurs, no native pointer leaves the callback, and no input state
 is changed. Entry and a normal native return do not prove that COM Present ran.
-The native suite passes 467 checks and the actual module suite 1,529; the Core
-lifecycle passes 3,031 checks on each architecture. These are offline fixtures.
-The separate ten-second `-MtaCoreRenderReference` trial uses actual Core and
-its existing worker; it is disabled by default and still needs live validation.
-See the [trial contract](../definitive/README.md).
+The D3D11 route is historical: the live game uses the separately pinned
+D3D12 viewport callback. API3 adds callback-local COM metadata queries;
+API4 also verifies the complete code signatures of the native custom
+presenter without calling its methods. Older factory contracts are preserved.
+The ten-second API4 trial now passes native callback observation, metadata,
+presenter recognition, cleanup and normal exit through actual Core. Its 87
+logged snapshots all identify the known presenter, while GPU ownership
+remains unsupported: 603 rejected probes and zero accepted. No GPU commands
+are issued, and recognition alone cannot authorize drawing.
+See the [trial contract](../definitive/README.md) and
+[current reuse boundary](../definitive/MTA_REUSE_PLAN.md).
 
 The current factory contract is **ABI6**. Actual Core configured input can now
 use the existing local on-foot movement writer after build-pinned eligibility

@@ -23,6 +23,7 @@
 #include <SharedUtil.Defines.h>
 #include <SString.h>
 #include <gui/CGUI.h>
+#include <gui/CGUID3D12.h>
 
 namespace
 {
@@ -279,6 +280,15 @@ int wmain(int argc, wchar_t** argv)
         Check(init != nullptr, "resolve actual unchanged GUI factory ABI");
         owned.gui = init(owned.device);
         Check(owned.gui && init(owned.device) == owned.gui, "real GUI constructor and existing singleton behavior");
+        const auto configureRoot = reinterpret_cast<mta::gui::ConfigureGuiD3D12AssetRoot>(GetProcAddress(owned.guiModule, "ConfigureGUID3D12AssetRoot"));
+        Check(configureRoot != nullptr, "optional root export leaves the legacy factory ABI available");
+        const auto poisonRoot = root / L"poison-root";
+        for (const auto* part : {L"MTA/cgui", L"MTA/logs", L"skins/Default"})
+            std::filesystem::create_directories(poisonRoot / part);
+        const auto poisonWide = poisonRoot.wstring();
+        Check(!configureRoot(mta::gui::GuiD3D12AssetRootApiVersion, poisonWide.data(), static_cast<std::uint32_t>(poisonWide.size())) &&
+                  init(owned.device) == owned.gui,
+              "live legacy singleton excludes root mutation and retains sequential factory behavior");
         owned.gui->SetSkin("Default");
         owned.gui->SetResolution(static_cast<float>(width), static_cast<float>(height));
         Check(owned.gui->GetResolution().fX == width && owned.gui->GetResolution().fY == height, "actual GUI resolution follows fixture device");

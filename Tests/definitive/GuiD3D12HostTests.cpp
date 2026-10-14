@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -26,6 +27,8 @@
 
 using Microsoft::WRL::ComPtr;
 using namespace mta::gui;
+static_assert(GuiD3D12ApiVersion == 1 && GuiD3D12AssetRootApiVersion == 1);
+static_assert(sizeof(GuiD3D12CreateInfo) == 40 && sizeof(GuiD3D12Frame) == 24);
 namespace
 {
     unsigned checks = 0, clicks = 0;
@@ -312,6 +315,11 @@ int wmain(int argc, wchar_t** argv)
         Check(argc == 3 && sizeof(void*) == 8, "owned x64 D3D12 fixture root and target format supplied");
         const std::filesystem::path root(argv[1]);
         Check(root.is_absolute(), "fixture root is an absolute owned path");
+        Check(root.filename() == L"de-online" && root.parent_path().filename() == L"CLEO" && root.parent_path().parent_path().filename() == L"Win64" &&
+                  std::filesystem::is_regular_file(root.parent_path().parent_path() / L"SanAndreas.exe"),
+              "fixture uses actual Win64/CLEO/de-online adjacency beneath its owned executable");
+        Check(!std::filesystem::exists(root / L"MTA" / L"core.dll") && !std::filesystem::exists(root / L"MTA" / L"cgui.dll"),
+              "no classic MTA/core.dll fallback can mask the explicit GUI root contract");
         Owned              owned;
         const std::wstring formatArgument(argv[2]);
         if (formatArgument == L"87")
@@ -352,13 +360,69 @@ int wmain(int argc, wchar_t** argv)
         rtv.NumDescriptors = 1;
         Hr(owned.device->CreateDescriptorHeap(&rtv, IID_PPV_ARGS(&owned.rtv)), "create owned host RTV heap");
         MakeTarget(owned);
-        owned.core = LoadLibraryExW((root / L"MTA" / L"core.dll").c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
-        Check(owned.core != nullptr, "load actual Core only for its existing asset-root identity");
+        owned.core = LoadLibraryExW((root / L"core.dll").c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+        Check(owned.core != nullptr, "load actual Core beside the bridge layout without initializing it");
+        using SetCoreRoot = void (*)(const wchar_t*, std::size_t);
+        const auto setCoreRoot = reinterpret_cast<SetCoreRoot>(GetProcAddress(owned.core, "SetMTADirectory"));
+        Check(setCoreRoot != nullptr, "resolve Core's independent diagnostic root setter");
+        const auto rootWide = root.wstring();
+        setCoreRoot(rootWide.data(), rootWide.size());
         Check(!GetModuleHandleW(L"game_de.dll") && !GetModuleHandleW(L"game_sa.dll"), "no gameplay adapter loaded or initialized");
-        owned.guiModule = LoadLibraryExW((root / L"MTA" / L"cgui.dll").c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+        owned.guiModule = LoadLibraryExW((root / L"cgui.dll").c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
         Check(owned.guiModule != nullptr, "load actual cgui with existing widgets and new renderer");
         const auto create = reinterpret_cast<CreateGuiD3D12Session>(GetProcAddress(owned.guiModule, "CreateGUID3D12Session"));
         Check(create != nullptr, "resolve additive optional D3D12 GUI factory");
+        const auto configureRoot = reinterpret_cast<ConfigureGuiD3D12AssetRoot>(GetProcAddress(owned.guiModule, "ConfigureGUID3D12AssetRoot"));
+        Check(configureRoot != nullptr, "resolve separately versioned GUI asset-root configuration without changing session ABI");
+        const auto rootLength = static_cast<std::uint32_t>(rootWide.size());
+        Check(!configureRoot(0, rootWide.data(), rootLength) && !configureRoot(2, rootWide.data(), rootLength) &&
+                  !configureRoot(GuiD3D12AssetRootApiVersion, nullptr, rootLength) && !configureRoot(GuiD3D12AssetRootApiVersion, L"", 0) &&
+                  !configureRoot(GuiD3D12AssetRootApiVersion, L"x", 32768),
+              "unknown root versions and null, empty or oversized counts fail before reading path data");
+        const std::array<wchar_t, 3> embeddedNull{L'x', L'\0', L'x'};
+        Check(!configureRoot(GuiD3D12AssetRootApiVersion, embeddedNull.data(), static_cast<std::uint32_t>(embeddedNull.size())) &&
+                  !configureRoot(GuiD3D12AssetRootApiVersion, L"..", 2) && !configureRoot(GuiD3D12AssetRootApiVersion, L"C:relative", 10),
+              "embedded nulls and relative or drive-relative roots cannot select assets");
+        const auto missingRoot = (root / L"missing-root").wstring();
+        Check(!configureRoot(GuiD3D12AssetRootApiVersion, missingRoot.data(), static_cast<std::uint32_t>(missingRoot.size())),
+              "missing directory trees cannot configure the GUI resolver");
+        for (const auto* part : {L"MTA/cgui", L"MTA/logs", L"skins/Default"})
+        {
+            const auto original = root / part;
+            const auto held = original.wstring() + L".fixture-disabled";
+            std::filesystem::rename(original, held);
+            const bool rejected = configureRoot(GuiD3D12AssetRootApiVersion, rootWide.data(), rootLength) == 0;
+            std::filesystem::rename(held, original);
+            Check(rejected, "required font, log and default-skin directories are validated before root mutation");
+        }
+        // Put the exact counted range against an inaccessible page. No trailing
+        // terminator exists for the API to inspect, and the caller storage is
+        // freed before GUI construction to verify that cgui copied its root.
+        SYSTEM_INFO systemInfo{};
+        GetSystemInfo(&systemInfo);
+        const auto pageBytes = static_cast<std::size_t>(systemInfo.dwPageSize);
+        Check(rootWide.size() * sizeof(wchar_t) < pageBytes, "owned counted path fits before its guard page");
+        auto* countedPages = static_cast<BYTE*>(VirtualAlloc(nullptr, pageBytes * 2, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+        Check(countedPages != nullptr, "allocate owned counted-root and guard pages");
+        DWORD priorProtection = 0;
+        Check(VirtualProtect(countedPages + pageBytes, pageBytes, PAGE_NOACCESS, &priorProtection) != FALSE,
+              "guard the first character beyond the counted root");
+        auto* countedRoot = reinterpret_cast<wchar_t*>(countedPages + pageBytes - rootWide.size() * sizeof(wchar_t));
+        std::memcpy(countedRoot, rootWide.data(), rootWide.size() * sizeof(wchar_t));
+        std::uint32_t configured = 0;
+        DWORD         configurationThread = 0;
+        std::thread   configureWorker(
+            [&]
+            {
+                configurationThread = GetCurrentThreadId();
+                configured = configureRoot(GuiD3D12AssetRootApiVersion, countedRoot, rootLength);
+            });
+        configureWorker.join();
+        Check(configured == 1 && configurationThread != GetCurrentThreadId(),
+              "worker publishes an owned explicit GUI root from a counted nonterminated path before render-thread construction");
+        Check(VirtualFree(countedPages, 0, MEM_RELEASE) != FALSE, "release caller path storage before the GUI uses its configured root");
+        Check(!configureRoot(GuiD3D12AssetRootApiVersion, missingRoot.data(), static_cast<std::uint32_t>(missingRoot.size())),
+              "a later rejected root preserves the previously configured valid resolver");
         GuiD3D12CreateInfo info;
         info.device = owned.device.Get();
         info.queue = owned.queue.Get();
@@ -424,6 +488,16 @@ int wmain(int argc, wchar_t** argv)
         Check(missingFontRejected, "actual missing font unwinds CEGUI singletons and GUI ownership without an interactive dialog");
         owned.session = create(GuiD3D12ApiVersion, &info);
         Check(owned.session != nullptr, "construct actual MTA GUI/font/CEGUI D3D12 session after failed initialization");
+        const auto poisonRoot = root / L"poison-root";
+        for (const auto* part : {L"MTA/cgui", L"MTA/logs", L"skins/Default"})
+            std::filesystem::create_directories(poisonRoot / part);
+        const auto    poisonWide = poisonRoot.wstring();
+        std::uint32_t foreignRootResult = 1;
+        std::thread   rejectRootWorker(
+            [&] { foreignRootResult = configureRoot(GuiD3D12AssetRootApiVersion, poisonWide.data(), static_cast<std::uint32_t>(poisonWide.size())); });
+        rejectRootWorker.join();
+        Check(!foreignRootResult && !configureRoot(GuiD3D12AssetRootApiVersion, poisonWide.data(), static_cast<std::uint32_t>(poisonWide.size())),
+              "active session excludes a valid-shaped poison root on worker and owner threads");
         Check(!create(GuiD3D12ApiVersion, &info), "reject concurrent actual GUI session ownership");
         using InitGui = CGUI* (*)(IDirect3DDevice9*);
         const auto legacy = reinterpret_cast<InitGui>(GetProcAddress(owned.guiModule, "InitGUIInterface"));

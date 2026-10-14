@@ -81,21 +81,27 @@ if ($compileExit -eq 0) {
     # the actual layout rather than inherited from a previous format's run.
     foreach ($format in @(87,28,24)) {
         $formatRoot=Join-Path $outputRoot ('format-'+$format)
-        New-Item -ItemType Directory -Path (Join-Path $formatRoot 'MTA/logs') -Force | Out-Null
+        $assetRoot=Join-Path $formatRoot 'Win64/CLEO/de-online'
+        New-Item -ItemType Directory -Path (Join-Path $assetRoot 'MTA/logs') -Force | Out-Null
         foreach ($entry in @($artifacts | Where-Object { [IO.Path]::GetDirectoryName($_.staged) -eq (Join-Path $outputRoot 'MTA') })) {
-            $staged=Join-Path $formatRoot ([IO.Path]::GetRelativePath($outputRoot,$entry.staged))
+            $staged=Join-Path $assetRoot ([IO.Path]::GetFileName($entry.staged))
             New-Item -ItemType Directory -Path (Split-Path $staged) -Force | Out-Null
             Copy-Item -LiteralPath $entry.staged -Destination $staged
             $artifacts+=@([ordered]@{source=$entry.source;staged=$staged;sha256=$entry.sha256;targetFormat=$format})
         }
         foreach ($entry in @($assets | Where-Object { -not $_.Contains('targetFormat') })) {
-            $staged=Join-Path $formatRoot ([IO.Path]::GetRelativePath($outputRoot,$entry.staged))
+            $staged=Join-Path $assetRoot ([IO.Path]::GetRelativePath($outputRoot,$entry.staged))
             New-Item -ItemType Directory -Path (Split-Path $staged) -Force | Out-Null
             Copy-Item -LiteralPath $entry.staged -Destination $staged
             $assets+=@([ordered]@{source=$entry.source;staged=$staged;sha256=$entry.sha256;targetFormat=$format})
         }
+        # Actual diagnostic Core/cgui adjacency has no MTA/core.dll parent to
+        # discover. Keep the EXE above CLEO exactly as the Steam layout does.
+        $fixtureExecutable=Join-Path $formatRoot 'Win64/SanAndreas.exe'
+        Copy-Item -LiteralPath $executable -Destination $fixtureExecutable
+        $artifacts+=@([ordered]@{source=$executable;staged=$fixtureExecutable;sha256=(Get-FileHash -Algorithm SHA256 -LiteralPath $executable).Hash.ToLowerInvariant();targetFormat=$format})
         $stdout=Join-Path $formatRoot 'stdout.log';$stderr=Join-Path $formatRoot 'stderr.log'
-        $process=Start-Process -FilePath $executable -ArgumentList ('"'+$formatRoot+'" '+$format) -WorkingDirectory $formatRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+        $process=Start-Process -FilePath $fixtureExecutable -ArgumentList ('"'+$assetRoot+'" '+$format) -WorkingDirectory (Join-Path $formatRoot 'Win64') -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
         # This exact disposable Process is the only process this fixture may terminate.
         $runTimedOut=-not $process.WaitForExit(45000)
         if ($runTimedOut) { $timedOut=$true;$process.Kill();$process.WaitForExit() }
@@ -105,7 +111,7 @@ if ($compileExit -eq 0) {
         if ($runText -match 'Passed (\d+) actual D3D12 GUI host checks') { $runChecks=[int]$Matches[1];$testCount+=$runChecks }
         $runSuccess=$runExit -eq 0 -and $null -ne $runChecks -and -not $runTimedOut -and $runText.Contains('GUI target format='+$format)
         if (-not $runSuccess -and $testExit -eq 0) { $testExit=if ($runExit -ne 0) {$runExit} else {1} }
-        $runs+=@([ordered]@{targetFormat=$format;directory=$formatRoot;success=$runSuccess;checks=$runChecks;testExit=$runExit;timedOut=$runTimedOut;
+        $runs+=@([ordered]@{targetFormat=$format;directory=$formatRoot;assetRoot=$assetRoot;fixtureExecutable=$fixtureExecutable;success=$runSuccess;checks=$runChecks;testExit=$runExit;timedOut=$runTimedOut;
             stdout=$stdout;stdoutSha256=(Get-FileHash -Algorithm SHA256 -LiteralPath $stdout).Hash.ToLowerInvariant();
             stderr=$stderr;stderrSha256=(Get-FileHash -Algorithm SHA256 -LiteralPath $stderr).Hash.ToLowerInvariant();
             debugLayerAvailable=$runText.Contains('D3D12 debug layer available=1');nativePixelEncoding=if($format -eq 24){'R10G10B10A2_UNORM packed little-endian uint32'}elseif($format -eq 28){'R8G8B8A8_UNORM'}else{'B8G8R8A8_UNORM'}})
@@ -127,6 +133,7 @@ $receipt=[ordered]@{recordedAt=[DateTimeOffset]::Now.ToString('o');directory=$ou
     sourceHashes=$sourceHashes;sourceSnapshotScope='Fixture, GUI ABI, renderer and selected CEGUI/widget sources; not the complete normal compiler dependency trace';sourceUnchanged=$sourceUnchanged;
     artifacts=$artifacts;artifactsUnchanged=$artifactsUnchanged;assets=$assets;assetsUnchanged=$assetsUnchanged;windowsFonts=$fonts;images=$images;nativeReadbacks=$nativeReadbacks;
     targetFormats=@(87,28,24);formatRuns=$runs;artifactNormalization='Only BMP copies are normalized to BGRA8; numerical assertions and .raw artifacts use untouched native target precision.';
+    explicitGuiAssetRootVerified=$success;fixtureLayout='Win64/SanAndreas.exe with adjacent Core/cgui in Win64/CLEO/de-online and explicit assets below that adapter root; no MTA/core.dll fallback';
     actualMtaWidgetsRenderedOnOwnedD3D12Warp=$success;debugLayerAvailable=$testText.Contains('D3D12 debug layer available=1');
     installedFilesChanged=$false;gameLaunched=$false;gameAttached=$false;coreInitialized=$false;deDrawingVerified=$false;fullMtaReady=$false;
     scope='Actual MTA CGUI/CEGUI widgets, fonts and textures on separate owned offscreen WARP sessions for BGRA8, RGBA8 and R10G10B10A2_UNORM targets; no engine target, real game device, color-space/HDR claim, or visible GTA drawing.'}

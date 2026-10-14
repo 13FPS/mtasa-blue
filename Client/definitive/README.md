@@ -6,7 +6,24 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
-**Completed live renderer diagnostic: clean lifecycle, no D3D11 callbacks.**
+**Latest live renderer result: native D3D12 presenter identified; drawing remains gated.**
+Actual Core's API4 trial completed in **10,049 ms**, with **199 Core samples,
+87 script snapshots, 606 native entries and 603 accepted scalar snapshots**.
+All 87 logged reports contain complete metadata and identify the known native
+custom presenter: status 2, implementation 1, slot mask 127 and policy flags
+15. Every published GPU probe remains rejected, with zero accepted probes
+and no GPU commands. These counters establish observation and implementation
+identity, not safe target state or permission to draw.
+
+The human reported GTA continued normally. Observer/Core/XML/pthread cleanup,
+the expected backend PIN, all 23 installed hashes and normal exit passed.
+Independent live and shutdown reviews are preserved with the complete
+36,311-byte log and immutable candidate archives. The next integration must
+account for the presenter's Social Club callback and release GUI-held
+backbuffers after the native queue drain and before resize. No MTA GUI is
+installed into GTA yet; the tested read-only runtime remains installed.
+
+**Historical live renderer diagnostic: clean lifecycle, no D3D11 callbacks.**
 The ten-second Core-owned trial ran for **10,004 ms**, with **198 Core samples
 and 87 script snapshots**. All native callback counters stayed zero. The user
 reported that GTA continued normally. Core/XML unloaded, the observer detached,
@@ -120,7 +137,25 @@ against a private offscreen WARP device with MTA's actual assets, GPU pixel
 readback, widget input, blocked-queue cleanup and resize. It does not run GTA
 or use an engine-owned target. The GUI DLL is not included in the live probe.
 
-The latest normal opt-in GUI build passed 69 policy/artifact guards, including
+The additive `ConfigureGUID3D12AssetRoot` export configures cgui's own existing
+asset resolver before GUI construction. Core's root override is separate
+because each DLL compiles its own SharedUtil state. The counted UTF-16 path
+must be absolute, at most 32,767 characters, with `MTA/cgui`, `MTA/logs` and
+`skins/Default` directories already present. Rejected configuration preserves
+the prior root; a live legacy GUI or explicit session excludes changes. The
+original session v1 layout and factory are unchanged.
+
+Fresh tests now place the owned executable at `Win64/SanAndreas.exe` and the
+actual Core/cgui DLLs and assets under `Win64/CLEO/de-online`, matching the
+diagnostic adapter layout. They configure Core and GUI independently, with no
+classic `MTA/core.dll` fallback. The normal build passes 70 policy/artifact
+guards and both classic Win32 compile checks. Actual D3D12 hosts pass **510
+checks, 170 per format**, including nonterminated input against a guard page,
+worker-to-render-thread root publication, rejection/preservation and widget
+rendering. The existing D3D9 host passes **93 checks**. These owned-device
+results do not change the installed game runtime or enable DE drawing.
+
+The preceding normal opt-in GUI build passed 69 policy/artifact guards, including
 classic Win32 compile checks. The actual D3D12 WARP host passed **459 checks:
 153 each for BGRA8 (87), RGBA8 (28) and R10G10B10A2_UNORM (24)**. All three
 fresh sessions render MTA's existing widgets, fonts and textures. Native
@@ -193,8 +228,9 @@ drawing. API3's custom-present support exclusion remains unchanged.
 MTA Core retains the classification lease through the existing worker and
 cleanup lifecycle. The reader's `custom_presenter_recognized` and sample count
 describe logged recognized classifications independently of COM query success.
-They do not promote GPU ownership or full startup. No live API4 result is
-claimed until the installed candidate is tested manually.
+They do not promote GPU ownership or full startup. The completed live result
+is qualified above: all 87 logged classifications are Known, while all 603
+published GPU probes remain unsupported for drawing.
 
 The owned COM-query fixture covers a real WARP swapchain and balanced
 references, including custom-present metadata that remains unsupported for

@@ -17,6 +17,8 @@
     #include <gui/CGUID3D12.h>
     #include "D3D12GuiRenderer.h"
     #include <atomic>
+    #include <filesystem>
+    #include <string_view>
 #endif
 
 CGUI_Impl* g_pGUI = NULL;
@@ -26,7 +28,22 @@ namespace
 {
     // CEGUI owns process-local singletons. An explicit session and the legacy
     // factory must never construct two independent GUI systems in this DLL.
-    std::atomic<unsigned> guiOwner{0};  // 0 available, 1 legacy construction, 2 explicit session
+    std::atomic<unsigned> guiOwner{0};  // 0 available, 1 legacy access, 2 explicit session, 3 root configuration
+
+    struct TemporaryGuiOwner
+    {
+        bool acquired;
+        explicit TemporaryGuiOwner(unsigned requested)
+        {
+            unsigned available = 0;
+            acquired = guiOwner.compare_exchange_strong(available, requested, std::memory_order_acq_rel);
+        }
+        ~TemporaryGuiOwner()
+        {
+            if (acquired)
+                guiOwner.store(0, std::memory_order_release);
+        }
+    };
 
     using mta::gui::D3D12GuiRenderer;
     using mta::gui::D3D12GuiStatus;
@@ -209,39 +226,69 @@ int WINAPI DllMain(HINSTANCE hModule, DWORD dwReason, PVOID pvNothing)
 MTAEXPORT CGUI* InitGUIInterface(IDirect3DDevice9* pDevice)
 {
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
-    if (guiOwner.load(std::memory_order_acquire) == 2)
+    // Inspect the legacy singleton under the same lease as construction and
+    // explicit root configuration; a pre-lock pointer read could race creation.
+    TemporaryGuiOwner owner(1);
+    if (!owner.acquired)
         return nullptr;
-#endif
-    // Create our GUI interface if not already done
-    if (!g_pGUI)
+    try
     {
-#if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
-        unsigned available = 0;
-        if (!guiOwner.compare_exchange_strong(available, 1, std::memory_order_acq_rel))
-            return nullptr;
-        try
-        {
 #endif
+        // Create our GUI interface if not already done
+        if (!g_pGUI)
+        {
             SetMemoryAllocationFailureHandler();
             g_pGUI = new CGUI_Impl(pDevice);
+        }
+        return g_pGUI;
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
-        }
-        catch (...)
-        {
-            guiOwner.store(0, std::memory_order_release);
-            // The optional x64 owner must not propagate a C++ initialization
-            // failure through the unchanged C factory boundary.
-            return nullptr;
-        }
-        guiOwner.store(0, std::memory_order_release);
-#endif
     }
-
-    // Return it
-    return g_pGUI;
+    catch (...)
+    {
+        // The optional x64 owner must not propagate a C++ initialization
+        // failure through the unchanged C factory boundary.
+        return nullptr;
+    }
+#endif
 }
 
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
+MTAEXPORT std::uint32_t ConfigureGUID3D12AssetRoot(std::uint32_t apiVersion, const wchar_t* root, std::uint32_t length) noexcept
+{
+    if (apiVersion != mta::gui::GuiD3D12AssetRootApiVersion || !root || !length || length > 32767)
+        return 0;
+    TemporaryGuiOwner owner(3);
+    if (!owner.acquired || g_pGUI)
+        return 0;
+    try
+    {
+        const std::wstring_view counted(root, length);
+        if (counted.find(L'\0') != std::wstring_view::npos)
+            return 0;
+        const std::filesystem::path candidate{std::wstring(counted)};
+        if (!candidate.is_absolute())
+            return 0;
+        const auto normalized = candidate.lexically_normal();
+        for (const auto* required : {L"MTA/cgui", L"MTA/logs", L"skins/Default"})
+            if (!std::filesystem::is_directory(normalized / required))
+                return 0;
+        const auto wide = normalized.wstring();
+        const auto encoded = ToUTF8(wide);
+        if (encoded.empty() || FromUTF8(encoded) != wide)
+            return 0;
+        // Core and cgui compile separate SharedUtil state. DE loads Core beside
+        // the bridge rather than under a classic MTA folder, so its root setter
+        // cannot configure this DLL's font/skin resolver. Validate the complete
+        // directory shape, including CEGUI's log parent, before changing it.
+        SharedUtil::SetMTASABaseDirOverride(encoded);
+        return 1;
+    }
+    catch (...)
+    {
+        return 0;
+    }
+}
+
 MTAEXPORT mta::gui::IGuiD3D12Session* CreateGUID3D12Session(std::uint32_t apiVersion, const mta::gui::GuiD3D12CreateInfo* info) noexcept
 {
     if (apiVersion != mta::gui::GuiD3D12ApiVersion || !info || info->size != sizeof(*info) || !info->device || !info->queue || !info->width || !info->height)

@@ -5,6 +5,7 @@
  *****************************************************************************/
 
 #include "../../Client/core/DefinitiveRenderReference.h"
+#include "../../Client/core/DefinitiveRenderEndpointLog.h"
 #include "../../Client/sdk/game/CGameRenderObservation.h"
 #include <cstdio>
 #include <functional>
@@ -20,6 +21,47 @@ namespace
         ++checks;
         if (!condition)
             throw std::runtime_error(message);
+    }
+    void EndpointLogTests()
+    {
+        using namespace DefinitiveRenderEndpointLog;
+        mta::game_de::RenderEndpointDiagnosticV1 state{1, 0xffffffffu, 2, 3, 4, 13, 3, 0, 0, 2, 1, 3, 100, 0, 2, 3, 200, 2, 3, 300};
+        const Fields                             expected{1, 0xffffffffu, 2, 3, 4, 13, 3, 0, 0, 2, 1, 3, 100, 0, 2, 3, 200, 2, 3, 300};
+        Check(Copy(state) == expected, "endpoint log preserves every unsigned field independently of observation wire");
+        Recorder                 recorder;
+        std::vector<std::string> lines;
+        const auto               sink = [&](const std::string& line)
+        {
+            lines.push_back(line);
+            return true;
+        };
+        Check(!recorder.Write(state, 50, 0x200000001ULL, 1, [](const std::string&) { return false; }),
+              "failed file writes do not consume dedup state or record budget");
+        Check(recorder.Write(state, 50, 0x200000001ULL, 0, sink), "begin diagnostic remains retryable after a failed sink");
+        Check(lines.back() ==
+                  "{\"event\":\"de_render_endpoint\",\"pid\":50,\"run_ms\":[1,2],\"phase\":0,\"fields\":[1,4294967295,2,3,4,13,3,0,0,2,1,3,100,0,2,3,200,2,3,"
+                  "300]}\n",
+              "separate JSONL framing preserves full unsigned words and run identity without native pointers");
+        ++state.acceptedSnapshotsLow;
+        ++state.acceptedSnapshotsHigh;
+        Check(!recorder.Write(state, 50, 0x200000001ULL, 1, sink) && lines.size() == 1, "accepted-counter churn alone does not duplicate endpoint evidence");
+        ++state.slotOwnerClass;
+        Check(recorder.Write(state, 50, 0x200000001ULL, 1, sink), "an endpoint ownership change emits new diagnostic evidence");
+        ++state.generationHigh;
+        Check(recorder.Write(state, 50, 0x200000001ULL, 1, sink), "a new native generation cannot inherit previous diagnostic dedup");
+        state.version = 2;
+        Check(!recorder.Write(state, 50, 0x200000001ULL, 1, sink), "unknown diagnostic version is not serialized as version1");
+        state.version = 1;
+        Check(!recorder.Write(state, 50, 0x200000001ULL, 3, sink), "unknown file phase cannot invent a terminal report");
+        for (unsigned index = 0; index < 100; ++index)
+        {
+            ++state.slotRva;
+            recorder.Write(state, 50, 0x200000001ULL, 1, sink);
+        }
+        Check(lines.size() == Recorder::MaximumRecords - 1, "rapid endpoint changes reserve one bounded terminal record");
+        Check(recorder.Write(state, 50, 0x200000001ULL, 2, sink) && lines.size() == Recorder::MaximumRecords,
+              "end can record the latest cached scalar evidence even after sample budget exhaustion");
+        Check(!recorder.Write(state, 50, 0x200000001ULL, 2, sink), "even repeated terminal attempts cannot exceed the file-record bound");
     }
     struct Clock
     {
@@ -543,6 +585,7 @@ int main()
             if (scenario == 3)
                 Check(f.observer.ends == 43, "API5 retains endpoint hooks and owner beyond the reported cleanup deadline");
         }
+        EndpointLogTests();
         std::printf("{\"success\":true,\"checks\":%u,\"game_operations\":false}\n", checks);
         return 0;
     }

@@ -54,14 +54,19 @@ API3/4 query and release callback-local COM references without issuing GPU
 commands. The source flags remain disabled by default, with indefinite
 manual F9 arming before each bounded trial.
 
-The prepared API5 observer reuses the same Core owner and worker. It scopes
+The API5 observer reuses the same Core owner and worker. It scopes
 the standard DXGI Present entry to the pinned native caller, after the Social
 Club callback, and copies 110 scalar fields. Exact swapchain/backbuffer/queue
 association, CPU tracker values and resize/destruction counters are separate
 from GPU ownership: even a coherent association cannot authorize drawing.
 Native endpoint and detour ownership checks refuse changed code and retain
-the module when cleanup cannot finish. The read-only live trial is pending;
-no GUI assets, input writes or GPU commands are included.
+the module when cleanup cannot finish. The completed trial continued normally
+and passed cleanup/normal exit, but all 87 samples refused endpoint admission;
+no standard Present or backbuffer association was observed. A separate optional
+20-scalar diagnostic now reports the preparation gate and module-relative
+slot/branch categories to the same Core worker. Core logs those values under
+the explicit DE root. It changes no observation wire or drawing guard.
+No GUI assets, input writes or GPU commands are included.
 
 The GUI backend reuses MTA's actual CGUI/CEGUI widgets, skins, fonts and
 textures. Owned offscreen WARP tests cover BGRA8, RGBA8 and the observed

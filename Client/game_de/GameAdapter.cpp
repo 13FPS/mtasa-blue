@@ -6,6 +6,7 @@
 
 #include <game/CGameAdapter.h>
 #include <game/CGameRenderObservation.h>
+#include <game/CGameRenderEndpointDiagnostic.h>
 #include "ControllerSnapshot.h"
 #include "NativePadReader.h"
 #include "NativeMovementInput.h"
@@ -554,10 +555,41 @@ namespace mta::game_de
             const RenderObservationRoute route;
             NativeRenderObservation      observation;
         };
+        class GameRenderObservationV5;
+        SRWLOCK                  diagnosticLeaseLock = SRWLOCK_INIT;
+        GameRenderObservationV5* diagnosticLeases = nullptr;
+
         class GameRenderObservationV5 final : public IGameRenderObservationV5
         {
         public:
-            explicit GameRenderObservationV5(RenderObservationRoute requested) noexcept : route(requested) {}
+            explicit GameRenderObservationV5(RenderObservationRoute requested) noexcept : route(requested)
+            {
+                // The separate export receives an opaque lease value, so only
+                // our live-object registry may authorize touching that object.
+                AcquireSRWLockExclusive(&diagnosticLeaseLock);
+                nextDiagnosticLease = diagnosticLeases;
+                diagnosticLeases = this;
+                ReleaseSRWLockExclusive(&diagnosticLeaseLock);
+            }
+
+            static Status ReadEndpointDiagnostic(IGameRenderObservationV5* lease, RenderEndpointDiagnosticV1& output) noexcept
+            {
+                Status result = Status::InvalidArgument;
+                AcquireSRWLockShared(&diagnosticLeaseLock);
+                for (auto* current = diagnosticLeases; current; current = current->nextDiagnosticLease)
+                {
+                    if (static_cast<IGameRenderObservationV5*>(current) != lease)
+                        continue;
+                    if (current->ownerThread != GetCurrentThreadId())
+                        result = Status::WrongThread;
+                    else
+                        result = current->observation.ReadEndpointDiagnostic(output) ? Status::Ok : Status::Unsupported;
+                    break;
+                }
+                ReleaseSRWLockShared(&diagnosticLeaseLock);
+                return result;
+            }
+
             Status Begin() noexcept override
             {
                 if (ownerThread != GetCurrentThreadId())
@@ -592,6 +624,16 @@ namespace mta::game_de
             {
                 if (ownerThread != GetCurrentThreadId() || !observation.End())
                     return;
+                // Failed cleanup retains both the native lease and registry
+                // entry. Successful End alone keeps its final cache readable;
+                // only Release excludes readers before deleting the object.
+                AcquireSRWLockExclusive(&diagnosticLeaseLock);
+                auto** current = &diagnosticLeases;
+                while (*current && *current != this)
+                    current = &(*current)->nextDiagnosticLease;
+                if (*current)
+                    *current = nextDiagnosticLease;
+                ReleaseSRWLockExclusive(&diagnosticLeaseLock);
                 delete this;
             }
 
@@ -599,6 +641,7 @@ namespace mta::game_de
             const DWORD                  ownerThread = GetCurrentThreadId();
             const RenderObservationRoute route;
             NativeRenderObservation      observation;
+            GameRenderObservationV5*     nextDiagnosticLease = nullptr;
         };
     }
 
@@ -692,5 +735,17 @@ namespace mta::game_de
         {
             return nullptr;
         }
+    }
+
+    extern "C" Status ReadGameRenderEndpointDiagnosticV1(std::uint32_t version, IGameRenderObservationV5* retainedLease,
+                                                         RenderEndpointDiagnosticV1* output) noexcept
+    {
+        if (version != RenderEndpointDiagnosticVersionV1 || !retainedLease || !output)
+            return Status::InvalidArgument;
+        RenderEndpointDiagnosticV1 next;
+        const auto                 result = GameRenderObservationV5::ReadEndpointDiagnostic(retainedLease, next);
+        if (result == Status::Ok)
+            *output = next;
+        return result;
     }
 }

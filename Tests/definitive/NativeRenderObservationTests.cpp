@@ -18,6 +18,7 @@
 using namespace mta::game_de;
 void CheckFrameBoundaryProbe(const char* customFixture, unsigned& checks);
 bool BoundaryFixtureOriginal(void*, std::uint32_t);
+void PrimeBoundaryDiagnostic(std::uint64_t generation);
 
 namespace
 {
@@ -384,6 +385,10 @@ int main(int argc, char** argv)
               !state.boundary.presentEntries && !state.boundary.resizeEpoch,
           "wrong-image API5 leaves the additive initial tail zero");
     Check(owner.End(), "wrong-image API5 cleanup");
+    RenderEndpointDiagnosticV1 unavailableDiagnostic;
+    unavailableDiagnostic.version = 99;
+    Check(!owner.ReadEndpointDiagnostic(unavailableDiagnostic) && unavailableDiagnostic.version == 99,
+          "wrong-image API5 has no separate endpoint diagnostic and preserves output");
 
     const auto image = reinterpret_cast<std::uintptr_t>(VirtualAlloc(nullptr, 0x5770000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
     Check(image != 0, "owned synthetic image allocation");
@@ -667,6 +672,7 @@ int main(int argc, char** argv)
         Configure(image, BoundaryFixtureOriginal, RenderObservationRoute::D3D12);
         EnableOwnership(image, 2, 1);
         runtime.classifyCustomPresent = runtime.queryFrameBoundary = true;
+        PrimeBoundaryDiagnostic(runtime.generation.load());
     };
     configureBoundaryPublication();
     Check(HookPresent(viewport.data(), 1) && !HookPresent(viewport.data(), 0), "API5 completed scopes preserve both native original results");
@@ -674,12 +680,35 @@ int main(int argc, char** argv)
     Check(state.boundary.presentEntries == 2 && state.boundary.rejectedEntries == 0 && state.boundary.status == 2 && state.boundary.factsMask == 255 &&
               state.gpu.attempts == 2 && !state.gpu.supportPredicate,
           "API5 cumulative boundary values publish atomically with historical unsupported GPU metadata");
+    RenderEndpointDiagnosticV1 endpointDiagnostic;
+    Check(owner.ReadEndpointDiagnostic(endpointDiagnostic) && endpointDiagnostic.version == 1 && endpointDiagnostic.acceptedSnapshotsLow == 2 &&
+              endpointDiagnostic.generationLow == static_cast<std::uint32_t>(state.generation),
+          "owner reads separate scalar diagnostic tied to the coherently published native snapshot");
+    bool        foreignDiagnosticRejected = false;
+    std::thread foreignDiagnostic(
+        [&]
+        {
+            RenderEndpointDiagnosticV1 preserved;
+            preserved.version = 99;
+            foreignDiagnosticRejected = !owner.ReadEndpointDiagnostic(preserved) && preserved.version == 99;
+        });
+    foreignDiagnostic.join();
+    Check(foreignDiagnosticRejected, "endpoint diagnostic requires the native producer thread and preserves foreign output");
     AcquireSRWLockShared(&runtime.snapshotLock);
     HookPresent(viewport.data(), 1);
     ReleaseSRWLockShared(&runtime.snapshotLock);
     owner.ReadState(state);
     Check(state.boundary.presentEntries == 2 && state.gpu.attempts == 2 && state.publicationMisses == 1,
           "publication miss cannot attach new boundary counters to an old snapshot");
+    Check(owner.ReadEndpointDiagnostic(endpointDiagnostic) && endpointDiagnostic.acceptedSnapshotsLow == 2,
+          "missed native publication cannot update the separate endpoint diagnostic cache");
+    runtime.inFlight.store(1);
+    Check(!owner.End() && owner.ReadEndpointDiagnostic(endpointDiagnostic) && endpointDiagnostic.acceptedSnapshotsLow == 2,
+          "inflight failed End retains the readable diagnostic and module lifetime");
+    runtime.inFlight.store(0);
+    Check(owner.End() && owner.ReadEndpointDiagnostic(endpointDiagnostic) && endpointDiagnostic.acceptedSnapshotsLow == 2,
+          "successful End preserves the final scalar diagnostic until lease release");
+    runtime.active.store(true);
     EnableOwnership(image);
     Put(object + 0x1d0, std::uintptr_t{0x1234});
     Put(object + 0x60, reinterpret_cast<std::uintptr_t>(&ownedSwapchain));
@@ -920,6 +949,9 @@ int main(int argc, char** argv)
     const auto              oldGeneration = state.generation;
     NativeRenderObservation nextOwner;
     Check(!nextOwner.Begin(), "new owner still cannot admit wrong executable");
+    unavailableDiagnostic.version = 99;
+    Check(!owner.ReadEndpointDiagnostic(unavailableDiagnostic) && unavailableDiagnostic.version == 99,
+          "retired observation cannot read a different generation's private diagnostic");
     NativeRenderObservationState retired;
     owner.ReadState(retired);
     Check(retired.generation == oldGeneration && retired.acceptedSnapshots == state.acceptedSnapshots && retired.width == state.width,

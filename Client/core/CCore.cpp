@@ -38,6 +38,7 @@
 #include "DefinitiveInputReference.h"
 #include "DefinitiveMovementReference.h"
 #include "DefinitiveRenderReference.h"
+#include "DefinitiveRenderEndpointLog.h"
 
 using SharedUtil::CalcMTASAPath;
 using namespace std;
@@ -239,11 +240,53 @@ namespace
         {
             struct ObserverV5
             {
-                CGameAdapterModule&                  adapter;
-                mta::game_de::RenderObservationRoute route;
-                bool                                 Begin() { return adapter.BeginNativeRenderFrameBoundaryObservation(route); }
-                bool Read(DefinitiveRenderReference::SnapshotV5& snapshot) { return CopyRenderReferenceState(adapter, snapshot); }
-                bool End() { return adapter.EndNativeRenderObservation(); }
+                CGameAdapterModule&                   adapter;
+                mta::game_de::RenderObservationRoute  route;
+                const std::uint64_t                   runMs = static_cast<std::uint64_t>(GetTickCount64_());
+                DefinitiveRenderEndpointLog::Recorder endpointLog;
+                void                                  Log(std::uint32_t phase) noexcept
+                {
+                    try
+                    {
+                        mta::game_de::RenderEndpointDiagnosticV1 state;
+                        if (!adapter.GetNativeRenderEndpointDiagnostic(state))
+                            return;
+                        endpointLog.Write(state, GetCurrentProcessId(), runMs, phase,
+                                          [](const std::string& line)
+                                          {
+                                              // Reuse MTA file utilities under this Core's explicit
+                                              // DE root. AddReportLog targets shared AppData instead.
+                                              const auto path = CalcMTASAPath("mta/logs/render-endpoint.log");
+                                              SharedUtil::MakeSureDirExists(path);
+                                              return SharedUtil::FileAppend(path, line.data(), static_cast<unsigned long>(line.size()));
+                                          });
+                    }
+                    catch (...)
+                    {
+                        // Optional file diagnostics must never change native
+                        // observation, cancellation or hook cleanup ownership.
+                    }
+                }
+                bool Begin()
+                {
+                    const bool began = adapter.BeginNativeRenderFrameBoundaryObservation(route);
+                    Log(0);
+                    return began;
+                }
+                bool Read(DefinitiveRenderReference::SnapshotV5& snapshot)
+                {
+                    const bool read = CopyRenderReferenceState(adapter, snapshot);
+                    if (read)
+                        Log(1);
+                    return read;
+                }
+                bool End()
+                {
+                    const bool ended = adapter.EndNativeRenderObservation();
+                    if (ended)
+                        Log(2);
+                    return ended;
+                }
             } boundaryObserver{adapter, static_cast<mta::game_de::RenderObservationRoute>(request.renderRoute)};
             DefinitiveRenderReference::Run<DefinitiveRenderReference::SnapshotV5>(boundaryObserver, clock, request);
         }

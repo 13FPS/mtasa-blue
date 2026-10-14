@@ -8,7 +8,7 @@ $root=(Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
 $output=Join-Path $root ('Build/mta-core-render-lifecycle/'+(Get-Date -Format 'yyyyMMdd-HHmmss')+'-'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $output | Out-Null
 function Sha([string]$path){return (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()}
-$sources=@('Client/core/DefinitiveRenderReference.h','Client/sdk/game/CGameRenderObservation.h','Client/sdk/game/CGameAdapter.h',
+$sources=@('Client/core/DefinitiveRenderReference.h','Client/core/DefinitiveRenderEndpointLog.h','Client/sdk/game/CGameRenderEndpointDiagnostic.h','Client/sdk/game/CGameRenderObservation.h','Client/sdk/game/CGameAdapter.h',
     'Shared/sdk/CControllerState.h','Shared/sdk/CControllerActions.h','Shared/sdk/CControlStateSynthesis.h',
     'Tests/definitive/DefinitiveRenderReferenceTests.cpp','Tests/definitive/test_definitive_render_reference.ps1')
 $hashes=[ordered]@{}

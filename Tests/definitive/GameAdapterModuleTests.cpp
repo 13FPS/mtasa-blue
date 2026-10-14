@@ -6,17 +6,21 @@
 
 #include <game/CGameAdapter.h>
 #include <game/CGameRenderObservation.h>
+#include <game/CGameRenderEndpointDiagnostic.h>
 
 #include <array>
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <type_traits>
+#include <windows.h>
 
 namespace
 {
@@ -777,6 +781,105 @@ namespace
               "ended API5 state remains readable with all new observations unattempted until owner release");
         observation->Release();
     }
+
+    void TestEndpointDiagnosticLeaseRejection()
+    {
+        OwnerIdentity              owner;
+        RenderEndpointDiagnosticV1 output;
+        std::memset(&output, 0xa5, sizeof(output));
+        const auto sentinel = output;
+        const auto unchanged = [&] { return std::memcmp(&output, &sentinel, sizeof(output)) == 0; };
+        auto*      observation = CreateGameRenderObservationV5(RenderObservationApiVersionV5, owner.Get(), RenderObservationRoute::D3D12);
+        auto*      other = CreateGameRenderObservationV5(RenderObservationApiVersionV5, owner.Get(), RenderObservationRoute::D3D12);
+        Check(observation && other, "allocate two independent API5 leases for exact diagnostic identity checks");
+        for (const auto version : {0u, 2u, 5u, std::numeric_limits<std::uint32_t>::max()})
+            Check(ReadGameRenderEndpointDiagnosticV1(version, observation, &output) == Status::InvalidArgument && unchanged(),
+                  "unknown diagnostic versions preserve every output byte before native access");
+        Check(ReadGameRenderEndpointDiagnosticV1(1, nullptr, &output) == Status::InvalidArgument && unchanged() &&
+                  ReadGameRenderEndpointDiagnosticV1(1, observation, nullptr) == Status::InvalidArgument,
+              "the separate diagnostic export rejects null arguments without publishing partial output");
+        Check(ReadGameRenderEndpointDiagnosticV1(1, observation, &output) == Status::Unsupported && unchanged() &&
+                  ReadGameRenderEndpointDiagnosticV1(1, other, &output) == Status::Unsupported && unchanged(),
+              "allocation alone cannot expose another lease's endpoint cache or invent a prepared endpoint");
+
+        // An opaque argument may be unreadable. Exact registry comparison must
+        // reject it before a vtable, object field or caller output is touched.
+        auto* inaccessible = VirtualAlloc(nullptr, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_NOACCESS);
+        Check(inaccessible != nullptr, "reserve an unreadable page for diagnostic lease validation");
+        auto* inaccessibleLease = reinterpret_cast<IGameRenderObservationV5*>(inaccessible);
+        Check(ReadGameRenderEndpointDiagnosticV1(1, inaccessibleLease, &output) == Status::InvalidArgument && unchanged(),
+              "unreadable unregistered lease values are rejected without dereferencing caller memory");
+        Check(ReadGameRenderEndpointDiagnosticV1(1, inaccessibleLease, static_cast<RenderEndpointDiagnosticV1*>(inaccessible)) == Status::InvalidArgument,
+              "an unregistered lease cannot cause even an unreadable output pointer to be accessed");
+        Check(ReadGameRenderEndpointDiagnosticV1(2, observation, static_cast<RenderEndpointDiagnosticV1*>(inaccessible)) == Status::InvalidArgument,
+              "version rejection precedes all output writes even for an exact live lease");
+        Check(VirtualFree(inaccessible, 0, MEM_RELEASE) != 0, "release the owned unreadable validation page");
+
+        auto* legacy1 = CreateGameRenderObservation(1, owner.Get());
+        auto* legacy2 = CreateGameRenderObservationV2(2, owner.Get(), RenderObservationRoute::D3D12);
+        auto* legacy3 = CreateGameRenderObservationV3(3, owner.Get(), RenderObservationRoute::D3D12);
+        auto* legacy4 = CreateGameRenderObservationV4(4, owner.Get(), RenderObservationRoute::D3D12);
+        Check(legacy1 && legacy2 && legacy3 && legacy4, "allocate all four historical interfaces for separate-export isolation");
+        for (auto* lease : {reinterpret_cast<IGameRenderObservationV5*>(legacy1), reinterpret_cast<IGameRenderObservationV5*>(legacy2),
+                            reinterpret_cast<IGameRenderObservationV5*>(legacy3), reinterpret_cast<IGameRenderObservationV5*>(legacy4)})
+            Check(ReadGameRenderEndpointDiagnosticV1(1, lease, &output) == Status::InvalidArgument && unchanged(),
+                  "historical render leases never acquire the separate API5 endpoint diagnostic capability");
+        legacy1->Release();
+        legacy2->Release();
+        legacy3->Release();
+        legacy4->Release();
+
+        Status      foreign = Status::Ok;
+        std::thread wrongThread(
+            [&]
+            {
+                foreign = ReadGameRenderEndpointDiagnosticV1(1, observation, &output);
+                observation->Release();
+            });
+        wrongThread.join();
+        Check(foreign == Status::WrongThread && unchanged(), "foreign diagnostic reads preserve output and cannot release the retained owner lease");
+        Check(observation->Begin() == Status::Unsupported && ReadGameRenderEndpointDiagnosticV1(1, observation, &output) == Status::Unsupported && unchanged(),
+              "wrong-image rejection produces no private endpoint diagnostic and cannot leak a previous generation");
+        Check(observation->End() == Status::Ok && ReadGameRenderEndpointDiagnosticV1(1, observation, &output) == Status::Unsupported && unchanged(),
+              "End preserves safe diagnostic eligibility without fabricating a cache for unsupported admission");
+
+        const auto releasedAddress = reinterpret_cast<std::uintptr_t>(observation);
+        observation->Release();
+        Check(ReadGameRenderEndpointDiagnosticV1(1, reinterpret_cast<IGameRenderObservationV5*>(releasedAddress), &output) == Status::InvalidArgument &&
+                  unchanged(),
+              "Release removes the exact registry identity before destruction while another live V5 lease remains registered");
+        Check(ReadGameRenderEndpointDiagnosticV1(1, other, &output) == Status::Unsupported && unchanged(),
+              "removing a non-head registry entry preserves the independent live lease");
+
+        // A foreign reader can race owner Release, but it must observe either a
+        // live wrong-thread identity or an absent identity, never freed fields.
+        const auto        racingAddress = reinterpret_cast<std::uintptr_t>(other);
+        std::atomic<bool> readerReady{false}, releaseStarted{false};
+        bool              racePreserved = true;
+        std::thread       reader(
+            [&]
+            {
+                RenderEndpointDiagnosticV1 foreignOutput = sentinel;
+                readerReady.store(true);
+                while (!releaseStarted.load())
+                    std::this_thread::yield();
+                for (unsigned index = 0; index < 10000; ++index)
+                {
+                    const auto status = ReadGameRenderEndpointDiagnosticV1(1, reinterpret_cast<IGameRenderObservationV5*>(racingAddress), &foreignOutput);
+                    if ((status != Status::WrongThread && status != Status::InvalidArgument) || std::memcmp(&foreignOutput, &sentinel, sizeof(foreignOutput)))
+                        racePreserved = false;
+                }
+            });
+        while (!readerReady.load())
+            std::this_thread::yield();
+        releaseStarted.store(true);
+        other->Release();
+        reader.join();
+        Check(racePreserved, "foreign read versus owner Release never accesses a destroyed lease or mutates rejected output");
+        Check(ReadGameRenderEndpointDiagnosticV1(1, reinterpret_cast<IGameRenderObservationV5*>(racingAddress), &output) == Status::InvalidArgument &&
+                  unchanged(),
+              "removing the final registry entry makes subsequent diagnostic reads reject without native access");
+    }
 }
 
 int main()
@@ -790,6 +893,10 @@ int main()
     static_assert(std::is_nothrow_invocable_v<decltype(CreateGameAdapter), std::uint32_t>);
     static_assert(RenderObservationApiVersionV5 == 5);
     static_assert(std::is_nothrow_invocable_v<decltype(CreateGameRenderObservationV5), std::uint32_t, CCoreInterface*, RenderObservationRoute>);
+    static_assert(RenderEndpointDiagnosticVersionV1 == 1 && sizeof(RenderEndpointDiagnosticV1) == 80);
+    static_assert(std::is_standard_layout_v<RenderEndpointDiagnosticV1> && std::is_trivially_copyable_v<RenderEndpointDiagnosticV1>);
+    static_assert(std::is_nothrow_invocable_r_v<Status, decltype(ReadGameRenderEndpointDiagnosticV1), std::uint32_t, IGameRenderObservationV5*,
+                                                RenderEndpointDiagnosticV1*>);
     try
     {
         TestFactoryAndLifecycle();
@@ -804,6 +911,7 @@ int main()
         // Exercise historical factory layouts after the additive lease has
         // completed, so API5 cannot silently replace their module contract.
         TestRenderObservationV5FactoryRejection();
+        TestEndpointDiagnosticLeaseRejection();
         TestRenderObservationFactoryRejection();
         TestRenderObservationV2FactoryRejection();
         TestRenderObservationV3FactoryRejection();

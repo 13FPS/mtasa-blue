@@ -6,7 +6,23 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
-**Latest live renderer result: native D3D12 presenter identified; drawing remains gated.**
+**Latest live API5 result: endpoint refused; cleanup and normal exit passed.**
+The ten-second trial ran for 10,048 ms with 605 native wrapper entries,
+603 accepted scalar snapshots and 87 logged complete metadata/known-presenter
+reports. All 87 API5 tails contain EndpointUnadmitted 1, profile 0 and no
+Present or buffer-association observations. The human reported normal GTA
+continuation. Core/XML/pthread unloaded, all 23 hashes matched and the complete
+40,915-byte shutdown log passed independent review.
+
+The next read-only candidate adds a separate 20-scalar endpoint diagnostic.
+It distinguishes preparation failures from callback slot ownership without
+weakening the existing gate or changing the 110-field observation wire.
+Actual Core records bounded JSONL at `mta/logs/render-endpoint.log` under the
+explicit adapter root. Module classes and RVAs describe location, not trusted
+code, GPU state or drawing permission. No walking test or visible overlay is
+part of this candidate; its live diagnostic evidence remains pending.
+
+**Earlier live renderer result: native D3D12 presenter identified; drawing remains gated.**
 Actual Core's API4 trial completed in **10,049 ms**, with **199 Core samples,
 87 script snapshots, 606 native entries and 603 accepted scalar snapshots**.
 All 87 logged reports contain complete metadata and identify the known native
@@ -21,17 +37,17 @@ Independent live and shutdown reviews are preserved with the complete
 36,311-byte log and immutable candidate archives. The next integration must
 account for the presenter's Social Club callback and release GUI-held
 backbuffers after the native queue drain and before resize. No MTA GUI is
-installed into GTA yet; the tested read-only runtime remains installed.
+installed into GTA yet; that completed runtime is preserved as historical evidence.
 
-**Next read-only trial: actual standard Present and backbuffer association.**
+**API5 observer: actual standard Present and backbuffer association.**
 The API5 candidate checks the standard DXGI Present entry after the native
 Social Club callback, using the existing MTA Core owner and startup worker.
-Live validation is pending. Its object and CPU tracker observations cannot
+The completed trial refused endpoint admission. Its object and CPU tracker observations cannot
 establish GPU completion, resource state or permission to draw. No GUI, input
 writes or GPU commands are included; the port remains EXPERIMENTAL.
 
-The final offline suites pass 2,606 native checks, 1,618 module checks,
-892 x64/3 x86 normal-module consumer checks, 10,280 lifecycle checks on each
+The current diagnostic suites pass 2,623 native checks, 1,642 module checks,
+940 x64/3 x86 normal-module consumer checks, 10,292 lifecycle checks on each
 architecture, 41 worker scenarios, 293 bridge protocol/1,482 ABI checks,
 542 script checks and 64 reader methods. Package ownership passes 663 checks.
 The normal Core/Game DE build passes 219 actual Core startup checks in each
@@ -1237,3 +1253,19 @@ The worker requests API5 explicitly and transports 110 unsigned scalar fields. T
 `ObservedCoherent=2`, endpoint profile1 and facts255 identify a logged coherent Present-entry association sample. Reader outputs `native_present_observed` and `buffer_association_observed` count only valid sampled coherent reports without native failure or any whole-log issue; cumulative counters cannot reconstruct unsampled successes. A later fatal callback can retain an earlier boundary cache without becoming a new positive sample. These facts do not establish GPU completion, resource state, visible presentation, a drawing boundary or permission to issue GPU commands. GPU ownership, frame-boundary verification, drawing and full startup remain unverified.
 
 Core, the backend and installed files remain retained while cleanup is pending. Cancellation and cleanup deadlines never authorize unloading active hooks. The frontend only polls scalar caches and requests worker cancellation; it receives no native interface pointers and does not call Present, draw, copy or engine input functions.
+
+The separate `ReadGameRenderEndpointDiagnosticV1` export preserves this wire
+and every earlier ABI. Its 20 unsigned fields distinguish a worker preparation
+failure from callback slot ownership, because API5 EndpointUnadmitted alone
+cannot separate those causes. The exact retained V5 lease and its owner thread
+are required; invalid reads preserve caller output, and Release excludes new
+readers before destroying the lease. Callback snapshots use held module bases
+and guarded memory metadata, with no callback file or loader work.
+
+Core writes at most 32 JSONL records per run to the explicit adapter root's
+`mta/logs/render-endpoint.log`, retaining process/run identity and native
+generation/sample counters. Counter progress alone is deduplicated and one
+record is reserved for End. Missing export, wrong version and file failures
+cannot change hook cleanup or relabel an older run's cached diagnostic.
+Owner classes, relative offsets and branch categories establish location only;
+they neither admit unfamiliar code nor infer GPU state or buffer association.

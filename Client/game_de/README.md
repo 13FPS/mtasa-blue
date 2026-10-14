@@ -33,7 +33,13 @@ scoped by the pinned native caller and exact system DXGI endpoint. It observes
 backbuffer/queue association and CPU tracker values, and invalidates samples
 on resize or destruction overlap. These checks preserve the earlier factories
 and cannot establish GPU resource state or permission to draw. The normal
-module and offline fixtures pass; actual-game API5 validation remains pending.
+module and offline fixtures pass. The actual-game trial passed cleanup and
+normal exit but refused the standard endpoint in all 87 logged samples.
+A separate `ReadGameRenderEndpointDiagnosticV1` export now supplies 20 scalar
+preparation/slot diagnostics only for an exact retained API5 lease on its
+owner thread. Rejected reads preserve output; successful End preserves the
+cache until Release. Core logs the values under its explicit DE root without
+changing API5, ABI6, admission or the drawing gate.
 See the [trial contract](../definitive/README.md) and
 [current reuse boundary](../definitive/MTA_REUSE_PLAN.md).
 

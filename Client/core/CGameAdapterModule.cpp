@@ -123,6 +123,7 @@ bool CGameAdapterModule::Start(CCoreInterface* owner, const std::wstring& absolu
     m_hasRenderObservationV3 = false;
     m_hasRenderObservationV4 = false;
     m_hasRenderObservationV5 = false;
+    m_hasEndpointDiagnostic = false;
     m_renderRoute = mta::game_de::RenderObservationRoute::Unknown;
     m_error.clear();
     return true;
@@ -197,6 +198,7 @@ bool CGameAdapterModule::Reset()
     m_hasRenderObservationV3 = false;
     m_hasRenderObservationV4 = false;
     m_hasRenderObservationV5 = false;
+    m_hasEndpointDiagnostic = false;
     return true;
 }
 
@@ -449,6 +451,10 @@ bool CGameAdapterModule::BeginNativeRenderFrameBoundaryObservation(mta::game_de:
         SetError("A render observation lease is already retained; end it before selecting another version or route");
         return false;
     }
+    // A newly allowed attempt must not relabel a previous generation's cached
+    // evidence if the optional factory is missing or cannot allocate a lease.
+    m_hasRenderObservationV5 = false;
+    m_hasEndpointDiagnostic = false;
     const auto address = GetProcAddress(static_cast<HMODULE>(m_module), "CreateGameRenderObservationV5");
     if (!address)
     {
@@ -473,6 +479,7 @@ bool CGameAdapterModule::BeginNativeRenderFrameBoundaryObservation(mta::game_de:
     m_hasRenderObservationV3 = false;
     m_hasRenderObservationV4 = false;
     m_hasRenderObservationV5 = false;
+    m_hasEndpointDiagnostic = false;
     return RecordStatus(m_renderObservationV5->Begin(), "BeginNativeRenderObservationV5");
 }
 
@@ -615,6 +622,46 @@ bool CGameAdapterModule::GetNativeRenderObservationState(mta::game_de::RenderObs
     return true;
 }
 
+bool CGameAdapterModule::GetNativeRenderEndpointDiagnostic(mta::game_de::RenderEndpointDiagnosticV1& state)
+{
+    using namespace mta::game_de;
+    if (!RequireOwnerThread("GetNativeRenderEndpointDiagnostic"))
+        return false;
+    if (m_renderObservationV5)
+    {
+        // This optional export diagnoses why the existing API5 gate refused an
+        // endpoint. Missing support never substitutes a different render lease.
+        const auto address = GetProcAddress(static_cast<HMODULE>(m_module), "ReadGameRenderEndpointDiagnosticV1");
+        if (!address)
+        {
+            SetError("The retained API5 provider has no separate endpoint diagnostic export");
+            return false;
+        }
+        using Reader = decltype(&ReadGameRenderEndpointDiagnosticV1);
+        Reader reader = nullptr;
+        static_assert(sizeof(reader) == sizeof(address));
+        std::memcpy(&reader, &address, sizeof(reader));
+        RenderEndpointDiagnosticV1 next;
+        if (!RecordStatus(reader(RenderEndpointDiagnosticVersionV1, m_renderObservationV5, &next), "ReadGameRenderEndpointDiagnosticV1"))
+            return false;
+        if (next.version != RenderEndpointDiagnosticVersionV1)
+        {
+            SetError("Endpoint diagnostic provider returned a different version; caller output preserved");
+            return false;
+        }
+        m_lastEndpointDiagnostic = next;
+        m_hasEndpointDiagnostic = true;
+    }
+    if (!m_hasEndpointDiagnostic || (!m_renderObservationV5 && !m_hasRenderObservationV5))
+    {
+        SetError("No retained API5 endpoint diagnostic state is available");
+        return false;
+    }
+    state = m_lastEndpointDiagnostic;
+    m_error.clear();
+    return true;
+}
+
 bool CGameAdapterModule::EndNativeRenderObservation() noexcept
 {
     // Stop calls this during cleanup, so errors must not allocate or throw.
@@ -647,6 +694,16 @@ bool CGameAdapterModule::EndNativeRenderObservation() noexcept
         }
         m_lastRenderObservationV5 = final;
         m_hasRenderObservationV5 = true;
+        // Copy optional scalar evidence while its exact lease still exists.
+        // A diagnostic miss cannot block an otherwise safe hook teardown.
+        try
+        {
+            mta::game_de::RenderEndpointDiagnosticV1 diagnostic;
+            GetNativeRenderEndpointDiagnostic(diagnostic);
+        }
+        catch (...)
+        {
+        }
         m_renderObservationV5->Release();
         m_renderObservationV5 = nullptr;
         m_error.clear();

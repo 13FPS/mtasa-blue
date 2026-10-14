@@ -8,6 +8,7 @@
 
 #include <game/CGameAdapter.h>
 #include <game/CGameRenderObservation.h>
+#include <game/CGameRenderEndpointDiagnostic.h>
 #include <cstdint>
 #include <string>
 
@@ -46,6 +47,7 @@ public:
     bool                GetNativeRenderObservationState(mta::game_de::RenderObservationStateV4& state);
     bool                BeginNativeRenderFrameBoundaryObservation(mta::game_de::RenderObservationRoute route);
     bool                GetNativeRenderObservationState(mta::game_de::RenderObservationStateV5& state);
+    bool                GetNativeRenderEndpointDiagnostic(mta::game_de::RenderEndpointDiagnosticV1& state);
     bool                EndNativeRenderObservation() noexcept;
     void                Stop() noexcept;
 
@@ -62,25 +64,27 @@ private:
 
     // Instance callbacks and teardown belong to the same Core thread. Keeping
     // the DLL alive until Release avoids retaining a vtable into unloaded code.
-    void*                                   m_module = nullptr;
-    mta::game_de::IGameAdapter*             m_adapter = nullptr;
-    mta::game_de::IGameRenderObservation*   m_renderObservation = nullptr;
-    mta::game_de::IGameRenderObservationV2* m_renderObservationV2 = nullptr;
-    mta::game_de::RenderObservationState    m_lastRenderObservation;
-    mta::game_de::RenderObservationStateV2  m_lastRenderObservationV2;
-    bool                                    m_hasRenderObservation = false;
-    bool                                    m_hasRenderObservationV2 = false;
-    mta::game_de::IGameRenderObservationV3* m_renderObservationV3 = nullptr;
-    mta::game_de::RenderObservationStateV3  m_lastRenderObservationV3;
-    bool                                    m_hasRenderObservationV3 = false;
-    mta::game_de::IGameRenderObservationV4* m_renderObservationV4 = nullptr;
-    mta::game_de::RenderObservationStateV4  m_lastRenderObservationV4;
-    bool                                    m_hasRenderObservationV4 = false;
-    mta::game_de::IGameRenderObservationV5* m_renderObservationV5 = nullptr;
-    mta::game_de::RenderObservationStateV5  m_lastRenderObservationV5;
-    bool                                    m_hasRenderObservationV5 = false;
-    mta::game_de::RenderObservationRoute    m_renderRoute = mta::game_de::RenderObservationRoute::Unknown;
-    CCoreInterface*                         m_ownerIdentity = nullptr;
-    std::uint32_t                           m_ownerThread = 0;
-    std::string                             m_error;
+    void*                                    m_module = nullptr;
+    mta::game_de::IGameAdapter*              m_adapter = nullptr;
+    mta::game_de::IGameRenderObservation*    m_renderObservation = nullptr;
+    mta::game_de::IGameRenderObservationV2*  m_renderObservationV2 = nullptr;
+    mta::game_de::RenderObservationState     m_lastRenderObservation;
+    mta::game_de::RenderObservationStateV2   m_lastRenderObservationV2;
+    bool                                     m_hasRenderObservation = false;
+    bool                                     m_hasRenderObservationV2 = false;
+    mta::game_de::IGameRenderObservationV3*  m_renderObservationV3 = nullptr;
+    mta::game_de::RenderObservationStateV3   m_lastRenderObservationV3;
+    bool                                     m_hasRenderObservationV3 = false;
+    mta::game_de::IGameRenderObservationV4*  m_renderObservationV4 = nullptr;
+    mta::game_de::RenderObservationStateV4   m_lastRenderObservationV4;
+    bool                                     m_hasRenderObservationV4 = false;
+    mta::game_de::IGameRenderObservationV5*  m_renderObservationV5 = nullptr;
+    mta::game_de::RenderObservationStateV5   m_lastRenderObservationV5;
+    bool                                     m_hasRenderObservationV5 = false;
+    mta::game_de::RenderEndpointDiagnosticV1 m_lastEndpointDiagnostic;
+    bool                                     m_hasEndpointDiagnostic = false;
+    mta::game_de::RenderObservationRoute     m_renderRoute = mta::game_de::RenderObservationRoute::Unknown;
+    CCoreInterface*                          m_ownerIdentity = nullptr;
+    std::uint32_t                            m_ownerThread = 0;
+    std::string                              m_error;
 };

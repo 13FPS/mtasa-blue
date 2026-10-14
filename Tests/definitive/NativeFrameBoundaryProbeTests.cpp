@@ -100,6 +100,22 @@ bool BoundaryFixtureOriginal(void*, std::uint32_t interval)
     return interval != 0;
 }
 
+void PrimeBoundaryDiagnostic(std::uint64_t generation)
+{
+    using namespace mta::game_de;
+    auto& runtime = boundary_detail::runtime;
+    runtime.preparation = {};
+    runtime.preparation.version = RenderEndpointDiagnosticVersionV1;
+    runtime.preparation.generationLow = static_cast<std::uint32_t>(generation);
+    runtime.preparation.generationHigh = static_cast<std::uint32_t>(generation >> 32);
+    runtime.preparation.preparationGate = static_cast<unsigned>(RenderEndpointPrepareGate::Complete);
+    runtime.preparation.preparationReason = static_cast<unsigned>(RenderEndpointPrepareReason::Admitted);
+    runtime.preparation.loadedEntryMatch = static_cast<unsigned>(RenderEndpointLoadedMatch::Match);
+    AcquireSRWLockExclusive(&runtime.diagnosticLock);
+    runtime.diagnostic = runtime.preparation;
+    ReleaseSRWLockExclusive(&runtime.diagnosticLock);
+}
+
 void CheckFrameBoundaryProbe(const char* customFixture, unsigned& checks)
 {
     using namespace mta::game_de;
@@ -227,6 +243,75 @@ void CheckFrameBoundaryProbe(const char* customFixture, unsigned& checks)
     auto* memory = static_cast<unsigned char*>(VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
     Require(memory != nullptr, "owned executable patch fixture allocation", checks);
     std::memcpy(memory, code.data(), code.size());
+    detail::runtime.image = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
+    detail::CacheDiagnosticModules();
+    std::uint32_t branch = 0, branchOwner = 0, branchRva = 0;
+    detail::DescribeOwner(reinterpret_cast<std::uintptr_t>(&Noop), branchOwner, branchRva);
+    Require(branchOwner == static_cast<unsigned>(RenderEndpointOwnerClass::GameImage) && branchRva != 0,
+            "worker-cached owner identifies own executable without callback loader APIs", checks);
+    memory[128] = 0xc3;
+    const std::int32_t directOffset = 123;
+    memory[0] = 0xe9;
+    std::memcpy(memory + 1, &directOffset, sizeof(directOffset));
+    detail::DescribeBranch(reinterpret_cast<std::uintptr_t>(memory), branch, branchOwner, branchRva);
+    Require(branch == static_cast<unsigned>(RenderEndpointBranchKind::RelativeE9) &&
+                branchOwner == static_cast<unsigned>(RenderEndpointOwnerClass::PrivateExecutable) && !branchRva,
+            "one relative branch reports private executable metadata without following a hook chain", checks);
+    memory[0] = 0xff;
+    memory[1] = 0x25;
+    const std::int32_t slotOffset = 58;
+    std::memcpy(memory + 2, &slotOffset, sizeof(slotOffset));
+    const auto ownTarget = reinterpret_cast<std::uintptr_t>(&Noop);
+    std::memcpy(memory + 64, &ownTarget, sizeof(ownTarget));
+    detail::DescribeBranch(reinterpret_cast<std::uintptr_t>(memory), branch, branchOwner, branchRva);
+    Require(
+        branch == static_cast<unsigned>(RenderEndpointBranchKind::IndirectFF25) && branchOwner == static_cast<unsigned>(RenderEndpointOwnerClass::GameImage),
+        "one indirect branch reads only its bounded pointer slot and reports cached owner", checks);
+    detail::DescribeBranch(1, branch, branchOwner, branchRva);
+    Require(branch == static_cast<unsigned>(RenderEndpointBranchKind::ReadFault) && !branchOwner && !branchRva,
+            "unreadable diagnostic code never calls a foreign endpoint", checks);
+    std::uintptr_t branchAddress = 0;
+    Require(!detail::RelativeAddress((std::numeric_limits<std::uintptr_t>::max)(), 5, 0, branchAddress) && !detail::RelativeAddress(0, 0, -1, branchAddress),
+            "branch metadata rejects address overflow and underflow", checks);
+    ReleaseFrameBoundaryDiagnosticModules();
+    std::memcpy(memory, code.data(), code.size());
+    PrimeBoundaryDiagnostic(0x100000002ull);
+    detail::runtime.preparation.errorDomain = static_cast<unsigned>(RenderEndpointErrorDomain::Win32);
+    detail::runtime.preparation.errorCode = 123;
+    detail::PreparationFailure(RenderEndpointPrepareGate::LoadedCodeHash, RenderEndpointPrepareReason::Mismatch);
+    Require(detail::runtime.preparation.preparationGate == 13 && detail::runtime.preparation.preparationReason == 3 &&
+                !detail::runtime.preparation.errorDomain && !detail::runtime.preparation.errorCode,
+            "signature mismatch clears unrelated prior OS error metadata", checks);
+    FrameBoundaryScope diagnosticScope;
+    diagnosticScope.diagnostic = detail::runtime.preparation;
+    diagnosticScope.diagnostic.slotStatus = static_cast<unsigned>(RenderEndpointSlotStatus::Read);
+    diagnosticScope.diagnostic.slotOwnerClass = static_cast<unsigned>(RenderEndpointOwnerClass::OtherImage);
+    diagnosticScope.diagnostic.slotRva = 0x2468;
+    PublishFrameBoundaryEndpointDiagnostic(diagnosticScope, 0x300000004ull);
+    RenderEndpointDiagnosticV1 diagnostic;
+    Require(ReadFrameBoundaryEndpointDiagnostic(0x100000002ull, diagnostic) && diagnostic.generationHigh == 1 && diagnostic.acceptedSnapshotsLow == 4 &&
+                diagnostic.acceptedSnapshotsHigh == 3 && diagnostic.slotRva == 0x2468,
+            "separate diagnostic cache coherently publishes named scalar generations and counters", checks);
+    diagnostic.version = 99;
+    Require(!ReadFrameBoundaryEndpointDiagnostic(0x100000003ull, diagnostic) && diagnostic.version == 99,
+            "stale diagnostic generation leaves caller output untouched", checks);
+    detail::runtime.dxgi = 0x12345000;
+    ResetFrameBoundaryObservation();
+    Require(!detail::runtime.dxgi && !detail::runtime.diagnostic.version, "new generation clears old system endpoint candidate before any failed module lookup",
+            checks);
+    detail::runtime.preparation.version = 1;
+    detail::PreparationFailure(RenderEndpointPrepareGate::ModuleLookup, RenderEndpointPrepareReason::OperationFailed, RenderEndpointErrorDomain::Win32,
+                               ERROR_MOD_NOT_FOUND);
+    std::array<std::uintptr_t, 9> oldTable{};
+    oldTable[8] = 0x12345000 + 0x19000;
+    std::uintptr_t oldSwapchain = reinterpret_cast<std::uintptr_t>(oldTable.data());
+    put(view + 0x60, reinterpret_cast<std::uintptr_t>(&oldSwapchain));
+    FrameBoundaryScope               failedLookup;
+    CustomPresentClassificationState absent;
+    EnterFrameBoundaryScope(failedLookup, 0, viewport.data(), GetCurrentThreadId(), absent);
+    Require(failedLookup.diagnostic.preparationGate == 1 && failedLookup.diagnostic.slotStatus == 1 && !failedLookup.diagnostic.slotEqualsPinned,
+            "failed lookup cannot match a slot at the prior generation's candidate base", checks);
+    LeaveFrameBoundaryScope(failedLookup);
     const std::array<std::array<unsigned char, 16>, 4> prologues{{
         {0x48, 0x89, 0x5c, 0x24, 0x10},        // full pinned Resize starts with one 5B mov
         {0x40, 0x53, 0x48, 0x83, 0xec, 0x20},  // notify push2 + sub4
@@ -240,10 +325,10 @@ void CheckFrameBoundaryProbe(const char* customFixture, unsigned& checks)
         std::size_t                   consumed = 0;
         while (consumed < 5)
         {
-            PVOID      target = nullptr, pool = nullptr;
+            PVOID      instructionTarget = nullptr, pool = nullptr;
             LONG       extra = 0;
-            const auto next = static_cast<const unsigned char*>(
-                DetourCopyInstruction(copied.data() + consumed, &pool, const_cast<unsigned char*>(prologues[index].data() + consumed), &target, &extra));
+            const auto next = static_cast<const unsigned char*>(DetourCopyInstruction(
+                copied.data() + consumed, &pool, const_cast<unsigned char*>(prologues[index].data() + consumed), &instructionTarget, &extra));
             Require(next > prologues[index].data() + consumed && extra == 0, "pinned prologue instruction copies without expansion", checks);
             consumed = static_cast<std::size_t>(next - prologues[index].data());
         }

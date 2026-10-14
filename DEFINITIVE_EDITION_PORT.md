@@ -3,6 +3,7 @@
 Last updated: **2026-10-14** (Europe/Luxembourg).
 Experimental branch: `definitive-edition-port`.
 Live renderer source baseline: `05e80a41ecfcdd27165c7eefa3912a809c5546a4`.
+Latest completed diagnostic runtime: `c155c253c4b7f0062fc53eb0b67b031400533e91`.
 
 ## Current result
 
@@ -23,7 +24,22 @@ and full-MTA readiness explicitly false. See the
 [reuse plan](Client/definitive/MTA_REUSE_PLAN.md) and
 [preflight contract](Client/launch/DefinitivePreflight/README.md).
 
-The active D3D12 renderer now has a live-verified native callback through
+The latest API5 trial completed in 10,048 ms with 605 native wrapper entries,
+603 accepted scalar snapshots and 87 logged metadata/custom-presenter reports.
+All 87 reports refuse the standard Present endpoint: status 1, profile 0,
+with no Present or backbuffer association observation. GTA continued normally;
+cleanup, all 23 installed files and normal exit passed. The 40,915-byte final
+log and independent reviews are sealed separately from later source work.
+
+The refusal can mean startup endpoint admission failed or the native swapchain
+slot differed from the pinned system entry. The exact production admission
+function passes in an owned WARP host, which does not resolve the live cause.
+A separate versioned scalar diagnostic now records the preparation gate and
+module-relative endpoint categories through MTA Core's existing owner/worker.
+Core writes bounded JSONL under the explicit DE root. It preserves the API5
+110-field wire, earlier interfaces and every hook/drawing guard.
+
+The active D3D12 renderer has a live-verified native callback through
 actual Core. The latest API4 session ran for 10,049 ms with 606 native entries,
 603 accepted scalar snapshots and 87 logged metadata reports. All logged
 reports recognize the pinned Gameface native custom presenter and show the
@@ -44,17 +60,15 @@ The complete API4 log, independent reviews and matching candidate archives
 are sealed under `Build/definitive-manual-test/20261014-134311-mta-core-render-actual-1a7e51e2/`.
 The final log is 36,311 bytes, SHA-256
 `7790f9c39f49493c340d221e2f569104a7dd2ec951e125745825fcfaa9480854`.
-The installed runtime remains the tested read-only candidate; no automatic
-GTA launch is part of this work.
+That completed runtime is retained as historical evidence; no automatic GTA
+launch is part of this work.
 
-The next read-only API5 candidate moves association checks to the actual
+The API5 observer moves association checks to the actual
 standard DXGI Present entry, after the native Social Club callback. It checks
 the exact swapchain, backbuffer and queue association, CPU-side tracker values,
 and resize/destruction overlap without issuing GPU commands. A coherent sample
 will establish object association at that callback, not GPU resource state,
-submission ordering or drawing readiness. Live API5 validation is pending.
-The normal Core/Game DE build passes 219 actual startup checks per folder
-layout; native, module and package suites pass 2,606, 1,618 and 663 checks.
+submission ordering or drawing readiness. Live association remains unverified.
 Older observation interfaces and the full-startup gate are preserved.
 
 **Earlier engine movement and Core startup milestones.** ABI5 adds a bounded trial inside the normal Game DE

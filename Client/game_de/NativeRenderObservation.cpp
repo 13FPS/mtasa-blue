@@ -476,6 +476,8 @@ namespace mta::game_de
                         }
                     }
                     runtime.snapshot = capture;
+                    if (observeBoundary)
+                        PublishFrameBoundaryEndpointDiagnostic(boundary, runtime.accepted.load() + 1);
                     runtime.accepted.fetch_add(1);
                     ReleaseSRWLockExclusive(&runtime.snapshotLock);
                 }
@@ -648,7 +650,7 @@ namespace mta::game_de
             return false;
         }
         runtime.modulePinned.store(true);
-        if (queryFrameBoundary && !PrepareFrameBoundaryHooks(runtime.image))
+        if (queryFrameBoundary && !PrepareFrameBoundaryHooks(runtime.image, generation))
         {
             Fail(Failure::FingerprintMismatch);
             ReadState(finalState);
@@ -698,6 +700,7 @@ namespace mta::game_de
             return false;
         }
         runtime.hooked.store(false);
+        ReleaseFrameBoundaryDiagnosticModules();
         ReadState(finalState);
         return true;
     }
@@ -734,5 +737,16 @@ namespace mta::game_de
         state.publicationMisses = runtime.missed.load();
         state.nativePresentCallbacks = runtime.callbacks.load();
         state.failureReason = runtime.failure.load();
+    }
+    bool NativeRenderObservation::ReadEndpointDiagnostic(RenderEndpointDiagnosticV1& state) const noexcept
+    {
+        if (!generation || generation != runtime.generation.load() || GetCurrentThreadId() != runtime.producerThread || !runtime.queryFrameBoundary)
+            return false;
+        // Use the same lock order as publication so a separate diagnostic read
+        // cannot observe next-count metadata before the native snapshot commits.
+        AcquireSRWLockShared(&runtime.snapshotLock);
+        const bool result = ReadFrameBoundaryEndpointDiagnostic(generation, state);
+        ReleaseSRWLockShared(&runtime.snapshotLock);
+        return result;
     }
 }

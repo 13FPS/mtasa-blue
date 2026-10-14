@@ -5,6 +5,7 @@
  *****************************************************************************/
 #pragma once
 #include "../sdk/game/CGameRenderObservation.h"
+#include "../sdk/game/CGameRenderEndpointDiagnostic.h"
 #include <cstddef>
 
 namespace mta::game_de
@@ -25,6 +26,7 @@ namespace mta::game_de
     struct FrameBoundaryScope
     {
         FrameBoundaryObservationState state;
+        RenderEndpointDiagnosticV1    diagnostic;
         std::uintptr_t                image = 0, viewport = 0, swapchain = 0;
         std::uint32_t                 callbackThread = 0;
         bool                          knownPresenter = false, cleanupFailed = false, entered = false;
@@ -34,7 +36,7 @@ namespace mta::game_de
     };
     // Prepare is worker-only and performs no COM calls. Change appends to the
     // observer's existing all-thread Detours transaction; it never commits one.
-    bool     PrepareFrameBoundaryHooks(std::uintptr_t image) noexcept;
+    bool     PrepareFrameBoundaryHooks(std::uintptr_t image, std::uint64_t generation = 0) noexcept;
     bool     ChangeFrameBoundaryHooks(bool install) noexcept;
     bool     FrameBoundaryHooksCommitted(bool install) noexcept;
     bool     FrameBoundaryHooksOwned() noexcept;
@@ -47,4 +49,7 @@ namespace mta::game_de
     // API5 alone may normalize our verified installed pre-release patch back to
     // its fully pinned original bytes. Historical API4 uses its original reader.
     bool ReadFrameBoundaryOwnedOriginal(std::uintptr_t address, void* output, std::size_t bytes) noexcept;
+    void PublishFrameBoundaryEndpointDiagnostic(const FrameBoundaryScope& scope, std::uint64_t acceptedSnapshots) noexcept;
+    bool ReadFrameBoundaryEndpointDiagnostic(std::uint64_t generation, RenderEndpointDiagnosticV1& state) noexcept;
+    void ReleaseFrameBoundaryDiagnosticModules() noexcept;
 }

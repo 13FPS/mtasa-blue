@@ -62,7 +62,10 @@ namespace mta::game_de
 {
     namespace
     {
-        std::uint32_t* fixtureCounters = nullptr;
+        std::uint32_t*            fixtureCounters = nullptr;
+        IGameRenderObservationV5* diagnosticLease = nullptr;
+        DWORD                     diagnosticOwnerThread = 0;
+        std::uint32_t             diagnosticReads = 0;
         alignas(void*) unsigned char facadeIdentity[sizeof(void*)]{};
 
         class ShutdownFailureAdapter final : public IGameAdapter
@@ -356,6 +359,7 @@ namespace mta::game_de
             }
             void Release() noexcept override
             {
+                diagnosticLease = nullptr;
                 if (fixtureCounters)
                 {
                     ++fixtureCounters[7];
@@ -408,7 +412,39 @@ namespace mta::game_de
     #if MTA_TEST_RENDER_V5
     extern "C" IGameRenderObservationV5* CreateGameRenderObservationV5(std::uint32_t apiVersion, CCoreInterface* owner, RenderObservationRoute route) noexcept
     {
-        return apiVersion == RenderObservationApiVersionV5 && owner && route == RenderObservationRoute::D3D12 ? new (std::nothrow) RenderFixtureV5 : nullptr;
+        if (apiVersion != RenderObservationApiVersionV5 || !owner || route != RenderObservationRoute::D3D12 || (fixtureCounters && fixtureCounters[13] == 3))
+            return nullptr;
+        diagnosticLease = new (std::nothrow) RenderFixtureV5;
+        diagnosticOwnerThread = GetCurrentThreadId();
+        return diagnosticLease;
+    }
+        // Mode6 is an actual historical provider with no optional diagnostic export.
+        // Mode8 deliberately returns a different diagnostic version, not admission.
+        #if MTA_TEST_RENDER_MODE != 6
+    extern "C" Status ReadGameRenderEndpointDiagnosticV1(std::uint32_t version, IGameRenderObservationV5* lease, RenderEndpointDiagnosticV1* output) noexcept
+    {
+        if (version != 1 || !output || !lease || lease != diagnosticLease)
+            return Status::InvalidArgument;
+        if (GetCurrentThreadId() != diagnosticOwnerThread)
+            return Status::WrongThread;
+        ++diagnosticReads;
+        RenderEndpointDiagnosticV1 next;
+        next.version = MTA_TEST_RENDER_MODE == 8 ? 99u : 1u;
+        next.generationLow = 17;
+        next.acceptedSnapshotsLow = 7;
+        next.preparationGate = 13;
+        next.preparationReason = 3;
+        next.loadedEntryMatch = 2;
+        next.slotStatus = 1;
+        next.slotOwnerClass = 3;
+        next.slotRva = 0x1234;
+        *output = next;
+        return Status::Ok;
+    }
+        #endif
+    extern "C" __declspec(dllexport) std::uint32_t GetFixtureDiagnosticReads() noexcept
+    {
+        return diagnosticReads;
     }
     #endif
 
@@ -1197,6 +1233,9 @@ namespace
         using namespace mta::game_de;
         CGameAdapterModule host;
         Check(host.Start(owner, path), "own controlled separately versioned API5 provider");
+        RenderEndpointDiagnosticV1 diagnostic;
+        diagnostic.version = 77;
+        Check(!host.GetNativeRenderEndpointDiagnostic(diagnostic) && diagnostic.version == 77, "endpoint diagnostics cannot invent a V5 lease before Begin");
         std::uint32_t counters[14]{};
         using Configure = void (*)(std::uint32_t*) noexcept;
         Configure configure = nullptr;
@@ -1227,6 +1266,15 @@ namespace
               "retained API5 lease excludes every renderer version and duplicate Begin");
         Check(host.GetNativeRenderObservationState(output) && output.base.base.base.requestedRoute == 2,
               "API5 reports its immutable explicit route through its own state layout");
+        const bool diagnosticAvailable = mode != 6 && mode != 8;
+        Check(host.GetNativeRenderEndpointDiagnostic(diagnostic) == diagnosticAvailable &&
+                  (diagnosticAvailable
+                       ? diagnostic.version == 1 && diagnostic.generationLow == 17 && diagnostic.slotOwnerClass == 3 && diagnostic.slotRva == 0x1234
+                       : diagnostic.version == 77),
+              "optional endpoint export preserves known scalars while missing/wrong-version providers preserve caller output");
+        if (mode == 6)
+            Check(!GetProcAddress(GetModuleHandleW(path.c_str()), "ReadGameRenderEndpointDiagnosticV1"),
+                  "historical API5 fixture genuinely has no separate diagnostic export");
         Check(mode == 6 ? !output.base.base.base.observedRoute && !output.base.base.gpu.attempts && !output.base.base.gpu.metadataValid
                         : output.base.base.base.observedRoute == 2 && output.base.base.gpu.attempts == 7 && output.base.base.gpu.queryStage == 19 &&
                               output.base.base.gpu.accepted == 0 && output.base.base.gpu.rejected == 7,
@@ -1254,8 +1302,10 @@ namespace
                           : output.boundary.status == 2 && output.boundary.factsMask == 255 && output.boundary.presentEntries == 7 &&
                                 output.boundary.queryStage == 9 && output.boundary.nativeBufferIndex == output.boundary.dxgiBufferIndex,
               "API5 preserves actual zero, unadmitted and coherent association reports in its own typed state");
-        const auto               reads = counters[5];
-        bool                     foreignBegin = true, foreignRead = true, foreignEnd = true;
+        const auto                 reads = counters[5];
+        bool                       foreignBegin = true, foreignRead = true, foreignEnd = true, foreignDiagnostic = true;
+        RenderEndpointDiagnosticV1 foreignDiagnosticOutput;
+        foreignDiagnosticOutput.version = 88;
         RenderObservationStateV5 foreignOutput;
         foreignOutput.base.base.gpu.queryStage = 77;
         foreignOutput.base.custom.status = 77;
@@ -1264,10 +1314,13 @@ namespace
             {
                 foreignBegin = host.BeginNativeRenderFrameBoundaryObservation(RenderObservationRoute::D3D12);
                 foreignRead = host.GetNativeRenderObservationState(foreignOutput);
+                foreignDiagnostic = host.GetNativeRenderEndpointDiagnostic(foreignDiagnosticOutput);
                 foreignEnd = host.EndNativeRenderObservation();
                 host.Stop();
             });
         foreign.join();
+        Check(!foreignDiagnostic && foreignDiagnosticOutput.version == 88,
+              "a foreign Core thread cannot inspect an optional endpoint diagnostic or replace output");
         Check(!foreignBegin && !foreignRead && !foreignEnd && foreignOutput.base.base.gpu.queryStage == 77 && foreignOutput.base.custom.status == 77 &&
                   counters[5] == reads && !counters[6] && !counters[0],
               "foreign API5 calls cannot publish output or touch the provider lifetime");
@@ -1290,6 +1343,8 @@ namespace
             output.base.custom.status = 88;
             Check(!host.GetNativeRenderObservationState(output) && output.base.base.gpu.queryStage == 88 && output.base.custom.status == 88,
                   "Reset clears API5 final state availability");
+            diagnostic.version = 77;
+            Check(!host.GetNativeRenderEndpointDiagnostic(diagnostic) && diagnostic.version == 77, "Reset clears cached optional diagnostic availability too");
         }
         else
         {
@@ -1302,6 +1357,10 @@ namespace
                       "API5 Begin/End/read/route failure retains adapter and module for retry");
             counters[13] = 0;
             Check(host.EndNativeRenderObservation(), "owner completes API5 End after the retained failure");
+            diagnostic.version = 77;
+            Check(host.GetNativeRenderEndpointDiagnostic(diagnostic) == diagnosticAvailable &&
+                      (diagnosticAvailable ? diagnostic.version == 1 && diagnostic.slotRva == 0x1234 : diagnostic.version == 77),
+                  "safe End preserves only successfully copied optional diagnostics after provider Release");
             const auto finalReads = counters[5];
             Check(host.GetNativeRenderObservationState(output) && !output.base.base.base.base.active && !output.base.base.base.base.pendingCleanup &&
                       counters[5] == finalReads && counters[7] == 1 && output.base.base.gpu.queryStage == (mode == 6 ? 0u : 19u),
@@ -1315,6 +1374,13 @@ namespace
                                                             : 2u),
                   "API5 final cache preserves classification before releasing its provider");
             Check(host.EndNativeRenderObservation() && counters[7] == 1, "API5 completed End is idempotent");
+            counters[13] = 3;
+            diagnostic.version = 77;
+            output.base.custom.status = 99;
+            Check(!host.BeginNativeRenderFrameBoundaryObservation(RenderObservationRoute::D3D12) && !host.GetNativeRenderEndpointDiagnostic(diagnostic) &&
+                      diagnostic.version == 77 && !host.GetNativeRenderObservationState(output) && output.base.custom.status == 99,
+                  "a rejected new V5 factory cannot relabel the completed run's cached diagnostic or observation");
+            counters[13] = 0;
         }
         host.Stop();
         Check(!host.IsStarted() && !GetModuleHandleW(path.c_str()) && counters[7] == 1 && counters[0] == 1 && counters[1] == 1 && counters[9] < counters[11],
@@ -1323,6 +1389,9 @@ namespace
         output.base.custom.status = 99;
         Check(!host.GetNativeRenderObservationState(output) && output.base.base.gpu.queryStage == 99 && output.base.custom.status == 99,
               "unloaded API5 cannot replace caller output");
+        diagnostic.version = 77;
+        Check(!host.GetNativeRenderEndpointDiagnostic(diagnostic) && diagnostic.version == 77,
+              "unloaded provider cannot expose a cached diagnostic through a new owner");
     }
     #endif
 }

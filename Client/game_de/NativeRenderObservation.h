@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include "../sdk/game/CGameRenderObservation.h"
+#include "../sdk/game/CGameRenderEndpointDiagnostic.h"
 
 namespace mta::game_de
 {
@@ -63,6 +64,8 @@ namespace mta::game_de
                    bool queryFrameBoundary = false) noexcept;
         bool End() noexcept;
         void ReadState(NativeRenderObservationState& state) const noexcept;
+        // This separate cache does not add fields or claims to the V5 ABI.
+        bool ReadEndpointDiagnostic(RenderEndpointDiagnosticV1& state) const noexcept;
 
     private:
         std::uint64_t                generation = 0;

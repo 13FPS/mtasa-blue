@@ -55,6 +55,15 @@ namespace mta::game_de
             SRWLOCK                       lifecycleLock = SRWLOCK_INIT;
             std::array<unsigned char, 32> key{}, identity{}, addressIdentity{};
             bool                          identitySet = false;
+            struct CachedModule
+            {
+                std::uintptr_t           base = 0;
+                RenderEndpointOwnerClass owner = RenderEndpointOwnerClass::Unknown;
+                HMODULE                  retained = nullptr;
+            };
+            std::array<CachedModule, 7> modules{};
+            SRWLOCK                     diagnosticLock = SRWLOCK_INIT;
+            RenderEndpointDiagnosticV1  preparation, diagnostic;
         } runtime;
         thread_local FrameBoundaryScope* scope = nullptr;
         thread_local unsigned            presentDepth = 0;
@@ -97,31 +106,39 @@ namespace mta::game_de
             return Read(address, &output, sizeof(output));
         }
 
-        bool Hash(const void* bytes, std::size_t count, std::array<unsigned char, 32>& digest) noexcept
+        bool Hash(const void* bytes, std::size_t count, std::array<unsigned char, 32>& digest, std::int32_t* failure = nullptr) noexcept
         {
             BCRYPT_ALG_HANDLE  algorithm = nullptr;
             BCRYPT_HASH_HANDLE hash = nullptr;
-            const bool         opened = BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) >= 0;
-            const bool         created = opened && BCryptCreateHash(algorithm, &hash, nullptr, 0, nullptr, 0, 0) >= 0;
-            const bool         result = created && count <= (std::numeric_limits<ULONG>::max)() &&
-                                BCryptHashData(hash, reinterpret_cast<PUCHAR>(const_cast<void*>(bytes)), static_cast<ULONG>(count), 0) >= 0 &&
-                                BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0) >= 0;
+            auto               status = BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
+            if (status >= 0)
+                status = BCryptCreateHash(algorithm, &hash, nullptr, 0, nullptr, 0, 0);
+            if (status >= 0 && count > (std::numeric_limits<ULONG>::max)())
+                status = static_cast<LONG>(0xc000000du);
+            if (status >= 0)
+                status = BCryptHashData(hash, reinterpret_cast<PUCHAR>(const_cast<void*>(bytes)), static_cast<ULONG>(count), 0);
+            if (status >= 0)
+                status = BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0);
+            if (failure)
+                *failure = status;
             if (hash)
                 BCryptDestroyHash(hash);
             if (algorithm)
                 BCryptCloseAlgorithmProvider(algorithm, 0);
-            return result;
+            return status >= 0;
         }
-        bool DigestMatches(const void* bytes, std::size_t count, const char* expected) noexcept
+        bool DigestEquals(const std::array<unsigned char, 32>& digest, const char* expected) noexcept
         {
-            std::array<unsigned char, 32> digest{};
-            if (!Hash(bytes, count, digest))
-                return false;
             constexpr char hex[] = "0123456789abcdef";
             for (std::size_t i = 0; i < digest.size(); ++i)
                 if (hex[digest[i] >> 4] != expected[2 * i] || hex[digest[i] & 15] != expected[2 * i + 1])
                     return false;
             return true;
+        }
+        bool DigestMatches(const void* bytes, std::size_t count, const char* expected) noexcept
+        {
+            std::array<unsigned char, 32> digest{};
+            return Hash(bytes, count, digest) && DigestEquals(digest, expected);
         }
         bool CheckFunction(std::uintptr_t image, Function& function) noexcept
         {
@@ -191,40 +208,192 @@ namespace mta::game_de
             // this does not normalize or restore an unfamiliar code change.
             return function.detour && CaptureOwnedPatch(image, function, function.stolen, reinterpret_cast<void*>(function.detour));
         }
+        void CacheDiagnosticModules() noexcept
+        {
+            // Hold only already-loaded module references during this lease.
+            // Callback ownership checks then need no loader APIs or path IO,
+            // and cannot mistake a reused base after an observed module unload.
+            ReleaseFrameBoundaryDiagnosticModules();
+            const wchar_t* names[]{L"dxgi.dll", nullptr, L"gameoverlayrenderer64.dll", L"amdihk64.dll", L"SocialClubD3D12Renderer.dll", L"socialclub.dll"};
+            for (std::size_t i = 0; i < 6; ++i)
+            {
+                auto& cached = runtime.modules[i];
+                cached.owner = static_cast<RenderEndpointOwnerClass>(i + 1);
+                if (!names[i])
+                    cached.base = runtime.image;
+                else if (GetModuleHandleExW(0, names[i], &cached.retained))
+                    cached.base = reinterpret_cast<std::uintptr_t>(cached.retained);
+            }
+        }
+        void DescribeOwner(std::uintptr_t address, std::uint32_t& owner, std::uint32_t& rva) noexcept
+        {
+            owner = static_cast<unsigned>(RenderEndpointOwnerClass::Unknown);
+            rva = 0;
+            MEMORY_BASIC_INFORMATION page{};
+            if (!address || VirtualQuery(reinterpret_cast<void*>(address), &page, sizeof(page)) != sizeof(page) || page.State != MEM_COMMIT ||
+                (page.Protect & (PAGE_GUARD | PAGE_NOACCESS)))
+                return;
+            const auto protection = page.Protect & 0xff;
+            const bool execute =
+                protection == PAGE_EXECUTE_READ || protection == PAGE_EXECUTE_READWRITE || protection == PAGE_EXECUTE_WRITECOPY || protection == PAGE_EXECUTE;
+            if (!execute)
+            {
+                owner = static_cast<unsigned>(RenderEndpointOwnerClass::OtherMemory);
+                return;
+            }
+            if (page.Type != MEM_IMAGE)
+            {
+                owner = static_cast<unsigned>(RenderEndpointOwnerClass::PrivateExecutable);
+                return;
+            }
+            const auto base = reinterpret_cast<std::uintptr_t>(page.AllocationBase);
+            owner = static_cast<unsigned>(RenderEndpointOwnerClass::OtherImage);
+            for (const auto& cached : runtime.modules)
+                if (cached.base && cached.base == base)
+                {
+                    owner = static_cast<unsigned>(cached.owner);
+                    break;
+                }
+            if (address >= base && address - base <= (std::numeric_limits<std::uint32_t>::max)())
+                rva = static_cast<std::uint32_t>(address - base);
+        }
+        bool RelativeAddress(std::uintptr_t address, std::size_t prefix, std::int32_t displacement, std::uintptr_t& target) noexcept
+        {
+            if (prefix > (std::numeric_limits<std::uintptr_t>::max)() - address)
+                return false;
+            address += prefix;
+            if (displacement >= 0)
+            {
+                if (static_cast<std::uintptr_t>(displacement) > (std::numeric_limits<std::uintptr_t>::max)() - address)
+                    return false;
+                target = address + displacement;
+            }
+            else
+            {
+                const auto distance = static_cast<std::uintptr_t>(-static_cast<std::int64_t>(displacement));
+                if (distance > address)
+                    return false;
+                target = address - distance;
+            }
+            return true;
+        }
+        void DescribeBranch(std::uintptr_t address, std::uint32_t& kind, std::uint32_t& owner, std::uint32_t& rva) noexcept
+        {
+            // Classify one bounded entry instruction only. A branch destination
+            // is metadata, never a callable replacement or a trusted hook chain.
+            using Branch = RenderEndpointBranchKind;
+            kind = static_cast<unsigned>(Branch::ReadFault);
+            owner = rva = 0;
+            std::array<unsigned char, 6> code{};
+            if (!Read(address, code.data(), code.size(), 0, true))
+                return;
+            std::int32_t   displacement = 0;
+            std::uintptr_t target = 0;
+            if (code[0] == 0xe9)
+            {
+                std::memcpy(&displacement, code.data() + 1, sizeof(displacement));
+                if (!RelativeAddress(address, 5, displacement, target))
+                    return;
+                kind = static_cast<unsigned>(Branch::RelativeE9);
+            }
+            else if (code[0] == 0xff && code[1] == 0x25)
+            {
+                std::memcpy(&displacement, code.data() + 2, sizeof(displacement));
+                std::uintptr_t slot = 0;
+                if (!RelativeAddress(address, 6, displacement, slot) || !Read(slot, target))
+                    return;
+                kind = static_cast<unsigned>(Branch::IndirectFF25);
+            }
+            else
+            {
+                kind = static_cast<unsigned>(Branch::NoSupportedBranch);
+                return;
+            }
+            DescribeOwner(target, owner, rva);
+        }
+        bool PreparationFailure(RenderEndpointPrepareGate gate, RenderEndpointPrepareReason reason,
+                                RenderEndpointErrorDomain domain = RenderEndpointErrorDomain::None, std::uint32_t code = 0) noexcept
+        {
+            runtime.preparation.preparationGate = static_cast<unsigned>(gate);
+            runtime.preparation.preparationReason = static_cast<unsigned>(reason);
+            runtime.preparation.errorDomain = static_cast<unsigned>(domain);
+            runtime.preparation.errorCode = code;
+            return false;
+        }
         bool SystemEndpoint() noexcept
         {
+            using Gate = RenderEndpointPrepareGate;
+            using Reason = RenderEndpointPrepareReason;
+            using Domain = RenderEndpointErrorDomain;
+            runtime.preparation.version = RenderEndpointDiagnosticVersionV1;
+            runtime.preparation.loadedEntryMatch = 0;
+            runtime.preparation.systemBranchKind = runtime.preparation.systemBranchOwnerClass = runtime.preparation.systemBranchRva = 0;
+            runtime.dxgi = 0;
             const auto module = GetModuleHandleW(L"dxgi.dll");
             if (!module)
-                return false;
+                return PreparationFailure(Gate::ModuleLookup, Reason::OperationFailed, Domain::Win32, GetLastError());
+            runtime.dxgi = reinterpret_cast<std::uintptr_t>(module);
+            DescribeBranch(runtime.dxgi + runtime.presentCode.rva, runtime.preparation.systemBranchKind, runtime.preparation.systemBranchOwnerClass,
+                           runtime.preparation.systemBranchRva);
             std::array<wchar_t, 32768> actual{}, expected{};
             const auto                 actualLength = GetModuleFileNameW(module, actual.data(), static_cast<DWORD>(actual.size()));
+            const auto                 actualError = !actualLength ? GetLastError() : actualLength >= actual.size() ? ERROR_INSUFFICIENT_BUFFER : 0;
             const auto                 systemLength = GetSystemDirectoryW(expected.data(), static_cast<UINT>(expected.size()));
-            if (!actualLength || actualLength >= actual.size() || !systemLength || systemLength + 10 >= expected.size())
-                return false;
+            const auto                 systemError = !systemLength ? GetLastError() : systemLength + 10 >= expected.size() ? ERROR_INSUFFICIENT_BUFFER : 0;
+            if (!actualLength || actualLength >= actual.size())
+                return PreparationFailure(Gate::ModulePath, Reason::OperationFailed, Domain::Win32, actualError);
+            if (!systemLength || systemLength + 10 >= expected.size())
+                return PreparationFailure(Gate::SystemPath, Reason::OperationFailed, Domain::Win32, systemError);
             const wchar_t suffix[] = L"\\dxgi.dll";
             std::memcpy(expected.data() + systemLength, suffix, sizeof(suffix));
-            if (CompareStringOrdinal(actual.data(), -1, expected.data(), -1, TRUE) != CSTR_EQUAL)
-                return false;
+            const auto pathComparison = CompareStringOrdinal(actual.data(), -1, expected.data(), -1, TRUE);
+            if (!pathComparison)
+                return PreparationFailure(Gate::SystemPath, Reason::OperationFailed, Domain::Win32, GetLastError());
+            if (pathComparison != CSTR_EQUAL)
+                return PreparationFailure(Gate::SystemPath, Reason::Mismatch);
             HANDLE file = CreateFileW(actual.data(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
             if (file == INVALID_HANDLE_VALUE)
-                return false;
+                return PreparationFailure(Gate::FileOpen, Reason::OperationFailed, Domain::Win32, GetLastError());
             LARGE_INTEGER      size{};
             BCRYPT_ALG_HANDLE  algorithm = nullptr;
             BCRYPT_HASH_HANDLE hash = nullptr;
-            bool               ok = GetFileSizeEx(file, &size) && size.QuadPart == 1316248 &&
-                      BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) >= 0 &&
-                      BCryptCreateHash(algorithm, &hash, nullptr, 0, nullptr, 0, 0) >= 0;
+            bool               ok = GetFileSizeEx(file, &size) != FALSE;
+            if (!ok)
+                PreparationFailure(Gate::FileSize, Reason::OperationFailed, Domain::Win32, GetLastError());
+            else if (size.QuadPart != 1316248)
+                ok = PreparationFailure(Gate::FileSize, Reason::Mismatch);
+            if (ok)
+            {
+                const auto status = BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
+                if (status < 0)
+                    ok = PreparationFailure(Gate::HashProvider, Reason::OperationFailed, Domain::NtStatus, static_cast<std::uint32_t>(status));
+            }
+            if (ok)
+            {
+                const auto status = BCryptCreateHash(algorithm, &hash, nullptr, 0, nullptr, 0, 0);
+                if (status < 0)
+                    ok = PreparationFailure(Gate::HashCreate, Reason::OperationFailed, Domain::NtStatus, static_cast<std::uint32_t>(status));
+            }
             std::array<unsigned char, 65536> block{};
             while (ok)
             {
                 DWORD count = 0;
                 ok = ReadFile(file, block.data(), static_cast<DWORD>(block.size()), &count, nullptr) != FALSE;
+                if (!ok)
+                    PreparationFailure(Gate::FileRead, Reason::OperationFailed, Domain::Win32, GetLastError());
                 if (!ok || !count)
                     break;
-                ok = BCryptHashData(hash, block.data(), count, 0) >= 0;
+                const auto status = BCryptHashData(hash, block.data(), count, 0);
+                if (status < 0)
+                    ok = PreparationFailure(Gate::HashUpdate, Reason::OperationFailed, Domain::NtStatus, static_cast<std::uint32_t>(status));
             }
             std::array<unsigned char, 32> digest{};
-            ok = ok && BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0) >= 0;
+            if (ok)
+            {
+                const auto status = BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0);
+                if (status < 0)
+                    ok = PreparationFailure(Gate::FileDigest, Reason::OperationFailed, Domain::NtStatus, static_cast<std::uint32_t>(status));
+            }
             if (hash)
                 BCryptDestroyHash(hash);
             if (algorithm)
@@ -233,15 +402,36 @@ namespace mta::game_de
             constexpr std::array<unsigned char, 32> expectedHash{0x42, 0x25, 0xe1, 0x3f, 0x27, 0xa4, 0xf3, 0xa4, 0xa4, 0x73, 0x8e,
                                                                  0x64, 0xa5, 0x7f, 0xa0, 0x94, 0x9d, 0x85, 0x89, 0xf3, 0x17, 0xfc,
                                                                  0x6f, 0x8e, 0xc1, 0x94, 0xb3, 0xa4, 0xd3, 0x94, 0xa5, 0x28};
-            runtime.dxgi = reinterpret_cast<std::uintptr_t>(module);
+            if (!ok)
+                return false;
+            if (digest != expectedHash)
+                return PreparationFailure(Gate::FileDigest, Reason::Mismatch);
             DWORD64    base = 0;
             const auto unwind = RtlLookupFunctionEntry(runtime.dxgi + runtime.presentCode.rva, &base, nullptr);
-            if (!ok || digest != expectedHash || !unwind || base != runtime.dxgi || unwind->BeginAddress != 0x19000 || unwind->EndAddress != 0x1948f ||
-                unwind->UnwindData != 1010704 || !CheckFunction(runtime.dxgi, runtime.presentCode))
-                return false;
+            if (!unwind)
+                return PreparationFailure(Gate::Unwind, Reason::OperationFailed);
+            if (base != runtime.dxgi || unwind->BeginAddress != 0x19000 || unwind->EndAddress != 0x1948f || unwind->UnwindData != 1010704)
+                return PreparationFailure(Gate::Unwind, Reason::Mismatch);
+            if (!Read(runtime.dxgi + runtime.presentCode.rva, runtime.presentCode.original.data(), runtime.presentCode.bytes, runtime.dxgi, true))
+            {
+                runtime.preparation.loadedEntryMatch = static_cast<unsigned>(RenderEndpointLoadedMatch::ReadFault);
+                return PreparationFailure(Gate::LoadedCodeRead, Reason::OperationFailed);
+            }
+            std::int32_t hashStatus = 0;
+            if (!Hash(runtime.presentCode.original.data(), runtime.presentCode.bytes, digest, &hashStatus))
+                return PreparationFailure(Gate::LoadedCodeHash, Reason::OperationFailed, Domain::NtStatus, static_cast<std::uint32_t>(hashStatus));
+            const bool codeMatch = DigestEquals(digest, runtime.presentCode.digest);
+            runtime.preparation.loadedEntryMatch = static_cast<unsigned>(codeMatch ? RenderEndpointLoadedMatch::Match : RenderEndpointLoadedMatch::Mismatch);
+            if (!codeMatch)
+                return PreparationFailure(Gate::LoadedCodeHash, Reason::Mismatch);
             HMODULE retained = nullptr;
-            return GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
-                                      reinterpret_cast<LPCWSTR>(runtime.dxgi + runtime.presentCode.rva), &retained) != FALSE;
+            if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+                                    reinterpret_cast<LPCWSTR>(runtime.dxgi + runtime.presentCode.rva), &retained))
+                return PreparationFailure(Gate::ModulePin, Reason::OperationFailed, Domain::Win32, GetLastError());
+            runtime.preparation.preparationGate = static_cast<unsigned>(Gate::Complete);
+            runtime.preparation.preparationReason = static_cast<unsigned>(Reason::Admitted);
+            runtime.preparation.errorDomain = runtime.preparation.errorCode = 0;
+            return true;
         }
 
         struct Roots
@@ -769,8 +959,13 @@ namespace mta::game_de
     {
         using namespace boundary_detail;
         runtime.armed.store(false);
+        ReleaseFrameBoundaryDiagnosticModules();
+        AcquireSRWLockExclusive(&runtime.diagnosticLock);
+        runtime.preparation = runtime.diagnostic = {};
+        ReleaseSRWLockExclusive(&runtime.diagnosticLock);
         runtime.prepared = false;
         runtime.endpoint = false;
+        runtime.dxgi = 0;
         runtime.committed = false;
         runtime.epoch.store(0);
         runtime.resizeEntries.store(0);
@@ -786,7 +981,7 @@ namespace mta::game_de
         runtime.key = {};
         runtime.keyReady = BCryptGenRandom(nullptr, runtime.key.data(), static_cast<ULONG>(runtime.key.size()), BCRYPT_USE_SYSTEM_PREFERRED_RNG) >= 0;
     }
-    bool PrepareFrameBoundaryHooks(std::uintptr_t image) noexcept
+    bool PrepareFrameBoundaryHooks(std::uintptr_t image, std::uint64_t generation) noexcept
     {
         using namespace boundary_detail;
         runtime.image = image;
@@ -798,7 +993,14 @@ namespace mta::game_de
         runtime.resize = reinterpret_cast<Resize>(image + runtime.resizeCode.rva);
         runtime.notify = reinterpret_cast<Notify>(image + runtime.notifyCode.rva);
         runtime.destroy = reinterpret_cast<Notify>(image + runtime.destroyCode.rva);
+        CacheDiagnosticModules();
+        runtime.preparation = {};
+        runtime.preparation.generationLow = static_cast<std::uint32_t>(generation);
+        runtime.preparation.generationHigh = static_cast<std::uint32_t>(generation >> 32);
         runtime.endpoint = SystemEndpoint();
+        AcquireSRWLockExclusive(&runtime.diagnosticLock);
+        runtime.diagnostic = runtime.preparation;
+        ReleaseSRWLockExclusive(&runtime.diagnosticLock);
         runtime.present = runtime.endpoint ? reinterpret_cast<Present>(runtime.dxgi + runtime.presentCode.rva) : nullptr;
         runtime.prepared = true;
         return true;
@@ -869,11 +1071,14 @@ namespace mta::game_de
         selected.epoch = runtime.epoch.load();
         selected.cleanupFailure = cleanupFailure;
         selected.knownPresenter = custom.status == static_cast<unsigned>(CustomPresentClassificationStatus::KnownNativePresenter);
+        selected.diagnostic = runtime.preparation;
         selected.state.endpointProfileId = runtime.endpoint ? 1u : 0u;
         selected.state.status = static_cast<unsigned>(runtime.endpoint ? BoundaryStatus::NoScopedPresent : BoundaryStatus::EndpointUnadmitted);
         std::uintptr_t table = 0, endpoint = 0;
+        bool           slotRead = false;
+        selected.diagnostic.slotStatus = static_cast<unsigned>(RenderEndpointSlotStatus::ReadFault);
         if (!Identity(selected.viewport, true) || !Read(selected.viewport + 0x60, selected.swapchain) || !Read(selected.swapchain, table) ||
-            !Read(table + 0x40, endpoint))
+            !(slotRead = Read(table + 0x40, endpoint)))
         {
             selected.state.status = static_cast<unsigned>(BoundaryStatus::QueryFailed);
             selected.state.queryStage = static_cast<unsigned>(Stage::NativeRoots);
@@ -891,6 +1096,13 @@ namespace mta::game_de
             selected.swapchain = 0;
         }
         selected.previous = scope;
+        if (slotRead)
+        {
+            selected.diagnostic.slotStatus = static_cast<unsigned>(RenderEndpointSlotStatus::Read);
+            DescribeOwner(endpoint, selected.diagnostic.slotOwnerClass, selected.diagnostic.slotRva);
+            selected.diagnostic.slotEqualsPinned = runtime.dxgi && endpoint == runtime.dxgi + runtime.presentCode.rva ? 1u : 0u;
+            DescribeBranch(endpoint, selected.diagnostic.slotBranchKind, selected.diagnostic.slotBranchOwnerClass, selected.diagnostic.slotBranchRva);
+        }
         scope = &selected;
     }
     void LeaveFrameBoundaryScope(FrameBoundaryScope& selected) noexcept
@@ -911,5 +1123,42 @@ namespace mta::game_de
         scope = selected.previous;
         selected.viewport = selected.swapchain = selected.image = 0;
         selected.previous = nullptr;
+    }
+    void PublishFrameBoundaryEndpointDiagnostic(const FrameBoundaryScope& selected, std::uint64_t acceptedSnapshots) noexcept
+    {
+        using namespace boundary_detail;
+        if (selected.diagnostic.version != RenderEndpointDiagnosticVersionV1)
+            return;
+        auto next = selected.diagnostic;
+        next.acceptedSnapshotsLow = static_cast<std::uint32_t>(acceptedSnapshots);
+        next.acceptedSnapshotsHigh = static_cast<std::uint32_t>(acceptedSnapshots >> 32);
+        AcquireSRWLockExclusive(&runtime.diagnosticLock);
+        runtime.diagnostic = next;
+        ReleaseSRWLockExclusive(&runtime.diagnosticLock);
+    }
+    bool ReadFrameBoundaryEndpointDiagnostic(std::uint64_t generation, RenderEndpointDiagnosticV1& state) noexcept
+    {
+        using namespace boundary_detail;
+        AcquireSRWLockShared(&runtime.diagnosticLock);
+        const auto next = runtime.diagnostic;
+        ReleaseSRWLockShared(&runtime.diagnosticLock);
+        if (next.version != RenderEndpointDiagnosticVersionV1 || next.generationLow != static_cast<std::uint32_t>(generation) ||
+            next.generationHigh != static_cast<std::uint32_t>(generation >> 32))
+            return false;
+        state = next;
+        return true;
+    }
+    void ReleaseFrameBoundaryDiagnosticModules() noexcept
+    {
+        using namespace boundary_detail;
+        // Only the owner calls this after hooks/callbacks drain. Failed End
+        // keeps these references together with its retained trampoline state.
+        for (auto& cached : runtime.modules)
+        {
+            const auto retained = cached.retained;
+            cached = {};
+            if (retained)
+                FreeLibrary(retained);
+        }
     }
 }

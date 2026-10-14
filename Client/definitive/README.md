@@ -36,8 +36,8 @@ execution, visible MTA output or a working GUI.
 The first API3 trial ran for **10,037 ms**, with **199 Core samples, 87 script
 snapshots, 605 callback entries and 602 accepted native snapshots**. Native
 rejections, nesting, foreign callbacks, publication misses and failure stayed
-zero. All 602 published GPU probe outcomes were unsupported; every logged
-sample reported the custom-present safeguard before any COM query. Native
+zero. All 602 published GPU probes were rejected; every logged sample
+reported Unsupported at the custom-present safeguard before any COM query. Native
 GPU/AFR counts were both one, while COM metadata stayed unobserved.
 
 The user reported normal game continuation. Cleanup detached the observer and

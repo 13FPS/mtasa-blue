@@ -1309,6 +1309,32 @@ async function main() {
         const sample = result.logs.find(event => event.event === 'core_render_reference_sample').state;
         assert.equal(sample[19], 600); assert.equal(sample[48], 600); assert.equal(sample[58], 2);
     });
+    for (const fullyQueried of [false, true])
+        test('GPU custom presenter preserves ' + (fullyQueried ? 'queried metadata' : 'historical pre-COM guard') + ' without renderer admission', () => {
+            // Full COM metadata must survive the unsupported outcome without
+            // turning a custom-present route into a renderer or gameplay pass.
+            const metadata = fullyQueried ? {} : Object.fromEntries(Array.from({ length: 20 }, (_, index) => [54 + index, 0]));
+            const result = coreGpu({ renderState: { ...metadata, 46: 0, 48: 600, 50: fullyQueried ? 19 : 2,
+                52: fullyQueried ? 1 : 0, 53: 0, 74: 1, 75: 2 } });
+            const finish = result.logs.find(event => event.event === 'core_render_reference_finished');
+            assert.ok(finish);
+            assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true);
+            for (const claim of ['full_core_ready', 'rendering_started', 'network_active', 'input_writes', 'remote_peds_created'])
+                assert.equal(finish[claim], false);
+            assert.equal(finish.state[13], 1); assert.equal(finish.state[15], 1);
+            const samples = result.logs.filter(event => event.event === 'core_render_reference_sample');
+            assert.equal(samples.length, 2);
+            for (const { state } of samples) {
+                assert.equal(state.length, 80);
+                assert.equal(state[19], 600); assert.equal(state[44], 600); assert.equal(state[46], 0); assert.equal(state[48], 600);
+                assert.deepEqual(Array.from(state.slice(50, 54)), [fullyQueried ? 19 : 2, 0, fullyQueried ? 1 : 0, 0]);
+                assert.equal(state[61], fullyQueried ? 7 : 0);
+                assert.deepEqual(Array.from(state.slice(74, 78)), [1, 2, 1, 1]);
+            }
+            assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 0);
+            assert.ok(result.logs.some(event => event.event === 'adapter_failed' && event.error.includes('renderer observation incomplete')));
+            assert.ok(!result.calls.some(call => /DE_Connect|DE_MtaMovement|DE_CoreInput|DE_CoreMovement|GET_CHAR/.test(call[0])));
+        });
     test('GPU failed COM query preserves exact HRESULT and stage and reports clean diagnostic failure', () => {
         const result = coreGpu({ renderState: { 46: 0, 48: 600, 50: 8, 51: 0x80004002, 52: 0, 53: 0, 75: 3 } });
         const finish = result.logs.find(event => event.event === 'core_render_reference_finished');

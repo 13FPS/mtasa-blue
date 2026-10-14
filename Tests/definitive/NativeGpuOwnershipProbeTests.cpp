@@ -171,6 +171,42 @@ int main()
                       References(buffer.Get()) == bufferRefs,
                   "Repeated production queries must leave all COM reference counts unchanged");
         }
+        // A custom presenter prevents renderer admission, but its presence must
+        // not hide metadata from independently borrowed swapchain/queue roots.
+        // Only the scalar flag is supplied: no custom-presenter interface exists
+        // in this fixture for the ownership transaction to call.
+        for (unsigned iteration = 0; iteration < 20; ++iteration)
+        {
+            auto state = Fresh();
+            state.customPresentPresent = 1;
+            ProbeD3D12Ownership(swapchain.Get(), queue.Get(), state);
+            Check(state.queryStatus == Number(GpuOwnershipQueryStatus::Unsupported) && state.queryStage == 19 && state.hresult == 0,
+                  "Custom-present metadata must complete all COM queries without admitting ownership");
+            Check(state.metadataValid == 1 && state.supportPredicate == 0 && state.canonicalIdentityFlags == 7 && state.deviceNodeCount == 1 &&
+                      state.queueType == 0 && state.customPresentPresent == 1 && state.nativeExplicitGPUCount == 1 && state.nativeAFRCount == 1,
+                  "A custom-present flag must preserve full identity metadata while keeping the support predicate false");
+            Check(state.swapchainWidth == 640 && state.swapchainHeight == 480 && state.backbufferWidth == 640 && state.backbufferHeight == 480 &&
+                      state.swapchainBufferCount == 2 && state.backbufferSampleCount == 1 && state.currentBackbufferIndex < 2,
+                  "Custom-present diagnostics must describe the actual own-process swapchain and backbuffer");
+            Check(References(device.Get()) == deviceRefs && References(queue.Get()) == queueRefs && References(swapchain.Get()) == swapRefs &&
+                      References(buffer.Get()) == bufferRefs,
+                  "Repeated custom-present diagnostics must release every acquired COM reference before returning");
+        }
+        // Reusing an output must not carry admission across a change in the
+        // custom-present flag or leave a later supported probe unsupported.
+        auto reused = Fresh();
+        for (const unsigned customPresent : {0u, 1u, 0u})
+        {
+            reused.customPresentPresent = customPresent;
+            ProbeD3D12Ownership(swapchain.Get(), queue.Get(), reused);
+            Check(reused.metadataValid == 1 && reused.supportPredicate == (customPresent ? 0u : 1u) && reused.canonicalIdentityFlags == 7 &&
+                      reused.queryStage == 19 &&
+                      reused.queryStatus == Number(customPresent ? GpuOwnershipQueryStatus::Unsupported : GpuOwnershipQueryStatus::Accepted),
+                  "Reused output must derive metadata and support from the current custom-present flag");
+            Check(References(device.Get()) == deviceRefs && References(queue.Get()) == queueRefs && References(swapchain.Get()) == swapRefs &&
+                      References(buffer.Get()) == bufferRefs,
+                  "Changing the custom-present flag cannot leak references from earlier probes");
+        }
         NullQuery nullQuery;
         auto      nullSwap = Fresh();
         ProbeD3D12Ownership(&nullQuery, queue.Get(), nullSwap);
@@ -202,7 +238,10 @@ int main()
         DestroyWindow(window);
         window = nullptr;
         UnregisterClassW(klass.lpszClassName, klass.hInstance);
-        std::printf("{\"success\":true,\"checks\":%u,\"actual_warp_com_query\":true,\"gpu_commands_issued\":false,\"game_operations\":false}\n", checks);
+        std::printf(
+            "{\"success\":true,\"checks\":%u,\"actual_warp_com_query\":true,\"custom_present_flagged_warp_metadata\":true,"
+            "\"gpu_commands_issued\":false,\"game_operations\":false}\n",
+            checks);
         return 0;
     }
     catch (const std::exception& error)

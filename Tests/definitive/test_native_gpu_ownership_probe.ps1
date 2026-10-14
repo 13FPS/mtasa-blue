@@ -25,7 +25,8 @@ $process=Start-Process -FilePath $binary -WindowStyle Hidden -PassThru -Redirect
 if(-not $process.WaitForExit(30000)){$process.Kill();$process.WaitForExit();throw 'Owned query fixture timed out'}
 if($process.ExitCode -ne 0){throw "Query fixture failed: $errors"}
 $result=Get-Content -LiteralPath $log -Raw|ConvertFrom-Json
+if(-not $result.success -or -not $result.actual_warp_com_query -or -not $result.custom_present_flagged_warp_metadata -or $result.gpu_commands_issued -or $result.game_operations){throw 'Owned custom-present metadata fixture contract failed'}
 foreach($name in $names){if((Sha (Join-Path $root $name)) -cne $hashes[$name]){throw 'Query source changed during testing'}}
-$record=[ordered]@{success=$result.success;directory=$output;checks=$result.checks;source_hashes=$hashes;sources_unchanged=$true;binary=$binary;binary_sha256=(Sha $binary);compile_log=$compile;compile_log_sha256=(Sha $compile);test_log=$log;test_log_sha256=(Sha $log);actual_warp_com_query=$true;gpu_commands_issued=$false;game_operations=$false;native_game_runtime_verified=$false}
+$record=[ordered]@{success=$result.success;directory=$output;checks=$result.checks;source_hashes=$hashes;sources_unchanged=$true;binary=$binary;binary_sha256=(Sha $binary);compile_log=$compile;compile_log_sha256=(Sha $compile);test_log=$log;test_log_sha256=(Sha $log);actual_warp_com_query=$true;custom_present_flagged_warp_metadata=$result.custom_present_flagged_warp_metadata;gpu_commands_issued=$false;game_operations=$false;native_game_runtime_verified=$false}
 $target=Join-Path $output 'test-result.json';$record|ConvertTo-Json -Depth 8|Set-Content -LiteralPath $target -Encoding utf8
 @{success=$record.success;checks=$record.checks;path=$target;sha256=(Sha $target)}|ConvertTo-Json -Compress

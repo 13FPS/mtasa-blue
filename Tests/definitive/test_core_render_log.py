@@ -86,6 +86,8 @@ class CoreRenderEvidenceTests(unittest.TestCase):
         self.assertTrue(result["native_renderer_callback_observed"])
         self.assertEqual(result["status"], "native_gpu_ownership_observed")
         self.assertEqual(result["gpu_metrics"], dict(attempts=603, accepted=603, rejected=0))
+        self.assertTrue(result["native_gpu_metadata_observed"])
+        self.assertEqual(result["gpu_metadata_sample_count"], 2)
         self.assertFalse(result["com_present_verified"])
         self.assertFalse(result["de_renderer_verified"])
 
@@ -119,6 +121,8 @@ class CoreRenderEvidenceTests(unittest.TestCase):
         result = analyze(rows)
         self.assertTrue(result["diagnostic_lifecycle_complete"], result)
         self.assertFalse(result["gpu_ownership_verified"])
+        self.assertFalse(result["native_gpu_metadata_observed"])
+        self.assertEqual(result["gpu_metadata_sample_count"], 0)
         for field in range(44, 80):
             mutated = deepcopy(rows)
             mutated[7]["state"][field] = 1
@@ -148,6 +152,67 @@ class CoreRenderEvidenceTests(unittest.TestCase):
                 self.assertTrue(result["native_renderer_callback_observed"])
                 self.assertEqual(result["status"], "native_gpu_ownership_incomplete")
                 self.assertEqual(result["terminal_render_state"][50:54], [stage, error, valid, 0])
+                self.assertEqual(result["native_gpu_metadata_observed"], stage == 19 and valid == 1)
+                self.assertEqual(result["gpu_metadata_sample_count"], 2 if stage == 19 and valid == 1 else 0)
+
+    def test_api3_custom_present_metadata_preserves_incomplete_ownership_and_historical_guard(self):
+        # Queried metadata is useful evidence even though a custom presenter
+        # cannot satisfy renderer admission. Earlier pre-COM guard logs must
+        # retain their distinct stage and remain valid historical diagnostics.
+        for fully_queried in (False, True):
+            with self.subTest(fully_queried=fully_queried):
+                rows = self.version3(fixture())
+                for row in rows[6:8]:
+                    native = row["state"]
+                    native[46:50] = [0, 0, native[44], native[45]]
+                    native[50:54] = [19 if fully_queried else 2, 0, int(fully_queried), 0]
+                    native[74:78] = [1, 2, 1, 1]
+                    if not fully_queried:
+                        native[54:74] = [0] * 20
+                rows[-1]["passed"] = False
+                rows.append(dict(event="adapter_failed", phase="core_render_reference", error=reader.INCOMPLETE_ERROR,
+                                 game_adapter_active=False))
+                result = analyze(rows)
+                self.assertEqual(result["issue_count"], 0, result)
+                self.assertTrue(result["diagnostic_lifecycle_complete"], result)
+                self.assertTrue(result["native_renderer_callback_observed"])
+                self.assertFalse(result["cleanup_pending"])
+                self.assertEqual(result["status"], "native_gpu_ownership_incomplete")
+                self.assertEqual(result["gpu_metrics"], dict(attempts=603, accepted=0, rejected=603))
+                self.assertEqual(result["terminal_render_state"][50:54], [19 if fully_queried else 2, 0, int(fully_queried), 0])
+                self.assertEqual(result["terminal_render_state"][61], 7 if fully_queried else 0)
+                self.assertEqual(result["terminal_render_state"][74:78], [1, 2, 1, 1])
+                self.assertEqual(result["native_gpu_metadata_observed"], fully_queried)
+                self.assertEqual(result["gpu_metadata_sample_count"], 2 if fully_queried else 0)
+                for claim in ("gpu_ownership_verified", "core_render_reference_complete", "render_observation_session_complete",
+                              "visual_success_verified", "com_present_verified", "de_renderer_verified", "full_mta_boot_verified",
+                              "engine_input_write_verified", "remote_player_context_verified"):
+                    self.assertFalse(result[claim], claim)
+
+    def test_api3_metadata_count_describes_sampled_reports_without_overriding_later_query_failure(self):
+        # A completed earlier query remains observed evidence, while its count
+        # cannot stand in for all intervening probes or terminal GPU ownership.
+        rows = self.version3(fixture())
+        for row in rows[6:8]:
+            native = row["state"]
+            native[46:50] = [0, 0, native[44], native[45]]
+            native[53] = 0
+            native[74:78] = [1, 2, 1, 1]
+        rows[7]["state"][50:54] = [8, 0x80004002, 0, 0]
+        rows[7]["state"][54:74] = [0] * 20
+        rows[7]["state"][75] = 3
+        rows[-1]["passed"] = False
+        rows.append(dict(event="adapter_failed", phase="core_render_reference", error=reader.INCOMPLETE_ERROR,
+                         game_adapter_active=False))
+        result = analyze(rows)
+        self.assertEqual(result["issue_count"], 0, result)
+        self.assertTrue(result["native_gpu_metadata_observed"])
+        self.assertEqual(result["gpu_metadata_sample_count"], 1)
+        self.assertEqual(result["sample_count"], 2)
+        self.assertEqual(result["gpu_metrics"], dict(attempts=603, accepted=0, rejected=603))
+        self.assertEqual(result["terminal_render_state"][50:54], [8, 0x80004002, 0, 0])
+        self.assertFalse(result["gpu_ownership_verified"])
+        self.assertTrue(result["diagnostic_lifecycle_complete"])
 
     def test_api3_cannot_relabel_api2_or_mix_protocols(self):
         for version, core_api, route in ((2, 7, 2), (3, 6, 2), (3, 7, 1)):
@@ -160,12 +225,14 @@ class CoreRenderEvidenceTests(unittest.TestCase):
 
     def test_nested_native_pointer_and_readiness_claims_never_certify_observation(self):
         for details in (dict(device="0x12345678"), dict(de_renderer_verified=True), dict(full_mta_boot_verified=True),
+                        dict(native_gpu_metadata_observed=True),
                         dict(rendering_started=1), dict(network_active=True), dict(remote_player_context_verified=True)):
             with self.subTest(details=details):
                 rows = self.version3(fixture())
                 rows[4]["details"] = [dict(nested=details)]
                 result = analyze(rows)
                 self.assertFalse(result["gpu_ownership_verified"])
+                self.assertFalse(result["native_gpu_metadata_observed"])
                 self.assertEqual(result["status"], "invalid_evidence")
         rows = self.version3(fixture())
         rows[4]["full_mta_boot_verified"] = True

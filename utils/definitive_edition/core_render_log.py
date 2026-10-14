@@ -19,7 +19,7 @@ GPU_PAIRS = dict(attempts=44, accepted=46, rejected=48)
 POINTER_KEYS = frozenset(("viewport", "swapchain", "device", "native_pointer", "address", "command_queue", "resource_pointer"))
 UNVERIFIED_CLAIMS = frozenset(("com_present_verified", "visual_success_verified", "de_renderer_verified", "full_mta_boot_verified",
                               "full_core_ready", "gameplay_ready", "rendering_started", "engine_input_write_verified",
-                              "remote_player_context_verified", "network_active", "input_writes", "remote_peds_created"))
+                              "remote_player_context_verified", "network_active", "input_writes", "remote_peds_created", "native_gpu_metadata_observed"))
 NOTICE = (
     "This checks saved reports of an explicitly selected owned native viewport callback and cleanup. "
     "Callback entry and its native return value do not prove that COM Present executed or pixels were drawn. "
@@ -308,6 +308,11 @@ def analyze_log(text, require_exit=False):
                                 finished.get("stop_requested") is False and
                                 ((finished.get("passed") is True and not base["failures"]) or
                                  (finished.get("passed") is False and expected_failure_only)))
+    # A complete native-object query can still be unsupported for drawing when
+    # a custom presenter owns the actual frame sink. Count sampled reports only;
+    # sparse logs cannot establish the outcomes of every intermediate probe.
+    metadata_samples = sum(1 for sample in samples if version == 3 and sample["state"][50] == 19 and
+                           sample["state"][52] == 1 and sample["state"][75] in (1, 2) and gpu_consistent(sample["state"]))
     return dict(schema_version=1, status=("native_gpu_ownership_observed" if version == 3 else "native_renderer_callback_observed") if complete else
                 "invalid_evidence" if issues or base["issue_count"] else
                 ("native_gpu_ownership_incomplete" if version == 3 and native_clean else "native_observation_missing") if diagnostic_lifecycle else "incomplete_or_failed",
@@ -315,6 +320,8 @@ def analyze_log(text, require_exit=False):
                 diagnostic_lifecycle_complete=diagnostic_lifecycle, deliberate_incomplete_event=deliberate_incomplete,
                 native_renderer_callback_observed=bool(native_clean and (lifecycle or diagnostic_lifecycle)), sample_count=len(samples), native_metrics=native,
                 gpu_ownership_verified=bool(version == 3 and complete),
+                native_gpu_metadata_observed=bool(metadata_samples and not issues and not base["issue_count"]),
+                gpu_metadata_sample_count=metadata_samples,
                 gpu_metrics=gpu_metrics(terminal) if version == 3 and terminal else None,
                 observation_api=version, requested_route=requested,
                 observed_route=(terminal[41] if version >= 2 else 1 if complete else 0) if terminal else 0,

@@ -295,14 +295,15 @@ namespace mta::game_de
             state.customPresentPresent = roots.customPresent ? 1u : 0u;
             state.nativeExplicitGPUCount = roots.explicitGpuCount;
             state.nativeAFRCount = roots.afrCount;
-            // A custom presenter or indexed multi-GPU route may choose another
-            // queue/resource. Observe those facts without querying a guess.
+            // Indexed multi-GPU routes may choose another native queue. Keep
+            // their historical refusal stage rather than query device zero.
+            const bool singleNativeGpu = roots.explicitGpuCount == 1 && roots.afrCount == 1;
             state.queryStatus = static_cast<std::uint32_t>(QueryStatus::Unsupported);
             state.queryStage = static_cast<std::uint32_t>(Stage::CustomPresent);
-            if (roots.customPresent)
+            if (roots.customPresent && !singleNativeGpu)
                 return;
             state.queryStage = static_cast<std::uint32_t>(Stage::SingleNode);
-            if (roots.explicitGpuCount != 1 || roots.afrCount != 1)
+            if (!singleNativeGpu)
                 return;
             if (!BorrowedComRoot(roots.swapchain) || !BorrowedComRoot(roots.queue))
             {
@@ -310,8 +311,11 @@ namespace mta::game_de
                 state.hresult = static_cast<std::uint32_t>(E_POINTER);
                 return;
             }
-            // All acquired refs are released before the engine original can
-            // rotate its buffers. This probe issues no GPU work or waits.
+            // These are the existing native swapchain and creation queue even
+            // when a custom presenter exists; their metadata does not identify
+            // its chosen frame sink. The query's support predicate still
+            // excludes that route. Release every local ref before the original
+            // can present or rotate buffers; issue no GPU work or waits.
             ProbeD3D12Ownership(reinterpret_cast<void*>(roots.swapchain), reinterpret_cast<void*>(roots.queue), state);
             ProbeRoots after;
             if ((!ReadProbeRoots(viewport, after) || !SameProbeRoots(roots, after)) &&

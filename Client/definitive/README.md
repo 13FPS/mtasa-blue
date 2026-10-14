@@ -32,6 +32,20 @@ log. This validates the bounded D3D12 callback and cleanup through MTA ownership
 Callback entries, normal returns and queue presence do not establish COM Present
 execution, visible MTA output or a working GUI.
 
+**Completed live GPU diagnostic: custom-present refusal and clean shutdown.**
+The first API3 trial ran for **10,037 ms**, with **199 Core samples, 87 script
+snapshots, 605 callback entries and 602 accepted native snapshots**. Native
+rejections, nesting, foreign callbacks, publication misses and failure stayed
+zero. All 602 published GPU probe outcomes were unsupported; every logged
+sample reported the custom-present safeguard before any COM query. Native
+GPU/AFR counts were both one, while COM metadata stayed unobserved.
+
+The user reported normal game continuation. Cleanup detached the observer and
+unloaded Core/XML/pthread, retaining the expected backend PIN. All 23 installed
+files matched, and normal exit was verified in the **33,440-byte** whole log,
+including the exact captured prefix and 74 appended shutdown bytes. The reader
+reports a clean diagnostic lifecycle with GPU ownership still unverified.
+
 **Offline prerequisite: MTA's existing GUI layer on x64.**
 The CEGUI, Falagard, DirectX9GUIRenderer and `cgui` projects now admit only
 opt-in `--with-definitive-adapter` Release/x64 builds. Default x64 exclusion and
@@ -120,9 +134,23 @@ not authorize drawing, prove resource state, or establish resize safety.
 Failed or unsupported queries keep their exact stage and raw HRESULT in the
 saved evidence. The whole-log reader separates clean diagnostic teardown from
 GPU ownership acceptance and rejects nested pointer/readiness claims.
-The final owned COM-query fixture passed 179 checks, including a real WARP
-swapchain and balanced references. The native callback fixture passed 2,061
-checks. Cleanup-release faults disable further queries before calling the
+The current diagnostic permits read-only queries of the existing native
+swapchain and creation queue when custom-present GPU/AFR counts are both one.
+Those objects need not be the custom presenter's actual frame sink. Other
+custom/count combinations retain the early refusal. The support predicate
+still excludes every custom-present route, so complete metadata cannot enable
+drawing. ABI3 and its 80 fields remain unchanged. The reader's
+`native_gpu_metadata_observed` reports complete sampled queries separately
+from GPU ownership; its sample count does not describe unlogged probes.
+
+The owned COM-query fixture covers a real WARP swapchain and balanced
+references, including custom-present metadata that remains unsupported for
+drawing. The native callback fixture covers both the single-node query path
+and the retained custom/multi-GPU refusal.
+The focused checks pass 265 ownership and 2,072 native callback cases,
+including repeated real custom-present metadata queries and balanced COM
+references. The renderer itself is unchanged.
+Cleanup-release faults disable further queries before calling the
 engine original; that failure survives a missed publication, a changed root
 and an original exception. No GPU commands are submitted by this observer.
 
@@ -158,10 +186,10 @@ Core and worker for retries. A two-second cleanup deadline records failure
 without permitting unload. Ended state is copied before lease release, and the
 terminal Core diagnostics preserve the actual backend PIN.
 
-Final offline checks pass: 2,061 native callback checks, 1,563 module checks,
+Final offline checks pass: 2,072 native callback checks, 1,563 module checks,
 563 x64/3 x86 Core consumer checks against the exact normal Game DE DLL,
 6,600 lifecycle checks on each architecture, all 23 worker scenarios,
-293 bridge protocol/1,062 ABI checks, 465 script checks and 33 renderer log-reader tests.
+293 bridge protocol/1,062 ABI checks, 467 script checks and 35 renderer log-reader tests.
 The normal Core/Game DE build passes 161 actual Core entry checks in each
 folder layout and preserves classic Win32 compilation and default x64 exclusion.
 The packaged launcher preflight verifies all 23 files while keeping full startup

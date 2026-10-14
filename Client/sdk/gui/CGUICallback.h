@@ -11,7 +11,20 @@
 
 #pragma once
 
+#include <cstdint>
+#include <cstring>
+#include <new>
+
 class CGUIElement;
+
+#ifdef _WIN64
+namespace GuiCallbackDetail
+{
+    // An incomplete owner uses the compiler's general member-pointer layout,
+    // so storage also accommodates multiple and virtual inheritance callbacks.
+    class UnknownInheritance;
+}
+#endif
 
 // Define callbacks
 #define GUI_CALLBACK       CGUICallback<bool, CGUIElement*>
@@ -69,6 +82,7 @@ public:
     // Construct from a static function pointer
     CGUICallback(Ret (*pF)(Arguments))
     {
+        static_assert(sizeof(CGUICallbackFree<Ret, Arguments>) <= sizeof(m_Callback), "GUI free callback exceeds inline storage");
         memset(m_Callback, 0, sizeof(m_Callback));
         if (pF)
         {
@@ -80,6 +94,10 @@ public:
     template <class T>
     CGUICallback(Ret (T::*pF)(Arguments), T* pObj)
     {
+        static_assert(sizeof(CGUICallbackMethod<T, Ret, Arguments>) <= sizeof(m_Callback), "GUI method callback exceeds inline storage");
+#ifdef _WIN64
+        static_assert(alignof(CGUICallbackMethod<T, Ret, Arguments>) <= alignof(CGUICallback), "GUI method callback exceeds storage alignment");
+#endif
         memset(m_Callback, 0, sizeof(m_Callback));
         if (pF)
         {
@@ -95,8 +113,25 @@ public:
     // Call operator
     Ret operator()(Arguments Args) const { return (*(CGUICallbackInterface<Ret, Arguments>*)m_Callback)(Args); }
 
-    operator bool() const { return *(DWORD*)m_Callback != NULL; }
+    operator bool() const
+    {
+#ifdef _WIN64
+        // Presence belongs to the full native vtable pointer, not its low DWORD.
+        std::uintptr_t callback = 0;
+        memcpy(&callback, m_Callback, sizeof(callback));
+        return callback != 0;
+#else
+        return *(DWORD*)m_Callback != NULL;
+#endif
+    }
 
 protected:
+#ifdef _WIN64
+    using StorageLayout = CGUICallbackMethod<GuiCallbackDetail::UnknownInheritance, Ret, Arguments>;
+    // Preserve the classic SDK layout while giving Win64 placement construction
+    // enough naturally aligned storage for the compiler's widest member pointer.
+    alignas(StorageLayout) char m_Callback[sizeof(StorageLayout)];
+#else
     char m_Callback[4 + 4 + 20];  // vtable + pObj + pMemFn
+#endif
 };

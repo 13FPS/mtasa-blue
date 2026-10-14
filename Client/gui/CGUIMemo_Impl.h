@@ -23,8 +23,10 @@ public:
     void SetReadOnly(bool bReadOnly);
     bool IsReadOnly();
 
-    size_t GetCaretIndex();
-    void   SetCaretIndex(size_t Index);
+    // The public widget interface uses 32-bit indices on both architectures;
+    // size_t would declare different overrides on Win64.
+    unsigned int GetCaretIndex() override;
+    void         SetCaretIndex(unsigned int uiIndex) override;
 
     float        GetVerticalScrollPosition();
     void         SetVerticalScrollPosition(float fPosition);

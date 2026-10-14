@@ -165,9 +165,13 @@ CGUI_Impl::~CGUI_Impl()
     delete m_pSAGothicFont;
     delete m_pSansFont;
 
-    // Clean up CEGUI system - this automatically deletes the renderer
+    // CEGUI borrows the renderer while destroying its fonts and textures.
+    // Release our renderer afterward so its buffers and device reference do
+    // not survive GUI module teardown.
     delete CEGUI::System::getSingletonPtr();
-    // DO NOT delete m_pRenderer - it's already deleted by System destructor
+    m_pSystem = nullptr;
+    delete m_pRenderer;
+    m_pRenderer = nullptr;
 }
 
 void CGUI_Impl::CreateRootWindow()
@@ -542,7 +546,7 @@ CGUIFont* CGUI_Impl::CreateFnt(const char* szFontName, const char* szFontFile, u
 CGUIFont* CGUI_Impl::CreateFntFromWinFont(const char* szFontName, const char* szFontWinReg, const char* szFontWinFile, unsigned int uSize, unsigned int uFlags,
                                           bool bAutoScale)
 {
-    SString strFontWinRegName = GetSystemRegistryValue((uint)HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts", szFontWinReg);
+    SString strFontWinRegName = GetSystemRegistryValue(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts", szFontWinReg);
     SString strWinFontsPath = PathJoin(GetSystemWindowsPath(), "fonts");
 
     // Compile a list of places to look

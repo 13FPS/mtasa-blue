@@ -62,6 +62,15 @@ using WinHGlobalHandle = struct HGLOBAL__*;
 using WinHGlobalHandle = void*;
     #endif
 
+    // Match the SDK's default STRICT handles even when this header precedes
+    // windows.h; explicit NO_STRICT builds retain the SDK's void* handle type.
+    #if defined(STRICT) || !defined(NO_STRICT)
+struct HKEY__;
+using WinHKeyHandle = struct HKEY__*;
+    #else
+using WinHKeyHandle = void*;
+    #endif
+
 struct HWND__;
     #ifndef _WINDOWS_
 typedef HWND__*      HWND;
@@ -112,6 +121,9 @@ namespace SharedUtil
 
     // Get a system registry value
     SString GetSystemRegistryValue(uint hKey, const SString& strPath, const SString& strName, int* iResult = nullptr);
+    // Native handles must retain their pointer width and predefined-handle sign
+    // extension on Win64; keep the integer overload for existing callers.
+    SString GetSystemRegistryValue(WinHKeyHandle hKey, const SString& strPath, const SString& strName, int* iResult = nullptr);
 
     // Get/set registry values for the current version
     void    SetRegistryValue(const SString& strPath, const SString& strName, const SString& strValue, bool bFlush = false);

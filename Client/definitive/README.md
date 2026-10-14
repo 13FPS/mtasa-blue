@@ -16,7 +16,59 @@ was saved in the complete 24,886-byte log. The reader reports
 This validates diagnostic cleanup; the active renderer path remains unconfirmed.
 Loaded D3D11/D3D12 modules and missing D3D11 callbacks do not identify that path.
 
-**Next live boundary: explicitly selected D3D12 observation through MTA Core.**
+**Completed live check: D3D12 callback observation through actual MTA Core.**
+The explicit D3D12 session completed in **10,046 ms**, with **199 Core samples,
+88 script snapshots, 605 native callback entries and 603 accepted snapshots**.
+Rejected, nested, foreign-thread and missed publications stayed zero, with no
+native failure. The callback reported 1920×1080, window/swapchain presence `3`,
+known presence `19` and a separate command queue. Device and immediate context
+remain unknown. The first snapshot correctly reported an unobserved route;
+later accepted snapshots identified route `2` on one callback thread.
+
+The user reported normal game continuation. The native observer detached,
+Core unloaded, the backend remained pinned as expected, and all 23 installed
+hashes matched. Normal exit passed with the complete **26,948-byte** shutdown
+log. This validates the bounded D3D12 callback and cleanup through MTA ownership.
+Callback entries, normal returns and queue presence do not establish COM Present
+execution, visible MTA output or a working GUI.
+
+**Offline prerequisite: MTA's existing GUI layer on x64.**
+The CEGUI, Falagard, DirectX9GUIRenderer and `cgui` projects now admit only
+opt-in `--with-definitive-adapter` Release/x64 builds. Default x64 exclusion and
+classic Win32 behavior remain intact. The real `cgui.dll` keeps its existing
+`InitGUIInterface(IDirect3DDevice9*)` entry and uses MTA's existing widgets,
+fonts and skins. This D3D9 subsystem is a prerequisite for reusing the widget
+layer; it is not a DE rendering backend.
+
+The port preserves the memo interface's 32-bit indices, uses a native-width
+font registry handle and gives x64 callbacks aligned storage for the compiler's
+widest member pointer. Win32 keeps its exact 28-byte callback layout. A real
+offscreen GUI test also exposed a renderer leak: CEGUI borrows the renderer,
+so `CGUI_Impl` must delete it after System finishes its texture/font cleanup.
+
+`Tests/definitive/test_gui_x64_host.ps1` loads the real normal GUI/Core modules
+in an owned host, without initializing Core or a CGame. It stages the existing
+MTA skin/font assets and the repository's pinned Unifont release, creates a
+hidden private D3D9 device, and checks widget callbacks, allocated text,
+offscreen pixel changes, device reset and complete teardown. Its host filename
+selects Core's existing DE classification; its executable contains only test
+code and never launches the game binary. Device references must reach zero;
+the fixture does not drain leaked references to manufacture success.
+
+The final normal GUI build passed 66 policy/artifact guards and Win32 compile
+checks. The fresh Core build passed 132 actual entry checks in each folder
+layout. The real GUI host passed 91 checks, rasterized 128,964 non-background
+pixels, handled widget/text events and reproduced the same image after device
+reset. GUI/Core unloaded and the owned device's final release reached zero.
+The saved old callback header fails the adjacent-storage canary; the saved
+old GUI DLL fails the device-release check. These results validate the reused
+x64 D3D9 GUI subsystem independently of the DE runtime.
+
+The classic D3D9 Present path also requires a working CGame and cannot be called
+from the DE callback. The next rendering work belongs behind CEGUI's existing
+renderer/texture abstractions. D3D12 GPU ownership, synchronization and resize
+lifetime, visible output and full MTA startup remain unverified and gated.
+
 `package.ps1 -Mode Smoke -MtaCoreRenderReference -MtaCoreRenderRoute D3D12`
 selects the separate, disabled by default 23-file trial. The real Core owns a
 versioned observation lease from Game DE and runs it on its existing worker for

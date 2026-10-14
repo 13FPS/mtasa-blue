@@ -1105,6 +1105,11 @@ SString SharedUtil::GetSystemRegistryValue(uint hKey, const SString& strPath, co
     return ReadRegistryStringValue((HKEY)hKey, strPath, strName, iResult);
 }
 
+SString SharedUtil::GetSystemRegistryValue(WinHKeyHandle hKey, const SString& strPath, const SString& strName, int* iResult /*= nullptr*/)
+{
+    return ReadRegistryStringValue(hKey, strPath, strName, iResult);
+}
+
 //
 // New layout:
 //              HKLM Software\\Multi Theft Auto: San Andreas All\\Common    - For all versions

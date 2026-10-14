@@ -41,8 +41,22 @@ project "GUI"
 		"*.cpp"
 	}
 
-	filter "architecture:not x86"
-		flags { "ExcludeFromBuild" }
+	if _OPTIONS["with-definitive-adapter"] then
+		-- Build the existing GUI independently before any DE renderer port.
+		-- Its D3D9 interface and classic output remain unchanged.
+		filter { "architecture:x86_64", "configurations:Release" }
+			targetdir(buildpath("mta/x64"))
+			-- No GUI source calls DXErr. Its obsolete SDK library is absent
+			-- from the verified D3DX package; preserve classic linkage only.
+			removelinks { "dxerr.lib" }
+		filter { "architecture:not x86", "configurations:not Release" }
+			flags { "ExcludeFromBuild" }
+		filter { "architecture:not x86", "architecture:not x86_64" }
+			flags { "ExcludeFromBuild" }
+	else
+		filter "architecture:not x86"
+			flags { "ExcludeFromBuild" }
+	end
 
 	filter "system:not windows"
 		flags { "ExcludeFromBuild" }

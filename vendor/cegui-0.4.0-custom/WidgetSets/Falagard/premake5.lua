@@ -26,8 +26,18 @@ project "Falagard"
 		"include/**.h",
 	}
 
-	filter "architecture:not x86"
-		flags { "ExcludeFromBuild" }
+	if _OPTIONS["with-definitive-adapter"] then
+		-- Reuse the existing widget implementation without replacing its ABI.
+		filter { "architecture:x86_64", "configurations:Release" }
+			targetdir(buildpath("mta/x64/deps"))
+		filter { "architecture:not x86", "configurations:not Release" }
+			flags { "ExcludeFromBuild" }
+		filter { "architecture:not x86", "architecture:not x86_64" }
+			flags { "ExcludeFromBuild" }
+	else
+		filter "architecture:not x86"
+			flags { "ExcludeFromBuild" }
+	end
 
 	filter "system:not windows"
 		flags { "ExcludeFromBuild" }

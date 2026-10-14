@@ -15,6 +15,11 @@ INCOMPLETE_ERROR = "Error: MTA Core renderer observation incomplete; inspect its
 PAIRS = dict(generation=15, native_present_callbacks=17, accepted_snapshots=19,
              rejected_snapshots=21, nested_callbacks=23, foreign_callbacks=33,
              publication_misses=35)
+GPU_PAIRS = dict(attempts=44, accepted=46, rejected=48)
+POINTER_KEYS = frozenset(("viewport", "swapchain", "device", "native_pointer", "address", "command_queue", "resource_pointer"))
+UNVERIFIED_CLAIMS = frozenset(("com_present_verified", "visual_success_verified", "de_renderer_verified", "full_mta_boot_verified",
+                              "full_core_ready", "gameplay_ready", "rendering_started", "engine_input_write_verified",
+                              "remote_player_context_verified", "network_active", "input_writes", "remote_peds_created"))
 NOTICE = (
     "This checks saved reports of an explicitly selected owned native viewport callback and cleanup. "
     "Callback entry and its native return value do not prove that COM Present executed or pixels were drawn. "
@@ -35,9 +40,10 @@ def event_contract(event):
         return None
     if event["core_api"] == 5 and "observation_api" not in event and "requested_route" not in event:
         return (1, 1)
-    if (event["core_api"] == 6 and type(event.get("observation_api")) is int and event["observation_api"] == 2 and
-            type(event.get("requested_route")) is int and event["requested_route"] in (1, 2)):
-        return (2, event["requested_route"])
+    if (type(event.get("observation_api")) is int and type(event.get("requested_route")) is int and
+            ((event["core_api"] == 6 and event["observation_api"] == 2 and event["requested_route"] in (1, 2)) or
+             (event["core_api"] == 7 and event["observation_api"] == 3 and event["requested_route"] == 2))):
+        return (event["observation_api"], event["requested_route"])
     return None
 
 
@@ -54,6 +60,74 @@ def route_consistent(state, version, requested):
             state[37] == (presence if observed else 0) and
             (bool(state[19] or state[20]) == bool(observed)) and (not observed or state[31] == 1) and
             (bool(observed) or not any(state[25:30]) and state[31] == 0))
+
+
+def gpu_eligible(state):
+    # Passing this conservative metadata predicate does not prove queue ordering,
+    # PRESENT resource state, resize ownership, or any submitted/drawn GUI frame.
+    return bool(state[54] == 0 and state[57] <= 1 and state[58] == 1 and
+                state[61] == 7 and 2 <= state[63] <= 16 and state[62] < state[63] and state[64] > 0 and
+                0 < state[66] <= 32768 and 0 < state[67] <= 32768 and
+                state[68] == state[66] and state[69] == 0 and state[70] == state[67] and state[71] == state[64] and
+                state[72:75] == [1, 0, 0] and state[76:78] == [1, 1])
+
+
+def gpu_supported(state):
+    return state[50] == 19 and state[51:54] == [0, 1, 1] and state[75] == 1 and gpu_eligible(state)
+
+
+def gpu_metrics(state):
+    return {name: state[index] | state[index + 1] << 32 for name, index in GPU_PAIRS.items()}
+
+
+def gpu_consistent(state, previous=None):
+    metrics = gpu_metrics(state)
+    if (metrics["attempts"] != metrics["accepted"] + metrics["rejected"] or
+            metrics["attempts"] != counters(state)["accepted_snapshots"] or
+            state[50] > 19 or state[52] > 1 or state[53] > 1 or state[61] > 7 or state[74] > 1 or
+            state[75] > 6 or any(state[78:80])):
+        return False
+    if previous and any(metrics[key] < gpu_metrics(previous)[key] for key in GPU_PAIRS):
+        return False
+    if not metrics["attempts"]:
+        return not any(state[46:80])
+    if not state[50] or not state[75] or (state[53] and not gpu_supported(state)):
+        return False
+    if state[75] == 1:
+        return gpu_supported(state) and metrics["accepted"] > 0
+    if state[53] or not metrics["rejected"]:
+        return False
+    if state[75] == 2:
+        return state[51] == 0 and (state[50] == 19 and not gpu_eligible(state) if state[52] else
+                                  state[74] == 1 if state[50] == 2 else
+                                  state[50] == 3 and not state[74] and (state[76] != 1 or state[77] != 1))
+    if state[52]:
+        return False
+    if state[75] == 3:
+        return (state[50] in (1, 3) or 4 <= state[50] <= 16) and state[51] >= 0x80000000
+    if state[75] == 4:
+        return 4 <= state[50] <= 16 and state[51] == 0x8000ffff
+    if state[75] == 5:
+        return state[50] == 17 and state[51] == 0
+    return state[75] == 6 and state[50] == 18 and state[51] == 0x8000ffff
+
+
+def unsafe_event_claims(event):
+    # Inspect nested objects as well: moving a readiness flag or pointer below
+    # `details` must not turn the same unsupported claim into accepted evidence.
+    pending, visited = [event], 0
+    while pending:
+        value = pending.pop()
+        visited += 1
+        if visited > 16384:
+            return True
+        if isinstance(value, dict):
+            if any(key in POINTER_KEYS or (key in UNVERIFIED_CLAIMS and item is not False) for key, item in value.items()):
+                return True
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+    return False
 
 
 def analyze_log(text, require_exit=False):
@@ -81,8 +155,7 @@ def analyze_log(text, require_exit=False):
             translated.append(raw)
             continue
         kind = event["event"]
-        if (any(key in event for key in ("viewport", "swapchain", "device", "native_pointer", "address")) or
-                any(key in event and event[key] is not False for key in ("com_present_verified", "visual_success_verified", "de_renderer_verified"))):
+        if unsafe_event_claims(event):
             invalid(line, "Native pointers or visual/COM readiness claims exceed this scalar diagnostic")
         if kind.startswith(("core_startup_reference", "core_input_reference", "core_movement_reference")):
             invalid(line, "Another Core reference cannot accompany renderer observations")
@@ -99,7 +172,7 @@ def analyze_log(text, require_exit=False):
         elif kind == "core_render_reference_started":
             contract = event_contract(event)
             keys = {"event", "at_ms", "core_api", "sample_interval_ms", "budget_ms"}
-            if contract and contract[0] == 2:
+            if contract and contract[0] >= 2:
                 keys |= {"observation_api", "requested_route"}
             if (set(event) != keys or contract is None or contract != adapter_contract or
                     started or finished or
@@ -120,7 +193,7 @@ def analyze_log(text, require_exit=False):
             if (len(samples) >= 4096 or set(event) != {"event", "at_ms", "elapsed_ms", "state"} or
                     not started or finished or not startup.integer(event.get("at_ms")) or
                     not startup.integer(event.get("elapsed_ms")) or not startup.integer(started.get("at_ms")) or
-                    event["at_ms"] - started["at_ms"] != event["elapsed_ms"] or not unsigned_array(state, 44 if version == 2 else 40)):
+                    event["at_ms"] - started["at_ms"] != event["elapsed_ms"] or not unsigned_array(state, {1: 40, 2: 44, 3: 80}[version])):
                 invalid(line, "Sample requires the versioned unsigned fields with bound clock/order")
                 continue
             if last_clock is not None and event["at_ms"] < last_clock:
@@ -135,6 +208,8 @@ def analyze_log(text, require_exit=False):
                     state[26] > 32768 or state[27] > 32768 or state[37] & ~15 or any(state[38:40]) or
                     not route_consistent(state, version, requested)):
                 invalid(line, "Snapshot version, flags, field bounds or reserved storage is invalid")
+            if version == 3 and not gpu_consistent(state, previous):
+                invalid(line, "GPU ownership metadata or coherent published counters are contradictory")
             native = counters(state)
             outcomes = ("accepted_snapshots", "rejected_snapshots", "foreign_callbacks", "publication_misses")
             if (any(native[name] > native["native_present_callbacks"] for name in (*outcomes, "nested_callbacks")) or
@@ -146,7 +221,7 @@ def analyze_log(text, require_exit=False):
                         state[7] < previous[7] or state[8] < previous[8] or state[9] < previous[9] or
                         (previous[30] and state[30] != previous[30]) or state[12] < previous[12] or
                         (prior["generation"] and native["generation"] != prior["generation"]) or
-                        (version == 2 and previous[41] and state[41] != previous[41]) or
+                        (version >= 2 and previous[41] and state[41] != previous[41]) or
                         any(native[name] < prior[name] for name in PAIRS if name != "generation")):
                     invalid(line, "Snapshot sequence, generation or counters changed inconsistently")
             if state[1] == 1 and (state[4] or state[6] or state[10]):
@@ -209,6 +284,10 @@ def analyze_log(text, require_exit=False):
                  terminal[29] <= 1 and terminal[30:35] == [0, 1, 0, 0, 0] and
                  terminal[37] == (15 if requested == 1 else 3) and not any(terminal[38:40]) and
                  (version == 1 or terminal[41] == requested))
+    native_clean = clean
+    gpu_clean = bool(version == 3 and terminal and gpu_supported(terminal) and
+                     gpu_metrics(terminal)["accepted"] > 0 and not gpu_metrics(terminal)["rejected"])
+    clean = clean and (version != 3 or gpu_clean)
     lifecycle = bool(base["core_startup_reference_complete"] and not issues and not stop)
     complete = lifecycle and clean
     if finished and finished.get("passed") is True and not clean:
@@ -229,16 +308,18 @@ def analyze_log(text, require_exit=False):
                                 finished.get("stop_requested") is False and
                                 ((finished.get("passed") is True and not base["failures"]) or
                                  (finished.get("passed") is False and expected_failure_only)))
-    return dict(schema_version=1, status="native_renderer_callback_observed" if complete else
+    return dict(schema_version=1, status=("native_gpu_ownership_observed" if version == 3 else "native_renderer_callback_observed") if complete else
                 "invalid_evidence" if issues or base["issue_count"] else
-                "native_observation_missing" if diagnostic_lifecycle else "incomplete_or_failed",
+                ("native_gpu_ownership_incomplete" if version == 3 and native_clean else "native_observation_missing") if diagnostic_lifecycle else "incomplete_or_failed",
                 core_render_reference_complete=complete, render_observation_session_complete=lifecycle,
                 diagnostic_lifecycle_complete=diagnostic_lifecycle, deliberate_incomplete_event=deliberate_incomplete,
-                native_renderer_callback_observed=complete, sample_count=len(samples), native_metrics=native,
+                native_renderer_callback_observed=bool(native_clean and (lifecycle or diagnostic_lifecycle)), sample_count=len(samples), native_metrics=native,
+                gpu_ownership_verified=bool(version == 3 and complete),
+                gpu_metrics=gpu_metrics(terminal) if version == 3 and terminal else None,
                 observation_api=version, requested_route=requested,
-                observed_route=(terminal[41] if version == 2 else 1 if complete else 0) if terminal else 0,
-                presence_known_mask=(terminal[42] if version == 2 else 15 if complete else 0) if terminal else 0,
-                queue_present=bool(version == 2 and terminal and terminal[43]),
+                observed_route=(terminal[41] if version >= 2 else 1 if complete else 0) if terminal else 0,
+                presence_known_mask=(terminal[42] if version >= 2 else 15 if complete else 0) if terminal else 0,
+                queue_present=bool(version >= 2 and terminal and terminal[43]),
                 terminal_render_state=terminal, worker_state=finished.get("state") if finished else None,
                 cleanup_pending=bool(terminal and (terminal[1] == 3 or terminal[10] or terminal[32])),
                 issue_count=len(issues) + base["issue_count"], issues=issues, lifecycle=base,

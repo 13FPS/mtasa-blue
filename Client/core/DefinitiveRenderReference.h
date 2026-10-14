@@ -16,6 +16,8 @@ namespace DefinitiveRenderReference
     inline constexpr std::uint32_t FieldCount = 40;
     inline constexpr std::uint32_t ApiVersionV2 = 2;
     inline constexpr std::uint32_t FieldCountV2 = 44;
+    inline constexpr std::uint32_t ApiVersionV3 = 3;
+    inline constexpr std::uint32_t FieldCountV3 = 80;
     inline constexpr std::uint32_t MaximumDurationMs = 10000;
     inline constexpr std::uint32_t SampleIntervalMs = 50;
     inline constexpr std::uint32_t MaximumSamples = 200;
@@ -69,6 +71,42 @@ namespace DefinitiveRenderReference
         ObservedRoute,
         PresenceKnownMask,
         QueuePresent,
+        ProbeAttemptsLow,
+        ProbeAttemptsHigh,
+        ProbeAcceptedLow,
+        ProbeAcceptedHigh,
+        ProbeRejectedLow,
+        ProbeRejectedHigh,
+        QueryStage,
+        QueryHresult,
+        MetadataValid,
+        SupportPredicate,
+        QueueType,
+        QueuePriority,
+        QueueFlags,
+        QueueNodeMask,
+        DeviceNodeCount,
+        AdapterLuidLow,
+        AdapterLuidHigh,
+        CanonicalIdentityFlags,
+        CurrentBackbufferIndex,
+        SwapchainBufferCount,
+        SwapchainFormat,
+        SwapchainFlags,
+        SwapchainWidth,
+        SwapchainHeight,
+        BackbufferWidthLow,
+        BackbufferWidthHigh,
+        BackbufferHeight,
+        BackbufferFormat,
+        BackbufferSampleCount,
+        BackbufferSampleQuality,
+        CustomPresentPresent,
+        QueryStatus,
+        NativeExplicitGPUCount,
+        NativeAFRCount,
+        ReservedV3,
+        ReservedHighV3,
     };
 
     enum class StopReason : std::uint32_t
@@ -88,6 +126,7 @@ namespace DefinitiveRenderReference
     // cleanup deadline reports failure but cannot authorize unloading live code.
     using Snapshot = std::array<std::uint32_t, FieldCount>;
     using SnapshotV2 = std::array<std::uint32_t, FieldCountV2>;
+    using SnapshotV3 = std::array<std::uint32_t, FieldCountV3>;
 
     // Both protocols copy the actual observer's scalar state. Keeping this
     // shared with focused tests prevents route selection from inventing a
@@ -95,7 +134,7 @@ namespace DefinitiveRenderReference
     template <std::size_t N, typename State>
     void CopyNativeState(std::array<std::uint32_t, N>& snapshot, const State& state) noexcept
     {
-        static_assert(N == FieldCount || N == FieldCountV2);
+        static_assert(N == FieldCount || N == FieldCountV2 || N == FieldCountV3);
         snapshot[Bound] = state.bound;
         snapshot[Active] = state.active;
         snapshot[ModulePinned] = snapshot[BackendPinnedExpected] = state.modulePinned;
@@ -122,14 +161,51 @@ namespace DefinitiveRenderReference
             (state.windowPresent ? 1u : 0u) | (state.swapchainPresent ? 2u : 0u) | (state.devicePresent ? 4u : 0u) | (state.contextPresent ? 8u : 0u);
     }
 
-    template <typename State>
-    void CopyNativeStateV2(SnapshotV2& snapshot, const State& state) noexcept
+    template <std::size_t N, typename State>
+    void CopyNativeStateV2(std::array<std::uint32_t, N>& snapshot, const State& state) noexcept
     {
         CopyNativeState(snapshot, state.base);
         snapshot[RequestedRoute] = state.requestedRoute;
         snapshot[ObservedRoute] = state.observedRoute;
         snapshot[PresenceKnownMask] = state.presenceKnownMask;
         snapshot[QueuePresent] = state.queuePresent;
+    }
+
+    template <typename State>
+    void CopyNativeStateV3(SnapshotV3& snapshot, const State& state) noexcept
+    {
+        CopyNativeStateV2(snapshot, state.base);
+        const auto&                        gpu = state.gpu;
+        const std::array<std::uint64_t, 3> counters{gpu.attempts, gpu.accepted, gpu.rejected};
+        for (std::size_t index = 0; index < counters.size(); ++index)
+        {
+            snapshot[ProbeAttemptsLow + index * 2] = static_cast<std::uint32_t>(counters[index]);
+            snapshot[ProbeAttemptsLow + index * 2 + 1] = static_cast<std::uint32_t>(counters[index] >> 32);
+        }
+        const std::array<std::uint32_t, 18> values{gpu.queryStage,
+                                                   gpu.hresult,
+                                                   gpu.metadataValid,
+                                                   gpu.supportPredicate,
+                                                   gpu.queueType,
+                                                   gpu.queuePriority,
+                                                   gpu.queueFlags,
+                                                   gpu.queueNodeMask,
+                                                   gpu.deviceNodeCount,
+                                                   gpu.adapterLuidLow,
+                                                   gpu.adapterLuidHigh,
+                                                   gpu.canonicalIdentityFlags,
+                                                   gpu.currentBackbufferIndex,
+                                                   gpu.swapchainBufferCount,
+                                                   gpu.swapchainFormat,
+                                                   gpu.swapchainFlags,
+                                                   gpu.swapchainWidth,
+                                                   gpu.swapchainHeight};
+        std::copy(values.begin(), values.end(), snapshot.begin() + QueryStage);
+        snapshot[BackbufferWidthLow] = static_cast<std::uint32_t>(gpu.backbufferWidth);
+        snapshot[BackbufferWidthHigh] = static_cast<std::uint32_t>(gpu.backbufferWidth >> 32);
+        const std::array<std::uint32_t, 8> tail{gpu.backbufferHeight,     gpu.backbufferFormat, gpu.backbufferSampleCount,  gpu.backbufferSampleQuality,
+                                                gpu.customPresentPresent, gpu.queryStatus,      gpu.nativeExplicitGPUCount, gpu.nativeAFRCount};
+        std::copy(tail.begin(), tail.end(), snapshot.begin() + BackbufferHeight);
     }
 
     // The real Core uses this same value-only lifecycle. Injecting only the
@@ -141,13 +217,13 @@ namespace DefinitiveRenderReference
         static_assert(noexcept(clock.Now()) && noexcept(clock.Wait(std::uint32_t{})), "Lifecycle clock must not throw during retained cleanup");
         SnapshotType   snapshot{};
         constexpr auto count = std::tuple_size<SnapshotType>::value;
-        static_assert(count == FieldCount || count == FieldCountV2);
-        snapshot[Version] = count == FieldCountV2 ? ApiVersionV2 : ApiVersion;
+        static_assert(count == FieldCount || count == FieldCountV2 || count == FieldCountV3);
+        snapshot[Version] = count == FieldCountV3 ? ApiVersionV3 : count == FieldCountV2 ? ApiVersionV2 : ApiVersion;
         bool validRoute = true;
-        if constexpr (count == FieldCountV2)
+        if constexpr (count >= FieldCountV2)
         {
             snapshot[RequestedRoute] = request.renderRoute;
-            validRoute = request.renderRoute == 1 || request.renderRoute == 2;
+            validRoute = request.renderRoute == 2 || (count == FieldCountV2 && request.renderRoute == 1);
         }
         auto reason = StopReason::BeginError;
         auto started = clock.Now();

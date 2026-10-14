@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { MODE, ONLINE_ACTIVATION, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE, MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE, MTA_CORE_RENDER_ROUTE } from './config.mjs';
+import { MODE, ONLINE_ACTIVATION, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE, MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE, MTA_CORE_RENDER_ROUTE, MTA_CORE_RENDER_GPU_REFERENCE } from './config.mjs';
 import { AdapterController, NativeGaitReferenceController, NativeInputReferenceController } from './controller.mjs';
 import { MtaNativePadReferenceController } from './native-pad-reference.mjs';
 import { MtaNativeMovementTrialController } from './native-movement-trial.mjs';
@@ -19,6 +19,9 @@ function runAdapter() {
         throw new Error('MTA Core renderer observation requires separate opt-in Smoke mode');
     if (MTA_CORE_RENDER_REFERENCE && !['d3d11', 'd3d12'].includes(MTA_CORE_RENDER_ROUTE))
         throw new Error('MTA Core renderer observation requires an explicit supported route');
+    if (typeof MTA_CORE_RENDER_GPU_REFERENCE !== 'boolean' ||
+        (MTA_CORE_RENDER_GPU_REFERENCE && (!MTA_CORE_RENDER_REFERENCE || MTA_CORE_RENDER_ROUTE !== 'd3d12')))
+        throw new Error('GPU ownership queries require explicit D3D12 Core renderer observation');
     if (typeof MTA_CORE_MOVEMENT_REFERENCE !== 'boolean' ||
         (MTA_CORE_MOVEMENT_REFERENCE && (MODE !== 'smoke' || INPUT_REFERENCE || GAIT_REFERENCE || GAIT_RATE || GAIT_ROOT_LOCK ||
             MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE)))
@@ -170,26 +173,63 @@ function runAdapter() {
         // Core owns the optional backend observer and all teardown on its
         // worker. Script reads coherent scalar snapshots; it draws nothing
         // and never receives viewport, swapchain or device pointers.
-        const renderApiVersion = bind('DE_CoreRenderApiVersionV2', 'X64U32');
-        const begin = bind('DE_CoreRenderBeginV2');
-        const capture = bind('DE_CoreRenderCaptureV2');
-        const readRender = bind('DE_CoreRenderReadV2', 'X64U32');
+        const observationApi = MTA_CORE_RENDER_GPU_REFERENCE ? 3 : 2;
+        const coreApi = MTA_CORE_RENDER_GPU_REFERENCE ? 7 : 6;
+        const renderApiVersion = bind('DE_CoreRenderApiVersionV' + observationApi, 'X64U32');
+        const begin = bind('DE_CoreRenderBeginV' + observationApi);
+        const capture = bind('DE_CoreRenderCaptureV' + observationApi);
+        const readRender = bind('DE_CoreRenderReadV' + observationApi, 'X64U32');
         const poll = bind('DE_CoreStartupPoll');
         const cancel = bind('DE_CoreStartupCancel');
         const read = bind('DE_CoreStartupRead', 'X64U32');
-        if (renderApiVersion() !== 2) throw new Error('Core renderer observation API 2 is required');
+        if (renderApiVersion() !== observationApi) throw new Error('Core renderer observation API ' + observationApi + ' is required');
         const requestedRoute = MTA_CORE_RENDER_ROUTE === 'd3d11' ? 1 : 2;
         const expectedPresence = requestedRoute === 1 ? 15 : 3;
         const expectedKnown = requestedRoute === 1 ? 15 : 19;
+        // These are metadata eligibility checks, not permission to submit GPU
+        // work. Engine queue ordering, target states and resize remain separate.
+        const gpuEligible = state => state[54] === 0 && state[57] <= 1 && state[58] === 1 && state[61] === 7 && state[63] >= 2 && state[63] <= 16 && state[62] < state[63] && state[64] > 0 &&
+            state[66] > 0 && state[66] <= 32768 && state[67] > 0 && state[67] <= 32768 &&
+            state[68] === state[66] && state[69] === 0 && state[70] === state[67] && state[71] === state[64] &&
+            state[72] === 1 && state[73] === 0 && state[74] === 0 && state[76] === 1 && state[77] === 1;
+        const gpuSupported = state => state[50] === 19 && state[52] === 1 && state[53] === 1 && state[51] === 0 && state[75] === 1 && gpuEligible(state);
+        const compare64 = (state, a, b) => state[a + 1] === state[b + 1] ? Math.sign(state[a] - state[b]) : Math.sign(state[a + 1] - state[b + 1]);
+        const gpuConsistent = (state, previous) => {
+            const sum = state[46] + state[48];
+            if (state[44] !== sum % 0x100000000 || state[45] !== state[47] + state[49] + Math.floor(sum / 0x100000000) ||
+                compare64(state, 44, 19) !== 0 || state[50] > 19 || state[52] > 1 || state[53] > 1 || state[61] > 7 || state[74] > 1 ||
+                state[75] > 6 || state[78] !== 0 || state[79] !== 0)
+                return false;
+            if (previous && [44, 46, 48].some(field => state[field + 1] < previous[field + 1] ||
+                    (state[field + 1] === previous[field + 1] && state[field] < previous[field])))
+                return false;
+            if (state[44] === 0 && state[45] === 0)
+                return state.slice(46).every(value => value === 0);
+            if (state[50] === 0 || state[75] === 0 || (state[53] && !gpuSupported(state)))
+                return false;
+            if (state[75] === 1)
+                return gpuSupported(state) && (state[46] !== 0 || state[47] !== 0);
+            if (state[53] !== 0 || (state[48] === 0 && state[49] === 0))
+                return false;
+            if (state[75] === 2)
+                return state[51] === 0 && (state[52] === 1 ? state[50] === 19 && !gpuEligible(state) :
+                    state[50] === 2 ? state[74] === 1 : state[50] === 3 && state[74] === 0 && (state[76] !== 1 || state[77] !== 1));
+            if (state[52] !== 0) return false;
+            if (state[75] === 3)
+                return (state[50] === 1 || state[50] === 3 || (state[50] >= 4 && state[50] <= 16)) && state[51] >= 0x80000000;
+            if (state[75] === 4) return state[50] >= 4 && state[50] <= 16 && state[51] === 0x8000ffff;
+            if (state[75] === 5) return state[50] === 17 && state[51] === 0;
+            return state[75] === 6 && state[50] === 18 && state[51] === 0x8000ffff;
+        };
         emit({ event: 'adapter_start', host: HOST, cleo: String(CLEO.version), host_version: String(CLEO.hostVersion),
             definitions: String(CLEO.apiVersion), mode: MODE, endpoint: null, stop_key: stopKey,
-            core_render_reference: true, provenance: 'mta_core_native_render_observation', core_api: 6,
-            observation_api: 2, requested_route: requestedRoute,
+            core_render_reference: true, provenance: 'mta_core_native_render_observation', core_api: coreApi,
+            observation_api: observationApi, requested_route: requestedRoute,
             network_active: false, input_writes: false, remote_peds_created: false });
         enterPhase('core_render_reference');
         const startedAt = Date.now();
         if (!Number.isSafeInteger(startedAt) || startedAt < 0) throw new Error('Invalid Core render clock');
-        emit({ event: 'core_render_reference_started', at_ms: startedAt, core_api: 6, observation_api: 2,
+        emit({ event: 'core_render_reference_started', at_ms: startedAt, core_api: coreApi, observation_api: observationApi,
             requested_route: requestedRoute, sample_interval_ms: 100, budget_ms: 10000 });
         if (begin(requestedRoute) !== 1) throw new Error('MTA Core renderer observation worker could not start');
         let terminal = false, stopRequested = false, lastAt = startedAt, lastSequence = 0, lastElapsed = -1;
@@ -198,10 +238,10 @@ function runAdapter() {
             const captured = capture();
             if (captured !== 0 && captured !== 1) throw new Error('Core render capture status unavailable');
             if (!captured) return;
-            const state = Array.from({ length: 44 }, (_, field) => readRender(field));
+            const state = Array.from({ length: observationApi === 3 ? 80 : 44 }, (_, field) => readRender(field));
             if (!state.every(value => Number.isInteger(value) && value >= 0 && value <= 0xffffffff))
                 throw new Error('Core render returned invalid unsigned state');
-            if (state[0] !== 2 || ![1, 2, 3].includes(state[1]) || state[2] < lastSequence || state[3] < lastElapsed)
+            if (state[0] !== observationApi || ![1, 2, 3].includes(state[1]) || state[2] < lastSequence || state[3] < lastElapsed)
                 throw new Error('Core render publication order is invalid');
             // Requested route is an admission choice, while observed route
             // requires a returned native callback. Never infer it from DLLs.
@@ -221,6 +261,8 @@ function runAdapter() {
             if (highSum > state[18] || (highSum === state[18] && low > state[17]) ||
                 state[24] > state[18] || (state[24] === state[18] && state[23] > state[17]))
                 throw new Error('Core render outcomes exceed native callback entries');
+            if (observationApi === 3 && !gpuConsistent(state, latest))
+                throw new Error('Core GPU ownership metadata or counters are contradictory');
             if (state[2] === lastSequence) {
                 if (!latest || state.some((value, field) => value !== latest[field]))
                     throw new Error('Core render publication changed without a new sequence');
@@ -275,8 +317,10 @@ function runAdapter() {
             latest[33] === 0 && latest[34] === 0 && latest[37] === expectedPresence &&
             latest[38] === 0 && latest[39] === 0 && latest[40] === requestedRoute &&
             latest[41] === requestedRoute && latest[42] === expectedKnown && latest[43] === (requestedRoute === 2 ? 1 : 0);
+        const gpuObserved = observationApi !== 3 || (latest !== null && gpuSupported(latest) &&
+            (latest[46] !== 0 || latest[47] !== 0) && latest[48] === 0 && latest[49] === 0);
         const passed = !stopRequested && runResult === 1 && expected.every((value, field) => state[field] === value) &&
-            state[11] <= 3 && state[12] <= 3 && (state[12] & ~state[11]) === 0 && cleanupPassed && state[18] === 0 && observed;
+            state[11] <= 3 && state[12] <= 3 && (state[12] & ~state[11]) === 0 && cleanupPassed && state[18] === 0 && observed && gpuObserved;
         emit({ event: 'core_render_reference_finished', at_ms: now, elapsed_ms: now - startedAt, state, run_result: runResult,
             passed, cleanup_passed: cleanupPassed, stop_requested: stopRequested, samples,
             full_core_ready: state[6] === 1, rendering_started: false, network_active: false,

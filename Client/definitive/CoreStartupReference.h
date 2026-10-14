@@ -26,6 +26,9 @@ namespace deonline
         bool          BeginMovementReference(const void* moduleAddress) noexcept;
         bool          BeginRenderReference(const void* moduleAddress) noexcept;
         bool          BeginRenderReferenceV2(const void* moduleAddress, std::uint32_t route) noexcept;
+        bool          BeginRenderReferenceV3(const void* moduleAddress, std::uint32_t route) noexcept;
+        bool          CaptureRenderV3() noexcept;
+        std::uint32_t ReadRenderV3(std::uint32_t field) const noexcept;
         int           Poll() noexcept;
         std::uint32_t Read(std::uint32_t field) const noexcept;
         bool          CaptureInput() noexcept;
@@ -44,7 +47,7 @@ namespace deonline
         void                      Run() noexcept;
         bool                      CheckCancellation() noexcept;
         bool                      Start(const void* moduleAddress, bool configuredInput, bool configuredMovement = false, bool configuredRender = false,
-                                        std::uint32_t configuredRenderRoute = 0) noexcept;
+                                        std::uint32_t configuredRenderRoute = 0, std::uint32_t configuredRenderApi = 1) noexcept;
         static bool               InputCancelled();
         static void               PublishInput(const std::uint32_t* values, std::uint32_t count);
 
@@ -61,6 +64,9 @@ namespace deonline
         bool                                  movementRequested = false;
         bool                                  renderRequested = false;
         std::uint32_t                         renderRoute = 0;
+        std::uint32_t                         renderApi = 1;
+        bool                                  renderV3Available = false;
+        DefinitiveRenderReference::SnapshotV3 publishedRenderV3{}, capturedRenderV3{};
         SRWLOCK                               inputLock = SRWLOCK_INIT;
         bool                                  inputAvailable = false;
         DefinitiveInputReference::Snapshot    publishedInput{};

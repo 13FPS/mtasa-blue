@@ -15,6 +15,7 @@
 #include <string>
 #include <thread>
 #include "../../Client/core/DefinitiveInputReference.h"
+#include "../../Client/core/DefinitiveRenderReference.h"
 
 namespace
 {
@@ -105,6 +106,15 @@ int wmain(int argc, wchar_t** argv)
         using ConfigureRenderV2 =
             std::uint32_t (*)(std::uint32_t, std::uint32_t, DefinitiveInputReference::CancelCallback, DefinitiveInputReference::PublishCallback);
         const auto configureRenderV2 = Resolve<ConfigureRenderV2>(core, "MTA_ConfigureDERenderReferenceV2");
+        const auto renderVersionV3 = Resolve<std::uint32_t (*)()>(core, "MTA_DERenderReferenceApiVersionV3");
+        const auto configureRenderV3 = Resolve<ConfigureRenderV2>(core, "MTA_ConfigureDERenderReferenceV3");
+        Check(renderVersionV3() == 3 && DefinitiveRenderReference::FieldCountV3 == 80, "API3 exports bind the separate 80-field scalar ownership contract");
+        for (const auto route : {0u, 1u, 3u, 0xffffffffu})
+            Check(configureRenderV3(1, route, CancelInput, PublishInput) == 0, "API3 requires explicit D3D12 without an earlier-version fallback");
+        Check(configureRenderV3(0, 2, CancelInput, PublishInput) == 0 && configureRenderV3(10001, 2, CancelInput, PublishInput) == 0,
+              "API3 retains the existing ten-second duration bound");
+        Check(configureRenderV3(1, 2, nullptr, PublishInput) == 0 && configureRenderV3(1, 2, CancelInput, nullptr) == 0,
+              "API3 requires owner cancellation and value publication callbacks");
         Check(renderVersionV2() == 2, "explicit route contract must use an additive API2 export");
         for (const auto route : {0u, 3u, 0xffffffffu})
             Check(configureRenderV2(1, route, CancelInput, PublishInput) == 0, "unknown renderer route must fail before Core activation");
@@ -130,6 +140,7 @@ int wmain(int argc, wchar_t** argv)
         Check(configureInput(1, CancelInput, PublishInput) == 1, "bounded configured input request must be accepted");
         Check(configureRender(1, CancelInput, PublishInput) == 0, "render observation cannot replace pending configured input");
         Check(configureRenderV2(1, 2, CancelInput, PublishInput) == 0, "API2 route cannot replace a pending input request");
+        Check(configureRenderV3(1, 2, CancelInput, PublishInput) == 0, "API3 cannot replace a pending configured input owner");
         Check(configureMovement(1, CancelInput, PublishInput) == 0, "movement cannot replace a pending read-only request");
         Check(configureInput(1, CancelInput, PublishInput) == 0, "a pending input request must not be overwritten");
         unsigned int foreignConfigure = 1;
@@ -171,6 +182,23 @@ int wmain(int argc, wchar_t** argv)
             NoClassicRendererModules();
             Check(inputPublications == 0, "wrong-image rejection must happen before configured input or XML access");
         }
+        // Exercise the new request through the same real Core entry point. The
+        // exact-image gate must still reject before any callback or COM query.
+        Check(configureRenderV3(1, 2, CancelInput, PublishInput) == 1, "consumed API2 request permits an explicit API3 owner");
+        Check(configureRender(1, CancelInput, PublishInput) == 0 && configureRenderV2(1, 2, CancelInput, PublishInput) == 0 &&
+                  configureMovement(1, CancelInput, PublishInput) == 0 && configureInput(1, CancelInput, PublishInput) == 0,
+              "pending API3 excludes earlier observers, configured input and writes");
+        std::uint32_t foreignGpuRequest = 1;
+        std::thread   gpuRequester([&] { foreignGpuRequest = configureRenderV3(1, 2, CancelInput, PublishInput); });
+        gpuRequester.join();
+        Check(foreignGpuRequest == 0, "foreign API3 request cannot replace the owning worker's request");
+        const int api3Result = initialize();
+        Check(api3Result == 5, "actual API3 request still fails the nongame exact-image gate");
+        CheckStartup(readStartup, 5, 3, 33);
+        Check(GetModuleHandleW(L"game_de.dll") == nullptr, "failed API3 construction releases its backend lease");
+        NoGameModules();
+        NoClassicRendererModules();
+        Check(inputPublications == 0, "wrong-image API3 never reaches native ownership queries or publication");
         // A diagnostic reader cannot accidentally become a cross-thread Core
         // control channel or erase the completed owner-thread failure snapshot.
         std::array<unsigned int, 8> foreign{};
@@ -191,8 +219,9 @@ int wmain(int argc, wchar_t** argv)
         // Reaching this statement proves DE detach did not take legacy ExitProcess.
         std::printf(
             "{\"success\":true,\"checks\":%d,\"initialize_results\":[%d,%d,%d,%d],\"continued_after_free_library\":true,\"backend_unloaded_after_each_"
-            "failure\":true,\"classic_modules_unloaded\":true,\"legacy_renderer_modules_unloaded\":true,\"startup_diagnostics_verified\":true}\n",
-            checks, results[0], results[1], results[2], results[3]);
+            "failure\":true,\"classic_modules_unloaded\":true,\"legacy_renderer_modules_unloaded\":true,\"startup_diagnostics_verified\":true,\"api3_"
+            "initialize_result\":%d}\n",
+            checks, results[0], results[1], results[2], results[3], api3Result);
         return 0;
     }
     catch (const std::exception& error)

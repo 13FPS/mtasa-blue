@@ -69,6 +69,63 @@ from the DE callback. The next rendering work belongs behind CEGUI's existing
 renderer/texture abstractions. D3D12 GPU ownership, synchronization and resize
 lifetime, visible output and full MTA startup remain unverified and gated.
 
+**Optional D3D12 backend for the existing MTA GUI.**
+`D3D12GuiRenderer` implements CEGUI's existing renderer and texture interfaces;
+the optional `CreateGUID3D12Session` factory constructs the real `CGUI_Impl`,
+fonts, widgets and skins. Its versioned session supplies an actual target and
+caller-declared resource states. The original D3D9 factory and public GUI
+vtables keep their existing signatures. Browser textures and external D3D9
+render targets remain unavailable through this D3D12 session.
+
+Three fenced slots retain submitted allocators, descriptors, targets and
+immutable texture versions. A busy queue returns `Busy` without waiting or
+reusing live resources. Resize, shutdown and release retain ownership until
+submitted work retires. Creation-thread and reentry guards protect CEGUI's
+singletons; failed initialization unwinds the actual font/System ownership.
+`Tests/definitive/test_gui_d3d12_host.ps1` exercises this production factory
+against a private offscreen WARP device with MTA's actual assets, GPU pixel
+readback, widget input, blocked-queue cleanup and resize. It does not run GTA
+or use an engine-owned target. The GUI DLL is not included in the live probe.
+
+The normal opt-in GUI build passed 69 policy/artifact guards, including classic
+Win32 compile checks. The actual D3D12 WARP host passed 141 checks and produced
+133,058 non-background pixels, including verified BGRA colour/straight alpha.
+Blocked-queue tests covered all three slots, texture destruction, resize and
+busy shutdown/release. The final owned device release reached zero. The D3D12
+debug layer was unavailable; these results come from actual GPU readback,
+fences and ownership checks. The existing D3D9 host still passed its 91 checks.
+An earlier candidate aborts on an invalid-format constructor before CEGUI has
+created its logger; the corrected backend throws without that singleton and
+then successfully constructs the real GUI after the rejected attempt.
+
+The pinned native caller emits transitions toward state zero before the
+observed wrapper, but has custom-present and multi-GPU branches and rotates
+buffer pointers after returning. That trace does not establish the ownership
+or synchronization needed for MTA to submit drawing commands. Live drawing
+therefore remains disabled while callback-local GPU metadata is validated.
+
+**Separate read-only GPU ownership diagnostic.**
+`package.ps1 -Mode Smoke -MtaCoreRenderReference -MtaCoreRenderRoute D3D12 -MtaCoreRenderGpuReference`
+explicitly admits API3. Its separate factory, Core exports and 80-field wire
+preserve API1/API2. The original first 44 fields retain their meaning; the
+additional fields describe published query counts, stage/HRESULT, queue
+properties, device identity, current backbuffer metadata and custom-present
+or multi-GPU exclusions. Older observers execute no COM queries.
+
+Queries run only inside the naturally invoked callback and release acquired
+interfaces before the engine original can rotate its buffers. They submit no
+commands and retain no swapchain or backbuffer. Canonical device identity,
+single-node eligibility and matching descriptors are metadata checks; they do
+not authorize drawing, prove resource state, or establish resize safety.
+Failed or unsupported queries keep their exact stage and raw HRESULT in the
+saved evidence. The whole-log reader separates clean diagnostic teardown from
+GPU ownership acceptance and rejects nested pointer/readiness claims.
+The final owned COM-query fixture passed 179 checks, including a real WARP
+swapchain and balanced references. The native callback fixture passed 2,061
+checks. Cleanup-release faults disable further queries before calling the
+engine original; that failure survives a missed publication, a changed root
+and an original exception. No GPU commands are submitted by this observer.
+
 `package.ps1 -Mode Smoke -MtaCoreRenderReference -MtaCoreRenderRoute D3D12`
 selects the separate, disabled by default 23-file trial. The real Core owns a
 versioned observation lease from Game DE and runs it on its existing worker for
@@ -81,7 +138,7 @@ constructor, destructor, native callers and swapchain creation establish its
 owned callback and command-queue chain. For D3D12, `CreateSwapChainForHwnd`
 receives a direct command queue, as specified by
 [Microsoft's API contract](https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_2/nf-dxgi1_2-idxgifactory2-createswapchainforhwnd).
-The observer copies only dimensions, counters and presence flags from a natural
+The API1/API2 observer copies only dimensions, counters and presence flags from a natural
 callback; no viewport, swapchain, queue, device or context address reaches Core
 or JavaScript. D3D12 window/swapchain/queue knowledge is `19`; COM device and
 immediate context remain unknown. D3D11 keeps its existing knowledge mask `15`.
@@ -101,11 +158,11 @@ Core and worker for retries. A two-second cleanup deadline records failure
 without permitting unload. Ended state is copied before lease release, and the
 terminal Core diagnostics preserve the actual backend PIN.
 
-Final offline checks pass: 1,970 native callback checks, 1,548 module checks,
-424 x64/3 x86 Core consumer checks against the exact normal Game DE DLL,
-5,634 lifecycle checks on each architecture, all 15 worker scenarios,
-293 bridge protocol/885 ABI checks, 425 script checks and 79 log-reader tests.
-The normal Core/Game DE build passes 132 actual Core entry checks in each
+Final offline checks pass: 2,061 native callback checks, 1,563 module checks,
+563 x64/3 x86 Core consumer checks against the exact normal Game DE DLL,
+6,600 lifecycle checks on each architecture, all 23 worker scenarios,
+293 bridge protocol/1,062 ABI checks, 465 script checks and 33 renderer log-reader tests.
+The normal Core/Game DE build passes 161 actual Core entry checks in each
 folder layout and preserves classic Win32 compilation and default x64 exclusion.
 The packaged launcher preflight verifies all 23 files while keeping full startup
 unavailable. These checks use owned fixtures; they do not execute GTA.

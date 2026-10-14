@@ -51,11 +51,45 @@ void CGUI_Impl::DestroyElementRecursive(CGUIElement* pElement)
 #define CGUI_SA_GOTHIC_SIZE      47
 #define CGUI_MTA_SANS_FONT_SIZE  9
 
-CGUI_Impl::CGUI_Impl(IDirect3DDevice9* pDevice)
+namespace
+{
+    std::unique_ptr<CEGUI::Renderer> CreateD3D9Renderer(IDirect3DDevice9* device)
+    {
+#ifdef MTA_DEBUG
+        IUnknown* marker = nullptr;
+        if (device && SUCCEEDED(device->QueryInterface(CProxyDirect3DDevice9_GUID, reinterpret_cast<void**>(&marker))) && marker)
+            marker->Release();
+#endif
+        return std::make_unique<CEGUI::DirectX9Renderer>(device, 0);
+    }
+
+    void SetD3D9DisplaySize(CEGUI::Renderer& renderer, float width, float height)
+    {
+        static_cast<CEGUI::DirectX9Renderer&>(renderer).setDisplaySize(CEGUI::Size(width, height));
+    }
+
+    void InvalidateD3D9(CEGUI::Renderer& renderer)
+    {
+        static_cast<CEGUI::DirectX9Renderer&>(renderer).preD3DReset();
+    }
+
+    void RestoreD3D9(CEGUI::Renderer& renderer)
+    {
+        static_cast<CEGUI::DirectX9Renderer&>(renderer).postD3DReset();
+    }
+
+    const GuiRendererOperations d3d9Operations{SetD3D9DisplaySize, InvalidateD3D9, RestoreD3D9, true};
+}
+
+CGUI_Impl::CGUI_Impl(IDirect3DDevice9* pDevice) : CGUI_Impl(CreateD3D9Renderer(pDevice), d3d9Operations)
+{
+}
+
+CGUI_Impl::CGUI_Impl(std::unique_ptr<CEGUI::Renderer> renderer, const GuiRendererOperations& operations)
     : m_HasSchemeLoaded(false),
       m_fCurrentServerCursorAlpha(1.0f),
-      m_pDevice(pDevice),
-      m_pRenderer(nullptr),
+      m_RendererOperations(operations),
+      m_pRenderer(renderer.get()),
       m_pSystem(nullptr),
       m_pFontManager(nullptr),
       m_pImageSetManager(nullptr),
@@ -78,76 +112,85 @@ CGUI_Impl::CGUI_Impl(IDirect3DDevice9* pDevice)
       m_eInputMode(INPUTMODE_NO_BINDS_ON_EDIT),
       m_Channel(INPUT_CORE)
 {
-#ifdef MTA_DEBUG
+    try
     {
-        IUnknown*     pProxyMarker = nullptr;
-        const HRESULT hr = pDevice ? pDevice->QueryInterface(CProxyDirect3DDevice9_GUID, reinterpret_cast<void**>(&pProxyMarker)) : E_POINTER;
-        if (SUCCEEDED(hr) && pProxyMarker)
-        {
-            pProxyMarker->Release();
-        }
-        else
-        {
-        }
-    }
-#endif
-    m_RenderOkTimer.SetMaxIncrement(100);
+        if (!m_pRenderer || !operations.setDisplaySize || !operations.invalidate || !operations.restore)
+            throw std::invalid_argument("GUI renderer operations are incomplete");
+        m_RenderOkTimer.SetMaxIncrement(100);
 
-    // Callback arrays are default-initialized to empty state by their constructors
+        // Callback arrays are default-initialized to empty state by their constructors
 
-    // Create a GUI system and get the windowmanager
-    m_pRenderer = new CEGUI::DirectX9Renderer(pDevice, 0);
-    m_pSystem = new CEGUI::System(m_pRenderer, CEGUI::String(CalcMTASAPath(PathJoin("MTA", "logs", "CEGUI.log"))).data());
+        // Create a GUI system and get the windowmanager
+        m_pSystem = new CEGUI::System(m_pRenderer, CEGUI::String(CalcMTASAPath(PathJoin("MTA", "logs", "CEGUI.log"))).data());
 
-    // Get pointers to various stuff from CEGUI singletons
-    m_pFontManager = CEGUI::FontManager::getSingletonPtr();
-    m_pImageSetManager = CEGUI::ImagesetManager::getSingletonPtr();
-    m_pSchemeManager = CEGUI::SchemeManager::getSingletonPtr();
-    m_pWindowManager = CEGUI::WindowManager::getSingletonPtr();
+        // Get pointers to various stuff from CEGUI singletons
+        m_pFontManager = CEGUI::FontManager::getSingletonPtr();
+        m_pImageSetManager = CEGUI::ImagesetManager::getSingletonPtr();
+        m_pSchemeManager = CEGUI::SchemeManager::getSingletonPtr();
+        m_pWindowManager = CEGUI::WindowManager::getSingletonPtr();
 
-    SetDefaultGuiWorkingDirectory(CalcMTASAPath("MTA"));
+        SetDefaultGuiWorkingDirectory(CalcMTASAPath("MTA"));
 
-    // Set logging to Informative for debug and Standard for release
+        // Set logging to Informative for debug and Standard for release
 #if defined(_DEBUG) || defined(DEBUG)
-    CEGUI::Logger::getSingleton().setLoggingLevel(CEGUI::Informative);
+        CEGUI::Logger::getSingleton().setLoggingLevel(CEGUI::Informative);
 #else
-    CEGUI::Logger::getSingleton().setLoggingLevel(CEGUI::Standard);
+        CEGUI::Logger::getSingleton().setLoggingLevel(CEGUI::Standard);
 #endif
 
-    // Load our fonts
-    SString strFontsPath = PathJoin(GetSystemWindowsPath(), "fonts");
+        // Load our fonts
+        SString strFontsPath = PathJoin(GetSystemWindowsPath(), "fonts");
 
-    try
-    {
-        m_pUniFont = (CGUIFont_Impl*)CreateFnt("unifont", CGUI_MTA_SUBSTITUTE_FONT, 9, 0, false);
-        m_pFontManager->setSubstituteFont(m_pUniFont->GetFont());
-    }
-    catch (const CEGUI::Exception& e)
-    {
-        SString strMessage = e.getMessage().c_str();
-        BrowseToSolution("create-fonts", EXIT_GAME_FIRST | ASK_GO_ONLINE, SString("Error loading fonts!\n\n%s", *strMessage));
-    }
+        try
+        {
+            m_pUniFont = (CGUIFont_Impl*)CreateFnt("unifont", CGUI_MTA_SUBSTITUTE_FONT, 9, 0, false);
+            m_pFontManager->setSubstituteFont(m_pUniFont->GetFont());
+        }
+        catch (const CEGUI::Exception& e)
+        {
+            if (!IsDirect3D9Renderer())
+                throw;
+            SString strMessage = e.getMessage().c_str();
+            BrowseToSolution("create-fonts", EXIT_GAME_FIRST | ASK_GO_ONLINE, SString("Error loading fonts!\n\n%s", *strMessage));
+        }
 
-    // Window fonts first
-    m_pDefaultFont = (CGUIFont_Impl*)CreateFntFromWinFont("default-normal", CGUI_MTA_DEFAULT_REG, CGUI_MTA_DEFAULT_FONT, 9, 0);
-    m_pSmallFont = (CGUIFont_Impl*)CreateFntFromWinFont("default-small", CGUI_MTA_DEFAULT_REG, CGUI_MTA_DEFAULT_FONT, 7, 0);
-    m_pBoldFont = (CGUIFont_Impl*)CreateFntFromWinFont("default-bold-small", CGUI_MTA_DEFAULT_REG_BOLD, CGUI_MTA_DEFAULT_FONT_BOLD, 8, 0);
-    m_pClearFont = (CGUIFont_Impl*)CreateFntFromWinFont("clear-normal", CGUI_MTA_CLEAR_REG, CGUI_MTA_CLEAR_FONT, 9);
+        // Window fonts first
+        m_pDefaultFont = (CGUIFont_Impl*)CreateFntFromWinFont("default-normal", CGUI_MTA_DEFAULT_REG, CGUI_MTA_DEFAULT_FONT, 9, 0);
+        m_pSmallFont = (CGUIFont_Impl*)CreateFntFromWinFont("default-small", CGUI_MTA_DEFAULT_REG, CGUI_MTA_DEFAULT_FONT, 7, 0);
+        m_pBoldFont = (CGUIFont_Impl*)CreateFntFromWinFont("default-bold-small", CGUI_MTA_DEFAULT_REG_BOLD, CGUI_MTA_DEFAULT_FONT_BOLD, 8, 0);
+        m_pClearFont = (CGUIFont_Impl*)CreateFntFromWinFont("clear-normal", CGUI_MTA_CLEAR_REG, CGUI_MTA_CLEAR_FONT, 9);
 
-    try
-    {
-        m_pSAHeaderFont = (CGUIFont_Impl*)CreateFnt("sa-header", CGUI_SA_HEADER_FONT, CGUI_SA_HEADER_SIZE, 0, true);
-        m_pSAGothicFont = (CGUIFont_Impl*)CreateFnt("sa-gothic", CGUI_SA_GOTHIC_FONT, CGUI_SA_GOTHIC_SIZE, 0, true);
-        m_pSansFont = (CGUIFont_Impl*)CreateFnt("sans", CGUI_MTA_SANS_FONT, CGUI_MTA_SANS_FONT_SIZE, 0, false);
+        try
+        {
+            m_pSAHeaderFont = (CGUIFont_Impl*)CreateFnt("sa-header", CGUI_SA_HEADER_FONT, CGUI_SA_HEADER_SIZE, 0, true);
+            m_pSAGothicFont = (CGUIFont_Impl*)CreateFnt("sa-gothic", CGUI_SA_GOTHIC_FONT, CGUI_SA_GOTHIC_SIZE, 0, true);
+            m_pSansFont = (CGUIFont_Impl*)CreateFnt("sans", CGUI_MTA_SANS_FONT, CGUI_MTA_SANS_FONT_SIZE, 0, false);
+        }
+        catch (const CEGUI::Exception& e)
+        {
+            if (!IsDirect3D9Renderer())
+                throw;
+            SString strMessage = e.getMessage().c_str();
+            BrowseToSolution("create-fonts", EXIT_GAME_FIRST | ASK_GO_ONLINE, SString("Error loading fonts!\n\n%s", *strMessage));
+        }
+        // Only a fully initialized GUI takes renderer ownership. Failure tears down
+        // the actual CEGUI consumers before the renderer's unique owner releases it.
+        renderer.release();
     }
-    catch (const CEGUI::Exception& e)
+    catch (...)
     {
-        SString strMessage = e.getMessage().c_str();
-        BrowseToSolution("create-fonts", EXIT_GAME_FIRST | ASK_GO_ONLINE, SString("Error loading fonts!\n\n%s", *strMessage));
+        m_pRenderer = nullptr;
+        DestroyGUIResources();
+        throw;
     }
 }
 
 CGUI_Impl::~CGUI_Impl()
+{
+    DestroyGUIResources();
+}
+
+void CGUI_Impl::DestroyGUIResources()
 {
     if (m_ScriptRoot)
     {
@@ -168,10 +211,26 @@ CGUI_Impl::~CGUI_Impl()
     // CEGUI borrows the renderer while destroying its fonts and textures.
     // Release our renderer afterward so its buffers and device reference do
     // not survive GUI module teardown.
-    delete CEGUI::System::getSingletonPtr();
+    delete m_pSystem;
     m_pSystem = nullptr;
     delete m_pRenderer;
     m_pRenderer = nullptr;
+}
+
+void CGUI_Impl::DestroySessionWidgets()
+{
+    // Explicit sessions must release widget wrappers while their CEGUI windows
+    // and renderer still exist; DLL detach is too late for this owner policy.
+    if (m_pTop)
+    {
+        CEGUI::Window* root = m_pTop;
+        m_ScriptRoot = nullptr;
+        DestroyGuiWindowRecursive(root);
+        m_ScriptTop = nullptr;
+        m_pTop = nullptr;
+    }
+    for (int channel = 0; channel < INPUT_CHANNEL_COUNT; ++channel)
+        ClearInputHandlers(static_cast<eInputChannel>(channel));
 }
 
 void CGUI_Impl::CreateRootWindow()
@@ -317,10 +376,12 @@ void CGUI_Impl::SetResolution(float fWidth, float fHeight)
 {
     try
     {
-        reinterpret_cast<CEGUI::DirectX9Renderer*>(m_pRenderer)->setDisplaySize(CEGUI::Size(fWidth, fHeight));
+        m_RendererOperations.setDisplaySize(*m_pRenderer, fWidth, fHeight);
     }
     catch (const CEGUI::Exception& exception)
     {
+        if (!IsDirect3D9Renderer())
+            throw;
         // Reachable from the vid command when the video mode changes.
         ShowFatalCEGUIException(exception, "SetResolution");
     }
@@ -345,7 +406,7 @@ void CGUI_Impl::Draw()
 
         if (!m_pSystem->renderGUI())
         {
-            if (m_RenderOkTimer.Get() > 4000)
+            if (IsDirect3D9Renderer() && m_RenderOkTimer.Get() > 4000)
             {
                 // 4 seconds and over 40 failed calls means we have a problem
                 BrowseToSolution("gui-render", EXIT_GAME_FIRST, "Some sort of DirectX problem has occurred");
@@ -356,6 +417,8 @@ void CGUI_Impl::Draw()
     }
     catch (const CEGUI::Exception& exception)
     {
+        if (!IsDirect3D9Renderer())
+            throw;
         // Missing or corrupt GUI assets throw here; show one clear error and exit.
         ShowFatalCEGUIException(exception, "Draw");
     }
@@ -365,10 +428,12 @@ void CGUI_Impl::Invalidate()
 {
     try
     {
-        reinterpret_cast<CEGUI::DirectX9Renderer*>(m_pRenderer)->preD3DReset();
+        m_RendererOperations.invalidate(*m_pRenderer);
     }
     catch (const CEGUI::Exception& exception)
     {
+        if (!IsDirect3D9Renderer())
+            throw;
         // A CEGUI fault here unwinds through the D3D reset path and crashes harder in COM.
         ShowFatalCEGUIException(exception, "Invalidate");
     }
@@ -378,10 +443,12 @@ void CGUI_Impl::Restore()
 {
     try
     {
-        reinterpret_cast<CEGUI::DirectX9Renderer*>(m_pRenderer)->postD3DReset();
+        m_RendererOperations.restore(*m_pRenderer);
     }
     catch (const CEGUI::Exception& exception)
     {
+        if (!IsDirect3D9Renderer())
+            throw;
         ShowFatalCEGUIException(exception, "Restore");
     }
 }
@@ -578,6 +645,8 @@ CGUIFont* CGUI_Impl::CreateFntFromWinFont(const char* szFontName, const char* sz
     }
     if (!pResult)
     {
+        if (!IsDirect3D9Renderer())
+            throw std::runtime_error("A required GUI font is unavailable");
         BrowseToSolution("create-fonts", EXIT_GAME_FIRST | ASK_GO_ONLINE, SString("Error loading font!\n\n(%s)", szFontWinFile));
     }
 
@@ -631,6 +700,9 @@ CGUIComboBox* CGUI_Impl::_CreateComboBox(CGUIElement_Impl* pParent, const char* 
 
 CGUIWebBrowser* CGUI_Impl::_CreateWebBrowser(CGUIElement_Impl* pParent)
 {
+    // Browser textures are externally owned D3D9 objects in the current SDK.
+    if (!IsDirect3D9Renderer())
+        return nullptr;
     return new CGUIWebBrowser_Impl(this, pParent);
 }
 

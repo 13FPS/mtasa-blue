@@ -30,6 +30,8 @@ $sourceNames=@('Tests/definitive/MtaCoreEntryTests.cpp','Tests/definitive/test_m
     'Client/core/CKeyBinds.h','Client/core/CKeyBinds.cpp','Client/core/CTimingCheckpoints.hpp','Client/game_de/GameAdapter.cpp',
     'Client/game_de/NativePadReader.cpp','Client/game_de/NativePadReader.h','Client/sdk/game/CGameAdapter.h',
     'Client/game_de/NativeMovementInput.cpp','Client/game_de/NativeMovementInput.h','Client/game_de/NativeInputRouting.h',
+    'Client/game_de/NativeRenderObservation.cpp','Client/game_de/NativeRenderObservation.h','Client/sdk/game/CGameRenderObservation.h',
+    'Client/game_de/NativeD3D12OwnershipProbe.cpp','Client/game_de/NativeD3D12OwnershipProbe.h',
     'Client/game_de/premake5.lua','vendor/detours/premake5.lua','vendor/detours/4.0.1/src/detours.h',
     'Shared/sdk/CControllerState.h','Shared/sdk/CControllerActions.h','Shared/sdk/CControlStateSynthesis.h')
 $sourceHashes=[ordered]@{}
@@ -168,7 +170,9 @@ $sourcesUnchanged=$true
 foreach ($name in $sourceNames) {
     if ((Get-FileHash -LiteralPath (Join-Path $taskRoot $name) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $sourceHashes[$name]) { $sourcesUnchanged=$false }
 }
-$success=$compilerExit -eq 0 -and $hostExit -eq 0 -and $null -ne $hostResult -and $hostResult.success -and $bindingRejections -eq 2 -and $sourcesUnchanged
+# The separate API3 InitializeCore attempt adds a third genuine exact-image
+# rejection; all three must occur before any native game binding is admitted.
+$success=$compilerExit -eq 0 -and $hostExit -eq 0 -and $null -ne $hostResult -and $hostResult.success -and $bindingRejections -eq 3 -and $sourcesUnchanged
 $record=[ordered]@{recorded_at=[DateTimeOffset]::Now.ToString('o');success=$success;directory=$outputRoot;
     scope='Actual supplied Core/Game DE DLL entry point in a separate non-game host named SanAndreas.exe';
     compiler_exit=$compilerExit;host_exit=$hostExit;host_result=$hostResult;failure=$failure;host_sha256=$hostHash;nonclassic_layout=$NonClassicLayout.IsPresent;

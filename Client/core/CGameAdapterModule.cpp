@@ -120,6 +120,7 @@ bool CGameAdapterModule::Start(CCoreInterface* owner, const std::wstring& absolu
     m_ownerIdentity = owner;
     m_hasRenderObservation = false;
     m_hasRenderObservationV2 = false;
+    m_hasRenderObservationV3 = false;
     m_renderRoute = mta::game_de::RenderObservationRoute::Unknown;
     m_error.clear();
     return true;
@@ -191,6 +192,7 @@ bool CGameAdapterModule::Reset()
         return false;
     m_hasRenderObservation = false;
     m_hasRenderObservationV2 = false;
+    m_hasRenderObservationV3 = false;
     return true;
 }
 
@@ -275,7 +277,7 @@ bool CGameAdapterModule::BeginNativeRenderObservation()
 {
     if (!RequireOwnerThread("BeginNativeRenderObservation"))
         return false;
-    if (m_renderObservation || m_renderObservationV2)
+    if (m_renderObservation || m_renderObservationV2 || m_renderObservationV3)
     {
         SetError("A render observation lease is already retained; end it before another begin");
         return false;
@@ -300,6 +302,7 @@ bool CGameAdapterModule::BeginNativeRenderObservation()
     // explicit End proves cleanup rather than releasing on a false start.
     m_hasRenderObservation = false;
     m_hasRenderObservationV2 = false;
+    m_hasRenderObservationV3 = false;
     return RecordStatus(m_renderObservation->Begin(), "BeginNativeRenderObservation");
 }
 
@@ -313,7 +316,7 @@ bool CGameAdapterModule::BeginNativeRenderObservation(mta::game_de::RenderObserv
         SetError("An explicit supported render observation route is required");
         return false;
     }
-    if (m_renderObservation || m_renderObservationV2)
+    if (m_renderObservation || m_renderObservationV2 || m_renderObservationV3)
     {
         SetError("A render observation lease is already retained; end it before selecting another version or route");
         return false;
@@ -337,14 +340,53 @@ bool CGameAdapterModule::BeginNativeRenderObservation(mta::game_de::RenderObserv
     m_renderRoute = route;
     m_hasRenderObservation = false;
     m_hasRenderObservationV2 = false;
+    m_hasRenderObservationV3 = false;
     return RecordStatus(m_renderObservationV2->Begin(), "BeginNativeRenderObservationV2");
+}
+
+bool CGameAdapterModule::BeginNativeRenderOwnershipObservation(mta::game_de::RenderObservationRoute route)
+{
+    using namespace mta::game_de;
+    if (!RequireOwnerThread("BeginNativeRenderObservationV3"))
+        return false;
+    if (route != RenderObservationRoute::D3D12)
+    {
+        SetError("An explicit supported render observation route is required");
+        return false;
+    }
+    if (m_renderObservation || m_renderObservationV2 || m_renderObservationV3)
+    {
+        SetError("A render observation lease is already retained; end it before selecting another version or route");
+        return false;
+    }
+    const auto address = GetProcAddress(static_cast<HMODULE>(m_module), "CreateGameRenderObservationV3");
+    if (!address)
+    {
+        SetError("The selected adapter does not export version3 render diagnostics; no legacy route was substituted");
+        return false;
+    }
+    using Factory = decltype(&CreateGameRenderObservationV3);
+    Factory factory = nullptr;
+    static_assert(sizeof(factory) == sizeof(address));
+    std::memcpy(&factory, &address, sizeof(factory));
+    m_renderObservationV3 = factory(RenderObservationApiVersionV3, m_ownerIdentity, route);
+    if (!m_renderObservationV3)
+    {
+        SetError("The version3 render factory rejected its version/owner/route or could not allocate a lease");
+        return false;
+    }
+    m_renderRoute = route;
+    m_hasRenderObservation = false;
+    m_hasRenderObservationV2 = false;
+    m_hasRenderObservationV3 = false;
+    return RecordStatus(m_renderObservationV3->Begin(), "BeginNativeRenderObservationV3");
 }
 
 bool CGameAdapterModule::GetNativeRenderObservationState(mta::game_de::RenderObservationState& state)
 {
     if (!RequireOwnerThread("GetNativeRenderObservationState"))
         return false;
-    if (m_renderObservationV2 || m_hasRenderObservationV2)
+    if (m_renderObservationV2 || m_hasRenderObservationV2 || m_renderObservationV3 || m_hasRenderObservationV3)
     {
         SetError("Version2 render observations require the version2 state contract");
         return false;
@@ -394,6 +436,34 @@ bool CGameAdapterModule::GetNativeRenderObservationState(mta::game_de::RenderObs
     return true;
 }
 
+bool CGameAdapterModule::GetNativeRenderObservationState(mta::game_de::RenderObservationStateV3& state)
+{
+    if (!RequireOwnerThread("GetNativeRenderObservationStateV3"))
+        return false;
+    if (m_renderObservationV3)
+    {
+        mta::game_de::RenderObservationStateV3 next;
+        if (!RecordStatus(m_renderObservationV3->ReadState(next), "GetNativeRenderObservationStateV3"))
+            return false;
+        if (next.base.requestedRoute != static_cast<std::uint32_t>(m_renderRoute) ||
+            (next.base.observedRoute && next.base.observedRoute != next.base.requestedRoute))
+        {
+            SetError("Render observation provider returned a different route; caller state preserved");
+            return false;
+        }
+        m_lastRenderObservationV3 = next;
+        m_hasRenderObservationV3 = true;
+    }
+    if (!m_hasRenderObservationV3)
+    {
+        SetError("No version3 native render observation state is available");
+        return false;
+    }
+    state = m_lastRenderObservationV3;
+    m_error.clear();
+    return true;
+}
+
 bool CGameAdapterModule::EndNativeRenderObservation() noexcept
 {
     // Stop calls this during cleanup, so errors must not allocate or throw.
@@ -401,6 +471,34 @@ bool CGameAdapterModule::EndNativeRenderObservation() noexcept
     {
         SetError("Render observation cleanup requires an initialized adapter's owning Core thread");
         return false;
+    }
+    if (m_renderObservationV3)
+    {
+        // The optional version owns its own state layout. Cache only its actual
+        // ended values; never reinterpret them through the legacy API1 lease.
+        if (m_renderObservationV3->End() != mta::game_de::Status::Ok)
+        {
+            SetError("Version3 render observation End failed; lease, adapter and module retained for cleanup retry");
+            return false;
+        }
+        mta::game_de::RenderObservationStateV3 final;
+        if (m_renderObservationV3->ReadState(final) != mta::game_de::Status::Ok)
+        {
+            SetError("Final version3 render observation read failed; lease, adapter and module retained for cleanup retry");
+            return false;
+        }
+        if (final.base.base.active || final.base.base.pendingCleanup || final.base.requestedRoute != static_cast<std::uint32_t>(m_renderRoute) ||
+            (final.base.observedRoute && final.base.observedRoute != final.base.requestedRoute))
+        {
+            SetError("Ended version3 render observation reports unsafe cleanup or a different route; lease, adapter and module retained");
+            return false;
+        }
+        m_lastRenderObservationV3 = final;
+        m_hasRenderObservationV3 = true;
+        m_renderObservationV3->Release();
+        m_renderObservationV3 = nullptr;
+        m_error.clear();
+        return true;
     }
     if (m_renderObservationV2)
     {
@@ -467,7 +565,7 @@ void CGameAdapterModule::Stop() noexcept
         SetError("Game adapter teardown requires its owning Core thread; module retained");
         return;
     }
-    if ((m_renderObservation || m_renderObservationV2) && !EndNativeRenderObservation())
+    if ((m_renderObservation || m_renderObservationV2 || m_renderObservationV3) && !EndNativeRenderObservation())
         return;
     if (m_adapter)
     {

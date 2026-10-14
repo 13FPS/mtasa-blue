@@ -18,6 +18,7 @@ class CGUI_Impl;
 #include <unordered_map>
 #include <unordered_set>
 #include <cstdint>
+#include <memory>
 #include <windows.h>
 
 #define CGUI_CHAR_SIZE 6
@@ -60,13 +61,25 @@ namespace CEGUI
     typedef GUISheet DefaultWindow;
 }  // namespace CEGUI
 
+struct GuiRendererOperations
+{
+    void (*setDisplaySize)(CEGUI::Renderer&, float, float);
+    void (*invalidate)(CEGUI::Renderer&);
+    void (*restore)(CEGUI::Renderer&);
+    bool direct3D9;
+};
+
 class CGUI_Impl : public CGUI, public CGUITabList
 {
 public:
     static constexpr std::uint32_t kInvalidRedrawHandle = 0;
 
     CGUI_Impl(IDirect3DDevice9* pDevice);
+    CGUI_Impl(std::unique_ptr<CEGUI::Renderer> renderer, const GuiRendererOperations& operations);
     ~CGUI_Impl();
+
+    bool IsDirect3D9Renderer() const { return m_RendererOperations.direct3D9; }
+    void DestroySessionWidgets();
 
     void SetSkin(const char* szName);
     void SetBidiEnabled(bool bEnabled);
@@ -313,8 +326,9 @@ private:
     CGUIFont* CreateFntFromWinFont(const char* szFontName, const char* szFontWinReg, const char* szFontWinFile, unsigned int uSize = 8, unsigned int uFlags = 0,
                                    bool bAutoScale = false);
     void      ApplyGuiWorkingDirectory();
+    void      DestroyGUIResources();
 
-    IDirect3DDevice9* m_pDevice;
+    GuiRendererOperations m_RendererOperations;
 
     CEGUI::Renderer*        m_pRenderer;
     CEGUI::System*          m_pSystem;

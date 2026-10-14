@@ -14,12 +14,16 @@ param(
     [switch]$MtaCoreInputReference,
     [switch]$MtaCoreMovementReference,
     [switch]$MtaCoreRenderReference,
+    [switch]$MtaCoreRenderGpuReference,
     [ValidateSet('D3D11', 'D3D12')][string]$MtaCoreRenderRoute = 'D3D11',
     [string]$GameDirectory = 'C:\Program Files (x86)\Steam\steamapps\common\GTA San Andreas - The Definitive Edition\Gameface\Binaries\Win64'
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+if ($MtaCoreRenderGpuReference -and (-not $MtaCoreRenderReference -or $MtaCoreRenderRoute -ne 'D3D12')) {
+    throw 'GPU ownership queries require explicit D3D12 Core renderer observation.'
+}
 if ($PSBoundParameters.ContainsKey('MtaCoreRenderRoute') -and -not $MtaCoreRenderReference) {
     throw 'An explicit renderer route requires MtaCoreRenderReference.'
 }
@@ -187,6 +191,17 @@ if ($coreRenderRouteMatches -eq 1) {
     $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $coreRenderRoutePattern,
         "export const MTA_CORE_RENDER_ROUTE = '$($MtaCoreRenderRoute.ToLowerInvariant())';"))
 }
+$coreRenderGpuPattern = 'export const MTA_CORE_RENDER_GPU_REFERENCE = (true|false);'
+$coreRenderGpuMatches = [regex]::Matches($configText, $coreRenderGpuPattern).Count
+if ($coreRenderGpuMatches -gt 1 -or ($MtaCoreRenderGpuReference -and $coreRenderGpuMatches -ne 1)) {
+    throw 'Update the adapter before selecting GPU ownership queries.'
+}
+# Historical read-only observers keep working; ordinary mode switches clear
+# the newer COM-query opt-in instead of silently inheriting it from a trial.
+if ($coreRenderGpuMatches -eq 1) {
+    $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $coreRenderGpuPattern,
+        "export const MTA_CORE_RENDER_GPU_REFERENCE = $($MtaCoreRenderGpuReference.IsPresent.ToString().ToLowerInvariant());"))
+}
 $configEntry = @($installed.files | Where-Object { $_.path -eq 'CLEO/de-online/config.mjs' })
 if ($configEntry.Count -ne 1) { throw 'Missing owned configuration record.' }
 $configEntry[0].sha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($newConfig)).ToLowerInvariant()
@@ -219,7 +234,9 @@ try {
     Write-AtomicFile $manifestPath $originalManifest
     throw $failure
 }
-if ($MtaCoreRenderReference) {
+if ($MtaCoreRenderGpuReference) {
+    Write-Host 'Installed adapter mode: Smoke, read-only D3D12 GPU ownership queries armed. Ctrl+Shift+F9 starts after release; Ctrl+Shift+End requests cleanup. No drawing or input writes.'
+} elseif ($MtaCoreRenderReference) {
     Write-Host "Installed adapter mode: Smoke, Core $MtaCoreRenderRoute observation armed. Ctrl+Shift+F9 starts after release; Ctrl+Shift+End requests cleanup. No drawing or input writes."
 } elseif ($MtaCoreMovementReference) {
     Write-Host 'Installed adapter mode: Smoke, bounded Core configured movement writes armed. Ctrl+Shift+F9 activates after release; Ctrl+Shift+End requests cleanup.'

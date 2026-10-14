@@ -103,4 +103,81 @@ namespace mta::game_de
 #else
     extern "C" IGameRenderObservationV2* CreateGameRenderObservationV2(std::uint32_t apiVersion, CCoreInterface* owner, RenderObservationRoute route) noexcept;
 #endif
+
+    // API3 is an explicit, read-only COM ownership query inside a naturally
+    // invoked D3D12 callback. Older observers never acquire COM references.
+    inline constexpr std::uint32_t RenderObservationApiVersionV3 = 3;
+    enum class GpuOwnershipQueryStage : std::uint32_t
+    {
+        NotAttempted = 0,
+        NativeRoots,
+        CustomPresent,
+        SingleNode,
+        SwapchainQuery,
+        QueueQuery,
+        QueueDescription,
+        QueueDevice,
+        SwapchainDevice,
+        CanonicalQueueDevice,
+        CanonicalSwapchainDevice,
+        SwapchainDescription,
+        CurrentBackbufferIndex,
+        Backbuffer,
+        BackbufferDescription,
+        BackbufferDevice,
+        CanonicalBackbufferDevice,
+        RootReadback,
+        ReleaseReferences,
+        Complete
+    };
+    enum class GpuOwnershipQueryStatus : std::uint32_t
+    {
+        NotAttempted = 0,
+        Accepted,
+        Unsupported,
+        Failed,
+        Exception,
+        RootsChanged,
+        CleanupFailed
+    };
+    struct GpuOwnershipProbeState
+    {
+        // Counts describe coherent published probes, one per accepted native
+        // snapshot. A nonblocking publication miss retains the previous values.
+        std::uint64_t attempts = 0, accepted = 0, rejected = 0;
+        // metadataValid includes a fully queried unsupported result; it never
+        // implies a safe GPU frame boundary, resource state, or GUI admission.
+        std::uint32_t queryStage = 0, hresult = 0, metadataValid = 0, supportPredicate = 0;
+        std::uint32_t queueType = 0, queuePriority = 0, queueFlags = 0, queueNodeMask = 0;
+        std::uint32_t deviceNodeCount = 0, adapterLuidLow = 0, adapterLuidHigh = 0;
+        // Canonical IUnknown identity: queue device1, SC device2, buffer device4.
+        std::uint32_t canonicalIdentityFlags = 0;
+        std::uint32_t currentBackbufferIndex = 0, swapchainBufferCount = 0, swapchainFormat = 0, swapchainFlags = 0;
+        std::uint32_t swapchainWidth = 0, swapchainHeight = 0;
+        std::uint64_t backbufferWidth = 0;
+        std::uint32_t backbufferHeight = 0, backbufferFormat = 0, backbufferSampleCount = 0, backbufferSampleQuality = 0;
+        std::uint32_t customPresentPresent = 0, queryStatus = 0, nativeExplicitGPUCount = 0, nativeAFRCount = 0;
+    };
+    struct RenderObservationStateV3
+    {
+        RenderObservationStateV2 base;
+        GpuOwnershipProbeState   gpu;
+    };
+    class IGameRenderObservationV3
+    {
+    public:
+        virtual Status Begin() noexcept = 0;
+        virtual Status ReadState(RenderObservationStateV3& state) noexcept = 0;
+        virtual Status End() noexcept = 0;
+        virtual void   Release() noexcept = 0;
+
+    protected:
+        virtual ~IGameRenderObservationV3() = default;
+    };
+#if defined(_WIN32) && defined(MTA_GAME_DE_EXPORTS)
+    extern "C" __declspec(dllexport)
+    IGameRenderObservationV3* CreateGameRenderObservationV3(std::uint32_t apiVersion, CCoreInterface* owner, RenderObservationRoute route) noexcept;
+#else
+    extern "C" IGameRenderObservationV3* CreateGameRenderObservationV3(std::uint32_t apiVersion, CCoreInterface* owner, RenderObservationRoute route) noexcept;
+#endif
 }

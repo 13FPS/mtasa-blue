@@ -1203,6 +1203,7 @@ async function main() {
             MTA_CORE_MOVEMENT_REFERENCE: overrides.mtaCoreMovementReference ?? false,
             MTA_CORE_RENDER_REFERENCE: overrides.mtaCoreRenderReference ?? false,
             MTA_CORE_RENDER_ROUTE: overrides.mtaCoreRenderRoute ?? 'd3d11',
+            MTA_CORE_RENDER_GPU_REFERENCE: overrides.mtaCoreRenderGpuReference ?? false,
             Date: { now: () => overrides.times ? overrides.times[frame] : frame * 50 },
             CLEO: { version: overrides.version || '1.5.1', apiVersion: overrides.definitions || '0.500', hostVersion: '1.0.113.49697469' },
             native: (name, ...args) => { record(name, ...args);
@@ -1252,6 +1253,69 @@ async function main() {
                     ...overrides.renderState }, overrides.mtaCoreRenderRoute === 'd3d12' ? 2 : 1)[index],
                 ...overrides.functions } });
     };
+    const coreGpuState = (overrides = {}) => {
+        const state = coreRenderState({}, 2).concat(Array(36).fill(0));
+        Object.assign(state, { 0: 3, 44: 600, 46: 600, 50: 19, 52: 1, 53: 1, 58: 1, 59: 123, 61: 7,
+            62: 1, 63: 3, 64: 87, 66: 1920, 67: 1080, 68: 1920, 70: 1080, 71: 87, 72: 1, 75: 1, 76: 1, 77: 1 }, overrides);
+        return state;
+    };
+    const coreGpu = (overrides = {}) => {
+        let polls = 0;
+        return coreRender({ mtaCoreRenderRoute: 'd3d12', mtaCoreRenderGpuReference: true, ...overrides,
+            functions: { DE_CoreRenderApiVersionV3: () => 3, DE_CoreRenderBeginV3: () => 1, DE_CoreRenderCaptureV3: () => 1,
+                DE_CoreStartupPoll: () => ++polls >= 2 ? 1 : 0,
+                DE_CoreRenderReadV3: field => coreGpuState({ ...(polls < 2 ? { 1: 1, 2: 1, 3: 0, 4: 0, 5: 1, 6: 0, 7: 0, 13: 1 } : {}),
+                    ...overrides.renderState })[field], ...overrides.functions } });
+    };
+    test('GPU queries require independent API3 admission and preserve scalar80 evidence without drawing', () => {
+        const result = coreGpu();
+        assert.deepEqual(result.calls.find(call => call[0] === 'DE_CoreRenderBeginV3'), ['DE_CoreRenderBeginV3', 2]);
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreRenderReadV3').length, 160);
+        assert.ok(!result.calls.some(call => /DE_CoreRender.*V2/.test(call[0])));
+        assert.equal(result.logs.find(event => event.event === 'core_render_reference_started').observation_api, 3);
+        const finish = result.logs.find(event => event.event === 'core_render_reference_finished');
+        assert.equal(finish.passed, true); assert.equal(finish.rendering_started, false); assert.equal(finish.input_writes, false);
+        assert.equal(result.logs.find(event => event.event === 'core_render_reference_sample').state.length, 80);
+    });
+    for (const override of [{ mtaCoreRenderRoute: 'd3d11' }, { mtaCoreRenderReference: false }, { mtaCoreRenderGpuReference: 'true' }])
+        test('GPU metadata cannot be implicitly enabled by inconsistent configuration ' + JSON.stringify(override), () => {
+            const result = coreGpu(override);
+            assert.equal(result.calls.length, 0);
+            assert.ok(result.logs.some(event => event.event === 'adapter_failed'));
+        });
+    for (const value of [undefined, () => 2, () => 4])
+        test('GPU API3 missing or wrong version has no API2 fallback ' + String(value), () => {
+            const result = coreGpu({ functions: { DE_CoreRenderApiVersionV3: value } });
+            assert.ok(!result.calls.some(call => /DE_CoreRenderBegin/.test(call[0])));
+            assert.ok(result.logs.some(event => event.event === 'adapter_failed'));
+        });
+    for (const [field, value] of [[44, 599], [45, 1], [46, 599], [48, 1], [50, 0], [50, 20], [51, 1], [52, 2], [53, 0],
+            [54, 2], [57, 2], [58, 2], [61, 3], [62, 3], [63, 1], [63, 17], [63, 0xffffffff], [66, 0], [68, 1919], [69, 1], [70, 1079], [71, 28],
+            [72, 2], [73, 1], [74, 1], [75, 0], [76, 2], [77, 2], [78, 1], [79, 1]])
+        test('GPU success rejects contradictory metadata field ' + field, () => {
+            const result = coreGpu({ renderState: { [field]: value } });
+            assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 1);
+            assert.ok(!result.logs.some(event => event.event === 'core_render_reference_finished' && event.passed));
+        });
+    test('GPU success cannot agree on an unknown swapchain and backbuffer format', () => {
+        const result = coreGpu({ renderState: { 64: 0, 71: 0 } });
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 1);
+        assert.ok(!result.logs.some(event => event.event === 'core_render_reference_finished' && event.passed));
+    });
+    test('GPU unsupported multi-node diagnostic retains native callback and actual cleanup without passing', () => {
+        const result = coreGpu({ renderState: { 46: 0, 48: 600, 53: 0, 58: 2, 75: 2 } });
+        const finish = result.logs.find(event => event.event === 'core_render_reference_finished');
+        assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true);
+        const sample = result.logs.find(event => event.event === 'core_render_reference_sample').state;
+        assert.equal(sample[19], 600); assert.equal(sample[48], 600); assert.equal(sample[58], 2);
+    });
+    test('GPU failed COM query preserves exact HRESULT and stage and reports clean diagnostic failure', () => {
+        const result = coreGpu({ renderState: { 46: 0, 48: 600, 50: 8, 51: 0x80004002, 52: 0, 53: 0, 75: 3 } });
+        const finish = result.logs.find(event => event.event === 'core_render_reference_finished');
+        assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true);
+        const sample = result.logs.find(event => event.event === 'core_render_reference_sample').state;
+        assert.equal(sample[50], 8); assert.equal(sample[51], 0x80004002);
+    });
     test('Core render probe waits for F9 release and reads scalar44 snapshots on yielding worker polls', () => {
         const result = coreRender();
         assert.equal(result.callFrames.find(call => call.name === 'DynamicLibrary.Load').frame, 2);

@@ -101,7 +101,9 @@ try {
     $runs += Run-Host 'actual-core-wrong-image' $actualRoot @($actualRoot,'actual')
     foreach ($mode in @('movement','movement-cancel','render','render-cancel','render-deadline',
                         'render-v2','render-v2-d3d11','render-v2-cancel','render-v2-deadline','render-v2-missing',
-                        'render-v2-cross-route','render-v2-mixed-version','render-v2-wrong-mask')) {
+                        'render-v2-cross-route','render-v2-mixed-version','render-v2-wrong-mask',
+                        'render-v3','render-v3-cancel','render-v3-deadline','render-v3-missing','render-v3-query-failed',
+                        'render-v3-cross-route','render-v3-mixed-version','render-v3-wrong-mask')) {
         $movementRoot = Join-Path $outputRoot ($mode + '-host')
         New-Item -ItemType Directory -Path $movementRoot -Force | Out-Null
         Copy-Item -LiteralPath $hostPath -Destination (Join-Path $movementRoot 'SanAndreas.exe')
@@ -116,7 +118,7 @@ $unchanged = $true
 foreach ($name in $sourceNames) { if ((Hash (Join-Path $repositoryRoot $name)) -ne $sourceHashes[$name]) { $unchanged=$false } }
 foreach ($artifact in $artifacts) { if ((Hash $artifact.source) -ne $artifact.sha256) { $unchanged=$false } }
 $record = [ordered]@{
-    recorded_at=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=($null -eq $failure -and $unchanged -and $runs.Count -eq 15);
+    recorded_at=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=($null -eq $failure -and $unchanged -and $runs.Count -eq 23);
     failure=$failure;source_hashes=$sourceHashes;sources_unchanged=$unchanged;compiles=$compiles;runs=$runs;normal_artifacts=$artifacts;
     fixture_executable_is_game=$false;game_launched=$false;game_memory_read=$false;game_process_attached=$false;game_files_changed=$false;
     synthetic_core_is_mta=$false;full_mta_boot_verified=$false;engine_input_write_verified=$false;

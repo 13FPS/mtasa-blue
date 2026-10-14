@@ -104,6 +104,25 @@ foreach ($architecture in @('x86', 'x64')) {
         }
         if ($failure) { break }
     }
+    if ($architecture -eq 'x64') {
+        $renderV3Fixtures = @()
+        foreach ($mode in 1..8) {
+            $renderFixture = Join-Path $outputDirectory ("render-v3-provider-$mode.dll")
+            $renderArguments = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/LD','/DMTA_TEST_SHUTDOWN_FAILURE_MODULE',
+                '/DMTA_TEST_RENDER_V2=1','/DMTA_TEST_RENDER_V3=1',"/DMTA_TEST_RENDER_MODE=$mode", '/DNOMINMAX','/DWIN32_LEAN_AND_MEAN',
+                ('/I' + (Join-Path $taskRoot 'Shared/sdk')), ('/I' + (Join-Path $taskRoot 'Client/sdk')),
+                (Join-Path $PSScriptRoot 'MtaGameAdapterHostTests.cpp'), ('/Fo' + (Join-Path $outputDirectory "render-v3-$mode.obj")), ('/Fe' + $renderFixture),
+                '/link', '/EXPORT:CreateGameAdapter', '/EXPORT:CreateGameRenderObservation', '/EXPORT:CreateGameRenderObservationV2', '/EXPORT:CreateGameRenderObservationV3')
+            $renderOutput = @(& $compiler @renderArguments 2>&1)
+            $renderExit = $LASTEXITCODE
+            $renderLog = Join-Path $outputDirectory "render-v3-$mode-compile.log"
+            $renderOutput | Set-Content -LiteralPath $renderLog -Encoding utf8
+            $renderV3Fixtures += [ordered]@{ mode=$mode; path=$renderFixture; compilerExit=$renderExit; log=$renderLog;
+                sha256=$(if (Test-Path -LiteralPath $renderFixture) { (Get-FileHash -LiteralPath $renderFixture -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null }) }
+            if ($renderExit -ne 0) { $failure = "Render version3 fixture $mode did not compile"; break }
+        }
+        if ($failure) { break }
+    }
     $arguments = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN',
         ('/I' + (Join-Path $taskRoot 'Shared/sdk')), ('/I' + (Join-Path $taskRoot 'Client/sdk')),
         (Join-Path $PSScriptRoot 'MtaGameAdapterHostTests.cpp'), (Join-Path $taskRoot 'Client/core/CGameAdapterModule.cpp'),
@@ -115,7 +134,7 @@ foreach ($architecture in @('x86', 'x64')) {
     $testCount = $null
     if ($compilerExit -eq 0) {
         $testArguments = @($ModulePath)
-        if ($architecture -eq 'x64') { $testArguments += $fixture; $testArguments += @($facadeFixtures | ForEach-Object path); $testArguments += @($renderFixtures | ForEach-Object path); $testArguments += @($renderV2Fixtures | ForEach-Object path) }
+        if ($architecture -eq 'x64') { $testArguments += $fixture; $testArguments += @($facadeFixtures | ForEach-Object path); $testArguments += @($renderFixtures | ForEach-Object path); $testArguments += @($renderV2Fixtures | ForEach-Object path); $testArguments += @($renderV3Fixtures | ForEach-Object path) }
         $testOutput = @(& $executable @testArguments 2>&1)
         $testExit = $LASTEXITCODE
         $testOutput | Set-Content -LiteralPath (Join-Path $outputDirectory 'test.log') -Encoding utf8
@@ -128,6 +147,7 @@ foreach ($architecture in @('x86', 'x64')) {
         facadeProviderFixtures=$facadeFixtures;
         renderProviderFixtures=$renderFixtures;
         renderV2ProviderFixtures=$(if ($architecture -eq 'x64') { $renderV2Fixtures } else { @() });
+        renderV3ProviderFixtures=$(if ($architecture -eq 'x64') { $renderV3Fixtures } else { @() });
         executable=$executable; executableSha256=$(if (Test-Path -LiteralPath $executable) {
             (Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash.ToLowerInvariant()
         } else { $null }) }

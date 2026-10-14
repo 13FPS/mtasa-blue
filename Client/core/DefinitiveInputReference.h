@@ -71,6 +71,9 @@ namespace DefinitiveInputReference
         // Zero preserves API1's implicit D3D11 route. Explicit API2 requests
         // carry their route through Core rather than inferring an active RHI.
         std::uint32_t renderRoute = 0;
+        // An explicit protocol keeps the API3 COM probe opt-in. Route2 alone
+        // continues to mean the historical API2 no-COM observation.
+        std::uint32_t renderApiVersion = 1;
     };
 
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)

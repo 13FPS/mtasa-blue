@@ -13,6 +13,7 @@
 
 CGUITexture_Impl::CGUITexture_Impl(CGUI_Impl* pGUI)
 {
+    m_Direct3D9 = pGUI->IsDirect3D9Renderer();
     // Save the renderer
     m_pRenderer = pGUI->GetRenderer();
 
@@ -64,10 +65,16 @@ void CGUITexture_Impl::SetTexture(CEGUI::Texture* pTexture)
 
 LPDIRECT3DTEXTURE9 CGUITexture_Impl::GetD3DTexture()
 {
+    // Plain CEGUI textures work on either backend; a D3D12 texture cannot be
+    // borrowed through this legacy D3D9-specific SDK entry point.
+    if (!m_Direct3D9)
+        return nullptr;
     return reinterpret_cast<CEGUI::DirectX9Texture*>(m_pTexture)->getD3DTexture();
 }
 
 void CGUITexture_Impl::CreateTexture(unsigned int width, unsigned int height)
 {
+    if (!m_Direct3D9)
+        throw std::runtime_error("D3D9 GUI render-target textures are unavailable on D3D12");
     return reinterpret_cast<CEGUI::DirectX9Texture*>(m_pTexture)->createRenderTarget(width, height);
 }

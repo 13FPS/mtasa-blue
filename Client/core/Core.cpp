@@ -62,6 +62,9 @@ namespace DefinitiveInputReference
                              : request.nativeMovement  ? DefinitiveMovementReference::MaximumDurationMs
                                                        : MaximumDurationMs;
         if ((request.nativeMovement && request.renderObservation) || (request.renderRoute && (!request.renderObservation || request.renderRoute > 2)) ||
+            (request.renderObservation &&
+             ((request.renderApiVersion == 1 && request.renderRoute) || (request.renderApiVersion == 2 && !request.renderRoute) ||
+              (request.renderApiVersion == 3 && request.renderRoute != 2) || !request.renderApiVersion || request.renderApiVersion > 3)) ||
             !request.durationMs || request.durationMs > maximum || !request.cancelled || !request.publish || !TryAcquireSRWLockExclusive(&requestLock))
             return false;
         const bool accepted = !pending && !active;
@@ -287,8 +290,17 @@ CORE_API std::uint32_t MTA_ConfigureDERenderReferenceV2(std::uint32_t durationMs
     // A separate export makes route choice explicit without changing API1's
     // signature or silently claiming that the requested RHI is active.
     return (route == 1 || route == 2) && g_isDefinitiveProcessCandidate &&
-                   DefinitiveInputReference::Configure({durationMs, cancel, publish, false, true, route})
+                   DefinitiveInputReference::Configure({durationMs, cancel, publish, false, true, route, 2})
                ? 1u
                : 0u;
+}
+CORE_API std::uint32_t MTA_DERenderReferenceApiVersionV3()
+{
+    return DefinitiveRenderReference::ApiVersionV3;
+}
+CORE_API std::uint32_t MTA_ConfigureDERenderReferenceV3(std::uint32_t durationMs, std::uint32_t route, DefinitiveInputReference::CancelCallback cancel,
+                                                        DefinitiveInputReference::PublishCallback publish)
+{
+    return route == 2 && g_isDefinitiveProcessCandidate && DefinitiveInputReference::Configure({durationMs, cancel, publish, false, true, route, 3}) ? 1u : 0u;
 }
 #endif

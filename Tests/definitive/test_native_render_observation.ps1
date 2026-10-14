@@ -8,6 +8,7 @@ $taskRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
 $outputRoot = Join-Path $taskRoot ('Build/mta-native-render-observation/' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
 $sourceNames = @('Client/game_de/NativeRenderObservation.h','Client/game_de/NativeRenderObservation.cpp',
+    'Client/game_de/NativeD3D12OwnershipProbe.h','Client/game_de/NativeD3D12OwnershipProbe.cpp',
     'Tests/definitive/NativeRenderObservationTests.cpp','Tests/definitive/test_native_render_observation.ps1',
     'Client/sdk/game/CGameRenderObservation.h','Client/sdk/game/CGameAdapter.h',
     'Shared/sdk/CControllerState.h','Shared/sdk/CControlStateSynthesis.h','Shared/sdk/CControllerActions.h',
@@ -57,7 +58,8 @@ $detoursExit = $LASTEXITCODE
 $detoursOutput | Set-Content -LiteralPath (Join-Path $outputRoot 'detours-compile.log') -Encoding utf8
 $executable = Join-Path $outputRoot 'native_render_observation_tests.exe'
 $objects = @('detours.obj','modules.obj','disasm.obj','image.obj','creatwth.obj') | ForEach-Object { Join-Path $outputRoot $_ }
-$arguments = $common + @('/W4','/WX',(Join-Path $PSScriptRoot 'NativeRenderObservationTests.cpp'),('/Fo'+$outputRoot+[IO.Path]::DirectorySeparatorChar),('/Fe'+$executable),'/link','bcrypt.lib')+$objects
+$arguments = $common + @('/W4','/WX',(Join-Path $PSScriptRoot 'NativeRenderObservationTests.cpp'),
+    (Join-Path $taskRoot 'Client/game_de/NativeD3D12OwnershipProbe.cpp'),('/Fo'+$outputRoot+[IO.Path]::DirectorySeparatorChar),('/Fe'+$executable),'/link','bcrypt.lib')+$objects
 $compilerOutput = @(& $compiler @arguments 2>&1)
 $compilerExit = $LASTEXITCODE
 $compilerOutput | Set-Content -LiteralPath (Join-Path $outputRoot 'compile.log') -Encoding utf8

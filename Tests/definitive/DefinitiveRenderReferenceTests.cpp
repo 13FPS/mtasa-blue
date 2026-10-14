@@ -64,7 +64,7 @@ namespace
             snapshot[NativeOriginalReturned] = 1;
             snapshot[NativeOriginalResult] = 0;  // A returned false bool is not an observer failure.
             snapshot[FailureReason] = nativeFailure ? 4u : 0u;
-            if constexpr (std::tuple_size<SnapshotType>::value == FieldCountV2)
+            if constexpr (std::tuple_size<SnapshotType>::value >= FieldCountV2)
             {
                 snapshot[RequestedRoute] = route;
                 snapshot[ObservedRoute] = noCallbacks ? 0u : route;
@@ -127,12 +127,15 @@ namespace
     };
     using Fixture = FixtureT<Snapshot>;
     using FixtureV2 = FixtureT<SnapshotV2>;
+    using FixtureV3 = FixtureT<SnapshotV3>;
     template <typename SnapshotType>
     void Terminal(const FixtureT<SnapshotType>& fixture, const SnapshotType& state, StopReason reason, bool clean = true)
     {
         Check(fixture.observer.ended && fixture.observer.ends > 0, "every exit must finish actual observer End");
-        Check(state[Version] == (std::tuple_size<SnapshotType>::value == FieldCountV2 ? 2u : 1u) && state[Phase] == 2 && state[CleanupPending] == 0 &&
-                  state[CleanupComplete] == (clean ? 1u : 0u),
+        Check(state[Version] == (std::tuple_size<SnapshotType>::value == FieldCountV3   ? 3u
+                                 : std::tuple_size<SnapshotType>::value == FieldCountV2 ? 2u
+                                                                                        : 1u) &&
+                  state[Phase] == 2 && state[CleanupPending] == 0 && state[CleanupComplete] == (clean ? 1u : 0u),
               "terminal publication must accurately describe cleanup");
         Check(state[Reason] == static_cast<std::uint32_t>(reason), "stop reason must survive the cleanup path");
         Check(state[Reserved] == 0 && state[ReservedHigh] == 0, "reserved fields must remain neutral");
@@ -315,6 +318,64 @@ int main()
             CopyNativeState(legacy, state.base);
             Check(legacy[NativePresence] == 3 && legacy[GenerationHigh] == copied[GenerationHigh] && legacy[Reserved] == 0,
                   "API1 base copy must never append API2 queue presence");
+        }
+        {
+            FixtureV3 f;
+            Terminal(f, f.Run(), StopReason::TimeBudget);
+            Check(f.publications.size() == 201 && f.publications.back()[RequestedRoute] == 2 && f.publications.back()[NativePresence] == 3,
+                  "API3 must retain the actual route/lifecycle without changing historical presence bits");
+        }
+        for (const auto invalid : {0u, 1u, 3u, 0xffffffffu})
+        {
+            FixtureV3 f;
+            f.request.renderRoute = invalid;
+            Terminal(f, f.Run(), StopReason::BeginError);
+            Check(!f.observer.begins, "GPU ownership probes require explicit D3D12 before Begin");
+        }
+        {
+            FixtureV3 f;
+            f.observer.busyEnds = 42;
+            const auto state = f.Run();
+            Terminal(f, state, StopReason::CleanupError);
+            Check(state[CleanupDeadlineExceeded] && f.observer.ends == 43, "API3 cannot unload its owner after a cleanup deadline");
+        }
+        {
+            // Copy intentionally distinct scalars from the real SDK POD. This
+            // catches a shifted wire tail, lost high half or V2 reinterpretation.
+            mta::game_de::RenderObservationStateV3 state;
+            state.base.requestedRoute = state.base.observedRoute = 2;
+            state.base.base.windowPresent = state.base.base.swapchainPresent = 1;
+            state.base.presenceKnownMask = 19;
+            state.base.queuePresent = 1;
+            state.gpu.attempts = 0x1234567887654321ull;
+            state.gpu.accepted = 0x1122334455667788ull;
+            state.gpu.rejected = 0x9988776655443322ull;
+            state.gpu.queryStage = 19;
+            state.gpu.hresult = 0x80004002;
+            state.gpu.metadataValid = 1;
+            state.gpu.supportPredicate = 0;
+            state.gpu.queuePriority = 0xffffffffu;
+            state.gpu.adapterLuidHigh = 0xabcdef01u;
+            state.gpu.backbufferWidth = 0x9876543212345678ull;
+            state.gpu.backbufferHeight = 720;
+            state.gpu.backbufferFormat = 87;
+            state.gpu.backbufferSampleCount = 1;
+            state.gpu.queryStatus = 3;
+            state.gpu.nativeExplicitGPUCount = 1;
+            state.gpu.nativeAFRCount = 2;
+            SnapshotV3 copied{};
+            CopyNativeStateV3(copied, state);
+            Check(copied[ProbeAttemptsLow] == 0x87654321u && copied[ProbeAttemptsHigh] == 0x12345678u && copied[ProbeAcceptedHigh] == 0x11223344u &&
+                      copied[ProbeRejectedHigh] == 0x99887766u,
+                  "API3 copy must retain all published probe counter halves");
+            Check(copied[QueryStage] == 19 && copied[QueryHresult] == 0x80004002u && copied[QueuePriority] == 0xffffffffu &&
+                      copied[AdapterLuidHigh] == 0xabcdef01u,
+                  "Raw HRESULT, signed priority bits and adapter LUID must remain lossless");
+            Check(copied[BackbufferWidthLow] == 0x12345678u && copied[BackbufferWidthHigh] == 0x98765432u && copied[BackbufferHeight] == 720 &&
+                      copied[BackbufferFormat] == 87 && copied[NativeAFRCount] == 2,
+                  "API3 metadata tail must preserve exact SDK field ordering");
+            Check(copied[NativePresence] == 3 && copied[PresenceKnownMask] == 19 && copied[QueuePresent] == 1 && !copied[ReservedV3] && !copied[ReservedHighV3],
+                  "API3 must not merge queue into historical presence bits or populate reserved fields");
         }
         std::printf("{\"success\":true,\"checks\":%u,\"game_operations\":false}\n", checks);
         return 0;

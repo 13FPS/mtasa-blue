@@ -13,6 +13,7 @@
 #include <cstring>
 #include <fstream>
 #include <thread>
+#include <unknwn.h>
 
 using namespace mta::game_de;
 
@@ -82,6 +83,8 @@ namespace
         runtime.original = original;
         runtime.route = SelectRoute(route);
         runtime.requestedRoute = static_cast<std::uint32_t>(route);
+        // API1/2 never inherit opt-in COM work from a previously rejected API3 Begin.
+        runtime.queryGpuOwnership = false;
         runtime.producerThread = GetCurrentThreadId();
         runtime.bound.store(true);
         runtime.active.store(true);
@@ -117,6 +120,39 @@ namespace
             Put(image + 0x576fb60, std::uintptr_t{1});
         }
     }
+    void EnableOwnership(std::uintptr_t image, std::uint32_t explicitCount = 1, std::uint32_t afrCount = 1)
+    {
+        runtime.queryGpuOwnership = true;
+        Put(image + 0x503e8e0, explicitCount);
+        Put(image + 0x503f45c, afrCount);
+    }
+    struct OwnedUnknown final : IUnknown
+    {
+        unsigned                  calls = 0;
+        std::uintptr_t            changeAddress = 0;
+        bool                      succeed = false, failRelease = false;
+        HRESULT STDMETHODCALLTYPE QueryInterface(REFIID, void** output) override
+        {
+            ++calls;
+            if (output)
+                *output = nullptr;
+            if (changeAddress)
+                Put(changeAddress, std::uintptr_t{0x4321});
+            if (succeed && output)
+            {
+                *output = this;
+                return S_OK;
+            }
+            return E_NOINTERFACE;
+        }
+        ULONG STDMETHODCALLTYPE AddRef() override { return 1; }
+        ULONG STDMETHODCALLTYPE Release() override
+        {
+            if (failRelease)
+                RaiseException(0xe0434343, 0, 0, nullptr);
+            return 1;
+        }
+    };
     void CheckCodeFixture(const char* path, const RouteDescriptor& route)
     {
         std::vector<unsigned char> fingerprint(route.presentBytes);
@@ -171,6 +207,11 @@ int main(int argc, char** argv)
               !state.modulePinned && !runtime.hooked.load(),
           "explicit D3D12 wrong-image rejection remains unobserved and unpinned");
     Check(owner.End(), "wrong-image D3D12 cleanup");
+    Check(!owner.Begin(RenderObservationRoute::D3D12, true), "API3 still rejects an ordinary executable before any COM query");
+    owner.ReadState(state);
+    Check(!state.bound && !state.modulePinned && !runtime.hooked.load() && state.gpu.attempts == 0 && state.gpu.metadataValid == 0,
+          "wrong-image API3 cannot publish borrowed GPU ownership or install a hook");
+    Check(owner.End(), "wrong-image API3 cleanup");
     const auto image = reinterpret_cast<std::uintptr_t>(VirtualAlloc(nullptr, 0x5770000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
     Check(image != 0, "owned synthetic image allocation");
     Configure(image);
@@ -210,6 +251,121 @@ int main(int argc, char** argv)
     owner.ReadState(state);
     Check(state.acceptedSnapshots == 2 && state.lastOriginalReturned && !state.lastOriginalResult && state.failureReason == 0,
           "D3D12 native boolfalse does not imply COM or failure");
+    Check(state.gpu.attempts == 0 && state.gpu.queryStage == 0 && state.gpu.queryStatus == 0,
+          "API2 with deliberately unreadable borrowed interfaces never calls COM or fabricates API3 metadata");
+
+    OwnedUnknown ownedSwapchain, ownedQueue;
+    const auto   object = reinterpret_cast<std::uintptr_t>(viewport.data());
+    const auto   queueMember = reinterpret_cast<std::uintptr_t>(queueManager.data()) + 0x28;
+    Configure(image, Original, RenderObservationRoute::D3D12);
+    EnableOwnership(image, 2, 1);
+    Check(HookPresent(viewport.data(), 1), "API3 multi-GPU refusal still forwards original");
+    owner.ReadState(state);
+    Check(state.gpu.attempts == 1 && state.gpu.accepted == 0 && state.gpu.rejected == 1 && state.gpu.metadataValid == 0 &&
+              state.gpu.queryStage == static_cast<unsigned>(GpuOwnershipQueryStage::SingleNode) &&
+              state.gpu.queryStatus == static_cast<unsigned>(GpuOwnershipQueryStatus::Unsupported),
+          "native multi-GPU facts publish explicit unsupported metadata without touching unreadable COM roots");
+    Configure(image, Original, RenderObservationRoute::D3D12);
+    EnableOwnership(image);
+    Put(object + 0x1d0, std::uintptr_t{0x1234});
+    Check(!HookPresent(viewport.data(), 0), "API3 custom presenter refusal preserves false original result");
+    owner.ReadState(state);
+    Check(state.gpu.attempts == 1 && state.gpu.rejected == 1 && state.gpu.customPresentPresent == 1 &&
+              state.gpu.queryStage == static_cast<unsigned>(GpuOwnershipQueryStage::CustomPresent) &&
+              state.gpu.queryStatus == static_cast<unsigned>(GpuOwnershipQueryStatus::Unsupported) && state.failureReason == 0,
+          "custom presenter is unsupported before any attempted guessed queue query");
+    Configure(image, Original, RenderObservationRoute::D3D12);
+    EnableOwnership(image);
+    Check(HookPresent(viewport.data(), 1), "invalid API3 COM root never prevents original forwarding");
+    owner.ReadState(state);
+    Check(state.gpu.attempts == 1 && state.gpu.rejected == 1 && state.gpu.hresult == static_cast<std::uint32_t>(E_POINTER) &&
+              state.gpu.queryStatus == static_cast<unsigned>(GpuOwnershipQueryStatus::Failed) && state.gpu.metadataValid == 0,
+          "unreadable API3 roots fail closed before invoking a COM vtable");
+    Configure(image, Original, RenderObservationRoute::D3D12);
+    EnableOwnership(image);
+    Put(object + 0x60, reinterpret_cast<std::uintptr_t>(&ownedSwapchain));
+    Put(queueMember, reinterpret_cast<std::uintptr_t>(&ownedQueue));
+    ownedSwapchain.changeAddress = object + 0x1d0;
+    Check(HookPresent(viewport.data(), 1), "owned QI failure/root mutation still preserves original");
+    owner.ReadState(state);
+    Check(ownedSwapchain.calls == 1 && ownedQueue.calls == 0 && state.gpu.queryStage == static_cast<unsigned>(GpuOwnershipQueryStage::RootReadback) &&
+              state.gpu.queryStatus == static_cast<unsigned>(GpuOwnershipQueryStatus::RootsChanged) && state.gpu.metadataValid == 0 &&
+              state.gpu.supportPredicate == 0 && state.gpu.attempts == 1 && state.gpu.rejected == 1,
+          "post-query native root readback rejects changed ownership and publishes no stale positive metadata");
+    ownedSwapchain.changeAddress = 0;
+    Configure(image, Original, RenderObservationRoute::D3D12);
+    EnableOwnership(image);
+    Put(object + 0x60, reinterpret_cast<std::uintptr_t>(&ownedSwapchain));
+    Put(queueMember, reinterpret_cast<std::uintptr_t>(&ownedQueue));
+    Check(HookPresent(viewport.data(), 1), "owned failing QI executes only on adopted callback thread");
+    const auto  beforeForeign = ownedSwapchain.calls;
+    std::thread foreignProbe([&] { HookPresent(viewport.data(), 1); });
+    foreignProbe.join();
+    owner.ReadState(state);
+    Check(ownedSwapchain.calls == beforeForeign && state.foreignThreadCallbacks == 1 && state.gpu.attempts == 1 && state.gpu.rejected == 1,
+          "foreign native callbacks forward without borrowing or querying another thread's GPU roots");
+    Configure(image, OriginalException, RenderObservationRoute::D3D12);
+    EnableOwnership(image, 2, 1);
+    Check(CatchOriginalException(viewport.data()), "API3 original SEH still propagates after a read-only native precheck");
+    owner.ReadState(state);
+    Check(state.gpu.attempts == 0 && state.gpu.queryStage == 0 && state.acceptedSnapshots == 0 && runtime.inFlight.load() == 0,
+          "API3 precheck cannot publish completed probe evidence when original never returns");
+    Configure(image, Original, RenderObservationRoute::D3D12);
+    EnableOwnership(image, 2, 1);
+    AcquireSRWLockShared(&runtime.snapshotLock);
+    std::thread missedProbe([&] { HookPresent(viewport.data(), 1); });
+    missedProbe.join();
+    ReleaseSRWLockShared(&runtime.snapshotLock);
+    owner.ReadState(state);
+    Check(state.publicationMisses == 1 && state.gpu.attempts == 0 && state.gpu.queryStage == 0 && state.acceptedSnapshots == 0,
+          "API3 missed publication retains one coherent old metadata/counter snapshot without blocking the engine");
+    const auto configureCleanupFailure = [&](PresentFunction original)
+    {
+        Configure(image, original, RenderObservationRoute::D3D12);
+        EnableOwnership(image);
+        Put(object + 0x60, reinterpret_cast<std::uintptr_t>(&ownedSwapchain));
+        Put(queueMember, reinterpret_cast<std::uintptr_t>(&ownedQueue));
+        ownedSwapchain.succeed = true;
+        ownedSwapchain.failRelease = true;
+    };
+    configureCleanupFailure(Original);
+    Check(HookPresent(viewport.data(), 1), "callback forwards original after an owned COM release fault");
+    owner.ReadState(state);
+    Check(!state.active && state.failureReason == static_cast<unsigned>(Failure::GpuOwnershipCleanup) && state.gpu.attempts == 1 &&
+              state.gpu.queryStatus == static_cast<unsigned>(GpuOwnershipQueryStatus::CleanupFailed) && state.gpu.metadataValid == 0,
+          "COM cleanup fault permanently disarms and publishes failure without treating the callback as clean");
+    auto callsAfterCleanup = ownedSwapchain.calls;
+    Check(HookPresent(viewport.data(), 1) && ownedSwapchain.calls == callsAfterCleanup,
+          "disarmed ownership probe never re-queries after a COM cleanup failure");
+    configureCleanupFailure(Original);
+    AcquireSRWLockShared(&runtime.snapshotLock);
+    std::thread missedCleanup([&] { HookPresent(viewport.data(), 1); });
+    missedCleanup.join();
+    ReleaseSRWLockShared(&runtime.snapshotLock);
+    owner.ReadState(state);
+    Check(!state.active && state.failureReason == static_cast<unsigned>(Failure::GpuOwnershipCleanup) && state.publicationMisses == 1 &&
+              state.gpu.attempts == 0 && state.gpu.queryStage == 0,
+          "cleanup failure survives missed metadata publication through the independent fatal latch");
+    callsAfterCleanup = ownedSwapchain.calls;
+    Check(HookPresent(viewport.data(), 1) && ownedSwapchain.calls == callsAfterCleanup, "missed failure publication cannot rearm COM queries");
+    configureCleanupFailure(OriginalException);
+    Check(CatchOriginalException(viewport.data()), "original SEH still propagates after a COM cleanup failure");
+    owner.ReadState(state);
+    Check(!state.active && state.failureReason == static_cast<unsigned>(Failure::GpuOwnershipCleanup) && state.gpu.attempts == 0 &&
+              state.acceptedSnapshots == 0 && runtime.inFlight.load() == 0,
+          "fatal COM cleanup failure remains visible when original never returns or publishes");
+    callsAfterCleanup = ownedSwapchain.calls;
+    runtime.original = Original;
+    Check(HookPresent(viewport.data(), 1) && ownedSwapchain.calls == callsAfterCleanup, "original exception cannot erase a disarm or permit another COM query");
+    configureCleanupFailure(Original);
+    ownedSwapchain.changeAddress = object + 0x1d0;
+    Check(HookPresent(viewport.data(), 1), "simultaneous ownership mutation and failed release still forward original");
+    owner.ReadState(state);
+    Check(!state.active && state.failureReason == static_cast<unsigned>(Failure::GpuOwnershipCleanup) &&
+              state.gpu.queryStatus == static_cast<unsigned>(GpuOwnershipQueryStatus::CleanupFailed),
+          "native root readback cannot erase a fatal COM cleanup failure");
+    ownedSwapchain.changeAddress = 0;
+    ownedSwapchain.succeed = ownedSwapchain.failRelease = false;
     for (const auto route : {RenderObservationRoute::D3D11, RenderObservationRoute::D3D12})
     {
         Configure(image, Original, route);
@@ -388,6 +544,24 @@ int main(int argc, char** argv)
             publishedRounds += state.acceptedSnapshots != 0;
         }
         Check(publishedRounds != 0, "publication stress exercised actual returned route snapshots");
+    }
+    for (unsigned round = 0; round < 64; ++round)
+    {
+        Configure(image, Original, RenderObservationRoute::D3D12);
+        EnableOwnership(image, 2, 1);
+        SetEvent(publish);
+        bool coherent = true;
+        do
+        {
+            owner.ReadState(state);
+            const bool observed = state.acceptedSnapshots != 0;
+            coherent = coherent && state.gpu.attempts == state.acceptedSnapshots && state.gpu.accepted == 0 && state.gpu.rejected == state.gpu.attempts &&
+                       state.gpu.metadataValid == 0 && state.gpu.supportPredicate == 0 &&
+                       state.gpu.queryStage == (observed ? static_cast<unsigned>(GpuOwnershipQueryStage::SingleNode) : 0u) &&
+                       state.gpu.queryStatus == (observed ? static_cast<unsigned>(GpuOwnershipQueryStatus::Unsupported) : 0u) &&
+                       state.gpu.nativeExplicitGPUCount == (observed ? 2u : 0u);
+        } while (WaitForSingleObject(published, 0) != WAIT_OBJECT_0);
+        Check(coherent, "API3 metadata and published probe counters are coherent across producer/engine threads");
     }
     stopPublication.store(true);
     SetEvent(publish);

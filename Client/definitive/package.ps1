@@ -5,11 +5,14 @@
 param([ValidateSet('Diagnostic', 'Smoke', 'Online')][string]$Mode = 'Smoke',
     [switch]$NativeGaitReference, [switch]$MatchedGaitRate, [switch]$LockWalkRoot, [switch]$NativeInputReference,
     [switch]$MtaNativePadReference, [switch]$MtaNativeMovementTrial, [switch]$MtaCoreStartupReference, [switch]$MtaCoreInputReference,
-    [switch]$MtaCoreMovementReference, [switch]$MtaCoreRenderReference,
+    [switch]$MtaCoreMovementReference, [switch]$MtaCoreRenderReference, [switch]$MtaCoreRenderGpuReference,
     [ValidateSet('D3D11', 'D3D12')][string]$MtaCoreRenderRoute = 'D3D11')
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+if ($MtaCoreRenderGpuReference -and (-not $MtaCoreRenderReference -or $MtaCoreRenderRoute -ne 'D3D12')) {
+    throw 'GPU ownership queries require explicit D3D12 Core renderer observation.'
+}
 if ($PSBoundParameters.ContainsKey('MtaCoreRenderRoute') -and -not $MtaCoreRenderReference) {
     throw 'An explicit renderer route requires MtaCoreRenderReference.'
 }
@@ -230,6 +233,10 @@ $coreRenderRouteMarker = "export const MTA_CORE_RENDER_ROUTE = 'd3d11';"
 if ([regex]::Matches($configText, [regex]::Escape($coreRenderRouteMarker)).Count -ne 1) { throw 'Expected explicit renderer route in source configuration.' }
 $configText = $configText.Replace($coreRenderRouteMarker,
     "export const MTA_CORE_RENDER_ROUTE = '$($MtaCoreRenderRoute.ToLowerInvariant())';")
+$coreRenderGpuMarker = 'export const MTA_CORE_RENDER_GPU_REFERENCE = false;'
+if ([regex]::Matches($configText, [regex]::Escape($coreRenderGpuMarker)).Count -ne 1) { throw 'Expected disabled GPU ownership queries in source configuration.' }
+$configText = $configText.Replace($coreRenderGpuMarker,
+    "export const MTA_CORE_RENDER_GPU_REFERENCE = $($MtaCoreRenderGpuReference.IsPresent.ToString().ToLowerInvariant());")
 [IO.File]::WriteAllText($configPath, $configText, $utf8)
 foreach ($name in @('sa_unreal.json', 'unknown_x64.json')) {
     [IO.File]::Copy($downloads[$name], (Join-Path $configDirectory $name), $false)

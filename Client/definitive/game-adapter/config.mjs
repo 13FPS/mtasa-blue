@@ -44,3 +44,6 @@ export const MTA_CORE_RENDER_REFERENCE = false;
 // A missing D3D11 callback does not identify the active RHI. Select the reviewed
 // route explicitly so a diagnostic never guesses from loaded DLLs or silence.
 export const MTA_CORE_RENDER_ROUTE = 'd3d11';
+// COM metadata queries need their own explicit admission. They release every
+// borrowed frame interface before returning and never submit GPU commands.
+export const MTA_CORE_RENDER_GPU_REFERENCE = false;

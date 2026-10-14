@@ -522,8 +522,21 @@ try {
         Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'D3D12 route WhatIf changes no bytes'
         Invoke-Production $fixture 'set-mode.ps1' @{ Mode='Smoke'; MtaCoreRenderReference=$true; MtaCoreRenderRoute='D3D12'; GameDirectory=$fixture.game }
         Assert-Check ([IO.File]::ReadAllText($config) -match "export const MTA_CORE_RENDER_ROUTE = 'd3d12';") 'D3D12 observer route requires explicit selection'
+        Assert-Check ([IO.File]::ReadAllText($config) -match 'export const MTA_CORE_RENDER_GPU_REFERENCE = false;') 'API2 route does not enable COM queries'
+        $before = Get-TreeFingerprint $fixture.root
+        Invoke-Production $fixture 'set-mode.ps1' @{ Mode='Smoke'; MtaCoreRenderReference=$true; MtaCoreRenderRoute='D3D12'; MtaCoreRenderGpuReference=$true; GameDirectory=$fixture.game; WhatIf=$true }
+        Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'GPU query WhatIf changes no bytes'
+        Invoke-Production $fixture 'set-mode.ps1' @{ Mode='Smoke'; MtaCoreRenderReference=$true; MtaCoreRenderRoute='D3D12'; MtaCoreRenderGpuReference=$true; GameDirectory=$fixture.game }
+        Assert-Check ([IO.File]::ReadAllText($config) -match 'export const MTA_CORE_RENDER_GPU_REFERENCE = true;') 'COM queries require their own explicit opt-in'
         Invoke-Production $fixture 'uninstall.ps1' @{ GameDirectory=$fixture.game; ValidateOnly=$true }
         $before = Get-TreeFingerprint $fixture.root
+        foreach ($invalid in @(@{MtaCoreRenderGpuReference=$true}, @{MtaCoreRenderReference=$true;MtaCoreRenderGpuReference=$true})) {
+            $arguments = @{Mode='Smoke';GameDirectory=$fixture.game} + $invalid
+            Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' $arguments } 'GPU ownership queries require explicit D3D12' 'GPU query requires separate observer and route'
+            $arguments.Remove('GameDirectory')
+            Assert-Refused { Invoke-Production $fixture 'package.ps1' $arguments } 'GPU ownership queries require explicit D3D12' 'GPU query package requires separate observer and route'
+            Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Rejected GPU query changes no bytes'
+        }
         Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' @{ Mode='Smoke'; MtaCoreRenderRoute='D3D12'; GameDirectory=$fixture.game } } 'explicit renderer route requires' 'Route cannot enable an observer by itself'
         Assert-Refused { Invoke-Production $fixture 'package.ps1' @{ Mode='Smoke'; MtaCoreRenderRoute='D3D12' } } 'explicit renderer route requires' 'Route package requires separate opt-in'
         Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Route-only rejection changes no bytes'
@@ -544,7 +557,22 @@ try {
             Invoke-Production $fixture 'set-mode.ps1' @{ Mode=$mode; GameDirectory=$fixture.game }
             Assert-Check ([IO.File]::ReadAllText($config) -match 'export const MTA_CORE_RENDER_REFERENCE = false;') "Ordinary $mode clears render observation"
             Assert-Check ([IO.File]::ReadAllText($config) -match "export const MTA_CORE_RENDER_ROUTE = 'd3d11';") "Ordinary $mode resets the inactive route"
+            Assert-Check ([IO.File]::ReadAllText($config) -match 'export const MTA_CORE_RENDER_GPU_REFERENCE = false;') "Ordinary $mode clears COM queries"
         }
+    }
+    Invoke-Case 'historical-api2-cannot-infer-gpu-query-admission' {
+        param($fixture)
+        Install-Fresh $fixture
+        $config = Join-Path $fixture.game 'CLEO/de-online/config.mjs'
+        Write-FixtureBytes $config ($utf8.GetBytes([regex]::Replace([IO.File]::ReadAllText($config), 'export const MTA_CORE_RENDER_GPU_REFERENCE = (true|false);', '')))
+        $manifestPath = Join-Path $fixture.game 'de-online-install-manifest.json'
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+        @($manifest.files | Where-Object path -eq 'CLEO/de-online/config.mjs')[0].sha256 = Get-Sha $config
+        Write-FixtureJson $manifestPath $manifest
+        Invoke-Production $fixture 'set-mode.ps1' @{ Mode='Smoke'; MtaCoreRenderReference=$true; MtaCoreRenderRoute='D3D12'; GameDirectory=$fixture.game }
+        $before = Get-TreeFingerprint $fixture.root
+        Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' @{ Mode='Smoke'; MtaCoreRenderReference=$true; MtaCoreRenderRoute='D3D12'; MtaCoreRenderGpuReference=$true; GameDirectory=$fixture.game } } 'Update the adapter before selecting GPU ownership queries' 'Historical API2 cannot infer COM-query opt-in'
+        Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Historical COM-query refusal changes no bytes'
     }
     Invoke-Case 'historical-render-api1-cannot-infer-api2-route' {
         param($fixture)

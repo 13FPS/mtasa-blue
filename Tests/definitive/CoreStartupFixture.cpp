@@ -106,7 +106,23 @@ extern "C" __declspec(dllexport) std::uint32_t MTA_ConfigureDERenderReferenceV2(
     Call(8);
     if (duration != DefinitiveRenderReference::MaximumDurationMs || (route != 1 && route != 2) || !cancelled || !publish)
         return 0;
-    inputRequest = {duration, cancelled, publish, false, true, route};
+    inputRequest = {duration, cancelled, publish, false, true, route, 2};
+    return 1;
+}
+
+extern "C" __declspec(dllexport) std::uint32_t MTA_DERenderReferenceApiVersionV3()
+{
+    Call(7);
+    return 3;
+}
+extern "C" __declspec(dllexport) std::uint32_t MTA_ConfigureDERenderReferenceV3(std::uint32_t duration, std::uint32_t route,
+                                                                                DefinitiveInputReference::CancelCallback  cancelled,
+                                                                                DefinitiveInputReference::PublishCallback publish)
+{
+    Call(8);
+    if (duration != DefinitiveRenderReference::MaximumDurationMs || route != 2 || !cancelled || !publish)
+        return 0;
+    inputRequest = {duration, cancelled, publish, false, true, route, 3};
     return 1;
 }
 
@@ -116,7 +132,7 @@ void ControlledRender()
     using namespace DefinitiveRenderReference;
     constexpr auto count = static_cast<std::uint32_t>(std::tuple_size<SnapshotType>::value);
     SnapshotType   sample{};
-    sample[Version] = count == FieldCountV2 ? 2u : 1u;
+    sample[Version] = count == FieldCountV3 ? 3u : count == FieldCountV2 ? 2u : 1u;
     sample[Phase] = sample[Sequence] = sample[SampleCount] = 1;
     sample[ObserverStarted] = sample[Bound] = sample[Active] = 1;
     sample[PresentCallbacksLow] = sample[AcceptedSnapshotsLow] = 10;
@@ -125,7 +141,7 @@ void ControlledRender()
     sample[Height] = 720;
     sample[NativeOriginalReturned] = 1;
     sample[NativePresence] = 15;
-    if constexpr (count == FieldCountV2)
+    if constexpr (count >= FieldCountV2)
     {
         // Warmup is intentionally unobserved. A route request alone cannot
         // make an RHI callback, queue, or presence field known.
@@ -155,7 +171,7 @@ void ControlledRender()
         CloseHandle(release);
     }
     sample[Phase] = 3;
-    if constexpr (count == FieldCountV2)
+    if constexpr (count >= FieldCountV2)
     {
         if (Setting(L"MTA_CORE_FIXTURE_RENDER_MODE") != 1)
         {
@@ -167,6 +183,29 @@ void ControlledRender()
             sample[NativeOriginalReturned] = 1;
             sample[Width] = 1280;
             sample[Height] = 720;
+        }
+    }
+    if constexpr (count == FieldCountV3)
+    {
+        // These are controlled worker transport values, not native evidence.
+        // The actual COM provider is exercised by the independent WARP fixture.
+        if (sample[ObservedRoute])
+        {
+            sample[ProbeAttemptsLow] = 10;
+            const bool failed = Setting(L"MTA_CORE_FIXTURE_RENDER_MODE") == 5;
+            sample[ProbeAcceptedLow] = failed ? 0u : 10u;
+            sample[ProbeRejectedLow] = failed ? 10u : 0u;
+            sample[QueryStage] = failed ? 8u : 19u;
+            sample[QueryHresult] = failed ? static_cast<std::uint32_t>(E_NOINTERFACE) : 0u;
+            sample[MetadataValid] = sample[SupportPredicate] = failed ? 0u : 1u;
+            sample[DeviceNodeCount] = sample[NativeExplicitGPUCount] = sample[NativeAFRCount] = 1;
+            sample[CanonicalIdentityFlags] = failed ? 1u : 7u;
+            sample[SwapchainBufferCount] = 2;
+            sample[SwapchainWidth] = sample[BackbufferWidthLow] = 1280;
+            sample[SwapchainHeight] = sample[BackbufferHeight] = 720;
+            sample[SwapchainFormat] = sample[BackbufferFormat] = 87;
+            sample[BackbufferSampleCount] = 1;
+            sample[QueryStatus] = failed ? 3u : 1u;
         }
     }
     sample[CleanupPending] = sample[NativeCleanupPending] = sample[CleanupAttempts] = 1;
@@ -194,7 +233,7 @@ void ControlledRender()
     sample[CleanupComplete] = 1;
     if (!sample[CleanupDeadlineExceeded])
         sample[Reason] = static_cast<std::uint32_t>(inputRequest.cancelled() ? StopReason::Cancelled : StopReason::TimeBudget);
-    if constexpr (count == FieldCountV2)
+    if constexpr (count >= FieldCountV2)
     {
         const auto malformed = Setting(L"MTA_CORE_FIXTURE_RENDER_MODE");
         if (malformed == 2)
@@ -298,7 +337,9 @@ extern "C" __declspec(dllexport) int InitializeCore()
         return 0;
     if (mtaSet && gtaSet && inputRequest.renderObservation)
     {
-        if (inputRequest.renderRoute)
+        if (inputRequest.renderApiVersion == 3)
+            ControlledRender<DefinitiveRenderReference::SnapshotV3>();
+        else if (inputRequest.renderRoute)
             ControlledRender<DefinitiveRenderReference::SnapshotV2>();
         else
             ControlledRender<DefinitiveRenderReference::Snapshot>();

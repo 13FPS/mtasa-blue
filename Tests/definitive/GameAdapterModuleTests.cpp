@@ -593,6 +593,46 @@ namespace
         Check(legacy->End() == Status::Ok, "legacy lease still ends through the old interface");
         legacy->Release();
     }
+    void TestRenderObservationV3FactoryRejection()
+    {
+        OwnerIdentity owner;
+        for (const auto version : {0u, 1u, 2u, 4u})
+            Check(!CreateGameRenderObservationV3(version, owner.Get(), RenderObservationRoute::D3D12),
+                  "actual API3 never substitutes an earlier or unknown diagnostics contract");
+        Check(!CreateGameRenderObservationV3(3, nullptr, RenderObservationRoute::D3D12), "API3 requires an opaque MTA owner identity");
+        for (const auto route : {RenderObservationRoute::Unknown, RenderObservationRoute::D3D11, static_cast<RenderObservationRoute>(99)})
+            Check(!CreateGameRenderObservationV3(3, owner.Get(), route), "API3 COM queries require the explicit D3D12 route");
+        auto* observation = CreateGameRenderObservationV3(3, owner.Get(), RenderObservationRoute::D3D12);
+        Check(observation != nullptr, "actual API3 allocates its separate owner lease");
+        RenderObservationStateV3 state;
+        Check(observation->ReadState(state) == Status::Ok && !state.base.base.bound && !state.base.base.active && !state.base.base.modulePinned &&
+                  !state.gpu.attempts && !state.gpu.accepted && !state.gpu.rejected && !state.gpu.queryStage && !state.gpu.metadataValid,
+              "API3 allocation acquires no engine references and invents no GPU metadata");
+        Status                   foreignBegin = Status::Ok, foreignRead = Status::Ok, foreignEnd = Status::Ok;
+        RenderObservationStateV3 foreignState;
+        foreignState.gpu.queryStage = 99;
+        std::thread foreign(
+            [&]
+            {
+                foreignBegin = observation->Begin();
+                foreignRead = observation->ReadState(foreignState);
+                foreignEnd = observation->End();
+                observation->Release();
+            });
+        foreign.join();
+        Check(
+            foreignBegin == Status::WrongThread && foreignRead == Status::WrongThread && foreignEnd == Status::WrongThread && foreignState.gpu.queryStage == 99,
+            "foreign API3 calls preserve output and cannot release an owned lease");
+        Check(observation->Begin() == Status::Unsupported, "real API3 binding rejects the owned nongame executable");
+        Check(observation->ReadState(state) == Status::Ok && state.base.requestedRoute == 2 && !state.base.observedRoute && !state.base.base.bound &&
+                  !state.base.base.active && !state.base.base.modulePinned && state.base.base.failureReason && !state.gpu.attempts && !state.gpu.queryStage &&
+                  !state.gpu.metadataValid && !state.gpu.supportPredicate,
+              "failed image binding performs no COM queries, hook, PIN or inferred D3D12 observation");
+        Check(observation->End() == Status::Ok && observation->End() == Status::Ok, "wrong-image API3 End is idempotent");
+        Check(observation->ReadState(state) == Status::Ok && !state.base.base.active && !state.base.base.pendingCleanup && !state.gpu.attempts,
+              "actual ended API3 readback keeps failed admission and zero-query evidence");
+        observation->Release();
+    }
 }
 
 int main()
@@ -617,6 +657,7 @@ int main()
         TestNativeMovementEligibilityRejection();
         TestRenderObservationFactoryRejection();
         TestRenderObservationV2FactoryRejection();
+        TestRenderObservationV3FactoryRejection();
         std::cout << "Passed " << checks << " MTA Game DE adapter checks\n";
         return 0;
     }

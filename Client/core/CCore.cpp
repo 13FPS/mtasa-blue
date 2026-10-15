@@ -43,6 +43,8 @@
 #include "DefinitiveRenderRootsLog.h"
 #include "DefinitiveGuiStartup.h"
 #include "DefinitiveGuiStartupReference.h"
+#include "DefinitiveGuiSurface.h"
+#include "DefinitiveGuiSurfaceReference.h"
 
 using SharedUtil::CalcMTASAPath;
 using namespace std;
@@ -382,6 +384,207 @@ namespace
             }
             line += "]}\n";
             const auto path = CalcMTASAPath("mta/logs/gui-startup.log");
+            SharedUtil::MakeSureDirExists(path);
+            SharedUtil::FileAppend(path, line.data(), static_cast<unsigned long>(line.size()));
+        }
+        catch (...)
+        {
+        }
+    }
+
+    void RunGuiSurfaceReference(CGameAdapterModule& adapter, const DefinitiveInputReference::Request& request) noexcept
+    {
+        using namespace DefinitiveGuiStartupReference;
+        using SurfaceSnapshot = DefinitiveGuiSurfaceReference::Snapshot;
+        using SurfaceStatus = DefinitiveGuiSurface::Status;
+        struct Owner
+        {
+            CGameAdapterModule&                     adapter;
+            DefinitiveGuiSurface::Session           gui;
+            mta::game_de::RenderDeviceWindowLeaseV2 lease;
+            bool                                    beginAttempted = false;
+            std::uint64_t                           displayStarted = 0;
+
+            void CopyGui(SurfaceSnapshot& values) noexcept
+            {
+                const auto s = gui.Snapshot();
+                values[GuiPrepared] = s.modulePrepared;
+                values[WorkloadHresult] = s.hresult;
+                values[WorkloadGuiStatus] = s.guiStatus;
+                values[NodeCount] = s.nodeCount;
+                values[AdapterLuidLow] = s.deviceLuidLow;
+                values[AdapterLuidHigh] = s.deviceLuidHigh;
+                values[TargetFormat] = s.targetFormat;
+                values[Width] = s.width;
+                values[Height] = s.height;
+                values[QueueCreated] = s.queueCreated;
+                values[TargetCreated] = s.swapchainCreated;
+                values[RenderSubmitted] = s.guiFrames ? 1u : 0u;
+                SetPair(values, FenceSignaledLow, s.fenceValue);
+                SetPair(values, FenceCompletedLow, s.completedFenceValue);
+                values[ReadbackVerified] = s.readbackComplete && s.readbackRedVerified && s.transparentPixelVerified && s.premultipliedPixelsVerified;
+                values[ReadbackChangedPixels] = s.readbackPixels;
+                values[GuiCleanupComplete] = s.cleanupComplete;
+                values[OwnQueueSubmissions] = s.ownQueueSubmissions;
+                values[GuiStage] = s.stage;
+                values[GuiFailureStage] = s.failureStage;
+                values[ModuleRetained] = s.moduleRetained;
+                values[SessionRetained] = s.sessionRetained;
+                values[DeviceRetained] = s.deviceRetained || lease.device;
+                values[DeviceRemoved] = s.deviceRemoved;
+                values[DeviceReleaseFault] = s.releaseFault;
+                values[BackgroundVerified] = s.transparentPixelVerified;
+                values[TextureVerified] = s.readbackRedVerified;
+                values[OpaqueAlphaVerified] = s.premultipliedPixelsVerified;
+                values[WidgetsCreated] = s.widgetsCreated;
+                using namespace DefinitiveGuiSurfaceReference;
+                values[ParentValidated] = s.parentValidated;
+                values[ParentWindowed] = s.parentWindowed;
+                values[ParentAlive] = s.parentAlive;
+                values[ChildCreated] = s.childCreated;
+                values[ChildShown] = s.childShown;
+                values[CompositionCreated] = s.compositionCreated;
+                values[SwapchainCreated] = s.swapchainCreated;
+                values[PresentCalls] = s.presentCalls;
+                values[PresentSucceeded] = s.presentSucceeded;
+                values[PresentBusy] = s.presentBusy;
+                values[PresentHresult] = s.presentHresult;
+                values[GuiFrames] = s.guiFrames;
+                values[ResizeCount] = s.resizeCount;
+                values[ResizePending] = s.resizePending;
+                values[ParentDestroyed] = s.parentDestroyed;
+                values[StopRequested] = s.stopRequested;
+                values[ChildRetained] = s.childRetained;
+                values[QueueRetained] = s.queueRetained;
+                values[SurfaceRetained] = s.surfaceRetained;
+                values[WindowCleanupComplete] = s.windowCleanupComplete;
+                values[CompositionCleanupComplete] = s.compositionCleanupComplete;
+                values[ClassUnregistered] = s.classUnregistered;
+                values[OwnerThreadId] = s.ownerThreadId;
+                values[ParentThreadId] = s.parentThreadId;
+                values[AlphaMode] = s.alphaMode;
+                values[SignalAttempts] = s.signalAttempts;
+                values[DisplayDuration] = DisplayDurationMs;
+                values[PrivateSurface] = 1;
+            }
+            bool Prepare(SurfaceSnapshot& values)
+            {
+                // As with offscreen startup, resolve cgui before Begin can hold
+                // peers. No Win32 surface or COM work runs during retained holds.
+                const auto root = g_mtaDirectory.wstring();
+                const auto path = (g_mtaDirectory / L"cgui.dll").wstring();
+                const bool prepared = gui.Prepare(path.c_str(), root.c_str()) == SurfaceStatus::Ok;
+                CopyGui(values);
+                return prepared;
+            }
+            bool Begin(SurfaceSnapshot&)
+            {
+                beginAttempted = true;
+                return adapter.BeginNativeRenderDeviceWindowObservation();
+            }
+            bool ReadNative(SurfaceSnapshot& values)
+            {
+                mta::game_de::RenderObservationStateV6 state;
+                if (!adapter.GetNativeRenderObservationState(state))
+                    return false;
+                const auto& base = state.base.base.base.base.base;
+                values[NativeFailureReason] = base.failureReason;
+                values[ObserverPendingCleanup] = base.pendingCleanup;
+                values[BackendPinnedExpected] = base.modulePinned ? 1u : 0u;
+                return true;
+            }
+            bool TryDevice(SurfaceSnapshot& values)
+            {
+                if (!adapter.TakeNativeRenderDeviceWindowLease(lease))
+                    return false;
+                SetPair(values, LeaseGenerationLow, lease.generation);
+                SetPair(values, AcceptedSnapshotsLow, lease.acceptedSnapshots);
+                SetPair(values, DispatchEntriesLow, lease.dispatchEntries);
+                values[SourceProfile] = lease.sourceProfileId;
+                values[LeaseMetadataValid] = lease.size == sizeof(lease) && lease.version == mta::game_de::RenderDeviceWindowLeaseVersionV2 && lease.device &&
+                                             lease.window && lease.windowed == 1 && lease.generation && lease.acceptedSnapshots && lease.dispatchEntries &&
+                                             lease.sourceProfileId == 2 && !lease.reserved[0] && !lease.reserved[1];
+                values[DeviceRetained] = 1;
+                return true;
+            }
+            bool End(SurfaceSnapshot& values)
+            {
+                const bool ended = adapter.EndNativeRenderObservation();
+                if (beginAttempted)
+                    ReadNative(values);
+                return ended;
+            }
+            bool Attach() noexcept
+            {
+                if (!lease.device)
+                    return true;
+                if (gui.AttachDeviceWindow(lease.device, static_cast<HWND>(lease.window), lease.windowed == 1) != SurfaceStatus::Ok)
+                    return false;
+                lease.device = nullptr;
+                return true;
+            }
+            bool StartGpu(SurfaceSnapshot& values) noexcept
+            {
+                // Only MTA-owned window/swapchain resources are created, after
+                // native End. The borrowed parent is revalidated by the helper.
+                const bool started = Attach() && gui.Start() == SurfaceStatus::Ok;
+                if (started)
+                    displayStarted = static_cast<std::uint64_t>(GetTickCount64_());
+                CopyGui(values);
+                return started;
+            }
+            Outcome PollGpu(SurfaceSnapshot& values) noexcept
+            {
+                const auto status = gui.Poll();
+                CopyGui(values);
+                const auto s = gui.Snapshot();
+                if (status == SurfaceStatus::Failed || status == SurfaceStatus::InvalidArgument || status == SurfaceStatus::WrongThread || s.parentDestroyed ||
+                    !s.parentAlive || s.releaseFault || s.deviceRemoved)
+                    return Outcome::Failed;
+                const auto now = static_cast<std::uint64_t>(GetTickCount64_());
+                if (now < displayStarted)
+                    return Outcome::Failed;
+                if (now - displayStarted < DefinitiveGuiSurfaceReference::DisplayDurationMs)
+                    return Outcome::Pending;
+                // DO_NOT_WAIT can legitimately leave a frame queued. Count those
+                // retries explicitly so only successful presents prove output.
+                const bool presentsAccounted = s.presentSucceeded <= s.presentCalls && s.presentBusy == s.presentCalls - s.presentSucceeded;
+                return values[ReadbackVerified] && s.presentSucceeded >= 2 && presentsAccounted && !s.presentHresult && s.guiFrames >= s.presentSucceeded &&
+                               s.childShown && !s.failureStage
+                           ? Outcome::Passed
+                           : Outcome::Failed;
+            }
+            bool ShutdownGpu(SurfaceSnapshot& values) noexcept
+            {
+                if (!Attach())
+                    return false;
+                const auto status = gui.Shutdown();
+                CopyGui(values);
+                values[GuiShutdownStatus] = static_cast<std::uint32_t>(status);
+                return status == SurfaceStatus::Ok && values[GuiCleanupComplete];
+            }
+        } owner{adapter};
+        struct Clock
+        {
+            std::uint64_t Now() const noexcept { return static_cast<std::uint64_t>(GetTickCount64_()); }
+            void          Wait(std::uint32_t milliseconds) const noexcept { Sleep(milliseconds); }
+        } clock;
+        const auto runMs = clock.Now();
+        const auto result = DefinitiveGuiSurfaceReference::Run(owner, clock, request);
+        try
+        {
+            // All native holds, GUI/GPU owners and the child window have ended
+            // before file I/O; failure to log cannot relabel cleanup or drawing.
+            std::string line = "{\"schema\":\"mta_core_gui_surface_v1\",\"pid\":" + std::to_string(GetCurrentProcessId()) +
+                               ",\"runMs\":" + std::to_string(runMs) + ",\"values\":[";
+            for (std::size_t index = 0; index < result.size(); ++index)
+            {
+                if (index)
+                    line += ',';
+                line += std::to_string(result[index]);
+            }
+            line += "]}\n";
+            const auto path = CalcMTASAPath("mta/logs/gui-surface.log");
             SharedUtil::MakeSureDirExists(path);
             SharedUtil::FileAppend(path, line.data(), static_cast<unsigned long>(line.size()));
         }
@@ -978,7 +1181,9 @@ CCore::CCore()
         DefinitiveInputReference::Request inputReference;
         if (DefinitiveInputReference::GetActiveRequest(inputReference))
         {
-            if (inputReference.guiStartup)
+            if (inputReference.guiSurface)
+                RunGuiSurfaceReference(m_DefinitiveAdapter, inputReference);
+            else if (inputReference.guiStartup)
                 RunGuiStartupReference(m_DefinitiveAdapter, inputReference);
             else if (inputReference.renderObservation)
                 RunRenderReference(m_DefinitiveAdapter, inputReference);

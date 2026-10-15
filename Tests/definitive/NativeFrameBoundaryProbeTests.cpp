@@ -38,12 +38,24 @@ namespace
     class OwnedQueries final : public FrameBoundaryQueries
     {
     public:
-        unsigned      stop = 0, calls = 0, closes = 0;
-        HRESULT       result = E_NOINTERFACE;
-        bool          raise = false, cleanup = false, raiseClose = false;
-        ID3D12Device* candidate = nullptr;
-        unsigned      detachCalls = 0;
-        bool          detachedBeforeClose = false;
+        unsigned              stop = 0, calls = 0, closes = 0;
+        HRESULT               result = E_NOINTERFACE;
+        bool                  raise = false, cleanup = false, raiseClose = false;
+        ID3D12Device*         candidate = nullptr;
+        unsigned              detachCalls = 0;
+        bool                  detachedBeforeClose = false;
+        DeviceWindowCandidate window;
+        bool                  windowValid = false, windowBeforeClose = false;
+        unsigned              windowCalls = 0;
+        bool                  CaptureDeviceWindowCandidate(DeviceWindowCandidate& output) noexcept override
+        {
+            ++windowCalls;
+            windowBeforeClose = closes == 0 && calls == 8;
+            if (!windowValid)
+                return false;
+            output = window;
+            return true;
+        }
         ID3D12Device* DetachDeviceCandidate() noexcept override
         {
             ++detachCalls;
@@ -78,6 +90,74 @@ namespace
     }
     void ResizeNoop(void*, UINT, UINT, bool)
     {
+    }
+    struct OwnedWindowChain
+    {
+        void**               table = nullptr;
+        DXGI_SWAP_CHAIN_DESC description{};
+        HRESULT              result = S_OK;
+        bool                 raise = false;
+        unsigned             calls = 0;
+    };
+    HRESULT STDMETHODCALLTYPE OwnedWindowGetDesc(OwnedWindowChain* chain, DXGI_SWAP_CHAIN_DESC* output)
+    {
+        ++chain->calls;
+        if (chain->raise)
+            RaiseException(0xe0444550, 0, 0, nullptr);
+        *output = chain->description;
+        return chain->result;
+    }
+    void CheckDeviceWindowCapture(unsigned& checks)
+    {
+        struct OwnedWindows
+        {
+            HWND root = nullptr, child = nullptr;
+            ~OwnedWindows()
+            {
+                if (child)
+                    DestroyWindow(child);
+                if (root)
+                    DestroyWindow(root);
+            }
+        } windows;
+        windows.root = CreateWindowExW(0, L"STATIC", L"MTA owned device-window fixture", WS_OVERLAPPEDWINDOW, 0, 0, 64, 64, nullptr, nullptr,
+                                       GetModuleHandleW(nullptr), nullptr);
+        windows.child =
+            windows.root ? CreateWindowExW(0, L"STATIC", L"MTA owned child", WS_CHILD, 0, 0, 16, 16, windows.root, nullptr, GetModuleHandleW(nullptr), nullptr)
+                         : nullptr;
+        Require(windows.root && windows.child, "owned root and child HWND controls are created without showing a game", checks);
+        std::array<void*, 13> table{};
+        table[12] = reinterpret_cast<void*>(&OwnedWindowGetDesc);
+        OwnedWindowChain chain;
+        chain.table = table.data();
+        chain.description.OutputWindow = windows.root;
+        chain.description.Windowed = TRUE;
+        DeviceWindowCandidate output;
+        Require(boundary_detail::CaptureSwapchainWindow(reinterpret_cast<IDXGISwapChain3*>(&chain), output) && output.window == windows.root &&
+                    output.windowed == 1 && chain.calls == 1,
+                "production V2 capture calls actual owned GetDesc and admits only its current-process root HWND", checks);
+        for (unsigned mode = 0; mode < 7; ++mode)
+        {
+            chain.description.OutputWindow = mode == 0 ? nullptr : mode == 1 ? windows.child : mode == 2 ? GetDesktopWindow() : windows.root;
+            chain.description.Windowed = mode == 3 ? FALSE : TRUE;
+            chain.result = mode == 4 ? E_FAIL : S_OK;
+            chain.raise = mode == 5;
+            output = {};
+            const bool result = boundary_detail::CaptureSwapchainWindow(mode == 6 ? nullptr : reinterpret_cast<IDXGISwapChain3*>(&chain), output);
+            Require(!result && !output.window && !output.windowed,
+                    "null, child, foreign, fullscreen, failed GetDesc and SEH controls cannot create a device-window candidate", checks);
+        }
+        const auto oldRoot = windows.root;
+        Require(DestroyWindow(windows.child) && DestroyWindow(windows.root), "owned HWND controls are synchronously destroyed on their creation thread",
+                checks);
+        windows.child = windows.root = nullptr;
+        chain.description.OutputWindow = oldRoot;
+        chain.description.Windowed = TRUE;
+        chain.result = S_OK;
+        chain.raise = false;
+        output = {};
+        Require(!boundary_detail::CaptureSwapchainWindow(reinterpret_cast<IDXGISwapChain3*>(&chain), output) && !output.window,
+                "an already destroyed HWND cannot be published even when GetDesc still returns its old value", checks);
     }
     unsigned                  dispatchForwards = 0;
     HRESULT                   dispatchResult = S_OK;
@@ -386,10 +466,15 @@ namespace
 
 namespace
 {
-    IUnknown* deviceCandidateFixture = nullptr;
-    IUnknown* secondDeviceCandidateFixture = nullptr;
-    unsigned  deviceCandidateMode = 0;
-    bool      foreignDeviceCandidateStable = false;
+    IUnknown*                           deviceCandidateFixture = nullptr;
+    IUnknown*                           secondDeviceCandidateFixture = nullptr;
+    unsigned                            deviceCandidateMode = 0;
+    bool                                foreignDeviceCandidateStable = false;
+    mta::game_de::DeviceWindowCandidate deviceWindowCandidateFixture;
+}
+void SetDeviceWindowCandidateFixture(void* window, std::uint32_t windowed)
+{
+    deviceWindowCandidateFixture = {window, windowed};
 }
 void SetSecondDeviceCandidateFixture(IUnknown* device)
 {
@@ -416,6 +501,8 @@ bool DeviceCandidateFixtureOriginal(void* viewport, std::uint32_t interval)
         {
             selected->deviceReserved = true;
             selected->deviceCandidate = reinterpret_cast<ID3D12Device*>(deviceCandidateFixture);
+            if (selected->captureDeviceWindow)
+                selected->deviceWindowCandidate = deviceWindowCandidateFixture;
             deviceCandidateFixture = nullptr;
         }
         if (deviceCandidateMode == 2)
@@ -547,6 +634,7 @@ void CheckFrameBoundaryProbe(const char* customFixture, const char* wrapperFixtu
     using Status = FrameBoundaryObservationStatus;
     Require(OwnedNativeDispatchVmTransactions(), "actual VM-backed vendor commit/abort preserve borrowed counts and bypass a stopped CRT heap owner", checks);
     CheckOwnedNativeRoots(checks);
+    CheckDeviceWindowCapture(checks);
     for (unsigned mode = 0; mode < 4; ++mode)
     {
         OwnedQueries                  query;
@@ -566,6 +654,31 @@ void CheckFrameBoundaryProbe(const char* customFixture, const char* wrapperFixtu
                                          : candidate == nullptr,
                 "query runner moves the existing device reference before Close, including caller-owned cleanup on Close failure", checks);
         Require(result == (mode != 3), "optional candidate does not change query cleanup result", checks);
+        Require(!query.windowCalls, "legacy/V1 queries never ask for HWND metadata", checks);
+    }
+    for (unsigned mode = 0; mode < 4; ++mode)
+    {
+        OwnedQueries query;
+        query.candidate = reinterpret_cast<ID3D12Device*>(std::uintptr_t{0x1234});
+        query.windowValid = mode != 0;
+        query.window = {reinterpret_cast<void*>(std::uintptr_t{0x5678}), 1};
+        if (mode == 2)
+            query.stop = 8;
+        if (mode == 3)
+            query.cleanup = true;
+        FrameBoundaryObservationState state;
+        ID3D12Device*                 device = nullptr;
+        DeviceWindowCandidate         window;
+        Require(RunFrameBoundaryQueries(query, state, nullptr, &device, &window) == (mode != 3),
+                "V2 window capture preserves the existing query cleanup result", checks);
+        Require(query.windowCalls == (mode == 2 ? 0u : 1u) && query.detachCalls == (mode == 1 || mode == 3 ? 1u : 0u) && query.closes == 1 &&
+                    (mode == 2 || query.windowBeforeClose),
+                "V2 captures HWND only after coherent pre-close checks and before moving the existing device reference", checks);
+        Require((mode == 1 || mode == 3) ? (device && window.window == query.window.window && window.windowed == 1) : !device,
+                "missing HWND or failed root checks cannot detach a V2 device; Close-fault cleanup still belongs to the outer scope", checks);
+        if (mode == 0)
+            Require(state.status == static_cast<unsigned>(Status::ObservedCoherent) && state.factsMask == 255,
+                    "V2-only HWND refusal does not invent a different API6 boundary result", checks);
     }
     detail::Roots dispatchRoots;
     dispatchRoots.swapchain = 0x1000;

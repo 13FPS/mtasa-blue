@@ -9,6 +9,7 @@
 #include <game/CGameRenderEndpointDiagnostic.h>
 #include <game/CGameRenderSetupDiagnostic.h>
 #include <game/CGameRenderDeviceLease.h>
+#include <game/CGameRenderDeviceWindowLease.h>
 #include "ControllerSnapshot.h"
 #include "NativePadReader.h"
 #include "NativeMovementInput.h"
@@ -651,7 +652,7 @@ namespace mta::game_de
         class GameRenderObservationV6 final : public IGameRenderObservationV6
         {
         public:
-            static Status RequestDeviceLease(IGameRenderObservationV6* lease) noexcept
+            static Status RequestDeviceLease(IGameRenderObservationV6* lease, bool window = false) noexcept
             {
                 if (!TryAcquireSRWLockShared(&diagnosticLeaseLock))
                     return Status::Unsupported;
@@ -662,11 +663,14 @@ namespace mta::game_de
                         continue;
                     if (current->ownerThread != GetCurrentThreadId())
                         result = Status::WrongThread;
-                    else if (current->beginAttempted || current->deviceRequested)
+                    else if (current->beginAttempted || current->deviceRequested || current->deviceWindowRequested)
                         result = Status::Unsupported;
                     else
                     {
-                        current->deviceRequested = true;
+                        if (window)
+                            current->deviceWindowRequested = true;
+                        else
+                            current->deviceRequested = true;
                         result = Status::Ok;
                     }
                     break;
@@ -684,6 +688,21 @@ namespace mta::game_de
                     if (static_cast<IGameRenderObservationV6*>(current) != lease)
                         continue;
                     result = current->ownerThread != GetCurrentThreadId() ? Status::WrongThread : current->observation.TakeDeviceLease(output);
+                    break;
+                }
+                ReleaseSRWLockShared(&diagnosticLeaseLock);
+                return result;
+            }
+            static Status TakeDeviceWindowLease(IGameRenderObservationV6* lease, RenderDeviceWindowLeaseV2& output) noexcept
+            {
+                if (!TryAcquireSRWLockShared(&diagnosticLeaseLock))
+                    return Status::Unsupported;
+                Status result = Status::InvalidArgument;
+                for (auto* current = diagnosticLeasesV6; current; current = current->nextDiagnosticLease)
+                {
+                    if (static_cast<IGameRenderObservationV6*>(current) != lease)
+                        continue;
+                    result = current->ownerThread != GetCurrentThreadId() ? Status::WrongThread : current->observation.TakeDeviceWindowLease(output);
                     break;
                 }
                 ReleaseSRWLockShared(&diagnosticLeaseLock);
@@ -768,9 +787,11 @@ namespace mta::game_de
                 if (ownerThread != GetCurrentThreadId())
                     return Status::WrongThread;
                 const bool captureDevice = deviceRequested;
+                const bool captureDeviceWindow = deviceWindowRequested;
                 deviceRequested = false;
+                deviceWindowRequested = false;
                 beginAttempted = true;
-                return observation.Begin(route, true, true, true, true, captureDevice) ? Status::Ok : Status::Unsupported;
+                return observation.Begin(route, true, true, true, true, captureDevice, captureDeviceWindow) ? Status::Ok : Status::Unsupported;
             }
             Status ReadState(RenderObservationStateV6& state) noexcept override
             {
@@ -820,7 +841,7 @@ namespace mta::game_de
             const RenderObservationRoute route;
             NativeRenderObservation      observation;
             GameRenderObservationV6*     nextDiagnosticLease = nullptr;
-            bool                         deviceRequested = false, beginAttempted = false;
+            bool                         deviceRequested = false, deviceWindowRequested = false, beginAttempted = false;
         };
     }
 
@@ -994,6 +1015,23 @@ extern "C" mta::game_de::Status TakeGameRenderDeviceLeaseV1(std::uint32_t versio
     // caller sentinel; ownership moves only after exact lease/thread validation.
     mta::game_de::RenderDeviceLeaseV1 next;
     const auto                        result = mta::game_de::GameRenderObservationV6::TakeDeviceLease(retainedLease, next);
+    if (result == mta::game_de::Status::Ok)
+        *output = next;
+    return result;
+}
+extern "C" mta::game_de::Status RequestGameRenderDeviceWindowLeaseV2(std::uint32_t version, mta::game_de::IGameRenderObservationV6* retainedLease) noexcept
+{
+    if (version != mta::game_de::RenderDeviceWindowLeaseVersionV2 || !retainedLease)
+        return mta::game_de::Status::InvalidArgument;
+    return mta::game_de::GameRenderObservationV6::RequestDeviceLease(retainedLease, true);
+}
+extern "C" mta::game_de::Status TakeGameRenderDeviceWindowLeaseV2(std::uint32_t version, mta::game_de::IGameRenderObservationV6* retainedLease,
+                                                                  mta::game_de::RenderDeviceWindowLeaseV2* output) noexcept
+{
+    if (version != mta::game_de::RenderDeviceWindowLeaseVersionV2 || !retainedLease || !output)
+        return mta::game_de::Status::InvalidArgument;
+    mta::game_de::RenderDeviceWindowLeaseV2 next;
+    const auto                              result = mta::game_de::GameRenderObservationV6::TakeDeviceWindowLease(retainedLease, next);
     if (result == mta::game_de::Status::Ok)
         *output = next;
     return result;

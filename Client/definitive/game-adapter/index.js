@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { MODE, ONLINE_ACTIVATION, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE, MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE, MTA_CORE_RENDER_ROUTE, MTA_CORE_RENDER_GPU_REFERENCE, MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE, MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE, MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE, MTA_CORE_GUI_STARTUP_REFERENCE } from './config.mjs';
+import { MODE, ONLINE_ACTIVATION, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE, MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE, MTA_CORE_RENDER_ROUTE, MTA_CORE_RENDER_GPU_REFERENCE, MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE, MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE, MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE, MTA_CORE_GUI_STARTUP_REFERENCE, MTA_CORE_GUI_SURFACE_REFERENCE } from './config.mjs';
 import { AdapterController, NativeGaitReferenceController, NativeInputReferenceController } from './controller.mjs';
 import { MtaNativePadReferenceController } from './native-pad-reference.mjs';
 import { MtaNativeMovementTrialController } from './native-movement-trial.mjs';
@@ -18,8 +18,17 @@ function runAdapter() {
             MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE,
             MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE, MTA_CORE_RENDER_GPU_REFERENCE,
             MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE, MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE,
-            MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE].some(Boolean))))
+            MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE, MTA_CORE_GUI_SURFACE_REFERENCE].some(Boolean))))
         throw new Error('MTA Core GUI startup requires separate opt-in Smoke mode');
+    // A child composition surface is a separate Core-owned workload. It must
+    // never inherit offscreen startup, input writes, or a native render trial.
+    if (typeof MTA_CORE_GUI_SURFACE_REFERENCE !== 'boolean' ||
+        (MTA_CORE_GUI_SURFACE_REFERENCE && (MODE !== 'smoke' || [INPUT_REFERENCE, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK,
+            MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE,
+            MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE, MTA_CORE_RENDER_GPU_REFERENCE,
+            MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE, MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE,
+            MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE, MTA_CORE_GUI_STARTUP_REFERENCE].some(Boolean))))
+        throw new Error('MTA Core GUI surface requires separate opt-in Smoke mode');
     if (typeof MTA_CORE_RENDER_REFERENCE !== 'boolean' ||
         (MTA_CORE_RENDER_REFERENCE && (MODE !== 'smoke' || INPUT_REFERENCE || GAIT_REFERENCE || GAIT_RATE || GAIT_ROOT_LOCK ||
             MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE)))
@@ -87,20 +96,20 @@ function runAdapter() {
         throw new Error('SA Unreal API definitions 0.493 or newer are required');
     // These untested input/velocity bindings come from the pinned 0.500 API.
     // Reject older definitions before activation reads, DLL access, or CJ reads.
-    if ((INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE) && definitionVersion < 0.500)
+    if ((INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE) && definitionVersion < 0.500)
         throw new Error('Native input reference requires SA Unreal API definitions 0.500 or newer');
 
     const stopKey = 'Ctrl+Shift+End';
     // Home opens the Rockstar console on the tested build and interrupts this
     // read-only observation, so the input reference needs its own shortcut.
-    const activateKey = (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE) ? 'Ctrl+Shift+F9' : 'Ctrl+Shift+Home';
+    const activateKey = (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE) ? 'Ctrl+Shift+F9' : 'Ctrl+Shift+Home';
     const chordHeld = keys => keys.every(key => native('IS_KEY_PRESSED', key));
-    if (MODE === 'online' || GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE) {
+    if (MODE === 'online' || GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE) {
         if (MODE === 'online' && !['manual', 'automatic'].includes(ONLINE_ACTIVATION))
             throw new Error('Unknown online activation mode');
         // The reference changes one owned NPC, so even an automatic Online
         // preference cannot start this separate experiment during save loading.
-        if (GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || ONLINE_ACTIVATION === 'manual') {
+        if (GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || ONLINE_ACTIVATION === 'manual') {
             // Startup freezes have also occurred before this script enters.
             // Waiting here cannot prevent those loader failures, but it gives
             // a usable game session a separate, observable boundary before
@@ -116,7 +125,7 @@ function runAdapter() {
                         bridge_loaded: false, game_adapter_active: false, network_active: false });
                     return;
                 }
-                if (chordHeld([17, 16, (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE) ? 120 : 36]) && native('IS_PLAYER_PLAYING', 0)) {
+                if (chordHeld([17, 16, (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE) ? 120 : 36]) && native('IS_PLAYER_PLAYING', 0)) {
                     emit({ event: 'adapter_activation_requested', mode: MODE, activate_key: activateKey });
                     break;
                 }
@@ -124,7 +133,7 @@ function runAdapter() {
             }
         }
     }
-    if (MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE) {
+    if (MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE) {
         // Holding the activation modifiers contaminated the prior source-state
         // window. Begin DLL access and the recorder only after their release,
         // while keeping cancellation and a finite pre-binding deadline.
@@ -187,6 +196,114 @@ function runAdapter() {
     enterPhase('runtime_bind');
     if (bindRuntime() !== 1) throw new Error('CLEO runtime lifecycle binding failed');
     enterPhase('runtime_bound');
+    if (MTA_CORE_GUI_SURFACE_REFERENCE) {
+        // A correlated device/window lease is consumed only after native End.
+        // Core draws through MTA's own child/DComp swapchain and direct queue;
+        // this path never receives native queue or backbuffer write permission.
+        const version = bind('DE_CoreGuiSurfaceApiVersion', 'X64U32');
+        const begin = bind('DE_CoreGuiSurfaceBegin');
+        const capture = bind('DE_CoreGuiSurfaceCapture');
+        const readGui = bind('DE_CoreGuiSurfaceRead', 'X64U32');
+        const poll = bind('DE_CoreStartupPoll');
+        const cancel = bind('DE_CoreStartupCancel');
+        const read = bind('DE_CoreStartupRead', 'X64U32');
+        if (version() !== 1) throw new Error('Core GUI surface API1 is required');
+        emit({ event: 'adapter_start', host: HOST, cleo: String(CLEO.version), host_version: String(CLEO.hostVersion),
+            definitions: String(CLEO.apiVersion), mode: MODE, endpoint: null, stop_key: stopKey,
+            core_gui_surface_reference: true, provenance: 'mta_core_owned_gui_surface', core_api: 12, surface_api: 1, adapter_abi: 6,
+            network_active: false, input_writes: false, remote_peds_created: false,
+            native_queue_commands_issued: false, native_backbuffer_touched: false });
+        enterPhase('core_gui_surface_reference');
+        const startedAt = Date.now();
+        if (!Number.isSafeInteger(startedAt) || startedAt < 0) throw new Error('Invalid Core GUI surface clock');
+        emit({ event: 'core_gui_surface_reference_started', at_ms: startedAt, core_api: 12, surface_api: 1,
+            sample_interval_ms: 100, device_wait_budget_ms: 10000, display_duration_ms: 8000, cleanup_deadline_ms: 2000 });
+        if (begin() !== 1) throw new Error('MTA Core GUI surface worker could not start');
+        let terminal = false, stopRequested = false, lastAt = startedAt, latest = null, samples = 0;
+        const unsigned = values => values.every(value => Number.isInteger(value) && value >= 0 && value <= 0xffffffff);
+        const captureSample = at => {
+            const captured = capture();
+            if (captured !== 0 && captured !== 1) throw new Error('Core GUI surface capture status unavailable');
+            if (!captured) return;
+            const state = Array.from({ length: 96 }, (_, field) => readGui(field));
+            const booleanFields = [5, 6, 7, 8, 9, 10, 11, 19, 20, 21, 30, 31, 32, 37, 39, 43, 44, 45,
+                49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 72, 73, 74,
+                75, 76, 77, 78, 79, 80, 86];
+            if (!unsigned(state) || state[0] !== 1 || ![1, 2, 3].includes(state[1]) || !state[2] || state[4] > 11 ||
+                booleanFields.some(field => state[field] > 1) || ![0, 2].includes(state[18]) || state[23] > 6 ||
+                state[41] > 4 || state[42] > 10 || state[47] > 9 || state[48] > 9 || state.slice(88).some(Boolean) || state[44] || state[45])
+                throw new Error('Invalid Core GUI surface scalar state');
+            if ((state[5] && state[6]) || (state[9] && state[43]) ||
+                (state[6] && (state[1] !== 2 || state[5] || !state[9] || !state[39] || state[43] ||
+                    state.slice(49, 52).some(Boolean) || state[59] || state[41] || state.slice(75, 78).some(Boolean) || state[72] || ![78, 79, 80].every(field => state[field] === 1))))
+                throw new Error('Core GUI surface claimed cleanup with retained ownership');
+            const pairPresent = field => state[field] !== 0 || state[field + 1] !== 0;
+            if ((state[1] === 2 && (!state[6] || !state[4])) || (state[1] === 3 && (!state[5] || state[6])) ||
+                (!state[10] && (state.slice(12, 19).some(Boolean) || state[58])) ||
+                (state[58] && (!state[10] || state[18] !== 2 || ![12, 14, 16].every(pairPresent))) ||
+                (state[19] && (![8, 9, 10, 11, 58].every(field => state[field] === 1) || state[42])) ||
+                (state[20] && !state[19]) || (state[21] && (!state[19] || !state[20])) ||
+                (state[37] && (!state[20] || !state[21])) || (state[4] === 1 && (!state[20] || !state[21])) ||
+                (state[35] === 0xffffffff && state[36] === 0xffffffff && !state[52]))
+                throw new Error('Invalid Core GUI surface ownership state');
+            if (latest && (state[2] < latest[2] || state[3] < latest[3]))
+                throw new Error('Core GUI surface publication order is invalid');
+            if (latest && state[2] === latest[2]) {
+                if (state.some((value, field) => value !== latest[field]))
+                    throw new Error('Core GUI surface changed without a new sequence');
+                return;
+            }
+            latest = state;
+            ++samples;
+            emit({ event: 'core_gui_surface_reference_sample', at_ms: at, elapsed_ms: at - startedAt, state });
+        };
+        try {
+            while (true) {
+                const at = Date.now();
+                if (!Number.isSafeInteger(at) || at < lastAt) throw new Error('Invalid Core GUI surface clock');
+                lastAt = at;
+                if (!stopRequested && (chordHeld([17, 16, 35]) || !native('IS_PLAYER_PLAYING', 0))) {
+                    if (cancel() !== 1) throw new Error('MTA Core GUI surface cancellation was rejected');
+                    stopRequested = true;
+                    emit({ event: 'core_gui_surface_reference_stop_requested', at_ms: at });
+                }
+                const status = poll();
+                if (status !== 0 && status !== 1) throw new Error('Core GUI surface worker status unavailable');
+                captureSample(at);
+                if (status === 1) { terminal = true; break; }
+                wait(100);
+            }
+        } catch (error) {
+            if (!terminal) { try { cancel(); } catch (_) {} }
+            throw error;
+        }
+        const state = Array.from({ length: 19 }, (_, field) => read(field));
+        if (!unsigned(state)) throw new Error('Invalid Core GUI surface final worker state');
+        const expected = [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5];
+        const cleanupPassed = latest !== null && latest[1] === 2 && latest[6] === 1 && latest[5] === 0 && latest[7] === 0 &&
+            latest[9] === 1 && latest[39] === 1 && latest[41] === 0 && latest[43] === 0 && latest.slice(49, 52).every(value => value === 0) &&
+            latest[59] === 0 && latest.slice(75, 78).every(value => value === 0) && latest[72] === 0 && [78, 79, 80].every(field => latest[field] === 1) &&
+            state[7] === 1 && state[13] === 1 && state[14] === 0 && state[15] === latest[57];
+        const pairPresent = field => latest !== null && (latest[field] !== 0 || latest[field + 1] !== 0);
+        const fenceComplete = latest !== null && !(latest[35] === 0xffffffff && latest[36] === 0xffffffff) &&
+            (latest[36] > latest[34] || (latest[36] === latest[34] && latest[35] >= latest[33]));
+        const passed = !stopRequested && cleanupPassed && expected.every((value, field) => state[field] === value) &&
+            state[16] === 0 && state[17] === 1 && state[18] === 0 && state[11] <= 3 && state[12] <= 3 && (state[12] & ~state[11]) === 0 &&
+            latest[4] === 1 && [8, 10, 11, 19, 20, 21, 30, 31, 32, 37, 53, 54, 55, 56, 58,
+                60, 61, 62, 63, 64, 65, 66, 78, 79, 80, 86].every(field => latest[field] === 1) &&
+            latest[18] === 2 && [12, 14, 16, 33].every(pairPresent) && latest[22] === 0 && latest[23] === 0 &&
+            latest[24] > 0 && latest[27] === 87 && latest[28] > 0 && latest[28] <= 16384 && latest[29] > 0 && latest[29] <= 16384 &&
+            fenceComplete && latest[38] > 0 && latest[42] === 0 && latest[44] === 0 && latest[45] === 0 && latest[46] > 0 &&
+            latest[47] === 9 && latest[48] === 0 && latest[52] === 0 && latest[68] >= 2 && latest[67] === latest[68] + latest[87] &&
+            latest[69] === 0 && latest[70] >= latest[68] && latest[73] === 0 && latest[81] > 0 && latest[82] > 0 &&
+            latest[83] === 1 && latest[84] > 0 && latest[85] === 8000 && latest[3] >= 8000;
+        emit({ event: 'core_gui_surface_reference_finished', at_ms: Date.now(), elapsed_ms: Date.now() - startedAt, state,
+            passed, cleanup_passed: cleanupPassed, stop_requested: stopRequested, samples, own_surface_workload_verified: passed, composition_present_verified: passed,
+            full_core_ready: false, visible_gta_drawing_verified: false, network_active: false, input_writes: false,
+            remote_peds_created: false, native_queue_commands_issued: false, native_backbuffer_touched: false });
+        if (!passed) throw new Error('MTA Core GUI surface incomplete; inspect its saved state');
+        return;
+    }
     if (MTA_CORE_GUI_STARTUP_REFERENCE) {
         // Core preloads cgui, takes the explicit strong device lease and fully
         // ends native observation before using MTA's own queue/offscreen target.

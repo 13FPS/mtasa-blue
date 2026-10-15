@@ -16,7 +16,7 @@ $sourceNames = @('Client/game_de/NativeRenderObservation.h','Client/game_de/Nati
     'Tests/definitive/NativeRenderObservationTests.cpp','Tests/definitive/test_native_render_observation.ps1',
     'Client/sdk/game/CGameRenderObservation.h','Client/sdk/game/CGameAdapter.h',
     'Client/sdk/game/CGameRenderEndpointDiagnostic.h',
-    'Client/sdk/game/CGameRenderSetupDiagnostic.h', 'Client/sdk/game/CGameRenderRootsDiagnostic.h', 'Client/sdk/game/CGameRenderDeviceLease.h',
+    'Client/sdk/game/CGameRenderSetupDiagnostic.h', 'Client/sdk/game/CGameRenderRootsDiagnostic.h', 'Client/sdk/game/CGameRenderDeviceLease.h', 'Client/sdk/game/CGameRenderDeviceWindowLease.h',
     'Shared/sdk/CControllerState.h','Shared/sdk/CControlStateSynthesis.h','Shared/sdk/CControllerActions.h',
     'vendor/detours/4.0.1/src/detours.h','vendor/detours/4.0.1/src/detours.cpp','vendor/detours/4.0.1/src/modules.cpp',
     'vendor/detours/4.0.1/src/disasm.cpp','vendor/detours/4.0.1/src/image.cpp','vendor/detours/4.0.1/src/creatwth.cpp')
@@ -97,7 +97,7 @@ $objects = @('detours.obj','modules.obj','disasm.obj','image.obj','creatwth.obj'
 $arguments = $common + @('/W4','/WX',(Join-Path $PSScriptRoot 'NativeRenderObservationTests.cpp'),
     (Join-Path $PSScriptRoot 'NativeFrameBoundaryProbeTests.cpp'),
     (Join-Path $taskRoot 'Client/game_de/NativeD3D12OwnershipProbe.cpp'),
-    (Join-Path $taskRoot 'Client/game_de/NativeCustomPresentProbe.cpp'),('/Fo'+$outputRoot+[IO.Path]::DirectorySeparatorChar),('/Fe'+$executable),'/link','bcrypt.lib')+$objects
+    (Join-Path $taskRoot 'Client/game_de/NativeCustomPresentProbe.cpp'),('/Fo'+$outputRoot+[IO.Path]::DirectorySeparatorChar),('/Fe'+$executable),'/link','bcrypt.lib','user32.lib')+$objects
 $compilerOutput = @(& $compiler @arguments 2>&1)
 $compilerExit = $LASTEXITCODE
 $compilerOutput | Set-Content -LiteralPath (Join-Path $outputRoot 'compile.log') -Encoding utf8
@@ -120,7 +120,7 @@ $unavailableArguments=$unavailableCommon+@('/W4','/WX','/DMTA_TEST_NATIVE_DISPAT
     (Join-Path $taskRoot 'Client/game_de/NativeFrameBoundaryProbe.cpp'),
     (Join-Path $taskRoot 'Client/game_de/NativeD3D12OwnershipProbe.cpp'),
     (Join-Path $taskRoot 'Client/game_de/NativeCustomPresentProbe.cpp'),
-    ('/Fo'+$unavailableRoot+[IO.Path]::DirectorySeparatorChar),('/Fe'+$unavailableExecutable),'/link','bcrypt.lib')+$objects
+    ('/Fo'+$unavailableRoot+[IO.Path]::DirectorySeparatorChar),('/Fe'+$unavailableExecutable),'/link','bcrypt.lib','user32.lib')+$objects
 $unavailableOutput=@(& $compiler @unavailableArguments 2>&1)
 $unavailableCompilerExit=$LASTEXITCODE
 $unavailableOutput | Set-Content -LiteralPath (Join-Path $unavailableRoot 'compile.log') -Encoding utf8

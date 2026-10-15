@@ -12,6 +12,11 @@
 
 namespace mta::game_de
 {
+    struct DeviceWindowCandidate
+    {
+        void*         window = nullptr;
+        std::uint32_t windowed = 0;
+    };
     // The query executor lets owned fixtures exercise faults and cleanup without
     // loading the game, installing its hooks, or submitting GPU work.
     class FrameBoundaryQueries
@@ -22,12 +27,13 @@ namespace mta::game_de
         // An explicit device request may move an already acquired reference;
         // ordinary observations never call this or retain a COM object.
         virtual ID3D12Device* DetachDeviceCandidate() noexcept { return nullptr; }
+        virtual bool          CaptureDeviceWindowCandidate(DeviceWindowCandidate&) noexcept { return false; }
 
     protected:
         ~FrameBoundaryQueries() = default;
     };
     bool RunFrameBoundaryQueries(FrameBoundaryQueries& queries, FrameBoundaryObservationState& state, RenderRootsDiagnosticV1* trace = nullptr,
-                                 ID3D12Device** deviceCandidate = nullptr) noexcept;
+                                 ID3D12Device** deviceCandidate = nullptr, DeviceWindowCandidate* windowCandidate = nullptr) noexcept;
     bool ReleaseRenderDeviceReference(ID3D12Device*& device) noexcept;
 
     struct FrameBoundaryScope
@@ -41,9 +47,11 @@ namespace mta::game_de
         bool                          knownPresenter = false, cleanupFailed = false, entered = false, dispatchEntered = false;
         std::uint64_t                 epoch = 0;
         void (*cleanupFailure)() noexcept = nullptr;
-        FrameBoundaryScope* previous = nullptr;
-        ID3D12Device*       deviceCandidate = nullptr;
-        bool                deviceReserved = false;
+        FrameBoundaryScope*   previous = nullptr;
+        ID3D12Device*         deviceCandidate = nullptr;
+        bool                  deviceReserved = false;
+        bool                  captureDeviceWindow = false;
+        DeviceWindowCandidate deviceWindowCandidate;
         bool (*reserveDeviceCandidate)() noexcept = nullptr;
     };
     // Prepare is worker-only and performs no COM calls. Change appends to the
@@ -57,7 +65,7 @@ namespace mta::game_de
     void     ResetFrameBoundaryObservation() noexcept;
     void     EnterFrameBoundaryScope(FrameBoundaryScope& scope, std::uintptr_t image, void* viewport, std::uint32_t callbackThread,
                                      const CustomPresentClassificationState& custom, void (*cleanupFailure)() noexcept = nullptr,
-                                     bool (*reserveDeviceCandidate)() noexcept = nullptr) noexcept;
+                                     bool (*reserveDeviceCandidate)() noexcept = nullptr, bool captureDeviceWindow = false) noexcept;
     void     LeaveFrameBoundaryScope(FrameBoundaryScope& scope) noexcept;
     // API5 alone may normalize our verified installed pre-release patch back to
     // its fully pinned original bytes. Historical API4 uses its original reader.

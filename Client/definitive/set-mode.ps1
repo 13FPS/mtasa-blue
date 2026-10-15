@@ -16,15 +16,19 @@ param(
     [switch]$MtaCoreRenderReference,
     [switch]$MtaCoreRenderGpuReference,
     [switch]$MtaCoreRenderCustomPresentReference, [switch]$MtaCoreRenderFrameBoundaryReference, [switch]$MtaCoreRenderNativeDispatchReference,
-    [switch]$MtaCoreGuiStartupReference,
+    [switch]$MtaCoreGuiStartupReference, [switch]$MtaCoreGuiSurfaceReference,
     [ValidateSet('D3D11', 'D3D12')][string]$MtaCoreRenderRoute = 'D3D11',
     [string]$GameDirectory = 'C:\Program Files (x86)\Steam\steamapps\common\GTA San Andreas - The Definitive Edition\Gameface\Binaries\Win64'
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-if ($MtaCoreGuiStartupReference -and ($Mode -ne 'Smoke' -or $MtaCoreRenderReference -or $MtaCoreRenderGpuReference -or $MtaCoreRenderCustomPresentReference -or $MtaCoreRenderFrameBoundaryReference -or $MtaCoreRenderNativeDispatchReference -or $MtaCoreMovementReference -or $MtaCoreInputReference -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
+if ($MtaCoreGuiStartupReference -and ($Mode -ne 'Smoke' -or $MtaCoreGuiSurfaceReference -or $MtaCoreRenderReference -or $MtaCoreRenderGpuReference -or $MtaCoreRenderCustomPresentReference -or $MtaCoreRenderFrameBoundaryReference -or $MtaCoreRenderNativeDispatchReference -or $MtaCoreMovementReference -or $MtaCoreInputReference -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
     throw 'MTA Core GUI startup requires separate opt-in Smoke mode without other trials or an explicit renderer route.'
+}
+# Surface display is an independent opt-in: sharing GUI assets cannot arm it.
+if ($MtaCoreGuiSurfaceReference -and ($Mode -ne 'Smoke' -or $MtaCoreGuiStartupReference -or $MtaCoreRenderReference -or $MtaCoreRenderGpuReference -or $MtaCoreRenderCustomPresentReference -or $MtaCoreRenderFrameBoundaryReference -or $MtaCoreRenderNativeDispatchReference -or $MtaCoreMovementReference -or $MtaCoreInputReference -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
+    throw 'MTA Core GUI surface requires separate opt-in Smoke mode without other trials or an explicit renderer route.'
 }
 # Frame association is a separate read-only hook lease, never implicit in recognition.
 # Caller dispatch is a separate explicit hook lease, even when the older probe refuses.
@@ -253,7 +257,7 @@ if ($coreRenderNativeDispatchMatches -eq 1) {
 $guiPattern = 'export const MTA_CORE_GUI_STARTUP_REFERENCE = (true|false);'
 $guiMatches = [regex]::Matches($configText, $guiPattern).Count
 if ($guiMatches -gt 1 -or ($MtaCoreGuiStartupReference -and $guiMatches -ne 1)) { throw 'Update the adapter before selecting MTA Core GUI startup.' }
-if ($MtaCoreGuiStartupReference) {
+if ($MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference) {
     $guiPaths = @('CLEO/de-online/cgui.dll',
         'CLEO/de-online/mta/cgui/sans.ttf', 'CLEO/de-online/mta/cgui/saheader.ttf', 'CLEO/de-online/mta/cgui/sagothic.ttf',
         'CLEO/de-online/mta/cgui/Imageset.xsd', 'CLEO/de-online/mta/cgui/GUIScheme.xsd', 'CLEO/de-online/mta/cgui/Font.xsd',
@@ -267,6 +271,14 @@ if ($MtaCoreGuiStartupReference) {
 if ($guiMatches -eq 1) {
     $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $guiPattern,
         "export const MTA_CORE_GUI_STARTUP_REFERENCE = $($MtaCoreGuiStartupReference.IsPresent.ToString().ToLowerInvariant());"))
+}
+# Old configurations remain usable, but cannot infer this newer surface opt-in.
+$surfacePattern = 'export const MTA_CORE_GUI_SURFACE_REFERENCE = (true|false);'
+$surfaceMatches = [regex]::Matches($configText, $surfacePattern).Count
+if ($surfaceMatches -gt 1 -or ($MtaCoreGuiSurfaceReference -and $surfaceMatches -ne 1)) { throw 'Update the adapter before selecting MTA Core GUI surface.' }
+if ($surfaceMatches -eq 1) {
+    $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $surfacePattern,
+        "export const MTA_CORE_GUI_SURFACE_REFERENCE = $($MtaCoreGuiSurfaceReference.IsPresent.ToString().ToLowerInvariant());"))
 }
 $configEntry = @($installed.files | Where-Object { $_.path -eq 'CLEO/de-online/config.mjs' })
 if ($configEntry.Count -ne 1) { throw 'Missing owned configuration record.' }
@@ -300,7 +312,9 @@ try {
     Write-AtomicFile $manifestPath $originalManifest
     throw $failure
 }
-if ($MtaCoreGuiStartupReference) {
+if ($MtaCoreGuiSurfaceReference) {
+    Write-Host 'Installed adapter mode: Smoke, MTA child composition GUI surface armed. Ctrl+Shift+F9 starts after release; Ctrl+Shift+End requests cleanup.'
+} elseif ($MtaCoreGuiStartupReference) {
     Write-Host 'Installed adapter mode: Smoke, MTA GUI startup on an owned offscreen queue armed. Ctrl+Shift+F9 starts after release; Ctrl+Shift+End requests cleanup.'
 } elseif ($MtaCoreRenderNativeDispatchReference) {
     Write-Host 'Installed adapter mode: Smoke, read-only scoped native D3D12 dispatch armed. Ctrl+Shift+F9 starts after release; Ctrl+Shift+End requests cleanup. No drawing or input writes.'

@@ -12,6 +12,7 @@
 #include "../sdk/game/CGameRenderSetupDiagnostic.h"
 #include "../sdk/game/CGameRenderRootsDiagnostic.h"
 #include "../sdk/game/CGameRenderDeviceLease.h"
+#include "../sdk/game/CGameRenderDeviceWindowLease.h"
 
 namespace mta::game_de
 {
@@ -68,7 +69,7 @@ namespace mta::game_de
         // A zero-callback run cannot choose a backend. The route is explicit;
         // observedRoute remains unknown until a validated original returns.
         bool Begin(RenderObservationRoute route = RenderObservationRoute::D3D11, bool queryGpuOwnership = false, bool classifyCustomPresent = false,
-                   bool queryFrameBoundary = false, bool nativeDispatch = false, bool captureDevice = false) noexcept;
+                   bool queryFrameBoundary = false, bool nativeDispatch = false, bool captureDevice = false, bool captureDeviceWindow = false) noexcept;
         bool End() noexcept;
         void ReadState(NativeRenderObservationState& state) const noexcept;
         // This separate cache does not add fields or claims to the V5 ABI.
@@ -80,6 +81,7 @@ namespace mta::game_de
         // a publication miss cannot attach newer read failures to older facts.
         bool   ReadRootsDiagnostic(RenderRootsDiagnosticV1& state) const noexcept;
         Status TakeDeviceLease(RenderDeviceLeaseV1& state) noexcept;
+        Status TakeDeviceWindowLease(RenderDeviceWindowLeaseV2& state) noexcept;
 
     private:
         std::uint64_t                        generation = 0;

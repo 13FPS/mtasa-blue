@@ -7,6 +7,7 @@
 param(
     [string]$PackageRoot,
     [string]$GuiPackagePath,
+    [string]$SurfacePackagePath,
     [Parameter(Mandatory)][string]$GameExecutable
 )
 
@@ -77,10 +78,35 @@ if ($GuiPackagePath) {
         }
     }
     $guiConfig = [IO.File]::ReadAllText((Join-Path $guiPackage 'Win64/CLEO/de-online/config.mjs'))
-    if ([regex]::Matches($guiConfig, 'export const MTA_CORE_GUI_STARTUP_REFERENCE = true;').Count -ne 1 -or $guiConfig -match 'export const (GAIT_REFERENCE|GAIT_RATE|GAIT_ROOT_LOCK|INPUT_REFERENCE|MTA_NATIVE_PAD_REFERENCE|MTA_NATIVE_MOVEMENT_TRIAL|MTA_CORE_STARTUP_REFERENCE|MTA_CORE_INPUT_REFERENCE|MTA_CORE_MOVEMENT_REFERENCE|MTA_CORE_RENDER_REFERENCE|MTA_CORE_RENDER_GPU_REFERENCE|MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE|MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE|MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE) = true;') {
+    if ([regex]::Matches($guiConfig, 'export const MTA_CORE_GUI_STARTUP_REFERENCE = true;').Count -ne 1 -or $guiConfig -match 'export const (GAIT_REFERENCE|GAIT_RATE|GAIT_ROOT_LOCK|INPUT_REFERENCE|MTA_NATIVE_PAD_REFERENCE|MTA_NATIVE_MOVEMENT_TRIAL|MTA_CORE_STARTUP_REFERENCE|MTA_CORE_INPUT_REFERENCE|MTA_CORE_MOVEMENT_REFERENCE|MTA_CORE_RENDER_REFERENCE|MTA_CORE_RENDER_GPU_REFERENCE|MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE|MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE|MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE|MTA_CORE_GUI_SURFACE_REFERENCE) = true;') {
         throw 'GUI ownership tests require an explicitly armed, separate GUI startup package.'
     }
     $guiPackageHashes = @([ordered]@{ path='manifest.json'; sha256=(Get-Sha (Join-Path $guiPackage 'manifest.json')) }) + @($guiManifest.files | ForEach-Object { [ordered]@{ path=('Win64/' + $_.path); sha256=$_.sha256 } })
+}
+# A real surface package supplies the same exact assets, while its distinct
+# marker proves that asset ownership alone cannot select a visible workload.
+$surfacePackage = $null
+$surfaceManifest = $null
+$surfacePackageHashes = @()
+if ($SurfacePackagePath) {
+    $surfacePackage = (Resolve-Path -LiteralPath $SurfacePackagePath).Path
+    $surfaceManifest = Get-Content -LiteralPath (Join-Path $surfacePackage 'manifest.json') -Raw | ConvertFrom-Json
+    if ($surfaceManifest.packageId -ne 'de-online-prototype' -or $surfaceManifest.mode -ne 'Smoke' -or $surfaceManifest.gameSha256 -ne $knownGameHash -or $surfaceManifest.formatVersion -ne 1 -or
+        @($surfaceManifest.files).Count -ne 36 -or @($surfaceManifest.files.path | Select-Object -Unique).Count -ne 36 -or @(Compare-Object ($expectedPaths + $guiPaths) @($surfaceManifest.files.path)).Count -ne 0) {
+        throw 'Supply the complete real 36-file GUI surface Smoke package.'
+    }
+    foreach ($entry in $surfaceManifest.files) {
+        if ((Get-Sha (Join-Path $surfacePackage ('Win64/' + $entry.path))) -ne $entry.sha256) { throw "Surface source package hash differs: $($entry.path)" }
+        if ($entry.path -in $expectedPaths -and $entry.path -ne 'CLEO/de-online/config.mjs') {
+            if (@($sourceManifest.files | Where-Object path -eq $entry.path)[0].sha256 -ne $entry.sha256) { throw "Surface and ordinary backend bytes differ: $($entry.path)" }
+        }
+        if ($guiManifest -and $entry.path -in $guiPaths -and @($guiManifest.files | Where-Object path -eq $entry.path)[0].sha256 -ne $entry.sha256) { throw "GUI surface asset bytes differ: $($entry.path)" }
+    }
+    $surfaceConfig = [IO.File]::ReadAllText((Join-Path $surfacePackage 'Win64/CLEO/de-online/config.mjs'))
+    if ([regex]::Matches($surfaceConfig, 'export const MTA_CORE_GUI_SURFACE_REFERENCE = true;').Count -ne 1 -or $surfaceConfig -match 'export const (GAIT_REFERENCE|GAIT_RATE|GAIT_ROOT_LOCK|INPUT_REFERENCE|MTA_NATIVE_PAD_REFERENCE|MTA_NATIVE_MOVEMENT_TRIAL|MTA_CORE_STARTUP_REFERENCE|MTA_CORE_INPUT_REFERENCE|MTA_CORE_MOVEMENT_REFERENCE|MTA_CORE_RENDER_REFERENCE|MTA_CORE_RENDER_GPU_REFERENCE|MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE|MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE|MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE|MTA_CORE_GUI_STARTUP_REFERENCE) = true;') {
+        throw 'Surface ownership tests require an explicitly armed, separate GUI surface package.'
+    }
+    $surfacePackageHashes = @([ordered]@{ path='manifest.json'; sha256=(Get-Sha (Join-Path $surfacePackage 'manifest.json')) }) + @($surfaceManifest.files | ForEach-Object { [ordered]@{ path=('Win64/' + $_.path); sha256=$_.sha256 } })
 }
 $outputRoot = Join-Path $repositoryRoot ('Build/mta-movement-package-tests/' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($outputRoot) | Out-Null
@@ -176,22 +202,23 @@ function New-Fixture([string]$Name) {
 function Install-Fresh([object]$Fixture) {
     Invoke-Production $Fixture 'install.ps1' @{ Mode='Smoke'; PackageDirectory=$Fixture.package; GameDirectory=$Fixture.game }
 }
-function Select-FixturePackage([object]$Fixture, [bool]$Gui) {
+function Select-FixturePackage([object]$Fixture, [bool]$Gui, [bool]$Surface = $false) {
     # Switch only the disposable package tree; current installed ownership is
     # left intact so update exercises the real 23-to-36 and 36-to-23 transaction.
     $old = Get-Content -LiteralPath (Join-Path $Fixture.package 'manifest.json') -Raw | ConvertFrom-Json
     foreach ($entry in $old.files) { Remove-Item -LiteralPath (Assert-FixturePath (Join-Path $Fixture.package ('Win64/' + $entry.path))) }
     Remove-Item -LiteralPath (Assert-FixturePath (Join-Path $Fixture.package 'manifest.json'))
-    $source = if ($Gui) { $guiPackage } else { $sourcePackage }
-    $manifest = if ($Gui) { $guiManifest } else { $sourceManifest }
+    $source = if ($Surface) { $surfacePackage } elseif ($Gui) { $guiPackage } else { $sourcePackage }
+    $manifest = if ($Surface) { $surfaceManifest } elseif ($Gui) { $guiManifest } else { $sourceManifest }
     Copy-FixtureFile (Join-Path $source 'manifest.json') (Join-Path $Fixture.package 'manifest.json')
     foreach ($entry in $manifest.files) { Copy-FixtureFile (Join-Path $source ('Win64/' + $entry.path)) (Join-Path $Fixture.package ('Win64/' + $entry.path)) }
 }
-function Assert-GuiInstalled([object]$Fixture) {
+function Assert-GuiInstalled([object]$Fixture, [bool]$Surface = $false) {
     $manifest = Get-Content -LiteralPath (Join-Path $Fixture.game 'de-online-install-manifest.json') -Raw | ConvertFrom-Json
     Assert-Check (@($manifest.files).Count -eq 36 -and @(Compare-Object ($expectedPaths + $guiPaths) @($manifest.files.path)).Count -eq 0) 'GUI exact complete36 ownership'
     foreach ($entry in $manifest.files) {
-        $expected = @($guiManifest.files | Where-Object path -eq $entry.path)[0]
+        $expectedManifest = if ($Surface) { $surfaceManifest } else { $guiManifest }
+        $expected = @($expectedManifest.files | Where-Object path -eq $entry.path)[0]
         Assert-Check ($entry.sha256 -eq $expected.sha256 -and (Get-Sha $entry.destination) -eq $expected.sha256) ('GUI owned hash ' + $entry.path)
     }
     Invoke-Production $Fixture 'uninstall.ps1' @{GameDirectory=$Fixture.game;ValidateOnly=$true}
@@ -885,7 +912,7 @@ try {
             $before = Get-TreeFingerprint $fixture.root
             Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' @{Mode='Smoke';MtaCoreGuiStartupReference=$true;GameDirectory=$fixture.game} } 'complete owned GUI assets are missing' 'GUI cannot infer missing group'
             Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Missing GUI group cannot mutate config'
-            foreach ($flag in @('NativeGaitReference','MatchedGaitRate','LockWalkRoot','NativeInputReference','MtaNativePadReference','MtaNativeMovementTrial','MtaCoreStartupReference','MtaCoreInputReference','MtaCoreMovementReference','MtaCoreRenderReference','MtaCoreRenderGpuReference','MtaCoreRenderCustomPresentReference','MtaCoreRenderFrameBoundaryReference','MtaCoreRenderNativeDispatchReference')) {
+            foreach ($flag in @('NativeGaitReference','MatchedGaitRate','LockWalkRoot','NativeInputReference','MtaNativePadReference','MtaNativeMovementTrial','MtaCoreStartupReference','MtaCoreInputReference','MtaCoreMovementReference','MtaCoreRenderReference','MtaCoreRenderGpuReference','MtaCoreRenderCustomPresentReference','MtaCoreRenderFrameBoundaryReference','MtaCoreRenderNativeDispatchReference','MtaCoreGuiSurfaceReference')) {
                 $selection = @{Mode='Smoke';MtaCoreGuiStartupReference=$true}; $selection[$flag]=$true
                 Assert-Refused { Invoke-Production $fixture 'package.ps1' $selection } 'GUI startup requires separate opt-in Smoke mode' ('GUI package rejects ' + $flag)
                 $selection.GameDirectory=$fixture.game
@@ -960,17 +987,128 @@ try {
             Invoke-Production $fixture 'uninstall.ps1' @{GameDirectory=$fixture.game;ValidateOnly=$true}
         }
     }
+    if ($surfacePackage) {
+        Invoke-Case 'surface23-36-23-and-mode-isolation' {
+            param($fixture)
+            Install-Fresh $fixture
+            Select-FixturePackage $fixture $false $true
+            Invoke-Production $fixture 'update.ps1' @{GameDirectory=$fixture.game}
+            Assert-GuiInstalled $fixture $true
+            $config = Join-Path $fixture.game 'CLEO/de-online/config.mjs'
+            foreach ($mode in @('Smoke','Diagnostic','Online','Smoke')) {
+                Invoke-Production $fixture 'set-mode.ps1' @{Mode=$mode;GameDirectory=$fixture.game}
+                Assert-Check ([IO.File]::ReadAllText($config) -match 'export const MTA_CORE_GUI_SURFACE_REFERENCE = false;' -and [IO.File]::ReadAllText($config) -match 'export const MTA_CORE_GUI_STARTUP_REFERENCE = false;') "Ordinary $mode clears both independent GUI opt-ins"
+            }
+            Invoke-Production $fixture 'set-mode.ps1' @{Mode='Smoke';MtaCoreGuiStartupReference=$true;GameDirectory=$fixture.game}
+            Invoke-Production $fixture 'set-mode.ps1' @{Mode='Smoke';MtaCoreGuiSurfaceReference=$true;GameDirectory=$fixture.game}
+            Assert-Check ([IO.File]::ReadAllText($config) -match 'export const MTA_CORE_GUI_SURFACE_REFERENCE = true;' -and [IO.File]::ReadAllText($config) -match 'export const MTA_CORE_GUI_STARTUP_REFERENCE = false;') 'Surface selection clears prior offscreen startup'
+            Invoke-Production $fixture 'set-mode.ps1' @{Mode='Smoke';MtaCoreGuiStartupReference=$true;GameDirectory=$fixture.game}
+            Assert-Check ([IO.File]::ReadAllText($config) -match 'export const MTA_CORE_GUI_SURFACE_REFERENCE = false;') 'Offscreen startup clears prior surface selection'
+            $user = Join-Path $fixture.game 'CLEO/de-online/mta/cgui/surface-user.txt'
+            Write-FixtureBytes $user ($utf8.GetBytes('Retained surface user bytes'))
+            $userHash = Get-Sha $user
+            Select-FixturePackage $fixture $false
+            Invoke-Production $fixture 'update.ps1' @{GameDirectory=$fixture.game}
+            Assert-InstalledPackage $fixture
+            foreach ($path in $guiPaths) { Assert-Check (-not (Test-Path -LiteralPath (Join-Path $fixture.game $path))) ('Surface downgrade removes exact owned ' + $path) }
+            Assert-Check ((Get-Sha $user) -eq $userHash) 'Surface downgrade preserves foreign GUI bytes'
+        }
+        Invoke-Case 'surface-selection-conflicts-and-missing-group' {
+            param($fixture)
+            Install-Fresh $fixture
+            $before = Get-TreeFingerprint $fixture.root
+            Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' @{Mode='Smoke';MtaCoreGuiSurfaceReference=$true;GameDirectory=$fixture.game} } 'complete owned GUI assets are missing' 'Surface cannot infer missing13 group'
+            foreach ($flag in @('NativeGaitReference','MatchedGaitRate','LockWalkRoot','NativeInputReference','MtaNativePadReference','MtaNativeMovementTrial','MtaCoreStartupReference','MtaCoreInputReference','MtaCoreMovementReference','MtaCoreRenderReference','MtaCoreRenderGpuReference','MtaCoreRenderCustomPresentReference','MtaCoreRenderFrameBoundaryReference','MtaCoreRenderNativeDispatchReference','MtaCoreGuiStartupReference')) {
+                $selection = @{Mode='Smoke';MtaCoreGuiSurfaceReference=$true}; $selection[$flag]=$true
+                Assert-Refused { Invoke-Production $fixture 'package.ps1' $selection } 'separate opt-in Smoke mode' ('Surface package rejects ' + $flag)
+                $selection.GameDirectory=$fixture.game
+                Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' $selection } 'separate opt-in Smoke mode' ('Surface mode rejects ' + $flag)
+            }
+            foreach ($mode in @('Diagnostic','Online')) {
+                Assert-Refused { Invoke-Production $fixture 'package.ps1' @{Mode=$mode;MtaCoreGuiSurfaceReference=$true} } 'separate opt-in Smoke mode' 'Surface package mode conflict'
+                Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' @{Mode=$mode;MtaCoreGuiSurfaceReference=$true;GameDirectory=$fixture.game} } 'separate opt-in Smoke mode' 'Surface selected mode conflict'
+            }
+            Assert-Refused { Invoke-Production $fixture 'package.ps1' @{Mode='Smoke';MtaCoreGuiSurfaceReference=$true;MtaCoreRenderRoute='D3D12'} } 'separate opt-in Smoke mode' 'Surface cannot inherit explicit route'
+            Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Surface conflicts preserve all bytes and backups'
+        }
+        foreach ($markerKind in @('missing','duplicate')) {
+            Invoke-Case ('surface-' + $markerKind + '-marker') {
+                param($fixture)
+                Select-FixturePackage $fixture $false $true
+                Install-Fresh $fixture
+                $config = Join-Path $fixture.game 'CLEO/de-online/config.mjs'
+                $text = [regex]::Replace([IO.File]::ReadAllText($config), 'export const MTA_CORE_GUI_SURFACE_REFERENCE = (true|false);', '')
+                if ($markerKind -eq 'duplicate') { $text += "`nexport const MTA_CORE_GUI_SURFACE_REFERENCE = false;`nexport const MTA_CORE_GUI_SURFACE_REFERENCE = false;`n" }
+                Write-FixtureBytes $config ($utf8.GetBytes($text))
+                $manifestPath = Join-Path $fixture.game 'de-online-install-manifest.json'
+                $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+                @($manifest.files | Where-Object path -eq 'CLEO/de-online/config.mjs')[0].sha256 = Get-Sha $config
+                Write-FixtureJson $manifestPath $manifest
+                $before = Get-TreeFingerprint $fixture.root
+                Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' @{Mode='Smoke';MtaCoreGuiSurfaceReference=$true;GameDirectory=$fixture.game} } 'Update the adapter before selecting MTA Core GUI surface' 'Surface requires one explicit marker'
+                Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Invalid surface marker changes no bytes'
+            }
+        }
+        foreach ($badFlag in @('MTA_CORE_GUI_STARTUP_REFERENCE','MTA_CORE_RENDER_REFERENCE')) {
+            Invoke-Case ('surface-forged-conflict-' + $badFlag) {
+                param($fixture)
+                Install-Fresh $fixture
+                Select-FixturePackage $fixture $false $true
+                $config = Join-Path $fixture.package 'Win64/CLEO/de-online/config.mjs'
+                Write-FixtureBytes $config ($utf8.GetBytes([IO.File]::ReadAllText($config).Replace("export const $badFlag = false;", "export const $badFlag = true;")))
+                $manifestPath = Join-Path $fixture.package 'manifest.json'
+                $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+                @($manifest.files | Where-Object path -eq 'CLEO/de-online/config.mjs')[0].sha256=Get-Sha $config
+                Write-FixtureJson $manifestPath $manifest
+                $fresh=New-GameDirectory (Join-Path $fixture.root 'fresh')
+                $before=Get-TreeFingerprint $fixture.root
+                Assert-Refused { Invoke-Production $fixture 'update.ps1' @{GameDirectory=$fixture.game} } 'separate opt-in Smoke mode' 'Forged surface update flags'
+                Assert-Refused { Invoke-Production $fixture 'install.ps1' @{Mode='Smoke';PackageDirectory=$fixture.package;GameDirectory=$fresh} } 'separate opt-in Smoke mode' 'Forged surface install flags'
+                Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Forged surface conflicts stage no bytes'
+            }
+        }
+        Invoke-Case 'surface-duplicate-package-marker' {
+            param($fixture)
+            Install-Fresh $fixture
+            Select-FixturePackage $fixture $false $true
+            $config = Join-Path $fixture.package 'Win64/CLEO/de-online/config.mjs'
+            Write-FixtureBytes $config ($utf8.GetBytes([IO.File]::ReadAllText($config) + "`nexport const MTA_CORE_GUI_SURFACE_REFERENCE = false;`n"))
+            $manifestPath = Join-Path $fixture.package 'manifest.json'
+            $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+            @($manifest.files | Where-Object path -eq 'CLEO/de-online/config.mjs')[0].sha256=Get-Sha $config
+            Write-FixtureJson $manifestPath $manifest
+            $fresh=New-GameDirectory (Join-Path $fixture.root 'fresh')
+            $before=Get-TreeFingerprint $fixture.root
+            Assert-Refused { Invoke-Production $fixture 'update.ps1' @{GameDirectory=$fixture.game} } 'Invalid GUI surface configuration marker' 'Duplicate surface package update'
+            Assert-Refused { Invoke-Production $fixture 'install.ps1' @{Mode='Smoke';PackageDirectory=$fixture.package;GameDirectory=$fresh} } 'Invalid GUI surface configuration marker' 'Duplicate surface package install'
+            Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Duplicate surface package marker stages no bytes'
+        }
+        Invoke-Case 'surface-downgrade-failure-restores36' {
+            param($fixture)
+            Select-FixturePackage $fixture $false $true
+            Install-Fresh $fixture
+            Select-FixturePackage $fixture $false
+            $before=Get-TreeFingerprint $fixture.game
+            $locked=[IO.File]::Open((Join-Path $fixture.game 'CLEO/de-online/config.mjs'), [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+            try { Assert-Refused { Invoke-Production $fixture 'update.ps1' @{GameDirectory=$fixture.game} } 'being used|access|denied|process' 'Surface downgrade real replacement refusal' }
+            finally { $locked.Dispose() }
+            Assert-Check ((Get-TreeFingerprint $fixture.game) -eq $before) 'Failed surface downgrade restores all36 bytes and original manifest'
+            Invoke-Production $fixture 'uninstall.ps1' @{GameDirectory=$fixture.game;ValidateOnly=$true}
+        }
+    }
 } catch { $failure = $_.Exception.Message }
 $sourceUnchanged = $true
 foreach ($entry in $sourceHashes) { if ((Get-Sha (Join-Path $repositoryRoot $entry.path)) -ne $entry.sha256) { $sourceUnchanged = $false } }
 foreach ($entry in $packageHashes) { if ((Get-Sha (Join-Path $sourcePackage $entry.path)) -ne $entry.sha256) { $sourceUnchanged = $false } }
 foreach ($entry in $guiPackageHashes) { if ((Get-Sha (Join-Path $guiPackage $entry.path)) -ne $entry.sha256) { $sourceUnchanged = $false } }
+foreach ($entry in $surfacePackageHashes) { if ((Get-Sha (Join-Path $surfacePackage $entry.path)) -ne $entry.sha256) { $sourceUnchanged = $false } }
 $sourceExecutableUnchanged = (Get-Sha $sourceExecutable) -eq $knownGameHash
 $record = [ordered]@{
     recordedAt=[DateTimeOffset]::Now.ToString('o'); directory=$outputRoot; success=($null -eq $failure -and $sourceUnchanged -and $sourceExecutableUnchanged);
     checks=$script:checks.Count; cases=$script:cases; checkLabels=$script:checks; failure=$failure;
     sourceHashes=$sourceHashes; packageRoot=$sourcePackage; packageHashes=$packageHashes; sourceUnchanged=$sourceUnchanged;
     guiPackageRoot=$guiPackage; guiPackageHashes=$guiPackageHashes; guiCasesEnabled=($null -ne $guiPackage);
+    surfacePackageRoot=$surfacePackage; surfacePackageHashes=$surfacePackageHashes; surfaceCasesEnabled=($null -ne $surfacePackage);
     gameExecutableSource=$sourceExecutable; gameExecutableSha256=$knownGameHash; sourceExecutableUnchanged=$sourceExecutableUnchanged;
     actualGameInstallationChanged=$false; gameLaunched=$false; gameProcessAttached=$false; nativeInputWriteVerified=$false
 }

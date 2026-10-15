@@ -77,6 +77,10 @@ def main():
         "DE_CoreGuiStartupBegin": (ctypes.c_int, []),
         "DE_CoreGuiStartupCapture": (ctypes.c_int, []),
         "DE_CoreGuiStartupRead": (ctypes.c_uint32, [ctypes.c_uint32]),
+        "DE_CoreGuiSurfaceApiVersion": (ctypes.c_uint32, []),
+        "DE_CoreGuiSurfaceBegin": (ctypes.c_int, []),
+        "DE_CoreGuiSurfaceCapture": (ctypes.c_int, []),
+        "DE_CoreGuiSurfaceRead": (ctypes.c_uint32, [ctypes.c_uint32]),
     }
     for name, (result, arguments) in signatures.items():
         function = getattr(bridge, name)
@@ -91,6 +95,7 @@ def main():
     check(bridge.DE_CoreRenderApiVersionV5() == 5, "Scoped Present association requires a separate additive API5 protocol")
     check(bridge.DE_CoreRenderApiVersionV6() == 6, "Native dispatch has a distinct API6 protocol without reinterpreting API5")
     check(bridge.DE_CoreGuiStartupApiVersion() == 1, "Explicit GUI startup uses a separate API1 without reusing the API6 wire")
+    check(bridge.DE_CoreGuiSurfaceApiVersion() == 1, "MTA-owned child surface has a separate API1/96 without altering the GUI64 or API6 wires")
     check(getattr(bridge, "DE_CoreStartupRun", None) is None, "Unsafe synchronous startup export must be absent")
     # A regular Python executable must never masquerade as the verified GTA host
     # or obtain engine access merely by loading this DLL and resolving its ABI.
@@ -111,6 +116,10 @@ def main():
     check(bridge.DE_CoreGuiStartupCapture() == 0, "Rejected host cannot freeze GUI workload evidence")
     for component in (*range(64), 64, 0xFFFFFFFF):
         check(bridge.DE_CoreGuiStartupRead(component) == 0, "Rejected host cannot manufacture the independent GUI64 state")
+    check(bridge.DE_CoreGuiSurfaceBegin() == 0, "Wrong executable cannot request a GUI child surface or device-window handoff")
+    check(bridge.DE_CoreGuiSurfaceCapture() == 0, "Rejected host cannot freeze GUI surface evidence")
+    for component in (*range(96), 96, 0xFFFFFFFF):
+        check(bridge.DE_CoreGuiSurfaceRead(component) == 0, "Rejected host cannot manufacture the independent surface96 state")
     for route in (0, 1, 2, 3, 0xFFFFFFFF):
         check(bridge.DE_CoreRenderBeginV2(route) == 0, "Wrong executable cannot start any explicit renderer route")
         check(bridge.DE_CoreRenderBeginV3(route) == 0, "Wrong executable cannot acquire a GPU ownership query lease")

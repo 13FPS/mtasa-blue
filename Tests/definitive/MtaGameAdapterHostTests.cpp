@@ -47,6 +47,10 @@ static_assert(sizeof(mta::game_de::RenderDeviceLeaseV1) == 48);
 static_assert(offsetof(mta::game_de::RenderDeviceLeaseV1, device) == 8);
 static_assert(offsetof(mta::game_de::RenderDeviceLeaseV1, generation) == 16);
 static_assert(offsetof(mta::game_de::RenderDeviceLeaseV1, sourceProfileId) == 40);
+static_assert(sizeof(mta::game_de::RenderDeviceWindowLeaseV2) == 64);
+static_assert(offsetof(mta::game_de::RenderDeviceWindowLeaseV2, window) == 16);
+static_assert(offsetof(mta::game_de::RenderDeviceWindowLeaseV2, generation) == 24);
+static_assert(offsetof(mta::game_de::RenderDeviceWindowLeaseV2, reserved) == 56);
 #endif
 struct FixtureDeviceStats
 {
@@ -135,6 +139,7 @@ namespace mta::game_de
         std::uint32_t             rootsDiagnosticReads = 0;
         FixtureDeviceStats*       deviceFixtureStats = nullptr;
         alignas(void*) unsigned char deviceIdentity[sizeof(void*)]{};
+        alignas(void*) unsigned char windowIdentity[sizeof(void*)]{};
         void (*v6OperationObserver)() noexcept = nullptr;
         alignas(void*) unsigned char facadeIdentity[sizeof(void*)]{};
 
@@ -508,7 +513,7 @@ namespace mta::game_de
                 delete this;
             }
 
-            Status RequestDevice() noexcept
+            Status RequestDevice(bool window = false) noexcept
             {
                 if (deviceFixtureStats)
                 {
@@ -520,12 +525,13 @@ namespace mta::game_de
                 if (MTA_TEST_RENDER_MODE == 8 || (deviceFixtureStats && deviceFixtureStats->control == 1))
                     return Status::Unsupported;
                 deviceRequested = true;
+                deviceWindowRequested = window;
                 return Status::Ok;
             }
 
-            Status TakeDevice(RenderDeviceLeaseV1& output) noexcept
+            Status TakeDevice(RenderDeviceLeaseV1& output, bool window = false) noexcept
             {
-                if (!deviceRequested || !deviceBegan || deviceEnded || deviceTaken || MTA_TEST_RENDER_MODE == 2 ||
+                if (!deviceRequested || deviceWindowRequested != window || !deviceBegan || deviceEnded || deviceTaken || MTA_TEST_RENDER_MODE == 2 ||
                     (deviceFixtureStats && deviceFixtureStats->control == 2))
                     return Status::NotInitialized;
                 // This token tests transfer policy only. It has no COM vtable,
@@ -541,11 +547,30 @@ namespace mta::game_de
                     ++deviceFixtureStats->transfers;
                 return Status::Ok;
             }
+            Status TakeDeviceWindow(RenderDeviceWindowLeaseV2& output) noexcept
+            {
+                // This HWND is an opaque policy token like deviceIdentity. No
+                // fixture attaches a child, calls Win32 on it or claims pixels.
+                RenderDeviceLeaseV1 device;
+                const auto          result = TakeDevice(device, true);
+                if (result != Status::Ok)
+                    return result;
+                RenderDeviceWindowLeaseV2 next;
+                next.device = device.device;
+                next.window = windowIdentity;
+                next.generation = device.generation;
+                next.acceptedSnapshots = device.acceptedSnapshots;
+                next.dispatchEntries = device.dispatchEntries;
+                next.sourceProfileId = device.sourceProfileId;
+                next.windowed = 1;
+                output = next;
+                return Status::Ok;
+            }
 
         private:
             RenderFixtureV5 observation;
             unsigned        setupEndCount = 0;
-            bool            deviceRequested = false, deviceBegan = false, deviceEnded = false, deviceTaken = false;
+            bool            deviceRequested = false, deviceWindowRequested = false, deviceBegan = false, deviceEnded = false, deviceTaken = false;
         };
     }
 
@@ -670,6 +695,26 @@ namespace mta::game_de
             return Status::WrongThread;
         return static_cast<RenderFixtureV6*>(lease)->TakeDevice(*output);
     }
+    extern "C" Status RequestGameRenderDeviceWindowLeaseV2(std::uint32_t version, IGameRenderObservationV6* lease) noexcept
+    {
+        if (version != RenderDeviceWindowLeaseVersionV2 || !lease || lease != diagnosticLeaseV6)
+            return Status::InvalidArgument;
+        if (GetCurrentThreadId() != diagnosticOwnerThread)
+            return Status::WrongThread;
+        return static_cast<RenderFixtureV6*>(lease)->RequestDevice(true);
+    }
+            #if !defined(MTA_TEST_DEVICE_WINDOW_MISSING_TAKE)
+    extern "C" Status TakeGameRenderDeviceWindowLeaseV2(std::uint32_t version, IGameRenderObservationV6* lease, RenderDeviceWindowLeaseV2* output) noexcept
+    {
+        if (deviceFixtureStats)
+            ++deviceFixtureStats->takes;
+        if (version != RenderDeviceWindowLeaseVersionV2 || !lease || lease != diagnosticLeaseV6 || !output)
+            return Status::InvalidArgument;
+        if (GetCurrentThreadId() != diagnosticOwnerThread)
+            return Status::WrongThread;
+        return static_cast<RenderFixtureV6*>(lease)->TakeDeviceWindow(*output);
+    }
+            #endif
         #endif
         // Mode6 is an actual historical provider with no optional diagnostic export.
         // Mode8 deliberately returns a different diagnostic version, not admission.
@@ -937,6 +982,17 @@ namespace
                       !host.TakeNativeRenderDeviceLease(deviceLease) && !deviceLease.device && deviceLease.generation == 0xfedcba9876543210ull,
                   "actual requested device observation still refuses a non-game host without inventing device ownership");
             Check(host.EndNativeRenderObservation(), "actual failed device admission safely releases its fresh V6 lease");
+            Check(GetProcAddress(GetModuleHandleW(modulePath.c_str()), "RequestGameRenderDeviceWindowLeaseV2") &&
+                      GetProcAddress(GetModuleHandleW(modulePath.c_str()), "TakeGameRenderDeviceWindowLeaseV2"),
+                  "actual module exposes the separately versioned optional device-window handoff");
+            mta::game_de::RenderDeviceWindowLeaseV2 deviceWindowLease;
+            deviceWindowLease.generation = 0xfedcba9876543210ull;
+            Check(!host.BeginNativeRenderDeviceWindowObservation() && host.GetNativeRenderObservationState(dispatch) &&
+                      dispatch.base.base.base.base.base.failureReason && !dispatch.base.base.base.base.base.bound && !dispatch.nativeDispatch.presentEntries &&
+                      !host.TakeNativeRenderDeviceWindowLease(deviceWindowLease) && !deviceWindowLease.device && !deviceWindowLease.window &&
+                      deviceWindowLease.generation == 0xfedcba9876543210ull,
+                  "actual V2 admission rejects the owned non-game host without inventing a device or HWND");
+            Check(host.EndNativeRenderObservation(), "actual failed device-window request safely disposes its retained fresh V6 lease");
             Check(!host.BeginNativeMovementTrial(), "movement trial requires an explicit synthesized frame");
             mta::game_de::LocalObservation observation;
             observation.sampleAtMs = 1000;
@@ -1915,6 +1971,27 @@ namespace
                a.reserved == b.reserved;
     }
 
+    mta::game_de::RenderDeviceWindowLeaseV2 DeviceWindowOutputSentinel() noexcept
+    {
+        mta::game_de::RenderDeviceWindowLeaseV2 value;
+        value.size = 77;
+        value.version = 88;
+        value.generation = 0xfedcba9876543210ull;
+        value.acceptedSnapshots = 0x123456789abcdef0ull;
+        value.dispatchEntries = 0xabcdef0123456789ull;
+        value.sourceProfileId = 99;
+        value.windowed = 55;
+        value.reserved[0] = 66;
+        value.reserved[1] = 67;
+        return value;
+    }
+    bool SameDeviceWindowOutput(const mta::game_de::RenderDeviceWindowLeaseV2& a, const mta::game_de::RenderDeviceWindowLeaseV2& b) noexcept
+    {
+        return a.size == b.size && a.version == b.version && a.device == b.device && a.window == b.window && a.generation == b.generation &&
+               a.acceptedSnapshots == b.acceptedSnapshots && a.dispatchEntries == b.dispatchEntries && a.sourceProfileId == b.sourceProfileId &&
+               a.windowed == b.windowed && a.reserved[0] == b.reserved[0] && a.reserved[1] == b.reserved[1];
+    }
+
     bool FinishDeviceObservation(CGameAdapterModule& host) noexcept
     {
         // Existing provider modes deliberately refuse the first End/final read.
@@ -1961,6 +2038,11 @@ namespace
         const auto previousReleases = stats.releases;
         const bool began = host.BeginNativeRenderDeviceObservation();
         Check(began == (mode != 2 && mode != 6 && mode != 8), "explicit device Begin distinguishes missing, refused and failed admission");
+        auto       windowOutput = DeviceWindowOutputSentinel();
+        const auto windowSentinel = windowOutput;
+        const auto takesBeforeWindow = stats.takes;
+        Check(!host.TakeNativeRenderDeviceWindowLease(windowOutput) && SameDeviceWindowOutput(windowOutput, windowSentinel) && stats.takes == takesBeforeWindow,
+              "legacy V1 request never caches or invokes the optional V2 window Take");
         if (mode == 6 || mode == 8)
         {
             if (mode == 6)
@@ -2078,6 +2160,177 @@ namespace
         const auto finalTakes = stats.takes;
         output = sentinel;
         Check(!host.TakeNativeRenderDeviceLease(output) && SameDeviceOutput(output, sentinel) && stats.takes == finalTakes,
+              "completed device observer leaves no stale function or output cache");
+        host.Stop();
+        Check(!host.IsStarted() && !GetModuleHandleW(path.c_str()) && !stats.liveLeases && stats.allocations == stats.releases && lifetime[0] == 1,
+              "all controlled device allocations release before adapter shutdown and module unload");
+    }
+
+    void TestDeviceWindowLeaseProvider(CCoreInterface* owner, const std::wstring& path, unsigned mode, const std::wstring& loaderProbePath)
+    {
+        using namespace mta::game_de;
+        CGameAdapterModule host;
+        Check(host.Start(owner, path), "device policy fixture starts an owned controlled V6 provider");
+        FixtureDeviceStats stats;
+        using ConfigureDevice = void (*)(FixtureDeviceStats*) noexcept;
+        ConfigureDevice configureDevice = nullptr;
+        auto            address = GetProcAddress(GetModuleHandleW(path.c_str()), "SetFixtureDeviceStats");
+        std::memcpy(&configureDevice, &address, sizeof(configureDevice));
+        Check(configureDevice != nullptr, "device fixture exposes separate allocation/request/transfer counters");
+        configureDevice(&stats);
+        std::uint32_t lifetime[14]{};
+        using ConfigureLifetime = void (*)(std::uint32_t*) noexcept;
+        ConfigureLifetime configureLifetime = nullptr;
+        address = GetProcAddress(GetModuleHandleW(path.c_str()), "SetFacadeFixtureCounters");
+        std::memcpy(&configureLifetime, &address, sizeof(configureLifetime));
+        Check(configureLifetime != nullptr, "device fixture retains the existing adapter lifetime counters");
+        configureLifetime(lifetime);
+        auto       output = DeviceWindowOutputSentinel();
+        const auto sentinel = output;
+        Check(!host.TakeNativeRenderDeviceWindowLease(output) && SameDeviceWindowOutput(output, sentinel) && !stats.takes,
+              "Take before an explicit lease preserves every output field without calling the provider");
+        Check(host.BeginNativeRenderDispatchObservation(RenderObservationRoute::D3D12) == (mode != 2) && !stats.requests,
+              "historical read-only V6 Begin never requests persistent device ownership");
+        const auto readonlyAllocations = stats.allocations;
+        Check(!host.BeginNativeRenderDeviceWindowObservation() && stats.allocations == readonlyAllocations && !stats.requests,
+              "explicit device Begin cannot replace a retained read-only observer");
+        Check(!host.TakeNativeRenderDeviceWindowLease(output) && SameDeviceWindowOutput(output, sentinel) && !stats.takes,
+              "read-only V6 never calls an optional Take export or upgrades into a device lease");
+        Check(FinishDeviceObservation(host) && stats.releases == stats.allocations && !stats.liveLeases,
+              "read-only fixture cleans its observation before any explicit device allocation");
+        const auto previousBegins = stats.begins;
+        const auto previousReleases = stats.releases;
+        const bool began = host.BeginNativeRenderDeviceWindowObservation();
+        Check(began == (mode != 2 && mode != 6 && mode != 7 && mode != 8), "explicit device Begin distinguishes missing, refused and failed admission");
+        if (mode == 6 || mode == 7 || mode == 8)
+        {
+            if (mode == 6 || mode == 7)
+                Check((GetProcAddress(GetModuleHandleW(path.c_str()), "RequestGameRenderDeviceWindowLeaseV2") != nullptr) == (mode == 7) &&
+                          !GetProcAddress(GetModuleHandleW(path.c_str()), "TakeGameRenderDeviceWindowLeaseV2") && !stats.requests,
+                      "provider genuinely omits both V2 exports or only Take; neither case falls back to V1");
+            else
+                Check(stats.requests == 1, "refused Request is called once on the fresh allocation");
+            Check(stats.begins == previousBegins && stats.releases == previousReleases + 1 && !stats.liveLeases && !lifetime[0],
+                  "missing/refused Request disposes the never-begun lease immediately without fallback or adapter shutdown");
+            const auto takes = stats.takes;
+            Check(!host.TakeNativeRenderDeviceWindowLease(output) && SameDeviceWindowOutput(output, sentinel) && stats.takes == takes,
+                  "rejected fresh device setup clears cached Take and preserves output");
+            host.Stop();
+            Check(!host.IsStarted() && !GetModuleHandleW(path.c_str()) && stats.releases == stats.allocations,
+                  "missing/refused device exports leak no fresh observation or owned module");
+            return;
+        }
+        Check(stats.requests == 1 && stats.begins == previousBegins + 1 && stats.requestOrder < stats.beginOrder && stats.liveLeases == 1,
+              "fresh Request completes before the exact V6 Begin and establishes one cleanup owner");
+        auto       legacyOutput = DeviceOutputSentinel();
+        const auto legacySentinel = legacyOutput;
+        const auto takesBeforeLegacy = stats.takes;
+        Check(!host.TakeNativeRenderDeviceLease(legacyOutput) && SameDeviceOutput(legacyOutput, legacySentinel) && stats.takes == takesBeforeLegacy,
+              "an explicit window lease cannot be consumed through the legacy V1 Take cache");
+        stats.control = 2;
+        Check(!host.TakeNativeRenderDeviceWindowLease(output) && SameDeviceWindowOutput(output, sentinel),
+              "an unavailable requested result leaves every caller field untouched");
+        stats.control = 0;
+        if (mode == 2)
+        {
+            Check(!host.TakeNativeRenderDeviceWindowLease(output) && SameDeviceWindowOutput(output, sentinel) && !stats.transfers &&
+                      !host.EndNativeRenderObservation() && stats.liveLeases == 1 && stats.releases == previousReleases && GetModuleHandleW(path.c_str()),
+                  "failed Begin supplies no device and failed End retains provider/lease for retry");
+            Check(FinishDeviceObservation(host), "owner retries failed device Begin cleanup safely");
+        }
+        else
+        {
+            auto occupied = sentinel;
+            occupied.device = reinterpret_cast<ID3D12Device*>(&stats);
+            const auto occupiedBefore = occupied;
+            const auto takesBeforeOccupied = stats.takes;
+            Check(!host.TakeNativeRenderDeviceWindowLease(occupied) && SameDeviceWindowOutput(occupied, occupiedBefore) && stats.takes == takesBeforeOccupied,
+                  "consumer refuses to overwrite an already owned device before provider entry");
+            occupied = sentinel;
+            occupied.window = &stats;
+            const auto occupiedWindowBefore = occupied;
+            Check(!host.TakeNativeRenderDeviceWindowLease(occupied) && SameDeviceWindowOutput(occupied, occupiedWindowBefore) &&
+                      stats.takes == takesBeforeOccupied,
+                  "consumer refuses to overwrite an occupied HWND even when the device output is empty");
+            bool        foreignBegin = true, foreignTake = true;
+            auto        foreignOutput = sentinel;
+            const auto  foreignRequests = stats.requests, foreignTakes = stats.takes;
+            std::thread foreign(
+                [&]
+                {
+                    foreignBegin = host.BeginNativeRenderDeviceWindowObservation();
+                    foreignTake = host.TakeNativeRenderDeviceWindowLease(foreignOutput);
+                });
+            foreign.join();
+            Check(!foreignBegin && !foreignTake && SameDeviceWindowOutput(foreignOutput, sentinel) && stats.requests == foreignRequests &&
+                      stats.takes == foreignTakes,
+                  "foreign Core thread cannot request or take a device or replace caller output");
+            if (mode == 4)
+            {
+                wchar_t enteredName[96]{}, resumeName[96]{}, timeoutName[96]{};
+                swprintf_s(enteredName, L"Local\\MtaApi6DiagnosticLoaderEntered-%lu", GetCurrentProcessId());
+                swprintf_s(resumeName, L"Local\\MtaApi6DiagnosticLoaderResume-%lu", GetCurrentProcessId());
+                swprintf_s(timeoutName, L"Local\\MtaApi6DiagnosticLoaderTimeout-%lu", GetCurrentProcessId());
+                const auto entered = CreateEventW(nullptr, TRUE, FALSE, enteredName);
+                const auto resume = CreateEventW(nullptr, TRUE, FALSE, resumeName);
+                const auto timeout = CreateEventW(nullptr, TRUE, FALSE, timeoutName);
+                Check(entered && resume && timeout, "device cached-Take loader gates created");
+                HMODULE     loadedProbe = nullptr;
+                std::thread loader(
+                    [&]
+                    { loadedProbe = LoadLibraryExW(loaderProbePath.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS); });
+                const bool held = WaitForSingleObject(entered, 5000) == WAIT_OBJECT_0;
+                const auto started = GetTickCount64();
+                const bool transferred = held && host.TakeNativeRenderDeviceWindowLease(output);
+                const auto elapsed = GetTickCount64() - started;
+                SetEvent(resume);
+                loader.join();
+                const bool timedOut = WaitForSingleObject(timeout, 0) != WAIT_TIMEOUT;
+                if (loadedProbe)
+                    FreeLibrary(loadedProbe);
+                CloseHandle(entered);
+                CloseHandle(resume);
+                CloseHandle(timeout);
+                Check(held && loadedProbe && transferred && !timedOut && elapsed < 1500,
+                      "pre-resolved device Take completes while another owned provider holds the real loader lock");
+            }
+            else
+                Check(host.TakeNativeRenderDeviceWindowLease(output), "requested controlled device transfers once");
+            Check(output.size == sizeof(output) && output.version == RenderDeviceWindowLeaseVersionV2 && output.device && output.generation &&
+                      output.acceptedSnapshots == 7 && output.dispatchEntries == 7 && output.sourceProfileId == 2 && output.window && output.windowed == 1 &&
+                      !output.reserved[0] && !output.reserved[1] && stats.transfers == 1,
+                  "device transfer copies exact value provenance and one opaque control token without COM calls");
+            const auto transferred = output;
+            auto       duplicate = sentinel;
+            Check(!host.TakeNativeRenderDeviceWindowLease(duplicate) && SameDeviceWindowOutput(duplicate, sentinel) && stats.transfers == 1,
+                  "second Take cannot replay ownership or partially replace output");
+            const bool ended = host.EndNativeRenderObservation();
+            if (mode == 1 || mode == 3 || mode == 5)
+                Check(!ended && stats.liveLeases == 1 && stats.releases == previousReleases && host.IsStarted() && GetModuleHandleW(path.c_str()),
+                      "failed End/final-read retains the device provider and exact observation for cleanup retry");
+            else
+                Check(ended, "controlled device observer ends safely");
+            Check(FinishDeviceObservation(host) && SameDeviceWindowOutput(output, transferred),
+                  "safe observer End never releases or changes the caller's transferred token");
+            const auto takesAfterEnd = stats.takes;
+            duplicate = sentinel;
+            Check(!host.TakeNativeRenderDeviceWindowLease(duplicate) && SameDeviceWindowOutput(duplicate, sentinel) && stats.takes == takesAfterEnd,
+                  "safe End clears cached Take before Release and never calls or replays a released provider");
+            const auto requestsAfterEnd = stats.requests;
+            Check(host.BeginNativeRenderDispatchObservation(RenderObservationRoute::D3D12) && stats.requests == requestsAfterEnd &&
+                      !host.TakeNativeRenderDeviceWindowLease(duplicate) && SameDeviceWindowOutput(duplicate, sentinel) && stats.takes == takesAfterEnd,
+                  "a later read-only V6 lease cannot inherit a previous device request or cached Take");
+            Check(FinishDeviceObservation(host), "later read-only observer cleans before a fresh explicit request");
+            Check(host.BeginNativeRenderDeviceWindowObservation() && stats.requests == requestsAfterEnd + 1,
+                  "a separate fresh V6 allocation can explicitly request a new one-shot device result");
+            auto next = sentinel;
+            Check(host.TakeNativeRenderDeviceWindowLease(next) && next.device && next.generation > transferred.generation && stats.transfers == 2,
+                  "new explicit lease transfers current generation provenance instead of cached prior ownership");
+            Check(FinishDeviceObservation(host), "new explicit device generation completes cleanup");
+        }
+        const auto finalTakes = stats.takes;
+        output = sentinel;
+        Check(!host.TakeNativeRenderDeviceWindowLease(output) && SameDeviceWindowOutput(output, sentinel) && stats.takes == finalTakes,
               "completed device observer leaves no stale function or output cache");
         host.Stop();
         Check(!host.IsStarted() && !GetModuleHandleW(path.c_str()) && !stats.liveLeases && stats.allocations == stats.releases && lifetime[0] == 1,
@@ -2451,6 +2704,8 @@ int wmain(int argc, wchar_t** argv)
             TestRootsDiagnosticGeneration(owner, argv[45]);
             for (unsigned mode = 1; mode <= 8; ++mode)
                 TestDeviceLeaseProvider(owner, argv[mode + 41], mode, argv[49]);
+            for (unsigned mode = 1; mode <= 8; ++mode)
+                TestDeviceWindowLeaseProvider(owner, argv[mode + 41], mode, argv[49]);
         }
     #else
         CGameAdapterModule host;

@@ -125,9 +125,11 @@ namespace mta::game_de
             bool                            classifyCustomPresent = false;
             bool                            queryFrameBoundary = false;
             bool                            nativeDispatch = false;
+            bool                            captureDeviceWindow = false;
             std::atomic<DeviceCapturePhase> devicePhase{DeviceCapturePhase::Off};
             std::atomic<bool>               devicePending{false}, deviceReleaseFault{false};
             RenderDeviceLeaseV1             deviceLease;
+            DeviceWindowCandidate           deviceWindow;
             ThreadHandles                   retainedSuspensions;
             bool                            safetyHeldSuspensions = false;
             NextThread                      nextThread = nullptr;
@@ -536,6 +538,7 @@ namespace mta::game_de
                 state.factsMask == 255 && state.queryStage == static_cast<unsigned>(FrameBoundaryQueryStage::Complete) && !state.queryHresult &&
                 !state.presentHresult && !state.lifecycleFlags && trace.queryPhase == static_cast<unsigned>(RenderRootsDiagnosticPhase::AfterCloseReadback) &&
                 trace.checkpoint == static_cast<unsigned>(RenderRootsDiagnosticCheckpoint::ReadComplete) && !trace.refusalReason &&
+                (!runtime.captureDeviceWindow || (scope.deviceWindowCandidate.window && scope.deviceWindowCandidate.windowed == 1)) &&
                 !runtime.devicePending.load() && runtime.devicePhase.compare_exchange_strong(phase, DeviceCapturePhase::Ready))
             {
                 runtime.deviceLease = {};
@@ -545,6 +548,7 @@ namespace mta::game_de
                 runtime.deviceLease.acceptedSnapshots = acceptedNext;
                 runtime.deviceLease.dispatchEntries = capture.nativeDispatch.presentEntries;
                 runtime.deviceLease.sourceProfileId = 2;
+                runtime.deviceWindow = runtime.captureDeviceWindow ? scope.deviceWindowCandidate : DeviceWindowCandidate{};
                 runtime.devicePending.store(true);
             }
         }
@@ -621,7 +625,8 @@ namespace mta::game_de
             const bool         observeBoundary = accepted && runtime.queryFrameBoundary && !fatalCleanup && runtime.active.load();
             if (observeBoundary)
                 EnterFrameBoundaryScope(boundary, runtime.image, viewport, runtime.callbackThread.load(), capture.custom, &BoundaryCleanupFailure,
-                                        runtime.devicePhase.load() == DeviceCapturePhase::Armed ? &ReserveDeviceCandidate : nullptr);
+                                        runtime.devicePhase.load() == DeviceCapturePhase::Armed ? &ReserveDeviceCandidate : nullptr,
+                                        runtime.captureDeviceWindow);
             const bool result = InvokeOriginal(viewport, syncInterval, boundary, observeBoundary);
             if (observeBoundary)
             {
@@ -1305,8 +1310,10 @@ namespace mta::game_de
     }
 
     bool NativeRenderObservation::Begin(RenderObservationRoute route, bool queryGpuOwnership, bool classifyCustomPresent, bool queryFrameBoundary,
-                                        bool nativeDispatch, bool captureDevice) noexcept
+                                        bool nativeDispatch, bool captureDevice, bool captureDeviceWindow) noexcept
     {
+        if (captureDeviceWindow && (captureDevice || !nativeDispatch || !queryFrameBoundary))
+            return false;
         ApiOperation operation;
         if (!operation.acquired || runtime.hooked.load() || NativeDispatchPatchPresent() || !runtime.retainedSuspensions.empty() || runtime.inFlight.load() ||
             FrameBoundaryInFlight() || runtime.active.load() || runtime.devicePending.load() || runtime.deviceReleaseFault.load())
@@ -1324,8 +1331,10 @@ namespace mta::game_de
         runtime.classifyCustomPresent = classifyCustomPresent;
         runtime.queryFrameBoundary = queryFrameBoundary;
         runtime.nativeDispatch = nativeDispatch;
-        runtime.devicePhase.store(captureDevice ? DeviceCapturePhase::Armed : DeviceCapturePhase::Off);
+        runtime.captureDeviceWindow = captureDeviceWindow;
+        runtime.devicePhase.store(captureDevice || captureDeviceWindow ? DeviceCapturePhase::Armed : DeviceCapturePhase::Off);
         runtime.deviceLease = {};
+        runtime.deviceWindow = {};
         ResetFrameBoundaryObservation();
         runtime.route = SelectRoute(route);
 #ifndef DETOURS_MTA_VM_TRANSACTION_NODES
@@ -1560,6 +1569,8 @@ namespace mta::game_de
             return Status::Unsupported;
         if (!generation || generation != runtime.generation.load() || GetCurrentThreadId() != runtime.producerThread)
             return Status::Unsupported;
+        if (runtime.captureDeviceWindow)
+            return Status::NotInitialized;
         if (!runtime.active.load() || runtime.failure.load() || runtime.deviceReleaseFault.load() || runtime.devicePhase.load() != DeviceCapturePhase::Ready)
             return Status::NotInitialized;
         if (!TryAcquireSRWLockExclusive(&runtime.snapshotLock))
@@ -1576,6 +1587,46 @@ namespace mta::game_de
         ReleaseSRWLockExclusive(&runtime.snapshotLock);
         if (!ready)
             return Status::NotInitialized;
+        state = next;
+        return Status::Ok;
+    }
+    Status NativeRenderObservation::TakeDeviceWindowLease(RenderDeviceWindowLeaseV2& state) noexcept
+    {
+        ApiOperation operation;
+        if (!operation.acquired || runtime.safetyHeldSuspensions || !runtime.retainedSuspensions.empty())
+            return Status::Unsupported;
+        if (!generation || generation != runtime.generation.load() || GetCurrentThreadId() != runtime.producerThread)
+            return Status::Unsupported;
+        if (!runtime.captureDeviceWindow || !runtime.active.load() || runtime.failure.load() || runtime.deviceReleaseFault.load() ||
+            runtime.devicePhase.load() != DeviceCapturePhase::Ready)
+            return Status::NotInitialized;
+        if (!TryAcquireSRWLockExclusive(&runtime.snapshotLock))
+            return Status::Unsupported;
+        const auto device = runtime.deviceLease;
+        const auto window = runtime.deviceWindow;
+        const bool ready = runtime.active.load() && !runtime.failure.load() && runtime.devicePhase.load() == DeviceCapturePhase::Ready && device.device &&
+                           device.generation == generation && device.acceptedSnapshots && device.dispatchEntries && device.sourceProfileId == 2 &&
+                           window.window && window.windowed == 1;
+        if (ready)
+        {
+            runtime.deviceLease.device = nullptr;
+            runtime.deviceWindow = {};
+            runtime.devicePending.store(false);
+            runtime.devicePhase.store(DeviceCapturePhase::Taken);
+        }
+        ReleaseSRWLockExclusive(&runtime.snapshotLock);
+        if (!ready)
+            return Status::NotInitialized;
+        // The HWND is a same-frame observation only. Moving this record performs
+        // no COM, window operations or reference resurrection under either lock.
+        RenderDeviceWindowLeaseV2 next;
+        next.device = device.device;
+        next.window = window.window;
+        next.generation = device.generation;
+        next.acceptedSnapshots = device.acceptedSnapshots;
+        next.dispatchEntries = device.dispatchEntries;
+        next.sourceProfileId = device.sourceProfileId;
+        next.windowed = window.windowed;
         state = next;
         return Status::Ok;
     }

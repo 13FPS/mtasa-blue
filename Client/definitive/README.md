@@ -27,8 +27,37 @@ independent actual/normal-exit reviews are sealed together.
 This validates MTA's real GUI on the actual device using its own queue and
 offscreen resources. Native queue/backbuffer writes and visible GTA drawing
 remain unverified; full startup and multiplayer remain gated. The port stays
-EXPERIMENTAL. The next integration reuses this renderer through a separately
-authorized native frame callback with resize and owner-thread drain handling.
+EXPERIMENTAL. Direct native-frame drawing still needs resize and owner-thread
+drain handling.
+
+The next visible trial reuses the same MTA GUI through a Core-owned transparent
+child surface inside GTA's window. `package.ps1 -Mode Smoke
+-MtaCoreGuiSurfaceReference` selects this separate, disabled-by-default trial.
+It takes a one-shot device/window lease, ends native observation, then creates
+its own DirectComposition swapchain and queue. The existing CGUI/CEGUI widgets
+are displayed for eight seconds; Core handles resize, parent closure and GPU
+drain before removing the child surface. No game queue or backbuffer is written.
+This path requires windowed or borderless GTA. Actual GTA visibility remains
+unverified until the new trial has a real-game screen capture. This bounded
+trial displays widgets; mouse forwarding and GUI interaction still need
+validation.
+
+Its independent Core12 / Surface1 protocol carries 96 scalars and writes
+`mta/logs/gui-surface.log`. Successful presents, compositor-busy retries,
+parent-window validity and complete child/compositor cleanup are separate
+facts. Pixel readback proves the owned target; compositor Present alone does
+not prove the pixels were visible on the screen. The ordinary 23-file package
+and the older offscreen GUI trial retain their separate modes and protocols.
+
+The visible candidate's local tests pass 238 checks across six disposable
+surface cases, including a composed screen capture, resize allocation failure,
+parent closure during GPU drain and guarded release failure. Its shared
+lifecycle passes 865 checks on each architecture, while the existing offscreen
+477 checks remain green. All 89 worker scenarios pass against the selected
+normal Core bundle. Package ownership passes 1,144 checks across 113 cases,
+including the ordinary, offscreen and visible-surface variants. These results
+establish the owned implementation and its
+cleanup behavior; the actual GTA display remains the next test.
 
 `package.ps1 -Mode Smoke -MtaCoreGuiStartupReference` selects a separate,
 disabled-by-default trial. Its 36-file bundle adds the real `cgui.dll` and

@@ -565,8 +565,12 @@ bool CGameAdapterModule::BeginNativeRenderDeviceObservation()
 {
     return StartNativeRenderDispatchObservation(mta::game_de::RenderObservationRoute::D3D12, true);
 }
+bool CGameAdapterModule::BeginNativeRenderDeviceWindowObservation()
+{
+    return StartNativeRenderDispatchObservation(mta::game_de::RenderObservationRoute::D3D12, false, true);
+}
 
-bool CGameAdapterModule::StartNativeRenderDispatchObservation(mta::game_de::RenderObservationRoute route, bool captureDevice)
+bool CGameAdapterModule::StartNativeRenderDispatchObservation(mta::game_de::RenderObservationRoute route, bool captureDevice, bool captureWindow)
 {
     using namespace mta::game_de;
     if (!RequireOwnerThread("BeginNativeRenderObservationV6"))
@@ -590,6 +594,7 @@ bool CGameAdapterModule::StartNativeRenderDispatchObservation(mta::game_de::Rend
     m_renderSetupReaderV1 = nullptr;
     m_renderRootsReaderV1 = nullptr;
     m_renderDeviceTakeV1 = nullptr;
+    m_renderDeviceWindowTakeV2 = nullptr;
     m_hasSetupDiagnostic = false;
     m_hasRootsDiagnostic = false;
     try
@@ -659,6 +664,27 @@ bool CGameAdapterModule::StartNativeRenderDispatchObservation(mta::game_de::Rend
             return false;
         }
     }
+    if (captureWindow)
+    {
+        // Resolve and request the independent window lease before Begin can
+        // hold a peer. The borrowed HWND only authorizes MTA-owned presentation.
+        const auto                       requestAddress = GetProcAddress(static_cast<HMODULE>(m_module), "RequestGameRenderDeviceWindowLeaseV2");
+        const auto                       takeAddress = GetProcAddress(static_cast<HMODULE>(m_module), "TakeGameRenderDeviceWindowLeaseV2");
+        RequestRenderDeviceWindowLeaseV2 request = nullptr;
+        static_assert(sizeof(request) == sizeof(requestAddress));
+        static_assert(sizeof(m_renderDeviceWindowTakeV2) == sizeof(takeAddress));
+        std::memcpy(&request, &requestAddress, sizeof(request));
+        std::memcpy(&m_renderDeviceWindowTakeV2, &takeAddress, sizeof(m_renderDeviceWindowTakeV2));
+        if (!request || !m_renderDeviceWindowTakeV2 ||
+            !RecordStatus(request(RenderDeviceWindowLeaseVersionV2, m_renderObservationV6), "RequestNativeRenderDeviceWindowLease"))
+        {
+            m_renderDeviceWindowTakeV2 = nullptr;
+            m_renderObservationV6->Release();
+            m_renderObservationV6 = nullptr;
+            SetError("The selected adapter refused the explicit device/window lease; no historical fallback was started");
+            return false;
+        }
+    }
     // Preserve the old DXGI-entry result alongside the separately labeled
     // native dispatch record; an existing Present hook remains untouched.
     m_renderRoute = route;
@@ -689,6 +715,24 @@ bool CGameAdapterModule::TakeNativeRenderDeviceLease(mta::game_de::RenderDeviceL
     output = next;
     // The receiver must finish End safely before calling cgui or any GPU API;
     // a transferred strong reference survives the observer's later removal.
+    return true;
+}
+bool CGameAdapterModule::TakeNativeRenderDeviceWindowLease(mta::game_de::RenderDeviceWindowLeaseV2& output)
+{
+    if (!RequireOwnerThread("TakeNativeRenderDeviceWindowLease"))
+        return false;
+    if (output.device || output.window || !m_renderObservationV6 || !m_renderDeviceWindowTakeV2)
+    {
+        SetError("Taking a device/window requires an empty output and the explicitly requested active version6 lease");
+        return false;
+    }
+    mta::game_de::RenderDeviceWindowLeaseV2 next;
+    if (!RecordStatus(m_renderDeviceWindowTakeV2(mta::game_de::RenderDeviceWindowLeaseVersionV2, m_renderObservationV6, &next),
+                      "TakeNativeRenderDeviceWindowLease"))
+        return false;
+    output = next;
+    // Core must complete End before validating/using the HWND or device. The
+    // HWND stays borrowed and never extends the native window's lifetime.
     return true;
 }
 
@@ -1042,6 +1086,7 @@ bool CGameAdapterModule::EndNativeRenderObservation() noexcept
         m_renderObservationV6->Release();
         m_renderObservationV6 = nullptr;
         m_renderDeviceTakeV1 = nullptr;
+        m_renderDeviceWindowTakeV2 = nullptr;
         m_error.clear();
         return true;
     }

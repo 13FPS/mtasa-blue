@@ -13,6 +13,7 @@
 #include "../core/DefinitiveMovementReference.h"
 #include "../core/DefinitiveRenderReference.h"
 #include "../core/DefinitiveGuiStartupReference.h"
+#include "../core/DefinitiveGuiSurfaceReference.h"
 
 namespace deonline
 {
@@ -42,6 +43,9 @@ namespace deonline
         bool          BeginGuiStartupReference(const void* moduleAddress) noexcept;
         bool          CaptureGuiStartup() noexcept;
         std::uint32_t ReadGuiStartup(std::uint32_t field) const noexcept;
+        bool          BeginGuiSurfaceReference(const void* moduleAddress) noexcept;
+        bool          CaptureGuiSurface() noexcept;
+        std::uint32_t ReadGuiSurface(std::uint32_t field) const noexcept;
         int           Poll() noexcept;
         std::uint32_t Read(std::uint32_t field) const noexcept;
         bool          CaptureInput() noexcept;
@@ -65,7 +69,8 @@ namespace deonline
         void                      Run() noexcept;
         bool                      CheckCancellation() noexcept;
         bool                      Start(const void* moduleAddress, bool configuredInput, bool configuredMovement = false, bool configuredRender = false,
-                                        std::uint32_t configuredRenderRoute = 0, std::uint32_t configuredRenderApi = 1, bool configuredGuiStartup = false) noexcept;
+                                        std::uint32_t configuredRenderRoute = 0, std::uint32_t configuredRenderApi = 1, bool configuredGuiStartup = false,
+                                        bool configuredGuiSurface = false) noexcept;
         static bool               InputCancelled();
         static void               PublishInput(const std::uint32_t* values, std::uint32_t count);
 
@@ -84,6 +89,8 @@ namespace deonline
         bool                                    guiRequested = false;
         bool                                    guiAvailable = false;
         DefinitiveGuiStartupReference::Snapshot publishedGui{}, capturedGui{};
+        bool                                    guiSurfaceRequested = false, guiSurfaceAvailable = false;
+        DefinitiveGuiSurfaceReference::Snapshot publishedGuiSurface{}, capturedGuiSurface{};
         std::uint32_t                           renderRoute = 0;
         std::uint32_t                           renderApi = 1;
         bool                                    renderV3Available = false;

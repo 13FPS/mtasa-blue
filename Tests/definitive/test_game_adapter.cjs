@@ -1208,6 +1208,7 @@ async function main() {
             MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE: overrides.mtaCoreRenderFrameBoundaryReference ?? false,
             MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE: overrides.mtaCoreRenderNativeDispatchReference ?? false,
             MTA_CORE_GUI_STARTUP_REFERENCE: overrides.mtaCoreGuiStartupReference ?? false,
+            MTA_CORE_GUI_SURFACE_REFERENCE: overrides.mtaCoreGuiSurfaceReference ?? false,
             Date: { now: () => overrides.times ? overrides.times[frame] : frame * 50 },
             CLEO: { version: overrides.version || '1.5.1', apiVersion: overrides.definitions || '0.500', hostVersion: '1.0.113.49697469' },
             native: (name, ...args) => { record(name, ...args);
@@ -1367,6 +1368,173 @@ async function main() {
         test('GUI cancelled or timed-out arming never touches runtime ' + JSON.stringify(options), () => {
             const result = coreGui(options);
             assert.equal(result.runtimeAccess.length, 0); assert.ok(!guiFinish(result));
+        });
+    // Surface policy mocks transport reported facts only; they do not render
+    // pixels, call DComp, or turn native dispatch into a drawing permission.
+    const coreSurfaceState = (overrides = {}) => Object.assign(Array(96).fill(0), {
+        0: 1, 1: 2, 2: 3, 3: 8500, 4: 1, 6: 1, 8: 1, 9: 1, 10: 1, 11: 1,
+        12: 1, 14: 7, 16: 7, 18: 2, 19: 1, 20: 1, 21: 1, 24: 1, 25: 42,
+        27: 87, 28: 640, 29: 480, 30: 1, 31: 1, 32: 1, 33: 4, 35: 4, 37: 1,
+        38: 20000, 39: 1, 40: 2, 46: 4, 47: 9, 53: 1, 54: 1, 55: 1, 56: 1, 57: 1,
+        58: 1, 60: 1, 61: 1, 62: 1, 63: 1, 64: 1, 65: 1, 66: 1, 67: 3, 68: 3,
+        70: 3, 74: 1, 78: 1, 79: 1, 80: 1, 81: 42, 82: 43, 83: 1, 84: 4, 85: 8000, 86: 1
+    }, overrides);
+    const coreSurface = (overrides = {}) => {
+        let polls = 0;
+        return runEntry({ mtaCoreGuiSurfaceReference: true, keyFrames: [[17, 16, 120], [16], [], []],
+            times: [0, 50, 100, 8600], ...overrides, functions: {
+                DE_CoreGuiSurfaceApiVersion: () => 1, DE_CoreGuiSurfaceBegin: () => 1, DE_CoreGuiSurfaceCapture: () => 1,
+                DE_CoreGuiSurfaceRead: field => coreSurfaceState(polls < 2 ? {
+                    1: 1, 2: 1, 3: 50, 4: 0, 6: 0, 20: 0, 21: 0, 37: 0, 39: 0,
+                    49: 1, 50: 1, 51: 1, 75: 1, 76: 1, 77: 1, 78: 0, 79: 0, 80: 0,
+                    ...(overrides.surfacePendingState || {})
+                } : overrides.surfaceState)[field],
+                DE_CoreStartupPoll: () => ++polls >= 2 ? 1 : 0,
+                DE_CoreStartupRead: field => [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5, 0, 0, 1, 0, 1, 0, 1, 0][field],
+                ...(overrides.functions || {})
+            } });
+    };
+    const surfaceFinish = result => result.logs.find(event => event.event === 'core_gui_surface_reference_finished');
+    test('Surface uses distinct Core12 API1/96 fields after F9 release and certifies only own composition workload', () => {
+        const result = coreSurface();
+        assert.equal(result.callFrames.find(call => call.name === 'DynamicLibrary.Load').frame, 2);
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreGuiSurfaceBegin').length, 1);
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreGuiSurfaceRead').length, 192);
+        assert.ok(!result.calls.some(call => /DE_CoreGuiStartup|DE_CoreRender|DE_CoreInput|DE_ConnectLocal|CREATE_CHAR/.test(call[0])));
+        const start = result.logs.find(event => event.event === 'adapter_start');
+        assert.equal(start.core_api, 12); assert.equal(start.surface_api, 1);
+        assert.equal(start.provenance, 'mta_core_owned_gui_surface');
+        assert.equal(start.core_gui_surface_reference, true);
+        assert.deepEqual(result.logs.filter(event => event.event === 'core_gui_surface_reference_sample').map(event => event.state.length), [96, 96]);
+        const finish = surfaceFinish(result);
+        assert.equal(finish.passed, true); assert.equal(finish.cleanup_passed, true);
+        assert.equal(finish.own_surface_workload_verified, true); assert.equal(finish.composition_present_verified, true);
+        for (const claim of ['full_core_ready', 'visible_gta_drawing_verified', 'network_active', 'input_writes',
+            'remote_peds_created', 'native_queue_commands_issued', 'native_backbuffer_touched']) assert.equal(finish[claim], false);
+    });
+    for (const options of [{ mode: 'online' }, { mode: 'diagnostic' }, { mtaCoreGuiSurfaceReference: 'true' },
+        { inputReference: true }, { reference: true }, { gaitRate: true }, { gaitRootLock: true },
+        { mtaNativePadReference: true }, { mtaNativeMovementTrial: true }, { mtaCoreStartupReference: true },
+        { mtaCoreInputReference: true }, { mtaCoreMovementReference: true }, { mtaCoreRenderReference: true },
+        { mtaCoreRenderGpuReference: true }, { mtaCoreRenderCustomPresentReference: true },
+        { mtaCoreRenderFrameBoundaryReference: true }, { mtaCoreRenderNativeDispatchReference: true }, { mtaCoreGuiStartupReference: true }])
+        test('Surface refuses conflicts before runtime access ' + JSON.stringify(options), () => {
+            const result = coreSurface({ ...options, forbidRuntimeAccess: true });
+            assert.equal(result.calls.length, 0); assert.ok(result.logs.some(event => event.event === 'adapter_failed'));
+        });
+    for (const name of ['DE_CoreGuiSurfaceApiVersion', 'DE_CoreGuiSurfaceBegin', 'DE_CoreGuiSurfaceCapture', 'DE_CoreGuiSurfaceRead'])
+        test('Surface missing export refuses without any Begin or fallback ' + name, () => {
+            const result = coreSurface({ functions: { [name]: null } });
+            assert.ok(!result.calls.some(call => /DE_CoreGuiSurfaceBegin|DE_CoreGuiStartupBegin|DE_CoreRenderBegin/.test(call[0])));
+            assert.ok(result.logs.some(event => event.event === 'adapter_failed' && event.error.includes(name)));
+        });
+    test('Surface wrong API or rejected Begin never owns a poll/cancel job', () => {
+        for (const functions of [{ DE_CoreGuiSurfaceApiVersion: () => 2 }, { DE_CoreGuiSurfaceBegin: () => 0 }]) {
+            const result = coreSurface({ functions });
+            assert.ok(!result.calls.some(call => /DE_CoreStartupPoll|DE_CoreStartupCancel|DE_CoreGuiSurfaceCapture/.test(call[0])));
+            assert.ok(!surfaceFinish(result));
+        }
+    });
+    for (const [field, value] of [[0, 2], [1, 0], [2, 0], [4, 12], [5, 2], [18, 1], [23, 7], [41, 5], [42, 11],
+        [44, 1], [45, 1], [47, 10], [48, 10], [58, 2], [59, 2], [60, 2], [74, 2], [86, 2], [28, NaN],
+        [29, -1], [25, 0x100000000], ...Array.from({ length: 8 }, (_, i) => [88 + i, 1])])
+        test('Surface malformed scalar requests cleanup without proof field ' + field, () => {
+            const result = coreSurface({ surfacePendingState: { [field]: value } });
+            assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 1);
+            assert.ok(!surfaceFinish(result)); assert.ok(!result.calls.some(call => call[0] === 'DE_CoreStartupRead'));
+        });
+    for (const field of [5, 43, 49, 50, 51, 59, 72, 75, 76, 77]) test('Surface complete cleanup cannot hide ownership field ' + field, () => {
+        const result = coreSurface({ surfaceState: { [field]: 1 } });
+        assert.ok(!surfaceFinish(result));
+        assert.ok(result.logs.some(event => event.event === 'adapter_failed' && /retained ownership/.test(event.error)));
+    });
+    for (const field of [78, 79, 80]) test('Surface terminal cleanup requires window/composition/class cleanup field ' + field, () => {
+        const result = coreSurface({ surfaceState: { [field]: 0 } });
+        assert.ok(!surfaceFinish(result));
+        assert.ok(result.logs.some(event => event.event === 'adapter_failed' && /retained ownership/.test(event.error)));
+    });
+    for (const [field, value] of [[3, 7999], [7, 1], [22, 1], [23, 1], [24, 0], [27, 24], [28, 0], [29, 16385],
+        [30, 0], [31, 0], [32, 0], [35, 3], [38, 0], [46, 0], [47, 8], [48, 1], [52, 1],
+        [53, 0], [54, 0], [55, 0], [56, 0], [60, 0], [61, 0], [62, 0], [63, 0], [64, 0], [65, 0], [66, 0],
+        [67, 1], [68, 2], [69, 1], [70, 2], [73, 1], [81, 0], [82, 0], [83, 0], [84, 0],
+        [85, 7999], [85, 8001], [86, 0]])
+        test('Surface partial workload cannot claim own surface or Present proof field ' + field, () => {
+            const finish = surfaceFinish(coreSurface({ surfaceState: { [field]: value } }));
+            assert.ok(finish); assert.equal(finish.passed, false);
+            assert.equal(finish.own_surface_workload_verified, false); assert.equal(finish.composition_present_verified, false);
+            assert.equal(finish.cleanup_passed, field !== 7);
+        });
+    test('Surface successful Presents are counted and normal Shutdown stop is compatible with completion', () => {
+        for (const stop of [0, 1]) {
+            const finish = surfaceFinish(coreSurface({ surfaceState: { 67: 200, 68: 200, 70: 201, 74: stop, 71: 0xffffffff } }));
+            assert.equal(finish.passed, true);
+        }
+    });
+    test('Surface busy Present retries preserve counted successes and do not require another GUI frame', () => {
+        assert.equal(surfaceFinish(coreSurface({ surfaceState: { 67: 200, 68: 3, 87: 197, 70: 3 } })).passed, true);
+        for (const changes of [{ 67: 199 }, { 68: 1 }, { 87: 196 }, { 69: 0x887a000a }, { 70: 2 }]) {
+            const finish = surfaceFinish(coreSurface({ surfaceState: { 67: 200, 68: 3, 87: 197, 70: 3, ...changes } }));
+            assert.equal(finish.passed, false);
+        }
+        assert.equal(surfaceFinish(coreSurface({ surfaceState: { 67: 0xffffffff, 68: 0xffffffff, 87: 1 } })).passed, false);
+    });
+    test('Surface64 alias, invalid metadata and removed-fence sentinel cannot certify a workload', () => {
+        for (const state of [{ 12: 0 }, { 58: 0 }, { 35: 0xffffffff, 36: 0xffffffff }]) {
+            const result = coreSurface({ surfaceState: state });
+            assert.ok(!surfaceFinish(result)); assert.ok(result.logs.some(event => event.event === 'adapter_failed'));
+        }
+        const result = coreSurface({ functions: { DE_CoreGuiSurfaceRead: field => coreGuiState()[field] } });
+        assert.ok(!surfaceFinish(result));
+    });
+    test('Surface full 64-bit fence completion preserves high words', () => {
+        assert.equal(surfaceFinish(coreSurface({ surfaceState: { 33: 0xffffffff, 34: 1, 35: 0, 36: 2 } })).passed, true);
+        assert.equal(surfaceFinish(coreSurface({ surfaceState: { 33: 0, 34: 2, 35: 0xffffffff, 36: 1 } })).passed, false);
+    });
+    test('Surface backend pin expectation and Core worker state remain independently checked', () => {
+        const result = coreSurface({ surfaceState: { 57: 0 } });
+        assert.equal(surfaceFinish(result).cleanup_passed, false);
+        for (const field of [0, 7, 13, 14, 16, 17, 18]) {
+            const state = [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5, 0, 0, 1, 0, 1, 0, 1, 0];
+            state[field] = state[field] ? 0 : 1;
+            const finish = surfaceFinish(coreSurface({ functions: { DE_CoreStartupRead: index => state[index] } }));
+            assert.equal(finish.passed, false);
+        }
+    });
+    test('Surface identical repeated sequences log once; changed repeat and regressed sequence cancel', () => {
+        for (const mode of ['same', 'changed', 'regressed']) {
+            let polls = 0;
+            const result = coreSurface({ keyFrames: [[17, 16, 120], [], [], [], []], times: [0, 50, 100, 150, 8600], functions: {
+                DE_CoreStartupPoll: () => ++polls >= 3 ? 1 : 0,
+                DE_CoreGuiSurfaceRead: field => coreSurfaceState(polls >= 3 ? {} : { 1: 1, 2: mode === 'regressed' && polls === 1 ? 2 : 1,
+                    3: mode === 'changed' && polls === 2 ? 51 : 50, 4: 0, 6: 0, 20: 0, 21: 0, 37: 0, 39: 0 })[field]
+            } });
+            if (mode === 'same') { assert.equal(surfaceFinish(result).passed, true); assert.equal(surfaceFinish(result).samples, 2); }
+            else { assert.ok(!surfaceFinish(result)); assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 1); }
+        }
+    });
+    for (const loading of [false, true]) test('Surface ' + (loading ? 'loading' : 'End') + ' cancel waits for final cleanup', () => {
+        let polls = 0;
+        const result = coreSurface({ keyFrames: [[17, 16, 120], [], [], [17, 16, 35], [17, 16, 35]],
+            times: [0, 50, 100, 150, 8600], readyFrames: loading ? [true, true, true, false, false] : undefined, functions: {
+                DE_CoreStartupPoll: () => ++polls >= 3 ? 1 : 0,
+                DE_CoreGuiSurfaceRead: field => coreSurfaceState(polls < 3 ? { 1: 1, 2: polls, 3: polls * 50, 4: 0,
+                    6: 0, 20: 0, 21: 0, 37: 0, 39: 0 } : {})[field]
+            } });
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 1);
+        assert.equal(polls, 3); assert.equal(surfaceFinish(result).stop_requested, true);
+        assert.equal(surfaceFinish(result).cleanup_passed, true); assert.equal(surfaceFinish(result).passed, false);
+    });
+    test('Surface manual activation remains dormant until late F9 and full modifier release', () => {
+        const result = coreSurface({ activation: 'automatic', keyFrames: [[], [], [17, 16, 120], [16], [], []],
+            times: [0, 7200000, 14400000, 14400050, 14400100, 14408600] });
+        assert.equal(result.callFrames.find(call => call.name === 'DynamicLibrary.Load').frame, 4);
+        assert.equal(result.logs.find(event => event.event === 'core_gui_surface_reference_started').at_ms, 14400100);
+        assert.equal(surfaceFinish(result).passed, true);
+    });
+    for (const options of [{ keyFrames: [[17, 16, 120, 35]] }, { keyFrames: [[17, 16, 120], [120]], times: [0, 10000] }])
+        test('Surface cancelled or timed-out arming never touches runtime ' + JSON.stringify(options), () => {
+            const result = coreSurface(options);
+            assert.equal(result.runtimeAccess.length, 0); assert.ok(!surfaceFinish(result));
         });
     const coreRenderState = (overrides = {}, route = 1) => {
         const state = Array(44).fill(0);
@@ -2715,6 +2883,7 @@ async function main() {
         assert.equal(sourceConfig.ONLINE_ACTIVATION, 'manual');
         assert.equal(sourceConfig.MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE, false);
         assert.equal(sourceConfig.MTA_CORE_GUI_STARTUP_REFERENCE, false);
+        assert.equal(sourceConfig.MTA_CORE_GUI_SURFACE_REFERENCE, false);
         assert.equal(sourceConfig.GAIT_REFERENCE, false);
         assert.equal(sourceConfig.GAIT_RATE, false);
         assert.equal(sourceConfig.INPUT_REFERENCE, false);

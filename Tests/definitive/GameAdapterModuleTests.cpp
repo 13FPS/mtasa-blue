@@ -10,6 +10,7 @@
 #include <game/CGameRenderSetupDiagnostic.h>
 #include <game/CGameRenderRootsDiagnostic.h>
 #include <game/CGameRenderDeviceLease.h>
+#include <game/CGameRenderDeviceWindowLease.h>
 
 #include <array>
 #include <algorithm>
@@ -1079,6 +1080,64 @@ namespace
               "ordinary V6 remains device-free and cannot arm retrospectively after Begin");
         plain->Release();
     }
+    void TestDeviceWindowLeaseContract()
+    {
+        OwnerIdentity owner;
+        auto*         lease = CreateGameRenderObservationV6(6, owner.Get(), RenderObservationRoute::D3D12);
+        auto*         older = CreateGameRenderObservationV5(5, owner.Get(), RenderObservationRoute::D3D12);
+        Check(lease && older, "device-window handoff is a separate optional extension of an exact V6 lease");
+        RenderDeviceWindowLeaseV2 output;
+        std::memset(&output, 0xa5, sizeof(output));
+        const auto sentinel = output;
+        const auto unchanged = [&] { return std::memcmp(&output, &sentinel, sizeof(output)) == 0; };
+        for (const auto version : {0u, 1u, 3u, 0xffffffffu})
+            Check(RequestGameRenderDeviceWindowLeaseV2(version, lease) == Status::InvalidArgument &&
+                      TakeGameRenderDeviceWindowLeaseV2(version, lease, &output) == Status::InvalidArgument && unchanged(),
+                  "V2 rejects wrong versions without reading output metadata");
+        Check(RequestGameRenderDeviceWindowLeaseV2(2, nullptr) == Status::InvalidArgument &&
+                  TakeGameRenderDeviceWindowLeaseV2(2, nullptr, &output) == Status::InvalidArgument &&
+                  TakeGameRenderDeviceWindowLeaseV2(2, lease, nullptr) == Status::InvalidArgument && unchanged(),
+              "V2 rejects null arguments and preserves output");
+        auto* invalid = reinterpret_cast<IGameRenderObservationV6*>(std::uintptr_t{1});
+        Check(RequestGameRenderDeviceWindowLeaseV2(2, invalid) == Status::InvalidArgument &&
+                  TakeGameRenderDeviceWindowLeaseV2(2, invalid, &output) == Status::InvalidArgument &&
+                  RequestGameRenderDeviceWindowLeaseV2(2, reinterpret_cast<IGameRenderObservationV6*>(older)) == Status::InvalidArgument &&
+                  TakeGameRenderDeviceWindowLeaseV2(2, reinterpret_cast<IGameRenderObservationV6*>(older), &output) == Status::InvalidArgument && unchanged(),
+              "V2 exact registry rejects invalid and older interface values before dereference");
+        Check(TakeGameRenderDeviceWindowLeaseV2(2, lease, &output) != Status::Ok && unchanged(), "allocated-only V2 has no native device/window result");
+        Status      request = Status::Ok, take = Status::Ok;
+        std::thread foreign(
+            [&]
+            {
+                request = RequestGameRenderDeviceWindowLeaseV2(2, lease);
+                take = TakeGameRenderDeviceWindowLeaseV2(2, lease, &output);
+            });
+        foreign.join();
+        Check(request == Status::WrongThread && take == Status::WrongThread && unchanged(), "V2 request/transfer belongs to the factory thread");
+        Check(RequestGameRenderDeviceWindowLeaseV2(2, lease) == Status::Ok && RequestGameRenderDeviceWindowLeaseV2(2, lease) == Status::Unsupported &&
+                  RequestGameRenderDeviceLeaseV1(1, lease) == Status::Unsupported,
+              "V2 arms exactly once and excludes a second V1 capture request");
+        Check(lease->Begin() == Status::Unsupported && RequestGameRenderDeviceWindowLeaseV2(2, lease) == Status::Unsupported &&
+                  TakeGameRenderDeviceWindowLeaseV2(2, lease, &output) != Status::Ok && unchanged(),
+              "wrong-image Begin consumes V2 without claiming HWND/device ownership");
+        Check(lease->End() == Status::Ok && TakeGameRenderDeviceWindowLeaseV2(2, lease, &output) == Status::NotInitialized && unchanged(),
+              "V2 End leaves no transferable result after refused native preparation");
+        const auto released = reinterpret_cast<std::uintptr_t>(lease);
+        lease->Release();
+        Check(RequestGameRenderDeviceWindowLeaseV2(2, reinterpret_cast<IGameRenderObservationV6*>(released)) == Status::InvalidArgument &&
+                  TakeGameRenderDeviceWindowLeaseV2(2, reinterpret_cast<IGameRenderObservationV6*>(released), &output) == Status::InvalidArgument &&
+                  unchanged(),
+              "released V2 lease is excluded from the exact registry");
+        auto* legacy = CreateGameRenderObservationV6(6, owner.Get(), RenderObservationRoute::D3D12);
+        Check(legacy && RequestGameRenderDeviceLeaseV1(1, legacy) == Status::Ok && RequestGameRenderDeviceWindowLeaseV2(2, legacy) == Status::Unsupported,
+              "an armed V1 request cannot be reinterpreted as V2");
+        legacy->Release();
+        auto* plain = CreateGameRenderObservationV6(6, owner.Get(), RenderObservationRoute::D3D12);
+        Check(plain && plain->Begin() == Status::Unsupported && RequestGameRenderDeviceWindowLeaseV2(2, plain) == Status::Unsupported,
+              "ordinary V6 never gains window capture retrospectively");
+        plain->Release();
+        older->Release();
+    }
     void TestRenderObservationV6Contract()
     {
         OwnerIdentity owner;
@@ -1199,6 +1258,11 @@ int main()
     static_assert(sizeof(RenderDeviceLeaseV1) == 48 && offsetof(RenderDeviceLeaseV1, device) == 8 && offsetof(RenderDeviceLeaseV1, generation) == 16);
     static_assert(std::is_nothrow_invocable_r_v<Status, decltype(RequestGameRenderDeviceLeaseV1), std::uint32_t, IGameRenderObservationV6*>);
     static_assert(std::is_nothrow_invocable_r_v<Status, decltype(TakeGameRenderDeviceLeaseV1), std::uint32_t, IGameRenderObservationV6*, RenderDeviceLeaseV1*>);
+    static_assert(sizeof(RenderDeviceWindowLeaseV2) == 64 && offsetof(RenderDeviceWindowLeaseV2, window) == 16 &&
+                  offsetof(RenderDeviceWindowLeaseV2, generation) == 24 && offsetof(RenderDeviceWindowLeaseV2, reserved) == 56);
+    static_assert(std::is_nothrow_invocable_r_v<Status, decltype(RequestGameRenderDeviceWindowLeaseV2), std::uint32_t, IGameRenderObservationV6*>);
+    static_assert(std::is_nothrow_invocable_r_v<Status, decltype(TakeGameRenderDeviceWindowLeaseV2), std::uint32_t, IGameRenderObservationV6*,
+                                                RenderDeviceWindowLeaseV2*>);
     static_assert(AdapterAbiVersion == 6 && AdapterControllerMask == 0xfffff);
     static_assert(static_cast<std::uint64_t>(AdapterCapability::NativeMovementWriteCandidate) == 256);
     static_assert(NativeDeviceStateCount == 127 && sizeof(NativeDeviceState) == 508);
@@ -1245,6 +1309,7 @@ int main()
         TestEndpointDiagnosticLeaseRejection();
         TestRenderObservationV6Contract();
         TestDeviceLeaseContract();
+        TestDeviceWindowLeaseContract();
         TestSetupDiagnosticLeaseRejection();
         TestRootsDiagnosticLeaseRejection();
         TestRenderObservationFactoryRejection();

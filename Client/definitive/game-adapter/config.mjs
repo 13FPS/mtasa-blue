@@ -59,3 +59,6 @@ export const MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE = false;
 // Core obtains an explicit device lease, ends observation, then renders the
 // existing MTA GUI on its own queue/offscreen target. No native buffer is drawn.
 export const MTA_CORE_GUI_STARTUP_REFERENCE = false;
+// Display the existing GUI in an MTA-owned child composition surface. The
+// observed device/window lease is released after our queue and surface drain.
+export const MTA_CORE_GUI_SURFACE_REFERENCE = false;

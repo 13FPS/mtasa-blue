@@ -18,7 +18,7 @@ $sourceNames = @('Client/sdk/game/CGameAdapter.h', 'Client/game_de/GameAdapter.c
     'Client/game_de/premake5.lua', 'vendor/detours/premake5.lua',
     'Client/game_de/NativePadReader.h', 'Client/game_de/NativePadReader.cpp',
     'Client/game_de/NativeMovementInput.h', 'Client/game_de/NativeMovementInput.cpp', 'Client/game_de/NativeInputRouting.h',
-    'Client/sdk/game/CGameRenderObservation.h', 'Client/sdk/game/CGameRenderEndpointDiagnostic.h', 'Client/sdk/game/CGameRenderSetupDiagnostic.h', 'Client/sdk/game/CGameRenderRootsDiagnostic.h', 'Client/sdk/game/CGameRenderDeviceLease.h',
+    'Client/sdk/game/CGameRenderObservation.h', 'Client/sdk/game/CGameRenderEndpointDiagnostic.h', 'Client/sdk/game/CGameRenderSetupDiagnostic.h', 'Client/sdk/game/CGameRenderRootsDiagnostic.h', 'Client/sdk/game/CGameRenderDeviceLease.h', 'Client/sdk/game/CGameRenderDeviceWindowLease.h',
     'Client/game_de/NativeRenderObservation.h', 'Client/game_de/NativeRenderObservation.cpp',
     'Client/game_de/NativeD3D12OwnershipProbe.h', 'Client/game_de/NativeD3D12OwnershipProbe.cpp',
     'Client/game_de/NativeCustomPresentProbe.h', 'Client/game_de/NativeCustomPresentProbe.cpp',
@@ -75,7 +75,7 @@ if ((Test-Path -LiteralPath $moduleSource) -and $detoursLibraryExit -eq 0) {
         (Join-Path $taskRoot 'Client/game_de/NativeD3D12OwnershipProbe.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeCustomPresentProbe.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeFrameBoundaryProbe.cpp'), ('/I' + $detoursSourceRoot),
-        ('/Fo' + $outputRoot + [IO.Path]::DirectorySeparatorChar), ('/Fe' + $module), '/link', ('/IMPLIB:' + $library), 'bcrypt.lib', 'd3d12.lib', 'dxgi.lib', $detoursLibrary)
+        ('/Fo' + $outputRoot + [IO.Path]::DirectorySeparatorChar), ('/Fe' + $module), '/link', ('/IMPLIB:' + $library), 'bcrypt.lib', 'd3d12.lib', 'dxgi.lib', 'user32.lib', $detoursLibrary)
     $moduleOutput = @(& $compiler @moduleArguments 2>&1)
     $moduleExit = $LASTEXITCODE
     $moduleOutput | Set-Content -LiteralPath (Join-Path $outputRoot 'module-compile.log') -Encoding utf8

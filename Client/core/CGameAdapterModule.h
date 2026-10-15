@@ -12,6 +12,7 @@
 #include <game/CGameRenderSetupDiagnostic.h>
 #include <game/CGameRenderRootsDiagnostic.h>
 #include <game/CGameRenderDeviceLease.h>
+#include <game/CGameRenderDeviceWindowLease.h>
 #include <cstdint>
 #include <string>
 
@@ -55,6 +56,8 @@ public:
     // their callback-local references and never acquire an owned device here.
     bool BeginNativeRenderDeviceObservation();
     bool TakeNativeRenderDeviceLease(mta::game_de::RenderDeviceLeaseV1& output);
+    bool BeginNativeRenderDeviceWindowObservation();
+    bool TakeNativeRenderDeviceWindowLease(mta::game_de::RenderDeviceWindowLeaseV2& output);
     bool GetNativeRenderObservationState(mta::game_de::RenderObservationStateV6& state);
     bool GetNativeRenderEndpointDiagnostic(mta::game_de::RenderEndpointDiagnosticV1& state);
     bool GetNativeRenderSetupDiagnostic(mta::game_de::RenderSetupDiagnosticV1& state);
@@ -70,7 +73,7 @@ public:
 
 private:
     bool RequireOwnerThread(const char* operation);
-    bool StartNativeRenderDispatchObservation(mta::game_de::RenderObservationRoute route, bool captureDevice);
+    bool StartNativeRenderDispatchObservation(mta::game_de::RenderObservationRoute route, bool captureDevice, bool captureWindow = false);
     bool RecordStatus(mta::game_de::Status status, const char* operation);
     void SetError(const char* error) noexcept;
 
@@ -95,6 +98,7 @@ private:
     bool                                                        m_hasRenderObservationV5 = false;
     mta::game_de::IGameRenderObservationV6*                     m_renderObservationV6 = nullptr;
     mta::game_de::TakeRenderDeviceLeaseV1                       m_renderDeviceTakeV1 = nullptr;
+    mta::game_de::TakeRenderDeviceWindowLeaseV2                 m_renderDeviceWindowTakeV2 = nullptr;
     decltype(&mta::game_de::ReadGameRenderEndpointDiagnosticV2) m_renderEndpointReaderV2 = nullptr;
     mta::game_de::RenderObservationStateV6                      m_lastRenderObservationV6;
     bool                                                        m_hasRenderObservationV6 = false;

@@ -5,6 +5,15 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+Visible GUI integration continues inside Core using the existing CGUI/CEGUI
+renderer. The new opt-in surface attaches an MTA-owned transparent child window
+to GTA's validated window and uses the retained D3D12 device with its own queue
+and composition swapchain. Native observation ends before GUI or window work.
+This provides a bounded visible-output trial while native backbuffer rendering
+remains gated on safe resize/destruction handling. It does not replace MTA's
+GUI, unlock full startup or establish multiplayer readiness. Actual on-screen
+output must be verified separately from readback and compositor submission.
+
 Current checkpoint: actual MTA Core owns saved XML configuration, its existing
 `CKeyBinds`, adapter pulse and digital synthesis on the startup worker. Its
 corrected scoped-write session passed **30,009 ms**, **595 native samples and

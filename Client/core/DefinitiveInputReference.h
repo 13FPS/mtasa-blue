@@ -77,6 +77,9 @@ namespace DefinitiveInputReference
         // A separately configured workload retains an actual device for MTA's
         // own queue after observation ends. It cannot upgrade a render request.
         bool guiStartup = false;
+        // A separate opt-in binds MTA's own GUI surface to a borrowed game HWND.
+        // It never changes the offscreen workload or admits native frame writes.
+        bool guiSurface = false;
     };
 
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)

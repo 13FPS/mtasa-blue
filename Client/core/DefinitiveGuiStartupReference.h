@@ -111,7 +111,8 @@ namespace DefinitiveGuiStartupReference
         Failed,
     };
 
-    inline void SetPair(Snapshot& values, Field field, std::uint64_t value) noexcept
+    template <std::size_t Count>
+    inline void SetPair(std::array<std::uint32_t, Count>& values, Field field, std::uint64_t value) noexcept
     {
         values[field] = static_cast<std::uint32_t>(value);
         values[field + 1] = static_cast<std::uint32_t>(value >> 32);
@@ -120,11 +121,13 @@ namespace DefinitiveGuiStartupReference
     // Production and owned tests execute the same lifetime order. Preparing
     // the module precedes hook installation; all GPU/GUI work and COM release
     // follow successful End, even when Begin failed while retaining peers.
-    template <typename Owner, typename Clock, typename Request>
-    Snapshot Run(Owner& owner, Clock& clock, const Request& request) noexcept
+    // The surface trial shares this ownership order with the offscreen trial.
+    // Only its separately versioned scalar tail differs; old callers keep64.
+    template <typename SnapshotType = Snapshot, typename Owner, typename Clock, typename Request>
+    SnapshotType Run(Owner& owner, Clock& clock, const Request& request) noexcept
     {
         static_assert(noexcept(clock.Now()) && noexcept(clock.Wait(std::uint32_t{})));
-        Snapshot snapshot{};
+        SnapshotType snapshot{};
         snapshot[Version] = ApiVersion;
         auto       reason = StopReason::Running;
         const auto started = clock.Now();
@@ -142,7 +145,7 @@ namespace DefinitiveGuiStartupReference
             ++snapshot[Sequence];
             try
             {
-                request.publish(snapshot.data(), FieldCount);
+                request.publish(snapshot.data(), static_cast<std::uint32_t>(snapshot.size()));
             }
             catch (...)
             {

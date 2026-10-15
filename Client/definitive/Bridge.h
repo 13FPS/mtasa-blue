@@ -141,3 +141,10 @@ DE_BRIDGE_API std::uint32_t DE_CoreGuiStartupApiVersion();
 DE_BRIDGE_API int           DE_CoreGuiStartupBegin();
 DE_BRIDGE_API int           DE_CoreGuiStartupCapture();
 DE_BRIDGE_API std::uint32_t DE_CoreGuiStartupRead(std::uint32_t component);
+
+// A separate API1/96 describes only MTA's own child HWND/composition surface.
+// API6 and GUI startup's API1/64 retain their existing scalar meanings.
+DE_BRIDGE_API std::uint32_t DE_CoreGuiSurfaceApiVersion();
+DE_BRIDGE_API int           DE_CoreGuiSurfaceBegin();
+DE_BRIDGE_API int           DE_CoreGuiSurfaceCapture();
+DE_BRIDGE_API std::uint32_t DE_CoreGuiSurfaceRead(std::uint32_t component);

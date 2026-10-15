@@ -84,6 +84,7 @@ bool NativeDispatchFixtureOriginal(void*, std::uint32_t interval);
 bool DeviceCandidateFixtureOriginal(void*, std::uint32_t interval);
 void SetDeviceCandidateFixture(IUnknown* device, unsigned mode);
 void SetSecondDeviceCandidateFixture(IUnknown* device);
+void SetDeviceWindowCandidateFixture(void* window, std::uint32_t windowed);
 bool ForeignDeviceCandidateStable();
 
 namespace
@@ -169,6 +170,8 @@ namespace
         runtime.classifyCustomPresent = false;
         runtime.queryFrameBoundary = false;
         runtime.nativeDispatch = false;
+        runtime.captureDeviceWindow = false;
+        runtime.deviceWindow = {};
         runtime.devicePhase.store(DeviceCapturePhase::Off);
         runtime.producerThread = GetCurrentThreadId();
         runtime.bound.store(true);
@@ -282,6 +285,12 @@ namespace
             runtime.hooked.store(false);
         }
         Check(HookPresent(viewport.data(), 1) && runtime.devicePending.load(), "explicit clean callback commits one owned device with its accepted snapshot");
+        RenderDeviceWindowLeaseV2 unrelatedWindow;
+        std::memset(&unrelatedWindow, 0xa5, sizeof(unrelatedWindow));
+        const auto unrelatedWindowSentinel = unrelatedWindow;
+        Check(owner.TakeDeviceWindowLease(unrelatedWindow) == Status::NotInitialized &&
+                  std::memcmp(&unrelatedWindow, &unrelatedWindowSentinel, sizeof(unrelatedWindow)) == 0 && !staleDevice.releases,
+              "V2 cannot consume an existing V1 result or reinterpret it as window metadata");
         Check(owner.TakeDeviceLease(staleLease) == Status::Ok && staleLease.device == reinterpret_cast<ID3D12Device*>(&staleDevice) && staleLease.size == 48 &&
                   staleLease.version == 1 && staleLease.generation == runtime.generation.load() && staleLease.acceptedSnapshots == 1 &&
                   staleLease.dispatchEntries == 1 && staleLease.sourceProfileId == 2 && !staleLease.reserved && !staleDevice.adds && !staleDevice.releases,
@@ -415,6 +424,118 @@ namespace
             entered = resume = nullptr;
         }
         SetDeviceCandidateFixture(nullptr, 0);
+    }
+    void CheckDeviceWindowLeaseLifecycle(NativeRenderObservation& owner, std::uintptr_t image)
+    {
+        const auto window = reinterpret_cast<void*>(std::uintptr_t{0x123456});
+        const auto configure = [&](IUnknown* device, unsigned mode, void* candidateWindow = nullptr, unsigned windowed = 1)
+        {
+            Configure(image, DeviceCandidateFixtureOriginal, RenderObservationRoute::D3D12);
+            EnableOwnership(image, 2, 1);
+            runtime.classifyCustomPresent = runtime.queryFrameBoundary = runtime.nativeDispatch = true;
+            runtime.captureDeviceWindow = true;
+            PrimeNativeDispatchDiagnostic(runtime.generation.load());
+            runtime.devicePhase.store(DeviceCapturePhase::Armed);
+            SetDeviceCandidateFixture(device, mode);
+            SetDeviceWindowCandidateFixture(candidateWindow, windowed);
+        };
+        // The HWND token tests publication/transfer, not Win32 admission. The
+        // separate production GetDesc fixture creates real owned root windows.
+        RenderDeviceWindowLeaseV2 output;
+        std::memset(&output, 0xa5, sizeof(output));
+        const auto       sentinel = output;
+        const auto       unchanged = [&] { return std::memcmp(&output, &sentinel, sizeof(output)) == 0; };
+        OwnedLeaseDevice device;
+        configure(&device, 0, window);
+        Check(HookPresent(viewport.data(), 1) && runtime.devicePending.load(),
+              "V2 publishes a device and same-scope HWND only after an accepted true original");
+        RenderDeviceLeaseV1 legacy;
+        std::memset(&legacy, 0xa5, sizeof(legacy));
+        const auto legacySentinel = legacy;
+        Check(owner.TakeDeviceLease(legacy) == Status::NotInitialized && std::memcmp(&legacy, &legacySentinel, sizeof(legacy)) == 0 && !device.releases,
+              "V1 cannot consume or overwrite an explicitly requested V2 reference");
+        NativeRenderObservation fresh;
+        Check(fresh.TakeDeviceWindowLease(output) == Status::Unsupported && unchanged(), "generation-zero V2 getter cannot consume another observer's result");
+        runtime.safetyHeldSuspensions = true;
+        Check(owner.TakeDeviceWindowLease(output) == Status::Unsupported && unchanged(),
+              "V2 refuses retained suspension ownership without COM or output changes");
+        runtime.safetyHeldSuspensions = false;
+        bool        foreignPreserved = false;
+        std::thread foreign(
+            [&]
+            {
+                auto foreignOutput = sentinel;
+                foreignPreserved =
+                    owner.TakeDeviceWindowLease(foreignOutput) != Status::Ok && std::memcmp(&foreignOutput, &sentinel, sizeof(foreignOutput)) == 0;
+            });
+        foreign.join();
+        Check(foreignPreserved, "V2 native Take remains factory/producer-thread-only");
+        {
+            ApiOperation busy;
+            Check(busy.acquired && owner.TakeDeviceWindowLease(output) == Status::Unsupported && unchanged(),
+                  "V2 Take refuses a busy operation without waiting");
+        }
+        AcquireSRWLockShared(&runtime.snapshotLock);
+        Check(owner.TakeDeviceWindowLease(output) == Status::Unsupported && unchanged(), "V2 Take refuses a contended publication lock");
+        ReleaseSRWLockShared(&runtime.snapshotLock);
+        RenderDeviceWindowLeaseV2 taken;
+        Check(owner.TakeDeviceWindowLease(taken) == Status::Ok && taken.size == 64 && taken.version == 2 &&
+                  taken.device == reinterpret_cast<ID3D12Device*>(&device) && taken.window == window && taken.windowed == 1 &&
+                  taken.generation == runtime.generation.load() && taken.acceptedSnapshots == 1 && taken.dispatchEntries == 1 && taken.sourceProfileId == 2 &&
+                  !taken.reserved[0] && !taken.reserved[1] && !device.adds && !device.releases,
+              "V2 Take moves the existing device ref and exact correlated scalar window metadata without calling COM or HWND APIs");
+        Check(owner.TakeDeviceWindowLease(output) == Status::NotInitialized && unchanged() && owner.End() && !device.releases,
+              "V2 is one-shot and End cannot release ownership already transferred to Core");
+        Check(ReleaseRenderDeviceReference(taken.device) && device.releases == 1 && !device.references,
+              "V2 receiver releases its one independent reference exactly once");
+        for (unsigned mode = 0; mode < 11; ++mode)
+        {
+            OwnedLeaseDevice refused;
+            configure(&refused, mode < 8 ? mode : 0, mode == 8 ? nullptr : window, mode == 9 ? 0u : mode == 10 ? 2u : 1u);
+            if (mode == 0)
+                AcquireSRWLockShared(&runtime.snapshotLock);
+            if (mode == 3)
+                Check(CatchOriginalException(viewport.data()), "V2 candidate cleanup preserves original SEH");
+            else
+                HookPresent(viewport.data(), 1);
+            if (mode == 0)
+                ReleaseSRWLockShared(&runtime.snapshotLock);
+            Check(!runtime.devicePending.load() && refused.releases == 1 && !refused.references && !refused.adds &&
+                      owner.TakeDeviceWindowLease(output) != Status::Ok && unchanged(),
+                  "publication miss/original/HRESULT/root/multiple/readback/lifecycle/null/nonwindowed refusal cannot publish a V2 ref");
+            Check(owner.End(), "V2 refused candidate has complete balanced cleanup");
+        }
+        for (unsigned faultStage = 0; faultStage < 4; ++faultStage)
+        {
+            OwnedLeaseDevice faulted;
+            configure(&faulted, faultStage == 0 ? 1u : faultStage == 1 ? 3u : 0u, window);
+            faulted.fault = true;
+            if (faultStage == 2)
+                AcquireSRWLockShared(&runtime.snapshotLock);
+            if (faultStage == 1)
+                Check(CatchOriginalException(viewport.data()), "V2 Release fault cannot replace original SEH");
+            else
+                HookPresent(viewport.data(), 1);
+            if (faultStage == 2)
+                ReleaseSRWLockShared(&runtime.snapshotLock);
+            Check(!owner.End() && runtime.deviceReleaseFault.load() && runtime.failure.load() == 10 && faulted.releases == 1 &&
+                      owner.TakeDeviceWindowLease(output) != Status::Ok && unchanged() && !owner.Begin() && !owner.End() && faulted.releases == 1,
+                  "all V2 discard/SEH/miss/untaken-End Release faults retain fatal ownership and cannot retry or rearm");
+            runtime.deviceReleaseFault.store(false);
+            Check(owner.End(), "only the private known-live fake may clear its irreversible Release fault for subsequent fixture cases");
+        }
+        OwnedLeaseDevice untaken;
+        configure(&untaken, 0, window);
+        HookPresent(viewport.data(), 1);
+        runtime.inFlight.store(1);
+        Check(!owner.End() && !untaken.releases && owner.TakeDeviceWindowLease(output) == Status::NotInitialized && unchanged(),
+              "End overlap stops V2 transfer but retains its untaken reference until the callback drains");
+        runtime.inFlight.store(0);
+        Check(owner.End() && untaken.releases == 1 && !untaken.references && owner.TakeDeviceWindowLease(output) == Status::NotInitialized && unchanged(),
+              "clean End releases an untaken V2 ref exactly once and never permits a post-End transfer");
+        SetDeviceCandidateFixture(nullptr, 0);
+        SetDeviceWindowCandidateFixture(nullptr, 0);
+        runtime.captureDeviceWindow = false;
     }
     void CheckCodeFixture(const char* path, const RouteDescriptor& route)
     {
@@ -1936,6 +2057,7 @@ int main(int argc, char** argv)
     OwnedLeaseDevice    staleDevice;
     RenderDeviceLeaseV1 staleDeviceLease;
     CheckDeviceLeaseLifecycle(owner, image, staleDevice, staleDeviceLease);
+    CheckDeviceWindowLeaseLifecycle(owner, image);
     // Retire a genuinely published owned API6 scalar cache, so a rejected next
     // Begin must invalidate positive historical evidence rather than only zero.
     Configure(image, NativeDispatchFixtureOriginal, RenderObservationRoute::D3D12);

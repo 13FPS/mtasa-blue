@@ -40,6 +40,8 @@ project "Client Core"
 	-- keeps its independent owned-host build free of classic PCH dependencies.
 	filter { "files:DefinitiveGuiStartup.cpp" }
 		flags { "NoPCH" }
+	filter { "files:DefinitiveGuiSurface.cpp" }
+		flags { "NoPCH" }
 	filter {}
 
 	if _OPTIONS["with-definitive-adapter"] then
@@ -97,7 +99,7 @@ project "Client Core"
 			links { "delayimp" }
 			-- The separate GUI startup workload creates its own D3D12 objects;
 			-- classic builds retain their existing renderer linkage.
-			links { "d3d12", "dxgi" }
+			links { "d3d12", "dxgi", "dcomp" }
 			linkoptions { "/DELAYLOAD:d3dx9_43.dll" }
 			-- The backend loader resolves adjacent modules. Stage real build
 			-- outputs together without installing anything into the game.

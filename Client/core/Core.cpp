@@ -22,6 +22,7 @@
 #include "DefinitiveMovementReference.h"
 #include "DefinitiveRenderReference.h"
 #include "DefinitiveGuiStartupReference.h"
+#include "DefinitiveGuiSurfaceReference.h"
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
     #include "DefinitiveProcess.h"
 #endif
@@ -59,11 +60,14 @@ namespace DefinitiveInputReference
 
     bool Configure(const Request& request) noexcept
     {
-        const auto maximum = request.guiStartup          ? DefinitiveGuiStartupReference::MaximumDurationMs
+        const auto maximum = request.guiSurface          ? DefinitiveGuiSurfaceReference::MaximumDurationMs
+                             : request.guiStartup        ? DefinitiveGuiStartupReference::MaximumDurationMs
                              : request.renderObservation ? DefinitiveRenderReference::MaximumDurationMs
                              : request.nativeMovement    ? DefinitiveMovementReference::MaximumDurationMs
                                                          : MaximumDurationMs;
-        if ((request.guiStartup && (request.nativeMovement || request.renderObservation || request.renderRoute || request.renderApiVersion != 1)) ||
+        if ((request.guiSurface &&
+             (request.guiStartup || request.nativeMovement || request.renderObservation || request.renderRoute || request.renderApiVersion != 1)) ||
+            (request.guiStartup && (request.nativeMovement || request.renderObservation || request.renderRoute || request.renderApiVersion != 1)) ||
             (request.nativeMovement && request.renderObservation) || (request.renderRoute && (!request.renderObservation || request.renderRoute > 2)) ||
             (request.renderObservation &&
              ((request.renderApiVersion == 1 && request.renderRoute) || (request.renderApiVersion == 2 && !request.renderRoute) ||
@@ -353,6 +357,19 @@ CORE_API std::uint32_t MTA_ConfigureDEGuiStartupReference(std::uint32_t duration
     // never acquire a device or run MTA's offscreen GPU workload implicitly.
     DefinitiveInputReference::Request request{durationMs, cancel, publish};
     request.guiStartup = true;
+    return g_isDefinitiveProcessCandidate && DefinitiveInputReference::Configure(request) ? 1u : 0u;
+}
+CORE_API std::uint32_t MTA_DEGuiSurfaceReferenceApiVersion()
+{
+    return DefinitiveGuiSurfaceReference::ApiVersion;
+}
+CORE_API std::uint32_t MTA_ConfigureDEGuiSurfaceReference(std::uint32_t durationMs, DefinitiveInputReference::CancelCallback cancel,
+                                                          DefinitiveInputReference::PublishCallback publish)
+{
+    // Surface presentation is explicit and remains separate from the proven
+    // offscreen workload and every native frame observation contract.
+    DefinitiveInputReference::Request request{durationMs, cancel, publish};
+    request.guiSurface = true;
     return g_isDefinitiveProcessCandidate && DefinitiveInputReference::Configure(request) ? 1u : 0u;
 }
 #endif

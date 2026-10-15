@@ -752,6 +752,30 @@ namespace mta::game_de
             state.factsMask |= 8;
             return S_OK;
         }
+        bool CaptureSwapchainWindow(IDXGISwapChain3* chain, DeviceWindowCandidate& output) noexcept
+        {
+            __try
+            {
+                DXGI_SWAP_CHAIN_DESC description{};
+                // A composition child belongs to the game's actual top-level
+                // HWND, not an inferred viewport pointer or a foreign window.
+                // This opt-in query does not change ordinary API6/V1 COM work.
+                if (!chain || FAILED(chain->GetDesc(&description)) || description.Windowed != TRUE || !description.OutputWindow ||
+                    !IsWindow(description.OutputWindow))
+                    return false;
+                DWORD process = 0;
+                if (!GetWindowThreadProcessId(description.OutputWindow, &process) || process != GetCurrentProcessId() ||
+                    GetAncestor(description.OutputWindow, GA_ROOT) != description.OutputWindow)
+                    return false;
+                output.window = description.OutputWindow;
+                output.windowed = 1;
+                return true;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                return false;
+            }
+        }
         class Queries final : public FrameBoundaryQueries
         {
         public:
@@ -766,6 +790,7 @@ namespace mta::game_de
                 queueDevice = nullptr;
                 return device;
             }
+            bool         CaptureDeviceWindowCandidate(DeviceWindowCandidate& output) noexcept override { return CaptureSwapchainWindow(chain, output); }
             std::int32_t Execute(Stage stage, FrameBoundaryObservationState& state) override
             {
                 switch (stage)
@@ -1027,7 +1052,10 @@ namespace mta::game_de
                         selected->deviceReserved = true;
                         candidate = &selected->deviceCandidate;
                     }
-                    selected->cleanupFailed = !RunFrameBoundaryQueries(queries, state, trace, candidate) || selected->cleanupFailed;
+                    selected->cleanupFailed =
+                        !RunFrameBoundaryQueries(queries, state, trace, candidate,
+                                                 candidate && selected->captureDeviceWindow ? &selected->deviceWindowCandidate : nullptr) ||
+                        selected->cleanupFailed;
                     if (selected->cleanupFailed)
                     {
                         runtime.armed.store(false);
@@ -1037,7 +1065,7 @@ namespace mta::game_de
                     else if (state.status == static_cast<unsigned>(BoundaryStatus::ObservedCoherent))
                     {
                         // Final Release may run arbitrary foreign code. Check
-                        // borrowed roots again after every local ref is gone.
+                        // borrowed roots again after query-local releases complete.
                         queries.MarkAfterCloseReadback();
                         const auto hr = Execute(queries, Stage::RootReadback, state, trace);
                         if (hr != S_OK)
@@ -1215,7 +1243,7 @@ namespace mta::game_de
         return boundary_detail::Release(owned);
     }
     bool RunFrameBoundaryQueries(FrameBoundaryQueries& queries, FrameBoundaryObservationState& state, RenderRootsDiagnosticV1* trace,
-                                 ID3D12Device** deviceCandidate) noexcept
+                                 ID3D12Device** deviceCandidate, DeviceWindowCandidate* windowCandidate) noexcept
     {
         using namespace boundary_detail;
         state.status = static_cast<unsigned>(BoundaryStatus::QueryFailed);
@@ -1240,7 +1268,8 @@ namespace mta::game_de
         // The canonical device is already strongly held by these queries. Move
         // that one ref only after all pre-close checks; never AddRef a raw root.
         // The enclosing callback owns it through the post-close/original gates.
-        if (deviceCandidate && state.status == static_cast<unsigned>(BoundaryStatus::ObservedCoherent))
+        if (deviceCandidate && state.status == static_cast<unsigned>(BoundaryStatus::ObservedCoherent) &&
+            (!windowCandidate || queries.CaptureDeviceWindowCandidate(*windowCandidate)))
             *deviceCandidate = queries.DetachDeviceCandidate();
         if (!Close(queries))
         {
@@ -1363,8 +1392,8 @@ namespace mta::game_de
         return true;
     }
     void EnterFrameBoundaryScope(FrameBoundaryScope& selected, std::uintptr_t image, void* viewport, std::uint32_t callbackThread,
-                                 const CustomPresentClassificationState& custom, void (*cleanupFailure)() noexcept,
-                                 bool (*reserveDeviceCandidate)() noexcept) noexcept
+                                 const CustomPresentClassificationState& custom, void (*cleanupFailure)() noexcept, bool (*reserveDeviceCandidate)() noexcept,
+                                 bool                                    captureDeviceWindow) noexcept
     {
         using namespace boundary_detail;
         selected.image = image;
@@ -1373,6 +1402,7 @@ namespace mta::game_de
         selected.epoch = runtime.epoch.load();
         selected.cleanupFailure = cleanupFailure;
         selected.reserveDeviceCandidate = reserveDeviceCandidate;
+        selected.captureDeviceWindow = captureDeviceWindow;
         selected.knownPresenter = custom.status == static_cast<unsigned>(CustomPresentClassificationStatus::KnownNativePresenter);
         selected.diagnostic = runtime.preparation;
         if (runtime.nativeDispatch)

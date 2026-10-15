@@ -445,6 +445,23 @@ std::uint32_t DE_CoreGuiStartupRead(std::uint32_t component)
     return ControllerAccessAllowed() ? coreStartup.ReadGuiStartup(component) : 0;
 }
 
+std::uint32_t DE_CoreGuiSurfaceApiVersion()
+{
+    return DefinitiveGuiSurfaceReference::ApiVersion;
+}
+int DE_CoreGuiSurfaceBegin()
+{
+    return ControllerAccessAllowed() && !movementAdapter && !client && coreStartup.BeginGuiSurfaceReference(&moduleAnchor) ? 1 : 0;
+}
+int DE_CoreGuiSurfaceCapture()
+{
+    return ControllerAccessAllowed() && coreStartup.CaptureGuiSurface() ? 1 : 0;
+}
+std::uint32_t DE_CoreGuiSurfaceRead(std::uint32_t component)
+{
+    return ControllerAccessAllowed() ? coreStartup.ReadGuiSurface(component) : 0;
+}
+
 int DE_Pump()
 {
     try

@@ -15,7 +15,7 @@ $developerCommand = Join-Path $visualStudio 'Common7/Tools/VsDevCmd.bat'
 $outputRoot = Join-Path $taskRoot ('Build/definitive-game-adapter-host/' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
 $sourceNames = @('Client/core/CGameAdapterModule.h', 'Client/core/CGameAdapterModule.cpp',
-    'Client/sdk/game/CGameAdapter.h', 'Client/sdk/game/CGameRenderObservation.h', 'Client/sdk/game/CGameRenderEndpointDiagnostic.h', 'Client/sdk/game/CGameRenderSetupDiagnostic.h', 'Client/sdk/game/CGameRenderRootsDiagnostic.h', 'Client/sdk/game/CGameRenderDeviceLease.h', 'Shared/sdk/CControllerState.h',
+    'Client/sdk/game/CGameAdapter.h', 'Client/sdk/game/CGameRenderObservation.h', 'Client/sdk/game/CGameRenderEndpointDiagnostic.h', 'Client/sdk/game/CGameRenderSetupDiagnostic.h', 'Client/sdk/game/CGameRenderRootsDiagnostic.h', 'Client/sdk/game/CGameRenderDeviceLease.h', 'Client/sdk/game/CGameRenderDeviceWindowLease.h', 'Shared/sdk/CControllerState.h',
     'Shared/sdk/CControllerActions.h', 'Shared/sdk/CControlStateSynthesis.h',
     'Tests/definitive/MtaGameAdapterHostTests.cpp', 'Tests/definitive/test_mta_game_adapter_host.ps1')
 $sourceHashes = @($sourceNames | ForEach-Object {
@@ -167,7 +167,10 @@ foreach ($architecture in @('x86', 'x64')) {
                 ('/I' + (Join-Path $taskRoot 'Shared/sdk')), ('/I' + (Join-Path $taskRoot 'Client/sdk')),
                 (Join-Path $PSScriptRoot 'MtaGameAdapterHostTests.cpp'), ('/Fo' + (Join-Path $outputDirectory "render-v6-$mode.obj")), ('/Fe' + $renderFixture),
                 '/link', '/EXPORT:CreateGameAdapter', '/EXPORT:CreateGameRenderObservation', '/EXPORT:CreateGameRenderObservationV2', '/EXPORT:CreateGameRenderObservationV3', '/EXPORT:CreateGameRenderObservationV4', '/EXPORT:CreateGameRenderObservationV5', '/EXPORT:CreateGameRenderObservationV6')
-            if ($mode -ne 6) { $renderArguments += @('/EXPORT:ReadGameRenderEndpointDiagnosticV2', '/EXPORT:ReadGameRenderSetupDiagnosticV1', '/EXPORT:ReadGameRenderRootsDiagnosticV1', '/EXPORT:RequestGameRenderDeviceLeaseV1', '/EXPORT:TakeGameRenderDeviceLeaseV1') }
+            if ($mode -ne 6) {
+                $renderArguments += @('/EXPORT:ReadGameRenderEndpointDiagnosticV2', '/EXPORT:ReadGameRenderSetupDiagnosticV1', '/EXPORT:ReadGameRenderRootsDiagnosticV1', '/EXPORT:RequestGameRenderDeviceLeaseV1', '/EXPORT:TakeGameRenderDeviceLeaseV1', '/EXPORT:RequestGameRenderDeviceWindowLeaseV2')
+                if ($mode -eq 7) { $renderArguments = @('/DMTA_TEST_DEVICE_WINDOW_MISSING_TAKE=1') + $renderArguments } else { $renderArguments += '/EXPORT:TakeGameRenderDeviceWindowLeaseV2' }
+            }
             $renderOutput = @(& $compiler @renderArguments 2>&1)
             $renderExit = $LASTEXITCODE
             $renderLog = Join-Path $outputDirectory "render-v6-$mode-compile.log"

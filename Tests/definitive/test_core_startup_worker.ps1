@@ -18,7 +18,7 @@ $outputRoot = Join-Path $repositoryRoot ('Build/mta-core-startup-worker/' + (Get
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
 function Hash([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 $sourceNames = @('Client/definitive/CoreStartupReference.h','Client/definitive/CoreStartupReference.cpp',
-    'Client/core/DefinitiveInputReference.h','Client/core/DefinitiveMovementReference.h','Client/core/DefinitiveRenderReference.h','Client/core/DefinitiveGuiStartupReference.h',
+    'Client/core/DefinitiveInputReference.h','Client/core/DefinitiveMovementReference.h','Client/core/DefinitiveRenderReference.h','Client/core/DefinitiveGuiStartupReference.h','Client/core/DefinitiveGuiSurfaceReference.h',
     'Tests/definitive/CoreStartupReferenceTests.cpp','Tests/definitive/CoreStartupFixture.cpp','Tests/definitive/test_core_startup_worker.ps1')
 $sourceHashes = [ordered]@{}
 foreach ($name in $sourceNames) {
@@ -72,9 +72,11 @@ try {
     $normalFixture = Join-Path $fixtureDirectory 'CoreFixture.dll'
     $missingFixture = Join-Path $fixtureDirectory 'CoreMissingExport.dll'
     $missingGuiFixture = Join-Path $fixtureDirectory 'CoreMissingGuiExport.dll'
+    $missingSurfaceFixture = Join-Path $fixtureDirectory 'CoreMissingSurfaceExport.dll'
     Compile 'fixture-normal' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $normalFixture @('/LD')
     Compile 'fixture-missing-export' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $missingFixture @('/LD','/DCORE_FIXTURE_MISSING_EXPORT=1')
     Compile 'fixture-missing-gui-export' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $missingGuiFixture @('/LD','/DCORE_FIXTURE_MISSING_GUI_EXPORT=1')
+    Compile 'fixture-missing-surface-export' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $missingSurfaceFixture @('/LD','/DCORE_FIXTURE_MISSING_SURFACE_EXPORT=1')
     $syntheticRoot = Join-Path $outputRoot 'synthetic-host'
     $hostPath = Join-Path $syntheticRoot 'SanAndreas.exe'
     Compile 'production-worker-host' @((Join-Path $PSScriptRoot 'CoreStartupReferenceTests.cpp'),(Join-Path $repositoryRoot 'Client/definitive/CoreStartupReference.cpp')) $hostPath @('/DMTA_TEST_CORE_STARTUP_ACCESS=1')
@@ -113,7 +115,11 @@ try {
                         'render-v6','render-v6-cancel','render-v6-deadline','render-v6-missing','render-v6-query-failed','render-v6-unknown-presenter',
                         'render-v6-cross-route','render-v6-mixed-version','render-v6-wrong-mask','render-v6-cache-contention',
                         'gui','gui-workload-failed','gui-cancel','gui-wrong-api','gui-config-refused','gui-mixed-version','gui-cache-contention',
-                        'gui-deadline','gui-crosswire','gui-cleanup-incomplete','gui-retained','gui-unpinned','gui-device-release-fault','gui-missing-export')) {
+                        'gui-deadline','gui-crosswire','gui-cleanup-incomplete','gui-retained','gui-unpinned','gui-device-release-fault','gui-missing-export',
+                        'surface','surface-workload-failed','surface-cancel','surface-wrong-api','surface-config-refused','surface-mixed-version','surface-cache-contention',
+                        'surface-deadline','surface-crosswire','surface-cleanup-incomplete','surface-retained','surface-unpinned','surface-device-release-fault','surface-missing-export',
+                        'surface-child-retained','surface-queue-retained','surface-surface-retained','surface-window-incomplete','surface-composition-incomplete','surface-class-incomplete',
+                        'surface-observer-incomplete','surface-gui-incomplete','surface-shutdown-busy','surface-resize-pending')) {
         $movementRoot = Join-Path $outputRoot ($mode + '-host')
         New-Item -ItemType Directory -Path $movementRoot -Force | Out-Null
         Copy-Item -LiteralPath $hostPath -Destination (Join-Path $movementRoot 'SanAndreas.exe')
@@ -121,7 +127,7 @@ try {
         # or native methods. The controlled Core tests worker lifetime only.
         Copy-Item -LiteralPath $GameDeDll -Destination (Join-Path $movementRoot 'game_de.dll')
         if ((Hash (Join-Path $movementRoot 'game_de.dll')) -ne $ExpectedGameDeSha256.ToLowerInvariant()) { throw 'Movement PIN fixture backend hash differs.' }
-        $selectedFixture = if ($mode -eq 'gui-missing-export') { $missingGuiFixture } else { $normalFixture }
+        $selectedFixture = if ($mode -eq 'gui-missing-export') { $missingGuiFixture } elseif ($mode -eq 'surface-missing-export') { $missingSurfaceFixture } else { $normalFixture }
         $runs += Run-Host $mode $movementRoot @($movementRoot,$mode,$selectedFixture)
     }
 } catch { $failure = $_.Exception.Message }
@@ -129,8 +135,9 @@ $unchanged = $true
 foreach ($name in $sourceNames) { if ((Hash (Join-Path $repositoryRoot $name)) -ne $sourceHashes[$name]) { $unchanged=$false } }
 foreach ($artifact in $artifacts) { if ((Hash $artifact.source) -ne $artifact.sha256) { $unchanged=$false } }
 $record = [ordered]@{
-    recorded_at=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=($null -eq $failure -and $unchanged -and $runs.Count -eq 65);
+    recorded_at=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=($null -eq $failure -and $unchanged -and $runs.Count -eq 89);
     failure=$failure;source_hashes=$sourceHashes;sources_unchanged=$unchanged;compiles=$compiles;runs=$runs;normal_artifacts=$artifacts;
+    historical_cases_expected=65;surface_cases_expected=24;
     fixture_executable_is_game=$false;game_launched=$false;game_memory_read=$false;game_process_attached=$false;game_files_changed=$false;
     synthetic_core_is_mta=$false;full_mta_boot_verified=$false;engine_input_write_verified=$false;
     scope='Actual production async worker, controlled non-MTA loader-lock fixtures, and normal Core exact-image rejection in owned nonclassic hosts'

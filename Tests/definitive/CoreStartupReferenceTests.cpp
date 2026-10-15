@@ -19,6 +19,9 @@ static_assert(sizeof(DefinitiveGuiStartupReference::Snapshot) == 64 * sizeof(std
 static_assert(DefinitiveGuiStartupReference::BackendPinnedExpected == 57);
 static_assert(DefinitiveGuiStartupReference::LeaseMetadataValid == 58);
 static_assert(DefinitiveGuiStartupReference::DeviceReleaseFault == 59);
+static_assert(DefinitiveGuiSurfaceReference::ApiVersion == 1 && DefinitiveGuiSurfaceReference::FieldCount == 96);
+static_assert(sizeof(DefinitiveGuiSurfaceReference::Snapshot) == 96 * sizeof(std::uint32_t));
+static_assert(DefinitiveGuiSurfaceReference::ChildRetained == 75 && DefinitiveGuiSurfaceReference::ClassUnregistered == 80);
 
 namespace deonline
 {
@@ -29,6 +32,14 @@ namespace deonline
         static std::uint32_t PublishedGuiPhase(const CoreStartupReference& worker) noexcept
         {
             return worker.publishedGui[DefinitiveGuiStartupReference::Phase];
+        }
+        static std::uint32_t PublishedSurfacePhase(const CoreStartupReference& worker) noexcept
+        {
+            return worker.publishedGuiSurface[DefinitiveGuiStartupReference::Phase];
+        }
+        static bool ConflictingSurfaceStart(CoreStartupReference& worker, const void* address, unsigned mode) noexcept
+        {
+            return worker.Start(address, true, mode == 0, mode == 1, 2, 6, mode == 2, true);
         }
         static bool ConflictingGuiStart(CoreStartupReference& worker, const void* address, bool movement) noexcept
         {
@@ -98,9 +109,9 @@ namespace
             Set(L"MTA_CORE_FIXTURE_RELEASE", releaseName);
             Set(L"MTA_CORE_FIXTURE_INPUT_RELEASE", inputReleaseName);
             Set(L"MTA_CORE_FIXTURE_MOVEMENT_RELEASE", movementReleaseName);
-            for (const auto* name :
-                 {L"MTA_CORE_FIXTURE_DELAY_MS", L"MTA_CORE_FIXTURE_BAD_VERSION", L"MTA_CORE_FIXTURE_BAD_STATE", L"MTA_CORE_FIXTURE_BAD_INITIALIZE",
-                  L"MTA_CORE_FIXTURE_FAIL_ATTACH", L"MTA_CORE_FIXTURE_INPUT_MODE", L"MTA_CORE_FIXTURE_RENDER_MODE", L"MTA_CORE_FIXTURE_GUI_MODE"})
+            for (const auto* name : {L"MTA_CORE_FIXTURE_DELAY_MS", L"MTA_CORE_FIXTURE_BAD_VERSION", L"MTA_CORE_FIXTURE_BAD_STATE",
+                                     L"MTA_CORE_FIXTURE_BAD_INITIALIZE", L"MTA_CORE_FIXTURE_FAIL_ATTACH", L"MTA_CORE_FIXTURE_INPUT_MODE",
+                                     L"MTA_CORE_FIXTURE_RENDER_MODE", L"MTA_CORE_FIXTURE_GUI_MODE", L"MTA_CORE_FIXTURE_SURFACE_MODE"})
                 Set(name, L"0");
         }
         ~Fixture()
@@ -272,6 +283,158 @@ namespace
               "a newly allowed ordinary job clears GUI captured/published availability before any new work");
         Wait(worker);
     }
+    void TestGuiSurfaceWorker(deonline::CoreStartupReference& worker, const std::filesystem::path& root, const std::wstring& mode,
+                              const std::filesystem::path& coreFixture)
+    {
+        using namespace DefinitiveGuiStartupReference;
+        const unsigned scenario = mode == L"surface-workload-failed"          ? 1u
+                                  : mode == L"surface-cancel"                 ? 2u
+                                  : mode == L"surface-wrong-api"              ? 3u
+                                  : mode == L"surface-config-refused"         ? 4u
+                                  : mode == L"surface-mixed-version"          ? 5u
+                                  : mode == L"surface-cache-contention"       ? 6u
+                                  : mode == L"surface-deadline"               ? 7u
+                                  : mode == L"surface-crosswire"              ? 8u
+                                  : mode == L"surface-cleanup-incomplete"     ? 9u
+                                  : mode == L"surface-retained"               ? 10u
+                                  : mode == L"surface-unpinned"               ? 11u
+                                  : mode == L"surface-device-release-fault"   ? 12u
+                                  : mode == L"surface-child-retained"         ? 13u
+                                  : mode == L"surface-queue-retained"         ? 14u
+                                  : mode == L"surface-surface-retained"       ? 15u
+                                  : mode == L"surface-window-incomplete"      ? 16u
+                                  : mode == L"surface-composition-incomplete" ? 17u
+                                  : mode == L"surface-class-incomplete"       ? 18u
+                                  : mode == L"surface-observer-incomplete"    ? 19u
+                                  : mode == L"surface-gui-incomplete"         ? 20u
+                                  : mode == L"surface-shutdown-busy"          ? 21u
+                                  : mode == L"surface-resize-pending"         ? 22u
+                                                                              : 0u;
+        Fixture        fixture(160 + scenario);
+        CopyCore(coreFixture, root);
+        Set(L"MTA_CORE_FIXTURE_SURFACE_MODE", std::to_wstring(scenario));
+        Check(!worker.CaptureGuiSurface() && !worker.ReadGuiSurface(Version), "fresh surface cache is unavailable and neutral");
+        Check(!deonline::CoreStartupReferenceTestAccess::ConflictingSurfaceStart(worker, &anchor, 0) &&
+                  !deonline::CoreStartupReferenceTestAccess::ConflictingSurfaceStart(worker, &anchor, 1) &&
+                  !deonline::CoreStartupReferenceTestAccess::ConflictingSurfaceStart(worker, &anchor, 2),
+              "actual Start rejects mixed surface/movement and surface/render flags before creating a worker");
+        Check(Fast([&] { return worker.BeginGuiSurfaceReference(&anchor); }), "explicit surface worker job must queue without loader work on script thread");
+        Check(WaitForSingleObject(fixture.entered, 5000) == WAIT_OBJECT_0, "surface fixture loader did not enter on worker");
+        Check(!worker.Begin(&anchor) && !worker.BeginInputReference(&anchor) && !worker.BeginMovementReference(&anchor) &&
+                  !worker.BeginRenderReferenceV6(&anchor, 2) && !worker.BeginGuiSurfaceReference(&anchor) && !worker.BeginGuiStartupReference(&anchor),
+              "surface job excludes ordinary, input, movement and every render lifetime");
+        SetEvent(fixture.release);
+        const bool configurationFailure = scenario == 3 || scenario == 4 || mode == L"surface-missing-export";
+        if (configurationFailure)
+        {
+            Wait(worker);
+            Check(worker.Read(16) == (scenario == 4 ? 14u : 13u) && !worker.Read(17) && !worker.CaptureGuiSurface() && !worker.ReadGuiSurface(Version),
+                  "missing/wrong-version/refused surface exports never substitute an old configuration or invent a cache");
+            Check(!fixture.counters[9] && fixture.counters[2] == 0 && worker.Read(13) == 1 && worker.Read(15) == 0,
+                  "surface configuration refusal unloads its unused owned Core with no worker publication");
+            return;
+        }
+        auto deadline = GetTickCount64() + 10000;
+        while (!Fast([&] { return worker.CaptureGuiSurface(); }))
+        {
+            Check(worker.Poll() == 0 && GetTickCount64() < deadline, "surface fixture failed to publish its first POD snapshot");
+            Sleep(5);
+        }
+        Check(worker.ReadGuiSurface(Version) == 1 && worker.ReadGuiSurface(Phase) == 1 && worker.ReadGuiSurface(Sequence) == 1 &&
+                  worker.ReadGuiSurface(LeaseGenerationHigh) == 2 && worker.ReadGuiSurface(AcceptedSnapshotsHigh) == 1 &&
+                  worker.ReadGuiSurface(DispatchEntriesHigh) == 1 && worker.ReadGuiSurface(SourceProfile) == 2 &&
+                  worker.ReadGuiSurface(LeaseMetadataValid) == 1,
+              "surface96 captures distinct split-counter provenance without reusing API6 or input fields");
+        Check(!worker.CaptureInput() && !worker.ReadInput(0) && !worker.CaptureMovement() && !worker.ReadMovement(0) && !worker.CaptureRender() &&
+                  !worker.CaptureRenderV2() && !worker.CaptureRenderV3() && !worker.CaptureRenderV4() && !worker.CaptureRenderV5() &&
+                  !worker.CaptureRenderV6() && !worker.ReadRenderV6(0) && !worker.CaptureGuiStartup() && !worker.ReadGuiStartup(0),
+              "surface POD publication never appears through an older input, movement or renderer cache");
+        bool        foreignRejected = false;
+        std::thread foreign(
+            [&]
+            {
+                foreignRejected = !worker.CaptureGuiSurface() && !worker.ReadGuiSurface(0) && !worker.BeginGuiSurfaceReference(&anchor) && worker.Poll() == -1;
+            });
+        foreign.join();
+        Check(foreignRejected, "surface capture/read/Begin/completion remain bound to the script owner thread");
+        if (scenario == 2)
+            Check(Fast([&] { return worker.Cancel(); }), "surface cancellation remains nonblocking on script thread");
+        SRWLOCK* heldCache = scenario == 6 ? &deonline::CoreStartupReferenceTestAccess::InputLock(worker) : nullptr;
+        if (heldCache)
+            AcquireSRWLockShared(heldCache);
+        SetEvent(fixture.inputRelease);
+        if (heldCache)
+        {
+            const auto started = GetTickCount64();
+            while (!fixture.counters[21] && GetTickCount64() - started < 500)
+                Sleep(1);
+            const bool returned = fixture.counters[21] != 0;
+            const bool dropped = deonline::CoreStartupReferenceTestAccess::PublishedSurfacePhase(worker) == 1;
+            ReleaseSRWLockShared(heldCache);
+            Check(returned && dropped && worker.ReadGuiSurface(Phase) == 1,
+                  "actual surface Phase3/CleanupPending publication drops under cache contention instead of blocking cleanup");
+        }
+        while (worker.ReadGuiSurface(Phase) != 3)
+        {
+            Check(worker.Poll() == 0 && GetTickCount64() < deadline, "surface cleanup must retain its worker and Core owner");
+            worker.CaptureGuiSurface();
+            Sleep(5);
+        }
+        Check(worker.ReadGuiSurface(CleanupPending) == 1 && worker.ReadGuiSurface(DeviceRetained) == 1 && GetModuleHandleW(L"core.dll"),
+              "pending surface cleanup retains ownership while final success is unavailable");
+        Check(worker.ReadGuiSurface(DefinitiveGuiSurfaceReference::ChildRetained) == 1 &&
+                  worker.ReadGuiSurface(DefinitiveGuiSurfaceReference::QueueRetained) == 1 &&
+                  worker.ReadGuiSurface(DefinitiveGuiSurfaceReference::SurfaceRetained) == 1,
+              "surface phase3 keeps HWND, own queue and composition retention separate from GUI64 fields");
+        if (scenario == 7)
+        {
+            while (!worker.ReadGuiSurface(CleanupDeadlineExceeded))
+            {
+                Check(worker.Poll() == 0 && GetTickCount64() < deadline, "surface deadline must not authorize unsafe worker unload");
+                worker.CaptureGuiSurface();
+                Sleep(10);
+            }
+            Check(GetModuleHandleW(L"core.dll") != nullptr, "surface deadline preserves Core until actual cleanup completes");
+        }
+        SetEvent(fixture.movementRelease);
+        Wait(worker);
+        Check(worker.ReadGuiSurface(Phase) == 3, "worker completion cannot mutate an owner-captured surface sample");
+        Check(worker.CaptureGuiSurface() && worker.ReadGuiSurface(Phase) == 2 && worker.ReadGuiSurface(CleanupPending) == 0 &&
+                  worker.ReadGuiSurface(ObserverPendingCleanup) == 0 && worker.ReadGuiSurface(SessionRetained) == 0 &&
+                  worker.ReadGuiSurface(DeviceRetained) == 0,
+              "reliable final surface publication survives worker completion and Core unload");
+        const bool malformed = scenario == 5 || scenario == 7 || scenario == 9 || scenario == 10 || scenario == 12 || scenario >= 13;
+        const auto expectedError = scenario == 2 ? 12u : malformed ? 15u : 0u;
+        Check(worker.Read(16) == expectedError && worker.Read(17) == (expectedError ? 0u : 1u) && worker.Read(13) == 1 &&
+                  worker.Read(15) == (scenario == 11 ? 0u : 1u) && worker.ReadGuiSurface(BackendPinnedExpected) == worker.Read(15),
+              "surface lifecycle result validates explicit backend pin and cleanup independently of workload outcome");
+        Check(worker.ReadGuiSurface(WorkloadComplete) == 1 && worker.ReadGuiSurface(WorkloadSucceeded) == (scenario == 1 ? 0u : 1u) &&
+                  worker.ReadGuiSurface(WorkloadHresult) == (scenario == 1 ? static_cast<std::uint32_t>(E_FAIL) : 0u),
+              "a failed surface workload with complete cleanup remains distinguishable from worker lifecycle failure");
+        Check(!worker.ReadGuiSurface(NativeQueueCommandsIssued) && !worker.ReadGuiSurface(NativeBackbufferTouched),
+              "surface fixture transport never claims native queue commands or backbuffer access");
+        Check(worker.ReadGuiSurface(DefinitiveGuiSurfaceReference::ChildRetained) == (scenario == 13 ? 1u : 0u) &&
+                  worker.ReadGuiSurface(DefinitiveGuiSurfaceReference::QueueRetained) == (scenario == 14 ? 1u : 0u) &&
+                  worker.ReadGuiSurface(DefinitiveGuiSurfaceReference::SurfaceRetained) == (scenario == 15 ? 1u : 0u) &&
+                  worker.ReadGuiSurface(DefinitiveGuiSurfaceReference::WindowCleanupComplete) == (scenario == 16 ? 0u : 1u) &&
+                  worker.ReadGuiSurface(DefinitiveGuiSurfaceReference::CompositionCleanupComplete) == (scenario == 17 ? 0u : 1u) &&
+                  worker.ReadGuiSurface(DefinitiveGuiSurfaceReference::ClassUnregistered) == (scenario == 18 ? 0u : 1u),
+              "surface-only retained HWND/queue/composition and all three cleanup bits remain independently authoritative");
+        Check(worker.ReadGuiSurface(ObserverEnded) == (scenario == 19 ? 0u : 1u) && worker.ReadGuiSurface(GuiCleanupComplete) == (scenario == 20 ? 0u : 1u) &&
+                  worker.ReadGuiSurface(GuiShutdownStatus) == (scenario == 21 ? 1u : 0u) &&
+                  worker.ReadGuiSurface(DefinitiveGuiSurfaceReference::ResizePending) == (scenario == 22 ? 1u : 0u),
+              "surface completion requires ended observer, completed GUI shutdown, Ok status and no pending resize");
+        Check(worker.ReadGuiSurface(LeaseMetadataValid) == 1 && worker.ReadGuiSurface(DeviceReleaseFault) == (scenario == 12 ? 1u : 0u),
+              "device Release fault remains visible and prevents lifecycle success independently of cleared retention bits");
+        for (unsigned field = 87; field < DefinitiveGuiSurfaceReference::FieldCount; ++field)
+            Check(worker.ReadGuiSurface(field) == 0, "surface96 reserved tail remains neutral");
+        Check(!worker.ReadGuiSurface(DefinitiveGuiSurfaceReference::FieldCount) && !worker.ReadGuiSurface(0xffffffffu) && fixture.counters[2] == 0 &&
+                  fixture.counters[1] == fixture.counters[0],
+              "surface bounds are neutral and configure/publication/unload all remain on worker thread");
+        Check(worker.Begin(&anchor) && !worker.CaptureGuiSurface() && !worker.ReadGuiSurface(Version),
+              "a newly allowed ordinary job clears surface captured/published availability before any new work");
+        Wait(worker);
+    }
 }
 
 int wmain(int argc, wchar_t** argv)
@@ -291,7 +454,12 @@ int wmain(int argc, wchar_t** argv)
         Check(!worker.Begin(nullptr), "null anchor must be rejected");
         for (unsigned field = 0; field < 20; ++field)
             Check(worker.Read(field) == 0, "idle cache must be neutral");
-        if (std::wstring(argv[2]).find(L"gui") == 0)
+        if (std::wstring(argv[2]).find(L"surface") == 0)
+        {
+            Check(argc == 4, "surface worker fixture requires its controlled Core DLL");
+            TestGuiSurfaceWorker(worker, root, argv[2], argv[3]);
+        }
+        else if (std::wstring(argv[2]).find(L"gui") == 0)
         {
             Check(argc == 4, "GUI worker fixture requires its controlled Core DLL");
             TestGuiWorker(worker, root, argv[2], argv[3]);

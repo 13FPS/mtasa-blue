@@ -370,6 +370,61 @@ bool OwnedNativeDispatchCleanup(bool& pending)
     runtime.nativeDispatch = runtime.queryFrameBoundary = true;
     return ChangeHooks(false, pending);
 }
+void* OwnedNativeDispatchWrapperHook()
+{
+    return reinterpret_cast<void*>(&mta::game_de::HookPresent);
+}
+bool OwnedNativeDispatchTransaction(bool install, std::uintptr_t wrapper, bool& pending)
+{
+    using namespace mta::game_de;
+    if (install)
+    {
+        Check(!runtime.hooked.load() && runtime.retainedSuspensions.empty() && !runtime.safetyHeldSuspensions && !runtime.inFlight.load() &&
+                  !FrameBoundaryInFlight(),
+              "complete API6 fixture begins without inherited hooks or holds");
+        // Only the private owned test advances past admission. The production
+        // Begin image/fingerprint gates are unchanged, and this code is never
+        // compiled into Game DE. No copied native function is ever invoked.
+        runtime.image = 0;
+        runtime.original = reinterpret_cast<PresentFunction>(wrapper);
+        runtime.producerThread = GetCurrentThreadId();
+        runtime.nativeDispatch = runtime.queryFrameBoundary = true;
+        runtime.active.store(false);
+        InitializeSetupDiagnostic(runtime.generation.load());
+    }
+    const bool result = ChangeHooks(install, pending);
+    if (result)
+        Check(runtime.hooked.load() == install && runtime.retainedSuspensions.empty() && !runtime.safetyHeldSuspensions && !runtime.inFlight.load() &&
+                  !FrameBoundaryInFlight() &&
+                  (install ? reinterpret_cast<std::uintptr_t>(runtime.original) != wrapper : reinterpret_cast<std::uintptr_t>(runtime.original) == wrapper),
+              "complete API6 transaction owns/restores native trampoline and balances every production suspension");
+    if (result && !install)
+    {
+        runtime.original = nullptr;
+        runtime.nativeDispatch = runtime.queryFrameBoundary = false;
+    }
+    return result;
+}
+void OwnedNativeDispatchSetupSnapshot(mta::game_de::RenderSetupDiagnosticV1& state)
+{
+    state = mta::game_de::runtime.setup;
+}
+bool OwnedNativeDispatchSetupRefusal(std::uintptr_t wrapper, bool afterHolds, mta::game_de::RenderSetupDiagnosticV1& state)
+{
+    using namespace mta::game_de;
+    const auto                    savedEntry = runtime.nextThread;
+    const auto                    savedImage = runtime.nextThreadImage;
+    std::array<unsigned char, 24> foreignEntry{};
+    if (!afterHolds)
+        runtime.nextThread = reinterpret_cast<NextThread>(foreignEntry.data());
+    bool       pending = false;
+    const bool installed = OwnedNativeDispatchTransaction(true, afterHolds ? 0 : wrapper, pending);
+    runtime.nextThread = savedEntry;
+    runtime.nextThreadImage = savedImage;
+    state = runtime.setup;
+    runtime.original = reinterpret_cast<PresentFunction>(wrapper);
+    return !installed && !pending && !runtime.hooked.load() && runtime.retainedSuspensions.empty() && !runtime.safetyHeldSuspensions;
+}
 bool OwnedNativeDispatchSafetyHeld()
 {
     using namespace mta::game_de;
@@ -538,6 +593,10 @@ int main(int argc, char** argv)
     unavailableDiagnostic.version = 99;
     Check(!owner.ReadEndpointDiagnostic(unavailableDiagnostic) && unavailableDiagnostic.version == 99,
           "wrong-image API5 has no separate endpoint diagnostic and preserves output");
+    RenderSetupDiagnosticV1 setupDiagnostic;
+    setupDiagnostic.version = 99;
+    Check(!owner.ReadSetupDiagnostic(setupDiagnostic) && setupDiagnostic.version == 99,
+          "pre-preparation wrong-image lease has no setup cache and preserves output");
 
     const auto image = reinterpret_cast<std::uintptr_t>(VirtualAlloc(nullptr, 0x5770000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
     Check(image != 0, "owned synthetic image allocation");
@@ -545,6 +604,29 @@ int main(int argc, char** argv)
     EnableOwnership(image, 2, 1);
     runtime.classifyCustomPresent = runtime.queryFrameBoundary = runtime.nativeDispatch = true;
     PrimeNativeDispatchDiagnostic(runtime.generation.load());
+    InitializeSetupDiagnostic(runtime.generation.load());
+    runtime.setupTracing = false;
+    Check(owner.ReadSetupDiagnostic(setupDiagnostic) && setupDiagnostic.version == 1 && setupDiagnostic.attempted == 1 &&
+              setupDiagnostic.stage == static_cast<unsigned>(RenderSetupStage::PrepareFrameBoundary),
+          "exact API6 producer reads its separate generation-owned setup cache");
+    {
+        ApiOperation            busyOperation;
+        RenderSetupDiagnosticV1 preserved;
+        std::memset(&preserved, 0xA5, sizeof(preserved));
+        const auto expected = preserved;
+        Check(busyOperation.acquired && !owner.ReadSetupDiagnostic(preserved) && std::memcmp(&preserved, &expected, sizeof(preserved)) == 0,
+              "busy generation operation refuses the setup getter without altering any output field");
+    }
+    bool        foreignSetupRejected = false;
+    std::thread foreignSetupReader(
+        [&]
+        {
+            RenderSetupDiagnosticV1 preserved;
+            preserved.version = 99;
+            foreignSetupRejected = !owner.ReadSetupDiagnostic(preserved) && preserved.version == 99;
+        });
+    foreignSetupReader.join();
+    Check(foreignSetupRejected, "foreign setup reader cannot access worker-owned scalars or alter its output");
     Check(HookPresent(viewport.data(), 1) && !HookPresent(viewport.data(), 0), "API6 native dispatch preserves forwarded native original results");
     owner.ReadState(state);
     Check(state.nativeDispatch.endpointProfileId == 2 && state.nativeDispatch.status == 2 && state.nativeDispatch.presentEntries == 2 &&
@@ -573,16 +655,34 @@ int main(int argc, char** argv)
     unavailableDiagnostic.version = 99;
     Check(!owner.ReadEndpointDiagnostic(unavailableDiagnostic) && unavailableDiagnostic.version == 99,
           "retained suspension refuses optional diagnostic untouched before either callback-shared lock");
+    setupDiagnostic.version = 99;
+    Check(!owner.ReadSetupDiagnostic(setupDiagnostic) && setupDiagnostic.version == 99,
+          "retained suspension refuses setup getter untouched without acquiring the held snapshot lock");
     runtime.inFlight.store(1);
     Check(!owner.Begin(RenderObservationRoute::D3D12, true, true, true, true), "held callback readback rejects a new generation without waiting for its lock");
     runtime.inFlight.store(0);
     runtime.retainedSuspensions.clear();
     runtime.accepted.store(3);
     ReleaseSRWLockExclusive(&runtime.snapshotLock);
+    runtime.safetyHeldSuspensions = true;
+    Check(!owner.ReadSetupDiagnostic(setupDiagnostic) && setupDiagnostic.version == 99,
+          "safety-held state alone also refuses setup getter without output changes");
+    runtime.safetyHeldSuspensions = false;
+    runtime.setupTracing = true;
+    SetupRefused(RenderSetupStage::NativeThreadStubMatch);
+    SetupRefused(RenderSetupStage::TransactionPeers, RenderSetupErrorDomain::Detours, 123);
+    FinishSetupChange(false, true);
     runtime.inFlight.store(1);
     Check(!owner.End(), "API6 native wrapper in flight retains its owner");
+    Check(owner.ReadSetupDiagnostic(setupDiagnostic) && setupDiagnostic.failureStage == static_cast<unsigned>(RenderSetupStage::NativeThreadStubMatch) &&
+              !setupDiagnostic.errorDomain && !setupDiagnostic.errorCode && setupDiagnostic.cleanupAttempted == 1 && !setupDiagnostic.cleanupComplete,
+          "busy End preserves first refusal/error while marking incomplete cleanup");
     runtime.inFlight.store(0);
     Check(owner.End(), "API6 fixture drains without a frame sink or GPU command");
+    Check(owner.ReadSetupDiagnostic(setupDiagnostic) && setupDiagnostic.stage == static_cast<unsigned>(RenderSetupStage::NativeThreadStubMatch) &&
+              setupDiagnostic.failureStage == setupDiagnostic.stage && setupDiagnostic.cleanupAttempted == 1 && setupDiagnostic.cleanupComplete == 1 &&
+              !setupDiagnostic.errorDomain && !setupDiagnostic.errorCode && !setupDiagnostic.installSucceeded,
+          "successful End keeps first setup refusal readable and changes only cleanup facts");
     const HANDLE lockedReady = CreateEventW(nullptr, TRUE, FALSE, nullptr), lockedRelease = CreateEventW(nullptr, TRUE, FALSE, nullptr),
                  lockedDone = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     Check(lockedReady && lockedRelease && lockedDone, "counted held-callback retry events");
@@ -1168,12 +1268,22 @@ int main(int argc, char** argv)
     HookPresent(viewport.data(), 1);
     Check(owner.End(), "direct callback cleanup");
     owner.ReadState(state);
-    const auto              oldGeneration = state.generation;
+    const auto oldGeneration = state.generation;
+    runtime.nativeDispatch = true;
+    InitializeSetupDiagnostic(oldGeneration);
+    runtime.setup.transactionCommitted = runtime.setup.hooksCommitted = 1;
+    FinishSetupChange(true, true);
+    Check(owner.ReadSetupDiagnostic(setupDiagnostic) && setupDiagnostic.installSucceeded == 1,
+          "owned getter fixture retains a completed previous-generation setup");
     NativeRenderObservation nextOwner;
     Check(!nextOwner.Begin(), "new owner still cannot admit wrong executable");
     unavailableDiagnostic.version = 99;
     Check(!owner.ReadEndpointDiagnostic(unavailableDiagnostic) && unavailableDiagnostic.version == 99,
           "retired observation cannot read a different generation's private diagnostic");
+    setupDiagnostic.version = 99;
+    Check(!owner.ReadSetupDiagnostic(setupDiagnostic) && setupDiagnostic.version == 99 && !nextOwner.ReadSetupDiagnostic(setupDiagnostic) &&
+              setupDiagnostic.version == 99 && !runtime.setup.version,
+          "new rejected Begin clears historical setup and neither old nor wrong-image lease exposes it");
     NativeRenderObservationState retired;
     owner.ReadState(retired);
     Check(retired.generation == oldGeneration && retired.acceptedSnapshots == state.acceptedSnapshots && retired.width == state.width,

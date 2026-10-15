@@ -16,6 +16,7 @@ $sourceNames = @('Client/game_de/NativeRenderObservation.h','Client/game_de/Nati
     'Tests/definitive/NativeRenderObservationTests.cpp','Tests/definitive/test_native_render_observation.ps1',
     'Client/sdk/game/CGameRenderObservation.h','Client/sdk/game/CGameAdapter.h',
     'Client/sdk/game/CGameRenderEndpointDiagnostic.h',
+    'Client/sdk/game/CGameRenderSetupDiagnostic.h',
     'Shared/sdk/CControllerState.h','Shared/sdk/CControlStateSynthesis.h','Shared/sdk/CControllerActions.h',
     'vendor/detours/4.0.1/src/detours.h','vendor/detours/4.0.1/src/detours.cpp','vendor/detours/4.0.1/src/modules.cpp',
     'vendor/detours/4.0.1/src/disasm.cpp','vendor/detours/4.0.1/src/image.cpp','vendor/detours/4.0.1/src/creatwth.cpp')

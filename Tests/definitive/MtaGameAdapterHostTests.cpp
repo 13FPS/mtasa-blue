@@ -116,6 +116,8 @@ namespace mta::game_de
         IGameRenderObservationV6* diagnosticLeaseV6 = nullptr;
         DWORD                     diagnosticOwnerThread = 0;
         std::uint32_t             diagnosticReads = 0;
+        std::uint32_t             setupGeneration = 0;
+        std::uint32_t             setupDiagnosticReads = 0, setupCleanupAttempted = 0, setupCleanupComplete = 0;
         void (*v6OperationObserver)() noexcept = nullptr;
         alignas(void*) unsigned char facadeIdentity[sizeof(void*)]{};
 
@@ -435,6 +437,9 @@ namespace mta::game_de
             Status End() noexcept override
             {
                 const auto status = observation.End();
+                ++setupEndCount;
+                setupCleanupAttempted = 1;
+                setupCleanupComplete = status == Status::Ok && !(MTA_TEST_RENDER_MODE == 5 && setupEndCount == 1) ? 1u : 0u;
                 if (v6OperationObserver)
                     v6OperationObserver();
                 return status;
@@ -473,6 +478,7 @@ namespace mta::game_de
 
         private:
             RenderFixtureV5 observation;
+            unsigned        setupEndCount = 0;
         };
     }
 
@@ -561,6 +567,11 @@ namespace mta::game_de
         if (apiVersion != RenderObservationApiVersionV6 || !owner || route != RenderObservationRoute::D3D12 || (fixtureCounters && fixtureCounters[13] == 3))
             return nullptr;
         diagnosticLeaseV6 = new (std::nothrow) RenderFixtureV6;
+        if (diagnosticLeaseV6)
+        {
+            ++setupGeneration;
+            setupCleanupAttempted = setupCleanupComplete = 0;
+        }
         diagnosticOwnerThread = GetCurrentThreadId();
         return diagnosticLeaseV6;
     }
@@ -588,6 +599,40 @@ namespace mta::game_de
         return Status::Ok;
     }
         #endif
+        #if MTA_TEST_RENDER_MODE != 6
+    extern "C" Status ReadGameRenderSetupDiagnosticV1(std::uint32_t version, IGameRenderObservationV6* lease, RenderSetupDiagnosticV1* output) noexcept
+    {
+        // Count every entry, including an invalid released lease, so the host
+        // can prove its final value cache makes no provider calls after Release.
+        ++setupDiagnosticReads;
+        if (version != RenderSetupDiagnosticVersionV1 || !lease || lease != diagnosticLeaseV6 || !output)
+            return Status::InvalidArgument;
+        if (GetCurrentThreadId() != diagnosticOwnerThread)
+            return Status::WrongThread;
+        // A retained provider can deny fresh setup evidence without permitting
+        // Core to reuse the previously copied generation as a current report.
+        if (fixtureCounters && fixtureCounters[13] == 4)
+            return Status::Unsupported;
+        RenderSetupDiagnosticV1 next;
+        next.version = MTA_TEST_RENDER_MODE == 8 ? 99u : 1u;
+        next.generationLow = setupGeneration;
+        next.attempted = 1;
+        next.failureStage = MTA_TEST_RENDER_MODE == 2 ? static_cast<std::uint32_t>(RenderSetupStage::NativeThreadStubMatch) : 0u;
+        next.stage = next.failureStage ? next.failureStage : static_cast<std::uint32_t>(RenderSetupStage::Complete);
+        next.initialThreads = MTA_TEST_RENDER_MODE == 2 ? 0u : 3u;
+        next.heldThreads = MTA_TEST_RENDER_MODE == 2 ? 0u : 3u;
+        next.stablePasses = MTA_TEST_RENDER_MODE == 2 ? 0u : 2u;
+        next.cleanupAttempted = setupCleanupAttempted;
+        next.cleanupComplete = setupCleanupComplete;
+        next.transactionCommitted = next.hooksCommitted = next.installSucceeded = MTA_TEST_RENDER_MODE == 2 ? 0u : 1u;
+        *output = next;
+        return Status::Ok;
+    }
+        #endif
+    extern "C" __declspec(dllexport) std::uint32_t GetFixtureSetupDiagnosticReadsV6() noexcept
+    {
+        return setupDiagnosticReads;
+    }
     extern "C" __declspec(dllexport) std::uint32_t GetFixtureDiagnosticReadsV6() noexcept
     {
         return diagnosticReads;
@@ -745,6 +790,10 @@ namespace
             endpointDiagnostic.version = 99;
             Check(!host.GetNativeRenderEndpointDiagnostic(endpointDiagnostic) && endpointDiagnostic.version == 99,
                   "actual wrong-image API6 exposes no diagnostic through its optional V2 export");
+            mta::game_de::RenderSetupDiagnosticV1 setupDiagnostic;
+            setupDiagnostic.version = 99;
+            Check(!host.GetNativeRenderSetupDiagnostic(setupDiagnostic) && setupDiagnostic.version == 99,
+                  "actual wrong-image API6 never admits a setup diagnostic cache");
             Check(host.EndNativeRenderObservation() && host.GetNativeRenderObservationState(dispatch) && !dispatch.base.base.base.base.base.active &&
                       !dispatch.base.base.base.base.base.pendingCleanup && !dispatch.nativeDispatch.presentEntries && !dispatch.base.boundary.presentEntries,
                   "actual API6 caches safe zero-query cleanup before releasing its larger lease");
@@ -1603,6 +1652,49 @@ namespace
         Check(!host.IsStarted() && !GetModuleHandleW(path.c_str()), "missing API6 leaves normal owner cleanup available");
     }
 
+    void TestSetupDiagnosticGeneration(CCoreInterface* owner, const std::wstring& path)
+    {
+        using namespace mta::game_de;
+        CGameAdapterModule host;
+        Check(host.Start(owner, path), "own setup-generation consumer fixture");
+        std::uint32_t counters[14]{};
+        using Configure = void (*)(std::uint32_t*) noexcept;
+        Configure  configure = nullptr;
+        const auto address = GetProcAddress(GetModuleHandleW(path.c_str()), "SetFacadeFixtureCounters");
+        std::memcpy(&configure, &address, sizeof(configure));
+        Check(configure != nullptr, "setup-generation provider exposes owned lifetime counters");
+        configure(counters);
+        RenderSetupDiagnosticV1 setup;
+        Check(host.BeginNativeRenderDispatchObservation(RenderObservationRoute::D3D12) && host.GetNativeRenderSetupDiagnostic(setup),
+              "first API6 setup generation is readable");
+        const auto firstGeneration = setup.generationLow;
+        Check(firstGeneration != 0 && host.EndNativeRenderObservation() && host.GetNativeRenderSetupDiagnostic(setup) && setup.generationLow == firstGeneration,
+              "clean End preserves the exact setup generation copied before Release");
+        Check(host.BeginNativeRenderFrameBoundaryObservation(RenderObservationRoute::D3D12), "new historical API5 lease is independently selectable");
+        setup.version = 77;
+        Check(!host.GetNativeRenderSetupDiagnostic(setup) && setup.version == 77,
+              "selecting an older API clears API6 setup evidence before its factory can return");
+        Check(host.EndNativeRenderObservation() && host.Reset(), "older lease ends before setup-generation reset");
+        setup.version = 77;
+        Check(!host.GetNativeRenderSetupDiagnostic(setup) && setup.version == 77, "Reset cannot expose the prior setup cache");
+        Check(host.BeginNativeRenderDispatchObservation(RenderObservationRoute::D3D12) && host.GetNativeRenderSetupDiagnostic(setup) &&
+                  setup.generationLow > firstGeneration,
+              "a later successful API6 lease publishes its own generation instead of reusing cached values");
+        Check(host.Reset(), "Reset safely ends and releases the later API6 lease");
+        setup.version = 77;
+        Check(!host.GetNativeRenderSetupDiagnostic(setup) && setup.version == 77, "second Reset clears the new setup generation too");
+        Check(host.BeginNativeRenderDispatchObservation(RenderObservationRoute::D3D12) && host.GetNativeRenderSetupDiagnostic(setup),
+              "prime an active setup report before a controlled final-read miss");
+        counters[13] = 4;
+        Check(host.EndNativeRenderObservation(), "an optional final setup read miss cannot block otherwise safe Release");
+        setup.version = 77;
+        Check(!host.GetNativeRenderSetupDiagnostic(setup) && setup.version == 77,
+              "final setup read miss drops pre-End cache instead of labeling stale cleanup fields as terminal evidence");
+        counters[13] = 0;
+        host.Stop();
+        Check(!host.IsStarted() && !GetModuleHandleW(path.c_str()), "setup-generation fixture unloads after safe cleanup");
+    }
+
     void TestRenderProviderV6(CCoreInterface* owner, const std::wstring& path, unsigned mode, const std::wstring& loaderProbePath)
     {
         using namespace mta::game_de;
@@ -1611,6 +1703,9 @@ namespace
         RenderEndpointDiagnosticV1 diagnostic;
         diagnostic.version = 77;
         Check(!host.GetNativeRenderEndpointDiagnostic(diagnostic) && diagnostic.version == 77, "endpoint diagnostics cannot invent a V6 lease before Begin");
+        RenderSetupDiagnosticV1 setup;
+        setup.version = 77;
+        Check(!host.GetNativeRenderSetupDiagnostic(setup) && setup.version == 77, "setup diagnostics cannot invent a V6 lease before Begin");
         std::uint32_t counters[14]{};
         using Configure = void (*)(std::uint32_t*) noexcept;
         Configure configure = nullptr;
@@ -1623,6 +1718,11 @@ namespace
         address = GetProcAddress(GetModuleHandleW(path.c_str()), "SetFixtureV6OperationObserver");
         std::memcpy(&observe, &address, sizeof(observe));
         Check(observe != nullptr, "owned API6 provider can mark the exact post-operation allocation boundary");
+        using SetupReads = std::uint32_t (*)() noexcept;
+        SetupReads setupReads = nullptr;
+        address = GetProcAddress(GetModuleHandleW(path.c_str()), "GetFixtureSetupDiagnosticReadsV6");
+        std::memcpy(&setupReads, &address, sizeof(setupReads));
+        Check(setupReads != nullptr, "owned API6 provider counts setup calls even after exact lease Release");
         using Factory = decltype(&CreateGameRenderObservationV6);
         Factory factory = nullptr;
         address = GetProcAddress(GetModuleHandleW(path.c_str()), "CreateGameRenderObservationV6");
@@ -1664,6 +1764,29 @@ namespace
         if (mode == 6)
             Check(!GetProcAddress(GetModuleHandleW(path.c_str()), "ReadGameRenderEndpointDiagnosticV2"),
                   "historical API6 fixture genuinely has no separate diagnostic export");
+        observedCoreAllocations.store(0);
+        observeCoreAllocations.store(true);
+        const bool copiedSetup = host.GetNativeRenderSetupDiagnostic(setup);
+        observeCoreAllocations.store(false);
+        Check(observedCoreAllocations.load() == 0 && copiedSetup == diagnosticAvailable &&
+                  (diagnosticAvailable
+                       ? setup.version == 1 && setup.generationLow == 1 && setup.attempted == 1 && !setup.cleanupAttempted && !setup.cleanupComplete &&
+                             setup.stage == (mode == 2 ? static_cast<std::uint32_t>(RenderSetupStage::NativeThreadStubMatch)
+                                                       : static_cast<std::uint32_t>(RenderSetupStage::Complete)) &&
+                             setup.failureStage == (mode == 2 ? static_cast<std::uint32_t>(RenderSetupStage::NativeThreadStubMatch) : 0u)
+                       : setup.version == 77),
+              "setup diagnostics survive failed Begin without consumer allocations, while missing/wrong-version outputs stay untouched");
+        if (mode == 6)
+            Check(!GetProcAddress(GetModuleHandleW(path.c_str()), "ReadGameRenderSetupDiagnosticV1"),
+                  "historical API6 provider genuinely omits the additive setup export");
+        if (diagnosticAvailable)
+        {
+            counters[13] = 4;
+            setup.version = 77;
+            Check(!host.GetNativeRenderSetupDiagnostic(setup) && setup.version == 77,
+                  "a retained provider's unavailable setup read cannot expose earlier cached evidence");
+            counters[13] = 0;
+        }
         if (mode == 1)
         {
             wchar_t enteredName[96]{}, resumeName[96]{}, timeoutName[96]{};
@@ -1680,6 +1803,7 @@ namespace
             const bool held = WaitForSingleObject(entered, 5000) == WAIT_OBJECT_0;
             const auto started = GetTickCount64();
             const bool copied = held && host.GetNativeRenderEndpointDiagnostic(diagnostic);
+            const bool copiedSetupUnderLoaderLock = held && host.GetNativeRenderSetupDiagnostic(setup);
             const auto elapsed = GetTickCount64() - started;
             SetEvent(resume);
             loader.join();
@@ -1689,8 +1813,8 @@ namespace
             CloseHandle(entered);
             CloseHandle(resume);
             CloseHandle(timeout);
-            Check(held && loadedProbe && !timedOut && copied && diagnostic.version == 1 && elapsed < 1500,
-                  "cached API6 diagnostic reader completes while another owned provider holds the loader lock");
+            Check(held && loadedProbe && !timedOut && copied && copiedSetupUnderLoaderLock && setup.version == 1 && diagnostic.version == 1 && elapsed < 1500,
+                  "both cached API6 diagnostic readers complete while another owned provider holds the loader lock");
         }
         Check(mode == 6 ? !output.base.base.base.base.observedRoute && !output.base.base.base.gpu.attempts && !output.base.base.base.gpu.metadataValid
                         : output.base.base.base.base.observedRoute == 2 && output.base.base.base.gpu.attempts == 7 &&
@@ -1731,6 +1855,9 @@ namespace
         bool                       foreignBegin = true, foreignRead = true, foreignEnd = true, foreignDiagnostic = true;
         RenderEndpointDiagnosticV1 foreignDiagnosticOutput;
         foreignDiagnosticOutput.version = 88;
+        RenderSetupDiagnosticV1 foreignSetupOutput;
+        foreignSetupOutput.version = 88;
+        bool                     foreignSetup = true;
         RenderObservationStateV6 foreignOutput;
         foreignOutput.base.base.base.gpu.queryStage = 77;
         foreignOutput.base.base.custom.status = 77;
@@ -1742,10 +1869,12 @@ namespace
                 foreignBegin = host.BeginNativeRenderDispatchObservation(RenderObservationRoute::D3D12);
                 foreignRead = host.GetNativeRenderObservationState(foreignOutput);
                 foreignDiagnostic = host.GetNativeRenderEndpointDiagnostic(foreignDiagnosticOutput);
+                foreignSetup = host.GetNativeRenderSetupDiagnostic(foreignSetupOutput);
                 foreignEnd = host.EndNativeRenderObservation();
                 host.Stop();
             });
         foreign.join();
+        Check(!foreignSetup && foreignSetupOutput.version == 88, "a foreign Core thread cannot replace setup diagnostic output");
         Check(!foreignDiagnostic && foreignDiagnosticOutput.version == 88,
               "a foreign Core thread cannot inspect an optional endpoint diagnostic or replace output");
         Check(!foreignBegin && !foreignRead && !foreignEnd && foreignOutput.base.base.base.gpu.queryStage == 77 &&
@@ -1773,6 +1902,8 @@ namespace
                   "Reset clears API6 final state availability");
             diagnostic.version = 77;
             Check(!host.GetNativeRenderEndpointDiagnostic(diagnostic) && diagnostic.version == 77, "Reset clears cached optional diagnostic availability too");
+            setup.version = 77;
+            Check(!host.GetNativeRenderSetupDiagnostic(setup) && setup.version == 77, "Reset clears the setup generation and cached export");
         }
         else
         {
@@ -1797,6 +1928,13 @@ namespace
             Check(host.GetNativeRenderEndpointDiagnostic(diagnostic) == diagnosticAvailable &&
                       (diagnosticAvailable ? diagnostic.version == 1 && diagnostic.slotRva == 0x1234 : diagnostic.version == 77),
                   "safe End preserves only successfully copied optional diagnostics after provider Release");
+            const auto setupCallsAfterRelease = setupReads();
+            setup.version = 77;
+            Check(host.GetNativeRenderSetupDiagnostic(setup) == diagnosticAvailable &&
+                      (diagnosticAvailable ? setup.version == 1 && setup.generationLow == 1 && setup.cleanupAttempted == 1 && setup.cleanupComplete == 1
+                                           : setup.version == 77) &&
+                      setupReads() == setupCallsAfterRelease,
+                  "safe End copies fresh cleanup0-to1 facts before Release; final cache never calls the released provider");
             const auto finalReads = counters[5];
             Check(host.GetNativeRenderObservationState(output) && !output.base.base.base.base.base.active && !output.base.base.base.base.base.pendingCleanup &&
                       counters[5] == finalReads && counters[7] == 1 && output.base.base.base.gpu.queryStage == (mode == 6 ? 0u : 19u),
@@ -1817,10 +1955,12 @@ namespace
                   "API6 final cache preserves classification before releasing its provider");
             Check(host.EndNativeRenderObservation() && counters[7] == 1, "API6 completed End is idempotent");
             counters[13] = 3;
+            setup.version = 77;
             diagnostic.version = 77;
             output.base.base.custom.status = 99;
             Check(!host.BeginNativeRenderDispatchObservation(RenderObservationRoute::D3D12) && !host.GetNativeRenderEndpointDiagnostic(diagnostic) &&
-                      diagnostic.version == 77 && !host.GetNativeRenderObservationState(output) && output.base.base.custom.status == 99,
+                      diagnostic.version == 77 && !host.GetNativeRenderSetupDiagnostic(setup) && setup.version == 77 &&
+                      !host.GetNativeRenderObservationState(output) && output.base.base.custom.status == 99,
                   "a rejected new V6 factory cannot relabel the completed run's cached diagnostic or observation");
             counters[13] = 0;
         }
@@ -1834,6 +1974,9 @@ namespace
         diagnostic.version = 77;
         Check(!host.GetNativeRenderEndpointDiagnostic(diagnostic) && diagnostic.version == 77,
               "unloaded provider cannot expose a cached diagnostic through a new owner");
+        setup.version = 77;
+        Check(!host.GetNativeRenderSetupDiagnostic(setup) && setup.version == 77,
+              "safe Stop clears setup availability instead of carrying a prior owner into the next Start");
     }
     #endif
 }
@@ -1891,6 +2034,7 @@ int wmain(int argc, wchar_t** argv)
             TestMissingRenderV6(owner, argv[34]);
             for (unsigned mode = 1; mode <= 8; ++mode)
                 TestRenderProviderV6(owner, argv[mode + 41], mode, argv[49]);
+            TestSetupDiagnosticGeneration(owner, argv[45]);
         }
     #else
         CGameAdapterModule host;

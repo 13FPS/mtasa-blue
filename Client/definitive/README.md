@@ -6,6 +6,18 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
+**Latest live API6 result: hook setup refused; cleanup and normal exit passed.**
+The trial stopped after 289 ms with BeginError/native HookInstall failure and
+zero callbacks, metadata or dispatch/buffer observations. GTA continued normally.
+All 23 installed hashes matched; the final 6,511-byte log retains the complete
+6,437-byte pre-exit capture plus 74 shutdown bytes. The exact failing transaction
+step is not logged. The separate strict DXGI refusal is tolerated during API6
+preparation and does not identify this setup failure. The complete owned
+transaction now passes within 3,355 native checks, including both endpoint
+routes, shared-page protection restoration and balanced suspension counts.
+Separate setup-stage reporting is ready for the next live trial;
+no further walking test is needed.
+
 **Latest live API5 result: pre-existing Present patch identified; cleanup and normal exit passed.**
 The ten-second trial ran for 10,001 ms with 603 native wrapper entries,
 600 accepted scalar snapshots and 87 logged complete metadata/known-presenter
@@ -34,6 +46,14 @@ all four earlier renderer flags and the explicit D3D12 route. Its Core10/API6
 wire contains 136 scalar fields. The source flag defaults to false, and the
 transaction requires the verified local Windows syscall profile before holding
 threads. No association report grants permission to submit GPU work.
+
+The next candidate adds an optional API6 setup diagnostic alongside those
+contracts. Its 18 unsigned scalars identify the first failed setup stage and
+explicit error code, with installation and cleanup facts kept separate. MTA
+Core resolves its export before Begin and writes bounded
+`mta/logs/render-setup.log` records only when no threads remain held. Neither
+that report nor a successful offline fixture establishes live dispatch or
+permission to draw.
 
 The serial package ownership suite passes 687 checks across 59 disposable
 install/update/uninstall and configuration cases. The earlier refusal while

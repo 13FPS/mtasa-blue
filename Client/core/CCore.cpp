@@ -39,6 +39,7 @@
 #include "DefinitiveMovementReference.h"
 #include "DefinitiveRenderReference.h"
 #include "DefinitiveRenderEndpointLog.h"
+#include "DefinitiveRenderSetupLog.h"
 
 using SharedUtil::CalcMTASAPath;
 using namespace std;
@@ -253,7 +254,31 @@ namespace
                 mta::game_de::RenderObservationRoute  route;
                 const std::uint64_t                   runMs = static_cast<std::uint64_t>(GetTickCount64_());
                 DefinitiveRenderEndpointLog::Recorder endpointLog;
-                void                                  Log(std::uint32_t phase) noexcept
+                DefinitiveRenderSetupLog::Recorder    setupLog;
+                void                                  LogSetup(std::uint32_t phase) noexcept
+                {
+                    try
+                    {
+                        mta::game_de::RenderSetupDiagnosticV1 state;
+                        // The adapter refuses this read while any peer remains
+                        // held. Only then may optional MTA file utilities allocate
+                        // or take locks to preserve the precise setup refusal.
+                        if (!adapter.GetNativeRenderSetupDiagnostic(state))
+                            return;
+                        setupLog.Write(state, GetCurrentProcessId(), runMs, phase,
+                                       [](const std::string& line)
+                                       {
+                                           const auto path = CalcMTASAPath("mta/logs/render-setup.log");
+                                           SharedUtil::MakeSureDirExists(path);
+                                           return SharedUtil::FileAppend(path, line.data(), static_cast<unsigned long>(line.size()));
+                                       });
+                    }
+                    catch (...)
+                    {
+                        // Diagnostic I/O cannot change hook or module ownership.
+                    }
+                }
+                void Log(std::uint32_t phase) noexcept
                 {
                     try
                     {
@@ -279,6 +304,7 @@ namespace
                 bool Begin()
                 {
                     const bool began = adapter.BeginNativeRenderDispatchObservation(route);
+                    LogSetup(0);
                     Log(0);
                     return began;
                 }
@@ -286,14 +312,20 @@ namespace
                 {
                     const bool read = CopyRenderReferenceState(adapter, snapshot);
                     if (read)
+                    {
+                        LogSetup(1);
                         Log(1);
+                    }
                     return read;
                 }
                 bool End()
                 {
                     const bool ended = adapter.EndNativeRenderObservation();
                     if (ended)
+                    {
+                        LogSetup(2);
                         Log(2);
+                    }
                     return ended;
                 }
             } boundaryObserver{adapter, static_cast<mta::game_de::RenderObservationRoute>(request.renderRoute)};

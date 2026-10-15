@@ -7,6 +7,7 @@
 #include <game/CGameAdapter.h>
 #include <game/CGameRenderObservation.h>
 #include <game/CGameRenderEndpointDiagnostic.h>
+#include <game/CGameRenderSetupDiagnostic.h>
 
 #include <array>
 #include <algorithm>
@@ -881,6 +882,75 @@ namespace
               "removing the final registry entry makes subsequent diagnostic reads reject without native access");
     }
 
+    void TestSetupDiagnosticLeaseRejection()
+    {
+        OwnerIdentity owner;
+        auto*         lease = CreateGameRenderObservationV6(6, owner.Get(), RenderObservationRoute::D3D12);
+        auto*         other = CreateGameRenderObservationV6(6, owner.Get(), RenderObservationRoute::D3D12);
+        auto*         older = CreateGameRenderObservationV5(5, owner.Get(), RenderObservationRoute::D3D12);
+        Check(lease && other && older, "setup diagnostics retain only exact V6 lease identities");
+        RenderSetupDiagnosticV1 output;
+        std::memset(&output, 0xa5, sizeof(output));
+        const auto sentinel = output;
+        const auto unchanged = [&] { return std::memcmp(&output, &sentinel, sizeof(output)) == 0; };
+        for (const auto version : {0u, 2u, 6u, std::numeric_limits<std::uint32_t>::max()})
+            Check(ReadGameRenderSetupDiagnosticV1(version, lease, &output) == Status::InvalidArgument && unchanged(),
+                  "setup payload version is independent of observation API6 and rejects without output mutation");
+        Check(ReadGameRenderSetupDiagnosticV1(1, nullptr, &output) == Status::InvalidArgument && unchanged() &&
+                  ReadGameRenderSetupDiagnosticV1(1, lease, nullptr) == Status::InvalidArgument,
+              "setup export validates null arguments before native cache access");
+        Check(ReadGameRenderSetupDiagnosticV1(1, lease, &output) == Status::Unsupported && unchanged() &&
+                  ReadGameRenderSetupDiagnosticV1(1, reinterpret_cast<IGameRenderObservationV6*>(older), &output) == Status::InvalidArgument && unchanged(),
+              "allocation alone and an older interface cannot expose API6 setup evidence");
+        auto* inaccessible = VirtualAlloc(nullptr, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_NOACCESS);
+        Check(inaccessible != nullptr, "reserve unreadable setup lease validation page");
+        Check(ReadGameRenderSetupDiagnosticV1(1, static_cast<IGameRenderObservationV6*>(inaccessible), static_cast<RenderSetupDiagnosticV1*>(inaccessible)) ==
+                      Status::InvalidArgument &&
+                  ReadGameRenderSetupDiagnosticV1(2, lease, static_cast<RenderSetupDiagnosticV1*>(inaccessible)) == Status::InvalidArgument,
+              "unknown identity and wrong version never dereference caller lease or output pointers");
+        Check(VirtualFree(inaccessible, 0, MEM_RELEASE) != 0, "release setup validation page");
+        Status      foreign = Status::Ok;
+        std::thread reader([&] { foreign = ReadGameRenderSetupDiagnosticV1(1, lease, &output); });
+        reader.join();
+        Check(foreign == Status::WrongThread && unchanged(), "setup cache is available only on the lease producer thread");
+        Check(lease->Begin() == Status::Unsupported && ReadGameRenderSetupDiagnosticV1(1, lease, &output) == Status::Unsupported && unchanged(),
+              "wrong-image Begin fails before setup cache admission without inventing diagnostics");
+        Check(lease->End() == Status::Ok && ReadGameRenderSetupDiagnosticV1(1, lease, &output) == Status::Unsupported && unchanged(),
+              "clean End preserves the lack of setup evidence for an unadmitted image");
+        const auto released = reinterpret_cast<std::uintptr_t>(lease);
+        lease->Release();
+        Check(ReadGameRenderSetupDiagnosticV1(1, reinterpret_cast<IGameRenderObservationV6*>(released), &output) == Status::InvalidArgument && unchanged() &&
+                  ReadGameRenderSetupDiagnosticV1(1, other, &output) == Status::Unsupported && unchanged(),
+              "Release removes only its exact setup lease while another allocated V6 identity remains valid");
+        const auto        racing = reinterpret_cast<std::uintptr_t>(other);
+        std::atomic<bool> ready{false}, releasing{false};
+        bool              preserved = true;
+        std::thread       racingReader(
+            [&]
+            {
+                RenderSetupDiagnosticV1 next = sentinel;
+                ready.store(true);
+                while (!releasing.load())
+                    std::this_thread::yield();
+                for (unsigned index = 0; index < 2000; ++index)
+                {
+                    const auto result = ReadGameRenderSetupDiagnosticV1(1, reinterpret_cast<IGameRenderObservationV6*>(racing), &next);
+                    if ((result != Status::WrongThread && result != Status::InvalidArgument && result != Status::Unsupported) ||
+                        std::memcmp(&next, &sentinel, sizeof(next)))
+                        preserved = false;
+                }
+            });
+        while (!ready.load())
+            std::this_thread::yield();
+        releasing.store(true);
+        other->Release();
+        racingReader.join();
+        Check(preserved && ReadGameRenderSetupDiagnosticV1(1, reinterpret_cast<IGameRenderObservationV6*>(racing), &output) == Status::InvalidArgument &&
+                  unchanged(),
+              "setup read versus Release cannot use freed leases or mutate rejected output");
+        older->Release();
+    }
+
     void TestRenderObservationV6Contract()
     {
         OwnerIdentity owner;
@@ -1013,6 +1083,11 @@ int main()
     static_assert(std::is_nothrow_invocable_v<decltype(CreateGameRenderObservationV6), std::uint32_t, CCoreInterface*, RenderObservationRoute>);
     static_assert(std::is_nothrow_invocable_v<decltype(CreateGameRenderObservationV5), std::uint32_t, CCoreInterface*, RenderObservationRoute>);
     static_assert(RenderEndpointDiagnosticVersionV1 == 1 && sizeof(RenderEndpointDiagnosticV1) == 80);
+    static_assert(RenderSetupDiagnosticVersionV1 == 1 && sizeof(RenderSetupDiagnosticV1) == 72);
+    static_assert(std::is_standard_layout_v<RenderSetupDiagnosticV1> && std::is_trivially_copyable_v<RenderSetupDiagnosticV1>);
+    static_assert(
+        std::is_nothrow_invocable_r_v<Status, decltype(ReadGameRenderSetupDiagnosticV1), std::uint32_t, IGameRenderObservationV6*, RenderSetupDiagnosticV1*>);
+
     static_assert(std::is_standard_layout_v<RenderEndpointDiagnosticV1> && std::is_trivially_copyable_v<RenderEndpointDiagnosticV1>);
     static_assert(std::is_nothrow_invocable_r_v<Status, decltype(ReadGameRenderEndpointDiagnosticV1), std::uint32_t, IGameRenderObservationV5*,
                                                 RenderEndpointDiagnosticV1*>);
@@ -1034,6 +1109,7 @@ int main()
         TestRenderObservationV5FactoryRejection();
         TestEndpointDiagnosticLeaseRejection();
         TestRenderObservationV6Contract();
+        TestSetupDiagnosticLeaseRejection();
         TestRenderObservationFactoryRejection();
         TestRenderObservationV2FactoryRejection();
         TestRenderObservationV3FactoryRejection();

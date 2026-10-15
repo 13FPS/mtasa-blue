@@ -82,6 +82,12 @@ describes native dispatch and CPU object association, while API5's profile1
 still describes an admitted system DXGI entry. Neither grants GPU ownership.
 Offline publication/rollback checks and normal MTA builds pass. A subsequent
 human GTA trial is required before live dispatch can be claimed.
+The first API6 attempt returned HookInstall during Begin with zero callbacks;
+cleanup and normal exit passed. The exact transaction subgate remains unknown.
+Complete owned install/detach coverage now passes, including shared-page
+protection and suspension-count restoration. A separate value-only setup
+report is the next diagnostic step; the earlier strict DXGI mismatch is
+tolerated during preparation and is not an established cause.
 
 The GUI backend reuses MTA's actual CGUI/CEGUI widgets, skins, fonts and
 textures. Owned offscreen WARP tests cover BGRA8, RGBA8 and the observed

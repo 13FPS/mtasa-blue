@@ -9,6 +9,7 @@
 #include <game/CGameAdapter.h>
 #include <game/CGameRenderObservation.h>
 #include <game/CGameRenderEndpointDiagnostic.h>
+#include <game/CGameRenderSetupDiagnostic.h>
 #include <cstdint>
 #include <string>
 
@@ -50,6 +51,7 @@ public:
     bool                BeginNativeRenderDispatchObservation(mta::game_de::RenderObservationRoute route);
     bool                GetNativeRenderObservationState(mta::game_de::RenderObservationStateV6& state);
     bool                GetNativeRenderEndpointDiagnostic(mta::game_de::RenderEndpointDiagnosticV1& state);
+    bool                GetNativeRenderSetupDiagnostic(mta::game_de::RenderSetupDiagnosticV1& state);
     bool                EndNativeRenderObservation() noexcept;
     void                Stop() noexcept;
 
@@ -89,6 +91,9 @@ private:
     bool                                                        m_hasRenderObservationV6 = false;
     mta::game_de::RenderEndpointDiagnosticV1                    m_lastEndpointDiagnostic;
     bool                                                        m_hasEndpointDiagnostic = false;
+    decltype(&mta::game_de::ReadGameRenderSetupDiagnosticV1)    m_renderSetupReaderV1 = nullptr;
+    mta::game_de::RenderSetupDiagnosticV1                       m_lastSetupDiagnostic;
+    bool                                                        m_hasSetupDiagnostic = false;
     mta::game_de::RenderObservationRoute                        m_renderRoute = mta::game_de::RenderObservationRoute::Unknown;
     CCoreInterface*                                             m_ownerIdentity = nullptr;
     std::uint32_t                                               m_ownerThread = 0;

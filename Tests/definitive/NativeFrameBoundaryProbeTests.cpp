@@ -5,14 +5,19 @@
  *****************************************************************************/
 // Private inclusion exposes the real helpers without creating shipping bypasses.
 #include "../../Client/game_de/NativeFrameBoundaryProbe.cpp"
+#include "../../Client/sdk/game/CGameRenderSetupDiagnostic.h"
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <thread>
-bool OwnedNativeDispatchCleanup(bool& pending);
-bool OwnedNativeDispatchSafetyHeld();
-bool OwnedNativeDispatchDiscovery(void (*afterSnapshot)(), DWORD (*newThreadId)());
-bool OwnedNativeDispatchVmTransactions();
+bool  OwnedNativeDispatchCleanup(bool& pending);
+void* OwnedNativeDispatchWrapperHook();
+bool  OwnedNativeDispatchTransaction(bool install, std::uintptr_t wrapper, bool& pending);
+void  OwnedNativeDispatchSetupSnapshot(mta::game_de::RenderSetupDiagnosticV1& state);
+bool  OwnedNativeDispatchSetupRefusal(std::uintptr_t wrapper, bool afterHolds, mta::game_de::RenderSetupDiagnosticV1& state);
+bool  OwnedNativeDispatchSafetyHeld();
+bool  OwnedNativeDispatchDiscovery(void (*afterSnapshot)(), DWORD (*newThreadId)());
+bool  OwnedNativeDispatchVmTransactions();
 
 namespace
 {
@@ -713,4 +718,142 @@ void CheckFrameBoundaryProbe(const char* customFixture, const char* wrapperFixtu
     detail::runtime.nativeDispatch = false;
     VirtualFree(wrapperMemory, 0, MEM_RELEASE);
     ResetFrameBoundaryObservation();
+    const auto flowResizeCode = detail::runtime.resizeCode, flowNotifyCode = detail::runtime.notifyCode, flowDestroyCode = detail::runtime.destroyCode,
+               flowPresentCode = detail::runtime.presentCode, flowWrapperCode = detail::runtime.wrapperCode;
+    for (const bool ownedEndpoint : {false, true})
+    {
+        // The live failure occurred after admission, with strict DXGI refused.
+        // Reproduce the complete production transaction without invoking any
+        // copied game bytes. Wrapper/Resize/destructor share their native page
+        // offsets so page-permission ordering is exercised too. Lifecycle
+        // bodies are owned inert buffers with the already-decoded prologues.
+        auto* flowMemory = static_cast<unsigned char*>(VirtualAlloc(nullptr, 3 * 4096, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+        Require(flowMemory != nullptr, "complete API6 transaction owns its unexecuted code pages", checks);
+        constexpr std::array<std::size_t, 4> flowOffsets{0x8e0, 0x1780, 0x480, 0x2000};
+        detail::Function* flowFunctions[]{&detail::runtime.resizeCode, &detail::runtime.notifyCode, &detail::runtime.destroyCode, &detail::runtime.presentCode};
+        for (std::size_t function = 0; function < flowOffsets.size(); ++function)
+        {
+            auto& ownedFunction = *flowFunctions[function];
+            ownedFunction.rva = reinterpret_cast<std::uintptr_t>(flowMemory + flowOffsets[function]);
+            ownedFunction.original = ownedFunction.installed = {};
+            ownedFunction.captured = false;
+            ownedFunction.stolen = ownedFunction.detour = 0;
+            std::memcpy(ownedFunction.original.data(), prologues[function].data(), prologues[function].size());
+            std::memcpy(flowMemory + flowOffsets[function], ownedFunction.original.data(), ownedFunction.bytes);
+        }
+        const auto flowWrapper = reinterpret_cast<std::uintptr_t>(flowMemory + 0xda0);
+        std::memcpy(flowMemory + 0xda0, wrapperBytes.data(), wrapperBytes.size());
+        std::array<unsigned char, 3 * 4096> flowExpected{};
+        std::memcpy(flowExpected.data(), flowMemory, flowExpected.size());
+        DWORD flowOldProtection = 0;
+        Require(VirtualProtect(flowMemory, flowExpected.size(), PAGE_EXECUTE_READ, &flowOldProtection) != FALSE,
+                "complete API6 fixture begins with every owned code page RX", checks);
+        detail::runtime.image = detail::runtime.dxgi = 0;
+        detail::runtime.nativeDispatch = detail::runtime.prepared = true;
+        detail::runtime.endpoint = ownedEndpoint;
+        detail::runtime.wrapperCode.rva = flowWrapper;
+        detail::runtime.wrapperHook = reinterpret_cast<std::uintptr_t>(OwnedNativeDispatchWrapperHook());
+        detail::runtime.resize = reinterpret_cast<detail::Resize>(flowFunctions[0]->rva);
+        detail::runtime.notify = reinterpret_cast<detail::Notify>(flowFunctions[1]->rva);
+        detail::runtime.destroy = reinterpret_cast<detail::Notify>(flowFunctions[2]->rva);
+        detail::runtime.present = ownedEndpoint ? reinterpret_cast<detail::Present>(flowFunctions[3]->rva) : nullptr;
+        Require(detail::CheckFunction(0, detail::runtime.wrapperCode) && detail::PrepareDispatchRelay(),
+                "complete production transaction uses the full pinned wrapper and actual native observer hook target", checks);
+        const HANDLE flowReady = CreateEventW(nullptr, TRUE, FALSE, nullptr), flowStop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        Require(flowReady && flowStop, "complete API6 transaction sleeper barriers", checks);
+        std::thread flowSleeper(
+            [&]
+            {
+                SetEvent(flowReady);
+                WaitForSingleObject(flowStop, INFINITE);
+            });
+        WaitForSingleObject(flowReady, INFINITE);
+        Sleep(5);
+        Require(SuspendThread(flowSleeper.native_handle()) == 0, "fixture owns an independent pre-existing sleeper suspension", checks);
+        bool flowPending = false;
+        for (const bool afterHolds : {false, true})
+        {
+            RenderSetupDiagnosticV1 refusedSetup;
+            Require(OwnedNativeDispatchSetupRefusal(flowWrapper, afterHolds, refusedSetup),
+                    "real install pipeline refuses deterministically before writes and balances any holds", checks);
+            const auto expectedStage = afterHolds ? RenderSetupStage::WrapperChange : RenderSetupStage::NativeThreadStubRead;
+            Require(refusedSetup.version == 1 && refusedSetup.attempted == 1 && refusedSetup.stage == static_cast<unsigned>(expectedStage) &&
+                        refusedSetup.failureStage == refusedSetup.stage && !refusedSetup.installSucceeded && !refusedSetup.transactionCommitted &&
+                        !refusedSetup.hooksCommitted && !refusedSetup.retainedSuspensions && !refusedSetup.safetyHeldSuspensions &&
+                        (afterHolds ? refusedSetup.errorDomain == static_cast<unsigned>(RenderSetupErrorDomain::Detours) &&
+                                          refusedSetup.errorCode == ERROR_INVALID_HANDLE && refusedSetup.initialThreads >= 1 &&
+                                          refusedSetup.heldThreads >= refusedSetup.initialThreads && refusedSetup.stablePasses >= 2
+                                    : !refusedSetup.errorDomain && !refusedSetup.errorCode && !refusedSetup.initialThreads && !refusedSetup.heldThreads),
+                    "first setup refusal records exact stage/error and truthful precommit attempt history", checks);
+            flowPending = false;
+            Require(OwnedNativeDispatchTransaction(false, flowWrapper, flowPending) && !flowPending,
+                    "refused install remains safely detachable without a retry or admission change", checks);
+            RenderSetupDiagnosticV1 cleanedRefusal;
+            OwnedNativeDispatchSetupSnapshot(cleanedRefusal);
+            Require(cleanedRefusal.stage == refusedSetup.stage && cleanedRefusal.failureStage == refusedSetup.failureStage &&
+                        cleanedRefusal.errorDomain == refusedSetup.errorDomain && cleanedRefusal.errorCode == refusedSetup.errorCode &&
+                        !cleanedRefusal.transactionCommitted && !cleanedRefusal.hooksCommitted && !cleanedRefusal.installSucceeded,
+                    "successful cleanup cannot overwrite or promote the original install refusal", checks);
+            Require(detail::PrepareDispatchRelay(), "next independent owned install prepares fresh leaf storage after refused-attempt cleanup", checks);
+        }
+        flowPending = false;
+        Require(OwnedNativeDispatchTransaction(true, flowWrapper, flowPending) && !flowPending,
+                ownedEndpoint ? "complete production API6 install with owned strict endpoint succeeds"
+                              : "complete production API6 install with strict endpoint refused succeeds",
+                checks);
+        RenderSetupDiagnosticV1 installedSetup;
+        OwnedNativeDispatchSetupSnapshot(installedSetup);
+        Require(installedSetup.version == 1 && installedSetup.attempted == 1 && installedSetup.stage == static_cast<unsigned>(RenderSetupStage::Complete) &&
+                    !installedSetup.failureStage && !installedSetup.errorDomain && !installedSetup.errorCode && installedSetup.transactionCommitted == 1 &&
+                    installedSetup.hooksCommitted == 1 && installedSetup.installSucceeded == 1 && installedSetup.initialThreads >= 1 &&
+                    installedSetup.heldThreads >= installedSetup.initialThreads && installedSetup.stablePasses >= 2 && !installedSetup.retainedSuspensions &&
+                    !installedSetup.safetyHeldSuspensions,
+                "complete install diagnostic distinguishes verified ownership and full setup success", checks);
+        Require(
+            detail::runtime.armed && detail::runtime.committed && detail::runtime.dispatchPatched && FrameBoundaryHooksOwned() && detail::CurrentWrapper(true),
+            "one production transaction owns all native entries, lifecycle hooks and CALL before observation", checks);
+        Require(SuspendThread(flowSleeper.native_handle()) == 1 && ResumeThread(flowSleeper.native_handle()) == 2,
+                "full install balances only production holds and preserves the independent sleeper count", checks);
+        for (std::size_t page = 0; page < 3; ++page)
+        {
+            MEMORY_BASIC_INFORMATION flowPage{};
+            Require(VirtualQuery(flowMemory + page * 4096, &flowPage, sizeof(flowPage)) == sizeof(flowPage) && flowPage.Protect == PAGE_EXECUTE_READ,
+                    "full install restores every shared/native page to RX before resuming peers", checks);
+        }
+        flowPending = false;
+        Require(OwnedNativeDispatchTransaction(false, flowWrapper, flowPending) && !flowPending,
+                "complete production API6 detach succeeds through the same ownership and context guards", checks);
+        RenderSetupDiagnosticV1 detachedSetup;
+        OwnedNativeDispatchSetupSnapshot(detachedSetup);
+        Require(detachedSetup.stage == installedSetup.stage && !detachedSetup.failureStage && detachedSetup.transactionCommitted == 1 &&
+                    detachedSetup.hooksCommitted == 1 && detachedSetup.installSucceeded == 1 && !detachedSetup.retainedSuspensions &&
+                    !detachedSetup.safetyHeldSuspensions,
+                "detach retains historical installation facts while current retained-hold facts clear", checks);
+        Require(!detail::runtime.armed && !detail::runtime.committed && !NativeDispatchPatchPresent() && !detail::runtime.dispatchRelay &&
+                    std::memcmp(flowMemory, flowExpected.data(), flowExpected.size()) == 0,
+                "full detach restores every owned byte, disarms hooks and releases leaf storage", checks);
+        Require(SuspendThread(flowSleeper.native_handle()) == 1 && ResumeThread(flowSleeper.native_handle()) == 2,
+                "full detach also preserves exactly the independent sleeper suspension", checks);
+        for (std::size_t page = 0; page < 3; ++page)
+        {
+            MEMORY_BASIC_INFORMATION flowPage{};
+            Require(VirtualQuery(flowMemory + page * 4096, &flowPage, sizeof(flowPage)) == sizeof(flowPage) && flowPage.Protect == PAGE_EXECUTE_READ,
+                    "full detach leaves every owned code page at its exact RX baseline", checks);
+        }
+        SetEvent(flowStop);
+        Require(ResumeThread(flowSleeper.native_handle()) == 1, "fixture balances its own final suspension after production teardown", checks);
+        flowSleeper.join();
+        CloseHandle(flowReady);
+        CloseHandle(flowStop);
+        ResetFrameBoundaryObservation();
+        detail::runtime.resizeCode = flowResizeCode;
+        detail::runtime.notifyCode = flowNotifyCode;
+        detail::runtime.destroyCode = flowDestroyCode;
+        detail::runtime.presentCode = flowPresentCode;
+        detail::runtime.wrapperCode = flowWrapperCode;
+        detail::runtime.resize = nullptr;
+        detail::runtime.notify = detail::runtime.destroy = nullptr;
+        detail::runtime.present = nullptr;
+        VirtualFree(flowMemory, 0, MEM_RELEASE);
+    }
 }

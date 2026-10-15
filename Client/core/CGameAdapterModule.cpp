@@ -135,6 +135,8 @@ bool CGameAdapterModule::Start(CCoreInterface* owner, const std::wstring& absolu
     m_hasRenderObservationV6 = false;
     m_hasEndpointDiagnostic = false;
     m_renderEndpointReaderV2 = nullptr;
+    m_renderSetupReaderV1 = nullptr;
+    m_hasSetupDiagnostic = false;
     m_renderRoute = mta::game_de::RenderObservationRoute::Unknown;
     m_error.clear();
     return true;
@@ -233,6 +235,8 @@ bool CGameAdapterModule::Reset()
     m_hasRenderObservationV6 = false;
     m_hasEndpointDiagnostic = false;
     m_renderEndpointReaderV2 = nullptr;
+    m_renderSetupReaderV1 = nullptr;
+    m_hasSetupDiagnostic = false;
     return true;
 }
 
@@ -322,6 +326,9 @@ bool CGameAdapterModule::BeginNativeRenderObservation()
         SetError("A render observation lease is already retained; end it before another begin");
         return false;
     }
+    // A new allowed lease cannot expose a previous API6 setup generation.
+    m_renderSetupReaderV1 = nullptr;
+    m_hasSetupDiagnostic = false;
     const auto address = GetProcAddress(static_cast<HMODULE>(m_module), "CreateGameRenderObservation");
     if (!address)
     {
@@ -364,6 +371,9 @@ bool CGameAdapterModule::BeginNativeRenderObservation(mta::game_de::RenderObserv
         SetError("A render observation lease is already retained; end it before selecting another version or route");
         return false;
     }
+    // A new allowed lease cannot expose a previous API6 setup generation.
+    m_renderSetupReaderV1 = nullptr;
+    m_hasSetupDiagnostic = false;
     const auto address = GetProcAddress(static_cast<HMODULE>(m_module), "CreateGameRenderObservationV2");
     if (!address)
     {
@@ -405,6 +415,9 @@ bool CGameAdapterModule::BeginNativeRenderOwnershipObservation(mta::game_de::Ren
         SetError("A render observation lease is already retained; end it before selecting another version or route");
         return false;
     }
+    // A new allowed lease cannot expose a previous API6 setup generation.
+    m_renderSetupReaderV1 = nullptr;
+    m_hasSetupDiagnostic = false;
     const auto address = GetProcAddress(static_cast<HMODULE>(m_module), "CreateGameRenderObservationV3");
     if (!address)
     {
@@ -446,6 +459,9 @@ bool CGameAdapterModule::BeginNativeRenderClassificationObservation(mta::game_de
         SetError("A render observation lease is already retained; end it before selecting another version or route");
         return false;
     }
+    // A new allowed lease cannot expose a previous API6 setup generation.
+    m_renderSetupReaderV1 = nullptr;
+    m_hasSetupDiagnostic = false;
     const auto address = GetProcAddress(static_cast<HMODULE>(m_module), "CreateGameRenderObservationV4");
     if (!address)
     {
@@ -494,6 +510,9 @@ bool CGameAdapterModule::BeginNativeRenderFrameBoundaryObservation(mta::game_de:
     m_hasRenderObservationV5 = false;
     m_hasRenderObservationV6 = false;
     m_hasEndpointDiagnostic = false;
+    // A new allowed lease cannot expose a previous API6 setup generation.
+    m_renderSetupReaderV1 = nullptr;
+    m_hasSetupDiagnostic = false;
     const auto address = GetProcAddress(static_cast<HMODULE>(m_module), "CreateGameRenderObservationV5");
     if (!address)
     {
@@ -544,6 +563,8 @@ bool CGameAdapterModule::BeginNativeRenderDispatchObservation(mta::game_de::Rend
     m_hasRenderObservationV6 = false;
     m_hasEndpointDiagnostic = false;
     m_renderEndpointReaderV2 = nullptr;
+    m_renderSetupReaderV1 = nullptr;
+    m_hasSetupDiagnostic = false;
     try
     {
         m_error.reserve(512);
@@ -575,6 +596,9 @@ bool CGameAdapterModule::BeginNativeRenderDispatchObservation(mta::game_de::Rend
     const auto diagnosticAddress = GetProcAddress(static_cast<HMODULE>(m_module), "ReadGameRenderEndpointDiagnosticV2");
     static_assert(sizeof(m_renderEndpointReaderV2) == sizeof(diagnosticAddress));
     std::memcpy(&m_renderEndpointReaderV2, &diagnosticAddress, sizeof(m_renderEndpointReaderV2));
+    const auto setupAddress = GetProcAddress(static_cast<HMODULE>(m_module), "ReadGameRenderSetupDiagnosticV1");
+    static_assert(sizeof(m_renderSetupReaderV1) == sizeof(setupAddress));
+    std::memcpy(&m_renderSetupReaderV1, &setupAddress, sizeof(m_renderSetupReaderV1));
     // Preserve the old DXGI-entry result alongside the separately labeled
     // native dispatch record; an existing Present hook remains untouched.
     m_renderRoute = route;
@@ -815,6 +839,41 @@ bool CGameAdapterModule::GetNativeRenderEndpointDiagnostic(mta::game_de::RenderE
     return true;
 }
 
+bool CGameAdapterModule::GetNativeRenderSetupDiagnostic(mta::game_de::RenderSetupDiagnosticV1& state)
+{
+    using namespace mta::game_de;
+    if (!RequireOwnerThread("GetNativeRenderSetupDiagnostic"))
+        return false;
+    if (m_renderObservationV6)
+    {
+        // Begin may fail after holding peers. Use only the export resolved
+        // before Begin, and never turn an unavailable read into stale evidence.
+        if (!m_renderSetupReaderV1)
+        {
+            SetError("The retained API6 provider has no separate setup diagnostic export");
+            return false;
+        }
+        RenderSetupDiagnosticV1 next;
+        if (!RecordStatus(m_renderSetupReaderV1(RenderSetupDiagnosticVersionV1, m_renderObservationV6, &next), "ReadGameRenderSetupDiagnosticV1"))
+            return false;
+        if (next.version != RenderSetupDiagnosticVersionV1)
+        {
+            SetError("Setup diagnostic provider returned a different version; caller output preserved");
+            return false;
+        }
+        m_lastSetupDiagnostic = next;
+        m_hasSetupDiagnostic = true;
+    }
+    if (!m_hasSetupDiagnostic || (!m_renderObservationV6 && !m_hasRenderObservationV6))
+    {
+        SetError("No retained API6 setup diagnostic state is available");
+        return false;
+    }
+    state = m_lastSetupDiagnostic;
+    m_error.clear();
+    return true;
+}
+
 bool CGameAdapterModule::EndNativeRenderObservation() noexcept
 {
     // Stop calls this during cleanup, so errors must not allocate or throw.
@@ -847,12 +906,17 @@ bool CGameAdapterModule::EndNativeRenderObservation() noexcept
         }
         m_lastRenderObservationV6 = final;
         m_hasRenderObservationV6 = true;
+        // A busy optional registry can miss the final read. Do not relabel an
+        // earlier pre-End setup report as completed cleanup after Release.
+        m_hasSetupDiagnostic = false;
         // Copy optional scalar evidence while its exact lease still exists.
         // A diagnostic miss cannot block an otherwise safe hook teardown.
         try
         {
             mta::game_de::RenderEndpointDiagnosticV1 diagnostic;
             GetNativeRenderEndpointDiagnostic(diagnostic);
+            mta::game_de::RenderSetupDiagnosticV1 setup;
+            GetNativeRenderSetupDiagnostic(setup);
         }
         catch (...)
         {
@@ -1045,6 +1109,8 @@ void CGameAdapterModule::Stop() noexcept
     m_ownerThread = 0;
     m_ownerIdentity = nullptr;
     m_renderEndpointReaderV2 = nullptr;
+    m_renderSetupReaderV1 = nullptr;
+    m_hasSetupDiagnostic = false;
 }
 
 std::uint64_t CGameAdapterModule::GetCapabilities() const noexcept

@@ -82,12 +82,17 @@ describes native dispatch and CPU object association, while API5's profile1
 still describes an admitted system DXGI entry. Neither grants GPU ownership.
 Offline publication/rollback checks and normal MTA builds pass. A subsequent
 human GTA trial is required before live dispatch can be claimed.
-The first API6 attempt returned HookInstall during Begin with zero callbacks;
-cleanup and normal exit passed. The exact transaction subgate remains unknown.
-Complete owned install/detach coverage now passes, including shared-page
-protection and suspension-count restoration. A separate value-only setup
-report is the next diagnostic step; the earlier strict DXGI mismatch is
-tolerated during preparation and is not an established cause.
+The latest API6 attempt returned HookInstall with zero callbacks. Its separate
+setup report identifies `StableSuspend`/Win32 access denied (5), before any
+transaction or hook write. All 190 initial holds were released; cleanup and
+normal exit passed. The failed thread's liveness is unknown. An owned 350-check
+Windows test reproduces the same error for exited and live restricted threads.
+The correction passes 3,483 native checks plus four unavailable-build checks. It
+skips only a proven exited handle and restarts bounded discovery; live or unknown
+threads still refuse. Retained exited objects can still reach the four-pass
+limit safely. Complete owned install/detach coverage includes shared-page
+protection and suspension-count restoration.
+The earlier strict DXGI mismatch is tolerated during preparation.
 
 The GUI backend reuses MTA's actual CGUI/CEGUI widgets, skins, fonts and
 textures. Owned offscreen WARP tests cover BGRA8, RGBA8 and the observed

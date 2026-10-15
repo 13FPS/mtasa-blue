@@ -3,21 +3,28 @@
 Last updated: **2026-10-15** (Europe/Luxembourg).
 Experimental branch: `definitive-edition-port`.
 Live renderer source baseline: `05e80a41ecfcdd27165c7eefa3912a809c5546a4`.
-Latest completed diagnostic runtime: `a3d6ec9617c5d56d58c8b27225c4d82b91bdce62`.
+Latest completed diagnostic runtime: `f997c936a4b4c9fe8f174d18781e257131824897`.
 
 ## Current result
 
-The first API6 live trial stopped during hook setup after 289 ms. Its single
-terminal report records BeginError and native HookInstall failure, with zero
-native callbacks or dispatch/buffer observations. GTA continued normally;
-cleanup and normal exit passed, and all 23 installed hashes matched. The
-6,511-byte final log preserves the entire 6,437-byte capture plus 74 shutdown
-bytes; the 637-byte endpoint log is unchanged through shutdown. That separate
-diagnostic still reports the strict DXGI hash refusal, which API6 preparation
-tolerates. The exact failing transaction step is unlogged. Complete owned-host
-transaction and setup-stage coverage now passes within 3,355 native checks.
-The next candidate reports the precise setup refusal. These fixtures do not
-establish which guard refused inside the game.
+The latest API6 live trial stopped after 288 ms during stable thread discovery.
+The separate setup report identifies `StableSuspend` (stage 18), Win32 access
+denied (5), on a newly discovered thread after 190 initial peers were held.
+The refusal occurred before the Detours transaction or any hook write. All
+holds were released, Core/XML/pthread unloaded, and cleanup and normal exit
+passed. GTA continued normally; all 23 installed hashes matched. The final
+6,511-byte log retains the full 6,437-byte capture plus 74 shutdown bytes;
+endpoint and setup logs remain 885 and 244 bytes through exit. Native callbacks,
+dispatch and buffer observations remain zero.
+
+The failed thread's identity, liveness and reason for access denied are not
+recorded. An owned Windows test passes 350 checks across 20 cases: exited
+threads and a live thread without suspension rights can both return error 5.
+The correction discards a failed suspension only when the same owned handle is
+proven exited, then restarts bounded discovery. Live or unconfirmed threads still
+refuse setup. Retained exited objects can still exhaust the unchanged four-pass
+limit safely. The earlier API6 trial's unlogged subgate remains
+unknown; the separate strict DXGI hash refusal is tolerated during preparation.
 
 **EXPERIMENTAL: the full MTA client is not playable on DE.** Actual MTA Core,
 XML and configured CKeyBinds now drive a validated bounded local on-foot
@@ -74,7 +81,7 @@ callback code refuse the transaction before writes. Stable thread discovery
 uses an exact pinned local x64 system syscall entry; an unsupported or changed
 entry refuses before suspension. These are experimental local build profiles.
 
-The next diagnostic candidate adds a separate optional 18-scalar setup report
+The live diagnostic candidate adds a separate optional 18-scalar setup report
 through the exact API6 lease. It records the worker's setup stage, first failure
 and explicit error domain/code, bounded thread counts, commit effects and
 cleanup state. Core caches the export before Begin and writes bounded
@@ -83,7 +90,7 @@ Cleanup preserves the initial setup failure. The API6 136-field observation
 wire and 20-field endpoint diagnostic are unchanged; this report grants no
 callback, endpoint, buffer or GPU admission.
 
-The offline candidate passes 3,355 native checks plus four checks with the
+The offline candidate passes 3,483 native checks plus four checks with the
 extension disabled, 1,688 adapter-module checks and 1,290 x64/three x86 Core
 consumer checks. Core lifecycle tests pass 12,125 checks on each architecture.
 The normal build passes 38 guards, 248 startup checks in each classic and
@@ -93,7 +100,8 @@ The bridge passes 293 protocol and 1,771 ABI checks; script/log tests pass
 265 metadata/ownership checks without submitting GPU commands. These tests
 do not validate visible GTA rendering or multiplayer readiness. The separate
 setup logger passes 88 checks on each architecture; its capture/preparation
-helpers pass 77 checks. Review caught and fixed a cross-lease setup-cache race
+helpers pass 97 checks, including the sealed refusal and owned exit proof.
+Review caught and fixed a cross-lease setup-cache race
 with a nonblocking operation guard and a stale final-cache replay on a missed
 optional read. The blocked logger run and earlier receipts remain preserved.
 

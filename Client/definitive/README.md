@@ -6,17 +6,24 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
-**Latest live API6 result: hook setup refused; cleanup and normal exit passed.**
-The trial stopped after 289 ms with BeginError/native HookInstall failure and
-zero callbacks, metadata or dispatch/buffer observations. GTA continued normally.
-All 23 installed hashes matched; the final 6,511-byte log retains the complete
-6,437-byte pre-exit capture plus 74 shutdown bytes. The exact failing transaction
-step is not logged. The separate strict DXGI refusal is tolerated during API6
-preparation and does not identify this setup failure. The complete owned
-transaction now passes within 3,355 native checks, including both endpoint
-routes, shared-page protection restoration and balanced suspension counts.
-Separate setup-stage reporting is ready for the next live trial;
-no further walking test is needed.
+**Latest live API6 result: stable thread suspension refused; cleanup and normal exit passed.**
+The trial stopped after 288 ms. Its setup report identifies `StableSuspend`
+(stage 18), Win32 access denied (5), on a newly discovered thread after 190
+initial holds. No transaction or hook write began; all holds were released and
+Core/XML/pthread unloaded. GTA continued normally and all 23 installed hashes
+matched. The final 6,511-byte log retains the full 6,437-byte capture plus 74
+shutdown bytes; the 885-byte endpoint and 244-byte setup logs are unchanged
+through exit. Callbacks and dispatch/buffer observations remain zero.
+
+The failed thread's identity and liveness are unknown. An owned Windows test
+passes 350 checks across 20 cases and reproduces error 5 for both exited threads
+and a live thread without suspension rights. The correction now passes 3,483
+native checks plus four unavailable-build checks. It discards only a proven
+exited handle, then restarts bounded discovery; live and unconfirmed threads
+still refuse. Retained exited objects can still exhaust the unchanged four-pass
+limit safely. The earlier API6 trial's unlogged failure remains unknown.
+The separate strict DXGI refusal is tolerated during preparation. No further
+walking test is needed.
 
 **Latest live API5 result: pre-existing Present patch identified; cleanup and normal exit passed.**
 The ten-second trial ran for 10,001 ms with 603 native wrapper entries,
@@ -47,7 +54,7 @@ wire contains 136 scalar fields. The source flag defaults to false, and the
 transaction requires the verified local Windows syscall profile before holding
 threads. No association report grants permission to submit GPU work.
 
-The next candidate adds an optional API6 setup diagnostic alongside those
+The diagnostic candidate adds an optional API6 setup diagnostic alongside those
 contracts. Its 18 unsigned scalars identify the first failed setup stage and
 explicit error code, with installation and cleanup facts kept separate. MTA
 Core resolves its export before Begin and writes bounded

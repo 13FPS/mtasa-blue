@@ -793,7 +793,8 @@ namespace mta::game_de
                     HANDLE next = nullptr;
                     SetupStep(RenderSetupStage::StableEnumerate);
                     const auto status = runtime.nextThread(
-                        GetCurrentProcess(), previous, THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_SET_CONTEXT | THREAD_QUERY_INFORMATION, 0, 0, &next);
+                        GetCurrentProcess(), previous, THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_SET_CONTEXT | THREAD_QUERY_INFORMATION | SYNCHRONIZE,
+                        0, 0, &next);
                     if (previous)
                         CloseHandle(previous);
                     previous = next;
@@ -843,7 +844,20 @@ namespace mta::game_de
                                 if (SuspendThread(thread) == static_cast<DWORD>(-1))
                                 {
                                     const auto error = GetLastError();
+                                    // A newly enumerated thread can finish before
+                                    // suspension. Error 5 alone also describes a
+                                    // live access refusal; discard only this exact
+                                    // owned object after a nonblocking exit proof.
+                                    // Restart from null rather than continue the
+                                    // iterator from an exited thread. This pass
+                                    // cannot count toward the two stable passes.
+                                    const bool exited = error == ERROR_ACCESS_DENIED && WaitForSingleObject(thread, 0) == WAIT_OBJECT_0;
                                     CloseHandle(thread);
+                                    if (exited)
+                                    {
+                                        added = true;
+                                        break;
+                                    }
                                     ready = SetupRefused(RenderSetupStage::StableSuspend, RenderSetupErrorDomain::Win32, error);
                                 }
                                 else

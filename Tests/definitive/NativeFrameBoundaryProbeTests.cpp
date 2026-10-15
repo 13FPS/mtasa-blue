@@ -17,6 +17,7 @@ void  OwnedNativeDispatchSetupSnapshot(mta::game_de::RenderSetupDiagnosticV1& st
 bool  OwnedNativeDispatchSetupRefusal(std::uintptr_t wrapper, bool afterHolds, mta::game_de::RenderSetupDiagnosticV1& state);
 bool  OwnedNativeDispatchSafetyHeld();
 bool  OwnedNativeDispatchDiscovery(void (*afterSnapshot)(), DWORD (*newThreadId)());
+bool  OwnedNativeDispatchExitingInstall(std::uintptr_t wrapper, unsigned mode, mta::game_de::RenderSetupDiagnosticV1& state);
 bool  OwnedNativeDispatchVmTransactions();
 
 namespace
@@ -796,12 +797,23 @@ void CheckFrameBoundaryProbe(const char* customFixture, const char* wrapperFixtu
                     "successful cleanup cannot overwrite or promote the original install refusal", checks);
             Require(detail::PrepareDispatchRelay(), "next independent owned install prepares fresh leaf storage after refused-attempt cleanup", checks);
         }
+        if (!ownedEndpoint)
+            for (const unsigned refusalMode : {1u, 2u, 3u, 4u})
+            {
+                RenderSetupDiagnosticV1 refusedThread;
+                Require(OwnedNativeDispatchExitingInstall(flowWrapper, refusalMode, refusedThread),
+                        "full owned install keeps live denial, failed wait, other errors and repeated retained exits fail closed", checks);
+                flowPending = false;
+                Require(OwnedNativeDispatchTransaction(false, flowWrapper, flowPending) && !flowPending,
+                        "stable-thread refusal owns no hook transaction and leaves ordinary safe cleanup available", checks);
+                Require(detail::PrepareDispatchRelay(), "next stable-thread control receives fresh owned relay storage", checks);
+            }
         flowPending = false;
-        Require(OwnedNativeDispatchTransaction(true, flowWrapper, flowPending) && !flowPending,
+        RenderSetupDiagnosticV1 installedSetup;
+        Require(OwnedNativeDispatchExitingInstall(flowWrapper, 0, installedSetup),
                 ownedEndpoint ? "complete production API6 install with owned strict endpoint succeeds"
                               : "complete production API6 install with strict endpoint refused succeeds",
                 checks);
-        RenderSetupDiagnosticV1 installedSetup;
         OwnedNativeDispatchSetupSnapshot(installedSetup);
         Require(installedSetup.version == 1 && installedSetup.attempted == 1 && installedSetup.stage == static_cast<unsigned>(RenderSetupStage::Complete) &&
                     !installedSetup.failureStage && !installedSetup.errorDomain && !installedSetup.errorCode && installedSetup.transactionCommitted == 1 &&

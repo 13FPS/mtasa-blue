@@ -82,7 +82,18 @@ describes native dispatch and CPU object association, while API5's profile1
 still describes an admitted system DXGI entry. Neither grants GPU ownership.
 Offline publication/rollback checks and normal MTA builds pass. A subsequent
 human GTA trial is required before live dispatch can be claimed.
-The latest API6 attempt returned HookInstall with zero callbacks. Its separate
+The latest API6 attempt returned HookInstall with zero callbacks. Its setup
+report identifies `StableLimit` (stage 21), no OS error, 189 initial/peak holds
+and four discovery passes entered. No transaction or hook write began; cleanup
+and normal exit passed. The exact limit branch, object identity, liveness and
+cause remain unknown. The next correction passes 3,617 native checks plus four
+unavailable-build checks. Bounded continuation uses a disjoint VM-backed cache
+of exact exited objects: first sightings reset stability, repeats require fresh
+exit proof and pinned native identity comparison. The four-pass limit and two
+consecutive stable passes remain. Standalone owned proofs pass 27 continuation
+and 34 identity checks without establishing the actual game's limit cause.
+
+The preceding API6 attempt also returned HookInstall with zero callbacks. Its separate
 setup report identifies `StableSuspend`/Win32 access denied (5), before any
 transaction or hook write. All 190 initial holds were released; cleanup and
 normal exit passed. The failed thread's liveness is unknown. An owned 350-check

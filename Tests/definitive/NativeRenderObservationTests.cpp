@@ -501,12 +501,21 @@ namespace
     };
     struct ExitingDiscoveryFixture
     {
-        unsigned              mode = 0, passes = 0, deadCalls = 0, liveCalls = 0;
-        HANDLE                create = nullptr, created = nullptr, creatorReady = nullptr, creatorStop = nullptr, restricted = nullptr;
-        HANDLE                deadIterator = nullptr, deadDuplicate = nullptr;
-        unsigned              iteratorCloses = 0, duplicateCloses = 0;
-        ExitingDiscoveryChild dead, live;
-        NextThread            originalNext = nullptr;
+        unsigned                             mode = 0, passes = 0, deadCalls = 0, liveCalls = 0;
+        HANDLE                               create = nullptr, created = nullptr, creatorReady = nullptr, creatorStop = nullptr, restricted = nullptr;
+        HANDLE                               deadIterator = nullptr, deadDuplicate = nullptr;
+        unsigned                             iteratorCloses = 0, duplicateCloses = 0;
+        ExitingDiscoveryChild                dead, live;
+        std::array<ExitingDiscoveryChild, 2> extraDead{};
+        std::array<unsigned, 2>              extraDeadCalls{};
+        std::array<unsigned, 2>              extraIteratorCloses{}, extraDuplicateCloses{};
+        std::array<std::array<HANDLE, 4>, 2> extraIterators{}, extraDuplicates{};
+        std::array<std::array<bool, 4>, 2>   extraClosedIterators{}, extraClosedDuplicates{};
+        std::array<HANDLE, 4>                deadIterators{}, deadDuplicates{};
+        std::array<bool, 4>                  closedIterators{}, closedDuplicates{};
+        NextThread                           originalNext = nullptr;
+        CompareThreadObjects                 originalCompare = nullptr;
+        unsigned                             unknownComparisons = 0, continuedDeadCalls = 0;
         bool  started = false, valid = true, continuedExitedIterator = false, syncRequested = true, liveContextChecked = false, deadHandlesClosed = false;
         DWORD deadResult = 0, deadError = 0, deadWait = WAIT_FAILED, liveResult = static_cast<DWORD>(-1);
         DWORD deadExitCode = 0;
@@ -525,8 +534,15 @@ namespace
         auto& fixture = *exitingDiscoveryFixture;
         if (!previous)
             ++fixture.passes;
-        if (fixture.deadCalls && fixture.passes == 1)
+        if (previous && previous == fixture.deadIterator)
+        {
             fixture.continuedExitedIterator = true;
+            ++fixture.continuedDeadCalls;
+            fixture.valid = fixture.valid && WaitForSingleObject(previous, 0) == WAIT_OBJECT_0;
+            // This reference is consumed by the call below. Forget its value
+            // before later iterator opens can reuse the closed handle number.
+            fixture.deadIterator = nullptr;
+        }
         fixture.syncRequested = fixture.syncRequested && (access & SYNCHRONIZE) != 0;
         if (fixture.liveCalls && !fixture.liveContextChecked)
         {
@@ -537,9 +553,16 @@ namespace
         }
         auto status = fixture.originalNext(process, previous, access, attributes, flags, next);
         // The private proxy still acquires every object from the real native
-        // iterator. Hiding the live child for pass1 deterministically requires
-        // the production dead-thread branch to restart and discover it later.
-        while (status == 0 && GetThreadId(*next) == fixture.live.id && fixture.passes == 1)
+        // iterator. Delayed first sightings model a creator whose later child
+        // was behind the scan; each newly discovered dead object must still
+        // reset stability even when retained earlier exits are neutral.
+        auto hidden = [&]()
+        {
+            const auto id = GetThreadId(*next);
+            return (id == fixture.live.id && fixture.passes == 1 && (fixture.mode == 0 || fixture.mode == 6)) ||
+                   (fixture.mode == 6 && ((id == fixture.extraDead[0].id && fixture.passes < 2) || (id == fixture.extraDead[1].id && fixture.passes < 3)));
+        };
+        while (status == 0 && hidden())
         {
             const auto skipped = *next;
             status = fixture.originalNext(process, skipped, access, attributes, flags, next);
@@ -560,8 +583,32 @@ namespace
             *next = withoutSync;
         }
         if (status == 0 && GetThreadId(*next) == fixture.dead.id)
+        {
             fixture.deadIterator = *next;
+            if (fixture.deadCalls < fixture.deadIterators.size())
+                fixture.deadIterators[fixture.deadCalls] = *next;
+            else
+                fixture.valid = false;
+        }
+        for (unsigned index = 0; status == 0 && index < fixture.extraDead.size(); ++index)
+            if (fixture.extraDead[index].thread && GetThreadId(*next) == fixture.extraDead[index].id)
+            {
+                if (fixture.extraDeadCalls[index] < fixture.extraIterators[index].size())
+                    fixture.extraIterators[index][fixture.extraDeadCalls[index]] = *next;
+                else
+                    fixture.valid = false;
+            }
         return status;
+    }
+    LONG NTAPI ExitingDiscoveryCompare(HANDLE first, HANDLE second)
+    {
+        auto& fixture = *exitingDiscoveryFixture;
+        if (fixture.mode == 7 && fixture.originalCompare(first, fixture.dead.thread) == 0 && fixture.originalCompare(second, fixture.dead.thread) == 0)
+        {
+            ++fixture.unknownComparisons;
+            return static_cast<LONG>(0xc0000008u);
+        }
+        return fixture.originalCompare(first, second);
     }
     HANDLE ExitingDiscoveryBeforeSuspend(HANDLE thread)
     {
@@ -575,27 +622,48 @@ namespace
             fixture.valid = fixture.valid && created;
             Sleep(5);
             fixture.originalNext = runtime.nextThread;
+            fixture.originalCompare = runtime.compareThreadObjects;
             runtime.nextThread = &ExitingDiscoveryNext;
+            if (fixture.mode == 7)
+                runtime.compareThreadObjects = &ExitingDiscoveryCompare;
         }
+        for (unsigned index = 0; index < fixture.extraDead.size(); ++index)
+            if (fixture.extraDead[index].thread && GetThreadId(thread) == fixture.extraDead[index].id)
+            {
+                auto& child = fixture.extraDead[index];
+                DWORD exitCode = 0;
+                ++fixture.extraDeadCalls[index];
+                if (fixture.extraDeadCalls[index] <= fixture.extraDuplicates[index].size())
+                    fixture.extraDuplicates[index][fixture.extraDeadCalls[index] - 1] = thread;
+                else
+                    fixture.valid = false;
+                fixture.valid = SetEvent(child.release) != FALSE && WaitForSingleObject(thread, 5000) == WAIT_OBJECT_0 &&
+                                GetExitCodeThread(thread, &exitCode) != FALSE && exitCode == STILL_ACTIVE && fixture.valid;
+                return thread;
+            }
         if (GetThreadId(thread) != fixture.dead.id)
             return thread;
         ++fixture.deadCalls;
         fixture.deadDuplicate = thread;
+        if (fixture.deadCalls <= fixture.deadDuplicates.size())
+            fixture.deadDuplicates[fixture.deadCalls - 1] = thread;
+        else
+            fixture.valid = false;
         fixture.deadHandlesClosed = false;
         if (fixture.mode != 1)
         {
-            fixture.deadExitProved = SetEvent(fixture.dead.release) != FALSE && WaitForSingleObject(fixture.dead.thread, 5000) == WAIT_OBJECT_0 &&
-                                     GetExitCodeThread(fixture.dead.thread, &fixture.deadExitCode) != FALSE;
+            const auto proofHandle = fixture.dead.thread ? fixture.dead.thread : thread;
+            fixture.deadExitProved = SetEvent(fixture.dead.release) != FALSE && WaitForSingleObject(proofHandle, 5000) == WAIT_OBJECT_0 &&
+                                     GetExitCodeThread(proofHandle, &fixture.deadExitCode) != FALSE;
             fixture.valid = fixture.valid && fixture.deadExitProved;
             if (fixture.mode == 0 && fixture.deadExitProved)
             {
-                // Model the thread owner releasing its own refs after normal
-                // exit. Production's iterator/duplicate still keep this exact
-                // object valid for Suspend and its zero-wait proof. A separate
-                // negative retains these refs and reselects it on every pass.
-                if (CloseHandle(fixture.dead.thread))
+                // Production's new strong identity handle must keep the object
+                // valid even after its creator releases these extra references.
+                // Other positive modes deliberately retain all creator refs.
+                if (fixture.dead.thread && CloseHandle(fixture.dead.thread))
                     fixture.dead.thread = nullptr;
-                if (CloseHandle(fixture.restricted))
+                if (fixture.restricted && CloseHandle(fixture.restricted))
                     fixture.restricted = nullptr;
                 fixture.extraDeadReferencesReleased = !fixture.dead.thread && !fixture.restricted;
                 fixture.valid = fixture.valid && fixture.extraDeadReferencesReleased;
@@ -625,17 +693,43 @@ namespace
     void ExitingDiscoveryAfterClose(HANDLE handle, BOOL result)
     {
         auto& fixture = *exitingDiscoveryFixture;
-        if (fixture.deadHandlesClosed || !fixture.deadDuplicate)
-            return;
-        if (handle == fixture.deadDuplicate)
-            ++fixture.duplicateCloses;
-        else if (handle == fixture.deadIterator)
-            ++fixture.iteratorCloses;
-        else
-            return;
-        fixture.valid = fixture.valid && result != FALSE;
-        // Stop tracking once both exact handles close; later native iterator
-        // opens may reuse their numeric values for different thread objects.
+        for (unsigned child = 0; child < fixture.extraDead.size(); ++child)
+            for (unsigned index = 0; index < fixture.extraDeadCalls[child]; ++index)
+            {
+                if (handle == fixture.extraDuplicates[child][index] && !fixture.extraClosedDuplicates[child][index])
+                {
+                    fixture.extraClosedDuplicates[child][index] = true;
+                    ++fixture.extraDuplicateCloses[child];
+                }
+                else if (handle == fixture.extraIterators[child][index] && !fixture.extraClosedIterators[child][index])
+                {
+                    fixture.extraClosedIterators[child][index] = true;
+                    ++fixture.extraIteratorCloses[child];
+                }
+                else
+                    continue;
+                fixture.valid = fixture.valid && result != FALSE;
+                return;
+            }
+        for (unsigned index = 0; index < fixture.deadCalls; ++index)
+        {
+            if (handle == fixture.deadDuplicates[index] && !fixture.closedDuplicates[index])
+            {
+                fixture.closedDuplicates[index] = true;
+                ++fixture.duplicateCloses;
+            }
+            else if (handle == fixture.deadIterators[index] && !fixture.closedIterators[index])
+            {
+                fixture.closedIterators[index] = true;
+                ++fixture.iteratorCloses;
+            }
+            else
+                continue;
+            fixture.valid = fixture.valid && result != FALSE;
+            break;
+        }
+        // Numeric values may be reused after a completed close; only current
+        // unclosed references participate in exact close accounting.
         fixture.deadHandlesClosed = fixture.duplicateCloses == fixture.deadCalls && fixture.iteratorCloses == fixture.deadCalls;
     }
 }
@@ -644,12 +738,15 @@ bool OwnedNativeDispatchExitingInstall(std::uintptr_t wrapper, unsigned mode, mt
     using namespace mta::game_de;
     ExitingDiscoveryFixture fixture;
     fixture.mode = mode;
+    const std::array<ExitingDiscoveryChild*, 4> children{&fixture.dead, &fixture.live, &fixture.extraDead[0], &fixture.extraDead[1]};
+    const unsigned                              childCount = mode == 6 ? 4u : mode == 5 ? 3u : 2u;
     fixture.create = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     fixture.created = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     fixture.creatorReady = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     fixture.creatorStop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    for (auto* child : {&fixture.dead, &fixture.live})
+    for (unsigned index = 0; index < childCount; ++index)
     {
+        auto* child = children[index];
         child->ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
         child->release = CreateEventW(nullptr, TRUE, FALSE, nullptr);
         Check(child->ready && child->release, "exiting discovery owns child barriers before any hold");
@@ -660,8 +757,9 @@ bool OwnedNativeDispatchExitingInstall(std::uintptr_t wrapper, unsigned mode, mt
         {
             SetEvent(fixture.creatorReady);
             WaitForSingleObject(fixture.create, INFINITE);
-            for (auto* child : {&fixture.dead, &fixture.live})
+            for (unsigned index = 0; index < childCount; ++index)
             {
+                auto* child = children[index];
                 child->thread = CreateThread(nullptr, 0, &ExitingDiscoveryChildBody, child, 0, &child->id);
                 if (!child->thread || WaitForSingleObject(child->ready, 5000) != WAIT_OBJECT_0)
                     fixture.valid = false;
@@ -684,33 +782,53 @@ bool OwnedNativeDispatchExitingInstall(std::uintptr_t wrapper, unsigned mode, mt
     fixtureAfterClose = nullptr;
     if (fixture.originalNext)
         runtime.nextThread = fixture.originalNext;
+    if (fixture.originalCompare)
+        runtime.compareThreadObjects = fixture.originalCompare;
     exitingDiscoveryFixture = nullptr;
     state = runtime.setup;
-    const unsigned expectedDeadCalls = mode == 4 ? 4u : 1u;
+    const bool     positive = mode == 0 || mode == 4 || mode == 5;
+    const unsigned expectedDeadCalls = mode == 0 || mode == 6 ? 4u : mode == 4 || mode == 5 ? 3u : mode == 7 ? 2u : 1u;
+    bool           distinctDeadHandles = true;
+    for (unsigned index = 0; index < fixture.deadCalls; ++index)
+        distinctDeadHandles = fixture.deadDuplicates[index] != fixture.deadIterators[index] && distinctDeadHandles;
     Check(fixture.started && fixture.valid && fixture.originalNext && fixture.syncRequested && fixture.deadCalls == expectedDeadCalls,
           "production discovery enumerates and duplicates an owned child with synchronization rights before its actual suspension attempt");
     Check(fixture.deadResult == static_cast<DWORD>(-1) && fixture.deadError == static_cast<DWORD>(mode == 3 ? ERROR_INVALID_HANDLE : ERROR_ACCESS_DENIED),
           "production stable suspension receives the actual Win32 failure without replacing its original error");
-    Check(!fixture.continuedExitedIterator, "an exited iterator object is closed before the next production discovery pass restarts from null");
-    Check(fixture.deadDuplicate != fixture.deadIterator && fixture.duplicateCloses == expectedDeadCalls && fixture.iteratorCloses == expectedDeadCalls &&
-              fixture.deadHandlesClosed,
-          "the production path closes the separate stable duplicate and iterator handles exactly once before reopening the next pass");
+    Check(positive || mode == 6 || mode == 7 ? fixture.continuedExitedIterator && fixture.continuedDeadCalls == expectedDeadCalls - (mode == 7 ? 1u : 0u)
+                                             : !fixture.continuedExitedIterator,
+          "every accepted dead branch continues from the still-owned native iterator; failing controls close without continuing");
+    Check(distinctDeadHandles && fixture.duplicateCloses == expectedDeadCalls && fixture.iteratorCloses == expectedDeadCalls && fixture.deadHandlesClosed,
+          "production closes every iterator after continuation and each independent dead duplicate/cache handle exactly once");
     Check(!pending && runtime.retainedSuspensions.empty() && !runtime.safetyHeldSuspensions,
           "every completed exit/refusal pipeline balances its initial holds without retaining ownership");
-    if (mode == 0)
+    for (unsigned index = 0; index < fixture.extraDead.size(); ++index)
+        Check(fixture.extraIteratorCloses[index] == fixture.extraDeadCalls[index] && fixture.extraDuplicateCloses[index] == fixture.extraDeadCalls[index],
+              "every additional dead-object iterator and strong cache/duplicate handle closes once on success and churn refusal");
+    if (positive)
     {
-        Check(installed && fixture.deadWait == WAIT_OBJECT_0 && fixture.passes == 4 && state.stablePasses == 4 && fixture.liveCalls == 1 &&
-                  fixture.liveResult == 0 && fixture.liveContextChecked && state.heldThreads == state.initialThreads + 1,
-              "dead pass restarts, then holds/context-checks the newly visible live child and completes two subsequent stable passes within four");
-        Check(fixture.deadExitProved && fixture.deadExitCode == STILL_ACTIVE && fixture.extraDeadReferencesReleased,
-              "completed wait and exit259 are captured before fixture refs release; production handles alone preserve the actual exit proof");
+        const unsigned expectedPasses = mode == 0 ? 4u : 3u;
+        Check(installed && fixture.deadWait == WAIT_OBJECT_0 && fixture.passes == expectedPasses && state.stablePasses == expectedPasses &&
+                  fixture.liveCalls == 1 && fixture.liveResult == 0 && fixture.liveContextChecked && state.heldThreads == state.initialThreads + 1,
+              "retained exited objects do not starve later live discovery; first sightings reset and two full later passes complete within four");
+        Check(fixture.deadExitProved && fixture.deadExitCode == STILL_ACTIVE &&
+                  (mode == 0 ? fixture.extraDeadReferencesReleased : !fixture.extraDeadReferencesReleased),
+              "real wait proves exit259 with both released-creator and fully retained-reference lifetime cases");
+        if (mode == 5)
+            Check(fixture.extraDeadCalls[0] == 3 && !fixture.extraDeadCalls[1],
+                  "multiple distinct retained exited objects each require fresh Suspend5/wait proof on all three passes");
     }
-    else if (mode == 4)
+    else if (mode == 6)
         Check(!installed && fixture.deadExitProved && !fixture.extraDeadReferencesReleased && fixture.deadWait == WAIT_OBJECT_0 && fixture.passes == 4 &&
                   state.stablePasses == 4 && state.stage == static_cast<unsigned>(RenderSetupStage::StableLimit) && state.failureStage == state.stage &&
                   !state.errorDomain && !state.errorCode && !state.transactionCommitted && !state.hooksCommitted && !state.installSucceeded &&
-                  fixture.liveCalls <= 1 && state.heldThreads == state.initialThreads + fixture.liveCalls,
-              "repeated retained exited objects exhaust the unchanged four-pass budget and refuse before any hook transaction");
+                  fixture.liveCalls == 1 && state.heldThreads == state.initialThreads + 1 && fixture.extraDeadCalls[0] == 3 && fixture.extraDeadCalls[1] == 2,
+              "first-seen dead-object churn resets stability and exhausts four passes before any transaction instead of being treated as neutral");
+    else if (mode == 7)
+        Check(!installed && fixture.passes == 2 && fixture.unknownComparisons == 1 && state.stage == static_cast<unsigned>(RenderSetupStage::StableSuspend) &&
+                  state.failureStage == state.stage && state.errorDomain == static_cast<unsigned>(RenderSetupErrorDomain::NtStatus) &&
+                  state.errorCode == 0xc0000008u && !state.transactionCommitted && !state.hooksCommitted && !state.installSucceeded,
+              "an unknown raw object-comparison status refuses before any transaction without interpreting it as equality or inequality");
     else
         Check(!installed && fixture.passes == 1 && !fixture.liveCalls && state.stage == static_cast<unsigned>(RenderSetupStage::StableSuspend) &&
                   state.failureStage == state.stage && state.errorDomain == static_cast<unsigned>(RenderSetupErrorDomain::Win32) &&
@@ -723,12 +841,13 @@ bool OwnedNativeDispatchExitingInstall(std::uintptr_t wrapper, unsigned mode, mt
     Check(SuspendThread(fixture.live.thread) == 0 && ResumeThread(fixture.live.thread) == 1 && SuspendThread(creator.native_handle()) == 0 &&
               ResumeThread(creator.native_handle()) == 1,
           "production borrowed enrollment and cleanup restore exactly the original creator/live-child suspend counts");
-    SetEvent(fixture.dead.release);
-    SetEvent(fixture.live.release);
+    for (unsigned index = 0; index < childCount; ++index)
+        SetEvent(children[index]->release);
     SetEvent(fixture.creatorStop);
     creator.join();
-    for (auto* child : {&fixture.dead, &fixture.live})
+    for (unsigned index = 0; index < childCount; ++index)
     {
+        auto* child = children[index];
         if (child->thread)
         {
             Check(WaitForSingleObject(child->thread, 5000) == WAIT_OBJECT_0, "owned discovery child finishes cooperatively without forced termination");
@@ -742,7 +861,7 @@ bool OwnedNativeDispatchExitingInstall(std::uintptr_t wrapper, unsigned mode, mt
     Check((!fixture.restricted || CloseHandle(fixture.restricted)) && CloseHandle(fixture.create) && CloseHandle(fixture.created) &&
               CloseHandle(fixture.creatorReady) && CloseHandle(fixture.creatorStop),
           "owned discovery creator and restricted control handles are released");
-    return mode == 0 ? installed : !installed;
+    return positive ? installed : !installed;
 }
 DWORD WINAPI RefuseThreadResume(HANDLE)
 {
@@ -767,6 +886,20 @@ bool OwnedNativeDispatchVmTransactions()
     Check(!PrepareNativeThreadEnumeration(), "copied or altered non-image NtGetNextThread entry refuses before any hold");
     runtime.nextThread = savedEntry;
     runtime.nextThreadImage = savedImage;
+    const auto savedComparison = runtime.compareThreadObjects;
+    Check(Read(reinterpret_cast<std::uintptr_t>(savedComparison), foreignStub.data(), foreignStub.size()),
+          "owned fixture reads only cached native comparison stub");
+    Check(NativeThreadComparisonStubMatches(foreignStub), "all24 original native comparison bytes match the admitted profile");
+    for (auto& byte : foreignStub)
+    {
+        byte ^= 1;
+        Check(!NativeThreadComparisonStubMatches(foreignStub), "each changed comparison stub byte refuses the actual signature helper");
+        byte ^= 1;
+    }
+    runtime.compareThreadObjects = reinterpret_cast<CompareThreadObjects>(foreignStub.data());
+    Check(!PrepareNativeThreadEnumeration(), "copied non-image native comparison entry refuses before any hold");
+    runtime.compareThreadObjects = savedComparison;
+    Check(PrepareNativeThreadEnumeration(), "both exact system entries remain admissible after copied-entry refusal");
     ThreadHandles vmHandles;
     vmHandles.reserve(1024);
     MEMORY_BASIC_INFORMATION vmPage{};

@@ -798,15 +798,29 @@ void CheckFrameBoundaryProbe(const char* customFixture, const char* wrapperFixtu
             Require(detail::PrepareDispatchRelay(), "next independent owned install prepares fresh leaf storage after refused-attempt cleanup", checks);
         }
         if (!ownedEndpoint)
-            for (const unsigned refusalMode : {1u, 2u, 3u, 4u})
+            for (const unsigned refusalMode : {1u, 2u, 3u, 6u, 7u})
             {
                 RenderSetupDiagnosticV1 refusedThread;
                 Require(OwnedNativeDispatchExitingInstall(flowWrapper, refusalMode, refusedThread),
-                        "full owned install keeps live denial, failed wait, other errors and repeated retained exits fail closed", checks);
+                        "full owned install keeps live denial, failed wait, other errors, fresh-dead churn and unknown identity fail closed", checks);
                 flowPending = false;
                 Require(OwnedNativeDispatchTransaction(false, flowWrapper, flowPending) && !flowPending,
                         "stable-thread refusal owns no hook transaction and leaves ordinary safe cleanup available", checks);
                 Require(detail::PrepareDispatchRelay(), "next stable-thread control receives fresh owned relay storage", checks);
+            }
+        if (!ownedEndpoint)
+            for (const unsigned retainedMode : {4u, 5u})
+            {
+                RenderSetupDiagnosticV1 retainedThread;
+                Require(OwnedNativeDispatchExitingInstall(flowWrapper, retainedMode, retainedThread),
+                        "full owned install advances past multiple retained exited objects to later live children", checks);
+                flowPending = false;
+                Require(OwnedNativeDispatchTransaction(false, flowWrapper, flowPending) && !flowPending,
+                        "retained-exit positive pipeline detaches and restores all holds and callsite ownership", checks);
+                Require(!detail::runtime.dispatchRelay && !detail::runtime.dispatchPatched &&
+                            std::memcmp(flowMemory, flowExpected.data(), flowExpected.size()) == 0,
+                        "retained-exit positive cleanup frees relay and restores exact complete code pages", checks);
+                Require(detail::PrepareDispatchRelay(), "next retained-exit positive receives fresh owned relay storage", checks);
             }
         flowPending = false;
         RenderSetupDiagnosticV1 installedSetup;

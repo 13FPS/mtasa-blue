@@ -6,8 +6,27 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
-**Latest live API6 result: stable thread suspension refused; cleanup and normal exit passed.**
-The trial stopped after 288 ms. Its setup report identifies `StableSuspend`
+**Latest live API6 result: stable discovery limit refused; cleanup and normal exit passed.**
+The trial stopped after 272 ms with `StableLimit` (stage 21), no OS error, 189
+initial/peak held threads and four discovery passes entered. No transaction or
+hook write began. All holds were released and Core/XML/pthread unloaded. GTA
+continued normally; all 23 installed hashes matched. The final 6,511-byte log
+preserves the 6,437-byte capture plus 74 shutdown bytes, and the 1,133-byte
+endpoint and 488-byte setup logs are unchanged through exit. Callback and
+dispatch/buffer observations remain zero.
+
+The diagnostic does not distinguish the per-pass enumeration bound from
+four-pass exhaustion, or identify a thread, its liveness, an exited-thread skip,
+or the cause. The next correction passes 3,617 native checks plus four
+unavailable-build checks. It continues with a valid iterator and a separate
+bounded cache of exact exited objects. First sightings reset stability; every
+repeat still needs fresh exit proof before it can leave stability unchanged.
+The four-pass budget and two consecutive stable passes remain. Separate owned
+Windows programs pass 27 continuation and 34 native identity checks; these do
+not identify the actual game's limit cause or validate rendering.
+
+**Preceding live API6 result: stable suspension refused; cleanup and normal exit passed.**
+That trial stopped after 288 ms. Its setup report identifies `StableSuspend`
 (stage 18), Win32 access denied (5), on a newly discovered thread after 190
 initial holds. No transaction or hook write began; all holds were released and
 Core/XML/pthread unloaded. GTA continued normally and all 23 installed hashes

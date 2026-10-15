@@ -3,11 +3,30 @@
 Last updated: **2026-10-15** (Europe/Luxembourg).
 Experimental branch: `definitive-edition-port`.
 Live renderer source baseline: `05e80a41ecfcdd27165c7eefa3912a809c5546a4`.
-Latest completed diagnostic runtime: `f997c936a4b4c9fe8f174d18781e257131824897`.
+Latest completed diagnostic runtime: `12e83c8e3eb5c6bfae278037b6a3c120b0d8527f`.
 
 ## Current result
 
-The latest API6 live trial stopped after 288 ms during stable thread discovery.
+The latest API6 live trial stopped after 272 ms with `StableLimit` (stage 21),
+no OS error, 189 initial/peak held threads and four discovery passes entered.
+No transaction or hook write began. Cleanup released all holds, Core/XML/pthread
+unloaded, and normal exit passed. GTA continued normally; all 23 installed
+hashes matched. The final 6,511-byte log preserves the 6,437-byte capture plus
+74 shutdown bytes; endpoint and setup logs remain 1,133 and 488 bytes through
+exit. Callbacks and dispatch/buffer observations remain zero.
+
+Stage 21 can report either a per-pass enumeration bound or exhaustion of the
+four-pass budget. The recording does not distinguish those branches or identify
+a thread, its liveness, an exited-thread skip, or why stability failed. Owned
+tests now cover bounded continuation past proven exited objects. The next
+candidate keeps a separate VM-backed strong-handle cache, prepared before any
+hold. First-seen exited objects reset stability; repeated sightings require a
+fresh exit proof and exact native object identity before becoming neutral. The
+four-pass budget, per-pass enumeration bound and two stable passes remain.
+Unknown comparison statuses refuse before writes. This is offline coverage;
+the actual game's limit cause remains unknown.
+
+The preceding API6 live trial stopped after 288 ms during stable thread discovery.
 The separate setup report identifies `StableSuspend` (stage 18), Win32 access
 denied (5), on a newly discovered thread after 190 initial peers were held.
 The refusal occurred before the Detours transaction or any hook write. All
@@ -90,7 +109,7 @@ Cleanup preserves the initial setup failure. The API6 136-field observation
 wire and 20-field endpoint diagnostic are unchanged; this report grants no
 callback, endpoint, buffer or GPU admission.
 
-The offline candidate passes 3,483 native checks plus four checks with the
+The offline candidate passes 3,617 native checks plus four checks with the
 extension disabled, 1,688 adapter-module checks and 1,290 x64/three x86 Core
 consumer checks. Core lifecycle tests pass 12,125 checks on each architecture.
 The normal build passes 38 guards, 248 startup checks in each classic and
@@ -100,7 +119,10 @@ The bridge passes 293 protocol and 1,771 ABI checks; script/log tests pass
 265 metadata/ownership checks without submitting GPU commands. These tests
 do not validate visible GTA rendering or multiplayer readiness. The separate
 setup logger passes 88 checks on each architecture; its capture/preparation
-helpers pass 97 checks, including the sealed refusal and owned exit proof.
+helpers pass 137 checks, including the sealed refusal and separate owned
+continuation (27) and native identity (34) proofs. Those standalone programs
+establish only the pinned local Windows behavior; producer fixtures cover
+complete owned install/detach and refusal cleanup.
 Review caught and fixed a cross-lease setup-cache race
 with a nonblocking operation guard and a stale final-cache replay on a missed
 optional read. The blocked logger run and earlier receipts remain preserved.

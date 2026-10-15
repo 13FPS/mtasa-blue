@@ -95,6 +95,7 @@ namespace mta::game_de
         };
         using ThreadHandles = std::vector<HANDLE, VirtualAllocator<HANDLE>>;
         using NextThread = LONG(NTAPI*)(HANDLE, HANDLE, ACCESS_MASK, ULONG, ULONG, PHANDLE);
+        using CompareThreadObjects = LONG(NTAPI*)(HANDLE, HANDLE);
 
         struct Runtime
         {
@@ -118,6 +119,7 @@ namespace mta::game_de
             ThreadHandles                retainedSuspensions;
             bool                         safetyHeldSuspensions = false;
             NextThread                   nextThread = nullptr;
+            CompareThreadObjects         compareThreadObjects = nullptr;
             std::uintptr_t               nextThreadImage = 0;
             RenderSetupDiagnosticV1      setup;
             bool                         setupTracing = false;
@@ -697,12 +699,18 @@ namespace mta::game_de
                                                              0x03, 0xfe, 0x7f, 0x01, 0x75, 0x03, 0x0f, 0x05, 0xc3, 0xcd, 0x2e, 0xc3};
             return actual == expected;
         }
+        bool NativeThreadComparisonStubMatches(const std::array<unsigned char, 24>& actual) noexcept
+        {
+            constexpr std::array<unsigned char, 24> expected{0x4c, 0x8b, 0xd1, 0xb8, 0x9f, 0,    0,    0,    0xf6, 0x04, 0x25, 0x08,
+                                                             0x03, 0xfe, 0x7f, 0x01, 0x75, 0x03, 0x0f, 0x05, 0xc3, 0xcd, 0x2e, 0xc3};
+            return actual == expected;
+        }
         bool PrepareNativeThreadEnumeration() noexcept
         {
             // Toolhelp may allocate internally. Cache this exact local x64
             // system entry before holds; stable passes then use only its
             // syscall/int2e stub. Modified or foreign entries fail closed.
-            if (!runtime.nextThread)
+            if (!runtime.nextThread || !runtime.compareThreadObjects)
             {
                 SetupStep(RenderSetupStage::NativeThreadModule);
                 if (!runtime.retainedSuspensions.empty())
@@ -720,6 +728,12 @@ namespace mta::game_de
                     const auto error = GetLastError();
                     return SetupRefused(RenderSetupStage::NativeThreadExport, RenderSetupErrorDomain::Win32, error);
                 }
+                const auto comparison = GetProcAddress(module, "NtCompareObjects");
+                if (!comparison)
+                {
+                    const auto error = GetLastError();
+                    return SetupRefused(RenderSetupStage::NativeThreadExport, RenderSetupErrorDomain::Win32, error);
+                }
                 SetupStep(RenderSetupStage::NativeThreadImage);
                 MEMORY_BASIC_INFORMATION page{};
                 if (VirtualQuery(reinterpret_cast<void*>(entry), &page, sizeof(page)) != sizeof(page))
@@ -729,7 +743,15 @@ namespace mta::game_de
                 }
                 if (page.Type != MEM_IMAGE || page.AllocationBase != module)
                     return SetupRefused(RenderSetupStage::NativeThreadImage);
+                if (VirtualQuery(reinterpret_cast<void*>(comparison), &page, sizeof(page)) != sizeof(page))
+                {
+                    const auto error = GetLastError();
+                    return SetupRefused(RenderSetupStage::NativeThreadImage, RenderSetupErrorDomain::Win32, error);
+                }
+                if (page.Type != MEM_IMAGE || page.AllocationBase != module)
+                    return SetupRefused(RenderSetupStage::NativeThreadImage);
                 runtime.nextThread = reinterpret_cast<NextThread>(entry);
+                runtime.compareThreadObjects = reinterpret_cast<CompareThreadObjects>(comparison);
                 runtime.nextThreadImage = reinterpret_cast<std::uintptr_t>(module);
             }
             SetupStep(RenderSetupStage::NativeThreadStubRead);
@@ -737,7 +759,16 @@ namespace mta::game_de
             if (!Read(reinterpret_cast<std::uintptr_t>(runtime.nextThread), actual.data(), actual.size(), runtime.nextThreadImage, true))
                 return SetupRefused(RenderSetupStage::NativeThreadStubRead);
             SetupStep(RenderSetupStage::NativeThreadStubMatch);
-            return NativeThreadStubMatches(actual) || SetupRefused(RenderSetupStage::NativeThreadStubMatch);
+            if (!NativeThreadStubMatches(actual))
+                return SetupRefused(RenderSetupStage::NativeThreadStubMatch);
+            // The documented Win32 comparator converts negative NT statuses.
+            // Use only the pinned local syscall body while peers are stopped,
+            // avoiding that wrapper's additional error-conversion calls.
+            SetupStep(RenderSetupStage::NativeThreadStubRead);
+            if (!Read(reinterpret_cast<std::uintptr_t>(runtime.compareThreadObjects), actual.data(), actual.size(), runtime.nextThreadImage, true))
+                return SetupRefused(RenderSetupStage::NativeThreadStubRead);
+            SetupStep(RenderSetupStage::NativeThreadStubMatch);
+            return NativeThreadComparisonStubMatches(actual) || SetupRefused(RenderSetupStage::NativeThreadStubMatch);
         }
         bool ResumeOwnedThread(HANDLE thread, DWORD(WINAPI* resume)(HANDLE) = &ResumeThread, DWORD* resumeError = nullptr) noexcept
         {
@@ -753,6 +784,15 @@ namespace mta::game_de
             // VM-backed buffers are reserved before suspension. Newly found
             // children never grow a vector or touch a stopped CRT heap.
             constexpr std::size_t maximumThreads = 1024;
+            struct ExitedObjects
+            {
+                ThreadHandles handles;
+                ~ExitedObjects()
+                {
+                    for (const auto handle : handles)
+                        CloseHandle(handle);
+                }
+            } exitedObjects;
             if (threads.size() > maximumThreads)
                 return SetupRefused(RenderSetupStage::ThreadLimit);
             SetupStep(RenderSetupStage::HoldReserve);
@@ -760,6 +800,7 @@ namespace mta::game_de
             {
                 threads.reserve(maximumThreads);
                 held.reserve(maximumThreads);
+                exitedObjects.handles.reserve(maximumThreads);
                 held.resize(threads.size(), nullptr);
             }
             catch (...)
@@ -784,7 +825,7 @@ namespace mta::game_de
                 if (runtime.setupTracing)
                     runtime.setup.stablePasses = pass + 1;
                 HANDLE   previous = nullptr;
-                bool     ready = runtime.nextThread != nullptr, added = false;
+                bool     ready = runtime.nextThread && runtime.compareThreadObjects, added = false;
                 unsigned enumerated = 0;
                 if (!ready)
                     SetupRefused(RenderSetupStage::StableEnumerate);
@@ -848,16 +889,49 @@ namespace mta::game_de
                                     // suspension. Error 5 alone also describes a
                                     // live access refusal; discard only this exact
                                     // owned object after a nonblocking exit proof.
-                                    // Restart from null rather than continue the
-                                    // iterator from an exited thread. This pass
-                                    // cannot count toward the two stable passes.
                                     const bool exited = error == ERROR_ACCESS_DENIED && WaitForSingleObject(thread, 0) == WAIT_OBJECT_0;
-                                    CloseHandle(thread);
                                     if (exited)
                                     {
-                                        added = true;
-                                        break;
+                                        // Retained exited objects remain enumerable.
+                                        // Keep the iterator valid through its next
+                                        // native call, and remember exact kernel
+                                        // objects with separate unsuspended handles.
+                                        // First sightings reset stability because a
+                                        // dead creator could have spawned a live
+                                        // child behind this scan; only repeats with
+                                        // this fresh exit proof are neutral.
+                                        bool seen = false;
+                                        for (const auto known : exitedObjects.handles)
+                                        {
+                                            const auto comparisonStatus = runtime.compareThreadObjects(thread, known);
+                                            if (comparisonStatus == 0)
+                                            {
+                                                seen = true;
+                                                break;
+                                            }
+                                            if (comparisonStatus != static_cast<LONG>(0xc00001acu))
+                                            {
+                                                ready = SetupRefused(RenderSetupStage::StableSuspend, RenderSetupErrorDomain::NtStatus,
+                                                                     static_cast<std::uint32_t>(comparisonStatus));
+                                                break;
+                                            }
+                                        }
+                                        if (ready && !seen)
+                                        {
+                                            if (exitedObjects.handles.size() == maximumThreads)
+                                                ready = SetupRefused(RenderSetupStage::ThreadLimit);
+                                            else
+                                            {
+                                                exitedObjects.handles.push_back(thread);
+                                                thread = nullptr;
+                                                added = true;
+                                            }
+                                        }
+                                        if (thread)
+                                            CloseHandle(thread);
+                                        continue;
                                     }
+                                    CloseHandle(thread);
                                     ready = SetupRefused(RenderSetupStage::StableSuspend, RenderSetupErrorDomain::Win32, error);
                                 }
                                 else

@@ -111,6 +111,177 @@ namespace
         }
         return DetourTransactionCommit() == NO_ERROR;
     }
+    void CheckOwnedNativeRoots(unsigned& checks)
+    {
+        namespace detail = mta::game_de::boundary_detail;
+        Require(!detail::runtime.armed && !detail::runtime.committed && !detail::runtime.inFlight,
+                "full native-root fixture runs without installed hooks or active callbacks", checks);
+        struct OwnedRootImage
+        {
+            void*          base = nullptr;
+            std::uintptr_t previousImage = detail::runtime.image;
+            ~OwnedRootImage()
+            {
+                detail::runtime.image = previousImage;
+                if (base)
+                    VirtualFree(base, 0, MEM_RELEASE);
+            }
+        } ownedImage;
+        // Only the two scalar-global pages are committed. The reserved range
+        // gives the actual reader its pinned RVA arithmetic without loading or
+        // invoking a game image, changing admission, or inventing COM objects.
+        ownedImage.base = VirtualAlloc(nullptr, 0x5040000, MEM_RESERVE, PAGE_NOACCESS);
+        Require(ownedImage.base != nullptr, "owned root fixture reserves its private RVA range", checks);
+        SYSTEM_INFO system{};
+        GetSystemInfo(&system);
+        const auto image = reinterpret_cast<std::uintptr_t>(ownedImage.base);
+        for (const std::uintptr_t offset : {0x503e8e0u, 0x503f45cu})
+        {
+            const auto page = image + offset - offset % system.dwPageSize;
+            Require(VirtualAlloc(reinterpret_cast<void*>(page), system.dwPageSize, MEM_COMMIT, PAGE_READWRITE) == reinterpret_cast<void*>(page),
+                    "only owned GPU/AFR scalar pages are committed", checks);
+        }
+        detail::runtime.image = image;
+        std::array<unsigned char, 0x1d8> viewport{}, context{};
+        std::array<unsigned char, 0x8b0> owner{};
+        std::array<unsigned char, 0x678> device{}, otherDevice{};
+        std::array<unsigned char, 0x30>  manager{}, alternateManager{}, commandData{}, decoyData{};
+        std::array<unsigned char, 0x130> texture{}, alternateTexture{};
+        std::array<unsigned char, 0x178> nativeTexture{};
+        std::array<unsigned char, 0x58>  view{};
+        std::array<unsigned char, 0xcc>  resource{};
+        std::array<std::uintptr_t, 1>    contextRoot{}, queue{}, swapchain{}, rawResource{};
+        const auto                       address = [](const auto& value) { return reinterpret_cast<std::uintptr_t>(value.data()); };
+        const auto putPointer = [](std::uintptr_t at, std::uintptr_t value) { std::memcpy(reinterpret_cast<void*>(at), &value, sizeof(value)); };
+        const auto putScalar = [](std::uintptr_t at, std::uint32_t value) { std::memcpy(reinterpret_cast<void*>(at), &value, sizeof(value)); };
+        const auto putByte = [](std::uintptr_t at, unsigned char value) { std::memcpy(reinterpret_cast<void*>(at), &value, sizeof(value)); };
+        const auto viewportAddress = address(viewport), contextAddress = address(context), managerAddress = address(manager),
+                   dataAddress = address(commandData);
+        putScalar(image + 0x503e8e0, 1);
+        putScalar(image + 0x503f45c, 1);
+        putPointer(viewportAddress, image + 0x4504060);
+        putPointer(viewportAddress + 0x18, address(owner));
+        putPointer(viewportAddress + 0x60, address(swapchain));
+        putPointer(address(owner) + 0x8a8, address(device));
+        putPointer(address(device) + 0x38, managerAddress);
+        putPointer(address(device) + 0x48, address(alternateManager));
+        putPointer(address(otherDevice) + 0x38, managerAddress);
+        putPointer(managerAddress, image + 0x44fbe88);
+        putPointer(managerAddress + 0x28, address(queue));
+        contextRoot[0] = contextAddress;
+        putPointer(address(device) + 0x670, address(contextRoot));
+        putPointer(contextAddress + 0x140, address(device));
+        putScalar(contextAddress + 0x138, 1);
+        putByte(contextAddress + 0x13e, 0);
+        putPointer(contextAddress + 0x1c8, image + 0x44fcae0);
+        putPointer(contextAddress + 0x1d0, dataAddress);
+        // The native handle is inline at context+1C8. Its +8 is already the
+        // data pointer. Data+8 is unrelated and deliberately null/decoy so a
+        // second dereference cannot accidentally pass this regression.
+        putPointer(dataAddress + 8, 0);
+        putPointer(dataAddress + 0x18, managerAddress);
+        putPointer(address(decoyData) + 0x18, address(alternateManager));
+        putScalar(viewportAddress + 0xa0, 2);
+        putScalar(viewportAddress + 0x58, 24);
+        putScalar(viewportAddress + 0x118, 24);
+        putPointer(viewportAddress + 0xa8, address(texture));
+        putPointer(viewportAddress + 0x110, address(alternateTexture));
+        putPointer(address(texture) + 0x128, address(nativeTexture) + 0x68);
+        putPointer(address(alternateTexture) + 0x128, address(nativeTexture) + 0x68);
+        putPointer(address(nativeTexture) + 0x170, address(view));
+        putPointer(address(view) + 0x50, address(resource));
+        putPointer(address(resource), image + 0x4502080);
+        putPointer(address(resource) + 0x20, address(rawResource));
+        putScalar(address(resource) + 0xc8, 0x80000000u);
+        detail::Roots baseline;
+        Require(detail::ReadRoots(viewportAddress, baseline),
+                "actual full root extraction reads context+1D0 data then data+18 manager with unrelated data+8 null", checks);
+        Require(baseline.commandData == dataAddress && baseline.commandManager == managerAddress && baseline.contextManager == managerAddress &&
+                    baseline.texture == address(texture) && baseline.rawResource == address(rawResource) && baseline.index == 2 &&
+                    baseline.tracked == 0x80000000u && baseline.gpuCount == 1 && baseline.afrCount == 1,
+                "actual reader extracts the complete owned native context/resource graph", checks);
+        putPointer(dataAddress + 8, address(decoyData));
+        detail::Roots decoy;
+        Require(detail::ReadRoots(viewportAddress, decoy) && detail::SameRoots(baseline, decoy),
+                "unrelated data+8 decoy cannot alter extracted command data/manager or root coherence", checks);
+        // These existing validator inputs test only guarded scalar association;
+        // they do not classify a presenter or make a synthetic COM/frame claim.
+        FrameBoundaryScope selected;
+        selected.knownPresenter = true;
+        selected.nativeSwapchain = baseline.swapchain;
+        CustomPresentClassificationState knownCustom;
+        knownCustom.status = static_cast<unsigned>(CustomPresentClassificationStatus::KnownNativePresenter);
+        const auto validate = [&](const detail::Roots& roots)
+        {
+            FrameBoundaryObservationState state;
+            const auto                    result = detail::ValidateNativeRoots(roots, knownCustom, selected, baseline.swapchain, state);
+            Require(!state.status && !state.queryStage && !state.presentEntries && !(state.factsMask & ~8u),
+                    "scalar-only root validation cannot claim coherent Present, COM or resource identity", checks);
+            return result;
+        };
+        Require(validate(baseline) == S_OK, "direct single-node owned roots preserve the existing scalar association guard", checks);
+        putScalar(viewportAddress + 0x118, 25);
+        detail::Roots alternate;
+        Require(detail::ReadRoots(viewportAddress, alternate) && alternate.texture == address(alternateTexture) && validate(alternate) == S_OK,
+                "actual selector chooses viewport+110 when the two native format scalars differ", checks);
+        putScalar(viewportAddress + 0x118, 24);
+        for (const auto data : {std::uintptr_t{0}, image + 0x1000})
+        {
+            putPointer(contextAddress + 0x1d0, data);
+            detail::Roots refused;
+            Require(!detail::ReadRoots(viewportAddress, refused), "null or uncommitted owned command data refuses the actual root reader", checks);
+        }
+        putPointer(contextAddress + 0x1d0, dataAddress);
+        for (const auto table : {viewportAddress, managerAddress, address(resource)})
+        {
+            std::uintptr_t saved = 0;
+            std::memcpy(&saved, reinterpret_cast<const void*>(table), sizeof(saved));
+            putPointer(table, saved + 8);
+            detail::Roots refused;
+            Require(!detail::ReadRoots(viewportAddress, refused), "wrong viewport, manager or resource table remains unsupported", checks);
+            putPointer(table, saved);
+        }
+        putPointer(address(texture) + 0x128, 0x67);
+        detail::Roots refusedTexture;
+        Require(!detail::ReadRoots(viewportAddress, refusedTexture), "native texture bias underflow still refuses before dereferencing", checks);
+        putPointer(address(texture) + 0x128, address(nativeTexture) + 0x68);
+        putPointer(dataAddress + 0x18, address(alternateManager));
+        detail::Roots wrongManager;
+        Require(detail::ReadRoots(viewportAddress, wrongManager) && validate(wrongManager) == S_FALSE && !detail::SameRoots(baseline, wrongManager),
+                "changed actual data+18 manager fails direct association and root coherence", checks);
+        putPointer(dataAddress + 0x18, managerAddress);
+        putByte(contextAddress + 0x13e, 1);
+        detail::Roots alternateContext;
+        Require(detail::ReadRoots(viewportAddress, alternateContext) && alternateContext.contextManager == address(alternateManager) &&
+                    validate(alternateContext) == S_FALSE,
+                "alternate context selection is extracted but remains refused by the direct-only guard", checks);
+        putByte(contextAddress + 0x13e, 0);
+        putPointer(contextAddress + 0x140, address(otherDevice));
+        detail::Roots wrongDevice;
+        Require(detail::ReadRoots(viewportAddress, wrongDevice) && validate(wrongDevice) == S_FALSE,
+                "different context device cannot inherit the native creation-device association", checks);
+        putPointer(contextAddress + 0x140, address(device));
+        struct ScalarRefusal
+        {
+            std::uintptr_t at;
+            std::uint32_t  value;
+        };
+        for (const auto refusal : {ScalarRefusal{contextAddress + 0x138, 0}, ScalarRefusal{contextAddress + 0x138, 2}, ScalarRefusal{image + 0x503e8e0, 2},
+                                   ScalarRefusal{image + 0x503f45c, 2}})
+        {
+            putScalar(refusal.at, refusal.value);
+            detail::Roots refused;
+            Require(detail::ReadRoots(viewportAddress, refused) && validate(refused) == S_FALSE,
+                    "zero/multiple node mask and GPU/AFR counts retain the existing association refusal", checks);
+            putScalar(refusal.at, 1);
+        }
+        detail::Roots finalRoots;
+        Require(detail::ReadRoots(viewportAddress, finalRoots) && detail::SameRoots(baseline, finalRoots),
+                "every owned mutation is restored before the graph lease ends", checks);
+        detail::runtime.image = ownedImage.previousImage;
+        Require(VirtualFree(ownedImage.base, 0, MEM_RELEASE) != FALSE, "owned root RVA reservation is released after restoring runtime image", checks);
+        ownedImage.base = nullptr;
+    }
 }
 
 bool BoundaryFixtureOriginal(void*, std::uint32_t interval)
@@ -192,6 +363,7 @@ void CheckFrameBoundaryProbe(const char* customFixture, const char* wrapperFixtu
     namespace detail = mta::game_de::boundary_detail;
     using Status = FrameBoundaryObservationStatus;
     Require(OwnedNativeDispatchVmTransactions(), "actual VM-backed vendor commit/abort preserve borrowed counts and bypass a stopped CRT heap owner", checks);
+    CheckOwnedNativeRoots(checks);
     detail::Roots dispatchRoots;
     dispatchRoots.swapchain = 0x1000;
     dispatchRoots.device = dispatchRoots.contextDevice = 0x2000;

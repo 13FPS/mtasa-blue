@@ -80,9 +80,23 @@ own code. Core owns the same typed adapter lease and worker lifecycle; the
 bridge transports 136 scalars through a distinct opt-in version. Profile2
 describes native dispatch and CPU object association, while API5's profile1
 still describes an admitted system DXGI entry. Neither grants GPU ownership.
-Offline publication/rollback checks and normal MTA builds pass. A subsequent
-human GTA trial is required before live dispatch can be claimed.
-The latest API6 attempt returned HookInstall with zero callbacks. Its setup
+Offline publication/rollback checks and normal MTA builds pass. The latest
+API6 trial installed hooks after three stable passes with 189 initial/peak
+holds. It recorded 607 native callbacks, 604 accepted scalar snapshots and 87
+complete metadata/known-presenter reports. Native dispatch intercepted and
+forwarded 604 calls, but all association queries refused at `NativeRoots` with
+probe `E_POINTER`; forwarded target results were `S_OK`. The failed root/read
+is unknown. Cleanup, all 23 installed hashes and normal exit passed, preserving
+46,818 captured bytes plus 74 shutdown bytes and unchanged diagnostic logs.
+This proves bounded interception, not admitted buffers or GPU drawing.
+
+The narrow correction removes an extra command-data dereference exposed
+by pinned native instructions. Its owned full-graph regression fails on the
+old reader and passes after the fix; 3,650 native checks plus four
+unavailable-build checks pass. MTA still owns the Core worker, typed adapter lease and cleanup;
+the native correction supplies no separate client or rendering bypass.
+
+The preceding API6 attempt returned HookInstall with zero callbacks. Its setup
 report identifies `StableLimit` (stage 21), no OS error, 189 initial/peak holds
 and four discovery passes entered. No transaction or hook write began; cleanup
 and normal exit passed. The exact limit branch, object identity, liveness and

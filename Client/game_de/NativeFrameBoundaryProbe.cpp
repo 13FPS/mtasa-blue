@@ -572,7 +572,7 @@ namespace mta::game_de
         struct Roots
         {
             std::uintptr_t owner = 0, device = 0, manager = 0, queue = 0, swapchain = 0, custom = 0, contextRoot = 0, context = 0;
-            std::uintptr_t contextDevice = 0, contextManager = 0, commandHandle = 0, commandData = 0, commandManager = 0;
+            std::uintptr_t contextDevice = 0, contextManager = 0, commandData = 0, commandManager = 0;
             std::uintptr_t texture = 0, nativeTexture = 0, view = 0, resource = 0, rawResource = 0;
             std::uint32_t  index = 0, selectorA = 0, selectorB = 0, nodeMask = 0, tracked = 0, gpuCount = 0, afrCount = 0;
             unsigned char  alternate = 0;
@@ -580,19 +580,22 @@ namespace mta::game_de
         bool ReadRoots(std::uintptr_t viewport, Roots& r) noexcept
         {
             std::uintptr_t table = 0, managerTable = 0, resourceTable = 0;
+            // Native code at RVA 1F849E4 takes the inline handle at context+1C8,
+            // loads its +8 data pointer, then data+18 manager. Context+1D0 holds
+            // that data: another +8 dereference reads unrelated storage and
+            // can reject a valid native frame before any COM metadata query.
             if (!Read(viewport, table) || table != runtime.image + 0x4504060 || !Read(viewport + 0x18, r.owner) || !r.owner ||
                 !Read(r.owner + 0x8a8, r.device) || !r.device || !Read(r.device + 0x38, r.manager) || !r.manager || !Read(r.manager, managerTable) ||
                 managerTable != runtime.image + 0x44fbe88 || !Read(r.manager + 0x28, r.queue) || !r.queue || !Read(viewport + 0x60, r.swapchain) ||
                 !r.swapchain || !Read(viewport + 0x1d0, r.custom) || !Read(runtime.image + 0x503e8e0, r.gpuCount) ||
                 !Read(runtime.image + 0x503f45c, r.afrCount) || !Read(r.device + 0x670, r.contextRoot) || !r.contextRoot || !Read(r.contextRoot, r.context) ||
                 !r.context || !Read(r.context + 0x140, r.contextDevice) || !Read(r.context + 0x13e, r.alternate) || !Read(r.context + 0x138, r.nodeMask) ||
-                !Read(r.contextDevice + (r.alternate ? 0x48 : 0x38), r.contextManager) || !Read(r.context + 0x1d0, r.commandHandle) || !r.commandHandle ||
-                !Read(r.commandHandle + 8, r.commandData) || !r.commandData || !Read(r.commandData + 0x18, r.commandManager) ||
-                !Read(viewport + 0xa0, r.index) || !Read(viewport + 0x58, r.selectorA) || !Read(viewport + 0x118, r.selectorB) ||
-                !Read(viewport + (r.selectorA == r.selectorB ? 0xa8 : 0x110), r.texture) || !r.texture || !Read(r.texture + 0x128, r.nativeTexture) ||
-                r.nativeTexture < 0x68 || !Read(r.nativeTexture - 0x68 + 0x170, r.view) || !r.view || !Read(r.view + 0x50, r.resource) || !r.resource ||
-                !Read(r.resource, resourceTable) || resourceTable != runtime.image + 0x4502080 || !Read(r.resource + 0x20, r.rawResource) || !r.rawResource ||
-                !Read(r.resource + 0xc8, r.tracked))
+                !Read(r.contextDevice + (r.alternate ? 0x48 : 0x38), r.contextManager) || !Read(r.context + 0x1d0, r.commandData) || !r.commandData ||
+                !Read(r.commandData + 0x18, r.commandManager) || !Read(viewport + 0xa0, r.index) || !Read(viewport + 0x58, r.selectorA) ||
+                !Read(viewport + 0x118, r.selectorB) || !Read(viewport + (r.selectorA == r.selectorB ? 0xa8 : 0x110), r.texture) || !r.texture ||
+                !Read(r.texture + 0x128, r.nativeTexture) || r.nativeTexture < 0x68 || !Read(r.nativeTexture - 0x68 + 0x170, r.view) || !r.view ||
+                !Read(r.view + 0x50, r.resource) || !r.resource || !Read(r.resource, resourceTable) || resourceTable != runtime.image + 0x4502080 ||
+                !Read(r.resource + 0x20, r.rawResource) || !r.rawResource || !Read(r.resource + 0xc8, r.tracked))
                 return false;
             return true;
         }
@@ -601,11 +604,10 @@ namespace mta::game_de
             // Roots is value-initialized but padding is not part of its identity.
             return a.owner == b.owner && a.device == b.device && a.manager == b.manager && a.queue == b.queue && a.swapchain == b.swapchain &&
                    a.custom == b.custom && a.contextRoot == b.contextRoot && a.context == b.context && a.contextDevice == b.contextDevice &&
-                   a.contextManager == b.contextManager && a.commandHandle == b.commandHandle && a.commandData == b.commandData &&
-                   a.commandManager == b.commandManager && a.texture == b.texture && a.nativeTexture == b.nativeTexture && a.view == b.view &&
-                   a.resource == b.resource && a.rawResource == b.rawResource && a.index == b.index && a.selectorA == b.selectorA &&
-                   a.selectorB == b.selectorB && a.nodeMask == b.nodeMask && a.tracked == b.tracked && a.alternate == b.alternate && a.gpuCount == b.gpuCount &&
-                   a.afrCount == b.afrCount;
+                   a.contextManager == b.contextManager && a.commandData == b.commandData && a.commandManager == b.commandManager && a.texture == b.texture &&
+                   a.nativeTexture == b.nativeTexture && a.view == b.view && a.resource == b.resource && a.rawResource == b.rawResource && a.index == b.index &&
+                   a.selectorA == b.selectorA && a.selectorB == b.selectorB && a.nodeMask == b.nodeMask && a.tracked == b.tracked &&
+                   a.alternate == b.alternate && a.gpuCount == b.gpuCount && a.afrCount == b.afrCount;
         }
         enum class IdentityResult
         {

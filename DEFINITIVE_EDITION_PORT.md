@@ -3,11 +3,36 @@
 Last updated: **2026-10-15** (Europe/Luxembourg).
 Experimental branch: `definitive-edition-port`.
 Live renderer source baseline: `05e80a41ecfcdd27165c7eefa3912a809c5546a4`.
-Latest completed diagnostic runtime: `12e83c8e3eb5c6bfae278037b6a3c120b0d8527f`.
+Latest completed diagnostic runtime: `e3dd414523e75577198b978bc809b4ee32b5bbef`.
 
 ## Current result
 
-The latest API6 live trial stopped after 272 ms with `StableLimit` (stage 21),
+The latest API6 live trial completed its ten-second observation and installed
+hooks successfully: setup stage 40, 189 initial/peak holds and three stable
+passes. There were 607 native callbacks, 604 accepted scalar snapshots and 87
+complete GPU-metadata/known-presenter reports. Native dispatch intercepted
+604 calls and rejected all 604 buffer-association queries. Every sampled
+dispatch tail reports `QueryFailed`, profile 2, `NativeRoots` and probe HRESULT
+`E_POINTER`; the forwarded target returned `S_OK`. These are distinct results.
+The recording does not identify the invalid root or failed read/exception.
+
+GTA continued normally. Hooks were removed, every held thread released and
+Core/XML/pthread unloaded; all 23 installed files matched. Normal exit preserves
+the complete 46,818-byte capture plus 74 shutdown bytes. The 1,520-byte endpoint
+and 732-byte setup logs remain unchanged. Buffer association, GPU ownership,
+drawing and full client readiness remain false.
+
+Pinned native instructions expose a concrete source mismatch: the inline
+command handle starts at `context+0x1C8`, its `+8` contains command data, and
+data `+0x18` contains the manager. The adapter already reads `context+0x1D0`
+but then dereferences data `+8` again. The correction removes that extra
+indirection. A full owned pointer graph fails on the old reader and passes
+after the fix, including unrelated null/decoy `data+8`, selector paths and
+unchanged table/range/device/node refusal guards. The suite passes 3,650 native
+checks plus four unavailable-build checks. It does not establish which live
+root failed or grant any drawing capability; the next live result is pending.
+
+The preceding API6 live trial stopped after 272 ms with `StableLimit` (stage 21),
 no OS error, 189 initial/peak held threads and four discovery passes entered.
 No transaction or hook write began. Cleanup released all holds, Core/XML/pthread
 unloaded, and normal exit passed. GTA continued normally; all 23 installed
@@ -91,7 +116,8 @@ dispatch record to the unchanged 110-field API5 prefix; profile2 cannot become
 profile1 admission or GPU ownership. Owned hosts pass 146 argument, forwarding
 and exception-unwind checks for both the ordinary and CFG/CET-compatible
 builds. Hardware policy in GTA remains unverified. Native publication and
-cleanup checks and the normal MTA build pass; live dispatch remains unverified.
+cleanup checks and the normal MTA build pass. Live interception now ran 604
+times; native buffer association and GPU drawing remain unverified.
 
 The API6 transaction owns each suspension count itself. Its Detours nodes and
 thread lists use virtual memory so cleanup cannot wait for a suspended CRT
@@ -109,7 +135,7 @@ Cleanup preserves the initial setup failure. The API6 136-field observation
 wire and 20-field endpoint diagnostic are unchanged; this report grants no
 callback, endpoint, buffer or GPU admission.
 
-The offline candidate passes 3,617 native checks plus four checks with the
+The offline candidate passes 3,650 native checks plus four checks with the
 extension disabled, 1,688 adapter-module checks and 1,290 x64/three x86 Core
 consumer checks. Core lifecycle tests pass 12,125 checks on each architecture.
 The normal build passes 38 guards, 248 startup checks in each classic and
@@ -119,8 +145,9 @@ The bridge passes 293 protocol and 1,771 ABI checks; script/log tests pass
 265 metadata/ownership checks without submitting GPU commands. These tests
 do not validate visible GTA rendering or multiplayer readiness. The separate
 setup logger passes 88 checks on each architecture; its capture/preparation
-helpers pass 137 checks, including the sealed refusal and separate owned
-continuation (27) and native identity (34) proofs. Those standalone programs
+helpers pass 151 checks, including preservation of the sealed partial-positive
+live result and separate owned continuation (27) and native identity (34)
+proofs. Those standalone programs
 establish only the pinned local Windows behavior; producer fixtures cover
 complete owned install/detach and refusal cleanup.
 Review caught and fixed a cross-lease setup-cache race

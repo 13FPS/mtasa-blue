@@ -6,7 +6,33 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
-**Latest live API6 result: stable discovery limit refused; cleanup and normal exit passed.**
+**Latest live API6 result: hook setup passed; native-root association refused.**
+The ten-second trial installed its hooks with 189 initial/peak held threads and
+three stable-discovery passes. It recorded 607 native wrapper entries, 604
+accepted scalar snapshots and 87 complete metadata/known-presenter reports.
+The native dispatch hook ran 604 times; all 604 association queries refused.
+Every sampled dispatch report has profile 2, `QueryFailed`, query stage
+`NativeRoots` and probe HRESULT `E_POINTER`. The forwarded target returned
+`S_OK`; its result is separate from the failed probe. The log does not identify
+the invalid root or distinguish a refused read from a guarded exception.
+
+GTA continued normally. Hooks were removed, all holds released and
+Core/XML/pthread unloaded. All 23 installed hashes matched. Normal exit retains
+the complete 46,818-byte capture plus 74 shutdown bytes; the 1,520-byte endpoint
+and 732-byte setup logs are unchanged. Buffer association, GPU ownership,
+drawing and full MTA readiness remain unverified.
+
+Offline inspection found an extra dereference in the command-data chain:
+`context+0x1D0` already contains the data pointer, whose `+0x18` holds its
+manager. The correction removes that extra indirection. An owned full-graph
+regression fails on the old reader and passes with the narrow fix, including
+null/decoy unrelated storage and unchanged refusal guards. The native suite
+passes 3,650 checks plus four unavailable-build checks; the adapter module
+passes 1,688 checks. This corrects the source mismatch without identifying the
+specific live predicate that failed. Live validation is still required; no
+walking test is needed.
+
+**Preceding live API6 result: stable discovery limit refused; cleanup and normal exit passed.**
 The trial stopped after 272 ms with `StableLimit` (stage 21), no OS error, 189
 initial/peak held threads and four discovery passes entered. No transaction or
 hook write began. All holds were released and Core/XML/pthread unloaded. GTA

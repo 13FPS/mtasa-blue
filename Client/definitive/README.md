@@ -6,7 +6,30 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
-**Next candidate: Core-owned startup of MTA's actual GUI on D3D12.**
+**Latest live GUI result: Core-owned offscreen rendering, cleanup and normal exit passed.**
+Actual MTA Core started the existing CGUI/CEGUI session on GTA's retained
+D3D12 device. Its real widgets, text and texture rendered into an MTA-owned
+640x480 BGRA8 target. Pixel readback verified 133,058 changed pixels, the
+background, texture and opaque alpha. The helper submitted its two clear/copy
+lists and the GUI submitted one frame; the final fence signaled/completed at
+1/1. Core's bounded session completed in 401 ms; the script observed 523 ms.
+
+The explicit device lease came from generation 1, with one accepted snapshot,
+one native dispatch and coherent source profile 2. The native observer ended
+before GUI/GPU work. The final of two logged Core11 / GUI1 snapshots matches the
+terminal 64-scalar Core record; the separate 19-scalar worker report confirms cleanup.
+Core/cgui/XML/pthread unloaded, the backend remained pinned as expected, and
+all 36 installed hashes matched. The user reported normal GTA continuation.
+Normal exit preserves the complete 6,580-byte capture plus 74 shutdown bytes;
+the 219-byte GUI log is unchanged. Whole logs, the source/package snapshots and
+independent actual/normal-exit reviews are sealed together.
+
+This validates MTA's real GUI on the actual device using its own queue and
+offscreen resources. Native queue/backbuffer writes and visible GTA drawing
+remain unverified; full startup and multiplayer remain gated. The port stays
+EXPERIMENTAL. The next integration reuses this renderer through a separately
+authorized native frame callback with resize and owner-thread drain handling.
+
 `package.ps1 -Mode Smoke -MtaCoreGuiStartupReference` selects a separate,
 disabled-by-default trial. Its 36-file bundle adds the real `cgui.dll` and
 MTA's skin/font assets to the ordinary 23-file bundle. Install, update and
@@ -33,9 +56,8 @@ Offline validation covers real three-buffer WARP swapchains in formats 24/87/28
 builds pass with classic Win32 startup preserved; legacy D3DX9 loading is
 delayed on the opt-in x64 GUI path. Package ownership passes 1,008 checks
 across 105 cases, including complete 23/36-file upgrades and rollback.
-These owned fixtures establish offline behavior. The actual-device GUI
-startup result remains pending a manual GTA
-trial; visible GTA drawing and multiplayer remain unverified.
+These owned fixtures cover the lifecycle around the actual-device result above;
+they do not establish visible GTA drawing or multiplayer.
 
 **Latest live API6 result: native backbuffer association passed; cleanup and normal exit passed.**
 The primary-backbuffer trial recorded 603 native callbacks, 601 accepted
@@ -49,7 +71,7 @@ GTA continued normally. Hooks were removed, all held threads released and
 Core/XML/pthread unloaded. All 23 installed hashes matched. Normal exit
 preserves the complete 46,055-byte capture plus 74 shutdown bytes; the
 2,678-byte endpoint, 1,583-byte setup and 2,369-byte roots logs are unchanged.
-This validates native CPU/COM buffer association. GPU ownership remains
+This validates native CPU/COM buffer association. Native frame GPU ownership remains
 unsupported, with zero accepted GPU probes; no GPU commands or drawing were
 included. The separate system DXGI API5 endpoint remains unadmitted. Full
 MTA startup and multiplayer remain gated, and the port stays EXPERIMENTAL.

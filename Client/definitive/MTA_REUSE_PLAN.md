@@ -159,7 +159,7 @@ checks for actual CGUI rendering, fresh asset/log paths, pending fences,
 signal recovery and irreversible release faults. Debug-layer validation was
 unavailable; these tests do not claim it.
 
-The first actual-device startup candidate adds an explicit one-shot retained
+The first actual-device startup trial passed. It adds an explicit one-shot retained
 device handoff. Ordinary API6 observers retain no device and keep the existing
 136-scalar contract. Core preloads the existing cgui assets, requests the new
 lease, and detaches the observer before creating its own queue and fixed BGRA8
@@ -170,12 +170,72 @@ retain all owners; unknown release faults never authorize an unload.
 
 `package.ps1 -Mode Smoke -MtaCoreGuiStartupReference` explicitly selects this
 36-file trial; the ordinary package remains 23 files and the source flag stays
-false. The actual-device test remains pending. It expects no visible overlay
-or movement. The existing 23-file launcher preflight is separate and does not
-validate the GUI bundle. Visible integration must separately place drawing after the
-custom presenter's Social Club callback and release retained backbuffer
-references before native resize. Core and GUI leases must survive a pending
-drain; full startup and multiplayer stay gated.
+false. The completed test renders offscreen with no visible overlay or
+movement. The existing 23-file launcher preflight is separate and does not
+validate the GUI bundle.
+
+The live trial completed in 401 ms on Core and 523 ms on the script. One
+coherent profile-2 device lease produced the actual 640x480 BGRA8 GUI workload:
+two helper clear/copy submissions, one CGUI frame, fence 1/1 and 133,058 changed
+pixels with background/texture/alpha checks. Core/cgui/XML/pthread unloaded,
+the backend PIN matched, all 36 installed hashes passed, and normal GTA exit
+preserved the 6,580-byte capture plus 74 shutdown bytes. The 219-byte Core GUI
+log is unchanged. This establishes actual-device offscreen GUI rendering;
+native frame drawing, full startup and multiplayer remain gated.
+
+The next visible integration must preserve the existing renderer and establish
+a new native/Core ownership contract. `IGuiD3D12Session::RenderFrame` already
+records barriers, submits work and signals its supplied queue. The existing
+API6 facts and one-shot device lease grant no authority for those operations on
+the native queue or backbuffer. Admission needs a source-pinned boundary after
+native rendering and the Social Club callback, before the actual Present, with
+the required resource state and submission order established independently.
+Same-queue ordering alone does not establish where native work is submitted.
+See Microsoft's [submission contract](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12commandqueue-executecommandlists).
+
+The pinned profile-2 seam already sits after the custom-present/Social Club
+callback and immediately before the vtable `+0x40` dispatch. The existing
+`HookNativeDispatch` preserves the captured target and forwards it once.
+Static native paths place final barriers and queue submission before the
+wrapper; API6 now confirms the selected context/manager/queue/device and current
+`GetBuffer` identity. The separately pinned native `CreateSwapChain` path
+establishes the creation-queue relation; `GetDevice` supplies device identity.
+The CPU tracker value is still intent, not a GPU state read. A new explicit
+write lease must declare its state/order policy;
+inferring the valid game's PRESENT contract must stay explicit.
+
+Core should prepare cgui and register a retained callback owner on its worker,
+then create/use the real session and widgets on the authorized render thread.
+The current offscreen helper stays worker-owned and continues to end observation
+before starting GPU work. Full `CCore` frame pulses remain gated because their
+gameplay dependencies are not initialized by this diagnostic startup.
+
+The native producer must also coordinate pause, resize/destruction and stop:
+
+- Deliver only a validated frame with strong device/creation-queue/current-buffer
+  references and explicit generation, resize epoch, index, format, dimensions
+  and resource-state/submission policy. Reject foreign or nested delivery.
+- Stop admission before resize, drain GUI work on its owner thread, and release
+  every external backbuffer reference before forwarding the native operation.
+  Revalidate afterward and recreate the session on device/queue/format changes.
+  Current resize/destruction hooks count and immediately forward, so they do
+  not provide this handshake. See the [DXGI resize requirements](https://learn.microsoft.com/en-us/windows/win32/api/dxgi/nf-dxgi-idxgiswapchain-resizebuffers).
+- Make an owner-thread drain callback reachable without another Present.
+  Cancellation requests stop atomically; Busy/error retains Core, cgui, the
+  session and backend until GPU retirement and callback quiescence. Cleanup
+  cannot move to the worker or detach the callback while it is still needed.
+
+Pinned resize entry precedes a native manager drain and custom notification,
+then the first buffer release. Admission must close at entry; the later
+notification alone cannot quiesce in-flight GUI work. The destruction path has
+no equivalent established manager drain. Neither path currently proves that
+it runs on the GUI's render owner or guarantees a final owner-thread callback.
+
+Before another live drawing trial, extend the existing owned three-buffer WARP
+fixture through this Core/backend handshake. Cover actual widget pixels, one
+Present forwarding per call, blocked-queue retention, resize/recreation,
+foreign/nested refusal, and cancellation with a drain but no later Present.
+Keep API6, the GUI v1 session and the completed GUI64 offscreen trial unchanged.
 
 The preceding read-only live session ran for **60,003 ms**,
 with **1,188 native samples and 515 script snapshots**. Four directions, sprint

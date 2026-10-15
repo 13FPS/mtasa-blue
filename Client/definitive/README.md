@@ -6,31 +6,36 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
-**Latest live API6 result: hook setup passed; native-root association refused.**
-The corrected-reader ten-second trial installed its hooks with 188 initial/peak held threads and
-three stable-discovery passes. It recorded 603 native wrapper entries, 601
+**Latest live API6 result: logged texture-null refusal; cleanup and normal exit passed.**
+The roots-diagnostic ten-second trial installed its hooks with 187 initial/peak held threads and
+three stable-discovery passes. It recorded 606 native wrapper entries, 601
 accepted scalar snapshots and 87 complete metadata/known-presenter reports.
 The native dispatch hook ran 601 times; all 601 association queries refused.
 Every sampled dispatch report has profile 2, `QueryFailed`, query stage
 `NativeRoots` and probe HRESULT `E_POINTER`. The forwarded target returned
-`S_OK`; its result is separate from the failed probe. The log does not identify
-the invalid root or distinguish a refused read from a guarded exception.
+`S_OK`; its result is separate from the failed probe. All 11 fresh roots
+reports identify `Texture` (checkpoint 22), `RequiredNull`, no guarded
+exception, known node mask 1 and buffer indices 0/1/2. The selected texture
+slot read succeeded, then its required-nonnull guard failed. These sampled
+reports do not identify every unsampled query's cause, the selector branch,
+why the slot was null or the cause of an earlier trial.
 
 GTA continued normally. Hooks were removed, all holds released and
 Core/XML/pthread unloaded. All 23 installed hashes matched. Normal exit retains
-the complete 46,823-byte capture plus 74 shutdown bytes; the 1,907-byte endpoint
-and 976-byte setup logs are unchanged. Buffer association, GPU ownership,
+the complete 46,824-byte capture plus 74 shutdown bytes; the 2,291-byte endpoint,
+1,339-byte setup and 1,235-byte roots logs are unchanged. Buffer association, GPU ownership,
 drawing and full MTA readiness remain unverified.
 
-Offline inspection found an extra dereference in the command-data chain:
-`context+0x1D0` already contains the data pointer, whose `+0x18` holds its
-manager. The correction removes that extra indirection. An owned full-graph
-regression fails on the old reader and passes with the narrow fix, including
-null/decoy unrelated storage and unchanged refusal guards. The native suite
-passes 3,650 checks plus four unavailable-build checks; the adapter module
-passes 1,688 checks. This corrects the source mismatch without identifying the
-specific live predicate that failed. The corrected-reader live trial above
-still refused at the same broad stage, so no second pointer change is inferred.
+Pinned native instructions distinguish the primary backbuffer at
+`viewport+0xA8` from the format-dependent helper's nullable alternate at
+`+0x110`. The observer incorrectly required that helper-selected texture
+when associating the DXGI backbuffer. The correction follows the primary
+texture, retaining the existing selector/coherence reads, nonnull guards,
+canonical `GetBuffer` identity, resource state, queue and cleanup checks.
+The live log does not establish that the primary slot was nonnull; that
+candidate still requires live validation. Earlier command-data extraction
+was separately corrected to read `context+0x1D0` then data `+0x18`; neither
+source correction retrospectively identifies an earlier trial's exact cause.
 
 An optional, separately versioned 14-scalar roots diagnostic now records the
 existing read checkpoint, refusal category, root-query phase, actual guarded
@@ -42,9 +47,12 @@ counters. Core caches the export before Begin and writes bounded JSONL to
 preserve caller output; a failed final read cannot replay a pre-End report.
 The strict saved-file reader attributes only fresh PID/run/generation records.
 This diagnostic does not grant buffer admission, GPU work or readiness. Its
-live result remains pending; no walking test is needed.
+live result is the logged predicate above; no walking test is needed.
 
-Offline validation passes 3,686 native checks plus four unavailable-build
+The owned primary-texture regression fails on the old reader with a null
+alternate, then passes with the correction, including a distinct decoy and an
+unreadable alternate. A null primary still refuses even with a valid alternate.
+Offline validation passes 3,697 native checks plus four unavailable-build
 checks, 1,703 adapter checks, 1,330 x64 consumer checks, all 51 worker scenarios
 and 49 scalar-logger checks on each architecture plus 16 saved-reader tests.
 The normal Core build passes 39 guards and 248 startup checks in each layout.

@@ -81,13 +81,16 @@ bridge transports 136 scalars through a distinct opt-in version. Profile2
 describes native dispatch and CPU object association, while API5's profile1
 still describes an admitted system DXGI entry. Neither grants GPU ownership.
 Offline publication/rollback checks and normal MTA builds pass. The latest
-corrected-reader API6 trial installed hooks after three stable passes with 188 initial/peak
-holds. It recorded 603 native callbacks, 601 accepted scalar snapshots and 87
+roots-diagnostic API6 trial installed hooks after three stable passes with 187 initial/peak
+holds. It recorded 606 native callbacks, 601 accepted scalar snapshots and 87
 complete metadata/known-presenter reports. Native dispatch intercepted and
 forwarded 601 calls, but all association queries refused at `NativeRoots` with
-probe `E_POINTER`; forwarded target results were `S_OK`. The failed root/read
-is unknown. Cleanup, all 23 installed hashes and normal exit passed, preserving
-46,823 captured bytes plus 74 shutdown bytes and unchanged diagnostic logs.
+probe `E_POINTER`; forwarded target results were `S_OK`. All 11 fresh roots
+reports identify a successful selected-texture read followed by `RequiredNull`
+at checkpoint 22. The selector branch, primary slot value and underlying cause
+remain unknown; unsampled queries and earlier trials have no new cause claim.
+Cleanup, all 23 installed hashes and normal exit passed, preserving
+46,824 captured bytes plus 74 shutdown bytes and unchanged diagnostic logs.
 This proves bounded interception, not admitted buffers or GPU drawing.
 
 The narrow correction removes an extra command-data dereference exposed
@@ -95,12 +98,15 @@ by pinned native instructions. Its owned full-graph regression fails on the
 old reader and passes after the fix; 3,650 native checks plus four
 unavailable-build checks pass. MTA still owns the Core worker, typed adapter lease and cleanup;
 the native correction supplies no separate client or rendering bypass. Its
-live result above still refused, leaving the precise root unknown. The next
-candidate adds a separate 14-scalar read/refusal diagnostic to the same MTA
+live result still refused. A separate 14-scalar read/refusal diagnostic uses the same MTA
 lease and worker. It preserves all existing reads, guards and the 136-scalar
 observation, publishes only accepted-callback cache values and logs outside
 the callback. Its strict reader binds fresh PID/run/generation evidence;
-diagnostic success cannot admit buffers, GPU commands or full startup.
+diagnostic success cannot admit buffers, GPU commands or full startup. The
+next correction follows the primary `viewport+0xA8` backbuffer used by native
+resource preparation, rather than requiring its nullable format-dependent
+alternate. Existing selector/coherence, canonical buffer identity, resource
+state and cleanup guards remain; the primary's live value is still untested.
 
 The preceding API6 attempt returned HookInstall with zero callbacks. Its setup
 report identifies `StableLimit` (stage 21), no OS error, 189 initial/peak holds

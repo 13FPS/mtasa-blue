@@ -622,6 +622,10 @@ namespace mta::game_de
             // loads its +8 data pointer, then data+18 manager. Context+1D0 holds
             // that data: another +8 dereference reads unrelated storage and
             // can reject a valid native frame before any COM metadata query.
+            // Native RVA1FD5FBF resolves primary+A8 independently; the format
+            // selector may return an absent alternate that RVA1FD6022 skips.
+            // Canonical GetBuffer equality must inspect that primary resource,
+            // without requiring an optional alternate or using it as a fallback.
             if (!RootRead(viewport, table, RootCheckpoint::ViewportTable, trace) ||
                 !RootGuard(table == runtime.image + 0x4504060, RootReason::TableMismatch, trace) ||
                 !RootRead(viewport + 0x18, r.owner, RootCheckpoint::Owner, trace) || !RootGuard(r.owner != 0, RootReason::RequiredNull, trace) ||
@@ -647,8 +651,7 @@ namespace mta::game_de
                 !RootRead(viewport + 0xa0, r.index, RootCheckpoint::BufferIndex, trace) ||
                 !RootRead(viewport + 0x58, r.selectorA, RootCheckpoint::SelectorA, trace) ||
                 !RootRead(viewport + 0x118, r.selectorB, RootCheckpoint::SelectorB, trace) ||
-                !RootRead(viewport + (r.selectorA == r.selectorB ? 0xa8 : 0x110), r.texture, RootCheckpoint::Texture, trace) ||
-                !RootGuard(r.texture != 0, RootReason::RequiredNull, trace) ||
+                !RootRead(viewport + 0xa8, r.texture, RootCheckpoint::Texture, trace) || !RootGuard(r.texture != 0, RootReason::RequiredNull, trace) ||
                 !RootRead(r.texture + 0x128, r.nativeTexture, RootCheckpoint::NativeTexture, trace) ||
                 !RootGuard(r.nativeTexture >= 0x68, RootReason::TextureBias, trace) ||
                 !RootRead(r.nativeTexture - 0x68 + 0x170, r.view, RootCheckpoint::View, trace) || !RootGuard(r.view != 0, RootReason::RequiredNull, trace) ||

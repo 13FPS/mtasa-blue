@@ -147,10 +147,10 @@ namespace
         std::array<unsigned char, 0x678> device{}, otherDevice{};
         std::array<unsigned char, 0x30>  manager{}, alternateManager{}, commandData{}, decoyData{};
         std::array<unsigned char, 0x130> texture{}, alternateTexture{};
-        std::array<unsigned char, 0x178> nativeTexture{};
-        std::array<unsigned char, 0x58>  view{};
-        std::array<unsigned char, 0xcc>  resource{};
-        std::array<std::uintptr_t, 1>    contextRoot{}, queue{}, swapchain{}, rawResource{};
+        std::array<unsigned char, 0x178> nativeTexture{}, decoyNativeTexture{};
+        std::array<unsigned char, 0x58>  view{}, decoyView{};
+        std::array<unsigned char, 0xcc>  resource{}, decoyResource{};
+        std::array<std::uintptr_t, 1>    contextRoot{}, queue{}, swapchain{}, rawResource{}, decoyRawResource{};
         const auto                       address = [](const auto& value) { return reinterpret_cast<std::uintptr_t>(value.data()); };
         const auto putPointer = [](std::uintptr_t at, std::uintptr_t value) { std::memcpy(reinterpret_cast<void*>(at), &value, sizeof(value)); };
         const auto putScalar = [](std::uintptr_t at, std::uint32_t value) { std::memcpy(reinterpret_cast<void*>(at), &value, sizeof(value)); };
@@ -187,12 +187,17 @@ namespace
         putPointer(viewportAddress + 0xa8, address(texture));
         putPointer(viewportAddress + 0x110, address(alternateTexture));
         putPointer(address(texture) + 0x128, address(nativeTexture) + 0x68);
-        putPointer(address(alternateTexture) + 0x128, address(nativeTexture) + 0x68);
+        putPointer(address(alternateTexture) + 0x128, address(decoyNativeTexture) + 0x68);
         putPointer(address(nativeTexture) + 0x170, address(view));
         putPointer(address(view) + 0x50, address(resource));
         putPointer(address(resource), image + 0x4502080);
         putPointer(address(resource) + 0x20, address(rawResource));
         putScalar(address(resource) + 0xc8, 0x80000000u);
+        putPointer(address(decoyNativeTexture) + 0x170, address(decoyView));
+        putPointer(address(decoyView) + 0x50, address(decoyResource));
+        putPointer(address(decoyResource), image + 0x4502080);
+        putPointer(address(decoyResource) + 0x20, address(decoyRawResource));
+        putScalar(address(decoyResource) + 0xc8, 0x80000000u);
         RenderRootsDiagnosticV1 trace;
         trace.queryPhase = static_cast<unsigned>(RenderRootsDiagnosticPhase::NativeRoots);
         detail::Roots baseline;
@@ -229,9 +234,31 @@ namespace
         };
         Require(validate(baseline) == S_OK, "direct single-node owned roots preserve the existing scalar association guard", checks);
         putScalar(viewportAddress + 0x118, 25);
-        detail::Roots alternate;
-        Require(detail::ReadRoots(viewportAddress, alternate) && alternate.texture == address(alternateTexture) && validate(alternate) == S_OK,
-                "actual selector chooses viewport+110 when the two native format scalars differ", checks);
+        auto primaryExpected = baseline;
+        primaryExpected.selectorB = 25;
+        // The native presentation code resolves primary+A8 independently of
+        // the nullable format-selected alternate. A valid decoy graph and an
+        // unreadable alternate ensure this does not silently use a fallback.
+        for (const auto alternate : {std::uintptr_t{0}, address(alternateTexture), image + 0x1000})
+        {
+            putPointer(viewportAddress + 0x110, alternate);
+            detail::Roots primary;
+            Require(detail::ReadRoots(viewportAddress, primary, &trace) && primary.texture == address(texture) && detail::SameRoots(primaryExpected, primary) &&
+                        validate(primary) == S_OK,
+                    "unequal format scalars with null, decoy or unreadable alternate must extract the required primary swapchain texture", checks);
+            Require(trace.checkpoint == 29 && !trace.refusalReason && trace.scalarValidMask == 3 && primary.rawResource == address(rawResource),
+                    "optional alternate storage cannot replace the primary resource or its complete trace", checks);
+        }
+        putPointer(viewportAddress + 0x110, address(alternateTexture));
+        putPointer(viewportAddress + 0xa8, 0);
+        detail::Roots absentPrimary;
+        Require(!detail::ReadRoots(viewportAddress, absentPrimary, &trace) && trace.checkpoint == 22 && trace.refusalReason == 2 && trace.scalarValidMask == 3,
+                "missing primary remains refused even when a valid selected alternate exists", checks);
+        putPointer(viewportAddress + 0xa8, address(texture));
+        detail::Roots changedSelector;
+        Require(detail::ReadRoots(viewportAddress, changedSelector) && detail::SameRoots(primaryExpected, changedSelector) &&
+                    !detail::SameRoots(baseline, changedSelector),
+                "selector scalar changes remain part of root coherence despite the same primary resource", checks);
         putScalar(viewportAddress + 0x118, 24);
         for (const auto data : {std::uintptr_t{0}, image + 0x1000})
         {
@@ -263,6 +290,11 @@ namespace
         Require(trace.checkpoint == 23 && trace.refusalReason == 4 && trace.scalarValidMask == 3 && !trace.exceptionCode,
                 "texture bias guard reports no invented read exception", checks);
         putPointer(address(texture) + 0x128, address(nativeTexture) + 0x68);
+        putPointer(address(resource) + 0x20, 0);
+        detail::Roots absentResource;
+        Require(!detail::ReadRoots(viewportAddress, absentResource, &trace) && trace.checkpoint == 27 && trace.refusalReason == 2 && trace.scalarValidMask == 3,
+                "the primary raw-resource required-null guard stays closed", checks);
+        putPointer(address(resource) + 0x20, address(rawResource));
         putPointer(dataAddress + 0x18, address(alternateManager));
         detail::Roots wrongManager;
         Require(detail::ReadRoots(viewportAddress, wrongManager) && validate(wrongManager) == S_FALSE && !detail::SameRoots(baseline, wrongManager),
@@ -309,6 +341,12 @@ namespace
         Require(tracedQueries.Execute(FrameBoundaryQueryStage::RootReadback, readbackState) == S_OK && trace.queryPhase == 2 && trace.checkpoint == 29 &&
                     !trace.refusalReason && (readbackState.factsMask & 128),
                 "actual before-Close readback preserves equality facts and records phase2", checks);
+        putScalar(viewportAddress + 0x118, 25);
+        Require(tracedQueries.Execute(FrameBoundaryQueryStage::RootReadback, readbackState) == S_FALSE && trace.queryPhase == 2 && trace.checkpoint == 29 &&
+                    !trace.refusalReason && !(readbackState.factsMask & 128) &&
+                    readbackState.status == static_cast<unsigned>(FrameBoundaryObservationStatus::RootsChanged),
+                "actual readback still rejects changed selector scalars without selecting an alternate resource", checks);
+        putScalar(viewportAddress + 0x118, 24);
         Require(tracedQueries.Close(), "owned root query with no COM references closes normally", checks);
         tracedQueries.MarkAfterCloseReadback();
         putScalar(viewportAddress + 0xa0, 0);

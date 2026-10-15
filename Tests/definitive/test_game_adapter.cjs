@@ -1206,6 +1206,7 @@ async function main() {
             MTA_CORE_RENDER_GPU_REFERENCE: overrides.mtaCoreRenderGpuReference ?? false,
             MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE: overrides.mtaCoreRenderCustomPresentReference ?? false,
             MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE: overrides.mtaCoreRenderFrameBoundaryReference ?? false,
+            MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE: overrides.mtaCoreRenderNativeDispatchReference ?? false,
             Date: { now: () => overrides.times ? overrides.times[frame] : frame * 50 },
             CLEO: { version: overrides.version || '1.5.1', apiVersion: overrides.definitions || '0.500', hostVersion: '1.0.113.49697469' },
             native: (name, ...args) => { record(name, ...args);
@@ -1295,6 +1296,60 @@ async function main() {
                 DE_CoreRenderReadV5: field => coreBoundaryState({ ...(polls < 2 ? { 1: 1, 2: 1, 3: 0, 4: 0, 5: 1, 6: 0, 7: 0, 13: 1 } : {}),
                     ...overrides.renderState })[field], ...overrides.functions } });
     };
+    const coreDispatchState = (overrides = {}) => {
+        const state = coreBoundaryState({ 0: 6 }).concat(Array(26).fill(0));
+        state.splice(110, 26, ...state.slice(84, 110)); state[111] = 2;
+        state.fill(0, 84, 110); state[84] = 1;
+        Object.assign(state, overrides); return state;
+    };
+    const coreDispatch = (overrides = {}) => {
+        let polls = 0;
+        return coreBoundary({ mtaCoreRenderNativeDispatchReference: true, ...overrides,
+            functions: { DE_CoreRenderApiVersionV6: () => 6, DE_CoreRenderBeginV6: () => 1, DE_CoreRenderCaptureV6: () => 1,
+                DE_CoreStartupPoll: () => ++polls >= 2 ? 1 : 0,
+                DE_CoreRenderReadV6: field => coreDispatchState({ ...(polls < 2 ? { 1: 1, 2: 1, 3: 0, 4: 0, 5: 1, 6: 0, 7: 0, 13: 1 } : {}),
+                    ...overrides.renderState })[field], ...overrides.functions } });
+    };
+    test('API6 transports136 scalars with independent profile2 and preserves refused standard Present', () => {
+        const result = coreDispatch();
+        assert.deepEqual(result.calls.find(call => call[0] === 'DE_CoreRenderBeginV6'), ['DE_CoreRenderBeginV6', 2]);
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreRenderReadV6').length, 272);
+        assert.ok(!result.calls.some(call => /DE_CoreRender.*V[2345]/.test(call[0])));
+        const start = result.logs.find(event => event.event === 'core_render_reference_started');
+        assert.equal(start.core_api, 10); assert.equal(start.observation_api, 6);
+        const finish = result.logs.find(event => event.event === 'core_render_reference_finished');
+        assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true); assert.equal(finish.full_core_ready, false);
+        for (const { state } of result.logs.filter(event => event.event === 'core_render_reference_sample')) {
+            assert.equal(state.length, 136); assert.deepEqual(Array.from(state.slice(84, 110)), [1, ...Array(25).fill(0)]);
+            assert.deepEqual(Array.from(state.slice(110, 113)), [2, 2, 255]); assert.equal(state[53], 0);
+        }
+    });
+    for (const override of [{ mtaCoreRenderFrameBoundaryReference: false }, { mtaCoreRenderCustomPresentReference: false },
+            { mtaCoreRenderGpuReference: false }, { mtaCoreRenderReference: false }, { mtaCoreRenderRoute: 'd3d11' },
+            { mtaCoreRenderNativeDispatchReference: 'true' }])
+        test('API6 requires explicit native dispatch prerequisites ' + JSON.stringify(override), () => {
+            const result = coreDispatch(override); assert.equal(result.calls.length, 0);
+            assert.ok(result.logs.some(event => event.event === 'adapter_failed'));
+        });
+    for (const value of [undefined, () => 5, () => 7])
+        test('API6 missing or mismatched export cannot fall back to API5 ' + String(value), () => {
+            const result = coreDispatch({ functions: { DE_CoreRenderApiVersionV6: value } });
+            assert.ok(!result.calls.some(call => /DE_CoreRenderBegin/.test(call[0])));
+        });
+    for (const [field, value] of [[111, 1], [111, 0], [111, 3], [112, 254], [113, 0x80004005], [114, 2],
+            [115, 16], [116, 1], [117, 0], [120, 601], [130, 43], [133, 1], [134, 8], [135, 1], [85, 2]])
+        test('API6 independently refuses forged dispatch field ' + field + ':' + value, () => {
+            const result = coreDispatch({ renderState: { [field]: value } });
+            assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 1);
+            assert.ok(!result.logs.some(event => event.event === 'core_render_reference_finished'));
+        });
+    test('API6 accepts pointer-free refusals without inventing readiness', () => {
+        for (const [status, profile] of [[1, 0], [10, 2], [8, 2]]) {
+            const zero = Object.fromEntries(Array.from({ length: 26 }, (_, i) => [110 + i, 0]));
+            const result = coreDispatch({ renderState: { ...zero, 110: status, 111: profile } });
+            assert.equal(result.logs.find(event => event.event === 'core_render_reference_finished').passed, false);
+        }
+    });
     test('API5 carries scalar110 separately and never promotes coherent CPU association to GPU readiness', () => {
         const result = coreBoundary();
         assert.deepEqual(result.calls.find(call => call[0] === 'DE_CoreRenderBeginV5'), ['DE_CoreRenderBeginV5', 2]);
@@ -2531,6 +2586,7 @@ async function main() {
     const sourceConfig = await import(pathToFileURL(path.join(adapterDirectory, 'config.mjs')).href);
     test('source configuration makes online activation manual by default', () => {
         assert.equal(sourceConfig.ONLINE_ACTIVATION, 'manual');
+        assert.equal(sourceConfig.MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE, false);
         assert.equal(sourceConfig.GAIT_REFERENCE, false);
         assert.equal(sourceConfig.GAIT_RATE, false);
         assert.equal(sourceConfig.INPUT_REFERENCE, false);

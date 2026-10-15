@@ -97,4 +97,14 @@ namespace mta::game_de
     extern "C" Status ReadGameRenderEndpointDiagnosticV1(std::uint32_t version, IGameRenderObservationV5* retainedLease,
                                                          RenderEndpointDiagnosticV1* output) noexcept;
 #endif
+
+    // V2 selects an exact API6 lease, while the value-only diagnostic payload
+    // and version argument remain V1. The original export stays V5-only.
+#if defined(_WIN32) && defined(MTA_GAME_DE_EXPORTS)
+    extern "C" __declspec(dllexport) Status ReadGameRenderEndpointDiagnosticV2(std::uint32_t version, IGameRenderObservationV6* retainedLease,
+                                                                               RenderEndpointDiagnosticV1* output) noexcept;
+#else
+    extern "C" Status ReadGameRenderEndpointDiagnosticV2(std::uint32_t version, IGameRenderObservationV6* retainedLease,
+                                                         RenderEndpointDiagnosticV1* output) noexcept;
+#endif
 }

@@ -9,6 +9,10 @@
 #include <cstdlib>
 #include <fstream>
 #include <thread>
+bool OwnedNativeDispatchCleanup(bool& pending);
+bool OwnedNativeDispatchSafetyHeld();
+bool OwnedNativeDispatchDiscovery(void (*afterSnapshot)(), DWORD (*newThreadId)());
+bool OwnedNativeDispatchVmTransactions();
 
 namespace
 {
@@ -54,6 +58,39 @@ namespace
     }
     void ResizeNoop(void*, UINT, UINT, bool)
     {
+    }
+    unsigned                  dispatchForwards = 0;
+    HRESULT                   dispatchResult = S_OK;
+    HRESULT STDMETHODCALLTYPE OwnedDispatchTarget(IDXGISwapChain*, UINT interval, UINT flags)
+    {
+        ++dispatchForwards;
+        if (flags == 3)
+            RaiseException(0xe0444547, 0, 0, nullptr);
+        return interval == 7 ? dispatchResult : E_INVALIDARG;
+    }
+    bool CatchDispatchException()
+    {
+        __try
+        {
+            boundary_detail::HookNativeDispatch(nullptr, 7, 3, &OwnedDispatchTarget);
+        }
+        __except (GetExceptionCode() == 0xe0444547 ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
+        {
+            return true;
+        }
+        return false;
+    }
+    HANDLE             discoveryTrigger = nullptr, discoveryReady = nullptr;
+    std::atomic<DWORD> discoveryChildId{0};
+    void               TriggerLateChild()
+    {
+        SetEvent(discoveryTrigger);
+        WaitForSingleObject(discoveryReady, INFINITE);
+        Sleep(5);
+    }
+    DWORD LateChildId()
+    {
+        return discoveryChildId.load();
     }
     bool ChangeOwnedNotify(bool install)
     {
@@ -115,12 +152,59 @@ void PrimeBoundaryDiagnostic(std::uint64_t generation)
     runtime.diagnostic = runtime.preparation;
     ReleaseSRWLockExclusive(&runtime.diagnosticLock);
 }
+void PrimeNativeDispatchDiagnostic(std::uint64_t generation)
+{
+    PrimeBoundaryDiagnostic(generation);
+    mta::game_de::boundary_detail::runtime.nativeDispatch = true;
+}
+bool NativeDispatchFixtureOriginal(void*, std::uint32_t interval)
+{
+    using namespace mta::game_de;
+    auto* selected = boundary_detail::scope;
+    if (selected)
+    {
+        selected->nativeDispatch = {};
+        selected->nativeDispatch.endpointProfileId = 2;
+        selected->nativeDispatch.status = static_cast<unsigned>(FrameBoundaryObservationStatus::NoScopedPresent);
+        if (interval != 4)
+        {
+            selected->dispatchEntered = true;
+            selected->nativeDispatch.status = static_cast<unsigned>(FrameBoundaryObservationStatus::ObservedCoherent);
+            selected->nativeDispatch.factsMask = 255;
+            selected->nativeDispatch.nativeTrackedMode = 1;
+            selected->nativeDispatch.queryStage = 9;
+            selected->nativeDispatch.presentEntries = 1;
+            selected->nativeDispatch.presentThreadId = GetCurrentThreadId();
+        }
+    }
+    return interval != 0;
+}
 
-void CheckFrameBoundaryProbe(const char* customFixture, unsigned& checks)
+void CheckFrameBoundaryProbe(const char* customFixture, const char* wrapperFixture, unsigned& checks)
 {
     using namespace mta::game_de;
     namespace detail = mta::game_de::boundary_detail;
     using Status = FrameBoundaryObservationStatus;
+    Require(OwnedNativeDispatchVmTransactions(), "actual VM-backed vendor commit/abort preserve borrowed counts and bypass a stopped CRT heap owner", checks);
+    detail::Roots dispatchRoots;
+    dispatchRoots.swapchain = 0x1000;
+    dispatchRoots.device = dispatchRoots.contextDevice = 0x2000;
+    dispatchRoots.manager = dispatchRoots.contextManager = dispatchRoots.commandManager = 0x3000;
+    dispatchRoots.gpuCount = dispatchRoots.afrCount = dispatchRoots.nodeMask = 1;
+    dispatchRoots.index = 2;
+    FrameBoundaryScope strictUnadmitted;
+    strictUnadmitted.knownPresenter = true;
+    strictUnadmitted.nativeSwapchain = dispatchRoots.swapchain;
+    CustomPresentClassificationState knownCustom;
+    knownCustom.status = static_cast<unsigned>(CustomPresentClassificationStatus::KnownNativePresenter);
+    FrameBoundaryObservationState dispatchAssociation;
+    dispatchAssociation.endpointProfileId = 2;
+    Require(detail::ValidateNativeRoots(dispatchRoots, knownCustom, strictUnadmitted, dispatchRoots.swapchain, dispatchAssociation) == S_OK &&
+                dispatchAssociation.factsMask == 8 && dispatchAssociation.nativeBufferIndex == 2 && !strictUnadmitted.swapchain,
+            "real native-root validator admits the explicit API6 chain when the strict API5 chain is unadmitted", checks);
+    Require(detail::ValidateNativeRoots(dispatchRoots, knownCustom, strictUnadmitted, dispatchRoots.swapchain + 8, dispatchAssociation) == S_FALSE &&
+                detail::ValidateNativeRoots(dispatchRoots, knownCustom, strictUnadmitted, 0, dispatchAssociation) == S_FALSE,
+            "different API6 chain and absent strict API5 chain both refuse native-root association", checks);
     for (unsigned stage = 1; stage <= 8; ++stage)
     {
         for (unsigned fault = 0; fault < 3; ++fault)
@@ -408,5 +492,225 @@ void CheckFrameBoundaryProbe(const char* customFixture, unsigned& checks)
     detail::runtime.destroyCode.rva = destroyRva;
     detail::runtime.presentCode.rva = presentRva;
     VirtualFree(multiple, 0, MEM_RELEASE);
+    ResetFrameBoundaryObservation();
+    // These are copied disk bytes in our own unexecuted allocation. Only our
+    // executable's harmless target is called; no game code or DXGI is invoked.
+    std::array<unsigned char, 429> wrapperBytes{};
+    std::ifstream                  wrapperInput(wrapperFixture, std::ios::binary);
+    wrapperInput.read(reinterpret_cast<char*>(wrapperBytes.data()), wrapperBytes.size());
+    Require(wrapperInput.gcount() == static_cast<std::streamsize>(wrapperBytes.size()), "owned callsite fixture has the complete pinned wrapper", checks);
+    auto* wrapperMemory = static_cast<unsigned char*>(VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    Require(wrapperMemory != nullptr, "owned wrapper allocation", checks);
+    std::memcpy(wrapperMemory, wrapperBytes.data(), wrapperBytes.size());
+    const auto oldWrapper = detail::runtime.wrapperCode;
+    detail::runtime.wrapperCode.rva = reinterpret_cast<std::uintptr_t>(wrapperMemory);
+    detail::runtime.image = 0;
+    detail::runtime.nativeDispatch = true;
+    detail::runtime.wrapperHook = reinterpret_cast<std::uintptr_t>(&detail::HookNativeDispatch);
+    Require(detail::CheckFunction(0, detail::runtime.wrapperCode) && detail::PrepareDispatchRelay(),
+            "exact whole-wrapper pin prepares an owned near leaf relay", checks);
+    MEMORY_BASIC_INFORMATION relayPage{};
+    Require(VirtualQuery(detail::runtime.dispatchRelay, &relayPage, sizeof(relayPage)) == sizeof(relayPage) && relayPage.Protect == PAGE_EXECUTE_READ,
+            "generated leaf is RX before any source callsite patch", checks);
+    const auto                              wrapperAddress = reinterpret_cast<std::uintptr_t>(wrapperMemory);
+    const auto                              relayAddress = reinterpret_cast<std::uintptr_t>(detail::runtime.dispatchRelay);
+    const auto                              gateResize = detail::runtime.resize;
+    const auto                              gateNotify = detail::runtime.notify;
+    const auto                              gateDestroy = detail::runtime.destroy;
+    const auto                              gatePresent = detail::runtime.present;
+    const bool                              gateCommitted = detail::runtime.committed, gateEndpoint = detail::runtime.endpoint;
+    constexpr std::array<std::uintptr_t, 5> gateTrampolines{0x110000, 0x120000, 0x130000, 0x140000, 0x150000};
+    detail::runtime.resize = reinterpret_cast<detail::Resize>(gateTrampolines[1]);
+    detail::runtime.notify = reinterpret_cast<detail::Notify>(gateTrampolines[2]);
+    detail::runtime.destroy = reinterpret_cast<detail::Notify>(gateTrampolines[3]);
+    detail::runtime.present = reinterpret_cast<detail::Present>(gateTrampolines[4]);
+    detail::runtime.committed = detail::runtime.endpoint = true;
+    const std::array<std::uintptr_t, 5> gateEntries{
+        wrapperAddress, detail::runtime.image + detail::runtime.resizeCode.rva, detail::runtime.image + detail::runtime.notifyCode.rva,
+        detail::runtime.image + detail::runtime.destroyCode.rva, detail::runtime.dxgi + detail::runtime.presentCode.rva};
+    constexpr std::array<std::size_t, 5> gateStolen{7, 5, 6, 6, 5};
+    for (std::size_t entry = 0; entry < gateEntries.size(); ++entry)
+    {
+        for (std::size_t byte = 0; byte < gateStolen[entry]; ++byte)
+            Require(!NativeDispatchInstructionSafe(gateEntries[entry] + byte, gateTrampolines[0]),
+                    "every modified vendor entry byte refuses a stopped control IP before commit", checks);
+        Require(NativeDispatchInstructionSafe(gateEntries[entry] + gateStolen[entry], gateTrampolines[0]),
+                "first unchanged entry byte is beyond its relocation window", checks);
+    }
+    for (const auto trampoline : gateTrampolines)
+    {
+        for (std::size_t byte = 0; byte < 96; ++byte)
+            Require(!NativeDispatchInstructionSafe(trampoline + byte, gateTrampolines[0]),
+                    "complete pinned96B vendor trampoline includes inbound rbCodeIn before lifetime increment", checks);
+        Require(NativeDispatchInstructionSafe(trampoline + 96, gateTrampolines[0]), "first byte beyond owned trampoline is not a relocation dependency",
+                checks);
+    }
+    detail::runtime.resize = gateResize;
+    detail::runtime.notify = gateNotify;
+    detail::runtime.destroy = gateDestroy;
+    detail::runtime.present = gatePresent;
+    detail::runtime.committed = gateCommitted;
+    detail::runtime.endpoint = gateEndpoint;
+    for (std::size_t index = 0; index < 5; ++index)
+        Require(!NativeDispatchInstructionSafe(wrapperAddress + detail::dispatchOffset + index),
+                "every byte in the replaced instruction window refuses suspended IP", checks);
+    Require(NativeDispatchInstructionSafe(wrapperAddress + detail::dispatchOffset + 5), "unchanged native return address lies beyond the patch window", checks);
+    for (std::size_t index = 0; index < 20; ++index)
+        Require(!NativeDispatchInstructionSafe(relayAddress + index), "every leaf instruction and literal refuses free while a control IP is inside", checks);
+    Require(!NativeDispatchInstructionSafe(detail::runtime.dispatchHookBegin) && !NativeDispatchInstructionSafe(detail::runtime.dispatchHookEnd - 1),
+            "first/last C++ hook instruction counter gaps retain code", checks);
+    Require(ChangeNativeDispatchCallsite(true, false) && detail::CurrentWrapper(false), "owned E8 patch normalizes only exact five replaced bytes", checks);
+    void* keptRelay = detail::runtime.dispatchRelay;
+    ReleaseNativeDispatchRelay();
+    Require(detail::runtime.dispatchRelay == keptRelay, "installed callsite retains its leaf storage", checks);
+    for (const auto offset : {detail::dispatchOffset + 1, std::size_t{428}})
+    {
+        wrapperMemory[offset] ^= 1;
+        Require(!detail::CurrentWrapper(false) && !ChangeNativeDispatchCallsite(false, false),
+                "foreign call/tail modification refuses normalization and cleanup", checks);
+        wrapperMemory[offset] ^= 1;
+    }
+    DWORD relayProtection = 0;
+    Require(VirtualProtect(keptRelay, 4096, PAGE_READWRITE, &relayProtection) != FALSE, "owned relay tamper fixture becomes writable", checks);
+    static_cast<unsigned char*>(keptRelay)[19] ^= 1;
+    DWORD ignoredProtection = 0;
+    VirtualProtect(keptRelay, 4096, relayProtection, &ignoredProtection);
+    Require(!detail::CurrentWrapper(false), "a changed relay destination cannot reuse an unchanged E8 as ownership proof", checks);
+    VirtualProtect(keptRelay, 4096, PAGE_READWRITE, &ignoredProtection);
+    static_cast<unsigned char*>(keptRelay)[19] ^= 1;
+    VirtualProtect(keptRelay, 4096, relayProtection, &ignoredProtection);
+    PVOID wrapperOriginal = wrapperMemory;
+    Require(DetourTransactionBegin() == NO_ERROR && DetourUpdateThread(GetCurrentThread()) == NO_ERROR &&
+                DetourAttach(&wrapperOriginal, reinterpret_cast<PVOID>(&detail::HookNativeDispatch)) == NO_ERROR && DetourTransactionCommit() == NO_ERROR,
+            "owned native-entry detour coexists with the separate owned CALL", checks);
+    Require(detail::CurrentWrapper(true), "full wrapper normalizes both owned entry branch and owned callsite, including the original tail", checks);
+    Require(ChangeNativeDispatchCallsite(false, true) && DetourTransactionBegin() == NO_ERROR && DetourUpdateThread(GetCurrentThread()) == NO_ERROR &&
+                DetourDetach(&wrapperOriginal, reinterpret_cast<PVOID>(&detail::HookNativeDispatch)) == NO_ERROR && DetourTransactionCommit() == NO_ERROR &&
+                detail::CurrentWrapper(false),
+            "entry/callsite teardown restores all429 original bytes", checks);
+    Require(NativeDispatchSafeToResume(false), "post-vendor finalization clears the direct fixture's pending writable-page state", checks);
+    DWORD fixtureProtection = 0;
+    Require(VirtualProtect(wrapperMemory, 4096, PAGE_EXECUTE_READ, &fixtureProtection) && CaptureNativeDispatchProtectionBaseline() &&
+                detail::runtime.dispatchOriginalProtection == PAGE_EXECUTE_READ,
+            "true pretransaction protection is refreshed under the owned transaction guard", checks);
+    Require(DetourTransactionBegin() == NO_ERROR && DetourUpdateThread(GetCurrentThread()) == NO_ERROR &&
+                DetourAttach(&wrapperOriginal, reinterpret_cast<PVOID>(&detail::HookNativeDispatch)) == NO_ERROR && ChangeNativeDispatchCallsite(true, false) &&
+                DetourTransactionCommit() == NO_ERROR,
+            "vendor and custom patches share the same temporarily writable native page", checks);
+    // Model failed own restoration while Detours had that page RWX. Recovery
+    // must use the earlier RX baseline, never the vendor's temporary value.
+    DWORD temporaryProtection = 0;
+    Require(VirtualProtect(wrapperMemory, 4096, PAGE_EXECUTE_READWRITE, &temporaryProtection) != FALSE,
+            "owned restoration fault leaves a writable page for the real recovery helper", checks);
+    detail::runtime.dispatchProtectionPending = true;
+    detail::runtime.dispatchProtection = PAGE_EXECUTE_READWRITE;
+    Require(NativeDispatchSafeToResume(true) && VirtualQuery(wrapperMemory, &relayPage, sizeof(relayPage)) == sizeof(relayPage) &&
+                relayPage.Protect == PAGE_EXECUTE_READ && !detail::runtime.dispatchProtectionPending,
+            "after vendor completion protection-failure recovery proves exact original RX before any resume", checks);
+    Require(CaptureNativeDispatchProtectionBaseline() && DetourTransactionBegin() == NO_ERROR && DetourUpdateThread(GetCurrentThread()) == NO_ERROR &&
+                DetourDetach(&wrapperOriginal, reinterpret_cast<PVOID>(&detail::HookNativeDispatch)) == NO_ERROR && ChangeNativeDispatchCallsite(false, true) &&
+                DetourTransactionCommit() == NO_ERROR && NativeDispatchSafeToResume(false) &&
+                VirtualQuery(wrapperMemory, &relayPage, sizeof(relayPage)) == sizeof(relayPage) && relayPage.Protect == PAGE_EXECUTE_READ,
+            "detach also restores the true baseline after vendor and custom writes", checks);
+    Require(VirtualProtect(wrapperMemory, 4096, fixtureProtection, &temporaryProtection) && CaptureNativeDispatchProtectionBaseline(),
+            "owned fixture restores its initial writable permission before later deliberate byte faults", checks);
+    wrapperMemory[428] ^= 1;
+    Require(!ChangeNativeDispatchCallsite(true, false) && !NativeDispatchPatchPresent() && NativeDispatchSafeToResume(false),
+            "pure foreign-tail refusal before any owned write does not safety-hold peers merely because a relay was allocated", checks);
+    wrapperMemory[428] ^= 1;
+    discoveryTrigger = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    discoveryReady = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    const HANDLE discoveryStop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    Require(discoveryTrigger && discoveryReady && discoveryStop, "controlled child-creation fixture events", checks);
+    std::thread spawner(
+        [&]
+        {
+            WaitForSingleObject(discoveryTrigger, INFINITE);
+            std::thread child(
+                [&]
+                {
+                    discoveryChildId.store(GetCurrentThreadId());
+                    SetEvent(discoveryReady);
+                    WaitForSingleObject(discoveryStop, INFINITE);
+                });
+            WaitForSingleObject(discoveryStop, INFINITE);
+            child.join();
+        });
+    Require(OwnedNativeDispatchDiscovery(&TriggerLateChild, &LateChildId),
+            "production stable-pass guard finds and holds a child created by a spawner after the first actual snapshot", checks);
+    SetEvent(discoveryStop);
+    spawner.join();
+    CloseHandle(discoveryTrigger);
+    CloseHandle(discoveryReady);
+    CloseHandle(discoveryStop);
+    std::atomic<bool> sleeperReady{false}, sleeperDone{false};
+    std::thread       sleeper(
+        [&]
+        {
+            sleeperReady.store(true);
+            while (!sleeperDone.load())
+                Sleep(1);
+        });
+    while (!sleeperReady.load())
+        Sleep(1);
+    const HANDLE sleeperHandle = sleeper.native_handle();
+    Require(SuspendThread(sleeperHandle) != static_cast<DWORD>(-1), "owned suspension outlives the Detours transaction", checks);
+    CONTEXT suspended{};
+    suspended.ContextFlags = CONTEXT_CONTROL;
+    Require(GetThreadContext(sleeperHandle, &suspended) && NativeDispatchInstructionSafe(static_cast<std::uintptr_t>(suspended.Rip)),
+            "suspended real control context is checked before the custom write", checks);
+    Require(DetourTransactionBegin() == NO_ERROR && DetourUpdateThread(sleeperHandle) == NO_ERROR && ChangeNativeDispatchCallsite(true, false),
+            "custom CALL is written while both owned and Detours suspend counts are held", checks);
+    PVOID invalidTarget = nullptr;
+    Require(DetourAttach(&invalidTarget, reinterpret_cast<PVOID>(&detail::HookNativeDispatch)) != NO_ERROR && DetourTransactionCommit() != NO_ERROR,
+            "injected transaction error aborts vendor patches", checks);
+    Require(SuspendThread(sleeperHandle) == 1 && ResumeThread(sleeperHandle) == 2 && NativeDispatchPatchPresent(),
+            "vendor failure resumes only its own count and leaves custom rollback under owned suspension", checks);
+    Require(ChangeNativeDispatchCallsite(false, false) && detail::CurrentWrapper(false), "failed transaction custom patch rolls back before owned resume",
+            checks);
+    Require(ChangeNativeDispatchCallsite(true, false), "owned partial-write fault starts from a verified installed CALL", checks);
+    wrapperMemory[detail::dispatchOffset + 2] ^= 0x80;
+    // Model a fault after the worker validated ownership and started its own
+    // five-byte copy. A pre-write foreign refusal must never acquire this mark.
+    detail::runtime.dispatchUnsafeWrite = true;
+    bool safetyPending = false;
+    Require(!OwnedNativeDispatchCleanup(safetyPending) && safetyPending && OwnedNativeDispatchSafetyHeld(),
+            "unknown partial instruction retains every production-owned suspension instead of only retaining relay storage", checks);
+    Require(SuspendThread(sleeperHandle) == 2 && ResumeThread(sleeperHandle) == 3, "failed rollback did not resume the safety-held owned count", checks);
+    safetyPending = false;
+    Require(!OwnedNativeDispatchCleanup(safetyPending) && safetyPending && OwnedNativeDispatchSafetyHeld(),
+            "cleanup retry refuses before resuming safety-held threads while instruction bytes remain unknown", checks);
+    Require(SuspendThread(sleeperHandle) == 2 && ResumeThread(sleeperHandle) == 3, "unsafe retry also preserves the owned suspend count", checks);
+    std::memcpy(wrapperMemory + detail::dispatchOffset, wrapperBytes.data() + detail::dispatchOffset, 5);
+    safetyPending = false;
+    Require(OwnedNativeDispatchCleanup(safetyPending) && !safetyPending && !OwnedNativeDispatchSafetyHeld() && !NativeDispatchPatchPresent(),
+            "cleanup proves restored original bytes while held before balancing its suspension and releasing relay", checks);
+    Require(!detail::runtime.dispatchRelay && SuspendThread(sleeperHandle) == 1 && ResumeThread(sleeperHandle) == 2,
+            "safe retry frees relay and leaves only the fixture's external hold", checks);
+    Require(detail::PrepareDispatchRelay(), "fresh owned relay supports separate in-flight retention test", checks);
+    keptRelay = detail::runtime.dispatchRelay;
+    detail::runtime.inFlight.store(1);
+    ReleaseNativeDispatchRelay();
+    Require(detail::runtime.dispatchRelay == keptRelay, "an in-flight callback retains the now-unpatched relay until drain", checks);
+    detail::runtime.inFlight.store(0);
+    ReleaseNativeDispatchRelay();
+    Require(!detail::runtime.dispatchRelay, "quiescent restored callsite permits relay release while owned threads remain held", checks);
+    Require(ResumeThread(sleeperHandle) == 1, "owned suspension count is balanced independently of Detours", checks);
+    sleeperDone.store(true);
+    sleeper.join();
+    detail::scope = nullptr;
+    for (const HRESULT expected : {S_OK, S_FALSE, E_FAIL})
+    {
+        dispatchResult = expected;
+        const auto prior = dispatchForwards;
+        Require(detail::HookNativeDispatch(nullptr, 7, 0, &OwnedDispatchTarget) == expected && dispatchForwards == prior + 1 && !FrameBoundaryInFlight(),
+                "unmatched natural dispatch forwards the captured target exactly once and preserves HRESULT", checks);
+    }
+    const auto priorThrows = dispatchForwards;
+    Require(CatchDispatchException() && dispatchForwards == priorThrows + 1 && !FrameBoundaryInFlight() && !detail::dispatchDepth,
+            "target SEH propagates unchanged and balances dispatch lifetime", checks);
+    detail::runtime.wrapperCode = oldWrapper;
+    detail::runtime.nativeDispatch = false;
+    VirtualFree(wrapperMemory, 0, MEM_RELEASE);
     ResetFrameBoundaryObservation();
 }

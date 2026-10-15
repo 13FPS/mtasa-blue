@@ -645,6 +645,50 @@ try {
         Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' $selection } 'Update the adapter before selecting frame-boundary observation' 'Historical API4 cannot infer API5 admission'
         Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Historical API5 refusal changes no bytes'
     }
+    Invoke-Case 'explicit-native-dispatch-observation-opt-in' {
+        param($fixture)
+        Install-Fresh $fixture
+        $config = Join-Path $fixture.game 'CLEO/de-online/config.mjs'
+        Assert-Check ([IO.File]::ReadAllText($config) -match 'export const MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE = false;') 'API6 is disabled in ordinary Smoke'
+        $selection = @{Mode='Smoke';MtaCoreRenderReference=$true;MtaCoreRenderRoute='D3D12';MtaCoreRenderGpuReference=$true;MtaCoreRenderCustomPresentReference=$true;MtaCoreRenderFrameBoundaryReference=$true;MtaCoreRenderNativeDispatchReference=$true;GameDirectory=$fixture.game}
+        $before = Get-TreeFingerprint $fixture.root
+        Invoke-Production $fixture 'set-mode.ps1' ($selection + @{WhatIf=$true})
+        Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'API6 WhatIf changes no bytes'
+        Invoke-Production $fixture 'set-mode.ps1' $selection
+        Assert-Check ([IO.File]::ReadAllText($config) -match 'export const MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE = true;') 'API6 requires separate explicit admission'
+        Invoke-Production $fixture 'uninstall.ps1' @{GameDirectory=$fixture.game;ValidateOnly=$true}
+        foreach ($field in @('MtaCoreRenderReference','MtaCoreRenderGpuReference','MtaCoreRenderCustomPresentReference','MtaCoreRenderFrameBoundaryReference')) {
+            $invalid = $selection.Clone();$invalid[$field]=$false
+            $before = Get-TreeFingerprint $fixture.root
+            Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' $invalid } 'Native-dispatch observation requires explicit' 'API6 refuses each missing prerequisite'
+            $invalid.Remove('GameDirectory')
+            Assert-Refused { Invoke-Production $fixture 'package.ps1' $invalid } 'Native-dispatch observation requires explicit' 'API6 package refuses each missing prerequisite'
+            Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Rejected API6 admission changes no bytes'
+        }
+        $invalid=$selection.Clone();$invalid.MtaCoreRenderRoute='D3D11'
+        Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' $invalid } 'Native-dispatch observation requires explicit' 'API6 refuses D3D11'
+        foreach ($mode in @('Diagnostic','Online')) {
+            $invalid=$selection.Clone();$invalid.Mode=$mode
+            Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' $invalid } 'separate opt-in Smoke mode' 'API6 refuses non-Smoke modes'
+        }
+        foreach ($mode in @('Diagnostic','Smoke','Online','Smoke')) {
+            Invoke-Production $fixture 'set-mode.ps1' $selection
+            Invoke-Production $fixture 'set-mode.ps1' @{Mode=$mode;GameDirectory=$fixture.game}
+            Assert-Check ([IO.File]::ReadAllText($config) -match 'export const MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE = false;') "Ordinary $mode clears API6 observation"
+        }
+        # An intact historical API5 install remains usable, but its missing
+        # marker cannot silently authorize this newer endpoint/lifecycle lease.
+        Write-FixtureBytes $config ($utf8.GetBytes([regex]::Replace([IO.File]::ReadAllText($config), 'export const MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE = (true|false);', '')))
+        $manifestPath=Join-Path $fixture.game 'de-online-install-manifest.json'
+        $manifest=Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+        @($manifest.files | Where-Object path -eq 'CLEO/de-online/config.mjs')[0].sha256=Get-Sha $config
+        Write-FixtureJson $manifestPath $manifest
+        $legacy=$selection.Clone();$legacy.Remove('MtaCoreRenderNativeDispatchReference')
+        Invoke-Production $fixture 'set-mode.ps1' $legacy
+        $before=Get-TreeFingerprint $fixture.root
+        Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' $selection } 'Update the adapter before selecting native-dispatch observation' 'Historical API5 cannot infer API6 admission'
+        Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Historical API6 refusal changes no bytes'
+    }
     Invoke-Case 'historical-api3-cannot-infer-custom-present-classification' {
         param($fixture)
         Install-Fresh $fixture

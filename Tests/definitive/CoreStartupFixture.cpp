@@ -5,6 +5,7 @@
 
 // A controlled DLL supplies loader-lock delay and thread-affinity observations.
 // It contains no MTA/Game DE implementation and never touches game memory.
+#include <algorithm>
 #include <windows.h>
 #include <array>
 #include <cstddef>
@@ -158,13 +159,34 @@ extern "C" __declspec(dllexport) std::uint32_t MTA_ConfigureDERenderReferenceV5(
     return 1;
 }
 
+extern "C" __declspec(dllexport) std::uint32_t MTA_DERenderReferenceApiVersionV6()
+{
+    Call(7);
+    return 6;
+}
+extern "C" __declspec(dllexport) std::uint32_t MTA_ConfigureDERenderReferenceV6(std::uint32_t duration, std::uint32_t route,
+                                                                                DefinitiveInputReference::CancelCallback  cancelled,
+                                                                                DefinitiveInputReference::PublishCallback publish)
+{
+    Call(8);
+    if (duration != DefinitiveRenderReference::MaximumDurationMs || route != 2 || !cancelled || !publish)
+        return 0;
+    inputRequest = {duration, cancelled, publish, false, true, route, 6};
+    return 1;
+}
+
 template <typename SnapshotType>
 void ControlledRender()
 {
     using namespace DefinitiveRenderReference;
     constexpr auto count = static_cast<std::uint32_t>(std::tuple_size<SnapshotType>::value);
     SnapshotType   sample{};
-    sample[Version] = count == FieldCountV5 ? 5u : count == FieldCountV4 ? 4u : count == FieldCountV3 ? 3u : count == FieldCountV2 ? 2u : 1u;
+    sample[Version] = count == FieldCountV6   ? 6u
+                      : count == FieldCountV5 ? 5u
+                      : count == FieldCountV4 ? 4u
+                      : count == FieldCountV3 ? 3u
+                      : count == FieldCountV2 ? 2u
+                                              : 1u;
     sample[Phase] = sample[Sequence] = sample[SampleCount] = 1;
     sample[ObserverStarted] = sample[Bound] = sample[Active] = 1;
     sample[PresentCallbacksLow] = sample[AcceptedSnapshotsLow] = 10;
@@ -252,7 +274,7 @@ void ControlledRender()
                 sample[81] = unknown ? 0u : 1u;
                 sample[82] = unknown ? 0u : 127u;
                 sample[83] = unknown ? 0u : 15u;
-                if constexpr (count == FieldCountV5)
+                if constexpr (count >= FieldCountV5)
                 {
                     // Controlled scalars prove transport and retained teardown,
                     // not the actual system Present or engine buffer association.
@@ -268,6 +290,15 @@ void ControlledRender()
                     sample[104] = unknown ? 0u : sample[25];
                     sample[108] = unknown ? 0u : failed ? 3u : 9u;
                     sample[109] = failed ? static_cast<std::uint32_t>(E_NOINTERFACE) : 0u;
+                    if constexpr (count == FieldCountV6)
+                    {
+                        // Distinct tails let the worker prove a dispatch result
+                        // survives while the older standard endpoint refuses.
+                        std::copy_n(sample.begin() + 84, 26, sample.begin() + 110);
+                        sample[111] = 2;
+                        std::fill(sample.begin() + 84, sample.begin() + 110, 0u);
+                        sample[84] = 1;
+                    }
                 }
             }
         }
@@ -275,6 +306,10 @@ void ControlledRender()
     sample[CleanupPending] = sample[NativeCleanupPending] = sample[CleanupAttempts] = 1;
     ++sample[Sequence];
     inputRequest.publish(sample.data(), count);
+    // The host holds the actual worker cache lock across this publication.
+    // Progress here proves the production callback returned without waiting.
+    if constexpr (count == FieldCountV6)
+        Call(20);
     const auto cleanupRelease = Event(L"MTA_CORE_FIXTURE_MOVEMENT_RELEASE", SYNCHRONIZE);
     const auto cleanupAt = GetTickCount64();
     while (cleanupRelease && WaitForSingleObject(cleanupRelease, 50) == WAIT_TIMEOUT)
@@ -401,7 +436,9 @@ extern "C" __declspec(dllexport) int InitializeCore()
         return 0;
     if (mtaSet && gtaSet && inputRequest.renderObservation)
     {
-        if (inputRequest.renderApiVersion == 5)
+        if (inputRequest.renderApiVersion == 6)
+            ControlledRender<DefinitiveRenderReference::SnapshotV6>();
+        else if (inputRequest.renderApiVersion == 5)
             ControlledRender<DefinitiveRenderReference::SnapshotV5>();
         else if (inputRequest.renderApiVersion == 4)
             ControlledRender<DefinitiveRenderReference::SnapshotV4>();

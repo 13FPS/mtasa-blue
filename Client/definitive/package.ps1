@@ -5,12 +5,16 @@
 param([ValidateSet('Diagnostic', 'Smoke', 'Online')][string]$Mode = 'Smoke',
     [switch]$NativeGaitReference, [switch]$MatchedGaitRate, [switch]$LockWalkRoot, [switch]$NativeInputReference,
     [switch]$MtaNativePadReference, [switch]$MtaNativeMovementTrial, [switch]$MtaCoreStartupReference, [switch]$MtaCoreInputReference,
-    [switch]$MtaCoreMovementReference, [switch]$MtaCoreRenderReference, [switch]$MtaCoreRenderGpuReference, [switch]$MtaCoreRenderCustomPresentReference, [switch]$MtaCoreRenderFrameBoundaryReference,
+    [switch]$MtaCoreMovementReference, [switch]$MtaCoreRenderReference, [switch]$MtaCoreRenderGpuReference, [switch]$MtaCoreRenderCustomPresentReference, [switch]$MtaCoreRenderFrameBoundaryReference, [switch]$MtaCoreRenderNativeDispatchReference,
     [ValidateSet('D3D11', 'D3D12')][string]$MtaCoreRenderRoute = 'D3D11')
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 # Frame association is a separate read-only hook lease, never implicit in recognition.
+# Caller dispatch is a separate explicit hook lease, even when the older probe refuses.
+if ($MtaCoreRenderNativeDispatchReference -and (-not $MtaCoreRenderFrameBoundaryReference -or -not $MtaCoreRenderCustomPresentReference -or -not $MtaCoreRenderGpuReference -or -not $MtaCoreRenderReference -or $MtaCoreRenderRoute -ne 'D3D12')) {
+    throw 'Native-dispatch observation requires explicit D3D12 Core GPU, custom-present and frame-boundary observation.'
+}
 if ($MtaCoreRenderFrameBoundaryReference -and (-not $MtaCoreRenderCustomPresentReference -or -not $MtaCoreRenderGpuReference -or -not $MtaCoreRenderReference -or $MtaCoreRenderRoute -ne 'D3D12')) {
     throw 'Frame-boundary observation requires explicit D3D12 Core GPU and custom-present observation.'
 }
@@ -252,6 +256,10 @@ $coreRenderFrameBoundaryMarker = 'export const MTA_CORE_RENDER_FRAME_BOUNDARY_RE
 if ([regex]::Matches($configText, [regex]::Escape($coreRenderFrameBoundaryMarker)).Count -ne 1) { throw 'Expected disabled frame-boundary observation in source configuration.' }
 $configText = $configText.Replace($coreRenderFrameBoundaryMarker,
     "export const MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE = $($MtaCoreRenderFrameBoundaryReference.IsPresent.ToString().ToLowerInvariant());")
+$coreRenderNativeDispatchMarker = 'export const MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE = false;'
+if ([regex]::Matches($configText, [regex]::Escape($coreRenderNativeDispatchMarker)).Count -ne 1) { throw 'Expected disabled native-dispatch observation in source configuration.' }
+$configText = $configText.Replace($coreRenderNativeDispatchMarker,
+    "export const MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE = $($MtaCoreRenderNativeDispatchReference.IsPresent.ToString().ToLowerInvariant());")
 [IO.File]::WriteAllText($configPath, $configText, $utf8)
 foreach ($name in @('sa_unreal.json', 'unknown_x64.json')) {
     [IO.File]::Copy($downloads[$name], (Join-Path $configDirectory $name), $false)

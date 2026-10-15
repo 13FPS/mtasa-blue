@@ -476,6 +476,11 @@ LONG WINAPI DetourTransactionCommit(VOID);
 LONG WINAPI DetourTransactionCommitEx(_Out_opt_ PVOID **pppFailedPointer);
 
 LONG WINAPI DetourUpdateThread(_In_ HANDLE hThread);
+#ifdef DETOURS_MTA_VM_TRANSACTION_NODES
+// The caller must already own a suspend count and retain it until this
+// transaction completes. This opt-in DE path never suspends or resumes it.
+LONG WINAPI DetourUpdateThreadExternallySuspended(_In_ HANDLE hThread);
+#endif
 
 LONG WINAPI DetourAttach(_Inout_ PVOID *ppPointer,
                          _In_ PVOID pDetour);

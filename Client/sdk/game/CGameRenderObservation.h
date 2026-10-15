@@ -302,4 +302,35 @@ namespace mta::game_de
 #else
     extern "C" IGameRenderObservationV5* CreateGameRenderObservationV5(std::uint32_t apiVersion, CCoreInterface* owner, RenderObservationRoute route) noexcept;
 #endif
+
+    // API6 adds a separate observation at the native callsite that naturally
+    // dispatches the swapchain slot. Its target may be wrapped, so profile2
+    // cannot replace API5's strict standard-DXGI-entry/profile1 evidence.
+    inline constexpr std::uint32_t RenderObservationApiVersionV6 = 6;
+    struct RenderObservationStateV6
+    {
+        RenderObservationStateV5 base;
+        // The existing scalar shape is reused only in this separate field:
+        // presentEntries/Hresult/thread describe natural callsite dispatch and
+        // its forwarded result. Facts/stages are read-only object/CPU tracker
+        // associations, not proof of DXGI body entry, GPU state or safe drawing.
+        FrameBoundaryObservationState nativeDispatch;
+    };
+    class IGameRenderObservationV6
+    {
+    public:
+        virtual Status Begin() noexcept = 0;
+        virtual Status ReadState(RenderObservationStateV6& state) noexcept = 0;
+        virtual Status End() noexcept = 0;
+        virtual void   Release() noexcept = 0;
+
+    protected:
+        virtual ~IGameRenderObservationV6() = default;
+    };
+#if defined(_WIN32) && defined(MTA_GAME_DE_EXPORTS)
+    extern "C" __declspec(dllexport)
+    IGameRenderObservationV6* CreateGameRenderObservationV6(std::uint32_t apiVersion, CCoreInterface* owner, RenderObservationRoute route) noexcept;
+#else
+    extern "C" IGameRenderObservationV6* CreateGameRenderObservationV6(std::uint32_t apiVersion, CCoreInterface* owner, RenderObservationRoute route) noexcept;
+#endif
 }

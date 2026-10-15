@@ -15,10 +15,33 @@
 #include <thread>
 #include <unknwn.h>
 
+#ifdef MTA_TEST_NATIVE_DISPATCH_UNAVAILABLE
+int main()
+{
+    using namespace mta::game_de;
+    NativeRenderObservation owner;
+    if (owner.Begin(RenderObservationRoute::D3D12, true, true, true, true))
+        return 1;
+    NativeRenderObservationState state;
+    owner.ReadState(state);
+    if (state.failureReason != static_cast<unsigned>(NativeRenderObservationFailure::UnsupportedRoute) || state.pendingCleanup || state.modulePinned ||
+        state.nativePresentCallbacks || state.acceptedSnapshots || state.gpu.attempts || state.boundary.status || state.nativeDispatch.status)
+        return 2;
+    if (!owner.End() || owner.Begin(RenderObservationRoute::D3D12, true, true, true))
+        return 3;
+    owner.ReadState(state);
+    if (state.failureReason != static_cast<unsigned>(NativeRenderObservationFailure::UnsupportedBuild) || !owner.End())
+        return 4;
+    std::printf("Passed 4 native-dispatch unavailable-build checks\n");
+    return 0;
+}
+#else
 using namespace mta::game_de;
-void CheckFrameBoundaryProbe(const char* customFixture, unsigned& checks);
+void CheckFrameBoundaryProbe(const char* customFixture, const char* wrapperFixture, unsigned& checks);
 bool BoundaryFixtureOriginal(void*, std::uint32_t);
 void PrimeBoundaryDiagnostic(std::uint64_t generation);
+void PrimeNativeDispatchDiagnostic(std::uint64_t generation);
+bool NativeDispatchFixtureOriginal(void*, std::uint32_t interval);
 
 namespace
 {
@@ -102,6 +125,7 @@ namespace
         runtime.queryGpuOwnership = false;
         runtime.classifyCustomPresent = false;
         runtime.queryFrameBoundary = false;
+        runtime.nativeDispatch = false;
         runtime.producerThread = GetCurrentThreadId();
         runtime.bound.store(true);
         runtime.active.store(true);
@@ -340,6 +364,131 @@ namespace
 
 }
 
+bool OwnedNativeDispatchCleanup(bool& pending)
+{
+    using namespace mta::game_de;
+    runtime.nativeDispatch = runtime.queryFrameBoundary = true;
+    return ChangeHooks(false, pending);
+}
+bool OwnedNativeDispatchSafetyHeld()
+{
+    using namespace mta::game_de;
+    return runtime.safetyHeldSuspensions && !runtime.retainedSuspensions.empty();
+}
+bool OwnedNativeDispatchDiscovery(void (*afterSnapshot)(), DWORD (*newThreadId)())
+{
+    using namespace mta::game_de;
+    ThreadHandles threads, held;
+    bool          ready = PrepareNativeThreadEnumeration() && CollectThreads(threads);
+    if (ready)
+    {
+        afterSnapshot();
+        const auto childId = newThreadId();
+        const bool childWasAbsent = std::none_of(threads.begin(), threads.end(), [&](HANDLE thread) { return GetThreadId(thread) == childId; });
+        ready = HoldNativeDispatchThreads(threads, held);
+        const auto found = std::find_if(threads.begin(), threads.end(), [&](HANDLE thread) { return GetThreadId(thread) == childId; });
+        ready = ready && childWasAbsent && found != threads.end();
+        if (ready)
+            ready = SuspendThread(*found) == 1 && ResumeThread(*found) == 2;
+    }
+    for (const auto thread : held)
+        if (thread)
+            ResumeThread(thread);
+    for (const auto thread : threads)
+        CloseHandle(thread);
+    return ready;
+}
+DWORD WINAPI RefuseThreadResume(HANDLE)
+{
+    return static_cast<DWORD>(-1);
+}
+bool OwnedNativeDispatchVmTransactions()
+{
+    using namespace mta::game_de;
+    Check(PrepareNativeThreadEnumeration(), "exact local NtGetNextThread stub admits bounded pre-hold enumeration");
+    const auto                    savedEntry = runtime.nextThread;
+    const auto                    savedImage = runtime.nextThreadImage;
+    std::array<unsigned char, 24> foreignStub{};
+    Check(Read(reinterpret_cast<std::uintptr_t>(savedEntry), foreignStub.data(), foreignStub.size()), "owned fixture reads only cached system stub");
+    Check(NativeThreadStubMatches(foreignStub), "all24 original system stub bytes match the admitted profile");
+    for (auto& byte : foreignStub)
+    {
+        byte ^= 1;
+        Check(!NativeThreadStubMatches(foreignStub), "each changed system stub byte refuses the actual signature helper");
+        byte ^= 1;
+    }
+    runtime.nextThread = reinterpret_cast<NextThread>(foreignStub.data());
+    Check(!PrepareNativeThreadEnumeration(), "copied or altered non-image NtGetNextThread entry refuses before any hold");
+    runtime.nextThread = savedEntry;
+    runtime.nextThreadImage = savedImage;
+    ThreadHandles vmHandles;
+    vmHandles.reserve(1024);
+    MEMORY_BASIC_INFORMATION vmPage{};
+    Check(VirtualQuery(vmHandles.data(), &vmPage, sizeof(vmPage)) == sizeof(vmPage) && vmPage.AllocationBase == vmHandles.data() && vmPage.Type == MEM_PRIVATE,
+          "owned and retained handle buffers use direct VM allocations");
+    const HANDLE lockStart = CreateEventW(nullptr, TRUE, FALSE, nullptr), lockReady = CreateEventW(nullptr, TRUE, FALSE, nullptr),
+                 lockRelease = CreateEventW(nullptr, TRUE, FALSE, nullptr), allocationStart = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    Check(lockStart && lockReady && lockRelease && allocationStart, "VM transaction fixture events");
+    std::atomic<bool> allocatorReady{false}, attempted{false}, completed{false}, peerLocked{false};
+    std::thread       allocator(
+        [&]
+        {
+            allocatorReady.store(true);
+            WaitForSingleObject(allocationStart, INFINITE);
+            attempted.store(true);
+            void* allocation = HeapAlloc(GetProcessHeap(), 0, 1024 * 1024);
+            completed.store(allocation != nullptr);
+            if (allocation)
+                HeapFree(GetProcessHeap(), 0, allocation);
+        });
+    std::thread peer(
+        [&]
+        {
+            WaitForSingleObject(lockStart, INFINITE);
+            peerLocked.store(HeapLock(GetProcessHeap()) != FALSE);
+            SetEvent(lockReady);
+            WaitForSingleObject(lockRelease, INFINITE);
+            if (peerLocked.load())
+                HeapUnlock(GetProcessHeap());
+        });
+    while (!allocatorReady.load())
+        Sleep(1);
+    SetEvent(lockStart);
+    WaitForSingleObject(lockReady, INFINITE);
+    Check(peerLocked.load() && SuspendThread(peer.native_handle()) == 0, "owned peer is held while it owns backend heap lock");
+    SetEvent(allocationStart);
+    while (!attempted.load())
+        Sleep(1);
+    Sleep(10);
+    Check(!completed.load(), "backend-heap allocation is demonstrably blocked; no production guard relies on HeapLock");
+    PVOID original = reinterpret_cast<PVOID>(&Original);
+    Check(DetourTransactionBegin() == NO_ERROR && DetourUpdateThreadExternallySuspended(peer.native_handle()) == NO_ERROR &&
+              DetourAttach(&original, reinterpret_cast<PVOID>(&HookPresent)) == NO_ERROR && DetourTransactionCommit() == NO_ERROR,
+          "actual VM vendor allocation and commit complete while CRT heap allocation is blocked");
+    Check(SuspendThread(peer.native_handle()) == 1 && ResumeThread(peer.native_handle()) == 2,
+          "borrowed enrollment and Commit leave exactly caller's sole suspend count");
+    Check(DetourTransactionBegin() == NO_ERROR && DetourUpdateThreadExternallySuspended(peer.native_handle()) == NO_ERROR &&
+              DetourDetach(&original, reinterpret_cast<PVOID>(&HookPresent)) == NO_ERROR && DetourTransactionCommit() == NO_ERROR,
+          "actual VM detach commit completes under stopped heap owner");
+    Check(DetourTransactionBegin() == NO_ERROR && DetourUpdateThreadExternallySuspended(peer.native_handle()) == NO_ERROR &&
+              DetourAttach(&original, reinterpret_cast<PVOID>(&HookPresent)) == NO_ERROR && DetourTransactionAbort() == NO_ERROR &&
+              original == reinterpret_cast<PVOID>(&Original),
+          "actual VM abort frees nodes without CRT dependency");
+    Check(SuspendThread(peer.native_handle()) == 1 && ResumeThread(peer.native_handle()) == 2 && !completed.load(),
+          "borrowed Abort also preserves one own count while unrelated CRT allocation stays blocked");
+    Check(!ResumeOwnedThread(peer.native_handle(), &RefuseThreadResume) && SuspendThread(peer.native_handle()) == 1 && ResumeThread(peer.native_handle()) == 2,
+          "forced own resume failure leaves live peer and exact own count available for retry");
+    SetEvent(lockRelease);
+    Check(ResumeOwnedThread(peer.native_handle()), "same owner retries sole suspension after vendor completion");
+    peer.join();
+    allocator.join();
+    Check(completed.load(), "blocked CRT allocation completes after held owner resumes and releases heap");
+    CloseHandle(lockStart);
+    CloseHandle(lockReady);
+    CloseHandle(lockRelease);
+    CloseHandle(allocationStart);
+    return true;
+}
 int main(int argc, char** argv)
 {
     Check(argc == 4, "both route and complete presenter signature fixture paths supplied");
@@ -392,6 +541,79 @@ int main(int argc, char** argv)
 
     const auto image = reinterpret_cast<std::uintptr_t>(VirtualAlloc(nullptr, 0x5770000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
     Check(image != 0, "owned synthetic image allocation");
+    Configure(image, NativeDispatchFixtureOriginal, RenderObservationRoute::D3D12);
+    EnableOwnership(image, 2, 1);
+    runtime.classifyCustomPresent = runtime.queryFrameBoundary = runtime.nativeDispatch = true;
+    PrimeNativeDispatchDiagnostic(runtime.generation.load());
+    Check(HookPresent(viewport.data(), 1) && !HookPresent(viewport.data(), 0), "API6 native dispatch preserves forwarded native original results");
+    owner.ReadState(state);
+    Check(state.nativeDispatch.endpointProfileId == 2 && state.nativeDispatch.status == 2 && state.nativeDispatch.presentEntries == 2 &&
+              state.nativeDispatch.factsMask == 255 && state.boundary.endpointProfileId == 0 && !state.boundary.presentEntries && !state.gpu.supportPredicate,
+          "API6 associations accumulate separately without promoting API5 standard entry or GPU permission");
+    HookPresent(viewport.data(), 4);
+    owner.ReadState(state);
+    Check(state.nativeDispatch.status == 10 && state.nativeDispatch.endpointProfileId == 2 && state.nativeDispatch.presentEntries == 2 &&
+              !state.nativeDispatch.factsMask && state.acceptedSnapshots == 3,
+          "a later absent dispatch keeps cumulative completed evidence and clears current association facts");
+    AcquireSRWLockShared(&runtime.snapshotLock);
+    HookPresent(viewport.data(), 1);
+    ReleaseSRWLockShared(&runtime.snapshotLock);
+    owner.ReadState(state);
+    Check(state.nativeDispatch.presentEntries == 2 && state.nativeDispatch.status == 10 && state.acceptedSnapshots == 3 && state.publicationMisses == 1,
+          "missed API6 publication cannot overwrite either tail or completed dispatch counters");
+    RenderEndpointDiagnosticV1 nativeEndpointDiagnostic;
+    Check(owner.ReadEndpointDiagnostic(nativeEndpointDiagnostic) && nativeEndpointDiagnostic.acceptedSnapshotsLow == 3,
+          "API6 producer retains the separate generation-coherent endpoint diagnostic");
+    AcquireSRWLockExclusive(&runtime.snapshotLock);
+    runtime.retainedSuspensions.push_back(nullptr);
+    runtime.accepted.store(4);
+    owner.ReadState(state);
+    Check(state.acceptedSnapshots == 3 && state.nativeDispatch.presentEntries == 2,
+          "held snapshot lock returns paired cached evidence without a new accepted count");
+    unavailableDiagnostic.version = 99;
+    Check(!owner.ReadEndpointDiagnostic(unavailableDiagnostic) && unavailableDiagnostic.version == 99,
+          "retained suspension refuses optional diagnostic untouched before either callback-shared lock");
+    runtime.inFlight.store(1);
+    Check(!owner.Begin(RenderObservationRoute::D3D12, true, true, true, true), "held callback readback rejects a new generation without waiting for its lock");
+    runtime.inFlight.store(0);
+    runtime.retainedSuspensions.clear();
+    runtime.accepted.store(3);
+    ReleaseSRWLockExclusive(&runtime.snapshotLock);
+    runtime.inFlight.store(1);
+    Check(!owner.End(), "API6 native wrapper in flight retains its owner");
+    runtime.inFlight.store(0);
+    Check(owner.End(), "API6 fixture drains without a frame sink or GPU command");
+    const HANDLE lockedReady = CreateEventW(nullptr, TRUE, FALSE, nullptr), lockedRelease = CreateEventW(nullptr, TRUE, FALSE, nullptr),
+                 lockedDone = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    Check(lockedReady && lockedRelease && lockedDone, "counted held-callback retry events");
+    std::thread lockedCallback(
+        [&]
+        {
+            runtime.inFlight.store(1);
+            AcquireSRWLockExclusive(&runtime.snapshotLock);
+            SetEvent(lockedReady);
+            WaitForSingleObject(lockedRelease, INFINITE);
+            ReleaseSRWLockExclusive(&runtime.snapshotLock);
+            runtime.inFlight.store(0);
+            SetEvent(lockedDone);
+        });
+    WaitForSingleObject(lockedReady, INFINITE);
+    HANDLE retainedCallback = nullptr;
+    Check(SuspendThread(lockedCallback.native_handle()) == 0 &&
+              DuplicateHandle(GetCurrentProcess(), lockedCallback.native_handle(), GetCurrentProcess(), &retainedCallback, 0, FALSE, DUPLICATE_SAME_ACCESS),
+          "owned failed-resume model retains the counted callback's actual suspension and handle");
+    Check(!ResumeOwnedThread(retainedCallback, &RefuseThreadResume), "own-resume helper preserves failed counted callback for public End retry");
+    runtime.retainedSuspensions.push_back(retainedCallback);
+    SetEvent(lockedRelease);
+    owner.End();
+    Check(WaitForSingleObject(lockedDone, 1000) == WAIT_OBJECT_0 && !runtime.inFlight.load(),
+          "End retries a retained counted callback's resume before requiring its in-flight count or snapshot lock to drain");
+    lockedCallback.join();
+    Check(owner.End(), "a drained counted-callback retry remains cleanup-idempotent");
+    CloseHandle(lockedReady);
+    CloseHandle(lockedRelease);
+    CloseHandle(lockedDone);
+    ResetFrameBoundaryObservation();
     Configure(image);
     const auto originalViewport = viewport;
     const auto originalRhi = rhi;
@@ -958,8 +1180,9 @@ int main(int argc, char** argv)
           "retired owner preserves own final evidence across generations");
     Check(nextOwner.End(), "failed next generation cleanup");
     Check(!runtime.modulePinned.load(), "synthetic fixtures never pin executable/module");
-    CheckFrameBoundaryProbe(argv[3], checks);
+    CheckFrameBoundaryProbe(argv[3], argv[2], checks);
     VirtualFree(reinterpret_cast<void*>(image), 0, MEM_RELEASE);
     std::printf("Passed %u production native render observation checks\n", checks);
     return 0;
 }
+#endif

@@ -15,6 +15,7 @@ $developerCommand = Join-Path $visualStudio 'Common7/Tools/VsDevCmd.bat'
 $outputRoot = Join-Path $taskRoot ('Build/mta-game-de-module/' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
 $sourceNames = @('Client/sdk/game/CGameAdapter.h', 'Client/game_de/GameAdapter.cpp', 'Client/game_de/ControllerSnapshot.h',
+    'Client/game_de/premake5.lua', 'vendor/detours/premake5.lua',
     'Client/game_de/NativePadReader.h', 'Client/game_de/NativePadReader.cpp',
     'Client/game_de/NativeMovementInput.h', 'Client/game_de/NativeMovementInput.cpp', 'Client/game_de/NativeInputRouting.h',
     'Client/sdk/game/CGameRenderObservation.h', 'Client/sdk/game/CGameRenderEndpointDiagnostic.h',
@@ -44,7 +45,7 @@ foreach ($entry in $compilerEnvironment) {
 $compiler = Join-Path $env:VCToolsInstallDir 'bin/Hostx64/x64/cl.exe'
 $module = Join-Path $outputRoot 'game_de.dll'
 $library = Join-Path $outputRoot 'game_de.lib'
-$common = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/MD','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN',
+$common = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/MD','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN','/DDETOURS_MTA_VM_TRANSACTION_NODES',
     ('/I' + (Join-Path $taskRoot 'Shared/sdk')), ('/I' + (Join-Path $taskRoot 'Client/sdk')))
 $moduleExit = $null
 $detoursDirectory = Join-Path $outputRoot 'detours'
@@ -54,7 +55,7 @@ $detoursLibrary = Join-Path $detoursDirectory 'detours.lib'
 # policy never weakens /W4 /WX for the adapter that owns the native lifetime.
 $detoursSources = @('creatwth.cpp', 'detours.cpp', 'image.cpp', 'modules.cpp', 'disolx86.cpp', 'disolx64.cpp', 'disasm.cpp') |
     ForEach-Object { Join-Path $detoursSourceRoot $_ }
-$detoursArguments = @('/nologo','/c','/EHsc','/O2','/MD','/W0','/DWIN32_LEAN_AND_MEAN',
+$detoursArguments = @('/nologo','/c','/EHsc','/O2','/MD','/W0','/DWIN32_LEAN_AND_MEAN','/DDETOURS_MTA_VM_TRANSACTION_NODES',
     ('/Fo' + $detoursDirectory + [IO.Path]::DirectorySeparatorChar)) + $detoursSources
 $detoursOutput = @(& $compiler @detoursArguments 2>&1)
 $detoursCompilerExit = $LASTEXITCODE

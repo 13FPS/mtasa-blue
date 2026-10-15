@@ -26,6 +26,10 @@
 
 #include "detours.h"
 
+#if defined(DETOURS_MTA_VM_TRANSACTION_NODES) && !defined(DETOURS_X64)
+#error The MTA externally suspended transaction extension is x64-only.
+#endif
+
 #if DETOURS_VERSION != 0x4c0c1   // 0xMAJORcMINORcPATCH
 #error detours.h version mismatch
 #endif
@@ -1311,12 +1315,24 @@ static void detour_free_unused_trampoline_regions()
 //
 struct DetourThread
 {
+#ifdef DETOURS_MTA_VM_TRANSACTION_NODES
+    // DE can hold every peer while changing its own CALL instruction. A CRT
+    // allocation/free here could wait on a stopped heap owner; VM nodes avoid
+    // that dependency without changing the classic allocator or API path.
+    static void* operator new(size_t bytes) noexcept { return VirtualAlloc(NULL, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE); }
+    static void operator delete(void* value) noexcept { if (value) VirtualFree(value, 0, MEM_RELEASE); }
+    BOOL                fExternallySuspended;
+#endif
     DetourThread *      pNext;
     HANDLE              hThread;
 };
 
 struct DetourOperation
 {
+#ifdef DETOURS_MTA_VM_TRANSACTION_NODES
+    static void* operator new(size_t bytes) noexcept { return VirtualAlloc(NULL, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE); }
+    static void operator delete(void* value) noexcept { if (value) VirtualFree(value, 0, MEM_RELEASE); }
+#endif
     DetourOperation *   pNext;
     BOOL                fIsRemove;
     PBYTE *             ppbPointer;
@@ -1428,7 +1444,10 @@ LONG WINAPI DetourTransactionAbort()
     // Resume any suspended threads.
     for (DetourThread *t = s_pPendingThreads; t != NULL;) {
         // There is nothing we can do if this fails.
-        ResumeThread(t->hThread);
+#ifdef DETOURS_MTA_VM_TRANSACTION_NODES
+        if (!t->fExternallySuspended)
+#endif
+            ResumeThread(t->hThread);
 
         DetourThread *n = t->pNext;
         delete t;
@@ -1718,7 +1737,10 @@ typedef ULONG_PTR DETOURS_EIP_TYPE;
     // Resume any suspended threads.
     for (t = s_pPendingThreads; t != NULL;) {
         // There is nothing we can do if this fails.
-        ResumeThread(t->hThread);
+#ifdef DETOURS_MTA_VM_TRANSACTION_NODES
+        if (!t->fExternallySuspended)
+#endif
+            ResumeThread(t->hThread);
 
         DetourThread *n = t->pNext;
         delete t;
@@ -1749,6 +1771,9 @@ LONG WINAPI DetourUpdateThread(_In_ HANDLE hThread)
     }
 
     DetourThread *t = new NOTHROW DetourThread;
+#ifdef DETOURS_MTA_VM_TRANSACTION_NODES
+    if (t != NULL) t->fExternallySuspended = FALSE;
+#endif
     if (t == NULL) {
         error = ERROR_NOT_ENOUGH_MEMORY;
       fail:
@@ -1774,6 +1799,35 @@ LONG WINAPI DetourUpdateThread(_In_ HANDLE hThread)
 
     return NO_ERROR;
 }
+
+#ifdef DETOURS_MTA_VM_TRANSACTION_NODES
+LONG WINAPI DetourUpdateThreadExternallySuspended(_In_ HANDLE hThread)
+{
+    if (s_nPendingThreadId != (LONG)GetCurrentThreadId()) {
+        return ERROR_INVALID_OPERATION;
+    }
+    if (s_nPendingError != NO_ERROR) {
+        return s_nPendingError;
+    }
+    if (hThread == GetCurrentThread()) {
+        return NO_ERROR;
+    }
+    DetourThread* t = new NOTHROW DetourThread;
+    if (t == NULL) {
+        s_nPendingError = ERROR_NOT_ENOUGH_MEMORY;
+        s_ppPendingError = NULL;
+        return s_nPendingError;
+    }
+    // The caller owns the sole suspend count and keeps it through Commit or
+    // Abort. Detours only adjusts its control context; it must neither add a
+    // count nor hide a failed ResumeThread by discarding this record.
+    t->fExternallySuspended = TRUE;
+    t->hThread = hThread;
+    t->pNext = s_pPendingThreads;
+    s_pPendingThreads = t;
+    return NO_ERROR;
+}
+#endif
 
 ///////////////////////////////////////////////////////////// Transacted APIs.
 //

@@ -32,6 +32,10 @@ project "detours"
     -- Only the explicit DE build needs native x64 detours; retain the classic
     -- default exclusions and avoid enabling unrelated architecture/configs.
     if _OPTIONS["with-definitive-adapter"] then
+        -- DE's owned CALL transaction holds peers itself. Its private nodes
+        -- use VM, and borrowed enrollment never owns a suspend count.
+        filter { "architecture:x86_64", "configurations:Release" }
+            defines { "DETOURS_MTA_VM_TRANSACTION_NODES" }
         filter { "architecture:x86_64", "configurations:not Release" }
             flags { "ExcludeFromBuild" }
         filter { "architecture:not x86", "architecture:not x86_64" }

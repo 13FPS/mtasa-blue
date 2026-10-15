@@ -7,7 +7,10 @@
 #include "../../Client/core/CGameAdapterModule.h"
 
 #include <filesystem>
+#include <atomic>
+#include <cstdlib>
 #include <cstring>
+#include <cwchar>
 #include <cstddef>
 #include <iostream>
 #include <new>
@@ -37,6 +40,49 @@ static_assert(sizeof(mta::game_de::RenderObservationStateV5) == 392);
 static_assert(offsetof(mta::game_de::RenderObservationStateV3, base) == 0);
 static_assert(offsetof(mta::game_de::RenderObservationStateV3, gpu) == sizeof(mta::game_de::RenderObservationStateV2));
 
+#if !defined(MTA_TEST_SHUTDOWN_FAILURE_MODULE)
+namespace
+{
+    std::atomic<bool>     observeCoreAllocations{false};
+    std::atomic<unsigned> observedCoreAllocations{0};
+    [[maybe_unused]] void ArmCoreAllocationObservation() noexcept
+    {
+        observeCoreAllocations.store(true);
+    }
+}
+// Observe the actual consumer's CRT requests without blocking or changing its
+// allocator. The controlled provider arms this only as Begin/End returns, after
+// preparation may allocate but retained cleanup must remain allocation-free.
+void* operator new(std::size_t bytes)
+{
+    if (observeCoreAllocations.load())
+        ++observedCoreAllocations;
+    if (void* memory = std::malloc(bytes ? bytes : 1))
+        return memory;
+    throw std::bad_alloc();
+}
+void* operator new[](std::size_t bytes)
+{
+    return ::operator new(bytes);
+}
+void operator delete(void* memory) noexcept
+{
+    std::free(memory);
+}
+void operator delete[](void* memory) noexcept
+{
+    std::free(memory);
+}
+void operator delete(void* memory, std::size_t) noexcept
+{
+    std::free(memory);
+}
+void operator delete[](void* memory, std::size_t) noexcept
+{
+    std::free(memory);
+}
+#endif
+
 #if defined(MTA_TEST_SHUTDOWN_FAILURE_MODULE)
     #ifndef MTA_TEST_FACADE_MODE
         #define MTA_TEST_FACADE_MODE 0
@@ -49,6 +95,9 @@ static_assert(offsetof(mta::game_de::RenderObservationStateV3, gpu) == sizeof(mt
     #endif
     #ifndef MTA_TEST_RENDER_V3
         #define MTA_TEST_RENDER_V3 0
+    #endif
+    #ifndef MTA_TEST_RENDER_V6
+        #define MTA_TEST_RENDER_V6 0
     #endif
     #ifndef MTA_TEST_RENDER_V5
         #define MTA_TEST_RENDER_V5 0
@@ -64,8 +113,10 @@ namespace mta::game_de
     {
         std::uint32_t*            fixtureCounters = nullptr;
         IGameRenderObservationV5* diagnosticLease = nullptr;
+        IGameRenderObservationV6* diagnosticLeaseV6 = nullptr;
         DWORD                     diagnosticOwnerThread = 0;
         std::uint32_t             diagnosticReads = 0;
+        void (*v6OperationObserver)() noexcept = nullptr;
         alignas(void*) unsigned char facadeIdentity[sizeof(void*)]{};
 
         class ShutdownFailureAdapter final : public IGameAdapter
@@ -371,6 +422,58 @@ namespace mta::game_de
         private:
             RenderFixtureV4 observation;
         };
+        class RenderFixtureV6 final : public IGameRenderObservationV6
+        {
+        public:
+            Status Begin() noexcept override
+            {
+                const auto status = observation.Begin();
+                if (v6OperationObserver)
+                    v6OperationObserver();
+                return status;
+            }
+            Status End() noexcept override
+            {
+                const auto status = observation.End();
+                if (v6OperationObserver)
+                    v6OperationObserver();
+                return status;
+            }
+            Status ReadState(RenderObservationStateV6& output) noexcept override
+            {
+                RenderObservationStateV6 next;
+                const auto               status = observation.ReadState(next.base);
+                if (status != Status::Ok)
+                    return status;
+                if (MTA_TEST_RENDER_MODE != 6)
+                {
+                    // These controlled CPU facts exercise Core's typed cache;
+                    // they cannot change the historical GPU support predicate.
+                    // A coherent native dispatch must remain representable
+                    // beside a refused standard-DXGI entry in the V5 prefix.
+                    next.base.boundary = {};
+                    next.base.boundary.status = 1;
+                    next.nativeDispatch.status = MTA_TEST_RENDER_MODE == 8 ? 1u : 2u;
+                    if (MTA_TEST_RENDER_MODE != 8)
+                        next.nativeDispatch = {2, 2, 255, 0, 2, 2, 0, 1, 7, 0, 2, 1, 1, 0, 100, 100, 100, 0, 9, 0};
+                }
+                output = next;
+                return Status::Ok;
+            }
+            void Release() noexcept override
+            {
+                diagnosticLeaseV6 = nullptr;
+                if (fixtureCounters)
+                {
+                    ++fixtureCounters[7];
+                    fixtureCounters[9] = ++fixtureCounters[8];
+                }
+                delete this;
+            }
+
+        private:
+            RenderFixtureV5 observation;
+        };
     }
 
     extern "C" IGameAdapter* CreateGameAdapter(std::uint32_t abiVersion) noexcept
@@ -448,7 +551,81 @@ namespace mta::game_de
     }
     #endif
 
+    #if MTA_TEST_RENDER_V6
+    extern "C" __declspec(dllexport) void SetFixtureV6OperationObserver(void (*observer)() noexcept) noexcept
+    {
+        v6OperationObserver = observer;
+    }
+    extern "C" IGameRenderObservationV6* CreateGameRenderObservationV6(std::uint32_t apiVersion, CCoreInterface* owner, RenderObservationRoute route) noexcept
+    {
+        if (apiVersion != RenderObservationApiVersionV6 || !owner || route != RenderObservationRoute::D3D12 || (fixtureCounters && fixtureCounters[13] == 3))
+            return nullptr;
+        diagnosticLeaseV6 = new (std::nothrow) RenderFixtureV6;
+        diagnosticOwnerThread = GetCurrentThreadId();
+        return diagnosticLeaseV6;
+    }
+        // Mode6 is an actual historical provider with no optional diagnostic export.
+        // Mode8 deliberately returns a different diagnostic version, not admission.
+        #if MTA_TEST_RENDER_MODE != 6
+    extern "C" Status ReadGameRenderEndpointDiagnosticV2(std::uint32_t version, IGameRenderObservationV6* lease, RenderEndpointDiagnosticV1* output) noexcept
+    {
+        if (version != 1 || !output || !lease || lease != diagnosticLeaseV6)
+            return Status::InvalidArgument;
+        if (GetCurrentThreadId() != diagnosticOwnerThread)
+            return Status::WrongThread;
+        ++diagnosticReads;
+        RenderEndpointDiagnosticV1 next;
+        next.version = MTA_TEST_RENDER_MODE == 8 ? 99u : 1u;
+        next.generationLow = 17;
+        next.acceptedSnapshotsLow = 7;
+        next.preparationGate = 13;
+        next.preparationReason = 3;
+        next.loadedEntryMatch = 2;
+        next.slotStatus = 1;
+        next.slotOwnerClass = 3;
+        next.slotRva = 0x1234;
+        *output = next;
+        return Status::Ok;
+    }
+        #endif
+    extern "C" __declspec(dllexport) std::uint32_t GetFixtureDiagnosticReadsV6() noexcept
+    {
+        return diagnosticReads;
+    }
+    #endif
+
 }
+    #if MTA_TEST_RENDER_V6 && MTA_TEST_RENDER_MODE == 8
+// A distinct disposable provider holds the real loader lock only when the host
+// creates both named gates. Its timeout makes a lazy-lookup regression fail
+// cleanly instead of hanging the suite or adding a production admission bypass.
+extern "C" BOOL WINAPI DllMain(HINSTANCE, DWORD reason, LPVOID)
+{
+    if (reason == DLL_PROCESS_ATTACH)
+    {
+        wchar_t enteredName[96]{}, resumeName[96]{}, timeoutName[96]{};
+        swprintf_s(enteredName, L"Local\\MtaApi6DiagnosticLoaderEntered-%lu", GetCurrentProcessId());
+        swprintf_s(resumeName, L"Local\\MtaApi6DiagnosticLoaderResume-%lu", GetCurrentProcessId());
+        swprintf_s(timeoutName, L"Local\\MtaApi6DiagnosticLoaderTimeout-%lu", GetCurrentProcessId());
+        const auto entered = OpenEventW(EVENT_MODIFY_STATE, FALSE, enteredName);
+        const auto resume = OpenEventW(SYNCHRONIZE, FALSE, resumeName);
+        const auto timeout = OpenEventW(EVENT_MODIFY_STATE, FALSE, timeoutName);
+        if (entered && resume && timeout)
+        {
+            SetEvent(entered);
+            if (WaitForSingleObject(resume, 3000) != WAIT_OBJECT_0)
+                SetEvent(timeout);
+        }
+        if (entered)
+            CloseHandle(entered);
+        if (resume)
+            CloseHandle(resume);
+        if (timeout)
+            CloseHandle(timeout);
+    }
+    return TRUE;
+}
+    #endif
 #else
 namespace
 {
@@ -555,6 +732,22 @@ namespace
             Check(host.EndNativeRenderObservation() && host.GetNativeRenderObservationState(boundary) && !boundary.base.base.base.base.active &&
                       !boundary.base.base.base.base.pendingCleanup && !boundary.boundary.presentEntries,
                   "actual API5 caches completed zero-query admission failure before releasing its typed lease");
+            mta::game_de::RenderObservationStateV6 dispatch;
+            Check(!host.BeginNativeRenderDispatchObservation(mta::game_de::RenderObservationRoute::D3D12) && host.GetNativeRenderObservationState(dispatch) &&
+                      dispatch.base.base.base.base.requestedRoute == 2 && !dispatch.base.base.base.base.observedRoute &&
+                      dispatch.base.base.base.base.base.failureReason && !dispatch.base.base.base.gpu.attempts && !dispatch.base.boundary.status &&
+                      !dispatch.base.boundary.presentEntries && !dispatch.nativeDispatch.status && !dispatch.nativeDispatch.presentEntries,
+                  "actual API6 rejects the nongame image before callsite changes and preserves both zero observation tails");
+            boundary.boundary.status = 99;
+            Check(!host.GetNativeRenderObservationState(boundary) && boundary.boundary.status == 99,
+                  "actual retained API6 cannot replace a historical API5 caller layout");
+            mta::game_de::RenderEndpointDiagnosticV1 endpointDiagnostic;
+            endpointDiagnostic.version = 99;
+            Check(!host.GetNativeRenderEndpointDiagnostic(endpointDiagnostic) && endpointDiagnostic.version == 99,
+                  "actual wrong-image API6 exposes no diagnostic through its optional V2 export");
+            Check(host.EndNativeRenderObservation() && host.GetNativeRenderObservationState(dispatch) && !dispatch.base.base.base.base.base.active &&
+                      !dispatch.base.base.base.base.base.pendingCleanup && !dispatch.nativeDispatch.presentEntries && !dispatch.base.boundary.presentEntries,
+                  "actual API6 caches safe zero-query cleanup before releasing its larger lease");
             Check(!host.BeginNativeMovementTrial(), "movement trial requires an explicit synthesized frame");
             mta::game_de::LocalObservation observation;
             observation.sampleAtMs = 1000;
@@ -1393,6 +1586,255 @@ namespace
         Check(!host.GetNativeRenderEndpointDiagnostic(diagnostic) && diagnostic.version == 77,
               "unloaded provider cannot expose a cached diagnostic through a new owner");
     }
+    void TestMissingRenderV6(CCoreInterface* owner, const std::wstring& path)
+    {
+        using namespace mta::game_de;
+        CGameAdapterModule host;
+        Check(host.Start(owner, path), "own a real API5-only provider for missing API6 admission");
+        Check(!GetProcAddress(GetModuleHandleW(path.c_str()), "CreateGameRenderObservationV6"), "API5 provider genuinely has no API6 export");
+        RenderObservationStateV6 output;
+        output.base.base.base.gpu.queryStage = 99;
+        Check(!host.BeginNativeRenderDispatchObservation(RenderObservationRoute::D3D12) && host.GetError().find("no legacy route") != std::string::npos &&
+                  !host.GetNativeRenderObservationState(output) && output.base.base.base.gpu.queryStage == 99,
+              "missing API6 never falls back to API1/2/3 or publishes their state as classification evidence");
+        Check(host.BeginNativeRenderClassificationObservation(RenderObservationRoute::D3D12), "explicit API4 remains usable after API6 rejection");
+        Check(!host.EndNativeRenderObservation() && host.EndNativeRenderObservation(), "older API4 keeps its original retry lifetime");
+        host.Stop();
+        Check(!host.IsStarted() && !GetModuleHandleW(path.c_str()), "missing API6 leaves normal owner cleanup available");
+    }
+
+    void TestRenderProviderV6(CCoreInterface* owner, const std::wstring& path, unsigned mode, const std::wstring& loaderProbePath)
+    {
+        using namespace mta::game_de;
+        CGameAdapterModule host;
+        Check(host.Start(owner, path), "own controlled separately versioned API6 provider");
+        RenderEndpointDiagnosticV1 diagnostic;
+        diagnostic.version = 77;
+        Check(!host.GetNativeRenderEndpointDiagnostic(diagnostic) && diagnostic.version == 77, "endpoint diagnostics cannot invent a V6 lease before Begin");
+        std::uint32_t counters[14]{};
+        using Configure = void (*)(std::uint32_t*) noexcept;
+        Configure configure = nullptr;
+        auto      address = GetProcAddress(GetModuleHandleW(path.c_str()), "SetFacadeFixtureCounters");
+        std::memcpy(&configure, &address, sizeof(configure));
+        Check(configure != nullptr, "API6 controlled lifetime counters available");
+        configure(counters);
+        using Observe = void (*)(void (*)() noexcept) noexcept;
+        Observe observe = nullptr;
+        address = GetProcAddress(GetModuleHandleW(path.c_str()), "SetFixtureV6OperationObserver");
+        std::memcpy(&observe, &address, sizeof(observe));
+        Check(observe != nullptr, "owned API6 provider can mark the exact post-operation allocation boundary");
+        using Factory = decltype(&CreateGameRenderObservationV6);
+        Factory factory = nullptr;
+        address = GetProcAddress(GetModuleHandleW(path.c_str()), "CreateGameRenderObservationV6");
+        std::memcpy(&factory, &address, sizeof(factory));
+        Check(factory && !factory(5, owner, RenderObservationRoute::D3D12) && !factory(7, owner, RenderObservationRoute::D3D12) &&
+                  !factory(6, nullptr, RenderObservationRoute::D3D12) && !factory(6, owner, RenderObservationRoute::D3D11),
+              "API6 factory rejects wrong version/owner and earlier route");
+        RenderObservationStateV6 output;
+        output.base.base.base.gpu.queryStage = 99;
+        output.base.base.custom.status = 99;
+        Check(!host.BeginNativeRenderDispatchObservation(RenderObservationRoute::Unknown) &&
+                  !host.BeginNativeRenderDispatchObservation(RenderObservationRoute::D3D11) && !host.GetNativeRenderObservationState(output) &&
+                  output.base.base.base.gpu.queryStage == 99 && output.base.base.custom.status == 99 && !counters[4],
+              "invalid API6 route rejects before provider entry and preserves output");
+        observedCoreAllocations.store(0);
+        observe(&ArmCoreAllocationObservation);
+        const bool began = host.BeginNativeRenderDispatchObservation(RenderObservationRoute::D3D12);
+        observeCoreAllocations.store(false);
+        observe(nullptr);
+        Check(began == (mode != 2), "API6 failed Begin remains distinguishable and cleanup-owned");
+        Check(observedCoreAllocations.load() == 0, "API6 post-Begin status formatting performs no consumer CRT allocation");
+        Check(!host.BeginNativeRenderDispatchObservation(RenderObservationRoute::D3D12) && !host.BeginNativeRenderObservation() &&
+                  !host.BeginNativeRenderObservation(RenderObservationRoute::D3D12) &&
+                  !host.BeginNativeRenderOwnershipObservation(RenderObservationRoute::D3D12) &&
+                  !host.BeginNativeRenderClassificationObservation(RenderObservationRoute::D3D12) && counters[4] == 1,
+              "retained API6 lease excludes every renderer version and duplicate Begin");
+        Check(host.GetNativeRenderObservationState(output) && output.base.base.base.base.requestedRoute == 2,
+              "API6 reports its immutable explicit route through its own state layout");
+        const bool diagnosticAvailable = mode != 6 && mode != 8;
+        observedCoreAllocations.store(0);
+        observeCoreAllocations.store(true);
+        const bool copiedDiagnostic = host.GetNativeRenderEndpointDiagnostic(diagnostic);
+        observeCoreAllocations.store(false);
+        Check(observedCoreAllocations.load() == 0, "API6 missing/wrong-version optional diagnostic formatting performs no consumer CRT allocation");
+        Check(copiedDiagnostic == diagnosticAvailable && (diagnosticAvailable ? diagnostic.version == 1 && diagnostic.generationLow == 17 &&
+                                                                                    diagnostic.slotOwnerClass == 3 && diagnostic.slotRva == 0x1234
+                                                                              : diagnostic.version == 77),
+              "optional endpoint export preserves known scalars while missing/wrong-version providers preserve caller output");
+        if (mode == 6)
+            Check(!GetProcAddress(GetModuleHandleW(path.c_str()), "ReadGameRenderEndpointDiagnosticV2"),
+                  "historical API6 fixture genuinely has no separate diagnostic export");
+        if (mode == 1)
+        {
+            wchar_t enteredName[96]{}, resumeName[96]{}, timeoutName[96]{};
+            swprintf_s(enteredName, L"Local\\MtaApi6DiagnosticLoaderEntered-%lu", GetCurrentProcessId());
+            swprintf_s(resumeName, L"Local\\MtaApi6DiagnosticLoaderResume-%lu", GetCurrentProcessId());
+            swprintf_s(timeoutName, L"Local\\MtaApi6DiagnosticLoaderTimeout-%lu", GetCurrentProcessId());
+            const auto entered = CreateEventW(nullptr, TRUE, FALSE, enteredName);
+            const auto resume = CreateEventW(nullptr, TRUE, FALSE, resumeName);
+            const auto timeout = CreateEventW(nullptr, TRUE, FALSE, timeoutName);
+            Check(entered && resume && timeout, "owned loader-lock fixture gates created");
+            HMODULE     loadedProbe = nullptr;
+            std::thread loader(
+                [&] { loadedProbe = LoadLibraryExW(loaderProbePath.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS); });
+            const bool held = WaitForSingleObject(entered, 5000) == WAIT_OBJECT_0;
+            const auto started = GetTickCount64();
+            const bool copied = held && host.GetNativeRenderEndpointDiagnostic(diagnostic);
+            const auto elapsed = GetTickCount64() - started;
+            SetEvent(resume);
+            loader.join();
+            const bool timedOut = WaitForSingleObject(timeout, 0) != WAIT_TIMEOUT;
+            if (loadedProbe)
+                FreeLibrary(loadedProbe);
+            CloseHandle(entered);
+            CloseHandle(resume);
+            CloseHandle(timeout);
+            Check(held && loadedProbe && !timedOut && copied && diagnostic.version == 1 && elapsed < 1500,
+                  "cached API6 diagnostic reader completes while another owned provider holds the loader lock");
+        }
+        Check(mode == 6 ? !output.base.base.base.base.observedRoute && !output.base.base.base.gpu.attempts && !output.base.base.base.gpu.metadataValid
+                        : output.base.base.base.base.observedRoute == 2 && output.base.base.base.gpu.attempts == 7 &&
+                              output.base.base.base.gpu.queryStage == 19 && output.base.base.base.gpu.accepted == 0 && output.base.base.base.gpu.rejected == 7,
+              "API6 copies actual controlled zero-query or custom-unsupported metadata without promotion");
+        RenderObservationState   legacy;
+        RenderObservationStateV2 older;
+        RenderObservationStateV3 previous;
+        previous.gpu.queryStage = 99;
+        legacy.width = older.requestedRoute = 99;
+        Check(!host.GetNativeRenderObservationState(legacy) && !host.GetNativeRenderObservationState(older) &&
+                  !host.GetNativeRenderObservationState(previous) && previous.gpu.queryStage == 99 && legacy.width == 99 && older.requestedRoute == 99,
+              "API1/2/3 output cannot reinterpret the API6 lease");
+        Check(mode == 6 ? output.base.base.custom.status == 0 && output.base.base.custom.implementationId == 0 &&
+                              output.base.base.custom.slotSignatureMask == 0 && output.base.base.custom.staticPolicyFlags == 0
+              : mode == 8 ? output.base.base.custom.status == 3 && output.base.base.custom.implementationId == 0
+                          : output.base.base.custom.status == 2 && output.base.base.custom.implementationId == 1 &&
+                                output.base.base.custom.slotSignatureMask == 127 && output.base.base.custom.staticPolicyFlags == 15,
+              "API6 classification must preserve unknown/known scalars without promoting GPU support");
+        RenderObservationStateV4 classificationOutput;
+        classificationOutput.custom.status = 99;
+        Check(!host.GetNativeRenderObservationState(classificationOutput) && classificationOutput.custom.status == 99,
+              "API4 cannot reinterpret the API6 endpoint lease");
+        Check((mode == 6 ? output.base.boundary.status == 0 : output.base.boundary.status == 1) && !output.base.boundary.endpointProfileId &&
+                  !output.base.boundary.presentEntries && !output.base.boundary.factsMask,
+              "API6 coherent native dispatch never upgrades the independently refused strict API5 prefix");
+        Check(mode == 6   ? output.nativeDispatch.status == 0 && !output.nativeDispatch.presentEntries
+              : mode == 8 ? output.nativeDispatch.status == 1 && !output.nativeDispatch.endpointProfileId
+                          : output.nativeDispatch.status == 2 && output.nativeDispatch.endpointProfileId == 2 && output.nativeDispatch.factsMask == 255 &&
+                                output.nativeDispatch.presentEntries == 7,
+              "API6 dispatch stays separate from the retained API5 DXGI-entry record");
+        RenderObservationStateV5 prior;
+        prior.boundary.status = 99;
+        Check(!host.GetNativeRenderObservationState(prior) && prior.boundary.status == 99 &&
+                  !host.BeginNativeRenderFrameBoundaryObservation(RenderObservationRoute::D3D12),
+              "API5 cannot reinterpret or replace a retained API6 dispatch lease");
+        const auto                 reads = counters[5];
+        bool                       foreignBegin = true, foreignRead = true, foreignEnd = true, foreignDiagnostic = true;
+        RenderEndpointDiagnosticV1 foreignDiagnosticOutput;
+        foreignDiagnosticOutput.version = 88;
+        RenderObservationStateV6 foreignOutput;
+        foreignOutput.base.base.base.gpu.queryStage = 77;
+        foreignOutput.base.base.custom.status = 77;
+        foreignOutput.nativeDispatch.status = 77;
+        foreignOutput.nativeDispatch.presentEntries = 0xfedcba9876543210ull;
+        std::thread foreign(
+            [&]
+            {
+                foreignBegin = host.BeginNativeRenderDispatchObservation(RenderObservationRoute::D3D12);
+                foreignRead = host.GetNativeRenderObservationState(foreignOutput);
+                foreignDiagnostic = host.GetNativeRenderEndpointDiagnostic(foreignDiagnosticOutput);
+                foreignEnd = host.EndNativeRenderObservation();
+                host.Stop();
+            });
+        foreign.join();
+        Check(!foreignDiagnostic && foreignDiagnosticOutput.version == 88,
+              "a foreign Core thread cannot inspect an optional endpoint diagnostic or replace output");
+        Check(!foreignBegin && !foreignRead && !foreignEnd && foreignOutput.base.base.base.gpu.queryStage == 77 &&
+                  foreignOutput.base.base.custom.status == 77 && foreignOutput.nativeDispatch.status == 77 &&
+                  foreignOutput.nativeDispatch.presentEntries == 0xfedcba9876543210ull && counters[5] == reads && !counters[6] && !counters[0],
+              "foreign API6 calls cannot publish output or touch the provider lifetime");
+        if (mode == 7)
+        {
+            counters[13] = 1;
+            output.base.base.base.gpu.queryStage = 88;
+            output.base.base.custom.status = 88;
+            Check(!host.GetNativeRenderObservationState(output) && output.base.base.base.gpu.queryStage == 88 && output.base.base.custom.status == 88,
+                  "cross-observed route preserves API6 caller output");
+            counters[13] = 2;
+            Check(!host.GetNativeRenderObservationState(output) && output.base.base.base.gpu.queryStage == 88 && output.base.base.custom.status == 88,
+                  "cross-requested route preserves API6 caller output");
+        }
+        if (mode == 4)
+        {
+            Check(host.Reset() && counters[6] == 1 && counters[7] == 1 && counters[3] == 1 && counters[9] < counters[10],
+                  "API6 End/Release precede adapter Reset");
+            output.base.base.base.gpu.queryStage = 88;
+            output.base.base.custom.status = 88;
+            Check(!host.GetNativeRenderObservationState(output) && output.base.base.base.gpu.queryStage == 88 && output.base.base.custom.status == 88,
+                  "Reset clears API6 final state availability");
+            diagnostic.version = 77;
+            Check(!host.GetNativeRenderEndpointDiagnostic(diagnostic) && diagnostic.version == 77, "Reset clears cached optional diagnostic availability too");
+        }
+        else
+        {
+            observedCoreAllocations.store(0);
+            observe(&ArmCoreAllocationObservation);
+            bool retainedEnd = false;
+            if (mode <= 2 || mode == 7)
+                host.Stop();
+            else if (mode == 3 || mode == 5)
+                retainedEnd = !host.EndNativeRenderObservation();
+            observeCoreAllocations.store(false);
+            observe(nullptr);
+            Check(observedCoreAllocations.load() == 0, "API6 retained End/read failure formatting performs no consumer CRT allocation");
+            if (mode == 3 || mode == 5)
+                Check(retainedEnd, "failed API6 final read or active end state retains the lease");
+            if (mode <= 3 || mode == 5 || mode == 7)
+                Check(host.IsStarted() && counters[6] == 1 && !counters[7] && !counters[0] && GetModuleHandleW(path.c_str()),
+                      "API6 Begin/End/read/route failure retains adapter and module for retry");
+            counters[13] = 0;
+            Check(host.EndNativeRenderObservation(), "owner completes API6 End after the retained failure");
+            diagnostic.version = 77;
+            Check(host.GetNativeRenderEndpointDiagnostic(diagnostic) == diagnosticAvailable &&
+                      (diagnosticAvailable ? diagnostic.version == 1 && diagnostic.slotRva == 0x1234 : diagnostic.version == 77),
+                  "safe End preserves only successfully copied optional diagnostics after provider Release");
+            const auto finalReads = counters[5];
+            Check(host.GetNativeRenderObservationState(output) && !output.base.base.base.base.base.active && !output.base.base.base.base.base.pendingCleanup &&
+                      counters[5] == finalReads && counters[7] == 1 && output.base.base.base.gpu.queryStage == (mode == 6 ? 0u : 19u),
+                  "ended API6 cache contains actual final metadata without touching released provider");
+            Check((mode == 6 ? output.nativeDispatch.status == 0
+                   : mode == 8
+                       ? output.nativeDispatch.status == 1
+                       : output.nativeDispatch.status == 2 && output.nativeDispatch.endpointProfileId == 2 && output.nativeDispatch.presentEntries == 7) &&
+                      !output.base.boundary.endpointProfileId,
+                  "safe API6 End retains its separate dispatch tail while the old DXGI-entry prefix remains unadmitted");
+            if (mode != 6)
+                Check(!output.base.base.base.gpu.supportPredicate && output.base.base.base.gpu.queryStatus == 2 && output.base.base.base.gpu.rejected == 7 &&
+                          !host.IsGameplayReady(),
+                      "unsupported GPU metadata remains unsupported after End and grants no gameplay readiness");
+            Check(output.base.base.custom.status == (mode == 6   ? 0u
+                                                     : mode == 8 ? 3u
+                                                                 : 2u),
+                  "API6 final cache preserves classification before releasing its provider");
+            Check(host.EndNativeRenderObservation() && counters[7] == 1, "API6 completed End is idempotent");
+            counters[13] = 3;
+            diagnostic.version = 77;
+            output.base.base.custom.status = 99;
+            Check(!host.BeginNativeRenderDispatchObservation(RenderObservationRoute::D3D12) && !host.GetNativeRenderEndpointDiagnostic(diagnostic) &&
+                      diagnostic.version == 77 && !host.GetNativeRenderObservationState(output) && output.base.base.custom.status == 99,
+                  "a rejected new V6 factory cannot relabel the completed run's cached diagnostic or observation");
+            counters[13] = 0;
+        }
+        host.Stop();
+        Check(!host.IsStarted() && !GetModuleHandleW(path.c_str()) && counters[7] == 1 && counters[0] == 1 && counters[1] == 1 && counters[9] < counters[11],
+              "API6 observer release precedes adapter shutdown and unload");
+        output.base.base.base.gpu.queryStage = 99;
+        output.base.base.custom.status = 99;
+        Check(!host.GetNativeRenderObservationState(output) && output.base.base.base.gpu.queryStage == 99 && output.base.base.custom.status == 99,
+              "unloaded API6 cannot replace caller output");
+        diagnostic.version = 77;
+        Check(!host.GetNativeRenderEndpointDiagnostic(diagnostic) && diagnostic.version == 77,
+              "unloaded provider cannot expose a cached diagnostic through a new owner");
+    }
     #endif
 }
 
@@ -1400,7 +1842,7 @@ int wmain(int argc, wchar_t** argv)
 {
     try
     {
-        if (argc != 2 && argc != 3 && argc != 6 && argc != 11 && argc != 18 && argc != 26 && argc != 34 && argc != 42)
+        if (argc != 2 && argc != 3 && argc != 6 && argc != 11 && argc != 18 && argc != 26 && argc != 34 && argc != 42 && argc != 50)
             throw std::runtime_error("Pass the absolute path of the built Game DE module");
         const std::wstring modulePath = argv[1];
         // The adapter stores this identity but must never dereference it. This
@@ -1438,11 +1880,17 @@ int wmain(int argc, wchar_t** argv)
             for (unsigned mode = 1; mode <= 8; ++mode)
                 TestRenderProviderV4(owner, argv[mode + 25], mode);
         }
-        if (argc == 42)
+        if (argc >= 42)
         {
             TestMissingRenderV5(owner, argv[26]);
             for (unsigned mode = 1; mode <= 8; ++mode)
                 TestRenderProviderV5(owner, argv[mode + 33], mode);
+        }
+        if (argc == 50)
+        {
+            TestMissingRenderV6(owner, argv[34]);
+            for (unsigned mode = 1; mode <= 8; ++mode)
+                TestRenderProviderV6(owner, argv[mode + 41], mode, argv[49]);
         }
     #else
         CGameAdapterModule host;

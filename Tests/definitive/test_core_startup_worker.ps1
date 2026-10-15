@@ -75,7 +75,7 @@ try {
     Compile 'fixture-missing-export' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $missingFixture @('/LD','/DCORE_FIXTURE_MISSING_EXPORT=1')
     $syntheticRoot = Join-Path $outputRoot 'synthetic-host'
     $hostPath = Join-Path $syntheticRoot 'SanAndreas.exe'
-    Compile 'production-worker-host' @((Join-Path $PSScriptRoot 'CoreStartupReferenceTests.cpp'),(Join-Path $repositoryRoot 'Client/definitive/CoreStartupReference.cpp')) $hostPath
+    Compile 'production-worker-host' @((Join-Path $PSScriptRoot 'CoreStartupReferenceTests.cpp'),(Join-Path $repositoryRoot 'Client/definitive/CoreStartupReference.cpp')) $hostPath @('/DMTA_TEST_CORE_STARTUP_ACCESS=1')
     if ((Hash $hostPath) -eq '63e633bb51c35fe35ca98f503b62e7ddb8403abe4c9d501cfa9162892453846f') { throw 'Owned host unexpectedly matches the real game image.' }
     $runs += Run-Host 'controlled-loader' $syntheticRoot @($syntheticRoot,'synthetic',$normalFixture,$missingFixture)
     $actualRoot = Join-Path $outputRoot 'actual-host/CLEO/de-online'
@@ -107,7 +107,9 @@ try {
                         'render-v4','render-v4-cancel','render-v4-deadline','render-v4-missing','render-v4-query-failed','render-v4-unknown-presenter',
                         'render-v4-cross-route','render-v4-mixed-version','render-v4-wrong-mask',
                         'render-v5','render-v5-cancel','render-v5-deadline','render-v5-missing','render-v5-query-failed','render-v5-unknown-presenter',
-                        'render-v5-cross-route','render-v5-mixed-version','render-v5-wrong-mask')) {
+                        'render-v5-cross-route','render-v5-mixed-version','render-v5-wrong-mask',
+                        'render-v6','render-v6-cancel','render-v6-deadline','render-v6-missing','render-v6-query-failed','render-v6-unknown-presenter',
+                        'render-v6-cross-route','render-v6-mixed-version','render-v6-wrong-mask','render-v6-cache-contention')) {
         $movementRoot = Join-Path $outputRoot ($mode + '-host')
         New-Item -ItemType Directory -Path $movementRoot -Force | Out-Null
         Copy-Item -LiteralPath $hostPath -Destination (Join-Path $movementRoot 'SanAndreas.exe')
@@ -122,7 +124,7 @@ $unchanged = $true
 foreach ($name in $sourceNames) { if ((Hash (Join-Path $repositoryRoot $name)) -ne $sourceHashes[$name]) { $unchanged=$false } }
 foreach ($artifact in $artifacts) { if ((Hash $artifact.source) -ne $artifact.sha256) { $unchanged=$false } }
 $record = [ordered]@{
-    recorded_at=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=($null -eq $failure -and $unchanged -and $runs.Count -eq 41);
+    recorded_at=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=($null -eq $failure -and $unchanged -and $runs.Count -eq 51);
     failure=$failure;source_hashes=$sourceHashes;sources_unchanged=$unchanged;compiles=$compiles;runs=$runs;normal_artifacts=$artifacts;
     fixture_executable_is_game=$false;game_launched=$false;game_memory_read=$false;game_process_attached=$false;game_files_changed=$false;
     synthetic_core_is_mta=$false;full_mta_boot_verified=$false;engine_input_write_verified=$false;

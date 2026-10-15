@@ -39,6 +39,7 @@ namespace mta::game_de
         GpuOwnershipProbeState           gpu;
         CustomPresentClassificationState custom;
         FrameBoundaryObservationState    boundary;
+        FrameBoundaryObservationState    nativeDispatch;
     };
 
     // This is an observation of a naturally invoked native viewport callback,
@@ -61,14 +62,14 @@ namespace mta::game_de
         // A zero-callback run cannot choose a backend. The route is explicit;
         // observedRoute remains unknown until a validated original returns.
         bool Begin(RenderObservationRoute route = RenderObservationRoute::D3D11, bool queryGpuOwnership = false, bool classifyCustomPresent = false,
-                   bool queryFrameBoundary = false) noexcept;
+                   bool queryFrameBoundary = false, bool nativeDispatch = false) noexcept;
         bool End() noexcept;
         void ReadState(NativeRenderObservationState& state) const noexcept;
         // This separate cache does not add fields or claims to the V5 ABI.
         bool ReadEndpointDiagnostic(RenderEndpointDiagnosticV1& state) const noexcept;
 
     private:
-        std::uint64_t                generation = 0;
-        NativeRenderObservationState finalState;
+        std::uint64_t                        generation = 0;
+        mutable NativeRenderObservationState finalState;
     };
 }

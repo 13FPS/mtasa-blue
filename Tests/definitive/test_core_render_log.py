@@ -78,6 +78,98 @@ class CoreRenderEvidenceTests(unittest.TestCase):
                     native[108] = 9
         return rows
 
+    @classmethod
+    def version6(cls, rows):
+        cls.version5(rows)
+        for row in rows:
+            if row.get("event") in ("adapter_start", "core_render_reference_started"):
+                row.update(core_api=10, observation_api=6)
+            if row.get("event") == "core_render_reference_sample":
+                native = row["state"]
+                native[0] = 6
+                native += native[84:110]
+                if native[44] or native[45]:
+                    native[111] = 2
+                    native[84:110] = [1] + [0] * 25
+        return rows
+
+    def test_api6_dispatch_is_separate_from_refused_standard_present(self):
+        result = analyze(self.version6(fixture()))
+        self.assertEqual(result["issue_count"], 0, result)
+        self.assertTrue(result["diagnostic_lifecycle_complete"])
+        self.assertEqual(result["observation_api"], 6)
+        self.assertTrue(result["native_dispatch_observed"])
+        self.assertTrue(result["native_dispatch_buffer_association_observed"])
+        self.assertEqual(result["native_dispatch_sample_count"], 2)
+        self.assertEqual(result["native_dispatch_buffer_association_sample_count"], 2)
+        self.assertEqual(result["native_dispatch_metrics"]["present_entries"], 603)
+        self.assertEqual(result["boundary_metrics"]["present_entries"], 0)
+        for flag in ("native_present_observed", "buffer_association_observed", "gpu_ownership_verified",
+                     "gpu_frame_boundary_verified", "core_render_reference_complete", "com_present_verified"):
+            self.assertFalse(result[flag], flag)
+
+    def test_api6_each_tail_requires_its_own_profile_and_coherent_fields(self):
+        for field, value in ((111, 0), (111, 1), (111, 3), (112, 254), (113, 0x80004005),
+                             (114, 2), (115, 16), (116, 1), (117, 0), (120, 604), (130, 43),
+                             (133, 1), (134, 8), (135, 1), (85, 2)):
+            with self.subTest(field=field, value=value):
+                rows = self.version6(fixture())
+                rows[6]["state"][field] = value
+                result = analyze(rows)
+                self.assertGreater(result["issue_count"], 0)
+                self.assertFalse(result["native_dispatch_observed"])
+                self.assertFalse(result["native_present_observed"])
+
+    def test_api6_all136_fields_require_exact_unsigned_integers(self):
+        for field in range(136):
+            for value in (True, -1, .5, 0x100000000):
+                rows = self.version6(fixture())
+                rows[6]["state"][field] = value
+                result = analyze(rows)
+                self.assertGreater(result["issue_count"], 0, (field, value))
+                self.assertFalse(result["native_dispatch_observed"])
+
+    def test_api6_protocol_width_and_forged_dispatch_claims_fail_closed(self):
+        for version, core, route in ((6, 9, 2), (5, 10, 2), (6, 10, 1)):
+            rows = self.version6(fixture())
+            rows[5].update(observation_api=version, core_api=core, requested_route=route)
+            self.assertGreater(analyze(rows)["issue_count"], 0)
+        for length in (110, 135, 137):
+            rows = self.version6(fixture())
+            rows[6]["state"] = (rows[6]["state"] + [0])[:length]
+            self.assertGreater(analyze(rows)["issue_count"], 0)
+        for claim in ("native_dispatch_observed", "native_dispatch_sample_count", "native_dispatch_buffer_association_observed",
+                      "native_dispatch_buffer_association_sample_count", "nativeDispatchObserved", "nativeDispatchSampleCount",
+                      "nativeDispatchBufferAssociationSampleCount", "gpu_frame_boundary_verified"):
+            rows = self.version6(fixture())
+            rows[6]["details"] = {claim: True}
+            result = analyze(rows)
+            self.assertGreater(result["issue_count"], 0)
+            self.assertFalse(result["native_dispatch_observed"])
+
+    def test_api6_dispatch_counter_carry_and_cleanup_cache_do_not_invent_samples(self):
+        rows = self.version6(fixture())
+        for row in rows[6:8]:
+            row["state"][118:120] = [0, 0x200001]
+        result = analyze(rows)
+        self.assertEqual(result["issue_count"], 0, result)
+        self.assertEqual(result["native_dispatch_metrics"]["present_entries"], 0x20000100000000)
+        rows[7]["state"][30] = 10
+        result = analyze(rows)
+        self.assertEqual(result["native_dispatch_sample_count"], 1)
+        rows[7]["state"][118:120] = [0xffffffff, 0x200000]
+        self.assertGreater(analyze(rows)["issue_count"], 0)
+
+    def test_api6_dispatch_refusal_does_not_poison_old_tail_or_claim_draw(self):
+        for status, profile in ((1, 0), (10, 2), (8, 2)):
+            rows = self.version6(fixture())
+            for row in rows[6:8]: row["state"][110:136] = [status, profile] + [0] * 24
+            result = analyze(rows)
+            self.assertEqual(result["issue_count"], 0, result)
+            self.assertTrue(result["diagnostic_lifecycle_complete"])
+            self.assertFalse(result["native_dispatch_observed"])
+            self.assertFalse(result["native_present_observed"])
+
     def test_api5_coherent_present_and_association_remain_read_only(self):
         result = analyze(self.version5(fixture()))
         self.assertEqual(result["issue_count"], 0, result)
@@ -262,6 +354,66 @@ class CoreRenderEvidenceTests(unittest.TestCase):
         self.assertEqual(forged["status"], "invalid_evidence")
         self.assertFalse(forged["gpu_ownership_verified"])
         self.assertFalse(forged["core_render_reference_complete"])
+
+    def test_fatal_cached_complete_metadata_is_not_counted_as_fresh_observation(self):
+        for version in (3, 4, 5, 6):
+            for initial_fresh in (False, True):
+                with self.subTest(version=version, initial_fresh=initial_fresh):
+                    rows = getattr(self, "version" + str(version))(fixture())
+                    for row in rows:
+                        if row.get("event") == "core_render_reference_finished":
+                            row["passed"] = False
+                    if not any(row.get("event") == "adapter_failed" for row in rows):
+                        rows.append(dict(event="adapter_failed", phase="core_render_reference", error=reader.INCOMPLETE_ERROR,
+                                         game_adapter_active=False))
+                    for index, row in enumerate(rows[6:8]):
+                        if initial_fresh and index == 0:
+                            continue
+                        # Preserve the exact Complete query/classification/tail
+                        # cache; only the native failure and activity change.
+                        row["state"][13] = 0
+                        row["state"][30] = 10
+                    result = analyze(rows)
+                    self.assertEqual(result["issue_count"], 0, result)
+                    self.assertEqual(result["terminal_render_state"][50], 19)
+                    self.assertEqual(result["terminal_render_state"][52], 1)
+                    self.assertEqual(result["native_gpu_metadata_observed"], initial_fresh)
+                    self.assertEqual(result["gpu_metadata_sample_count"], int(initial_fresh))
+                    self.assertFalse(result["gpu_ownership_verified"])
+                    self.assertFalse(result["diagnostic_lifecycle_complete"])
+                    if version >= 4:
+                        self.assertEqual(result["terminal_render_state"][80:84], [2, 1, 127, 15])
+                        self.assertEqual(result["custom_presenter_sample_count"], int(initial_fresh))
+                    if not initial_fresh:
+                        self.assertFalse(result["native_present_observed"])
+                        self.assertFalse(result["native_dispatch_observed"])
+
+    def test_fatal_cached_known_classification_preserves_raw_fields_without_fresh_positive(self):
+        for version in (4, 5, 6):
+            for initial_fresh in (False, True):
+                with self.subTest(version=version, initial_fresh=initial_fresh):
+                    rows = getattr(self, "version" + str(version))(fixture())
+                    for index, row in enumerate(rows[6:8]):
+                        if initial_fresh and index == 0:
+                            continue
+                        native = row["state"]
+                        native[13] = 0
+                        native[30] = 10
+                        native[50:54] = [18, 0x8000ffff, 0, 0]
+                        native[54:74] = [0] * 20
+                        native[75] = 6
+                    result = analyze(rows)
+                    self.assertEqual(result["issue_count"], 0, result)
+                    self.assertEqual(result["terminal_render_state"][80:84], [2, 1, 127, 15])
+                    self.assertEqual(result["custom_presenter_recognized"], initial_fresh)
+                    self.assertEqual(result["custom_presenter_sample_count"], int(initial_fresh))
+                    self.assertFalse(result["diagnostic_lifecycle_complete"])
+                    self.assertFalse(result["gpu_ownership_verified"])
+                    if not initial_fresh:
+                        self.assertFalse(result["native_present_observed"])
+                        self.assertFalse(result["native_dispatch_observed"])
+                        self.assertEqual(result["native_present_sample_count"], 0)
+                        self.assertEqual(result["native_dispatch_sample_count"], 0)
 
     def test_api5_initial_fatal_gpu_cleanup_can_precede_any_boundary_attempt(self):
         rows = self.version5(fixture())

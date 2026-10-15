@@ -38,14 +38,22 @@ namespace mta::game_de
         };
         struct Runtime
         {
-            std::uintptr_t                image = 0, dxgi = 0;
-            Present                       present = nullptr;
-            Resize                        resize = nullptr;
-            Notify                        notify = nullptr, destroy = nullptr;
-            Function                      resizeCode{0x1fd58e0, 1216, "c3aa255197bb099e36c0c92a0847839212635182ffee90b82c602a18dec269f2"};
-            Function                      notifyCode{0xc20780, 44, "f3b4a18798b293c12b9184eaefa26a2b1aaff29543c79524615fcf6fb4275540"};
-            Function                      destroyCode{0x1fd5480, 546, "ceb9c5ed9902ae95e2eeb1b758c8151dd906b3ca514ffb92bc5a5bbc0bf9acf7"};
-            Function                      presentCode{0x19000, 1167, "927480275a7ec7ff5fc5b7519b90cbe1565e6a1dde1ad502cea102f8dbc67104"};
+            std::uintptr_t image = 0, dxgi = 0;
+            Present        present = nullptr;
+            Resize         resize = nullptr;
+            Notify         notify = nullptr, destroy = nullptr;
+            Function       resizeCode{0x1fd58e0, 1216, "c3aa255197bb099e36c0c92a0847839212635182ffee90b82c602a18dec269f2"};
+            Function       notifyCode{0xc20780, 44, "f3b4a18798b293c12b9184eaefa26a2b1aaff29543c79524615fcf6fb4275540"};
+            Function       destroyCode{0x1fd5480, 546, "ceb9c5ed9902ae95e2eeb1b758c8151dd906b3ca514ffb92bc5a5bbc0bf9acf7"};
+            Function       presentCode{0x19000, 1167, "927480275a7ec7ff5fc5b7519b90cbe1565e6a1dde1ad502cea102f8dbc67104"};
+            Function       wrapperCode{0x1fd5da0, 429, "376cfc00ed38249e3e226a32deabc25d2dd1e525621baba69f2362c29a99934e"};
+            bool  nativeDispatch = false, dispatchPatched = false, dispatchProtectionPending = false, dispatchFlushPending = false, dispatchUnsafeWrite = false;
+            DWORD dispatchProtection = 0, dispatchOriginalProtection = 0;
+            bool  dispatchFinalizePending = false, dispatchReleasePending = false;
+            void* dispatchRelay = nullptr;
+            std::uintptr_t                wrapperHook = 0, dispatchHookBegin = 0, dispatchHookEnd = 0, dispatchModuleBegin = 0, dispatchModuleEnd = 0;
+            std::array<unsigned char, 20> relayCode{};
+            std::array<unsigned char, 5>  dispatchPatch{};
             bool                          prepared = false, endpoint = false, committed = false, keyReady = false;
             std::atomic<bool>             armed{false}, destroyed{false};
             std::atomic<unsigned>         inFlight{0}, resizing{0};
@@ -67,6 +75,8 @@ namespace mta::game_de
         } runtime;
         thread_local FrameBoundaryScope* scope = nullptr;
         thread_local unsigned            presentDepth = 0;
+        thread_local unsigned            dispatchDepth = 0;
+        HRESULT STDMETHODCALLTYPE        HookNativeDispatch(IDXGISwapChain* chain, UINT interval, UINT flags, Present target);
         struct ResizeScope
         {
             std::uintptr_t viewport = 0, presenter = 0, device = 0;
@@ -170,6 +180,131 @@ namespace mta::game_de
             const auto&                            expected = installed ? function.installed : function.original;
             return Read(image + function.rva, code.data(), function.bytes, image, true) && std::memcmp(code.data(), expected.data(), function.bytes) == 0 &&
                    (!installed || (function.captured && OwnedBranch(image, function, code.data(), function.stolen, function.detour)));
+        }
+        constexpr std::size_t dispatchOffset = 0x11d;
+        bool                  CurrentDispatchRelay() noexcept
+        {
+            std::array<unsigned char, 20> code{};
+            return runtime.dispatchRelay && Read(reinterpret_cast<std::uintptr_t>(runtime.dispatchRelay), code.data(), code.size(), 0, true) &&
+                   code == runtime.relayCode;
+        }
+        bool CurrentWrapper(bool entryInstalled) noexcept
+        {
+            std::array<unsigned char, maximumCode> code{};
+            const auto&                            function = runtime.wrapperCode;
+            if (!Read(runtime.image + function.rva, code.data(), function.bytes, runtime.image, true))
+                return false;
+            if (runtime.dispatchPatched)
+            {
+                if (!CurrentDispatchRelay() || std::memcmp(code.data() + dispatchOffset, runtime.dispatchPatch.data(), runtime.dispatchPatch.size()))
+                    return false;
+                std::memcpy(code.data() + dispatchOffset, function.original.data() + dispatchOffset, runtime.dispatchPatch.size());
+            }
+            return entryInstalled ? OwnedBranch(runtime.image, function, code.data(), 7, runtime.wrapperHook)
+                                  : std::memcmp(code.data(), function.original.data(), function.bytes) == 0;
+        }
+        bool PrepareDispatchRelay() noexcept
+        {
+            if (runtime.dispatchRelay)
+                return false;
+            // A direct CALL keeps the native return address and caller's normal
+            // shadow space. The leaf writes no stack or nonvolatile register;
+            // exceptions can unwind it as a leaf before reaching normal C++.
+            const auto               site = runtime.image + runtime.wrapperCode.rva + dispatchOffset;
+            MEMORY_BASIC_INFORMATION originalPage{};
+            if (VirtualQuery(reinterpret_cast<void*>(site), &originalPage, sizeof(originalPage)) != sizeof(originalPage))
+                return false;
+            runtime.dispatchOriginalProtection = originalPage.Protect;
+            SYSTEM_INFO system{};
+            GetSystemInfo(&system);
+            const auto granularity = static_cast<std::uintptr_t>(system.dwAllocationGranularity);
+            const auto distance = static_cast<std::uintptr_t>((std::numeric_limits<std::int32_t>::max)());
+            const auto low = site + 5 > distance ? site + 5 - distance : granularity;
+            const auto high =
+                site + 5 > (std::numeric_limits<std::uintptr_t>::max)() - distance ? (std::numeric_limits<std::uintptr_t>::max)() : site + 5 + distance;
+            auto at = (low + granularity - 1) & ~(granularity - 1);
+            for (unsigned regions = 0; regions < 512 && at < high; ++regions)
+            {
+                MEMORY_BASIC_INFORMATION page{};
+                if (VirtualQuery(reinterpret_cast<void*>(at), &page, sizeof(page)) != sizeof(page))
+                    break;
+                const auto base = reinterpret_cast<std::uintptr_t>(page.BaseAddress);
+                if (page.RegionSize > (std::numeric_limits<std::uintptr_t>::max)() - base || base + page.RegionSize <= at)
+                    break;
+                const auto end = base + page.RegionSize;
+                if (page.State == MEM_FREE && end - at >= 4096 && high - at >= 4096)
+                {
+                    runtime.dispatchRelay = VirtualAlloc(reinterpret_cast<void*>(at), 4096, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+                    if (runtime.dispatchRelay)
+                        break;
+                }
+                if (end > (std::numeric_limits<std::uintptr_t>::max)() - (granularity - 1))
+                    break;
+                at = (end + granularity - 1) & ~(granularity - 1);
+            }
+            if (!runtime.dispatchRelay)
+                return false;
+            runtime.relayCode = {0x8b, 0xd5, 0x4c, 0x8b, 0x48, 0x40, 0xff, 0x25, 0, 0, 0, 0};
+            const auto hook = reinterpret_cast<std::uintptr_t>(&HookNativeDispatch);
+            std::memcpy(runtime.relayCode.data() + 12, &hook, sizeof(hook));
+            std::memcpy(runtime.dispatchRelay, runtime.relayCode.data(), runtime.relayCode.size());
+            DWORD old = 0;
+            if (!VirtualProtect(runtime.dispatchRelay, 4096, PAGE_EXECUTE_READ, &old) ||
+                !FlushInstructionCache(GetCurrentProcess(), runtime.dispatchRelay, runtime.relayCode.size()))
+                return false;
+            DWORD64    module = 0;
+            const auto unwind = RtlLookupFunctionEntry(hook, &module, nullptr);
+            if (!unwind || hook < module + unwind->BeginAddress || hook >= module + unwind->EndAddress)
+                return false;
+            runtime.dispatchHookBegin = module + unwind->BeginAddress;
+            runtime.dispatchHookEnd = module + unwind->EndAddress;
+            IMAGE_DOS_HEADER   dos{};
+            IMAGE_NT_HEADERS64 nt{};
+            if (!Read(module, &dos, sizeof(dos), module) || dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew < 0 || dos.e_lfanew > 0x100000 ||
+                !Read(module + static_cast<std::uintptr_t>(dos.e_lfanew), &nt, sizeof(nt), module) || nt.Signature != IMAGE_NT_SIGNATURE ||
+                nt.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC || !nt.OptionalHeader.SizeOfImage)
+                return false;
+            // SEH finally funclets have separate pdata entries. Excluding our
+            // complete pinned module closes their post-decrement unwind gaps as
+            // well as the ordinary C++ hook's first/last instructions.
+            runtime.dispatchModuleBegin = module;
+            runtime.dispatchModuleEnd = module + nt.OptionalHeader.SizeOfImage;
+            const auto delta = static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(runtime.dispatchRelay)) - static_cast<std::int64_t>(site + 5);
+            if (delta < (std::numeric_limits<std::int32_t>::min)() || delta > (std::numeric_limits<std::int32_t>::max)())
+                return false;
+            const auto displacement = static_cast<std::int32_t>(delta);
+            runtime.dispatchPatch[0] = 0xe8;
+            std::memcpy(runtime.dispatchPatch.data() + 1, &displacement, sizeof(displacement));
+            return CurrentDispatchRelay();
+        }
+        bool WriteDispatchBytes(const unsigned char* bytes) noexcept
+        {
+            void* site = reinterpret_cast<void*>(runtime.image + runtime.wrapperCode.rva + dispatchOffset);
+            DWORD old = 0;
+            if (!VirtualProtect(site, 5, PAGE_EXECUTE_READWRITE, &old))
+                return false;
+            runtime.dispatchUnsafeWrite = true;
+            runtime.dispatchFinalizePending = true;
+            bool copied = false;
+            __try
+            {
+                std::memcpy(site, bytes, 5);
+                copied = true;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+            }
+            DWORD      ignored = 0;
+            const bool protectedAgain = VirtualProtect(site, 5, old, &ignored) != FALSE;
+            if (!protectedAgain)
+            {
+                runtime.dispatchProtectionPending = true;
+                runtime.dispatchProtection = runtime.dispatchOriginalProtection;
+            }
+            const bool flushed = FlushInstructionCache(GetCurrentProcess(), site, 5) != FALSE;
+            if (!flushed)
+                runtime.dispatchFlushPending = true;
+            return copied && protectedAgain && flushed;
         }
         bool AdditionalSignatures(std::uintptr_t image) noexcept
         {
@@ -538,10 +673,25 @@ namespace mta::game_de
                 return Read(address, output, bytes, runtime.image, executable);
             }
         };
+        HRESULT ValidateNativeRoots(const Roots& roots, const CustomPresentClassificationState& custom, const FrameBoundaryScope& selected,
+                                    std::uintptr_t dispatchChain, FrameBoundaryObservationState& state) noexcept
+        {
+            state.nativeBufferIndex = roots.index;
+            if (!selected.knownPresenter || custom.status != static_cast<unsigned>(CustomPresentClassificationStatus::KnownNativePresenter) ||
+                roots.gpuCount != 1 || roots.afrCount != 1 || roots.swapchain != (dispatchChain ? dispatchChain : selected.swapchain) ||
+                roots.contextDevice != roots.device || roots.alternate || roots.nodeMask != 1 || roots.contextManager != roots.manager ||
+                roots.commandManager != roots.manager)
+                return S_FALSE;
+            state.factsMask |= 8;
+            return S_OK;
+        }
         class Queries final : public FrameBoundaryQueries
         {
         public:
-            explicit Queries(FrameBoundaryScope& selected) noexcept : selected(selected), epoch(runtime.epoch.load()) {}
+            explicit Queries(FrameBoundaryScope& selected, std::uintptr_t observedDispatchChain = 0) noexcept
+                : selected(selected), epoch(runtime.epoch.load()), dispatchChain(observedDispatchChain)
+            {
+            }
             std::int32_t Execute(Stage stage, FrameBoundaryObservationState& state) override
             {
                 switch (stage)
@@ -550,17 +700,13 @@ namespace mta::game_de
                     {
                         if (!ReadRoots(selected.viewport, roots))
                             return E_POINTER;
+                        if (dispatchChain && roots.swapchain != dispatchChain)
+                            return S_FALSE;
                         PresenterReads                   reads;
                         CustomPresentClassificationState custom;
                         CustomPresentProbeRoots          customRoots;
                         ClassifyCustomPresent(reads, runtime.image, roots.custom, roots.device, custom, customRoots);
-                        state.nativeBufferIndex = roots.index;
-                        if (!selected.knownPresenter || custom.status != static_cast<unsigned>(CustomPresentClassificationStatus::KnownNativePresenter) ||
-                            roots.gpuCount != 1 || roots.afrCount != 1 || roots.swapchain != selected.swapchain || roots.contextDevice != roots.device ||
-                            roots.alternate || roots.nodeMask != 1 || roots.contextManager != roots.manager || roots.commandManager != roots.manager)
-                            return S_FALSE;
-                        state.factsMask |= 8;
-                        return S_OK;
+                        return ValidateNativeRoots(roots, custom, selected, dispatchChain, state);
                     }
                     case Stage::SwapchainInterface:
                     {
@@ -703,6 +849,7 @@ namespace mta::game_de
         private:
             FrameBoundaryScope& selected;
             std::uint64_t       epoch;
+            std::uintptr_t      dispatchChain = 0;
             Roots               roots;
             IDXGISwapChain3*    chain = nullptr;
             ID3D12Resource*     buffer = nullptr;
@@ -745,32 +892,45 @@ namespace mta::game_de
             state.lifecycleFlags = (runtime.resizing.load() ? 1u : 0u) | (runtime.destroyed.load() ? 2u : 0u);
             ReleaseSRWLockShared(&runtime.lifecycleLock);
         }
-        HRESULT PresentBody(IDXGISwapChain* chain, UINT interval, UINT flags, void* caller)
+        bool DispatchAssociationCurrent(const FrameBoundaryScope& selected, IDXGISwapChain* chain, Present target) noexcept
+        {
+            std::uintptr_t current = 0, table = 0, slot = 0;
+            const bool     locationAdmitted = runtime.preparation.preparationGate == static_cast<unsigned>(RenderEndpointPrepareGate::Complete) ||
+                                          (runtime.preparation.preparationGate == static_cast<unsigned>(RenderEndpointPrepareGate::LoadedCodeHash) &&
+                                           runtime.preparation.preparationReason == static_cast<unsigned>(RenderEndpointPrepareReason::Mismatch) &&
+                                           runtime.preparation.loadedEntryMatch == static_cast<unsigned>(RenderEndpointLoadedMatch::Mismatch));
+            return locationAdmitted && target && reinterpret_cast<std::uintptr_t>(target) == runtime.dxgi + runtime.presentCode.rva &&
+                   Read(selected.viewport + 0x60, current) && current == reinterpret_cast<std::uintptr_t>(chain) && Read(current, table) &&
+                   Read(table + 0x40, slot) && slot == reinterpret_cast<std::uintptr_t>(target);
+        }
+        HRESULT PresentBody(IDXGISwapChain* chain, UINT interval, UINT flags, void* caller, Present target = nullptr, bool nativeDispatch = false)
         {
             FrameBoundaryScope* selected = scope;
-            const bool          relevant = selected && runtime.armed.load() && reinterpret_cast<std::uintptr_t>(chain) == selected->swapchain &&
+            const bool          relevant = selected && runtime.armed.load() &&
+                                  reinterpret_cast<std::uintptr_t>(chain) == (nativeDispatch ? selected->nativeSwapchain : selected->swapchain) &&
                                   reinterpret_cast<std::uintptr_t>(caller) == runtime.image + 0x1fd5ec2;
             if (relevant)
             {
-                selected->entered = true;
-                auto&      state = selected->state;
+                (nativeDispatch ? selected->dispatchEntered : selected->entered) = true;
+                auto&      state = nativeDispatch ? selected->nativeDispatch : selected->state;
                 const auto entries = state.presentEntries, rejected = state.rejectedEntries;
                 state = {};
-                state.endpointProfileId = 1;
+                state.endpointProfileId = nativeDispatch ? 2u : 1u;
                 state.presentEntries = entries;
                 state.rejectedEntries = rejected;
                 ++state.presentEntries;
                 state.presentThreadId = GetCurrentThreadId();
-                if (presentDepth != 1 || state.presentThreadId != selected->callbackThread)
+                if ((nativeDispatch ? dispatchDepth : presentDepth) != 1 || state.presentThreadId != selected->callbackThread)
                     state.status = static_cast<unsigned>(BoundaryStatus::WrongThreadOrNested);
-                else if (!CurrentCode(runtime.dxgi, runtime.presentCode, true))
+                else if (nativeDispatch ? (!CurrentWrapper(true) || !DispatchAssociationCurrent(*selected, chain, target))
+                                        : !CurrentCode(runtime.dxgi, runtime.presentCode, true))
                     state.status = static_cast<unsigned>(BoundaryStatus::EndpointChanged);
                 else if (runtime.resizing.load() || runtime.destroyed.load())
                     state.status = static_cast<unsigned>(BoundaryStatus::ResizeOverlap);
                 else
                 {
-                    Queries queries(*selected);
-                    selected->cleanupFailed = !RunFrameBoundaryQueries(queries, state);
+                    Queries queries(*selected, nativeDispatch ? reinterpret_cast<std::uintptr_t>(chain) : 0);
+                    selected->cleanupFailed = !RunFrameBoundaryQueries(queries, state) || selected->cleanupFailed;
                     if (selected->cleanupFailed)
                     {
                         runtime.armed.store(false);
@@ -789,13 +949,23 @@ namespace mta::game_de
                             if (FAILED(hr))
                                 state.status = static_cast<unsigned>(BoundaryStatus::QueryFailed);
                         }
+                        else if (nativeDispatch && !DispatchAssociationCurrent(*selected, chain, target))
+                        {
+                            state.status = static_cast<unsigned>(BoundaryStatus::RootsChanged);
+                            state.queryStage = static_cast<unsigned>(Stage::RootReadback);
+                            state.queryHresult = static_cast<unsigned>(S_FALSE);
+                            state.factsMask &= 127u;
+                        }
                     }
                 }
             }
-            const auto result = runtime.present(chain, interval, flags);
+            // The native callsite supplies the target the game itself loaded.
+            // Forward it once; no branch in a foreign DXGI hook is overwritten,
+            // normalized, followed for admission, or selected as a replacement.
+            const auto result = (nativeDispatch ? target : runtime.present)(chain, interval, flags);
             if (relevant)
             {
-                auto& state = selected->state;
+                auto& state = nativeDispatch ? selected->nativeDispatch : selected->state;
                 state.presentHresult = static_cast<std::uint32_t>(result);
                 if (FAILED(result) && state.status == static_cast<unsigned>(BoundaryStatus::ObservedCoherent))
                     state.status = static_cast<unsigned>(BoundaryStatus::PresentFailed);
@@ -816,6 +986,21 @@ namespace mta::game_de
             __finally
             {
                 --presentDepth;
+                runtime.inFlight.fetch_sub(1);
+            }
+        }
+        HRESULT STDMETHODCALLTYPE HookNativeDispatch(IDXGISwapChain* chain, UINT interval, UINT flags, Present target)
+        {
+            runtime.inFlight.fetch_add(1);
+            ++dispatchDepth;
+            void* caller = _ReturnAddress();
+            __try
+            {
+                return PresentBody(chain, interval, flags, caller, target, true);
+            }
+            __finally
+            {
+                --dispatchDepth;
                 runtime.inFlight.fetch_sub(1);
             }
         }
@@ -959,6 +1144,8 @@ namespace mta::game_de
     {
         using namespace boundary_detail;
         runtime.armed.store(false);
+        ReleaseNativeDispatchRelay();
+        runtime.nativeDispatch = false;
         ReleaseFrameBoundaryDiagnosticModules();
         AcquireSRWLockExclusive(&runtime.diagnosticLock);
         runtime.preparation = runtime.diagnostic = {};
@@ -981,11 +1168,15 @@ namespace mta::game_de
         runtime.key = {};
         runtime.keyReady = BCryptGenRandom(nullptr, runtime.key.data(), static_cast<ULONG>(runtime.key.size()), BCRYPT_USE_SYSTEM_PREFERRED_RNG) >= 0;
     }
-    bool PrepareFrameBoundaryHooks(std::uintptr_t image, std::uint64_t generation) noexcept
+    bool PrepareFrameBoundaryHooks(std::uintptr_t image, std::uint64_t generation, bool nativeDispatch, void* nativeWrapperHook) noexcept
     {
         using namespace boundary_detail;
         runtime.image = image;
+        runtime.nativeDispatch = nativeDispatch;
+        runtime.wrapperHook = reinterpret_cast<std::uintptr_t>(nativeWrapperHook);
         if (!runtime.keyReady)
+            return false;
+        if (nativeDispatch && (!runtime.wrapperHook || !CheckFunction(image, runtime.wrapperCode) || !PrepareDispatchRelay()))
             return false;
         if (!CheckFunction(image, runtime.resizeCode) || !CheckFunction(image, runtime.notifyCode) || !CheckFunction(image, runtime.destroyCode) ||
             !AdditionalSignatures(image))
@@ -1031,7 +1222,7 @@ namespace mta::game_de
         const bool notify = CaptureOwnedPatch(runtime.image, runtime.notifyCode, 6, reinterpret_cast<void*>(&HookNotify));
         const bool destroy = CaptureOwnedPatch(runtime.image, runtime.destroyCode, 6, reinterpret_cast<void*>(&HookDestroy));
         const bool present = !runtime.endpoint || CaptureOwnedPatch(runtime.dxgi, runtime.presentCode, 5, reinterpret_cast<void*>(&HookPresent));
-        const bool ok = resize && notify && destroy && present;
+        const bool ok = resize && notify && destroy && present && (!runtime.nativeDispatch || CurrentWrapper(true));
         runtime.armed.store(ok);
         return ok;
     }
@@ -1072,6 +1263,11 @@ namespace mta::game_de
         selected.cleanupFailure = cleanupFailure;
         selected.knownPresenter = custom.status == static_cast<unsigned>(CustomPresentClassificationStatus::KnownNativePresenter);
         selected.diagnostic = runtime.preparation;
+        if (runtime.nativeDispatch)
+        {
+            selected.nativeDispatch.endpointProfileId = 2;
+            selected.nativeDispatch.status = static_cast<unsigned>(BoundaryStatus::NoScopedPresent);
+        }
         selected.state.endpointProfileId = runtime.endpoint ? 1u : 0u;
         selected.state.status = static_cast<unsigned>(runtime.endpoint ? BoundaryStatus::NoScopedPresent : BoundaryStatus::EndpointUnadmitted);
         std::uintptr_t table = 0, endpoint = 0;
@@ -1098,6 +1294,11 @@ namespace mta::game_de
         selected.previous = scope;
         if (slotRead)
         {
+            // This borrow is scoped to the enclosing native callback. The
+            // separate API6 record observes the game's dispatch even when its
+            // standard DXGI entry contains an unadmitted foreign patch.
+            if (runtime.nativeDispatch)
+                Read(selected.viewport + 0x60, selected.nativeSwapchain);
             selected.diagnostic.slotStatus = static_cast<unsigned>(RenderEndpointSlotStatus::Read);
             DescribeOwner(endpoint, selected.diagnostic.slotOwnerClass, selected.diagnostic.slotRva);
             selected.diagnostic.slotEqualsPinned = runtime.dxgi && endpoint == runtime.dxgi + runtime.presentCode.rva ? 1u : 0u;
@@ -1120,8 +1321,22 @@ namespace mta::game_de
             selected.state.status = static_cast<unsigned>(BoundaryStatus::ResizeOverlap);
             selected.state.factsMask &= 127u;
         }
+        if (runtime.nativeDispatch)
+        {
+            CopyLifecycle(selected.nativeDispatch);
+            const bool dispatchComplete = selected.nativeDispatch.status == static_cast<unsigned>(BoundaryStatus::ObservedCoherent) ||
+                                          selected.nativeDispatch.status == static_cast<unsigned>(BoundaryStatus::PresentFailed);
+            if (selected.dispatchEntered && dispatchComplete &&
+                (selected.epoch != selected.nativeDispatch.resizeEpoch || selected.nativeDispatch.lifecycleFlags))
+            {
+                if (selected.nativeDispatch.status == static_cast<unsigned>(BoundaryStatus::ObservedCoherent))
+                    ++selected.nativeDispatch.rejectedEntries;
+                selected.nativeDispatch.status = static_cast<unsigned>(BoundaryStatus::ResizeOverlap);
+                selected.nativeDispatch.factsMask &= 127u;
+            }
+        }
         scope = selected.previous;
-        selected.viewport = selected.swapchain = selected.image = 0;
+        selected.viewport = selected.swapchain = selected.nativeSwapchain = selected.image = 0;
         selected.previous = nullptr;
     }
     void PublishFrameBoundaryEndpointDiagnostic(const FrameBoundaryScope& selected, std::uint64_t acceptedSnapshots) noexcept
@@ -1146,6 +1361,177 @@ namespace mta::game_de
             next.generationHigh != static_cast<std::uint32_t>(generation >> 32))
             return false;
         state = next;
+        return true;
+    }
+    bool NativeDispatchInstructionSafe(std::uintptr_t instruction, std::uintptr_t nativeWrapperTrampoline) noexcept
+    {
+        using namespace boundary_detail;
+        if (!runtime.nativeDispatch)
+            return true;
+        const auto site = runtime.image + runtime.wrapperCode.rva + dispatchOffset;
+        const auto relay = reinterpret_cast<std::uintptr_t>(runtime.dispatchRelay);
+        const auto inside = [instruction](std::uintptr_t begin, std::size_t bytes) { return begin && instruction >= begin && instruction - begin < bytes; };
+        // The pinned x64 vendor layout has C_ASSERT(sizeof(... ) == 96).
+        // Its inbound rbCodeIn relay runs before our first lifetime increment.
+        // Reject complete installed trampolines and every modified entry so
+        // correctness never depends on Detours' unchecked SetThreadContext.
+        constexpr std::size_t trampolineBytes = 96;
+        if (inside(runtime.image + runtime.wrapperCode.rva, 7) || inside(runtime.image + runtime.resizeCode.rva, 5) ||
+            inside(runtime.image + runtime.notifyCode.rva, 6) || inside(runtime.image + runtime.destroyCode.rva, 6) ||
+            (runtime.endpoint && inside(runtime.dxgi + runtime.presentCode.rva, 5)) || inside(nativeWrapperTrampoline, trampolineBytes))
+            return false;
+        if (runtime.committed && (inside(reinterpret_cast<std::uintptr_t>(runtime.resize), trampolineBytes) ||
+                                  inside(reinterpret_cast<std::uintptr_t>(runtime.notify), trampolineBytes) ||
+                                  inside(reinterpret_cast<std::uintptr_t>(runtime.destroy), trampolineBytes) ||
+                                  (runtime.endpoint && inside(reinterpret_cast<std::uintptr_t>(runtime.present), trampolineBytes))))
+            return false;
+        // Counters cannot cover the first instruction before increment, or the
+        // final instructions after decrement. Suspended control contexts close
+        // both gaps before patching, restoring, or freeing our leaf relay.
+        return !(instruction >= site && instruction < site + 5) && !(relay && instruction >= relay && instruction < relay + 20) &&
+               !(instruction >= runtime.dispatchHookBegin && instruction < runtime.dispatchHookEnd) &&
+               !(instruction >= runtime.dispatchModuleBegin && instruction < runtime.dispatchModuleEnd);
+    }
+    bool ChangeNativeDispatchCallsite(bool install, bool nativeEntryInstalled) noexcept
+    {
+        using namespace boundary_detail;
+        if (!runtime.nativeDispatch)
+            return true;
+        const auto site = runtime.image + runtime.wrapperCode.rva + dispatchOffset;
+        if (runtime.dispatchProtectionPending)
+        {
+            DWORD ignored = 0;
+            if (!VirtualProtect(reinterpret_cast<void*>(site), 5, runtime.dispatchProtection, &ignored) ||
+                !FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(site), 5))
+                return false;
+            runtime.dispatchProtectionPending = false;
+        }
+        if (runtime.dispatchFlushPending)
+        {
+            if (!FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(site), 5))
+                return false;
+            runtime.dispatchFlushPending = false;
+        }
+        if (install == runtime.dispatchPatched)
+        {
+            const bool safe = CurrentWrapper(nativeEntryInstalled);
+            if (safe)
+                runtime.dispatchUnsafeWrite = false;
+            return safe;
+        }
+        if (!CurrentWrapper(nativeEntryInstalled) || (install && !CurrentDispatchRelay()))
+            return false;
+        const auto*                  desired = install ? runtime.dispatchPatch.data() : runtime.wrapperCode.original.data() + dispatchOffset;
+        const bool                   written = WriteDispatchBytes(desired);
+        std::array<unsigned char, 5> current{};
+        if (!Read(site, current.data(), current.size(), runtime.image, true))
+        {
+            runtime.dispatchPatched = true;
+            return false;
+        }
+        if (current == runtime.dispatchPatch)
+            runtime.dispatchPatched = true;
+        else if (!std::memcmp(current.data(), runtime.wrapperCode.original.data() + dispatchOffset, current.size()))
+            runtime.dispatchPatched = false;
+        else
+        {
+            // Unknown partial bytes are never normalized or overwritten during
+            // cleanup. Keep code/storage pinned until ownership is recoverable.
+            runtime.dispatchPatched = true;
+            return false;
+        }
+        const bool safe = written && runtime.dispatchPatched == install && CurrentWrapper(nativeEntryInstalled);
+        if (safe)
+            runtime.dispatchUnsafeWrite = false;
+        return safe;
+    }
+    bool CaptureNativeDispatchProtectionBaseline() noexcept
+    {
+        using namespace boundary_detail;
+        if (!runtime.nativeDispatch)
+            return true;
+        // Refresh only while our outer holds exclude executing peers and
+        // before Detours makes the shared wrapper page temporarily writable.
+        // A previous unresolved write keeps its original recovery baseline.
+        if (runtime.dispatchFinalizePending || runtime.dispatchProtectionPending || runtime.dispatchUnsafeWrite || runtime.dispatchFlushPending)
+            return runtime.dispatchOriginalProtection != 0;
+        MEMORY_BASIC_INFORMATION page{};
+        const auto               site = runtime.image + runtime.wrapperCode.rva + dispatchOffset;
+        if (VirtualQuery(reinterpret_cast<void*>(site), &page, sizeof(page)) != sizeof(page) || page.State != MEM_COMMIT ||
+            (page.Protect & (PAGE_GUARD | PAGE_NOACCESS)))
+            return false;
+        runtime.dispatchOriginalProtection = page.Protect;
+        return true;
+    }
+    bool NativeDispatchSafeToResume(bool nativeEntryInstalled) noexcept
+    {
+        using namespace boundary_detail;
+        if (!runtime.nativeDispatch || (!runtime.dispatchPatched && !runtime.dispatchUnsafeWrite && !runtime.dispatchProtectionPending &&
+                                        !runtime.dispatchFlushPending && !runtime.dispatchFinalizePending))
+            return true;
+        std::array<unsigned char, 5> current{};
+        const auto                   site = runtime.image + runtime.wrapperCode.rva + dispatchOffset;
+        if (runtime.dispatchFinalizePending || runtime.dispatchProtectionPending)
+        {
+            // Detours temporarily makes this same native page writable. Its
+            // Commit/Abort has now completed; restore the protection captured
+            // before the transaction rather than that temporary RWX value.
+            DWORD ignored = 0;
+            if (!VirtualProtect(reinterpret_cast<void*>(site), 5, runtime.dispatchOriginalProtection, &ignored))
+                return false;
+            MEMORY_BASIC_INFORMATION page{};
+            if (VirtualQuery(reinterpret_cast<void*>(site), &page, sizeof(page)) != sizeof(page) || page.Protect != runtime.dispatchOriginalProtection)
+                return false;
+            runtime.dispatchProtectionPending = false;
+        }
+        if (!Read(site, current.data(), current.size(), runtime.image, true))
+            return false;
+        if (!std::memcmp(current.data(), runtime.wrapperCode.original.data() + dispatchOffset, current.size()))
+            runtime.dispatchPatched = false;
+        else if (current == runtime.dispatchPatch && CurrentDispatchRelay())
+            runtime.dispatchPatched = true;
+        else
+            return false;
+        // Only exact original or our complete owned CALL can be repaired. A
+        // partial/foreign instruction keeps all owned threads safety-held; it
+        // is not made executable merely because its backing storage is pinned.
+        if (!ChangeNativeDispatchCallsite(runtime.dispatchPatched, nativeEntryInstalled))
+            return false;
+        if (!FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(site), 5))
+        {
+            runtime.dispatchFlushPending = runtime.dispatchUnsafeWrite = true;
+            return false;
+        }
+        runtime.dispatchFinalizePending = false;
+        return true;
+    }
+    bool NativeDispatchPatchPresent() noexcept
+    {
+        return boundary_detail::runtime.dispatchPatched || boundary_detail::runtime.dispatchProtectionPending ||
+               boundary_detail::runtime.dispatchFlushPending || boundary_detail::runtime.dispatchUnsafeWrite ||
+               boundary_detail::runtime.dispatchFinalizePending || boundary_detail::runtime.dispatchReleasePending;
+    }
+    bool NativeDispatchDetoursPresent() noexcept
+    {
+        return boundary_detail::runtime.committed;
+    }
+    bool ReleaseNativeDispatchRelay() noexcept
+    {
+        using namespace boundary_detail;
+        if (runtime.dispatchPatched || runtime.dispatchProtectionPending || runtime.dispatchFlushPending || runtime.dispatchUnsafeWrite ||
+            runtime.dispatchFinalizePending || runtime.inFlight.load())
+            return false;
+        if (runtime.dispatchRelay && !VirtualFree(runtime.dispatchRelay, 0, MEM_RELEASE))
+        {
+            runtime.dispatchReleasePending = true;
+            return false;
+        }
+        runtime.dispatchReleasePending = false;
+        runtime.dispatchRelay = nullptr;
+        runtime.dispatchHookBegin = runtime.dispatchHookEnd = 0;
+        runtime.dispatchModuleBegin = runtime.dispatchModuleEnd = 0;
+        runtime.relayCode = {};
+        runtime.dispatchPatch = {};
         return true;
     }
     void ReleaseFrameBoundaryDiagnosticModules() noexcept

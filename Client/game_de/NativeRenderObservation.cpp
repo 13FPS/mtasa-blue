@@ -9,8 +9,10 @@
 #include "NativeCustomPresentProbe.h"
 #include "NativeFrameBoundaryProbe.h"
 #include <array>
+#include <algorithm>
 #include <atomic>
 #include <limits>
+#include <new>
 #include <vector>
 #include <windows.h>
 #include <tlhelp32.h>
@@ -57,6 +59,43 @@ namespace mta::game_de
             return route == RenderObservationRoute::D3D11 ? &d3d11Route : route == RenderObservationRoute::D3D12 ? &d3d12Route : nullptr;
         }
 
+        template <typename T>
+        struct VirtualAllocator
+        {
+            using value_type = T;
+            VirtualAllocator() noexcept = default;
+            template <typename U>
+            VirtualAllocator(const VirtualAllocator<U>&) noexcept
+            {
+            }
+            T* allocate(std::size_t count)
+            {
+                if (!count || count > (std::numeric_limits<std::size_t>::max)() / sizeof(T))
+                    throw std::bad_alloc();
+                auto* result = static_cast<T*>(VirtualAlloc(nullptr, count * sizeof(T), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+                if (!result)
+                    throw std::bad_alloc();
+                return result;
+            }
+            void deallocate(T* value, std::size_t) noexcept
+            {
+                if (value)
+                    VirtualFree(value, 0, MEM_RELEASE);
+            }
+            template <typename U>
+            bool operator==(const VirtualAllocator<U>&) const noexcept
+            {
+                return true;
+            }
+            template <typename U>
+            bool operator!=(const VirtualAllocator<U>&) const noexcept
+            {
+                return false;
+            }
+        };
+        using ThreadHandles = std::vector<HANDLE, VirtualAllocator<HANDLE>>;
+        using NextThread = LONG(NTAPI*)(HANDLE, HANDLE, ACCESS_MASK, ULONG, ULONG, PHANDLE);
+
         struct Runtime
         {
             std::atomic<bool>            apiBusy{false}, bound{false}, active{false}, hooked{false}, modulePinned{false};
@@ -75,6 +114,11 @@ namespace mta::game_de
             bool                         queryGpuOwnership = false;
             bool                         classifyCustomPresent = false;
             bool                         queryFrameBoundary = false;
+            bool                         nativeDispatch = false;
+            ThreadHandles                retainedSuspensions;
+            bool                         safetyHeldSuspensions = false;
+            NextThread                   nextThread = nullptr;
+            std::uintptr_t               nextThreadImage = 0;
         };
         // Failed teardown must retain its trampoline and callback storage.
         // Nothing in this process-lifetime state points at a released owner.
@@ -444,6 +488,7 @@ namespace mta::game_de
             if (observeBoundary)
             {
                 capture.boundary = boundary.state;
+                capture.nativeDispatch = boundary.nativeDispatch;
                 if (boundary.cleanupFailed)
                 {
                     fatalCleanup = true;
@@ -475,6 +520,16 @@ namespace mta::game_de
                             capture.boundary.rejectedEntries += runtime.snapshot.boundary.rejectedEntries;
                         }
                     }
+                    if (runtime.nativeDispatch)
+                    {
+                        if (!observeBoundary && fatalCleanup)
+                            capture.nativeDispatch = runtime.snapshot.nativeDispatch;
+                        else
+                        {
+                            capture.nativeDispatch.presentEntries += runtime.snapshot.nativeDispatch.presentEntries;
+                            capture.nativeDispatch.rejectedEntries += runtime.snapshot.nativeDispatch.rejectedEntries;
+                        }
+                    }
                     runtime.snapshot = capture;
                     if (observeBoundary)
                         PublishFrameBoundaryEndpointDiagnostic(boundary, runtime.accepted.load() + 1);
@@ -502,11 +557,17 @@ namespace mta::game_de
             }
         }
 
-        bool ChangeHooks(bool install, bool& pending) noexcept
+        bool CollectThreads(ThreadHandles& threads) noexcept
         {
-            pending = false;
-            std::vector<HANDLE> threads;
-            const auto          snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+            try
+            {
+                threads.reserve(1024);
+            }
+            catch (...)
+            {
+                return false;
+            }
+            const auto snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
             if (snapshot == INVALID_HANDLE_VALUE)
                 return false;
             THREADENTRY32 entry{};
@@ -518,6 +579,11 @@ namespace mta::game_de
                 {
                     if (entry.th32OwnerProcessID == GetCurrentProcessId() && entry.th32ThreadID != GetCurrentThreadId())
                     {
+                        if (runtime.nativeDispatch && threads.size() == 1024)
+                        {
+                            ready = false;
+                            break;
+                        }
                         const auto thread =
                             OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_SET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, entry.th32ThreadID);
                         if (!thread)
@@ -537,19 +603,199 @@ namespace mta::game_de
                     }
                     enumerated = Thread32Next(snapshot, &entry) != FALSE;
                 }
+                if (!enumerated && GetLastError() != ERROR_NO_MORE_FILES)
+                    ready = false;
             }
             catch (...)
             {
                 ready = false;
             }
             CloseHandle(snapshot);
-            bool transaction = false;
+            return ready;
+        }
+        bool NativeThreadStubMatches(const std::array<unsigned char, 24>& actual) noexcept
+        {
+            constexpr std::array<unsigned char, 24> expected{0x4c, 0x8b, 0xd1, 0xb8, 0x01, 0x01, 0,    0,    0xf6, 0x04, 0x25, 0x08,
+                                                             0x03, 0xfe, 0x7f, 0x01, 0x75, 0x03, 0x0f, 0x05, 0xc3, 0xcd, 0x2e, 0xc3};
+            return actual == expected;
+        }
+        bool PrepareNativeThreadEnumeration() noexcept
+        {
+            // Toolhelp may allocate internally. Cache this exact local x64
+            // system entry before holds; stable passes then use only its
+            // syscall/int2e stub. Modified or foreign entries fail closed.
+            if (!runtime.nextThread)
+            {
+                if (!runtime.retainedSuspensions.empty())
+                    return false;
+                const auto               module = GetModuleHandleW(L"ntdll.dll");
+                const auto               entry = module ? GetProcAddress(module, "NtGetNextThread") : nullptr;
+                MEMORY_BASIC_INFORMATION page{};
+                if (!entry || VirtualQuery(reinterpret_cast<void*>(entry), &page, sizeof(page)) != sizeof(page) || page.Type != MEM_IMAGE ||
+                    page.AllocationBase != module)
+                    return false;
+                runtime.nextThread = reinterpret_cast<NextThread>(entry);
+                runtime.nextThreadImage = reinterpret_cast<std::uintptr_t>(module);
+            }
+            std::array<unsigned char, 24> actual{};
+            return Read(reinterpret_cast<std::uintptr_t>(runtime.nextThread), actual.data(), actual.size(), runtime.nextThreadImage, true) &&
+                   NativeThreadStubMatches(actual);
+        }
+        bool ResumeOwnedThread(HANDLE thread, DWORD(WINAPI* resume)(HANDLE) = &ResumeThread) noexcept
+        {
+            DWORD exitCode = STILL_ACTIVE;
+            return resume(thread) != static_cast<DWORD>(-1) || (GetExitCodeThread(thread, &exitCode) && exitCode != STILL_ACTIVE);
+        }
+        bool HoldNativeDispatchThreads(ThreadHandles& threads, ThreadHandles& held) noexcept
+        {
+            // VM-backed buffers are reserved before suspension. Newly found
+            // children never grow a vector or touch a stopped CRT heap.
+            constexpr std::size_t maximumThreads = 1024;
+            if (threads.size() > maximumThreads)
+                return false;
+            try
+            {
+                threads.reserve(maximumThreads);
+                held.reserve(maximumThreads);
+                held.resize(threads.size(), nullptr);
+            }
+            catch (...)
+            {
+                return false;
+            }
+            for (std::size_t index = 0; index < threads.size(); ++index)
+            {
+                if (SuspendThread(threads[index]) == static_cast<DWORD>(-1))
+                    return false;
+                held[index] = threads[index];
+            }
+            unsigned stablePasses = 0;
+            for (unsigned pass = 0; pass < 4; ++pass)
+            {
+                HANDLE   previous = nullptr;
+                bool     ready = runtime.nextThread != nullptr, added = false;
+                unsigned enumerated = 0;
+                while (ready)
+                {
+                    HANDLE     next = nullptr;
+                    const auto status = runtime.nextThread(
+                        GetCurrentProcess(), previous, THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_SET_CONTEXT | THREAD_QUERY_INFORMATION, 0, 0, &next);
+                    if (previous)
+                        CloseHandle(previous);
+                    previous = next;
+                    if (status == static_cast<LONG>(0x8000001au))
+                        break;
+                    if (status != 0 || !next || ++enumerated > maximumThreads + 1)
+                    {
+                        ready = false;
+                        break;
+                    }
+                    const auto id = GetThreadId(next);
+                    if (!id)
+                    {
+                        ready = false;
+                        break;
+                    }
+                    if (id != GetCurrentThreadId() && std::none_of(threads.begin(), threads.end(), [&](HANDLE thread) { return GetThreadId(thread) == id; }))
+                    {
+                        if (threads.size() == maximumThreads)
+                            ready = false;
+                        else
+                        {
+                            HANDLE thread = nullptr;
+                            if (!DuplicateHandle(GetCurrentProcess(), next, GetCurrentProcess(), &thread, 0, FALSE, DUPLICATE_SAME_ACCESS) ||
+                                SuspendThread(thread) == static_cast<DWORD>(-1))
+                            {
+                                if (thread)
+                                    CloseHandle(thread);
+                                ready = false;
+                            }
+                            else
+                            {
+                                threads.push_back(thread);
+                                held.push_back(thread);
+                                CONTEXT context{};
+                                context.ContextFlags = CONTEXT_CONTROL;
+                                ready = GetThreadContext(thread, &context) &&
+                                        NativeDispatchInstructionSafe(static_cast<std::uintptr_t>(context.Rip),
+                                                                      runtime.hooked.load() ? reinterpret_cast<std::uintptr_t>(runtime.original) : 0);
+                                added = true;
+                            }
+                        }
+                    }
+                }
+                if (previous)
+                    CloseHandle(previous);
+                if (!ready)
+                    return false;
+                stablePasses = added ? 0u : stablePasses + 1;
+                if (stablePasses == 2)
+                    return true;
+            }
+            return false;
+        }
+        bool ChangeHooks(bool install, bool& pending) noexcept
+        {
+            pending = false;
+            if (runtime.safetyHeldSuspensions)
+            {
+                if (!NativeDispatchSafeToResume(runtime.hooked.load()))
+                {
+                    pending = true;
+                    return false;
+                }
+                runtime.safetyHeldSuspensions = false;
+            }
+            for (auto& retained : runtime.retainedSuspensions)
+                if (retained)
+                {
+                    if (ResumeOwnedThread(retained))
+                    {
+                        CloseHandle(retained);
+                        retained = nullptr;
+                    }
+                    else
+                    {
+                        pending = true;
+                        return false;
+                    }
+                }
+            runtime.retainedSuspensions.clear();
+            ThreadHandles threads;
+            ThreadHandles ownedSuspended;
+            bool          ready = (!runtime.nativeDispatch || PrepareNativeThreadEnumeration()) && CollectThreads(threads);
+            if (ready && runtime.nativeDispatch)
+                ready = HoldNativeDispatchThreads(threads, ownedSuspended);
+            bool       transaction = false;
+            bool       callsiteChanged = false;
+            bool       committedChange = false;
+            const bool entryBefore = runtime.hooked.load();
             if (ready && DetourTransactionBegin() == NO_ERROR)
             {
                 transaction = true;
                 ready = DetourUpdateThread(GetCurrentThread()) == NO_ERROR;
                 for (const auto thread : threads)
-                    ready = ready && DetourUpdateThread(thread) == NO_ERROR;
+                {
+#ifdef DETOURS_MTA_VM_TRANSACTION_NODES
+                    ready = ready && (runtime.nativeDispatch ? DetourUpdateThreadExternallySuspended(thread) : DetourUpdateThread(thread)) == NO_ERROR;
+#else
+                    ready = ready && !runtime.nativeDispatch && DetourUpdateThread(thread) == NO_ERROR;
+#endif
+                }
+                if (ready && runtime.nativeDispatch)
+                    for (const auto thread : threads)
+                    {
+                        CONTEXT context{};
+                        context.ContextFlags = CONTEXT_CONTROL;
+                        if (!GetThreadContext(thread, &context) ||
+                            !NativeDispatchInstructionSafe(static_cast<std::uintptr_t>(context.Rip),
+                                                           runtime.hooked.load() ? reinterpret_cast<std::uintptr_t>(runtime.original) : 0))
+                        {
+                            pending = !install;
+                            ready = false;
+                            break;
+                        }
+                    }
                 // No callback-shared lock is held while Detours suspends threads.
                 // A callback can enter after End's optimistic check; abort and
                 // resume it rather than freeing its live trampoline.
@@ -558,17 +804,26 @@ namespace mta::game_de
                     pending = true;
                     ready = false;
                 }
-                if (ready)
+                if (ready && runtime.nativeDispatch)
+                    ready = CaptureNativeDispatchProtectionBaseline();
+                if (ready && (install || entryBefore))
                     ready =
                         (install ? DetourAttach : DetourDetach)(reinterpret_cast<PVOID*>(&runtime.original), reinterpret_cast<PVOID>(&HookPresent)) == NO_ERROR;
-                if (ready && runtime.queryFrameBoundary)
+                if (ready && runtime.queryFrameBoundary && (install || NativeDispatchDetoursPresent()))
                     ready = install || FrameBoundaryHooksOwned();
-                if (ready && runtime.queryFrameBoundary)
+                if (ready && runtime.queryFrameBoundary && (install || NativeDispatchDetoursPresent()))
                     ready = ChangeFrameBoundaryHooks(install);
+                if (ready && runtime.nativeDispatch)
+                {
+                    const bool before = NativeDispatchPatchPresent();
+                    ready = ChangeNativeDispatchCallsite(install, entryBefore);
+                    callsiteChanged = NativeDispatchPatchPresent() != before;
+                }
                 if (ready)
                 {
                     ready = DetourTransactionCommit() == NO_ERROR;
                     transaction = false;
+                    committedChange = ready;
                     if (ready && runtime.queryFrameBoundary)
                     {
                         // A committed hook remains owned even if post-attach
@@ -578,10 +833,47 @@ namespace mta::game_de
                     }
                 }
             }
+            else
+                ready = false;
+            // Detours knows only its entry patches. Our additional suspend
+            // counts keep every enlisted thread stopped after Commit/Abort so
+            // a failed transaction can roll back the CALL before any resume.
+            if (!ready && !committedChange && runtime.nativeDispatch && callsiteChanged)
+            {
+                if (!ChangeNativeDispatchCallsite(!install, entryBefore))
+                    pending = true;
+            }
             if (transaction)
                 DetourTransactionAbort();
+            const bool safeToResume = !runtime.nativeDispatch || NativeDispatchSafeToResume(runtime.hooked.load());
+            if (!safeToResume)
+            {
+                pending = true;
+                ready = false;
+                runtime.safetyHeldSuspensions = true;
+            }
+            if (ready && !install && runtime.nativeDispatch && !ReleaseNativeDispatchRelay())
+            {
+                ready = false;
+                pending = true;
+            }
+            for (auto& thread : ownedSuspended)
+                if (thread && safeToResume)
+                {
+                    if (ResumeOwnedThread(thread))
+                        thread = nullptr;
+                    else
+                    {
+                        ready = false;
+                        pending = true;
+                    }
+                }
+            runtime.retainedSuspensions.swap(ownedSuspended);
             for (const auto thread : threads)
-                CloseHandle(thread);
+                if (std::find(runtime.retainedSuspensions.begin(), runtime.retainedSuspensions.end(), thread) == runtime.retainedSuspensions.end())
+                    CloseHandle(thread);
+            if (std::all_of(runtime.retainedSuspensions.begin(), runtime.retainedSuspensions.end(), [](HANDLE thread) { return thread == nullptr; }))
+                runtime.retainedSuspensions.clear();
             return ready;
         }
 
@@ -606,10 +898,12 @@ namespace mta::game_de
         End();
     }
 
-    bool NativeRenderObservation::Begin(RenderObservationRoute route, bool queryGpuOwnership, bool classifyCustomPresent, bool queryFrameBoundary) noexcept
+    bool NativeRenderObservation::Begin(RenderObservationRoute route, bool queryGpuOwnership, bool classifyCustomPresent, bool queryFrameBoundary,
+                                        bool nativeDispatch) noexcept
     {
         ApiOperation operation;
-        if (!operation.acquired || runtime.hooked.load() || runtime.inFlight.load() || FrameBoundaryInFlight() || runtime.active.load())
+        if (!operation.acquired || runtime.hooked.load() || NativeDispatchPatchPresent() || !runtime.retainedSuspensions.empty() || runtime.inFlight.load() ||
+            FrameBoundaryInFlight() || runtime.active.load())
             return false;
         generation = runtime.generation.fetch_add(1) + 1;
         finalState = {};
@@ -621,10 +915,23 @@ namespace mta::game_de
         runtime.queryGpuOwnership = queryGpuOwnership;
         runtime.classifyCustomPresent = classifyCustomPresent;
         runtime.queryFrameBoundary = queryFrameBoundary;
+        runtime.nativeDispatch = nativeDispatch;
         ResetFrameBoundaryObservation();
         runtime.route = SelectRoute(route);
+#ifndef DETOURS_MTA_VM_TRANSACTION_NODES
+        // The direct CALL path cannot fall back to CRT-backed transaction
+        // nodes or vendor-owned suspension counts when this build lacks the
+        // explicit DE extension. Refuse before any peer is suspended.
+        if (nativeDispatch)
+        {
+            Fail(Failure::UnsupportedRoute);
+            ReadState(finalState);
+            return false;
+        }
+#endif
         if (!runtime.route || ((queryGpuOwnership || classifyCustomPresent) && route != RenderObservationRoute::D3D12) ||
-            (classifyCustomPresent && !queryGpuOwnership) || (queryFrameBoundary && (!classifyCustomPresent || route != RenderObservationRoute::D3D12)))
+            (classifyCustomPresent && !queryGpuOwnership) || (queryFrameBoundary && (!classifyCustomPresent || route != RenderObservationRoute::D3D12)) ||
+            (nativeDispatch && !queryFrameBoundary))
         {
             Fail(Failure::UnsupportedRoute);
             ReadState(finalState);
@@ -650,7 +957,7 @@ namespace mta::game_de
             return false;
         }
         runtime.modulePinned.store(true);
-        if (queryFrameBoundary && !PrepareFrameBoundaryHooks(runtime.image, generation))
+        if (queryFrameBoundary && !PrepareFrameBoundaryHooks(runtime.image, generation, nativeDispatch, reinterpret_cast<void*>(&HookPresent)))
         {
             Fail(Failure::FingerprintMismatch);
             ReadState(finalState);
@@ -678,7 +985,7 @@ namespace mta::game_de
         if (!operation.acquired)
             return false;
         if (!generation || generation != runtime.generation.load())
-            return !runtime.hooked.load();
+            return !runtime.hooked.load() && !NativeDispatchPatchPresent() && runtime.retainedSuspensions.empty();
         runtime.active.store(false);
         StopFrameBoundaryAdmission();
         if (GetCurrentThreadId() != runtime.producerThread)
@@ -686,13 +993,17 @@ namespace mta::game_de
             Fail(Failure::WrongProducerThread);
             return false;
         }
-        if (runtime.inFlight.load() || (runtime.queryFrameBoundary && FrameBoundaryInFlight()))
+        // A counted callback may be the thread whose resume failed. Cleanup
+        // must first retry its safe resume rather than requiring it to finish
+        // while it is still stopped; ChangeHooks rechecks counts under holds.
+        if ((runtime.inFlight.load() || (runtime.queryFrameBoundary && FrameBoundaryInFlight())) && runtime.retainedSuspensions.empty() &&
+            !runtime.safetyHeldSuspensions)
         {
             ReadState(finalState);
             return false;
         }
         bool pending = false;
-        if (runtime.hooked.load() && !ChangeHooks(false, pending))
+        if ((runtime.hooked.load() || NativeDispatchPatchPresent() || !runtime.retainedSuspensions.empty()) && !ChangeHooks(false, pending))
         {
             if (!pending)
                 Fail(Failure::HookRemove);
@@ -700,6 +1011,11 @@ namespace mta::game_de
             return false;
         }
         runtime.hooked.store(false);
+        if (!ReleaseNativeDispatchRelay())
+        {
+            ReadState(finalState);
+            return false;
+        }
         ReleaseFrameBoundaryDiagnosticModules();
         ReadState(finalState);
         return true;
@@ -717,19 +1033,25 @@ namespace mta::game_de
             if (now < runtime.started || now - runtime.started >= maximumObservationMs)
                 Fail(Failure::TimeBudget);
         }
-        AcquireSRWLockShared(&runtime.snapshotLock);
-        state = runtime.snapshot;
-        // A first publication changes route/scalars and accepted together.
-        // Sampling the count after unlocking could attach accepted=1 to an
-        // older unobserved snapshot, contradicting the value-only contract.
-        state.acceptedSnapshots = runtime.accepted.load();
-        ReleaseSRWLockShared(&runtime.snapshotLock);
+        // A failed resume may retain a callback while it owns this lock. The
+        // worker must remain able to retry cleanup; keep its last coherent
+        // value cache if a nonblocking read cannot obtain a new publication.
+        const bool retained = runtime.safetyHeldSuspensions || !runtime.retainedSuspensions.empty();
+        const bool locked = retained ? TryAcquireSRWLockShared(&runtime.snapshotLock) != FALSE : (AcquireSRWLockShared(&runtime.snapshotLock), true);
+        if (locked)
+        {
+            state = runtime.snapshot;
+            // Count and snapshot are one publication; never attach a newer
+            // atomic accepted count to the cached state on a lock miss.
+            state.acceptedSnapshots = runtime.accepted.load();
+            ReleaseSRWLockShared(&runtime.snapshotLock);
+        }
         state.generation = generation;
         state.requestedRoute = runtime.requestedRoute;
         state.modulePinned = runtime.modulePinned.load();
         state.bound = runtime.bound.load();
         state.active = runtime.active.load();
-        state.pendingCleanup = runtime.hooked.load() && !state.active;
+        state.pendingCleanup = (runtime.hooked.load() || NativeDispatchPatchPresent() || !runtime.retainedSuspensions.empty()) && !state.active;
         // Completed effects precede their monotonically increasing prerequisite.
         state.rejectedSnapshots = runtime.rejected.load();
         state.nestedCallbacks = runtime.nested.load();
@@ -737,10 +1059,12 @@ namespace mta::game_de
         state.publicationMisses = runtime.missed.load();
         state.nativePresentCallbacks = runtime.callbacks.load();
         state.failureReason = runtime.failure.load();
+        finalState = state;
     }
     bool NativeRenderObservation::ReadEndpointDiagnostic(RenderEndpointDiagnosticV1& state) const noexcept
     {
-        if (!generation || generation != runtime.generation.load() || GetCurrentThreadId() != runtime.producerThread || !runtime.queryFrameBoundary)
+        if (!generation || generation != runtime.generation.load() || GetCurrentThreadId() != runtime.producerThread || !runtime.queryFrameBoundary ||
+            runtime.safetyHeldSuspensions || !runtime.retainedSuspensions.empty())
             return false;
         // Use the same lock order as publication so a separate diagnostic read
         // cannot observe next-count metadata before the native snapshot commits.

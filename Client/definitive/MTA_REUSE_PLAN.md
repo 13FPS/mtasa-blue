@@ -64,9 +64,24 @@ the module when cleanup cannot finish. The completed trial continued normally
 and passed cleanup/normal exit, but all 87 samples refused endpoint admission;
 no standard Present or backbuffer association was observed. A separate optional
 20-scalar diagnostic now reports the preparation gate and module-relative
-slot/branch categories to the same Core worker. Core logs those values under
-the explicit DE root. It changes no observation wire or drawing guard.
+slot/branch categories to the same Core worker. The completed diagnostic
+identifies a loaded-code hash mismatch: the expected DXGI Present entry was
+already patched with an E9 branch to private executable memory before MTA's
+hook installation. The native swapchain slot still equals DXGI RVA `0x19000`.
+The relay's memory category does not identify its owning DLL. Core logs those
+values under the explicit DE root; the next native integration must preserve
+the existing Present chain. It changes no observation wire or drawing guard.
 No GUI assets, input writes or GPU commands are included.
+
+API6 keeps that result intact and appends a separate native dispatch record.
+Its source-pinned callsite intercept forwards the existing swapchain slot
+target, so a pre-existing DXGI patch need not be replaced or trusted as MTA's
+own code. Core owns the same typed adapter lease and worker lifecycle; the
+bridge transports 136 scalars through a distinct opt-in version. Profile2
+describes native dispatch and CPU object association, while API5's profile1
+still describes an admitted system DXGI entry. Neither grants GPU ownership.
+Offline publication/rollback checks and normal MTA builds pass. A subsequent
+human GTA trial is required before live dispatch can be claimed.
 
 The GUI backend reuses MTA's actual CGUI/CEGUI widgets, skins, fonts and
 textures. Owned offscreen WARP tests cover BGRA8, RGBA8 and the observed

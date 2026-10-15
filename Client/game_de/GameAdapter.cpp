@@ -556,8 +556,10 @@ namespace mta::game_de
             NativeRenderObservation      observation;
         };
         class GameRenderObservationV5;
+        class GameRenderObservationV6;
         SRWLOCK                  diagnosticLeaseLock = SRWLOCK_INIT;
         GameRenderObservationV5* diagnosticLeases = nullptr;
+        GameRenderObservationV6* diagnosticLeasesV6 = nullptr;
 
         class GameRenderObservationV5 final : public IGameRenderObservationV5
         {
@@ -642,6 +644,95 @@ namespace mta::game_de
             const RenderObservationRoute route;
             NativeRenderObservation      observation;
             GameRenderObservationV5*     nextDiagnosticLease = nullptr;
+        };
+
+        class GameRenderObservationV6 final : public IGameRenderObservationV6
+        {
+        public:
+            explicit GameRenderObservationV6(RenderObservationRoute requested) noexcept : route(requested)
+            {
+                // A separate registry keeps exact lease validation from
+                // granting either diagnostic export the other API's object.
+                AcquireSRWLockExclusive(&diagnosticLeaseLock);
+                nextDiagnosticLease = diagnosticLeasesV6;
+                diagnosticLeasesV6 = this;
+                ReleaseSRWLockExclusive(&diagnosticLeaseLock);
+            }
+
+            static Status ReadEndpointDiagnostic(IGameRenderObservationV6* lease, RenderEndpointDiagnosticV1& output) noexcept
+            {
+                Status result = Status::InvalidArgument;
+                // A failed API6 cleanup can retain a peer stopped inside lease
+                // registration. Optional diagnostics must not wait for that
+                // peer's lock and prevent the owner from retrying cleanup.
+                if (!TryAcquireSRWLockShared(&diagnosticLeaseLock))
+                    return Status::Unsupported;
+                for (auto* current = diagnosticLeasesV6; current; current = current->nextDiagnosticLease)
+                {
+                    if (static_cast<IGameRenderObservationV6*>(current) != lease)
+                        continue;
+                    if (current->ownerThread != GetCurrentThreadId())
+                        result = Status::WrongThread;
+                    else
+                        result = current->observation.ReadEndpointDiagnostic(output) ? Status::Ok : Status::Unsupported;
+                    break;
+                }
+                ReleaseSRWLockShared(&diagnosticLeaseLock);
+                return result;
+            }
+
+            Status Begin() noexcept override
+            {
+                if (ownerThread != GetCurrentThreadId())
+                    return Status::WrongThread;
+                return observation.Begin(route, true, true, true, true) ? Status::Ok : Status::Unsupported;
+            }
+            Status ReadState(RenderObservationStateV6& state) noexcept override
+            {
+                if (ownerThread != GetCurrentThreadId())
+                    return Status::WrongThread;
+                NativeRenderObservationState native;
+                observation.ReadState(native);
+                RenderObservationStateV6 next;
+                next.base.base.base.base.base = CopyRenderObservation(native);
+                next.base.base.base.base.requestedRoute = native.requestedRoute;
+                next.base.base.base.base.observedRoute = native.observedRoute;
+                next.base.base.base.base.presenceKnownMask = native.presenceKnownMask;
+                next.base.base.base.base.queuePresent = native.queuePresent;
+                next.base.base.base.gpu = native.gpu;
+                next.base.base.custom = native.custom;
+                next.base.boundary = native.boundary;
+                next.nativeDispatch = native.nativeDispatch;
+                state = next;
+                return Status::Ok;
+            }
+            Status End() noexcept override
+            {
+                if (ownerThread != GetCurrentThreadId())
+                    return Status::WrongThread;
+                return observation.End() ? Status::Ok : Status::Unsupported;
+            }
+            void Release() noexcept override
+            {
+                if (ownerThread != GetCurrentThreadId() || !observation.End())
+                    return;
+                // The callsite may still own a live relay after failed End.
+                // Retain it and exclude diagnostic readers only on safe release.
+                AcquireSRWLockExclusive(&diagnosticLeaseLock);
+                auto** current = &diagnosticLeasesV6;
+                while (*current && *current != this)
+                    current = &(*current)->nextDiagnosticLease;
+                if (*current)
+                    *current = nextDiagnosticLease;
+                ReleaseSRWLockExclusive(&diagnosticLeaseLock);
+                delete this;
+            }
+
+        private:
+            const DWORD                  ownerThread = GetCurrentThreadId();
+            const RenderObservationRoute route;
+            NativeRenderObservation      observation;
+            GameRenderObservationV6*     nextDiagnosticLease = nullptr;
         };
     }
 
@@ -744,6 +835,34 @@ namespace mta::game_de
             return Status::InvalidArgument;
         RenderEndpointDiagnosticV1 next;
         const auto                 result = GameRenderObservationV5::ReadEndpointDiagnostic(retainedLease, next);
+        if (result == Status::Ok)
+            *output = next;
+        return result;
+    }
+
+    extern "C" IGameRenderObservationV6* CreateGameRenderObservationV6(std::uint32_t apiVersion, CCoreInterface* owner, RenderObservationRoute route) noexcept
+    {
+        // Natural callsite dispatch is a new observation, not a relaxation of
+        // the existing API5 endpoint gate or its ABI layout.
+        if (apiVersion != RenderObservationApiVersionV6 || !owner || route != RenderObservationRoute::D3D12)
+            return nullptr;
+        try
+        {
+            return new (std::nothrow) GameRenderObservationV6(route);
+        }
+        catch (...)
+        {
+            return nullptr;
+        }
+    }
+
+    extern "C" Status ReadGameRenderEndpointDiagnosticV2(std::uint32_t version, IGameRenderObservationV6* retainedLease,
+                                                         RenderEndpointDiagnosticV1* output) noexcept
+    {
+        if (version != RenderEndpointDiagnosticVersionV1 || !retainedLease || !output)
+            return Status::InvalidArgument;
+        RenderEndpointDiagnosticV1 next;
+        const auto                 result = GameRenderObservationV6::ReadEndpointDiagnostic(retainedLease, next);
         if (result == Status::Ok)
             *output = next;
         return result;

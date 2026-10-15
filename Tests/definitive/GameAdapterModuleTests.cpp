@@ -880,6 +880,120 @@ namespace
                   unchanged(),
               "removing the final registry entry makes subsequent diagnostic reads reject without native access");
     }
+
+    void TestRenderObservationV6Contract()
+    {
+        OwnerIdentity owner;
+        for (const auto version : {0u, 1u, 2u, 3u, 4u, 5u, 7u, std::numeric_limits<std::uint32_t>::max()})
+            Check(!CreateGameRenderObservationV6(version, owner.Get(), RenderObservationRoute::D3D12),
+                  "API6 accepts only its separately declared native-dispatch contract");
+        Check(!CreateGameRenderObservationV6(6, nullptr, RenderObservationRoute::D3D12), "API6 requires an opaque Core owner before allocation");
+        for (const auto route : {RenderObservationRoute::Unknown, RenderObservationRoute::D3D11, static_cast<RenderObservationRoute>(99)})
+            Check(!CreateGameRenderObservationV6(6, owner.Get(), route), "native-dispatch observation requires explicit D3D12 selection");
+        Check(!CreateGameRenderObservation(6, owner.Get()) && !CreateGameRenderObservationV2(6, owner.Get(), RenderObservationRoute::D3D12) &&
+                  !CreateGameRenderObservationV3(6, owner.Get(), RenderObservationRoute::D3D12) &&
+                  !CreateGameRenderObservationV4(6, owner.Get(), RenderObservationRoute::D3D12) &&
+                  !CreateGameRenderObservationV5(6, owner.Get(), RenderObservationRoute::D3D12),
+              "five historical factories cannot return the larger API6 state through an older interface");
+        auto* observation = CreateGameRenderObservationV6(6, owner.Get(), RenderObservationRoute::D3D12);
+        auto* other = CreateGameRenderObservationV6(6, owner.Get(), RenderObservationRoute::D3D12);
+        auto* historical = CreateGameRenderObservationV5(5, owner.Get(), RenderObservationRoute::D3D12);
+        Check(observation && other && historical, "actual module allocates independent V6 leases alongside the unchanged V5 contract");
+        const FrameBoundaryObservationState zero;
+        const auto                          empty = [&](const FrameBoundaryObservationState& value) { return std::memcmp(&value, &zero, sizeof(value)) == 0; };
+        RenderObservationStateV6            state;
+        Check(observation->ReadState(state) == Status::Ok && !state.base.base.base.base.base.generation && empty(state.base.boundary) &&
+                  empty(state.nativeDispatch) && !state.base.base.base.gpu.attempts && !state.base.base.custom.status,
+              "successful API6 read after allocation reports both observation tails unattempted without native effects");
+
+        RenderEndpointDiagnosticV1 diagnostic;
+        std::memset(&diagnostic, 0xa5, sizeof(diagnostic));
+        const auto diagnosticSentinel = diagnostic;
+        const auto unchanged = [&] { return std::memcmp(&diagnostic, &diagnosticSentinel, sizeof(diagnostic)) == 0; };
+        Check(ReadGameRenderEndpointDiagnosticV2(1, observation, &diagnostic) == Status::Unsupported && unchanged(),
+              "V2 diagnostic export retains payload version1 but allocation alone grants no private cache");
+        Check(ReadGameRenderEndpointDiagnosticV1(1, reinterpret_cast<IGameRenderObservationV5*>(observation), &diagnostic) == Status::InvalidArgument &&
+                  ReadGameRenderEndpointDiagnosticV2(1, reinterpret_cast<IGameRenderObservationV6*>(historical), &diagnostic) == Status::InvalidArgument &&
+                  unchanged(),
+              "diagnostic V1 and V2 registries reject the other exact interface without dereferencing it");
+        for (const auto version : {0u, 2u, 6u, std::numeric_limits<std::uint32_t>::max()})
+            Check(ReadGameRenderEndpointDiagnosticV2(version, observation, &diagnostic) == Status::InvalidArgument && unchanged(),
+                  "V2 export name does not change its counted diagnostic payload version argument");
+        Check(ReadGameRenderEndpointDiagnosticV2(1, nullptr, &diagnostic) == Status::InvalidArgument && unchanged() &&
+                  ReadGameRenderEndpointDiagnosticV2(1, observation, nullptr) == Status::InvalidArgument,
+              "API6 diagnostic validates null arguments before native or output access");
+        auto* inaccessible = VirtualAlloc(nullptr, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_NOACCESS);
+        Check(inaccessible != nullptr, "reserve unreadable opaque API6 lease validation page");
+        Check(ReadGameRenderEndpointDiagnosticV2(1, static_cast<IGameRenderObservationV6*>(inaccessible),
+                                                 static_cast<RenderEndpointDiagnosticV1*>(inaccessible)) == Status::InvalidArgument,
+              "unregistered API6 lease cannot cause a vtable read or even an unreadable output write");
+        Check(VirtualFree(inaccessible, 0, MEM_RELEASE) != 0, "release the owned API6 validation page");
+
+        // Preserve the entire larger state, including historical prefixes and
+        // every native-dispatch word, when a foreign thread asks for a read.
+        RenderObservationStateV6 foreignState;
+        std::memset(&foreignState, 0xa5, sizeof(foreignState));
+        std::array<unsigned char, sizeof(foreignState)> before;
+        std::memcpy(before.data(), &foreignState, before.size());
+        Status      foreignBegin = Status::Ok, foreignRead = Status::Ok, foreignEnd = Status::Ok, foreignDiagnostic = Status::Ok;
+        std::thread foreign(
+            [&]
+            {
+                foreignBegin = observation->Begin();
+                foreignRead = observation->ReadState(foreignState);
+                foreignDiagnostic = ReadGameRenderEndpointDiagnosticV2(1, observation, &diagnostic);
+                foreignEnd = observation->End();
+                observation->Release();
+            });
+        foreign.join();
+        Check(foreignBegin == Status::WrongThread && foreignRead == Status::WrongThread && foreignEnd == Status::WrongThread &&
+                  foreignDiagnostic == Status::WrongThread && unchanged() && std::memcmp(&foreignState, before.data(), before.size()) == 0,
+              "foreign API6 calls preserve the full larger output and retain the owner lease");
+        Check(observation->Begin() == Status::Unsupported && observation->ReadState(state) == Status::Ok && state.base.base.base.base.requestedRoute == 2 &&
+                  state.base.base.base.base.base.generation && state.base.base.base.base.base.failureReason && !state.base.base.base.base.base.bound &&
+                  !state.base.base.base.base.base.active && !state.base.base.base.base.base.modulePinned && !state.base.base.base.base.base.pendingCleanup &&
+                  !state.base.base.base.gpu.attempts && empty(state.base.boundary) && empty(state.nativeDispatch),
+              "actual nongame module host rejects API6 before callsite patching and retains zero COM/native-dispatch tails");
+        Check(observation->End() == Status::Ok && observation->End() == Status::Ok && observation->ReadState(state) == Status::Ok &&
+                  empty(state.base.boundary) && empty(state.nativeDispatch) &&
+                  ReadGameRenderEndpointDiagnosticV2(1, observation, &diagnostic) == Status::Unsupported && unchanged(),
+              "safe owner End remains idempotent and readable without inventing unsupported API6 diagnostics");
+        const auto released = reinterpret_cast<std::uintptr_t>(observation);
+        observation->Release();
+        Check(ReadGameRenderEndpointDiagnosticV2(1, reinterpret_cast<IGameRenderObservationV6*>(released), &diagnostic) == Status::InvalidArgument &&
+                  unchanged() && ReadGameRenderEndpointDiagnosticV2(1, other, &diagnostic) == Status::Unsupported,
+              "releasing a non-head V6 entry removes only its identity and preserves the independent live lease");
+        const auto        racing = reinterpret_cast<std::uintptr_t>(other);
+        std::atomic<bool> ready{false}, releaseStarted{false};
+        bool              racePreserved = true;
+        std::thread       reader(
+            [&]
+            {
+                RenderEndpointDiagnosticV1 output = diagnosticSentinel;
+                ready.store(true);
+                while (!releaseStarted.load())
+                    std::this_thread::yield();
+                for (unsigned index = 0; index < 10000; ++index)
+                {
+                    const auto status = ReadGameRenderEndpointDiagnosticV2(1, reinterpret_cast<IGameRenderObservationV6*>(racing), &output);
+                    if ((status != Status::WrongThread && status != Status::InvalidArgument && status != Status::Unsupported) ||
+                        std::memcmp(&output, &diagnosticSentinel, sizeof(output)))
+                        racePreserved = false;
+                }
+            });
+        while (!ready.load())
+            std::this_thread::yield();
+        releaseStarted.store(true);
+        other->Release();
+        reader.join();
+        Check(racePreserved &&
+                  ReadGameRenderEndpointDiagnosticV2(1, reinterpret_cast<IGameRenderObservationV6*>(racing), &diagnostic) == Status::InvalidArgument &&
+                  unchanged(),
+              "API6 read versus Release race preserves rejected output and excludes the final destroyed identity");
+        Check(ReadGameRenderEndpointDiagnosticV1(1, historical, &diagnostic) == Status::Unsupported && unchanged(),
+              "API6 registration and cleanup cannot grant or destroy a historical V5 diagnostic capability");
+        historical->Release();
+    }
 }
 
 int main()
@@ -892,10 +1006,17 @@ int main()
     static_assert((NativePadBindingCapabilities & static_cast<std::uint64_t>(AdapterCapability::EngineInputRead)) == 0);
     static_assert(std::is_nothrow_invocable_v<decltype(CreateGameAdapter), std::uint32_t>);
     static_assert(RenderObservationApiVersionV5 == 5);
+    static_assert(RenderObservationApiVersionV6 == 6 && sizeof(FrameBoundaryObservationState) == 104);
+    static_assert(std::is_standard_layout_v<RenderObservationStateV6> &&
+                  offsetof(RenderObservationStateV6, nativeDispatch) == sizeof(RenderObservationStateV5));
+    static_assert(sizeof(RenderObservationStateV6) == sizeof(RenderObservationStateV5) + sizeof(FrameBoundaryObservationState));
+    static_assert(std::is_nothrow_invocable_v<decltype(CreateGameRenderObservationV6), std::uint32_t, CCoreInterface*, RenderObservationRoute>);
     static_assert(std::is_nothrow_invocable_v<decltype(CreateGameRenderObservationV5), std::uint32_t, CCoreInterface*, RenderObservationRoute>);
     static_assert(RenderEndpointDiagnosticVersionV1 == 1 && sizeof(RenderEndpointDiagnosticV1) == 80);
     static_assert(std::is_standard_layout_v<RenderEndpointDiagnosticV1> && std::is_trivially_copyable_v<RenderEndpointDiagnosticV1>);
     static_assert(std::is_nothrow_invocable_r_v<Status, decltype(ReadGameRenderEndpointDiagnosticV1), std::uint32_t, IGameRenderObservationV5*,
+                                                RenderEndpointDiagnosticV1*>);
+    static_assert(std::is_nothrow_invocable_r_v<Status, decltype(ReadGameRenderEndpointDiagnosticV2), std::uint32_t, IGameRenderObservationV6*,
                                                 RenderEndpointDiagnosticV1*>);
     try
     {
@@ -912,6 +1033,7 @@ int main()
         // completed, so API5 cannot silently replace their module contract.
         TestRenderObservationV5FactoryRejection();
         TestEndpointDiagnosticLeaseRejection();
+        TestRenderObservationV6Contract();
         TestRenderObservationFactoryRejection();
         TestRenderObservationV2FactoryRejection();
         TestRenderObservationV3FactoryRejection();

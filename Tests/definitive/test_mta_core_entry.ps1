@@ -175,7 +175,7 @@ foreach ($name in $sourceNames) {
 # Each optional protocol must pass through the actual initializer's image
 # guard. Require API5's genuine rejection as well as the prior attempts, rather
 # than treating an extra log entry as proof of the new request's ownership.
-$success=$compilerExit -eq 0 -and $hostExit -eq 0 -and $null -ne $hostResult -and $hostResult.success -and $hostResult.api4_initialize_result -eq 5 -and $hostResult.api5_initialize_result -eq 5 -and $bindingRejections -eq 5 -and $sourcesUnchanged
+$success=$compilerExit -eq 0 -and $hostExit -eq 0 -and $null -ne $hostResult -and $hostResult.success -and $hostResult.api4_initialize_result -eq 5 -and $hostResult.api5_initialize_result -eq 5 -and $hostResult.api6_initialize_result -eq 5 -and $bindingRejections -eq 6 -and $sourcesUnchanged
 $record=[ordered]@{recorded_at=[DateTimeOffset]::Now.ToString('o');success=$success;directory=$outputRoot;
     scope='Actual supplied Core/Game DE DLL entry point in a separate non-game host named SanAndreas.exe';
     compiler_exit=$compilerExit;host_exit=$hostExit;host_result=$hostResult;failure=$failure;host_sha256=$hostHash;nonclassic_layout=$NonClassicLayout.IsPresent;

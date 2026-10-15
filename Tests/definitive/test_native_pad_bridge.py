@@ -69,6 +69,10 @@ def main():
         "DE_CoreRenderBeginV5": (ctypes.c_int, [ctypes.c_uint32]),
         "DE_CoreRenderCaptureV5": (ctypes.c_int, []),
         "DE_CoreRenderReadV5": (ctypes.c_uint32, [ctypes.c_uint32]),
+        "DE_CoreRenderApiVersionV6": (ctypes.c_uint32, []),
+        "DE_CoreRenderBeginV6": (ctypes.c_int, [ctypes.c_uint32]),
+        "DE_CoreRenderCaptureV6": (ctypes.c_int, []),
+        "DE_CoreRenderReadV6": (ctypes.c_uint32, [ctypes.c_uint32]),
     }
     for name, (result, arguments) in signatures.items():
         function = getattr(bridge, name)
@@ -81,6 +85,7 @@ def main():
     check(bridge.DE_CoreRenderApiVersionV3() == 3, "Read-only COM queries require a separate API3 protocol")
     check(bridge.DE_CoreRenderApiVersionV4() == 4, "Presenter classification requires a separate additive API4 protocol")
     check(bridge.DE_CoreRenderApiVersionV5() == 5, "Scoped Present association requires a separate additive API5 protocol")
+    check(bridge.DE_CoreRenderApiVersionV6() == 6, "Native dispatch has a distinct API6 protocol without reinterpreting API5")
     check(getattr(bridge, "DE_CoreStartupRun", None) is None, "Unsafe synchronous startup export must be absent")
     # A regular Python executable must never masquerade as the verified GTA host
     # or obtain engine access merely by loading this DLL and resolving its ABI.
@@ -102,6 +107,10 @@ def main():
         check(bridge.DE_CoreRenderBeginV3(route) == 0, "Wrong executable cannot acquire a GPU ownership query lease")
         check(bridge.DE_CoreRenderBeginV4(route) == 0, "Wrong executable cannot acquire a custom-present classification lease")
         check(bridge.DE_CoreRenderBeginV5(route) == 0, "Wrong executable cannot acquire scoped Present observation")
+        check(bridge.DE_CoreRenderBeginV6(route) == 0, "Wrong executable cannot patch native Present dispatch")
+    check(bridge.DE_CoreRenderCaptureV6() == 0, "Rejected host cannot freeze native dispatch evidence")
+    for component in (*range(136), 136, 0xFFFFFFFF):
+        check(bridge.DE_CoreRenderReadV6(component) == 0, "Rejected host cannot manufacture either API6 observation tail")
     check(bridge.DE_CoreRenderCaptureV5() == 0, "Rejected host cannot freeze scoped Present associations")
     for component in range(111):
         check(bridge.DE_CoreRenderReadV5(component) == 0, "Rejected host cannot manufacture API5 evidence")
@@ -151,6 +160,10 @@ def main():
         check(bridge.DE_NativeDeviceRead(index) == 0, "Unbound or invalid device source must remain unavailable")
     bridge.DE_NativePadReset()
     bridge.DE_Disconnect()
+    check(bridge.DE_CoreRenderBeginV6(2) == 0, "Cleanup cannot authorize native dispatch")
+    check(bridge.DE_CoreRenderCaptureV6() == 0, "Cleanup cannot manufacture native dispatch evidence")
+    for component in (*range(136), 136, 0xFFFFFFFF):
+        check(bridge.DE_CoreRenderReadV6(component) == 0, "Cleanup cannot retain either API6 observation tail")
     check(bridge.DE_CoreRenderBegin() == 0, "Cleanup cannot authorize native render observation")
     check(bridge.DE_CoreRenderCapture() == 0, "Cleanup cannot manufacture render evidence")
     check(bridge.DE_CoreRenderBeginV2(2) == 0, "Cleanup cannot authorize the explicit D3D12 route")

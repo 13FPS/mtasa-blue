@@ -13,6 +13,10 @@ project "Game DE"
 	-- lifecycle, classic engine addresses or dependency on game_sa's hooks.
 	includedirs { "../../Shared/sdk", "../sdk", "../../vendor/detours/4.0.1/src" }
 	files { "premake5.lua", "**.h", "**.cpp" }
+	if _OPTIONS["with-definitive-adapter"] then
+		filter { "architecture:x86_64", "configurations:Release" }
+			defines { "DETOURS_MTA_VM_TRANSACTION_NODES" }
+	end
 
 	filter "architecture:not x86_64"
 		flags { "ExcludeFromBuild" }

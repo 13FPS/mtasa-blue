@@ -6,21 +6,38 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
-**Latest live API5 result: endpoint refused; cleanup and normal exit passed.**
-The ten-second trial ran for 10,048 ms with 605 native wrapper entries,
-603 accepted scalar snapshots and 87 logged complete metadata/known-presenter
+**Latest live API5 result: pre-existing Present patch identified; cleanup and normal exit passed.**
+The ten-second trial ran for 10,001 ms with 603 native wrapper entries,
+600 accepted scalar snapshots and 87 logged complete metadata/known-presenter
 reports. All 87 API5 tails contain EndpointUnadmitted 1, profile 0 and no
 Present or buffer-association observations. The human reported normal GTA
 continuation. Core/XML/pthread unloaded, all 23 hashes matched and the complete
-40,915-byte shutdown log passed independent review.
+40,922-byte shutdown log passed independent review.
 
-The next read-only candidate adds a separate 20-scalar endpoint diagnostic.
-It distinguishes preparation failures from callback slot ownership without
-weakening the existing gate or changing the 110-field observation wire.
-Actual Core records bounded JSONL at `mta/logs/render-endpoint.log` under the
-explicit adapter root. Module classes and RVAs describe location, not trusted
-code, GPU state or drawing permission. No walking test or visible overlay is
-part of this candidate; its live diagnostic evidence remains pending.
+The separate 20-scalar endpoint diagnostic identifies a loaded-code hash
+mismatch before MTA's Present hook installation. The native swapchain slot
+still points to DXGI RVA `0x19000`, whose first E9 branch targets private
+executable memory. This proves an existing patch, without identifying the DLL
+that installed it. Actual Core's bounded JSONL and the complete CLEO log are
+sealed together; the existing 110-field observation contract remains unchanged.
+
+API6 source work now adds a separate native dispatch record at the game's
+source-pinned Present callsite. It forwards the existing target and preserves
+the original return address and argument values. The 110-field API5 prefix
+remains separate from the new 26-field profile2 record. The native, Core,
+worker, bridge and normal build checks pass offline; live dispatch, buffer
+association and drawing remain unverified. No GUI or automatic movement is
+included in the read-only trial.
+
+`-MtaCoreRenderNativeDispatchReference` is a separate Smoke opt-in requiring
+all four earlier renderer flags and the explicit D3D12 route. Its Core10/API6
+wire contains 136 scalar fields. The source flag defaults to false, and the
+transaction requires the verified local Windows syscall profile before holding
+threads. No association report grants permission to submit GPU work.
+
+The serial package ownership suite passes 687 checks across 59 disposable
+install/update/uninstall and configuration cases. The earlier refusal while
+owned worker hosts were running remains saved as a failed test result.
 
 **Earlier live renderer result: native D3D12 presenter identified; drawing remains gated.**
 Actual Core's API4 trial completed in **10,049 ms**, with **199 Core samples,

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { MODE, ONLINE_ACTIVATION, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE, MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE, MTA_CORE_RENDER_ROUTE, MTA_CORE_RENDER_GPU_REFERENCE, MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE, MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE } from './config.mjs';
+import { MODE, ONLINE_ACTIVATION, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE, MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE, MTA_CORE_RENDER_ROUTE, MTA_CORE_RENDER_GPU_REFERENCE, MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE, MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE, MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE } from './config.mjs';
 import { AdapterController, NativeGaitReferenceController, NativeInputReferenceController } from './controller.mjs';
 import { MtaNativePadReferenceController } from './native-pad-reference.mjs';
 import { MtaNativeMovementTrialController } from './native-movement-trial.mjs';
@@ -22,6 +22,10 @@ function runAdapter() {
     if (typeof MTA_CORE_RENDER_GPU_REFERENCE !== 'boolean' ||
         (MTA_CORE_RENDER_GPU_REFERENCE && (!MTA_CORE_RENDER_REFERENCE || MTA_CORE_RENDER_ROUTE !== 'd3d12')))
         throw new Error('GPU ownership queries require explicit D3D12 Core renderer observation');
+    if (typeof MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE !== 'boolean' ||
+        (MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE && (!MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE || !MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE ||
+            !MTA_CORE_RENDER_GPU_REFERENCE || !MTA_CORE_RENDER_REFERENCE || MTA_CORE_RENDER_ROUTE !== 'd3d12')))
+        throw new Error('Native-dispatch observation requires explicit D3D12 Core GPU, custom-present and frame-boundary observation');
     if (typeof MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE !== 'boolean' ||
         (MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE && (!MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE || !MTA_CORE_RENDER_GPU_REFERENCE ||
             !MTA_CORE_RENDER_REFERENCE || MTA_CORE_RENDER_ROUTE !== 'd3d12')))
@@ -180,8 +184,8 @@ function runAdapter() {
         // Core owns the optional backend observer and all teardown on its
         // worker. Script reads coherent scalar snapshots; it draws nothing
         // and never receives viewport, swapchain or device pointers.
-        const observationApi = MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE ? 5 : MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE ? 4 : MTA_CORE_RENDER_GPU_REFERENCE ? 3 : 2;
-        const coreApi = MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE ? 9 : MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE ? 8 : MTA_CORE_RENDER_GPU_REFERENCE ? 7 : 6;
+        const observationApi = MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE ? 6 : MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE ? 5 : MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE ? 4 : MTA_CORE_RENDER_GPU_REFERENCE ? 3 : 2;
+        const coreApi = MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE ? 10 : MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE ? 9 : MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE ? 8 : MTA_CORE_RENDER_GPU_REFERENCE ? 7 : 6;
         const renderApiVersion = bind('DE_CoreRenderApiVersionV' + observationApi, 'X64U32');
         const begin = bind('DE_CoreRenderBeginV' + observationApi);
         const capture = bind('DE_CoreRenderCaptureV' + observationApi);
@@ -239,12 +243,18 @@ function runAdapter() {
             if (implementation !== 0 || policies !== 0 || ([1, 3, 7].includes(status) && signatures !== 0)) return false;
             return status === 1 ? state[74] === 0 : [5, 7].includes(status) || state[74] === 1;
         };
-        const boundaryConsistent = (state, previous) => {
+        const boundaryConsistent = (state, previous, offset = 84, expectedProfile = 1) => {
+            // Validate each independent tail against its own profile/counters;
+            // neither can supply missing evidence for the other hook.
+            if (offset !== 84) {
+                state = state.slice(0, 84).concat(state.slice(offset, offset + 26));
+                if (previous) previous = previous.slice(0, 84).concat(previous.slice(offset, offset + 26));
+            }
             const [status, profile, facts, presentHresult] = state.slice(84, 88);
             const [stage, queryHresult] = state.slice(108, 110);
             const pairs = [92, 94, 96, 98, 100, 102];
             const anyPair = field => state[field] !== 0 || state[field + 1] !== 0;
-            if (status > 10 || profile > 1 || facts > 255 || state[90] > 0x7fffffff || state[91] > 1 ||
+            if (status > 10 || (profile !== 0 && profile !== expectedProfile) || facts > 255 || state[90] > 0x7fffffff || state[91] > 1 ||
                 (!state[91] && state[90]) || state[107] > 3 || stage > 9 || compare64(state, 94, 92) > 0)
                 return false;
             if (previous && pairs.some(field => state[field + 1] < previous[field + 1] ||
@@ -255,18 +265,18 @@ function runAdapter() {
             // begins. A zero tail then describes no Present association at all.
             if (!status) return state[30] === 10 && state[13] === 0 && state.slice(84, 110).every(value => value === 0);
             if (status === 1 || status === 10)
-                return profile === (status === 10 ? 1 : 0) && !facts && !presentHresult && !stage && !queryHresult &&
+                return profile === (status === 10 ? expectedProfile : 0) && !facts && !presentHresult && !stage && !queryHresult &&
                     state.slice(88, 92).every(value => value === 0) && !state[104];
             if (status === 5) {
-                const entered = profile === 1 && anyPair(92) && anyPair(94) && state[104] !== 0;
+                const entered = profile === expectedProfile && anyPair(92) && anyPair(94) && state[104] !== 0;
                 return stage >= 1 && stage <= 9 && queryHresult >= 0x80000000 &&
                     (stage !== 9 || queryHresult === 0x8000ffff) &&
                     (entered || (stage === 1 && facts === 0 && state[104] === 0 && presentHresult === 0));
             }
             // An owned-patch mismatch can refuse before any Present entry.
             if (status === 8 && !state[104])
-                return profile === 1 && !facts && !presentHresult && !stage && !queryHresult && state.slice(88, 92).every(value => value === 0);
-            if (profile !== 1 || !anyPair(92) || !state[104]) return false;
+                return profile === expectedProfile && !facts && !presentHresult && !stage && !queryHresult && state.slice(88, 92).every(value => value === 0);
+            if (profile !== expectedProfile || !anyPair(92) || !state[104]) return false;
             if (status === 2 || status === 9)
                 return facts === 255 && state[80] === 2 && state[88] === state[89] && state[89] < 16 &&
                     state[90] === 0 && state[91] === 1 && state[104] === state[25] && !state[107] && stage === 9 && queryHresult === 0 &&
@@ -296,7 +306,7 @@ function runAdapter() {
             const captured = capture();
             if (captured !== 0 && captured !== 1) throw new Error('Core render capture status unavailable');
             if (!captured) return;
-            const state = Array.from({ length: observationApi === 5 ? 110 : observationApi === 4 ? 84 : observationApi === 3 ? 80 : 44 }, (_, field) => readRender(field));
+            const state = Array.from({ length: observationApi === 6 ? 136 : observationApi === 5 ? 110 : observationApi === 4 ? 84 : observationApi === 3 ? 80 : 44 }, (_, field) => readRender(field));
             if (!state.every(value => Number.isInteger(value) && value >= 0 && value <= 0xffffffff))
                 throw new Error('Core render returned invalid unsigned state');
             if (state[0] !== observationApi || ![1, 2, 3].includes(state[1]) || state[2] < lastSequence || state[3] < lastElapsed)
@@ -325,8 +335,10 @@ function runAdapter() {
             // The additive tail describes checked code/association, never a GPU frame boundary.
             if (observationApi >= 4 && !customPresentConsistent(state))
                 throw new Error('Core custom-present classification is contradictory');
-            if (observationApi === 5 && !boundaryConsistent(state, latest))
+            if (observationApi >= 5 && !boundaryConsistent(state, latest))
                 throw new Error('Core scoped Present association or lifecycle counters are contradictory');
+            if (observationApi === 6 && !boundaryConsistent(state, latest, 110, 2))
+                throw new Error('Core native dispatch association or lifecycle counters are contradictory');
             if (state[2] === lastSequence) {
                 if (!latest || state.some((value, field) => value !== latest[field]))
                     throw new Error('Core render publication changed without a new sequence');
@@ -383,11 +395,11 @@ function runAdapter() {
             latest[41] === requestedRoute && latest[42] === expectedKnown && latest[43] === (requestedRoute === 2 ? 1 : 0);
         const gpuObserved = observationApi < 3 || (latest !== null && gpuSupported(latest) &&
             (latest[46] !== 0 || latest[47] !== 0) && latest[48] === 0 && latest[49] === 0);
-        const passed = observationApi !== 5 && !stopRequested && runResult === 1 && expected.every((value, field) => state[field] === value) &&
+        const passed = observationApi < 5 && !stopRequested && runResult === 1 && expected.every((value, field) => state[field] === value) &&
             state[11] <= 3 && state[12] <= 3 && (state[12] & ~state[11]) === 0 && cleanupPassed && state[18] === 0 && observed && gpuObserved;
         emit({ event: 'core_render_reference_finished', at_ms: now, elapsed_ms: now - startedAt, state, run_result: runResult,
             passed, cleanup_passed: cleanupPassed, stop_requested: stopRequested, samples,
-            full_core_ready: observationApi === 5 ? false : state[6] === 1, rendering_started: false, network_active: false,
+            full_core_ready: observationApi >= 5 ? false : state[6] === 1, rendering_started: false, network_active: false,
             input_writes: false, remote_peds_created: false });
         if (!passed) throw new Error('MTA Core renderer observation incomplete; inspect its saved state');
         return;

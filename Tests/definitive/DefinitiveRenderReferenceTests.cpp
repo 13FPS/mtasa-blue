@@ -172,6 +172,9 @@ namespace
     using FixtureV3 = FixtureT<SnapshotV3>;
     using FixtureV4 = FixtureT<SnapshotV4>;
     using FixtureV5 = FixtureT<SnapshotV5>;
+    using FixtureV6 = FixtureT<SnapshotV6>;
+    static_assert(DispatchStatus == 110 && DispatchPresentEntriesLow == 118 && DispatchQueryHresult == 135);
+    static_assert(sizeof(SnapshotV6) == 136 * sizeof(std::uint32_t));
     static_assert(CustomPresentStatus == 80 && CustomPresentStaticPolicyFlags == 83);
     static_assert(sizeof(SnapshotV4) == 84 * sizeof(std::uint32_t));
     static_assert(BoundaryStatus == 84 && BoundaryPresentEntriesLow == 92 && BoundaryQueryHresult == 109);
@@ -180,7 +183,8 @@ namespace
     void Terminal(const FixtureT<SnapshotType>& fixture, const SnapshotType& state, StopReason reason, bool clean = true)
     {
         Check(fixture.observer.ended && fixture.observer.ends > 0, "every exit must finish actual observer End");
-        Check(state[Version] == (std::tuple_size<SnapshotType>::value == FieldCountV5   ? 5u
+        Check(state[Version] == (std::tuple_size<SnapshotType>::value == FieldCountV6   ? 6u
+                                 : std::tuple_size<SnapshotType>::value == FieldCountV5 ? 5u
                                  : std::tuple_size<SnapshotType>::value == FieldCountV4 ? 4u
                                  : std::tuple_size<SnapshotType>::value == FieldCountV3 ? 3u
                                  : std::tuple_size<SnapshotType>::value == FieldCountV2 ? 2u
@@ -584,6 +588,100 @@ int main()
             Terminal(f, f.Run(), reason, scenario != 5);
             if (scenario == 3)
                 Check(f.observer.ends == 43, "API5 retains endpoint hooks and owner beyond the reported cleanup deadline");
+        }
+        {
+            mta::game_de::RenderObservationStateV6 state;
+            state.base.base.custom = {2, 1, 127, 15};
+            state.base.boundary.status = 1;
+            state.base.base.base.gpu.customPresentPresent = 1;
+            state.base.base.base.gpu.queryStatus = 2;
+            const std::array<std::uint32_t, 26> expected{2,          2,          255,        0x887a0001u, 2,          2, 0,          1,          1,
+                                                         0x12345678, 2,          0x23456789, 3,           0x3456789a, 4, 0x456789ab, 5,          0x56789abc,
+                                                         6,          0x6789abcd, 100,        101,         102,        3, 9,          0x80004005u};
+            state.nativeDispatch = {2,
+                                    2,
+                                    255,
+                                    0x887a0001u,
+                                    2,
+                                    2,
+                                    0,
+                                    1,
+                                    0x1234567800000001ull,
+                                    0x2345678900000002ull,
+                                    0x3456789a00000003ull,
+                                    0x456789ab00000004ull,
+                                    0x56789abc00000005ull,
+                                    0x6789abcd00000006ull,
+                                    100,
+                                    101,
+                                    102,
+                                    3,
+                                    9,
+                                    0x80004005u};
+            SnapshotV5 prefix{};
+            CopyNativeStateV5(prefix, state.base);
+            SnapshotV6 copied{};
+            CopyNativeStateV6(copied, state);
+            Check(std::equal(prefix.begin(), prefix.end(), copied.begin()), "API6 preserves the exact API5 scalar prefix");
+            Check(std::equal(expected.begin(), expected.end(), copied.begin() + DispatchStatus),
+                  "API6 preserves every association field, high counter word and separate HRESULT without reinterpretation");
+            Check(!copied[SupportPredicate] && copied[CustomPresentStatus] == 2 && copied[QueryStatus] == 2,
+                  "observed Present associations cannot promote historical GPU ownership support");
+            Check(
+                copied[BoundaryStatus] == 1 && copied[BoundaryEndpointProfileId] == 0 && copied[DispatchStatus] == 2 && copied[DispatchEndpointProfileId] == 2,
+                "native dispatch cannot turn a refused DXGI endpoint into profile1 admission");
+            for (std::uint32_t status = 0; status <= 10; ++status)
+            {
+                state.nativeDispatch.status = status;
+                CopyNativeStateV6(copied, state);
+                Check(copied[DispatchStatus] == status && copied[DispatchQueryHresult] == 0x80004005u && !copied[SupportPredicate],
+                      "all boundary failure statuses remain scalar evidence without changing the ownership predicate");
+            }
+        }
+        {
+            FixtureV6  f;
+            const auto state = f.Run();
+            Terminal(f, state, StopReason::TimeBudget);
+            Check(f.publications.size() == 201 && state[RequestedRoute] == 2 && state[NativePresence] == 3,
+                  "API6 reuses the bounded Core lifecycle and publishes exactly 136 scalars");
+        }
+        for (const auto invalid : {0u, 1u, 3u, 0xffffffffu})
+        {
+            FixtureV6 f;
+            f.request.renderRoute = invalid;
+            Terminal(f, f.Run(), StopReason::BeginError);
+            Check(!f.observer.begins, "actual Present observations cannot silently select another route");
+        }
+        // Additional endpoint/lifecycle hooks still belong to the same retained
+        // Core owner; no cancellation or diagnostic deadline permits unload.
+        for (unsigned scenario = 0; scenario < 8; ++scenario)
+        {
+            FixtureV6 f;
+            if (scenario == 0)
+                f.request.cancelled = [&] { return f.clock.now >= 1150; };
+            else if (scenario == 1)
+                f.observer.rejectBegin = true;
+            else if (scenario == 2)
+                f.observer.throwRead = true;
+            else if (scenario == 3)
+                f.observer.busyEnds = 42;
+            else if (scenario == 4)
+                f.observer.lateEnd = 2001;
+            else if (scenario == 5)
+                f.observer.rejectFinalRead = true;
+            else if (scenario == 6)
+                f.observer.nativeFailure = true;
+            else
+                f.clock.regularWait = 1001;
+            const auto reason = scenario == 0   ? StopReason::Cancelled
+                                : scenario == 1 ? StopReason::BeginError
+                                : scenario == 2 ? StopReason::Exception
+                                : scenario <= 5 ? StopReason::CleanupError
+                                : scenario == 6 ? StopReason::ReadError
+                                                : StopReason::PulseGap;
+            Terminal(f, f.Run(), reason, scenario != 5);
+            if (scenario == 3)
+                Check(f.observer.ends == 43, "API6 retains endpoint hooks and owner beyond the reported cleanup deadline");
         }
         EndpointLogTests();
         std::printf("{\"success\":true,\"checks\":%u,\"game_operations\":false}\n", checks);

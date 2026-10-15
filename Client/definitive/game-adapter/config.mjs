@@ -53,3 +53,6 @@ export const MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE = false;
 // Observe the scoped natural Present and CPU buffer association separately.
 // This does not verify GPU resource state, a drawing boundary or startup.
 export const MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE = false;
+// Native current-slot dispatch is an independent caller hook, never implicit
+// in the older standard Present probe and never permission to issue GPU work.
+export const MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE = false;

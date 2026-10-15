@@ -26,20 +26,21 @@ namespace mta::game_de
     struct FrameBoundaryScope
     {
         FrameBoundaryObservationState state;
+        FrameBoundaryObservationState nativeDispatch;
         RenderEndpointDiagnosticV1    diagnostic;
-        std::uintptr_t                image = 0, viewport = 0, swapchain = 0;
+        std::uintptr_t                image = 0, viewport = 0, swapchain = 0, nativeSwapchain = 0;
         std::uint32_t                 callbackThread = 0;
-        bool                          knownPresenter = false, cleanupFailed = false, entered = false;
+        bool                          knownPresenter = false, cleanupFailed = false, entered = false, dispatchEntered = false;
         std::uint64_t                 epoch = 0;
         void (*cleanupFailure)() noexcept = nullptr;
         FrameBoundaryScope* previous = nullptr;
     };
     // Prepare is worker-only and performs no COM calls. Change appends to the
     // observer's existing all-thread Detours transaction; it never commits one.
-    bool     PrepareFrameBoundaryHooks(std::uintptr_t image, std::uint64_t generation = 0) noexcept;
-    bool     ChangeFrameBoundaryHooks(bool install) noexcept;
-    bool     FrameBoundaryHooksCommitted(bool install) noexcept;
-    bool     FrameBoundaryHooksOwned() noexcept;
+    bool PrepareFrameBoundaryHooks(std::uintptr_t image, std::uint64_t generation = 0, bool nativeDispatch = false, void* nativeWrapperHook = nullptr) noexcept;
+    bool ChangeFrameBoundaryHooks(bool install) noexcept;
+    bool FrameBoundaryHooksCommitted(bool install) noexcept;
+    bool FrameBoundaryHooksOwned() noexcept;
     unsigned FrameBoundaryInFlight() noexcept;
     void     StopFrameBoundaryAdmission() noexcept;
     void     ResetFrameBoundaryObservation() noexcept;
@@ -52,4 +53,13 @@ namespace mta::game_de
     void PublishFrameBoundaryEndpointDiagnostic(const FrameBoundaryScope& scope, std::uint64_t acceptedSnapshots) noexcept;
     bool ReadFrameBoundaryEndpointDiagnostic(std::uint64_t generation, RenderEndpointDiagnosticV1& state) noexcept;
     void ReleaseFrameBoundaryDiagnosticModules() noexcept;
+    // The worker holds its own suspended-thread references across the Detours
+    // transaction, so custom CALL rollback finishes before any thread resumes.
+    bool NativeDispatchInstructionSafe(std::uintptr_t instruction, std::uintptr_t nativeWrapperTrampoline = 0) noexcept;
+    bool CaptureNativeDispatchProtectionBaseline() noexcept;
+    bool ChangeNativeDispatchCallsite(bool install, bool nativeEntryInstalled) noexcept;
+    bool NativeDispatchPatchPresent() noexcept;
+    bool NativeDispatchDetoursPresent() noexcept;
+    bool NativeDispatchSafeToResume(bool nativeEntryInstalled) noexcept;
+    bool ReleaseNativeDispatchRelay() noexcept;
 }

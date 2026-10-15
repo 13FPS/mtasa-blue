@@ -64,7 +64,7 @@ namespace DefinitiveInputReference
         if ((request.nativeMovement && request.renderObservation) || (request.renderRoute && (!request.renderObservation || request.renderRoute > 2)) ||
             (request.renderObservation &&
              ((request.renderApiVersion == 1 && request.renderRoute) || (request.renderApiVersion == 2 && !request.renderRoute) ||
-              (request.renderApiVersion >= 3 && request.renderRoute != 2) || !request.renderApiVersion || request.renderApiVersion > 5)) ||
+              (request.renderApiVersion >= 3 && request.renderRoute != 2) || !request.renderApiVersion || request.renderApiVersion > 6)) ||
             !request.durationMs || request.durationMs > maximum || !request.cancelled || !request.publish || !TryAcquireSRWLockExclusive(&requestLock))
             return false;
         const bool accepted = !pending && !active;
@@ -324,5 +324,18 @@ CORE_API std::uint32_t MTA_ConfigureDERenderReferenceV5(std::uint32_t durationMs
     // Observing the later standard Present endpoint is an explicit opt-in;
     // older diagnostics keep their existing callback and scalar contracts.
     return route == 2 && g_isDefinitiveProcessCandidate && DefinitiveInputReference::Configure({durationMs, cancel, publish, false, true, route, 5}) ? 1u : 0u;
+}
+
+// The native callsite has its own version so API5 keeps its DXGI-entry meaning.
+CORE_API std::uint32_t MTA_DERenderReferenceApiVersionV6()
+{
+    return DefinitiveRenderReference::ApiVersionV6;
+}
+CORE_API std::uint32_t MTA_ConfigureDERenderReferenceV6(std::uint32_t durationMs, std::uint32_t route, DefinitiveInputReference::CancelCallback cancel,
+                                                        DefinitiveInputReference::PublishCallback publish)
+{
+    // Dispatch through the native callsite preserves an existing Present hook;
+    // a separate version prevents that seam from relabeling the API5 endpoint.
+    return route == 2 && g_isDefinitiveProcessCandidate && DefinitiveInputReference::Configure({durationMs, cancel, publish, false, true, route, 6}) ? 1u : 0u;
 }
 #endif

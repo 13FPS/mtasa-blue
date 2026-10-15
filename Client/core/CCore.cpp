@@ -220,6 +220,15 @@ namespace
         return true;
     }
 
+    bool CopyRenderReferenceState(CGameAdapterModule& adapter, DefinitiveRenderReference::SnapshotV6& snapshot)
+    {
+        mta::game_de::RenderObservationStateV6 state;
+        if (!adapter.GetNativeRenderObservationState(state))
+            return false;
+        DefinitiveRenderReference::CopyNativeStateV6(snapshot, state);
+        return true;
+    }
+
     void RunRenderReference(CGameAdapterModule& adapter, const DefinitiveInputReference::Request& request) noexcept
     {
         struct Observer
@@ -236,7 +245,61 @@ namespace
         } clock;
         // Tests execute this exact retained lifecycle with a value-only fake
         // clock/observer; production supplies the actual Core-owned module.
-        if (request.renderApiVersion == 5)
+        if (request.renderApiVersion == 6)
+        {
+            struct ObserverV6
+            {
+                CGameAdapterModule&                   adapter;
+                mta::game_de::RenderObservationRoute  route;
+                const std::uint64_t                   runMs = static_cast<std::uint64_t>(GetTickCount64_());
+                DefinitiveRenderEndpointLog::Recorder endpointLog;
+                void                                  Log(std::uint32_t phase) noexcept
+                {
+                    try
+                    {
+                        mta::game_de::RenderEndpointDiagnosticV1 state;
+                        if (!adapter.GetNativeRenderEndpointDiagnostic(state))
+                            return;
+                        endpointLog.Write(state, GetCurrentProcessId(), runMs, phase,
+                                          [](const std::string& line)
+                                          {
+                                              // Reuse MTA file utilities under this Core's explicit
+                                              // DE root. AddReportLog targets shared AppData instead.
+                                              const auto path = CalcMTASAPath("mta/logs/render-endpoint.log");
+                                              SharedUtil::MakeSureDirExists(path);
+                                              return SharedUtil::FileAppend(path, line.data(), static_cast<unsigned long>(line.size()));
+                                          });
+                    }
+                    catch (...)
+                    {
+                        // Optional file diagnostics must never change native
+                        // observation, cancellation or hook cleanup ownership.
+                    }
+                }
+                bool Begin()
+                {
+                    const bool began = adapter.BeginNativeRenderDispatchObservation(route);
+                    Log(0);
+                    return began;
+                }
+                bool Read(DefinitiveRenderReference::SnapshotV6& snapshot)
+                {
+                    const bool read = CopyRenderReferenceState(adapter, snapshot);
+                    if (read)
+                        Log(1);
+                    return read;
+                }
+                bool End()
+                {
+                    const bool ended = adapter.EndNativeRenderObservation();
+                    if (ended)
+                        Log(2);
+                    return ended;
+                }
+            } boundaryObserver{adapter, static_cast<mta::game_de::RenderObservationRoute>(request.renderRoute)};
+            DefinitiveRenderReference::Run<DefinitiveRenderReference::SnapshotV6>(boundaryObserver, clock, request);
+        }
+        else if (request.renderApiVersion == 5)
         {
             struct ObserverV5
             {

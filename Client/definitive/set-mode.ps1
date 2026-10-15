@@ -15,7 +15,7 @@ param(
     [switch]$MtaCoreMovementReference,
     [switch]$MtaCoreRenderReference,
     [switch]$MtaCoreRenderGpuReference,
-    [switch]$MtaCoreRenderCustomPresentReference, [switch]$MtaCoreRenderFrameBoundaryReference,
+    [switch]$MtaCoreRenderCustomPresentReference, [switch]$MtaCoreRenderFrameBoundaryReference, [switch]$MtaCoreRenderNativeDispatchReference,
     [ValidateSet('D3D11', 'D3D12')][string]$MtaCoreRenderRoute = 'D3D11',
     [string]$GameDirectory = 'C:\Program Files (x86)\Steam\steamapps\common\GTA San Andreas - The Definitive Edition\Gameface\Binaries\Win64'
 )
@@ -23,6 +23,10 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 # Frame association is a separate read-only hook lease, never implicit in recognition.
+# Caller dispatch is a separate explicit hook lease, even when the older probe refuses.
+if ($MtaCoreRenderNativeDispatchReference -and (-not $MtaCoreRenderFrameBoundaryReference -or -not $MtaCoreRenderCustomPresentReference -or -not $MtaCoreRenderGpuReference -or -not $MtaCoreRenderReference -or $MtaCoreRenderRoute -ne 'D3D12')) {
+    throw 'Native-dispatch observation requires explicit D3D12 Core GPU, custom-present and frame-boundary observation.'
+}
 if ($MtaCoreRenderFrameBoundaryReference -and (-not $MtaCoreRenderCustomPresentReference -or -not $MtaCoreRenderGpuReference -or -not $MtaCoreRenderReference -or $MtaCoreRenderRoute -ne 'D3D12')) {
     throw 'Frame-boundary observation requires explicit D3D12 Core GPU and custom-present observation.'
 }
@@ -232,6 +236,16 @@ if ($coreRenderFrameBoundaryMatches -eq 1) {
     $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $coreRenderFrameBoundaryPattern,
         "export const MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE = $($MtaCoreRenderFrameBoundaryReference.IsPresent.ToString().ToLowerInvariant());"))
 }
+$coreRenderNativeDispatchPattern = 'export const MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE = (true|false);'
+$coreRenderNativeDispatchMatches = [regex]::Matches($configText, $coreRenderNativeDispatchPattern).Count
+if ($coreRenderNativeDispatchMatches -gt 1 -or ($MtaCoreRenderNativeDispatchReference -and $coreRenderNativeDispatchMatches -ne 1)) {
+    throw 'Update the adapter before selecting native-dispatch observation.'
+}
+# Clear the newer lease on ordinary switches while preserving intact old configurations.
+if ($coreRenderNativeDispatchMatches -eq 1) {
+    $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $coreRenderNativeDispatchPattern,
+        "export const MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE = $($MtaCoreRenderNativeDispatchReference.IsPresent.ToString().ToLowerInvariant());"))
+}
 $configEntry = @($installed.files | Where-Object { $_.path -eq 'CLEO/de-online/config.mjs' })
 if ($configEntry.Count -ne 1) { throw 'Missing owned configuration record.' }
 $configEntry[0].sha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($newConfig)).ToLowerInvariant()
@@ -264,7 +278,9 @@ try {
     Write-AtomicFile $manifestPath $originalManifest
     throw $failure
 }
-if ($MtaCoreRenderFrameBoundaryReference) {
+if ($MtaCoreRenderNativeDispatchReference) {
+    Write-Host 'Installed adapter mode: Smoke, read-only scoped native D3D12 dispatch armed. Ctrl+Shift+F9 starts after release; Ctrl+Shift+End requests cleanup. No drawing or input writes.'
+} elseif ($MtaCoreRenderFrameBoundaryReference) {
     Write-Host 'Installed adapter mode: Smoke, read-only scoped D3D12 Present association armed. Ctrl+Shift+F9 starts after release; Ctrl+Shift+End requests cleanup. No drawing or input writes.'
 } elseif ($MtaCoreRenderCustomPresentReference) {
     Write-Host 'Installed adapter mode: Smoke, read-only D3D12 custom-present code recognition armed. Ctrl+Shift+F9 starts after release; Ctrl+Shift+End requests cleanup. No drawing or input writes.'

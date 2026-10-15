@@ -1,9 +1,9 @@
 # GTA San Andreas Definitive Edition: findings and port tracker
 
-Last updated: **2026-10-14** (Europe/Luxembourg).
+Last updated: **2026-10-15** (Europe/Luxembourg).
 Experimental branch: `definitive-edition-port`.
 Live renderer source baseline: `05e80a41ecfcdd27165c7eefa3912a809c5546a4`.
-Latest completed diagnostic runtime: `c155c253c4b7f0062fc53eb0b67b031400533e91`.
+Latest completed diagnostic runtime: `87af7269995a65ae453ee7592c034b559d58724f`.
 
 ## Current result
 
@@ -24,20 +24,58 @@ and full-MTA readiness explicitly false. See the
 [reuse plan](Client/definitive/MTA_REUSE_PLAN.md) and
 [preflight contract](Client/launch/DefinitivePreflight/README.md).
 
-The latest API5 trial completed in 10,048 ms with 605 native wrapper entries,
-603 accepted scalar snapshots and 87 logged metadata/custom-presenter reports.
+The latest API5 trial completed in 10,001 ms with 603 native wrapper entries,
+600 accepted scalar snapshots and 87 logged metadata/custom-presenter reports.
 All 87 reports refuse the standard Present endpoint: status 1, profile 0,
 with no Present or backbuffer association observation. GTA continued normally;
-cleanup, all 23 installed files and normal exit passed. The 40,915-byte final
-log and independent reviews are sealed separately from later source work.
+cleanup, all 23 installed files and normal exit passed. The final CLEO log is
+40,922 bytes: the complete 40,848-byte pre-exit capture plus 74 shutdown bytes.
+The separate 387-byte endpoint log is unchanged through shutdown. Both are
+saved before subsequent source work, with zero reader issues.
 
-The refusal can mean startup endpoint admission failed or the native swapchain
-slot differed from the pinned system entry. The exact production admission
-function passes in an owned WARP host, which does not resolve the live cause.
-A separate versioned scalar diagnostic now records the preparation gate and
-module-relative endpoint categories through MTA Core's existing owner/worker.
-Core writes bounded JSONL under the explicit DE root. It preserves the API5
-110-field wire, earlier interfaces and every hook/drawing guard.
+The separate versioned diagnostic resolves this refusal to the loaded-code
+hash check. System DXGI's disk identity and unwind envelope passed, but its
+Present function was already patched before MTA attempted to install a Present
+hook. The native swapchain slot still points to the expected DXGI RVA `0x19000`;
+both that slot and the earlier preparation read begin with an E9 branch to
+private executable memory. This identifies a pre-existing patch, not the DLL
+that installed it. MTA refused the changed bytes and issued no GPU commands.
+Core's bounded JSONL preserves the API5 110-field wire, earlier interfaces and
+every hook/drawing guard. The next integration step must preserve the existing
+Present chain while using a proven native boundary for MTA's renderer.
+
+API6 source work adds an owned interception at the pinned game's five-byte
+Present dispatch window, RVA `0x1FD5EBD`, retaining return RVA `0x1FD5EC2`.
+An owned leaf relay reconstructs the original arguments and passes the game's
+current slot target to the callback for exactly one ordinary forward. The
+existing DXGI patch stays untouched. API6 appends a separate 26-field native
+dispatch record to the unchanged 110-field API5 prefix; profile2 cannot become
+profile1 admission or GPU ownership. Owned hosts pass 146 argument, forwarding
+and exception-unwind checks for both the ordinary and CFG/CET-compatible
+builds. Hardware policy in GTA remains unverified. Native publication and
+cleanup checks and the normal MTA build pass; live dispatch remains unverified.
+
+The API6 transaction owns each suspension count itself. Its Detours nodes and
+thread lists use virtual memory so cleanup cannot wait for a suspended CRT
+heap owner. Threads paused in modified entry windows, owned trampolines or
+callback code refuse the transaction before writes. Stable thread discovery
+uses an exact pinned local x64 system syscall entry; an unsupported or changed
+entry refuses before suspension. These are experimental local build profiles.
+
+The offline candidate passes 3,271 native checks plus four checks with the
+extension disabled, 1,673 adapter-module checks and 1,219 x64/three x86 Core
+consumer checks. Core lifecycle tests pass 12,125 checks on each architecture.
+The normal build passes 37 guards, 248 startup checks in each classic and
+nonclassic layout, and all 51 worker scenarios, including cache contention.
+The bridge passes 293 protocol and 1,771 ABI checks; script/log tests pass
+568 JavaScript checks and 72 Python tests. A separate owned WARP probe passes
+265 metadata/ownership checks without submitting GPU commands. These tests
+do not validate visible GTA rendering or multiplayer readiness.
+
+The package ownership suite passes 687 checks across 59 cases when run
+serially after the owned test hosts exit. Install, update, uninstall and
+explicit API6 configuration checks use disposable directories; the real GTA
+installation is unchanged by this suite.
 
 The active D3D12 renderer has a live-verified native callback through
 actual Core. The latest API4 session ran for 10,049 ms with 606 native entries,

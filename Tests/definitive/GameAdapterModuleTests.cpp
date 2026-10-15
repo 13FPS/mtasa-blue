@@ -9,6 +9,7 @@
 #include <game/CGameRenderEndpointDiagnostic.h>
 #include <game/CGameRenderSetupDiagnostic.h>
 #include <game/CGameRenderRootsDiagnostic.h>
+#include <game/CGameRenderDeviceLease.h>
 
 #include <array>
 #include <algorithm>
@@ -1021,6 +1022,63 @@ namespace
         older->Release();
     }
 
+    void TestDeviceLeaseContract()
+    {
+        OwnerIdentity owner;
+        auto*         lease = CreateGameRenderObservationV6(6, owner.Get(), RenderObservationRoute::D3D12);
+        auto*         older = CreateGameRenderObservationV5(5, owner.Get(), RenderObservationRoute::D3D12);
+        Check(lease && older, "device handoff uses a separate explicit extension of an exact allocated V6 lease");
+        auto* fresh = CreateGameRenderObservationV6(6, owner.Get(), RenderObservationRoute::D3D12);
+        Check(fresh != nullptr, "independent fresh V6 registry allocation");
+        const auto freshAddress = reinterpret_cast<std::uintptr_t>(fresh);
+        fresh->Release();
+        Check(RequestGameRenderDeviceLeaseV1(1, reinterpret_cast<IGameRenderObservationV6*>(freshAddress)) == Status::InvalidArgument,
+              "never-begun V6 is removed from the exact registry independently of another allocated lease");
+        RenderDeviceLeaseV1 output;
+        std::memset(&output, 0xa5, sizeof(output));
+        const auto sentinel = output;
+        const auto unchanged = [&] { return std::memcmp(&output, &sentinel, sizeof(output)) == 0; };
+        for (const auto version : {0u, 2u, 0xffffffffu})
+            Check(RequestGameRenderDeviceLeaseV1(version, lease) == Status::InvalidArgument &&
+                      TakeGameRenderDeviceLeaseV1(version, lease, &output) == Status::InvalidArgument && unchanged(),
+                  "device extension rejects wrong versions without reading or changing output sentinels");
+        Check(RequestGameRenderDeviceLeaseV1(1, nullptr) == Status::InvalidArgument &&
+                  TakeGameRenderDeviceLeaseV1(1, lease, nullptr) == Status::InvalidArgument &&
+                  TakeGameRenderDeviceLeaseV1(1, nullptr, &output) == Status::InvalidArgument && unchanged(),
+              "device extension rejects null arguments");
+        auto* foreign = reinterpret_cast<IGameRenderObservationV6*>(std::uintptr_t{1});
+        Check(RequestGameRenderDeviceLeaseV1(1, foreign) == Status::InvalidArgument &&
+                  TakeGameRenderDeviceLeaseV1(1, foreign, &output) == Status::InvalidArgument &&
+                  RequestGameRenderDeviceLeaseV1(1, reinterpret_cast<IGameRenderObservationV6*>(older)) == Status::InvalidArgument && unchanged(),
+              "opaque invalid and older leases never get dereferenced or armed");
+        Check(TakeGameRenderDeviceLeaseV1(1, lease, &output) != Status::Ok && unchanged(), "allocated-only device request has no native reference");
+        Status      request = Status::Ok, take = Status::Ok;
+        std::thread wrongThread(
+            [&]
+            {
+                request = RequestGameRenderDeviceLeaseV1(1, lease);
+                take = TakeGameRenderDeviceLeaseV1(1, lease, &output);
+            });
+        wrongThread.join();
+        Check(request == Status::WrongThread && take == Status::WrongThread && unchanged(), "foreign thread cannot arm or take an exact device lease");
+        Check(RequestGameRenderDeviceLeaseV1(1, lease) == Status::Ok && RequestGameRenderDeviceLeaseV1(1, lease) == Status::Unsupported,
+              "device request arms once before the first Begin");
+        Check(lease->Begin() == Status::Unsupported && RequestGameRenderDeviceLeaseV1(1, lease) == Status::Unsupported &&
+                  TakeGameRenderDeviceLeaseV1(1, lease, &output) != Status::Ok && unchanged(),
+              "wrong-image Begin consumes the request without capturing a device or allowing rearm");
+        Check(lease->End() == Status::Ok && TakeGameRenderDeviceLeaseV1(1, lease, &output) == Status::NotInitialized && unchanged(),
+              "End keeps a refused hardware startup device-free and output untouched");
+        const auto released = reinterpret_cast<std::uintptr_t>(lease);
+        lease->Release();
+        Check(RequestGameRenderDeviceLeaseV1(1, reinterpret_cast<IGameRenderObservationV6*>(released)) == Status::InvalidArgument &&
+                  TakeGameRenderDeviceLeaseV1(1, reinterpret_cast<IGameRenderObservationV6*>(released), &output) == Status::InvalidArgument && unchanged(),
+              "released device lease is removed from exact registry before any access");
+        older->Release();
+        auto* plain = CreateGameRenderObservationV6(6, owner.Get(), RenderObservationRoute::D3D12);
+        Check(plain && plain->Begin() == Status::Unsupported && RequestGameRenderDeviceLeaseV1(1, plain) == Status::Unsupported,
+              "ordinary V6 remains device-free and cannot arm retrospectively after Begin");
+        plain->Release();
+    }
     void TestRenderObservationV6Contract()
     {
         OwnerIdentity owner;
@@ -1138,6 +1196,9 @@ namespace
 
 int main()
 {
+    static_assert(sizeof(RenderDeviceLeaseV1) == 48 && offsetof(RenderDeviceLeaseV1, device) == 8 && offsetof(RenderDeviceLeaseV1, generation) == 16);
+    static_assert(std::is_nothrow_invocable_r_v<Status, decltype(RequestGameRenderDeviceLeaseV1), std::uint32_t, IGameRenderObservationV6*>);
+    static_assert(std::is_nothrow_invocable_r_v<Status, decltype(TakeGameRenderDeviceLeaseV1), std::uint32_t, IGameRenderObservationV6*, RenderDeviceLeaseV1*>);
     static_assert(AdapterAbiVersion == 6 && AdapterControllerMask == 0xfffff);
     static_assert(static_cast<std::uint64_t>(AdapterCapability::NativeMovementWriteCandidate) == 256);
     static_assert(NativeDeviceStateCount == 127 && sizeof(NativeDeviceState) == 508);
@@ -1183,6 +1244,7 @@ int main()
         TestRenderObservationV5FactoryRejection();
         TestEndpointDiagnosticLeaseRejection();
         TestRenderObservationV6Contract();
+        TestDeviceLeaseContract();
         TestSetupDiagnosticLeaseRejection();
         TestRootsDiagnosticLeaseRejection();
         TestRenderObservationFactoryRejection();

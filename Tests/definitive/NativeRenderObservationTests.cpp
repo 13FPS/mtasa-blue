@@ -81,6 +81,10 @@ bool BoundaryFixtureOriginal(void*, std::uint32_t);
 void PrimeBoundaryDiagnostic(std::uint64_t generation);
 void PrimeNativeDispatchDiagnostic(std::uint64_t generation);
 bool NativeDispatchFixtureOriginal(void*, std::uint32_t interval);
+bool DeviceCandidateFixtureOriginal(void*, std::uint32_t interval);
+void SetDeviceCandidateFixture(IUnknown* device, unsigned mode);
+void SetSecondDeviceCandidateFixture(IUnknown* device);
+bool ForeignDeviceCandidateStable();
 
 namespace
 {
@@ -165,6 +169,7 @@ namespace
         runtime.classifyCustomPresent = false;
         runtime.queryFrameBoundary = false;
         runtime.nativeDispatch = false;
+        runtime.devicePhase.store(DeviceCapturePhase::Off);
         runtime.producerThread = GetCurrentThreadId();
         runtime.bound.store(true);
         runtime.active.store(true);
@@ -233,6 +238,184 @@ namespace
             return 1;
         }
     };
+    struct OwnedLeaseDevice final : IUnknown
+    {
+        unsigned                  references = 1, adds = 0, releases = 0;
+        bool                      fault = false;
+        HRESULT STDMETHODCALLTYPE QueryInterface(REFIID, void**) override { return E_NOINTERFACE; }
+        ULONG STDMETHODCALLTYPE   AddRef() override
+        {
+            ++adds;
+            return ++references;
+        }
+        ULONG STDMETHODCALLTYPE Release() override
+        {
+            ++releases;
+            if (fault)
+                RaiseException(0xe0434344, 0, 0, nullptr);
+            return --references;
+        }
+    };
+    void CheckDeviceLeaseLifecycle(NativeRenderObservation& owner, std::uintptr_t image, OwnedLeaseDevice& staleDevice, RenderDeviceLeaseV1& staleLease)
+    {
+        const auto configure = [&](IUnknown* device, unsigned mode, bool enabled = true)
+        {
+            Configure(image, DeviceCandidateFixtureOriginal, RenderObservationRoute::D3D12);
+            EnableOwnership(image, 2, 1);
+            runtime.classifyCustomPresent = runtime.queryFrameBoundary = runtime.nativeDispatch = true;
+            PrimeNativeDispatchDiagnostic(runtime.generation.load());
+            runtime.devicePhase.store(enabled ? DeviceCapturePhase::Armed : DeviceCapturePhase::Off);
+            SetDeviceCandidateFixture(device, mode);
+        };
+        RenderDeviceLeaseV1 output;
+        std::memset(&output, 0xa5, sizeof(output));
+        const auto sentinel = output;
+        const auto unchanged = [&] { return std::memcmp(&output, &sentinel, sizeof(output)) == 0; };
+        configure(&staleDevice, 0);
+        {
+            const auto generation = runtime.generation.load();
+            runtime.hooked.store(true);
+            NativeRenderObservation fresh;
+            Check(!fresh.End() && runtime.active.load() && runtime.hooked.load() && runtime.generation.load() == generation &&
+                      runtime.devicePhase.load() == DeviceCapturePhase::Armed,
+                  "generation-zero Native destructor/End cannot mutate another active observer; fresh V6 registry disposal skips its refusal");
+            runtime.hooked.store(false);
+        }
+        Check(HookPresent(viewport.data(), 1) && runtime.devicePending.load(), "explicit clean callback commits one owned device with its accepted snapshot");
+        Check(owner.TakeDeviceLease(staleLease) == Status::Ok && staleLease.device == reinterpret_cast<ID3D12Device*>(&staleDevice) && staleLease.size == 48 &&
+                  staleLease.version == 1 && staleLease.generation == runtime.generation.load() && staleLease.acceptedSnapshots == 1 &&
+                  staleLease.dispatchEntries == 1 && staleLease.sourceProfileId == 2 && !staleLease.reserved && !staleDevice.adds && !staleDevice.releases,
+              "Take moves the existing reference and exact accepted provenance without AddRef");
+        Check(owner.TakeDeviceLease(output) == Status::NotInitialized && unchanged(), "second Take never duplicates or overwrites device ownership");
+        OwnedLeaseDevice later;
+        SetDeviceCandidateFixture(&later, 0);
+        HookPresent(viewport.data(), 1);
+        Check(!runtime.devicePending.load() && !later.releases && !later.adds, "Taken is one-shot and later callbacks do not capture a replacement");
+        Check(owner.End() && !staleDevice.releases && owner.TakeDeviceLease(output) == Status::NotInitialized && unchanged(),
+              "End cannot release a taken Core reference and Take after End is unavailable");
+        later.Release();
+        {
+            OwnedLeaseDevice first, second;
+            configure(&first, 10);
+            SetSecondDeviceCandidateFixture(&second);
+            HookPresent(viewport.data(), 1);
+            Check(ForeignDeviceCandidateStable() && first.releases == 1 && !first.references && !second.releases && second.references == 1 &&
+                      !runtime.devicePending.load(),
+                  "foreign wrapper cannot rearm another scope or overwrite its first candidate on a later dispatch");
+            Check(owner.End(), "foreign wrapper candidate regression leaves cleanup balanced");
+            second.Release();
+            SetSecondDeviceCandidateFixture(nullptr);
+        }
+        {
+            configure(nullptr, 11);
+            HookPresent(viewport.data(), 1);
+            Check(runtime.devicePhase.load() == DeviceCapturePhase::Armed && !runtime.devicePending.load(),
+                  "own reserved-but-failed query resets its reservation even without acquiring a candidate reference");
+            OwnedLeaseDevice device;
+            SetDeviceCandidateFixture(&device, 0);
+            HookPresent(viewport.data(), 1);
+            RenderDeviceLeaseV1 recovered;
+            Check(owner.TakeDeviceLease(recovered) == Status::Ok && recovered.acceptedSnapshots == 2 && recovered.dispatchEntries == 2 &&
+                      recovered.device == reinterpret_cast<ID3D12Device*>(&device),
+                  "later clean callback can complete the same one-shot request after a null candidate refusal");
+            Check(owner.End() && ReleaseRenderDeviceReference(recovered.device) && device.releases == 1 && !device.references,
+                  "null-candidate retry preserves exact transferred-reference ownership");
+        }
+        for (unsigned mode = 0; mode <= 8; ++mode)
+        {
+            OwnedLeaseDevice device;
+            configure(&device, mode, mode != 8);
+            if (mode == 0)
+                AcquireSRWLockShared(&runtime.snapshotLock);
+            if (mode == 3)
+                Check(CatchOriginalException(viewport.data()), "original SEH remains unchanged while candidate cleanup is finally-safe");
+            else
+                HookPresent(viewport.data(), 1);
+            if (mode == 0)
+                ReleaseSRWLockShared(&runtime.snapshotLock);
+            Check(!runtime.devicePending.load() && !runtime.deviceLease.device && device.releases == (mode == 8 ? 0u : 1u) && !device.adds,
+                  "miss, false original, failed HRESULT, SEH, changed roots, multiple dispatch, readback or lifecycle refusal cannot retain a candidate");
+            Check(owner.TakeDeviceLease(output) != Status::Ok && unchanged(), "negative candidate keeps caller output untouched");
+            Check(owner.End(), "negative candidate leaves ordinary hook cleanup complete");
+            if (mode == 8)
+                device.Release();
+        }
+        {
+            OwnedLeaseDevice device;
+            configure(&device, 0);
+            HookPresent(viewport.data(), 1);
+            runtime.safetyHeldSuspensions = true;
+            Check(owner.TakeDeviceLease(output) == Status::Unsupported && unchanged() && !device.releases,
+                  "Take refuses retained peers without waiting, releasing or changing output");
+            runtime.safetyHeldSuspensions = false;
+            bool        foreignPreserved = false;
+            std::thread foreignTake(
+                [&]
+                {
+                    RenderDeviceLeaseV1 foreignOutput = sentinel;
+                    foreignPreserved = owner.TakeDeviceLease(foreignOutput) != Status::Ok && std::memcmp(&foreignOutput, &sentinel, sizeof(foreignOutput)) == 0;
+                });
+            foreignTake.join();
+            Check(foreignPreserved && !device.releases, "foreign native Take preserves output and existing reference");
+            {
+                ApiOperation busy;
+                Check(busy.acquired && owner.TakeDeviceLease(output) == Status::Unsupported && unchanged(),
+                      "busy operation preserves device mailbox and output");
+            }
+            AcquireSRWLockShared(&runtime.snapshotLock);
+            Check(owner.TakeDeviceLease(output) == Status::Unsupported && unchanged(), "Take never waits for callback publication lock");
+            ReleaseSRWLockShared(&runtime.snapshotLock);
+            runtime.inFlight.store(1);
+            Check(!owner.End() && !device.releases && runtime.devicePending.load() && owner.TakeDeviceLease(output) == Status::NotInitialized && unchanged(),
+                  "End overlap stops handoff but retains the untaken ref until callback quiescence");
+            runtime.inFlight.store(0);
+            Check(owner.End() && device.releases == 1 && !device.references, "clean End releases an untaken device exactly once after quiescence");
+        }
+        for (unsigned faultStage = 0; faultStage < 4; ++faultStage)
+        {
+            OwnedLeaseDevice device;
+            configure(&device, faultStage == 0 ? 1u : faultStage == 1 ? 3u : 0u);
+            device.fault = true;
+            if (faultStage == 2)
+                AcquireSRWLockShared(&runtime.snapshotLock);
+            if (faultStage == 1)
+                Check(CatchOriginalException(viewport.data()), "Release fault cannot replace original SEH");
+            else
+                HookPresent(viewport.data(), 1);
+            if (faultStage == 2)
+                ReleaseSRWLockShared(&runtime.snapshotLock);
+            Check(!owner.End() && runtime.deviceReleaseFault.load() && runtime.failure.load() == 10 && device.releases == 1,
+                  "discard, SEH, publication miss and untaken-End Release faults retain fatal cleanup ownership");
+            NativeRenderObservationState failed;
+            owner.ReadState(failed);
+            Check(failed.pendingCleanup && !failed.active && !owner.End() && device.releases == 1 && !owner.Begin(),
+                  "unknown Release effect prevents successful End/new generation and is never blindly retried");
+            Check(owner.TakeDeviceLease(output) != Status::Ok && unchanged(), "fatal device cleanup never hands out a reference");
+            // Only this private fixture knows its stack fake remains alive.
+            // Shipping code has no reset for unknown COM Release effects.
+            runtime.deviceReleaseFault.store(false);
+            Check(owner.End(), "owned fake fault state reset permits later independent fixture cases");
+        }
+        {
+            OwnedLeaseDevice device;
+            entered = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+            resume = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+            Check(entered && resume, "owned in-flight device cancellation events");
+            configure(&device, 9);
+            std::thread callback([&] { HookPresent(viewport.data(), 1); });
+            Check(WaitForSingleObject(entered, 5000) == WAIT_OBJECT_0, "real native callback holds its candidate before returning original");
+            Check(!owner.End() && !device.releases && owner.TakeDeviceLease(output) != Status::Ok && unchanged(),
+                  "End stops an actual in-flight candidate without COM release or publication");
+            SetEvent(resume);
+            callback.join();
+            Check(owner.End() && device.releases == 1 && !runtime.devicePending.load(),
+                  "returning stopped callback discards once and cannot republish after End");
+            CloseHandle(entered);
+            CloseHandle(resume);
+            entered = resume = nullptr;
+        }
+        SetDeviceCandidateFixture(nullptr, 0);
+    }
     void CheckCodeFixture(const char* path, const RouteDescriptor& route)
     {
         std::vector<unsigned char> fingerprint(route.presentBytes);
@@ -967,6 +1150,17 @@ bool OwnedNativeDispatchVmTransactions()
     CloseHandle(lockRelease);
     CloseHandle(allocationStart);
     return true;
+}
+void BlockDeviceCandidateFixture()
+{
+    SetEvent(entered);
+    WaitForSingleObject(resume, 5000);
+}
+bool ProbeForeignDeviceCandidate()
+{
+    std::thread foreignCallback([] { HookPresent(viewport.data(), 1); });
+    foreignCallback.join();
+    return runtime.devicePhase.load() == DeviceCapturePhase::Candidate;
 }
 int main(int argc, char** argv)
 {
@@ -1739,6 +1933,9 @@ int main(int argc, char** argv)
     CloseHandle(publish);
     CloseHandle(published);
 
+    OwnedLeaseDevice    staleDevice;
+    RenderDeviceLeaseV1 staleDeviceLease;
+    CheckDeviceLeaseLifecycle(owner, image, staleDevice, staleDeviceLease);
     // Retire a genuinely published owned API6 scalar cache, so a rejected next
     // Begin must invalidate positive historical evidence rather than only zero.
     Configure(image, NativeDispatchFixtureOriginal, RenderObservationRoute::D3D12);
@@ -1775,6 +1972,14 @@ int main(int argc, char** argv)
     Check(retired.generation == oldGeneration && retired.acceptedSnapshots == state.acceptedSnapshots && retired.width == state.width,
           "retired owner preserves own final evidence across generations");
     Check(nextOwner.End(), "failed next generation cleanup");
+    RenderDeviceLeaseV1 staleOutput;
+    std::memset(&staleOutput, 0xa5, sizeof(staleOutput));
+    const auto staleSentinel = staleOutput;
+    Check(owner.TakeDeviceLease(staleOutput) != Status::Ok && std::memcmp(&staleOutput, &staleSentinel, sizeof(staleOutput)) == 0 &&
+              staleDeviceLease.device == reinterpret_cast<ID3D12Device*>(&staleDevice) && !staleDevice.releases,
+          "new generation cannot resurrect an old mailbox or revoke Core's previously taken reference");
+    Check(ReleaseRenderDeviceReference(staleDeviceLease.device) && staleDevice.releases == 1 && !staleDevice.references,
+          "Core releases its independent strong reference after native generation retirement");
     Check(!runtime.modulePinned.load(), "synthetic fixtures never pin executable/module");
     CheckFrameBoundaryProbe(argv[3], argv[2], checks);
     VirtualFree(reinterpret_cast<void*>(image), 0, MEM_RELEASE);

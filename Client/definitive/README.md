@@ -6,7 +6,59 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
-**Latest live API6 result: logged texture-null refusal; cleanup and normal exit passed.**
+**Next candidate: Core-owned startup of MTA's actual GUI on D3D12.**
+`package.ps1 -Mode Smoke -MtaCoreGuiStartupReference` selects a separate,
+disabled-by-default trial. Its 36-file bundle adds the real `cgui.dll` and
+MTA's skin/font assets to the ordinary 23-file bundle. Install, update and
+uninstall require the complete owned group; ordinary packages remain unchanged.
+The launcher's existing 23-file headless preflight does not certify this trial.
+
+An explicit, one-shot device lease is separate from read-only API6. Core waits
+for a coherent native callback, takes one owned device reference, and ends the
+observer before constructing an MTA-owned queue and a 640x480 BGRA8 offscreen
+target. The existing CGUI/CEGUI session renders real widgets, text and a texture;
+Core verifies GPU completion and pixel readback before releasing its owners.
+Neither the native queue nor GTA's backbuffer is written. No visible overlay,
+NPC or automatic movement is expected, and this does not unlock full startup.
+
+The separate Core11 / GUI API1 protocol publishes 64 unsigned scalars. It keeps
+native observation, lease provenance, owned GPU work and cleanup distinct.
+Pending fences retain their owners; a cleanup timeout or release fault cannot
+report a successful unload. Core also writes `mta/logs/gui-startup.log`; the
+saved-file reader requires a fresh PID/run and the exact pre-trial baseline.
+
+Offline validation covers real three-buffer WARP swapchains in formats 24/87/28
+(777 checks), the Core GUI helper including delayed signal and release faults
+(103 checks), and all 65 startup-worker scenarios. The normal Core and GUI
+builds pass with classic Win32 startup preserved; legacy D3DX9 loading is
+delayed on the opt-in x64 GUI path. Package ownership passes 1,008 checks
+across 105 cases, including complete 23/36-file upgrades and rollback.
+These owned fixtures establish offline behavior. The actual-device GUI
+startup result remains pending a manual GTA
+trial; visible GTA drawing and multiplayer remain unverified.
+
+**Latest live API6 result: native backbuffer association passed; cleanup and normal exit passed.**
+The primary-backbuffer trial recorded 603 native callbacks, 601 accepted
+snapshots and 601 native dispatches, with no association rejection. All 87
+logged API6 samples report coherent profile 2 association, complete queries,
+`S_OK` probe and forwarded results, and matching native/DXGI indices across
+buffers 0/1/2. All ten fresh roots reports completed their after-Close
+readback without a refusal or exception.
+
+GTA continued normally. Hooks were removed, all held threads released and
+Core/XML/pthread unloaded. All 23 installed hashes matched. Normal exit
+preserves the complete 46,055-byte capture plus 74 shutdown bytes; the
+2,678-byte endpoint, 1,583-byte setup and 2,369-byte roots logs are unchanged.
+This validates native CPU/COM buffer association. GPU ownership remains
+unsupported, with zero accepted GPU probes; no GPU commands or drawing were
+included. The separate system DXGI API5 endpoint remains unadmitted. Full
+MTA startup and multiplayer remain gated, and the port stays EXPERIMENTAL.
+
+The next candidate above reuses MTA's existing D3D12 CGUI session. Its explicit
+device handoff leaves read-only API6 unchanged and grants no native queue or
+backbuffer write permission.
+
+**Preceding live API6 result: logged texture-null refusal; cleanup and normal exit passed.**
 The roots-diagnostic ten-second trial installed its hooks with 187 initial/peak held threads and
 three stable-discovery passes. It recorded 606 native wrapper entries, 601
 accepted scalar snapshots and 87 complete metadata/known-presenter reports.
@@ -32,8 +84,8 @@ Pinned native instructions distinguish the primary backbuffer at
 when associating the DXGI backbuffer. The correction follows the primary
 texture, retaining the existing selector/coherence reads, nonnull guards,
 canonical `GetBuffer` identity, resource state, queue and cleanup checks.
-The live log does not establish that the primary slot was nonnull; that
-candidate still requires live validation. Earlier command-data extraction
+That earlier log did not establish that the primary slot was nonnull; the
+subsequent trial above validates the corrected association. Earlier command-data extraction
 was separately corrected to read `context+0x1D0` then data `+0x18`; neither
 source correction retrospectively identifies an earlier trial's exact cause.
 
@@ -115,9 +167,9 @@ API6 source work now adds a separate native dispatch record at the game's
 source-pinned Present callsite. It forwards the existing target and preserves
 the original return address and argument values. The 110-field API5 prefix
 remains separate from the new 26-field profile2 record. The native, Core,
-worker, bridge and normal build checks pass offline; live dispatch, buffer
-association and drawing remain unverified. No GUI or automatic movement is
-included in the read-only trial.
+worker, bridge and normal build checks pass offline. The latest trial above
+validates native dispatch and buffer association; drawing remains unverified.
+No GUI or automatic movement is included in the read-only trial.
 
 `-MtaCoreRenderNativeDispatchReference` is a separate Smoke opt-in requiring
 all four earlier renderer flags and the explicit D3D12 route. Its Core10/API6

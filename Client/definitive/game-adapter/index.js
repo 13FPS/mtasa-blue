@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { MODE, ONLINE_ACTIVATION, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE, MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE, MTA_CORE_RENDER_ROUTE, MTA_CORE_RENDER_GPU_REFERENCE, MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE, MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE, MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE } from './config.mjs';
+import { MODE, ONLINE_ACTIVATION, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE, MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE, MTA_CORE_RENDER_ROUTE, MTA_CORE_RENDER_GPU_REFERENCE, MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE, MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE, MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE, MTA_CORE_GUI_STARTUP_REFERENCE } from './config.mjs';
 import { AdapterController, NativeGaitReferenceController, NativeInputReferenceController } from './controller.mjs';
 import { MtaNativePadReferenceController } from './native-pad-reference.mjs';
 import { MtaNativeMovementTrialController } from './native-movement-trial.mjs';
@@ -13,6 +13,13 @@ function runAdapter() {
     emit({ event: 'adapter_phase', phase, mode: MODE, host: HOST, cleo: String(CLEO.version),
         host_version: String(CLEO.hostVersion), definitions: String(CLEO.apiVersion) });
     if (!['diagnostic', 'smoke', 'online'].includes(MODE)) throw new Error('Unknown adapter mode');
+    if (typeof MTA_CORE_GUI_STARTUP_REFERENCE !== 'boolean' ||
+        (MTA_CORE_GUI_STARTUP_REFERENCE && (MODE !== 'smoke' || [INPUT_REFERENCE, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK,
+            MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE,
+            MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE, MTA_CORE_RENDER_GPU_REFERENCE,
+            MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE, MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE,
+            MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE].some(Boolean))))
+        throw new Error('MTA Core GUI startup requires separate opt-in Smoke mode');
     if (typeof MTA_CORE_RENDER_REFERENCE !== 'boolean' ||
         (MTA_CORE_RENDER_REFERENCE && (MODE !== 'smoke' || INPUT_REFERENCE || GAIT_REFERENCE || GAIT_RATE || GAIT_ROOT_LOCK ||
             MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE)))
@@ -80,20 +87,20 @@ function runAdapter() {
         throw new Error('SA Unreal API definitions 0.493 or newer are required');
     // These untested input/velocity bindings come from the pinned 0.500 API.
     // Reject older definitions before activation reads, DLL access, or CJ reads.
-    if ((INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE) && definitionVersion < 0.500)
+    if ((INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE) && definitionVersion < 0.500)
         throw new Error('Native input reference requires SA Unreal API definitions 0.500 or newer');
 
     const stopKey = 'Ctrl+Shift+End';
     // Home opens the Rockstar console on the tested build and interrupts this
     // read-only observation, so the input reference needs its own shortcut.
-    const activateKey = (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE) ? 'Ctrl+Shift+F9' : 'Ctrl+Shift+Home';
+    const activateKey = (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE) ? 'Ctrl+Shift+F9' : 'Ctrl+Shift+Home';
     const chordHeld = keys => keys.every(key => native('IS_KEY_PRESSED', key));
-    if (MODE === 'online' || GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE) {
+    if (MODE === 'online' || GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE) {
         if (MODE === 'online' && !['manual', 'automatic'].includes(ONLINE_ACTIVATION))
             throw new Error('Unknown online activation mode');
         // The reference changes one owned NPC, so even an automatic Online
         // preference cannot start this separate experiment during save loading.
-        if (GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || ONLINE_ACTIVATION === 'manual') {
+        if (GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || ONLINE_ACTIVATION === 'manual') {
             // Startup freezes have also occurred before this script enters.
             // Waiting here cannot prevent those loader failures, but it gives
             // a usable game session a separate, observable boundary before
@@ -109,7 +116,7 @@ function runAdapter() {
                         bridge_loaded: false, game_adapter_active: false, network_active: false });
                     return;
                 }
-                if (chordHeld([17, 16, (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE) ? 120 : 36]) && native('IS_PLAYER_PLAYING', 0)) {
+                if (chordHeld([17, 16, (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE) ? 120 : 36]) && native('IS_PLAYER_PLAYING', 0)) {
                     emit({ event: 'adapter_activation_requested', mode: MODE, activate_key: activateKey });
                     break;
                 }
@@ -117,7 +124,7 @@ function runAdapter() {
             }
         }
     }
-    if (MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE) {
+    if (MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE) {
         // Holding the activation modifiers contaminated the prior source-state
         // window. Begin DLL access and the recorder only after their release,
         // while keeping cancellation and a finite pre-binding deadline.
@@ -180,6 +187,96 @@ function runAdapter() {
     enterPhase('runtime_bind');
     if (bindRuntime() !== 1) throw new Error('CLEO runtime lifecycle binding failed');
     enterPhase('runtime_bound');
+    if (MTA_CORE_GUI_STARTUP_REFERENCE) {
+        // Core preloads cgui, takes the explicit strong device lease and fully
+        // ends native observation before using MTA's own queue/offscreen target.
+        // Only scalar evidence crosses this bridge; script receives no COM pointer.
+        const version = bind('DE_CoreGuiStartupApiVersion', 'X64U32');
+        const begin = bind('DE_CoreGuiStartupBegin');
+        const capture = bind('DE_CoreGuiStartupCapture');
+        const readGui = bind('DE_CoreGuiStartupRead', 'X64U32');
+        const poll = bind('DE_CoreStartupPoll');
+        const cancel = bind('DE_CoreStartupCancel');
+        const read = bind('DE_CoreStartupRead', 'X64U32');
+        if (version() !== 1) throw new Error('Core GUI startup API1 is required');
+        emit({ event: 'adapter_start', host: HOST, cleo: String(CLEO.version), host_version: String(CLEO.hostVersion),
+            definitions: String(CLEO.apiVersion), mode: MODE, endpoint: null, stop_key: stopKey,
+            core_gui_startup_reference: true, provenance: 'mta_core_owned_d3d12_gui', core_api: 11, gui_api: 1, adapter_abi: 6,
+            network_active: false, input_writes: false, remote_peds_created: false,
+            native_queue_commands_issued: false, native_backbuffer_touched: false });
+        enterPhase('core_gui_startup_reference');
+        const startedAt = Date.now();
+        if (!Number.isSafeInteger(startedAt) || startedAt < 0) throw new Error('Invalid Core GUI startup clock');
+        emit({ event: 'core_gui_startup_reference_started', at_ms: startedAt, core_api: 11, gui_api: 1,
+            sample_interval_ms: 100, device_wait_budget_ms: 10000, gpu_budget_ms: 10000, cleanup_deadline_ms: 2000 });
+        if (begin() !== 1) throw new Error('MTA Core GUI startup worker could not start');
+        let terminal = false, stopRequested = false, lastAt = startedAt, latest = null, samples = 0;
+        const unsigned = values => values.every(value => Number.isInteger(value) && value >= 0 && value <= 0xffffffff);
+        const captureSample = at => {
+            const captured = capture();
+            if (captured !== 0 && captured !== 1) throw new Error('Core GUI startup capture status unavailable');
+            if (!captured) return;
+            const state = Array.from({ length: 64 }, (_, field) => readGui(field));
+            const booleanFields = [5, 6, 7, 8, 9, 10, 11, 19, 20, 21, 30, 31, 32, 37, 39, 43, 44, 45, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59];
+            if (!unsigned(state) || state[0] !== 1 || ![1, 2, 3].includes(state[1]) || !state[2] || state[4] > 11 ||
+                booleanFields.some(field => state[field] > 1) || ![0, 2].includes(state[18]) || state[46] > 2 ||
+                state[47] > 8 || state[48] > 8 || state[60] || state[61] || state[62] || state[63] || state[44] || state[45])
+                throw new Error('Invalid Core GUI startup scalar state');
+            if (state[6] && (state[5] || !state[9] || !state[39] || state[43] || state[49] || state[50] || state[51] || state[59]))
+                throw new Error('Core GUI startup claimed cleanup with retained ownership');
+            if (latest && (state[2] < latest[2] || state[3] < latest[3]))
+                throw new Error('Core GUI startup publication order is invalid');
+            if (latest && state[2] === latest[2]) {
+                if (state.some((value, field) => value !== latest[field]))
+                    throw new Error('Core GUI startup changed without a new sequence');
+                return;
+            }
+            latest = state;
+            ++samples;
+            emit({ event: 'core_gui_startup_reference_sample', at_ms: at, elapsed_ms: at - startedAt, state });
+        };
+        try {
+            while (true) {
+                const at = Date.now();
+                if (!Number.isSafeInteger(at) || at < lastAt) throw new Error('Invalid Core GUI startup clock');
+                lastAt = at;
+                if (!stopRequested && (chordHeld([17, 16, 35]) || !native('IS_PLAYER_PLAYING', 0))) {
+                    if (cancel() !== 1) throw new Error('MTA Core GUI startup cancellation was rejected');
+                    stopRequested = true;
+                    emit({ event: 'core_gui_startup_reference_stop_requested', at_ms: at });
+                }
+                const status = poll();
+                if (status !== 0 && status !== 1) throw new Error('Core GUI startup worker status unavailable');
+                captureSample(at);
+                if (status === 1) { terminal = true; break; }
+                wait(100);
+            }
+        } catch (error) {
+            if (!terminal) { try { cancel(); } catch (_) {} }
+            throw error;
+        }
+        const state = Array.from({ length: 19 }, (_, field) => read(field));
+        if (!unsigned(state)) throw new Error('Invalid Core GUI startup final worker state');
+        const expected = [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5];
+        const cleanupPassed = latest !== null && latest[1] === 2 && latest[6] === 1 && latest[5] === 0 && latest[7] === 0 &&
+            latest[9] === 1 && latest[39] === 1 && latest[43] === 0 && latest.slice(49, 52).every(value => value === 0) && latest[59] === 0 &&
+            state[7] === 1 && state[13] === 1 && state[14] === 0 && state[15] === latest[57];
+        const pairPresent = field => latest !== null && (latest[field] !== 0 || latest[field + 1] !== 0);
+        const fenceComplete = latest !== null && (latest[36] > latest[34] || (latest[36] === latest[34] && latest[35] >= latest[33]));
+        const passed = !stopRequested && cleanupPassed && expected.every((value, field) => state[field] === value) &&
+            state[16] === 0 && state[17] === 1 && state[18] === 0 && state[11] <= 3 && state[12] <= 3 && (state[12] & ~state[11]) === 0 &&
+            latest[4] === 1 && latest[8] === 1 && latest[10] === 1 && latest[11] === 1 && latest[18] === 2 && latest[58] === 1 &&
+            [12, 14, 16, 33].every(pairPresent) && latest[19] === 1 && latest[20] === 1 && latest[21] === 1 && latest[22] === 0 && latest[23] === 0 &&
+            latest[24] === 1 && latest[27] === 87 && latest[28] === 640 && latest[29] === 480 && latest[30] === 1 && latest[31] === 1 && latest[32] === 1 &&
+            fenceComplete && latest[37] === 1 && latest[38] > 10000 && latest[42] === 0 && latest[44] === 0 && latest[45] === 0 && latest[46] === 2 &&
+            latest[52] === 0 && latest.slice(53, 57).every(value => value === 1);
+        emit({ event: 'core_gui_startup_reference_finished', at_ms: Date.now(), elapsed_ms: Date.now() - startedAt, state,
+            passed, cleanup_passed: cleanupPassed, stop_requested: stopRequested, samples, own_gpu_workload_verified: passed,
+            full_core_ready: false, visible_gta_drawing_verified: false, network_active: false, input_writes: false,
+            remote_peds_created: false, native_queue_commands_issued: false, native_backbuffer_touched: false });
+        if (!passed) throw new Error('MTA Core GUI startup incomplete; inspect its saved state');
+        return;
+    }
     if (MTA_CORE_RENDER_REFERENCE) {
         // Core owns the optional backend observer and all teardown on its
         // worker. Script reads coherent scalar snapshots; it draws nothing

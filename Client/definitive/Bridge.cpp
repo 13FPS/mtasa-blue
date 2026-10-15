@@ -425,6 +425,26 @@ std::uint32_t DE_CoreRenderReadV6(std::uint32_t component)
     return ControllerAccessAllowed() ? coreStartup.ReadRenderV6(component) : 0;
 }
 
+std::uint32_t DE_CoreGuiStartupApiVersion()
+{
+    return DefinitiveGuiStartupReference::ApiVersion;
+}
+
+int DE_CoreGuiStartupBegin()
+{
+    return ControllerAccessAllowed() && !movementAdapter && !client && coreStartup.BeginGuiStartupReference(&moduleAnchor) ? 1 : 0;
+}
+
+int DE_CoreGuiStartupCapture()
+{
+    return ControllerAccessAllowed() && coreStartup.CaptureGuiStartup() ? 1 : 0;
+}
+
+std::uint32_t DE_CoreGuiStartupRead(std::uint32_t component)
+{
+    return ControllerAccessAllowed() ? coreStartup.ReadGuiStartup(component) : 0;
+}
+
 int DE_Pump()
 {
     try

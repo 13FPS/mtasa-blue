@@ -13,12 +13,27 @@
 #include <string>
 #include <thread>
 
+static_assert(DefinitiveGuiStartupReference::ApiVersion == 1);
+static_assert(DefinitiveGuiStartupReference::FieldCount == 64);
+static_assert(sizeof(DefinitiveGuiStartupReference::Snapshot) == 64 * sizeof(std::uint32_t));
+static_assert(DefinitiveGuiStartupReference::BackendPinnedExpected == 57);
+static_assert(DefinitiveGuiStartupReference::LeaseMetadataValid == 58);
+static_assert(DefinitiveGuiStartupReference::DeviceReleaseFault == 59);
+
 namespace deonline
 {
     struct CoreStartupReferenceTestAccess
     {
         static SRWLOCK&      InputLock(CoreStartupReference& worker) noexcept { return worker.inputLock; }
         static std::uint32_t PublishedPhase(const CoreStartupReference& worker) noexcept { return worker.publishedRenderV6[DefinitiveRenderReference::Phase]; }
+        static std::uint32_t PublishedGuiPhase(const CoreStartupReference& worker) noexcept
+        {
+            return worker.publishedGui[DefinitiveGuiStartupReference::Phase];
+        }
+        static bool ConflictingGuiStart(CoreStartupReference& worker, const void* address, bool movement) noexcept
+        {
+            return worker.Start(address, true, movement, !movement, 2, 6, true);
+        }
     };
 }
 
@@ -85,7 +100,7 @@ namespace
             Set(L"MTA_CORE_FIXTURE_MOVEMENT_RELEASE", movementReleaseName);
             for (const auto* name :
                  {L"MTA_CORE_FIXTURE_DELAY_MS", L"MTA_CORE_FIXTURE_BAD_VERSION", L"MTA_CORE_FIXTURE_BAD_STATE", L"MTA_CORE_FIXTURE_BAD_INITIALIZE",
-                  L"MTA_CORE_FIXTURE_FAIL_ATTACH", L"MTA_CORE_FIXTURE_INPUT_MODE", L"MTA_CORE_FIXTURE_RENDER_MODE"})
+                  L"MTA_CORE_FIXTURE_FAIL_ATTACH", L"MTA_CORE_FIXTURE_INPUT_MODE", L"MTA_CORE_FIXTURE_RENDER_MODE", L"MTA_CORE_FIXTURE_GUI_MODE"})
                 Set(name, L"0");
         }
         ~Fixture()
@@ -130,6 +145,133 @@ namespace
             }
         }
     };
+
+    void TestGuiWorker(deonline::CoreStartupReference& worker, const std::filesystem::path& root, const std::wstring& mode,
+                       const std::filesystem::path& coreFixture)
+    {
+        using namespace DefinitiveGuiStartupReference;
+        const unsigned scenario = mode == L"gui-workload-failed"        ? 1u
+                                  : mode == L"gui-cancel"               ? 2u
+                                  : mode == L"gui-wrong-api"            ? 3u
+                                  : mode == L"gui-config-refused"       ? 4u
+                                  : mode == L"gui-mixed-version"        ? 5u
+                                  : mode == L"gui-cache-contention"     ? 6u
+                                  : mode == L"gui-deadline"             ? 7u
+                                  : mode == L"gui-crosswire"            ? 8u
+                                  : mode == L"gui-cleanup-incomplete"   ? 9u
+                                  : mode == L"gui-retained"             ? 10u
+                                  : mode == L"gui-unpinned"             ? 11u
+                                  : mode == L"gui-device-release-fault" ? 12u
+                                                                        : 0u;
+        Fixture        fixture(120 + scenario);
+        CopyCore(coreFixture, root);
+        Set(L"MTA_CORE_FIXTURE_GUI_MODE", std::to_wstring(scenario));
+        Check(!worker.CaptureGuiStartup() && !worker.ReadGuiStartup(Version), "fresh GUI cache is unavailable and neutral");
+        Check(!deonline::CoreStartupReferenceTestAccess::ConflictingGuiStart(worker, &anchor, true) &&
+                  !deonline::CoreStartupReferenceTestAccess::ConflictingGuiStart(worker, &anchor, false),
+              "actual Start rejects mixed GUI/movement and GUI/render flags before creating a worker");
+        Check(Fast([&] { return worker.BeginGuiStartupReference(&anchor); }), "explicit GUI worker job must queue without loader work on script thread");
+        Check(WaitForSingleObject(fixture.entered, 5000) == WAIT_OBJECT_0, "GUI fixture loader did not enter on worker");
+        Check(!worker.Begin(&anchor) && !worker.BeginInputReference(&anchor) && !worker.BeginMovementReference(&anchor) &&
+                  !worker.BeginRenderReferenceV6(&anchor, 2) && !worker.BeginGuiStartupReference(&anchor),
+              "GUI job excludes ordinary, input, movement and every render lifetime");
+        SetEvent(fixture.release);
+        const bool configurationFailure = scenario == 3 || scenario == 4 || mode == L"gui-missing-export";
+        if (configurationFailure)
+        {
+            Wait(worker);
+            Check(worker.Read(16) == (scenario == 4 ? 14u : 13u) && !worker.Read(17) && !worker.CaptureGuiStartup() && !worker.ReadGuiStartup(Version),
+                  "missing/wrong-version/refused GUI exports never substitute an old configuration or invent a cache");
+            Check(!fixture.counters[9] && fixture.counters[2] == 0 && worker.Read(13) == 1 && worker.Read(15) == 0,
+                  "GUI configuration refusal unloads its unused owned Core with no worker publication");
+            return;
+        }
+        auto deadline = GetTickCount64() + 10000;
+        while (!Fast([&] { return worker.CaptureGuiStartup(); }))
+        {
+            Check(worker.Poll() == 0 && GetTickCount64() < deadline, "GUI fixture failed to publish its first POD snapshot");
+            Sleep(5);
+        }
+        Check(worker.ReadGuiStartup(Version) == 1 && worker.ReadGuiStartup(Phase) == 1 && worker.ReadGuiStartup(Sequence) == 1 &&
+                  worker.ReadGuiStartup(LeaseGenerationHigh) == 2 && worker.ReadGuiStartup(AcceptedSnapshotsHigh) == 1 &&
+                  worker.ReadGuiStartup(DispatchEntriesHigh) == 1 && worker.ReadGuiStartup(SourceProfile) == 2 &&
+                  worker.ReadGuiStartup(LeaseMetadataValid) == 1,
+              "GUI64 captures distinct split-counter provenance without reusing API6 or input fields");
+        Check(!worker.CaptureInput() && !worker.ReadInput(0) && !worker.CaptureMovement() && !worker.ReadMovement(0) && !worker.CaptureRender() &&
+                  !worker.CaptureRenderV2() && !worker.CaptureRenderV3() && !worker.CaptureRenderV4() && !worker.CaptureRenderV5() &&
+                  !worker.CaptureRenderV6() && !worker.ReadRenderV6(0),
+              "GUI POD publication never appears through an older input, movement or renderer cache");
+        bool        foreignRejected = false;
+        std::thread foreign(
+            [&]
+            {
+                foreignRejected = !worker.CaptureGuiStartup() && !worker.ReadGuiStartup(0) && !worker.BeginGuiStartupReference(&anchor) && worker.Poll() == -1;
+            });
+        foreign.join();
+        Check(foreignRejected, "GUI capture/read/Begin/completion remain bound to the script owner thread");
+        if (scenario == 2)
+            Check(Fast([&] { return worker.Cancel(); }), "GUI cancellation remains nonblocking on script thread");
+        SRWLOCK* heldCache = scenario == 6 ? &deonline::CoreStartupReferenceTestAccess::InputLock(worker) : nullptr;
+        if (heldCache)
+            AcquireSRWLockShared(heldCache);
+        SetEvent(fixture.inputRelease);
+        if (heldCache)
+        {
+            const auto started = GetTickCount64();
+            while (!fixture.counters[21] && GetTickCount64() - started < 500)
+                Sleep(1);
+            const bool returned = fixture.counters[21] != 0;
+            const bool dropped = deonline::CoreStartupReferenceTestAccess::PublishedGuiPhase(worker) == 1;
+            ReleaseSRWLockShared(heldCache);
+            Check(returned && dropped && worker.ReadGuiStartup(Phase) == 1,
+                  "actual GUI Phase3/CleanupPending publication drops under cache contention instead of blocking cleanup");
+        }
+        while (worker.ReadGuiStartup(Phase) != 3)
+        {
+            Check(worker.Poll() == 0 && GetTickCount64() < deadline, "GUI cleanup must retain its worker and Core owner");
+            worker.CaptureGuiStartup();
+            Sleep(5);
+        }
+        Check(worker.ReadGuiStartup(CleanupPending) == 1 && worker.ReadGuiStartup(DeviceRetained) == 1 && GetModuleHandleW(L"core.dll"),
+              "pending GUI cleanup retains ownership while final success is unavailable");
+        if (scenario == 7)
+        {
+            while (!worker.ReadGuiStartup(CleanupDeadlineExceeded))
+            {
+                Check(worker.Poll() == 0 && GetTickCount64() < deadline, "GUI deadline must not authorize unsafe worker unload");
+                worker.CaptureGuiStartup();
+                Sleep(10);
+            }
+            Check(GetModuleHandleW(L"core.dll") != nullptr, "GUI deadline preserves Core until actual cleanup completes");
+        }
+        SetEvent(fixture.movementRelease);
+        Wait(worker);
+        Check(worker.ReadGuiStartup(Phase) == 3, "worker completion cannot mutate an owner-captured GUI sample");
+        Check(worker.CaptureGuiStartup() && worker.ReadGuiStartup(Phase) == 2 && worker.ReadGuiStartup(CleanupPending) == 0 &&
+                  worker.ReadGuiStartup(ObserverPendingCleanup) == 0 && worker.ReadGuiStartup(SessionRetained) == 0 &&
+                  worker.ReadGuiStartup(DeviceRetained) == 0,
+              "reliable final GUI publication survives worker completion and Core unload");
+        const bool malformed = scenario == 5 || scenario == 7 || scenario == 9 || scenario == 10 || scenario == 12;
+        const auto expectedError = scenario == 2 ? 12u : malformed ? 15u : 0u;
+        Check(worker.Read(16) == expectedError && worker.Read(17) == (expectedError ? 0u : 1u) && worker.Read(13) == 1 &&
+                  worker.Read(15) == (scenario == 11 ? 0u : 1u) && worker.ReadGuiStartup(BackendPinnedExpected) == worker.Read(15),
+              "GUI lifecycle result validates explicit backend pin and cleanup independently of workload outcome");
+        Check(worker.ReadGuiStartup(WorkloadComplete) == 1 && worker.ReadGuiStartup(WorkloadSucceeded) == (scenario == 1 ? 0u : 1u) &&
+                  worker.ReadGuiStartup(WorkloadHresult) == (scenario == 1 ? static_cast<std::uint32_t>(E_FAIL) : 0u),
+              "a failed GUI workload with complete cleanup remains distinguishable from worker lifecycle failure");
+        Check(!worker.ReadGuiStartup(NativeQueueCommandsIssued) && !worker.ReadGuiStartup(NativeBackbufferTouched),
+              "GUI fixture transport never claims native queue commands or backbuffer access");
+        Check(worker.ReadGuiStartup(LeaseMetadataValid) == 1 && worker.ReadGuiStartup(DeviceReleaseFault) == (scenario == 12 ? 1u : 0u),
+              "device Release fault remains visible and prevents lifecycle success independently of cleared retention bits");
+        for (unsigned field = DeviceReleaseFault + 1; field < FieldCount; ++field)
+            Check(worker.ReadGuiStartup(field) == 0, "GUI64 reserved tail remains neutral");
+        Check(
+            !worker.ReadGuiStartup(FieldCount) && !worker.ReadGuiStartup(0xffffffffu) && fixture.counters[2] == 0 && fixture.counters[1] == fixture.counters[0],
+            "GUI bounds are neutral and configure/publication/unload all remain on worker thread");
+        Check(worker.Begin(&anchor) && !worker.CaptureGuiStartup() && !worker.ReadGuiStartup(Version),
+              "a newly allowed ordinary job clears GUI captured/published availability before any new work");
+        Wait(worker);
+    }
 }
 
 int wmain(int argc, wchar_t** argv)
@@ -149,7 +291,12 @@ int wmain(int argc, wchar_t** argv)
         Check(!worker.Begin(nullptr), "null anchor must be rejected");
         for (unsigned field = 0; field < 20; ++field)
             Check(worker.Read(field) == 0, "idle cache must be neutral");
-        if (std::wstring(argv[2]).find(L"render") == 0)
+        if (std::wstring(argv[2]).find(L"gui") == 0)
+        {
+            Check(argc == 4, "GUI worker fixture requires its controlled Core DLL");
+            TestGuiWorker(worker, root, argv[2], argv[3]);
+        }
+        else if (std::wstring(argv[2]).find(L"render") == 0)
         {
             using namespace DefinitiveRenderReference;
             Check(argc == 4, "render worker fixture requires its controlled Core DLL");

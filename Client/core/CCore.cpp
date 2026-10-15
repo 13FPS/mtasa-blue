@@ -41,6 +41,8 @@
 #include "DefinitiveRenderEndpointLog.h"
 #include "DefinitiveRenderSetupLog.h"
 #include "DefinitiveRenderRootsLog.h"
+#include "DefinitiveGuiStartup.h"
+#include "DefinitiveGuiStartupReference.h"
 
 using SharedUtil::CalcMTASAPath;
 using namespace std;
@@ -229,6 +231,163 @@ namespace
             return false;
         DefinitiveRenderReference::CopyNativeStateV6(snapshot, state);
         return true;
+    }
+
+    void RunGuiStartupReference(CGameAdapterModule& adapter, const DefinitiveInputReference::Request& request) noexcept
+    {
+        using namespace DefinitiveGuiStartupReference;
+        struct Owner
+        {
+            CGameAdapterModule&               adapter;
+            DefinitiveGuiStartup::Session     gui;
+            mta::game_de::RenderDeviceLeaseV1 lease;
+            bool                              beginAttempted = false;
+
+            void CopyGui(Snapshot& values) noexcept
+            {
+                const auto result = gui.Snapshot();
+                values[GuiPrepared] = result.modulePrepared;
+                values[WorkloadSucceeded] = result.workloadSucceeded;
+                values[WorkloadHresult] = result.hresult;
+                values[WorkloadGuiStatus] = result.guiStatus;
+                values[NodeCount] = result.nodeCount;
+                values[AdapterLuidLow] = result.deviceLuidLow;
+                values[AdapterLuidHigh] = result.deviceLuidHigh;
+                values[TargetFormat] = result.targetFormat;
+                values[Width] = result.width;
+                values[Height] = result.height;
+                values[QueueCreated] = result.queueCreated;
+                values[TargetCreated] = result.targetCreated;
+                values[RenderSubmitted] = result.guiFrames;
+                SetPair(values, FenceSignaledLow, result.fenceValue);
+                SetPair(values, FenceCompletedLow, result.completedFenceValue);
+                values[ReadbackVerified] = result.readbackComplete && result.workloadSucceeded;
+                values[ReadbackChangedPixels] = result.changedPixels;
+                values[GuiCleanupComplete] = result.cleanupComplete;
+                values[OwnQueueSubmissions] = result.ownQueueSubmissions;
+                values[GuiStage] = result.stage;
+                values[GuiFailureStage] = result.failureStage;
+                values[ModuleRetained] = result.moduleRetained;
+                values[SessionRetained] = result.sessionRetained;
+                values[DeviceRetained] = result.deviceRetained || lease.device;
+                values[DeviceRemoved] = result.deviceRemoved;
+                values[DeviceReleaseFault] = result.deviceReleaseFault;
+                values[BackgroundVerified] = result.backgroundVerified;
+                values[TextureVerified] = result.textureVerified;
+                values[OpaqueAlphaVerified] = result.opaqueAlphaVerified;
+                values[WidgetsCreated] = result.widgetsCreated;
+            }
+            bool Prepare(Snapshot& values)
+            {
+                // Resolve/load cgui and configure its existing asset resolver
+                // while every peer still runs. A failed Begin may retain a peer
+                // stopped inside the loader or allocator until End can retry.
+                const auto root = g_mtaDirectory.wstring();
+                const auto path = (g_mtaDirectory / L"cgui.dll").wstring();
+                const bool ready = gui.Prepare(path.c_str(), root.c_str()) == DefinitiveGuiStartup::Status::Ok;
+                CopyGui(values);
+                return ready;
+            }
+            bool Begin(Snapshot&)
+            {
+                beginAttempted = true;
+                return adapter.BeginNativeRenderDeviceObservation();
+            }
+            bool ReadNative(Snapshot& values)
+            {
+                mta::game_de::RenderObservationStateV6 state;
+                if (!adapter.GetNativeRenderObservationState(state))
+                    return false;
+                const auto& base = state.base.base.base.base.base;
+                values[NativeFailureReason] = base.failureReason;
+                values[ObserverPendingCleanup] = base.pendingCleanup;
+                values[BackendPinnedExpected] = base.modulePinned ? 1u : 0u;
+                return true;
+            }
+            bool TryDevice(Snapshot& values)
+            {
+                if (!adapter.TakeNativeRenderDeviceLease(lease))
+                    return false;
+                SetPair(values, LeaseGenerationLow, lease.generation);
+                SetPair(values, AcceptedSnapshotsLow, lease.acceptedSnapshots);
+                SetPair(values, DispatchEntriesLow, lease.dispatchEntries);
+                values[SourceProfile] = lease.sourceProfileId;
+                values[LeaseMetadataValid] = lease.size == sizeof(lease) && lease.version == mta::game_de::RenderDeviceLeaseVersionV1 && lease.device &&
+                                             lease.generation && lease.acceptedSnapshots && lease.dispatchEntries && lease.sourceProfileId == 2 &&
+                                             !lease.reserved;
+                values[DeviceRetained] = 1;
+                return true;
+            }
+            bool End(Snapshot& values)
+            {
+                const bool ended = adapter.EndNativeRenderObservation();
+                if (beginAttempted)
+                    ReadNative(values);
+                return ended;
+            }
+            bool Attach() noexcept
+            {
+                if (!lease.device)
+                    return true;
+                // Attach stores the transferred reference without COM. If it
+                // refuses, keep the reference on this worker for cleanup retry.
+                if (gui.AttachDevice(lease.device) != DefinitiveGuiStartup::Status::Ok)
+                    return false;
+                lease.device = nullptr;
+                return true;
+            }
+            bool StartGpu(Snapshot& values) noexcept
+            {
+                const bool started = Attach() && gui.Start() == DefinitiveGuiStartup::Status::Ok;
+                CopyGui(values);
+                return started;
+            }
+            Outcome PollGpu(Snapshot& values) noexcept
+            {
+                const auto status = gui.Poll();
+                CopyGui(values);
+                return status == DefinitiveGuiStartup::Status::Busy                              ? Outcome::Pending
+                       : status == DefinitiveGuiStartup::Status::Ok && values[WorkloadSucceeded] ? Outcome::Passed
+                                                                                                 : Outcome::Failed;
+            }
+            bool ShutdownGpu(Snapshot& values) noexcept
+            {
+                if (!Attach())
+                    return false;
+                const auto status = gui.Shutdown();
+                CopyGui(values);
+                values[GuiShutdownStatus] = static_cast<std::uint32_t>(status);
+                return status == DefinitiveGuiStartup::Status::Ok && values[GuiCleanupComplete];
+            }
+        } owner{adapter};
+        struct Clock
+        {
+            std::uint64_t Now() const noexcept { return static_cast<std::uint64_t>(GetTickCount64_()); }
+            void          Wait(std::uint32_t milliseconds) const noexcept { Sleep(milliseconds); }
+        } clock;
+        const auto runMs = clock.Now();
+        const auto result = Run(owner, clock, request);
+        try
+        {
+            // Run returns only after native hooks/holds and GUI/GPU leases have
+            // drained. Logging cannot take a shared allocator or file lock while
+            // End still owns suspended peers, and cannot change cleanup success.
+            std::string line = "{\"schema\":\"mta_core_gui_startup_v1\",\"pid\":" + std::to_string(GetCurrentProcessId()) +
+                               ",\"runMs\":" + std::to_string(runMs) + ",\"values\":[";
+            for (std::size_t index = 0; index < result.size(); ++index)
+            {
+                if (index)
+                    line += ',';
+                line += std::to_string(result[index]);
+            }
+            line += "]}\n";
+            const auto path = CalcMTASAPath("mta/logs/gui-startup.log");
+            SharedUtil::MakeSureDirExists(path);
+            SharedUtil::FileAppend(path, line.data(), static_cast<unsigned long>(line.size()));
+        }
+        catch (...)
+        {
+        }
     }
 
     void RunRenderReference(CGameAdapterModule& adapter, const DefinitiveInputReference::Request& request) noexcept
@@ -819,7 +978,9 @@ CCore::CCore()
         DefinitiveInputReference::Request inputReference;
         if (DefinitiveInputReference::GetActiveRequest(inputReference))
         {
-            if (inputReference.renderObservation)
+            if (inputReference.guiStartup)
+                RunGuiStartupReference(m_DefinitiveAdapter, inputReference);
+            else if (inputReference.renderObservation)
                 RunRenderReference(m_DefinitiveAdapter, inputReference);
             else
                 RunConfiguredInputReference(this, m_DefinitiveAdapter, inputReference);

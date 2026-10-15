@@ -7,6 +7,7 @@
 #include "../sdk/game/CGameRenderObservation.h"
 #include "../sdk/game/CGameRenderEndpointDiagnostic.h"
 #include "../sdk/game/CGameRenderRootsDiagnostic.h"
+#include "../sdk/game/CGameRenderDeviceLease.h"
 #include <cstddef>
 
 namespace mta::game_de
@@ -18,11 +19,16 @@ namespace mta::game_de
     public:
         virtual std::int32_t Execute(FrameBoundaryQueryStage stage, FrameBoundaryObservationState& state) = 0;
         virtual bool         Close() noexcept = 0;
+        // An explicit device request may move an already acquired reference;
+        // ordinary observations never call this or retain a COM object.
+        virtual ID3D12Device* DetachDeviceCandidate() noexcept { return nullptr; }
 
     protected:
         ~FrameBoundaryQueries() = default;
     };
-    bool RunFrameBoundaryQueries(FrameBoundaryQueries& queries, FrameBoundaryObservationState& state, RenderRootsDiagnosticV1* trace = nullptr) noexcept;
+    bool RunFrameBoundaryQueries(FrameBoundaryQueries& queries, FrameBoundaryObservationState& state, RenderRootsDiagnosticV1* trace = nullptr,
+                                 ID3D12Device** deviceCandidate = nullptr) noexcept;
+    bool ReleaseRenderDeviceReference(ID3D12Device*& device) noexcept;
 
     struct FrameBoundaryScope
     {
@@ -36,6 +42,9 @@ namespace mta::game_de
         std::uint64_t                 epoch = 0;
         void (*cleanupFailure)() noexcept = nullptr;
         FrameBoundaryScope* previous = nullptr;
+        ID3D12Device*       deviceCandidate = nullptr;
+        bool                deviceReserved = false;
+        bool (*reserveDeviceCandidate)() noexcept = nullptr;
     };
     // Prepare is worker-only and performs no COM calls. Change appends to the
     // observer's existing all-thread Detours transaction; it never commits one.
@@ -47,7 +56,8 @@ namespace mta::game_de
     void     StopFrameBoundaryAdmission() noexcept;
     void     ResetFrameBoundaryObservation() noexcept;
     void     EnterFrameBoundaryScope(FrameBoundaryScope& scope, std::uintptr_t image, void* viewport, std::uint32_t callbackThread,
-                                     const CustomPresentClassificationState& custom, void (*cleanupFailure)() noexcept = nullptr) noexcept;
+                                     const CustomPresentClassificationState& custom, void (*cleanupFailure)() noexcept = nullptr,
+                                     bool (*reserveDeviceCandidate)() noexcept = nullptr) noexcept;
     void     LeaveFrameBoundaryScope(FrameBoundaryScope& scope) noexcept;
     // API5 alone may normalize our verified installed pre-release patch back to
     // its fully pinned original bytes. Historical API4 uses its original reader.

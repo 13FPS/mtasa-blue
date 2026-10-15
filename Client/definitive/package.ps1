@@ -6,10 +6,15 @@ param([ValidateSet('Diagnostic', 'Smoke', 'Online')][string]$Mode = 'Smoke',
     [switch]$NativeGaitReference, [switch]$MatchedGaitRate, [switch]$LockWalkRoot, [switch]$NativeInputReference,
     [switch]$MtaNativePadReference, [switch]$MtaNativeMovementTrial, [switch]$MtaCoreStartupReference, [switch]$MtaCoreInputReference,
     [switch]$MtaCoreMovementReference, [switch]$MtaCoreRenderReference, [switch]$MtaCoreRenderGpuReference, [switch]$MtaCoreRenderCustomPresentReference, [switch]$MtaCoreRenderFrameBoundaryReference, [switch]$MtaCoreRenderNativeDispatchReference,
-    [ValidateSet('D3D11', 'D3D12')][string]$MtaCoreRenderRoute = 'D3D11')
+    [ValidateSet('D3D11', 'D3D12')][string]$MtaCoreRenderRoute = 'D3D11', [switch]$MtaCoreGuiStartupReference)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+# GUI startup owns its device and queue after observation ends. It is a separate
+# trial, so selecting it cannot inherit an input, movement or read-only trial.
+if ($MtaCoreGuiStartupReference -and ($Mode -ne 'Smoke' -or $MtaCoreRenderReference -or $MtaCoreRenderGpuReference -or $MtaCoreRenderCustomPresentReference -or $MtaCoreRenderFrameBoundaryReference -or $MtaCoreRenderNativeDispatchReference -or $MtaCoreMovementReference -or $MtaCoreInputReference -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
+    throw 'MTA Core GUI startup requires separate opt-in Smoke mode without other trials or an explicit renderer route.'
+}
 # Frame association is a separate read-only hook lease, never implicit in recognition.
 # Caller dispatch is a separate explicit hook lease, even when the older probe refuses.
 if ($MtaCoreRenderNativeDispatchReference -and (-not $MtaCoreRenderFrameBoundaryReference -or -not $MtaCoreRenderCustomPresentReference -or -not $MtaCoreRenderGpuReference -or -not $MtaCoreRenderReference -or $MtaCoreRenderRoute -ne 'D3D12')) {
@@ -119,6 +124,23 @@ $corePath = Join-Path $repositoryRoot 'Bin/mta/x64/core.dll'
 $pthreadPath = Join-Path $repositoryRoot 'Bin/mta/x64/pthread.dll'
 $xmlPath = Join-Path $repositoryRoot 'Bin/server/x64/xmll.dll'
 $bindConfigPath = Join-Path $PSScriptRoot 'coreconfig.xml'
+$guiSources = @()
+if ($MtaCoreGuiStartupReference) {
+    $guiSources += @{ source=(Join-Path $repositoryRoot 'Bin/mta/x64/cgui.dll'); path='cgui.dll' }
+    foreach ($name in @('sans.ttf', 'saheader.ttf', 'sagothic.ttf', 'Imageset.xsd', 'GUIScheme.xsd', 'Font.xsd', 'Falagard.xsd')) {
+        $guiSources += @{ source=(Join-Path $repositoryRoot ('Shared/data/MTA San Andreas/MTA/cgui/' + $name)); path=('mta/cgui/' + $name) }
+    }
+    $guiSources += @{ source=(Join-Path $repositoryRoot 'Build/gui-asset-cache/unifont-16.0.04.ttf'); path='mta/cgui/unifont.ttf' }
+    foreach ($name in @('CGUI.xml', 'CGUI.is.xml', 'CGUI.lnf.xml', 'CGUI.png')) {
+        $guiSources += @{ source=(Join-Path $repositoryRoot ('Shared/data/MTA San Andreas/skins/Default/' + $name)); path=('skins/Default/' + $name) }
+    }
+    foreach ($entry in $guiSources) {
+        Assert-NoLinks $entry.source
+        if (-not (Test-Path -LiteralPath $entry.source -PathType Leaf)) { throw "GUI startup asset is missing: $($entry.source)" }
+    }
+    $unifont = @($guiSources | Where-Object path -eq 'mta/cgui/unifont.ttf')[0]
+    if ((Get-FileHash -LiteralPath $unifont.source -Algorithm SHA256).Hash.ToLowerInvariant() -ne '6b18fdcf0f61f3df2e61db9737af6de9f37048ec93083621d41504ebf8cb18f4') { throw 'Pinned GUI Unifont hash mismatch.' }
+}
 Assert-NoLinks $bridgePath
 Assert-NoLinks $gameDePath
 Assert-NoLinks $corePath
@@ -189,6 +211,13 @@ foreach ($name in $sourceNames) {
 $bindConfigDirectory = Join-Path $adapterDirectory 'mta/config'
 [IO.Directory]::CreateDirectory($bindConfigDirectory) | Out-Null
 [IO.File]::Copy($bindConfigPath, (Join-Path $bindConfigDirectory 'coreconfig.xml'), $false)
+# Admit the complete asset group only in the explicit GUI package. Ordinary
+# packages remain the same 23 owned paths and never acquire partial GUI assets.
+foreach ($entry in $guiSources) {
+    $destination = Join-Path $adapterDirectory $entry.path
+    [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($destination)) | Out-Null
+    [IO.File]::Copy($entry.source, $destination, $false)
+}
 $configPath = Join-Path $adapterDirectory 'config.mjs'
 $configText = [IO.File]::ReadAllText($configPath)
 $modeMarker = "export const MODE = 'smoke';"
@@ -260,6 +289,10 @@ $coreRenderNativeDispatchMarker = 'export const MTA_CORE_RENDER_NATIVE_DISPATCH_
 if ([regex]::Matches($configText, [regex]::Escape($coreRenderNativeDispatchMarker)).Count -ne 1) { throw 'Expected disabled native-dispatch observation in source configuration.' }
 $configText = $configText.Replace($coreRenderNativeDispatchMarker,
     "export const MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE = $($MtaCoreRenderNativeDispatchReference.IsPresent.ToString().ToLowerInvariant());")
+$guiMarker = 'export const MTA_CORE_GUI_STARTUP_REFERENCE = false;'
+if ([regex]::Matches($configText, [regex]::Escape($guiMarker)).Count -ne 1) { throw 'Expected disabled MTA Core GUI startup in source configuration.' }
+$configText = $configText.Replace($guiMarker,
+    "export const MTA_CORE_GUI_STARTUP_REFERENCE = $($MtaCoreGuiStartupReference.IsPresent.ToString().ToLowerInvariant());")
 [IO.File]::WriteAllText($configPath, $configText, $utf8)
 foreach ($name in @('sa_unreal.json', 'unknown_x64.json')) {
     [IO.File]::Copy($downloads[$name], (Join-Path $configDirectory $name), $false)
@@ -292,6 +325,7 @@ $files = @(Get-ChildItem -LiteralPath $stagingWin64 -File -Recurse | Sort-Object
         sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     }
 })
+if ($files.Count -ne $(if ($MtaCoreGuiStartupReference) { 36 } else { 23 })) { throw 'Unexpected package ownership count.' }
 $manifest = [ordered]@{
     packageId = 'de-online-prototype'
     formatVersion = 1

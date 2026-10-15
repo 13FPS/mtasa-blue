@@ -558,6 +558,16 @@ bool CGameAdapterModule::BeginNativeRenderFrameBoundaryObservation(mta::game_de:
 
 bool CGameAdapterModule::BeginNativeRenderDispatchObservation(mta::game_de::RenderObservationRoute route)
 {
+    return StartNativeRenderDispatchObservation(route, false);
+}
+
+bool CGameAdapterModule::BeginNativeRenderDeviceObservation()
+{
+    return StartNativeRenderDispatchObservation(mta::game_de::RenderObservationRoute::D3D12, true);
+}
+
+bool CGameAdapterModule::StartNativeRenderDispatchObservation(mta::game_de::RenderObservationRoute route, bool captureDevice)
+{
     using namespace mta::game_de;
     if (!RequireOwnerThread("BeginNativeRenderObservationV6"))
         return false;
@@ -579,6 +589,7 @@ bool CGameAdapterModule::BeginNativeRenderDispatchObservation(mta::game_de::Rend
     m_renderEndpointReaderV2 = nullptr;
     m_renderSetupReaderV1 = nullptr;
     m_renderRootsReaderV1 = nullptr;
+    m_renderDeviceTakeV1 = nullptr;
     m_hasSetupDiagnostic = false;
     m_hasRootsDiagnostic = false;
     try
@@ -618,6 +629,36 @@ bool CGameAdapterModule::BeginNativeRenderDispatchObservation(mta::game_de::Rend
     const auto rootsAddress = GetProcAddress(static_cast<HMODULE>(m_module), "ReadGameRenderRootsDiagnosticV1");
     static_assert(sizeof(m_renderRootsReaderV1) == sizeof(rootsAddress));
     std::memcpy(&m_renderRootsReaderV1, &rootsAddress, sizeof(m_renderRootsReaderV1));
+    if (captureDevice)
+    {
+        // Both optional exports are resolved and the fresh lease is requested
+        // before Begin can retain a peer holding Windows' loader lock. No
+        // historical observer is silently upgraded to persistent COM ownership.
+        const auto                 requestAddress = GetProcAddress(static_cast<HMODULE>(m_module), "RequestGameRenderDeviceLeaseV1");
+        const auto                 takeAddress = GetProcAddress(static_cast<HMODULE>(m_module), "TakeGameRenderDeviceLeaseV1");
+        RequestRenderDeviceLeaseV1 request = nullptr;
+        static_assert(sizeof(request) == sizeof(requestAddress));
+        static_assert(sizeof(m_renderDeviceTakeV1) == sizeof(takeAddress));
+        std::memcpy(&request, &requestAddress, sizeof(request));
+        std::memcpy(&m_renderDeviceTakeV1, &takeAddress, sizeof(m_renderDeviceTakeV1));
+        if (!request || !m_renderDeviceTakeV1)
+        {
+            m_renderDeviceTakeV1 = nullptr;
+            // Begin has not run, so this fresh allocation owns no hooks, held
+            // peers or device. Dispose it without creating a fake ended cache.
+            m_renderObservationV6->Release();
+            m_renderObservationV6 = nullptr;
+            SetError("The selected adapter lacks the explicit device lease exports; no read-only fallback was started");
+            return false;
+        }
+        if (!RecordStatus(request(RenderDeviceLeaseVersionV1, m_renderObservationV6), "RequestNativeRenderDeviceLease"))
+        {
+            m_renderDeviceTakeV1 = nullptr;
+            m_renderObservationV6->Release();
+            m_renderObservationV6 = nullptr;
+            return false;
+        }
+    }
     // Preserve the old DXGI-entry result alongside the separately labeled
     // native dispatch record; an existing Present hook remains untouched.
     m_renderRoute = route;
@@ -629,6 +670,26 @@ bool CGameAdapterModule::BeginNativeRenderDispatchObservation(mta::game_de::Rend
     m_hasRenderObservationV6 = false;
     m_hasEndpointDiagnostic = false;
     return RecordStatus(m_renderObservationV6->Begin(), "BeginNativeRenderObservationV6");
+}
+
+bool CGameAdapterModule::TakeNativeRenderDeviceLease(mta::game_de::RenderDeviceLeaseV1& output)
+{
+    if (!RequireOwnerThread("TakeNativeRenderDeviceLease"))
+        return false;
+    // Output owns its reference once transferred. Refuse a nonempty output
+    // rather than overwriting ownership, and never replay a cached device.
+    if (output.device || !m_renderObservationV6 || !m_renderDeviceTakeV1)
+    {
+        SetError("Taking a device requires an empty output and the active explicitly requested version6 lease");
+        return false;
+    }
+    mta::game_de::RenderDeviceLeaseV1 next;
+    if (!RecordStatus(m_renderDeviceTakeV1(mta::game_de::RenderDeviceLeaseVersionV1, m_renderObservationV6, &next), "TakeNativeRenderDeviceLease"))
+        return false;
+    output = next;
+    // The receiver must finish End safely before calling cgui or any GPU API;
+    // a transferred strong reference survives the observer's later removal.
+    return true;
 }
 
 bool CGameAdapterModule::GetNativeRenderObservationState(mta::game_de::RenderObservationState& state)
@@ -980,6 +1041,7 @@ bool CGameAdapterModule::EndNativeRenderObservation() noexcept
         }
         m_renderObservationV6->Release();
         m_renderObservationV6 = nullptr;
+        m_renderDeviceTakeV1 = nullptr;
         m_error.clear();
         return true;
     }

@@ -16,12 +16,16 @@ param(
     [switch]$MtaCoreRenderReference,
     [switch]$MtaCoreRenderGpuReference,
     [switch]$MtaCoreRenderCustomPresentReference, [switch]$MtaCoreRenderFrameBoundaryReference, [switch]$MtaCoreRenderNativeDispatchReference,
+    [switch]$MtaCoreGuiStartupReference,
     [ValidateSet('D3D11', 'D3D12')][string]$MtaCoreRenderRoute = 'D3D11',
     [string]$GameDirectory = 'C:\Program Files (x86)\Steam\steamapps\common\GTA San Andreas - The Definitive Edition\Gameface\Binaries\Win64'
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+if ($MtaCoreGuiStartupReference -and ($Mode -ne 'Smoke' -or $MtaCoreRenderReference -or $MtaCoreRenderGpuReference -or $MtaCoreRenderCustomPresentReference -or $MtaCoreRenderFrameBoundaryReference -or $MtaCoreRenderNativeDispatchReference -or $MtaCoreMovementReference -or $MtaCoreInputReference -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
+    throw 'MTA Core GUI startup requires separate opt-in Smoke mode without other trials or an explicit renderer route.'
+}
 # Frame association is a separate read-only hook lease, never implicit in recognition.
 # Caller dispatch is a separate explicit hook lease, even when the older probe refuses.
 if ($MtaCoreRenderNativeDispatchReference -and (-not $MtaCoreRenderFrameBoundaryReference -or -not $MtaCoreRenderCustomPresentReference -or -not $MtaCoreRenderGpuReference -or -not $MtaCoreRenderReference -or $MtaCoreRenderRoute -ne 'D3D12')) {
@@ -246,6 +250,24 @@ if ($coreRenderNativeDispatchMatches -eq 1) {
     $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $coreRenderNativeDispatchPattern,
         "export const MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE = $($MtaCoreRenderNativeDispatchReference.IsPresent.ToString().ToLowerInvariant());"))
 }
+$guiPattern = 'export const MTA_CORE_GUI_STARTUP_REFERENCE = (true|false);'
+$guiMatches = [regex]::Matches($configText, $guiPattern).Count
+if ($guiMatches -gt 1 -or ($MtaCoreGuiStartupReference -and $guiMatches -ne 1)) { throw 'Update the adapter before selecting MTA Core GUI startup.' }
+if ($MtaCoreGuiStartupReference) {
+    $guiPaths = @('CLEO/de-online/cgui.dll',
+        'CLEO/de-online/mta/cgui/sans.ttf', 'CLEO/de-online/mta/cgui/saheader.ttf', 'CLEO/de-online/mta/cgui/sagothic.ttf',
+        'CLEO/de-online/mta/cgui/Imageset.xsd', 'CLEO/de-online/mta/cgui/GUIScheme.xsd', 'CLEO/de-online/mta/cgui/Font.xsd',
+        'CLEO/de-online/mta/cgui/Falagard.xsd', 'CLEO/de-online/mta/cgui/unifont.ttf',
+        'CLEO/de-online/skins/Default/CGUI.xml', 'CLEO/de-online/skins/Default/CGUI.is.xml',
+        'CLEO/de-online/skins/Default/CGUI.lnf.xml', 'CLEO/de-online/skins/Default/CGUI.png')
+    if (@($installed.files | Where-Object { $_.path -in $guiPaths }).Count -ne 13) { throw 'Update the adapter before selecting MTA Core GUI startup: complete owned GUI assets are missing.' }
+}
+# A later ordinary mode selection clears this independent GPU startup opt-in,
+# including on complete GUI installs whose assets remain owned for uninstall.
+if ($guiMatches -eq 1) {
+    $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $guiPattern,
+        "export const MTA_CORE_GUI_STARTUP_REFERENCE = $($MtaCoreGuiStartupReference.IsPresent.ToString().ToLowerInvariant());"))
+}
 $configEntry = @($installed.files | Where-Object { $_.path -eq 'CLEO/de-online/config.mjs' })
 if ($configEntry.Count -ne 1) { throw 'Missing owned configuration record.' }
 $configEntry[0].sha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($newConfig)).ToLowerInvariant()
@@ -278,7 +300,9 @@ try {
     Write-AtomicFile $manifestPath $originalManifest
     throw $failure
 }
-if ($MtaCoreRenderNativeDispatchReference) {
+if ($MtaCoreGuiStartupReference) {
+    Write-Host 'Installed adapter mode: Smoke, MTA GUI startup on an owned offscreen queue armed. Ctrl+Shift+F9 starts after release; Ctrl+Shift+End requests cleanup.'
+} elseif ($MtaCoreRenderNativeDispatchReference) {
     Write-Host 'Installed adapter mode: Smoke, read-only scoped native D3D12 dispatch armed. Ctrl+Shift+F9 starts after release; Ctrl+Shift+End requests cleanup. No drawing or input writes.'
 } elseif ($MtaCoreRenderFrameBoundaryReference) {
     Write-Host 'Installed adapter mode: Smoke, read-only scoped D3D12 Present association armed. Ctrl+Shift+F9 starts after release; Ctrl+Shift+End requests cleanup. No drawing or input writes.'

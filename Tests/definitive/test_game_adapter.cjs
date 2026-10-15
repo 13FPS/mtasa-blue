@@ -1207,6 +1207,7 @@ async function main() {
             MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE: overrides.mtaCoreRenderCustomPresentReference ?? false,
             MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE: overrides.mtaCoreRenderFrameBoundaryReference ?? false,
             MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE: overrides.mtaCoreRenderNativeDispatchReference ?? false,
+            MTA_CORE_GUI_STARTUP_REFERENCE: overrides.mtaCoreGuiStartupReference ?? false,
             Date: { now: () => overrides.times ? overrides.times[frame] : frame * 50 },
             CLEO: { version: overrides.version || '1.5.1', apiVersion: overrides.definitions || '0.500', hostVersion: '1.0.113.49697469' },
             native: (name, ...args) => { record(name, ...args);
@@ -1241,6 +1242,132 @@ async function main() {
         vm.runInNewContext(entry, sandbox, { timeout: 1000 });
         return { calls, callFrames, runtimeAccess, waits, logs, fromFloat };
     }
+    // This fixture transports reported scalar evidence only. Its opaque lease
+    // provenance and pixel facts cannot establish real COM or GPU execution.
+    const coreGuiState = (overrides = {}) => Object.assign(Array(64).fill(0), {
+        0: 1, 1: 2, 2: 3, 3: 1000, 4: 1, 6: 1, 8: 1, 9: 1, 10: 1, 11: 1,
+        12: 1, 14: 7, 16: 7, 18: 2, 19: 1, 20: 1, 21: 1, 24: 1, 25: 42,
+        27: 87, 28: 640, 29: 480, 30: 1, 31: 1, 32: 1, 33: 2, 35: 2, 37: 1,
+        38: 20000, 39: 1, 40: 2, 46: 2, 47: 8, 53: 1, 54: 1, 55: 1, 56: 1, 57: 1, 58: 1
+    }, overrides);
+    const coreGui = (overrides = {}) => {
+        let polls = 0;
+        return runEntry({ mtaCoreGuiStartupReference: true, keyFrames: [[17, 16, 120], [16], [], []], ...overrides,
+            functions: {
+                DE_CoreGuiStartupApiVersion: () => 1, DE_CoreGuiStartupBegin: () => 1, DE_CoreGuiStartupCapture: () => 1,
+                DE_CoreGuiStartupRead: field => coreGuiState(polls < 2 ? {
+                    1: 1, 2: 1, 3: 0, 4: 0, 6: 0, 9: 0, 20: 0, 21: 0, 39: 0, 49: 1, 50: 1, 51: 1,
+                    ...(overrides.guiPendingState || {})
+                } : overrides.guiState)[field],
+                DE_CoreStartupPoll: () => ++polls >= 2 ? 1 : 0,
+                DE_CoreStartupRead: field => [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5, 0, 0, 1, 0, 1, 0, 1, 0][field],
+                ...(overrides.functions || {})
+            }
+        });
+    };
+    const guiFinish = result => result.logs.find(event => event.event === 'core_gui_startup_reference_finished');
+    test('GUI startup uses a separate Core11 GUI1 one-shot POD worker and keeps native drawing claims false', () => {
+        const result = coreGui();
+        assert.equal(result.callFrames.find(call => call.name === 'DynamicLibrary.Load').frame, 2);
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreGuiStartupBegin').length, 1);
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreGuiStartupRead').length, 128);
+        assert.ok(!result.calls.some(call => /DE_CoreRender|DE_CoreInput|DE_ConnectLocal|CREATE_CHAR/.test(call[0])));
+        const start = result.logs.find(event => event.event === 'adapter_start');
+        assert.equal(start.core_api, 11); assert.equal(start.gui_api, 1); assert.equal(start.core_gui_startup_reference, true);
+        const samples = result.logs.filter(event => event.event === 'core_gui_startup_reference_sample');
+        assert.deepEqual(samples.map(event => event.state.length), [64, 64]);
+        const finish = guiFinish(result);
+        assert.equal(finish.passed, true); assert.equal(finish.cleanup_passed, true); assert.equal(finish.own_gpu_workload_verified, true);
+        for (const claim of ['full_core_ready', 'visible_gta_drawing_verified', 'network_active', 'input_writes',
+            'remote_peds_created', 'native_queue_commands_issued', 'native_backbuffer_touched']) assert.equal(finish[claim], false);
+    });
+    for (const options of [{ mode: 'online' }, { mode: 'diagnostic' }, { mtaCoreGuiStartupReference: 'true' },
+        { inputReference: true }, { reference: true }, { gaitRate: true }, { gaitRootLock: true },
+        { mtaNativePadReference: true }, { mtaNativeMovementTrial: true }, { mtaCoreStartupReference: true },
+        { mtaCoreInputReference: true }, { mtaCoreMovementReference: true }, { mtaCoreRenderReference: true },
+        { mtaCoreRenderGpuReference: true }, { mtaCoreRenderCustomPresentReference: true },
+        { mtaCoreRenderFrameBoundaryReference: true }, { mtaCoreRenderNativeDispatchReference: true }])
+        test('GUI startup rejects conflicting or nonboolean selection before any runtime lookup ' + JSON.stringify(options), () => {
+            const result = coreGui({ ...options, forbidRuntimeAccess: true });
+            assert.equal(result.calls.length, 0); assert.ok(result.logs.some(event => event.event === 'adapter_failed'));
+        });
+    for (const name of ['DE_CoreGuiStartupApiVersion', 'DE_CoreGuiStartupBegin', 'DE_CoreGuiStartupCapture', 'DE_CoreGuiStartupRead'])
+        test('GUI startup missing export refuses before Begin ' + name, () => {
+            const result = coreGui({ functions: { [name]: null } });
+            assert.ok(!result.calls.some(call => call[0] === 'DE_CoreGuiStartupBegin'));
+            assert.ok(result.logs.some(event => event.event === 'adapter_failed' && event.error.includes(name)));
+        });
+    test('GUI startup wrong API version never starts or falls back to render observation', () => {
+        const result = coreGui({ functions: { DE_CoreGuiStartupApiVersion: () => 2 } });
+        assert.ok(!result.calls.some(call => /DE_CoreGuiStartupBegin|DE_CoreRenderBegin/.test(call[0])));
+        assert.ok(!guiFinish(result));
+    });
+    test('GUI startup rejected Begin never polls or cancels an unowned job', () => {
+        const result = coreGui({ functions: { DE_CoreGuiStartupBegin: () => 0 } });
+        assert.ok(!result.calls.some(call => /DE_CoreStartupPoll|DE_CoreStartupCancel|DE_CoreGuiStartupCapture/.test(call[0])));
+        assert.ok(!guiFinish(result));
+    });
+    for (const [field, value] of [[0, 2], [1, 0], [2, 0], [4, 12], [5, 2], [18, 1], [44, 1], [45, 1],
+        [46, 3], [47, 9], [48, 9], [58, 2], [59, 2], [60, 1], [63, 1], [28, NaN], [29, -1], [25, 0x100000000]])
+        test('GUI malformed scalar requests cleanup and emits no final proof: field ' + field, () => {
+            const result = coreGui({ guiPendingState: { [field]: value } });
+            assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 1);
+            assert.ok(!guiFinish(result));
+            assert.ok(!result.calls.some(call => call[0] === 'DE_CoreStartupRead'));
+        });
+    for (const field of [5, 43, 49, 50, 51, 59]) test('GUI cleanup-complete cannot hide retained ownership field ' + field, () => {
+        const result = coreGui({ guiState: { [field]: 1 } });
+        assert.ok(!guiFinish(result));
+        assert.ok(result.logs.some(event => event.event === 'adapter_failed' && /retained ownership/.test(event.error)));
+    });
+    for (const [field, value] of [[7, 1], [8, 0], [10, 0], [12, 0], [14, 0], [16, 0], [18, 0], [21, 0],
+        [22, 0x80004005], [24, 2], [27, 24], [32, 0], [35, 1], [37, 0], [38, 10000], [42, 10], [46, 1], [52, 1], [54, 0], [58, 0]])
+        test('GUI final partial or refused workload cannot claim success: field ' + field, () => {
+            const finish = guiFinish(coreGui({ guiState: { [field]: value } }));
+            assert.equal(finish.passed, false); assert.equal(finish.own_gpu_workload_verified, false);
+            assert.equal(finish.cleanup_passed, field !== 7);
+        });
+    test('GUI backend pin is explicit, including unpinned factory refusal with complete cleanup', () => {
+        const result = coreGui({ guiState: { 4: 4, 8: 0, 10: 0, 57: 0 }, functions: {
+            DE_CoreStartupRead: field => [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5, 0, 0, 1, 0, 0, 15, 0, 0][field]
+        } });
+        assert.equal(guiFinish(result).cleanup_passed, true); assert.equal(guiFinish(result).passed, false);
+    });
+    test('GUI identical repeated sequences log once and changing repeated sequence cancels', () => {
+        for (const changed of [false, true]) {
+            let polls = 0;
+            const result = coreGui({ keyFrames: [[17, 16, 120], [], [], [], []], functions: {
+                DE_CoreStartupPoll: () => ++polls >= 3 ? 1 : 0,
+                DE_CoreGuiStartupRead: field => coreGuiState(polls >= 3 ? {} : { 1: 1, 2: 1, 3: changed && polls === 2 ? 1 : 0,
+                    4: 0, 6: 0, 9: 0, 39: 0 })[field]
+            } });
+            if (changed) { assert.ok(!guiFinish(result)); assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 1); }
+            else { assert.equal(guiFinish(result).passed, true); assert.equal(guiFinish(result).samples, 2); }
+        }
+    });
+    for (const loading of [false, true]) test('GUI ' + (loading ? 'loading' : 'End') + ' cancellation waits for terminal cleanup and cannot certify success', () => {
+        let polls = 0;
+        const result = coreGui({ keyFrames: [[17, 16, 120], [], [], [17, 16, 35], [17, 16, 35]],
+            readyFrames: loading ? [true, true, true, false, false] : undefined,
+            functions: { DE_CoreStartupPoll: () => ++polls >= 3 ? 1 : 0,
+                DE_CoreGuiStartupRead: field => coreGuiState(polls < 3 ? { 1: 1, 2: polls, 3: polls * 50, 4: 0,
+                    6: 0, 9: 0, 39: 0 } : {})[field] } });
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 1);
+        assert.equal(polls, 3); assert.equal(guiFinish(result).stop_requested, true);
+        assert.equal(guiFinish(result).cleanup_passed, true); assert.equal(guiFinish(result).passed, false);
+    });
+    test('GUI arming stays dormant for late F9 and requires all modifiers released', () => {
+        const result = coreGui({ activation: 'automatic', keyFrames: [[], [], [17, 16, 120], [16], [], []],
+            times: [0, 7200000, 14400000, 14400050, 14400100, 14400200] });
+        assert.equal(result.callFrames.find(call => call.name === 'DynamicLibrary.Load').frame, 4);
+        assert.equal(result.logs.find(event => event.event === 'core_gui_startup_reference_started').at_ms, 14400100);
+        assert.equal(guiFinish(result).passed, true);
+    });
+    for (const options of [{ keyFrames: [[17, 16, 120, 35]] }, { keyFrames: [[17, 16, 120], [120]], times: [0, 10000] }])
+        test('GUI cancelled or timed-out arming never touches runtime ' + JSON.stringify(options), () => {
+            const result = coreGui(options);
+            assert.equal(result.runtimeAccess.length, 0); assert.ok(!guiFinish(result));
+        });
     const coreRenderState = (overrides = {}, route = 1) => {
         const state = Array(44).fill(0);
         Object.assign(state, { 0: 2, 1: 2, 2: 201, 3: 10000, 4: 1, 5: 200, 6: 1, 7: 1, 9: 1, 11: 1,
@@ -2587,6 +2714,7 @@ async function main() {
     test('source configuration makes online activation manual by default', () => {
         assert.equal(sourceConfig.ONLINE_ACTIVATION, 'manual');
         assert.equal(sourceConfig.MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE, false);
+        assert.equal(sourceConfig.MTA_CORE_GUI_STARTUP_REFERENCE, false);
         assert.equal(sourceConfig.GAIT_REFERENCE, false);
         assert.equal(sourceConfig.GAIT_RATE, false);
         assert.equal(sourceConfig.INPUT_REFERENCE, false);

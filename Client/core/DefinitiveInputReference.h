@@ -74,6 +74,9 @@ namespace DefinitiveInputReference
         // An explicit protocol keeps the API3 COM probe opt-in. Route2 alone
         // continues to mean the historical API2 no-COM observation.
         std::uint32_t renderApiVersion = 1;
+        // A separately configured workload retains an actual device for MTA's
+        // own queue after observation ends. It cannot upgrade a render request.
+        bool guiStartup = false;
     };
 
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)

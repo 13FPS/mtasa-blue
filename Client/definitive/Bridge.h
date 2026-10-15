@@ -134,3 +134,10 @@ DE_BRIDGE_API std::uint32_t DE_CoreRenderApiVersionV6();
 DE_BRIDGE_API int           DE_CoreRenderBeginV6(std::uint32_t route);
 DE_BRIDGE_API int           DE_CoreRenderCaptureV6();
 DE_BRIDGE_API std::uint32_t DE_CoreRenderReadV6(std::uint32_t component);
+
+// Explicit MTA-owned offscreen startup uses its own scalar API1/64 cache.
+// It never repurposes an API6 render field or implies native frame ownership.
+DE_BRIDGE_API std::uint32_t DE_CoreGuiStartupApiVersion();
+DE_BRIDGE_API int           DE_CoreGuiStartupBegin();
+DE_BRIDGE_API int           DE_CoreGuiStartupCapture();
+DE_BRIDGE_API std::uint32_t DE_CoreGuiStartupRead(std::uint32_t component);

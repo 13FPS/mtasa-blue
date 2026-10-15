@@ -81,7 +81,18 @@ bridge transports 136 scalars through a distinct opt-in version. Profile2
 describes native dispatch and CPU object association, while API5's profile1
 still describes an admitted system DXGI entry. Neither grants GPU ownership.
 Offline publication/rollback checks and normal MTA builds pass. The latest
-roots-diagnostic API6 trial installed hooks after three stable passes with 187 initial/peak
+primary-backbuffer API6 trial recorded 603 native callbacks, 601 accepted
+snapshots and 601 native dispatches with no association rejection. All 87
+logged samples contain coherent profile 2 association, complete queries,
+`S_OK` probe and forwarded results, and matching native/DXGI buffer indices.
+Ten fresh roots reports completed their after-Close readback. Cleanup, all
+23 installed hashes and normal exit passed, preserving the full 46,055-byte
+capture plus 74 shutdown bytes and unchanged diagnostic logs. This validates
+native CPU/COM association. GPU ownership remains unsupported with zero
+accepted probes, and the system DXGI API5 endpoint remains unadmitted.
+No GPU commands, drawing or full client readiness are established.
+
+The preceding roots-diagnostic API6 trial installed hooks after three stable passes with 187 initial/peak
 holds. It recorded 606 native callbacks, 601 accepted scalar snapshots and 87
 complete metadata/known-presenter reports. Native dispatch intercepted and
 forwarded 601 calls, but all association queries refused at `NativeRoots` with
@@ -106,7 +117,8 @@ diagnostic success cannot admit buffers, GPU commands or full startup. The
 next correction follows the primary `viewport+0xA8` backbuffer used by native
 resource preparation, rather than requiring its nullable format-dependent
 alternate. Existing selector/coherence, canonical buffer identity, resource
-state and cleanup guards remain; the primary's live value is still untested.
+state and cleanup guards remain; the subsequent trial validates that corrected
+association without changing the GPU ownership gate.
 
 The preceding API6 attempt returned HookInstall with zero callbacks. Its setup
 report identifies `StableLimit` (stage 21), no OS error, 189 initial/peak holds
@@ -135,15 +147,35 @@ The GUI backend reuses MTA's actual CGUI/CEGUI widgets, skins, fonts and
 textures. Owned offscreen WARP tests cover BGRA8, RGBA8 and the observed
 R10G10B10A2_UNORM target, including pending-frame retention and teardown.
 Those tests do not establish visible GTA rendering, HDR or color-space
-correctness. No GUI DLL or GUI assets have been installed into GTA yet.
+correctness. Those earlier tests ran without installing GUI assets into GTA.
 An additive asset-root export now configures cgui independently of Core,
 avoiding classic folder discovery when both DLLs live beside the DE bridge.
 The actual `Win64/CLEO/de-online` layout passes 510 offscreen D3D12 checks
 across the three formats; the existing D3D9 path passes 93 checks.
-The remaining integration must place drawing after the custom presenter's
-Social Club callback and release retained backbuffer references before
-native resize. Core and GUI leases must survive a pending drain; full
-startup and multiplayer stay gated.
+Owned swapchain tests now pass 777 checks against real three-buffer DXGI
+swapchains in formats 24/87/28, including fence retention, two resizes per
+format and shutdown without another frame. The Core GUI helper passes 103
+checks for actual CGUI rendering, fresh asset/log paths, pending fences,
+signal recovery and irreversible release faults. Debug-layer validation was
+unavailable; these tests do not claim it.
+
+The first actual-device startup candidate adds an explicit one-shot retained
+device handoff. Ordinary API6 observers retain no device and keep the existing
+136-scalar contract. Core preloads the existing cgui assets, requests the new
+lease, and detaches the observer before creating its own queue and fixed BGRA8
+offscreen target. It reuses the actual MTA widgets and verifies fenced pixel
+readback. Separate Core11 / GUI API1 reports contain 64 scalars, with native
+association, owned GPU work and cleanup checked independently. Pending drains
+retain all owners; unknown release faults never authorize an unload.
+
+`package.ps1 -Mode Smoke -MtaCoreGuiStartupReference` explicitly selects this
+36-file trial; the ordinary package remains 23 files and the source flag stays
+false. The actual-device test remains pending. It expects no visible overlay
+or movement. The existing 23-file launcher preflight is separate and does not
+validate the GUI bundle. Visible integration must separately place drawing after the
+custom presenter's Social Club callback and release retained backbuffer
+references before native resize. Core and GUI leases must survive a pending
+drain; full startup and multiplayer stay gated.
 
 The preceding read-only live session ran for **60,003 ms**,
 with **1,188 native samples and 515 script snapshots**. Four directions, sprint

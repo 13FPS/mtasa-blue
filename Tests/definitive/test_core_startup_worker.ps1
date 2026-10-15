@@ -18,7 +18,7 @@ $outputRoot = Join-Path $repositoryRoot ('Build/mta-core-startup-worker/' + (Get
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
 function Hash([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 $sourceNames = @('Client/definitive/CoreStartupReference.h','Client/definitive/CoreStartupReference.cpp',
-    'Client/core/DefinitiveInputReference.h','Client/core/DefinitiveMovementReference.h','Client/core/DefinitiveRenderReference.h',
+    'Client/core/DefinitiveInputReference.h','Client/core/DefinitiveMovementReference.h','Client/core/DefinitiveRenderReference.h','Client/core/DefinitiveGuiStartupReference.h',
     'Tests/definitive/CoreStartupReferenceTests.cpp','Tests/definitive/CoreStartupFixture.cpp','Tests/definitive/test_core_startup_worker.ps1')
 $sourceHashes = [ordered]@{}
 foreach ($name in $sourceNames) {
@@ -71,8 +71,10 @@ try {
     $fixtureDirectory = Join-Path $outputRoot 'fixture-input'
     $normalFixture = Join-Path $fixtureDirectory 'CoreFixture.dll'
     $missingFixture = Join-Path $fixtureDirectory 'CoreMissingExport.dll'
+    $missingGuiFixture = Join-Path $fixtureDirectory 'CoreMissingGuiExport.dll'
     Compile 'fixture-normal' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $normalFixture @('/LD')
     Compile 'fixture-missing-export' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $missingFixture @('/LD','/DCORE_FIXTURE_MISSING_EXPORT=1')
+    Compile 'fixture-missing-gui-export' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $missingGuiFixture @('/LD','/DCORE_FIXTURE_MISSING_GUI_EXPORT=1')
     $syntheticRoot = Join-Path $outputRoot 'synthetic-host'
     $hostPath = Join-Path $syntheticRoot 'SanAndreas.exe'
     Compile 'production-worker-host' @((Join-Path $PSScriptRoot 'CoreStartupReferenceTests.cpp'),(Join-Path $repositoryRoot 'Client/definitive/CoreStartupReference.cpp')) $hostPath @('/DMTA_TEST_CORE_STARTUP_ACCESS=1')
@@ -109,7 +111,9 @@ try {
                         'render-v5','render-v5-cancel','render-v5-deadline','render-v5-missing','render-v5-query-failed','render-v5-unknown-presenter',
                         'render-v5-cross-route','render-v5-mixed-version','render-v5-wrong-mask',
                         'render-v6','render-v6-cancel','render-v6-deadline','render-v6-missing','render-v6-query-failed','render-v6-unknown-presenter',
-                        'render-v6-cross-route','render-v6-mixed-version','render-v6-wrong-mask','render-v6-cache-contention')) {
+                        'render-v6-cross-route','render-v6-mixed-version','render-v6-wrong-mask','render-v6-cache-contention',
+                        'gui','gui-workload-failed','gui-cancel','gui-wrong-api','gui-config-refused','gui-mixed-version','gui-cache-contention',
+                        'gui-deadline','gui-crosswire','gui-cleanup-incomplete','gui-retained','gui-unpinned','gui-device-release-fault','gui-missing-export')) {
         $movementRoot = Join-Path $outputRoot ($mode + '-host')
         New-Item -ItemType Directory -Path $movementRoot -Force | Out-Null
         Copy-Item -LiteralPath $hostPath -Destination (Join-Path $movementRoot 'SanAndreas.exe')
@@ -117,14 +121,15 @@ try {
         # or native methods. The controlled Core tests worker lifetime only.
         Copy-Item -LiteralPath $GameDeDll -Destination (Join-Path $movementRoot 'game_de.dll')
         if ((Hash (Join-Path $movementRoot 'game_de.dll')) -ne $ExpectedGameDeSha256.ToLowerInvariant()) { throw 'Movement PIN fixture backend hash differs.' }
-        $runs += Run-Host $mode $movementRoot @($movementRoot,$mode,$normalFixture)
+        $selectedFixture = if ($mode -eq 'gui-missing-export') { $missingGuiFixture } else { $normalFixture }
+        $runs += Run-Host $mode $movementRoot @($movementRoot,$mode,$selectedFixture)
     }
 } catch { $failure = $_.Exception.Message }
 $unchanged = $true
 foreach ($name in $sourceNames) { if ((Hash (Join-Path $repositoryRoot $name)) -ne $sourceHashes[$name]) { $unchanged=$false } }
 foreach ($artifact in $artifacts) { if ((Hash $artifact.source) -ne $artifact.sha256) { $unchanged=$false } }
 $record = [ordered]@{
-    recorded_at=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=($null -eq $failure -and $unchanged -and $runs.Count -eq 51);
+    recorded_at=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=($null -eq $failure -and $unchanged -and $runs.Count -eq 65);
     failure=$failure;source_hashes=$sourceHashes;sources_unchanged=$unchanged;compiles=$compiles;runs=$runs;normal_artifacts=$artifacts;
     fixture_executable_is_game=$false;game_launched=$false;game_memory_read=$false;game_process_attached=$false;game_files_changed=$false;
     synthetic_core_is_mta=$false;full_mta_boot_verified=$false;engine_input_write_verified=$false;

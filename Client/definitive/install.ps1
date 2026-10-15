@@ -60,6 +60,15 @@ if ($packageManifest.packageId -ne 'de-online-prototype' -or $packageManifest.fo
     throw 'Package identity, mode, format or game fingerprint does not match this installer.'
 }
 $relativePaths = @($packageManifest.files | ForEach-Object { $_.path })
+$guiPaths = @('CLEO/de-online/cgui.dll',
+    'CLEO/de-online/mta/cgui/sans.ttf', 'CLEO/de-online/mta/cgui/saheader.ttf', 'CLEO/de-online/mta/cgui/sagothic.ttf',
+    'CLEO/de-online/mta/cgui/Imageset.xsd', 'CLEO/de-online/mta/cgui/GUIScheme.xsd', 'CLEO/de-online/mta/cgui/Font.xsd',
+    'CLEO/de-online/mta/cgui/Falagard.xsd', 'CLEO/de-online/mta/cgui/unifont.ttf',
+    'CLEO/de-online/skins/Default/CGUI.xml', 'CLEO/de-online/skins/Default/CGUI.is.xml',
+    'CLEO/de-online/skins/Default/CGUI.lnf.xml', 'CLEO/de-online/skins/Default/CGUI.png')
+$guiCount = @($relativePaths | Where-Object { $_ -in $guiPaths }).Count
+if ($guiCount -ne 0 -and $guiCount -ne $guiPaths.Count) { throw 'Incomplete MTA Core GUI startup package ownership.' }
+if ($guiCount) { $allowedPaths += $guiPaths }
 if ($relativePaths.Count -ne $allowedPaths.Count -or @($relativePaths | Select-Object -Unique).Count -ne $allowedPaths.Count -or
     @(Compare-Object $allowedPaths $relativePaths).Count -ne 0) {
     throw 'Package manifest must contain exactly the known owned file paths.'
@@ -69,6 +78,15 @@ $actualPaths = @(Get-ChildItem -LiteralPath $sourceRoot -File -Recurse | ForEach
     [IO.Path]::GetRelativePath($sourceRoot, $_.FullName).Replace('\', '/')
 })
 if (@(Compare-Object $allowedPaths $actualPaths).Count -ne 0) { throw 'Package has unrecorded or missing files.' }
+$configText = [IO.File]::ReadAllText((Join-Path $sourceRoot 'CLEO/de-online/config.mjs'))
+$guiPattern = 'export const MTA_CORE_GUI_STARTUP_REFERENCE = (true|false);'
+$guiMarkers = [regex]::Matches($configText, $guiPattern)
+if ($guiMarkers.Count -gt 1 -or ($guiCount -and $guiMarkers.Count -ne 1)) { throw 'Invalid GUI startup configuration marker.' }
+if ($guiMarkers.Count -eq 1 -and $guiMarkers[0].Groups[1].Value -eq 'true') {
+    if (-not $guiCount -or $Mode -ne 'Smoke' -or $configText -match 'export const (GAIT_REFERENCE|GAIT_RATE|GAIT_ROOT_LOCK|INPUT_REFERENCE|MTA_NATIVE_PAD_REFERENCE|MTA_NATIVE_MOVEMENT_TRIAL|MTA_CORE_STARTUP_REFERENCE|MTA_CORE_INPUT_REFERENCE|MTA_CORE_MOVEMENT_REFERENCE|MTA_CORE_RENDER_REFERENCE|MTA_CORE_RENDER_GPU_REFERENCE|MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE|MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE|MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE) = true;') {
+        throw 'MTA Core GUI startup requires the complete GUI group and separate opt-in Smoke mode.'
+    }
+}
 $installedManifestPath = Join-Path $gameRoot 'de-online-install-manifest.json'
 # Owning a fresh CLEO directory makes rollback/uninstall provable and avoids
 # replacing a user's existing scripts, runtime, loader or permission settings.

@@ -56,3 +56,6 @@ export const MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE = false;
 // Native current-slot dispatch is an independent caller hook, never implicit
 // in the older standard Present probe and never permission to issue GPU work.
 export const MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE = false;
+// Core obtains an explicit device lease, ends observation, then renders the
+// existing MTA GUI on its own queue/offscreen target. No native buffer is drawn.
+export const MTA_CORE_GUI_STARTUP_REFERENCE = false;

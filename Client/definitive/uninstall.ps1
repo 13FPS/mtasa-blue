@@ -72,6 +72,17 @@ if ($hasXml -ne $hasBindConfig -or ($hasXml -and -not $hasCore)) {
     throw 'Incomplete MTA Core configured input package ownership.'
 }
 if ($hasXml) { $allowedPaths += @('CLEO/de-online/xmll.dll', 'CLEO/de-online/mta/config/coreconfig.xml') }
+$guiPaths = @('CLEO/de-online/cgui.dll',
+    'CLEO/de-online/mta/cgui/sans.ttf', 'CLEO/de-online/mta/cgui/saheader.ttf', 'CLEO/de-online/mta/cgui/sagothic.ttf',
+    'CLEO/de-online/mta/cgui/Imageset.xsd', 'CLEO/de-online/mta/cgui/GUIScheme.xsd', 'CLEO/de-online/mta/cgui/Font.xsd',
+    'CLEO/de-online/mta/cgui/Falagard.xsd', 'CLEO/de-online/mta/cgui/unifont.ttf',
+    'CLEO/de-online/skins/Default/CGUI.xml', 'CLEO/de-online/skins/Default/CGUI.is.xml',
+    'CLEO/de-online/skins/Default/CGUI.lnf.xml', 'CLEO/de-online/skins/Default/CGUI.png')
+$guiCount = @($relativePaths | Where-Object { $_ -in $guiPaths }).Count
+# Older manifests remain removable, but GUI ownership is one complete group
+# attached to the current 23-file backend, never a partial asset collection.
+if ($guiCount -and ($guiCount -ne $guiPaths.Count -or $allowedPaths.Count -ne 23)) { throw 'Incomplete MTA Core GUI startup package ownership.' }
+if ($guiCount) { $allowedPaths += $guiPaths }
 if ($relativePaths.Count -ne $allowedPaths.Count -or @($relativePaths | Select-Object -Unique).Count -ne $allowedPaths.Count -or
     @(Compare-Object $allowedPaths $relativePaths).Count -ne 0) {
     throw 'Installation manifest does not contain exactly the known owned files.'
@@ -102,7 +113,7 @@ foreach ($target in $targets) {
     Remove-Item -LiteralPath $target
 }
 Remove-Item -LiteralPath $manifestPath
-$directories = @('CLEO/de-online/mta/config', 'CLEO/de-online/mta', 'CLEO/de-online', 'CLEO/CLEO_PLUGINS', 'CLEO/.config', 'DE_ONLINE_LICENSES', 'CLEO')
+$directories = @('CLEO/de-online/mta/cgui', 'CLEO/de-online/skins/Default', 'CLEO/de-online/skins', 'CLEO/de-online/mta/config', 'CLEO/de-online/mta', 'CLEO/de-online', 'CLEO/CLEO_PLUGINS', 'CLEO/.config', 'DE_ONLINE_LICENSES', 'CLEO')
 foreach ($relative in $directories) {
     $directory = Join-Path $gameRoot $relative
     Assert-NoLinks $directory

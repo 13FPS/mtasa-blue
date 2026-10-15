@@ -19,6 +19,9 @@ bool  OwnedNativeDispatchSafetyHeld();
 bool  OwnedNativeDispatchDiscovery(void (*afterSnapshot)(), DWORD (*newThreadId)());
 bool  OwnedNativeDispatchExitingInstall(std::uintptr_t wrapper, unsigned mode, mta::game_de::RenderSetupDiagnosticV1& state);
 bool  OwnedNativeDispatchVmTransactions();
+bool  NativeDispatchFixtureOriginal(void*, std::uint32_t);
+void  BlockDeviceCandidateFixture();
+bool  ProbeForeignDeviceCandidate();
 
 namespace
 {
@@ -35,9 +38,20 @@ namespace
     class OwnedQueries final : public FrameBoundaryQueries
     {
     public:
-        unsigned     stop = 0, calls = 0, closes = 0;
-        HRESULT      result = E_NOINTERFACE;
-        bool         raise = false, cleanup = false, raiseClose = false;
+        unsigned      stop = 0, calls = 0, closes = 0;
+        HRESULT       result = E_NOINTERFACE;
+        bool          raise = false, cleanup = false, raiseClose = false;
+        ID3D12Device* candidate = nullptr;
+        unsigned      detachCalls = 0;
+        bool          detachedBeforeClose = false;
+        ID3D12Device* DetachDeviceCandidate() noexcept override
+        {
+            ++detachCalls;
+            detachedBeforeClose = closes == 0 && calls == 8;
+            auto* detached = candidate;
+            candidate = nullptr;
+            return detached;
+        }
         std::int32_t Execute(FrameBoundaryQueryStage stage, FrameBoundaryObservationState& state) override
         {
             ++calls;
@@ -370,6 +384,85 @@ namespace
     }
 }
 
+namespace
+{
+    IUnknown* deviceCandidateFixture = nullptr;
+    IUnknown* secondDeviceCandidateFixture = nullptr;
+    unsigned  deviceCandidateMode = 0;
+    bool      foreignDeviceCandidateStable = false;
+}
+void SetSecondDeviceCandidateFixture(IUnknown* device)
+{
+    secondDeviceCandidateFixture = device;
+}
+bool ForeignDeviceCandidateStable()
+{
+    return foreignDeviceCandidateStable;
+}
+void SetDeviceCandidateFixture(IUnknown* device, unsigned mode)
+{
+    deviceCandidateFixture = device;
+    deviceCandidateMode = mode;
+}
+bool DeviceCandidateFixtureOriginal(void* viewport, std::uint32_t interval)
+{
+    NativeDispatchFixtureOriginal(viewport, interval);
+    auto* selected = mta::game_de::boundary_detail::scope;
+    if (selected)
+    {
+        selected->rootsDiagnostic.queryPhase = 3;
+        selected->rootsDiagnostic.checkpoint = 29;
+        if (selected->reserveDeviceCandidate && selected->reserveDeviceCandidate())
+        {
+            selected->deviceReserved = true;
+            selected->deviceCandidate = reinterpret_cast<ID3D12Device*>(deviceCandidateFixture);
+            deviceCandidateFixture = nullptr;
+        }
+        if (deviceCandidateMode == 2)
+        {
+            selected->nativeDispatch.status = 9;
+            selected->nativeDispatch.presentHresult = static_cast<unsigned>(E_FAIL);
+            selected->nativeDispatch.rejectedEntries = 1;
+        }
+        if (deviceCandidateMode == 3)
+            RaiseException(0xe0424242, 0, 0, nullptr);
+        if (deviceCandidateMode == 4)
+        {
+            selected->nativeDispatch.status = 6;
+            selected->nativeDispatch.factsMask = 127;
+        }
+        if (deviceCandidateMode == 5)
+            selected->nativeDispatch.presentEntries = 2;
+        if (deviceCandidateMode == 6)
+            selected->rootsDiagnostic.queryPhase = 2;
+        if (deviceCandidateMode == 7)
+            mta::game_de::boundary_detail::runtime.epoch.fetch_add(1);
+        if (deviceCandidateMode == 9)
+            BlockDeviceCandidateFixture();
+        if (deviceCandidateMode == 10)
+        {
+            foreignDeviceCandidateStable = ProbeForeignDeviceCandidate();
+            const bool reservedAgain = selected->reserveDeviceCandidate && selected->reserveDeviceCandidate();
+            foreignDeviceCandidateStable = foreignDeviceCandidateStable && !reservedAgain;
+            if (reservedAgain)
+            {
+                selected->deviceReserved = true;
+                selected->deviceCandidate = reinterpret_cast<ID3D12Device*>(secondDeviceCandidateFixture);
+                secondDeviceCandidateFixture = nullptr;
+            }
+            selected->nativeDispatch.presentEntries = 2;
+        }
+        if (deviceCandidateMode == 11)
+        {
+            selected->nativeDispatch.status = 5;
+            selected->nativeDispatch.queryStage = 1;
+            selected->nativeDispatch.queryHresult = static_cast<unsigned>(E_POINTER);
+            selected->nativeDispatch.rejectedEntries = 1;
+        }
+    }
+    return deviceCandidateMode != 1;
+}
+
 bool BoundaryFixtureOriginal(void*, std::uint32_t interval)
 {
     using namespace mta::game_de;
@@ -454,6 +547,26 @@ void CheckFrameBoundaryProbe(const char* customFixture, const char* wrapperFixtu
     using Status = FrameBoundaryObservationStatus;
     Require(OwnedNativeDispatchVmTransactions(), "actual VM-backed vendor commit/abort preserve borrowed counts and bypass a stopped CRT heap owner", checks);
     CheckOwnedNativeRoots(checks);
+    for (unsigned mode = 0; mode < 4; ++mode)
+    {
+        OwnedQueries                  query;
+        FrameBoundaryObservationState state;
+        ID3D12Device*                 candidate = nullptr;
+        // This is an opaque owned reference token: the runner must only move
+        // it, never call AddRef/QI or treat it as an engine resource.
+        query.candidate = reinterpret_cast<ID3D12Device*>(std::uintptr_t{0x1234});
+        if (mode == 2)
+            query.stop = 8;
+        if (mode == 3)
+            query.cleanup = true;
+        const bool result = RunFrameBoundaryQueries(query, state, nullptr, mode ? &candidate : nullptr);
+        Require(query.closes == 1 && query.detachCalls == (mode == 1 || mode == 3 ? 1u : 0u),
+                "explicit device detachment occurs only after complete pre-close queries; legacy capture-off never detaches", checks);
+        Require((mode == 1 || mode == 3) ? (candidate == reinterpret_cast<ID3D12Device*>(std::uintptr_t{0x1234}) && query.detachedBeforeClose)
+                                         : candidate == nullptr,
+                "query runner moves the existing device reference before Close, including caller-owned cleanup on Close failure", checks);
+        Require(result == (mode != 3), "optional candidate does not change query cleanup result", checks);
+    }
     detail::Roots dispatchRoots;
     dispatchRoots.swapchain = 0x1000;
     dispatchRoots.device = dispatchRoots.contextDevice = 0x2000;

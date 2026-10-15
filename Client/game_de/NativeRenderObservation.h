@@ -11,6 +11,7 @@
 #include "../sdk/game/CGameRenderEndpointDiagnostic.h"
 #include "../sdk/game/CGameRenderSetupDiagnostic.h"
 #include "../sdk/game/CGameRenderRootsDiagnostic.h"
+#include "../sdk/game/CGameRenderDeviceLease.h"
 
 namespace mta::game_de
 {
@@ -51,7 +52,9 @@ namespace mta::game_de
     // after End; active/pendingCleanup describe observation and hook cleanup.
     // API1/2 make no COM calls. Explicit API3/4 queries and releases only inside
     // the callback; API4 also reads pinned custom-present policy without vcalls.
-    // None issue GPU work or export native object pointers.
+    // These observations issue no GPU work and export no native pointers. A
+    // separate explicit one-shot device request may transfer an acquired COM
+    // reference for Core's own queue; it never grants native-frame permission.
     // Begin/ReadState/End belong to one producer thread. End
     // disarms immediately but may require a later retry; retain the owner and
     // module until it succeeds. Static pinned hook state never retains this.
@@ -65,7 +68,7 @@ namespace mta::game_de
         // A zero-callback run cannot choose a backend. The route is explicit;
         // observedRoute remains unknown until a validated original returns.
         bool Begin(RenderObservationRoute route = RenderObservationRoute::D3D11, bool queryGpuOwnership = false, bool classifyCustomPresent = false,
-                   bool queryFrameBoundary = false, bool nativeDispatch = false) noexcept;
+                   bool queryFrameBoundary = false, bool nativeDispatch = false, bool captureDevice = false) noexcept;
         bool End() noexcept;
         void ReadState(NativeRenderObservationState& state) const noexcept;
         // This separate cache does not add fields or claims to the V5 ABI.
@@ -75,7 +78,8 @@ namespace mta::game_de
         bool ReadSetupDiagnostic(RenderSetupDiagnosticV1& state) const noexcept;
         // This historical scalar trace is correlated with one accepted snapshot;
         // a publication miss cannot attach newer read failures to older facts.
-        bool ReadRootsDiagnostic(RenderRootsDiagnosticV1& state) const noexcept;
+        bool   ReadRootsDiagnostic(RenderRootsDiagnosticV1& state) const noexcept;
+        Status TakeDeviceLease(RenderDeviceLeaseV1& state) noexcept;
 
     private:
         std::uint64_t                        generation = 0;

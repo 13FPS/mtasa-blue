@@ -96,33 +96,45 @@ namespace mta::game_de
         using ThreadHandles = std::vector<HANDLE, VirtualAllocator<HANDLE>>;
         using NextThread = LONG(NTAPI*)(HANDLE, HANDLE, ACCESS_MASK, ULONG, ULONG, PHANDLE);
         using CompareThreadObjects = LONG(NTAPI*)(HANDLE, HANDLE);
+        enum class DeviceCapturePhase : unsigned
+        {
+            Off,
+            Armed,
+            Candidate,
+            Ready,
+            Taken,
+            Stopped
+        };
 
         struct Runtime
         {
-            std::atomic<bool>            apiBusy{false}, bound{false}, active{false}, hooked{false}, modulePinned{false};
-            std::atomic<unsigned>        inFlight{0};
-            std::atomic<std::uint64_t>   generation{0}, callbacks{0}, accepted{0}, rejected{0}, nested{0}, foreign{0}, missed{0};
-            std::atomic<std::uint32_t>   failure{0};
-            std::atomic<DWORD>           callbackThread{0};
-            SRWLOCK                      snapshotLock = SRWLOCK_INIT;
-            NativeRenderObservationState snapshot;
-            DWORD                        producerThread = 0;
-            std::uintptr_t               image = 0;
-            ULONGLONG                    started = 0;
-            PresentFunction              original = nullptr;
-            const RouteDescriptor*       route = nullptr;
-            std::uint32_t                requestedRoute = 0;
-            bool                         queryGpuOwnership = false;
-            bool                         classifyCustomPresent = false;
-            bool                         queryFrameBoundary = false;
-            bool                         nativeDispatch = false;
-            ThreadHandles                retainedSuspensions;
-            bool                         safetyHeldSuspensions = false;
-            NextThread                   nextThread = nullptr;
-            CompareThreadObjects         compareThreadObjects = nullptr;
-            std::uintptr_t               nextThreadImage = 0;
-            RenderSetupDiagnosticV1      setup;
-            bool                         setupTracing = false;
+            std::atomic<bool>               apiBusy{false}, bound{false}, active{false}, hooked{false}, modulePinned{false};
+            std::atomic<unsigned>           inFlight{0};
+            std::atomic<std::uint64_t>      generation{0}, callbacks{0}, accepted{0}, rejected{0}, nested{0}, foreign{0}, missed{0};
+            std::atomic<std::uint32_t>      failure{0};
+            std::atomic<DWORD>              callbackThread{0};
+            SRWLOCK                         snapshotLock = SRWLOCK_INIT;
+            NativeRenderObservationState    snapshot;
+            DWORD                           producerThread = 0;
+            std::uintptr_t                  image = 0;
+            ULONGLONG                       started = 0;
+            PresentFunction                 original = nullptr;
+            const RouteDescriptor*          route = nullptr;
+            std::uint32_t                   requestedRoute = 0;
+            bool                            queryGpuOwnership = false;
+            bool                            classifyCustomPresent = false;
+            bool                            queryFrameBoundary = false;
+            bool                            nativeDispatch = false;
+            std::atomic<DeviceCapturePhase> devicePhase{DeviceCapturePhase::Off};
+            std::atomic<bool>               devicePending{false}, deviceReleaseFault{false};
+            RenderDeviceLeaseV1             deviceLease;
+            ThreadHandles                   retainedSuspensions;
+            bool                            safetyHeldSuspensions = false;
+            NextThread                      nextThread = nullptr;
+            CompareThreadObjects            compareThreadObjects = nullptr;
+            std::uintptr_t                  nextThreadImage = 0;
+            RenderSetupDiagnosticV1         setup;
+            bool                            setupTracing = false;
         };
         // Failed teardown must retain its trampoline and callback storage.
         // Nothing in this process-lifetime state points at a released owner.
@@ -481,16 +493,76 @@ namespace mta::game_de
             }
         }
 
+        bool ReserveDeviceCandidate() noexcept
+        {
+            auto expected = DeviceCapturePhase::Armed;
+            return runtime.active.load() && !runtime.failure.load() && runtime.devicePhase.compare_exchange_strong(expected, DeviceCapturePhase::Candidate);
+        }
+        void DeviceReleaseFailed() noexcept
+        {
+            // Release may have changed the reference count before raising. Do
+            // not retry a possibly freed pointer or claim complete cleanup.
+            runtime.deviceReleaseFault.store(true);
+            runtime.devicePhase.store(DeviceCapturePhase::Stopped);
+            Fail(Failure::GpuOwnershipCleanup);
+        }
+        void DiscardDeviceCandidate(FrameBoundaryScope& scope) noexcept
+        {
+            const bool reserved = scope.deviceReserved;
+            scope.deviceReserved = false;
+            if (!ReleaseRenderDeviceReference(scope.deviceCandidate))
+                DeviceReleaseFailed();
+            // Ignored/foreign wrappers have an empty unrelated scope. They
+            // cannot release another callback's reservation, even when that
+            // callback has reserved but its query has not acquired a ref yet.
+            if (reserved)
+            {
+                auto expected = DeviceCapturePhase::Candidate;
+                runtime.devicePhase.compare_exchange_strong(
+                    expected, runtime.active.load() && !runtime.failure.load() ? DeviceCapturePhase::Armed : DeviceCapturePhase::Stopped);
+            }
+        }
+        void CommitDeviceCandidate(FrameBoundaryScope& scope, const NativeRenderObservationState& capture, bool result, std::uint64_t acceptedNext) noexcept
+        {
+            const auto& state = scope.nativeDispatch;
+            const auto& trace = scope.rootsDiagnostic;
+            auto        phase = DeviceCapturePhase::Candidate;
+            // This stricter, explicit handoff does not change which historical
+            // scalar snapshots are accepted. A cached device is first-wins and
+            // never confers permission to submit on the game's queue or target.
+            if (scope.deviceReserved && scope.deviceCandidate && result && runtime.active.load() && !runtime.failure.load() && !scope.cleanupFailed &&
+                state.presentEntries == 1 && !state.rejectedEntries &&
+                state.status == static_cast<unsigned>(FrameBoundaryObservationStatus::ObservedCoherent) && state.endpointProfileId == 2 &&
+                state.factsMask == 255 && state.queryStage == static_cast<unsigned>(FrameBoundaryQueryStage::Complete) && !state.queryHresult &&
+                !state.presentHresult && !state.lifecycleFlags && trace.queryPhase == static_cast<unsigned>(RenderRootsDiagnosticPhase::AfterCloseReadback) &&
+                trace.checkpoint == static_cast<unsigned>(RenderRootsDiagnosticCheckpoint::ReadComplete) && !trace.refusalReason &&
+                !runtime.devicePending.load() && runtime.devicePhase.compare_exchange_strong(phase, DeviceCapturePhase::Ready))
+            {
+                runtime.deviceLease = {};
+                runtime.deviceLease.device = scope.deviceCandidate;
+                scope.deviceCandidate = nullptr;
+                runtime.deviceLease.generation = runtime.generation.load();
+                runtime.deviceLease.acceptedSnapshots = acceptedNext;
+                runtime.deviceLease.dispatchEntries = capture.nativeDispatch.presentEntries;
+                runtime.deviceLease.sourceProfileId = 2;
+                runtime.devicePending.store(true);
+            }
+        }
         bool InvokeOriginal(void* viewport, std::uint32_t syncInterval, FrameBoundaryScope& scope, bool observe)
         {
+            bool returned = false;
             __try
             {
-                return runtime.original(viewport, syncInterval);
+                const bool result = runtime.original(viewport, syncInterval);
+                returned = true;
+                return result;
             }
             __finally
             {
                 if (observe)
                     LeaveFrameBoundaryScope(scope);
+                if (!returned)
+                    DiscardDeviceCandidate(scope);
             }
         }
 
@@ -548,7 +620,8 @@ namespace mta::game_de
             FrameBoundaryScope boundary;
             const bool         observeBoundary = accepted && runtime.queryFrameBoundary && !fatalCleanup && runtime.active.load();
             if (observeBoundary)
-                EnterFrameBoundaryScope(boundary, runtime.image, viewport, runtime.callbackThread.load(), capture.custom, &BoundaryCleanupFailure);
+                EnterFrameBoundaryScope(boundary, runtime.image, viewport, runtime.callbackThread.load(), capture.custom, &BoundaryCleanupFailure,
+                                        runtime.devicePhase.load() == DeviceCapturePhase::Armed ? &ReserveDeviceCandidate : nullptr);
             const bool result = InvokeOriginal(viewport, syncInterval, boundary, observeBoundary);
             if (observeBoundary)
             {
@@ -611,6 +684,7 @@ namespace mta::game_de
                         }
                     }
                     runtime.snapshot = capture;
+                    CommitDeviceCandidate(boundary, capture, result, runtime.accepted.load() + 1);
                     if (observeBoundary)
                         PublishFrameBoundaryEndpointDiagnostic(boundary, runtime.accepted.load() + 1);
                     runtime.accepted.fetch_add(1);
@@ -619,6 +693,10 @@ namespace mta::game_de
                 else
                     runtime.missed.fetch_add(1);
             }
+            // No foreign COM operation runs under the publication lock. A miss,
+            // false original, failed dispatch or late root/lifetime change owns
+            // only this callback's ref and cannot publish it retrospectively.
+            DiscardDeviceCandidate(boundary);
             return result;
         }
 
@@ -1227,11 +1305,11 @@ namespace mta::game_de
     }
 
     bool NativeRenderObservation::Begin(RenderObservationRoute route, bool queryGpuOwnership, bool classifyCustomPresent, bool queryFrameBoundary,
-                                        bool nativeDispatch) noexcept
+                                        bool nativeDispatch, bool captureDevice) noexcept
     {
         ApiOperation operation;
         if (!operation.acquired || runtime.hooked.load() || NativeDispatchPatchPresent() || !runtime.retainedSuspensions.empty() || runtime.inFlight.load() ||
-            FrameBoundaryInFlight() || runtime.active.load())
+            FrameBoundaryInFlight() || runtime.active.load() || runtime.devicePending.load() || runtime.deviceReleaseFault.load())
             return false;
         generation = runtime.generation.fetch_add(1) + 1;
         finalState = {};
@@ -1246,6 +1324,8 @@ namespace mta::game_de
         runtime.classifyCustomPresent = classifyCustomPresent;
         runtime.queryFrameBoundary = queryFrameBoundary;
         runtime.nativeDispatch = nativeDispatch;
+        runtime.devicePhase.store(captureDevice ? DeviceCapturePhase::Armed : DeviceCapturePhase::Off);
+        runtime.deviceLease = {};
         ResetFrameBoundaryObservation();
         runtime.route = SelectRoute(route);
 #ifndef DETOURS_MTA_VM_TRANSACTION_NODES
@@ -1261,7 +1341,7 @@ namespace mta::game_de
 #endif
         if (!runtime.route || ((queryGpuOwnership || classifyCustomPresent) && route != RenderObservationRoute::D3D12) ||
             (classifyCustomPresent && !queryGpuOwnership) || (queryFrameBoundary && (!classifyCustomPresent || route != RenderObservationRoute::D3D12)) ||
-            (nativeDispatch && !queryFrameBoundary))
+            (nativeDispatch && !queryFrameBoundary) || (captureDevice && !nativeDispatch))
         {
             Fail(Failure::UnsupportedRoute);
             ReadState(finalState);
@@ -1321,6 +1401,7 @@ namespace mta::game_de
         if (!generation || generation != runtime.generation.load())
             return !runtime.hooked.load() && !NativeDispatchPatchPresent() && runtime.retainedSuspensions.empty();
         runtime.active.store(false);
+        runtime.devicePhase.store(DeviceCapturePhase::Stopped);
         StopFrameBoundaryAdmission();
         if (GetCurrentThreadId() != runtime.producerThread)
         {
@@ -1348,6 +1429,27 @@ namespace mta::game_de
         }
         runtime.hooked.store(false);
         if (!ReleaseNativeDispatchRelay())
+        {
+            SetupCleanup(false);
+            ReadState(finalState);
+            return false;
+        }
+        // Hook detach and every owned resume complete before the worker calls
+        // COM. An untaken device belongs to this lease; a taken one belongs only
+        // to Core and survives End independently of native object lifetimes.
+        ID3D12Device* untaken = nullptr;
+        if (runtime.devicePending.load())
+        {
+            if (!TryAcquireSRWLockExclusive(&runtime.snapshotLock))
+                return false;
+            untaken = runtime.deviceLease.device;
+            runtime.deviceLease.device = nullptr;
+            runtime.devicePending.store(false);
+            ReleaseSRWLockExclusive(&runtime.snapshotLock);
+        }
+        if (!ReleaseRenderDeviceReference(untaken))
+            DeviceReleaseFailed();
+        if (runtime.deviceReleaseFault.load())
         {
             SetupCleanup(false);
             ReadState(finalState);
@@ -1389,7 +1491,9 @@ namespace mta::game_de
         state.modulePinned = runtime.modulePinned.load();
         state.bound = runtime.bound.load();
         state.active = runtime.active.load();
-        state.pendingCleanup = (runtime.hooked.load() || NativeDispatchPatchPresent() || !runtime.retainedSuspensions.empty()) && !state.active;
+        state.pendingCleanup = (runtime.hooked.load() || NativeDispatchPatchPresent() || !runtime.retainedSuspensions.empty() || runtime.devicePending.load() ||
+                                runtime.deviceReleaseFault.load()) &&
+                               !state.active;
         // Completed effects precede their monotonically increasing prerequisite.
         state.rejectedSnapshots = runtime.rejected.load();
         state.nestedCallbacks = runtime.nested.load();
@@ -1448,5 +1552,31 @@ namespace mta::game_de
             return false;
         state = next;
         return true;
+    }
+    Status NativeRenderObservation::TakeDeviceLease(RenderDeviceLeaseV1& state) noexcept
+    {
+        ApiOperation operation;
+        if (!operation.acquired || runtime.safetyHeldSuspensions || !runtime.retainedSuspensions.empty())
+            return Status::Unsupported;
+        if (!generation || generation != runtime.generation.load() || GetCurrentThreadId() != runtime.producerThread)
+            return Status::Unsupported;
+        if (!runtime.active.load() || runtime.failure.load() || runtime.deviceReleaseFault.load() || runtime.devicePhase.load() != DeviceCapturePhase::Ready)
+            return Status::NotInitialized;
+        if (!TryAcquireSRWLockExclusive(&runtime.snapshotLock))
+            return Status::Unsupported;
+        const auto next = runtime.deviceLease;
+        const bool ready = runtime.active.load() && !runtime.failure.load() && runtime.devicePhase.load() == DeviceCapturePhase::Ready && next.device &&
+                           next.generation == generation && next.acceptedSnapshots && next.dispatchEntries && next.sourceProfileId == 2;
+        if (ready)
+        {
+            runtime.deviceLease.device = nullptr;
+            runtime.devicePending.store(false);
+            runtime.devicePhase.store(DeviceCapturePhase::Taken);
+        }
+        ReleaseSRWLockExclusive(&runtime.snapshotLock);
+        if (!ready)
+            return Status::NotInitialized;
+        state = next;
+        return Status::Ok;
     }
 }

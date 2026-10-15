@@ -759,7 +759,13 @@ namespace mta::game_de
                 : selected(selected), epoch(runtime.epoch.load()), dispatchChain(observedDispatchChain), trace(rootTrace)
             {
             }
-            void         MarkAfterCloseReadback() noexcept { afterCloseReadback = true; }
+            void          MarkAfterCloseReadback() noexcept { afterCloseReadback = true; }
+            ID3D12Device* DetachDeviceCandidate() noexcept override
+            {
+                auto* device = queueDevice;
+                queueDevice = nullptr;
+                return device;
+            }
             std::int32_t Execute(Stage stage, FrameBoundaryObservationState& state) override
             {
                 switch (stage)
@@ -1013,9 +1019,15 @@ namespace mta::game_de
                     state.status = static_cast<unsigned>(BoundaryStatus::ResizeOverlap);
                 else
                 {
-                    auto*   trace = nativeDispatch ? &selected->rootsDiagnostic : nullptr;
-                    Queries queries(*selected, nativeDispatch ? reinterpret_cast<std::uintptr_t>(chain) : 0, trace);
-                    selected->cleanupFailed = !RunFrameBoundaryQueries(queries, state, trace) || selected->cleanupFailed;
+                    auto*          trace = nativeDispatch ? &selected->rootsDiagnostic : nullptr;
+                    Queries        queries(*selected, nativeDispatch ? reinterpret_cast<std::uintptr_t>(chain) : 0, trace);
+                    ID3D12Device** candidate = nullptr;
+                    if (nativeDispatch && selected->reserveDeviceCandidate && selected->reserveDeviceCandidate())
+                    {
+                        selected->deviceReserved = true;
+                        candidate = &selected->deviceCandidate;
+                    }
+                    selected->cleanupFailed = !RunFrameBoundaryQueries(queries, state, trace, candidate) || selected->cleanupFailed;
                     if (selected->cleanupFailed)
                     {
                         runtime.armed.store(false);
@@ -1196,7 +1208,14 @@ namespace mta::game_de
         }
     }
 
-    bool RunFrameBoundaryQueries(FrameBoundaryQueries& queries, FrameBoundaryObservationState& state, RenderRootsDiagnosticV1* trace) noexcept
+    bool ReleaseRenderDeviceReference(ID3D12Device*& device) noexcept
+    {
+        IUnknown* owned = device;
+        device = nullptr;
+        return boundary_detail::Release(owned);
+    }
+    bool RunFrameBoundaryQueries(FrameBoundaryQueries& queries, FrameBoundaryObservationState& state, RenderRootsDiagnosticV1* trace,
+                                 ID3D12Device** deviceCandidate) noexcept
     {
         using namespace boundary_detail;
         state.status = static_cast<unsigned>(BoundaryStatus::QueryFailed);
@@ -1218,6 +1237,11 @@ namespace mta::game_de
                 state.status = static_cast<unsigned>(BoundaryStatus::ObservedCoherent);
             }
         }
+        // The canonical device is already strongly held by these queries. Move
+        // that one ref only after all pre-close checks; never AddRef a raw root.
+        // The enclosing callback owns it through the post-close/original gates.
+        if (deviceCandidate && state.status == static_cast<unsigned>(BoundaryStatus::ObservedCoherent))
+            *deviceCandidate = queries.DetachDeviceCandidate();
         if (!Close(queries))
         {
             state.status = static_cast<unsigned>(BoundaryStatus::QueryFailed);
@@ -1339,7 +1363,8 @@ namespace mta::game_de
         return true;
     }
     void EnterFrameBoundaryScope(FrameBoundaryScope& selected, std::uintptr_t image, void* viewport, std::uint32_t callbackThread,
-                                 const CustomPresentClassificationState& custom, void (*cleanupFailure)() noexcept) noexcept
+                                 const CustomPresentClassificationState& custom, void (*cleanupFailure)() noexcept,
+                                 bool (*reserveDeviceCandidate)() noexcept) noexcept
     {
         using namespace boundary_detail;
         selected.image = image;
@@ -1347,6 +1372,7 @@ namespace mta::game_de
         selected.callbackThread = callbackThread;
         selected.epoch = runtime.epoch.load();
         selected.cleanupFailure = cleanupFailure;
+        selected.reserveDeviceCandidate = reserveDeviceCandidate;
         selected.knownPresenter = custom.status == static_cast<unsigned>(CustomPresentClassificationStatus::KnownNativePresenter);
         selected.diagnostic = runtime.preparation;
         if (runtime.nativeDispatch)

@@ -21,6 +21,7 @@
 #include "DefinitiveInputReference.h"
 #include "DefinitiveMovementReference.h"
 #include "DefinitiveRenderReference.h"
+#include "DefinitiveGuiStartupReference.h"
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
     #include "DefinitiveProcess.h"
 #endif
@@ -58,10 +59,12 @@ namespace DefinitiveInputReference
 
     bool Configure(const Request& request) noexcept
     {
-        const auto maximum = request.renderObservation ? DefinitiveRenderReference::MaximumDurationMs
-                             : request.nativeMovement  ? DefinitiveMovementReference::MaximumDurationMs
-                                                       : MaximumDurationMs;
-        if ((request.nativeMovement && request.renderObservation) || (request.renderRoute && (!request.renderObservation || request.renderRoute > 2)) ||
+        const auto maximum = request.guiStartup          ? DefinitiveGuiStartupReference::MaximumDurationMs
+                             : request.renderObservation ? DefinitiveRenderReference::MaximumDurationMs
+                             : request.nativeMovement    ? DefinitiveMovementReference::MaximumDurationMs
+                                                         : MaximumDurationMs;
+        if ((request.guiStartup && (request.nativeMovement || request.renderObservation || request.renderRoute || request.renderApiVersion != 1)) ||
+            (request.nativeMovement && request.renderObservation) || (request.renderRoute && (!request.renderObservation || request.renderRoute > 2)) ||
             (request.renderObservation &&
              ((request.renderApiVersion == 1 && request.renderRoute) || (request.renderApiVersion == 2 && !request.renderRoute) ||
               (request.renderApiVersion >= 3 && request.renderRoute != 2) || !request.renderApiVersion || request.renderApiVersion > 6)) ||
@@ -337,5 +340,19 @@ CORE_API std::uint32_t MTA_ConfigureDERenderReferenceV6(std::uint32_t durationMs
     // Dispatch through the native callsite preserves an existing Present hook;
     // a separate version prevents that seam from relabeling the API5 endpoint.
     return route == 2 && g_isDefinitiveProcessCandidate && DefinitiveInputReference::Configure({durationMs, cancel, publish, false, true, route, 6}) ? 1u : 0u;
+}
+
+CORE_API std::uint32_t MTA_DEGuiStartupReferenceApiVersion()
+{
+    return DefinitiveGuiStartupReference::ApiVersion;
+}
+CORE_API std::uint32_t MTA_ConfigureDEGuiStartupReference(std::uint32_t durationMs, DefinitiveInputReference::CancelCallback cancel,
+                                                          DefinitiveInputReference::PublishCallback publish)
+{
+    // An independent export is required because ordinary read-only API6 must
+    // never acquire a device or run MTA's offscreen GPU workload implicitly.
+    DefinitiveInputReference::Request request{durationMs, cancel, publish};
+    request.guiStartup = true;
+    return g_isDefinitiveProcessCandidate && DefinitiveInputReference::Configure(request) ? 1u : 0u;
 }
 #endif

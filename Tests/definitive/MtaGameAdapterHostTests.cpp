@@ -40,6 +40,20 @@ static_assert(sizeof(mta::game_de::RenderObservationStateV5) == 392);
 static_assert(offsetof(mta::game_de::RenderObservationStateV3, base) == 0);
 static_assert(offsetof(mta::game_de::RenderObservationStateV3, gpu) == sizeof(mta::game_de::RenderObservationStateV2));
 
+// This new pointer-bearing contract is separate from every scalar observation
+// state. Its control fixture uses an opaque token and never calls COM or GPU.
+#if defined(_WIN64)
+static_assert(sizeof(mta::game_de::RenderDeviceLeaseV1) == 48);
+static_assert(offsetof(mta::game_de::RenderDeviceLeaseV1, device) == 8);
+static_assert(offsetof(mta::game_de::RenderDeviceLeaseV1, generation) == 16);
+static_assert(offsetof(mta::game_de::RenderDeviceLeaseV1, sourceProfileId) == 40);
+#endif
+struct FixtureDeviceStats
+{
+    std::uint32_t allocations = 0, requests = 0, begins = 0, takes = 0, transfers = 0, releases = 0, ends = 0;
+    std::uint32_t order = 0, requestOrder = 0, beginOrder = 0, liveLeases = 0, control = 0;
+};
+
 #if !defined(MTA_TEST_SHUTDOWN_FAILURE_MODULE)
 namespace
 {
@@ -119,6 +133,8 @@ namespace mta::game_de
         std::uint32_t             setupGeneration = 0;
         std::uint32_t             setupDiagnosticReads = 0, setupCleanupAttempted = 0, setupCleanupComplete = 0;
         std::uint32_t             rootsDiagnosticReads = 0;
+        FixtureDeviceStats*       deviceFixtureStats = nullptr;
+        alignas(void*) unsigned char deviceIdentity[sizeof(void*)]{};
         void (*v6OperationObserver)() noexcept = nullptr;
         alignas(void*) unsigned char facadeIdentity[sizeof(void*)]{};
 
@@ -430,6 +446,12 @@ namespace mta::game_de
         public:
             Status Begin() noexcept override
             {
+                deviceBegan = true;
+                if (deviceFixtureStats)
+                {
+                    ++deviceFixtureStats->begins;
+                    deviceFixtureStats->beginOrder = ++deviceFixtureStats->order;
+                }
                 const auto status = observation.Begin();
                 if (v6OperationObserver)
                     v6OperationObserver();
@@ -439,6 +461,10 @@ namespace mta::game_de
             {
                 const auto status = observation.End();
                 ++setupEndCount;
+                if (deviceFixtureStats)
+                    ++deviceFixtureStats->ends;
+                if (status == Status::Ok && !(MTA_TEST_RENDER_MODE == 5 && setupEndCount == 1))
+                    deviceEnded = true;
                 setupCleanupAttempted = 1;
                 setupCleanupComplete = status == Status::Ok && !(MTA_TEST_RENDER_MODE == 5 && setupEndCount == 1) ? 1u : 0u;
                 if (v6OperationObserver)
@@ -469,6 +495,11 @@ namespace mta::game_de
             void Release() noexcept override
             {
                 diagnosticLeaseV6 = nullptr;
+                if (deviceFixtureStats)
+                {
+                    ++deviceFixtureStats->releases;
+                    --deviceFixtureStats->liveLeases;
+                }
                 if (fixtureCounters)
                 {
                     ++fixtureCounters[7];
@@ -477,9 +508,44 @@ namespace mta::game_de
                 delete this;
             }
 
+            Status RequestDevice() noexcept
+            {
+                if (deviceFixtureStats)
+                {
+                    ++deviceFixtureStats->requests;
+                    deviceFixtureStats->requestOrder = ++deviceFixtureStats->order;
+                }
+                if (deviceBegan || deviceRequested || deviceEnded)
+                    return Status::InvalidArgument;
+                if (MTA_TEST_RENDER_MODE == 8 || (deviceFixtureStats && deviceFixtureStats->control == 1))
+                    return Status::Unsupported;
+                deviceRequested = true;
+                return Status::Ok;
+            }
+
+            Status TakeDevice(RenderDeviceLeaseV1& output) noexcept
+            {
+                if (!deviceRequested || !deviceBegan || deviceEnded || deviceTaken || MTA_TEST_RENDER_MODE == 2 ||
+                    (deviceFixtureStats && deviceFixtureStats->control == 2))
+                    return Status::NotInitialized;
+                // This token tests transfer policy only. It has no COM vtable,
+                // so a passing consumer test cannot claim device or GPU work.
+                RenderDeviceLeaseV1 next;
+                next.device = reinterpret_cast<ID3D12Device*>(deviceIdentity);
+                next.generation = setupGeneration;
+                next.acceptedSnapshots = next.dispatchEntries = 7;
+                next.sourceProfileId = 2;
+                output = next;
+                deviceTaken = true;
+                if (deviceFixtureStats)
+                    ++deviceFixtureStats->transfers;
+                return Status::Ok;
+            }
+
         private:
             RenderFixtureV5 observation;
             unsigned        setupEndCount = 0;
+            bool            deviceRequested = false, deviceBegan = false, deviceEnded = false, deviceTaken = false;
         };
     }
 
@@ -559,6 +625,10 @@ namespace mta::game_de
     #endif
 
     #if MTA_TEST_RENDER_V6
+    extern "C" __declspec(dllexport) void SetFixtureDeviceStats(FixtureDeviceStats* stats) noexcept
+    {
+        deviceFixtureStats = stats;
+    }
     extern "C" __declspec(dllexport) void SetFixtureV6OperationObserver(void (*observer)() noexcept) noexcept
     {
         v6OperationObserver = observer;
@@ -570,12 +640,37 @@ namespace mta::game_de
         diagnosticLeaseV6 = new (std::nothrow) RenderFixtureV6;
         if (diagnosticLeaseV6)
         {
+            if (deviceFixtureStats)
+            {
+                ++deviceFixtureStats->allocations;
+                ++deviceFixtureStats->liveLeases;
+            }
             ++setupGeneration;
             setupCleanupAttempted = setupCleanupComplete = 0;
         }
         diagnosticOwnerThread = GetCurrentThreadId();
         return diagnosticLeaseV6;
     }
+        #if MTA_TEST_RENDER_MODE != 6
+    extern "C" Status RequestGameRenderDeviceLeaseV1(std::uint32_t version, IGameRenderObservationV6* lease) noexcept
+    {
+        if (version != RenderDeviceLeaseVersionV1 || !lease || lease != diagnosticLeaseV6)
+            return Status::InvalidArgument;
+        if (GetCurrentThreadId() != diagnosticOwnerThread)
+            return Status::WrongThread;
+        return static_cast<RenderFixtureV6*>(lease)->RequestDevice();
+    }
+    extern "C" Status TakeGameRenderDeviceLeaseV1(std::uint32_t version, IGameRenderObservationV6* lease, RenderDeviceLeaseV1* output) noexcept
+    {
+        if (deviceFixtureStats)
+            ++deviceFixtureStats->takes;
+        if (version != RenderDeviceLeaseVersionV1 || !lease || lease != diagnosticLeaseV6 || !output)
+            return Status::InvalidArgument;
+        if (GetCurrentThreadId() != diagnosticOwnerThread)
+            return Status::WrongThread;
+        return static_cast<RenderFixtureV6*>(lease)->TakeDevice(*output);
+    }
+        #endif
         // Mode6 is an actual historical provider with no optional diagnostic export.
         // Mode8 deliberately returns a different diagnostic version, not admission.
         #if MTA_TEST_RENDER_MODE != 6
@@ -832,6 +927,16 @@ namespace
             Check(host.EndNativeRenderObservation() && host.GetNativeRenderObservationState(dispatch) && !dispatch.base.base.base.base.base.active &&
                       !dispatch.base.base.base.base.base.pendingCleanup && !dispatch.nativeDispatch.presentEntries && !dispatch.base.boundary.presentEntries,
                   "actual API6 caches safe zero-query cleanup before releasing its larger lease");
+            Check(GetProcAddress(GetModuleHandleW(modulePath.c_str()), "RequestGameRenderDeviceLeaseV1") &&
+                      GetProcAddress(GetModuleHandleW(modulePath.c_str()), "TakeGameRenderDeviceLeaseV1"),
+                  "actual module exposes the separately versioned explicit device handoff");
+            mta::game_de::RenderDeviceLeaseV1 deviceLease;
+            deviceLease.generation = 0xfedcba9876543210ull;
+            Check(!host.BeginNativeRenderDeviceObservation() && host.GetNativeRenderObservationState(dispatch) &&
+                      dispatch.base.base.base.base.base.failureReason && !dispatch.base.base.base.base.base.bound && !dispatch.nativeDispatch.presentEntries &&
+                      !host.TakeNativeRenderDeviceLease(deviceLease) && !deviceLease.device && deviceLease.generation == 0xfedcba9876543210ull,
+                  "actual requested device observation still refuses a non-game host without inventing device ownership");
+            Check(host.EndNativeRenderObservation(), "actual failed device admission safely releases its fresh V6 lease");
             Check(!host.BeginNativeMovementTrial(), "movement trial requires an explicit synthesized frame");
             mta::game_de::LocalObservation observation;
             observation.sampleAtMs = 1000;
@@ -1790,6 +1895,195 @@ namespace
         Check(!host.IsStarted() && !GetModuleHandleW(path.c_str()), "roots consumer releases the owned provider normally");
     }
 
+    mta::game_de::RenderDeviceLeaseV1 DeviceOutputSentinel() noexcept
+    {
+        mta::game_de::RenderDeviceLeaseV1 value;
+        value.size = 77;
+        value.version = 88;
+        value.generation = 0xfedcba9876543210ull;
+        value.acceptedSnapshots = 0x123456789abcdef0ull;
+        value.dispatchEntries = 0xabcdef0123456789ull;
+        value.sourceProfileId = 99;
+        value.reserved = 66;
+        return value;
+    }
+
+    bool SameDeviceOutput(const mta::game_de::RenderDeviceLeaseV1& a, const mta::game_de::RenderDeviceLeaseV1& b) noexcept
+    {
+        return a.size == b.size && a.version == b.version && a.device == b.device && a.generation == b.generation &&
+               a.acceptedSnapshots == b.acceptedSnapshots && a.dispatchEntries == b.dispatchEntries && a.sourceProfileId == b.sourceProfileId &&
+               a.reserved == b.reserved;
+    }
+
+    bool FinishDeviceObservation(CGameAdapterModule& host) noexcept
+    {
+        // Existing provider modes deliberately refuse the first End/final read.
+        // Exercise the actual consumer retry without discarding its live lease.
+        for (unsigned attempt = 0; attempt < 3; ++attempt)
+            if (host.EndNativeRenderObservation())
+                return true;
+        return false;
+    }
+
+    void TestDeviceLeaseProvider(CCoreInterface* owner, const std::wstring& path, unsigned mode, const std::wstring& loaderProbePath)
+    {
+        using namespace mta::game_de;
+        CGameAdapterModule host;
+        Check(host.Start(owner, path), "device policy fixture starts an owned controlled V6 provider");
+        FixtureDeviceStats stats;
+        using ConfigureDevice = void (*)(FixtureDeviceStats*) noexcept;
+        ConfigureDevice configureDevice = nullptr;
+        auto            address = GetProcAddress(GetModuleHandleW(path.c_str()), "SetFixtureDeviceStats");
+        std::memcpy(&configureDevice, &address, sizeof(configureDevice));
+        Check(configureDevice != nullptr, "device fixture exposes separate allocation/request/transfer counters");
+        configureDevice(&stats);
+        std::uint32_t lifetime[14]{};
+        using ConfigureLifetime = void (*)(std::uint32_t*) noexcept;
+        ConfigureLifetime configureLifetime = nullptr;
+        address = GetProcAddress(GetModuleHandleW(path.c_str()), "SetFacadeFixtureCounters");
+        std::memcpy(&configureLifetime, &address, sizeof(configureLifetime));
+        Check(configureLifetime != nullptr, "device fixture retains the existing adapter lifetime counters");
+        configureLifetime(lifetime);
+        auto       output = DeviceOutputSentinel();
+        const auto sentinel = output;
+        Check(!host.TakeNativeRenderDeviceLease(output) && SameDeviceOutput(output, sentinel) && !stats.takes,
+              "Take before an explicit lease preserves every output field without calling the provider");
+        Check(host.BeginNativeRenderDispatchObservation(RenderObservationRoute::D3D12) == (mode != 2) && !stats.requests,
+              "historical read-only V6 Begin never requests persistent device ownership");
+        const auto readonlyAllocations = stats.allocations;
+        Check(!host.BeginNativeRenderDeviceObservation() && stats.allocations == readonlyAllocations && !stats.requests,
+              "explicit device Begin cannot replace a retained read-only observer");
+        Check(!host.TakeNativeRenderDeviceLease(output) && SameDeviceOutput(output, sentinel) && !stats.takes,
+              "read-only V6 never calls an optional Take export or upgrades into a device lease");
+        Check(FinishDeviceObservation(host) && stats.releases == stats.allocations && !stats.liveLeases,
+              "read-only fixture cleans its observation before any explicit device allocation");
+        const auto previousBegins = stats.begins;
+        const auto previousReleases = stats.releases;
+        const bool began = host.BeginNativeRenderDeviceObservation();
+        Check(began == (mode != 2 && mode != 6 && mode != 8), "explicit device Begin distinguishes missing, refused and failed admission");
+        if (mode == 6 || mode == 8)
+        {
+            if (mode == 6)
+                Check(!GetProcAddress(GetModuleHandleW(path.c_str()), "RequestGameRenderDeviceLeaseV1") &&
+                          !GetProcAddress(GetModuleHandleW(path.c_str()), "TakeGameRenderDeviceLeaseV1") && !stats.requests,
+                      "historical provider genuinely omits both optional device exports");
+            else
+                Check(stats.requests == 1, "refused Request is called once on the fresh allocation");
+            Check(stats.begins == previousBegins && stats.releases == previousReleases + 1 && !stats.liveLeases && !lifetime[0],
+                  "missing/refused Request disposes the never-begun lease immediately without fallback or adapter shutdown");
+            const auto takes = stats.takes;
+            Check(!host.TakeNativeRenderDeviceLease(output) && SameDeviceOutput(output, sentinel) && stats.takes == takes,
+                  "rejected fresh device setup clears cached Take and preserves output");
+            host.Stop();
+            Check(!host.IsStarted() && !GetModuleHandleW(path.c_str()) && stats.releases == stats.allocations,
+                  "missing/refused device exports leak no fresh observation or owned module");
+            return;
+        }
+        Check(stats.requests == 1 && stats.begins == previousBegins + 1 && stats.requestOrder < stats.beginOrder && stats.liveLeases == 1,
+              "fresh Request completes before the exact V6 Begin and establishes one cleanup owner");
+        stats.control = 2;
+        Check(!host.TakeNativeRenderDeviceLease(output) && SameDeviceOutput(output, sentinel),
+              "an unavailable requested result leaves every caller field untouched");
+        stats.control = 0;
+        if (mode == 2)
+        {
+            Check(!host.TakeNativeRenderDeviceLease(output) && SameDeviceOutput(output, sentinel) && !stats.transfers && !host.EndNativeRenderObservation() &&
+                      stats.liveLeases == 1 && stats.releases == previousReleases && GetModuleHandleW(path.c_str()),
+                  "failed Begin supplies no device and failed End retains provider/lease for retry");
+            Check(FinishDeviceObservation(host), "owner retries failed device Begin cleanup safely");
+        }
+        else
+        {
+            auto occupied = sentinel;
+            occupied.device = reinterpret_cast<ID3D12Device*>(&stats);
+            const auto occupiedBefore = occupied;
+            const auto takesBeforeOccupied = stats.takes;
+            Check(!host.TakeNativeRenderDeviceLease(occupied) && SameDeviceOutput(occupied, occupiedBefore) && stats.takes == takesBeforeOccupied,
+                  "consumer refuses to overwrite an already owned device before provider entry");
+            bool        foreignBegin = true, foreignTake = true;
+            auto        foreignOutput = sentinel;
+            const auto  foreignRequests = stats.requests, foreignTakes = stats.takes;
+            std::thread foreign(
+                [&]
+                {
+                    foreignBegin = host.BeginNativeRenderDeviceObservation();
+                    foreignTake = host.TakeNativeRenderDeviceLease(foreignOutput);
+                });
+            foreign.join();
+            Check(
+                !foreignBegin && !foreignTake && SameDeviceOutput(foreignOutput, sentinel) && stats.requests == foreignRequests && stats.takes == foreignTakes,
+                "foreign Core thread cannot request or take a device or replace caller output");
+            if (mode == 4)
+            {
+                wchar_t enteredName[96]{}, resumeName[96]{}, timeoutName[96]{};
+                swprintf_s(enteredName, L"Local\\MtaApi6DiagnosticLoaderEntered-%lu", GetCurrentProcessId());
+                swprintf_s(resumeName, L"Local\\MtaApi6DiagnosticLoaderResume-%lu", GetCurrentProcessId());
+                swprintf_s(timeoutName, L"Local\\MtaApi6DiagnosticLoaderTimeout-%lu", GetCurrentProcessId());
+                const auto entered = CreateEventW(nullptr, TRUE, FALSE, enteredName);
+                const auto resume = CreateEventW(nullptr, TRUE, FALSE, resumeName);
+                const auto timeout = CreateEventW(nullptr, TRUE, FALSE, timeoutName);
+                Check(entered && resume && timeout, "device cached-Take loader gates created");
+                HMODULE     loadedProbe = nullptr;
+                std::thread loader(
+                    [&]
+                    { loadedProbe = LoadLibraryExW(loaderProbePath.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS); });
+                const bool held = WaitForSingleObject(entered, 5000) == WAIT_OBJECT_0;
+                const auto started = GetTickCount64();
+                const bool transferred = held && host.TakeNativeRenderDeviceLease(output);
+                const auto elapsed = GetTickCount64() - started;
+                SetEvent(resume);
+                loader.join();
+                const bool timedOut = WaitForSingleObject(timeout, 0) != WAIT_TIMEOUT;
+                if (loadedProbe)
+                    FreeLibrary(loadedProbe);
+                CloseHandle(entered);
+                CloseHandle(resume);
+                CloseHandle(timeout);
+                Check(held && loadedProbe && transferred && !timedOut && elapsed < 1500,
+                      "pre-resolved device Take completes while another owned provider holds the real loader lock");
+            }
+            else
+                Check(host.TakeNativeRenderDeviceLease(output), "requested controlled device transfers once");
+            Check(output.size == sizeof(output) && output.version == RenderDeviceLeaseVersionV1 && output.device && output.generation &&
+                      output.acceptedSnapshots == 7 && output.dispatchEntries == 7 && output.sourceProfileId == 2 && !output.reserved && stats.transfers == 1,
+                  "device transfer copies exact value provenance and one opaque control token without COM calls");
+            const auto transferred = output;
+            auto       duplicate = sentinel;
+            Check(!host.TakeNativeRenderDeviceLease(duplicate) && SameDeviceOutput(duplicate, sentinel) && stats.transfers == 1,
+                  "second Take cannot replay ownership or partially replace output");
+            const bool ended = host.EndNativeRenderObservation();
+            if (mode == 1 || mode == 3 || mode == 5)
+                Check(!ended && stats.liveLeases == 1 && stats.releases == previousReleases && host.IsStarted() && GetModuleHandleW(path.c_str()),
+                      "failed End/final-read retains the device provider and exact observation for cleanup retry");
+            else
+                Check(ended, "controlled device observer ends safely");
+            Check(FinishDeviceObservation(host) && SameDeviceOutput(output, transferred),
+                  "safe observer End never releases or changes the caller's transferred token");
+            const auto takesAfterEnd = stats.takes;
+            duplicate = sentinel;
+            Check(!host.TakeNativeRenderDeviceLease(duplicate) && SameDeviceOutput(duplicate, sentinel) && stats.takes == takesAfterEnd,
+                  "safe End clears cached Take before Release and never calls or replays a released provider");
+            const auto requestsAfterEnd = stats.requests;
+            Check(host.BeginNativeRenderDispatchObservation(RenderObservationRoute::D3D12) && stats.requests == requestsAfterEnd &&
+                      !host.TakeNativeRenderDeviceLease(duplicate) && SameDeviceOutput(duplicate, sentinel) && stats.takes == takesAfterEnd,
+                  "a later read-only V6 lease cannot inherit a previous device request or cached Take");
+            Check(FinishDeviceObservation(host), "later read-only observer cleans before a fresh explicit request");
+            Check(host.BeginNativeRenderDeviceObservation() && stats.requests == requestsAfterEnd + 1,
+                  "a separate fresh V6 allocation can explicitly request a new one-shot device result");
+            auto next = sentinel;
+            Check(host.TakeNativeRenderDeviceLease(next) && next.device && next.generation > transferred.generation && stats.transfers == 2,
+                  "new explicit lease transfers current generation provenance instead of cached prior ownership");
+            Check(FinishDeviceObservation(host), "new explicit device generation completes cleanup");
+        }
+        const auto finalTakes = stats.takes;
+        output = sentinel;
+        Check(!host.TakeNativeRenderDeviceLease(output) && SameDeviceOutput(output, sentinel) && stats.takes == finalTakes,
+              "completed device observer leaves no stale function or output cache");
+        host.Stop();
+        Check(!host.IsStarted() && !GetModuleHandleW(path.c_str()) && !stats.liveLeases && stats.allocations == stats.releases && lifetime[0] == 1,
+              "all controlled device allocations release before adapter shutdown and module unload");
+    }
+
     void TestRenderProviderV6(CCoreInterface* owner, const std::wstring& path, unsigned mode, const std::wstring& loaderProbePath)
     {
         using namespace mta::game_de;
@@ -2155,6 +2449,8 @@ int wmain(int argc, wchar_t** argv)
                 TestRenderProviderV6(owner, argv[mode + 41], mode, argv[49]);
             TestSetupDiagnosticGeneration(owner, argv[45]);
             TestRootsDiagnosticGeneration(owner, argv[45]);
+            for (unsigned mode = 1; mode <= 8; ++mode)
+                TestDeviceLeaseProvider(owner, argv[mode + 41], mode, argv[49]);
         }
     #else
         CGameAdapterModule host;

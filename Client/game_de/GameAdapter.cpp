@@ -8,6 +8,7 @@
 #include <game/CGameRenderObservation.h>
 #include <game/CGameRenderEndpointDiagnostic.h>
 #include <game/CGameRenderSetupDiagnostic.h>
+#include <game/CGameRenderDeviceLease.h>
 #include "ControllerSnapshot.h"
 #include "NativePadReader.h"
 #include "NativeMovementInput.h"
@@ -650,6 +651,44 @@ namespace mta::game_de
         class GameRenderObservationV6 final : public IGameRenderObservationV6
         {
         public:
+            static Status RequestDeviceLease(IGameRenderObservationV6* lease) noexcept
+            {
+                if (!TryAcquireSRWLockShared(&diagnosticLeaseLock))
+                    return Status::Unsupported;
+                Status result = Status::InvalidArgument;
+                for (auto* current = diagnosticLeasesV6; current; current = current->nextDiagnosticLease)
+                {
+                    if (static_cast<IGameRenderObservationV6*>(current) != lease)
+                        continue;
+                    if (current->ownerThread != GetCurrentThreadId())
+                        result = Status::WrongThread;
+                    else if (current->beginAttempted || current->deviceRequested)
+                        result = Status::Unsupported;
+                    else
+                    {
+                        current->deviceRequested = true;
+                        result = Status::Ok;
+                    }
+                    break;
+                }
+                ReleaseSRWLockShared(&diagnosticLeaseLock);
+                return result;
+            }
+            static Status TakeDeviceLease(IGameRenderObservationV6* lease, RenderDeviceLeaseV1& output) noexcept
+            {
+                if (!TryAcquireSRWLockShared(&diagnosticLeaseLock))
+                    return Status::Unsupported;
+                Status result = Status::InvalidArgument;
+                for (auto* current = diagnosticLeasesV6; current; current = current->nextDiagnosticLease)
+                {
+                    if (static_cast<IGameRenderObservationV6*>(current) != lease)
+                        continue;
+                    result = current->ownerThread != GetCurrentThreadId() ? Status::WrongThread : current->observation.TakeDeviceLease(output);
+                    break;
+                }
+                ReleaseSRWLockShared(&diagnosticLeaseLock);
+                return result;
+            }
             explicit GameRenderObservationV6(RenderObservationRoute requested) noexcept : route(requested)
             {
                 // A separate registry keeps exact lease validation from
@@ -728,7 +767,10 @@ namespace mta::game_de
             {
                 if (ownerThread != GetCurrentThreadId())
                     return Status::WrongThread;
-                return observation.Begin(route, true, true, true, true) ? Status::Ok : Status::Unsupported;
+                const bool captureDevice = deviceRequested;
+                deviceRequested = false;
+                beginAttempted = true;
+                return observation.Begin(route, true, true, true, true, captureDevice) ? Status::Ok : Status::Unsupported;
             }
             Status ReadState(RenderObservationStateV6& state) noexcept override
             {
@@ -757,10 +799,12 @@ namespace mta::game_de
             }
             void Release() noexcept override
             {
-                if (ownerThread != GetCurrentThreadId() || !observation.End())
+                if (ownerThread != GetCurrentThreadId() || (beginAttempted && !observation.End()))
                     return;
                 // The callsite may still own a live relay after failed End.
                 // Retain it and exclude diagnostic readers only on safe release.
+                // A fresh allocation has no runtime generation. Its disposal
+                // must not depend on a different observer's global hook state.
                 AcquireSRWLockExclusive(&diagnosticLeaseLock);
                 auto** current = &diagnosticLeasesV6;
                 while (*current && *current != this)
@@ -776,6 +820,7 @@ namespace mta::game_de
             const RenderObservationRoute route;
             NativeRenderObservation      observation;
             GameRenderObservationV6*     nextDiagnosticLease = nullptr;
+            bool                         deviceRequested = false, beginAttempted = false;
         };
     }
 
@@ -932,4 +977,24 @@ namespace mta::game_de
             *output = next;
         return result;
     }
+}
+
+extern "C" mta::game_de::Status RequestGameRenderDeviceLeaseV1(std::uint32_t version, mta::game_de::IGameRenderObservationV6* retainedLease) noexcept
+{
+    if (version != mta::game_de::RenderDeviceLeaseVersionV1 || !retainedLease)
+        return mta::game_de::Status::InvalidArgument;
+    return mta::game_de::GameRenderObservationV6::RequestDeviceLease(retainedLease);
+}
+extern "C" mta::game_de::Status TakeGameRenderDeviceLeaseV1(std::uint32_t version, mta::game_de::IGameRenderObservationV6* retainedLease,
+                                                            mta::game_de::RenderDeviceLeaseV1* output) noexcept
+{
+    if (version != mta::game_de::RenderDeviceLeaseVersionV1 || !retainedLease || !output)
+        return mta::game_de::Status::InvalidArgument;
+    // The record is output-only. Ordinary refusal never reads or overwrites a
+    // caller sentinel; ownership moves only after exact lease/thread validation.
+    mta::game_de::RenderDeviceLeaseV1 next;
+    const auto                        result = mta::game_de::GameRenderObservationV6::TakeDeviceLease(retainedLease, next);
+    if (result == mta::game_de::Status::Ok)
+        *output = next;
+    return result;
 }

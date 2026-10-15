@@ -6,6 +6,7 @@
 [CmdletBinding()]
 param(
     [string]$PackageRoot,
+    [string]$GuiPackagePath,
     [Parameter(Mandatory)][string]$GameExecutable
 )
 
@@ -34,6 +35,12 @@ $expectedPaths = @(
     'DE_ONLINE_LICENSES/CLEO_REDUX_LICENSE.txt', 'DE_ONLINE_LICENSES/ULTIMATE_ASI_LOADER_LICENSE.txt',
     'DE_ONLINE_LICENSES/MTA_GPLv3.txt', 'DE_ONLINE_LICENSES/SANNY_BUILDER_LIBRARY_README.md'
 )
+$guiPaths = @('CLEO/de-online/cgui.dll',
+    'CLEO/de-online/mta/cgui/sans.ttf', 'CLEO/de-online/mta/cgui/saheader.ttf', 'CLEO/de-online/mta/cgui/sagothic.ttf',
+    'CLEO/de-online/mta/cgui/Imageset.xsd', 'CLEO/de-online/mta/cgui/GUIScheme.xsd', 'CLEO/de-online/mta/cgui/Font.xsd',
+    'CLEO/de-online/mta/cgui/Falagard.xsd', 'CLEO/de-online/mta/cgui/unifont.ttf',
+    'CLEO/de-online/skins/Default/CGUI.xml', 'CLEO/de-online/skins/Default/CGUI.is.xml',
+    'CLEO/de-online/skins/Default/CGUI.lnf.xml', 'CLEO/de-online/skins/Default/CGUI.png')
 
 function Get-Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 if ((Get-Sha $sourceExecutable) -ne $knownGameHash) { throw 'A copy of the exact verified Steam executable is required.' }
@@ -52,6 +59,28 @@ foreach ($entry in $sourceManifest.files) {
     if ((Get-Sha (Join-Path $sourcePackage ('Win64/' + $entry.path))) -ne $entry.sha256) {
         throw "Source package hash differs: $($entry.path)"
     }
+}
+$guiPackage = $null
+$guiManifest = $null
+$guiPackageHashes = @()
+if ($GuiPackagePath) {
+    $guiPackage = (Resolve-Path -LiteralPath $GuiPackagePath).Path
+    $guiManifest = Get-Content -LiteralPath (Join-Path $guiPackage 'manifest.json') -Raw | ConvertFrom-Json
+    if ($guiManifest.packageId -ne 'de-online-prototype' -or $guiManifest.mode -ne 'Smoke' -or $guiManifest.gameSha256 -ne $knownGameHash -or $guiManifest.formatVersion -ne 1 -or
+        @($guiManifest.files).Count -ne 36 -or @($guiManifest.files.path | Select-Object -Unique).Count -ne 36 -or @(Compare-Object ($expectedPaths + $guiPaths) @($guiManifest.files.path)).Count -ne 0) {
+        throw 'Supply the complete real 36-file GUI Smoke package.'
+    }
+    foreach ($entry in $guiManifest.files) {
+        if ((Get-Sha (Join-Path $guiPackage ('Win64/' + $entry.path))) -ne $entry.sha256) { throw "GUI source package hash differs: $($entry.path)" }
+        if ($entry.path -in $expectedPaths -and $entry.path -ne 'CLEO/de-online/config.mjs') {
+            if (@($sourceManifest.files | Where-Object path -eq $entry.path)[0].sha256 -ne $entry.sha256) { throw "GUI and ordinary backend bytes differ: $($entry.path)" }
+        }
+    }
+    $guiConfig = [IO.File]::ReadAllText((Join-Path $guiPackage 'Win64/CLEO/de-online/config.mjs'))
+    if ([regex]::Matches($guiConfig, 'export const MTA_CORE_GUI_STARTUP_REFERENCE = true;').Count -ne 1 -or $guiConfig -match 'export const (GAIT_REFERENCE|GAIT_RATE|GAIT_ROOT_LOCK|INPUT_REFERENCE|MTA_NATIVE_PAD_REFERENCE|MTA_NATIVE_MOVEMENT_TRIAL|MTA_CORE_STARTUP_REFERENCE|MTA_CORE_INPUT_REFERENCE|MTA_CORE_MOVEMENT_REFERENCE|MTA_CORE_RENDER_REFERENCE|MTA_CORE_RENDER_GPU_REFERENCE|MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE|MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE|MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE) = true;') {
+        throw 'GUI ownership tests require an explicitly armed, separate GUI startup package.'
+    }
+    $guiPackageHashes = @([ordered]@{ path='manifest.json'; sha256=(Get-Sha (Join-Path $guiPackage 'manifest.json')) }) + @($guiManifest.files | ForEach-Object { [ordered]@{ path=('Win64/' + $_.path); sha256=$_.sha256 } })
 }
 $outputRoot = Join-Path $repositoryRoot ('Build/mta-movement-package-tests/' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($outputRoot) | Out-Null
@@ -146,6 +175,26 @@ function New-Fixture([string]$Name) {
 }
 function Install-Fresh([object]$Fixture) {
     Invoke-Production $Fixture 'install.ps1' @{ Mode='Smoke'; PackageDirectory=$Fixture.package; GameDirectory=$Fixture.game }
+}
+function Select-FixturePackage([object]$Fixture, [bool]$Gui) {
+    # Switch only the disposable package tree; current installed ownership is
+    # left intact so update exercises the real 23-to-36 and 36-to-23 transaction.
+    $old = Get-Content -LiteralPath (Join-Path $Fixture.package 'manifest.json') -Raw | ConvertFrom-Json
+    foreach ($entry in $old.files) { Remove-Item -LiteralPath (Assert-FixturePath (Join-Path $Fixture.package ('Win64/' + $entry.path))) }
+    Remove-Item -LiteralPath (Assert-FixturePath (Join-Path $Fixture.package 'manifest.json'))
+    $source = if ($Gui) { $guiPackage } else { $sourcePackage }
+    $manifest = if ($Gui) { $guiManifest } else { $sourceManifest }
+    Copy-FixtureFile (Join-Path $source 'manifest.json') (Join-Path $Fixture.package 'manifest.json')
+    foreach ($entry in $manifest.files) { Copy-FixtureFile (Join-Path $source ('Win64/' + $entry.path)) (Join-Path $Fixture.package ('Win64/' + $entry.path)) }
+}
+function Assert-GuiInstalled([object]$Fixture) {
+    $manifest = Get-Content -LiteralPath (Join-Path $Fixture.game 'de-online-install-manifest.json') -Raw | ConvertFrom-Json
+    Assert-Check (@($manifest.files).Count -eq 36 -and @(Compare-Object ($expectedPaths + $guiPaths) @($manifest.files.path)).Count -eq 0) 'GUI exact complete36 ownership'
+    foreach ($entry in $manifest.files) {
+        $expected = @($guiManifest.files | Where-Object path -eq $entry.path)[0]
+        Assert-Check ($entry.sha256 -eq $expected.sha256 -and (Get-Sha $entry.destination) -eq $expected.sha256) ('GUI owned hash ' + $entry.path)
+    }
+    Invoke-Production $Fixture 'uninstall.ps1' @{GameDirectory=$Fixture.game;ValidateOnly=$true}
 }
 function Install-Legacy([object]$Fixture, [int]$Count) {
     $excluded = @()
@@ -751,15 +800,177 @@ try {
         Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' @{ Mode='Smoke'; MtaCoreRenderReference=$true; GameDirectory=$fixture.game } } 'Update the adapter before selecting MTA Core renderer observation' 'Historical config cannot infer render opt-in'
         Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Missing render marker changes no bytes'
     }
+    if ($guiPackage) {
+        Invoke-Case 'gui23-36-23-transaction' {
+            param($fixture)
+            Install-Fresh $fixture
+            Select-FixturePackage $fixture $true
+            Invoke-Production $fixture 'update.ps1' @{GameDirectory=$fixture.game}
+            Assert-GuiInstalled $fixture
+            $config = Join-Path $fixture.game 'CLEO/de-online/config.mjs'
+            foreach ($mode in @('Smoke','Diagnostic','Online','Smoke')) {
+                Invoke-Production $fixture 'set-mode.ps1' @{Mode=$mode;GameDirectory=$fixture.game}
+                Assert-Check ([IO.File]::ReadAllText($config) -match 'export const MTA_CORE_GUI_STARTUP_REFERENCE = false;') "Ordinary $mode clears GUI opt-in"
+            }
+            Invoke-Production $fixture 'set-mode.ps1' @{Mode='Smoke';MtaCoreGuiStartupReference=$true;GameDirectory=$fixture.game}
+            Assert-Check ([IO.File]::ReadAllText($config) -match 'export const MTA_CORE_GUI_STARTUP_REFERENCE = true;') 'GUI complete group can be explicitly rearmed'
+            $user = Join-Path $fixture.game 'CLEO/de-online/mta/cgui/user.txt'
+            Write-FixtureBytes $user ($utf8.GetBytes('Retained GUI user bytes'))
+            $userHash = Get-Sha $user
+            Select-FixturePackage $fixture $false
+            Invoke-Production $fixture 'update.ps1' @{GameDirectory=$fixture.game}
+            Assert-InstalledPackage $fixture
+            foreach ($path in $guiPaths) { Assert-Check (-not (Test-Path -LiteralPath (Join-Path $fixture.game $path))) ('Downgrade removes only GUI owned ' + $path) }
+            Assert-Check ((Get-Sha $user) -eq $userHash) 'GUI downgrade preserves user bytes'
+            $backupManifests = @(Get-ChildItem -LiteralPath (Join-Path $fixture.repository 'Build/definitive-update-backups') -Filter manifest.json -Recurse)
+            Assert-Check ($backupManifests.Count -eq 2) 'Both package transitions retain prior manifests'
+            $guiBackup = @($backupManifests | Where-Object { @((Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json).files).Count -eq 36 })[0]
+            $originalHashes = @(Get-ChildItem -LiteralPath $guiBackup.DirectoryName -Filter '*.original' | ForEach-Object { Get-Sha $_.FullName })
+            foreach ($path in $guiPaths) { Assert-Check (@($guiManifest.files | Where-Object path -eq $path)[0].sha256 -in $originalHashes) ('Downgrade preserves backup ' + $path) }
+            Invoke-Production $fixture 'uninstall.ps1' @{GameDirectory=$fixture.game}
+            Assert-Check ((Get-Sha $user) -eq $userHash) 'Ordinary uninstall preserves later GUI user bytes'
+        }
+        Invoke-Case 'gui-fresh36-validate-uninstall' {
+            param($fixture)
+            Select-FixturePackage $fixture $true
+            Install-Fresh $fixture
+            Assert-GuiInstalled $fixture
+            $user = Join-Path $fixture.game 'CLEO/de-online/skins/Default/user.xml'
+            Write-FixtureBytes $user ($utf8.GetBytes('Retained custom skin'))
+            $hash = Get-Sha $user
+            Invoke-Production $fixture 'uninstall.ps1' @{GameDirectory=$fixture.game}
+            foreach ($path in ($expectedPaths + $guiPaths)) { Assert-Check (-not (Test-Path -LiteralPath (Join-Path $fixture.game $path))) ('GUI uninstall removes owned ' + $path) }
+            Assert-Check ((Get-Sha $user) -eq $hash) 'GUI uninstall preserves custom skin'
+        }
+        foreach ($missing in $guiPaths) {
+            Invoke-Case ('gui-partial-package-' + [IO.Path]::GetFileName($missing)) {
+                param($fixture)
+                Install-Fresh $fixture
+                Select-FixturePackage $fixture $true
+                $manifestPath = Join-Path $fixture.package 'manifest.json'
+                $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+                $manifest.files = @($manifest.files | Where-Object path -ne $missing)
+                Write-FixtureJson $manifestPath $manifest
+                Remove-Item -LiteralPath (Assert-FixturePath (Join-Path $fixture.package ('Win64/' + $missing)))
+                $fresh = New-GameDirectory (Join-Path $fixture.root 'fresh')
+                $before = Get-TreeFingerprint $fixture.root
+                Assert-Refused { Invoke-Production $fixture 'update.ps1' @{GameDirectory=$fixture.game} } 'Incomplete MTA Core GUI startup' 'Partial GUI update'
+                Assert-Refused { Invoke-Production $fixture 'install.ps1' @{Mode='Smoke';PackageDirectory=$fixture.package;GameDirectory=$fresh} } 'Incomplete MTA Core GUI startup' 'Partial GUI install'
+                Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Partial GUI package changes no bytes'
+            }
+            Invoke-Case ('gui-foreign-addition-' + [IO.Path]::GetFileName($missing)) {
+                param($fixture)
+                Install-Fresh $fixture
+                Select-FixturePackage $fixture $true
+                Write-FixtureBytes (Join-Path $fixture.game $missing) ($utf8.GetBytes('Foreign asset'))
+                $before = Get-TreeFingerprint $fixture.root
+                Assert-Refused { Invoke-Production $fixture 'update.ps1' @{GameDirectory=$fixture.game} } 'New owned reference path already exists' 'GUI foreign addition'
+                Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'GUI foreign asset is never overwritten'
+            }
+            Invoke-Case ('gui-edited-installed-' + [IO.Path]::GetFileName($missing)) {
+                param($fixture)
+                Select-FixturePackage $fixture $true
+                Install-Fresh $fixture
+                Write-FixtureBytes (Join-Path $fixture.game $missing) ($utf8.GetBytes('Edited owned asset'))
+                Select-FixturePackage $fixture $false
+                $before = Get-TreeFingerprint $fixture.root
+                Assert-Refused { Invoke-Production $fixture 'update.ps1' @{GameDirectory=$fixture.game} } 'Installed file was modified' 'GUI edited downgrade'
+                Assert-Refused { Invoke-Production $fixture 'uninstall.ps1' @{GameDirectory=$fixture.game} } 'Installed file was modified' 'GUI edited uninstall'
+                Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Edited GUI assets block all removal'
+            }
+        }
+        Invoke-Case 'gui-selection-conflicts-and-missing-assets' {
+            param($fixture)
+            Install-Fresh $fixture
+            $before = Get-TreeFingerprint $fixture.root
+            Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' @{Mode='Smoke';MtaCoreGuiStartupReference=$true;GameDirectory=$fixture.game} } 'complete owned GUI assets are missing' 'GUI cannot infer missing group'
+            Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Missing GUI group cannot mutate config'
+            foreach ($flag in @('NativeGaitReference','MatchedGaitRate','LockWalkRoot','NativeInputReference','MtaNativePadReference','MtaNativeMovementTrial','MtaCoreStartupReference','MtaCoreInputReference','MtaCoreMovementReference','MtaCoreRenderReference','MtaCoreRenderGpuReference','MtaCoreRenderCustomPresentReference','MtaCoreRenderFrameBoundaryReference','MtaCoreRenderNativeDispatchReference')) {
+                $selection = @{Mode='Smoke';MtaCoreGuiStartupReference=$true}; $selection[$flag]=$true
+                Assert-Refused { Invoke-Production $fixture 'package.ps1' $selection } 'GUI startup requires separate opt-in Smoke mode' ('GUI package rejects ' + $flag)
+                $selection.GameDirectory=$fixture.game
+                Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' $selection } 'GUI startup requires separate opt-in Smoke mode' ('GUI mode rejects ' + $flag)
+            }
+            foreach ($mode in @('Diagnostic','Online')) {
+                Assert-Refused { Invoke-Production $fixture 'package.ps1' @{Mode=$mode;MtaCoreGuiStartupReference=$true} } 'separate opt-in Smoke mode' 'GUI package mode conflict'
+                Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' @{Mode=$mode;MtaCoreGuiStartupReference=$true;GameDirectory=$fixture.game} } 'separate opt-in Smoke mode' 'GUI selected mode conflict'
+            }
+            Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'GUI conflicts change no bytes or backups'
+        }
+        Invoke-Case 'gui-partial-installed-and-missing-marker' {
+            param($fixture)
+            Select-FixturePackage $fixture $true
+            Install-Fresh $fixture
+            $config = Join-Path $fixture.game 'CLEO/de-online/config.mjs'
+            Write-FixtureBytes $config ($utf8.GetBytes([regex]::Replace([IO.File]::ReadAllText($config), 'export const MTA_CORE_GUI_STARTUP_REFERENCE = (true|false);', '')))
+            $manifestPath = Join-Path $fixture.game 'de-online-install-manifest.json'
+            $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+            @($manifest.files | Where-Object path -eq 'CLEO/de-online/config.mjs')[0].sha256 = Get-Sha $config
+            Write-FixtureJson $manifestPath $manifest
+            $before = Get-TreeFingerprint $fixture.root
+            Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' @{Mode='Smoke';MtaCoreGuiStartupReference=$true;GameDirectory=$fixture.game} } 'Update the adapter before selecting MTA Core GUI startup' 'GUI missing marker'
+            Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Missing GUI marker changes no bytes'
+            $manifest.files = @($manifest.files | Where-Object path -ne $guiPaths[0])
+            Write-FixtureJson $manifestPath $manifest
+            $before = Get-TreeFingerprint $fixture.root
+            Assert-Refused { Invoke-Production $fixture 'uninstall.ps1' @{GameDirectory=$fixture.game} } 'Incomplete MTA Core GUI startup' 'GUI partial installed manifest'
+            Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Partial installed GUI group cannot be removed'
+        }
+        Invoke-Case 'gui-forged-conflicting-package' {
+            param($fixture)
+            Install-Fresh $fixture
+            Select-FixturePackage $fixture $true
+            $config = Join-Path $fixture.package 'Win64/CLEO/de-online/config.mjs'
+            Write-FixtureBytes $config ($utf8.GetBytes([IO.File]::ReadAllText($config).Replace('export const MTA_CORE_RENDER_REFERENCE = false;', 'export const MTA_CORE_RENDER_REFERENCE = true;')))
+            $manifestPath = Join-Path $fixture.package 'manifest.json'
+            $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+            @($manifest.files | Where-Object path -eq 'CLEO/de-online/config.mjs')[0].sha256=Get-Sha $config
+            Write-FixtureJson $manifestPath $manifest
+            $fresh=New-GameDirectory (Join-Path $fixture.root 'fresh')
+            $before=Get-TreeFingerprint $fixture.root
+            Assert-Refused { Invoke-Production $fixture 'update.ps1' @{GameDirectory=$fixture.game} } 'separate opt-in Smoke mode' 'Forged GUI update flags'
+            Assert-Refused { Invoke-Production $fixture 'install.ps1' @{Mode='Smoke';PackageDirectory=$fixture.package;GameDirectory=$fresh} } 'separate opt-in Smoke mode' 'Forged GUI install flags'
+            Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Forged GUI flag conflicts stage no bytes'
+        }
+        Invoke-Case 'gui-edited-package-asset' {
+            param($fixture)
+            Install-Fresh $fixture
+            Select-FixturePackage $fixture $true
+            Write-FixtureBytes (Join-Path $fixture.package ('Win64/' + $guiPaths[-1])) ($utf8.GetBytes('Corrupted package asset'))
+            $fresh=New-GameDirectory (Join-Path $fixture.root 'fresh')
+            $before=Get-TreeFingerprint $fixture.root
+            Assert-Refused { Invoke-Production $fixture 'update.ps1' @{GameDirectory=$fixture.game} } 'Package hash mismatch' 'Edited GUI source update'
+            Assert-Refused { Invoke-Production $fixture 'install.ps1' @{Mode='Smoke';PackageDirectory=$fixture.package;GameDirectory=$fresh} } 'Package content hash mismatch' 'Edited GUI source install'
+            Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Edited GUI package stages no files'
+        }
+        Invoke-Case 'gui-downgrade-failure-restores-owned-group' {
+            param($fixture)
+            Select-FixturePackage $fixture $true
+            Install-Fresh $fixture
+            Select-FixturePackage $fixture $false
+            $before=Get-TreeFingerprint $fixture.game
+            # A real exclusive replacement refusal occurs after the group has
+            # been removed. The production rollback must restore all 13 bytes
+            # and preserve the original36 manifest before this fixture unlocks.
+            $locked=[IO.File]::Open((Join-Path $fixture.game 'CLEO/de-online/config.mjs'), [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+            try {
+                Assert-Refused { Invoke-Production $fixture 'update.ps1' @{GameDirectory=$fixture.game} } 'being used|access|denied|process' 'GUI downgrade replacement is locked'
+            } finally { $locked.Dispose() }
+            Assert-Check ((Get-TreeFingerprint $fixture.game) -eq $before) 'Failed GUI downgrade restores every owned byte and manifest'
+            Invoke-Production $fixture 'uninstall.ps1' @{GameDirectory=$fixture.game;ValidateOnly=$true}
+        }
+    }
 } catch { $failure = $_.Exception.Message }
 $sourceUnchanged = $true
 foreach ($entry in $sourceHashes) { if ((Get-Sha (Join-Path $repositoryRoot $entry.path)) -ne $entry.sha256) { $sourceUnchanged = $false } }
 foreach ($entry in $packageHashes) { if ((Get-Sha (Join-Path $sourcePackage $entry.path)) -ne $entry.sha256) { $sourceUnchanged = $false } }
+foreach ($entry in $guiPackageHashes) { if ((Get-Sha (Join-Path $guiPackage $entry.path)) -ne $entry.sha256) { $sourceUnchanged = $false } }
 $sourceExecutableUnchanged = (Get-Sha $sourceExecutable) -eq $knownGameHash
 $record = [ordered]@{
     recordedAt=[DateTimeOffset]::Now.ToString('o'); directory=$outputRoot; success=($null -eq $failure -and $sourceUnchanged -and $sourceExecutableUnchanged);
     checks=$script:checks.Count; cases=$script:cases; checkLabels=$script:checks; failure=$failure;
     sourceHashes=$sourceHashes; packageRoot=$sourcePackage; packageHashes=$packageHashes; sourceUnchanged=$sourceUnchanged;
+    guiPackageRoot=$guiPackage; guiPackageHashes=$guiPackageHashes; guiCasesEnabled=($null -ne $guiPackage);
     gameExecutableSource=$sourceExecutable; gameExecutableSha256=$knownGameHash; sourceExecutableUnchanged=$sourceExecutableUnchanged;
     actualGameInstallationChanged=$false; gameLaunched=$false; gameProcessAttached=$false; nativeInputWriteVerified=$false
 }

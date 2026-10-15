@@ -18,7 +18,7 @@ $sourceNames = @('Client/sdk/game/CGameAdapter.h', 'Client/game_de/GameAdapter.c
     'Client/game_de/premake5.lua', 'vendor/detours/premake5.lua',
     'Client/game_de/NativePadReader.h', 'Client/game_de/NativePadReader.cpp',
     'Client/game_de/NativeMovementInput.h', 'Client/game_de/NativeMovementInput.cpp', 'Client/game_de/NativeInputRouting.h',
-    'Client/sdk/game/CGameRenderObservation.h', 'Client/sdk/game/CGameRenderEndpointDiagnostic.h', 'Client/sdk/game/CGameRenderSetupDiagnostic.h', 'Client/sdk/game/CGameRenderRootsDiagnostic.h',
+    'Client/sdk/game/CGameRenderObservation.h', 'Client/sdk/game/CGameRenderEndpointDiagnostic.h', 'Client/sdk/game/CGameRenderSetupDiagnostic.h', 'Client/sdk/game/CGameRenderRootsDiagnostic.h', 'Client/sdk/game/CGameRenderDeviceLease.h',
     'Client/game_de/NativeRenderObservation.h', 'Client/game_de/NativeRenderObservation.cpp',
     'Client/game_de/NativeD3D12OwnershipProbe.h', 'Client/game_de/NativeD3D12OwnershipProbe.cpp',
     'Client/game_de/NativeCustomPresentProbe.h', 'Client/game_de/NativeCustomPresentProbe.cpp',

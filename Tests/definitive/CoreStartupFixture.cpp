@@ -14,6 +14,7 @@
 #include "../../Client/core/DefinitiveInputReference.h"
 #include "../../Client/core/DefinitiveMovementReference.h"
 #include "../../Client/core/DefinitiveRenderReference.h"
+#include "../../Client/core/DefinitiveGuiStartupReference.h"
 #include <filesystem>
 
 namespace
@@ -22,6 +23,7 @@ namespace
     volatile LONG*                    counters = nullptr;
     bool                              mtaSet = false, gtaSet = false;
     DefinitiveInputReference::Request inputRequest;
+    bool                              guiRequest = false;
 
     DWORD Setting(const wchar_t* name)
     {
@@ -173,6 +175,112 @@ extern "C" __declspec(dllexport) std::uint32_t MTA_ConfigureDERenderReferenceV6(
         return 0;
     inputRequest = {duration, cancelled, publish, false, true, route, 6};
     return 1;
+}
+
+#ifndef CORE_FIXTURE_MISSING_GUI_EXPORT
+extern "C" __declspec(dllexport) std::uint32_t MTA_DEGuiStartupReferenceApiVersion()
+{
+    Call(7);
+    return Setting(L"MTA_CORE_FIXTURE_GUI_MODE") == 3 ? 2u : DefinitiveGuiStartupReference::ApiVersion;
+}
+extern "C" __declspec(dllexport) std::uint32_t MTA_ConfigureDEGuiStartupReference(std::uint32_t duration, DefinitiveInputReference::CancelCallback cancelled,
+                                                                                  DefinitiveInputReference::PublishCallback publish)
+{
+    Call(8);
+    if (duration != DefinitiveGuiStartupReference::MaximumDurationMs || !cancelled || !publish || Setting(L"MTA_CORE_FIXTURE_GUI_MODE") == 4)
+        return 0;
+    guiRequest = true;
+    inputRequest = {duration, cancelled, publish};
+    return 1;
+}
+#endif
+
+void ControlledGuiStartup()
+{
+    using namespace DefinitiveGuiStartupReference;
+    const auto mode = Setting(L"MTA_CORE_FIXTURE_GUI_MODE");
+    Snapshot   sample{};
+    sample[Version] = ApiVersion;
+    sample[Phase] = sample[Sequence] = 1;
+    sample[ObserverStarted] = sample[DeviceAcquired] = sample[GuiPrepared] = 1;
+    sample[LeaseGenerationLow] = 3;
+    sample[LeaseGenerationHigh] = 2;
+    sample[AcceptedSnapshotsLow] = sample[DispatchEntriesLow] = 7;
+    sample[AcceptedSnapshotsHigh] = sample[DispatchEntriesHigh] = 1;
+    sample[SourceProfile] = 2;
+    sample[LeaseMetadataValid] = 1;
+    sample[GuiStarted] = sample[QueueCreated] = sample[TargetCreated] = 1;
+    sample[TargetFormat] = 24;
+    sample[Width] = 64;
+    sample[Height] = 32;
+    // Controlled value-only transport evidence is not a GUI renderer. The
+    // real backend is PINned only to exercise the explicit worker unload bit.
+    if (mode != 11)
+    {
+        wchar_t path[32768]{};
+        GetModuleFileNameW(nullptr, path, 32768);
+        const auto backend = LoadLibraryExW((std::filesystem::path(path).parent_path() / L"game_de.dll").c_str(), nullptr,
+                                            LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+        HMODULE    retained = nullptr;
+        const auto factory = backend ? GetProcAddress(backend, "CreateGameAdapter") : nullptr;
+        sample[BackendPinnedExpected] =
+            factory && GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN, reinterpret_cast<LPCWSTR>(factory), &retained)
+                ? 1u
+                : 0u;
+        if (backend)
+            FreeLibrary(backend);
+    }
+    Call(9);
+    inputRequest.publish(sample.data(), FieldCount);
+    if (mode == 8)
+    {
+        DefinitiveRenderReference::SnapshotV6 other{};
+        other[DefinitiveRenderReference::Version] = 6;
+        other[DefinitiveRenderReference::Phase] = 2;
+        inputRequest.publish(other.data(), DefinitiveRenderReference::FieldCountV6);
+    }
+    const auto release = Event(L"MTA_CORE_FIXTURE_INPUT_RELEASE", SYNCHRONIZE);
+    while (release && WaitForSingleObject(release, 5) == WAIT_TIMEOUT && !inputRequest.cancelled())
+        Call(10);
+    if (release)
+        CloseHandle(release);
+    sample[Phase] = 3;
+    ++sample[Sequence];
+    sample[CleanupPending] = sample[ObserverPendingCleanup] = sample[ModuleRetained] = sample[SessionRetained] = sample[DeviceRetained] = 1;
+    sample[CleanupAttempts] = 1;
+    inputRequest.publish(sample.data(), FieldCount);
+    Call(21);
+    const auto cleanupRelease = Event(L"MTA_CORE_FIXTURE_MOVEMENT_RELEASE", SYNCHRONIZE);
+    const auto cleanupAt = GetTickCount64();
+    while (cleanupRelease && WaitForSingleObject(cleanupRelease, 50) == WAIT_TIMEOUT)
+    {
+        if (mode == 7 && GetTickCount64() - cleanupAt >= CleanupDeadlineMs)
+            sample[CleanupDeadlineExceeded] = 1;
+        ++sample[Sequence];
+        ++sample[CleanupAttempts];
+        inputRequest.publish(sample.data(), FieldCount);
+    }
+    if (cleanupRelease)
+        CloseHandle(cleanupRelease);
+    sample[Phase] = 2;
+    ++sample[Sequence];
+    sample[ElapsedMs] = MaximumDurationMs;
+    sample[CleanupPending] = sample[ObserverPendingCleanup] = sample[ModuleRetained] = sample[SessionRetained] = sample[DeviceRetained] = 0;
+    sample[CleanupComplete] = mode == 9 ? 0u : 1u;
+    sample[ObserverEnded] = sample[GuiCleanupComplete] = 1;
+    sample[WorkloadComplete] = 1;
+    sample[WorkloadSucceeded] = mode == 1 ? 0u : 1u;
+    sample[WorkloadHresult] = mode == 1 ? static_cast<std::uint32_t>(E_FAIL) : 0u;
+    sample[Reason] = static_cast<unsigned>(inputRequest.cancelled() ? StopReason::Cancelled : mode == 1 ? StopReason::GpuError : StopReason::Completed);
+    if (mode == 5)
+        sample[Version] = 2;
+    if (mode == 10)
+        sample[ModuleRetained] = 1;
+    // A final value-only sample cannot authorize worker success after an
+    // unknown device Release effect, even if its other cleanup bits are zero.
+    if (mode == 12)
+        sample[DeviceReleaseFault] = 1;
+    inputRequest.publish(sample.data(), FieldCount);
 }
 
 template <typename SnapshotType>
@@ -434,6 +542,11 @@ extern "C" __declspec(dllexport) int InitializeCore()
     Call(3);
     if (Setting(L"MTA_CORE_FIXTURE_BAD_INITIALIZE"))
         return 0;
+    if (mtaSet && gtaSet && guiRequest)
+    {
+        ControlledGuiStartup();
+        return 5;
+    }
     if (mtaSet && gtaSet && inputRequest.renderObservation)
     {
         if (inputRequest.renderApiVersion == 6)

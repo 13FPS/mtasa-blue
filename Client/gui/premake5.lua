@@ -50,6 +50,10 @@ project "GUI"
 			-- offscreen tests; this does not admit DE frame/GPU ownership.
 			defines { "MTA_WITH_DEFINITIVE_ADAPTER" }
 			links { "d3d12", "dxgi", "d3dcompiler", "windowscodecs", "ole32" }
+			-- Loading the existing GUI for D3D12 must not initialize the legacy
+			-- texture helper. Its D3D9 entry points still resolve on first use.
+			links { "delayimp" }
+			linkoptions { "/DELAYLOAD:d3dx9_43.dll" }
 			-- No GUI source calls DXErr. Its obsolete SDK library is absent
 			-- from the verified D3DX package; preserve classic linkage only.
 			removelinks { "dxerr.lib" }

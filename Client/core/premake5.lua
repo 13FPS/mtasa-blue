@@ -36,6 +36,10 @@ project "Client Core"
 	-- the same MTA-owned lifecycle can be checked by the x64 integration host.
 	filter { "files:CGameAdapterModule.cpp" }
 		flags { "NoPCH" }
+	-- This new translation unit is empty in classic builds. A per-file override
+	-- keeps its independent owned-host build free of classic PCH dependencies.
+	filter { "files:DefinitiveGuiStartup.cpp" }
+		flags { "NoPCH" }
 	filter {}
 
 	if _OPTIONS["with-definitive-adapter"] then
@@ -91,6 +95,9 @@ project "Client Core"
 			-- D3D9 call. Do not require the legacy June 2010 runtime merely to
 			-- load Core; retain classic linkage and defer this renderer's import.
 			links { "delayimp" }
+			-- The separate GUI startup workload creates its own D3D12 objects;
+			-- classic builds retain their existing renderer linkage.
+			links { "d3d12", "dxgi" }
 			linkoptions { "/DELAYLOAD:d3dx9_43.dll" }
 			-- The backend loader resolves adjacent modules. Stage real build
 			-- outputs together without installing anything into the game.

@@ -32,14 +32,24 @@ if ($package.packageId -ne $installed.packageId -or $package.formatVersion -ne 1
     $package.mode -ne $installed.mode -or $package.gameSha256 -ne $installed.gameSha256) { throw 'Package identity or mode differs.' }
 $installedPaths = @($installed.files | ForEach-Object { $_.path })
 $packagePaths = @($package.files | ForEach-Object { $_.path })
+$guiPaths = @('CLEO/de-online/cgui.dll',
+    'CLEO/de-online/mta/cgui/sans.ttf', 'CLEO/de-online/mta/cgui/saheader.ttf', 'CLEO/de-online/mta/cgui/sagothic.ttf',
+    'CLEO/de-online/mta/cgui/Imageset.xsd', 'CLEO/de-online/mta/cgui/GUIScheme.xsd', 'CLEO/de-online/mta/cgui/Font.xsd',
+    'CLEO/de-online/mta/cgui/Falagard.xsd', 'CLEO/de-online/mta/cgui/unifont.ttf',
+    'CLEO/de-online/skins/Default/CGUI.xml', 'CLEO/de-online/skins/Default/CGUI.is.xml',
+    'CLEO/de-online/skins/Default/CGUI.lnf.xml', 'CLEO/de-online/skins/Default/CGUI.png')
+$guiCount = @($packagePaths | Where-Object { $_ -in $guiPaths }).Count
+if ($guiCount -ne 0 -and $guiCount -ne 13) { throw 'Incomplete MTA Core GUI startup package ownership.' }
+$removedPaths = @($installedPaths | Where-Object { $_ -notin $packagePaths })
 if (@($packagePaths | Select-Object -Unique).Count -ne $packagePaths.Count -or
-    @($installedPaths | Where-Object { $_ -notin $packagePaths }).Count -ne 0) { throw 'Package owned paths differ.' }
+    @($removedPaths | Where-Object { $_ -notin $guiPaths }).Count -ne 0 -or
+    ($removedPaths.Count -ne 0 -and $removedPaths.Count -ne 13)) { throw 'Package owned paths differ.' }
 $addedPaths = @($packagePaths | Where-Object { $_ -notin $installedPaths })
 # Admit only the named MTA probe/backend files from the newer package. All
 # additions are checked for existing user bytes before any update is applied.
 $allowedAdditions = @('CLEO/de-online/native-pad-reference.mjs', 'CLEO/de-online/native-movement-trial.mjs', 'CLEO/de-online/game_de.dll',
     'CLEO/de-online/core.dll', 'CLEO/de-online/pthread.dll',
-    'CLEO/de-online/xmll.dll', 'CLEO/de-online/mta/config/coreconfig.xml')
+    'CLEO/de-online/xmll.dll', 'CLEO/de-online/mta/config/coreconfig.xml') + $guiPaths
 if (@($addedPaths | Where-Object { $_ -notin $allowedAdditions }).Count -ne 0) {
     throw 'Unsupported additive package path.'
 }
@@ -62,8 +72,28 @@ $hasBindConfig = $packagePaths -contains 'CLEO/de-online/mta/config/coreconfig.x
 if ($hasXml -ne $hasBindConfig -or ($hasXml -and -not $hasCore)) {
     throw 'Incomplete MTA Core configured input package ownership.'
 }
+if ($guiCount -and ($packagePaths.Count -ne 36 -or -not $hasXml)) { throw 'Incomplete MTA Core GUI startup package ownership.' }
+$sourceRoot = Join-Path $packageRoot 'Win64'
+$actualPaths = @(Get-ChildItem -LiteralPath $sourceRoot -File -Recurse | ForEach-Object { [IO.Path]::GetRelativePath($sourceRoot, $_.FullName).Replace('\', '/') })
+if (@(Compare-Object $packagePaths $actualPaths).Count -ne 0) { throw 'Package has unrecorded or missing files.' }
+$configText = [IO.File]::ReadAllText((Join-Path $sourceRoot 'CLEO/de-online/config.mjs'))
+$guiMarkers = [regex]::Matches($configText, 'export const MTA_CORE_GUI_STARTUP_REFERENCE = (true|false);')
+if ($guiMarkers.Count -gt 1 -or ($guiCount -and $guiMarkers.Count -ne 1)) { throw 'Invalid GUI startup configuration marker.' }
+if ($guiMarkers.Count -eq 1 -and $guiMarkers[0].Groups[1].Value -eq 'true') {
+    if (-not $guiCount -or $package.mode -ne 'Smoke' -or $configText -match 'export const (GAIT_REFERENCE|GAIT_RATE|GAIT_ROOT_LOCK|INPUT_REFERENCE|MTA_NATIVE_PAD_REFERENCE|MTA_NATIVE_MOVEMENT_TRIAL|MTA_CORE_STARTUP_REFERENCE|MTA_CORE_INPUT_REFERENCE|MTA_CORE_MOVEMENT_REFERENCE|MTA_CORE_RENDER_REFERENCE|MTA_CORE_RENDER_GPU_REFERENCE|MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE|MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE|MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE) = true;') {
+        throw 'MTA Core GUI startup requires the complete GUI group and separate opt-in Smoke mode.'
+    }
+}
 $changes = @()
+# Removal is limited to the complete, previously verified GUI group. Save each
+# original just like replacements so a failed 36-to-23 update restores ownership.
+foreach ($relative in $removedPaths) {
+    $record = @($installed.files | Where-Object path -eq $relative)[0]
+    $changes += [pscustomobject]@{ path=$record.destination; bytes=$null; original=[IO.File]::ReadAllBytes($record.destination); additive=$false; removal=$true; applied=$false }
+}
+$installed.files = @($installed.files | Where-Object { $_.path -notin $removedPaths })
 foreach ($entry in $package.files) {
+    if ($entry.sha256 -notmatch '^[0-9a-f]{64}$') { throw 'Invalid package hash.' }
     $sourcePath = Join-Path $packageRoot ('Win64/' + $entry.path)
     Assert-NoLinks $sourcePath
     $sourceBytes = [IO.File]::ReadAllBytes($sourcePath)
@@ -88,12 +118,12 @@ foreach ($entry in $package.files) {
         }
         $record = [pscustomobject]@{ path=$entry.path; destination=$destination; sha256=$entry.sha256 }
         $installed.files = @($installed.files) + @($record)
-        $changes += [pscustomobject]@{ path=$destination; bytes=$sourceBytes; original=$null; additive=$true; applied=$false }
+        $changes += [pscustomobject]@{ path=$destination; bytes=$sourceBytes; original=$null; additive=$true; removal=$false; applied=$false }
         continue
     }
     $record = $records[0]
     if ($record.sha256 -ne $entry.sha256) {
-        $changes += [pscustomobject]@{ path=$record.destination; bytes=$sourceBytes; original=[IO.File]::ReadAllBytes($record.destination); additive=$false; applied=$false }
+        $changes += [pscustomobject]@{ path=$record.destination; bytes=$sourceBytes; original=[IO.File]::ReadAllBytes($record.destination); additive=$false; removal=$false; applied=$false }
         $record.sha256 = $entry.sha256
     }
 }
@@ -120,6 +150,12 @@ for ($index = 0; $index -lt $changes.Count; $index++) {
 $createdDirectories = [Collections.Generic.List[string]]::new()
 try {
     foreach ($change in $changes) {
+        if ($change.removal) {
+            Assert-NoLinks $change.path
+            Remove-Item -LiteralPath $change.path
+            $change.applied = $true
+            continue
+        }
         $parent = [IO.Path]::GetDirectoryName($change.path)
         $missing = [Collections.Generic.List[string]]::new()
         while (-not (Test-Path -LiteralPath $parent)) {

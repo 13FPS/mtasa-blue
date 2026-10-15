@@ -588,11 +588,26 @@ namespace mta::game_de
                     if (runtime.nativeDispatch)
                     {
                         if (!observeBoundary && fatalCleanup)
+                        {
                             capture.nativeDispatch = runtime.snapshot.nativeDispatch;
+                            capture.rootsDiagnostic = runtime.snapshot.rootsDiagnostic;
+                        }
                         else
                         {
                             capture.nativeDispatch.presentEntries += runtime.snapshot.nativeDispatch.presentEntries;
                             capture.nativeDispatch.rejectedEntries += runtime.snapshot.nativeDispatch.rejectedEntries;
+                            // Publish only after the original returned, under the
+                            // same lock/count commit as the associated API6 facts.
+                            // This remains historical when a later publication misses.
+                            capture.rootsDiagnostic = boundary.rootsDiagnostic;
+                            capture.rootsDiagnostic.version = RenderRootsDiagnosticVersionV1;
+                            capture.rootsDiagnostic.generationLow = static_cast<std::uint32_t>(runtime.generation.load());
+                            capture.rootsDiagnostic.generationHigh = static_cast<std::uint32_t>(runtime.generation.load() >> 32);
+                            const auto acceptedNext = runtime.accepted.load() + 1;
+                            capture.rootsDiagnostic.acceptedSnapshotsLow = static_cast<std::uint32_t>(acceptedNext);
+                            capture.rootsDiagnostic.acceptedSnapshotsHigh = static_cast<std::uint32_t>(acceptedNext >> 32);
+                            capture.rootsDiagnostic.dispatchEntriesLow = static_cast<std::uint32_t>(capture.nativeDispatch.presentEntries);
+                            capture.rootsDiagnostic.dispatchEntriesHigh = static_cast<std::uint32_t>(capture.nativeDispatch.presentEntries >> 32);
                         }
                     }
                     runtime.snapshot = capture;
@@ -1412,6 +1427,26 @@ namespace mta::game_de
         // The operation guard protects this worker-owned cache across leases.
         // It needs no callback-shared lock and remains usable after End.
         state = runtime.setup;
+        return true;
+    }
+
+    bool NativeRenderObservation::ReadRootsDiagnostic(RenderRootsDiagnosticV1& state) const noexcept
+    {
+        // Exclude another lease's Begin/End without waiting, then try the same
+        // callback snapshot lock used for its accepted-count publication. Optional
+        // logging must never obstruct cleanup of a retained suspended peer.
+        ApiOperation operation;
+        if (!operation.acquired || !generation || generation != runtime.generation.load() || GetCurrentThreadId() != runtime.producerThread ||
+            !runtime.nativeDispatch || runtime.safetyHeldSuspensions || !runtime.retainedSuspensions.empty())
+            return false;
+        if (!TryAcquireSRWLockShared(&runtime.snapshotLock))
+            return false;
+        const auto next = runtime.snapshot.rootsDiagnostic;
+        ReleaseSRWLockShared(&runtime.snapshotLock);
+        if (next.version != RenderRootsDiagnosticVersionV1 || next.generationLow != static_cast<std::uint32_t>(generation) ||
+            next.generationHigh != static_cast<std::uint32_t>(generation >> 32))
+            return false;
+        state = next;
         return true;
     }
 }

@@ -1022,6 +1022,12 @@ int main(int argc, char** argv)
     Check(!owner.ReadSetupDiagnostic(setupDiagnostic) && setupDiagnostic.version == 99,
           "pre-preparation wrong-image lease has no setup cache and preserves output");
 
+    RenderRootsDiagnosticV1 rootsDiagnostic;
+    std::memset(&rootsDiagnostic, 0xA5, sizeof(rootsDiagnostic));
+    const auto rootsSentinel = rootsDiagnostic;
+    const auto rootsUnchanged = [&] { return std::memcmp(&rootsDiagnostic, &rootsSentinel, sizeof(rootsDiagnostic)) == 0; };
+    Check(!owner.ReadRootsDiagnostic(rootsDiagnostic) && rootsUnchanged(), "unadmitted or older observation cannot invent an accepted roots cache");
+
     const auto image = reinterpret_cast<std::uintptr_t>(VirtualAlloc(nullptr, 0x5770000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
     Check(image != 0, "owned synthetic image allocation");
     Configure(image, NativeDispatchFixtureOriginal, RenderObservationRoute::D3D12);
@@ -1041,6 +1047,12 @@ int main(int argc, char** argv)
         Check(busyOperation.acquired && !owner.ReadSetupDiagnostic(preserved) && std::memcmp(&preserved, &expected, sizeof(preserved)) == 0,
               "busy generation operation refuses the setup getter without altering any output field");
     }
+    {
+        ApiOperation busyOperation;
+        Check(busyOperation.acquired && !owner.ReadRootsDiagnostic(rootsDiagnostic) && rootsUnchanged(),
+              "busy generation operation refuses roots getter without waiting or touching output");
+    }
+    Check(!owner.ReadRootsDiagnostic(rootsDiagnostic) && rootsUnchanged(), "prepared API6 without an accepted callback has no roots diagnostic");
     bool        foreignSetupRejected = false;
     std::thread foreignSetupReader(
         [&]
@@ -1056,17 +1068,48 @@ int main(int argc, char** argv)
     Check(state.nativeDispatch.endpointProfileId == 2 && state.nativeDispatch.status == 2 && state.nativeDispatch.presentEntries == 2 &&
               state.nativeDispatch.factsMask == 255 && state.boundary.endpointProfileId == 0 && !state.boundary.presentEntries && !state.gpu.supportPredicate,
           "API6 associations accumulate separately without promoting API5 standard entry or GPU permission");
+    Check(owner.ReadRootsDiagnostic(rootsDiagnostic) && rootsDiagnostic.version == 1 && rootsDiagnostic.queryPhase == 1 && rootsDiagnostic.checkpoint == 31 &&
+              !rootsDiagnostic.refusalReason && rootsDiagnostic.scalarValidMask == 3 && rootsDiagnostic.contextNodeMask == 1 &&
+              !rootsDiagnostic.nativeBufferIndex && rootsDiagnostic.acceptedSnapshotsLow == 2 && rootsDiagnostic.dispatchEntriesLow == 2 &&
+              rootsDiagnostic.generationLow == static_cast<unsigned>(runtime.generation.load()),
+          "roots evidence is committed after original with the same accepted count and cumulative dispatch count");
+    bool        foreignRootsRejected = false;
+    std::thread foreignRootsReader(
+        [&]
+        {
+            auto preserved = rootsSentinel;
+            foreignRootsRejected = !owner.ReadRootsDiagnostic(preserved) && std::memcmp(&preserved, &rootsSentinel, sizeof(preserved)) == 0;
+        });
+    foreignRootsReader.join();
+    Check(foreignRootsRejected, "foreign roots getter preserves every caller scalar");
     HookPresent(viewport.data(), 4);
     owner.ReadState(state);
     Check(state.nativeDispatch.status == 10 && state.nativeDispatch.endpointProfileId == 2 && state.nativeDispatch.presentEntries == 2 &&
               !state.nativeDispatch.factsMask && state.acceptedSnapshots == 3,
           "a later absent dispatch keeps cumulative completed evidence and clears current association facts");
+    Check(owner.ReadRootsDiagnostic(rootsDiagnostic) && rootsDiagnostic.acceptedSnapshotsLow == 3 && rootsDiagnostic.dispatchEntriesLow == 2 &&
+              !rootsDiagnostic.queryPhase && !rootsDiagnostic.checkpoint && !rootsDiagnostic.refusalReason && !rootsDiagnostic.exceptionCode &&
+              !rootsDiagnostic.scalarValidMask && !rootsDiagnostic.contextNodeMask && !rootsDiagnostic.nativeBufferIndex,
+          "accepted callback without a root query publishes an explicit zero-phase record and historical dispatch count");
+    const auto beforeRootsMiss = rootsDiagnostic;
+    runtime.original = OriginalException;
+    Check(CatchOriginalException(viewport.data()) && owner.ReadRootsDiagnostic(rootsDiagnostic) &&
+              std::memcmp(&rootsDiagnostic, &beforeRootsMiss, sizeof(rootsDiagnostic)) == 0,
+          "original SEH cannot publish a new roots trace or count");
+    runtime.original = NativeDispatchFixtureOriginal;
     AcquireSRWLockShared(&runtime.snapshotLock);
     HookPresent(viewport.data(), 1);
     ReleaseSRWLockShared(&runtime.snapshotLock);
     owner.ReadState(state);
     Check(state.nativeDispatch.presentEntries == 2 && state.nativeDispatch.status == 10 && state.acceptedSnapshots == 3 && state.publicationMisses == 1,
           "missed API6 publication cannot overwrite either tail or completed dispatch counters");
+    Check(owner.ReadRootsDiagnostic(rootsDiagnostic) && std::memcmp(&rootsDiagnostic, &beforeRootsMiss, sizeof(rootsDiagnostic)) == 0,
+          "publication miss preserves the entire historical roots/count correlation");
+    AcquireSRWLockExclusive(&runtime.snapshotLock);
+    rootsDiagnostic = rootsSentinel;
+    Check(!owner.ReadRootsDiagnostic(rootsDiagnostic) && rootsUnchanged(),
+          "contended callback cache refuses roots read without waiting or copying partial values");
+    ReleaseSRWLockExclusive(&runtime.snapshotLock);
     RenderEndpointDiagnosticV1 nativeEndpointDiagnostic;
     Check(owner.ReadEndpointDiagnostic(nativeEndpointDiagnostic) && nativeEndpointDiagnostic.acceptedSnapshotsLow == 3,
           "API6 producer retains the separate generation-coherent endpoint diagnostic");
@@ -1082,6 +1125,7 @@ int main(int argc, char** argv)
     setupDiagnostic.version = 99;
     Check(!owner.ReadSetupDiagnostic(setupDiagnostic) && setupDiagnostic.version == 99,
           "retained suspension refuses setup getter untouched without acquiring the held snapshot lock");
+    Check(!owner.ReadRootsDiagnostic(rootsDiagnostic) && rootsUnchanged(), "retained peer refuses roots getter before acquiring its held snapshot lock");
     runtime.inFlight.store(1);
     Check(!owner.Begin(RenderObservationRoute::D3D12, true, true, true, true), "held callback readback rejects a new generation without waiting for its lock");
     runtime.inFlight.store(0);
@@ -1091,6 +1135,7 @@ int main(int argc, char** argv)
     runtime.safetyHeldSuspensions = true;
     Check(!owner.ReadSetupDiagnostic(setupDiagnostic) && setupDiagnostic.version == 99,
           "safety-held state alone also refuses setup getter without output changes");
+    Check(!owner.ReadRootsDiagnostic(rootsDiagnostic) && rootsUnchanged(), "safety-held peers also refuse optional roots logging untouched");
     runtime.safetyHeldSuspensions = false;
     runtime.setupTracing = true;
     SetupRefused(RenderSetupStage::NativeThreadStubMatch);
@@ -1107,6 +1152,8 @@ int main(int argc, char** argv)
               setupDiagnostic.failureStage == setupDiagnostic.stage && setupDiagnostic.cleanupAttempted == 1 && setupDiagnostic.cleanupComplete == 1 &&
               !setupDiagnostic.errorDomain && !setupDiagnostic.errorCode && !setupDiagnostic.installSucceeded,
           "successful End keeps first setup refusal readable and changes only cleanup facts");
+    Check(owner.ReadRootsDiagnostic(rootsDiagnostic) && std::memcmp(&rootsDiagnostic, &beforeRootsMiss, sizeof(rootsDiagnostic)) == 0,
+          "clean End retains the final accepted roots cache until the exact lease retires");
     const HANDLE lockedReady = CreateEventW(nullptr, TRUE, FALSE, nullptr), lockedRelease = CreateEventW(nullptr, TRUE, FALSE, nullptr),
                  lockedDone = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     Check(lockedReady && lockedRelease && lockedDone, "counted held-callback retry events");
@@ -1376,6 +1423,7 @@ int main(int argc, char** argv)
         ownedSwapchain.failRelease = true;
     };
     configureCleanupFailure(Original);
+    runtime.queryFrameBoundary = runtime.nativeDispatch = true;
     Check(HookPresent(viewport.data(), 1), "callback forwards original after an owned COM release fault");
     owner.ReadState(state);
     Check(!state.active && state.failureReason == static_cast<unsigned>(Failure::GpuOwnershipCleanup) && state.gpu.attempts == 1 &&
@@ -1384,6 +1432,9 @@ int main(int argc, char** argv)
     auto callsAfterCleanup = ownedSwapchain.calls;
     Check(HookPresent(viewport.data(), 1) && ownedSwapchain.calls == callsAfterCleanup,
           "disarmed ownership probe never re-queries after a COM cleanup failure");
+    rootsDiagnostic = rootsSentinel;
+    Check(!state.rootsDiagnostic.version && !owner.ReadRootsDiagnostic(rootsDiagnostic) && rootsUnchanged(),
+          "first fatal COM cleanup keeps roots unattempted instead of inventing a diagnostic query");
     configureCleanupFailure(Original);
     AcquireSRWLockShared(&runtime.snapshotLock);
     std::thread missedCleanup([&] { HookPresent(viewport.data(), 1); });
@@ -1688,11 +1739,19 @@ int main(int argc, char** argv)
     CloseHandle(publish);
     CloseHandle(published);
 
-    Configure(image);
+    // Retire a genuinely published owned API6 scalar cache, so a rejected next
+    // Begin must invalidate positive historical evidence rather than only zero.
+    Configure(image, NativeDispatchFixtureOriginal, RenderObservationRoute::D3D12);
+    EnableOwnership(image, 2, 1);
+    runtime.classifyCustomPresent = runtime.queryFrameBoundary = runtime.nativeDispatch = true;
+    PrimeNativeDispatchDiagnostic(runtime.generation.load());
     HookPresent(viewport.data(), 1);
     Check(owner.End(), "direct callback cleanup");
     owner.ReadState(state);
     const auto oldGeneration = state.generation;
+    Check(owner.ReadRootsDiagnostic(rootsDiagnostic) && rootsDiagnostic.version == 1 && rootsDiagnostic.acceptedSnapshotsLow == 1 &&
+              rootsDiagnostic.dispatchEntriesLow == 1 && rootsDiagnostic.queryPhase == 1 && rootsDiagnostic.checkpoint == 31,
+          "previous owned generation retains a positively published roots cache before the rejected new Begin");
     runtime.nativeDispatch = true;
     InitializeSetupDiagnostic(oldGeneration);
     runtime.setup.transactionCommitted = runtime.setup.hooksCommitted = 1;
@@ -1708,6 +1767,9 @@ int main(int argc, char** argv)
     Check(!owner.ReadSetupDiagnostic(setupDiagnostic) && setupDiagnostic.version == 99 && !nextOwner.ReadSetupDiagnostic(setupDiagnostic) &&
               setupDiagnostic.version == 99 && !runtime.setup.version,
           "new rejected Begin clears historical setup and neither old nor wrong-image lease exposes it");
+    rootsDiagnostic = rootsSentinel;
+    Check(!owner.ReadRootsDiagnostic(rootsDiagnostic) && rootsUnchanged() && !nextOwner.ReadRootsDiagnostic(rootsDiagnostic) && rootsUnchanged(),
+          "new rejected generation exposes neither the retired roots cache nor invented current evidence");
     NativeRenderObservationState retired;
     owner.ReadState(retired);
     Check(retired.generation == oldGeneration && retired.acceptedSnapshots == state.acceptedSnapshots && retired.width == state.width,

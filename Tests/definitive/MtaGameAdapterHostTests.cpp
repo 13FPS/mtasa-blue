@@ -118,6 +118,7 @@ namespace mta::game_de
         std::uint32_t             diagnosticReads = 0;
         std::uint32_t             setupGeneration = 0;
         std::uint32_t             setupDiagnosticReads = 0, setupCleanupAttempted = 0, setupCleanupComplete = 0;
+        std::uint32_t             rootsDiagnosticReads = 0;
         void (*v6OperationObserver)() noexcept = nullptr;
         alignas(void*) unsigned char facadeIdentity[sizeof(void*)]{};
 
@@ -629,6 +630,36 @@ namespace mta::game_de
         return Status::Ok;
     }
         #endif
+        #if MTA_TEST_RENDER_MODE != 6
+    extern "C" Status ReadGameRenderRootsDiagnosticV1(std::uint32_t version, IGameRenderObservationV6* lease, RenderRootsDiagnosticV1* output) noexcept
+    {
+        ++rootsDiagnosticReads;
+        if (version != RenderRootsDiagnosticVersionV1 || !lease || lease != diagnosticLeaseV6 || !output)
+            return Status::InvalidArgument;
+        if (GetCurrentThreadId() != diagnosticOwnerThread)
+            return Status::WrongThread;
+        // Model a missed current-generation publication/final read. Core must
+        // preserve caller output and clear its final cache before Release.
+        if (MTA_TEST_RENDER_MODE == 2 || (fixtureCounters && fixtureCounters[13] == 4))
+            return Status::Unsupported;
+        RenderRootsDiagnosticV1 next;
+        next.version = MTA_TEST_RENDER_MODE == 8 ? 99u : 1u;
+        next.generationLow = setupGeneration;
+        next.acceptedSnapshotsLow = next.dispatchEntriesLow = 7;
+        next.queryPhase = 1;
+        next.checkpoint = 26;
+        next.refusalReason = 3;
+        next.scalarValidMask = 3;
+        next.contextNodeMask = 1;
+        next.nativeBufferIndex = 2;
+        *output = next;
+        return Status::Ok;
+    }
+        #endif
+    extern "C" __declspec(dllexport) std::uint32_t GetFixtureRootsDiagnosticReadsV6() noexcept
+    {
+        return rootsDiagnosticReads;
+    }
     extern "C" __declspec(dllexport) std::uint32_t GetFixtureSetupDiagnosticReadsV6() noexcept
     {
         return setupDiagnosticReads;
@@ -794,6 +825,10 @@ namespace
             setupDiagnostic.version = 99;
             Check(!host.GetNativeRenderSetupDiagnostic(setupDiagnostic) && setupDiagnostic.version == 99,
                   "actual wrong-image API6 never admits a setup diagnostic cache");
+            mta::game_de::RenderRootsDiagnosticV1 rootsDiagnostic;
+            rootsDiagnostic.version = 99;
+            Check(!host.GetNativeRenderRootsDiagnostic(rootsDiagnostic) && rootsDiagnostic.version == 99,
+                  "actual wrong-image API6 cannot publish roots diagnostics before a callback");
             Check(host.EndNativeRenderObservation() && host.GetNativeRenderObservationState(dispatch) && !dispatch.base.base.base.base.base.active &&
                       !dispatch.base.base.base.base.base.pendingCleanup && !dispatch.nativeDispatch.presentEntries && !dispatch.base.boundary.presentEntries,
                   "actual API6 caches safe zero-query cleanup before releasing its larger lease");
@@ -1695,6 +1730,66 @@ namespace
         Check(!host.IsStarted() && !GetModuleHandleW(path.c_str()), "setup-generation fixture unloads after safe cleanup");
     }
 
+    void TestRootsDiagnosticGeneration(CCoreInterface* owner, const std::wstring& path)
+    {
+        using namespace mta::game_de;
+        CGameAdapterModule host;
+        Check(host.Start(owner, path), "own roots diagnostic generation consumer");
+        auto module = GetModuleHandleW(path.c_str());
+        using Configure = void (*)(std::uint32_t*) noexcept;
+        Configure configure = nullptr;
+        auto      address = GetProcAddress(module, "SetFacadeFixtureCounters");
+        std::memcpy(&configure, &address, sizeof(configure));
+        using ReadCount = std::uint32_t (*)() noexcept;
+        ReadCount reads = nullptr;
+        address = GetProcAddress(module, "GetFixtureRootsDiagnosticReadsV6");
+        std::memcpy(&reads, &address, sizeof(reads));
+        Check(configure && reads, "roots fixture exports owned counters");
+        std::uint32_t counters[16]{};
+        configure(counters);
+        RenderRootsDiagnosticV1 roots;
+        roots.version = 77;
+        Check(!host.GetNativeRenderRootsDiagnostic(roots) && roots.version == 77, "roots cache unavailable before exact V6 lease");
+        Check(host.BeginNativeRenderDispatchObservation(RenderObservationRoute::D3D12) && host.GetNativeRenderRootsDiagnostic(roots) &&
+                  roots.checkpoint == 26 && roots.refusalReason == 3 && roots.acceptedSnapshotsLow == 7 && roots.dispatchEntriesLow == 7 &&
+                  roots.scalarValidMask == 3 && roots.contextNodeMask == 1 && roots.nativeBufferIndex == 2,
+              "consumer copies the exact fourteen scalar diagnostic fields");
+        const auto  generation = roots.generationLow;
+        bool        foreignRead = true;
+        std::thread foreign(
+            [&]
+            {
+                RenderRootsDiagnosticV1 output;
+                output.version = 77;
+                foreignRead = host.GetNativeRenderRootsDiagnostic(output) || output.version != 77;
+            });
+        foreign.join();
+        Check(!foreignRead, "foreign consumer thread cannot replace roots caller output");
+        Check(host.EndNativeRenderObservation(), "roots diagnostic does not prevent safe End");
+        const auto afterRelease = reads();
+        Check(host.GetNativeRenderRootsDiagnostic(roots) && roots.generationLow == generation && reads() == afterRelease,
+              "ended cache reads no released provider function");
+        Check(host.BeginNativeRenderFrameBoundaryObservation(RenderObservationRoute::D3D12), "historical API5 lease starts after V6 cleanup");
+        roots.version = 77;
+        Check(!host.GetNativeRenderRootsDiagnostic(roots) && roots.version == 77, "selecting API5 drops roots generation availability");
+        Check(host.EndNativeRenderObservation() && host.Reset(), "historical lease ends and resets before new roots generation");
+        Check(host.BeginNativeRenderDispatchObservation(RenderObservationRoute::D3D12) && host.GetNativeRenderRootsDiagnostic(roots) &&
+                  roots.generationLow > generation,
+              "later V6 lease cannot relabel the previous roots generation");
+        counters[13] = 4;
+        roots.version = 77;
+        Check(!host.GetNativeRenderRootsDiagnostic(roots) && roots.version == 77, "busy current provider cannot replay cached roots as fresh evidence");
+        Check(host.EndNativeRenderObservation(), "optional roots final-read miss cannot block Release");
+        roots.version = 77;
+        Check(!host.GetNativeRenderRootsDiagnostic(roots) && roots.version == 77, "final read miss clears pre-End roots cache");
+        counters[13] = 0;
+        Check(host.Reset(), "roots consumer Reset stays available");
+        roots.version = 77;
+        Check(!host.GetNativeRenderRootsDiagnostic(roots) && roots.version == 77, "Reset cannot expose prior roots values");
+        host.Stop();
+        Check(!host.IsStarted() && !GetModuleHandleW(path.c_str()), "roots consumer releases the owned provider normally");
+    }
+
     void TestRenderProviderV6(CCoreInterface* owner, const std::wstring& path, unsigned mode, const std::wstring& loaderProbePath)
     {
         using namespace mta::game_de;
@@ -1706,6 +1801,9 @@ namespace
         RenderSetupDiagnosticV1 setup;
         setup.version = 77;
         Check(!host.GetNativeRenderSetupDiagnostic(setup) && setup.version == 77, "setup diagnostics cannot invent a V6 lease before Begin");
+        RenderRootsDiagnosticV1 roots;
+        roots.version = 77;
+        Check(!host.GetNativeRenderRootsDiagnostic(roots) && roots.version == 77, "roots diagnostics cannot invent a V6 lease before Begin");
         std::uint32_t counters[14]{};
         using Configure = void (*)(std::uint32_t*) noexcept;
         Configure configure = nullptr;
@@ -1779,6 +1877,25 @@ namespace
         if (mode == 6)
             Check(!GetProcAddress(GetModuleHandleW(path.c_str()), "ReadGameRenderSetupDiagnosticV1"),
                   "historical API6 provider genuinely omits the additive setup export");
+        const bool rootsAvailable = diagnosticAvailable && mode != 2;
+        observedCoreAllocations.store(0);
+        observeCoreAllocations.store(true);
+        const bool copiedRoots = host.GetNativeRenderRootsDiagnostic(roots);
+        observeCoreAllocations.store(false);
+        Check(observedCoreAllocations.load() == 0 && copiedRoots == rootsAvailable &&
+                  (rootsAvailable ? roots.version == 1 && roots.generationLow == 1 && roots.checkpoint == 26 && roots.refusalReason == 3 : roots.version == 77),
+              "missing, wrong-version or unpublished roots diagnostics preserve output without consumer allocations");
+        if (mode == 6)
+            Check(!GetProcAddress(GetModuleHandleW(path.c_str()), "ReadGameRenderRootsDiagnosticV1"),
+                  "historical API6 provider genuinely omits the optional roots export");
+        if (rootsAvailable)
+        {
+            counters[13] = 4;
+            roots.version = 77;
+            Check(!host.GetNativeRenderRootsDiagnostic(roots) && roots.version == 77,
+                  "an unavailable current roots reader cannot replay a previously successful diagnostic");
+            counters[13] = 0;
+        }
         if (diagnosticAvailable)
         {
             counters[13] = 4;
@@ -1804,6 +1921,7 @@ namespace
             const auto started = GetTickCount64();
             const bool copied = held && host.GetNativeRenderEndpointDiagnostic(diagnostic);
             const bool copiedSetupUnderLoaderLock = held && host.GetNativeRenderSetupDiagnostic(setup);
+            const bool copiedRootsUnderLoaderLock = held && host.GetNativeRenderRootsDiagnostic(roots);
             const auto elapsed = GetTickCount64() - started;
             SetEvent(resume);
             loader.join();
@@ -1813,8 +1931,9 @@ namespace
             CloseHandle(entered);
             CloseHandle(resume);
             CloseHandle(timeout);
-            Check(held && loadedProbe && !timedOut && copied && copiedSetupUnderLoaderLock && setup.version == 1 && diagnostic.version == 1 && elapsed < 1500,
-                  "both cached API6 diagnostic readers complete while another owned provider holds the loader lock");
+            Check(held && loadedProbe && !timedOut && copied && copiedSetupUnderLoaderLock && copiedRootsUnderLoaderLock && roots.version == 1 &&
+                      setup.version == 1 && diagnostic.version == 1 && elapsed < 1500,
+                  "all cached API6 diagnostic readers complete while another owned provider holds the loader lock");
         }
         Check(mode == 6 ? !output.base.base.base.base.observedRoute && !output.base.base.base.gpu.attempts && !output.base.base.base.gpu.metadataValid
                         : output.base.base.base.base.observedRoute == 2 && output.base.base.base.gpu.attempts == 7 &&
@@ -2035,6 +2154,7 @@ int wmain(int argc, wchar_t** argv)
             for (unsigned mode = 1; mode <= 8; ++mode)
                 TestRenderProviderV6(owner, argv[mode + 41], mode, argv[49]);
             TestSetupDiagnosticGeneration(owner, argv[45]);
+            TestRootsDiagnosticGeneration(owner, argv[45]);
         }
     #else
         CGameAdapterModule host;

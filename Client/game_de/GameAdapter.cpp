@@ -703,6 +703,27 @@ namespace mta::game_de
                 return result;
             }
 
+            static Status ReadRootsDiagnostic(IGameRenderObservationV6* lease, RenderRootsDiagnosticV1& output) noexcept
+            {
+                // The same exact registry identity protects roots evidence from
+                // arbitrary pointers and Release, without waiting on a stopped
+                // peer that may hold registration's exclusive lock.
+                if (!TryAcquireSRWLockShared(&diagnosticLeaseLock))
+                    return Status::Unsupported;
+                Status result = Status::InvalidArgument;
+                for (auto* current = diagnosticLeasesV6; current; current = current->nextDiagnosticLease)
+                {
+                    if (static_cast<IGameRenderObservationV6*>(current) != lease)
+                        continue;
+                    result = current->ownerThread != GetCurrentThreadId()       ? Status::WrongThread
+                             : current->observation.ReadRootsDiagnostic(output) ? Status::Ok
+                                                                                : Status::Unsupported;
+                    break;
+                }
+                ReleaseSRWLockShared(&diagnosticLeaseLock);
+                return result;
+            }
+
             Status Begin() noexcept override
             {
                 if (ownerThread != GetCurrentThreadId())
@@ -896,6 +917,17 @@ namespace mta::game_de
             return Status::InvalidArgument;
         RenderSetupDiagnosticV1 next;
         const auto              result = GameRenderObservationV6::ReadSetupDiagnostic(retainedLease, next);
+        if (result == Status::Ok)
+            *output = next;
+        return result;
+    }
+
+    extern "C" Status ReadGameRenderRootsDiagnosticV1(std::uint32_t version, IGameRenderObservationV6* retainedLease, RenderRootsDiagnosticV1* output) noexcept
+    {
+        if (version != RenderRootsDiagnosticVersionV1 || !retainedLease || !output)
+            return Status::InvalidArgument;
+        RenderRootsDiagnosticV1 next;
+        const auto              result = GameRenderObservationV6::ReadRootsDiagnostic(retainedLease, next);
         if (result == Status::Ok)
             *output = next;
         return result;

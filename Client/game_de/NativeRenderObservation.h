@@ -10,6 +10,7 @@
 #include "../sdk/game/CGameRenderObservation.h"
 #include "../sdk/game/CGameRenderEndpointDiagnostic.h"
 #include "../sdk/game/CGameRenderSetupDiagnostic.h"
+#include "../sdk/game/CGameRenderRootsDiagnostic.h"
 
 namespace mta::game_de
 {
@@ -41,6 +42,7 @@ namespace mta::game_de
         CustomPresentClassificationState custom;
         FrameBoundaryObservationState    boundary;
         FrameBoundaryObservationState    nativeDispatch;
+        RenderRootsDiagnosticV1          rootsDiagnostic;
     };
 
     // This is an observation of a naturally invoked native viewport callback,
@@ -71,6 +73,9 @@ namespace mta::game_de
         // Worker-only setup evidence survives End without changing any render
         // wire fields or granting observation/admission after a refusal.
         bool ReadSetupDiagnostic(RenderSetupDiagnosticV1& state) const noexcept;
+        // This historical scalar trace is correlated with one accepted snapshot;
+        // a publication miss cannot attach newer read failures to older facts.
+        bool ReadRootsDiagnostic(RenderRootsDiagnosticV1& state) const noexcept;
 
     private:
         std::uint64_t                        generation = 0;

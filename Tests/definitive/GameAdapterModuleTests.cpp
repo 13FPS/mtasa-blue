@@ -8,6 +8,7 @@
 #include <game/CGameRenderObservation.h>
 #include <game/CGameRenderEndpointDiagnostic.h>
 #include <game/CGameRenderSetupDiagnostic.h>
+#include <game/CGameRenderRootsDiagnostic.h>
 
 #include <array>
 #include <algorithm>
@@ -951,6 +952,75 @@ namespace
         older->Release();
     }
 
+    void TestRootsDiagnosticLeaseRejection()
+    {
+        OwnerIdentity owner;
+        auto*         lease = CreateGameRenderObservationV6(6, owner.Get(), RenderObservationRoute::D3D12);
+        auto*         other = CreateGameRenderObservationV6(6, owner.Get(), RenderObservationRoute::D3D12);
+        auto*         older = CreateGameRenderObservationV5(5, owner.Get(), RenderObservationRoute::D3D12);
+        Check(lease && other && older, "roots diagnostics retain only exact V6 lease identities");
+        RenderRootsDiagnosticV1 output;
+        std::memset(&output, 0xa5, sizeof(output));
+        const auto sentinel = output;
+        const auto unchanged = [&] { return std::memcmp(&output, &sentinel, sizeof(output)) == 0; };
+        for (const auto version : {0u, 2u, 6u, std::numeric_limits<std::uint32_t>::max()})
+            Check(ReadGameRenderRootsDiagnosticV1(version, lease, &output) == Status::InvalidArgument && unchanged(),
+                  "roots payload version is independent of observation API6 and rejects without output mutation");
+        Check(ReadGameRenderRootsDiagnosticV1(1, nullptr, &output) == Status::InvalidArgument && unchanged() &&
+                  ReadGameRenderRootsDiagnosticV1(1, lease, nullptr) == Status::InvalidArgument,
+              "roots export validates null arguments before native cache access");
+        Check(ReadGameRenderRootsDiagnosticV1(1, lease, &output) == Status::Unsupported && unchanged() &&
+                  ReadGameRenderRootsDiagnosticV1(1, reinterpret_cast<IGameRenderObservationV6*>(older), &output) == Status::InvalidArgument && unchanged(),
+              "allocation alone and an older interface cannot expose API6 roots evidence");
+        auto* inaccessible = VirtualAlloc(nullptr, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_NOACCESS);
+        Check(inaccessible != nullptr, "reserve unreadable roots lease validation page");
+        Check(ReadGameRenderRootsDiagnosticV1(1, static_cast<IGameRenderObservationV6*>(inaccessible), static_cast<RenderRootsDiagnosticV1*>(inaccessible)) ==
+                      Status::InvalidArgument &&
+                  ReadGameRenderRootsDiagnosticV1(2, lease, static_cast<RenderRootsDiagnosticV1*>(inaccessible)) == Status::InvalidArgument,
+              "unknown identity and wrong version never dereference caller lease or output pointers");
+        Check(VirtualFree(inaccessible, 0, MEM_RELEASE) != 0, "release roots validation page");
+        Status      foreign = Status::Ok;
+        std::thread reader([&] { foreign = ReadGameRenderRootsDiagnosticV1(1, lease, &output); });
+        reader.join();
+        Check(foreign == Status::WrongThread && unchanged(), "roots cache is available only on the lease producer thread");
+        Check(lease->Begin() == Status::Unsupported && ReadGameRenderRootsDiagnosticV1(1, lease, &output) == Status::Unsupported && unchanged(),
+              "wrong-image Begin fails before roots cache admission without inventing diagnostics");
+        Check(lease->End() == Status::Ok && ReadGameRenderRootsDiagnosticV1(1, lease, &output) == Status::Unsupported && unchanged(),
+              "clean End preserves the lack of roots evidence for an unadmitted image");
+        const auto released = reinterpret_cast<std::uintptr_t>(lease);
+        lease->Release();
+        Check(ReadGameRenderRootsDiagnosticV1(1, reinterpret_cast<IGameRenderObservationV6*>(released), &output) == Status::InvalidArgument && unchanged() &&
+                  ReadGameRenderRootsDiagnosticV1(1, other, &output) == Status::Unsupported && unchanged(),
+              "Release removes only its exact roots lease while another allocated V6 identity remains valid");
+        const auto        racing = reinterpret_cast<std::uintptr_t>(other);
+        std::atomic<bool> ready{false}, releasing{false};
+        bool              preserved = true;
+        std::thread       racingReader(
+            [&]
+            {
+                RenderRootsDiagnosticV1 next = sentinel;
+                ready.store(true);
+                while (!releasing.load())
+                    std::this_thread::yield();
+                for (unsigned index = 0; index < 2000; ++index)
+                {
+                    const auto result = ReadGameRenderRootsDiagnosticV1(1, reinterpret_cast<IGameRenderObservationV6*>(racing), &next);
+                    if ((result != Status::WrongThread && result != Status::InvalidArgument && result != Status::Unsupported) ||
+                        std::memcmp(&next, &sentinel, sizeof(next)))
+                        preserved = false;
+                }
+            });
+        while (!ready.load())
+            std::this_thread::yield();
+        releasing.store(true);
+        other->Release();
+        racingReader.join();
+        Check(preserved && ReadGameRenderRootsDiagnosticV1(1, reinterpret_cast<IGameRenderObservationV6*>(racing), &output) == Status::InvalidArgument &&
+                  unchanged(),
+              "roots read versus Release cannot use freed leases or mutate rejected output");
+        older->Release();
+    }
+
     void TestRenderObservationV6Contract()
     {
         OwnerIdentity owner;
@@ -1083,6 +1153,10 @@ int main()
     static_assert(std::is_nothrow_invocable_v<decltype(CreateGameRenderObservationV6), std::uint32_t, CCoreInterface*, RenderObservationRoute>);
     static_assert(std::is_nothrow_invocable_v<decltype(CreateGameRenderObservationV5), std::uint32_t, CCoreInterface*, RenderObservationRoute>);
     static_assert(RenderEndpointDiagnosticVersionV1 == 1 && sizeof(RenderEndpointDiagnosticV1) == 80);
+    static_assert(RenderRootsDiagnosticVersionV1 == 1 && sizeof(RenderRootsDiagnosticV1) == 56);
+    static_assert(std::is_standard_layout_v<RenderRootsDiagnosticV1> && std::is_trivially_copyable_v<RenderRootsDiagnosticV1>);
+    static_assert(
+        std::is_nothrow_invocable_r_v<Status, decltype(ReadGameRenderRootsDiagnosticV1), std::uint32_t, IGameRenderObservationV6*, RenderRootsDiagnosticV1*>);
     static_assert(RenderSetupDiagnosticVersionV1 == 1 && sizeof(RenderSetupDiagnosticV1) == 72);
     static_assert(std::is_standard_layout_v<RenderSetupDiagnosticV1> && std::is_trivially_copyable_v<RenderSetupDiagnosticV1>);
     static_assert(
@@ -1110,6 +1184,7 @@ int main()
         TestEndpointDiagnosticLeaseRejection();
         TestRenderObservationV6Contract();
         TestSetupDiagnosticLeaseRejection();
+        TestRootsDiagnosticLeaseRejection();
         TestRenderObservationFactoryRejection();
         TestRenderObservationV2FactoryRejection();
         TestRenderObservationV3FactoryRejection();

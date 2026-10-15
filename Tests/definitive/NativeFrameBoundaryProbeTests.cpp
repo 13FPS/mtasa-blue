@@ -193,13 +193,21 @@ namespace
         putPointer(address(resource), image + 0x4502080);
         putPointer(address(resource) + 0x20, address(rawResource));
         putScalar(address(resource) + 0xc8, 0x80000000u);
+        RenderRootsDiagnosticV1 trace;
+        trace.queryPhase = static_cast<unsigned>(RenderRootsDiagnosticPhase::NativeRoots);
         detail::Roots baseline;
-        Require(detail::ReadRoots(viewportAddress, baseline),
+        Require(detail::ReadRoots(viewportAddress, baseline, &trace),
                 "actual full root extraction reads context+1D0 data then data+18 manager with unrelated data+8 null", checks);
         Require(baseline.commandData == dataAddress && baseline.commandManager == managerAddress && baseline.contextManager == managerAddress &&
                     baseline.texture == address(texture) && baseline.rawResource == address(rawResource) && baseline.index == 2 &&
                     baseline.tracked == 0x80000000u && baseline.gpuCount == 1 && baseline.afrCount == 1,
                 "actual reader extracts the complete owned native context/resource graph", checks);
+        Require(trace.queryPhase == 1 && trace.checkpoint == 29 && !trace.refusalReason && !trace.exceptionCode && trace.scalarValidMask == 3 &&
+                    trace.contextNodeMask == 1 && trace.nativeBufferIndex == 2,
+                "complete actual root trace records only its existing two scalar reads", checks);
+        detail::Roots untraced;
+        Require(detail::ReadRoots(viewportAddress, untraced) && detail::SameRoots(baseline, untraced),
+                "optional root tracing preserves the exact untraced extraction", checks);
         putPointer(dataAddress + 8, address(decoyData));
         detail::Roots decoy;
         Require(detail::ReadRoots(viewportAddress, decoy) && detail::SameRoots(baseline, decoy),
@@ -229,7 +237,10 @@ namespace
         {
             putPointer(contextAddress + 0x1d0, data);
             detail::Roots refused;
-            Require(!detail::ReadRoots(viewportAddress, refused), "null or uncommitted owned command data refuses the actual root reader", checks);
+            Require(!detail::ReadRoots(viewportAddress, refused, &trace), "null or uncommitted owned command data refuses the actual root reader", checks);
+            Require(trace.checkpoint == (data ? 18u : 17u) && trace.refusalReason == (data ? 1u : 2u) && trace.scalarValidMask == 1 &&
+                        trace.contextNodeMask == 1 && !trace.nativeBufferIndex && !trace.exceptionCode,
+                    "guarded read and required-null refusals name their existing command-data checkpoint", checks);
         }
         putPointer(contextAddress + 0x1d0, dataAddress);
         for (const auto table : {viewportAddress, managerAddress, address(resource)})
@@ -238,12 +249,19 @@ namespace
             std::memcpy(&saved, reinterpret_cast<const void*>(table), sizeof(saved));
             putPointer(table, saved + 8);
             detail::Roots refused;
-            Require(!detail::ReadRoots(viewportAddress, refused), "wrong viewport, manager or resource table remains unsupported", checks);
+            Require(!detail::ReadRoots(viewportAddress, refused, &trace), "wrong viewport, manager or resource table remains unsupported", checks);
+            Require(trace.checkpoint == (table == viewportAddress  ? 1u
+                                         : table == managerAddress ? 5u
+                                                                   : 26u) &&
+                        trace.refusalReason == 3 && trace.scalarValidMask == (table == address(resource) ? 3u : 0u) && !trace.exceptionCode,
+                    "table mismatch retains its exact read checkpoint and partial scalar validity", checks);
             putPointer(table, saved);
         }
         putPointer(address(texture) + 0x128, 0x67);
         detail::Roots refusedTexture;
-        Require(!detail::ReadRoots(viewportAddress, refusedTexture), "native texture bias underflow still refuses before dereferencing", checks);
+        Require(!detail::ReadRoots(viewportAddress, refusedTexture, &trace), "native texture bias underflow still refuses before dereferencing", checks);
+        Require(trace.checkpoint == 23 && trace.refusalReason == 4 && trace.scalarValidMask == 3 && !trace.exceptionCode,
+                "texture bias guard reports no invented read exception", checks);
         putPointer(address(texture) + 0x128, address(nativeTexture) + 0x68);
         putPointer(dataAddress + 0x18, address(alternateManager));
         detail::Roots wrongManager;
@@ -278,6 +296,36 @@ namespace
         detail::Roots finalRoots;
         Require(detail::ReadRoots(viewportAddress, finalRoots) && detail::SameRoots(baseline, finalRoots),
                 "every owned mutation is restored before the graph lease ends", checks);
+        // Exercise both actual rereads without invoking synthetic COM objects.
+        // Native classification stays unsupported; root equality is independently
+        // observable and does not grant a frame or drawing permission.
+        FrameBoundaryScope readbackScope;
+        readbackScope.viewport = viewportAddress;
+        detail::Queries               tracedQueries(readbackScope, baseline.swapchain, &trace);
+        FrameBoundaryObservationState readbackState;
+        Require(tracedQueries.Execute(FrameBoundaryQueryStage::NativeRoots, readbackState) == S_FALSE && trace.queryPhase == 1 && trace.checkpoint == 31 &&
+                    !trace.refusalReason && trace.scalarValidMask == 3,
+                "unsupported actual classification retains a complete roots trace without COM or synthetic Known", checks);
+        Require(tracedQueries.Execute(FrameBoundaryQueryStage::RootReadback, readbackState) == S_OK && trace.queryPhase == 2 && trace.checkpoint == 29 &&
+                    !trace.refusalReason && (readbackState.factsMask & 128),
+                "actual before-Close readback preserves equality facts and records phase2", checks);
+        Require(tracedQueries.Close(), "owned root query with no COM references closes normally", checks);
+        tracedQueries.MarkAfterCloseReadback();
+        putScalar(viewportAddress + 0xa0, 0);
+        Require(tracedQueries.Execute(FrameBoundaryQueryStage::RootReadback, readbackState) == S_FALSE && trace.queryPhase == 3 && trace.checkpoint == 29 &&
+                    !trace.refusalReason && trace.scalarValidMask == 3 && !trace.nativeBufferIndex && !(readbackState.factsMask & 128) &&
+                    readbackState.status == static_cast<unsigned>(FrameBoundaryObservationStatus::RootsChanged),
+                "after-Close changed roots retain the existing S_FALSE and known-zero buffer index", checks);
+        putScalar(viewportAddress + 0xa0, 2);
+        putPointer(contextAddress + 0x1d0, 0);
+        Require(tracedQueries.Execute(FrameBoundaryQueryStage::RootReadback, readbackState) == E_POINTER && trace.queryPhase == 3 && trace.checkpoint == 17 &&
+                    trace.refusalReason == 2 && trace.scalarValidMask == 1 && !trace.exceptionCode,
+                "after-Close read failure preserves E_POINTER and identifies only the actual required-null guard", checks);
+        putPointer(contextAddress + 0x1d0, dataAddress);
+        putScalar(contextAddress + 0x138, 0);
+        Require(detail::ReadRoots(viewportAddress, finalRoots, &trace) && trace.scalarValidMask == 3 && !trace.contextNodeMask && trace.nativeBufferIndex == 2,
+                "a successfully read zero node mask remains known rather than missing", checks);
+        putScalar(contextAddress + 0x138, 1);
         detail::runtime.image = ownedImage.previousImage;
         Require(VirtualFree(ownedImage.base, 0, MEM_RELEASE) != FALSE, "owned root RVA reservation is released after restoring runtime image", checks);
         ownedImage.base = nullptr;
@@ -352,6 +400,10 @@ bool NativeDispatchFixtureOriginal(void*, std::uint32_t interval)
             selected->nativeDispatch.queryStage = 9;
             selected->nativeDispatch.presentEntries = 1;
             selected->nativeDispatch.presentThreadId = GetCurrentThreadId();
+            selected->rootsDiagnostic.queryPhase = 1;
+            selected->rootsDiagnostic.checkpoint = 31;
+            selected->rootsDiagnostic.scalarValidMask = 3;
+            selected->rootsDiagnostic.contextNodeMask = 1;
         }
     }
     return interval != 0;
@@ -407,6 +459,31 @@ void CheckFrameBoundaryProbe(const char* customFixture, const char* wrapperFixtu
         Require(RunFrameBoundaryQueries(query, state) == (fault == 0), "cleanup failure is fatal independently of successful metadata", checks);
         Require(query.calls == 8 && query.closes == 1 && state.queryStage == 9, "complete queries close exactly once", checks);
         Require(state.status == static_cast<unsigned>(fault == 0 ? Status::ObservedCoherent : Status::QueryFailed), "cleanup outranks coherent result", checks);
+    }
+    for (const unsigned faultStage : {1u, 2u, 8u})
+    {
+        OwnedQueries query;
+        query.stop = faultStage;
+        query.raise = true;
+        RenderRootsDiagnosticV1 trace;
+        trace.queryPhase = faultStage == 8 ? 2u : 1u;
+        trace.checkpoint = 1;
+        FrameBoundaryObservationState state;
+        Require(RunFrameBoundaryQueries(query, state, &trace) && state.queryHresult == static_cast<unsigned>(E_POINTER) && query.closes == 1,
+                "traced existing executor preserves SEH HRESULT and once-only local cleanup", checks);
+        Require(trace.refusalReason == (faultStage == 2 ? 0u : 5u) && trace.exceptionCode == (faultStage == 2 ? 0u : 0xe0444545u),
+                "only root-stage Execute SEH is classified as a root exception", checks);
+    }
+    {
+        OwnedQueries query;
+        query.raiseClose = true;
+        RenderRootsDiagnosticV1 trace;
+        trace.queryPhase = 2;
+        trace.checkpoint = 29;
+        trace.scalarValidMask = 3;
+        FrameBoundaryObservationState state;
+        Require(!RunFrameBoundaryQueries(query, state, &trace) && !trace.refusalReason && !trace.exceptionCode && state.queryStage == 9,
+                "Release SEH keeps fatal cleanup priority without inventing a root-read exception", checks);
     }
     ResetFrameBoundaryObservation();
     std::array<unsigned char, 0x120> viewport{}, other{};

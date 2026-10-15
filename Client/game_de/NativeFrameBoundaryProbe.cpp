@@ -577,26 +577,88 @@ namespace mta::game_de
             std::uint32_t  index = 0, selectorA = 0, selectorB = 0, nodeMask = 0, tracked = 0, gpuCount = 0, afrCount = 0;
             unsigned char  alternate = 0;
         };
-        bool ReadRoots(std::uintptr_t viewport, Roots& r) noexcept
+        using RootCheckpoint = RenderRootsDiagnosticCheckpoint;
+        using RootReason = RenderRootsDiagnosticRefusalReason;
+        void RootStep(RenderRootsDiagnosticV1* trace, RootCheckpoint checkpoint) noexcept
+        {
+            if (trace)
+                trace->checkpoint = static_cast<unsigned>(checkpoint);
+        }
+        bool RootGuard(bool accepted, RootReason reason, RenderRootsDiagnosticV1* trace) noexcept
+        {
+            if (!accepted && trace)
+                trace->refusalReason = static_cast<unsigned>(reason);
+            return accepted;
+        }
+        template <typename T>
+        bool RootRead(std::uintptr_t address, T& value, RootCheckpoint checkpoint, RenderRootsDiagnosticV1* trace) noexcept
+        {
+            // Mark before the existing read so its executor's SEH handler can
+            // identify the operation without repeating or broadening reads.
+            RootStep(trace, checkpoint);
+            if (!Read(address, value))
+                return RootGuard(false, RootReason::GuardedRead, trace);
+            if (trace && checkpoint == RootCheckpoint::NodeMask)
+            {
+                trace->scalarValidMask |= static_cast<unsigned>(RenderRootsDiagnosticScalarMask::ContextNodeMask);
+                trace->contextNodeMask = static_cast<std::uint32_t>(value);
+            }
+            if (trace && checkpoint == RootCheckpoint::BufferIndex)
+            {
+                trace->scalarValidMask |= static_cast<unsigned>(RenderRootsDiagnosticScalarMask::NativeBufferIndex);
+                trace->nativeBufferIndex = static_cast<std::uint32_t>(value);
+            }
+            return true;
+        }
+        bool ReadRoots(std::uintptr_t viewport, Roots& r, RenderRootsDiagnosticV1* trace = nullptr) noexcept
         {
             std::uintptr_t table = 0, managerTable = 0, resourceTable = 0;
+            if (trace)
+            {
+                trace->checkpoint = trace->refusalReason = trace->exceptionCode = trace->scalarValidMask = 0;
+                trace->contextNodeMask = trace->nativeBufferIndex = 0;
+            }
             // Native code at RVA 1F849E4 takes the inline handle at context+1C8,
             // loads its +8 data pointer, then data+18 manager. Context+1D0 holds
             // that data: another +8 dereference reads unrelated storage and
             // can reject a valid native frame before any COM metadata query.
-            if (!Read(viewport, table) || table != runtime.image + 0x4504060 || !Read(viewport + 0x18, r.owner) || !r.owner ||
-                !Read(r.owner + 0x8a8, r.device) || !r.device || !Read(r.device + 0x38, r.manager) || !r.manager || !Read(r.manager, managerTable) ||
-                managerTable != runtime.image + 0x44fbe88 || !Read(r.manager + 0x28, r.queue) || !r.queue || !Read(viewport + 0x60, r.swapchain) ||
-                !r.swapchain || !Read(viewport + 0x1d0, r.custom) || !Read(runtime.image + 0x503e8e0, r.gpuCount) ||
-                !Read(runtime.image + 0x503f45c, r.afrCount) || !Read(r.device + 0x670, r.contextRoot) || !r.contextRoot || !Read(r.contextRoot, r.context) ||
-                !r.context || !Read(r.context + 0x140, r.contextDevice) || !Read(r.context + 0x13e, r.alternate) || !Read(r.context + 0x138, r.nodeMask) ||
-                !Read(r.contextDevice + (r.alternate ? 0x48 : 0x38), r.contextManager) || !Read(r.context + 0x1d0, r.commandData) || !r.commandData ||
-                !Read(r.commandData + 0x18, r.commandManager) || !Read(viewport + 0xa0, r.index) || !Read(viewport + 0x58, r.selectorA) ||
-                !Read(viewport + 0x118, r.selectorB) || !Read(viewport + (r.selectorA == r.selectorB ? 0xa8 : 0x110), r.texture) || !r.texture ||
-                !Read(r.texture + 0x128, r.nativeTexture) || r.nativeTexture < 0x68 || !Read(r.nativeTexture - 0x68 + 0x170, r.view) || !r.view ||
-                !Read(r.view + 0x50, r.resource) || !r.resource || !Read(r.resource, resourceTable) || resourceTable != runtime.image + 0x4502080 ||
-                !Read(r.resource + 0x20, r.rawResource) || !r.rawResource || !Read(r.resource + 0xc8, r.tracked))
+            if (!RootRead(viewport, table, RootCheckpoint::ViewportTable, trace) ||
+                !RootGuard(table == runtime.image + 0x4504060, RootReason::TableMismatch, trace) ||
+                !RootRead(viewport + 0x18, r.owner, RootCheckpoint::Owner, trace) || !RootGuard(r.owner != 0, RootReason::RequiredNull, trace) ||
+                !RootRead(r.owner + 0x8a8, r.device, RootCheckpoint::Device, trace) || !RootGuard(r.device != 0, RootReason::RequiredNull, trace) ||
+                !RootRead(r.device + 0x38, r.manager, RootCheckpoint::Manager, trace) || !RootGuard(r.manager != 0, RootReason::RequiredNull, trace) ||
+                !RootRead(r.manager, managerTable, RootCheckpoint::ManagerTable, trace) ||
+                !RootGuard(managerTable == runtime.image + 0x44fbe88, RootReason::TableMismatch, trace) ||
+                !RootRead(r.manager + 0x28, r.queue, RootCheckpoint::Queue, trace) || !RootGuard(r.queue != 0, RootReason::RequiredNull, trace) ||
+                !RootRead(viewport + 0x60, r.swapchain, RootCheckpoint::Swapchain, trace) || !RootGuard(r.swapchain != 0, RootReason::RequiredNull, trace) ||
+                !RootRead(viewport + 0x1d0, r.custom, RootCheckpoint::CustomPresent, trace) ||
+                !RootRead(runtime.image + 0x503e8e0, r.gpuCount, RootCheckpoint::GpuCount, trace) ||
+                !RootRead(runtime.image + 0x503f45c, r.afrCount, RootCheckpoint::AfrCount, trace) ||
+                !RootRead(r.device + 0x670, r.contextRoot, RootCheckpoint::ContextRoot, trace) ||
+                !RootGuard(r.contextRoot != 0, RootReason::RequiredNull, trace) || !RootRead(r.contextRoot, r.context, RootCheckpoint::Context, trace) ||
+                !RootGuard(r.context != 0, RootReason::RequiredNull, trace) ||
+                !RootRead(r.context + 0x140, r.contextDevice, RootCheckpoint::ContextDevice, trace) ||
+                !RootRead(r.context + 0x13e, r.alternate, RootCheckpoint::Alternate, trace) ||
+                !RootRead(r.context + 0x138, r.nodeMask, RootCheckpoint::NodeMask, trace) ||
+                !RootRead(r.contextDevice + (r.alternate ? 0x48 : 0x38), r.contextManager, RootCheckpoint::ContextManager, trace) ||
+                !RootRead(r.context + 0x1d0, r.commandData, RootCheckpoint::CommandData, trace) ||
+                !RootGuard(r.commandData != 0, RootReason::RequiredNull, trace) ||
+                !RootRead(r.commandData + 0x18, r.commandManager, RootCheckpoint::CommandManager, trace) ||
+                !RootRead(viewport + 0xa0, r.index, RootCheckpoint::BufferIndex, trace) ||
+                !RootRead(viewport + 0x58, r.selectorA, RootCheckpoint::SelectorA, trace) ||
+                !RootRead(viewport + 0x118, r.selectorB, RootCheckpoint::SelectorB, trace) ||
+                !RootRead(viewport + (r.selectorA == r.selectorB ? 0xa8 : 0x110), r.texture, RootCheckpoint::Texture, trace) ||
+                !RootGuard(r.texture != 0, RootReason::RequiredNull, trace) ||
+                !RootRead(r.texture + 0x128, r.nativeTexture, RootCheckpoint::NativeTexture, trace) ||
+                !RootGuard(r.nativeTexture >= 0x68, RootReason::TextureBias, trace) ||
+                !RootRead(r.nativeTexture - 0x68 + 0x170, r.view, RootCheckpoint::View, trace) || !RootGuard(r.view != 0, RootReason::RequiredNull, trace) ||
+                !RootRead(r.view + 0x50, r.resource, RootCheckpoint::Resource, trace) || !RootGuard(r.resource != 0, RootReason::RequiredNull, trace) ||
+                !RootRead(r.resource, resourceTable, RootCheckpoint::ResourceTable, trace) ||
+                !RootGuard(resourceTable == runtime.image + 0x4502080, RootReason::TableMismatch, trace) ||
+                !RootRead(r.resource + 0x20, r.rawResource, RootCheckpoint::RawResource, trace) ||
+                !RootGuard(r.rawResource != 0, RootReason::RequiredNull, trace) || !RootRead(r.resource + 0xc8, r.tracked, RootCheckpoint::TrackedState, trace))
                 return false;
+            RootStep(trace, RootCheckpoint::ReadComplete);
             return true;
         }
         bool SameRoots(const Roots& a, const Roots& b) noexcept
@@ -690,24 +752,29 @@ namespace mta::game_de
         class Queries final : public FrameBoundaryQueries
         {
         public:
-            explicit Queries(FrameBoundaryScope& selected, std::uintptr_t observedDispatchChain = 0) noexcept
-                : selected(selected), epoch(runtime.epoch.load()), dispatchChain(observedDispatchChain)
+            explicit Queries(FrameBoundaryScope& selected, std::uintptr_t observedDispatchChain = 0, RenderRootsDiagnosticV1* rootTrace = nullptr) noexcept
+                : selected(selected), epoch(runtime.epoch.load()), dispatchChain(observedDispatchChain), trace(rootTrace)
             {
             }
+            void         MarkAfterCloseReadback() noexcept { afterCloseReadback = true; }
             std::int32_t Execute(Stage stage, FrameBoundaryObservationState& state) override
             {
                 switch (stage)
                 {
                     case Stage::NativeRoots:
                     {
-                        if (!ReadRoots(selected.viewport, roots))
+                        if (trace)
+                            trace->queryPhase = static_cast<unsigned>(RenderRootsDiagnosticPhase::NativeRoots);
+                        if (!ReadRoots(selected.viewport, roots, trace))
                             return E_POINTER;
                         if (dispatchChain && roots.swapchain != dispatchChain)
                             return S_FALSE;
                         PresenterReads                   reads;
                         CustomPresentClassificationState custom;
                         CustomPresentProbeRoots          customRoots;
+                        RootStep(trace, RootCheckpoint::CustomClassification);
                         ClassifyCustomPresent(reads, runtime.image, roots.custom, roots.device, custom, customRoots);
+                        RootStep(trace, RootCheckpoint::AssociationValidation);
                         return ValidateNativeRoots(roots, custom, selected, dispatchChain, state);
                     }
                     case Stage::SwapchainInterface:
@@ -801,7 +868,10 @@ namespace mta::game_de
                     {
                         state.factsMask &= 127u;
                         Roots again;
-                        if (!ReadRoots(selected.viewport, again))
+                        if (trace)
+                            trace->queryPhase = static_cast<unsigned>(afterCloseReadback ? RenderRootsDiagnosticPhase::AfterCloseReadback
+                                                                                         : RenderRootsDiagnosticPhase::BeforeCloseReadback);
+                        if (!ReadRoots(selected.viewport, again, trace))
                             return E_POINTER;
                         if (runtime.resizing.load() || runtime.destroyed.load() || runtime.epoch.load() != epoch)
                         {
@@ -849,18 +919,20 @@ namespace mta::game_de
             }
 
         private:
-            FrameBoundaryScope& selected;
-            std::uint64_t       epoch;
-            std::uintptr_t      dispatchChain = 0;
-            Roots               roots;
-            IDXGISwapChain3*    chain = nullptr;
-            ID3D12Resource*     buffer = nullptr;
-            ID3D12CommandQueue* queue = nullptr;
-            IUnknown *          chainIdentity = nullptr, *nativeChainIdentity = nullptr, *queueIdentity = nullptr, *nativeQueueIdentity = nullptr;
-            ID3D12Device *      queueDevice = nullptr, *bufferDevice = nullptr, *chainDevice = nullptr;
-            IUnknown *          queueDeviceIdentity = nullptr, *bufferDeviceIdentity = nullptr, *chainDeviceIdentity = nullptr;
+            FrameBoundaryScope&      selected;
+            std::uint64_t            epoch;
+            std::uintptr_t           dispatchChain = 0;
+            RenderRootsDiagnosticV1* trace = nullptr;
+            bool                     afterCloseReadback = false;
+            Roots                    roots;
+            IDXGISwapChain3*         chain = nullptr;
+            ID3D12Resource*          buffer = nullptr;
+            ID3D12CommandQueue*      queue = nullptr;
+            IUnknown *               chainIdentity = nullptr, *nativeChainIdentity = nullptr, *queueIdentity = nullptr, *nativeQueueIdentity = nullptr;
+            ID3D12Device *           queueDevice = nullptr, *bufferDevice = nullptr, *chainDevice = nullptr;
+            IUnknown *               queueDeviceIdentity = nullptr, *bufferDeviceIdentity = nullptr, *chainDeviceIdentity = nullptr;
         };
-        HRESULT Execute(FrameBoundaryQueries& queries, Stage stage, FrameBoundaryObservationState& state) noexcept
+        HRESULT Execute(FrameBoundaryQueries& queries, Stage stage, FrameBoundaryObservationState& state, RenderRootsDiagnosticV1* trace = nullptr) noexcept
         {
             __try
             {
@@ -868,6 +940,13 @@ namespace mta::game_de
             }
             __except (EXCEPTION_EXECUTE_HANDLER)
             {
+                // Only a root-stage exception belongs to this record. A COM
+                // query or Release fault retains its existing wire/fatal path.
+                if (trace && (stage == Stage::NativeRoots || stage == Stage::RootReadback))
+                {
+                    trace->refusalReason = static_cast<unsigned>(RootReason::StructuredException);
+                    trace->exceptionCode = GetExceptionCode();
+                }
                 return E_POINTER;
             }
         }
@@ -931,8 +1010,9 @@ namespace mta::game_de
                     state.status = static_cast<unsigned>(BoundaryStatus::ResizeOverlap);
                 else
                 {
-                    Queries queries(*selected, nativeDispatch ? reinterpret_cast<std::uintptr_t>(chain) : 0);
-                    selected->cleanupFailed = !RunFrameBoundaryQueries(queries, state) || selected->cleanupFailed;
+                    auto*   trace = nativeDispatch ? &selected->rootsDiagnostic : nullptr;
+                    Queries queries(*selected, nativeDispatch ? reinterpret_cast<std::uintptr_t>(chain) : 0, trace);
+                    selected->cleanupFailed = !RunFrameBoundaryQueries(queries, state, trace) || selected->cleanupFailed;
                     if (selected->cleanupFailed)
                     {
                         runtime.armed.store(false);
@@ -943,7 +1023,8 @@ namespace mta::game_de
                     {
                         // Final Release may run arbitrary foreign code. Check
                         // borrowed roots again after every local ref is gone.
-                        const auto hr = Execute(queries, Stage::RootReadback, state);
+                        queries.MarkAfterCloseReadback();
+                        const auto hr = Execute(queries, Stage::RootReadback, state, trace);
                         if (hr != S_OK)
                         {
                             state.queryStage = static_cast<unsigned>(Stage::RootReadback);
@@ -1112,7 +1193,7 @@ namespace mta::game_de
         }
     }
 
-    bool RunFrameBoundaryQueries(FrameBoundaryQueries& queries, FrameBoundaryObservationState& state) noexcept
+    bool RunFrameBoundaryQueries(FrameBoundaryQueries& queries, FrameBoundaryObservationState& state, RenderRootsDiagnosticV1* trace) noexcept
     {
         using namespace boundary_detail;
         state.status = static_cast<unsigned>(BoundaryStatus::QueryFailed);
@@ -1120,7 +1201,7 @@ namespace mta::game_de
         {
             const auto stage = static_cast<Stage>(value);
             state.queryStage = value;
-            const auto hr = Execute(queries, stage, state);
+            const auto hr = Execute(queries, stage, state, trace);
             state.queryHresult = static_cast<std::uint32_t>(hr);
             if (hr != S_OK)
             {

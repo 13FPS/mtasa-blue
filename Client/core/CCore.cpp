@@ -40,6 +40,7 @@
 #include "DefinitiveRenderReference.h"
 #include "DefinitiveRenderEndpointLog.h"
 #include "DefinitiveRenderSetupLog.h"
+#include "DefinitiveRenderRootsLog.h"
 
 using SharedUtil::CalcMTASAPath;
 using namespace std;
@@ -255,7 +256,31 @@ namespace
                 const std::uint64_t                   runMs = static_cast<std::uint64_t>(GetTickCount64_());
                 DefinitiveRenderEndpointLog::Recorder endpointLog;
                 DefinitiveRenderSetupLog::Recorder    setupLog;
-                void                                  LogSetup(std::uint32_t phase) noexcept
+                DefinitiveRenderRootsLog::Recorder    rootsLog;
+                void                                  LogRoots(std::uint32_t phase) noexcept
+                {
+                    try
+                    {
+                        mta::game_de::RenderRootsDiagnosticV1 state;
+                        // The exact API6 provider returns cached values only and
+                        // refuses while peers are held. MTA file utilities run
+                        // here on the owning worker, never inside a native callback.
+                        if (!adapter.GetNativeRenderRootsDiagnostic(state))
+                            return;
+                        rootsLog.Write(state, GetCurrentProcessId(), runMs, phase,
+                                       [](const std::string& line)
+                                       {
+                                           const auto path = CalcMTASAPath("mta/logs/render-roots.log");
+                                           SharedUtil::MakeSureDirExists(path);
+                                           return SharedUtil::FileAppend(path, line.data(), static_cast<unsigned long>(line.size()));
+                                       });
+                    }
+                    catch (...)
+                    {
+                        // Optional diagnostics cannot change cleanup ownership.
+                    }
+                }
+                void LogSetup(std::uint32_t phase) noexcept
                 {
                     try
                     {
@@ -306,6 +331,7 @@ namespace
                     const bool began = adapter.BeginNativeRenderDispatchObservation(route);
                     LogSetup(0);
                     Log(0);
+                    LogRoots(0);
                     return began;
                 }
                 bool Read(DefinitiveRenderReference::SnapshotV6& snapshot)
@@ -315,6 +341,7 @@ namespace
                     {
                         LogSetup(1);
                         Log(1);
+                        LogRoots(1);
                     }
                     return read;
                 }
@@ -325,6 +352,7 @@ namespace
                     {
                         LogSetup(2);
                         Log(2);
+                        LogRoots(2);
                     }
                     return ended;
                 }

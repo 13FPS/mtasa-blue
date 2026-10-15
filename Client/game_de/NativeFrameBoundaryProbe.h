@@ -6,6 +6,7 @@
 #pragma once
 #include "../sdk/game/CGameRenderObservation.h"
 #include "../sdk/game/CGameRenderEndpointDiagnostic.h"
+#include "../sdk/game/CGameRenderRootsDiagnostic.h"
 #include <cstddef>
 
 namespace mta::game_de
@@ -21,13 +22,14 @@ namespace mta::game_de
     protected:
         ~FrameBoundaryQueries() = default;
     };
-    bool RunFrameBoundaryQueries(FrameBoundaryQueries& queries, FrameBoundaryObservationState& state) noexcept;
+    bool RunFrameBoundaryQueries(FrameBoundaryQueries& queries, FrameBoundaryObservationState& state, RenderRootsDiagnosticV1* trace = nullptr) noexcept;
 
     struct FrameBoundaryScope
     {
         FrameBoundaryObservationState state;
         FrameBoundaryObservationState nativeDispatch;
         RenderEndpointDiagnosticV1    diagnostic;
+        RenderRootsDiagnosticV1       rootsDiagnostic;
         std::uintptr_t                image = 0, viewport = 0, swapchain = 0, nativeSwapchain = 0;
         std::uint32_t                 callbackThread = 0;
         bool                          knownPresenter = false, cleanupFailed = false, entered = false, dispatchEntered = false;

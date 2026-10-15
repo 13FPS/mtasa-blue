@@ -10,6 +10,7 @@
 #include <game/CGameRenderObservation.h>
 #include <game/CGameRenderEndpointDiagnostic.h>
 #include <game/CGameRenderSetupDiagnostic.h>
+#include <game/CGameRenderRootsDiagnostic.h>
 #include <cstdint>
 #include <string>
 
@@ -52,6 +53,7 @@ public:
     bool                GetNativeRenderObservationState(mta::game_de::RenderObservationStateV6& state);
     bool                GetNativeRenderEndpointDiagnostic(mta::game_de::RenderEndpointDiagnosticV1& state);
     bool                GetNativeRenderSetupDiagnostic(mta::game_de::RenderSetupDiagnosticV1& state);
+    bool                GetNativeRenderRootsDiagnostic(mta::game_de::RenderRootsDiagnosticV1& state);
     bool                EndNativeRenderObservation() noexcept;
     void                Stop() noexcept;
 
@@ -94,6 +96,9 @@ private:
     decltype(&mta::game_de::ReadGameRenderSetupDiagnosticV1)    m_renderSetupReaderV1 = nullptr;
     mta::game_de::RenderSetupDiagnosticV1                       m_lastSetupDiagnostic;
     bool                                                        m_hasSetupDiagnostic = false;
+    decltype(&mta::game_de::ReadGameRenderRootsDiagnosticV1)    m_renderRootsReaderV1 = nullptr;
+    mta::game_de::RenderRootsDiagnosticV1                       m_lastRootsDiagnostic;
+    bool                                                        m_hasRootsDiagnostic = false;
     mta::game_de::RenderObservationRoute                        m_renderRoute = mta::game_de::RenderObservationRoute::Unknown;
     CCoreInterface*                                             m_ownerIdentity = nullptr;
     std::uint32_t                                               m_ownerThread = 0;

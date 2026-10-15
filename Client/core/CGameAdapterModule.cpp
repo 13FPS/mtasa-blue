@@ -136,7 +136,9 @@ bool CGameAdapterModule::Start(CCoreInterface* owner, const std::wstring& absolu
     m_hasEndpointDiagnostic = false;
     m_renderEndpointReaderV2 = nullptr;
     m_renderSetupReaderV1 = nullptr;
+    m_renderRootsReaderV1 = nullptr;
     m_hasSetupDiagnostic = false;
+    m_hasRootsDiagnostic = false;
     m_renderRoute = mta::game_de::RenderObservationRoute::Unknown;
     m_error.clear();
     return true;
@@ -236,7 +238,9 @@ bool CGameAdapterModule::Reset()
     m_hasEndpointDiagnostic = false;
     m_renderEndpointReaderV2 = nullptr;
     m_renderSetupReaderV1 = nullptr;
+    m_renderRootsReaderV1 = nullptr;
     m_hasSetupDiagnostic = false;
+    m_hasRootsDiagnostic = false;
     return true;
 }
 
@@ -328,7 +332,9 @@ bool CGameAdapterModule::BeginNativeRenderObservation()
     }
     // A new allowed lease cannot expose a previous API6 setup generation.
     m_renderSetupReaderV1 = nullptr;
+    m_renderRootsReaderV1 = nullptr;
     m_hasSetupDiagnostic = false;
+    m_hasRootsDiagnostic = false;
     const auto address = GetProcAddress(static_cast<HMODULE>(m_module), "CreateGameRenderObservation");
     if (!address)
     {
@@ -373,7 +379,9 @@ bool CGameAdapterModule::BeginNativeRenderObservation(mta::game_de::RenderObserv
     }
     // A new allowed lease cannot expose a previous API6 setup generation.
     m_renderSetupReaderV1 = nullptr;
+    m_renderRootsReaderV1 = nullptr;
     m_hasSetupDiagnostic = false;
+    m_hasRootsDiagnostic = false;
     const auto address = GetProcAddress(static_cast<HMODULE>(m_module), "CreateGameRenderObservationV2");
     if (!address)
     {
@@ -417,7 +425,9 @@ bool CGameAdapterModule::BeginNativeRenderOwnershipObservation(mta::game_de::Ren
     }
     // A new allowed lease cannot expose a previous API6 setup generation.
     m_renderSetupReaderV1 = nullptr;
+    m_renderRootsReaderV1 = nullptr;
     m_hasSetupDiagnostic = false;
+    m_hasRootsDiagnostic = false;
     const auto address = GetProcAddress(static_cast<HMODULE>(m_module), "CreateGameRenderObservationV3");
     if (!address)
     {
@@ -461,7 +471,9 @@ bool CGameAdapterModule::BeginNativeRenderClassificationObservation(mta::game_de
     }
     // A new allowed lease cannot expose a previous API6 setup generation.
     m_renderSetupReaderV1 = nullptr;
+    m_renderRootsReaderV1 = nullptr;
     m_hasSetupDiagnostic = false;
+    m_hasRootsDiagnostic = false;
     const auto address = GetProcAddress(static_cast<HMODULE>(m_module), "CreateGameRenderObservationV4");
     if (!address)
     {
@@ -512,7 +524,9 @@ bool CGameAdapterModule::BeginNativeRenderFrameBoundaryObservation(mta::game_de:
     m_hasEndpointDiagnostic = false;
     // A new allowed lease cannot expose a previous API6 setup generation.
     m_renderSetupReaderV1 = nullptr;
+    m_renderRootsReaderV1 = nullptr;
     m_hasSetupDiagnostic = false;
+    m_hasRootsDiagnostic = false;
     const auto address = GetProcAddress(static_cast<HMODULE>(m_module), "CreateGameRenderObservationV5");
     if (!address)
     {
@@ -564,7 +578,9 @@ bool CGameAdapterModule::BeginNativeRenderDispatchObservation(mta::game_de::Rend
     m_hasEndpointDiagnostic = false;
     m_renderEndpointReaderV2 = nullptr;
     m_renderSetupReaderV1 = nullptr;
+    m_renderRootsReaderV1 = nullptr;
     m_hasSetupDiagnostic = false;
+    m_hasRootsDiagnostic = false;
     try
     {
         m_error.reserve(512);
@@ -599,6 +615,9 @@ bool CGameAdapterModule::BeginNativeRenderDispatchObservation(mta::game_de::Rend
     const auto setupAddress = GetProcAddress(static_cast<HMODULE>(m_module), "ReadGameRenderSetupDiagnosticV1");
     static_assert(sizeof(m_renderSetupReaderV1) == sizeof(setupAddress));
     std::memcpy(&m_renderSetupReaderV1, &setupAddress, sizeof(m_renderSetupReaderV1));
+    const auto rootsAddress = GetProcAddress(static_cast<HMODULE>(m_module), "ReadGameRenderRootsDiagnosticV1");
+    static_assert(sizeof(m_renderRootsReaderV1) == sizeof(rootsAddress));
+    std::memcpy(&m_renderRootsReaderV1, &rootsAddress, sizeof(m_renderRootsReaderV1));
     // Preserve the old DXGI-entry result alongside the separately labeled
     // native dispatch record; an existing Present hook remains untouched.
     m_renderRoute = route;
@@ -874,6 +893,41 @@ bool CGameAdapterModule::GetNativeRenderSetupDiagnostic(mta::game_de::RenderSetu
     return true;
 }
 
+bool CGameAdapterModule::GetNativeRenderRootsDiagnostic(mta::game_de::RenderRootsDiagnosticV1& state)
+{
+    using namespace mta::game_de;
+    if (!RequireOwnerThread("GetNativeRenderRootsDiagnostic"))
+        return false;
+    if (m_renderObservationV6)
+    {
+        // Resolve before Begin and read only the provider's published scalars.
+        // A busy/held provider must not turn an earlier report into a new one.
+        if (!m_renderRootsReaderV1)
+        {
+            SetError("The retained API6 provider has no separate roots diagnostic export");
+            return false;
+        }
+        RenderRootsDiagnosticV1 next;
+        if (!RecordStatus(m_renderRootsReaderV1(RenderRootsDiagnosticVersionV1, m_renderObservationV6, &next), "ReadGameRenderRootsDiagnosticV1"))
+            return false;
+        if (next.version != RenderRootsDiagnosticVersionV1)
+        {
+            SetError("Roots diagnostic provider returned a different version; caller output preserved");
+            return false;
+        }
+        m_lastRootsDiagnostic = next;
+        m_hasRootsDiagnostic = true;
+    }
+    if (!m_hasRootsDiagnostic || (!m_renderObservationV6 && !m_hasRenderObservationV6))
+    {
+        SetError("No retained API6 roots diagnostic state is available");
+        return false;
+    }
+    state = m_lastRootsDiagnostic;
+    m_error.clear();
+    return true;
+}
+
 bool CGameAdapterModule::EndNativeRenderObservation() noexcept
 {
     // Stop calls this during cleanup, so errors must not allocate or throw.
@@ -909,6 +963,7 @@ bool CGameAdapterModule::EndNativeRenderObservation() noexcept
         // A busy optional registry can miss the final read. Do not relabel an
         // earlier pre-End setup report as completed cleanup after Release.
         m_hasSetupDiagnostic = false;
+        m_hasRootsDiagnostic = false;
         // Copy optional scalar evidence while its exact lease still exists.
         // A diagnostic miss cannot block an otherwise safe hook teardown.
         try
@@ -917,6 +972,8 @@ bool CGameAdapterModule::EndNativeRenderObservation() noexcept
             GetNativeRenderEndpointDiagnostic(diagnostic);
             mta::game_de::RenderSetupDiagnosticV1 setup;
             GetNativeRenderSetupDiagnostic(setup);
+            mta::game_de::RenderRootsDiagnosticV1 roots;
+            GetNativeRenderRootsDiagnostic(roots);
         }
         catch (...)
         {
@@ -1110,7 +1167,9 @@ void CGameAdapterModule::Stop() noexcept
     m_ownerIdentity = nullptr;
     m_renderEndpointReaderV2 = nullptr;
     m_renderSetupReaderV1 = nullptr;
+    m_renderRootsReaderV1 = nullptr;
     m_hasSetupDiagnostic = false;
+    m_hasRootsDiagnostic = false;
 }
 
 std::uint64_t CGameAdapterModule::GetCapabilities() const noexcept

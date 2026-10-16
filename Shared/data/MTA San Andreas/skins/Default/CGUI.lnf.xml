@@ -442,7 +442,7 @@
             </Area>
             <Property name="AlwaysOnTop" value="False" />
         </Child>
-        <Child type="CGUI/Button" nameSuffix="__auto_closebutton__">
+        <Child type="CGUI/SystemButton" nameSuffix="__auto_closebutton__">
             <Area>
                 <Dim type="LeftEdge" ><AbsoluteDim value="-8" /></Dim>
                 <Dim type="TopEdge" ><AbsoluteDim value="8" /></Dim>

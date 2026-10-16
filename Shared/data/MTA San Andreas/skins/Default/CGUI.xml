@@ -5,6 +5,8 @@
 	<WindowSet Filename="CEGUIFalagardBase" />
 	<FalagardMapping WindowType="CGUI/Titlebar" TargetType="Falagard/Titlebar" LookNFeel="CGUI/Titlebar" />
 	<FalagardMapping WindowType="CGUI/Button" TargetType="Falagard/Button" LookNFeel="CGUI/Button" />
+	<!-- Titlebar controls must clip against the frame's parent, not its client area. -->
+	<FalagardMapping WindowType="CGUI/SystemButton" TargetType="Falagard/SystemButton" LookNFeel="CGUI/Button" />
 	<FalagardMapping WindowType="CGUI/FrameWindow" TargetType="Falagard/FrameWindow" LookNFeel="CGUI/FrameWindow" />
 	<FalagardMapping WindowType="CGUI/Editbox" TargetType="Falagard/Editbox" LookNFeel="CGUI/Editbox" />
 	<FalagardMapping WindowType="CGUI/VerticalScrollbarThumb" TargetType="Falagard/Thumb" LookNFeel="CGUI/VerticalScrollbarThumb" />

@@ -6,7 +6,40 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
-**The next live trial uses MTA's real main menu and a reversible player-control
+**The real MTA menu and player-control handoff passed in GTA.** Runtime commit
+`c949c4a90` recorded 323 GUI frames and successful presents, a completed 323/323
+fence, and 34,647 nonzero pixels at 1920x1001. About opened the existing credits
+and Quit ended the trial after about 17 seconds. All 128 copied script snapshots
+were ordered; the final 160 fields exactly match Core's terminal record.
+
+The script verified initially enabled control, disabled it with native readback,
+then restored it after GUI input detached and acknowledged the same generation.
+Core/cgui/XML/pthread unloaded; the reusable bridge and game adapter remained.
+The user confirmed menu interaction, player/camera blocking and restored controls.
+Those visual observations are recorded separately from the native readbacks;
+there is no independent screenshot or instrumentation of every camera consumer.
+
+**The frontend now reuses MTA's actual console and command parser.** F8 toggles
+the existing console widgets. Help and Clear invoke the ordinary MTA handlers;
+the frontend command policy refuses networking, gameplay, nickname, scripted-bind
+and generic CVar paths until their real dependencies exist. History navigation
+and completion use `CEntryHistory` in memory without loading or saving disk history.
+Menu and console input claims are combined, so closing either cannot release the
+other's ownership. Classic console behavior retains its existing policy.
+Eleven owned WARP cases pass 1,045 checks of the real parser, Unicode, history,
+command refusals, ownership and partial/retained cleanup. They exposed a Default
+skin close button clipped out of its titlebar; using the existing system-button
+type fixes its hitbox while preserving the ordinary button look.
+
+Console1 has a separate 32-field owner-thread API and bounded copied UTF8 text.
+The existing Frontend1/32 and Frontend160 layouts stay unchanged. The live runner
+enables console input only after the script acknowledges native control capture;
+shortcuts require a fresh lease. Its separate `gui-console.log` terminal record
+uses the same PID/run identity as `gui-frontend.log`. The saved reader separates
+command execution and CPU cleanup from rendering, native control and human visual
+proof. Full game, multiplayer and ordinary startup capability gates remain closed.
+
+**The live workload reuses MTA's real main menu and a reversible player-control
 lease.** The separate Smoke option `-MtaCoreGuiFrontendReference` selects Core13 /
 Frontend1 with 160 copied scalars. After native device/window observation ends,
 the script saves initially enabled player control, calls GTA's existing
@@ -28,8 +61,8 @@ The real-menu composition host passes 514 checks, including Win32 interaction,
 focus, resize, partial startup and retained GPU/CPU cleanup. The script suite
 passes 880 mock checks; separate controlled worker tests exercise lease expiry,
 generation/owner rejection, restoration and final-read contention. These are
-owned-host results. Live player/camera exclusion and restoration still require
-the user's GTA test; control-command readback alone is not camera proof. Full
+owned-host results. The live result above adds native restoration proof and the
+user's visual report; control-command readback alone is not camera proof. Full
 game, networking and multiplayer startup remain gated and the port stays
 EXPERIMENTAL.
 

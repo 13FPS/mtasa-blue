@@ -135,6 +135,41 @@ namespace DefinitiveGuiSurface
             FrontendCall call(frontendCallbackActive);
             return frontend.pulse(frontend.context, frontendMouse.x, frontendMouse.y, GetFocus() == child);
         }
+        bool FrontendMessage(UINT message, WPARAM wparam, LPARAM lparam, bool& handled)
+        {
+            // The frontend may add its existing console shortcuts without
+            // borrowing global GUI callbacks. Never enter a partial factory,
+            // a retiring owner or a callback nested through a window message.
+            handled = false;
+            if (!frontendEnabled || !frontend.message || !started || frontendCallbackActive)
+                return true;
+            // Only input messages belong to the optional shortcut policy.
+            // Window destruction, painting and other lifetime bookkeeping
+            // must always reach this surface's own window procedure.
+            switch (message)
+            {
+                case WM_SETFOCUS:
+                case WM_KILLFOCUS:
+                case WM_CANCELMODE:
+                case WM_CAPTURECHANGED:
+                case WM_KEYDOWN:
+                case WM_KEYUP:
+                case WM_SYSKEYDOWN:
+                case WM_SYSKEYUP:
+                case WM_CHAR:
+                case WM_UNICHAR:
+                    break;
+                default:
+                    return true;
+            }
+            FrontendCall call(frontendCallbackActive);
+            if (frontend.message(frontend.context, message, wparam, lparam, &handled))
+                return true;
+            interaction.inputFailed = 1;
+            result.stopRequested = 1;
+            Fail(E_FAIL);
+            return false;
+        }
         bool ButtonClicked(CGUIElement*)
         {
             if (inputQuiescing)
@@ -191,7 +226,7 @@ namespace DefinitiveGuiSurface
         }
         bool ProcessInput(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
         {
-            if (!interaction.enabled || !gui || result.stopRequested || inputQuiescing)
+            if (!interaction.enabled || interaction.inputDetached || !gui || result.stopRequested || inputQuiescing)
                 return false;
             if (message == WM_SETFOCUS)
             {
@@ -202,11 +237,15 @@ namespace DefinitiveGuiSurface
             {
                 interaction.focused = 0;
                 ++interaction.focusLost;
+                bool ignored = false;
+                FrontendMessage(message, wparam, lparam, ignored);
                 ResetInput();
                 return false;
             }
             if (message == WM_CANCELMODE || message == WM_CAPTURECHANGED)
             {
+                bool ignored = false;
+                FrontendMessage(message, wparam, lparam, ignored);
                 ResetInput(true);
                 return false;
             }
@@ -219,18 +258,26 @@ namespace DefinitiveGuiSurface
                     return false;
                 SetCapture(window);
             }
-            if (message == WM_KEYDOWN && wparam == VK_ESCAPE && GetFocus() == window)
-            {
-                CloseRequested(nullptr);
-                ResetInput();
-                return true;
-            }
             // Text and shortcuts are admitted only while this exact owned
             // child has keyboard focus; queued input after deactivation drops.
             if ((message == WM_KEYDOWN || message == WM_KEYUP || message == WM_SYSKEYDOWN || message == WM_SYSKEYUP || message == WM_CHAR ||
                  message == WM_UNICHAR) &&
                 GetFocus() != window)
                 return false;
+            bool frontendHandled = false;
+            if (!FrontendMessage(message, wparam, lparam, frontendHandled))
+            {
+                ResetInput();
+                return false;
+            }
+            if (frontendHandled)
+                return true;
+            if (message == WM_KEYDOWN && wparam == VK_ESCAPE && GetFocus() == window)
+            {
+                CloseRequested(nullptr);
+                ResetInput();
+                return true;
+            }
             if (frontendEnabled)
             {
                 bool mouseButton = false;

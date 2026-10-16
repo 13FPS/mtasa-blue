@@ -25,6 +25,7 @@ class CDiscordInterface;
 #endif
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
     #include "DefinitiveFrontend.h"
+    #include "DefinitiveFrontendConsole.h"
 #endif
 #include "CSingleton.h"
 #include "CGUI.h"
@@ -314,15 +315,22 @@ private:
     };
     explicit CCore(FrontendShellTag);
     struct FrontendResources;
-    FrontendResources*           m_frontendResources = nullptr;
-    bool                         m_frontendShellOnly = false;
-    DWORD                        m_frontendCoreOwnerThread = GetCurrentThreadId();
-    bool                         StartFrontend(CGUI* borrowedGui);
-    DefinitiveFrontend::Status   PulseFrontend(std::int32_t mouseX, std::int32_t mouseY, bool focused);
-    DefinitiveFrontend::Status   StopFrontend();
-    DefinitiveFrontend::Snapshot ReadFrontend() const;
-    static void                  FrontendInputOwnership(void*, bool) noexcept;
-    static void                  FrontendCloseRequested(void*) noexcept;
+    FrontendResources*                  m_frontendResources = nullptr;
+    bool                                m_frontendShellOnly = false;
+    DWORD                               m_frontendCoreOwnerThread = GetCurrentThreadId();
+    bool                                StartFrontend(CGUI* borrowedGui);
+    DefinitiveFrontend::Status          PulseFrontend(std::int32_t mouseX, std::int32_t mouseY, bool focused);
+    DefinitiveFrontend::Status          StopFrontend();
+    DefinitiveFrontend::Snapshot        ReadFrontend() const;
+    static void                         FrontendInputOwnership(void*, bool) noexcept;
+    static void                         FrontendConsoleInputOwnership(void*, bool) noexcept;
+    static void                         FrontendCloseRequested(void*) noexcept;
+    DefinitiveFrontend::Status          EnableFrontendConsole();
+    DefinitiveFrontendConsole::Snapshot ReadFrontendConsole();
+    DefinitiveFrontend::Status          SetFrontendConsoleVisible(bool visible);
+    DefinitiveFrontend::Status          SetFrontendMenuVisible(bool visible);
+    DefinitiveFrontend::Status ProcessFrontendConsoleMessage(std::uint32_t message, std::uintptr_t wparam, std::intptr_t lparam, std::uint32_t& handled);
+    DefinitiveFrontend::Status ReadFrontendConsoleText(std::uint32_t field, char* output, std::uint32_t capacity, std::uint32_t& required);
 #endif
     void InitializeFrontendInfrastructure();
     void DestroyFrontendCommands();

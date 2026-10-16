@@ -10,6 +10,8 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include "DefinitiveFrontendConsole.h"
+#include <memory>
 
 using namespace std;
 
@@ -27,7 +29,7 @@ void TrimWhiteSpace(std::string& str)
 template <>
 CCommands* CSingleton<CCommands>::m_pSingleton = NULL;
 
-CCommands::CCommands()
+CCommands::CCommands(Policy policy) : m_Policy(policy)
 {
     WriteDebugEvent("CCommands::CCommands");
     m_pfnExecuteHandler = NULL;
@@ -41,7 +43,14 @@ CCommands::~CCommands()
 
 void CCommands::Add(const char* szCommand, const char* szDescription, PFNCOMMANDHANDLER pfnHandler, bool bModCommand, bool bAllowScriptedBind)
 {
-    COMMANDENTRY* pCommand = new COMMANDENTRY;
+    // A menu-only Core has no game/network services. Restrict both registration
+    // and execution, so a later caller cannot accidentally reopen fallthrough.
+    if (IsFrontendLocal() &&
+        (!szCommand || bModCommand || bAllowScriptedBind ||
+         !((!stricmp(szCommand, "help") && pfnHandler == CCommandFuncs::Help) || (!stricmp(szCommand, "clear") && pfnHandler == CCommandFuncs::Clear))))
+        return;
+    auto          ownedCommand = std::make_unique<COMMANDENTRY>();
+    COMMANDENTRY* pCommand = ownedCommand.get();
 
     // Copy the command name and description to the new command entry.
     STRNCPY(pCommand->szCommandName, szCommand, MAX_COMMAND_NAME_LENGTH);
@@ -59,6 +68,7 @@ void CCommands::Add(const char* szCommand, const char* szDescription, PFNCOMMAND
 
     // Insert it into the list.
     m_CommandList.push_back(pCommand);
+    ownedCommand.release();
 }
 
 unsigned int CCommands::Count()
@@ -73,6 +83,8 @@ bool CCommands::Exists(const char* szCommand)
 
 bool CCommands::Execute(const char* szCommandLine)
 {
+    if (IsFrontendLocal() && (!szCommandLine || !CLocalGUI::GetSingleton().GetConsole()))
+        return false;
     // Parse out the command name and command line
     string strCmd;
     string strCmdLine;
@@ -83,6 +95,8 @@ bool CCommands::Execute(const char* szCommandLine)
 
 bool CCommands::Execute(const char* szCommand, const char* szParametersIn, bool bHandleRemotely, bool bIsScriptedBind)
 {
+    if (IsFrontendLocal())
+        return ExecuteFrontend(szCommand, szParametersIn, bHandleRemotely, bIsScriptedBind);
     // Copy szParametersIn so the contents can be changed
     char* szParameters = NULL;
     char  empyParameters[1] = {0};
@@ -236,6 +250,33 @@ bool CCommands::Execute(const char* szCommand, const char* szParametersIn, bool 
     return false;
 }
 
+bool CCommands::ExecuteFrontend(const char* command, const char* parameters, bool remotely, bool scriptedBind)
+{
+    using Command = DefinitiveFrontendConsole::Command;
+    if (!command || !*command)
+        return false;
+    const auto* entry = Get(command);
+    const bool  help = !stricmp(command, "help");
+    const bool  clear = !stricmp(command, "clear");
+    if (remotely || scriptedBind || !entry || entry->bModCommand || !entry->bEnabled ||
+        !((help && entry->pfnCmdFunc == CCommandFuncs::Help) || (clear && entry->pfnCmdFunc == CCommandFuncs::Clear)))
+    {
+        if (m_FrontendRejected != UINT32_MAX)
+            ++m_FrontendRejected;
+        m_FrontendLastCommand = static_cast<std::uint32_t>(Command::Rejected);
+        if (auto* console = CCore::GetSingleton().GetConsole())
+            console->Printf("Command unavailable: %s", command);
+        return false;
+    }
+    // These are the ordinary MTA handlers. Return before the classic CVar,
+    // nickname and remote execute paths, even for an unknown command.
+    ExecuteHandler(entry->pfnCmdFunc, parameters ? parameters : "");
+    if (m_FrontendExecuted != UINT32_MAX)
+        ++m_FrontendExecuted;
+    m_FrontendLastCommand = static_cast<std::uint32_t>(help ? Command::Help : Command::Clear);
+    return true;
+}
+
 void CCommands::Delete(const char* szCommand)
 {
     // Find the entry we're looking for
@@ -265,7 +306,8 @@ void CCommands::DeleteAll()
     m_CommandList.clear();
 
     // Re-register our commands
-    CCore::GetSingleton().RegisterCommands();
+    if (!IsFrontendLocal())
+        CCore::GetSingleton().RegisterCommands();
 }
 
 tagCOMMANDENTRY* CCommands::Get(const char* szCommand, bool bCheckIfMod, bool bModCommand)

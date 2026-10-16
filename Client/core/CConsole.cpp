@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <stdexcept>
 
 using SharedUtil::CalcMTASAPath;
 using std::string;
@@ -22,8 +23,31 @@ using std::string;
 #define NATIVE_RES_X 1152.0f
 #define NATIVE_RES_Y 864.0f
 
-CConsole::CConsole(CGUI* pManager, CGUIElement* pParent)
+CConsole::CConsole(CGUI* pManager, CGUIElement* pParent, const FrontendHost* frontendHost)
 {
+    m_frontendOnly = frontendHost != nullptr;
+    if (frontendHost)
+    {
+        if (!frontendHost->setInputOwnership)
+            throw std::invalid_argument("Frontend console input owner is required");
+        m_frontendHost = *frontendHost;
+    }
+    // GUI factories can fail after publishing children or callbacks. Retire
+    // them while this object and its completed members are still alive.
+    struct Rollback
+    {
+        CConsole& console;
+        bool      committed = false;
+        ~Rollback()
+        {
+            if (!committed)
+            {
+                console.DestroyElements();
+                delete console.m_pConsoleHistory;
+                console.m_pConsoleHistory = nullptr;
+            }
+        }
+    } rollback{*this};
     // Store the GUI manager
     m_pManager = pManager;
 
@@ -41,6 +65,8 @@ CConsole::CConsole(CGUI* pManager, CGUIElement* pParent)
 
     // Create GUI elements
     CreateElements();
+    if (m_frontendOnly)
+        m_pWindow->SetVisible(false);
 
     // Add the eventhandlers we use
     m_pWindow->SetCloseClickHandler(GUI_CALLBACK(&CConsole::OnCloseButtonClick, this));
@@ -52,13 +78,19 @@ CConsole::CConsole(CGUI* pManager, CGUIElement* pParent)
     m_pHistory->SetTextChangedHandler(GUI_CALLBACK(&CConsole::History_OnTextChanged, this));
 
     // Load the console history from a file
-    m_pConsoleHistory->LoadFromFile(MTA_CONSOLE_INPUT_LOG_PATH);
+    // Skipping LoadFromFile keeps CEntryHistory's filename empty, so its
+    // existing parser/history remain memory-only for this bounded frontend.
+    if (!m_frontendOnly)
+        m_pConsoleHistory->LoadFromFile(MTA_CONSOLE_INPUT_LOG_PATH);
+    rollback.committed = true;
 }
 
 CConsole::~CConsole()
 {
     // Delete the GUI elements
     DestroyElements();
+    if (m_frontendOnly)
+        m_frontendHost.setInputOwnership(m_frontendHost.context, false);
 
     // Delete our history
     delete m_pConsoleHistory;
@@ -150,8 +182,19 @@ void CConsole::SetVisible(bool bVisible)
     // It must be enabled
     if (m_bIsEnabled)
     {
-        CMultiplayer* pMultiplayer = CCore::GetSingleton().GetMultiplayer();
-        pMultiplayer->DisablePadHandler(bVisible);
+        if (m_frontendOnly)
+        {
+            // Claim before showing, and release only after hiding succeeds.
+            // The host combines this with menu ownership instead of looking
+            // up a multiplayer interface that the frontend cannot create.
+            if (bVisible)
+                m_frontendHost.setInputOwnership(m_frontendHost.context, true);
+        }
+        else
+        {
+            CMultiplayer* pMultiplayer = CCore::GetSingleton().GetMultiplayer();
+            pMultiplayer->DisablePadHandler(bVisible);
+        }
 
         m_pWindow->SetVisible(bVisible);
 
@@ -166,6 +209,8 @@ void CConsole::SetVisible(bool bVisible)
         {
             m_pInput->Deactivate();
         }
+        if (m_frontendOnly && !bVisible)
+            m_frontendHost.setInputOwnership(m_frontendHost.context, false);
     }
 }
 
@@ -214,6 +259,8 @@ bool CConsole::Edit_OnTextAccepted(CGUIElement* pElement)
 
     // Get the text object from our input window.
     strInput = m_pInput->GetText();
+    if (m_frontendOnly && !strInput.empty() && m_AcceptedCount != UINT32_MAX)
+        ++m_AcceptedCount;
 
     // If the input isn't empty and isn't identical to the previous entry in history, add it to the history
     if (!strInput.empty() && (m_pConsoleHistory->Empty() || m_pConsoleHistory->GetLast() != strInput))
@@ -293,6 +340,8 @@ void CConsole::ResetHistoryChanges()
 
 void CConsole::SelectHistoryEntry(int iEntry)
 {
+    if (m_frontendOnly && m_HistorySelections != UINT32_MAX)
+        ++m_HistorySelections;
     int iPreviousHistoryIndex = m_iHistoryIndex;
 
     // Check if we're in bounds, otherwise clear selection
@@ -403,7 +452,11 @@ void CConsole::SetNextAutoCompleteMatch()
         return;
     const char* szItem = *pHistoryEntryItem;
     if (szItem)
+    {
         GracefullySetEditboxText(szItem);
+        if (m_frontendOnly && m_AutoCompleteUses != UINT32_MAX)
+            ++m_AutoCompleteUses;
+    }
 }
 
 void CConsole::CreateElements(CGUIElement* pParent)
@@ -449,8 +502,42 @@ void CConsole::CreateElements(CGUIElement* pParent)
 
 void CConsole::DestroyElements()
 {
+    // Detach every callback before recursively deleting the window. Partial
+    // construction must not leave a borrowed GUI invoking a freed console.
+    if (m_pInput)
+    {
+        m_pInput->SetTextAcceptedHandler(nullptr);
+        m_pInput->SetRenderingEndedHandler(nullptr);
+    }
+    if (m_pHistory)
+        m_pHistory->SetTextChangedHandler(nullptr);
     if (m_pWindow)
-        delete m_pWindow;
+    {
+        m_pWindow->SetCloseClickHandler(nullptr);
+        m_pWindow->SetSizedHandler(nullptr);
+    }
+    auto* window = m_pWindow;
+    m_pWindow = nullptr;
+    m_pInput = nullptr;
+    m_pHistory = nullptr;
+    delete window;
+}
+
+SString CConsole::GetInputText() const
+{
+    return m_pInput ? m_pInput->GetText() : SString();
+}
+
+SString CConsole::GetOutputText() const
+{
+    // Diagnostic copies describe the actual memo. Pending output becomes
+    // observable through the ordinary Show/Flush path, not a synthetic view.
+    return m_pHistory ? m_pHistory->GetText() : SString();
+}
+
+std::uint32_t CConsole::GetHistoryCount() const
+{
+    return m_pConsoleHistory ? static_cast<std::uint32_t>(m_pConsoleHistory->Size()) : 0;
 }
 
 CVector2D CConsole::GetPosition()

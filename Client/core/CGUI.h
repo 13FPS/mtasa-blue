@@ -53,6 +53,9 @@ public:
     void DoPulse();
     // Update the existing menu without classic game, D3D9 or updater pulses.
     void PulseFrontend(const CMainMenu::FrontendFrame& frame);
+    void EnableFrontendConsole(const CConsole::FrontendHost& host);
+    void DestroyFrontendConsole();
+    bool ProcessFrontendConsoleMessage(UINT message, WPARAM wparam, LPARAM lparam);
 
     void Draw();
     void Invalidate();
@@ -108,6 +111,7 @@ public:
 
 private:
     bool                    m_frontendOnly = false;
+    bool                    m_frontendConsoleF8Down = false;
     CMainMenu::FrontendHost m_frontendHost;
     void                    UpdateCursor();
     void                    ApplyQueuedLocale();

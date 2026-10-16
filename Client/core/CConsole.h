@@ -22,7 +22,12 @@ class CConsole;
 class CConsole : public CConsoleInterface
 {
 public:
-    CConsole(CGUI* pManager, CGUIElement* pParent = NULL);
+    struct FrontendHost
+    {
+        void* context = nullptr;
+        void (*setInputOwnership)(void*, bool) noexcept = nullptr;
+    };
+    CConsole(CGUI* pManager, CGUIElement* pParent = NULL, const FrontendHost* frontendHost = nullptr);
     ~CConsole();
 
     void Echo(const char* szText);
@@ -57,6 +62,13 @@ public:
     CVector2D GetSize();
     void      SetSize(CVector2D& vecSize);
 
+    SString       GetInputText() const;
+    SString       GetOutputText() const;
+    std::uint32_t GetAcceptedCount() const noexcept { return m_AcceptedCount; }
+    std::uint32_t GetHistoryCount() const;
+    std::uint32_t GetHistorySelections() const noexcept { return m_HistorySelections; }
+    std::uint32_t GetAutoCompleteUses() const noexcept { return m_AutoCompleteUses; }
+
 protected:
     bool OnCloseButtonClick(CGUIElement* pElement);
     bool Edit_OnTextAccepted(CGUIElement* pElement);
@@ -73,14 +85,18 @@ private:
 
     CGUI* m_pManager;
 
-    CEntryHistory*   m_pConsoleHistory;
+    CEntryHistory*   m_pConsoleHistory = nullptr;
     int              m_iHistoryIndex;
     std::vector<int> m_AutoCompleteList;
     int              m_iAutoCompleteIndex;
 
-    CGUIWindow* m_pWindow;
-    CGUIEdit*   m_pInput;
-    CGUIMemo*   m_pHistory;
+    CGUIWindow* m_pWindow = nullptr;
+    CGUIEdit*   m_pInput = nullptr;
+    CGUIMemo*   m_pHistory = nullptr;
+
+    bool          m_frontendOnly = false;
+    FrontendHost  m_frontendHost;
+    std::uint32_t m_AcceptedCount = 0, m_HistorySelections = 0, m_AutoCompleteUses = 0;
 
     bool m_bIsEnabled;
 

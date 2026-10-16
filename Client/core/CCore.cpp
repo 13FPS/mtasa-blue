@@ -71,6 +71,10 @@ extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_PulseDEFrontendS
 extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_ReadDEFrontendSession(void*, std::uint32_t*, std::uint32_t);
 extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_ShutdownDEFrontendSession(void*);
 extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_ReleaseDEFrontendSession(void*);
+extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_EnableDEFrontendConsole(void*, std::uint32_t);
+extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_ReadDEFrontendConsole(void*, std::uint32_t*, std::uint32_t);
+extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_ProcessDEFrontendConsoleMessage(void*, std::uint32_t, std::uintptr_t, std::intptr_t,
+                                                                                                std::uint32_t*);
 
 namespace
 {
@@ -615,14 +619,19 @@ namespace
 
             void*                                           frontend = nullptr;
             DefinitiveFrontend::Snapshot                    frontendState{};
+            DefinitiveFrontendConsole::Snapshot             consoleState{};
             DefinitiveGuiFrontendReference::ControlSnapshot control{};
             bool                                            frontendAttempted = false, frontendStopped = false;
+            bool                                            consoleAttempted = false;
             bool                                            controlAttempted = false, surfaceStarted = false;
             std::uint64_t                                   controlStarted = 0;
 
             bool ReadFrontend() noexcept
             {
-                return !frontend || MTA_ReadDEFrontendSession(frontend, frontendState.data(), DefinitiveFrontend::FieldCount) == DefinitiveFrontend::Status::Ok;
+                return !frontend ||
+                       (MTA_ReadDEFrontendSession(frontend, frontendState.data(), DefinitiveFrontend::FieldCount) == DefinitiveFrontend::Status::Ok &&
+                        (!consoleAttempted ||
+                         MTA_ReadDEFrontendConsole(frontend, consoleState.data(), DefinitiveFrontendConsole::FieldCount) == DefinitiveFrontend::Status::Ok));
             }
             static bool StartFrontend(void* context, CGUI* gui)
             {
@@ -631,7 +640,14 @@ namespace
                 // failed menu startup still needs explicit CPU-service teardown.
                 self.frontendAttempted = true;
                 self.frontend = MTA_CreateDEFrontendSession(DefinitiveFrontend::ApiVersion, gui);
-                return self.frontend && self.ReadFrontend() && self.frontendState[DefinitiveFrontend::Phase] == 2;
+                if (!self.frontend || !self.ReadFrontend() || self.frontendState[DefinitiveFrontend::Phase] != 2)
+                    return false;
+                // The script already acknowledged native control capture.
+                // Reuse the real console on the same frontend owner; failure
+                // keeps the entire partial lifecycle available for teardown.
+                self.consoleAttempted = true;
+                const auto enabled = MTA_EnableDEFrontendConsole(self.frontend, DefinitiveFrontendConsole::ApiVersion);
+                return self.ReadFrontend() && enabled == DefinitiveFrontend::Status::Ok && self.consoleState[DefinitiveFrontendConsole::Phase] == 2;
             }
             static bool PulseFrontend(void* context, std::int32_t x, std::int32_t y, bool focused)
             {
@@ -655,6 +671,27 @@ namespace
                     self.frontend = nullptr;
                 }
                 self.frontendStopped = true;
+                return true;
+            }
+            static bool FrontendMessage(void* context, std::uint32_t message, std::uintptr_t wparam, std::intptr_t lparam, bool* handled)
+            {
+                auto& self = *static_cast<Owner*>(context);
+                if (!handled || !self.frontend)
+                    return false;
+                *handled = false;
+                const bool keyboard = message == WM_KEYDOWN || message == WM_KEYUP || message == WM_SYSKEYDOWN || message == WM_SYSKEYUP ||
+                                      message == WM_CHAR || message == WM_UNICHAR;
+                // Shortcut admission needs the same fresh native lease as menu
+                // input. Focus/capture cancellation may still reset local state
+                // after focus leaves; it never invokes an engine command.
+                if (keyboard &&
+                    (!self.Control(DefinitiveGuiFrontendReference::ControlAction::Poll) || !self.control[DefinitiveGuiFrontendReference::Fresh] ||
+                     self.control[DefinitiveGuiFrontendReference::Revoked] || self.control[DefinitiveGuiFrontendReference::Fault] || !InputReferenceFocused()))
+                    return false;
+                std::uint32_t consumed = 0;
+                if (MTA_ProcessDEFrontendConsoleMessage(self.frontend, message, wparam, lparam, &consumed) != DefinitiveFrontend::Status::Ok || consumed > 1)
+                    return false;
+                *handled = consumed != 0;
                 return true;
             }
             bool Control(DefinitiveGuiFrontendReference::ControlAction action) noexcept
@@ -861,7 +898,8 @@ namespace
                         CopyGui(values);
                         return Outcome::Pending;
                     }
-                    const DefinitiveGuiSurface::FrontendCallbacks callbacks{this, &Owner::StartFrontend, &Owner::PulseFrontend, &Owner::StopFrontend};
+                    const DefinitiveGuiSurface::FrontendCallbacks callbacks{this, &Owner::StartFrontend, &Owner::PulseFrontend, &Owner::StopFrontend,
+                                                                            &Owner::FrontendMessage};
                     if (gui.EnableFrontend(callbacks) != SurfaceStatus::Ok || gui.Start() != SurfaceStatus::Ok)
                     {
                         CopyGui(values);
@@ -940,6 +978,23 @@ namespace
             const auto path = CalcMTASAPath("mta/logs/gui-frontend.log");
             SharedUtil::MakeSureDirExists(path);
             SharedUtil::FileAppend(path, line.data(), static_cast<unsigned long>(line.size()));
+            if (owner.consoleAttempted && owner.consoleState[DefinitiveFrontendConsole::Version] == DefinitiveFrontendConsole::ApiVersion)
+            {
+                // Console diagnostics use their own schema and copied fields;
+                // they cannot change the established Frontend160 contract or
+                // promote a rendered menu into full gameplay startup proof.
+                std::string consoleLine = "{\"schema\":\"mta_core_frontend_console_v1\",\"pid\":" + std::to_string(GetCurrentProcessId()) +
+                                          ",\"runMs\":" + std::to_string(runMs) + ",\"values\":[";
+                for (std::size_t index = 0; index < owner.consoleState.size(); ++index)
+                {
+                    if (index)
+                        consoleLine += ',';
+                    consoleLine += std::to_string(owner.consoleState[index]);
+                }
+                consoleLine += "]}\n";
+                const auto consolePath = CalcMTASAPath("mta/logs/gui-console.log");
+                SharedUtil::FileAppend(consolePath, consoleLine.data(), static_cast<unsigned long>(consoleLine.size()));
+            }
         }
         catch (...)
         {
@@ -1507,10 +1562,12 @@ static HMODULE WINAPI SkipDirectPlay_LoadLibraryA(LPCSTR fileName)
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
 struct CCore::FrontendResources
 {
-    InputReferenceXml            xml;
-    CLocalization*               previousLocalization = nullptr;
-    bool                         updaterAcquired = false;
-    DefinitiveFrontend::Snapshot snapshot{};
+    InputReferenceXml                   xml;
+    CLocalization*                      previousLocalization = nullptr;
+    bool                                updaterAcquired = false;
+    DefinitiveFrontend::Snapshot        snapshot{};
+    DefinitiveFrontendConsole::Snapshot consoleSnapshot{};
+    bool                                menuInputRequested = false, consoleInputRequested = false, consoleEnabled = false;
 };
 
 CCore::CCore(FrontendShellTag)
@@ -1527,7 +1584,26 @@ void CCore::FrontendInputOwnership(void* context, bool requested) noexcept
 {
     auto* core = static_cast<CCore*>(context);
     if (core->m_frontendResources)
-        core->m_frontendResources->snapshot[DefinitiveFrontend::InputRequested] = requested ? 1u : 0u;
+    {
+        auto& resources = *core->m_frontendResources;
+        resources.menuInputRequested = requested;
+        // Closing one actual window cannot release another window's input.
+        // Stopping Core overrides both claims while callbacks are detached.
+        resources.snapshot[DefinitiveFrontend::InputRequested] =
+            !resources.snapshot[DefinitiveFrontend::CleanupPending] && (resources.menuInputRequested || resources.consoleInputRequested) ? 1u : 0u;
+    }
+}
+
+void CCore::FrontendConsoleInputOwnership(void* context, bool requested) noexcept
+{
+    auto* core = static_cast<CCore*>(context);
+    if (core->m_frontendResources)
+    {
+        auto& resources = *core->m_frontendResources;
+        resources.consoleInputRequested = requested;
+        resources.snapshot[DefinitiveFrontend::InputRequested] =
+            !resources.snapshot[DefinitiveFrontend::CleanupPending] && (resources.menuInputRequested || resources.consoleInputRequested) ? 1u : 0u;
+    }
 }
 
 void CCore::FrontendCloseRequested(void* context) noexcept
@@ -1550,6 +1626,11 @@ bool CCore::StartFrontend(CGUI* borrowedGui)
     state.snapshot[OwnerThread] = GetCurrentThreadId();
     state.snapshot[OwnsCoreShell] = m_frontendShellOnly ? 1u : 0u;
     state.snapshot[ConfigurationReadOnly] = 1;
+    state.consoleSnapshot[DefinitiveFrontendConsole::Version] = DefinitiveFrontendConsole::ApiVersion;
+    state.consoleSnapshot[DefinitiveFrontendConsole::OwnerThread] = GetCurrentThreadId();
+    state.consoleSnapshot[DefinitiveFrontendConsole::CleanupComplete] = 1;
+    state.consoleSnapshot[DefinitiveFrontendConsole::ConfigurationReadOnly] = 1;
+    state.consoleSnapshot[DefinitiveFrontendConsole::MaxInputCharacters] = 255;
     state.previousLocalization = g_pLocalization;
     m_pGUI = borrowedGui;
     try
@@ -1572,7 +1653,7 @@ bool CCore::StartFrontend(CGUI* borrowedGui)
             throw std::runtime_error("Frontend localization assets are missing");
         state.snapshot[LocalizationLoaded] = 1;
         m_pConsoleLogger = new CConsoleLogger;
-        m_pCommands = new CCommands;
+        m_pCommands = new CCommands(CCommands::Policy::FrontendLocal);
         if (FrontendBackgroundServices::AcquireUpdater(this) != FrontendBackgroundServices::Status::Ok)
             throw std::runtime_error("Frontend updater ownership is unavailable");
         state.updaterAcquired = true;
@@ -1631,10 +1712,22 @@ namespace DefinitiveFrontend
                 delete controller->core;
             return nullptr;
         }
-        Status   PulseFrame(std::int32_t x, std::int32_t y, bool focused) { return core->PulseFrontend(x, y, focused); }
-        Snapshot ReadState() const { return core->ReadFrontend(); }
-        Status   Stop() { return core->StopFrontend(); }
-        Status   Retire()
+        Status                              PulseFrame(std::int32_t x, std::int32_t y, bool focused) { return core->PulseFrontend(x, y, focused); }
+        Snapshot                            ReadState() const { return core->ReadFrontend(); }
+        Status                              Stop() { return core->StopFrontend(); }
+        Status                              EnableConsole() { return core->EnableFrontendConsole(); }
+        DefinitiveFrontendConsole::Snapshot ReadConsole() { return core->ReadFrontendConsole(); }
+        Status                              SetConsoleVisible(bool visible) { return core->SetFrontendConsoleVisible(visible); }
+        Status                              SetMenuVisible(bool visible) { return core->SetFrontendMenuVisible(visible); }
+        Status                              ConsoleMessage(std::uint32_t message, std::uintptr_t wparam, std::intptr_t lparam, std::uint32_t& handled)
+        {
+            return core->ProcessFrontendConsoleMessage(message, wparam, lparam, handled);
+        }
+        Status ConsoleText(std::uint32_t field, char* output, std::uint32_t capacity, std::uint32_t& required)
+        {
+            return core->ReadFrontendConsoleText(field, output, capacity, required);
+        }
+        Status Retire()
         {
             const auto status = Stop();
             if (status != Status::Ok)
@@ -1747,6 +1840,264 @@ extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_ReleaseDEFronten
     return retired;
 }
 
+extern "C" __declspec(dllexport) std::uint32_t MTA_DEFrontendConsoleApiVersion()
+{
+    return DefinitiveFrontendConsole::ApiVersion;
+}
+
+extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_EnableDEFrontendConsole(void* handle, std::uint32_t version)
+{
+    using namespace DefinitiveFrontend;
+    FrontendOperation operation;
+    const auto        status = operation.Validate(handle);
+    if (status != Status::Ok)
+        return status;
+    if (version != DefinitiveFrontendConsole::ApiVersion)
+        return Status::InvalidArgument;
+    return activeFrontend->EnableConsole();
+}
+
+extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_ReadDEFrontendConsole(void* handle, std::uint32_t* output, std::uint32_t count)
+{
+    using namespace DefinitiveFrontend;
+    FrontendOperation operation;
+    const auto        status = operation.Validate(handle);
+    if (status != Status::Ok)
+        return status;
+    if (!output || count != DefinitiveFrontendConsole::FieldCount)
+        return Status::InvalidArgument;
+    try
+    {
+        const auto snapshot = activeFrontend->ReadConsole();
+        std::copy(snapshot.begin(), snapshot.end(), output);
+        return Status::Ok;
+    }
+    catch (...)
+    {
+        return Status::Failed;
+    }
+}
+
+extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_SetDEFrontendConsoleVisible(void* handle, std::uint32_t visible)
+{
+    using namespace DefinitiveFrontend;
+    FrontendOperation operation;
+    const auto        status = operation.Validate(handle);
+    if (status != Status::Ok)
+        return status;
+    return visible <= 1 ? activeFrontend->SetConsoleVisible(visible != 0) : Status::InvalidArgument;
+}
+
+extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_SetDEFrontendMenuVisible(void* handle, std::uint32_t visible)
+{
+    using namespace DefinitiveFrontend;
+    FrontendOperation operation;
+    const auto        status = operation.Validate(handle);
+    if (status != Status::Ok)
+        return status;
+    return visible <= 1 ? activeFrontend->SetMenuVisible(visible != 0) : Status::InvalidArgument;
+}
+
+extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_ProcessDEFrontendConsoleMessage(void* handle, std::uint32_t message, std::uintptr_t wparam,
+                                                                                                std::intptr_t lparam, std::uint32_t* handled)
+{
+    using namespace DefinitiveFrontend;
+    FrontendOperation operation;
+    const auto        status = operation.Validate(handle);
+    if (status != Status::Ok)
+        return status;
+    if (!handled || message > 0xffffu)
+        return Status::InvalidArgument;
+    return activeFrontend->ConsoleMessage(message, wparam, lparam, *handled);
+}
+
+extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_ReadDEFrontendConsoleText(void* handle, std::uint32_t field, char* output,
+                                                                                          std::uint32_t capacity, std::uint32_t* required)
+{
+    using namespace DefinitiveFrontend;
+    FrontendOperation operation;
+    const auto        status = operation.Validate(handle);
+    if (status != Status::Ok)
+        return status;
+    if (!required || field > static_cast<std::uint32_t>(DefinitiveFrontendConsole::Text::Output) || capacity > DefinitiveFrontendConsole::MaximumTextCapacity ||
+        (!output && capacity) || (output && !capacity))
+        return Status::InvalidArgument;
+    return activeFrontend->ConsoleText(field, output, capacity, *required);
+}
+
+DefinitiveFrontend::Status CCore::EnableFrontendConsole()
+{
+    using Status = DefinitiveFrontend::Status;
+    using namespace DefinitiveFrontendConsole;
+    if (!m_frontendResources)
+        return Status::InvalidArgument;
+    auto& resources = *m_frontendResources;
+    auto& state = resources.consoleSnapshot;
+    if (resources.snapshot[DefinitiveFrontend::Phase] != 2 || !m_pLocalGUI || !m_pCommands || !m_pCommands->IsFrontendLocal())
+        return Status::Stopped;
+    if (state[Phase] == static_cast<std::uint32_t>(Lifecycle::Running))
+        return Status::Ok;
+    if (state[ReleaseFault] || m_pLocalGUI->GetConsole())
+        return Status::Failed;
+    resources.consoleEnabled = true;
+    state[Phase] = static_cast<std::uint32_t>(Lifecycle::Starting);
+    state[CleanupComplete] = 0;
+    state[CVarRevision] = static_cast<std::uint32_t>(m_ClientVariables.GetRevision());
+    try
+    {
+        // Register only ordinary handlers whose dependencies already exist.
+        // The normal ver/time/bind/network commands require later startup.
+        m_pCommands->DeleteAll();
+        m_pCommands->Add("help", _("this help screen"), CCommandFuncs::Help);
+        m_pCommands->Add("clear", _("clears the console"), CCommandFuncs::Clear);
+        if (m_pCommands->Count() != 2)
+            throw std::runtime_error("Frontend console command registration failed");
+        const CConsole::FrontendHost host{this, &CCore::FrontendConsoleInputOwnership};
+        m_pLocalGUI->EnableFrontendConsole(host);
+        state[ConsoleCreated] = 1;
+        state[Phase] = static_cast<std::uint32_t>(Lifecycle::Running);
+        return Status::Ok;
+    }
+    catch (...)
+    {
+        state[Phase] = static_cast<std::uint32_t>(Lifecycle::Failed);
+        try
+        {
+            m_pLocalGUI->DestroyFrontendConsole();
+            m_pCommands->DeleteAll();
+            FrontendConsoleInputOwnership(this, false);
+            state[CleanupComplete] = 1;
+        }
+        catch (...)
+        {
+            // Keep the optional failed owner inspectable rather than releasing
+            // a borrowed GUI around callbacks that could still be registered.
+            state[ReleaseFault] = 1;
+        }
+        return Status::Failed;
+    }
+}
+
+DefinitiveFrontendConsole::Snapshot CCore::ReadFrontendConsole()
+{
+    using namespace DefinitiveFrontendConsole;
+    if (!m_frontendResources)
+        return {};
+    auto& resources = *m_frontendResources;
+    auto  state = resources.consoleSnapshot;
+    auto* console = m_pLocalGUI ? m_pLocalGUI->GetConsole() : nullptr;
+    state[ConsoleRetained] = console != nullptr;
+    state[CommandsRetained] = resources.consoleEnabled && m_pCommands && m_pCommands->Count() != 0;
+    state[CommandPolicyActive] = state[CommandsRetained] && m_pCommands->IsFrontendLocal();
+    state[CommandsRegistered] = resources.consoleEnabled && m_pCommands ? m_pCommands->Count() : 0;
+    state[MenuInputRequested] = resources.menuInputRequested ? 1u : 0u;
+    state[ConsoleInputRequested] = resources.consoleInputRequested ? 1u : 0u;
+    state[AggregateInputRequested] = resources.snapshot[DefinitiveFrontend::InputRequested];
+    state[ConsoleVisible] = console && console->IsVisible();
+    state[InputActive] = console && console->IsInputActive();
+    state[NetworkStarted] = m_pNet != nullptr;
+    state[ReleaseFault] = state[ReleaseFault] || resources.snapshot[DefinitiveFrontend::ReleaseFault];
+    if (resources.snapshot[DefinitiveFrontend::Phase] == 2)
+        state[CVarRevision] = static_cast<std::uint32_t>(m_ClientVariables.GetRevision());
+    if (console)
+    {
+        state[TextAccepted] = console->GetAcceptedCount();
+        state[HistoryEntries] = console->GetHistoryCount();
+        state[HistorySelections] = console->GetHistorySelections();
+        state[AutoCompleteUses] = console->GetAutoCompleteUses();
+        state[OutputBytes] = static_cast<std::uint32_t>(console->GetOutputText().size());
+        state[InputBytes] = static_cast<std::uint32_t>(console->GetInputText().size());
+    }
+    if (resources.consoleEnabled && m_pCommands)
+    {
+        state[CommandsExecuted] = m_pCommands->GetFrontendExecuted();
+        state[CommandsRejected] = m_pCommands->GetFrontendRejected();
+        state[LastCommand] = m_pCommands->GetFrontendLastCommand();
+    }
+    return state;
+}
+
+DefinitiveFrontend::Status CCore::SetFrontendConsoleVisible(bool visible)
+{
+    using Status = DefinitiveFrontend::Status;
+    if (!m_frontendResources || m_frontendResources->snapshot[DefinitiveFrontend::Phase] != 2 ||
+        m_frontendResources->consoleSnapshot[DefinitiveFrontendConsole::Phase] != 2 || !m_pLocalGUI || !m_pLocalGUI->GetConsole())
+        return Status::Stopped;
+    try
+    {
+        m_pLocalGUI->SetConsoleVisible(visible);
+        return Status::Ok;
+    }
+    catch (...)
+    {
+        m_frontendResources->consoleSnapshot[DefinitiveFrontendConsole::Phase] = 5;
+        return Status::Failed;
+    }
+}
+
+DefinitiveFrontend::Status CCore::SetFrontendMenuVisible(bool visible)
+{
+    using Status = DefinitiveFrontend::Status;
+    if (!m_frontendResources || m_frontendResources->snapshot[DefinitiveFrontend::Phase] != 2 ||
+        m_frontendResources->consoleSnapshot[DefinitiveFrontendConsole::Phase] != 2 || !m_pLocalGUI || !m_pLocalGUI->GetMainMenu())
+        return Status::Stopped;
+    try
+    {
+        m_pLocalGUI->SetMainMenuVisible(visible);
+        return Status::Ok;
+    }
+    catch (...)
+    {
+        m_frontendResources->consoleSnapshot[DefinitiveFrontendConsole::Phase] = 5;
+        return Status::Failed;
+    }
+}
+
+DefinitiveFrontend::Status CCore::ProcessFrontendConsoleMessage(std::uint32_t message, std::uintptr_t wparam, std::intptr_t lparam, std::uint32_t& handled)
+{
+    using Status = DefinitiveFrontend::Status;
+    if (!m_frontendResources || m_frontendResources->snapshot[DefinitiveFrontend::Phase] != 2 ||
+        m_frontendResources->consoleSnapshot[DefinitiveFrontendConsole::Phase] != 2 || !m_pLocalGUI || !m_pLocalGUI->GetConsole())
+        return Status::Stopped;
+    try
+    {
+        const bool consumed = m_pLocalGUI->ProcessFrontendConsoleMessage(message, static_cast<WPARAM>(wparam), static_cast<LPARAM>(lparam));
+        handled = consumed ? 1u : 0u;
+        return Status::Ok;
+    }
+    catch (...)
+    {
+        m_frontendResources->consoleSnapshot[DefinitiveFrontendConsole::Phase] = 5;
+        return Status::Failed;
+    }
+}
+
+DefinitiveFrontend::Status CCore::ReadFrontendConsoleText(std::uint32_t field, char* output, std::uint32_t capacity, std::uint32_t& required)
+{
+    using Status = DefinitiveFrontend::Status;
+    auto* console = m_pLocalGUI ? m_pLocalGUI->GetConsole() : nullptr;
+    if (!console)
+        return Status::Stopped;
+    try
+    {
+        const auto text = field == static_cast<std::uint32_t>(DefinitiveFrontendConsole::Text::Input) ? console->GetInputText() : console->GetOutputText();
+        if (text.size() >= UINT32_MAX)
+            return Status::Failed;
+        const auto bytes = static_cast<std::uint32_t>(text.size()) + 1;
+        required = bytes;
+        if (!capacity)
+            return Status::Ok;
+        if (capacity < bytes)
+            return Status::InvalidArgument;
+        std::memcpy(output, text.c_str(), bytes);
+        return Status::Ok;
+    }
+    catch (...)
+    {
+        return Status::Failed;
+    }
+}
+
 DefinitiveFrontend::Status CCore::PulseFrontend(std::int32_t mouseX, std::int32_t mouseY, bool focused)
 {
     using namespace DefinitiveFrontend;
@@ -1815,10 +2166,21 @@ DefinitiveFrontend::Status CCore::StopFrontend()
     state[Phase] = 3;
     try
     {
+        if (resources.consoleEnabled)
+        {
+            // Preserve real parser/history/output evidence before deleting
+            // widgets and commands. Live ownership fields are cleared below.
+            resources.consoleSnapshot = ReadFrontendConsole();
+            resources.consoleSnapshot[DefinitiveFrontendConsole::Phase] = 3;
+            resources.consoleSnapshot[DefinitiveFrontendConsole::CleanupComplete] = 0;
+            if (resources.consoleSnapshot[DefinitiveFrontendConsole::ReleaseFault])
+                throw std::runtime_error("Frontend console cleanup ownership is unresolved");
+        }
         // Stop input first. CPU widget destruction is supported while the GUI
         // renderer retains submitted texture versions; the external GUI/GPU
         // owner must still drain its session before unloading cgui or Core.
         state[InputRequested] = 0;
+        resources.menuInputRequested = resources.consoleInputRequested = false;
         if (m_pLocalGUI)
             m_pLocalGUI->ResetInputState();
         if (m_pGUI)
@@ -1847,6 +2209,9 @@ DefinitiveFrontend::Status CCore::StopFrontend()
             resources.updaterAcquired = false;
         }
         DestroyFrontendCommands();
+        resources.consoleSnapshot[DefinitiveFrontendConsole::CommandsRegistered] = 0;
+        resources.consoleSnapshot[DefinitiveFrontendConsole::CommandsRetained] = 0;
+        resources.consoleSnapshot[DefinitiveFrontendConsole::CommandPolicyActive] = 0;
         if (g_pLocalization == m_pLocalization)
             g_pLocalization = resources.previousLocalization;
         SAFE_DELETE(m_pLocalization);
@@ -1863,11 +2228,21 @@ DefinitiveFrontend::Status CCore::StopFrontend()
         state[CleanupPending] = 0;
         state[CleanupComplete] = 1;
         state[Phase] = 4;
+        if (resources.consoleEnabled)
+        {
+            resources.consoleSnapshot[DefinitiveFrontendConsole::ConsoleRetained] = 0;
+            resources.consoleSnapshot[DefinitiveFrontendConsole::ConsoleVisible] = 0;
+            resources.consoleSnapshot[DefinitiveFrontendConsole::InputActive] = 0;
+            resources.consoleSnapshot[DefinitiveFrontendConsole::CleanupComplete] = 1;
+            resources.consoleSnapshot[DefinitiveFrontendConsole::Phase] = 4;
+        }
         return Status::Ok;
     }
     catch (...)
     {
         state[ReleaseFault] = 1;
+        if (resources.consoleEnabled)
+            resources.consoleSnapshot[DefinitiveFrontendConsole::ReleaseFault] = 1;
         return Status::Failed;
     }
 }

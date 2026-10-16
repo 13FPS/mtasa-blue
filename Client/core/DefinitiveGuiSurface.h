@@ -74,6 +74,10 @@ namespace DefinitiveGuiSurface
         bool (*start)(void*, CGUI*) = nullptr;
         bool (*pulse)(void*, std::int32_t, std::int32_t, bool) = nullptr;
         bool (*stop)(void*) = nullptr;
+        // Optional owner-thread shortcuts may consume a message before normal
+        // GUI translation. A null hook preserves the existing menu workload;
+        // this does not replace borrowed CGUI handlers or capture game input.
+        bool (*message)(void*, std::uint32_t, std::uintptr_t, std::intptr_t, bool*) = nullptr;
     };
 
     class Session

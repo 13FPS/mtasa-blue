@@ -13,6 +13,8 @@
 #include "CNewsBrowser.h"
 #include <game/CGame.h>
 #include <windowsx.h>
+#include <memory>
+#include <stdexcept>
 
 using std::string;
 
@@ -466,6 +468,69 @@ void CLocalGUI::PulseFrontend(const CMainMenu::FrontendFrame& frame)
     if (m_frontendOnly && m_pMainMenu && !IsFaultDialogOpen())
         m_pMainMenu->Update(frame);
 }
+
+void CLocalGUI::EnableFrontendConsole(const CConsole::FrontendHost& host)
+{
+    if (!m_frontendOnly || m_pConsole)
+        throw std::logic_error("Frontend console creation is not admitted");
+    // Publish only a complete hidden console. Its destructor handles a failed
+    // visibility setup while the borrowed GUI and input owner still exist.
+    auto console = std::make_unique<CConsole>(CCore::GetSingleton().GetGUI(), nullptr, &host);
+    console->SetVisible(false);
+    m_pConsole = console.release();
+}
+
+void CLocalGUI::DestroyFrontendConsole()
+{
+    if (m_frontendOnly)
+    {
+        m_frontendConsoleF8Down = false;
+        SAFE_DELETE(m_pConsole);
+    }
+}
+
+bool CLocalGUI::ProcessFrontendConsoleMessage(UINT message, WPARAM wparam, LPARAM lparam)
+{
+    if (!m_frontendOnly || !m_pConsole)
+        return false;
+    if (message == WM_KILLFOCUS || message == WM_CANCELMODE || (message == WM_ACTIVATE && LOWORD(wparam) == WA_INACTIVE))
+        m_frontendConsoleF8Down = false;
+    if ((message == WM_KEYDOWN || message == WM_KEYUP) && wparam == VK_F8)
+    {
+        if (message == WM_KEYDOWN)
+        {
+            if (!m_frontendConsoleF8Down && !(static_cast<UINT_PTR>(lparam) & (UINT_PTR{1} << 30)))
+                SetConsoleVisible(!IsConsoleVisible());
+            m_frontendConsoleF8Down = true;
+        }
+        else
+            m_frontendConsoleF8Down = false;
+        return true;
+    }
+    if (!m_pConsole->IsInputActive())
+        return false;
+    // Reuse the same history/navigation methods as the classic window hook.
+    // Ordinary text/Enter remain with the admitted host's existing translator,
+    // rather than injecting a second stream into the borrowed GUI.
+    if (message == WM_CHAR && wparam == VK_TAB)
+        return true;
+    if (message == WM_KEYDOWN)
+    {
+        if (wparam == VK_UP)
+            m_pConsole->SetNextHistoryText();
+        else if (wparam == VK_DOWN)
+            m_pConsole->SetPreviousHistoryText();
+        else if (wparam == VK_TAB)
+            m_pConsole->SetNextAutoCompleteMatch();
+        if (wparam != VK_TAB)
+            m_pConsole->ResetAutoCompleteMatch();
+        if (wparam == VK_UP || wparam == VK_DOWN || wparam == VK_TAB)
+            return true;
+    }
+    if (message == WM_CHAR)
+        m_pConsole->ResetAutoCompleteMatch();
+    return message == WM_KEYUP && (wparam == VK_UP || wparam == VK_DOWN || wparam == VK_TAB);
+}
 // True while the fatal CC51 dialog is open: nested faults exit instead of stacking.
 static bool s_bFaultDialogOpen = false;
 bool        CLocalGUI::IsFaultDialogOpen() noexcept
@@ -584,7 +649,7 @@ void CLocalGUI::SetConsoleVisible(bool bVisible)
     if (m_pConsole)
     {
         // Only allow the console if the chat doesn't take input
-        if (m_pChat->IsInputVisible())
+        if (!m_frontendOnly && m_pChat->IsInputVisible())
             bVisible = false;
 
         // Set the visible state
@@ -593,7 +658,7 @@ void CLocalGUI::SetConsoleVisible(bool bVisible)
         CGUI* pGUI = CCore::GetSingleton().GetGUI();
         if (bVisible)
             pGUI->SetCursorAlpha(1.0f);
-        else if (!g_pCore->IsMenuVisible())
+        else if (!m_frontendOnly && !g_pCore->IsMenuVisible())
             pGUI->SetCursorAlpha(pGUI->GetCurrentServerCursorAlpha());
     }
 }
@@ -629,6 +694,15 @@ void CLocalGUI::SetMainMenuVisible(bool bVisible)
         // This is needed for things like pressing escape when changing a key bind
 
         m_pMainMenu->SetVisible(bVisible);
+
+        if (m_frontendOnly)
+        {
+            // Hiding the menu must not switch a console's borrowed input
+            // channel to INPUT_MOD or release its independent ownership.
+            if (m_pConsole && m_pConsole->IsVisible())
+                m_pConsole->ActivateInput();
+            return;
+        }
 
         CGUI* pGUI = CCore::GetSingleton().GetGUI();
         if (bVisible)

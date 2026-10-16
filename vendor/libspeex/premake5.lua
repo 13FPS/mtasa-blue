@@ -43,8 +43,22 @@ project "libspeex"
 			"4018", -- warning C4018: '<': signed/unsigned mismatch
 		}
 
-	filter "architecture:not x86"
-		flags { "ExcludeFromBuild" }
+	if _OPTIONS["with-definitive-adapter"] then
+		-- Build the existing voice codec independently of the client/game port.
+		-- Its x64 library must not replace the classic output or admit the still
+		-- unsupported deathmatch, audio-device and network modules.
+		filter { "platforms:not x86", "platforms:not x64" }
+			flags { "ExcludeFromBuild" }
+		filter { "platforms:x64", "configurations:not Release" }
+			flags { "ExcludeFromBuild" }
+		filter { "platforms:x64", "configurations:Release" }
+			targetdir(buildpath("mods/deathmatch/x64"))
+	else
+		filter "architecture:not x86"
+			flags { "ExcludeFromBuild" }
+	end
 
 	filter "system:not windows"
 		flags { "ExcludeFromBuild" }
+
+	filter {}

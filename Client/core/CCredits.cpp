@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <memory>
 
 extern CCore* g_pCore;
 
@@ -22,6 +23,12 @@ using namespace CCreditsGUI;
 
 CCredits::CCredits()
 {
+    m_pWindow = nullptr;
+    m_pButtonOK = nullptr;
+    m_clkStart = 0;
+    for (auto*& label : m_pLabels)
+        label = nullptr;
+
     CGUI* pManager = g_pCore->GetGUI();
 
     // Define our credits string
@@ -1096,6 +1103,21 @@ CCredits::CCredits()
     // Create our window
     CVector2D RelativeWindow = CVector2D(fWindowX / pManager->GetResolution().fX, fWindowY / pManager->GetResolution().fY);
     m_pWindow = reinterpret_cast<CGUIWindow*>(pManager->CreateWnd(NULL, "Multi Theft Auto: San Andreas " MTA_DM_BUILDTAG_SHORT));
+    const auto rollbackWindow = [this, pManager](CGUIElement* root)
+    {
+        // A constructor failure skips ~CCredits. Retire the actual GUI subtree
+        // and its callbacks before this partially initialized owner disappears.
+        if (m_pButtonOK)
+            m_pButtonOK->SetClickHandler(GUI_CALLBACK());
+        if (m_pWindow)
+            m_pWindow->SetEnterKeyHandler(GUI_CALLBACK());
+        m_pWindow = nullptr;
+        m_pButtonOK = nullptr;
+        for (auto*& label : m_pLabels)
+            label = nullptr;
+        pManager->DestroyElementRecursive(root);
+    };
+    std::unique_ptr<CGUIElement, decltype(rollbackWindow)> windowOwner(m_pWindow, rollbackWindow);
     m_pWindow->SetCloseButtonEnabled(false);
     m_pWindow->SetMovable(false);
     m_pWindow->SetPosition(CVector2D(0.5f - RelativeWindow.fX * 0.5f, 0.5f - RelativeWindow.fY * 0.5f), true);
@@ -1105,8 +1127,6 @@ CCredits::CCredits()
     m_pWindow->SetAlwaysOnTop(true);
 
     // Credits label
-    memset(m_pLabels, 0, sizeof(CGUILabel*) * MAX_CREDITS_LABEL_COUNT);
-
     // Create one for every 15th line. This is because of some limit at 500 chars
     float        fStartPosition = 1.0f;
     const char*  szCreditsIterator = m_strCredits.c_str();
@@ -1158,6 +1178,7 @@ CCredits::CCredits()
     // Set up the event handlers
     m_pButtonOK->SetClickHandler(GUI_CALLBACK(&CCredits::OnOKButtonClick, this));
     m_pWindow->SetEnterKeyHandler(GUI_CALLBACK(&CCredits::OnOKButtonClick, this));
+    windowOwner.release();
 }
 
 CCredits::~CCredits()

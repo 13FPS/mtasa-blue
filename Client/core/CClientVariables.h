@@ -123,6 +123,7 @@ public:
     bool Exists(const std::string& strVariable);
 
     bool Load();
+    void Unload();
     bool IsLoaded() { return m_bLoaded; }
     int  GetRevision() { return m_iRevision; }
     void ValidateValues();

@@ -26,12 +26,16 @@ CLocalGUI* CSingleton<CLocalGUI>::m_pSingleton = NULL;
 
 const char* const DEFAULT_SKIN_NAME = "Default 2023";  // TODO: Change to whatever the default skin is if it changes
 
-CLocalGUI::CLocalGUI()
+CLocalGUI::CLocalGUI(const CMainMenu::FrontendHost* frontendHost)
 {
+    m_frontendOnly = frontendHost != nullptr;
+    if (frontendHost)
+        m_frontendHost = *frontendHost;
     m_pConsole = NULL;
     m_pMainMenu = NULL;
     m_pChat = NULL;
     m_pDebugView = NULL;
+    m_pLabelVersionTag = nullptr;
 
     m_bForceCursorVisible = false;
     m_bChatboxVisible = true;
@@ -180,17 +184,21 @@ void CLocalGUI::CreateWindows(bool bGameIsAlreadyLoaded)
 {
     CGUI* pGUI = CCore::GetSingleton().GetGUI();
 
-    // Create chatbox
-    m_pChat = new CChat(pGUI, CVector2D(0.0125f, 0.015f));
-    m_pChat->SetVisible(false, true);
-
-    // Create the debug view
-    m_pDebugView = new CDebugView(pGUI, CVector2D(0.23f, 0.785f));
-    m_pDebugView->SetVisible(false, true);
+    if (!m_frontendOnly)
+    {
+        // Chat/debug fonts and console input still require the classic renderer
+        // and multiplayer. A frontend owns the actual menu without those views.
+        m_pChat = new CChat(pGUI, CVector2D(0.0125f, 0.015f));
+        m_pChat->SetVisible(false, true);
+        m_pDebugView = new CDebugView(pGUI, CVector2D(0.23f, 0.785f));
+        m_pDebugView->SetVisible(false, true);
+    }
 
     // Create the overlayed version labels
     CVector2D ScreenSize = pGUI->GetResolution();
     SString   strText = "MTA:SA " MTA_DM_BUILDTAG_SHORT;
+    if (m_frontendOnly)
+        strText += " / EXPERIMENTAL";
     if (_NETCODE_VERSION_BRANCH_ID != 0x04)
         strText += SString(" (%X)", _NETCODE_VERSION_BRANCH_ID);
     m_pLabelVersionTag = reinterpret_cast<CGUILabel*>(pGUI->CreateLabel(strText));
@@ -204,15 +212,19 @@ void CLocalGUI::CreateWindows(bool bGameIsAlreadyLoaded)
         m_pLabelVersionTag->SetAlwaysOnTop(true);
 
     // Create mainmenu
-    m_pMainMenu = new CMainMenu(pGUI);
-    m_pMainMenu->SetVisible(bGameIsAlreadyLoaded, !bGameIsAlreadyLoaded, false);
+    m_pMainMenu = new CMainMenu(pGUI, m_frontendOnly ? CMainMenu::SettingsCreation::Deferred : CMainMenu::SettingsCreation::Eager,
+                                m_frontendOnly ? &m_frontendHost : nullptr);
+    m_pMainMenu->SetVisible(m_frontendOnly || bGameIsAlreadyLoaded, m_frontendOnly || !bGameIsAlreadyLoaded, false);
 
     // Create console
-    m_pConsole = new CConsole(pGUI);
-    m_pConsole->SetVisible(false);
+    if (!m_frontendOnly)
+    {
+        m_pConsole = new CConsole(pGUI);
+        m_pConsole->SetVisible(false);
+    }
 
     // Create our news headlines if we're already ingame
-    if (bGameIsAlreadyLoaded)
+    if (bGameIsAlreadyLoaded && !m_frontendOnly)
         m_pMainMenu->GetNewsBrowser()->CreateHeadlines();
 }
 
@@ -385,6 +397,10 @@ void CLocalGUI::ApplyQueuedLocale()
 
 void CLocalGUI::DoPulse()
 {
+    // The frontend's owner supplies its frame/input context explicitly. Never
+    // accidentally start updater or mod-manager work through a classic pulse.
+    if (m_frontendOnly)
+        return;
     // A fatal dialog is pumping messages; pulse work touches CEGUI and would throw.
     if (CLocalGUI::IsFaultDialogOpen())
         return;
@@ -443,6 +459,12 @@ void CLocalGUI::DoPulse()
 
     // Show after any deferred locale/skin work so a prior prompt is not lost
     TryShowRestartPrompt();
+}
+
+void CLocalGUI::PulseFrontend(const CMainMenu::FrontendFrame& frame)
+{
+    if (m_frontendOnly && m_pMainMenu && !IsFaultDialogOpen())
+        m_pMainMenu->Update(frame);
 }
 // True while the fatal CC51 dialog is open: nested faults exit instead of stacking.
 static bool s_bFaultDialogOpen = false;

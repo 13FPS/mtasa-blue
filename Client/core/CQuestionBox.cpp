@@ -11,6 +11,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <memory>
 
 extern CCore* g_pCore;
 
@@ -20,6 +21,7 @@ CQuestionBox::CQuestionBox()
     m_pMessage = NULL;
     m_uiLastButton = -1;
     m_Callback = NULL;
+    m_CallbackEdit = NULL;
     m_CallbackParameter = 0;
     m_uiActiveButtons = 0;
     m_uiActiveEditboxes = 0;
@@ -29,6 +31,18 @@ CQuestionBox::CQuestionBox()
 
     // Create the window
     m_pWindow = reinterpret_cast<CGUIWindow*>(pManager->CreateWnd(NULL, ""));
+    const auto rollbackWindow = [this, pManager](CGUIElement* root)
+    {
+        // Its containing menu cannot clean up a member whose construction
+        // failed. Keep ownership of the real root until all child widgets exist.
+        m_Callback = nullptr;
+        m_CallbackEdit = nullptr;
+        m_CallbackParameter = nullptr;
+        m_pWindow = nullptr;
+        m_pMessage = nullptr;
+        pManager->DestroyElementRecursive(root);
+    };
+    std::unique_ptr<CGUIElement, decltype(rollbackWindow)> windowOwner(m_pWindow, rollbackWindow);
     m_pWindow->SetCloseButtonEnabled(false);
     m_pWindow->SetVisible(false);
     m_pWindow->SetSizingEnabled(false);
@@ -36,6 +50,7 @@ CQuestionBox::CQuestionBox()
 
     // Message label
     m_pMessage = reinterpret_cast<CGUILabel*>(pManager->CreateLabel(m_pWindow, ""));
+    windowOwner.release();
 }
 
 CQuestionBox::~CQuestionBox()

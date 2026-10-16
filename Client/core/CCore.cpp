@@ -1151,6 +1151,375 @@ static HMODULE WINAPI SkipDirectPlay_LoadLibraryA(LPCSTR fileName)
     return Win32LoadLibraryA(fileName);
 }
 
+#if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
+struct CCore::FrontendResources
+{
+    InputReferenceXml            xml;
+    CLocalization*               previousLocalization = nullptr;
+    bool                         updaterAcquired = false;
+    DefinitiveFrontend::Snapshot snapshot{};
+};
+
+CCore::CCore(FrontendShellTag)
+{
+    // This successful Core object owns only frontend services. The ordinary
+    // constructor and InitializeCore still require the real game backend.
+    g_pCore = this;
+    m_frontendShellOnly = true;
+    m_pLocalGUI = nullptr;
+    m_pGUI = nullptr;
+}
+
+void CCore::FrontendInputOwnership(void* context, bool requested) noexcept
+{
+    auto* core = static_cast<CCore*>(context);
+    if (core->m_frontendResources)
+        core->m_frontendResources->snapshot[DefinitiveFrontend::InputRequested] = requested ? 1u : 0u;
+}
+
+void CCore::FrontendCloseRequested(void* context) noexcept
+{
+    auto* core = static_cast<CCore*>(context);
+    if (core->m_frontendResources)
+        core->m_frontendResources->snapshot[DefinitiveFrontend::CloseRequested] = 1;
+}
+
+bool CCore::StartFrontend(CGUI* borrowedGui)
+{
+    using namespace DefinitiveFrontend;
+    if (GetCurrentThreadId() != m_frontendCoreOwnerThread || !borrowedGui || m_frontendResources || m_pGUI || m_pXML || m_pConfigFile || m_pLocalGUI ||
+        m_pLocalization || m_pCommands || m_pConsoleLogger)
+        return false;
+    m_frontendResources = new FrontendResources;
+    auto& state = *m_frontendResources;
+    state.snapshot[Version] = ApiVersion;
+    state.snapshot[Phase] = 1;
+    state.snapshot[OwnerThread] = GetCurrentThreadId();
+    state.snapshot[OwnsCoreShell] = m_frontendShellOnly ? 1u : 0u;
+    state.snapshot[ConfigurationReadOnly] = 1;
+    state.previousLocalization = g_pLocalization;
+    m_pGUI = borrowedGui;
+    try
+    {
+        // Reuse the existing adjacent, recovery-disabled XML owner. Frontend
+        // CVars remain real MTA XML nodes, but neither config nor global locale
+        // preferences are saved by this bounded lifecycle.
+        if (!state.xml.Open())
+            throw std::runtime_error("Frontend XML/configuration could not be opened");
+        m_pXML = state.xml.xml;
+        m_pConfigFile = state.xml.file;
+        state.snapshot[XmlLoaded] = state.snapshot[ConfigLoaded] = 1;
+        if (!m_ClientVariables.Load())
+            throw std::runtime_error("Frontend CVars could not be loaded");
+        m_ClientVariables.Set("locale", std::string("en_US"));
+        const auto localeRoot = ToUTF8((g_mtaDirectory / L"MTA/locale").wstring());
+        m_pLocalization = new CLocalization("en_US", localeRoot, false);
+        g_pLocalization = m_pLocalization;
+        if (m_pLocalization->GetLanguageDirectory().empty())
+            throw std::runtime_error("Frontend localization assets are missing");
+        state.snapshot[LocalizationLoaded] = 1;
+        m_pConsoleLogger = new CConsoleLogger;
+        m_pCommands = new CCommands;
+        if (FrontendBackgroundServices::AcquireUpdater(this) != FrontendBackgroundServices::Status::Ok)
+            throw std::runtime_error("Frontend updater ownership is unavailable");
+        state.updaterAcquired = true;
+        borrowedGui->SetSkin("Default");
+        if (!borrowedGui->GetDefaultFont())
+            throw std::runtime_error("Frontend GUI fonts are unavailable");
+        const CMainMenu::FrontendHost host{this, &CCore::FrontendInputOwnership, &CCore::FrontendCloseRequested};
+        m_pLocalGUI = new CLocalGUI(&host);
+        SString oldestNews;
+        uint    maximumNews = 0;
+        GetVersionUpdater()->GetNewsSettings(oldestNews, maximumNews);
+        m_pLocalGUI->CreateWindows(false);
+        state.snapshot[Phase] = 2;
+        return true;
+    }
+    catch (...)
+    {
+        // Keep the failed phase and every owner inspectable. The controller
+        // must explicitly retire them instead of throwing away a failed handle.
+        state.snapshot[Phase] = 5;
+        return false;
+    }
+}
+
+namespace DefinitiveFrontend
+{
+    struct Controller
+    {
+        DWORD  owner = GetCurrentThreadId();
+        CCore* core = nullptr;
+        bool   ownsCore = false;
+
+        static Controller* CreateSession(CGUI* gui)
+        {
+            auto controller = std::make_unique<Controller>();
+            controller->core = CCore::GetSingletonPtr();
+            // A partial normal Core still owns its adapter and constructor
+            // scope. Frontend adoption cannot move it onto a foreign thread.
+            if (controller->core && controller->core->m_frontendCoreOwnerThread != controller->owner)
+                return nullptr;
+            if (!controller->core)
+            {
+                controller->core = new CCore(CCore::FrontendShellTag{});
+                controller->ownsCore = true;
+            }
+            try
+            {
+                controller->core->StartFrontend(gui);
+                if (controller->core->m_frontendResources)
+                    return controller.release();
+            }
+            catch (...)
+            {
+            }
+            if (controller->ownsCore)
+                delete controller->core;
+            return nullptr;
+        }
+        Status   PulseFrame(std::int32_t x, std::int32_t y, bool focused) { return core->PulseFrontend(x, y, focused); }
+        Snapshot ReadState() const { return core->ReadFrontend(); }
+        Status   Stop() { return core->StopFrontend(); }
+        Status   Retire()
+        {
+            const auto status = Stop();
+            if (status != Status::Ok)
+                return status;
+            delete core->m_frontendResources;
+            core->m_frontendResources = nullptr;
+            if (ownsCore)
+                delete core;
+            core = nullptr;
+            return Status::Ok;
+        }
+    };
+    namespace
+    {
+        SRWLOCK     frontendLock = SRWLOCK_INIT;
+        Controller* activeFrontend = nullptr;
+        struct FrontendOperation
+        {
+            bool acquired = TryAcquireSRWLockExclusive(&frontendLock) != FALSE;
+            ~FrontendOperation()
+            {
+                if (acquired)
+                    ReleaseSRWLockExclusive(&frontendLock);
+            }
+            Status Validate(void* handle) const noexcept
+            {
+                if (!acquired)
+                    return Status::Busy;
+                if (!handle || handle != activeFrontend)
+                    return Status::InvalidArgument;
+                return activeFrontend->owner == GetCurrentThreadId() ? Status::Ok : Status::WrongThread;
+            }
+        };
+    }
+}
+
+extern "C" __declspec(dllexport) std::uint32_t MTA_DEFrontendApiVersion()
+{
+    return DefinitiveFrontend::ApiVersion;
+}
+extern "C" __declspec(dllexport) void* MTA_CreateDEFrontendSession(std::uint32_t version, CGUI* gui)
+{
+    using namespace DefinitiveFrontend;
+    if (version != ApiVersion || !gui)
+        return nullptr;
+    FrontendOperation operation;
+    if (!operation.acquired || activeFrontend)
+        return nullptr;
+    try
+    {
+        activeFrontend = Controller::CreateSession(gui);
+        return activeFrontend;
+    }
+    catch (...)
+    {
+        return nullptr;
+    }
+}
+extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_PulseDEFrontendSession(void* handle, std::int32_t x, std::int32_t y, std::uint32_t focused)
+{
+    using namespace DefinitiveFrontend;
+    FrontendOperation operation;
+    const auto        status = operation.Validate(handle);
+    if (status != Status::Ok)
+        return status;
+    if (focused > 1)
+        return Status::InvalidArgument;
+    return activeFrontend->PulseFrame(x, y, focused != 0);
+}
+extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_ReadDEFrontendSession(void* handle, std::uint32_t* output, std::uint32_t count)
+{
+    using namespace DefinitiveFrontend;
+    FrontendOperation operation;
+    const auto        status = operation.Validate(handle);
+    if (status != Status::Ok)
+        return status;
+    if (!output || count != FieldCount)
+        return Status::InvalidArgument;
+    try
+    {
+        const auto snapshot = activeFrontend->ReadState();
+        std::copy(snapshot.begin(), snapshot.end(), output);
+        return Status::Ok;
+    }
+    catch (...)
+    {
+        return Status::Failed;
+    }
+}
+extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_ShutdownDEFrontendSession(void* handle)
+{
+    using namespace DefinitiveFrontend;
+    FrontendOperation operation;
+    const auto        status = operation.Validate(handle);
+    return status == Status::Ok ? activeFrontend->Stop() : status;
+}
+extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_ReleaseDEFrontendSession(void* handle)
+{
+    using namespace DefinitiveFrontend;
+    FrontendOperation operation;
+    const auto        status = operation.Validate(handle);
+    if (status != Status::Ok)
+        return status;
+    const auto retired = activeFrontend->Retire();
+    if (retired == Status::Ok)
+    {
+        delete activeFrontend;
+        activeFrontend = nullptr;
+    }
+    return retired;
+}
+
+DefinitiveFrontend::Status CCore::PulseFrontend(std::int32_t mouseX, std::int32_t mouseY, bool focused)
+{
+    using namespace DefinitiveFrontend;
+    if (!m_frontendResources)
+        return Status::InvalidArgument;
+    auto& state = m_frontendResources->snapshot;
+    if (state[Phase] != 2)
+        return state[Phase] == 5 ? Status::Failed : Status::Stopped;
+    try
+    {
+        m_pLocalGUI->PulseFrontend({mouseX, mouseY, focused});
+        if (state[Frames] != UINT32_MAX)
+            ++state[Frames];
+        return Status::Ok;
+    }
+    catch (...)
+    {
+        state[Phase] = 5;
+        return Status::Failed;
+    }
+}
+
+DefinitiveFrontend::Snapshot CCore::ReadFrontend() const
+{
+    using namespace DefinitiveFrontend;
+    if (!m_frontendResources)
+        return {};
+    const auto& resources = *m_frontendResources;
+    auto        state = resources.snapshot;
+    if (m_pLocalGUI && m_pLocalGUI->GetMainMenu())
+    {
+        auto* menu = m_pLocalGUI->GetMainMenu();
+        state[MenuVisible] = menu->IsVisible() ? 1u : 0u;
+        state[MenuFading] = menu->IsFading() ? 1u : 0u;
+        state[CreditsVisible] = menu->IsCreditsVisible() ? 1u : 0u;
+        state[AboutClicks] = menu->GetFrontendAboutClicks();
+    }
+    FrontendBackgroundServices::UpdaterSnapshot updater;
+    if (resources.updaterAcquired && FrontendBackgroundServices::ReadUpdater(this, updater) == FrontendBackgroundServices::Status::Ok)
+    {
+        state[UpdaterCreated] = updater.instanceCreated;
+        state[UpdaterWorkerStarted] = updater.workerStarted;
+        state[BackgroundRequestsRejected] = static_cast<std::uint32_t>(std::min<std::uint64_t>(updater.backgroundRequestsRejected, UINT32_MAX));
+        state[UpdaterConfigLoaded] = updater.configLoaded;
+    }
+    state[ServicesRetained] = m_pLocalGUI || m_pLocalization || m_pConsoleLogger || m_pCommands || resources.xml.module || resources.updaterAcquired;
+    state[GuiBorrowed] = m_pGUI != nullptr;
+    state[AdapterStarted] = m_DefinitiveAdapter.IsStarted() ? 1u : 0u;
+    state[NetworkStarted] = m_pNet != nullptr;
+    // A running menu does not grant CGame, multiplayer or full-client readiness.
+    return state;
+}
+
+DefinitiveFrontend::Status CCore::StopFrontend()
+{
+    using namespace DefinitiveFrontend;
+    if (!m_frontendResources)
+        return Status::InvalidArgument;
+    auto& resources = *m_frontendResources;
+    auto& state = resources.snapshot;
+    if (state[CleanupComplete])
+        return Status::Ok;
+    if (state[ReleaseFault])
+        return Status::Failed;
+    state[CleanupPending] = 1;
+    state[Phase] = 3;
+    try
+    {
+        // Stop input first. CPU widget destruction is supported while the GUI
+        // renderer retains submitted texture versions; the external GUI/GPU
+        // owner must still drain its session before unloading cgui or Core.
+        state[InputRequested] = 0;
+        if (m_pLocalGUI)
+            m_pLocalGUI->ResetInputState();
+        if (m_pGUI)
+            m_pGUI->SetCursorEnabled(false);
+        if (m_pLocalGUI && m_pLocalGUI->GetMainMenu())
+        {
+            state[AboutClicks] = m_pLocalGUI->GetMainMenu()->GetFrontendAboutClicks();
+            state[CreditsVisible] = m_pLocalGUI->GetMainMenu()->IsCreditsVisible() ? 1u : 0u;
+        }
+        SAFE_DELETE(m_pLocalGUI);
+        if (resources.updaterAcquired)
+        {
+            FrontendBackgroundServices::UpdaterSnapshot updater;
+            if (FrontendBackgroundServices::ReadUpdater(this, updater) == FrontendBackgroundServices::Status::Ok)
+            {
+                state[UpdaterCreated] = updater.instanceCreated;
+                state[UpdaterWorkerStarted] = updater.workerStarted;
+                state[BackgroundRequestsRejected] = static_cast<std::uint32_t>(std::min<std::uint64_t>(updater.backgroundRequestsRejected, UINT32_MAX));
+                state[UpdaterConfigLoaded] = updater.configLoaded;
+            }
+            const auto status = FrontendBackgroundServices::ReleaseUpdater(this);
+            if (status == FrontendBackgroundServices::Status::Busy)
+                return Status::Busy;
+            if (status != FrontendBackgroundServices::Status::Ok)
+                throw std::runtime_error("Frontend updater did not quiesce");
+            resources.updaterAcquired = false;
+        }
+        DestroyFrontendCommands();
+        if (g_pLocalization == m_pLocalization)
+            g_pLocalization = resources.previousLocalization;
+        SAFE_DELETE(m_pLocalization);
+        // These views belong to the recovery-disabled XML owner, not the
+        // classic module/save path. Retire them before releasing that factory.
+        m_ClientVariables.Unload();
+        m_pConfigFile = nullptr;
+        m_pXML = nullptr;
+        if (!resources.xml.Close())
+            throw std::runtime_error("Frontend XML owner retained its module");
+        DestroyFrontendLogger();
+        m_pGUI = nullptr;
+        state[MenuVisible] = state[MenuFading] = state[CreditsVisible] = 0;
+        state[CleanupPending] = 0;
+        state[CleanupComplete] = 1;
+        state[Phase] = 4;
+        return Status::Ok;
+    }
+    catch (...)
+    {
+        state[ReleaseFault] = 1;
+        return Status::Failed;
+    }
+}
+#endif
+
 CCore::CCore()
 {
     // Initialize the global pointer
@@ -1289,6 +1658,17 @@ CCore::CCore()
 
 CCore::~CCore()
 {
+#if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
+    if (m_frontendShellOnly)
+    {
+        // Only the controller can destroy this shell after its explicit
+        // frontend stop; classic hooks and settings were never constructed.
+        assert(!m_frontendResources);
+        if (g_pCore == this)
+            g_pCore = nullptr;
+        return;
+    }
+#endif
     WriteDebugEvent("CCore::~CCore");
 
     if constexpr (bFreezeWatchdogEnabled)

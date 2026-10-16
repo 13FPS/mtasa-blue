@@ -14,6 +14,7 @@ class CMainMenu;
 #pragma once
 
 #include <memory>
+#include <cstdint>
 #include "CCore.h"
 #include "CQuestionBox.h"
 #include <ServerBrowser/CServerBrowser.h>
@@ -50,10 +51,27 @@ public:
         Deferred
     };
 
-    CMainMenu(CGUI* pManager, SettingsCreation settingsCreation = SettingsCreation::Eager);
+    struct FrontendHost
+    {
+        void* context = nullptr;
+        void (*setInputOwnership)(void*, bool) noexcept = nullptr;
+        void (*requestClose)(void*) noexcept = nullptr;
+        bool allowLanguageChange = false;
+    };
+
+    struct FrontendFrame
+    {
+        int  mouseX = 0;
+        int  mouseY = 0;
+        bool focused = false;
+    };
+
+    CMainMenu(CGUI* pManager, SettingsCreation settingsCreation = SettingsCreation::Eager, const FrontendHost* frontendHost = nullptr);
     ~CMainMenu();
 
     void Update();
+    void Update(const FrontendFrame& frame);
+    bool IsFrontendOnly() const noexcept { return m_FrontendOnly; }
 
     void Show(bool bOverlay);
     void Hide();
@@ -65,7 +83,7 @@ public:
     void SetIsIngame(bool bIsIngame);
     bool GetIsIngame();
 
-    CServerBrowser* GetServerBrowser() { return &m_ServerBrowser; };
+    CServerBrowser* GetServerBrowser() { return m_ServerBrowser.get(); };
     CSettings*      GetSettingsWindow() { return m_Settings.get(); };
     void            InitializeSettingsWindow();
     CQuestionBox*   GetQuestionWindow() { return &m_QuestionBox; };
@@ -74,7 +92,9 @@ public:
     void SetMenuVerticalPosition(int iPosY);
     void SetMenuUnhovered();
 
-    bool HasStarted() { return m_bStarted; };
+    bool          HasStarted() { return m_bStarted; };
+    bool          IsCreditsVisible() { return m_Credits.IsVisible(); }
+    std::uint32_t GetFrontendAboutClicks() const noexcept { return m_FrontendAboutClicks; }
 
     void SetNewsHeadline(int iIndex, const SString& strHeadline, const SString& strDate, bool bIsNew);
     void ReloadNews();
@@ -91,6 +111,8 @@ public:
 
 private:
     sMenuItem* CreateItem(unsigned char menuType, const char* szFilename, CVector2D vecRelPosition);
+    void       AppendItem(unsigned char menuType, const char* szFilename, CVector2D vecRelPosition);
+    void       DestroyOwnedGui();
     bool       SetItemHoverProgress(sMenuItem* pItem, float fProgress, bool bHovering);
 
     bool OnMenuEnter(CGUIElement* pElement);
@@ -109,42 +131,49 @@ private:
 
     void HideServerInfo();
     void TryShowPendingRichPresenceQuestion();
+    void UpdateFrame(const FrontendFrame* frontendFrame);
+    bool IsMenuActionAvailable(unsigned char menuType) const noexcept;
 
-    CGUI* m_pManager;
+    // The frontend host owns input exclusion and closing; its copied callbacks
+    // and borrowed context remain valid until this menu has been destroyed.
+    bool          m_FrontendOnly;
+    FrontendHost  m_FrontendHost;
+    std::uint32_t m_FrontendAboutClicks = 0;
+    CGUI*         m_pManager = nullptr;
 
     // Images
-    CGUIStaticImage* m_pBackground;
-    CGUIStaticImage* m_pLogo;
-    CGUIStaticImage* m_pLatestNews;
-    CGUIStaticImage* m_pFiller;
-    CGUIStaticImage* m_pFiller2;
-    CGUIStaticImage* m_pVersion;
-    CGUIStaticImage* m_pMenuArea;
+    CGUIStaticImage* m_pBackground = nullptr;
+    CGUIStaticImage* m_pLogo = nullptr;
+    CGUIStaticImage* m_pLatestNews = nullptr;
+    CGUIStaticImage* m_pFiller = nullptr;
+    CGUIStaticImage* m_pFiller2 = nullptr;
+    CGUIStaticImage* m_pVersion = nullptr;
+    CGUIStaticImage* m_pMenuArea = nullptr;
 
-    CGUIScrollPane* m_pCanvas;
+    CGUIScrollPane* m_pCanvas = nullptr;
 
     std::deque<sMenuItem*> m_menuItems;
     std::set<sMenuItem*>   m_unhoveredItems;
-    sMenuItem*             m_pDisconnect;
-    sMenuItem*             m_pHoveredItem;
-    bool                   m_bMouseOverMenu;
+    sMenuItem*             m_pDisconnect = nullptr;
+    sMenuItem*             m_pHoveredItem = nullptr;
+    bool                   m_bMouseOverMenu = false;
 
     // Submenu classes
-    CQuestionBox               m_QuestionBox;
-    std::unique_ptr<CSettings> m_Settings;
-    CNewsBrowser*              m_pNewsBrowser;
-    CCredits                   m_Credits;
-    CServerBrowser             m_ServerBrowser;
-    CServerInfo                m_ServerInfo;
-    CLanguageSelector*         m_pLanguageSelector;
+    CQuestionBox                    m_QuestionBox;
+    std::unique_ptr<CSettings>      m_Settings;
+    CNewsBrowser*                   m_pNewsBrowser = nullptr;
+    CCredits                        m_Credits;
+    std::unique_ptr<CServerBrowser> m_ServerBrowser;
+    std::unique_ptr<CServerInfo>    m_ServerInfo;
+    CLanguageSelector*              m_pLanguageSelector = nullptr;
 
     // Properties
-    bool m_bIsIngame;
-    bool m_bIsVisible;
-    bool m_bIsFullyVisible;
-    bool m_bFrameDelay;
-    bool m_bIsInSubWindow;
-    bool m_bHideGame;
+    bool m_bIsIngame = false;
+    bool m_bIsVisible = false;
+    bool m_bIsFullyVisible = false;
+    bool m_bFrameDelay = false;
+    bool m_bIsInSubWindow = false;
+    bool m_bHideGame = false;
 
     int m_iXOff;
     int m_iYOff;
@@ -158,7 +187,7 @@ private:
     int m_menuBX;
     int m_menuBY;
 
-    CGraphics* m_pGraphics;
+    CGraphics* m_pGraphics = nullptr;
     bool       m_bStarted{false};
     bool       m_bPendingRichPresenceQuestion{false};
     CVector2D  m_ScreenSize;
@@ -174,10 +203,10 @@ private:
     int           m_iMoveTargetPos;
     unsigned long m_ulMoveStartTick;
 
-    CGUILabel* m_pNewsItemLabels[CORE_MTA_NEWS_ITEMS];
-    CGUILabel* m_pNewsItemShadowLabels[CORE_MTA_NEWS_ITEMS];
-    CGUILabel* m_pNewsItemDateLabels[CORE_MTA_NEWS_ITEMS];
-    CGUILabel* m_pNewsItemNEWLabels[CORE_MTA_NEWS_ITEMS];
+    CGUILabel* m_pNewsItemLabels[CORE_MTA_NEWS_ITEMS]{};
+    CGUILabel* m_pNewsItemShadowLabels[CORE_MTA_NEWS_ITEMS]{};
+    CGUILabel* m_pNewsItemDateLabels[CORE_MTA_NEWS_ITEMS]{};
+    CGUILabel* m_pNewsItemNEWLabels[CORE_MTA_NEWS_ITEMS]{};
 
 #ifdef CI_BUILD
     std::unique_ptr<CGUITexture>     m_pFeatureBranchAlertTexture;

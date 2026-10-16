@@ -21,7 +21,7 @@ using namespace tinygettext;
 class CLocalization : public CLocalizationInterface
 {
 public:
-    CLocalization(const SString& strLocale = "", const SString& strLocalePath = "");
+    CLocalization(const SString& strLocale = "", const SString& strLocalePath = "", bool persistApplicationLocale = true);
     ~CLocalization();
 
     SString Translate(const SString& strMessage);
@@ -43,6 +43,7 @@ public:
     static void LogCallback(const std::string& str);
 
 private:
+    bool                                          m_persistApplicationLocale = true;
     DictionaryManager                             m_DictManager;
     std::map<SString, std::unique_ptr<CLanguage>> m_LanguageMap;
     CLanguage*                                    m_pCurrentLang{};

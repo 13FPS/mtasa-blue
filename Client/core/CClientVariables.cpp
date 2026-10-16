@@ -25,6 +25,15 @@ CClientVariables::~CClientVariables()
 {
 }
 
+void CClientVariables::Unload()
+{
+    // A bounded frontend can retire its XML file while Core remains available
+    // to its adapter. No subsequent CVar query may keep a view into that file.
+    m_pStorage = nullptr;
+    m_bLoaded = false;
+    ++m_iRevision;
+}
+
 bool CClientVariables::Load()
 {
     // Get the root node

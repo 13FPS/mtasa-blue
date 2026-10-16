@@ -23,7 +23,8 @@ struct NativeLanguageName
 #include "languages.generated.h"
 };
 
-CLocalization::CLocalization(const SString& strLocale, const SString& strLocalePath)
+CLocalization::CLocalization(const SString& strLocale, const SString& strLocalePath, bool persistApplicationLocale)
+    : m_persistApplicationLocale(persistApplicationLocale)
 {
     m_pCurrentLang = NULL;
 
@@ -83,9 +84,14 @@ void CLocalization::SetCurrentLanguage(SString strLocale)
             CVARS_SET("locale", strLocale);
     }
 
-    SString strStoredLocale = GetApplicationSetting("locale");
-    if (strStoredLocale != strLocale)
-        SetApplicationSetting("locale", strLocale);
+    // A bounded frontend uses its own XML view. Loading its real dictionary
+    // must not migrate the user's process-wide application preferences.
+    if (m_persistApplicationLocale)
+    {
+        SString strStoredLocale = GetApplicationSetting("locale");
+        if (strStoredLocale != strLocale)
+            SetApplicationSetting("locale", strLocale);
+    }
 
     if (m_pCurrentLang && m_pCurrentLang->GetCode() == strLocale)
         return;

@@ -11,6 +11,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 class CVersionUpdaterInterface
 {
 public:
@@ -31,3 +33,31 @@ public:
 };
 
 CVersionUpdaterInterface* GetVersionUpdater();
+
+namespace FrontendBackgroundServices
+{
+    enum class Status : std::uint32_t
+    {
+        Ok,
+        Busy,
+        Conflict,
+        WrongThread,
+        InvalidArgument,
+        Failed
+    };
+
+    struct UpdaterSnapshot
+    {
+        std::uint32_t version = 1, ownerThread = 0, instanceCreated = 0, workerStarted = 0, configLoaded = 0;
+        std::uint64_t backgroundRequestsRejected = 0;
+    };
+
+    // Reserve before constructing CLocalGUI. Ordinary GetVersionUpdater calls
+    // then lazily create the real updater in config/metadata-only mode, without
+    // its process-lifetime thread. Existing classic callers keep their default.
+    // Release after every borrowed frontend pointer is retired, before XML/Core
+    // unload. Busy/conflict/failure retains the reservation and owned instance.
+    Status AcquireUpdater(const void* owner) noexcept;
+    Status ReadUpdater(const void* owner, UpdaterSnapshot& output) noexcept;
+    Status ReleaseUpdater(const void* owner) noexcept;
+}

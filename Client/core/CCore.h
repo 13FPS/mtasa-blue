@@ -23,6 +23,9 @@ class CDiscordInterface;
 #ifdef MTA_WITH_DEFINITIVE_ADAPTER
     #include "CGameAdapterModule.h"
 #endif
+#if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
+    #include "DefinitiveFrontend.h"
+#endif
 #include "CSingleton.h"
 #include "CGUI.h"
 #include "CConnectManager.h"
@@ -304,6 +307,23 @@ public:
     void OnPostColorFilterRender() override;
 
 private:
+#if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
+    friend struct DefinitiveFrontend::Controller;
+    struct FrontendShellTag
+    {
+    };
+    explicit CCore(FrontendShellTag);
+    struct FrontendResources;
+    FrontendResources*           m_frontendResources = nullptr;
+    bool                         m_frontendShellOnly = false;
+    DWORD                        m_frontendCoreOwnerThread = GetCurrentThreadId();
+    bool                         StartFrontend(CGUI* borrowedGui);
+    DefinitiveFrontend::Status   PulseFrontend(std::int32_t mouseX, std::int32_t mouseY, bool focused);
+    DefinitiveFrontend::Status   StopFrontend();
+    DefinitiveFrontend::Snapshot ReadFrontend() const;
+    static void                  FrontendInputOwnership(void*, bool) noexcept;
+    static void                  FrontendCloseRequested(void*) noexcept;
+#endif
     void InitializeFrontendInfrastructure();
     void DestroyFrontendCommands();
     void DestroyFrontendConfiguration(bool saveConfig);

@@ -38,7 +38,7 @@ class CDebugView;
 class CLocalGUI : public CSingleton<CLocalGUI>
 {
 public:
-    CLocalGUI();
+    explicit CLocalGUI(const CMainMenu::FrontendHost* frontendHost = nullptr);
     ~CLocalGUI();
 
     void SetSkin(const char* szName);
@@ -51,6 +51,8 @@ public:
     void DestroyObjects();
 
     void DoPulse();
+    // Update the existing menu without classic game, D3D9 or updater pulses.
+    void PulseFrontend(const CMainMenu::FrontendFrame& frame);
 
     void Draw();
     void Invalidate();
@@ -105,10 +107,12 @@ public:
     void RequestRestartPrompt();
 
 private:
-    void UpdateCursor();
-    void ApplyQueuedLocale();
-    void TryShowRestartPrompt();
-    void ClearRestartPrompt() { m_bPendingRestartPrompt = false; }
+    bool                    m_frontendOnly = false;
+    CMainMenu::FrontendHost m_frontendHost;
+    void                    UpdateCursor();
+    void                    ApplyQueuedLocale();
+    void                    TryShowRestartPrompt();
+    void                    ClearRestartPrompt() { m_bPendingRestartPrompt = false; }
 
     static void RestartPromptCallBack(void* pData, unsigned int uiButton);
 

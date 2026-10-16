@@ -16,6 +16,7 @@
 #include "CFilePathTranslator.h"
 #include "SharedUtil.Thread.h"
 #include <charconv>
+#include <stdexcept>
 
 ///////////////////////////////////////////////////////////////
 //
@@ -30,7 +31,7 @@ public:
     ZERO_ON_NEW
 
     // CVersionUpdaterInterface interface
-    CVersionUpdater();
+    CVersionUpdater(bool frontendOwned = false, DWORD frontendOwnerThread = 0);
     virtual ~CVersionUpdater();
     virtual bool SaveConfigToXML();
     virtual void EnableChecking(bool bOn);
@@ -44,6 +45,10 @@ public:
     virtual void GetBrowseVersionMaps(std::map<SString, int>& outBlockedVersionMap, std::map<SString, int>& outAllowedVersionMap);
     virtual void GetNewsSettings(SString& strOutOldestPost, uint& uiOutMaxHistoryLength);
     virtual const SString& GetDebugFilterString();
+
+    bool                                        IsFrontendOwned() const noexcept { return m_frontendOwned; }
+    FrontendBackgroundServices::UpdaterSnapshot ReadFrontendSnapshot() const noexcept;
+    bool                                        CanReleaseFrontend() const noexcept { return m_frontendOwned && !m_pProgramThreadHandle; }
 
     // CVersionUpdater functions
     bool EnsureLoadedConfigFromXML();
@@ -141,6 +146,13 @@ public:
     void         ProcessCommand(EUpdaterProgramType eProgramType);
     void         MainStep();
     void         UpdaterYield();
+    void         CheckFrontendOwner() const;
+    bool         RejectFrontendBackgroundRequest();
+
+    const bool    m_frontendOwned;
+    const DWORD   m_frontendOwnerThread;
+    std::uint64_t m_frontendBackgroundRequestsRejected = 0;
+    bool          m_frontendMetadataReady = false;
 
     SJobInfo      m_JobInfo;
     long long     m_llTimeStart;
@@ -158,7 +170,7 @@ public:
     bool                   m_bCheckedTimeForVersionCheck;
     bool                   m_bCheckedTimeForNewsUpdate;
     bool                   m_bCheckedTimeForMasterFetch;
-    bool                   m_bLoadedConfig;
+    bool                   m_bLoadedConfig = false;
     bool                   m_bSentCrashDump;
     bool                   m_bSentReportLog;
     std::map<SString, int> m_DoneOptionalMap;
@@ -168,14 +180,14 @@ public:
 
     CReportWrap* m_pReportWrap;
     SString      m_strLastQueryURL;
-    bool         m_bEnabled;
+    bool         m_bEnabled = false;
     uint         m_uiFrameCounter;
     int          m_iForceMasterConfigRefreshCount;
 
     SUpdaterMasterConfig m_MasterConfig;
     SUpdaterVarConfig    m_VarConfig;
 
-    CThreadHandle* m_pProgramThreadHandle;
+    CThreadHandle* m_pProgramThreadHandle = nullptr;
 
     // Shared variables
     struct
@@ -198,10 +210,116 @@ public:
 ///////////////////////////////////////////////////////////////
 static CVersionUpdater* g_pVersionUpdater = NULL;
 
+namespace
+{
+    SRWLOCK     g_updaterOwnershipLock = SRWLOCK_INIT;
+    const void* g_frontendUpdaterOwner = nullptr;
+    DWORD       g_frontendUpdaterThread = 0;
+
+    struct UpdaterOwnershipOperation
+    {
+        bool locked = false;
+        explicit UpdaterOwnershipOperation(bool wait = false)
+        {
+            if (wait)
+            {
+                AcquireSRWLockExclusive(&g_updaterOwnershipLock);
+                locked = true;
+            }
+            else
+                locked = TryAcquireSRWLockExclusive(&g_updaterOwnershipLock) != FALSE;
+        }
+        ~UpdaterOwnershipOperation()
+        {
+            if (locked)
+                ReleaseSRWLockExclusive(&g_updaterOwnershipLock);
+        }
+    };
+}
+
+namespace FrontendBackgroundServices
+{
+    Status AcquireUpdater(const void* owner) noexcept
+    {
+        if (!owner)
+            return Status::InvalidArgument;
+        UpdaterOwnershipOperation operation;
+        if (!operation.locked)
+            return Status::Busy;
+        const auto thread = GetCurrentThreadId();
+        if (g_frontendUpdaterOwner)
+        {
+            if (g_frontendUpdaterOwner != owner)
+                return Status::Conflict;
+            return g_frontendUpdaterThread == thread ? Status::Ok : Status::WrongThread;
+        }
+        // Never adopt a classic singleton: it may already have a worker, HTTP
+        // callbacks, or process-lifetime borrowers outside this frontend owner.
+        if (g_pVersionUpdater)
+            return Status::Conflict;
+        g_frontendUpdaterOwner = owner;
+        g_frontendUpdaterThread = thread;
+        return Status::Ok;
+    }
+
+    Status ReadUpdater(const void* owner, UpdaterSnapshot& output) noexcept
+    {
+        if (!owner)
+            return Status::InvalidArgument;
+        UpdaterOwnershipOperation operation;
+        if (!operation.locked)
+            return Status::Busy;
+        if (g_frontendUpdaterOwner != owner)
+            return Status::Conflict;
+        if (g_frontendUpdaterThread != GetCurrentThreadId())
+            return Status::WrongThread;
+        UpdaterSnapshot next;
+        next.ownerThread = g_frontendUpdaterThread;
+        if (g_pVersionUpdater)
+        {
+            if (!g_pVersionUpdater->IsFrontendOwned())
+                return Status::Conflict;
+            next = g_pVersionUpdater->ReadFrontendSnapshot();
+        }
+        output = next;
+        return Status::Ok;
+    }
+
+    Status ReleaseUpdater(const void* owner) noexcept
+    {
+        if (!owner)
+            return Status::InvalidArgument;
+        UpdaterOwnershipOperation operation;
+        if (!operation.locked)
+            return Status::Busy;
+        if (!g_frontendUpdaterOwner && !g_pVersionUpdater)
+            return Status::Ok;
+        if (g_frontendUpdaterOwner != owner)
+            return Status::Conflict;
+        if (g_frontendUpdaterThread != GetCurrentThreadId())
+            return Status::WrongThread;
+        if (g_pVersionUpdater && !g_pVersionUpdater->CanReleaseFrontend())
+            return Status::Failed;
+        // Frontend mode cannot create a worker or queue an HTTP request. An
+        // unexpected worker therefore retains ownership instead of invoking
+        // the classic destructor's asynchronous thread-cancellation fallback.
+        delete g_pVersionUpdater;
+        g_pVersionUpdater = nullptr;
+        g_frontendUpdaterOwner = nullptr;
+        g_frontendUpdaterThread = 0;
+        return Status::Ok;
+    }
+}
+
 CVersionUpdaterInterface* GetVersionUpdater()
 {
+    // Classic callers expect a pointer even when another getter is briefly
+    // constructing the singleton. Only the explicit lifecycle API reports Busy.
+    UpdaterOwnershipOperation operation(true);
+    if (g_frontendUpdaterOwner && g_frontendUpdaterThread != GetCurrentThreadId())
+        throw std::logic_error("Frontend version updater belongs to another thread");
     if (!g_pVersionUpdater)
-        g_pVersionUpdater = new CVersionUpdater();
+        g_pVersionUpdater = new CVersionUpdater(g_frontendUpdaterOwner != nullptr, g_frontendUpdaterThread);
     return g_pVersionUpdater;
 }
 
@@ -212,10 +330,13 @@ CVersionUpdaterInterface* GetVersionUpdater()
 //
 //
 ///////////////////////////////////////////////////////////////
-CVersionUpdater::CVersionUpdater()
+CVersionUpdater::CVersionUpdater(bool frontendOwned, DWORD frontendOwnerThread) : m_frontendOwned(frontendOwned), m_frontendOwnerThread(frontendOwnerThread)
 {
-    shared.m_Mutex.Lock();
-    m_pProgramThreadHandle = new CThreadHandle(CVersionUpdater::StaticThreadProc, this);
+    if (!m_frontendOwned)
+    {
+        shared.m_Mutex.Lock();
+        m_pProgramThreadHandle = new CThreadHandle(CVersionUpdater::StaticThreadProc, this);
+    }
 }
 
 ///////////////////////////////////////////////////////////////
@@ -227,9 +348,39 @@ CVersionUpdater::CVersionUpdater()
 ///////////////////////////////////////////////////////////////
 CVersionUpdater::~CVersionUpdater()
 {
-    StopThread();
+    if (!m_frontendOwned)
+        StopThread();
     SAFE_DELETE(m_pProgramThreadHandle);
     SAFE_DELETE(m_pReportWrap);
+}
+
+void CVersionUpdater::CheckFrontendOwner() const
+{
+    if (m_frontendOwned && m_frontendOwnerThread != GetCurrentThreadId())
+        throw std::logic_error("Frontend version updater belongs to another thread");
+}
+
+bool CVersionUpdater::RejectFrontendBackgroundRequest()
+{
+    CheckFrontendOwner();
+    if (!m_frontendOwned)
+        return false;
+    // QueueFile retains this updater as raw callback context, while Reset's
+    // public API offers no callback-quiescence guarantee. Config/metadata reuse
+    // cannot safely admit downloads and then promise bounded Core unloading.
+    ++m_frontendBackgroundRequestsRejected;
+    return true;
+}
+
+FrontendBackgroundServices::UpdaterSnapshot CVersionUpdater::ReadFrontendSnapshot() const noexcept
+{
+    FrontendBackgroundServices::UpdaterSnapshot result;
+    result.ownerThread = m_frontendOwnerThread;
+    result.instanceCreated = 1;
+    result.workerStarted = m_pProgramThreadHandle != nullptr;
+    result.configLoaded = m_frontendMetadataReady;
+    result.backgroundRequestsRejected = m_frontendBackgroundRequestsRejected;
+    return result;
 }
 
 ///////////////////////////////////////////////////////////////
@@ -294,8 +445,13 @@ CXMLNode* CVersionUpdater::GetXMLConfigNode(bool bCreateIfRequired)
 ///////////////////////////////////////////////////////////////
 bool CVersionUpdater::EnsureLoadedConfigFromXML()
 {
+    CheckFrontendOwner();
     if (m_bLoadedConfig)
+    {
+        if (m_frontendOwned && !m_frontendMetadataReady)
+            throw std::runtime_error("Frontend updater metadata initialization failed");
         return false;
+    }
 
     m_bLoadedConfig = true;
 
@@ -306,7 +462,12 @@ bool CVersionUpdater::EnsureLoadedConfigFromXML()
     CXMLNode* pMainNode = GetXMLConfigNode(false);
 
     if (!pMainNode)
+    {
+        // Missing cached configuration means the real updater defaults are
+        // ready. An exception during parsing must not advertise that commit.
+        m_frontendMetadataReady = m_frontendOwned;
         return false;
+    }
 
     if (CXMLNode* pVar = pMainNode->FindSubNode("var"))
     {
@@ -348,9 +509,13 @@ bool CVersionUpdater::EnsureLoadedConfigFromXML()
         XMLAccess.GetSubNodeValue("news.maxhistorylength", m_MasterConfig.news.iMaxHistoryLength);
         XMLAccess.GetSubNodeValue("misc.debug.filter2", m_MasterConfig.misc.debug.strFilter);
 
-        PostChangeMasterConfig();
+        // A frontend may read cached settings before platform/network services
+        // exist. Publishing registry/debug/report settings remains classic work.
+        if (!m_frontendOwned)
+            PostChangeMasterConfig();
     }
 
+    m_frontendMetadataReady = m_frontendOwned;
     return true;
 }
 
@@ -363,6 +528,7 @@ bool CVersionUpdater::EnsureLoadedConfigFromXML()
 ///////////////////////////////////////////////////////////////
 bool CVersionUpdater::SaveConfigToXML()
 {
+    CheckFrontendOwner();
     if (!m_bLoadedConfig)
         return false;
 
@@ -426,6 +592,14 @@ bool CVersionUpdater::SaveConfigToXML()
 ///////////////////////////////////////////////////////////////
 void CVersionUpdater::EnableChecking(bool bOn)
 {
+    CheckFrontendOwner();
+    if (m_frontendOwned)
+    {
+        if (bOn)
+            RejectFrontendBackgroundRequest();
+        m_bEnabled = false;
+        return;
+    }
     m_bEnabled = bOn;
     EnsureLoadedConfigFromXML();
 }
@@ -453,6 +627,9 @@ CReportWrap* CVersionUpdater::GetReportWrap()
 ///////////////////////////////////////////////////////////////
 void CVersionUpdater::DoPulse()
 {
+    CheckFrontendOwner();
+    if (m_frontendOwned)
+        return;
     if (!m_bEnabled)
         return;
 
@@ -564,6 +741,8 @@ void CVersionUpdater::DoPulse()
 ///////////////////////////////////////////////////////////////
 void CVersionUpdater::InitiateUpdate(const SString& strType, const SString& strData, const SString& strHost)
 {
+    if (RejectFrontendBackgroundRequest())
+        return;
     if (strType == "Mandatory")
     {
         CCore::GetSingleton().RemoveMessageBox();
@@ -590,6 +769,7 @@ void CVersionUpdater::InitiateUpdate(const SString& strType, const SString& strD
 ///////////////////////////////////////////////////////////////
 bool CVersionUpdater::IsOptionalUpdateInfoRequired(const SString& strHost)
 {
+    CheckFrontendOwner();
     // Should this server tell us about recommended updates?
     return !MapContains(m_DoneOptionalMap, strHost);
 }
@@ -603,6 +783,8 @@ bool CVersionUpdater::IsOptionalUpdateInfoRequired(const SString& strHost)
 ///////////////////////////////////////////////////////////////
 void CVersionUpdater::InitiateDataFilesFix()
 {
+    if (RejectFrontendBackgroundRequest())
+        return;
     RunProgram(EUpdaterProgramType::ServerSaysDataFilesWrong);
 }
 
@@ -615,6 +797,8 @@ void CVersionUpdater::InitiateDataFilesFix()
 ///////////////////////////////////////////////////////////////
 void CVersionUpdater::InitiateManualCheck()
 {
+    if (RejectFrontendBackgroundRequest())
+        return;
     if (GetQuestionBox().IsVisible())
     {
         // Bring to the front
@@ -652,6 +836,8 @@ void CVersionUpdater::InitiateManualCheck()
 void CVersionUpdater::InitiateSidegradeLaunch(const SString& strVersion, const SString& strIp, ushort usPort, const SString& strName,
                                               const SString& strPassword)
 {
+    if (RejectFrontendBackgroundRequest())
+        return;
     RunProgram(EUpdaterProgramType::SidegradeLaunch);
 
     m_strSidegradeVersion = strVersion;
@@ -987,6 +1173,8 @@ void CVersionUpdater::OnPossibleConfigProblem()
 ///////////////////////////////////////////////////////////////
 void CVersionUpdater::RunProgram(EUpdaterProgramType strProgramName)
 {
+    if (RejectFrontendBackgroundRequest())
+        return;
     assert(IsMainThread());
     OutputDebugLine(SString("[Updater] RunProgram %d", strProgramName));
 

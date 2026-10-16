@@ -6,11 +6,21 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
-**Frontend startup and GUI interaction groundwork is implemented.** Core now
-separates its existing XML/configuration, localization, logging and commands
-from classic renderer/game hooks, with cleanup for partial initialization.
-The existing main menu supports explicitly deferred game settings; classic
-startup keeps its eager settings creation and shutdown order.
+**The existing MTA main menu now has a separate frontend lifecycle.** The real
+Core starts its XML/configuration, CVars, localization, logging, commands and
+`CLocalGUI`/`CMainMenu` on a borrowed MTA D3D12 GUI session. About opens the
+existing credits window, its OK button closes it, and Quit requests host cleanup.
+Game settings, server browsing and networking remain unavailable until their
+actual DE backends are ready. Classic startup retains its eager services.
+
+The optional `MTA_*DEFrontendSession` exports enforce one owner thread and keep
+failed startup inspectable until explicitly released. Configuration is read-only;
+the frontend does not change application-wide locale preferences. It uses the
+real updater's cached metadata with background requests refused and no worker
+started. Teardown retires menu callbacks and services before XML or GUI owners.
+Owned WARP tests exercise menu/credits rendering, actual callbacks, wrong-thread
+rejection, startup failure, reacquisition and CPU teardown with GPU work retained.
+They do not establish full game or multiplayer startup.
 
 The Core-owned surface has a separate internal interaction opt-in, using the
 same Win32 translator as classic MTA and the actual CGUI button/edit callbacks.
@@ -18,9 +28,10 @@ The D3D12 session draws MTA's cursor. Focus loss, capture loss and shutdown
 cancel mouse presses without completing clicks, while mouse capture changes
 preserve keyboard modifiers. Unicode input and owner-thread checks are shared.
 Owned WARP tests exercise these paths with real MTA widgets and GPU readback.
-This interaction mode is not exported or installed into GTA: native gameplay
-input capture, remaining main-menu dependencies and full Core/game startup
-still need implementation. No new GTA test is required for this groundwork.
+The owned frontend API is not installed into GTA yet. Live menu interaction
+still needs a scoped native gameplay/camera input lease and the separate bridge
+workload; the successful passive GUI trial does not grant either. No new GTA
+test is required for this owned-host milestone.
 
 **The Windowed MTA GUI trial passed, with user-confirmed eight-second visibility.**
 Runtime commit `27c54ea9d` acquired GTA's device/window lease and ran the existing

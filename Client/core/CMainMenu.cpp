@@ -14,6 +14,7 @@
 #include "CNewsBrowser.h"
 #include "CLanguageSelector.h"
 #include "CDiscordRichPresence.h"
+#include <stdexcept>
 
 #define NATIVE_RES_X 1280.0f
 #define NATIVE_RES_Y 1024.0f
@@ -61,13 +62,36 @@ static const int       BODGE_FACTOR_4 = 5;
 static const CVector2D BODGE_FACTOR_5(0, -50);
 static const CVector2D BODGE_FACTOR_6(0, 100);
 
-CMainMenu::CMainMenu(CGUI* pManager, SettingsCreation settingsCreation)
-    // Preserve classic member construction order and its game-volume baseline.
-    // Deferred creation only removes the settings dependency; the rest of the
-    // menu still requires ported Core/game/multiplayer services before DE use.
-    : m_Settings(settingsCreation == SettingsCreation::Eager ? std::make_unique<CSettings>() : nullptr)
+CMainMenu::CMainMenu(CGUI* pManager, SettingsCreation settingsCreation, const FrontendHost* frontendHost)
+    // Classic startup keeps its original settings/browser construction order.
+    // A frontend host uses the same menu and credits without constructing the
+    // game settings or browser network/cache owners before their admission.
+    : m_FrontendOnly(frontendHost != nullptr),
+      m_FrontendHost(frontendHost ? *frontendHost : FrontendHost{}),
+      m_pManager(pManager),
+      m_Settings(!frontendHost && settingsCreation == SettingsCreation::Eager ? std::make_unique<CSettings>() : nullptr),
+      m_ServerBrowser(frontendHost ? nullptr : std::make_unique<CServerBrowser>()),
+      m_ServerInfo(frontendHost ? nullptr : std::make_unique<CServerInfo>())
 {
-    m_pNewsBrowser = new CNewsBrowser();
+    if (m_FrontendOnly && (!m_FrontendHost.setInputOwnership || !m_FrontendHost.requestClose))
+        throw std::invalid_argument("MTA frontend menu requires input and close callbacks");
+
+    // A constructor function-try-block runs after member destruction. This
+    // body guard instead removes our widgets and callbacks while the menu and
+    // its completed subdialogs still exist, including late asset failures.
+    struct ConstructionRollback
+    {
+        CMainMenu& menu;
+        bool       committed = false;
+        ~ConstructionRollback()
+        {
+            if (!committed)
+                menu.DestroyOwnedGui();
+        }
+    } rollback{*this};
+
+    auto newsBrowser = std::make_unique<CNewsBrowser>();
+    m_pNewsBrowser = newsBrowser.release();
 
     ulPreviousTick = GetTickCount32();
     m_pHoveredItem = NULL;
@@ -184,19 +208,19 @@ CMainMenu::CMainMenu(CGUI* pManager, SettingsCreation settingsCreation)
     // Filepath, Relative position, absolute native size
     // And the font for the graphics is ?
     int iMenuItemIndex = 0;
-    m_menuItems.push_back(CreateItem(MENU_ITEM_QUICK_CONNECT, "menu_quick_connect.png", CVector2D(0.168f, fBase + fGap * iMenuItemIndex++)));
-    m_menuItems.push_back(CreateItem(MENU_ITEM_BROWSE_SERVERS, "menu_browse_servers.png", CVector2D(0.168f, fBase + fGap * iMenuItemIndex++)));
+    AppendItem(MENU_ITEM_QUICK_CONNECT, "menu_quick_connect.png", CVector2D(0.168f, fBase + fGap * iMenuItemIndex++));
+    AppendItem(MENU_ITEM_BROWSE_SERVERS, "menu_browse_servers.png", CVector2D(0.168f, fBase + fGap * iMenuItemIndex++));
 
     // Only add Host Game and Map Editor if server folder exists
     if (DirectoryExists(CalcMTASAPath("server")))
     {
-        m_menuItems.push_back(CreateItem(MENU_ITEM_HOST_GAME, "menu_host_game.png", CVector2D(0.168f, fBase + fGap * iMenuItemIndex++)));
-        m_menuItems.push_back(CreateItem(MENU_ITEM_MAP_EDITOR, "menu_map_editor.png", CVector2D(0.168f, fBase + fGap * iMenuItemIndex++)));
+        AppendItem(MENU_ITEM_HOST_GAME, "menu_host_game.png", CVector2D(0.168f, fBase + fGap * iMenuItemIndex++));
+        AppendItem(MENU_ITEM_MAP_EDITOR, "menu_map_editor.png", CVector2D(0.168f, fBase + fGap * iMenuItemIndex++));
     }
 
-    m_menuItems.push_back(CreateItem(MENU_ITEM_SETTINGS, "menu_settings.png", CVector2D(0.168f, fBase + fGap * iMenuItemIndex++)));
-    m_menuItems.push_back(CreateItem(MENU_ITEM_ABOUT, "menu_about.png", CVector2D(0.168f, fBase + fGap * iMenuItemIndex++)));
-    m_menuItems.push_back(CreateItem(MENU_ITEM_QUIT, "menu_quit.png", CVector2D(0.168f, fBase + fGap * iMenuItemIndex++)));
+    AppendItem(MENU_ITEM_SETTINGS, "menu_settings.png", CVector2D(0.168f, fBase + fGap * iMenuItemIndex++));
+    AppendItem(MENU_ITEM_ABOUT, "menu_about.png", CVector2D(0.168f, fBase + fGap * iMenuItemIndex++));
+    AppendItem(MENU_ITEM_QUIT, "menu_quit.png", CVector2D(0.168f, fBase + fGap * iMenuItemIndex++));
 
     // We store the position of the top item, and the second item.  These will be useful later
     float fFirstItemSize = m_menuItems.front()->image->GetSize(false).fY;
@@ -295,19 +319,27 @@ CMainMenu::CMainMenu(CGUI* pManager, SettingsCreation settingsCreation)
     m_pLogo->MoveToBack();
 
     // Submenus
-    m_ServerBrowser.SetVisible(false);
-    m_ServerInfo.Hide();
+    if (m_ServerBrowser)
+        m_ServerBrowser->SetVisible(false);
+    if (m_ServerInfo)
+        m_ServerInfo->Hide();
     if (m_Settings)
         m_Settings->SetVisible(false);
     m_Credits.SetVisible(false);
     m_pNewsBrowser->SetVisible(false);
-    m_pLanguageSelector = new CLanguageSelector(m_pCanvas);
+    // Language selection rebuilds the local GUI. A frontend host enables the
+    // existing selector only after it owns that reconstruction path as well.
+    if (!m_FrontendOnly || m_FrontendHost.allowLanguageChange)
+    {
+        auto languageSelector = std::make_unique<CLanguageSelector>(m_pCanvas);
+        m_pLanguageSelector = languageSelector.release();
+    }
 
     // We're not ingame
     SetIsIngame(false);
 
     // Discord
-    if (g_pCore->GetCVars()->GetValue("allow_discord_rpc", false))
+    if (!m_FrontendOnly && g_pCore->GetCVars()->GetValue("allow_discord_rpc", false))
     {
         auto discord = g_pCore->GetDiscord();
         if (!discord->IsDiscordRPCEnabled())
@@ -317,17 +349,19 @@ CMainMenu::CMainMenu(CGUI* pManager, SettingsCreation settingsCreation)
         discord->SetPresenceStartTimestamp(0);
     }
     // Store the pointer to the graphics subsystem
-    m_pGraphics = CGraphics::GetSingletonPtr();
+    m_pGraphics = m_FrontendOnly ? nullptr : CGraphics::GetSingletonPtr();
 
-    // Load the server lists
-    CXMLNode* pConfig = CCore::GetSingletonPtr()->GetConfig();
-    m_ServerBrowser.LoadServerList(pConfig->FindSubNode(CONFIG_NODE_SERVER_FAV), CONFIG_FAVOURITE_LIST_TAG, m_ServerBrowser.GetFavouritesList());
-    m_ServerBrowser.LoadServerList(pConfig->FindSubNode(CONFIG_NODE_SERVER_REC), CONFIG_RECENT_LIST_TAG, m_ServerBrowser.GetRecentList());
-    m_ServerBrowser.LoadServerList(pConfig->FindSubNode(CONFIG_NODE_SERVER_HISTORY), CONFIG_HISTORY_LIST_TAG, m_ServerBrowser.GetHistoryList());
+    if (m_ServerBrowser)
+    {
+        // Load the server lists only when the actual browser/cache is admitted.
+        CXMLNode* pConfig = CCore::GetSingletonPtr()->GetConfig();
+        m_ServerBrowser->LoadServerList(pConfig->FindSubNode(CONFIG_NODE_SERVER_FAV), CONFIG_FAVOURITE_LIST_TAG, m_ServerBrowser->GetFavouritesList());
+        m_ServerBrowser->LoadServerList(pConfig->FindSubNode(CONFIG_NODE_SERVER_REC), CONFIG_RECENT_LIST_TAG, m_ServerBrowser->GetRecentList());
+        m_ServerBrowser->LoadServerList(pConfig->FindSubNode(CONFIG_NODE_SERVER_HISTORY), CONFIG_HISTORY_LIST_TAG, m_ServerBrowser->GetHistoryList());
 
-    // Remove unused node
-    if (CXMLNode* pOldNode = pConfig->FindSubNode(CONFIG_NODE_SERVER_INT))
-        pConfig->DeleteSubNode(pOldNode);
+        if (CXMLNode* pOldNode = pConfig->FindSubNode(CONFIG_NODE_SERVER_INT))
+            pConfig->DeleteSubNode(pOldNode);
+    }
 
 #ifdef CI_BUILD
     // Add feature branch alert
@@ -349,17 +383,41 @@ CMainMenu::CMainMenu(CGUI* pManager, SettingsCreation settingsCreation)
     m_pFeatureBranchAlertLabel->SetHorizontalAlign(CGUI_ALIGN_HORIZONTALCENTER);
     m_pFeatureBranchAlertLabel->SetVerticalAlign(CGUI_ALIGN_VERTICALCENTER);
 #endif
+    rollback.committed = true;
 }
 
 CMainMenu::~CMainMenu()
 {
+    DestroyOwnedGui();
+}
+
+void CMainMenu::DestroyOwnedGui()
+{
+    if (m_FrontendOnly)
+        m_FrontendHost.setInputOwnership(m_FrontendHost.context, false);
+
     auto destroyElement = [this](auto*& element)
     {
         if (!element)
             return;
-        m_pManager->DestroyElementRecursive(element);
+        auto* owned = element;
         element = nullptr;
+        m_pManager->DestroyElementRecursive(owned);
     };
+
+    // Destruction can dispatch mouse-leave/deactivation events. Remove our
+    // callbacks and borrowed selection views before retiring their elements.
+    m_pHoveredItem = nullptr;
+    m_unhoveredItems.clear();
+    if (m_pMenuArea)
+    {
+        m_pMenuArea->SetClickHandler(GUI_CALLBACK_MOUSE());
+        m_pMenuArea->SetMouseEnterHandler(GUI_CALLBACK());
+        m_pMenuArea->SetMouseLeaveHandler(GUI_CALLBACK());
+    }
+    for (auto* label : m_pNewsItemLabels)
+        if (label)
+            label->SetClickHandler(GUI_CALLBACK());
 
     for (uint i = 0; i < CORE_MTA_NEWS_ITEMS; ++i)
     {
@@ -369,40 +427,52 @@ CMainMenu::~CMainMenu()
         destroyElement(m_pNewsItemNEWLabels[i]);
     }
 
-    for (sMenuItem* pItem : m_menuItems)
+    while (!m_menuItems.empty())
     {
+        auto* pItem = m_menuItems.front();
+        m_menuItems.pop_front();
         if (!pItem || pItem == m_pDisconnect)
             continue;
 
         if (pItem->image)
         {
-            m_pManager->DestroyElementRecursive(pItem->image);
+            auto* image = pItem->image;
             pItem->image = nullptr;
+            m_pManager->DestroyElementRecursive(image);
         }
 
         delete pItem;
     }
-    m_menuItems.clear();
-    m_unhoveredItems.clear();
-    m_pHoveredItem = nullptr;
-
     if (m_pDisconnect)
     {
-        if (m_pDisconnect->image)
+        auto* disconnect = m_pDisconnect;
+        m_pDisconnect = nullptr;
+        if (disconnect->image)
         {
-            m_pManager->DestroyElementRecursive(m_pDisconnect->image);
-            m_pDisconnect->image = nullptr;
+            auto* image = disconnect->image;
+            disconnect->image = nullptr;
+            m_pManager->DestroyElementRecursive(image);
         }
 
-        delete m_pDisconnect;
-        m_pDisconnect = nullptr;
+        delete disconnect;
     }
 
-    delete m_pLanguageSelector;
+    auto* languageSelector = m_pLanguageSelector;
     m_pLanguageSelector = nullptr;
+    delete languageSelector;
 
-    delete m_pNewsBrowser;
+    auto* newsBrowser = m_pNewsBrowser;
     m_pNewsBrowser = nullptr;
+    delete newsBrowser;
+
+#ifdef CI_BUILD
+    // These children must retire before recursive deletion of the background.
+    auto* alertLabel = m_pFeatureBranchAlertLabel.release();
+    destroyElement(alertLabel);
+    auto* alertImage = m_pFeatureBranchAlertImage.release();
+    destroyElement(alertImage);
+    m_pFeatureBranchAlertTexture.reset();
+#endif
 
     destroyElement(m_pMenuArea);
     destroyElement(m_pLogo);
@@ -417,6 +487,11 @@ CMainMenu::~CMainMenu()
 
 void CMainMenu::InitializeSettingsWindow()
 {
+    // A menu-only host never authorizes classic settings or an engine facade.
+    // A later full startup must explicitly choose its supported menu policy.
+    if (m_FrontendOnly)
+        throw std::logic_error("MTA frontend menu has no admitted game settings");
+
     if (!m_Settings)
     {
         // Core must admit the actual game settings and renderer before calling
@@ -497,7 +572,23 @@ void CMainMenu::SetMenuUnhovered()  // Dehighlight all our items
 
 void CMainMenu::Update()
 {
-    if (g_pCore->GetDiagnosticDebug() == EDiagnosticDebug::JOYSTICK_0000)
+    // Only the classic path reads engine state. The frontend host must supply
+    // a frame so hover coordinates never depend on classic window hooks.
+    if (m_FrontendOnly)
+        return;
+    UpdateFrame(nullptr);
+}
+
+void CMainMenu::Update(const FrontendFrame& frame)
+{
+    if (!m_FrontendOnly)
+        return;
+    UpdateFrame(&frame);
+}
+
+void CMainMenu::UpdateFrame(const FrontendFrame* frontendFrame)
+{
+    if (!m_FrontendOnly && g_pCore->GetDiagnosticDebug() == EDiagnosticDebug::JOYSTICK_0000)
     {
         m_pFiller->SetVisible(false);
         m_pFiller2->SetVisible(false);
@@ -511,18 +602,19 @@ void CMainMenu::Update()
         return;
     }
 
-    // Get the game interface and the system state
-    CGame*            pGame = CCore::GetSingleton().GetGame();
-    SystemState::Enum systemState = pGame->GetSystemState();
+    // Frontend is a UI policy, not a synthetic CGame implementation. Preserve
+    // the classic state query after its existing frame-delay guard.
+    const auto systemState = frontendFrame ? SystemState::GS_FRONTEND : CCore::GetSingleton().GetGame()->GetSystemState();
 
-    m_Credits.Update();
+    if (!frontendFrame || frontendFrame->focused)
+        m_Credits.Update();
     if (m_Settings)
         m_Settings->Update();
 
     unsigned long ulCurrentTick = GetTickCount32();
     unsigned long ulTimePassed = ulCurrentTick - ulPreviousTick;
 
-    if (m_bHideGame)
+    if (!m_FrontendOnly && m_bHideGame)
         m_pGraphics->DrawRectangle(0, 0, m_ScreenSize.fX, m_ScreenSize.fY, 0xFF000000);
 
     if (m_bIsIngame)  // CEGUI hack
@@ -534,18 +626,23 @@ void CMainMenu::Update()
 
     if (m_bIsFullyVisible)
     {
-        // Grab our cursor position
-        tagPOINT cursor;
-        GetCursorPos(&cursor);
+        tagPOINT cursor{};
+        if (frontendFrame)
+        {
+            cursor.x = frontendFrame->mouseX;
+            cursor.y = frontendFrame->mouseY;
+        }
+        else
+        {
+            GetCursorPos(&cursor);
+            HWND     hookedWindow = CCore::GetSingleton().GetHookedWindow();
+            tagPOINT windowPos = {0};
+            ClientToScreen(hookedWindow, &windowPos);
+            cursor.x -= windowPos.x;
+            cursor.y -= windowPos.y;
+        }
 
-        HWND hookedWindow = CCore::GetSingleton().GetHookedWindow();
-
-        tagPOINT windowPos = {0};
-        ClientToScreen(hookedWindow, &windowPos);
-
-        CVector2D vecResolution = CCore::GetSingleton().GetGUI()->GetResolution();
-        cursor.x -= windowPos.x;
-        cursor.y -= windowPos.y;
+        CVector2D vecResolution = m_pManager->GetResolution();
         if (cursor.x < 0)
             cursor.x = 0;
         else if (cursor.x > (long)vecResolution.fX)
@@ -556,15 +653,15 @@ void CMainMenu::Update()
             cursor.y = (long)vecResolution.fY;
 
         // If we're within our highlight bounding box
-        if (m_bMouseOverMenu && (cursor.x > m_menuAX) && (cursor.y > m_menuAY + BODGE_FACTOR_3) && (cursor.x < m_menuBX) &&
-            (cursor.y < m_menuBY + BODGE_FACTOR_4))
+        if ((!frontendFrame || frontendFrame->focused) && m_bMouseOverMenu && (cursor.x > m_menuAX) && (cursor.y > m_menuAY + BODGE_FACTOR_3) &&
+            (cursor.x < m_menuBX) && (cursor.y < m_menuBY + BODGE_FACTOR_4))
         {
             float fHoveredIndex = ((cursor.y - m_menuAY) / (float)(m_menuBY - m_menuAY) * m_menuItems.size());
             fHoveredIndex = Clamp<float>(0, fHoveredIndex, m_menuItems.size() - 1);
             sMenuItem* pItem = m_menuItems[(int)floor(fHoveredIndex)];
             int        iSizeX = (pItem->nativeSizeX / NATIVE_RES_X) * m_iMenuSizeX;
 
-            if (cursor.x < (iSizeX + m_menuAX))
+            if (IsMenuActionAvailable(pItem->menuType) && cursor.x < (iSizeX + m_menuAX))
             {
                 if ((m_pHoveredItem) && (m_pHoveredItem != pItem))
                 {
@@ -722,22 +819,25 @@ void CMainMenu::Update()
         {
             m_bStarted = true;
 
-            m_pNewsBrowser->CreateHeadlines();
-            GetVersionUpdater()->EnableChecking(true);
-
-            if (!g_pCore->GetCVars()->GetValue("discord_rpc_share_data_firsttime", false) && g_pCore->GetCVars()->GetValue("allow_discord_rpc", false) &&
-                !g_pCore->GetCVars()->GetValue("discord_rpc_share_data", false))
+            if (!m_FrontendOnly)
             {
-                if (m_Settings)
+                m_pNewsBrowser->CreateHeadlines();
+                GetVersionUpdater()->EnableChecking(true);
+
+                if (!g_pCore->GetCVars()->GetValue("discord_rpc_share_data_firsttime", false) && g_pCore->GetCVars()->GetValue("allow_discord_rpc", false) &&
+                    !g_pCore->GetCVars()->GetValue("discord_rpc_share_data", false))
                 {
-                    m_Settings->ShowRichPresenceShareDataQuestionBox();
-                    CVARS_SET("discord_rpc_share_data_firsttime", true);
+                    if (m_Settings)
+                    {
+                        m_Settings->ShowRichPresenceShareDataQuestionBox();
+                        CVARS_SET("discord_rpc_share_data_firsttime", true);
+                    }
+                    else
+                        m_bPendingRichPresenceQuestion = true;
                 }
                 else
-                    m_bPendingRichPresenceQuestion = true;
+                    CVARS_SET("discord_rpc_share_data_firsttime", true);
             }
-            else
-                CVARS_SET("discord_rpc_share_data_firsttime", true);
         }
     }
 
@@ -768,9 +868,12 @@ void CMainMenu::Update()
     ulPreviousTick = GetTickCount32();
 
     // Call subdialog pulses
-    m_ServerBrowser.Update();
-    m_ServerInfo.DoPulse();
-    m_pLanguageSelector->DoPulse();
+    if (m_ServerBrowser)
+        m_ServerBrowser->Update();
+    if (m_ServerInfo)
+        m_ServerInfo->DoPulse();
+    if (m_pLanguageSelector)
+        m_pLanguageSelector->DoPulse();
 }
 
 void CMainMenu::Show(bool bOverlay)
@@ -786,16 +889,18 @@ void CMainMenu::Hide()
 // When escape key pressed and not connected, hide these windows
 void CMainMenu::OnEscapePressedOffLine()
 {
-    m_ServerBrowser.SetVisible(false);
+    if (m_ServerBrowser)
+        m_ServerBrowser->SetVisible(false);
     m_Credits.SetVisible(false);
     m_pNewsBrowser->SetVisible(false);
 }
 
 void CMainMenu::SetVisible(bool bVisible, bool bOverlay, bool bFrameDelay)
 {
-    CMultiplayer* pMultiplayer = CCore::GetSingleton().GetMultiplayer();
-    CQuestionBox* pQuestionBox = CCore::GetSingleton().GetLocalGUI()->GetMainMenu()->GetQuestionWindow();
-    pMultiplayer->DisablePadHandler(bVisible);
+    if (m_FrontendOnly)
+        m_FrontendHost.setInputOwnership(m_FrontendHost.context, bVisible);
+    else
+        CCore::GetSingleton().GetMultiplayer()->DisablePadHandler(bVisible);
 
     if ((m_ucFade == FADE_VISIBLE || m_ucFade == FADE_IN) && bVisible == false)
     {
@@ -811,16 +916,17 @@ void CMainMenu::SetVisible(bool bVisible, bool bOverlay, bool bFrameDelay)
     {
         m_bFrameDelay = bFrameDelay;
         SetMenuUnhovered();
-        m_ServerBrowser.SetVisible(false);
+        if (m_ServerBrowser)
+            m_ServerBrowser->SetVisible(false);
         if (m_Settings)
             m_Settings->SetVisible(false);
         m_Credits.SetVisible(false);
         m_pNewsBrowser->SetVisible(false);
 
-        if (GetIsIngame() && pQuestionBox->IsVisible())
+        if (GetIsIngame() && m_QuestionBox.IsVisible())
         {
-            pQuestionBox->Reset();
-            pQuestionBox->Hide();
+            m_QuestionBox.Reset();
+            m_QuestionBox.Hide();
         }
         //        m_bIsInSubWindow = false;
     }
@@ -844,6 +950,9 @@ bool CMainMenu::IsVisible()
 
 void CMainMenu::SetIsIngame(bool bIsIngame)
 {
+    if (m_FrontendOnly && bIsIngame)
+        return;
+
     // Save some performance by making sure we don't do all this if the new state == old
     if (m_bIsIngame != bIsIngame)
     {
@@ -852,7 +961,8 @@ void CMainMenu::SetIsIngame(bool bIsIngame)
             m_Settings->SetIsModLoaded(bIsIngame);
 
         // Reset frame rate limit
-        CCore::GetSingleton().GetFPSLimiter()->Reset();
+        if (!m_FrontendOnly)
+            CCore::GetSingleton().GetFPSLimiter()->Reset();
 
         m_ulMoveStartTick = GetTickCount32();
         if (bIsIngame)
@@ -904,6 +1014,20 @@ bool CMainMenu::OnMenuClick(CGUIMouseEventArgs Args)
 
     if (Args.button != LeftButton && m_pHoveredItem->menuType != MENU_ITEM_QUICK_CONNECT)
         return true;
+
+    if (!IsMenuActionAvailable(m_pHoveredItem->menuType))
+        return true;
+
+    // Menu-only actions use the existing credits dialog or signal the owning
+    // host. No network, command, mod or gameplay path is entered by a click.
+    if (m_FrontendOnly)
+    {
+        if (m_pHoveredItem->menuType == MENU_ITEM_ABOUT)
+            OnAboutButtonClick(pElement);
+        else if (m_pHoveredItem->menuType == MENU_ITEM_QUIT)
+            OnQuitButtonClick(pElement);
+        return true;
+    }
 
     // For detecting startup problems
     WatchDogUserDidInteractWithMenu();
@@ -982,7 +1106,7 @@ bool CMainMenu::OnMenuClick(CGUIMouseEventArgs Args)
 bool CMainMenu::OnQuickConnectButtonClick(CGUIElement* pElement, bool left)
 {
     // Return if we haven't faded in yet
-    if (m_ucFade != FADE_VISIBLE)
+    if (m_FrontendOnly || m_ucFade != FADE_VISIBLE || !m_ServerBrowser)
         return false;
 
     if (left)
@@ -998,8 +1122,8 @@ bool CMainMenu::OnQuickConnectButtonClick(CGUIElement* pElement, bool left)
     }
     else
     {
-        m_ServerBrowser.SetVisible(true);
-        m_ServerBrowser.OnQuickConnectButtonClick();
+        m_ServerBrowser->SetVisible(true);
+        m_ServerBrowser->OnQuickConnectButtonClick();
     }
 
     return true;
@@ -1018,12 +1142,12 @@ bool CMainMenu::OnResumeButtonClick(CGUIElement* pElement)
 bool CMainMenu::OnBrowseServersButtonClick(CGUIElement* pElement)
 {
     // Return if we haven't faded in yet
-    if (m_ucFade != FADE_VISIBLE)
+    if (m_FrontendOnly || m_ucFade != FADE_VISIBLE || !m_ServerBrowser)
         return false;
 
     //    if ( !m_bIsInSubWindow )
     {
-        m_ServerBrowser.SetVisible(true);
+        m_ServerBrowser->SetVisible(true);
         //        m_bIsInSubWindow = true;
     }
 
@@ -1032,13 +1156,14 @@ bool CMainMenu::OnBrowseServersButtonClick(CGUIElement* pElement)
 
 void CMainMenu::HideServerInfo()
 {
-    m_ServerInfo.Hide();
+    if (m_ServerInfo)
+        m_ServerInfo->Hide();
 }
 
 bool CMainMenu::OnDisconnectButtonClick()
 {
     // Return if we haven't faded in yet
-    if (m_ucFade != FADE_VISIBLE)
+    if (m_FrontendOnly || m_ucFade != FADE_VISIBLE)
         return false;
 
     // Send "disconnect" command to the command handler
@@ -1050,7 +1175,7 @@ bool CMainMenu::OnDisconnectButtonClick()
 bool CMainMenu::OnHostGameButtonClick()
 {
     // Return if we haven't faded in yet
-    if (m_ucFade != FADE_VISIBLE)
+    if (m_FrontendOnly || m_ucFade != FADE_VISIBLE)
         return false;
 
     if (!WarnIfLocalServerUnsupported())
@@ -1065,7 +1190,7 @@ bool CMainMenu::OnHostGameButtonClick()
 bool CMainMenu::OnEditorButtonClick()
 {
     // Return if we haven't faded in yet
-    if (m_ucFade != FADE_VISIBLE)
+    if (m_FrontendOnly || m_ucFade != FADE_VISIBLE)
         return false;
 
     if (!WarnIfLocalServerUnsupported())
@@ -1103,6 +1228,8 @@ bool CMainMenu::OnAboutButtonClick(CGUIElement* pElement)
     // Determine if we're ingame or if the background is set to static
     // If so, show the old credits dialog
     m_Credits.SetVisible(true);
+    if (m_FrontendOnly && m_FrontendAboutClicks != UINT32_MAX)
+        ++m_FrontendAboutClicks;
 
     return true;
 }
@@ -1113,6 +1240,12 @@ bool CMainMenu::OnQuitButtonClick(CGUIElement* pElement)
     if (m_ucFade != FADE_VISIBLE)
         return false;
 
+    if (m_FrontendOnly)
+    {
+        m_FrontendHost.requestClose(m_FrontendHost.context);
+        return true;
+    }
+
     // Send "exit" command to the command handler
     CCommands::GetSingleton().Execute("exit", "");
 
@@ -1122,7 +1255,7 @@ bool CMainMenu::OnQuitButtonClick(CGUIElement* pElement)
 bool CMainMenu::OnNewsButtonClick(CGUIElement* pElement)
 {
     // Return if we haven't faded in yet
-    if (m_ucFade != FADE_VISIBLE)
+    if (m_FrontendOnly || m_ucFade != FADE_VISIBLE)
         return false;
 
     int iIndex = 0;
@@ -1141,9 +1274,23 @@ bool CMainMenu::OnNewsButtonClick(CGUIElement* pElement)
     return true;
 }
 
+bool CMainMenu::IsMenuActionAvailable(unsigned char menuType) const noexcept
+{
+    return !m_FrontendOnly || menuType == MENU_ITEM_ABOUT || menuType == MENU_ITEM_QUIT;
+}
+
 sMenuItem* CMainMenu::CreateItem(unsigned char menuType, const char* szFilename, CVector2D vecRelPosition)
 {
-    CGUIStaticImage* pImage = reinterpret_cast<CGUIStaticImage*>(m_pManager->CreateStaticImage());
+    // The image may be parented before a later property or allocation throws.
+    // Keep both owners local until their fields are complete and publish last.
+    auto       item = std::make_unique<sMenuItem>();
+    const auto destroyImage = [this](CGUIStaticImage* image)
+    {
+        if (image)
+            m_pManager->DestroyElementRecursive(image);
+    };
+    std::unique_ptr<CGUIStaticImage, decltype(destroyImage)> image(reinterpret_cast<CGUIStaticImage*>(m_pManager->CreateStaticImage()), destroyImage);
+    auto*                                                    pImage = image.get();
 
     if (!pImage->LoadFromFile(PathJoin(g_pCore->GetLocalization()->GetLanguageDirectory(), szFilename)))
     {
@@ -1176,20 +1323,42 @@ sMenuItem* CMainMenu::CreateItem(unsigned char menuType, const char* szFilename,
     pImage->SetPosition(CVector2D(iPosX, iPosY), false);
     pImage->SetSize(CVector2D(iSizeX, iSizeY), false);
     pImage->SetProperty("InheritsAlpha", "False");
-    pImage->SetAlpha(CORE_MTA_NORMAL_ALPHA);
+    pImage->SetAlpha(IsMenuActionAvailable(menuType) ? CORE_MTA_NORMAL_ALPHA : CORE_MTA_DISABLED_ALPHA);
+    if (!IsMenuActionAvailable(menuType))
+        pImage->SetEnabled(false);
 
-    sMenuItem* s = new sMenuItem();
-    s->menuType = menuType;
-    s->drawPositionX = vecRelPosition.fX * m_iMenuSizeX;
-    s->drawPositionY = vecRelPosition.fY * m_iMenuSizeY;
-    s->nativeSizeX = vecNativeSize.fX;
-    s->nativeSizeY = vecNativeSize.fY;
-    s->image = pImage;
-    return s;
+    item->menuType = menuType;
+    item->drawPositionX = vecRelPosition.fX * m_iMenuSizeX;
+    item->drawPositionY = vecRelPosition.fY * m_iMenuSizeY;
+    item->nativeSizeX = vecNativeSize.fX;
+    item->nativeSizeY = vecNativeSize.fY;
+    item->image = image.release();
+    return item.release();
+}
+
+void CMainMenu::AppendItem(unsigned char menuType, const char* szFilename, CVector2D vecRelPosition)
+{
+    // Container growth may throw after CreateItem succeeds. Its image and
+    // metadata stay owned until the menu's cleanup list accepts the item.
+    const auto destroyItem = [this](sMenuItem* item)
+    {
+        if (!item)
+            return;
+        auto* image = item->image;
+        item->image = nullptr;
+        if (image)
+            m_pManager->DestroyElementRecursive(image);
+        delete item;
+    };
+    std::unique_ptr<sMenuItem, decltype(destroyItem)> item(CreateItem(menuType, szFilename, vecRelPosition), destroyItem);
+    m_menuItems.push_back(item.get());
+    item.release();
 }
 
 bool CMainMenu::SetItemHoverProgress(sMenuItem* pItem, float fProgress, bool bHovering)
 {
+    if (!IsMenuActionAvailable(pItem->menuType))
+        fProgress = 0;
     fProgress = Clamp<float>(0, fProgress, 1);
 
     pItem->animProgress = fProgress;
@@ -1201,7 +1370,8 @@ bool CMainMenu::SetItemHoverProgress(sMenuItem* pItem, float fProgress, bool bHo
     float fTargetScale = (CORE_MTA_HOVER_SCALE - CORE_MTA_NORMAL_SCALE) * (fProgress) + CORE_MTA_NORMAL_SCALE;
 
     // Work out our current progress based upon the alpha value now
-    pItem->image->SetAlpha((CORE_MTA_HOVER_ALPHA - CORE_MTA_NORMAL_ALPHA) * (fProgress) + CORE_MTA_NORMAL_ALPHA);
+    pItem->image->SetAlpha(IsMenuActionAvailable(pItem->menuType) ? (CORE_MTA_HOVER_ALPHA - CORE_MTA_NORMAL_ALPHA) * (fProgress) + CORE_MTA_NORMAL_ALPHA
+                                                                  : CORE_MTA_DISABLED_ALPHA);
 
     int iSizeX = (pItem->nativeSizeX / NATIVE_RES_X) * m_iMenuSizeX * fTargetScale;
     int iSizeY = (pItem->nativeSizeY / NATIVE_RES_Y) * m_iMenuSizeY * fTargetScale;
@@ -1261,6 +1431,8 @@ void CMainMenu::SetNewsHeadline(int iIndex, const SString& strHeadline, const SS
 
 void CMainMenu::ReloadNews()
 {
+    if (m_FrontendOnly)
+        return;
     delete m_pNewsBrowser;
     m_pNewsBrowser = new CNewsBrowser();
     m_pNewsBrowser->CreateHeadlines();
@@ -1276,6 +1448,8 @@ void CMainMenu::ReloadNews()
 /////////////////////////////////////////////////////////////
 void CMainMenu::AskUserIfHeWantsToDisconnect(uchar menuType)
 {
+    if (m_FrontendOnly)
+        return;
     SStringX strMessage(
         _("This will disconnect you from the current server."
           "\n\nAre you sure you want to disconnect?"));
@@ -1319,6 +1493,8 @@ void CMainMenu::ShowNetworkNotReadyWindow()
 /////////////////////////////////////////////////////////////
 bool CMainMenu::WarnIfLocalServerUnsupported()
 {
+    if (m_FrontendOnly)
+        return false;
     if (!Is64BitOS())
     {
         CCore::GetSingleton().ShowMessageBox(_("Error"), _("Local server is not supported on 32-bit OS, please upgrade"), MB_BUTTON_OK | MB_ICON_ERROR);
@@ -1350,6 +1526,8 @@ void CMainMenu::StaticWantsToDisconnectCallBack(void* pData, uint uiButton)
 /////////////////////////////////////////////////////////////
 void CMainMenu::WantsToDisconnectCallBack(void* pData, uint uiButton)
 {
+    if (m_FrontendOnly)
+        return;
     CCore::GetSingleton().GetLocalGUI()->GetMainMenu()->GetQuestionWindow()->Reset();
 
     if (uiButton == 1)

@@ -28,13 +28,34 @@ same worker alive and retries, including after cancellation or a deadline.
 The existing Core14 input256 route and all older contracts remain separate.
 Persistent menu input remains deferred beyond the native 35-second trial limit.
 
-The prepared 58-file candidate passes 733 ownership/package checks, including
+The installed 58-file candidate passes 733 ownership/package checks, including
 22 real launcher preflight cases and missing-export/architecture rejection.
 Compiled worker tests pass 56 controlled cases and 90 regression cases, including
 the real Core's completed startup followed by deliberate wrong-image refusal.
 The script passes 1,084 mocks; 69 saved-log reader tests include the new lifetime
-report and exact script/Core input matching. These are offline checks. The new
-completed lifecycle still needs its own GTA menu/control-restoration test.
+report and exact script/Core input matching. These are offline checks.
+
+**The completed frontend lifecycle was exercised in GTA on runtime `91819c896`.**
+The fresh PID 19148 / run 348502 Core record shows 370 successful presents,
+1,138 native scopes with matching restores, and four executed console commands
+with no rejections. The 96 lifecycle fields preserve the same Core/backend
+through menu release, then record explicit backend shutdown and cleanup. All
+145 ordered script samples end with the exact fresh Core input256 values.
+Process inspection independently found Core, GUI, XML and pthread unloaded.
+
+CLEO replaced its log at launch, so the strict original script-baseline check
+correctly refused the changed prefix. That refusal is preserved. A supplemental
+assessment passes the unchanged reader using a 5,367-byte current-launch prefix
+derived after the test, with the same owner and exact fresh Core record. This
+proves the matched lifecycle content; it does not turn the derived prefix into
+an independently captured pretrial baseline. Normal exit preserved all live log
+prefixes, appended 74 CLEO shutdown bytes and left the other eleven logs unchanged.
+
+The user confirmed menu/console interaction, CJ/camera blocking and restored
+controls. These remain separate human observations; machine camera and full
+game/network readiness stay false. The generic GUI close was recorded, with
+no menu Quit callback. Raw logs, both reader assessments and the log-reset
+limitation are retained in the sealed trial evidence.
 
 The actual normal Core and GUI DLLs pass 659 checks in four owned WARP hosts:
 menu/credits/console/bindings, GPU-retained work, missing XML and missing Game DE.
@@ -109,9 +130,9 @@ remain CPU data; this grants no remote engine-context or gameplay capability.
 Both storage architectures pass their focused checks, including the original
 classic layout and complete pad copying. Actual module tests pass 1,733 checks,
 and the x64 Core adapter consumer passes 1,684. Normal x64 Core, classic Core and
-classic multiplayer consumer compilation also pass. This source/build step is
-not installed; the successfully tested `e93524ae3` runtime is preserved until a
-later candidate is ready for another live regression.
+classic multiplayer consumer compilation also pass. This storage implementation
+is included in the installed `91819c896` frontend candidate. Its live frontend
+regression does not grant remote engine-context or gameplay capability.
 
 **The real MTA menu and player-control handoff passed in GTA.** Runtime commit
 `c949c4a90` recorded 323 GUI frames and successful presents, a completed 323/323

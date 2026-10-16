@@ -20,7 +20,9 @@
 
 struct CSetCursorPosHook::FrontendImpl
 {
+    using Clock = ULONGLONG(WINAPI*)();
     FrontendCursorLease::Policy policy;
+    Clock                       clock = nullptr;
     HWND                        window = nullptr;
     std::uintptr_t              imageBegin = 0, imageEnd = 0, hookImageBegin = 0, hookImageEnd = 0;
     std::uint64_t               generation = 0;
@@ -29,6 +31,8 @@ struct CSetCursorPosHook::FrontendImpl
     std::atomic<std::uint32_t>  lastFailure{0}, attachStatus{0}, detachStatus{0};
     std::atomic<LONG>           clipLeft{0}, clipTop{0}, clipRight{0}, clipBottom{0};
     std::atomic<bool>           clipObserved{false};
+
+    std::uint64_t Now() const noexcept { return clock ? clock() : UINT64_MAX; }
 
     bool Focused() const noexcept
     {
@@ -180,7 +184,7 @@ BOOL WINAPI CSetCursorPosHook::API_SetCursorPos(int X, int Y)
         __try
         {
             const auto caller = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
-            if (lease.policy.Suppress(static_cast<std::uint64_t>(GetTickCount64_()), lease.Focused(), caller >= lease.imageBegin && caller < lease.imageEnd))
+            if (lease.policy.Suppress(lease.Now(), lease.Focused(), caller >= lease.imageBegin && caller < lease.imageEnd))
                 // GUI ownership deliberately completes the engine request as a
                 // no-op. Unlike the classic denial, success prevents UE cursor
                 // fallback/error handling from attempting another recenter.
@@ -335,7 +339,13 @@ bool CSetCursorPosHook::BeginFrontendLease(HWND rootWindow) noexcept
         }
         const auto user = GetModuleHandleW(L"user32.dll");
         m_pfnSetCursorPos = user ? reinterpret_cast<pSetCursorPos>(GetProcAddress(user, "SetCursorPos")) : nullptr;
-        if (!m_pfnSetCursorPos || !lease.policy.Begin(GetCurrentThreadId(), static_cast<std::uint64_t>(GetTickCount64_())))
+        // The general MTA clock wrapper takes a shared critical section. A
+        // cursor callback must not wait for a Core lock while Detours can
+        // suspend its owner. DE already requires modern Windows, so resolve
+        // its clock once before hooks; callbacks never use the loader.
+        const auto kernel = GetModuleHandleW(L"kernel32.dll");
+        lease.clock = kernel ? reinterpret_cast<FrontendImpl::Clock>(GetProcAddress(kernel, "GetTickCount64")) : nullptr;
+        if (!m_pfnSetCursorPos || !lease.clock || !lease.policy.Begin(GetCurrentThreadId(), lease.Now()))
         {
             m_pfnSetCursorPos = nullptr;
             lease.lastFailure.store(ERROR_INVALID_STATE);
@@ -367,8 +377,7 @@ bool CSetCursorPosHook::RenewFrontendLease() noexcept
         return false;
     auto&                   lease = *m_frontend;
     FrontendImpl::Operation operation(lease.operation);
-    return operation.acquired && lease.hooked.load() &&
-           lease.policy.Renew(GetCurrentThreadId(), lease.generation, static_cast<std::uint64_t>(GetTickCount64_()), lease.Focused());
+    return operation.acquired && lease.hooked.load() && lease.policy.Renew(GetCurrentThreadId(), lease.generation, lease.Now(), lease.Focused());
 }
 
 void CSetCursorPosHook::DisarmFrontendLease() noexcept

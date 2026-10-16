@@ -6,17 +6,32 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
-**The Windowed visible trial now acquires GTA's device and window.** MTA's
-existing GUI rendered verified pixels and presented two frames, but the
-frontend canceled the display after 392 ms. Its validation incorrectly required
-the full eight-second workload to finish before accepting early pixel readback.
-The frontend and saved-log reader now accept readback from started, submitted
-MTA-owned rendering while keeping full-duration success and cleanup separate.
-The user reported a brief flash; sustained visibility remains unconfirmed until
-the corrected trial is tested in GTA. Fullscreen attempts did not acquire the
-required window/device lease. Use Windowed mode inside GTA for this trial.
+**The Windowed MTA GUI trial passed, with user-confirmed eight-second visibility.**
+Runtime commit `27c54ea9d` acquired GTA's device/window lease and ran the existing
+CGUI/CEGUI through an MTA-owned child composition surface. Core recorded 158 GUI
+frames and 158 successful presents, with no compositor-busy retries. The final
+fence signaled/completed at 158/158. Readback from the 1920x1001 BGRA8 target
+verified 115,860 nonzero pixels, transparent background, the red texture and
+premultiplied alpha. Core completed in 8,411 ms; the script observed 8,580 ms.
 
-**Latest completed GUI workload: Core-owned offscreen rendering, cleanup and normal exit passed.**
+The script captured 72 valid snapshots; its terminal snapshot matches the final
+96-scalar Core record. Core/cgui/XML/pthread unloaded, child/compositor cleanup
+completed, and the backend remained
+pinned as expected. All 36 installed hashes matched. Normal exit preserved the
+32,604-byte live log plus exactly 74 shutdown bytes; the 1,447-byte GUI log was
+unchanged. Independent reviews and the completed checkpoint preserve the source,
+package, whole logs and explicit user visibility report together. No independent
+screen image was captured, so screenshot-based visibility verification remains
+false. Full client startup, GUI interaction and multiplayer remain unfinished.
+
+An earlier attempt canceled after 392 ms because validation incorrectly required
+full display completion before accepting early readback. The frontend and reader
+now accept readback from started, submitted MTA-owned rendering while preserving
+the full-duration success and cleanup requirements. Fullscreen attempts did not
+acquire the required window/device lease. Use Windowed mode inside GTA for this
+trial. The port remains EXPERIMENTAL.
+
+**Earlier offscreen milestone: rendering, cleanup and normal exit passed.**
 Actual MTA Core started the existing CGUI/CEGUI session on GTA's retained
 D3D12 device. Its real widgets, text and texture rendered into an MTA-owned
 640x480 BGRA8 target. Pixel readback verified 133,058 changed pixels, the
@@ -34,23 +49,22 @@ Normal exit preserves the complete 6,580-byte capture plus 74 shutdown bytes;
 the 219-byte GUI log is unchanged. Whole logs, the source/package snapshots and
 independent actual/normal-exit reviews are sealed together.
 
-This validates MTA's real GUI on the actual device using its own queue and
-offscreen resources. Native queue/backbuffer writes and visible GTA drawing
-remain unverified; full startup and multiplayer remain gated. The port stays
-EXPERIMENTAL. Direct native-frame drawing still needs resize and owner-thread
-drain handling.
+That earlier run validates MTA's real GUI on the actual device using its own
+queue and offscreen resources. Native queue/backbuffer writes remain unverified;
+full startup and multiplayer remain gated. Direct native-frame drawing still
+needs resize and owner-thread drain handling.
 
-The next visible trial reuses the same MTA GUI through a Core-owned transparent
+The visible trial reuses the same MTA GUI through a Core-owned transparent
 child surface inside GTA's window. `package.ps1 -Mode Smoke
 -MtaCoreGuiSurfaceReference` selects this separate, disabled-by-default trial.
 It takes a one-shot device/window lease, ends native observation, then creates
 its own DirectComposition swapchain and queue. The existing CGUI/CEGUI widgets
 are displayed for eight seconds; Core handles resize, parent closure and GPU
 drain before removing the child surface. No game queue or backbuffer is written.
-This path requires windowed or borderless GTA. Actual GTA visibility remains
-unverified until the new trial has a real-game screen capture. This bounded
-trial displays widgets; mouse forwarding and GUI interaction still need
-validation.
+This path requires windowed or borderless GTA. The user confirmed the panel
+remained visible for eight seconds; an independently attributed screen capture
+is still absent. This bounded trial displays widgets; mouse forwarding and GUI
+interaction still need validation.
 
 Its independent Core12 / Surface1 protocol carries 96 scalars and writes
 `mta/logs/gui-surface.log`. Successful presents, compositor-busy retries,
@@ -65,9 +79,11 @@ parent closure during GPU drain and guarded release failure. Its shared
 lifecycle passes 865 checks on each architecture, while the existing offscreen
 477 checks remain green. All 89 worker scenarios pass against the selected
 normal Core bundle. Package ownership passes 1,144 checks across 113 cases,
-including the ordinary, offscreen and visible-surface variants. These results
-establish the owned implementation and its
-cleanup behavior; the actual GTA display remains the next test.
+including the ordinary, offscreen and visible-surface variants. The corrected
+frontend passes 766 mock tests and the saved-log reader passes 27 tests. These
+results establish the owned implementation and its cleanup behavior; the live
+Windowed run above validates the complete bounded workload and records the
+user's visibility confirmation.
 
 `package.ps1 -Mode Smoke -MtaCoreGuiStartupReference` selects a separate,
 disabled-by-default trial. Its 36-file bundle adds the real `cgui.dll` and

@@ -7,6 +7,204 @@ export function validTransform(value) {
         typeof value[name] === 'number' && Number.isFinite(value[name]) && Math.abs(value[name]) <= 100000);
 }
 
+// This owner runs only on the CLEO script thread: the Core worker requests a
+// scalar lease, while the existing game opcodes perform and verify each write.
+// An attempted disable creates a restoration obligation even when it throws;
+// losing a heartbeat must never discard that obligation or target another ped.
+export class PlayerControlLease {
+    constructor(game, bridge, options = {}) {
+        this.game = game; this.bridge = bridge; this.log = options.log || (() => {});
+        this.generation = 0; this.originalPed = null; this.nativeInitial = null;
+        this.mutationAttempted = false; this.disabledVerified = false;
+        this.acknowledged = false; this.revoked = false; this.inputDetached = false;
+        this.restoredVerified = false; this.restoredAcknowledged = false;
+        this.completed = false; this.stopReason = null; this.error = null;
+        this.requestedAt = null; this.acknowledgedAt = null; this.lastAt = null;
+        this.heartbeatCount = 0; this.disableAttempts = 0; this.restoreAttempts = 0;
+        this.revokeAttempts = 0; this.lastPendingReason = null;
+    }
+
+    snapshot() {
+        return { generation: this.generation, original_ped: this.originalPed,
+            native_initial: this.nativeInitial, mutation_attempted: this.mutationAttempted,
+            native_disabled_verified: this.disabledVerified, acquired: this.acknowledged,
+            revoked: this.revoked, input_detached: this.inputDetached,
+            native_restored_verified: this.restoredVerified, restored_acknowledged: this.restoredAcknowledged,
+            no_mutation: !this.mutationAttempted, completed: this.completed,
+            stop_reason: this.stopReason, error: this.error, heartbeats: this.heartbeatCount,
+            disable_attempts: this.disableAttempts, restore_attempts: this.restoreAttempts,
+            revoke_attempts: this.revokeAttempts, gameplay_ready: false, full_mta_ready: false,
+            camera_capture_verified: false };
+    }
+
+    record(action, extra = {}) {
+        // A log sink failure is a reason to stop admission, not to abandon a
+        // native state change that still needs restoration on the next tick.
+        try { this.log({ event: 'core_gui_frontend_control', action, ...this.snapshot(), ...extra }); }
+        catch (error) { this.stopReason = this.stopReason || 'log_error'; this.error = this.error || String(error); }
+    }
+
+    stop(reason = 'cancelled') {
+        if (!this.stopReason) { this.stopReason = reason; this.record('stop_requested'); }
+    }
+
+    fail(error) {
+        this.error = this.error || String(error);
+        this.stop('error');
+    }
+
+    identity(requireOnFoot = true) {
+        if (this.game.isReady() !== true) throw new Error('Player is not playing');
+        const ped = this.game.localPed();
+        if (!Number.isInteger(ped) || ped <= 0 || ped > 0x7fffffff || this.game.doesPedExist(ped) !== true ||
+            (requireOnFoot && this.game.isOnFoot(ped) !== true))
+            throw new Error('Player is not a stable eligible character');
+        if (this.originalPed !== null && ped !== this.originalPed)
+            throw new Error('Original player identity changed');
+        return ped;
+    }
+
+    control() {
+        const value = this.game.isControlOn();
+        if (typeof value !== 'boolean') throw new Error('Player-control native did not return a boolean');
+        return value;
+    }
+
+    readState() {
+        const captured = this.bridge.capture();
+        if (captured !== 0 && captured !== 1) throw new Error('Control capture status unavailable');
+        if (!captured) return null;
+        const state = Array.from({ length: 8 }, (_, field) => this.bridge.read(field));
+        if (state.some(value => !Number.isInteger(value) || value < 0 || value > 0xffffffff) ||
+            state.slice(1).some(value => value > 1) || (state[1] && !state[0]) ||
+            (state[2] && !state[1]) || (state[3] && !state[2]) ||
+            (state[6] && (!state[4] || !state[5]))) throw new Error('Invalid player-control lease state');
+        if (this.generation && state[0] !== this.generation)
+            throw new Error('Player-control lease generation changed while owned');
+        return state;
+    }
+
+    pending(reason) {
+        if (this.lastPendingReason !== reason) { this.lastPendingReason = reason; this.record('cleanup_pending', { reason }); }
+    }
+
+    cleanup(state) {
+        if (!this.revoked) {
+            ++this.revokeAttempts;
+            if (this.bridge.revoke(this.generation) !== 1) { this.pending('revoke_rejected'); return; }
+            this.record('revoke_accepted');
+        }
+        // The worker detaches input first, without waiting for its GPU/Core
+        // owners to drain. Restoring here prevents cleanup latency locking CJ.
+        if (!state[4] || !state[5]) { this.pending('input_detachment'); return; }
+        if (this.mutationAttempted && !this.restoredAcknowledged) {
+            // A rejected/busy acknowledgement can outlive this native read.
+            // Every retry needs fresh proof for the same original player;
+            // another script or engine transition may have changed it again.
+            this.restoredVerified = false;
+            try {
+                // Admission is on foot, but restoration must also work if the
+                // same original ped entered a vehicle during cancellation.
+                this.identity(false);
+                const before = this.control();
+                this.identity(false);
+                if (before !== this.nativeInitial) {
+                    ++this.restoreAttempts;
+                    this.game.setControl(this.nativeInitial);
+                }
+                const after = this.control();
+                this.identity(false);
+                if (after !== this.nativeInitial) throw new Error('Player-control restoration readback differs');
+                this.restoredVerified = true;
+                this.record('native_restored', { native_restored: after });
+            } catch (error) { this.error = this.error || String(error); this.pending(String(error)); return; }
+        }
+        if (!this.restoredAcknowledged) {
+            if (this.bridge.restored(this.generation) !== 1) { this.pending('restoration_ack_rejected'); return; }
+            this.restoredAcknowledged = true;
+            this.record(this.mutationAttempted ? 'restoration_acknowledged' : 'no_mutation_acknowledged');
+        }
+        if (state[6]) { this.completed = true; this.lastPendingReason = null; this.record('completed'); }
+    }
+
+    advance(now) {
+        if (this.completed) return;
+        if (!Number.isSafeInteger(now) || now < 0 || (this.lastAt !== null && now < this.lastAt)) {
+            this.fail(new Error('Invalid player-control clock'));
+            now = this.lastAt === null ? 0 : this.lastAt;
+        }
+        if (this.lastAt !== null && this.acknowledged && now - this.lastAt > 1000) this.stop('heartbeat_gap');
+        this.lastAt = now;
+        try {
+            if (this.game.stopRequested()) this.stop('Ctrl+Shift+End');
+            const state = this.readState();
+            if (state === null) {
+                if (this.generation) throw new Error('Player-control snapshot unavailable while owned');
+                return;
+            }
+            if (!this.generation && state[1]) {
+                this.generation = state[0]; this.requestedAt = now;
+                this.record('requested');
+            }
+            if (!this.generation) return;
+            this.revoked = state[4] === 1; this.inputDetached = state[5] === 1;
+            if (state[7]) this.stop('control_fault');
+            if (this.revoked) this.stop('worker_revoked');
+            if (!this.acknowledged && now - this.requestedAt >= 5000) this.stop('acquire_deadline');
+            // Core starts its 30-second display after the handoff/GUI setup;
+            // a separate five-second margin keeps this watchdog independent.
+            if (this.acknowledged && now - this.acknowledgedAt >= 35000) this.stop('active_deadline');
+            if (!this.stopReason) {
+                if (this.game.isFocused() !== true) throw new Error('GTA lost foreground focus');
+                const ped = this.identity();
+                if (!this.acknowledged) {
+                    this.originalPed = ped;
+                    this.nativeInitial = this.control();
+                    this.record('native_initial', { native_initial: this.nativeInitial });
+                    if (this.nativeInitial !== true) { this.stop('control_initially_disabled'); }
+                    else if (!this.stopReason) {
+                        this.identity();
+                        // Mark BEFORE invoking the opcode: a binding can mutate
+                        // successfully and then fail while returning to script.
+                        this.mutationAttempted = true; ++this.disableAttempts;
+                        this.game.setControl(false);
+                        if (this.control() !== false) throw new Error('Player-control disable readback differs');
+                        this.identity();
+                        this.disabledVerified = true; this.record('native_disabled', { native_disabled: false });
+                        if (this.stopReason) return;
+                        if (this.game.isFocused() !== true) throw new Error('GTA lost foreground focus during acquisition');
+                        if (this.bridge.ack(this.generation) !== 1) throw new Error('Player-control acknowledgement rejected');
+                        this.acknowledged = true; this.acknowledgedAt = now;
+                        this.record('acquired');
+                    }
+                }
+                if (this.acknowledged && !this.stopReason) {
+                    if (this.control() !== false) throw new Error('Player control changed during ownership');
+                    this.identity();
+                    if (this.game.isFocused() !== true) throw new Error('GTA lost foreground focus before heartbeat');
+                    if (state[2] && !state[3]) throw new Error('Player-control heartbeat expired');
+                    if (this.bridge.heartbeat(this.generation) !== 1) throw new Error('Player-control heartbeat rejected');
+                    ++this.heartbeatCount;
+                }
+            }
+            if (this.stopReason) this.cleanup(state);
+        } catch (error) {
+            this.fail(error);
+            // Retry a rejected revoke/restoration later; a foreign generation
+            // or unreadable detachment state cannot authorize restoration.
+            if (this.generation) {
+                try { ++this.revokeAttempts; this.bridge.revoke(this.generation); }
+                catch (_) {}
+            }
+        }
+    }
+
+    finishWithoutRequest() {
+        if (this.generation || this.mutationAttempted) return false;
+        this.completed = true; this.record('completed_without_request'); return true;
+    }
+}
+
 const remoteAnimations = { idle: 'idle_stance', walk: 'Walk_civi' };
 const networkInterval = 50;
 const gaitProbeInterval = 100;

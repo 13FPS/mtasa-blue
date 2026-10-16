@@ -60,12 +60,16 @@ namespace DefinitiveInputReference
 
     bool Configure(const Request& request) noexcept
     {
-        const auto maximum = request.guiSurface          ? DefinitiveGuiSurfaceReference::MaximumDurationMs
+        const auto maximum = request.guiFrontend         ? DefinitiveGuiFrontendReference::MaximumDurationMs
+                             : request.guiSurface        ? DefinitiveGuiSurfaceReference::MaximumDurationMs
                              : request.guiStartup        ? DefinitiveGuiStartupReference::MaximumDurationMs
                              : request.renderObservation ? DefinitiveRenderReference::MaximumDurationMs
                              : request.nativeMovement    ? DefinitiveMovementReference::MaximumDurationMs
                                                          : MaximumDurationMs;
-        if ((request.guiSurface &&
+        if ((request.guiFrontend && (request.guiSurface || request.guiStartup || request.nativeMovement || request.renderObservation || request.renderRoute ||
+                                     request.renderApiVersion != 1 || !request.controlLease)) ||
+            (!request.guiFrontend && request.controlLease) ||
+            (request.guiSurface &&
              (request.guiStartup || request.nativeMovement || request.renderObservation || request.renderRoute || request.renderApiVersion != 1)) ||
             (request.guiStartup && (request.nativeMovement || request.renderObservation || request.renderRoute || request.renderApiVersion != 1)) ||
             (request.nativeMovement && request.renderObservation) || (request.renderRoute && (!request.renderObservation || request.renderRoute > 2)) ||
@@ -371,5 +375,20 @@ CORE_API std::uint32_t MTA_ConfigureDEGuiSurfaceReference(std::uint32_t duration
     DefinitiveInputReference::Request request{durationMs, cancel, publish};
     request.guiSurface = true;
     return g_isDefinitiveProcessCandidate && DefinitiveInputReference::Configure(request) ? 1u : 0u;
+}
+CORE_API std::uint32_t MTA_DEGuiFrontendReferenceApiVersion()
+{
+    return DefinitiveGuiFrontendReference::ApiVersion;
+}
+CORE_API std::uint32_t MTA_ConfigureDEGuiFrontendReference(std::uint32_t version, std::uint32_t durationMs, DefinitiveInputReference::CancelCallback cancel,
+                                                           DefinitiveInputReference::PublishCallback       publish,
+                                                           DefinitiveGuiFrontendReference::ControlCallback control)
+{
+    // This independent workload cannot upgrade passive Surface96 into native
+    // input capture. The pinned bridge keeps the scalar lease callback alive.
+    DefinitiveInputReference::Request request{durationMs, cancel, publish};
+    request.guiFrontend = true;
+    request.controlLease = control;
+    return version == DefinitiveGuiFrontendReference::ApiVersion && g_isDefinitiveProcessCandidate && DefinitiveInputReference::Configure(request) ? 1u : 0u;
 }
 #endif

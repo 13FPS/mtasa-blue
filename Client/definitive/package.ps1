@@ -6,17 +6,22 @@ param([ValidateSet('Diagnostic', 'Smoke', 'Online')][string]$Mode = 'Smoke',
     [switch]$NativeGaitReference, [switch]$MatchedGaitRate, [switch]$LockWalkRoot, [switch]$NativeInputReference,
     [switch]$MtaNativePadReference, [switch]$MtaNativeMovementTrial, [switch]$MtaCoreStartupReference, [switch]$MtaCoreInputReference,
     [switch]$MtaCoreMovementReference, [switch]$MtaCoreRenderReference, [switch]$MtaCoreRenderGpuReference, [switch]$MtaCoreRenderCustomPresentReference, [switch]$MtaCoreRenderFrameBoundaryReference, [switch]$MtaCoreRenderNativeDispatchReference,
-    [ValidateSet('D3D11', 'D3D12')][string]$MtaCoreRenderRoute = 'D3D11', [switch]$MtaCoreGuiStartupReference, [switch]$MtaCoreGuiSurfaceReference)
+    [ValidateSet('D3D11', 'D3D12')][string]$MtaCoreRenderRoute = 'D3D11', [switch]$MtaCoreGuiStartupReference, [switch]$MtaCoreGuiSurfaceReference, [switch]$MtaCoreGuiFrontendReference,
+    [string]$OutputDirectory)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+# Actual MTA frontend input is a separate, explicit control-owning trial.
+if ($MtaCoreGuiFrontendReference -and ($Mode -ne 'Smoke' -or $MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference -or $MtaCoreRenderReference -or $MtaCoreRenderGpuReference -or $MtaCoreRenderCustomPresentReference -or $MtaCoreRenderFrameBoundaryReference -or $MtaCoreRenderNativeDispatchReference -or $MtaCoreMovementReference -or $MtaCoreInputReference -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
+    throw 'MTA Core GUI frontend requires separate opt-in Smoke mode without other trials or an explicit renderer route.'
+}
 # GUI startup owns its device and queue after observation ends. It is a separate
 # trial, so selecting it cannot inherit an input, movement or read-only trial.
-if ($MtaCoreGuiStartupReference -and ($Mode -ne 'Smoke' -or $MtaCoreGuiSurfaceReference -or $MtaCoreRenderReference -or $MtaCoreRenderGpuReference -or $MtaCoreRenderCustomPresentReference -or $MtaCoreRenderFrameBoundaryReference -or $MtaCoreRenderNativeDispatchReference -or $MtaCoreMovementReference -or $MtaCoreInputReference -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
+if ($MtaCoreGuiStartupReference -and ($Mode -ne 'Smoke' -or $MtaCoreGuiFrontendReference -or $MtaCoreGuiSurfaceReference -or $MtaCoreRenderReference -or $MtaCoreRenderGpuReference -or $MtaCoreRenderCustomPresentReference -or $MtaCoreRenderFrameBoundaryReference -or $MtaCoreRenderNativeDispatchReference -or $MtaCoreMovementReference -or $MtaCoreInputReference -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
     throw 'MTA Core GUI startup requires separate opt-in Smoke mode without other trials or an explicit renderer route.'
 }
 # Surface display is an independent opt-in: sharing GUI assets cannot arm it.
-if ($MtaCoreGuiSurfaceReference -and ($Mode -ne 'Smoke' -or $MtaCoreGuiStartupReference -or $MtaCoreRenderReference -or $MtaCoreRenderGpuReference -or $MtaCoreRenderCustomPresentReference -or $MtaCoreRenderFrameBoundaryReference -or $MtaCoreRenderNativeDispatchReference -or $MtaCoreMovementReference -or $MtaCoreInputReference -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
+if ($MtaCoreGuiSurfaceReference -and ($Mode -ne 'Smoke' -or $MtaCoreGuiFrontendReference -or $MtaCoreGuiStartupReference -or $MtaCoreRenderReference -or $MtaCoreRenderGpuReference -or $MtaCoreRenderCustomPresentReference -or $MtaCoreRenderFrameBoundaryReference -or $MtaCoreRenderNativeDispatchReference -or $MtaCoreMovementReference -or $MtaCoreInputReference -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
     throw 'MTA Core GUI surface requires separate opt-in Smoke mode without other trials or an explicit renderer route.'
 }
 # Frame association is a separate read-only hook lease, never implicit in recognition.
@@ -61,9 +66,15 @@ if ($LockWalkRoot -and $Mode -ne 'Online') { throw 'Walk-root locking requires O
 if ($NativeInputReference -and $Mode -ne 'Smoke') { throw 'Native input reference requires Smoke mode.' }
 if ($NativeInputReference -and $NativeGaitReference) { throw 'Native input reference conflicts with native gait reference.' }
 $repositoryRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
+$workspaceBuild = [IO.Path]::GetFullPath((Join-Path $repositoryRoot 'Build')).TrimEnd('\', '/')
 $buildRoot = Join-Path $repositoryRoot 'Build/definitive-package'
 $cacheRoot = Join-Path $buildRoot 'downloads'
-$packageRoot = Join-Path $buildRoot $Mode
+$packageRoot = if ($OutputDirectory) { [IO.Path]::GetFullPath($OutputDirectory).TrimEnd('\', '/') } else { Join-Path $buildRoot $Mode }
+# New candidates need separate artifacts so a later package cannot overwrite
+# the files bound by a previous ready receipt or successful in-game evidence.
+if (-not $packageRoot.StartsWith($workspaceBuild + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'Package output must stay within the resolved workspace Build subtree.'
+}
 $knownGameHash = '63e633bb51c35fe35ca98f503b62e7ddb8403abe4c9d501cfa9162892453846f'
 $apiCommit = '34bedee0be2f57047ed8f0705c81f137ede3d3ce'
 $utf8 = [Text.UTF8Encoding]::new($false)
@@ -116,6 +127,7 @@ function Copy-ZipEntry([string]$ArchivePath, [string]$EntryName, [string]$Destin
 }
 
 Assert-NoLinks $buildRoot
+Assert-NoLinks $packageRoot
 $sourceNames = @('index.js', 'controller.mjs', 'native-pad-reference.mjs', 'native-movement-trial.mjs', 'config.mjs', 'mod.json')
 foreach ($name in $sourceNames) {
     $source = Join-Path $PSScriptRoot "game-adapter/$name"
@@ -129,7 +141,7 @@ $pthreadPath = Join-Path $repositoryRoot 'Bin/mta/x64/pthread.dll'
 $xmlPath = Join-Path $repositoryRoot 'Bin/server/x64/xmll.dll'
 $bindConfigPath = Join-Path $PSScriptRoot 'coreconfig.xml'
 $guiSources = @()
-if ($MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference) {
+if ($MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference -or $MtaCoreGuiFrontendReference) {
     $guiSources += @{ source=(Join-Path $repositoryRoot 'Bin/mta/x64/cgui.dll'); path='cgui.dll' }
     foreach ($name in @('sans.ttf', 'saheader.ttf', 'sagothic.ttf', 'Imageset.xsd', 'GUIScheme.xsd', 'Font.xsd', 'Falagard.xsd')) {
         $guiSources += @{ source=(Join-Path $repositoryRoot ('Shared/data/MTA San Andreas/MTA/cgui/' + $name)); path=('mta/cgui/' + $name) }
@@ -144,6 +156,34 @@ if ($MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference) {
     }
     $unifont = @($guiSources | Where-Object path -eq 'mta/cgui/unifont.ttf')[0]
     if ((Get-FileHash -LiteralPath $unifont.source -Algorithm SHA256).Hash.ToLowerInvariant() -ne '6b18fdcf0f61f3df2e61db9737af6de9f37048ec93083621d41504ebf8cb18f4') { throw 'Pinned GUI Unifont hash mismatch.' }
+}
+if ($MtaCoreGuiFrontendReference) {
+    $guiSources += @{ source=(Join-Path $repositoryRoot 'Shared/data/MTA San Andreas/MTA/cgui/images/background.png'); path='mta/cgui/images/background.png' }
+    $guiSources += @{ source=(Join-Path $repositoryRoot 'Shared/data/MTA San Andreas/MTA/cgui/images/background_logo.png'); path='mta/cgui/images/background_logo.png' }
+    $guiSources += @{ source=(Join-Path $repositoryRoot 'Shared/data/MTA San Andreas/MTA/cgui/images/mta_filler.png'); path='mta/cgui/images/mta_filler.png' }
+    $guiSources += @{ source=(Join-Path $repositoryRoot 'Shared/data/MTA San Andreas/MTA/cgui/images/version.png'); path='mta/cgui/images/version.png' }
+    $guiSources += @{ source=(Join-Path $repositoryRoot 'Shared/data/MTA San Andreas/MTA/cgui/images/the_language_icon.png'); path='mta/cgui/images/the_language_icon.png' }
+    $guiSources += @{ source=(Join-Path $repositoryRoot 'Shared/data/MTA San Andreas/MTA/cgui/images/serverbrowser/locked.png'); path='mta/cgui/images/serverbrowser/locked.png' }
+    $guiSources += @{ source=(Join-Path $repositoryRoot 'Shared/data/MTA San Andreas/MTA/cgui/images/serverbrowser/search-servers.png'); path='mta/cgui/images/serverbrowser/search-servers.png' }
+    $guiSources += @{ source=(Join-Path $repositoryRoot 'Shared/data/MTA San Andreas/MTA/cgui/images/serverbrowser/search-players.png'); path='mta/cgui/images/serverbrowser/search-players.png' }
+    $guiSources += @{ source=(Join-Path $repositoryRoot 'Shared/data/MTA San Andreas/MTA/cgui/images/serverbrowser/refresh.png'); path='mta/cgui/images/serverbrowser/refresh.png' }
+    $guiSources += @{ source=(Join-Path $repositoryRoot 'Shared/data/MTA San Andreas/MTA/cgui/images/serverbrowser/favorite.png'); path='mta/cgui/images/serverbrowser/favorite.png' }
+    $guiSources += @{ source=(Join-Path $repositoryRoot 'Shared/data/MTA San Andreas/MTA/cgui/images/serverbrowser/connect.png'); path='mta/cgui/images/serverbrowser/connect.png' }
+    $guiSources += @{ source=(Join-Path $repositoryRoot 'Shared/data/MTA San Andreas/MTA/cgui/images/serverbrowser/info.png'); path='mta/cgui/images/serverbrowser/info.png' }
+    $guiSources += @{ source=(Join-Path $repositoryRoot 'Shared/data/MTA San Andreas/MTA/cgui/images/serverbrowser/search.png'); path='mta/cgui/images/serverbrowser/search.png' }
+    $guiSources += @{ source=(Join-Path $repositoryRoot 'Shared/data/MTA San Andreas/MTA/cgui/images/serverbrowser/trashcan.png'); path='mta/cgui/images/serverbrowser/trashcan.png' }
+    $guiSources += @{ source=(Join-Path $repositoryRoot 'Shared/data/MTA San Andreas/MTA/locale/en_US/menu_disconnect.png'); path='mta/locale/en_US/menu_disconnect.png' }
+    $guiSources += @{ source=(Join-Path $repositoryRoot 'Shared/data/MTA San Andreas/MTA/locale/en_US/menu_quick_connect.png'); path='mta/locale/en_US/menu_quick_connect.png' }
+    $guiSources += @{ source=(Join-Path $repositoryRoot 'Shared/data/MTA San Andreas/MTA/locale/en_US/menu_browse_servers.png'); path='mta/locale/en_US/menu_browse_servers.png' }
+    $guiSources += @{ source=(Join-Path $repositoryRoot 'Shared/data/MTA San Andreas/MTA/locale/en_US/menu_settings.png'); path='mta/locale/en_US/menu_settings.png' }
+    $guiSources += @{ source=(Join-Path $repositoryRoot 'Shared/data/MTA San Andreas/MTA/locale/en_US/menu_about.png'); path='mta/locale/en_US/menu_about.png' }
+    $guiSources += @{ source=(Join-Path $repositoryRoot 'Shared/data/MTA San Andreas/MTA/locale/en_US/menu_quit.png'); path='mta/locale/en_US/menu_quit.png' }
+    $guiSources += @{ source=(Join-Path $repositoryRoot 'Shared/data/MTA San Andreas/MTA/locale/en_US/latest_news.png'); path='mta/locale/en_US/latest_news.png' }
+    $guiSources += @{ source=(Join-Path $repositoryRoot 'Shared/data/MTA San Andreas/MTA/locale/en_US/client.pot'); path='mta/locale/en_US/client.pot' }
+    foreach ($entry in $guiSources) {
+        Assert-NoLinks $entry.source
+        if (-not (Test-Path -LiteralPath $entry.source -PathType Leaf)) { throw "MTA frontend asset is missing: $($entry.source)" }
+    }
 }
 Assert-NoLinks $bridgePath
 Assert-NoLinks $gameDePath
@@ -301,6 +341,10 @@ $surfaceMarker = 'export const MTA_CORE_GUI_SURFACE_REFERENCE = false;'
 if ([regex]::Matches($configText, [regex]::Escape($surfaceMarker)).Count -ne 1) { throw 'Expected disabled MTA Core GUI surface in source configuration.' }
 $configText = $configText.Replace($surfaceMarker,
     "export const MTA_CORE_GUI_SURFACE_REFERENCE = $($MtaCoreGuiSurfaceReference.IsPresent.ToString().ToLowerInvariant());")
+$frontendMarker = 'export const MTA_CORE_GUI_FRONTEND_REFERENCE = false;'
+if ([regex]::Matches($configText, [regex]::Escape($frontendMarker)).Count -ne 1) { throw 'Expected disabled MTA Core GUI frontend in source configuration.' }
+$configText = $configText.Replace($frontendMarker,
+    "export const MTA_CORE_GUI_FRONTEND_REFERENCE = $($MtaCoreGuiFrontendReference.IsPresent.ToString().ToLowerInvariant());")
 [IO.File]::WriteAllText($configPath, $configText, $utf8)
 foreach ($name in @('sa_unreal.json', 'unknown_x64.json')) {
     [IO.File]::Copy($downloads[$name], (Join-Path $configDirectory $name), $false)
@@ -333,7 +377,7 @@ $files = @(Get-ChildItem -LiteralPath $stagingWin64 -File -Recurse | Sort-Object
         sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     }
 })
-if ($files.Count -ne $(if ($MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference) { 36 } else { 23 })) { throw 'Unexpected package ownership count.' }
+if ($files.Count -ne $(if ($MtaCoreGuiFrontendReference) { 58 } elseif ($MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference) { 36 } else { 23 })) { throw 'Unexpected package ownership count.' }
 $manifest = [ordered]@{
     packageId = 'de-online-prototype'
     formatVersion = 1
@@ -382,9 +426,10 @@ if (Test-Path -LiteralPath $packageRoot) {
 # move the completed artifact only after all dependency/content checks pass.
 Assert-NoLinks $stagingRoot
 if (-not $stagingRoot.StartsWith($buildRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or
-    -not $packageRoot.StartsWith($buildRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+    -not $packageRoot.StartsWith($workspaceBuild + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
     throw 'Package move would escape the intended build directory.'
 }
+[IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($packageRoot)) | Out-Null
 Move-Item -LiteralPath $stagingRoot -Destination $packageRoot
 Write-Host "Prepared $Mode package: $packageRoot"
 Write-Host "Verified $($files.Count) files. No game files were changed and no downloaded binary was run."

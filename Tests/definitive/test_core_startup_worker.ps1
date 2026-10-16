@@ -17,7 +17,8 @@ $repositoryRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).
 $outputRoot = Join-Path $repositoryRoot ('Build/mta-core-startup-worker/' + (Get-Date -Format yyyyMMdd-HHmmss) + '-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
 function Hash([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
-$sourceNames = @('Client/definitive/CoreStartupReference.h','Client/definitive/CoreStartupReference.cpp',
+$sourceNames = @('Client/definitive/CoreStartupReference.h','Client/definitive/CoreStartupReference.cpp','Client/definitive/FrontendControlMailbox.h',
+    'Client/core/DefinitiveFrontend.h','Client/core/DefinitiveGuiFrontendReference.h',
     'Client/core/DefinitiveInputReference.h','Client/core/DefinitiveMovementReference.h','Client/core/DefinitiveRenderReference.h','Client/core/DefinitiveGuiStartupReference.h','Client/core/DefinitiveGuiSurfaceReference.h',
     'Tests/definitive/CoreStartupReferenceTests.cpp','Tests/definitive/CoreStartupFixture.cpp','Tests/definitive/test_core_startup_worker.ps1')
 $sourceHashes = [ordered]@{}

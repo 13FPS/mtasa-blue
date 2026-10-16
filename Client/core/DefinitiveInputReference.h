@@ -8,6 +8,7 @@
 
 #include <array>
 #include <cstdint>
+#include "DefinitiveGuiFrontendReference.h"
 
 namespace DefinitiveInputReference
 {
@@ -80,6 +81,10 @@ namespace DefinitiveInputReference
         // A separate opt-in binds MTA's own GUI surface to a borrowed game HWND.
         // It never changes the offscreen workload or admits native frame writes.
         bool guiSurface = false;
+        // Real MTA menu input needs an independently acknowledged script-owned
+        // engine-control lease. A passive surface can never imply admission.
+        bool                                            guiFrontend = false;
+        DefinitiveGuiFrontendReference::ControlCallback controlLease = nullptr;
     };
 
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)

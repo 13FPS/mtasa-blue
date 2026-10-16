@@ -67,6 +67,42 @@ namespace
                                                           "DE_ONLINE_LICENSES/MTA_GPLv3.txt",
                                                           "DE_ONLINE_LICENSES/SANNY_BUILDER_LIBRARY_README.md"};
 
+    constexpr std::array<std::string_view, 13> GuiPaths{"CLEO/de-online/cgui.dll",
+                                                        "CLEO/de-online/mta/cgui/sans.ttf",
+                                                        "CLEO/de-online/mta/cgui/saheader.ttf",
+                                                        "CLEO/de-online/mta/cgui/sagothic.ttf",
+                                                        "CLEO/de-online/mta/cgui/Imageset.xsd",
+                                                        "CLEO/de-online/mta/cgui/GUIScheme.xsd",
+                                                        "CLEO/de-online/mta/cgui/Font.xsd",
+                                                        "CLEO/de-online/mta/cgui/Falagard.xsd",
+                                                        "CLEO/de-online/mta/cgui/unifont.ttf",
+                                                        "CLEO/de-online/skins/Default/CGUI.xml",
+                                                        "CLEO/de-online/skins/Default/CGUI.is.xml",
+                                                        "CLEO/de-online/skins/Default/CGUI.lnf.xml",
+                                                        "CLEO/de-online/skins/Default/CGUI.png"};
+    constexpr std::array<std::string_view, 22> FrontendPaths{"CLEO/de-online/mta/cgui/images/background.png",
+                                                             "CLEO/de-online/mta/cgui/images/background_logo.png",
+                                                             "CLEO/de-online/mta/cgui/images/mta_filler.png",
+                                                             "CLEO/de-online/mta/cgui/images/version.png",
+                                                             "CLEO/de-online/mta/cgui/images/the_language_icon.png",
+                                                             "CLEO/de-online/mta/cgui/images/serverbrowser/locked.png",
+                                                             "CLEO/de-online/mta/cgui/images/serverbrowser/search-servers.png",
+                                                             "CLEO/de-online/mta/cgui/images/serverbrowser/search-players.png",
+                                                             "CLEO/de-online/mta/cgui/images/serverbrowser/refresh.png",
+                                                             "CLEO/de-online/mta/cgui/images/serverbrowser/favorite.png",
+                                                             "CLEO/de-online/mta/cgui/images/serverbrowser/connect.png",
+                                                             "CLEO/de-online/mta/cgui/images/serverbrowser/info.png",
+                                                             "CLEO/de-online/mta/cgui/images/serverbrowser/search.png",
+                                                             "CLEO/de-online/mta/cgui/images/serverbrowser/trashcan.png",
+                                                             "CLEO/de-online/mta/locale/en_US/menu_disconnect.png",
+                                                             "CLEO/de-online/mta/locale/en_US/menu_quick_connect.png",
+                                                             "CLEO/de-online/mta/locale/en_US/menu_browse_servers.png",
+                                                             "CLEO/de-online/mta/locale/en_US/menu_settings.png",
+                                                             "CLEO/de-online/mta/locale/en_US/menu_about.png",
+                                                             "CLEO/de-online/mta/locale/en_US/menu_quit.png",
+                                                             "CLEO/de-online/mta/locale/en_US/latest_news.png",
+                                                             "CLEO/de-online/mta/locale/en_US/client.pot"};
+
     void Require(bool valid, const char* reason)
     {
         if (!valid)
@@ -295,17 +331,24 @@ namespace
                     "manifest_dependencies_invalid");
         }
         const auto files = Field(object.get(), "files", json_type_array);
-        Require(json_object_array_length(files) == OwnedPaths.size(), "exact_23_owned_paths_required");
+        const auto fileCount = json_object_array_length(files);
+        Require(fileCount == 23 || fileCount == 36 || fileCount == 58, "exact_owned_group_count_required");
+        std::vector<std::string_view> ownedPaths(OwnedPaths.begin(), OwnedPaths.end());
+        if (fileCount >= 36)
+            ownedPaths.insert(ownedPaths.end(), GuiPaths.begin(), GuiPaths.end());
+        if (fileCount == 58)
+            ownedPaths.insert(ownedPaths.end(), FrontendPaths.begin(), FrontendPaths.end());
+        std::string                configuration;
         std::set<std::string_view> seen;
         std::uint64_t              total = 0;
-        for (std::size_t index = 0; index < OwnedPaths.size(); ++index)
+        for (std::size_t index = 0; index < ownedPaths.size(); ++index)
         {
             auto entry = json_object_array_get_idx(files, index);
             Keys(entry, {"path", "sha256"});
             Require(json_object_object_length(entry) == 2, "manifest_file_fields_invalid");
             const auto relative = String(Field(entry, "path", json_type_string));
             const auto expected = String(Field(entry, "sha256", json_type_string));
-            Require(std::find(OwnedPaths.begin(), OwnedPaths.end(), relative) != OwnedPaths.end() && seen.insert(relative).second,
+            Require(std::find(ownedPaths.begin(), ownedPaths.end(), relative) != ownedPaths.end() && seen.insert(relative).second,
                     "owned_path_not_allowed_or_duplicate");
             Require(expected.size() == 64 && std::all_of(expected.begin(), expected.end(),
                                                          [](char value) { return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f'); }),
@@ -323,14 +366,42 @@ namespace
                 Pe64(file.prefix, file.size, true);
             if (relative == "CLEO/de-online/config.mjs")
             {
-                const std::string_view configuration(reinterpret_cast<const char*>(file.prefix.data()), file.prefix.size());
-                const auto             expectedMode = mode == "Smoke" ? "smoke" : mode == "Online" ? "online" : "diagnostic";
-                const auto             marker = std::string("export const MODE = '") + expectedMode + "';";
-                const auto             first = configuration.find("export const MODE =");
-                Require(first != std::string_view::npos && configuration.substr(first).starts_with(marker) &&
+                configuration.assign(reinterpret_cast<const char*>(file.prefix.data()), file.prefix.size());
+                const auto expectedMode = mode == "Smoke" ? "smoke" : mode == "Online" ? "online" : "diagnostic";
+                const auto marker = std::string("export const MODE = '") + expectedMode + "';";
+                const auto first = configuration.find("export const MODE =");
+                Require(first != std::string_view::npos && std::string_view(configuration).substr(first).starts_with(marker) &&
                             configuration.find("export const MODE =", first + 1) == std::string_view::npos,
                         "manifest_config_mode_mismatch");
             }
+        }
+        // Owning menu assets cannot arm interactive engine controls. Require one
+        // explicit marker and the whole group before accepting a GUI opt-in.
+        const auto flag = [&](std::string_view name, bool required)
+        {
+            const auto prefix = std::string("export const ") + std::string(name) + " = ";
+            const auto position = configuration.find(prefix);
+            Require(position != std::string::npos || !required, "gui_configuration_marker_invalid");
+            if (position == std::string::npos)
+                return false;
+            Require(configuration.find(prefix, position + 1) == std::string::npos, "gui_configuration_marker_invalid");
+            const auto value = std::string_view(configuration).substr(position + prefix.size());
+            Require(value.starts_with("true;") || value.starts_with("false;"), "gui_configuration_marker_invalid");
+            return value.starts_with("true;");
+        };
+        const bool startup = flag("MTA_CORE_GUI_STARTUP_REFERENCE", fileCount >= 36);
+        const bool surface = flag("MTA_CORE_GUI_SURFACE_REFERENCE", false);
+        const bool frontend = flag("MTA_CORE_GUI_FRONTEND_REFERENCE", fileCount == 58);
+        if (startup || surface || frontend)
+        {
+            Require(mode == "Smoke" && fileCount >= 36 && (!frontend || fileCount == 58) &&
+                        static_cast<unsigned>(startup) + static_cast<unsigned>(surface) + static_cast<unsigned>(frontend) == 1,
+                    "gui_mode_conflict");
+            for (const auto name : {"GAIT_REFERENCE", "GAIT_RATE", "GAIT_ROOT_LOCK", "INPUT_REFERENCE", "MTA_NATIVE_PAD_REFERENCE", "MTA_NATIVE_MOVEMENT_TRIAL",
+                                    "MTA_CORE_STARTUP_REFERENCE", "MTA_CORE_INPUT_REFERENCE", "MTA_CORE_MOVEMENT_REFERENCE", "MTA_CORE_RENDER_REFERENCE",
+                                    "MTA_CORE_RENDER_GPU_REFERENCE", "MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE", "MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE",
+                                    "MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE"})
+                Require(!flag(name, false), "gui_mode_conflict");
         }
         return static_cast<unsigned int>(seen.size());
     }

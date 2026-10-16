@@ -89,6 +89,9 @@ namespace DefinitiveGuiSurface
         InteractionResult                  interaction;
         GuiWin32Input::Translator          input;
         bool                               inputQuiescing = false;
+        FrontendCallbacks                  frontend;
+        bool                               frontendEnabled = false, frontendStartAttempted = false, frontendCallbackActive = false;
+        POINT                              frontendMouse{};
         HMODULE                            module = nullptr, windowModule = nullptr;
         wchar_t                            windowClass[96]{};
         bool                               classRegistered = false, comInitialized = false, prepared = false, started = false, failed = false;
@@ -119,6 +122,19 @@ namespace DefinitiveGuiSurface
         UINT                               captureWidth = 0, captureHeight = 0, redX = 0, redY = 0;
 
         Impl() noexcept { result.ownerThreadId = owner; }
+        struct FrontendCall
+        {
+            bool& active;
+            explicit FrontendCall(bool& value) noexcept : active(value) { active = true; }
+            ~FrontendCall() { active = false; }
+        };
+        bool PulseFrontend()
+        {
+            // Match the translator's client coordinates rather than sampling
+            // a different desktop cursor between a mouse-down and mouse-up.
+            FrontendCall call(frontendCallbackActive);
+            return frontend.pulse(frontend.context, frontendMouse.x, frontendMouse.y, GetFocus() == child);
+        }
         bool ButtonClicked(CGUIElement*)
         {
             if (inputQuiescing)
@@ -215,6 +231,41 @@ namespace DefinitiveGuiSurface
                  message == WM_UNICHAR) &&
                 GetFocus() != window)
                 return false;
+            if (frontendEnabled)
+            {
+                bool mouseButton = false;
+                switch (message)
+                {
+                    case WM_MOUSEMOVE:
+                        frontendMouse = {static_cast<short>(LOWORD(lparam)), static_cast<short>(HIWORD(lparam))};
+                        break;
+                    case WM_LBUTTONDOWN:
+                    case WM_LBUTTONUP:
+                    case WM_RBUTTONDOWN:
+                    case WM_RBUTTONUP:
+                    case WM_MBUTTONDOWN:
+                    case WM_MBUTTONUP:
+                    case WM_XBUTTONDOWN:
+                    case WM_XBUTTONUP:
+                        frontendMouse = {static_cast<short>(LOWORD(lparam)), static_cast<short>(HIWORD(lparam))};
+                        mouseButton = true;
+                        break;
+                    case WM_MOUSEWHEEL:
+                        frontendMouse = {static_cast<short>(LOWORD(lparam)), static_cast<short>(HIWORD(lparam))};
+                        ScreenToClient(window, &frontendMouse);
+                        break;
+                }
+                // A move and click may arrive in the same Poll batch. Update
+                // the real menu's hit selection before its existing callback
+                // consumes the button, rather than using the previous frame.
+                if (mouseButton && !PulseFrontend())
+                {
+                    interaction.inputFailed = 1;
+                    result.stopRequested = 1;
+                    Fail(E_FAIL);
+                    return false;
+                }
+            }
             const bool handled = input.Process(*gui, message, wparam, lparam);
             if ((message == WM_LBUTTONUP || message == WM_RBUTTONUP || message == WM_MBUTTONUP || message == WM_XBUTTONUP) &&
                 !input.Snapshot().pressedButtons && GetCapture() == window)
@@ -375,6 +426,8 @@ namespace DefinitiveGuiSurface
         }
         void PositionWidgets()
         {
+            if (!image)
+                return;
             redX = std::min<UINT>(500, result.width - 80);
             redY = std::min<UINT>(100, result.height - 80);
             image->SetPosition(CVector2D(static_cast<float>(redX), static_cast<float>(redY)));
@@ -408,8 +461,19 @@ namespace DefinitiveGuiSurface
             }
             const D3D12_RANGE noWrite{};
             readback->Unmap(0, &noWrite);
-            result.readbackComplete = 1;
             result.readbackPixels = nonzero;
+            if (frontendEnabled)
+            {
+                // The real menu fades in using its existing lifecycle. Early
+                // empty frames are not fixture failures; keep sampling until
+                // substantial actual content appears or the caller times out.
+                if (invalidPremult)
+                    return Fail(E_FAIL);
+                result.readbackComplete = nonzero > 10000;
+                result.premultipliedPixelsVerified = result.readbackComplete;
+                return Status::Ok;
+            }
+            result.readbackComplete = 1;
             result.transparentPixelVerified = transparent == 0;
             result.readbackRedVerified = red == 0xffff0000;
             result.premultipliedPixelsVerified = invalidPremult == 0;
@@ -622,8 +686,22 @@ namespace DefinitiveGuiSurface
             return Status::InvalidArgument;
         if (GetCurrentThreadId() != impl->owner)
             return Status::WrongThread;
-        if (!impl->prepared || impl->started || impl->failed || impl->result.stopRequested)
+        if (!impl->prepared || impl->started || impl->failed || impl->result.stopRequested || impl->frontendEnabled)
             return Status::InvalidArgument;
+        impl->interaction.enabled = 1;
+        return Status::Ok;
+    }
+    Status Session::EnableFrontend(const FrontendCallbacks& callbacks) noexcept
+    {
+        if (!impl)
+            return Status::InvalidArgument;
+        if (GetCurrentThreadId() != impl->owner)
+            return Status::WrongThread;
+        if (!impl->prepared || impl->started || impl->failed || impl->result.stopRequested || impl->interaction.enabled || !callbacks.start ||
+            !callbacks.pulse || !callbacks.stop)
+            return Status::InvalidArgument;
+        impl->frontend = callbacks;
+        impl->frontendEnabled = true;
         impl->interaction.enabled = 1;
         return Status::Ok;
     }
@@ -764,47 +842,62 @@ namespace DefinitiveGuiSurface
             impl->gui->SetSkin("Default");
             impl->gui->SetCursorEnabled(impl->interaction.enabled != 0);
             if (impl->interaction.enabled)
+            {
                 impl->gui->ProcessMouseInput(CGUI_MI_MOUSEPOS, width - 24, height - 24);
+                impl->frontendMouse = {static_cast<LONG>(width - 24), static_cast<LONG>(height - 24)};
+            }
             if (!impl->gui->GetDefaultFont() || impl->gui->GetTextExtent("MTA: Definitive Edition") <= 0)
                 return impl->Fail(E_FAIL);
-            auto* window = impl->gui->CreateWnd(nullptr, "MTA: Definitive Edition / EXPERIMENTAL");
-            window->SetPosition(CVector2D(24, 24));
-            window->SetSize(CVector2D(static_cast<float>(std::min<UINT>(430, width - 48)), static_cast<float>(std::min<UINT>(260, height - 48))));
-            window->SetVisible(true);
-            auto* button = impl->gui->CreateButton(static_cast<CGUIElement*>(window), "Existing MTA GUI - composition trial");
-            button->SetPosition(CVector2D(20, 55));
-            button->SetSize(CVector2D(300, 44));
-            button->SetVisible(true);
-            if (impl->interaction.enabled)
+            if (impl->frontendEnabled)
             {
-                // These are the same widgets and callbacks used by MTA menus.
-                // The owned host validates routing, not a replacement frontend.
-                button->SetText("Test MTA button");
-                button->SetClickHandler(GUI_CALLBACK(&Impl::ButtonClicked, impl));
-                impl->edit = impl->gui->CreateEdit(window, "");
-                impl->edit->SetPosition(CVector2D(20, 110));
-                impl->edit->SetSize(CVector2D(300, 30));
-                impl->edit->SetMaxLength(64);
-                impl->edit->SetVisible(true);
-                impl->edit->SetTextChangedHandler(GUI_CALLBACK(&Impl::TextChanged, impl));
-                impl->edit->SetTextAcceptedHandler(GUI_CALLBACK(&Impl::TextAccepted, impl));
-                impl->interactionLabel = impl->gui->CreateLabel(window, "Click the button or type and press Enter");
-                impl->interactionLabel->SetPosition(CVector2D(20, 150));
-                impl->interactionLabel->SetSize(CVector2D(370, 28));
-                impl->interactionLabel->SetVisible(true);
-                window->SetCloseClickHandler(GUI_CALLBACK(&Impl::CloseRequested, impl));
+                // Commit the cleanup obligation before crossing Core's factory:
+                // it may publish a failed but still-owned frontend session.
+                impl->frontendStartAttempted = true;
+                Impl::FrontendCall call(impl->frontendCallbackActive);
+                if (!impl->frontend.start(impl->frontend.context, impl->gui))
+                    return impl->Fail(E_FAIL);
             }
-            impl->texture = impl->gui->CreateTexture();
-            std::array<std::uint32_t, 16> red{};
-            red.fill(0xffff0000);
-            impl->texture->LoadFromMemory(red.data(), 4, 4);
-            impl->image = impl->gui->CreateStaticImage();
-            impl->image->SetSize(CVector2D(64, 64));
-            impl->image->SetFrameEnabled(false);
-            impl->image->SetVisible(true);
-            impl->PositionWidgets();
-            if (!impl->image->LoadFromTexture(impl->texture))
-                return impl->Fail(E_FAIL);
+            else
+            {
+                auto* window = impl->gui->CreateWnd(nullptr, "MTA: Definitive Edition / EXPERIMENTAL");
+                window->SetPosition(CVector2D(24, 24));
+                window->SetSize(CVector2D(static_cast<float>(std::min<UINT>(430, width - 48)), static_cast<float>(std::min<UINT>(260, height - 48))));
+                window->SetVisible(true);
+                auto* button = impl->gui->CreateButton(static_cast<CGUIElement*>(window), "Existing MTA GUI - composition trial");
+                button->SetPosition(CVector2D(20, 55));
+                button->SetSize(CVector2D(300, 44));
+                button->SetVisible(true);
+                if (impl->interaction.enabled)
+                {
+                    // These are the same widgets and callbacks used by MTA menus.
+                    // The owned host validates routing, not a replacement frontend.
+                    button->SetText("Test MTA button");
+                    button->SetClickHandler(GUI_CALLBACK(&Impl::ButtonClicked, impl));
+                    impl->edit = impl->gui->CreateEdit(window, "");
+                    impl->edit->SetPosition(CVector2D(20, 110));
+                    impl->edit->SetSize(CVector2D(300, 30));
+                    impl->edit->SetMaxLength(64);
+                    impl->edit->SetVisible(true);
+                    impl->edit->SetTextChangedHandler(GUI_CALLBACK(&Impl::TextChanged, impl));
+                    impl->edit->SetTextAcceptedHandler(GUI_CALLBACK(&Impl::TextAccepted, impl));
+                    impl->interactionLabel = impl->gui->CreateLabel(window, "Click the button or type and press Enter");
+                    impl->interactionLabel->SetPosition(CVector2D(20, 150));
+                    impl->interactionLabel->SetSize(CVector2D(370, 28));
+                    impl->interactionLabel->SetVisible(true);
+                    window->SetCloseClickHandler(GUI_CALLBACK(&Impl::CloseRequested, impl));
+                }
+                impl->texture = impl->gui->CreateTexture();
+                std::array<std::uint32_t, 16> red{};
+                red.fill(0xffff0000);
+                impl->texture->LoadFromMemory(red.data(), 4, 4);
+                impl->image = impl->gui->CreateStaticImage();
+                impl->image->SetSize(CVector2D(64, 64));
+                impl->image->SetFrameEnabled(false);
+                impl->image->SetVisible(true);
+                impl->PositionWidgets();
+                if (!impl->image->LoadFromTexture(impl->texture))
+                    return impl->Fail(E_FAIL);
+            }
             impl->result.widgetsCreated = 1;
             impl->result.stage = static_cast<unsigned>(Stage::Running);
             impl->Retained();
@@ -822,6 +915,8 @@ namespace DefinitiveGuiSurface
             return Status::InvalidArgument;
         if (GetCurrentThreadId() != impl->owner)
             return Status::WrongThread;
+        if (impl->frontendCallbackActive)
+            return Status::Busy;
         if (!impl->started)
             return Status::InvalidArgument;
         if (impl->result.stopRequested)
@@ -860,6 +955,8 @@ namespace DefinitiveGuiSurface
             if (now < impl->nextFrameAt)
                 return Status::Ok;
             impl->nextFrameAt = now + 33;
+            if (impl->frontendEnabled && !impl->PulseFrontend())
+                return impl->Fail(E_FAIL);
             return impl->Submit();
         }
         catch (...)
@@ -873,6 +970,8 @@ namespace DefinitiveGuiSurface
             return Status::Ok;
         if (GetCurrentThreadId() != impl->owner)
             return Status::WrongThread;
+        if (impl->frontendCallbackActive)
+            return Status::Busy;
         if (impl->result.cleanupComplete)
             return Status::Ok;
         if (impl->result.releaseFault)
@@ -888,6 +987,8 @@ namespace DefinitiveGuiSurface
                 impl->ResetInput();
                 if (impl->gui)
                     impl->gui->SetCursorEnabled(false);
+                if (impl->frontendEnabled && GetFocus() == impl->child)
+                    SetFocus(nullptr);
                 impl->interaction.focused = 0;
                 impl->interaction.inputDetached = 1;
             }
@@ -910,6 +1011,23 @@ namespace DefinitiveGuiSurface
         {
             ShowWindow(impl->child, SW_HIDE);
             impl->result.childVisible = 0;
+        }
+        if (impl->frontendStartAttempted)
+        {
+            try
+            {
+                // Retire real menu callbacks while their borrowed CGUI still
+                // exists, even if its GPU versions remain behind a fence.
+                Impl::FrontendCall call(impl->frontendCallbackActive);
+                if (!impl->frontend.stop(impl->frontend.context))
+                    return Status::Busy;
+                impl->frontendStartAttempted = false;
+                impl->frontend = {};
+            }
+            catch (...)
+            {
+                return impl->Fail(E_FAIL);
+            }
         }
         if (impl->Completion() != Status::Ok)
             return Status::Busy;

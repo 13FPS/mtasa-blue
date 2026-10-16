@@ -78,11 +78,37 @@ $guiPaths = @('CLEO/de-online/cgui.dll',
     'CLEO/de-online/mta/cgui/Falagard.xsd', 'CLEO/de-online/mta/cgui/unifont.ttf',
     'CLEO/de-online/skins/Default/CGUI.xml', 'CLEO/de-online/skins/Default/CGUI.is.xml',
     'CLEO/de-online/skins/Default/CGUI.lnf.xml', 'CLEO/de-online/skins/Default/CGUI.png')
+$frontendPaths = @(
+    'CLEO/de-online/mta/cgui/images/background.png',
+    'CLEO/de-online/mta/cgui/images/background_logo.png',
+    'CLEO/de-online/mta/cgui/images/mta_filler.png',
+    'CLEO/de-online/mta/cgui/images/version.png',
+    'CLEO/de-online/mta/cgui/images/the_language_icon.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/locked.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/search-servers.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/search-players.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/refresh.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/favorite.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/connect.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/info.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/search.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/trashcan.png',
+    'CLEO/de-online/mta/locale/en_US/menu_disconnect.png',
+    'CLEO/de-online/mta/locale/en_US/menu_quick_connect.png',
+    'CLEO/de-online/mta/locale/en_US/menu_browse_servers.png',
+    'CLEO/de-online/mta/locale/en_US/menu_settings.png',
+    'CLEO/de-online/mta/locale/en_US/menu_about.png',
+    'CLEO/de-online/mta/locale/en_US/menu_quit.png',
+    'CLEO/de-online/mta/locale/en_US/latest_news.png',
+    'CLEO/de-online/mta/locale/en_US/client.pot')
 $guiCount = @($relativePaths | Where-Object { $_ -in $guiPaths }).Count
+$frontendCount = @($relativePaths | Where-Object { $_ -in $frontendPaths }).Count
+if ($frontendCount -ne 0 -and ($frontendCount -ne 22 -or $guiCount -ne 13)) { throw 'Incomplete MTA Core GUI frontend package ownership.' }
 # Older manifests remain removable, but GUI ownership is one complete group
 # attached to the current 23-file backend, never a partial asset collection.
 if ($guiCount -and ($guiCount -ne $guiPaths.Count -or $allowedPaths.Count -ne 23)) { throw 'Incomplete MTA Core GUI startup package ownership.' }
 if ($guiCount) { $allowedPaths += $guiPaths }
+if ($frontendCount) { $allowedPaths += $frontendPaths }
 if ($relativePaths.Count -ne $allowedPaths.Count -or @($relativePaths | Select-Object -Unique).Count -ne $allowedPaths.Count -or
     @(Compare-Object $allowedPaths $relativePaths).Count -ne 0) {
     throw 'Installation manifest does not contain exactly the known owned files.'
@@ -113,7 +139,7 @@ foreach ($target in $targets) {
     Remove-Item -LiteralPath $target
 }
 Remove-Item -LiteralPath $manifestPath
-$directories = @('CLEO/de-online/mta/cgui', 'CLEO/de-online/skins/Default', 'CLEO/de-online/skins', 'CLEO/de-online/mta/config', 'CLEO/de-online/mta', 'CLEO/de-online', 'CLEO/CLEO_PLUGINS', 'CLEO/.config', 'DE_ONLINE_LICENSES', 'CLEO')
+$directories = @('CLEO/de-online/mta/cgui/images/serverbrowser', 'CLEO/de-online/mta/cgui/images', 'CLEO/de-online/mta/locale/en_US', 'CLEO/de-online/mta/locale', 'CLEO/de-online/mta/cgui', 'CLEO/de-online/skins/Default', 'CLEO/de-online/skins', 'CLEO/de-online/mta/config', 'CLEO/de-online/mta', 'CLEO/de-online', 'CLEO/CLEO_PLUGINS', 'CLEO/.config', 'DE_ONLINE_LICENSES', 'CLEO')
 foreach ($relative in $directories) {
     $directory = Join-Path $gameRoot $relative
     Assert-NoLinks $directory

@@ -148,3 +148,18 @@ DE_BRIDGE_API std::uint32_t DE_CoreGuiSurfaceApiVersion();
 DE_BRIDGE_API int           DE_CoreGuiSurfaceBegin();
 DE_BRIDGE_API int           DE_CoreGuiSurfaceCapture();
 DE_BRIDGE_API std::uint32_t DE_CoreGuiSurfaceRead(std::uint32_t component);
+
+// Real MTA menu startup has an independent API1/160 cache. The script alone
+// changes native player control and acknowledges its generation through this
+// scalar mailbox; no native engine command executes on the Core worker.
+DE_BRIDGE_API std::uint32_t DE_CoreGuiFrontendApiVersion();
+DE_BRIDGE_API int           DE_CoreGuiFrontendBegin();
+DE_BRIDGE_API int           DE_CoreGuiFrontendCapture();
+DE_BRIDGE_API std::uint32_t DE_CoreGuiFrontendRead(std::uint32_t component);
+DE_BRIDGE_API int           DE_CoreGuiFrontendControlCapture();
+DE_BRIDGE_API std::uint32_t DE_CoreGuiFrontendControlRead(std::uint32_t component);
+DE_BRIDGE_API int           DE_CoreGuiFrontendControlAck(std::uint32_t generation);
+DE_BRIDGE_API int           DE_CoreGuiFrontendControlHeartbeat(std::uint32_t generation);
+DE_BRIDGE_API int           DE_CoreGuiFrontendControlRevoke(std::uint32_t generation);
+DE_BRIDGE_API int           DE_CoreGuiFrontendControlRestored(std::uint32_t generation);
+DE_BRIDGE_API int           DE_CoreGuiFrontendControlFocused();

@@ -54,9 +54,10 @@ const remote = (id = 2, x = 30, heading = 180) => ({ id, x, y: 20, z: 3, heading
 const count = (test, name) => test.calls.filter(call => call[0] === name).length;
 
 async function main() {
-    const { AdapterController, NativeGaitReferenceController, NativeInputReferenceController, nativeGaitReferenceSpeed } = await import(pathToFileURL(path.join(adapterDirectory, 'controller.mjs')).href);
+    const { AdapterController, NativeGaitReferenceController, NativeInputReferenceController, nativeGaitReferenceSpeed, PlayerControlLease } = await import(pathToFileURL(path.join(adapterDirectory, 'controller.mjs')).href);
     const { MtaNativePadReferenceController } = await import(pathToFileURL(path.join(adapterDirectory, 'native-pad-reference.mjs')).href);
     const { MtaNativeMovementTrialController } = await import(pathToFileURL(path.join(adapterDirectory, 'native-movement-trial.mjs')).href);
+    tests += require('./test_player_control_lease.cjs')(PlayerControlLease);
     const test = (name, run) => { run(); ++tests; console.log('PASS ' + name); };
     test('smoke only reads local state, with bounded evidence logs', () => {
         const f = fixture(AdapterController, 'smoke');
@@ -1184,7 +1185,7 @@ async function main() {
         const names = Object.keys(functions).filter(name => typeof functions[name] === 'function');
         const record = (name, ...args) => { calls.push([name, ...args]); callFrames.push({ frame, name }); };
         const invoke = address => (...args) => { const name = names[address - 1]; record(name, ...args); return functions[name](...args); };
-        const runtimeValues = { AdapterController, NativeGaitReferenceController, NativeInputReferenceController, MtaNativePadReferenceController, MtaNativeMovementTrialController, DataView, ArrayBuffer,
+        const runtimeValues = { AdapterController, NativeGaitReferenceController, NativeInputReferenceController, MtaNativePadReferenceController, MtaNativeMovementTrialController, PlayerControlLease, DataView, ArrayBuffer,
             Memory: { FromFloat: fromFloat, ToFloat: toFloat, Fn: { X64U32: invoke, X64I32: invoke }, CallFunction: (address) => invoke(address)() },
             DynamicLibrary: { Load: () => { record('DynamicLibrary.Load'); return { getProcedure: name => {
                 runtimeAccess.push({ frame, name: 'getProcedure', procedure: name });
@@ -1209,6 +1210,7 @@ async function main() {
             MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE: overrides.mtaCoreRenderNativeDispatchReference ?? false,
             MTA_CORE_GUI_STARTUP_REFERENCE: overrides.mtaCoreGuiStartupReference ?? false,
             MTA_CORE_GUI_SURFACE_REFERENCE: overrides.mtaCoreGuiSurfaceReference ?? false,
+            MTA_CORE_GUI_FRONTEND_REFERENCE: overrides.mtaCoreGuiFrontendReference ?? false,
             Date: { now: () => overrides.times ? overrides.times[frame] : frame * 50 },
             CLEO: { version: overrides.version || '1.5.1', apiVersion: overrides.definitions || '0.500', hostVersion: '1.0.113.49697469' },
             native: (name, ...args) => { record(name, ...args);
@@ -1396,6 +1398,182 @@ async function main() {
             } });
     };
     const surfaceFinish = result => result.logs.find(event => event.event === 'core_gui_surface_reference_finished');
+    // These entry fixtures exchange copied protocol values and real boolean
+    // providers, not fixture-generated GUI clicks or an actual game window.
+    const coreFrontend = (options = {}) => {
+        let polls = 0, controlCache = Array(8).fill(0), enabled = options.initialControl ?? true;
+        const mailbox = Array(8).fill(0);
+        let admitted = false, restoredAt = null;
+        const snapshot = () => {
+            const complete = polls >= 6 && mailbox[6] === 1;
+            const started = admitted && polls >= 3 && !options.createNull;
+            const detached = mailbox[5] === 1;
+            const values = Object.assign(Array(160).fill(0), coreSurfaceState({
+                1: complete ? 2 : (detached ? 3 : 1), 2: polls, 3: polls * 50, 4: complete ? (started ? 1 : 7) : 0,
+                5: detached && !complete ? 1 : 0,
+                6: complete ? 1 : 0, 19: started || (options.createNull && admitted && polls >= 3) ? 1 : 0,
+                20: complete ? 1 : 0, 21: complete && started ? 1 : 0,
+                37: started ? 1 : 0,
+                39: complete ? 1 : 0, 49: complete ? 0 : 1, 50: complete ? 0 : 1, 51: complete ? 0 : 1,
+                53: 0, 54: 0, 74: detached ? 1 : 0, 75: complete ? 0 : 1, 76: complete ? 0 : 1, 77: complete ? 0 : 1,
+                78: complete ? 1 : 0, 79: complete ? 1 : 0, 80: complete ? 1 : 0, 85: 30000
+            }), { 128: 1, 139: detached ? 1 : 0, 151: 1000 });
+            if (started) Object.assign(values, {
+                96: 1, 97: detached ? 4 : 2, 98: 42, 99: polls, 100: detached ? 0 : 1,
+                102: detached ? 0 : 1, 103: options.quitRequested ? 1 : 0,
+                104: options.creditsVisible ? 1 : 0, 105: options.aboutClicks || 0,
+                106: 1, 107: 1, 108: 1, 109: 1, 113: detached ? 1 : 0,
+                117: detached ? 0 : 1, 118: 1, 121: 1, 124: 1,
+                129: 1, 130: detached ? 0 : 1, 131: 1,
+                133: options.inputEvents || 0, 153: 30000, 154: 1, 155: detached ? 1 : 0
+            });
+            if (options.createNull && admitted) Object.assign(values, { 129: 1, 155: detached ? 1 : 0 });
+            mailbox.forEach((value, field) => { values[142 + field] = value; });
+            return Object.assign(values, options.scalarOverrides?.(polls) || {});
+        };
+        const result = runEntry({ mtaCoreGuiFrontendReference: true,
+            keyFrames: [[17, 16, 120], [16], ...Array.from({ length: 25 }, () => [])],
+            ...options.entry,
+            functions: {
+                DE_CoreGuiFrontendApiVersion: () => 1, DE_CoreGuiFrontendBegin: () => 1,
+                DE_CoreGuiFrontendCapture: () => {
+                    if (options.captureErrorAt === polls) throw Error('temporary snapshot failure'); return 1;
+                },
+                DE_CoreGuiFrontendRead: field => snapshot()[field],
+                DE_CoreGuiFrontendControlFocused: () => options.focusLostAt === polls ? 0 : 1,
+                DE_CoreGuiFrontendControlCapture: () => { controlCache = mailbox.slice(); return 1; },
+                DE_CoreGuiFrontendControlRead: field => controlCache[field],
+                DE_CoreGuiFrontendControlAck: generation => {
+                    assert.equal(generation, 17); mailbox[2] = mailbox[3] = 1; admitted = true; return 1;
+                },
+                DE_CoreGuiFrontendControlHeartbeat: generation => { assert.equal(generation, 17); return 1; },
+                DE_CoreGuiFrontendControlRevoke: generation => { assert.equal(generation, 17); mailbox[4] = 1; mailbox[3] = 0; return 1; },
+                DE_CoreGuiFrontendControlRestored: generation => {
+                    assert.equal(generation, 17); assert.equal(mailbox[5], 1);
+                    assert.equal(enabled, options.initialControl ?? true); mailbox[6] = 1; restoredAt = polls; return 1;
+                },
+                DE_CoreStartupPoll: () => {
+                    ++polls;
+                    if (polls === 2) { mailbox[0] = 17; mailbox[1] = 1; }
+                    if (polls >= 4) { mailbox[4] = mailbox[5] = 1; mailbox[3] = 0; }
+                    if (options.controlFaultAt === polls) mailbox[7] = 1;
+                    if (options.pollErrorAt === polls) throw Error('temporary poll failure');
+                    return polls >= 6 && mailbox[6] === 1 ? 1 : 0;
+                },
+                DE_CoreStartupCancel: () => 1,
+                DE_CoreStartupRead: field => [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5, 0, 0, 1, 0, 1, 0, 1, 0][field],
+                ...options.functions
+            },
+            natives: { IS_CHAR_ON_FOOT: ped => { assert.equal(ped, 10); return true; },
+                IS_PLAYER_CONTROL_ON: index => { assert.equal(index, 0); return enabled; },
+                SET_PLAYER_CONTROL: (index, value) => {
+                    assert.equal(index, 0); assert.equal(typeof value, 'boolean'); enabled = value;
+                    if (options.throwAfterDisable && value === false) throw Error('setter return failure');
+                }, ...options.natives }
+        });
+        return { ...result, enabled, polls, restoredAt };
+    };
+    const frontendFinish = result => result.logs.find(event => event.event === 'core_gui_frontend_reference_finished');
+    test('Frontend requires separate F9-release activation and verified real native bool lease', () => {
+        const result = coreFrontend(); const finish = frontendFinish(result);
+        assert.equal(result.callFrames.find(call => call.name === 'DynamicLibrary.Load').frame, 2);
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreGuiFrontendBegin').length, 1);
+        assert.ok(result.callFrames.find(call => call.name === 'SET_PLAYER_CONTROL').frame > 2);
+        assert.deepEqual(result.calls.filter(call => call[0] === 'SET_PLAYER_CONTROL'),
+            [['SET_PLAYER_CONTROL', 0, false], ['SET_PLAYER_CONTROL', 0, true]]);
+        assert.equal(result.enabled, true); assert.equal(result.restoredAt, 4);
+        assert.ok(result.polls > result.restoredAt); assert.equal(finish.cleanup_passed, true); assert.equal(finish.passed, true);
+        assert.equal(finish.control.native_initial, true); assert.equal(finish.control.native_disabled_verified, true);
+        assert.equal(finish.control.native_restored_verified, true); assert.equal(finish.control.acquired, true);
+        assert.ok(result.logs.filter(event => event.event === 'core_gui_frontend_reference_sample').every(event => event.state.length === 160));
+        assert.ok(!result.calls.some(call => /DE_CoreGuiSurface|DE_CoreGuiStartup|DE_CoreInput|DE_CoreRender|DE_ConnectLocal|CREATE_CHAR/.test(call[0])));
+        const start = result.logs.find(event => event.event === 'adapter_start');
+        assert.equal(start.core_api, 13); assert.equal(start.frontend_trial_api, 1);
+        assert.equal(start.input_writes, false); assert.equal(finish.input_writes, true);
+        for (const claim of ['full_core_ready', 'full_mta_ready', 'gameplay_ready', 'camera_capture_verified', 'network_active',
+            'remote_peds_created', 'native_queue_commands_issued', 'native_backbuffer_touched']) assert.equal(finish[claim], false);
+    });
+    test('Frontend reports actual Core menu callbacks and never fabricates clicks from rendering', () => {
+        const result = coreFrontend({ aboutClicks: 2, quitRequested: true, creditsVisible: true, inputEvents: 15 });
+        const finish = frontendFinish(result);
+        assert.equal(finish.passed, true); assert.equal(finish.actual_about_clicks, 2);
+        assert.equal(finish.actual_quit_requested, true); assert.equal(finish.actual_credits_visible, true);
+        assert.equal(frontendFinish(coreFrontend()).actual_about_clicks, 0);
+    });
+    for (const options of [{ captureErrorAt: 3 }, { pollErrorAt: 3 }, { focusLostAt: 3 }, { throwAfterDisable: true }])
+        test('Frontend failure retains and drains controls/Core instead of escaping: ' + JSON.stringify(options), () => {
+            const result = coreFrontend(options); const finish = frontendFinish(result);
+            assert.ok(finish); assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true);
+            assert.equal(result.enabled, true); assert.equal(finish.control.native_restored_verified, true);
+            assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 1);
+            assert.ok(result.polls >= 6); assert.ok(result.logs.some(event => event.event === 'adapter_failed'));
+        });
+    test('Frontend initially-disabled control refuses native writes and reports honest no-owner cleanup', () => {
+        const result = coreFrontend({ initialControl: false }); const finish = frontendFinish(result);
+        assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true); assert.equal(result.enabled, false);
+        assert.ok(!result.calls.some(call => call[0] === 'SET_PLAYER_CONTROL' || call[0] === 'DE_CoreGuiFrontendControlAck'));
+        assert.equal(finish.control.acquired, false); assert.equal(finish.control.native_initial, false);
+        assert.equal(finish.control.native_restored_verified, false); assert.equal(finish.control.no_mutation, true);
+    });
+    test('Frontend historical control fault fails workload while verified restoration can retire owners', () => {
+        const result = coreFrontend({ controlFaultAt: 4 }); const finish = frontendFinish(result);
+        assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true);
+        assert.equal(result.enabled, true); assert.equal(finish.control.native_restored_verified, true);
+        assert.equal(finish.control.completed, true);
+    });
+    for (const field of [7, 140]) test('Frontend historical diagnostic permits proved cleanup, not workload: field ' + field, () => {
+        const result = coreFrontend({ scalarOverrides: polls => polls >= 6 ? { [field]: 1, ...(field === 7 ? { 4: 10 } : {}) } : {} });
+        const finish = frontendFinish(result);
+        assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true);
+        assert.equal(finish.control.completed, true); assert.equal(finish.control.native_restored_verified, true);
+        assert.equal(result.enabled, true);
+    });
+    test('Frontend permanently malformed final publication exits after actual owner drain without success proof', () => {
+        const result = coreFrontend({ scalarOverrides: polls => polls >= 6 ? { 149: 2 } : {} });
+        const finish = frontendFinish(result);
+        assert.ok(finish); assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, false);
+        assert.equal(finish.control.completed, true); assert.equal(result.enabled, true);
+    });
+    test('Frontend Create-null callback can retire controls with no fabricated CPU menu owner', () => {
+        const result = coreFrontend({ createNull: true }); const finish = frontendFinish(result);
+        assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true);
+        assert.equal(finish.control.native_restored_verified, true); assert.equal(result.enabled, true);
+        const final = result.logs.filter(event => event.event === 'core_gui_frontend_reference_sample').at(-1).state;
+        assert.ok(final.slice(96, 128).every(value => value === 0));
+        assert.equal(final[154], 0); assert.equal(final[155], 1);
+    });
+    for (const [field, value] of [[33, 0], [35, 3], [38, 10000], [47, 8], [67, 4], [68, 1],
+        [69, 1], [70, 2], [81, 0], [82, 0], [83, 0], [84, 0], [85, 8000], [99, 1], [151, 999], [153, 29999],
+        [24, 0], [27, 28], [28, 0], [29, 16385], [53, 1], [54, 1], [128, 2]])
+        test('Frontend final proof recomputes complete menu ownership: field ' + field, () => {
+            const result = coreFrontend({ scalarOverrides: polls => polls >= 6 ? { [field]: value } : {} });
+            const finish = frontendFinish(result); assert.ok(finish); assert.equal(finish.passed, false);
+            assert.equal(finish.control.completed, true); assert.equal(result.enabled, true);
+        });
+    for (const options of [{ mode: 'online' }, { mode: 'diagnostic' }, { mtaCoreGuiFrontendReference: 'true' },
+        { inputReference: true }, { reference: true }, { gaitRate: true }, { gaitRootLock: true },
+        { mtaNativePadReference: true }, { mtaNativeMovementTrial: true }, { mtaCoreStartupReference: true },
+        { mtaCoreInputReference: true }, { mtaCoreMovementReference: true }, { mtaCoreRenderReference: true },
+        { mtaCoreRenderGpuReference: true }, { mtaCoreRenderCustomPresentReference: true },
+        { mtaCoreRenderFrameBoundaryReference: true }, { mtaCoreRenderNativeDispatchReference: true },
+        { mtaCoreGuiStartupReference: true }, { mtaCoreGuiSurfaceReference: true }])
+        test('Frontend refuses conflicts before runtime lookup ' + JSON.stringify(options), () => {
+            const result = coreFrontend({ entry: { ...options, forbidRuntimeAccess: true } });
+            assert.equal(result.calls.length, 0); assert.ok(result.logs.some(event => event.event === 'adapter_failed'));
+        });
+    for (const name of ['DE_CoreGuiFrontendApiVersion', 'DE_CoreGuiFrontendBegin', 'DE_CoreGuiFrontendCapture', 'DE_CoreGuiFrontendRead',
+        'DE_CoreGuiFrontendControlCapture', 'DE_CoreGuiFrontendControlRead', 'DE_CoreGuiFrontendControlAck',
+        'DE_CoreGuiFrontendControlHeartbeat', 'DE_CoreGuiFrontendControlRevoke', 'DE_CoreGuiFrontendControlRestored', 'DE_CoreGuiFrontendControlFocused'])
+        test('Frontend missing export refuses before Begin and native writes: ' + name, () => {
+            const result = coreFrontend({ functions: { [name]: null } });
+            assert.ok(!result.calls.some(call => call[0] === 'DE_CoreGuiFrontendBegin' || call[0] === 'SET_PLAYER_CONTROL'));
+            assert.ok(result.logs.some(event => event.event === 'adapter_failed' && event.error.includes(name)));
+        });
+    for (const field of [120, 122, 123, 156, 157]) test('Frontend readiness/native assumptions never become success: field ' + field, () => {
+        const result = coreFrontend({ scalarOverrides: polls => polls === 3 ? { [field]: 1 } : {} });
+        const finish = frontendFinish(result); assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true);
+        assert.equal(result.enabled, true); assert.ok(finish.error.includes('scalar'));
+    });
     test('Surface uses distinct Core12 API1/96 fields after F9 release and certifies only own composition workload', () => {
         const result = coreSurface();
         assert.equal(result.callFrames.find(call => call.name === 'DynamicLibrary.Load').frame, 2);
@@ -2945,6 +3123,7 @@ async function main() {
         assert.equal(sourceConfig.MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE, false);
         assert.equal(sourceConfig.MTA_CORE_GUI_STARTUP_REFERENCE, false);
         assert.equal(sourceConfig.MTA_CORE_GUI_SURFACE_REFERENCE, false);
+        assert.equal(sourceConfig.MTA_CORE_GUI_FRONTEND_REFERENCE, false);
         assert.equal(sourceConfig.GAIT_REFERENCE, false);
         assert.equal(sourceConfig.GAIT_RATE, false);
         assert.equal(sourceConfig.INPUT_REFERENCE, false);

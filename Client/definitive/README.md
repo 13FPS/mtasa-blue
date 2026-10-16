@@ -6,6 +6,42 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
+**The next live trial uses MTA's real main menu and a reversible player-control
+lease.** The separate Smoke option `-MtaCoreGuiFrontendReference` selects Core13 /
+Frontend1 with 160 copied scalars. After native device/window observation ends,
+the script saves initially enabled player control, calls GTA's existing
+`SET_PLAYER_CONTROL(false)`, checks `IS_PLAYER_CONTROL_ON`, and acknowledges its
+generation. Only a fresh acknowledgement admits the interactive MTA surface.
+The existing Win32 translator routes clicks and keys to the actual menu,
+About/credits and Quit callbacks; no replacement menu or game facade is used.
+
+Cancellation, focus loss, identity loss or an expired heartbeat revokes GUI
+input. Input holds/capture detach before the script restores and checks the
+saved control state, even if GPU cleanup remains pending. Core, GUI and native
+owners remain retained until their actual retirement is proved. A rejected
+restoration acknowledgement requires fresh identity and native readback before
+retrying; a past timeout or input fault cannot conceal completed cleanup.
+Forced CLEO termination still has no independently validated engine-command
+executor for restoration.
+
+The real-menu composition host passes 514 checks, including Win32 interaction,
+focus, resize, partial startup and retained GPU/CPU cleanup. The script suite
+passes 880 mock checks; separate controlled worker tests exercise lease expiry,
+generation/owner rejection, restoration and final-read contention. These are
+owned-host results. Live player/camera exclusion and restoration still require
+the user's GTA test; control-command readback alone is not camera proof. Full
+game, networking and multiplayer startup remain gated and the port stays
+EXPERIMENTAL.
+
+The frontend package owns 58 files: the existing 36-file GUI group plus 22
+upstream MTA menu/localization assets. Ordinary 23-file and passive 36-file
+packages retain their separate modes. `package.ps1 -OutputDirectory` and
+`update.ps1 -PackageDirectory` allow a fresh candidate directory without
+overwriting packages bound by earlier live evidence. Activation waits
+indefinitely for Ctrl+Shift+F9 and key release; the menu runs for up to 30 seconds.
+Quit/Escape or Ctrl+Shift+End requests trial cleanup. No server connection or
+automatic movement is part of this trial.
+
 **The existing MTA main menu now has a separate frontend lifecycle.** The real
 Core starts its XML/configuration, CVars, localization, logging, commands and
 `CLocalGUI`/`CMainMenu` on a borrowed MTA D3D12 GUI session. About opens the
@@ -28,10 +64,8 @@ The D3D12 session draws MTA's cursor. Focus loss, capture loss and shutdown
 cancel mouse presses without completing clicks, while mouse capture changes
 preserve keyboard modifiers. Unicode input and owner-thread checks are shared.
 Owned WARP tests exercise these paths with real MTA widgets and GPU readback.
-The owned frontend API is not installed into GTA yet. Live menu interaction
-still needs a scoped native gameplay/camera input lease and the separate bridge
-workload; the successful passive GUI trial does not grant either. No new GTA
-test is required for this owned-host milestone.
+The new live workload uses a distinct opt-in and handshake. The earlier passive
+GUI trial does not grant native input ownership or validate the new interaction.
 
 **The Windowed MTA GUI trial passed, with user-confirmed eight-second visibility.**
 Runtime commit `27c54ea9d` acquired GTA's device/window lease and ran the existing

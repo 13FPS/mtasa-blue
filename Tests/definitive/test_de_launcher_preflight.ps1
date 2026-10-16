@@ -6,6 +6,8 @@
 param(
     [Parameter(Mandatory)][string]$GameExe,
     [string]$PackageDirectory,
+    [string]$GuiPackageDirectory,
+    [string]$FrontendPackageDirectory,
     [string]$LauncherExe,
     [string]$PreflightDll
 )
@@ -25,8 +27,8 @@ $sourceManifestSha=Sha $manifestSource
 $sourcePackage=Get-Content -LiteralPath $manifestSource -Raw | ConvertFrom-Json
 if($sourcePackage.files.Count -ne 23){throw 'Fixture requires the complete owned 23-file package.'}
 $output=Join-Path $root ('Build/mta-de-launcher-preflight/'+(Get-Date -Format 'yyyyMMdd-HHmmss')+'-'+[guid]::NewGuid().ToString('N'))
-$hostRoot=Join-Path $output 'MTA fixture with spaces é'
-$bundle=Join-Path $output 'owned bundle with spaces é'
+$hostRoot=Join-Path $output 'MTA fixture with spaces Ã©'
+$bundle=Join-Path $output 'owned bundle with spaces Ã©'
 $gameCopy=Join-Path $output 'hashed game copy/SanAndreas.exe'
 $manifest=Join-Path $output 'owned-package-manifest.json'
 New-Item -ItemType Directory -Path (Join-Path $hostRoot 'mta'),$bundle,(Split-Path $gameCopy -Parent) | Out-Null
@@ -55,7 +57,7 @@ foreach($name in $sourceNames){$sourceHashes[$name]=Sha (Join-Path $root $name)}
 $checks=0
 $cases=[Collections.Generic.List[object]]::new()
 function Check([bool]$condition,[string]$message){$script:checks++;if(-not $condition){throw $message}}
-function Invoke-Case([string]$name,[string[]]$arguments,[int]$exit,[string]$status,[string]$directory=$hostRoot){
+function Invoke-Case([string]$name,[string[]]$arguments,[int]$exit,[string]$status,[string]$directory=$hostRoot,[int]$verifiedFiles=23){
     $start=[Diagnostics.ProcessStartInfo]::new()
     $start.FileName=Join-Path $directory 'Multi Theft Auto.exe'
     $start.WorkingDirectory=$output
@@ -79,7 +81,7 @@ function Invoke-Case([string]$name,[string[]]$arguments,[int]$exit,[string]$stat
     Check ($record.status -ceq $status) "$name unexpected status: $text"
     Check ($record.preflightValid -eq ($exit -eq 0)) "$name success flag differs from exit."
     Check (-not $record.launchReady -and -not $record.fullMtaReady -and -not $record.gameLaunched -and -not $record.coreLoaded -and -not $record.installationWrites) "$name promoted offline file validation to runtime readiness."
-    Check (($exit -eq 0 -and $record.verifiedFiles -eq 23) -or ($exit -ne 0 -and $record.verifiedFiles -eq 0)) "$name owned-file count is wrong."
+    Check (($exit -eq 0 -and $record.verifiedFiles -eq $verifiedFiles) -or ($exit -ne 0 -and $record.verifiedFiles -eq 0)) "$name owned-file count is wrong."
     Check ([string]::IsNullOrWhiteSpace($errors)) "$name emitted unexpected stderr."
     $script:cases.Add([ordered]@{name=$name;exit_code=$process.ExitCode;status=$record.status;elapsed_ms=$watch.ElapsedMilliseconds;stdout=(Join-Path $output ($name+'.stdout.json'));record=$record})
 }
@@ -166,12 +168,67 @@ Manifest-Case 'rehash-cannot-hide-wrong-native-architecture' {param($r) ($r.file
 [IO.File]::WriteAllBytes($nativePath,$nativeBytes)
 Invoke-Case 'restored-valid-bundle' $arguments 0 'preflight_valid'
 
+# Extra owned GUI groups retain the same no-load/no-launch preflight boundary.
+$extraPackages=[Collections.Generic.List[object]]::new()
+foreach($spec in @(@{name='gui36';path=$GuiPackageDirectory;count=36},@{name='frontend58';path=$FrontendPackageDirectory;count=58})){
+    if(-not $spec.path){continue}
+    $source=(Resolve-Path -LiteralPath $spec.path).Path
+    $inputManifest=Join-Path $source 'manifest.json'
+    $inputHash=Sha $inputManifest
+    $parsed=Get-Content -LiteralPath $inputManifest -Raw|ConvertFrom-Json
+    Check ($parsed.files.Count -eq $spec.count) 'Extra preflight package has wrong group count.'
+    $extraBundle=Join-Path $output ($spec.name+'-owned-bundle')
+    $extraManifest=Join-Path $output ($spec.name+'-manifest.json')
+    $extraText=[IO.File]::ReadAllText($inputManifest)
+    foreach($entry in $parsed.files){
+        $inputFile=Join-Path $source ('Win64/'+$entry.path)
+        Check ((Sha $inputFile) -eq $entry.sha256) 'Extra input package hash differs.'
+        $target=Join-Path $extraBundle $entry.path
+        [IO.Directory]::CreateDirectory((Split-Path $target))|Out-Null
+        Copy-Item -LiteralPath $inputFile -Destination $target
+    }
+    [IO.File]::WriteAllText($extraManifest,$extraText,$utf8)
+    $extraArguments=@('--de-preflight','--game-exe',$gameCopy,'--bundle',$extraBundle,'--manifest',$extraManifest)
+    Invoke-Case ($spec.name+'-valid-complete-group') $extraArguments 0 'preflight_valid' $hostRoot $spec.count
+    $groupMember=if($spec.count -eq 58){'CLEO/de-online/mta/locale/en_US/client.pot'}else{'CLEO/de-online/mta/cgui/unifont.ttf'}
+    $bad=$extraText|ConvertFrom-Json;$bad.files=@($bad.files|Where-Object path -ne $groupMember)
+    [IO.File]::WriteAllText($extraManifest,($bad|ConvertTo-Json -Depth 12),$utf8)
+    Invoke-Case ($spec.name+'-partial-group-manifest') $extraArguments 4 'exact_owned_group_count_required'
+    [IO.File]::WriteAllText($extraManifest,$extraText,$utf8)
+    $member=Join-Path $extraBundle $groupMember
+    Move-Item -LiteralPath $member -Destination ($member+'.saved')
+    Invoke-Case ($spec.name+'-missing-group-file') $extraArguments 4 'missing_or_linked_path'
+    Move-Item -LiteralPath ($member+'.saved') -Destination $member
+    $bad=$extraText|ConvertFrom-Json;$bad.files[0].path='CLEO/de-online/extra-unowned.dll'
+    [IO.File]::WriteAllText($extraManifest,($bad|ConvertTo-Json -Depth 12),$utf8)
+    Invoke-Case ($spec.name+'-unknown-complete-count-path') $extraArguments 4 'owned_path_not_allowed_or_duplicate'
+    [IO.File]::WriteAllText($extraManifest,$extraText,$utf8)
+    if($spec.count -eq 58){
+        $extraConfig=Join-Path $extraBundle 'CLEO/de-online/config.mjs';$extraBytes=[IO.File]::ReadAllBytes($extraConfig)
+        foreach($change in @(@{name='duplicate-marker';suffix="`nexport const MTA_CORE_GUI_FRONTEND_REFERENCE = false;`n";status='gui_configuration_marker_invalid'},
+                            @{name='forged-other-trial';suffix='';status='gui_mode_conflict'})){
+            $text=$utf8.GetString($extraBytes)
+            if($change.suffix){$text+=$change.suffix}else{$text=$text.Replace('export const MTA_CORE_RENDER_REFERENCE = false;','export const MTA_CORE_RENDER_REFERENCE = true;')}
+            [IO.File]::WriteAllText($extraConfig,$text,$utf8)
+            $bad=$extraText|ConvertFrom-Json;($bad.files|Where-Object path -eq 'CLEO/de-online/config.mjs').sha256=Sha $extraConfig
+            [IO.File]::WriteAllText($extraManifest,($bad|ConvertTo-Json -Depth 12),$utf8)
+            Invoke-Case ('frontend58-'+$change.name) $extraArguments 4 $change.status
+        }
+        [IO.File]::WriteAllBytes($extraConfig,$extraBytes);[IO.File]::WriteAllText($extraManifest,$extraText,$utf8)
+        Invoke-Case 'frontend58-restored-complete-group' $extraArguments 0 'preflight_valid' $hostRoot 58
+    }
+    $extraPackages.Add(@{source=$source;manifest_sha256=$inputHash;files=$parsed.files;owned_count=$spec.count})
+}
+foreach($extra in $extraPackages){
+    Check ((Sha (Join-Path $extra.source 'manifest.json')) -eq $extra.manifest_sha256) 'Extra source manifest changed.'
+    foreach($entry in $extra.files){Check ((Sha (Join-Path $extra.source ('Win64/'+$entry.path))) -eq $entry.sha256) 'Extra source package changed.'}
+}
 foreach($entry in $sourcePackage.files){Check ((Sha (Join-Path $packageSource ('Win64/'+$entry.path))) -ceq $entry.sha256) 'Input package changed.'}
 Check ((Sha $manifestSource) -ceq $sourceManifestSha) 'Input manifest changed.'
 Check ((Sha $gameSource) -ceq $knownGame) 'Input game executable changed.'
 foreach($name in $sourceHashes.Keys){Check ((Sha (Join-Path $root $name)) -ceq $sourceHashes[$name]) 'Fixture source changed during execution.'}
 $artifacts=@(@{path=(Resolve-Path -LiteralPath $LauncherExe).Path;sha256=(Sha $LauncherExe);architecture='AMD64'},@{path=(Resolve-Path -LiteralPath $PreflightDll).Path;sha256=(Sha $PreflightDll);architecture='AMD64'})
-$result=[ordered]@{success=$true;created_at=[DateTimeOffset]::Now.ToString('o');directory=$output;checks=$checks;case_count=$cases.Count;cases=$cases;source_hashes=$sourceHashes;source_unchanged=$true;artifacts=$artifacts;package_manifest_sha256=$sourceManifestSha;package_hashes=$packageHashes;game_executable_sha256=$knownGame;game_executable_executed=$false;game_files_changed=$false;game_launched=$false;process_injection=$false;core_loaded=$false;launchReady=$false;fullMtaReady=$false;scope='Actual normal x64 MTA launcher dispatch and read-only DE bundle preflight in owned copies; no new game startup path'}
+$result=[ordered]@{success=$true;created_at=[DateTimeOffset]::Now.ToString('o');directory=$output;checks=$checks;case_count=$cases.Count;cases=$cases;source_hashes=$sourceHashes;source_unchanged=$true;artifacts=$artifacts;package_manifest_sha256=$sourceManifestSha;package_hashes=$packageHashes;extra_packages=$extraPackages;game_executable_sha256=$knownGame;game_executable_executed=$false;game_files_changed=$false;game_launched=$false;process_injection=$false;core_loaded=$false;launchReady=$false;fullMtaReady=$false;scope='Actual normal x64 MTA launcher dispatch and read-only DE bundle preflight in owned copies; no new game startup path'}
 $target=Join-Path $output 'test-result.json'
 $result|ConvertTo-Json -Depth 14|Set-Content -LiteralPath $target -Encoding utf8
 @{success=$true;path=$target;sha256=(Sha $target);checks=$checks;cases=$cases.Count;launcher_sha256=(Sha $LauncherExe);loader_sha256=(Sha $PreflightDll)}|ConvertTo-Json -Compress

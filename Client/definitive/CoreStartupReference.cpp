@@ -4,6 +4,7 @@
  *****************************************************************************/
 
 #include "CoreStartupReference.h"
+#include "../core/DefinitiveFrontend.h"
 #include <algorithm>
 #include <filesystem>
 #include <process.h>
@@ -79,14 +80,15 @@ namespace deonline
 
     bool CoreStartupReference::Start(const void* moduleAddress, bool configuredInput, bool configuredMovement, bool configuredRender,
                                      std::uint32_t configuredRenderRoute, std::uint32_t configuredRenderApi, bool configuredGuiStartup,
-                                     bool configuredGuiSurface) noexcept
+                                     bool configuredGuiSurface, bool configuredGuiFrontend) noexcept
     {
         DWORD      expected = 0;
         const auto current = GetCurrentThreadId();
         if ((static_cast<unsigned>(configuredMovement) + static_cast<unsigned>(configuredRender) + static_cast<unsigned>(configuredGuiStartup) +
-                 static_cast<unsigned>(configuredGuiSurface) >
+                 static_cast<unsigned>(configuredGuiSurface) + static_cast<unsigned>(configuredGuiFrontend) >
              1) ||
-            (!ownerThread.compare_exchange_strong(expected, current) && expected != current) || !moduleAddress || IsPending() || thread)
+            (!ownerThread.compare_exchange_strong(expected, current) && expected != current) || !moduleAddress || IsPending() || thread ||
+            frontendQuarantined || !frontendControl.PrepareAttempt(current))
             return false;
         address = moduleAddress;
         inputRequested = configuredInput;
@@ -94,6 +96,7 @@ namespace deonline
         renderRequested = configuredRender;
         guiRequested = configuredGuiStartup;
         guiSurfaceRequested = configuredGuiSurface;
+        guiFrontendRequested = configuredGuiFrontend;
         renderRoute = configuredRenderRoute;
         renderApi = configuredRenderApi;
         AcquireSRWLockExclusive(&inputLock);
@@ -101,6 +104,8 @@ namespace deonline
         publishedGui = {};
         guiSurfaceAvailable = false;
         publishedGuiSurface = {};
+        guiFrontendAvailable = false;
+        publishedGuiFrontend = {};
         inputAvailable = false;
         publishedInput = {};
         movementAvailable = false;
@@ -128,6 +133,8 @@ namespace deonline
         capturedRenderV6 = {};
         capturedGui = {};
         capturedGuiSurface = {};
+        capturedGuiFrontend = {};
+        capturedFrontendControl = {};
         cancellation.store(false);
         state.store(1, std::memory_order_release);
         // Use the existing CRT worker convention instead of a joinable global
@@ -332,6 +339,71 @@ namespace deonline
         return ownerThread.load() == GetCurrentThreadId() && guiSurfaceRequested && field < capturedGuiSurface.size() ? capturedGuiSurface[field] : 0;
     }
 
+    bool CoreStartupReference::BeginGuiFrontendReference(const void* moduleAddress) noexcept
+    {
+        // This owns the actual MTA menu and a script-confirmed engine control
+        // lease. Its cache and protocol remain separate from passive Surface96.
+        return Start(moduleAddress, true, false, false, 0, 1, false, false, true);
+    }
+
+    bool CoreStartupReference::CaptureGuiFrontend() noexcept
+    {
+        if (ownerThread.load() != GetCurrentThreadId() || !guiFrontendRequested || !TryAcquireSRWLockShared(&inputLock))
+            return false;
+        const bool available = guiFrontendAvailable;
+        if (available)
+            capturedGuiFrontend = publishedGuiFrontend;
+        ReleaseSRWLockShared(&inputLock);
+        return available;
+    }
+
+    std::uint32_t CoreStartupReference::ReadGuiFrontend(std::uint32_t field) const noexcept
+    {
+        return ownerThread.load() == GetCurrentThreadId() && guiFrontendRequested && field < capturedGuiFrontend.size() ? capturedGuiFrontend[field] : 0;
+    }
+
+    bool CoreStartupReference::CaptureGuiFrontendControl() noexcept
+    {
+        return ownerThread.load() == GetCurrentThreadId() && guiFrontendRequested &&
+               frontendControl.Capture(GetCurrentThreadId(), GetTickCount64(), capturedFrontendControl);
+    }
+
+    std::uint32_t CoreStartupReference::ReadGuiFrontendControl(std::uint32_t field) const noexcept
+    {
+        return ownerThread.load() == GetCurrentThreadId() && guiFrontendRequested && field < capturedFrontendControl.size() ? capturedFrontendControl[field]
+                                                                                                                            : 0;
+    }
+
+    bool CoreStartupReference::AcknowledgeGuiFrontendControl(std::uint32_t generation) noexcept
+    {
+        return ownerThread.load() == GetCurrentThreadId() && guiFrontendRequested &&
+               frontendControl.Script(FrontendControlMailbox::ScriptAction::Acknowledge, GetCurrentThreadId(), generation, GetTickCount64());
+    }
+
+    bool CoreStartupReference::HeartbeatGuiFrontendControl(std::uint32_t generation) noexcept
+    {
+        return ownerThread.load() == GetCurrentThreadId() && guiFrontendRequested &&
+               frontendControl.Script(FrontendControlMailbox::ScriptAction::Heartbeat, GetCurrentThreadId(), generation, GetTickCount64());
+    }
+
+    bool CoreStartupReference::RevokeGuiFrontendControl(std::uint32_t generation) noexcept
+    {
+        return ownerThread.load() == GetCurrentThreadId() && guiFrontendRequested &&
+               frontendControl.Script(FrontendControlMailbox::ScriptAction::Revoke, GetCurrentThreadId(), generation, GetTickCount64());
+    }
+
+    bool CoreStartupReference::RestoreGuiFrontendControl(std::uint32_t generation) noexcept
+    {
+        return ownerThread.load() == GetCurrentThreadId() && guiFrontendRequested &&
+               frontendControl.Script(FrontendControlMailbox::ScriptAction::Restore, GetCurrentThreadId(), generation, GetTickCount64());
+    }
+
+    bool CoreStartupReference::ControlInput(std::uint32_t action, std::uint32_t* snapshot, std::uint32_t count)
+    {
+        return inputOwner && inputOwner->guiFrontendRequested &&
+               inputOwner->frontendControl.Worker(action, GetCurrentThreadId(), GetTickCount64(), snapshot, count);
+    }
+
     bool CoreStartupReference::InputCancelled()
     {
         return !inputOwner || inputOwner->cancellation.load(std::memory_order_acquire);
@@ -340,16 +412,17 @@ namespace deonline
     void CoreStartupReference::PublishInput(const std::uint32_t* snapshot, std::uint32_t count)
     {
         if (!inputOwner || !snapshot ||
-            count != (inputOwner->guiSurfaceRequested ? DefinitiveGuiSurfaceReference::FieldCount
-                      : inputOwner->guiRequested      ? DefinitiveGuiStartupReference::FieldCount
-                      : inputOwner->renderRequested   ? (inputOwner->renderApi == 6   ? DefinitiveRenderReference::FieldCountV6
-                                                         : inputOwner->renderApi == 5 ? DefinitiveRenderReference::FieldCountV5
-                                                         : inputOwner->renderApi == 4 ? DefinitiveRenderReference::FieldCountV4
-                                                         : inputOwner->renderApi == 3 ? DefinitiveRenderReference::FieldCountV3
-                                                         : inputOwner->renderRoute    ? DefinitiveRenderReference::FieldCountV2
-                                                                                      : DefinitiveRenderReference::FieldCount)
-                      : inputOwner->movementRequested ? DefinitiveMovementReference::FieldCount
-                                                      : DefinitiveInputReference::FieldCount))
+            count != (inputOwner->guiFrontendRequested  ? DefinitiveGuiFrontendReference::FieldCount
+                      : inputOwner->guiSurfaceRequested ? DefinitiveGuiSurfaceReference::FieldCount
+                      : inputOwner->guiRequested        ? DefinitiveGuiStartupReference::FieldCount
+                      : inputOwner->renderRequested     ? (inputOwner->renderApi == 6   ? DefinitiveRenderReference::FieldCountV6
+                                                           : inputOwner->renderApi == 5 ? DefinitiveRenderReference::FieldCountV5
+                                                           : inputOwner->renderApi == 4 ? DefinitiveRenderReference::FieldCountV4
+                                                           : inputOwner->renderApi == 3 ? DefinitiveRenderReference::FieldCountV3
+                                                           : inputOwner->renderRoute    ? DefinitiveRenderReference::FieldCountV2
+                                                                                        : DefinitiveRenderReference::FieldCount)
+                      : inputOwner->movementRequested   ? DefinitiveMovementReference::FieldCount
+                                                        : DefinitiveInputReference::FieldCount))
             return;
         const bool pendingDispatchCleanup = inputOwner->renderRequested && inputOwner->renderApi == 6 && count == DefinitiveRenderReference::FieldCountV6 &&
                                             snapshot[DefinitiveRenderReference::Phase] == 3 && snapshot[DefinitiveRenderReference::CleanupPending] == 1;
@@ -357,17 +430,24 @@ namespace deonline
                                        snapshot[DefinitiveGuiStartupReference::Phase] == 3 && snapshot[DefinitiveGuiStartupReference::CleanupPending] == 1;
         const bool pendingSurfaceCleanup = inputOwner->guiSurfaceRequested && count == DefinitiveGuiSurfaceReference::FieldCount &&
                                            snapshot[DefinitiveGuiStartupReference::Phase] == 3 && snapshot[DefinitiveGuiStartupReference::CleanupPending] == 1;
+        const bool pendingFrontendCleanup = inputOwner->guiFrontendRequested && count == DefinitiveGuiFrontendReference::FieldCount &&
+                                            snapshot[DefinitiveGuiStartupReference::Phase] == 3 && snapshot[DefinitiveGuiStartupReference::CleanupPending] == 1;
         // A failed resume may retain the script peer inside a shared capture.
         // Drop only intermediate API6/GUI cleanup reports instead of blocking the
         // worker that must retry that resume; final publication remains reliable.
-        if (pendingDispatchCleanup || pendingGuiCleanup || pendingSurfaceCleanup)
+        if (pendingDispatchCleanup || pendingGuiCleanup || pendingSurfaceCleanup || pendingFrontendCleanup)
         {
             if (!TryAcquireSRWLockExclusive(&inputOwner->inputLock))
                 return;
         }
         else
             AcquireSRWLockExclusive(&inputOwner->inputLock);
-        if (inputOwner->guiSurfaceRequested)
+        if (inputOwner->guiFrontendRequested)
+        {
+            std::copy_n(snapshot, count, inputOwner->publishedGuiFrontend.begin());
+            inputOwner->guiFrontendAvailable = true;
+        }
+        else if (inputOwner->guiSurfaceRequested)
         {
             std::copy_n(snapshot, count, inputOwner->publishedGuiSurface.begin());
             inputOwner->guiSurfaceAvailable = true;
@@ -533,8 +613,11 @@ namespace deonline
                     using Configure = std::uint32_t (*)(std::uint32_t, DefinitiveInputReference::CancelCallback, DefinitiveInputReference::PublishCallback);
                     using ConfigureRenderV2 =
                         std::uint32_t (*)(std::uint32_t, std::uint32_t, DefinitiveInputReference::CancelCallback, DefinitiveInputReference::PublishCallback);
+                    using ConfigureFrontend = std::uint32_t (*)(std::uint32_t, std::uint32_t, DefinitiveInputReference::CancelCallback,
+                                                                DefinitiveInputReference::PublishCallback, DefinitiveGuiFrontendReference::ControlCallback);
                     const auto inputVersion =
-                        reinterpret_cast<Version>(GetProcAddress(core, guiSurfaceRequested                 ? "MTA_DEGuiSurfaceReferenceApiVersion"
+                        reinterpret_cast<Version>(GetProcAddress(core, guiFrontendRequested                ? "MTA_DEGuiFrontendReferenceApiVersion"
+                                                                       : guiSurfaceRequested               ? "MTA_DEGuiSurfaceReferenceApiVersion"
                                                                        : guiRequested                      ? "MTA_DEGuiStartupReferenceApiVersion"
                                                                        : renderRequested && renderApi == 6 ? "MTA_DERenderReferenceApiVersionV6"
                                                                        : renderRequested && renderApi == 5 ? "MTA_DERenderReferenceApiVersionV5"
@@ -554,7 +637,9 @@ namespace deonline
                                                                                                       : renderApi == 4 ? "MTA_ConfigureDERenderReferenceV4"
                                                                                                       : renderApi == 3 ? "MTA_ConfigureDERenderReferenceV3"
                                                                                                                        : "MTA_ConfigureDERenderReferenceV2"));
-                    const auto expectedVersion = guiSurfaceRequested                 ? DefinitiveGuiSurfaceReference::ApiVersion
+                    const auto configureFrontend = reinterpret_cast<ConfigureFrontend>(GetProcAddress(core, "MTA_ConfigureDEGuiFrontendReference"));
+                    const auto expectedVersion = guiFrontendRequested                ? DefinitiveGuiFrontendReference::ApiVersion
+                                                 : guiSurfaceRequested               ? DefinitiveGuiSurfaceReference::ApiVersion
                                                  : guiRequested                      ? DefinitiveGuiStartupReference::ApiVersion
                                                  : renderRequested && renderApi == 6 ? DefinitiveRenderReference::ApiVersionV6
                                                  : renderRequested && renderApi == 5 ? DefinitiveRenderReference::ApiVersionV5
@@ -563,19 +648,26 @@ namespace deonline
                                                  : renderRoute                       ? DefinitiveRenderReference::ApiVersionV2
                                                  : renderRequested                   ? DefinitiveRenderReference::ApiVersion
                                                                                      : DefinitiveInputReference::ApiVersion;
-                    if (!inputVersion || (renderRoute ? !configureV2 : !configure) || inputVersion() != expectedVersion)
+                    if (!inputVersion ||
+                        (guiFrontendRequested ? !configureFrontend
+                         : renderRoute        ? !configureV2
+                                              : !configure) ||
+                        inputVersion() != expectedVersion)
                     {
                         values[16] = 13;
                         return;
                     }
                     inputOwner = this;
-                    const auto duration = guiSurfaceRequested ? DefinitiveGuiSurfaceReference::MaximumDurationMs
-                                          : guiRequested      ? DefinitiveGuiStartupReference::MaximumDurationMs
-                                          : renderRequested   ? DefinitiveRenderReference::MaximumDurationMs
-                                          : movementRequested ? DefinitiveMovementReference::MaximumDurationMs
-                                                              : DefinitiveInputReference::MaximumDurationMs;
-                    if ((renderRoute ? configureV2(duration, renderRoute, InputCancelled, PublishInput) : configure(duration, InputCancelled, PublishInput)) !=
-                        1)
+                    const auto duration = guiFrontendRequested  ? DefinitiveGuiFrontendReference::MaximumDurationMs
+                                          : guiSurfaceRequested ? DefinitiveGuiSurfaceReference::MaximumDurationMs
+                                          : guiRequested        ? DefinitiveGuiStartupReference::MaximumDurationMs
+                                          : renderRequested     ? DefinitiveRenderReference::MaximumDurationMs
+                                          : movementRequested   ? DefinitiveMovementReference::MaximumDurationMs
+                                                                : DefinitiveInputReference::MaximumDurationMs;
+                    if ((guiFrontendRequested
+                             ? configureFrontend(DefinitiveGuiFrontendReference::ApiVersion, duration, InputCancelled, PublishInput, ControlInput)
+                         : renderRoute ? configureV2(duration, renderRoute, InputCancelled, PublishInput)
+                                       : configure(duration, InputCancelled, PublishInput)) != 1)
                     {
                         values[16] = 14;
                         return;
@@ -588,6 +680,12 @@ namespace deonline
                     values[field] = read(field);
                 if (inputRequested)
                 {
+                    // Native peer holds and GUI callbacks have ended. Wait for
+                    // a final independent control read before taking the cache
+                    // lock, so script capture contention cannot force quarantine.
+                    DefinitiveGuiFrontendReference::ControlSnapshot finalControl{};
+                    const bool                                      finalControlAvailable =
+                        !guiFrontendRequested || frontendControl.CaptureFinalOnWorker(GetCurrentThreadId(), GetTickCount64(), finalControl);
                     AcquireSRWLockShared(&inputLock);
                     const auto complete = [](const auto& sample)
                     {
@@ -654,18 +752,66 @@ namespace deonline
                                                  publishedGuiSurface[DefinitiveGuiSurfaceReference::WindowCleanupComplete] == 1 &&
                                                  publishedGuiSurface[DefinitiveGuiSurfaceReference::CompositionCleanupComplete] == 1 &&
                                                  publishedGuiSurface[DefinitiveGuiSurfaceReference::ClassUnregistered] == 1;
+                    const auto frontendComplete = [&]
+                    {
+                        using namespace DefinitiveGuiFrontendReference;
+                        using namespace DefinitiveGuiStartupReference;
+                        const auto& sample = publishedGuiFrontend;
+                        const auto& control = finalControl;
+                        // Independently read the mailbox: Core cannot turn an
+                        // unrestored script obligation into an unload claim.
+                        if (!guiFrontendAvailable || !finalControlAvailable)
+                            return false;
+                        const bool controlComplete = control[ControlField::Requested]
+                                                         ? control[ControlField::Revoked] == 1 && control[ControlField::Detached] == 1 &&
+                                                               control[ControlField::Restored] == 1 && sample[ControlRequested] == 1 &&
+                                                               sample[ControlGeneration] == control[ControlField::Generation] && sample[ControlRestored] == 1 &&
+                                                               sample[ControlInputDetached] == 1 && sample[ControlRevoked] == 1 && !sample[ControlFresh] &&
+                                                               sample[ControlAcknowledged] == control[ControlField::Acknowledged] &&
+                                                               sample[ControlFault] == control[ControlField::Fault]
+                                                         : std::all_of(sample.begin() + ControlGeneration, sample.begin() + ControlFault + 1,
+                                                                       [](std::uint32_t value) { return value == 0; });
+                        const bool frontendRetired =
+                            sample[Frontend + DefinitiveFrontend::Version] == 0
+                                ? !sample[FrontendStarted] && !sample[FrontendStopped] &&
+                                      std::all_of(sample.begin() + Frontend, sample.begin() + Frontend + DefinitiveFrontend::FieldCount,
+                                                  [](std::uint32_t value) { return value == 0; })
+                                : sample[Frontend + DefinitiveFrontend::Version] == DefinitiveFrontend::ApiVersion &&
+                                      sample[Frontend + DefinitiveFrontend::Phase] == 4 && !sample[Frontend + DefinitiveFrontend::InputRequested] &&
+                                      !sample[Frontend + DefinitiveFrontend::ReleaseFault] && sample[Frontend + DefinitiveFrontend::CleanupComplete] == 1 &&
+                                      !sample[Frontend + DefinitiveFrontend::CleanupPending] && !sample[Frontend + DefinitiveFrontend::ServicesRetained] &&
+                                      !sample[Frontend + DefinitiveFrontend::GuiBorrowed] && sample[FrontendStopped] == 1;
+                        const bool inputRetired =
+                            sample[InputDetached] == 1 || (!sample[DefinitiveGuiSurfaceReference::ChildCreated] && !sample[FrontendStarted] &&
+                                                           !sample[InputEventsLow] && !sample[InputEventsHigh]);
+                        // A missed cleanup deadline remains workload evidence;
+                        // eventual proven retirement must still release Core.
+                        return sample[DefinitiveGuiStartupReference::Version] == DefinitiveGuiFrontendReference::ApiVersion && sample[Phase] == 2 &&
+                               sample[CleanupComplete] == 1 && sample[ObserverEnded] == 1 && sample[GuiCleanupComplete] == 1 && !sample[GuiShutdownStatus] &&
+                               !sample[CleanupPending] && !sample[ObserverPendingCleanup] && !sample[ModuleRetained] && !sample[SessionRetained] &&
+                               !sample[DeviceRetained] && !sample[DeviceReleaseFault] && !sample[DefinitiveGuiSurfaceReference::ChildRetained] &&
+                               !sample[DefinitiveGuiSurfaceReference::QueueRetained] && !sample[DefinitiveGuiSurfaceReference::SurfaceRetained] &&
+                               !sample[DefinitiveGuiSurfaceReference::ResizePending] && sample[DefinitiveGuiSurfaceReference::WindowCleanupComplete] == 1 &&
+                               sample[DefinitiveGuiSurfaceReference::CompositionCleanupComplete] == 1 &&
+                               sample[DefinitiveGuiSurfaceReference::ClassUnregistered] == 1 && frontendRetired && inputRetired && !sample[PressedKeys] &&
+                               !sample[PressedButtons] && !sample[Frontend + DefinitiveFrontend::NetworkStarted] &&
+                               !sample[Frontend + DefinitiveFrontend::GameplayReady] && !sample[Frontend + DefinitiveFrontend::FullMtaReady] &&
+                               !sample[CameraCaptureVerified] && !sample[FullEngineInputReady] && controlComplete;
+                    };
                     // Workload failure is separate from completing ownership
                     // cleanup. The GUI snapshot retains its own outcome facts.
-                    const bool inputComplete = guiSurfaceRequested ? surfaceComplete
-                                               : guiRequested      ? guiComplete
-                                               : renderRequested   ? renderComplete
-                                               : movementRequested ? movementAvailable && complete(publishedMovement) &&
+                    const bool inputComplete = guiFrontendRequested  ? frontendComplete()
+                                               : guiSurfaceRequested ? surfaceComplete
+                                               : guiRequested        ? guiComplete
+                                               : renderRequested     ? renderComplete
+                                               : movementRequested   ? movementAvailable && complete(publishedMovement) &&
                                                                          !publishedMovement[DefinitiveMovementReference::CleanupPending]
                                                                    : inputAvailable && complete(publishedInput);
                     ReleaseSRWLockShared(&inputLock);
                     if (!inputComplete)
                     {
                         values[16] = 15;
+                        frontendQuarantined = guiFrontendRequested;
                         return;
                     }
                 }
@@ -692,7 +838,9 @@ namespace deonline
         inputOwner = nullptr;
         // Cancellation never interrupts the loader or unloads Core from a
         // second thread. Completion is published only after this owned cleanup.
-        if (core && !FreeLibrary(core))
+        if (guiFrontendRequested && core && values[16] == 11)
+            frontendQuarantined = true;
+        if (core && !frontendQuarantined && !FreeLibrary(core))
             values[16] = 9;
         values[12] = LegacyRendererModules();
         values[13] = GetModuleHandleW(L"core.dll") ? 0u : 1u;
@@ -700,7 +848,8 @@ namespace deonline
         if ((values[12] & ~values[11]) && !values[16])
             values[16] = 10;
         const auto expectedBackend =
-            guiSurfaceRequested && guiSurfaceAvailable               ? publishedGuiSurface[DefinitiveGuiStartupReference::BackendPinnedExpected]
+            guiFrontendRequested && guiFrontendAvailable             ? publishedGuiFrontend[DefinitiveGuiStartupReference::BackendPinnedExpected]
+            : guiSurfaceRequested && guiSurfaceAvailable             ? publishedGuiSurface[DefinitiveGuiStartupReference::BackendPinnedExpected]
             : guiRequested && guiAvailable                           ? publishedGui[DefinitiveGuiStartupReference::BackendPinnedExpected]
             : renderRequested && renderApi == 6 && renderV6Available ? publishedRenderV6[DefinitiveRenderReference::BackendPinnedExpected]
             : renderRequested && renderApi == 5 && renderV5Available ? publishedRenderV5[DefinitiveRenderReference::BackendPinnedExpected]

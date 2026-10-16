@@ -66,9 +66,35 @@ $guiPaths = @('CLEO/de-online/cgui.dll',
     'CLEO/de-online/mta/cgui/Falagard.xsd', 'CLEO/de-online/mta/cgui/unifont.ttf',
     'CLEO/de-online/skins/Default/CGUI.xml', 'CLEO/de-online/skins/Default/CGUI.is.xml',
     'CLEO/de-online/skins/Default/CGUI.lnf.xml', 'CLEO/de-online/skins/Default/CGUI.png')
+$frontendPaths = @(
+    'CLEO/de-online/mta/cgui/images/background.png',
+    'CLEO/de-online/mta/cgui/images/background_logo.png',
+    'CLEO/de-online/mta/cgui/images/mta_filler.png',
+    'CLEO/de-online/mta/cgui/images/version.png',
+    'CLEO/de-online/mta/cgui/images/the_language_icon.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/locked.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/search-servers.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/search-players.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/refresh.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/favorite.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/connect.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/info.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/search.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/trashcan.png',
+    'CLEO/de-online/mta/locale/en_US/menu_disconnect.png',
+    'CLEO/de-online/mta/locale/en_US/menu_quick_connect.png',
+    'CLEO/de-online/mta/locale/en_US/menu_browse_servers.png',
+    'CLEO/de-online/mta/locale/en_US/menu_settings.png',
+    'CLEO/de-online/mta/locale/en_US/menu_about.png',
+    'CLEO/de-online/mta/locale/en_US/menu_quit.png',
+    'CLEO/de-online/mta/locale/en_US/latest_news.png',
+    'CLEO/de-online/mta/locale/en_US/client.pot')
 $guiCount = @($relativePaths | Where-Object { $_ -in $guiPaths }).Count
+$frontendCount = @($relativePaths | Where-Object { $_ -in $frontendPaths }).Count
+if ($frontendCount -ne 0 -and ($frontendCount -ne 22 -or $guiCount -ne 13)) { throw 'Incomplete MTA Core GUI frontend package ownership.' }
 if ($guiCount -ne 0 -and $guiCount -ne $guiPaths.Count) { throw 'Incomplete MTA Core GUI startup package ownership.' }
 if ($guiCount) { $allowedPaths += $guiPaths }
+if ($frontendCount) { $allowedPaths += $frontendPaths }
 if ($relativePaths.Count -ne $allowedPaths.Count -or @($relativePaths | Select-Object -Unique).Count -ne $allowedPaths.Count -or
     @(Compare-Object $allowedPaths $relativePaths).Count -ne 0) {
     throw 'Package manifest must contain exactly the known owned file paths.'
@@ -83,7 +109,7 @@ $guiPattern = 'export const MTA_CORE_GUI_STARTUP_REFERENCE = (true|false);'
 $guiMarkers = [regex]::Matches($configText, $guiPattern)
 if ($guiMarkers.Count -gt 1 -or ($guiCount -and $guiMarkers.Count -ne 1)) { throw 'Invalid GUI startup configuration marker.' }
 if ($guiMarkers.Count -eq 1 -and $guiMarkers[0].Groups[1].Value -eq 'true') {
-    if (-not $guiCount -or $Mode -ne 'Smoke' -or $configText -match 'export const (GAIT_REFERENCE|GAIT_RATE|GAIT_ROOT_LOCK|INPUT_REFERENCE|MTA_NATIVE_PAD_REFERENCE|MTA_NATIVE_MOVEMENT_TRIAL|MTA_CORE_STARTUP_REFERENCE|MTA_CORE_INPUT_REFERENCE|MTA_CORE_MOVEMENT_REFERENCE|MTA_CORE_RENDER_REFERENCE|MTA_CORE_RENDER_GPU_REFERENCE|MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE|MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE|MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE|MTA_CORE_GUI_SURFACE_REFERENCE) = true;') {
+    if (-not $guiCount -or $Mode -ne 'Smoke' -or $configText -match 'export const (GAIT_REFERENCE|GAIT_RATE|GAIT_ROOT_LOCK|INPUT_REFERENCE|MTA_NATIVE_PAD_REFERENCE|MTA_NATIVE_MOVEMENT_TRIAL|MTA_CORE_STARTUP_REFERENCE|MTA_CORE_INPUT_REFERENCE|MTA_CORE_MOVEMENT_REFERENCE|MTA_CORE_RENDER_REFERENCE|MTA_CORE_RENDER_GPU_REFERENCE|MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE|MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE|MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE|MTA_CORE_GUI_SURFACE_REFERENCE|MTA_CORE_GUI_FRONTEND_REFERENCE) = true;') {
         throw 'MTA Core GUI startup requires the complete GUI group and separate opt-in Smoke mode.'
     }
 }
@@ -92,8 +118,15 @@ if ($guiMarkers.Count -eq 1 -and $guiMarkers[0].Groups[1].Value -eq 'true') {
 $surfaceMarkers = [regex]::Matches($configText, 'export const MTA_CORE_GUI_SURFACE_REFERENCE = (true|false);')
 if ($surfaceMarkers.Count -gt 1) { throw 'Invalid GUI surface configuration marker.' }
 if ($surfaceMarkers.Count -eq 1 -and $surfaceMarkers[0].Groups[1].Value -eq 'true') {
-    if (-not $guiCount -or $Mode -ne 'Smoke' -or $configText -match 'export const (GAIT_REFERENCE|GAIT_RATE|GAIT_ROOT_LOCK|INPUT_REFERENCE|MTA_NATIVE_PAD_REFERENCE|MTA_NATIVE_MOVEMENT_TRIAL|MTA_CORE_STARTUP_REFERENCE|MTA_CORE_INPUT_REFERENCE|MTA_CORE_MOVEMENT_REFERENCE|MTA_CORE_RENDER_REFERENCE|MTA_CORE_RENDER_GPU_REFERENCE|MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE|MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE|MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE|MTA_CORE_GUI_STARTUP_REFERENCE) = true;') {
+    if (-not $guiCount -or $Mode -ne 'Smoke' -or $configText -match 'export const (GAIT_REFERENCE|GAIT_RATE|GAIT_ROOT_LOCK|INPUT_REFERENCE|MTA_NATIVE_PAD_REFERENCE|MTA_NATIVE_MOVEMENT_TRIAL|MTA_CORE_STARTUP_REFERENCE|MTA_CORE_INPUT_REFERENCE|MTA_CORE_MOVEMENT_REFERENCE|MTA_CORE_RENDER_REFERENCE|MTA_CORE_RENDER_GPU_REFERENCE|MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE|MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE|MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE|MTA_CORE_GUI_STARTUP_REFERENCE|MTA_CORE_GUI_FRONTEND_REFERENCE) = true;') {
         throw 'MTA Core GUI surface requires the complete GUI group and separate opt-in Smoke mode.'
+    }
+}
+$frontendMarkers = [regex]::Matches($configText, 'export const MTA_CORE_GUI_FRONTEND_REFERENCE = (true|false);')
+if ($frontendMarkers.Count -gt 1 -or ($frontendCount -and $frontendMarkers.Count -ne 1)) { throw 'Invalid GUI frontend configuration marker.' }
+if ($frontendMarkers.Count -eq 1 -and $frontendMarkers[0].Groups[1].Value -eq 'true') {
+    if (-not $frontendCount -or $Mode -ne 'Smoke' -or $configText -match 'export const (GAIT_REFERENCE|GAIT_RATE|GAIT_ROOT_LOCK|INPUT_REFERENCE|MTA_NATIVE_PAD_REFERENCE|MTA_NATIVE_MOVEMENT_TRIAL|MTA_CORE_STARTUP_REFERENCE|MTA_CORE_INPUT_REFERENCE|MTA_CORE_MOVEMENT_REFERENCE|MTA_CORE_RENDER_REFERENCE|MTA_CORE_RENDER_GPU_REFERENCE|MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE|MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE|MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE|MTA_CORE_GUI_STARTUP_REFERENCE|MTA_CORE_GUI_SURFACE_REFERENCE) = true;') {
+        throw 'MTA Core GUI frontend requires the complete frontend group and separate opt-in Smoke mode.'
     }
 }
 $installedManifestPath = Join-Path $gameRoot 'de-online-install-manifest.json'

@@ -8,6 +8,8 @@ param(
     [string]$PackageRoot,
     [string]$GuiPackagePath,
     [string]$SurfacePackagePath,
+    [string]$FrontendPackagePath,
+    [switch]$FrontendOnly,
     [Parameter(Mandatory)][string]$GameExecutable
 )
 
@@ -42,6 +44,30 @@ $guiPaths = @('CLEO/de-online/cgui.dll',
     'CLEO/de-online/mta/cgui/Falagard.xsd', 'CLEO/de-online/mta/cgui/unifont.ttf',
     'CLEO/de-online/skins/Default/CGUI.xml', 'CLEO/de-online/skins/Default/CGUI.is.xml',
     'CLEO/de-online/skins/Default/CGUI.lnf.xml', 'CLEO/de-online/skins/Default/CGUI.png')
+
+$frontendPaths = @(
+    'CLEO/de-online/mta/cgui/images/background.png',
+    'CLEO/de-online/mta/cgui/images/background_logo.png',
+    'CLEO/de-online/mta/cgui/images/mta_filler.png',
+    'CLEO/de-online/mta/cgui/images/version.png',
+    'CLEO/de-online/mta/cgui/images/the_language_icon.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/locked.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/search-servers.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/search-players.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/refresh.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/favorite.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/connect.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/info.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/search.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/trashcan.png',
+    'CLEO/de-online/mta/locale/en_US/menu_disconnect.png',
+    'CLEO/de-online/mta/locale/en_US/menu_quick_connect.png',
+    'CLEO/de-online/mta/locale/en_US/menu_browse_servers.png',
+    'CLEO/de-online/mta/locale/en_US/menu_settings.png',
+    'CLEO/de-online/mta/locale/en_US/menu_about.png',
+    'CLEO/de-online/mta/locale/en_US/menu_quit.png',
+    'CLEO/de-online/mta/locale/en_US/latest_news.png',
+    'CLEO/de-online/mta/locale/en_US/client.pot')
 
 function Get-Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 if ((Get-Sha $sourceExecutable) -ne $knownGameHash) { throw 'A copy of the exact verified Steam executable is required.' }
@@ -108,6 +134,28 @@ if ($SurfacePackagePath) {
     }
     $surfacePackageHashes = @([ordered]@{ path='manifest.json'; sha256=(Get-Sha (Join-Path $surfacePackage 'manifest.json')) }) + @($surfaceManifest.files | ForEach-Object { [ordered]@{ path=('Win64/' + $_.path); sha256=$_.sha256 } })
 }
+$frontendPackage = $null
+$frontendManifest = $null
+$frontendPackageHashes = @()
+if ($FrontendPackagePath) {
+    $frontendPackage = (Resolve-Path -LiteralPath $FrontendPackagePath).Path
+    $frontendManifest = Get-Content -LiteralPath (Join-Path $frontendPackage 'manifest.json') -Raw | ConvertFrom-Json
+    if ($frontendManifest.packageId -ne 'de-online-prototype' -or $frontendManifest.mode -ne 'Smoke' -or $frontendManifest.gameSha256 -ne $knownGameHash -or $frontendManifest.formatVersion -ne 1 -or
+        @($frontendManifest.files).Count -ne 58 -or @($frontendManifest.files.path | Select-Object -Unique).Count -ne 58 -or @(Compare-Object ($expectedPaths + $guiPaths + $frontendPaths) @($frontendManifest.files.path)).Count -ne 0) {
+        throw 'Supply the complete real 58-file MTA frontend Smoke package.'
+    }
+    foreach ($entry in $frontendManifest.files) {
+        if ((Get-Sha (Join-Path $frontendPackage ('Win64/' + $entry.path))) -ne $entry.sha256) { throw "Frontend source package hash differs: $($entry.path)" }
+        if ($entry.path -in $expectedPaths -and $entry.path -ne 'CLEO/de-online/config.mjs' -and @($sourceManifest.files | Where-Object path -eq $entry.path)[0].sha256 -ne $entry.sha256) { throw "Frontend and ordinary backend bytes differ: $($entry.path)" }
+        if ($guiManifest -and $entry.path -in $guiPaths -and @($guiManifest.files | Where-Object path -eq $entry.path)[0].sha256 -ne $entry.sha256) { throw "Frontend GUI asset bytes differ: $($entry.path)" }
+    }
+    $frontendConfig = [IO.File]::ReadAllText((Join-Path $frontendPackage 'Win64/CLEO/de-online/config.mjs'))
+    if ([regex]::Matches($frontendConfig, 'export const MTA_CORE_GUI_FRONTEND_REFERENCE = true;').Count -ne 1 -or $frontendConfig -match 'export const (GAIT_REFERENCE|GAIT_RATE|GAIT_ROOT_LOCK|INPUT_REFERENCE|MTA_NATIVE_PAD_REFERENCE|MTA_NATIVE_MOVEMENT_TRIAL|MTA_CORE_STARTUP_REFERENCE|MTA_CORE_INPUT_REFERENCE|MTA_CORE_MOVEMENT_REFERENCE|MTA_CORE_RENDER_REFERENCE|MTA_CORE_RENDER_GPU_REFERENCE|MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE|MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE|MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE|MTA_CORE_GUI_STARTUP_REFERENCE|MTA_CORE_GUI_SURFACE_REFERENCE) = true;') {
+        throw 'Frontend ownership tests require an explicitly armed, separate MTA GUI frontend package.'
+    }
+    $frontendPackageHashes = @([ordered]@{ path='manifest.json'; sha256=(Get-Sha (Join-Path $frontendPackage 'manifest.json')) }) + @($frontendManifest.files | ForEach-Object { [ordered]@{ path=('Win64/' + $_.path); sha256=$_.sha256 } })
+}
+if ($FrontendOnly -and -not $frontendPackage) { throw 'FrontendOnly requires the real frontend package.' }
 $outputRoot = Join-Path $repositoryRoot ('Build/mta-movement-package-tests/' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($outputRoot) | Out-Null
 $logPath = Join-Path $outputRoot 'production-scripts.log'
@@ -202,14 +250,14 @@ function New-Fixture([string]$Name) {
 function Install-Fresh([object]$Fixture) {
     Invoke-Production $Fixture 'install.ps1' @{ Mode='Smoke'; PackageDirectory=$Fixture.package; GameDirectory=$Fixture.game }
 }
-function Select-FixturePackage([object]$Fixture, [bool]$Gui, [bool]$Surface = $false) {
+function Select-FixturePackage([object]$Fixture, [bool]$Gui, [bool]$Surface = $false, [bool]$Frontend = $false) {
     # Switch only the disposable package tree; current installed ownership is
     # left intact so update exercises the real 23-to-36 and 36-to-23 transaction.
     $old = Get-Content -LiteralPath (Join-Path $Fixture.package 'manifest.json') -Raw | ConvertFrom-Json
     foreach ($entry in $old.files) { Remove-Item -LiteralPath (Assert-FixturePath (Join-Path $Fixture.package ('Win64/' + $entry.path))) }
     Remove-Item -LiteralPath (Assert-FixturePath (Join-Path $Fixture.package 'manifest.json'))
-    $source = if ($Surface) { $surfacePackage } elseif ($Gui) { $guiPackage } else { $sourcePackage }
-    $manifest = if ($Surface) { $surfaceManifest } elseif ($Gui) { $guiManifest } else { $sourceManifest }
+    $source = if ($Frontend) { $frontendPackage } elseif ($Surface) { $surfacePackage } elseif ($Gui) { $guiPackage } else { $sourcePackage }
+    $manifest = if ($Frontend) { $frontendManifest } elseif ($Surface) { $surfaceManifest } elseif ($Gui) { $guiManifest } else { $sourceManifest }
     Copy-FixtureFile (Join-Path $source 'manifest.json') (Join-Path $Fixture.package 'manifest.json')
     foreach ($entry in $manifest.files) { Copy-FixtureFile (Join-Path $source ('Win64/' + $entry.path)) (Join-Path $Fixture.package ('Win64/' + $entry.path)) }
 }
@@ -280,6 +328,23 @@ function Invoke-Case([string]$Name, [scriptblock]$Action) {
 
 $failure = $null
 try {
+    if ($FrontendOnly) {
+        Invoke-Case 'frontend-bounded-legacy23-and-gui36-acceptance' {
+            param($fixture)
+            Install-Fresh $fixture
+            Assert-InstalledPackage $fixture
+            Invoke-Production $fixture 'set-loader.ps1' @{Action='Status';GameDirectory=$fixture.game}
+            Invoke-Production $fixture 'uninstall.ps1' @{GameDirectory=$fixture.game}
+            if ($guiPackage) {
+                Select-FixturePackage $fixture $true
+                Install-Fresh $fixture
+                Assert-GuiInstalled $fixture
+                Invoke-Production $fixture 'set-loader.ps1' @{Action='Status';GameDirectory=$fixture.game}
+                Invoke-Production $fixture 'uninstall.ps1' @{GameDirectory=$fixture.game}
+            }
+        }
+    }
+    if (-not $FrontendOnly) {
     Invoke-Case 'fresh-23-validate-uninstall' {
         param($fixture)
         Install-Fresh $fixture
@@ -1096,11 +1161,170 @@ try {
             Invoke-Production $fixture 'uninstall.ps1' @{GameDirectory=$fixture.game;ValidateOnly=$true}
         }
     }
+    }
+    if ($frontendPackage) {
+        Invoke-Case 'frontend23-58-36-58-23-transactions' {
+            param($fixture)
+            Install-Fresh $fixture
+            Select-FixturePackage $fixture $false $false $true
+            Invoke-Production $fixture 'update.ps1' @{GameDirectory=$fixture.game;PackageDirectory=$fixture.package}
+            $installed = Get-Content -LiteralPath (Join-Path $fixture.game 'de-online-install-manifest.json') -Raw | ConvertFrom-Json
+            Assert-Check (@($installed.files).Count -eq 58 -and @(Compare-Object ($expectedPaths + $guiPaths + $frontendPaths) @($installed.files.path)).Count -eq 0) 'Frontend exact complete58 ownership'
+            foreach ($entry in $installed.files) { Assert-Check ((Get-Sha $entry.destination) -eq $entry.sha256) ('Frontend owned hash ' + $entry.path) }
+            Invoke-Production $fixture 'uninstall.ps1' @{GameDirectory=$fixture.game;ValidateOnly=$true}
+            Invoke-Production $fixture 'set-mode.ps1' @{Mode='Smoke';MtaCoreGuiFrontendReference=$true;GameDirectory=$fixture.game}
+            Invoke-Production $fixture 'set-mode.ps1' @{Mode='Diagnostic';GameDirectory=$fixture.game}
+            $config = Join-Path $fixture.game 'CLEO/de-online/config.mjs'
+            Assert-Check ([IO.File]::ReadAllText($config) -match 'export const MTA_CORE_GUI_FRONTEND_REFERENCE = false;') 'Ordinary mode clears frontend opt-in while owning58'
+            Invoke-Production $fixture 'set-mode.ps1' @{Mode='Smoke';MtaCoreGuiFrontendReference=$true;GameDirectory=$fixture.game}
+            if ($guiPackage) {
+                Select-FixturePackage $fixture $true
+                Invoke-Production $fixture 'update.ps1' @{GameDirectory=$fixture.game}
+                Assert-GuiInstalled $fixture
+                foreach ($path in $frontendPaths) { Assert-Check (-not (Test-Path -LiteralPath (Join-Path $fixture.game $path))) ('Frontend downgrade removes only owned menu asset ' + $path) }
+                Select-FixturePackage $fixture $false $false $true
+                Invoke-Production $fixture 'update.ps1' @{GameDirectory=$fixture.game}
+            }
+            Select-FixturePackage $fixture $false
+            Invoke-Production $fixture 'update.ps1' @{GameDirectory=$fixture.game}
+            Assert-InstalledPackage $fixture
+            foreach ($path in ($guiPaths + $frontendPaths)) { Assert-Check (-not (Test-Path -LiteralPath (Join-Path $fixture.game $path))) ('Ordinary downgrade removes owned GUI/menu asset ' + $path) }
+        }
+        Invoke-Case 'frontend-fresh58-validate-uninstall' {
+            param($fixture)
+            Select-FixturePackage $fixture $false $false $true
+            Install-Fresh $fixture
+            Invoke-Production $fixture 'uninstall.ps1' @{GameDirectory=$fixture.game;ValidateOnly=$true}
+            Invoke-Production $fixture 'set-loader.ps1' @{Action='Disable';GameDirectory=$fixture.game}
+            Assert-Check ((Test-Path -LiteralPath (Join-Path $fixture.game 'version.dll.de-online-disabled')) -and -not (Test-Path -LiteralPath (Join-Path $fixture.game 'version.dll'))) 'Frontend58 loader bypass renames only owned loader'
+            Invoke-Production $fixture 'set-loader.ps1' @{Action='Status';GameDirectory=$fixture.game}
+            Invoke-Production $fixture 'set-loader.ps1' @{Action='Enable';GameDirectory=$fixture.game}
+            Assert-Check ((Test-Path -LiteralPath (Join-Path $fixture.game 'version.dll')) -and -not (Test-Path -LiteralPath (Join-Path $fixture.game 'version.dll.de-online-disabled'))) 'Frontend58 loader recovery restores owned loader'
+            $installedPath=Join-Path $fixture.game 'de-online-install-manifest.json'
+            $originalInstalled=[IO.File]::ReadAllBytes($installedPath)
+            foreach ($guard in @('foreign-owner','escape-destination','edited-owned-hash','partial-menu-group')) {
+                $record=$utf8.GetString($originalInstalled)|ConvertFrom-Json
+                switch ($guard) {
+                    'foreign-owner' { $record.gameDirectory=Join-Path $fixture.root 'other-owner' }
+                    'escape-destination' { $record.files[0].destination=Join-Path $fixture.root 'outside-owned-game' }
+                    'edited-owned-hash' { $record.files[0].sha256=('0'*64) }
+                    'partial-menu-group' { $record.files=@($record.files|Where-Object path -ne $frontendPaths[0]) }
+                }
+                Write-FixtureJson $installedPath $record
+                $before=Get-TreeFingerprint $fixture.root
+                Assert-Refused { Invoke-Production $fixture 'uninstall.ps1' @{GameDirectory=$fixture.game;ValidateOnly=$true} } 'identity|invalid destination|modified|Incomplete MTA Core GUI frontend' ('Frontend installed ownership guard ' + $guard)
+                Assert-Refused { Invoke-Production $fixture 'set-loader.ps1' @{Action='Status';GameDirectory=$fixture.game} } 'identity|invalid destination|modified|Incomplete MTA Core GUI frontend' ('Frontend loader ownership guard ' + $guard)
+                Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Installed ownership rejection preserves every byte'
+            }
+            Write-FixtureBytes $installedPath $originalInstalled
+            $sourceManifestPath=Join-Path $fixture.package 'manifest.json'
+            $originalPackage=[IO.File]::ReadAllBytes($sourceManifestPath)
+            $bad=$utf8.GetString($originalPackage)|ConvertFrom-Json
+            @($bad.files|Where-Object path -eq 'CLEO/de-online/mta/locale/en_US/client.pot')[0].sha256=('0'*64)
+            Write-FixtureJson $sourceManifestPath $bad
+            $before=Get-TreeFingerprint $fixture.root
+            Assert-Refused { Invoke-Production $fixture 'update.ps1' @{GameDirectory=$fixture.game} } 'Package hash mismatch' 'Frontend source hash cannot be forged'
+            Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Source hash rejection preserves all58 installed bytes'
+            Write-FixtureBytes $sourceManifestPath $originalPackage
+            Invoke-Production $fixture 'uninstall.ps1' @{GameDirectory=$fixture.game}
+            Assert-Check (@(Get-ChildItem -LiteralPath $fixture.game -File -Recurse).Count -eq 1) 'Frontend uninstall retains only exact hashed game executable'
+        }
+        Invoke-Case 'frontend-each-menu-asset-required-as-one-group' {
+            param($fixture)
+            Install-Fresh $fixture
+            Select-FixturePackage $fixture $false $false $true
+            $manifestPath = Join-Path $fixture.package 'manifest.json'
+            $original = [IO.File]::ReadAllBytes($manifestPath)
+            $fresh = $fixture.game # Validation fails before the existing-install collision gate.
+            foreach ($path in $frontendPaths) {
+                $manifest = $utf8.GetString($original) | ConvertFrom-Json
+                $manifest.files = @($manifest.files | Where-Object path -ne $path)
+                Write-FixtureJson $manifestPath $manifest
+                $before = Get-TreeFingerprint $fixture.root
+                Assert-Refused { Invoke-Production $fixture 'update.ps1' @{GameDirectory=$fixture.game} } 'Incomplete MTA Core GUI frontend package ownership' ('Frontend update missing group member ' + $path)
+                Assert-Refused { Invoke-Production $fixture 'install.ps1' @{Mode='Smoke';PackageDirectory=$fixture.package;GameDirectory=$fresh} } 'Incomplete MTA Core GUI frontend package ownership' ('Frontend install missing group member ' + $path)
+                Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Rejected incomplete frontend stages no bytes'
+            }
+            Write-FixtureBytes $manifestPath $original
+        }
+        Invoke-Case 'frontend-requires-gui-group-and-marker' {
+            param($fixture)
+            Install-Fresh $fixture
+            Select-FixturePackage $fixture $false $false $true
+            $manifestPath = Join-Path $fixture.package 'manifest.json'
+            $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+            $completeManifest = [IO.File]::ReadAllBytes($manifestPath)
+            $manifest.files = @($manifest.files | Where-Object { $_.path -notin $guiPaths })
+            Write-FixtureJson $manifestPath $manifest
+            Assert-Refused { Invoke-Production $fixture 'update.ps1' @{GameDirectory=$fixture.game} } 'Incomplete MTA Core GUI frontend package ownership' 'Frontend cannot omit complete13 GUI group'
+            Write-FixtureBytes $manifestPath $completeManifest
+            $config = Join-Path $fixture.package 'Win64/CLEO/de-online/config.mjs'
+            $configBytes = [IO.File]::ReadAllBytes($config)
+            foreach ($markerCase in @('missing','duplicate')) {
+                $text = $utf8.GetString($configBytes)
+                if ($markerCase -eq 'missing') { $text = [regex]::Replace($text,'(?m)^export const MTA_CORE_GUI_FRONTEND_REFERENCE = true;\r?\n','') }
+                else { $text += "`nexport const MTA_CORE_GUI_FRONTEND_REFERENCE = false;`n" }
+                Write-FixtureBytes $config ($utf8.GetBytes($text))
+                $modified = $utf8.GetString($completeManifest) | ConvertFrom-Json
+                @($modified.files | Where-Object path -eq 'CLEO/de-online/config.mjs')[0].sha256 = Get-Sha $config
+                Write-FixtureJson $manifestPath $modified
+                $before = Get-TreeFingerprint $fixture.root
+                Assert-Refused { Invoke-Production $fixture 'update.ps1' @{GameDirectory=$fixture.game} } 'Invalid GUI frontend configuration marker' ('Frontend package requires exactly one marker ' + $markerCase)
+                Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Frontend marker refusal stages no bytes'
+            }
+            Write-FixtureBytes $config $configBytes
+            Write-FixtureBytes $manifestPath $completeManifest
+            foreach ($flag in @('MtaCoreGuiStartupReference','MtaCoreGuiSurfaceReference','MtaCoreRenderReference','MtaCoreMovementReference','MtaCoreInputReference','NativeInputReference')) {
+                $selection = @{Mode='Smoke';MtaCoreGuiFrontendReference=$true;GameDirectory=$fixture.game};$selection[$flag]=$true
+                Assert-Refused { Invoke-Production $fixture 'set-mode.ps1' $selection } 'separate opt-in Smoke mode' ('Frontend selected mode conflict ' + $flag)
+            }
+            foreach ($mode in @('Diagnostic','Online')) {
+                Assert-Refused { Invoke-Production $fixture 'package.ps1' @{Mode=$mode;MtaCoreGuiFrontendReference=$true} } 'separate opt-in Smoke mode' 'Frontend package mode conflict'
+            }
+            Assert-Refused { Invoke-Production $fixture 'package.ps1' @{Mode='Smoke';MtaCoreGuiFrontendReference=$true;MtaCoreRenderRoute='D3D12'} } 'separate opt-in Smoke mode' 'Frontend does not inherit explicit renderer route'
+            foreach ($outputPath in @((Join-Path $fixture.root 'outside-workspace-build'),(Join-Path $fixture.repository 'Build'))) {
+                $before=Get-TreeFingerprint $fixture.root
+                Assert-Refused { Invoke-Production $fixture 'package.ps1' @{Mode='Smoke';OutputDirectory=$outputPath} } 'Package output must stay within' 'Candidate output cannot escape or replace workspace Build root'
+                Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Invalid output directory stages no writes'
+            }
+        }
+        foreach ($badFlag in @('MTA_CORE_GUI_STARTUP_REFERENCE','MTA_CORE_GUI_SURFACE_REFERENCE','MTA_CORE_RENDER_REFERENCE')) {
+            Invoke-Case ('frontend-forged-conflict-' + $badFlag) {
+                param($fixture)
+                Install-Fresh $fixture
+                Select-FixturePackage $fixture $false $false $true
+                $config = Join-Path $fixture.package 'Win64/CLEO/de-online/config.mjs'
+                Write-FixtureBytes $config ($utf8.GetBytes([IO.File]::ReadAllText($config).Replace("export const $badFlag = false;", "export const $badFlag = true;")))
+                $manifestPath = Join-Path $fixture.package 'manifest.json'
+                $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+                @($manifest.files | Where-Object path -eq 'CLEO/de-online/config.mjs')[0].sha256=Get-Sha $config
+                Write-FixtureJson $manifestPath $manifest
+                $fresh = $fixture.game # Validation fails before the existing-install collision gate.
+                $before = Get-TreeFingerprint $fixture.root
+                Assert-Refused { Invoke-Production $fixture 'update.ps1' @{GameDirectory=$fixture.game} } 'separate opt-in Smoke mode' 'Forged frontend update flags'
+                Assert-Refused { Invoke-Production $fixture 'install.ps1' @{Mode='Smoke';PackageDirectory=$fixture.package;GameDirectory=$fresh} } 'separate opt-in Smoke mode' 'Forged frontend install flags'
+                Assert-Check ((Get-TreeFingerprint $fixture.root) -eq $before) 'Frontend forged conflicts stage no bytes'
+            }
+        }
+        Invoke-Case 'frontend-downgrade-failure-restores58' {
+            param($fixture)
+            Select-FixturePackage $fixture $false $false $true
+            Install-Fresh $fixture
+            Select-FixturePackage $fixture $false
+            $before = Get-TreeFingerprint $fixture.game
+            $locked = [IO.File]::Open((Join-Path $fixture.game 'CLEO/de-online/config.mjs'),[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+            try { Assert-Refused { Invoke-Production $fixture 'update.ps1' @{GameDirectory=$fixture.game} } 'being used|access|denied|process' 'Frontend downgrade actual replacement refusal' }
+            finally { $locked.Dispose() }
+            Assert-Check ((Get-TreeFingerprint $fixture.game) -eq $before) 'Failed frontend downgrade restores58 bytes and original manifest'
+            Invoke-Production $fixture 'uninstall.ps1' @{GameDirectory=$fixture.game;ValidateOnly=$true}
+        }
+    }
 } catch { $failure = $_.Exception.Message }
 $sourceUnchanged = $true
 foreach ($entry in $sourceHashes) { if ((Get-Sha (Join-Path $repositoryRoot $entry.path)) -ne $entry.sha256) { $sourceUnchanged = $false } }
 foreach ($entry in $packageHashes) { if ((Get-Sha (Join-Path $sourcePackage $entry.path)) -ne $entry.sha256) { $sourceUnchanged = $false } }
 foreach ($entry in $guiPackageHashes) { if ((Get-Sha (Join-Path $guiPackage $entry.path)) -ne $entry.sha256) { $sourceUnchanged = $false } }
+foreach ($entry in $frontendPackageHashes) { if ((Get-Sha (Join-Path $frontendPackage $entry.path)) -ne $entry.sha256) { $sourceUnchanged = $false } }
 foreach ($entry in $surfacePackageHashes) { if ((Get-Sha (Join-Path $surfacePackage $entry.path)) -ne $entry.sha256) { $sourceUnchanged = $false } }
 $sourceExecutableUnchanged = (Get-Sha $sourceExecutable) -eq $knownGameHash
 $record = [ordered]@{
@@ -1108,6 +1332,7 @@ $record = [ordered]@{
     checks=$script:checks.Count; cases=$script:cases; checkLabels=$script:checks; failure=$failure;
     sourceHashes=$sourceHashes; packageRoot=$sourcePackage; packageHashes=$packageHashes; sourceUnchanged=$sourceUnchanged;
     guiPackageRoot=$guiPackage; guiPackageHashes=$guiPackageHashes; guiCasesEnabled=($null -ne $guiPackage);
+    frontendOnly=$FrontendOnly.IsPresent; scope=$(if ($FrontendOnly) { 'Bounded frontend58 ownership plus legacy23/GUI36 compatibility and shared ownership/hash/destination guards' } else { 'All historical and optional GUI/frontend package ownership cases' }); frontendPackageRoot=$frontendPackage; frontendPackageHashes=$frontendPackageHashes; frontendCasesEnabled=($null -ne $frontendPackage);
     surfacePackageRoot=$surfacePackage; surfacePackageHashes=$surfacePackageHashes; surfaceCasesEnabled=($null -ne $surfacePackage);
     gameExecutableSource=$sourceExecutable; gameExecutableSha256=$knownGameHash; sourceExecutableUnchanged=$sourceExecutableUnchanged;
     actualGameInstallationChanged=$false; gameLaunched=$false; gameProcessAttached=$false; nativeInputWriteVerified=$false

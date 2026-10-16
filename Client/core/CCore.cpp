@@ -45,6 +45,7 @@
 #include "DefinitiveGuiStartupReference.h"
 #include "DefinitiveGuiSurface.h"
 #include "DefinitiveGuiSurfaceReference.h"
+#include "DefinitiveGuiFrontendReference.h"
 
 using SharedUtil::CalcMTASAPath;
 using namespace std;
@@ -64,7 +65,12 @@ SString       g_strJingleBells;
 
 extern fs::path g_gtaDirectory;
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
-extern fs::path g_mtaDirectory;
+extern fs::path                        g_mtaDirectory;
+extern "C" __declspec(dllexport) void* MTA_CreateDEFrontendSession(std::uint32_t, CGUI*);
+extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_PulseDEFrontendSession(void*, std::int32_t, std::int32_t, std::uint32_t);
+extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_ReadDEFrontendSession(void*, std::uint32_t*, std::uint32_t);
+extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_ShutdownDEFrontendSession(void*);
+extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_ReleaseDEFrontendSession(void*);
 
 namespace
 {
@@ -585,6 +591,353 @@ namespace
             }
             line += "]}\n";
             const auto path = CalcMTASAPath("mta/logs/gui-surface.log");
+            SharedUtil::MakeSureDirExists(path);
+            SharedUtil::FileAppend(path, line.data(), static_cast<unsigned long>(line.size()));
+        }
+        catch (...)
+        {
+        }
+    }
+
+    void RunGuiFrontendReference(CGameAdapterModule& adapter, const DefinitiveInputReference::Request& request) noexcept
+    {
+        using namespace DefinitiveGuiStartupReference;
+        using SurfaceSnapshot = DefinitiveGuiFrontendReference::Snapshot;
+        using SurfaceStatus = DefinitiveGuiSurface::Status;
+        struct Owner
+        {
+            CGameAdapterModule&                      adapter;
+            const DefinitiveInputReference::Request& request;
+            DefinitiveGuiSurface::Session            gui;
+            mta::game_de::RenderDeviceWindowLeaseV2  lease;
+            bool                                     beginAttempted = false;
+            std::uint64_t                            displayStarted = 0;
+
+            void*                                           frontend = nullptr;
+            DefinitiveFrontend::Snapshot                    frontendState{};
+            DefinitiveGuiFrontendReference::ControlSnapshot control{};
+            bool                                            frontendAttempted = false, frontendStopped = false;
+            bool                                            controlAttempted = false, surfaceStarted = false;
+            std::uint64_t                                   controlStarted = 0;
+
+            bool ReadFrontend() noexcept
+            {
+                return !frontend || MTA_ReadDEFrontendSession(frontend, frontendState.data(), DefinitiveFrontend::FieldCount) == DefinitiveFrontend::Status::Ok;
+            }
+            static bool StartFrontend(void* context, CGUI* gui)
+            {
+                auto& self = *static_cast<Owner*>(context);
+                // Publish partial ownership before calling the actual Core API;
+                // failed menu startup still needs explicit CPU-service teardown.
+                self.frontendAttempted = true;
+                self.frontend = MTA_CreateDEFrontendSession(DefinitiveFrontend::ApiVersion, gui);
+                return self.frontend && self.ReadFrontend() && self.frontendState[DefinitiveFrontend::Phase] == 2;
+            }
+            static bool PulseFrontend(void* context, std::int32_t x, std::int32_t y, bool focused)
+            {
+                auto& self = *static_cast<Owner*>(context);
+                if (!self.Control(DefinitiveGuiFrontendReference::ControlAction::Poll) || !self.control[DefinitiveGuiFrontendReference::Fresh] ||
+                    self.control[DefinitiveGuiFrontendReference::Revoked] || self.control[DefinitiveGuiFrontendReference::Fault] || !InputReferenceFocused())
+                    return false;
+                return self.frontend && MTA_PulseDEFrontendSession(self.frontend, x, y, focused ? 1u : 0u) == DefinitiveFrontend::Status::Ok &&
+                       self.ReadFrontend();
+            }
+            static bool StopFrontend(void* context)
+            {
+                auto& self = *static_cast<Owner*>(context);
+                if (self.frontend)
+                {
+                    const auto stopped = MTA_ShutdownDEFrontendSession(self.frontend);
+                    if (!self.ReadFrontend() || stopped != DefinitiveFrontend::Status::Ok)
+                        return false;
+                    if (MTA_ReleaseDEFrontendSession(self.frontend) != DefinitiveFrontend::Status::Ok)
+                        return false;
+                    self.frontend = nullptr;
+                }
+                self.frontendStopped = true;
+                return true;
+            }
+            bool Control(DefinitiveGuiFrontendReference::ControlAction action) noexcept
+            {
+                try
+                {
+                    auto next = control;
+                    if (!request.controlLease ||
+                        !request.controlLease(static_cast<std::uint32_t>(action), next.data(), static_cast<std::uint32_t>(next.size())))
+                        return false;
+                    if (std::any_of(next.begin() + 1, next.end(), [](auto value) { return value > 1; }) ||
+                        (control[DefinitiveGuiFrontendReference::Generation] &&
+                         next[DefinitiveGuiFrontendReference::Generation] != control[DefinitiveGuiFrontendReference::Generation]))
+                        return false;
+                    control = next;
+                    return true;
+                }
+                catch (...)
+                {
+                    return false;
+                }
+            }
+            void CopyGui(SurfaceSnapshot& values) noexcept
+            {
+                const auto s = gui.Snapshot();
+                values[GuiPrepared] = s.modulePrepared;
+                values[WorkloadHresult] = s.hresult;
+                values[WorkloadGuiStatus] = s.guiStatus;
+                values[NodeCount] = s.nodeCount;
+                values[AdapterLuidLow] = s.deviceLuidLow;
+                values[AdapterLuidHigh] = s.deviceLuidHigh;
+                values[TargetFormat] = s.targetFormat;
+                values[Width] = s.width;
+                values[Height] = s.height;
+                values[QueueCreated] = s.queueCreated;
+                values[TargetCreated] = s.swapchainCreated;
+                values[RenderSubmitted] = s.guiFrames ? 1u : 0u;
+                SetPair(values, FenceSignaledLow, s.fenceValue);
+                SetPair(values, FenceCompletedLow, s.completedFenceValue);
+                values[ReadbackVerified] = s.readbackComplete && s.readbackPixels > 10000 && s.premultipliedPixelsVerified;
+                values[ReadbackChangedPixels] = s.readbackPixels;
+                values[GuiCleanupComplete] = s.cleanupComplete;
+                values[OwnQueueSubmissions] = s.ownQueueSubmissions;
+                values[GuiStage] = s.stage;
+                values[GuiFailureStage] = s.failureStage;
+                values[ModuleRetained] = s.moduleRetained;
+                values[SessionRetained] = s.sessionRetained;
+                values[DeviceRetained] = s.deviceRetained || lease.device;
+                values[DeviceRemoved] = s.deviceRemoved;
+                values[DeviceReleaseFault] = s.releaseFault;
+                values[BackgroundVerified] = 0;
+                values[TextureVerified] = 0;
+                values[OpaqueAlphaVerified] = s.premultipliedPixelsVerified;
+                values[WidgetsCreated] = s.widgetsCreated;
+                using namespace DefinitiveGuiSurfaceReference;
+                values[ParentValidated] = s.parentValidated;
+                values[ParentWindowed] = s.parentWindowed;
+                values[ParentAlive] = s.parentAlive;
+                values[ChildCreated] = s.childCreated;
+                values[ChildShown] = s.childShown;
+                values[CompositionCreated] = s.compositionCreated;
+                values[SwapchainCreated] = s.swapchainCreated;
+                values[PresentCalls] = s.presentCalls;
+                values[PresentSucceeded] = s.presentSucceeded;
+                values[PresentBusy] = s.presentBusy;
+                values[PresentHresult] = s.presentHresult;
+                values[GuiFrames] = s.guiFrames;
+                values[ResizeCount] = s.resizeCount;
+                values[ResizePending] = s.resizePending;
+                values[ParentDestroyed] = s.parentDestroyed;
+                values[StopRequested] = s.stopRequested;
+                values[ChildRetained] = s.childRetained;
+                values[QueueRetained] = s.queueRetained;
+                values[SurfaceRetained] = s.surfaceRetained;
+                values[WindowCleanupComplete] = s.windowCleanupComplete;
+                values[CompositionCleanupComplete] = s.compositionCleanupComplete;
+                values[ClassUnregistered] = s.classUnregistered;
+                values[OwnerThreadId] = s.ownerThreadId;
+                values[ParentThreadId] = s.parentThreadId;
+                values[AlphaMode] = s.alphaMode;
+                values[SignalAttempts] = s.signalAttempts;
+                values[DisplayDuration] = DefinitiveGuiFrontendReference::DisplayDurationMs;
+                values[PrivateSurface] = 1;
+                using namespace DefinitiveGuiFrontendReference;
+                // StartGpu first requests engine control; an actual GUI session
+                // is created later, only after the script's fresh Ack.
+                values[GuiStarted] = s.sessionCreated;
+                ReadFrontend();
+                std::copy(frontendState.begin(), frontendState.end(), values.begin() + Frontend);
+                const auto input = gui.InteractionSnapshot();
+                values[InteractionVersion] = input.version;
+                values[InteractionEnabled] = input.enabled;
+                values[InteractionFocused] = input.focused;
+                values[FocusAcquired] = input.focusAcquired;
+                values[FocusLost] = input.focusLost;
+                SetPair(values, InputEventsLow, input.events);
+                SetPair(values, SyntheticReleasesLow, input.syntheticReleases);
+                values[PressedKeys] = input.pressedKeys;
+                values[PressedButtons] = input.pressedButtons;
+                values[InputDetached] = input.inputDetached;
+                values[InputFailed] = input.inputFailed;
+                values[GuiCloseRequested] = input.closeRequested;
+                std::copy(control.begin(), control.end(), values.begin() + ControlGeneration);
+                const auto now = static_cast<std::uint64_t>(GetTickCount64_());
+                values[ControlWaitingMs] = !surfaceStarted && controlStarted && now >= controlStarted
+                                               ? static_cast<std::uint32_t>(std::min<std::uint64_t>(now - controlStarted, UINT32_MAX))
+                                               : 0;
+                values[ControlExpiryMs] = HeartbeatExpiryMs;
+                values[ActiveDuration] =
+                    surfaceStarted && now >= displayStarted ? static_cast<std::uint32_t>(std::min<std::uint64_t>(now - displayStarted, UINT32_MAX)) : 0;
+                values[FrontendStarted] = surfaceStarted ? 1u : 0u;
+                values[FrontendStopped] = frontendStopped ? 1u : 0u;
+                // Native bool readback establishes the control command only.
+                // Mouse-camera exclusion remains a separate human test gate.
+                values[CameraCaptureVerified] = values[FullEngineInputReady] = 0;
+            }
+            bool Prepare(SurfaceSnapshot& values)
+            {
+                // As with offscreen startup, resolve cgui before Begin can hold
+                // peers. No Win32 surface or COM work runs during retained holds.
+                const auto root = g_mtaDirectory.wstring();
+                const auto path = (g_mtaDirectory / L"cgui.dll").wstring();
+                const bool prepared = gui.Prepare(path.c_str(), root.c_str()) == SurfaceStatus::Ok;
+                CopyGui(values);
+                return prepared;
+            }
+            bool Begin(SurfaceSnapshot&)
+            {
+                beginAttempted = true;
+                return adapter.BeginNativeRenderDeviceWindowObservation();
+            }
+            bool ReadNative(SurfaceSnapshot& values)
+            {
+                mta::game_de::RenderObservationStateV6 state;
+                if (!adapter.GetNativeRenderObservationState(state))
+                    return false;
+                const auto& base = state.base.base.base.base.base;
+                values[NativeFailureReason] = base.failureReason;
+                values[ObserverPendingCleanup] = base.pendingCleanup;
+                values[BackendPinnedExpected] = base.modulePinned ? 1u : 0u;
+                return true;
+            }
+            bool TryDevice(SurfaceSnapshot& values)
+            {
+                if (!adapter.TakeNativeRenderDeviceWindowLease(lease))
+                    return false;
+                SetPair(values, LeaseGenerationLow, lease.generation);
+                SetPair(values, AcceptedSnapshotsLow, lease.acceptedSnapshots);
+                SetPair(values, DispatchEntriesLow, lease.dispatchEntries);
+                values[SourceProfile] = lease.sourceProfileId;
+                values[LeaseMetadataValid] = lease.size == sizeof(lease) && lease.version == mta::game_de::RenderDeviceWindowLeaseVersionV2 && lease.device &&
+                                             lease.window && lease.windowed == 1 && lease.generation && lease.acceptedSnapshots && lease.dispatchEntries &&
+                                             lease.sourceProfileId == 2 && !lease.reserved[0] && !lease.reserved[1];
+                values[DeviceRetained] = 1;
+                return true;
+            }
+            bool End(SurfaceSnapshot& values)
+            {
+                const bool ended = adapter.EndNativeRenderObservation();
+                if (beginAttempted)
+                    ReadNative(values);
+                return ended;
+            }
+            bool Attach() noexcept
+            {
+                if (!lease.device)
+                    return true;
+                if (gui.AttachDeviceWindow(lease.device, static_cast<HWND>(lease.window), lease.windowed == 1) != SurfaceStatus::Ok)
+                    return false;
+                lease.device = nullptr;
+                return true;
+            }
+            bool StartGpu(SurfaceSnapshot& values) noexcept
+            {
+                if (!Attach())
+                    return false;
+                // Native observation has ended before the script is asked to
+                // disable player control. No interactive HWND exists until Ack.
+                controlAttempted = true;
+                controlStarted = static_cast<std::uint64_t>(GetTickCount64_());
+                const bool requested = Control(DefinitiveGuiFrontendReference::ControlAction::Request);
+                CopyGui(values);
+                return requested && control[DefinitiveGuiFrontendReference::Generation] && control[DefinitiveGuiFrontendReference::Requested];
+            }
+            Outcome PollGpu(SurfaceSnapshot& values) noexcept
+            {
+                using namespace DefinitiveGuiFrontendReference;
+                if (!Control(ControlAction::Poll) || control[Revoked] || control[Fault] || !InputReferenceFocused())
+                {
+                    CopyGui(values);
+                    return Outcome::Failed;
+                }
+                const auto now = static_cast<std::uint64_t>(GetTickCount64_());
+                if (!surfaceStarted)
+                {
+                    if (now < controlStarted || now - controlStarted >= ControlAcquireMs)
+                    {
+                        values[ControlTimeout] = 1;
+                        CopyGui(values);
+                        return Outcome::Failed;
+                    }
+                    if (!control[Acknowledged] || !control[Fresh])
+                    {
+                        CopyGui(values);
+                        return Outcome::Pending;
+                    }
+                    const DefinitiveGuiSurface::FrontendCallbacks callbacks{this, &Owner::StartFrontend, &Owner::PulseFrontend, &Owner::StopFrontend};
+                    if (gui.EnableFrontend(callbacks) != SurfaceStatus::Ok || gui.Start() != SurfaceStatus::Ok)
+                    {
+                        CopyGui(values);
+                        return Outcome::Failed;
+                    }
+                    surfaceStarted = true;
+                    displayStarted = now;
+                }
+                if (!control[Fresh])
+                {
+                    CopyGui(values);
+                    return Outcome::Failed;
+                }
+                const auto status = gui.Poll();
+                CopyGui(values);
+                const auto s = gui.Snapshot();
+                const auto input = gui.InteractionSnapshot();
+                if (status == SurfaceStatus::Failed || status == SurfaceStatus::InvalidArgument || status == SurfaceStatus::WrongThread || s.parentDestroyed ||
+                    !s.parentAlive || s.releaseFault || s.deviceRemoved || input.inputFailed || frontendState[DefinitiveFrontend::Phase] != 2)
+                    return Outcome::Failed;
+                if (now < displayStarted)
+                    return Outcome::Failed;
+                const bool closing = input.closeRequested || frontendState[DefinitiveFrontend::CloseRequested];
+                if (!closing && now - displayStarted < DisplayDurationMs)
+                    return Outcome::Pending;
+                const bool accounted = s.presentSucceeded <= s.presentCalls && s.presentBusy == s.presentCalls - s.presentSucceeded;
+                return s.readbackComplete && s.readbackPixels > 10000 && s.premultipliedPixelsVerified && s.presentSucceeded >= 2 &&
+                               frontendState[DefinitiveFrontend::Frames] >= 2 && accounted && !s.presentHresult && s.guiFrames >= s.presentSucceeded &&
+                               s.childShown && !s.failureStage
+                           ? Outcome::Passed
+                           : Outcome::Failed;
+            }
+            bool ShutdownGpu(SurfaceSnapshot& values) noexcept
+            {
+                if (!Attach())
+                    return false;
+                const auto status = gui.Shutdown();
+                const auto input = gui.InteractionSnapshot();
+                const auto surface = gui.Snapshot();
+                // Input detachment, not a stalled GPU fence, authorizes the
+                // script to restore controls. GUI/Core stay retained until all
+                // services, GPU resources and the restoration Ack have drained.
+                bool restored = !controlAttempted;
+                if (controlAttempted && (input.inputDetached || (!surface.childCreated && !frontendAttempted)))
+                {
+                    const bool observed = Control(DefinitiveGuiFrontendReference::ControlAction::Poll);
+                    restored = observed && !control[DefinitiveGuiFrontendReference::Requested];
+                    if (observed && control[DefinitiveGuiFrontendReference::Requested])
+                        restored = Control(DefinitiveGuiFrontendReference::ControlAction::InputDetached) && control[DefinitiveGuiFrontendReference::Restored];
+                }
+                CopyGui(values);
+                values[GuiShutdownStatus] = static_cast<std::uint32_t>(status);
+                return status == SurfaceStatus::Ok && values[GuiCleanupComplete] && restored && !frontend;
+            }
+        } owner{adapter, request};
+        struct Clock
+        {
+            std::uint64_t Now() const noexcept { return static_cast<std::uint64_t>(GetTickCount64_()); }
+            void          Wait(std::uint32_t milliseconds) const noexcept { Sleep(milliseconds); }
+        } clock;
+        const auto runMs = clock.Now();
+        const auto result = DefinitiveGuiFrontendReference::Run(owner, clock, request);
+        try
+        {
+            // All native holds, GUI/GPU owners and the child window have ended
+            // before file I/O; failure to log cannot relabel cleanup or drawing.
+            std::string line = "{\"schema\":\"mta_core_gui_frontend_v1\",\"pid\":" + std::to_string(GetCurrentProcessId()) +
+                               ",\"runMs\":" + std::to_string(runMs) + ",\"values\":[";
+            for (std::size_t index = 0; index < result.size(); ++index)
+            {
+                if (index)
+                    line += ',';
+                line += std::to_string(result[index]);
+            }
+            line += "]}\n";
+            const auto path = CalcMTASAPath("mta/logs/gui-frontend.log");
             SharedUtil::MakeSureDirExists(path);
             SharedUtil::FileAppend(path, line.data(), static_cast<unsigned long>(line.size()));
         }
@@ -1550,7 +1903,9 @@ CCore::CCore()
         DefinitiveInputReference::Request inputReference;
         if (DefinitiveInputReference::GetActiveRequest(inputReference))
         {
-            if (inputReference.guiSurface)
+            if (inputReference.guiFrontend)
+                RunGuiFrontendReference(m_DefinitiveAdapter, inputReference);
+            else if (inputReference.guiSurface)
                 RunGuiSurfaceReference(m_DefinitiveAdapter, inputReference);
             else if (inputReference.guiStartup)
                 RunGuiStartupReference(m_DefinitiveAdapter, inputReference);

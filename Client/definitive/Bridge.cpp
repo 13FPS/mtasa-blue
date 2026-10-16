@@ -462,6 +462,55 @@ std::uint32_t DE_CoreGuiSurfaceRead(std::uint32_t component)
     return ControllerAccessAllowed() ? coreStartup.ReadGuiSurface(component) : 0;
 }
 
+std::uint32_t DE_CoreGuiFrontendApiVersion()
+{
+    return DefinitiveGuiFrontendReference::ApiVersion;
+}
+int DE_CoreGuiFrontendBegin()
+{
+    return ControllerAccessAllowed() && !movementAdapter && !client && coreStartup.BeginGuiFrontendReference(&moduleAnchor) ? 1 : 0;
+}
+int DE_CoreGuiFrontendCapture()
+{
+    return ControllerAccessAllowed() && coreStartup.CaptureGuiFrontend() ? 1 : 0;
+}
+std::uint32_t DE_CoreGuiFrontendRead(std::uint32_t component)
+{
+    return ControllerAccessAllowed() ? coreStartup.ReadGuiFrontend(component) : 0;
+}
+int DE_CoreGuiFrontendControlCapture()
+{
+    return ControllerAccessAllowed() && coreStartup.CaptureGuiFrontendControl() ? 1 : 0;
+}
+std::uint32_t DE_CoreGuiFrontendControlRead(std::uint32_t component)
+{
+    return ControllerAccessAllowed() ? coreStartup.ReadGuiFrontendControl(component) : 0;
+}
+int DE_CoreGuiFrontendControlAck(std::uint32_t generation)
+{
+    return ControllerAccessAllowed() && coreStartup.AcknowledgeGuiFrontendControl(generation) ? 1 : 0;
+}
+int DE_CoreGuiFrontendControlHeartbeat(std::uint32_t generation)
+{
+    return ControllerAccessAllowed() && coreStartup.HeartbeatGuiFrontendControl(generation) ? 1 : 0;
+}
+int DE_CoreGuiFrontendControlRevoke(std::uint32_t generation)
+{
+    return ControllerAccessAllowed() && coreStartup.RevokeGuiFrontendControl(generation) ? 1 : 0;
+}
+int DE_CoreGuiFrontendControlRestored(std::uint32_t generation)
+{
+    return ControllerAccessAllowed() && coreStartup.RestoreGuiFrontendControl(generation) ? 1 : 0;
+}
+int DE_CoreGuiFrontendControlFocused()
+{
+    if (!ControllerAccessAllowed())
+        return 0;
+    DWORD      process = 0;
+    const auto window = GetForegroundWindow();
+    return window && GetWindowThreadProcessId(window, &process) && process == GetCurrentProcessId() ? 1 : 0;
+}
+
 int DE_Pump()
 {
     try

@@ -14,6 +14,7 @@
 #include "../core/DefinitiveRenderReference.h"
 #include "../core/DefinitiveGuiStartupReference.h"
 #include "../core/DefinitiveGuiSurfaceReference.h"
+#include "FrontendControlMailbox.h"
 
 namespace deonline
 {
@@ -46,6 +47,15 @@ namespace deonline
         bool          BeginGuiSurfaceReference(const void* moduleAddress) noexcept;
         bool          CaptureGuiSurface() noexcept;
         std::uint32_t ReadGuiSurface(std::uint32_t field) const noexcept;
+        bool          BeginGuiFrontendReference(const void* moduleAddress) noexcept;
+        bool          CaptureGuiFrontend() noexcept;
+        std::uint32_t ReadGuiFrontend(std::uint32_t field) const noexcept;
+        bool          CaptureGuiFrontendControl() noexcept;
+        std::uint32_t ReadGuiFrontendControl(std::uint32_t field) const noexcept;
+        bool          AcknowledgeGuiFrontendControl(std::uint32_t generation) noexcept;
+        bool          HeartbeatGuiFrontendControl(std::uint32_t generation) noexcept;
+        bool          RevokeGuiFrontendControl(std::uint32_t generation) noexcept;
+        bool          RestoreGuiFrontendControl(std::uint32_t generation) noexcept;
         int           Poll() noexcept;
         std::uint32_t Read(std::uint32_t field) const noexcept;
         bool          CaptureInput() noexcept;
@@ -70,49 +80,57 @@ namespace deonline
         bool                      CheckCancellation() noexcept;
         bool                      Start(const void* moduleAddress, bool configuredInput, bool configuredMovement = false, bool configuredRender = false,
                                         std::uint32_t configuredRenderRoute = 0, std::uint32_t configuredRenderApi = 1, bool configuredGuiStartup = false,
-                                        bool configuredGuiSurface = false) noexcept;
+                                        bool configuredGuiSurface = false, bool configuredGuiFrontend = false) noexcept;
         static bool               InputCancelled();
         static void               PublishInput(const std::uint32_t* values, std::uint32_t count);
+        static bool               ControlInput(std::uint32_t action, std::uint32_t* values, std::uint32_t count);
 
         // Only Begin/Poll's owning thread touches the handle or input address.
         // State2 publishes the worker's immutable values; State3 also proves
         // the thread has exited, allowing another attempt without a live job.
-        std::atomic<DWORD>                      ownerThread{0};
-        std::atomic<unsigned>                   state{0};
-        std::atomic<bool>                       cancellation{false};
-        HANDLE                                  thread = nullptr;
-        const void*                             address = nullptr;
-        std::array<std::uint32_t, 19>           values{};
-        bool                                    inputRequested = false;
-        bool                                    movementRequested = false;
-        bool                                    renderRequested = false;
-        bool                                    guiRequested = false;
-        bool                                    guiAvailable = false;
-        DefinitiveGuiStartupReference::Snapshot publishedGui{}, capturedGui{};
-        bool                                    guiSurfaceRequested = false, guiSurfaceAvailable = false;
-        DefinitiveGuiSurfaceReference::Snapshot publishedGuiSurface{}, capturedGuiSurface{};
-        std::uint32_t                           renderRoute = 0;
-        std::uint32_t                           renderApi = 1;
-        bool                                    renderV3Available = false;
-        DefinitiveRenderReference::SnapshotV3   publishedRenderV3{}, capturedRenderV3{};
-        bool                                    renderV4Available = false;
-        DefinitiveRenderReference::SnapshotV4   publishedRenderV4{}, capturedRenderV4{};
-        bool                                    renderV5Available = false;
-        DefinitiveRenderReference::SnapshotV5   publishedRenderV5{}, capturedRenderV5{};
-        bool                                    renderV6Available = false;
-        DefinitiveRenderReference::SnapshotV6   publishedRenderV6{}, capturedRenderV6{};
-        SRWLOCK                                 inputLock = SRWLOCK_INIT;
-        bool                                    inputAvailable = false;
-        DefinitiveInputReference::Snapshot      publishedInput{};
-        DefinitiveInputReference::Snapshot      capturedInput{};
-        bool                                    movementAvailable = false;
-        DefinitiveMovementReference::Snapshot   publishedMovement{};
-        DefinitiveMovementReference::Snapshot   capturedMovement{};
-        bool                                    renderAvailable = false;
-        DefinitiveRenderReference::Snapshot     publishedRender{};
-        DefinitiveRenderReference::Snapshot     capturedRender{};
-        bool                                    renderV2Available = false;
-        DefinitiveRenderReference::SnapshotV2   publishedRenderV2{};
-        DefinitiveRenderReference::SnapshotV2   capturedRenderV2{};
+        std::atomic<DWORD>                       ownerThread{0};
+        std::atomic<unsigned>                    state{0};
+        std::atomic<bool>                        cancellation{false};
+        HANDLE                                   thread = nullptr;
+        const void*                              address = nullptr;
+        std::array<std::uint32_t, 19>            values{};
+        bool                                     inputRequested = false;
+        bool                                     movementRequested = false;
+        bool                                     renderRequested = false;
+        bool                                     guiRequested = false;
+        bool                                     guiAvailable = false;
+        DefinitiveGuiStartupReference::Snapshot  publishedGui{}, capturedGui{};
+        bool                                     guiSurfaceRequested = false, guiSurfaceAvailable = false;
+        DefinitiveGuiSurfaceReference::Snapshot  publishedGuiSurface{}, capturedGuiSurface{};
+        bool                                     guiFrontendRequested = false, guiFrontendAvailable = false;
+        DefinitiveGuiFrontendReference::Snapshot publishedGuiFrontend{}, capturedGuiFrontend{};
+        FrontendControlMailbox                   frontendControl;
+        FrontendControlMailbox::Snapshot         capturedFrontendControl{};
+        // Retain a faulty new frontend's code rather than unloading callbacks
+        // or allowing a second attempt while ownership remains unresolved.
+        bool                                  frontendQuarantined = false;
+        std::uint32_t                         renderRoute = 0;
+        std::uint32_t                         renderApi = 1;
+        bool                                  renderV3Available = false;
+        DefinitiveRenderReference::SnapshotV3 publishedRenderV3{}, capturedRenderV3{};
+        bool                                  renderV4Available = false;
+        DefinitiveRenderReference::SnapshotV4 publishedRenderV4{}, capturedRenderV4{};
+        bool                                  renderV5Available = false;
+        DefinitiveRenderReference::SnapshotV5 publishedRenderV5{}, capturedRenderV5{};
+        bool                                  renderV6Available = false;
+        DefinitiveRenderReference::SnapshotV6 publishedRenderV6{}, capturedRenderV6{};
+        SRWLOCK                               inputLock = SRWLOCK_INIT;
+        bool                                  inputAvailable = false;
+        DefinitiveInputReference::Snapshot    publishedInput{};
+        DefinitiveInputReference::Snapshot    capturedInput{};
+        bool                                  movementAvailable = false;
+        DefinitiveMovementReference::Snapshot publishedMovement{};
+        DefinitiveMovementReference::Snapshot capturedMovement{};
+        bool                                  renderAvailable = false;
+        DefinitiveRenderReference::Snapshot   publishedRender{};
+        DefinitiveRenderReference::Snapshot   capturedRender{};
+        bool                                  renderV2Available = false;
+        DefinitiveRenderReference::SnapshotV2 publishedRenderV2{};
+        DefinitiveRenderReference::SnapshotV2 capturedRenderV2{};
     };
 }

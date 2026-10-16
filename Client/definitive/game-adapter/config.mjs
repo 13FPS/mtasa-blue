@@ -62,3 +62,6 @@ export const MTA_CORE_GUI_STARTUP_REFERENCE = false;
 // Display the existing GUI in an MTA-owned child composition surface. The
 // observed device/window lease is released after our queue and surface drain.
 export const MTA_CORE_GUI_SURFACE_REFERENCE = false;
+// Real MTA menu interaction needs a separately acknowledged, reversible local
+// player-control lease. Ordinary Smoke and the passive GUI trials stay read-only.
+export const MTA_CORE_GUI_FRONTEND_REFERENCE = false;

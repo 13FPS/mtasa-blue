@@ -21,7 +21,13 @@ namespace
 {
     int          checks = 0;
     unsigned int inputPublications = 0;
-    bool         CancelInput()
+    unsigned int controlCalls = 0;
+    bool         ControlLease(std::uint32_t, std::uint32_t*, std::uint32_t)
+    {
+        ++controlCalls;
+        return false;
+    }
+    bool CancelInput()
     {
         return false;
     }
@@ -98,6 +104,20 @@ int wmain(int argc, wchar_t** argv)
         const auto inputVersion = Resolve<std::uint32_t (*)()>(core, "MTA_DEInputReferenceApiVersion");
         using ConfigureInput = std::uint32_t (*)(std::uint32_t, DefinitiveInputReference::CancelCallback, DefinitiveInputReference::PublishCallback);
         const auto configureInput = Resolve<ConfigureInput>(core, "MTA_ConfigureDEInputReference");
+        const auto frontendVersion = Resolve<std::uint32_t (*)()>(core, "MTA_DEGuiFrontendReferenceApiVersion");
+        using ConfigureFrontend = std::uint32_t (*)(std::uint32_t, std::uint32_t, DefinitiveInputReference::CancelCallback,
+                                                    DefinitiveInputReference::PublishCallback, DefinitiveGuiFrontendReference::ControlCallback);
+        const auto configureFrontend = Resolve<ConfigureFrontend>(core, "MTA_ConfigureDEGuiFrontendReference");
+        Check(frontendVersion() == 1 && DefinitiveGuiFrontendReference::FieldCount == 160, "real frontend trial has a distinct value-only API");
+        Check(configureFrontend(0, 40000, CancelInput, PublishInput, ControlLease) == 0 &&
+                  configureFrontend(2, 40000, CancelInput, PublishInput, ControlLease) == 0,
+              "unknown frontend versions cannot retain a request");
+        Check(
+            configureFrontend(1, 0, CancelInput, PublishInput, ControlLease) == 0 && configureFrontend(1, 40001, CancelInput, PublishInput, ControlLease) == 0,
+            "frontend duration is bounded before engine control admission");
+        Check(configureFrontend(1, 40000, nullptr, PublishInput, ControlLease) == 0 && configureFrontend(1, 40000, CancelInput, nullptr, ControlLease) == 0 &&
+                  configureFrontend(1, 40000, CancelInput, PublishInput, nullptr) == 0 && !controlCalls,
+              "frontend requires cancellation, copied publication and control callbacks without invoking them during configuration");
         const auto movementVersion = Resolve<std::uint32_t (*)()>(core, "MTA_DEMovementReferenceApiVersion");
         const auto configureMovement = Resolve<ConfigureInput>(core, "MTA_ConfigureDEMovementReference");
         const auto renderVersion = Resolve<std::uint32_t (*)()>(core, "MTA_DERenderReferenceApiVersion");
@@ -280,6 +300,17 @@ int wmain(int argc, wchar_t** argv)
         NoGameModules();
         NoClassicRendererModules();
         Check(inputPublications == 0, "wrong-image API6 cannot patch native Present dispatch or inspect resources");
+        Check(configureFrontend(1, 40000, CancelInput, PublishInput, ControlLease) == 1, "consumed render request permits a distinct real-menu trial owner");
+        Check(configureInput(1, CancelInput, PublishInput) == 0 && configureRenderV6(1, 2, CancelInput, PublishInput) == 0 &&
+                  configureFrontend(1, 40000, CancelInput, PublishInput, ControlLease) == 0,
+              "pending real-menu trial excludes input, render and duplicate frontend requests");
+        const int api13Result = initialize();
+        Check(api13Result == 5, "real-menu trial rejects the nongame exact-image host before asking for player control");
+        CheckStartup(readStartup, 5, 3, 33);
+        Check(!inputPublications && !controlCalls && !GetModuleHandleW(L"game_de.dll") && !GetModuleHandleW(L"cgui.dll"),
+              "wrong-image frontend trial reaches no control callback or GUI and releases its backend lease");
+        NoGameModules();
+        NoClassicRendererModules();
         // A diagnostic reader cannot accidentally become a cross-thread Core
         // control channel or erase the completed owner-thread failure snapshot.
         std::array<unsigned int, 8> foreign{};
@@ -301,8 +332,9 @@ int wmain(int argc, wchar_t** argv)
         std::printf(
             "{\"success\":true,\"checks\":%d,\"initialize_results\":[%d,%d,%d,%d],\"continued_after_free_library\":true,\"backend_unloaded_after_each_"
             "failure\":true,\"classic_modules_unloaded\":true,\"legacy_renderer_modules_unloaded\":true,\"startup_diagnostics_verified\":true,\"api3_"
-            "initialize_result\":%d,\"api4_initialize_result\":%d,\"api5_initialize_result\":%d,\"api6_initialize_result\":%d}\n",
-            checks, results[0], results[1], results[2], results[3], api3Result, api4Result, api5Result, api6Result);
+            "initialize_result\":%d,\"api4_initialize_result\":%d,\"api5_initialize_result\":%d,\"api6_initialize_result\":%d,\"api13_initialize_result\":%d}"
+            "\n",
+            checks, results[0], results[1], results[2], results[3], api3Result, api4Result, api5Result, api6Result, api13Result);
         return 0;
     }
     catch (const std::exception& error)

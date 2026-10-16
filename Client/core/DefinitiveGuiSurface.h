@@ -8,6 +8,7 @@
 
 struct ID3D12Device;
 struct HWND__;
+class CGUI;
 
 namespace DefinitiveGuiSurface
 {
@@ -64,6 +65,17 @@ namespace DefinitiveGuiSurface
         std::uint32_t closeRequested = 0, inputFailed = 0, inputDetached = 0;
     };
 
+    // The existing Core frontend borrows this surface's real CGUI. Its owner
+    // remains alive until stop succeeds, including after a partial start. No
+    // callback may reenter a mutating surface operation or invoke engine input.
+    struct FrontendCallbacks
+    {
+        void* context = nullptr;
+        bool (*start)(void*, CGUI*) = nullptr;
+        bool (*pulse)(void*, std::int32_t, std::int32_t, bool) = nullptr;
+        bool (*stop)(void*) = nullptr;
+    };
+
     class Session
     {
     public:
@@ -76,6 +88,10 @@ namespace DefinitiveGuiSurface
         // Explicit opt-in before Start. Until native gameplay input capture is
         // available, only the disposable owned-window host enables this mode.
         Status EnableInteraction() noexcept;
+        // Separate from the widget fixture. The caller must first acknowledge
+        // its native control lease; GUI ownership alone cannot suppress GTA.
+        // A false stop is Busy and retains callbacks/context/CGUI for retry.
+        Status EnableFrontend(const FrontendCallbacks& callbacks) noexcept;
         // Ok consumes one existing device reference by storage only. The HWND
         // remains borrowed; Start validates it after native End has fully drained.
         Status AttachDeviceWindow(ID3D12Device* transferredReference, HWND__* borrowedParent, bool windowed) noexcept;

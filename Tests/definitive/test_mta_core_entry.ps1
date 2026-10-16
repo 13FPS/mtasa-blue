@@ -25,6 +25,7 @@ if ($NonClassicLayout) {
     New-Item -ItemType Directory -Path (Join-Path $outputRoot ($moduleRelative+'/mta/logs')) | Out-Null
 }
 $sourceNames=@('Tests/definitive/MtaCoreEntryTests.cpp','Tests/definitive/test_mta_core_entry.ps1',
+    'Client/core/DefinitiveGuiFrontendReference.h',
     'Client/core/Core.cpp','Client/core/CCore.cpp','Client/core/CCore.h','Client/core/premake5.lua','Client/core/CGameAdapterModule.cpp',
     'Client/core/CGameAdapterModule.h','Client/core/DefinitiveProcess.h','Client/core/DefinitiveStartupState.h','Client/core/DefinitiveInputReference.h','Client/core/DefinitiveMovementReference.h','Client/core/DefinitiveRenderReference.h','Client/core/DefinitiveRenderEndpointLog.h','Client/sdk/game/CGameRenderEndpointDiagnostic.h',
     'Client/core/CKeyBinds.h','Client/core/CKeyBinds.cpp','Client/core/CTimingCheckpoints.hpp','Client/game_de/GameAdapter.cpp',
@@ -175,7 +176,7 @@ foreach ($name in $sourceNames) {
 # Each optional protocol must pass through the actual initializer's image
 # guard. Require API5's genuine rejection as well as the prior attempts, rather
 # than treating an extra log entry as proof of the new request's ownership.
-$success=$compilerExit -eq 0 -and $hostExit -eq 0 -and $null -ne $hostResult -and $hostResult.success -and $hostResult.api4_initialize_result -eq 5 -and $hostResult.api5_initialize_result -eq 5 -and $hostResult.api6_initialize_result -eq 5 -and $bindingRejections -eq 6 -and $sourcesUnchanged
+$success=$compilerExit -eq 0 -and $hostExit -eq 0 -and $null -ne $hostResult -and $hostResult.success -and $hostResult.api4_initialize_result -eq 5 -and $hostResult.api5_initialize_result -eq 5 -and $hostResult.api6_initialize_result -eq 5 -and $hostResult.api13_initialize_result -eq 5 -and $bindingRejections -eq 7 -and $sourcesUnchanged
 $record=[ordered]@{recorded_at=[DateTimeOffset]::Now.ToString('o');success=$success;directory=$outputRoot;
     scope='Actual supplied Core/Game DE DLL entry point in a separate non-game host named SanAndreas.exe';
     compiler_exit=$compilerExit;host_exit=$hostExit;host_result=$hostResult;failure=$failure;host_sha256=$hostHash;nonclassic_layout=$NonClassicLayout.IsPresent;

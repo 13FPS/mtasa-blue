@@ -3,7 +3,8 @@
 # Update verified owned files without removing the runtime or generated user data.
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'None')]
 param(
-    [string]$GameDirectory = 'C:\Program Files (x86)\Steam\steamapps\common\GTA San Andreas - The Definitive Edition\Gameface\Binaries\Win64'
+    [string]$GameDirectory = 'C:\Program Files (x86)\Steam\steamapps\common\GTA San Andreas - The Definitive Edition\Gameface\Binaries\Win64',
+    [string]$PackageDirectory
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -26,7 +27,8 @@ if ((Get-FileHash -LiteralPath (Join-Path $gameRoot 'SanAndreas.exe') -Algorithm
     throw 'Game build changed; investigate before updating the adapter.'
 }
 $repositoryRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
-$packageRoot = Join-Path $repositoryRoot ('Build/definitive-package/' + $installed.mode)
+$packageRoot = if ($PackageDirectory) { (Resolve-Path -LiteralPath $PackageDirectory).Path } else { Join-Path $repositoryRoot ('Build/definitive-package/' + $installed.mode) }
+Assert-NoLinks $packageRoot
 $package = Get-Content -LiteralPath (Join-Path $packageRoot 'manifest.json') -Raw | ConvertFrom-Json
 if ($package.packageId -ne $installed.packageId -or $package.formatVersion -ne 1 -or
     $package.mode -ne $installed.mode -or $package.gameSha256 -ne $installed.gameSha256) { throw 'Package identity or mode differs.' }
@@ -38,18 +40,44 @@ $guiPaths = @('CLEO/de-online/cgui.dll',
     'CLEO/de-online/mta/cgui/Falagard.xsd', 'CLEO/de-online/mta/cgui/unifont.ttf',
     'CLEO/de-online/skins/Default/CGUI.xml', 'CLEO/de-online/skins/Default/CGUI.is.xml',
     'CLEO/de-online/skins/Default/CGUI.lnf.xml', 'CLEO/de-online/skins/Default/CGUI.png')
+$frontendPaths = @(
+    'CLEO/de-online/mta/cgui/images/background.png',
+    'CLEO/de-online/mta/cgui/images/background_logo.png',
+    'CLEO/de-online/mta/cgui/images/mta_filler.png',
+    'CLEO/de-online/mta/cgui/images/version.png',
+    'CLEO/de-online/mta/cgui/images/the_language_icon.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/locked.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/search-servers.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/search-players.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/refresh.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/favorite.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/connect.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/info.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/search.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/trashcan.png',
+    'CLEO/de-online/mta/locale/en_US/menu_disconnect.png',
+    'CLEO/de-online/mta/locale/en_US/menu_quick_connect.png',
+    'CLEO/de-online/mta/locale/en_US/menu_browse_servers.png',
+    'CLEO/de-online/mta/locale/en_US/menu_settings.png',
+    'CLEO/de-online/mta/locale/en_US/menu_about.png',
+    'CLEO/de-online/mta/locale/en_US/menu_quit.png',
+    'CLEO/de-online/mta/locale/en_US/latest_news.png',
+    'CLEO/de-online/mta/locale/en_US/client.pot')
 $guiCount = @($packagePaths | Where-Object { $_ -in $guiPaths }).Count
+$frontendCount = @($packagePaths | Where-Object { $_ -in $frontendPaths }).Count
+if ($frontendCount -ne 0 -and ($frontendCount -ne 22 -or $guiCount -ne 13)) { throw 'Incomplete MTA Core GUI frontend package ownership.' }
 if ($guiCount -ne 0 -and $guiCount -ne 13) { throw 'Incomplete MTA Core GUI startup package ownership.' }
 $removedPaths = @($installedPaths | Where-Object { $_ -notin $packagePaths })
 if (@($packagePaths | Select-Object -Unique).Count -ne $packagePaths.Count -or
-    @($removedPaths | Where-Object { $_ -notin $guiPaths }).Count -ne 0 -or
-    ($removedPaths.Count -ne 0 -and $removedPaths.Count -ne 13)) { throw 'Package owned paths differ.' }
+    @($removedPaths | Where-Object { $_ -notin ($guiPaths + $frontendPaths) }).Count -ne 0 -or
+    @($removedPaths | Where-Object { $_ -in $guiPaths }).Count -notin @(0, 13) -or
+    @($removedPaths | Where-Object { $_ -in $frontendPaths }).Count -notin @(0, 22)) { throw 'Package owned paths differ.' }
 $addedPaths = @($packagePaths | Where-Object { $_ -notin $installedPaths })
 # Admit only the named MTA probe/backend files from the newer package. All
 # additions are checked for existing user bytes before any update is applied.
 $allowedAdditions = @('CLEO/de-online/native-pad-reference.mjs', 'CLEO/de-online/native-movement-trial.mjs', 'CLEO/de-online/game_de.dll',
     'CLEO/de-online/core.dll', 'CLEO/de-online/pthread.dll',
-    'CLEO/de-online/xmll.dll', 'CLEO/de-online/mta/config/coreconfig.xml') + $guiPaths
+    'CLEO/de-online/xmll.dll', 'CLEO/de-online/mta/config/coreconfig.xml') + $guiPaths + $frontendPaths
 if (@($addedPaths | Where-Object { $_ -notin $allowedAdditions }).Count -ne 0) {
     throw 'Unsupported additive package path.'
 }
@@ -72,7 +100,7 @@ $hasBindConfig = $packagePaths -contains 'CLEO/de-online/mta/config/coreconfig.x
 if ($hasXml -ne $hasBindConfig -or ($hasXml -and -not $hasCore)) {
     throw 'Incomplete MTA Core configured input package ownership.'
 }
-if ($guiCount -and ($packagePaths.Count -ne 36 -or -not $hasXml)) { throw 'Incomplete MTA Core GUI startup package ownership.' }
+if ($guiCount -and ($packagePaths.Count -ne $(if ($frontendCount) { 58 } else { 36 }) -or -not $hasXml)) { throw 'Incomplete MTA Core GUI startup package ownership.' }
 $sourceRoot = Join-Path $packageRoot 'Win64'
 $actualPaths = @(Get-ChildItem -LiteralPath $sourceRoot -File -Recurse | ForEach-Object { [IO.Path]::GetRelativePath($sourceRoot, $_.FullName).Replace('\', '/') })
 if (@(Compare-Object $packagePaths $actualPaths).Count -ne 0) { throw 'Package has unrecorded or missing files.' }
@@ -80,7 +108,7 @@ $configText = [IO.File]::ReadAllText((Join-Path $sourceRoot 'CLEO/de-online/conf
 $guiMarkers = [regex]::Matches($configText, 'export const MTA_CORE_GUI_STARTUP_REFERENCE = (true|false);')
 if ($guiMarkers.Count -gt 1 -or ($guiCount -and $guiMarkers.Count -ne 1)) { throw 'Invalid GUI startup configuration marker.' }
 if ($guiMarkers.Count -eq 1 -and $guiMarkers[0].Groups[1].Value -eq 'true') {
-    if (-not $guiCount -or $package.mode -ne 'Smoke' -or $configText -match 'export const (GAIT_REFERENCE|GAIT_RATE|GAIT_ROOT_LOCK|INPUT_REFERENCE|MTA_NATIVE_PAD_REFERENCE|MTA_NATIVE_MOVEMENT_TRIAL|MTA_CORE_STARTUP_REFERENCE|MTA_CORE_INPUT_REFERENCE|MTA_CORE_MOVEMENT_REFERENCE|MTA_CORE_RENDER_REFERENCE|MTA_CORE_RENDER_GPU_REFERENCE|MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE|MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE|MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE|MTA_CORE_GUI_SURFACE_REFERENCE) = true;') {
+    if (-not $guiCount -or $package.mode -ne 'Smoke' -or $configText -match 'export const (GAIT_REFERENCE|GAIT_RATE|GAIT_ROOT_LOCK|INPUT_REFERENCE|MTA_NATIVE_PAD_REFERENCE|MTA_NATIVE_MOVEMENT_TRIAL|MTA_CORE_STARTUP_REFERENCE|MTA_CORE_INPUT_REFERENCE|MTA_CORE_MOVEMENT_REFERENCE|MTA_CORE_RENDER_REFERENCE|MTA_CORE_RENDER_GPU_REFERENCE|MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE|MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE|MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE|MTA_CORE_GUI_SURFACE_REFERENCE|MTA_CORE_GUI_FRONTEND_REFERENCE) = true;') {
         throw 'MTA Core GUI startup requires the complete GUI group and separate opt-in Smoke mode.'
     }
 }
@@ -89,8 +117,15 @@ if ($guiMarkers.Count -eq 1 -and $guiMarkers[0].Groups[1].Value -eq 'true') {
 $surfaceMarkers = [regex]::Matches($configText, 'export const MTA_CORE_GUI_SURFACE_REFERENCE = (true|false);')
 if ($surfaceMarkers.Count -gt 1) { throw 'Invalid GUI surface configuration marker.' }
 if ($surfaceMarkers.Count -eq 1 -and $surfaceMarkers[0].Groups[1].Value -eq 'true') {
-    if (-not $guiCount -or $package.mode -ne 'Smoke' -or $configText -match 'export const (GAIT_REFERENCE|GAIT_RATE|GAIT_ROOT_LOCK|INPUT_REFERENCE|MTA_NATIVE_PAD_REFERENCE|MTA_NATIVE_MOVEMENT_TRIAL|MTA_CORE_STARTUP_REFERENCE|MTA_CORE_INPUT_REFERENCE|MTA_CORE_MOVEMENT_REFERENCE|MTA_CORE_RENDER_REFERENCE|MTA_CORE_RENDER_GPU_REFERENCE|MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE|MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE|MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE|MTA_CORE_GUI_STARTUP_REFERENCE) = true;') {
+    if (-not $guiCount -or $package.mode -ne 'Smoke' -or $configText -match 'export const (GAIT_REFERENCE|GAIT_RATE|GAIT_ROOT_LOCK|INPUT_REFERENCE|MTA_NATIVE_PAD_REFERENCE|MTA_NATIVE_MOVEMENT_TRIAL|MTA_CORE_STARTUP_REFERENCE|MTA_CORE_INPUT_REFERENCE|MTA_CORE_MOVEMENT_REFERENCE|MTA_CORE_RENDER_REFERENCE|MTA_CORE_RENDER_GPU_REFERENCE|MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE|MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE|MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE|MTA_CORE_GUI_STARTUP_REFERENCE|MTA_CORE_GUI_FRONTEND_REFERENCE) = true;') {
         throw 'MTA Core GUI surface requires the complete GUI group and separate opt-in Smoke mode.'
+    }
+}
+$frontendMarkers = [regex]::Matches($configText, 'export const MTA_CORE_GUI_FRONTEND_REFERENCE = (true|false);')
+if ($frontendMarkers.Count -gt 1 -or ($frontendCount -and $frontendMarkers.Count -ne 1)) { throw 'Invalid GUI frontend configuration marker.' }
+if ($frontendMarkers.Count -eq 1 -and $frontendMarkers[0].Groups[1].Value -eq 'true') {
+    if (-not $frontendCount -or $package.mode -ne 'Smoke' -or $configText -match 'export const (GAIT_REFERENCE|GAIT_RATE|GAIT_ROOT_LOCK|INPUT_REFERENCE|MTA_NATIVE_PAD_REFERENCE|MTA_NATIVE_MOVEMENT_TRIAL|MTA_CORE_STARTUP_REFERENCE|MTA_CORE_INPUT_REFERENCE|MTA_CORE_MOVEMENT_REFERENCE|MTA_CORE_RENDER_REFERENCE|MTA_CORE_RENDER_GPU_REFERENCE|MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE|MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE|MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE|MTA_CORE_GUI_STARTUP_REFERENCE|MTA_CORE_GUI_SURFACE_REFERENCE) = true;') {
+        throw 'MTA Core GUI frontend requires the complete frontend group and separate opt-in Smoke mode.'
     }
 }
 $changes = @()

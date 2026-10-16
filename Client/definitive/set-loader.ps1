@@ -81,6 +81,43 @@ if ($hasXml -ne $hasBindConfig -or ($hasXml -and -not $hasCore)) {
     throw 'Incomplete MTA Core configured input package ownership.'
 }
 if ($hasXml) { $allowedPaths += @('CLEO/de-online/xmll.dll', 'CLEO/de-online/mta/config/coreconfig.xml') }
+$guiPaths = @('CLEO/de-online/cgui.dll',
+    'CLEO/de-online/mta/cgui/sans.ttf', 'CLEO/de-online/mta/cgui/saheader.ttf', 'CLEO/de-online/mta/cgui/sagothic.ttf',
+    'CLEO/de-online/mta/cgui/Imageset.xsd', 'CLEO/de-online/mta/cgui/GUIScheme.xsd', 'CLEO/de-online/mta/cgui/Font.xsd',
+    'CLEO/de-online/mta/cgui/Falagard.xsd', 'CLEO/de-online/mta/cgui/unifont.ttf',
+    'CLEO/de-online/skins/Default/CGUI.xml', 'CLEO/de-online/skins/Default/CGUI.is.xml',
+    'CLEO/de-online/skins/Default/CGUI.lnf.xml', 'CLEO/de-online/skins/Default/CGUI.png')
+$frontendPaths = @(
+    'CLEO/de-online/mta/cgui/images/background.png',
+    'CLEO/de-online/mta/cgui/images/background_logo.png',
+    'CLEO/de-online/mta/cgui/images/mta_filler.png',
+    'CLEO/de-online/mta/cgui/images/version.png',
+    'CLEO/de-online/mta/cgui/images/the_language_icon.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/locked.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/search-servers.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/search-players.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/refresh.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/favorite.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/connect.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/info.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/search.png',
+    'CLEO/de-online/mta/cgui/images/serverbrowser/trashcan.png',
+    'CLEO/de-online/mta/locale/en_US/menu_disconnect.png',
+    'CLEO/de-online/mta/locale/en_US/menu_quick_connect.png',
+    'CLEO/de-online/mta/locale/en_US/menu_browse_servers.png',
+    'CLEO/de-online/mta/locale/en_US/menu_settings.png',
+    'CLEO/de-online/mta/locale/en_US/menu_about.png',
+    'CLEO/de-online/mta/locale/en_US/menu_quit.png',
+    'CLEO/de-online/mta/locale/en_US/latest_news.png',
+    'CLEO/de-online/mta/locale/en_US/client.pot')
+# Bypass/recovery must validate the exact same complete ownership groups as
+# uninstall, including after a restart interrupted an enabled/disabled rename.
+$guiCount = @($relativePaths | Where-Object { $_ -cin $guiPaths }).Count
+$frontendCount = @($relativePaths | Where-Object { $_ -cin $frontendPaths }).Count
+if ($guiCount -and ($guiCount -ne 13 -or $allowedPaths.Count -ne 23)) { throw 'Incomplete MTA Core GUI startup package ownership.' }
+if ($frontendCount -and ($frontendCount -ne 22 -or $guiCount -ne 13)) { throw 'Incomplete MTA Core GUI frontend package ownership.' }
+if ($guiCount) { $allowedPaths += $guiPaths }
+if ($frontendCount) { $allowedPaths += $frontendPaths }
 $uniquePaths = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 foreach ($relative in $relativePaths) {
     if ($relative -cnotin $allowedPaths -or -not $uniquePaths.Add($relative)) {

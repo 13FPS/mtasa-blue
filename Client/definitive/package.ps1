@@ -6,25 +6,29 @@ param([ValidateSet('Diagnostic', 'Smoke', 'Online')][string]$Mode = 'Smoke',
     [switch]$NativeGaitReference, [switch]$MatchedGaitRate, [switch]$LockWalkRoot, [switch]$NativeInputReference,
     [switch]$MtaNativePadReference, [switch]$MtaNativeMovementTrial, [switch]$MtaCoreStartupReference, [switch]$MtaCoreInputReference,
     [switch]$MtaCoreMovementReference, [switch]$MtaCoreRenderReference, [switch]$MtaCoreRenderGpuReference, [switch]$MtaCoreRenderCustomPresentReference, [switch]$MtaCoreRenderFrameBoundaryReference, [switch]$MtaCoreRenderNativeDispatchReference,
-    [ValidateSet('D3D11', 'D3D12')][string]$MtaCoreRenderRoute = 'D3D11', [switch]$MtaCoreGuiStartupReference, [switch]$MtaCoreGuiSurfaceReference, [switch]$MtaCoreGuiFrontendReference, [switch]$MtaCoreGuiFrontendInputReference,
+    [ValidateSet('D3D11', 'D3D12')][string]$MtaCoreRenderRoute = 'D3D11', [switch]$MtaCoreGuiStartupReference, [switch]$MtaCoreGuiSurfaceReference, [switch]$MtaCoreGuiFrontendReference, [switch]$MtaCoreGuiFrontendInputReference, [switch]$MtaCoreGuiFrontendStartupReference,
     [string]$OutputDirectory)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+# Completed frontend ownership is independent of the rejecting gameplay constructor.
+if ($MtaCoreGuiFrontendStartupReference -and ($Mode -ne 'Smoke' -or $MtaCoreGuiFrontendInputReference -or $MtaCoreGuiFrontendReference -or $MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference -or $MtaCoreRenderReference -or $MtaCoreRenderGpuReference -or $MtaCoreRenderCustomPresentReference -or $MtaCoreRenderFrameBoundaryReference -or $MtaCoreRenderNativeDispatchReference -or $MtaCoreMovementReference -or $MtaCoreInputReference -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
+    throw 'MTA Core GUI frontend startup requires separate opt-in Smoke mode without other trials or an explicit renderer route.'
+}
 # Actual MTA frontend input is a separate, explicit control-owning trial.
-if ($MtaCoreGuiFrontendInputReference -and ($Mode -ne 'Smoke' -or $MtaCoreGuiFrontendReference -or $MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference -or $MtaCoreRenderReference -or $MtaCoreRenderGpuReference -or $MtaCoreRenderCustomPresentReference -or $MtaCoreRenderFrameBoundaryReference -or $MtaCoreRenderNativeDispatchReference -or $MtaCoreMovementReference -or $MtaCoreInputReference -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
+if ($MtaCoreGuiFrontendInputReference -and ($Mode -ne 'Smoke' -or $MtaCoreGuiFrontendStartupReference -or $MtaCoreGuiFrontendReference -or $MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference -or $MtaCoreRenderReference -or $MtaCoreRenderGpuReference -or $MtaCoreRenderCustomPresentReference -or $MtaCoreRenderFrameBoundaryReference -or $MtaCoreRenderNativeDispatchReference -or $MtaCoreMovementReference -or $MtaCoreInputReference -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
     throw 'MTA Core GUI frontend input requires separate opt-in Smoke mode without other trials or an explicit renderer route.'
 }
-if ($MtaCoreGuiFrontendReference -and ($Mode -ne 'Smoke' -or $MtaCoreGuiFrontendInputReference -or $MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference -or $MtaCoreRenderReference -or $MtaCoreRenderGpuReference -or $MtaCoreRenderCustomPresentReference -or $MtaCoreRenderFrameBoundaryReference -or $MtaCoreRenderNativeDispatchReference -or $MtaCoreMovementReference -or $MtaCoreInputReference -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
+if ($MtaCoreGuiFrontendReference -and ($Mode -ne 'Smoke' -or $MtaCoreGuiFrontendStartupReference -or $MtaCoreGuiFrontendInputReference -or $MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference -or $MtaCoreRenderReference -or $MtaCoreRenderGpuReference -or $MtaCoreRenderCustomPresentReference -or $MtaCoreRenderFrameBoundaryReference -or $MtaCoreRenderNativeDispatchReference -or $MtaCoreMovementReference -or $MtaCoreInputReference -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
     throw 'MTA Core GUI frontend requires separate opt-in Smoke mode without other trials or an explicit renderer route.'
 }
 # GUI startup owns its device and queue after observation ends. It is a separate
 # trial, so selecting it cannot inherit an input, movement or read-only trial.
-if ($MtaCoreGuiStartupReference -and ($Mode -ne 'Smoke' -or $MtaCoreGuiFrontendInputReference -or $MtaCoreGuiFrontendReference -or $MtaCoreGuiSurfaceReference -or $MtaCoreRenderReference -or $MtaCoreRenderGpuReference -or $MtaCoreRenderCustomPresentReference -or $MtaCoreRenderFrameBoundaryReference -or $MtaCoreRenderNativeDispatchReference -or $MtaCoreMovementReference -or $MtaCoreInputReference -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
+if ($MtaCoreGuiStartupReference -and ($Mode -ne 'Smoke' -or $MtaCoreGuiFrontendStartupReference -or $MtaCoreGuiFrontendInputReference -or $MtaCoreGuiFrontendReference -or $MtaCoreGuiSurfaceReference -or $MtaCoreRenderReference -or $MtaCoreRenderGpuReference -or $MtaCoreRenderCustomPresentReference -or $MtaCoreRenderFrameBoundaryReference -or $MtaCoreRenderNativeDispatchReference -or $MtaCoreMovementReference -or $MtaCoreInputReference -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
     throw 'MTA Core GUI startup requires separate opt-in Smoke mode without other trials or an explicit renderer route.'
 }
 # Surface display is an independent opt-in: sharing GUI assets cannot arm it.
-if ($MtaCoreGuiSurfaceReference -and ($Mode -ne 'Smoke' -or $MtaCoreGuiFrontendInputReference -or $MtaCoreGuiFrontendReference -or $MtaCoreGuiStartupReference -or $MtaCoreRenderReference -or $MtaCoreRenderGpuReference -or $MtaCoreRenderCustomPresentReference -or $MtaCoreRenderFrameBoundaryReference -or $MtaCoreRenderNativeDispatchReference -or $MtaCoreMovementReference -or $MtaCoreInputReference -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
+if ($MtaCoreGuiSurfaceReference -and ($Mode -ne 'Smoke' -or $MtaCoreGuiFrontendStartupReference -or $MtaCoreGuiFrontendInputReference -or $MtaCoreGuiFrontendReference -or $MtaCoreGuiStartupReference -or $MtaCoreRenderReference -or $MtaCoreRenderGpuReference -or $MtaCoreRenderCustomPresentReference -or $MtaCoreRenderFrameBoundaryReference -or $MtaCoreRenderNativeDispatchReference -or $MtaCoreMovementReference -or $MtaCoreInputReference -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
     throw 'MTA Core GUI surface requires separate opt-in Smoke mode without other trials or an explicit renderer route.'
 }
 # Frame association is a separate read-only hook lease, never implicit in recognition.
@@ -94,6 +98,64 @@ function Assert-NoLinks([string]$Path) {
     }
 }
 
+function Get-Amd64Exports([string]$Path) {
+    # A new opt-in must reject stale DLLs before staging or downloading. Read
+    # their PE export tables without executing Core, bridge or their DllMain.
+    Assert-NoLinks $Path
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    if ($bytes.Length -lt 256 -or [BitConverter]::ToUInt16($bytes, 0) -ne 0x5a4d) { throw "Invalid AMD64 PE: $Path" }
+    $pe = [uint64][BitConverter]::ToUInt32($bytes, 0x3c)
+    if ($pe + 24 -gt $bytes.Length -or [BitConverter]::ToUInt32($bytes, [int]$pe) -ne 0x4550 -or [BitConverter]::ToUInt16($bytes, [int]$pe + 4) -ne 0x8664) { throw "Invalid AMD64 PE: $Path" }
+    $sectionCount = [BitConverter]::ToUInt16($bytes, [int]$pe + 6)
+    $optionalSize = [BitConverter]::ToUInt16($bytes, [int]$pe + 20)
+    $optional = [int]$pe + 24
+    if ($optionalSize -lt 120 -or $optional + $optionalSize -gt $bytes.Length -or [BitConverter]::ToUInt16($bytes, $optional) -ne 0x20b -or
+        [BitConverter]::ToUInt32($bytes, $optional + 108) -lt 1 -or -not $sectionCount -or $sectionCount -gt 96) { throw "Invalid PE optional header: $Path" }
+    $exportRva = [BitConverter]::ToUInt32($bytes, $optional + 112)
+    $exportSize = [BitConverter]::ToUInt32($bytes, $optional + 116)
+    $table = $optional + $optionalSize
+    if ($table + 40 * $sectionCount -gt $bytes.Length -or -not $exportRva -or $exportSize -lt 40) { throw "Missing PE exports: $Path" }
+    $sections = @()
+    for ($index = 0; $index -lt $sectionCount; ++$index) {
+        $at = $table + 40 * $index
+        $sections += @{rva=[uint64][BitConverter]::ToUInt32($bytes, $at + 12);raw=[uint64][BitConverter]::ToUInt32($bytes, $at + 20);size=[uint64][BitConverter]::ToUInt32($bytes, $at + 16)}
+    }
+    $offset = {
+        param([uint64]$Rva, [uint64]$Size)
+        foreach ($section in $sections) {
+            if ($Rva -ge $section.rva -and $Rva - $section.rva + $Size -le $section.size -and $section.raw + $Rva - $section.rva + $Size -le $bytes.Length) {
+                return [int]($section.raw + $Rva - $section.rva)
+            }
+        }
+        throw "Invalid PE export RVA: $Path"
+    }
+    $directory = & $offset $exportRva 40
+    $functionCount = [BitConverter]::ToUInt32($bytes, $directory + 20)
+    $nameCount = [BitConverter]::ToUInt32($bytes, $directory + 24)
+    if (-not $functionCount -or -not $nameCount -or $functionCount -gt 65536 -or $nameCount -gt 65536) { throw "Invalid PE export counts: $Path" }
+    $functions = & $offset ([BitConverter]::ToUInt32($bytes, $directory + 28)) (4 * $functionCount)
+    $names = & $offset ([BitConverter]::ToUInt32($bytes, $directory + 32)) (4 * $nameCount)
+    $ordinals = & $offset ([BitConverter]::ToUInt32($bytes, $directory + 36)) (2 * $nameCount)
+    $exports = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    for ($index = 0; $index -lt $nameCount; ++$index) {
+        $ordinal = [BitConverter]::ToUInt16($bytes, $ordinals + 2 * $index)
+        if ($ordinal -ge $functionCount) { throw "Invalid PE export ordinal: $Path" }
+        $functionRva = [BitConverter]::ToUInt32($bytes, $functions + 4 * $ordinal)
+        $nameRva = [BitConverter]::ToUInt32($bytes, $names + 4 * $index)
+        $nameOffset = & $offset $nameRva 1
+        $length = 0
+        while ($length -lt 512 -and $nameOffset + $length -lt $bytes.Length -and $bytes[$nameOffset + $length]) { ++$length }
+        if (-not $length -or $length -eq 512 -or $nameOffset + $length -ge $bytes.Length) { throw "Invalid PE export name: $Path" }
+        & $offset $nameRva ($length + 1) | Out-Null
+        # A forwarded name cannot establish that this reviewed module contains
+        # the completed lifecycle implementation required by the new mode.
+        if ($functionRva -and ($functionRva -lt $exportRva -or [uint64]$functionRva -ge [uint64]$exportRva + $exportSize)) {
+            [void]$exports.Add([Text.Encoding]::ASCII.GetString($bytes, $nameOffset, $length))
+        }
+    }
+    Write-Output -NoEnumerate $exports
+}
+
 function Get-VerifiedDownload([string]$Name, [string]$Url, [string]$Sha256) {
     $destination = Join-Path $cacheRoot $Name
     Assert-NoLinks $destination
@@ -143,8 +205,20 @@ $corePath = Join-Path $repositoryRoot 'Bin/mta/x64/core.dll'
 $pthreadPath = Join-Path $repositoryRoot 'Bin/mta/x64/pthread.dll'
 $xmlPath = Join-Path $repositoryRoot 'Bin/server/x64/xmll.dll'
 $bindConfigPath = Join-Path $PSScriptRoot 'coreconfig.xml'
+if ($MtaCoreGuiFrontendStartupReference) {
+    $bridgeExports = Get-Amd64Exports $bridgePath
+    foreach ($name in @('DE_CoreGuiFrontendStartupApiVersion', 'DE_CoreGuiFrontendStartupBegin', 'DE_CoreGuiFrontendStartupCapture', 'DE_CoreGuiFrontendStartupRead',
+        'DE_CoreGuiFrontendInputCapture', 'DE_CoreGuiFrontendInputRead', 'DE_CoreStartupPoll', 'DE_CoreStartupCancel', 'DE_CoreStartupRead')) {
+        if (-not $bridgeExports.Contains($name)) { throw "Required completed frontend bridge export missing: $name" }
+    }
+    $coreExports = Get-Amd64Exports $corePath
+    foreach ($name in @('MTA_DEFrontendStartupApiVersion', 'MTA_BeginDEFrontendStartup', 'MTA_PulseDEFrontendStartup', 'MTA_BindDEFrontendStartupInput',
+        'MTA_ReadDEFrontendStartup', 'MTA_ShutdownDEFrontendStartup', 'MTA_ReleaseDEFrontendStartup', 'MTA_RunDEFrontendStartupView')) {
+        if (-not $coreExports.Contains($name)) { throw "Required completed frontend Core export missing: $name" }
+    }
+}
 $guiSources = @()
-if ($MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference -or $MtaCoreGuiFrontendReference -or $MtaCoreGuiFrontendInputReference) {
+if ($MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference -or $MtaCoreGuiFrontendReference -or $MtaCoreGuiFrontendInputReference -or $MtaCoreGuiFrontendStartupReference) {
     $guiSources += @{ source=(Join-Path $repositoryRoot 'Bin/mta/x64/cgui.dll'); path='cgui.dll' }
     foreach ($name in @('sans.ttf', 'saheader.ttf', 'sagothic.ttf', 'Imageset.xsd', 'GUIScheme.xsd', 'Font.xsd', 'Falagard.xsd')) {
         $guiSources += @{ source=(Join-Path $repositoryRoot ('Shared/data/MTA San Andreas/MTA/cgui/' + $name)); path=('mta/cgui/' + $name) }
@@ -160,7 +234,7 @@ if ($MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference -or $MtaCoreGuiF
     $unifont = @($guiSources | Where-Object path -eq 'mta/cgui/unifont.ttf')[0]
     if ((Get-FileHash -LiteralPath $unifont.source -Algorithm SHA256).Hash.ToLowerInvariant() -ne '6b18fdcf0f61f3df2e61db9737af6de9f37048ec93083621d41504ebf8cb18f4') { throw 'Pinned GUI Unifont hash mismatch.' }
 }
-if ($MtaCoreGuiFrontendReference -or $MtaCoreGuiFrontendInputReference) {
+if ($MtaCoreGuiFrontendReference -or $MtaCoreGuiFrontendInputReference -or $MtaCoreGuiFrontendStartupReference) {
     $guiSources += @{ source=(Join-Path $repositoryRoot 'Shared/data/MTA San Andreas/MTA/cgui/images/background.png'); path='mta/cgui/images/background.png' }
     $guiSources += @{ source=(Join-Path $repositoryRoot 'Shared/data/MTA San Andreas/MTA/cgui/images/background_logo.png'); path='mta/cgui/images/background_logo.png' }
     $guiSources += @{ source=(Join-Path $repositoryRoot 'Shared/data/MTA San Andreas/MTA/cgui/images/mta_filler.png'); path='mta/cgui/images/mta_filler.png' }
@@ -354,6 +428,12 @@ $frontendInputMarker = 'export const MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE = fal
 if ([regex]::Matches($configText, [regex]::Escape($frontendInputMarker)).Count -ne 1) { throw 'Expected disabled MTA Core GUI frontend input in source configuration.' }
 $configText = $configText.Replace($frontendInputMarker,
     "export const MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE = $($MtaCoreGuiFrontendInputReference.IsPresent.ToString().ToLowerInvariant());")
+# A completed Core owner has a distinct opt-in and cannot inherit a bounded
+# InitializeCore experiment merely because both modes ship the same GUI assets.
+$frontendStartupMarker = 'export const MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE = false;'
+if ([regex]::Matches($configText, [regex]::Escape($frontendStartupMarker)).Count -ne 1) { throw 'Expected disabled MTA Core GUI frontend startup in source configuration.' }
+$configText = $configText.Replace($frontendStartupMarker,
+    "export const MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE = $($MtaCoreGuiFrontendStartupReference.IsPresent.ToString().ToLowerInvariant());")
 [IO.File]::WriteAllText($configPath, $configText, $utf8)
 foreach ($name in @('sa_unreal.json', 'unknown_x64.json')) {
     [IO.File]::Copy($downloads[$name], (Join-Path $configDirectory $name), $false)
@@ -386,7 +466,7 @@ $files = @(Get-ChildItem -LiteralPath $stagingWin64 -File -Recurse | Sort-Object
         sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     }
 })
-if ($files.Count -ne $(if ($MtaCoreGuiFrontendReference -or $MtaCoreGuiFrontendInputReference) { 58 } elseif ($MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference) { 36 } else { 23 })) { throw 'Unexpected package ownership count.' }
+if ($files.Count -ne $(if ($MtaCoreGuiFrontendReference -or $MtaCoreGuiFrontendInputReference -or $MtaCoreGuiFrontendStartupReference) { 58 } elseif ($MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference) { 36 } else { 23 })) { throw 'Unexpected package ownership count.' }
 $manifest = [ordered]@{
     packageId = 'de-online-prototype'
     formatVersion = 1

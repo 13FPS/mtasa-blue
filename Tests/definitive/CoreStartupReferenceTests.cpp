@@ -743,6 +743,53 @@ int wmain(int argc, wchar_t** argv)
                 "final movement metrics must prove inactive restored scopes");
             Check(fixture.counters[2] == 0 && fixture.counters[1] == fixture.counters[0], "movement callback/unload must share the worker thread");
         }
+        else if (std::wstring(argv[2]) == L"actual-frontend-startup")
+        {
+            namespace Startup = DefinitiveFrontendStartup;
+            namespace Report = deonline::FrontendStartupReport;
+            Check(Fast([&] { return worker.BeginGuiFrontendStartupReference(&anchor); }),
+                  "actual completed Core worker begins without script-thread loader work");
+            Wait(worker);
+            for (unsigned field = 0; field < 8; ++field)
+                Check(!worker.Read(field), "actual completed Core worker leaves historical startup8 fields reserved");
+            Check(worker.Read(8) == 2 && worker.Read(9) == static_cast<std::uint32_t>(Startup::Status::Failed) &&
+                      worker.Read(10) == static_cast<std::uint32_t>(Startup::Status::Ok),
+                  "actual Core completes construction, rejects native binding, and shuts down independently");
+            Check(worker.Read(13) == 1 && !worker.Read(14) && !worker.Read(15) && worker.Read(16) == 23 && !worker.Read(17) && !worker.Read(18),
+                  "wrong-image completed view fails workload while actual owner/backend/code cleanup succeeds");
+            Check(worker.CaptureGuiFrontendStartup(), "actual copied completed Core lifecycle report survives DLL unload");
+            for (const auto offset : {Report::Begin, Report::AfterView})
+            {
+                Check(worker.ReadGuiFrontendStartup(offset + Startup::Version) == 1 && worker.ReadGuiFrontendStartup(offset + Startup::Phase) == 2 &&
+                          worker.ReadGuiFrontendStartup(offset + Startup::CoreRetained) == 1 &&
+                          worker.ReadGuiFrontendStartup(offset + Startup::BackendStarted) == 1 &&
+                          !worker.ReadGuiFrontendStartup(offset + Startup::ExactImageBound) && !worker.ReadGuiFrontendStartup(offset + Startup::ViewRuns) &&
+                          worker.ReadGuiFrontendStartup(offset + Startup::LastViewCleanupComplete) == 1,
+                      "actual completed Core/backend remains alive before and after explicit wrong-image view refusal");
+            }
+            Check(worker.ReadGuiFrontendStartup(Report::AfterView + Startup::LastFailure) == static_cast<std::uint32_t>(Startup::Failure::InputBind),
+                  "actual backend, not a fixture boolean, supplies the native bind refusal");
+            Check(worker.ReadGuiFrontendStartup(Report::Stopped + Startup::Phase) == 4 &&
+                      worker.ReadGuiFrontendStartup(Report::Stopped + Startup::CoreRetained) == 1 &&
+                      !worker.ReadGuiFrontendStartup(Report::Stopped + Startup::BackendStarted) &&
+                      !worker.ReadGuiFrontendStartup(Report::Stopped + Startup::CapabilitiesLow) &&
+                      !worker.ReadGuiFrontendStartup(Report::Stopped + Startup::CapabilitiesHigh) &&
+                      worker.ReadGuiFrontendStartup(Report::Stopped + Startup::CleanupComplete) == 1 &&
+                      worker.ReadGuiFrontendStartup(Report::Stopped + Startup::LastViewCleanupComplete) == 1,
+                  "actual stopped Core is read before Release with adapter capabilities retired");
+            for (const auto offset : {Report::Begin, Report::AfterView, Report::Stopped})
+            {
+                for (unsigned field = Startup::FrontendRetained; field <= Startup::InputRequested; ++field)
+                    Check(!worker.ReadGuiFrontendStartup(offset + field), "wrong-image async startup creates no GUI/services/input ownership");
+                Check(!worker.ReadGuiFrontendStartup(offset + Startup::NetworkStarted) && !worker.ReadGuiFrontendStartup(offset + Startup::GameplayReady) &&
+                          !worker.ReadGuiFrontendStartup(offset + Startup::FullMtaReady),
+                      "actual completed frontend startup never upgrades full gameplay/network readiness");
+            }
+            Check(!worker.CaptureGuiFrontendInput() && !worker.ReadGuiFrontendInput(0) && !worker.ReadGuiFrontendStartup(Report::FieldCount),
+                  "a never-started native view invents no256 evidence and obeys report bounds");
+            Check(!GetModuleHandleW(L"core.dll") && !GetModuleHandleW(L"game_de.dll") && !GetModuleHandleW(L"pthread.dll"),
+                  "actual completed async owner releases its Core/backend/pthread modules");
+        }
         else if (std::wstring(argv[2]) == L"actual")
         {
             Check(Fast([&] { return worker.Begin(&anchor); }), "actual Core worker failed to begin");
@@ -916,7 +963,7 @@ int wmain(int argc, wchar_t** argv)
             }
         }
         std::printf("{\"success\":true,\"checks\":%d,\"worst_api_ms\":%llu,\"actual_mode\":%s,\"game_loaded\":false}\n", checks,
-                    static_cast<unsigned long long>(worstApiMs), std::wstring(argv[2]) == L"actual" ? "true" : "false");
+                    static_cast<unsigned long long>(worstApiMs), std::wstring(argv[2]).find(L"actual") == 0 ? "true" : "false");
         return 0;
     }
     catch (const std::exception& error)

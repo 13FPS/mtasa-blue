@@ -7,7 +7,8 @@ param(
     [Parameter(Mandatory)][string]$PackageDirectory,
     [Parameter(Mandatory)][string]$GameExecutable,
     [string]$PreflightDll,
-    [string]$LauncherExe
+    [string]$LauncherExe,
+    [switch]$CompletedFrontendStartup
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -46,7 +47,10 @@ $frontendPaths = @(
     'CLEO/de-online/mta/locale/en_US/latest_news.png', 'CLEO/de-online/mta/locale/en_US/client.pot')
 $allPaths = $basePaths + $guiPaths + $frontendPaths
 $configRelative = 'CLEO/de-online/config.mjs'
-$newMarker = 'MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE'
+$newMarker = if ($CompletedFrontendStartup) { 'MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE' } else { 'MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE' }
+$newSwitch = if ($CompletedFrontendStartup) { 'MtaCoreGuiFrontendStartupReference' } else { 'MtaCoreGuiFrontendInputReference' }
+$activeSelection = if ($CompletedFrontendStartup) { 'completed' } else { 'input' }
+$preflightModeLabel = if ($CompletedFrontendStartup) { 'frontend-startup58' } else { 'frontend-input58' }
 $scripts = @('install.ps1', 'update.ps1', 'uninstall.ps1', 'set-mode.ps1', 'package.ps1')
 $outputRoot = Join-Path $repositoryRoot ('Build/mta-frontend-input-package-tests/' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N'))
 $fixtureRoot = Join-Path $outputRoot 'repository'
@@ -189,7 +193,7 @@ foreach ($entry in $manifest.files) {
 }
 $candidateConfig = [IO.File]::ReadAllText((Join-Path $sourcePackage ('Win64/' + $configRelative)))
 if ([regex]::Matches($candidateConfig, "export const $newMarker = true;").Count -ne 1 -or
-    $candidateConfig -match 'export const (GAIT_REFERENCE|GAIT_RATE|GAIT_ROOT_LOCK|INPUT_REFERENCE|MTA_NATIVE_PAD_REFERENCE|MTA_NATIVE_MOVEMENT_TRIAL|MTA_CORE_STARTUP_REFERENCE|MTA_CORE_INPUT_REFERENCE|MTA_CORE_MOVEMENT_REFERENCE|MTA_CORE_RENDER_REFERENCE|MTA_CORE_RENDER_GPU_REFERENCE|MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE|MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE|MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE|MTA_CORE_GUI_STARTUP_REFERENCE|MTA_CORE_GUI_SURFACE_REFERENCE|MTA_CORE_GUI_FRONTEND_REFERENCE) = true;') { throw 'Candidate must arm only the new frontend input mode.' }
+    $candidateConfig -match ('export const (' + ((@('GAIT_REFERENCE','GAIT_RATE','GAIT_ROOT_LOCK','INPUT_REFERENCE','MTA_NATIVE_PAD_REFERENCE','MTA_NATIVE_MOVEMENT_TRIAL','MTA_CORE_STARTUP_REFERENCE','MTA_CORE_INPUT_REFERENCE','MTA_CORE_MOVEMENT_REFERENCE','MTA_CORE_RENDER_REFERENCE','MTA_CORE_RENDER_GPU_REFERENCE','MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE','MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE','MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE','MTA_CORE_GUI_STARTUP_REFERENCE','MTA_CORE_GUI_SURFACE_REFERENCE','MTA_CORE_GUI_FRONTEND_REFERENCE','MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE','MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE') | Where-Object { $_ -ne $newMarker }) -join '|') + ') = true;')) { throw 'Candidate must arm only the new frontend input mode.' }
 $sourcePaths = @($scripts | ForEach-Object { 'Client/definitive/' + $_ }) + @('Client/launch/DefinitivePreflight/Loader.cpp', 'Tests/definitive/test_frontend_input_package.ps1')
 if ($preflightEnabled) {
     if (-not $PreflightDll) { $PreflightDll = Join-Path $repositoryRoot 'Bin/mta-launcher/x64/mta/de_preflight.dll' }
@@ -214,7 +218,7 @@ $originalPackageManifest = [IO.File]::ReadAllText((Join-Path $fixturePackage 'ma
 $success = $false
 $failure = $null
 try {
-    Invoke-Preflight 'valid-frontend-input58' 0 'preflight_valid'
+    Invoke-Preflight ('valid-' + $preflightModeLabel) 0 'preflight_valid'
     # Legacy ownership accepts packages predating the optional marker. These
     # records contain verified actual DLL bytes, not fabricated PE fixtures.
     $legacyConfig = [regex]::Replace($candidateConfig, "(?m)^export const $newMarker = true;\r?\n", '')
@@ -238,40 +242,47 @@ try {
     Invoke-Production 'update.ps1' @{GameDirectory=$fixtureGame;PackageDirectory=$fixturePackage}
     Assert-Installed 58
     Assert-Check ([IO.File]::ReadAllText((Join-Path $fixtureGame $configRelative)) -eq $candidateConfig) 'Upgrade selects exact candidate mode'
-    foreach ($selection in @('plain', 'frontend', 'input', 'startup', 'surface', 'input')) {
+    $selections = @('plain', 'frontend', 'input', 'startup', 'surface')
+    if ($candidateConfig.Contains('export const MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE = ')) { $selections += 'completed' }
+    $selections += $activeSelection
+    foreach ($selection in $selections) {
         $arguments = @{Mode='Smoke';GameDirectory=$fixtureGame}
         switch ($selection) {
             'frontend' { $arguments.MtaCoreGuiFrontendReference=$true }
             'input' { $arguments.MtaCoreGuiFrontendInputReference=$true }
+            'completed' { $arguments.MtaCoreGuiFrontendStartupReference=$true }
             'startup' { $arguments.MtaCoreGuiStartupReference=$true }
             'surface' { $arguments.MtaCoreGuiSurfaceReference=$true }
         }
         Invoke-Production 'set-mode.ps1' $arguments
         $text = [IO.File]::ReadAllText((Join-Path $fixtureGame $configRelative))
-        $armed = @([regex]::Matches($text, 'export const MTA_CORE_GUI_(STARTUP|SURFACE|FRONTEND|FRONTEND_INPUT)_REFERENCE = true;'))
+        $armed = @([regex]::Matches($text, 'export const MTA_CORE_GUI_(STARTUP|SURFACE|FRONTEND|FRONTEND_INPUT|FRONTEND_STARTUP)_REFERENCE = true;'))
         Assert-Check ($armed.Count -eq $(if ($selection -eq 'plain') { 0 } else { 1 })) ('Exclusive GUI selection ' + $selection)
-        Assert-Check ($text.Contains("export const $newMarker = $($($selection -eq 'input').ToString().ToLowerInvariant());")) ('Input marker selection ' + $selection)
+        Assert-Check ($text.Contains("export const $newMarker = $($($selection -eq $activeSelection).ToString().ToLowerInvariant());")) ('Input marker selection ' + $selection)
     }
     Assert-Installed 58
     $conflictSwitches = @('NativeGaitReference', 'MatchedGaitRate', 'LockWalkRoot', 'NativeInputReference', 'MtaNativePadReference',
         'MtaNativeMovementTrial', 'MtaCoreStartupReference', 'MtaCoreInputReference', 'MtaCoreMovementReference', 'MtaCoreRenderReference',
         'MtaCoreRenderGpuReference', 'MtaCoreRenderCustomPresentReference', 'MtaCoreRenderFrameBoundaryReference',
-        'MtaCoreRenderNativeDispatchReference', 'MtaCoreGuiStartupReference', 'MtaCoreGuiSurfaceReference', 'MtaCoreGuiFrontendReference')
+        'MtaCoreRenderNativeDispatchReference', 'MtaCoreGuiStartupReference', 'MtaCoreGuiSurfaceReference', 'MtaCoreGuiFrontendReference',
+        'MtaCoreGuiFrontendInputReference', 'MtaCoreGuiFrontendStartupReference') | Where-Object { $_ -ne $newSwitch }
     foreach ($name in @('package.ps1', 'set-mode.ps1')) {
         foreach ($conflict in $conflictSwitches + @('route', 'Online', 'Diagnostic')) {
-            $arguments = @{Mode='Smoke';MtaCoreGuiFrontendInputReference=$true}
+            $arguments = @{Mode='Smoke'}
+            $arguments[$newSwitch] = $true
             if ($name -eq 'set-mode.ps1') { $arguments.GameDirectory=$fixtureGame }
             if ($conflict -eq 'route') { $arguments.MtaCoreRenderRoute='D3D12' }
             elseif ($conflict -in @('Online', 'Diagnostic')) { $arguments.Mode=$conflict }
             else { $arguments[$conflict]=$true }
-            Assert-Refused { Invoke-Production $name $arguments } "$name $conflict" 'frontend input requires separate'
+            Assert-Refused { Invoke-Production $name $arguments } "$name $conflict" 'frontend (input|startup) requires separate'
         }
     }
     $configConflicts = @('MTA_CORE_GUI_FRONTEND_REFERENCE', 'MTA_CORE_GUI_STARTUP_REFERENCE', 'MTA_CORE_GUI_SURFACE_REFERENCE',
         'MTA_CORE_MOVEMENT_REFERENCE', 'MTA_CORE_INPUT_REFERENCE', 'MTA_CORE_STARTUP_REFERENCE', 'MTA_CORE_RENDER_REFERENCE',
         'MTA_CORE_RENDER_GPU_REFERENCE', 'MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE', 'MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE',
         'MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE', 'MTA_NATIVE_MOVEMENT_TRIAL', 'MTA_NATIVE_PAD_REFERENCE', 'INPUT_REFERENCE',
-        'GAIT_REFERENCE', 'GAIT_RATE', 'GAIT_ROOT_LOCK')
+        'GAIT_REFERENCE', 'GAIT_RATE', 'GAIT_ROOT_LOCK', 'MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE', 'MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE') | Where-Object { $_ -ne $newMarker }
+    $configConflicts = @($configConflicts | Where-Object { $candidateConfig.Contains("export const $_ = false;") })
     foreach ($conflict in $configConflicts + @('duplicate', 'malformed')) {
         $text = if ($conflict -eq 'duplicate') { $candidateConfig + "`nexport const $newMarker = true;`n" }
                 elseif ($conflict -eq 'malformed') { $candidateConfig.Replace("export const $newMarker = true;", "export const $newMarker = 1;") }
@@ -286,7 +297,46 @@ try {
         Invoke-Preflight ("config-$conflict") 4 $(if ($conflict -in @('duplicate', 'malformed')) { 'gui_configuration_marker_invalid' } else { 'gui_mode_conflict' })
     }
     Set-PackageConfig $candidateConfig
-    Invoke-Preflight 'restored-frontend-input58' 0 'preflight_valid'
+    Invoke-Preflight ('restored-' + $preflightModeLabel) 0 'preflight_valid'
+    if ($CompletedFrontendStartup) {
+        # Mutate only DLL copies in this disposable repository. Packaging must
+        # reject missing actual exports before downloading or creating staging.
+        foreach ($name in @('index.js', 'controller.mjs', 'native-pad-reference.mjs', 'native-movement-trial.mjs', 'config.mjs', 'mod.json')) {
+            Copy-Fixture (Join-Path $fixturePackage ('Win64/CLEO/de-online/' + $name)) (Join-Path $fixtureScripts ('game-adapter/' + $name))
+        }
+        $specs = @(
+            @{role='Core';source=(Join-Path $fixturePackage 'Win64/CLEO/de-online/core.dll');target=(Join-Path $fixtureRoot 'Bin/mta/x64/core.dll');names=@(
+                'MTA_DEFrontendStartupApiVersion','MTA_BeginDEFrontendStartup','MTA_PulseDEFrontendStartup','MTA_BindDEFrontendStartupInput',
+                'MTA_ReadDEFrontendStartup','MTA_ShutdownDEFrontendStartup','MTA_ReleaseDEFrontendStartup','MTA_RunDEFrontendStartupView')},
+            @{role='bridge';source=(Join-Path $fixturePackage 'Win64/CLEO/de-online/de_client_bridge.dll');target=(Join-Path $fixtureRoot 'Build/definitive-online/de_client_bridge.dll');names=@(
+                'DE_CoreGuiFrontendStartupApiVersion','DE_CoreGuiFrontendStartupBegin','DE_CoreGuiFrontendStartupCapture','DE_CoreGuiFrontendStartupRead')})
+        foreach ($spec in $specs) { Copy-Fixture $spec.source $spec.target }
+        foreach ($spec in $specs) {
+            $original = [IO.File]::ReadAllBytes($spec.target)
+            foreach ($export in $spec.names) {
+                $mutated = [byte[]]$original.Clone()
+                $ascii = [Text.Encoding]::ASCII.GetString($mutated)
+                $position = $ascii.IndexOf(($export + [char]0), [StringComparison]::Ordinal)
+                Assert-Check ($position -ge 0) ('Real candidate export present ' + $export)
+                while ($position -ge 0) {
+                    $mutated[$position] = [byte][char]'Z'
+                    $position = $ascii.IndexOf(($export + [char]0), $position + 1, [StringComparison]::Ordinal)
+                }
+                Write-Fixture $spec.target $mutated
+                $arguments = @{Mode='Smoke';MtaCoreGuiFrontendStartupReference=$true;OutputDirectory=(Join-Path $fixtureRoot 'Build/refused-completed-candidate')}
+                Assert-Refused { Invoke-Production 'package.ps1' $arguments } ('Missing actual export ' + $export) ('completed frontend ' + $spec.role + ' export missing')
+                Write-Fixture $spec.target $original
+            }
+        }
+        $coreCopy = $specs[0].target
+        $original = [IO.File]::ReadAllBytes($coreCopy)
+        $mutated = [byte[]]$original.Clone()
+        $peOffset = [BitConverter]::ToInt32($mutated, 0x3c)
+        $mutated[$peOffset + 4] = 0x4c; $mutated[$peOffset + 5] = 0x01
+        Write-Fixture $coreCopy $mutated
+        Assert-Refused { Invoke-Production 'package.ps1' @{Mode='Smoke';MtaCoreGuiFrontendStartupReference=$true;OutputDirectory=(Join-Path $fixtureRoot 'Build/refused-completed-candidate')} } 'Wrong Core architecture' 'Invalid AMD64 PE'
+        Write-Fixture $coreCopy $original
+    }
     foreach ($missing in @($guiPaths[0], $frontendPaths[-1])) {
         $modified = $originalPackageManifest | ConvertFrom-Json
         $modified.files = @($modified.files | Where-Object path -ne $missing)
@@ -321,7 +371,8 @@ try {
     }
     $success = $true
 } catch { $failure = $_.Exception.Message }
-$result = [ordered]@{schema='mta_frontend_input_package_tests_v1';success=$success;scope='frontend-input-only-one-copied-executable';
+$result = [ordered]@{schema='mta_frontend_input_package_tests_v1';success=$success;scope=if ($CompletedFrontendStartup) { 'completed-frontend-startup-one-copied-executable' } else { 'frontend-input-only-one-copied-executable' };
+    completed_frontend_startup=[bool]$CompletedFrontendStartup;tested_marker=$newMarker;
     output_directory=$outputRoot;candidate=$sourcePackage;game_executable_sha256=$knownGameHash;checks=$checks.Count;check_labels=$checks;
     source_hashes=$sourcePins;package_hashes=$packagePins;legacy_ownership_counts=@(23,36);final_ownership_count=58;error=$failure;
     preflight_exercised=[bool]$preflightEnabled;preflight_artifacts=$preflightArtifacts;preflight_cases=$preflightCases;

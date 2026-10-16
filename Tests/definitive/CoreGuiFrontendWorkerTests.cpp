@@ -9,6 +9,9 @@
 #include <thread>
 #include <stdexcept>
 #include <string>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 
 namespace deonline
 {
@@ -18,8 +21,9 @@ namespace deonline
     };
     struct CoreStartupReferenceTestAccess
     {
-        static SRWLOCK& Lock(CoreStartupReference& worker) { return worker.inputLock; }
-        static SRWLOCK& ControlLock(CoreStartupReference& worker) { return FrontendControlMailboxTestAccess::Lock(worker.frontendControl); }
+        static SRWLOCK&                    Lock(CoreStartupReference& worker) { return worker.inputLock; }
+        static SRWLOCK&                    ControlLock(CoreStartupReference& worker) { return FrontendControlMailboxTestAccess::Lock(worker.frontendControl); }
+        static std::atomic<std::uint32_t>& StartupSequence(CoreStartupReference& worker) { return worker.frontendStartupSequence; }
     };
 }
 namespace
@@ -68,6 +72,171 @@ int wmain(int argc, wchar_t** argv)
               "fixture cleanup-publication setup");
         deonline::CoreStartupReference worker;
         Check(!worker.CaptureGuiFrontend() && !worker.CaptureGuiFrontendControl() && !worker.ReadGuiFrontend(0), "unbegun caches empty");
+        if (mode >= 200)
+        {
+            namespace Startup = DefinitiveFrontendStartup;
+            namespace Report = deonline::FrontendStartupReport;
+            namespace Input = DefinitiveGuiFrontendInputReference;
+            wchar_t executable[32768]{};
+            Check(GetModuleFileNameW(nullptr, executable, 32768) != 0, "owned fixture executable path");
+            const auto log = std::filesystem::path(executable).parent_path() / L"lifecycle.log";
+            Check(SetEnvironmentVariableW(L"MTA_FRONTEND_FIXTURE_LIFECYCLE", log.c_str()), "fixture lifecycle observation path");
+            Check(!worker.CaptureGuiFrontendStartup() && !worker.ReadGuiFrontendStartup(0), "completed startup cache begins empty");
+            const bool early = mode == 201 || mode == 202 || mode == 203 || mode == 212 || mode == 216 || mode == 220 || mode == 224 || mode == 229;
+            Check(worker.BeginGuiFrontendStartupReference(&anchor), "completed Core mode begins separately");
+            Check(!worker.Begin(&anchor) && !worker.BeginGuiFrontendInputReference(&anchor) && !worker.BeginGuiFrontendReference(&anchor),
+                  "completed Core shares worker ownership without entering a historical startup path");
+            if (mode == 229)
+            {
+                Check(WaitForSingleObject(ready, 10000) == WAIT_OBJECT_0 && worker.Cancel(), "cancel a known completed owner before view admission");
+                SetEvent(final);
+            }
+            if (!early)
+            {
+                Until([&] { return worker.CaptureGuiFrontendInput() && worker.ReadGuiFrontendInput(DefinitiveGuiStartupReference::Phase) == 1; },
+                      "completed owner publishes actual protocol256 through the existing cache");
+                Check(worker.CaptureGuiFrontendStartup() && worker.ReadGuiFrontendStartup(Report::Begin + Startup::Phase) == 2 &&
+                          worker.ReadGuiFrontendStartup(Report::Begin + Startup::BackendStarted) == 1 &&
+                          worker.ReadGuiFrontendStartup(Report::Begin + Startup::CoreRetained) == 1,
+                      "copied Begin32 proves a completed Core before the bounded view");
+                Check(!worker.CaptureGuiFrontendControl() && !worker.CaptureGuiFrontend() && !worker.CaptureGuiSurface(),
+                      "completed startup mode opens no script control mailbox or old GUI cache");
+                bool        foreign = true;
+                std::thread observer(
+                    [&] { foreign = worker.CaptureGuiFrontendStartup() || worker.ReadGuiFrontendStartup(0) != 0 || worker.CaptureGuiFrontendInput(); });
+                observer.join();
+                Check(!foreign, "completed startup report and input captures reject foreign script threads");
+                auto& sequence = deonline::CoreStartupReferenceTestAccess::StartupSequence(worker);
+                sequence.fetch_add(1);
+                Check(!worker.CaptureGuiFrontendStartup() && worker.ReadGuiFrontendStartup(Report::Begin + Startup::Phase) == 2,
+                      "in-progress atomic report publication preserves the last coherent capture");
+                sequence.fetch_add(1);
+                auto& lock = deonline::CoreStartupReferenceTestAccess::Lock(worker);
+                AcquireSRWLockExclusive(&lock);
+                Check(worker.CaptureGuiFrontendStartup() && !worker.CaptureGuiFrontendInput(),
+                      "completed Core scalar capture never waits on the other protocol's held script lock");
+                ReleaseSRWLockExclusive(&lock);
+                if (mode == 209)
+                {
+                    // Cancellation is intentionally a cross-thread atomic
+                    // signal; only lifecycle and copied reads require ownership.
+                    bool        accepted = false;
+                    std::thread canceller([&] { accepted = worker.Cancel(); });
+                    canceller.join();
+                    Check(accepted, "foreign cancellation requests bounded view retirement without moving cleanup ownership");
+                }
+                else
+                    SetEvent(release);
+                if (mode == 206 || mode == 207 || mode == 226 || mode == 227)
+                {
+                    Until([&] { return worker.CaptureGuiFrontendStartup() && worker.ReadGuiFrontendStartup(Report::Stopped + Startup::Phase) == 3; },
+                          "Busy shutdown publishes its actual pending owner without ending the worker");
+                    Check(worker.Poll() == 0 && GetModuleHandleW(L"core.dll") && !worker.BeginGuiFrontendStartupReference(&anchor),
+                          "Busy shutdown retains a live same-thread retry and rejects replacement work");
+                    if (mode == 227)
+                        Check(worker.Cancel(), "cancellation during Busy shutdown preserves cleanup retries");
+                }
+                if (mode == 208 || mode == 228)
+                {
+                    Until(
+                        [&]
+                        {
+                            std::ifstream pending(log);
+                            char          operation = 0;
+                            unsigned long pendingThread = 0;
+                            while (pending >> operation >> pendingThread)
+                                if (operation == 'F')
+                                    return true;
+                            return false;
+                        },
+                        "Busy release is invoked on the worker before retry");
+                    Check(worker.Poll() == 0 && GetModuleHandleW(L"core.dll"), "Busy release cannot abandon its owning worker thread");
+                    if (mode == 228)
+                        Check(worker.Cancel(), "cancellation during Busy release preserves cleanup retries");
+                }
+            }
+            Until([&] { return worker.Poll() == 1; }, "completed Core worker performs owner-thread shutdown after every outcome");
+            const bool retained = mode == 210 || mode == 211 || mode == 212 || mode == 213 || mode == 214 || mode == 219 || mode == 220 || mode == 222 ||
+                                  mode == 223 || mode == 225;
+            const auto expectedError = mode == 200 || mode == 207 || mode == 208                  ? 0u
+                                       : mode == 201                                              ? 20u
+                                       : mode == 202 || mode == 203 || mode == 220                ? 21u
+                                       : mode == 204 || mode == 215                               ? 22u
+                                       : mode == 214 || mode == 222                               ? 25u
+                                       : mode == 209 || mode == 227 || mode == 228 || mode == 229 ? 12u
+                                       : retained || mode == 226                                  ? 24u
+                                                                                                  : 23u;
+            Check(worker.Read(16) == expectedError, "completed owner preserves workload, cancellation and cleanup failure classifications");
+            Check(worker.Read(17) == (mode == 200 || mode == 207 || mode == 208 ? 1u : 0u), "failed or cancelled workload cannot become successful cleanup");
+            for (std::uint32_t field = 0; field < 8; ++field)
+                Check(!worker.Read(field), "completed mode does not reuse the historical full-startup8 schema");
+            Check(worker.Read(13) == (retained ? 0u : 1u) && (GetModuleHandleW(L"core.dll") != nullptr) == retained,
+                  "only independently retired completed Core code is unloaded");
+            Check(!worker.ReadGuiFrontendStartup(Report::FieldCount) && !worker.Read(19), "report and worker scalar reads enforce exact bounds");
+            const bool hasReport = mode != 201 && mode != 202 && mode != 220;
+            Check(worker.CaptureGuiFrontendStartup() == hasReport, "only actual successful32 readbacks create lifecycle evidence");
+            if (hasReport)
+            {
+                if (mode != 212)
+                    Check(worker.ReadGuiFrontendStartup(Report::Begin + Startup::Phase) == (mode == 203 ? 5u : 2u),
+                          "Begin report retains the real initial lifecycle phase");
+                if (mode == 203 || mode == 212 || mode == 229)
+                    Check(!worker.ReadGuiFrontendStartup(Report::AfterView), "skipped view keeps the AfterView32 segment empty");
+                if (mode == 229)
+                    Check(worker.Read(9) == static_cast<std::uint32_t>(Startup::Status::Stopped) && !worker.CaptureGuiFrontendInput(),
+                          "never-called view has a valid stopped status and invents no256 evidence");
+                if (!retained)
+                    Check(worker.ReadGuiFrontendStartup(Report::Stopped + Startup::Phase) == 4 &&
+                              worker.ReadGuiFrontendStartup(Report::Stopped + Startup::CoreRetained) == 1 &&
+                              !worker.ReadGuiFrontendStartup(Report::Stopped + Startup::BackendStarted) &&
+                              worker.ReadGuiFrontendStartup(Report::Stopped + Startup::CleanupComplete) == 1,
+                          "Stopped32 is copied before release, with completed Core retained and backend retired");
+                if (mode == 200)
+                    Check(worker.ReadGuiFrontendStartup(Report::AfterView + Startup::CoreRetained) == 1 &&
+                              worker.ReadGuiFrontendStartup(Report::AfterView + Startup::BackendStarted) == 1 &&
+                              !worker.ReadGuiFrontendStartup(Report::AfterView + Startup::FrontendRetained) &&
+                              worker.ReadGuiFrontendStartup(Report::AfterView + Startup::LastViewCleanupComplete) == 1,
+                          "view retirement preserves the completed Core/backend beyond the GUI lifetime");
+            }
+            if (retained)
+                Check(!worker.Begin(&anchor) && !worker.BeginGuiFrontendStartupReference(&anchor) && !worker.BeginGuiFrontendInputReference(&anchor),
+                      "completed startup quarantine cannot be bypassed by historical or new attempts");
+            std::ifstream operations(log);
+            char          operation = 0;
+            unsigned long threadId = 0, ownerId = 0;
+            unsigned      begins = 0, shuts = 0, releases = 0, initializes = 0;
+            while (operations >> operation >> threadId)
+            {
+                if (!ownerId)
+                    ownerId = threadId;
+                Check(threadId == ownerId && threadId != GetCurrentThreadId(), "all Core lifecycle callbacks execute on the same worker thread");
+                begins += operation == 'B';
+                shuts += operation == 'S';
+                releases += operation == 'F';
+                initializes += operation == 'I';
+            }
+            Check(initializes == 0, "new completed Core path never calls InitializeCore");
+            Check(begins == (mode == 201 ? 0u : 1u), "new mode uses its own completed Core factory");
+            Check(shuts == (mode == 201 || mode == 202 || mode == 220   ? 0u
+                            : mode == 226                               ? 44u
+                            : mode == 206 || mode == 207 || mode == 227 ? 4u
+                                                                        : 1u),
+                  "known owners always receive shutdown, including cooperative cancellation and failed view calls");
+            Check(releases == (mode == 208 || mode == 228                                                ? 4u
+                               : (!retained || mode == 214 || mode == 222) && mode != 201 && mode != 202 ? 1u
+                                                                                                         : 0u),
+                  "unverified owners are retained without release, while proven cleanup reaches release");
+            if (mode == 209)
+                Check(worker.Read(10) == static_cast<std::uint32_t>(Startup::Status::Ok) && !GetModuleHandleW(L"core.dll"),
+                      "cancellation still completes shutdown and unload");
+            CloseHandle(release);
+            CloseHandle(ready);
+            CloseHandle(final);
+            CloseHandle(detachReady);
+            CloseHandle(detachGate);
+            std::printf("{\"success\":true,\"checks\":%u,\"mode\":%u,\"fixture_is_mta\":false,\"game_launched\":false}\n", checks, mode);
+            return 0;
+        }
         if (mode >= 100)
         {
             // This controlled producer checks the real worker/cache/retirement

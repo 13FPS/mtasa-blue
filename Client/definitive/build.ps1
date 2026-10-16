@@ -41,6 +41,15 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Client probe compilation failed.' }
     & $compilerPath @commonArguments ('/I' + (Join-Path $repositoryRoot 'Client/sdk')) /DDE_BRIDGE_EXPORTS /LD (Join-Path $PSScriptRoot 'Bridge.cpp') (Join-Path $PSScriptRoot 'CoreStartupReference.cpp') (Join-Path $PSScriptRoot 'BuildGuard.cpp') (Join-Path $repositoryRoot 'Client/game_de/NativePadReader.cpp') (Join-Path $repositoryRoot 'Client/core/CGameAdapterModule.cpp') TransportClient.obj /Fede_client_bridge.dll /link ws2_32.lib bcrypt.lib user32.lib
     if ($LASTEXITCODE -ne 0) { throw 'Client bridge compilation failed.' }
+    # Export inspection executes no bridge/Core code. Old scalar exports remain
+    # unchanged; these distinct names advertise only the completed-Core route.
+    $dumpbinPath = Join-Path $env:VCToolsInstallDir 'bin/Hostx64/x64/dumpbin.exe'
+    $bridgeExports = & $dumpbinPath /nologo /exports de_client_bridge.dll
+    if ($LASTEXITCODE -ne 0) { throw 'Client bridge export inspection failed.' }
+    foreach ($name in @('DE_CoreGuiFrontendStartupApiVersion', 'DE_CoreGuiFrontendStartupBegin', 'DE_CoreGuiFrontendStartupCapture', 'DE_CoreGuiFrontendStartupRead',
+        'DE_CoreGuiFrontendInputApiVersion', 'DE_CoreGuiFrontendInputBegin', 'DE_CoreGuiFrontendInputCapture', 'DE_CoreGuiFrontendInputRead')) {
+        if (-not @($bridgeExports | Where-Object { $_ -match ('\s' + [regex]::Escape($name) + '\s*$') }).Count) { throw "Client bridge export missing: $name" }
+    }
     & $compilerPath @commonArguments (Join-Path $repositoryRoot 'Tests/definitive/ProtocolTests.cpp') /Fede_protocol_tests.exe
     if ($LASTEXITCODE -ne 0) { throw 'Protocol test compilation failed.' }
     & ./de_protocol_tests.exe

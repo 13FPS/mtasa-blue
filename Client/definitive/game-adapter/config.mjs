@@ -69,3 +69,7 @@ export const MTA_CORE_GUI_FRONTEND_REFERENCE = false;
 // actual menu and console. This distinct mode never changes player-control
 // flags through CLEO and does not establish camera or gameplay readiness.
 export const MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE = false;
+// Retain a successfully constructed Core/backend around the same bounded
+// frontend input view. This additive lifecycle is separate from InitializeCore
+// and never advertises gameplay, networking or complete engine readiness.
+export const MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE = false;

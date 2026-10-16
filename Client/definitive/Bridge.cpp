@@ -7,6 +7,7 @@
 #include "MtaControllerSnapshot.h"
 #include "TransportClient.h"
 #include "CoreStartupReference.h"
+#include "FrontendStartupReport.h"
 #include "../game_de/NativePadReader.h"
 #include "../core/CGameAdapterModule.h"
 #include <algorithm>
@@ -481,6 +482,24 @@ int DE_CoreGuiFrontendInputCapture()
 std::uint32_t DE_CoreGuiFrontendInputRead(std::uint32_t component)
 {
     return ControllerAccessAllowed() ? coreStartup.ReadGuiFrontendInput(component) : 0;
+}
+std::uint32_t DE_CoreGuiFrontendStartupApiVersion()
+{
+    return deonline::FrontendStartupReport::ApiVersion;
+}
+int DE_CoreGuiFrontendStartupBegin()
+{
+    // A completed frontend owns Core until its separate Shutdown/Release,
+    // without entering InitializeCore's rejecting gameplay constructor.
+    return ControllerAccessAllowed() && !movementAdapter && !client && coreStartup.BeginGuiFrontendStartupReference(&moduleAnchor) ? 1 : 0;
+}
+int DE_CoreGuiFrontendStartupCapture()
+{
+    return ControllerAccessAllowed() && coreStartup.CaptureGuiFrontendStartup() ? 1 : 0;
+}
+std::uint32_t DE_CoreGuiFrontendStartupRead(std::uint32_t component)
+{
+    return ControllerAccessAllowed() ? coreStartup.ReadGuiFrontendStartup(component) : 0;
 }
 int DE_CoreGuiFrontendBegin()
 {

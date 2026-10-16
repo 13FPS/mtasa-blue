@@ -159,6 +159,13 @@ DE_BRIDGE_API std::uint32_t DE_CoreGuiFrontendInputApiVersion();
 DE_BRIDGE_API int           DE_CoreGuiFrontendInputBegin();
 DE_BRIDGE_API int           DE_CoreGuiFrontendInputCapture();
 DE_BRIDGE_API std::uint32_t DE_CoreGuiFrontendInputRead(std::uint32_t component);
+// Core15 is a separate completed-Core lifecycle, never InitializeCore success.
+// Its96 copied values retain Begin/after-view/stopped owner snapshots; the
+// existing input256 cache remains available without changing old protocols.
+DE_BRIDGE_API std::uint32_t DE_CoreGuiFrontendStartupApiVersion();
+DE_BRIDGE_API int           DE_CoreGuiFrontendStartupBegin();
+DE_BRIDGE_API int           DE_CoreGuiFrontendStartupCapture();
+DE_BRIDGE_API std::uint32_t DE_CoreGuiFrontendStartupRead(std::uint32_t component);
 DE_BRIDGE_API int           DE_CoreGuiFrontendBegin();
 DE_BRIDGE_API int           DE_CoreGuiFrontendCapture();
 DE_BRIDGE_API std::uint32_t DE_CoreGuiFrontendRead(std::uint32_t component);

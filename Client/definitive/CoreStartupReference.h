@@ -8,6 +8,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <string>
 #include <windows.h>
 #include "../core/DefinitiveInputReference.h"
 #include "../core/DefinitiveMovementReference.h"
@@ -16,6 +17,7 @@
 #include "../core/DefinitiveGuiSurfaceReference.h"
 #include "../core/DefinitiveGuiFrontendInputReference.h"
 #include "FrontendControlMailbox.h"
+#include "FrontendStartupReport.h"
 
 namespace deonline
 {
@@ -54,6 +56,9 @@ namespace deonline
         bool          BeginGuiFrontendInputReference(const void* moduleAddress) noexcept;
         bool          CaptureGuiFrontendInput() noexcept;
         std::uint32_t ReadGuiFrontendInput(std::uint32_t field) const noexcept;
+        bool          BeginGuiFrontendStartupReference(const void* moduleAddress) noexcept;
+        bool          CaptureGuiFrontendStartup() noexcept;
+        std::uint32_t ReadGuiFrontendStartup(std::uint32_t field) const noexcept;
         bool          CaptureGuiFrontendControl() noexcept;
         std::uint32_t ReadGuiFrontendControl(std::uint32_t field) const noexcept;
         bool          AcknowledgeGuiFrontendControl(std::uint32_t generation) noexcept;
@@ -82,9 +87,12 @@ namespace deonline
         static unsigned __stdcall ThreadMain(void* context) noexcept;
         void                      Run() noexcept;
         bool                      CheckCancellation() noexcept;
+        void                      RunFrontendStartup(HMODULE core, const std::wstring& mtaDirectory, const std::wstring& gtaDirectory) noexcept;
+        void                      PublishFrontendStartup(const FrontendStartupReport::Snapshot& report) noexcept;
         bool                      Start(const void* moduleAddress, bool configuredInput, bool configuredMovement = false, bool configuredRender = false,
                                         std::uint32_t configuredRenderRoute = 0, std::uint32_t configuredRenderApi = 1, bool configuredGuiStartup = false,
-                                        bool configuredGuiSurface = false, bool configuredGuiFrontend = false, bool configuredGuiFrontendInput = false) noexcept;
+                                        bool configuredGuiSurface = false, bool configuredGuiFrontend = false, bool configuredGuiFrontendInput = false,
+                                        bool configuredFrontendStartup = false) noexcept;
         static bool               InputCancelled();
         static void               PublishInput(const std::uint32_t* values, std::uint32_t count);
         static bool               ControlInput(std::uint32_t action, std::uint32_t* values, std::uint32_t count);
@@ -110,8 +118,15 @@ namespace deonline
         DefinitiveGuiFrontendReference::Snapshot      publishedGuiFrontend{}, capturedGuiFrontend{};
         bool                                          guiFrontendInputRequested = false, guiFrontendInputAvailable = false;
         DefinitiveGuiFrontendInputReference::Snapshot publishedGuiFrontendInput{}, capturedGuiFrontendInput{};
-        FrontendControlMailbox                        frontendControl;
-        FrontendControlMailbox::Snapshot              capturedFrontendControl{};
+        bool                                          frontendStartupRequested = false;
+        // Atomic scalar publication cannot block a worker behind a script peer
+        // retained inside the other protocol's capture lock during cleanup.
+        std::array<std::atomic<std::uint32_t>, FrontendStartupReport::FieldCount> publishedFrontendStartup{};
+        std::atomic<std::uint32_t>                                                frontendStartupSequence{0};
+        std::atomic<bool>                                                         frontendStartupAvailable{false};
+        FrontendStartupReport::Snapshot                                           capturedFrontendStartup{};
+        FrontendControlMailbox                                                    frontendControl;
+        FrontendControlMailbox::Snapshot                                          capturedFrontendControl{};
         // Retain a faulty new frontend's code rather than unloading callbacks
         // or allowing a second attempt while ownership remains unresolved.
         bool                                  frontendQuarantined = false;

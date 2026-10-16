@@ -19,10 +19,22 @@ The bounded view operation reuses the tested MTA menu, console, configured
 neutral input, rendering and cleanup path. It no longer needs the ordinary
 `CCore` constructor to deliberately fail after rendering a menu. The existing
 `InitializeCore` result and eight full-startup fields retain their meanings.
-This new lifecycle is an offline source/build step; the installed GTA trial
-still uses the previously validated diagnostic worker until a new worker and
-package are prepared and tested. Persistent menu input remains deferred beyond
-the current native 35-second trial limit.
+The separate Smoke option `-MtaCoreGuiFrontendStartupReference` now selects a
+Core15 worker that uses this completed lifecycle instead of `InitializeCore`.
+Its 96-field report preserves Begin, after-view and stopped snapshots. The
+after-view snapshot must prove Core/backend survival before explicit shutdown;
+the stopped snapshot is copied before final release. Busy cleanup keeps the
+same worker alive and retries, including after cancellation or a deadline.
+The existing Core14 input256 route and all older contracts remain separate.
+Persistent menu input remains deferred beyond the native 35-second trial limit.
+
+The prepared 58-file candidate passes 733 ownership/package checks, including
+22 real launcher preflight cases and missing-export/architecture rejection.
+Compiled worker tests pass 56 controlled cases and 90 regression cases, including
+the real Core's completed startup followed by deliberate wrong-image refusal.
+The script passes 1,084 mocks; 69 saved-log reader tests include the new lifetime
+report and exact script/Core input matching. These are offline checks. The new
+completed lifecycle still needs its own GTA menu/control-restoration test.
 
 The actual normal Core and GUI DLLs pass 659 checks in four owned WARP hosts:
 menu/credits/console/bindings, GPU-retained work, missing XML and missing Game DE.

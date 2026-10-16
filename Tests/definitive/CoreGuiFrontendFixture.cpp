@@ -7,9 +7,12 @@
 #include "../../Client/core/DefinitiveFrontend.h"
 #include "../../Client/core/DefinitiveInputReference.h"
 #include "../../Client/core/DefinitiveGuiFrontendInputReference.h"
+#include "../../Client/core/DefinitiveFrontendStartup.h"
 #include <windows.h>
 #include <algorithm>
 #include <cwchar>
+#include <cstdio>
+#include <stdexcept>
 
 namespace
 {
@@ -18,6 +21,9 @@ namespace
     DefinitiveInputReference::CancelCallback        cancel = nullptr;
     DefinitiveInputReference::PublishCallback       publish = nullptr;
     DefinitiveGuiFrontendReference::ControlCallback control = nullptr;
+    DefinitiveFrontendStartup::Snapshot             startup{};
+    int                                             startupToken = 0;
+    unsigned                                        startupShutdowns = 0, startupReleases = 0, startupReads = 0;
     unsigned                                        Mode()
     {
         wchar_t value[32]{};
@@ -71,6 +77,15 @@ namespace
         sample[Bindings + 14] = 1;
         sample[InteractionFocused] = sample[NativeMetrics] = sample[NativeMetrics + 2] = sample[NativeOwnerRetained] = 0;
         sample[InputDetached] = sample[NativeEnded] = 1;
+        if (Mode() >= 200)
+        {
+            sample[WorkloadComplete] = 1;
+            sample[WorkloadSucceeded] = Mode() != 205 && Mode() != 209 && Mode() != 217 && Mode() != 218;
+        }
+        if (Mode() == 210)
+            sample[NativeOwnerRetained] = 1;
+        if (Mode() == 218)
+            sample[CleanupDeadlineExceeded] = 1;
         if (Mode() == 103)
             sample[NativeEnded] = 0;
         if (Mode() == 104)
@@ -212,6 +227,21 @@ namespace
         ++sample[Sequence];
         publish(sample.data(), static_cast<std::uint32_t>(sample.size()));
     }
+    void LogStartup(char operation)
+    {
+        wchar_t path[32768]{};
+        if (!GetEnvironmentVariableW(L"MTA_FRONTEND_FIXTURE_LIFECYCLE", path, 32768))
+            return;
+        const auto file = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file == INVALID_HANDLE_VALUE)
+            return;
+        char       text[64]{};
+        const auto count = std::snprintf(text, sizeof(text), "%c %lu\n", operation, GetCurrentThreadId());
+        DWORD      written = 0;
+        if (count > 0)
+            WriteFile(file, text, static_cast<DWORD>(count), &written, nullptr);
+        CloseHandle(file);
+    }
 }
 
 extern "C" __declspec(dllexport) std::uint32_t MTA_DEStartupApiVersion()
@@ -264,6 +294,8 @@ extern "C" __declspec(dllexport) std::uint32_t MTA_ConfigureDEGuiFrontendReferen
 }
 extern "C" __declspec(dllexport) int InitializeCore()
 {
+    if (Mode() >= 200)
+        LogStartup('I');
     if (!mta)
         return 3;
     if (!gta)
@@ -273,4 +305,138 @@ extern "C" __declspec(dllexport) int InitializeCore()
     else if (publish)
         ControlledFrontend();
     return 5;
+}
+
+extern "C" __declspec(dllexport) std::uint32_t MTA_DEFrontendStartupApiVersion()
+{
+    return Mode() == 201 ? 2u : 1u;
+}
+// These controlled exports deliberately violate the real lifecycle's no-throw
+// contract to test worker retention after unknown failures. Explicit throwing
+// specifications override /EHsc's extern-C assumption only in this fixture.
+extern "C" __declspec(dllexport) void* MTA_BeginDEFrontendStartup(std::uint32_t version) noexcept(false)
+{
+    LogStartup('B');
+    if (!mta || !gta || version != 1 || Mode() == 202)
+        return nullptr;
+    if (Mode() == 220)
+        throw std::runtime_error("controlled Begin throw with unknown ownership");
+    using namespace DefinitiveFrontendStartup;
+    startup = {};
+    startupShutdowns = startupReleases = startupReads = 0;
+    startup[Version] = 1;
+    startup[Phase] = Mode() == 203 ? 5u : 2u;
+    startup[OwnerThread] = GetCurrentThreadId();
+    startup[CoreRetained] = startup[BackendStartAttempted] = startup[Pulses] = startup[LastViewCleanupComplete] = 1;
+    startup[BackendStarted] = Mode() == 203 ? 0u : 1u;
+    startup[CapabilitiesLow] = startup[BackendStarted] ? 33u : 0u;
+    startup[LastFailure] = Mode() == 203 ? static_cast<std::uint32_t>(Failure::BackendStart) : 0u;
+    return &startupToken;
+}
+extern "C" __declspec(dllexport) DefinitiveFrontendStartup::Status MTA_ReadDEFrontendStartup(void* handle, std::uint32_t* output,
+                                                                                             std::uint32_t count) noexcept(false)
+{
+    LogStartup('R');
+    using namespace DefinitiveFrontendStartup;
+    if (handle != &startupToken || !output || count != FieldCount)
+        return Status::InvalidArgument;
+    if (startup[OwnerThread] != GetCurrentThreadId())
+        return Status::WrongThread;
+    ++startupReads;
+    if (Mode() == 229 && startupReads == 1)
+    {
+        wchar_t readyName[256]{}, releaseName[256]{};
+        GetEnvironmentVariableW(L"MTA_FRONTEND_FIXTURE_FINAL_READY", readyName, 256);
+        GetEnvironmentVariableW(L"MTA_FRONTEND_FIXTURE_FINAL_RELEASE", releaseName, 256);
+        const auto ready = OpenEventW(EVENT_MODIFY_STATE, FALSE, readyName);
+        const auto gate = OpenEventW(SYNCHRONIZE, FALSE, releaseName);
+        if (ready)
+            SetEvent(ready);
+        if (gate)
+            WaitForSingleObject(gate, 10000);
+        if (ready)
+            CloseHandle(ready);
+        if (gate)
+            CloseHandle(gate);
+    }
+    if ((Mode() == 204 && startup[ViewRuns] && startup[Phase] != 4) || (Mode() == 212 && startup[Phase] == 2 && !startup[ViewRuns]))
+        return Status::Failed;
+    if (Mode() == 225 && startup[Phase] == 4)
+        throw std::runtime_error("controlled stopped read throw");
+    auto next = startup;
+    if (Mode() == 211 && next[Phase] == 4)
+        next[BackendStarted] = 1;
+    if (Mode() == 215 && next[Phase] == 2 && next[ViewRuns])
+        ++next[OwnerThread];
+    if (Mode() == 219 && next[Phase] == 4)
+        next[ViewRuns] = 2;
+    std::copy(next.begin(), next.end(), output);
+    return Status::Ok;
+}
+extern "C" __declspec(dllexport) DefinitiveFrontendStartup::Status MTA_RunDEFrontendStartupView(
+    void* handle, std::uint32_t duration, DefinitiveInputReference::CancelCallback cancelled,
+    DefinitiveInputReference::PublishCallback publisher) noexcept(false)
+{
+    LogStartup('V');
+    using namespace DefinitiveFrontendStartup;
+    if (handle != &startupToken || duration != DefinitiveGuiFrontendInputReference::MaximumDurationMs || !cancelled || !publisher)
+        return Status::InvalidArgument;
+    if (startup[OwnerThread] != GetCurrentThreadId())
+        return Status::WrongThread;
+    if (Mode() == 216)
+    {
+        startup[LastFailure] = static_cast<std::uint32_t>(Failure::InputBind);
+        return Status::Failed;
+    }
+    if (Mode() == 224)
+        throw std::runtime_error("controlled pre-view throw");
+    cancel = cancelled;
+    publish = publisher;
+    startup[ExactImageBound] = startup[ViewRuns] = 1;
+    ++startup[Pulses];
+    ControlledFrontendInput();
+    if (Mode() == 206)
+    {
+        startup[Phase] = 3;
+        startup[CleanupPending] = 1;
+        startup[LastViewCleanupComplete] = 0;
+        return Status::Busy;
+    }
+    if (Mode() == 221)
+        throw std::runtime_error("controlled post-view throw");
+    return Mode() == 205 || Mode() == 209 || Mode() == 218 ? Status::Failed : Status::Ok;
+}
+extern "C" __declspec(dllexport) DefinitiveFrontendStartup::Status MTA_ShutdownDEFrontendStartup(void* handle) noexcept(false)
+{
+    LogStartup('S');
+    using namespace DefinitiveFrontendStartup;
+    if (handle != &startupToken)
+        return Status::InvalidArgument;
+    if (startup[OwnerThread] != GetCurrentThreadId())
+        return Status::WrongThread;
+    if (Mode() == 223)
+        throw std::runtime_error("controlled shutdown throw");
+    ++startupShutdowns;
+    if (((Mode() == 206 || Mode() == 207 || Mode() == 227) && startupShutdowns < 4) || (Mode() == 226 && startupShutdowns < 44) || Mode() == 213)
+    {
+        startup[Phase] = 3;
+        startup[CleanupPending] = 1;
+        return Mode() == 213 ? Status::Failed : Status::Busy;
+    }
+    startup[Phase] = 4;
+    startup[BackendStarted] = startup[ExactImageBound] = startup[CapabilitiesLow] = startup[CleanupPending] = 0;
+    startup[CleanupComplete] = 1;
+    startup[LastViewCleanupComplete] = 1;
+    return Status::Ok;
+}
+extern "C" __declspec(dllexport) DefinitiveFrontendStartup::Status MTA_ReleaseDEFrontendStartup(void* handle) noexcept(false)
+{
+    LogStartup('F');
+    using namespace DefinitiveFrontendStartup;
+    if (handle != &startupToken || startup[OwnerThread] != GetCurrentThreadId() || startup[Phase] != 4)
+        return Status::InvalidArgument;
+    if (Mode() == 222)
+        throw std::runtime_error("controlled release throw");
+    ++startupReleases;
+    return (Mode() == 208 || Mode() == 228) && startupReleases < 4 ? Status::Busy : Mode() == 214 ? Status::Failed : Status::Ok;
 }

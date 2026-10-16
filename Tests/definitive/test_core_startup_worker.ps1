@@ -18,6 +18,7 @@ $outputRoot = Join-Path $repositoryRoot ('Build/mta-core-startup-worker/' + (Get
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
 function Hash([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 $sourceNames = @('Client/definitive/CoreStartupReference.h','Client/definitive/CoreStartupReference.cpp','Client/definitive/FrontendControlMailbox.h',
+    'Client/definitive/FrontendStartupReport.h','Client/core/DefinitiveFrontendStartup.h','Client/core/DefinitiveGuiFrontendInputReference.h',
     'Client/core/DefinitiveFrontend.h','Client/core/DefinitiveGuiFrontendReference.h',
     'Client/core/DefinitiveInputReference.h','Client/core/DefinitiveMovementReference.h','Client/core/DefinitiveRenderReference.h','Client/core/DefinitiveGuiStartupReference.h','Client/core/DefinitiveGuiSurfaceReference.h',
     'Tests/definitive/CoreStartupReferenceTests.cpp','Tests/definitive/CoreStartupFixture.cpp','Tests/definitive/test_core_startup_worker.ps1')
@@ -104,6 +105,7 @@ try {
         $artifacts += [ordered]@{source=$source;path=$destination;sha256=$hash;machine='AMD64';bytes=$bytes.Length}
     }
     $runs += Run-Host 'actual-core-wrong-image' $actualRoot @($actualRoot,'actual')
+    $runs += Run-Host 'actual-completed-core-wrong-image' $actualRoot @($actualRoot,'actual-frontend-startup')
     foreach ($mode in @('movement','movement-cancel','render','render-cancel','render-deadline',
                         'render-v2','render-v2-d3d11','render-v2-cancel','render-v2-deadline','render-v2-missing',
                         'render-v2-cross-route','render-v2-mixed-version','render-v2-wrong-mask',
@@ -136,9 +138,9 @@ $unchanged = $true
 foreach ($name in $sourceNames) { if ((Hash (Join-Path $repositoryRoot $name)) -ne $sourceHashes[$name]) { $unchanged=$false } }
 foreach ($artifact in $artifacts) { if ((Hash $artifact.source) -ne $artifact.sha256) { $unchanged=$false } }
 $record = [ordered]@{
-    recorded_at=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=($null -eq $failure -and $unchanged -and $runs.Count -eq 89);
+    recorded_at=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=($null -eq $failure -and $unchanged -and $runs.Count -eq 90);
     failure=$failure;source_hashes=$sourceHashes;sources_unchanged=$unchanged;compiles=$compiles;runs=$runs;normal_artifacts=$artifacts;
-    historical_cases_expected=65;surface_cases_expected=24;
+    historical_cases_expected=65;surface_cases_expected=24;completed_core_actual_cases_expected=1;
     fixture_executable_is_game=$false;game_launched=$false;game_memory_read=$false;game_process_attached=$false;game_files_changed=$false;
     synthetic_core_is_mta=$false;full_mta_boot_verified=$false;engine_input_write_verified=$false;
     scope='Actual production async worker, controlled non-MTA loader-lock fixtures, and normal Core exact-image rejection in owned nonclassic hosts'

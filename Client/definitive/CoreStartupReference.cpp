@@ -18,6 +18,43 @@ namespace deonline
         {
             return (GetModuleHandleW(L"d3dx9_43.dll") ? 1u : 0u) | (GetModuleHandleW(L"d3d9.dll") ? 2u : 0u);
         }
+        bool FrontendInputRetired(const DefinitiveGuiFrontendInputReference::Snapshot& sample, bool available)
+        {
+            using namespace DefinitiveGuiStartupReference;
+            using namespace DefinitiveGuiFrontendInputReference;
+            const auto zeroPair = [&](std::uint32_t first) { return !sample[first] && !sample[first + 1]; };
+            const bool frontendRetired = !sample[Frontend]
+                                             ? std::all_of(sample.begin() + Frontend, sample.begin() + Frontend + 32, [](auto value) { return value == 0; })
+                                             : sample[Frontend] == 1 && sample[Frontend + 1] == 4 && sample[Frontend + 17] == 1 && !sample[Frontend + 6] &&
+                                                   !sample[Frontend + 16] && !sample[Frontend + 19] && !sample[Frontend + 20] && !sample[Frontend + 21];
+            const bool consoleRetired = !sample[Console]
+                                            ? std::all_of(sample.begin() + Console, sample.begin() + Console + 32, [](auto value) { return value == 0; })
+                                            : sample[Console] == 1 && (sample[Console + 1] == 0 || sample[Console + 1] == 4) && sample[Console + 21] == 1 &&
+                                                  !sample[Console + 4] && !sample[Console + 5] && !sample[Console + 8] && !sample[Console + 9] &&
+                                                  !sample[Console + 10] && !sample[Console + 22] && !sample[Console + 23] && !sample[Console + 28];
+            const bool bindingsRetired = !sample[Bindings]
+                                             ? std::all_of(sample.begin() + Bindings, sample.begin() + Bindings + 32, [](auto value) { return value == 0; })
+                                             : sample[Bindings] == 1 && (sample[Bindings + 1] == 0 || sample[Bindings + 1] == 4) &&
+                                                   sample[Bindings + 14] == 1 && !sample[Bindings + 10] && !sample[Bindings + 15] && !sample[Bindings + 21];
+            // Native scope retirement is independent from script
+            // progress, rendering success, and historical timeouts.
+            // Core still cannot unload a live callback or its sole
+            // pad restoration snapshot after a failed workload.
+            return available && sample[DefinitiveGuiStartupReference::Version] == DefinitiveGuiFrontendInputReference::ApiVersion && sample[Phase] == 2 &&
+                   sample[CleanupComplete] == 1 && !sample[CleanupPending] && sample[ObserverEnded] == 1 && sample[GuiCleanupComplete] == 1 &&
+                   !sample[GuiShutdownStatus] && !sample[ObserverPendingCleanup] && !sample[ModuleRetained] && !sample[SessionRetained] &&
+                   !sample[DeviceRetained] && !sample[DeviceReleaseFault] && !sample[DefinitiveGuiSurfaceReference::ChildRetained] &&
+                   !sample[DefinitiveGuiSurfaceReference::QueueRetained] && !sample[DefinitiveGuiSurfaceReference::SurfaceRetained] &&
+                   !sample[DefinitiveGuiSurfaceReference::ResizePending] && sample[DefinitiveGuiSurfaceReference::WindowCleanupComplete] == 1 &&
+                   sample[DefinitiveGuiSurfaceReference::CompositionCleanupComplete] == 1 && sample[DefinitiveGuiSurfaceReference::ClassUnregistered] == 1 &&
+                   frontendRetired && consoleRetired && bindingsRetired && !sample[PressedKeys] && !sample[PressedButtons] && !sample[InteractionFocused] &&
+                   (!sample[InteractionEnabled] || sample[InputDetached] == 1) && sample[NativeEnded] == 1 && !sample[NativeCleanupPending] &&
+                   !sample[NativeOwnerRetained] && zeroPair(NativeMetrics) && zeroPair(NativeMetrics + 2) &&
+                   sample[NativeMetrics + 6] == sample[NativeMetrics + 12] && sample[NativeMetrics + 7] == sample[NativeMetrics + 13] &&
+                   zeroPair(NativeMetrics + 14) && !sample[Frontend + 24] && !sample[Frontend + 26] && !sample[Frontend + 27] && !sample[Console + 25] &&
+                   !sample[Console + 26] && !sample[Console + 27] && !sample[Bindings + 18] && !sample[Bindings + 19] && !sample[Bindings + 20] &&
+                   !sample[CameraCaptureVerified] && !sample[FullEngineInputReady];
+        }
     }
 
     bool CoreStartupReference::Begin(const void* moduleAddress) noexcept
@@ -80,16 +117,17 @@ namespace deonline
 
     bool CoreStartupReference::Start(const void* moduleAddress, bool configuredInput, bool configuredMovement, bool configuredRender,
                                      std::uint32_t configuredRenderRoute, std::uint32_t configuredRenderApi, bool configuredGuiStartup,
-                                     bool configuredGuiSurface, bool configuredGuiFrontend, bool configuredGuiFrontendInput) noexcept
+                                     bool configuredGuiSurface, bool configuredGuiFrontend, bool configuredGuiFrontendInput,
+                                     bool configuredFrontendStartup) noexcept
     {
         DWORD      expected = 0;
         const auto current = GetCurrentThreadId();
         if ((static_cast<unsigned>(configuredMovement) + static_cast<unsigned>(configuredRender) + static_cast<unsigned>(configuredGuiStartup) +
                  static_cast<unsigned>(configuredGuiSurface) + static_cast<unsigned>(configuredGuiFrontend) +
-                 static_cast<unsigned>(configuredGuiFrontendInput) >
+                 static_cast<unsigned>(configuredGuiFrontendInput) + static_cast<unsigned>(configuredFrontendStartup) >
              1) ||
             (!ownerThread.compare_exchange_strong(expected, current) && expected != current) || !moduleAddress || IsPending() || thread ||
-            frontendQuarantined || (!configuredGuiFrontendInput && !frontendControl.PrepareAttempt(current)))
+            frontendQuarantined || (!configuredGuiFrontendInput && !configuredFrontendStartup && !frontendControl.PrepareAttempt(current)))
             return false;
         address = moduleAddress;
         inputRequested = configuredInput;
@@ -98,7 +136,13 @@ namespace deonline
         guiRequested = configuredGuiStartup;
         guiSurfaceRequested = configuredGuiSurface;
         guiFrontendRequested = configuredGuiFrontend;
-        guiFrontendInputRequested = configuredGuiFrontendInput;
+        guiFrontendInputRequested = configuredGuiFrontendInput || configuredFrontendStartup;
+        frontendStartupRequested = configuredFrontendStartup;
+        frontendStartupAvailable.store(false);
+        frontendStartupSequence.store(0);
+        for (auto& field : publishedFrontendStartup)
+            field.store(0);
+        capturedFrontendStartup = {};
         renderRoute = configuredRenderRoute;
         renderApi = configuredRenderApi;
         AcquireSRWLockExclusive(&inputLock);
@@ -358,6 +402,52 @@ namespace deonline
         return Start(moduleAddress, true, false, false, 0, 1, false, false, false, true);
     }
 
+    bool CoreStartupReference::BeginGuiFrontendStartupReference(const void* moduleAddress) noexcept
+    {
+        // This owns a completed Core through the separate frontend lifecycle;
+        // the historical constructor-rejection diagnostic remains untouched.
+        return Start(moduleAddress, true, false, false, 0, 1, false, false, false, false, true);
+    }
+
+    void CoreStartupReference::PublishFrontendStartup(const FrontendStartupReport::Snapshot& report) noexcept
+    {
+        // Use sequentially consistent atomic scalars so a bounded seqlock read
+        // cannot accept fields from a later publication with an older sequence.
+        // No script-owned lock may block cleanup of retained native peers.
+        frontendStartupSequence.fetch_add(1);
+        for (std::size_t index = 0; index < report.size(); ++index)
+            publishedFrontendStartup[index].store(report[index]);
+        frontendStartupAvailable.store(true);
+        frontendStartupSequence.fetch_add(1);
+    }
+
+    bool CoreStartupReference::CaptureGuiFrontendStartup() noexcept
+    {
+        if (ownerThread.load() != GetCurrentThreadId() || !frontendStartupRequested || !frontendStartupAvailable.load())
+            return false;
+        for (unsigned attempt = 0; attempt < 2; ++attempt)
+        {
+            const auto before = frontendStartupSequence.load();
+            if (before & 1)
+                continue;
+            FrontendStartupReport::Snapshot next{};
+            for (std::size_t index = 0; index < next.size(); ++index)
+                next[index] = publishedFrontendStartup[index].load();
+            if (frontendStartupSequence.load() == before)
+            {
+                capturedFrontendStartup = next;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    std::uint32_t CoreStartupReference::ReadGuiFrontendStartup(std::uint32_t field) const noexcept
+    {
+        return ownerThread.load() == GetCurrentThreadId() && frontendStartupRequested && field < capturedFrontendStartup.size() ? capturedFrontendStartup[field]
+                                                                                                                                : 0;
+    }
+
     bool CoreStartupReference::CaptureGuiFrontendInput() noexcept
     {
         if (ownerThread.load() != GetCurrentThreadId() || !guiFrontendInputRequested || !TryAcquireSRWLockShared(&inputLock))
@@ -570,11 +660,244 @@ namespace deonline
         return true;
     }
 
+    void CoreStartupReference::RunFrontendStartup(HMODULE core, const std::wstring& mtaDirectory, const std::wstring& gtaDirectory) noexcept
+    {
+        namespace Startup = DefinitiveFrontendStartup;
+        using Status = Startup::Status;
+        using Version = std::uint32_t (*)();
+        using SetDirectory = void (*)(const wchar_t*, std::size_t);
+        const auto                      version = reinterpret_cast<Version>(GetProcAddress(core, "MTA_DEFrontendStartupApiVersion"));
+        const auto                      begin = reinterpret_cast<Startup::Begin>(GetProcAddress(core, "MTA_BeginDEFrontendStartup"));
+        const auto                      read = reinterpret_cast<Startup::Read>(GetProcAddress(core, "MTA_ReadDEFrontendStartup"));
+        const auto                      view = reinterpret_cast<Startup::RunView>(GetProcAddress(core, "MTA_RunDEFrontendStartupView"));
+        const auto                      shutdown = reinterpret_cast<Startup::Shutdown>(GetProcAddress(core, "MTA_ShutdownDEFrontendStartup"));
+        const auto                      release = reinterpret_cast<Startup::Release>(GetProcAddress(core, "MTA_ReleaseDEFrontendStartup"));
+        const auto                      setMta = reinterpret_cast<SetDirectory>(GetProcAddress(core, "SetMTADirectory"));
+        const auto                      setGta = reinterpret_cast<SetDirectory>(GetProcAddress(core, "SetGTADirectory"));
+        void*                           handle = nullptr;
+        FrontendStartupReport::Snapshot report{};
+        Startup::Snapshot               initial{}, after{}, stopped{};
+        bool                            initialValid = false, afterValid = false, viewCalled = false;
+        Status                          viewStatus = Status::Stopped;
+        const auto                      error = [&](std::uint32_t code, bool ownershipFailure = false)
+        {
+            if (!values[16] || ownershipFailure)
+                values[16] = code;
+        };
+        const auto valid = [](const Startup::Snapshot& sample)
+        {
+            const std::array<std::uint32_t, 14> booleans = {
+                Startup::CoreRetained, Startup::BackendStartAttempted, Startup::BackendStarted, Startup::ExactImageBound,        Startup::FrontendRetained,
+                Startup::GuiBorrowed,  Startup::ServicesRetained,      Startup::InputRequested, Startup::CleanupPending,         Startup::CleanupComplete,
+                Startup::ReleaseFault, Startup::NetworkStarted,        Startup::GameplayReady,  Startup::LastViewCleanupComplete};
+            return sample[Startup::Version] == Startup::ApiVersion && sample[Startup::OwnerThread] == GetCurrentThreadId() && sample[Startup::Phase] >= 1 &&
+                   sample[Startup::Phase] <= 5 && !sample[Startup::NetworkStarted] && !sample[Startup::GameplayReady] && !sample[Startup::FullMtaReady] &&
+                   sample[Startup::LastFailure] <= static_cast<std::uint32_t>(Startup::Failure::View) &&
+                   std::all_of(booleans.begin(), booleans.end(), [&](auto field) { return sample[field] <= 1; }) &&
+                   std::all_of(sample.begin() + Startup::Reserved24, sample.end(), [](auto value) { return value == 0; });
+        };
+        const auto noFrontend = [](const Startup::Snapshot& sample)
+        { return std::all_of(sample.begin() + Startup::FrontendRetained, sample.begin() + Startup::CleanupPending, [](auto value) { return value == 0; }); };
+        const auto capture = [&](Startup::Snapshot& output, std::uint32_t offset)
+        {
+            Startup::Snapshot sample{};
+            if (read(handle, sample.data(), Startup::FieldCount) != Status::Ok)
+                return false;
+            output = sample;
+            std::copy(sample.begin(), sample.end(), report.begin() + offset);
+            PublishFrontendStartup(report);
+            return valid(sample);
+        };
+        try
+        {
+            if (!version || !begin || !read || !view || !shutdown || !release || !setMta || !setGta || version() != Startup::ApiVersion)
+            {
+                error(20);
+                return;
+            }
+            setMta(mtaDirectory.c_str(), mtaDirectory.size());
+            setGta(gtaDirectory.c_str(), gtaDirectory.size());
+            if (CheckCancellation())
+                return;
+            // A thrown Begin may have created an owner without returning its
+            // handle. Retain Core until the successful return proves otherwise.
+            frontendQuarantined = true;
+            handle = begin(Startup::ApiVersion);
+            frontendQuarantined = false;
+            if (!handle)
+            {
+                error(21);
+                return;
+            }
+            initialValid = capture(initial, FrontendStartupReport::Begin);
+            if (!initialValid)
+                error(22);
+            else
+            {
+                values[8] = initial[Startup::Phase];
+                const bool running = initial[Startup::Phase] == 2 && initial[Startup::CoreRetained] == 1 && initial[Startup::BackendStarted] == 1 &&
+                                     initial[Startup::BackendStartAttempted] == 1 && initial[Startup::Pulses] && !initial[Startup::ExactImageBound] &&
+                                     noFrontend(initial) && !initial[Startup::CleanupPending] && !initial[Startup::CleanupComplete] &&
+                                     !initial[Startup::ReleaseFault] && !initial[Startup::ViewRuns] && initial[Startup::LastViewCleanupComplete] == 1;
+                if (!running)
+                    error(21);
+                else if (!CheckCancellation())
+                {
+                    inputOwner = this;
+                    viewCalled = true;
+                    try
+                    {
+                        viewStatus = view(handle, DefinitiveGuiFrontendInputReference::MaximumDurationMs, InputCancelled, PublishInput);
+                        values[9] = static_cast<std::uint32_t>(viewStatus);
+                    }
+                    catch (...)
+                    {
+                        error(23);
+                    }
+                    afterValid = capture(after, FrontendStartupReport::AfterView);
+                    if (!afterValid)
+                        error(22);
+                    if (viewStatus != Status::Ok)
+                    {
+                        if (!CheckCancellation())
+                            error(23);
+                    }
+                }
+            }
+        }
+        catch (...)
+        {
+            error(handle ? 22u : 21u);
+        }
+
+        // Cancellation and failed workloads never bypass owner-thread teardown.
+        // A failed/Busy cleanup retains both its opaque owner and Core's code.
+        if (!handle)
+            return;
+        CheckCancellation();
+        try
+        {
+            const auto cleanupStarted = GetTickCount64();
+            const auto waitForOwner = [&]
+            {
+                CheckCancellation();
+                const auto elapsed = GetTickCount64() - cleanupStarted;
+                if (elapsed >= DefinitiveGuiStartupReference::CleanupDeadlineMs)
+                    error(24, true);
+                // Busy owns a live same-thread retry, even after cancellation or
+                // a workload deadline. Ending this worker would strand that API.
+                Sleep(elapsed >= DefinitiveGuiStartupReference::CleanupDeadlineMs ? DefinitiveGuiStartupReference::CleanupBackoffMs : 50);
+            };
+            Status shutdownStatus = Status::Busy;
+            bool   stoppedValid = false;
+            do
+            {
+                shutdownStatus = shutdown(handle);
+                values[10] = static_cast<std::uint32_t>(shutdownStatus);
+                stoppedValid = capture(stopped, FrontendStartupReport::Stopped);
+                if (!stoppedValid)
+                {
+                    error(24, true);
+                    frontendQuarantined = true;
+                    return;
+                }
+                if (shutdownStatus == Status::Busy)
+                    waitForOwner();
+            } while (shutdownStatus == Status::Busy);
+            const auto stoppedProof = [&]
+            {
+                return stoppedValid && shutdownStatus == Status::Ok && stopped[Startup::Phase] == 4 && stopped[Startup::CoreRetained] == 1 &&
+                       !stopped[Startup::BackendStarted] && !stopped[Startup::ExactImageBound] && !stopped[Startup::CapabilitiesLow] &&
+                       !stopped[Startup::CapabilitiesHigh] && noFrontend(stopped) && !stopped[Startup::CleanupPending] &&
+                       stopped[Startup::CleanupComplete] == 1 && !stopped[Startup::ReleaseFault] && stopped[Startup::LastViewCleanupComplete] == 1 &&
+                       stopped[Startup::ViewRuns] <= 1 && (!afterValid || stopped[Startup::ViewRuns] == after[Startup::ViewRuns]) &&
+                       (!initialValid || stopped[Startup::Pulses] >= initial[Startup::Pulses]) &&
+                       (!afterValid || stopped[Startup::Pulses] >= after[Startup::Pulses]);
+            };
+            const bool stoppedClean = stoppedProof();
+            const bool noView = initialValid && !initial[Startup::ViewRuns] && (!viewCalled || (afterValid && !after[Startup::ViewRuns])) &&
+                                !stopped[Startup::ViewRuns] && initial[Startup::LastViewCleanupComplete] == 1 &&
+                                (!viewCalled || after[Startup::LastViewCleanupComplete] == 1) && noFrontend(initial) && (!viewCalled || noFrontend(after));
+            bool inputClean = noView;
+            bool workload = false;
+            if (!noView && stoppedClean)
+            {
+                AcquireSRWLockShared(&inputLock);
+                inputClean = FrontendInputRetired(publishedGuiFrontendInput, guiFrontendInputAvailable);
+                workload = inputClean && publishedGuiFrontendInput[DefinitiveGuiStartupReference::WorkloadSucceeded] == 1 &&
+                           publishedGuiFrontendInput[DefinitiveGuiStartupReference::WorkloadComplete] == 1 &&
+                           !publishedGuiFrontendInput[DefinitiveGuiStartupReference::CleanupDeadlineExceeded];
+                ReleaseSRWLockShared(&inputLock);
+            }
+            if (!stoppedClean || !inputClean)
+            {
+                error(24, true);
+                frontendQuarantined = true;
+                return;
+            }
+            const bool retainedAfterView = afterValid && after[Startup::Phase] == 2 && after[Startup::CoreRetained] == 1 &&
+                                           after[Startup::BackendStarted] == 1 && after[Startup::ExactImageBound] == 1 && noFrontend(after) &&
+                                           !after[Startup::CleanupPending] && !after[Startup::CleanupComplete] && !after[Startup::ReleaseFault] &&
+                                           after[Startup::ViewRuns] == 1 && after[Startup::LastViewCleanupComplete] == 1;
+            if (viewStatus == Status::Ok && (!workload || !retainedAfterView))
+                error(23);
+            Status releaseStatus = Status::Busy;
+            do
+            {
+                try
+                {
+                    releaseStatus = release(handle);
+                }
+                catch (...)
+                {
+                    error(25, true);
+                    frontendQuarantined = true;
+                    return;
+                }
+                if (releaseStatus == Status::Busy)
+                {
+                    stoppedValid = capture(stopped, FrontendStartupReport::Stopped);
+                    if (!stoppedProof())
+                    {
+                        error(24, true);
+                        frontendQuarantined = true;
+                        return;
+                    }
+                    waitForOwner();
+                }
+            } while (releaseStatus == Status::Busy);
+            if (releaseStatus != Status::Ok)
+            {
+                error(25, true);
+                frontendQuarantined = true;
+                return;
+            }
+            handle = nullptr;
+            CheckCancellation();
+            if (!values[16] && viewStatus == Status::Ok && workload && retainedAfterView)
+                values[17] = 1;
+        }
+        catch (...)
+        {
+            error(24, true);
+            frontendQuarantined = true;
+        }
+    }
+
     void CoreStartupReference::Run() noexcept
     {
         values = {};
-        values[1] = values[8] = values[9] = values[10] = 0xffffffffu;
-        values[7] = 1;  // No adapter has been started by this attempt yet.
+        values[8] = values[9] = values[10] = 0xffffffffu;
+        if (frontendStartupRequested)
+        {
+            values[8] = 0;
+            values[9] = values[10] = static_cast<std::uint32_t>(DefinitiveFrontendStartup::Status::Stopped);
+        }
+        else
+        {
+            values[1] = 0xffffffffu;
+            values[7] = 1;
+        }  // No adapter has been started by this attempt yet.
         values[11] = LegacyRendererModules();
         values[14] = GetModuleHandleW(L"game_de.dll") ? 1u : 0u;
         HMODULE core = nullptr;
@@ -619,6 +942,11 @@ namespace deonline
                 }
                 if (CheckCancellation())
                     return;
+                if (frontendStartupRequested)
+                {
+                    RunFrontendStartup(core, mtaDirectory.wstring(), gtaDirectory.wstring());
+                    return;
+                }
                 using Version = std::uint32_t (*)();
                 using Read = std::uint32_t (*)(std::uint32_t);
                 using SetDirectory = void (*)(const wchar_t*, std::size_t);
@@ -844,47 +1172,7 @@ namespace deonline
                     };
                     // Workload failure is separate from completing ownership
                     // cleanup. The GUI snapshot retains its own outcome facts.
-                    const auto frontendInputComplete = [&]
-                    {
-                        using namespace DefinitiveGuiStartupReference;
-                        using namespace DefinitiveGuiFrontendInputReference;
-                        const auto& sample = publishedGuiFrontendInput;
-                        const auto  zeroPair = [&](std::uint32_t first) { return !sample[first] && !sample[first + 1]; };
-                        const bool  frontendRetired =
-                            !sample[Frontend] ? std::all_of(sample.begin() + Frontend, sample.begin() + Frontend + 32, [](auto value) { return value == 0; })
-                                               : sample[Frontend] == 1 && sample[Frontend + 1] == 4 && sample[Frontend + 17] == 1 && !sample[Frontend + 6] &&
-                                                    !sample[Frontend + 16] && !sample[Frontend + 19] && !sample[Frontend + 20] && !sample[Frontend + 21];
-                        const bool consoleRetired =
-                            !sample[Console] ? std::all_of(sample.begin() + Console, sample.begin() + Console + 32, [](auto value) { return value == 0; })
-                                             : sample[Console] == 1 && (sample[Console + 1] == 0 || sample[Console + 1] == 4) && sample[Console + 21] == 1 &&
-                                                   !sample[Console + 4] && !sample[Console + 5] && !sample[Console + 8] && !sample[Console + 9] &&
-                                                   !sample[Console + 10] && !sample[Console + 22] && !sample[Console + 23] && !sample[Console + 28];
-                        const bool bindingsRetired =
-                            !sample[Bindings] ? std::all_of(sample.begin() + Bindings, sample.begin() + Bindings + 32, [](auto value) { return value == 0; })
-                                              : sample[Bindings] == 1 && (sample[Bindings + 1] == 0 || sample[Bindings + 1] == 4) &&
-                                                    sample[Bindings + 14] == 1 && !sample[Bindings + 10] && !sample[Bindings + 15] && !sample[Bindings + 21];
-                        // Native scope retirement is independent from script
-                        // progress, rendering success, and historical timeouts.
-                        // Core still cannot unload a live callback or its sole
-                        // pad restoration snapshot after a failed workload.
-                        return guiFrontendInputAvailable && sample[DefinitiveGuiStartupReference::Version] == DefinitiveGuiFrontendInputReference::ApiVersion &&
-                               sample[Phase] == 2 && sample[CleanupComplete] == 1 && !sample[CleanupPending] && sample[ObserverEnded] == 1 &&
-                               sample[GuiCleanupComplete] == 1 && !sample[GuiShutdownStatus] && !sample[ObserverPendingCleanup] && !sample[ModuleRetained] &&
-                               !sample[SessionRetained] && !sample[DeviceRetained] && !sample[DeviceReleaseFault] &&
-                               !sample[DefinitiveGuiSurfaceReference::ChildRetained] && !sample[DefinitiveGuiSurfaceReference::QueueRetained] &&
-                               !sample[DefinitiveGuiSurfaceReference::SurfaceRetained] && !sample[DefinitiveGuiSurfaceReference::ResizePending] &&
-                               sample[DefinitiveGuiSurfaceReference::WindowCleanupComplete] == 1 &&
-                               sample[DefinitiveGuiSurfaceReference::CompositionCleanupComplete] == 1 &&
-                               sample[DefinitiveGuiSurfaceReference::ClassUnregistered] == 1 && frontendRetired && consoleRetired && bindingsRetired &&
-                               !sample[PressedKeys] && !sample[PressedButtons] && !sample[InteractionFocused] &&
-                               (!sample[InteractionEnabled] || sample[InputDetached] == 1) && sample[NativeEnded] == 1 && !sample[NativeCleanupPending] &&
-                               !sample[NativeOwnerRetained] && zeroPair(NativeMetrics) && zeroPair(NativeMetrics + 2) &&
-                               sample[NativeMetrics + 6] == sample[NativeMetrics + 12] && sample[NativeMetrics + 7] == sample[NativeMetrics + 13] &&
-                               zeroPair(NativeMetrics + 14) && !sample[Frontend + 24] && !sample[Frontend + 26] && !sample[Frontend + 27] &&
-                               !sample[Console + 25] && !sample[Console + 26] && !sample[Console + 27] && !sample[Bindings + 18] && !sample[Bindings + 19] &&
-                               !sample[Bindings + 20] && !sample[CameraCaptureVerified] && !sample[FullEngineInputReady];
-                    };
-                    const bool inputComplete = guiFrontendInputRequested ? frontendInputComplete()
+                    const bool inputComplete = guiFrontendInputRequested ? FrontendInputRetired(publishedGuiFrontendInput, guiFrontendInputAvailable)
                                                : guiFrontendRequested    ? frontendComplete()
                                                : guiSurfaceRequested     ? surfaceComplete
                                                : guiRequested            ? guiComplete

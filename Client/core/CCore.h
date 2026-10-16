@@ -27,6 +27,8 @@ class CDiscordInterface;
     #include "DefinitiveFrontend.h"
     #include "DefinitiveFrontendConsole.h"
     #include "DefinitiveFrontendBindings.h"
+    #include "DefinitiveFrontendStartup.h"
+    #include "DefinitiveGuiFrontendInputReference.h"
 #endif
 #include "CSingleton.h"
 #include "CGUI.h"
@@ -311,13 +313,21 @@ public:
 private:
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
     friend struct DefinitiveFrontend::Controller;
+    friend struct DefinitiveFrontendStartup::Controller;
     struct FrontendShellTag
     {
     };
     explicit CCore(FrontendShellTag);
+    struct FrontendStartupTag
+    {
+    };
+    explicit CCore(FrontendStartupTag);
+    DefinitiveFrontend::Status RunFrontendStartupView(const DefinitiveInputReference::Request&, DefinitiveGuiFrontendInputReference::Snapshot&);
     struct FrontendResources;
     FrontendResources*                  m_frontendResources = nullptr;
     bool                                m_frontendShellOnly = false;
+    bool                                m_frontendStartupOwned = false;
+    bool                                m_frontendStartupAccepting = false;
     DWORD                               m_frontendCoreOwnerThread = GetCurrentThreadId();
     bool                                StartFrontend(CGUI* borrowedGui);
     DefinitiveFrontend::Status          PulseFrontend(std::int32_t mouseX, std::int32_t mouseY, bool focused);

@@ -6,7 +6,40 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
-**The next frontend trial transfers input ownership to MTA Core.** The separate
+**Frontend startup now has a separate completed Core owner.**
+`DefinitiveFrontendStartup` creates a successfully constructed `CCore`, then
+starts the adjacent Game DE adapter outside its constructor. Native image
+binding is explicit. Existing frontend sessions borrow this Core; closing or
+releasing a menu leaves the Core and backend alive until explicit shutdown.
+Shutdown refuses while a frontend handle still owns CPU services, including a
+stopped handle awaiting release. Backend cleanup failure retains the owner for
+retry. Its separately versioned 32-field snapshot never grants full readiness.
+
+The bounded view operation reuses the tested MTA menu, console, configured
+neutral input, rendering and cleanup path. It no longer needs the ordinary
+`CCore` constructor to deliberately fail after rendering a menu. The existing
+`InitializeCore` result and eight full-startup fields retain their meanings.
+This new lifecycle is an offline source/build step; the installed GTA trial
+still uses the previously validated diagnostic worker until a new worker and
+package are prepared and tested. Persistent menu input remains deferred beyond
+the current native 35-second trial limit.
+
+The actual normal Core and GUI DLLs pass 659 checks in four owned WARP hosts:
+menu/credits/console/bindings, GPU-retained work, missing XML and missing Game DE.
+They verify Core survival and reacquisition after frontend release, refusal to
+borrow a stopped or failed Core, and unchanged legacy startup diagnostics.
+Normal x64 Core/GUI builds and classic Core compilation pass separately.
+
+**MTA's existing client Lua dependency now builds for x64.** Only the explicit
+DE opt-in enables `Lua_Client Release|x64`, with isolated output under
+`Bin/mods/deathmatch/x64`; classic builds keep their original output and policy.
+The actual modified Lua DLL passes 48 checks across seven cases for 64-bit
+owner/coroutine pointers, MTA pre/post-call and undump hooks, garbage collection,
+allocator retirement and loading a genuine four-byte-size_t Lua chunk. Classic
+Lua also builds, and twelve project-policy guards pass. This does not enable
+the x64 deathmatch client or supply the missing compatible network/BASS modules.
+
+**Core-owned frontend input uses MTA's existing systems.** The separate
 Smoke option `-MtaCoreGuiFrontendInputReference` selects Core14 / FrontendInput1
 with 256 copied fields. It reuses the actual menu, console, parsed XML and
 `CKeyBinds` configured-control synthesis. Core refreshes neutral current/previous

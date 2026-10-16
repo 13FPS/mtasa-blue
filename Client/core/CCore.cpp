@@ -610,7 +610,7 @@ namespace
     }
 
     template <bool CoreOwnedInput>
-    void RunGuiFrontendReferenceImpl(CGameAdapterModule& adapter, const DefinitiveInputReference::Request& request) noexcept
+    auto RunGuiFrontendReferenceImpl(CGameAdapterModule& adapter, const DefinitiveInputReference::Request& request) noexcept
     {
         using namespace DefinitiveGuiStartupReference;
         using SurfaceSnapshot = std::conditional_t<CoreOwnedInput, DefinitiveGuiFrontendInputReference::Snapshot, DefinitiveGuiFrontendReference::Snapshot>;
@@ -1220,6 +1220,10 @@ namespace
         catch (...)
         {
         }
+        // A completed frontend Core keeps this outcome separately from its
+        // lifetime. Closing the view must not destroy the backend owner or
+        // relabel the ordinary InitializeCore gameplay-readiness result.
+        return result;
     }
 
     void RunRenderReference(CGameAdapterModule& adapter, const DefinitiveInputReference::Request& request) noexcept
@@ -1794,6 +1798,19 @@ struct CCore::FrontendResources
     bool                                 menuInputRequested = false, consoleInputRequested = false, consoleEnabled = false;
 };
 
+DefinitiveFrontend::Status CCore::RunFrontendStartupView(const DefinitiveInputReference::Request&       request,
+                                                         DefinitiveGuiFrontendInputReference::Snapshot& result)
+{
+    // Construction has already succeeded for this owner. Reuse the same menu,
+    // console, native neutral-input admission and retained GPU cleanup as the
+    // diagnostic path, without executing the rejecting gameplay constructor.
+    result = RunGuiFrontendReferenceImpl<true>(m_DefinitiveAdapter, request);
+    using namespace DefinitiveGuiStartupReference;
+    if (!result[CleanupComplete] || result[CleanupPending])
+        return DefinitiveFrontend::Status::Busy;
+    return result[WorkloadSucceeded] && !result[CleanupDeadlineExceeded] ? DefinitiveFrontend::Status::Ok : DefinitiveFrontend::Status::Failed;
+}
+
 CCore::CCore(FrontendShellTag)
 {
     // This successful Core object owns only frontend services. The ordinary
@@ -1802,6 +1819,37 @@ CCore::CCore(FrontendShellTag)
     m_frontendShellOnly = true;
     m_pLocalGUI = nullptr;
     m_pGUI = nullptr;
+    // Completed frontend objects do not run the classic constructor body.
+    // Their existing public getters and menu snapshots must observe explicit
+    // absent services rather than rely on allocator-zeroed storage.
+    m_pGraphics = nullptr;
+    m_pDirect3DData = nullptr;
+    m_pConnectManager = nullptr;
+    m_pModelCacheManager = nullptr;
+    m_pTrayIcon = nullptr;
+    m_pMessageLoopHook = nullptr;
+    m_pDirectInputHookManager = nullptr;
+    m_pDirect3DHookManager = nullptr;
+    m_pSetCursorPosHook = nullptr;
+    m_pModManager = nullptr;
+    m_pNet = nullptr;
+    m_pMultiplayer = nullptr;
+    m_pMouseControl = nullptr;
+    m_pfnMessageProcessor = nullptr;
+    m_pMessageBox = nullptr;
+    m_bIsOfflineMod = false;
+    m_bCursorToggleControls = false;
+    m_bQuitOnPulse = false;
+    m_bDestroyMessageBox = false;
+    m_bModulesLoaded = false;
+}
+
+CCore::CCore(FrontendStartupTag) : CCore(FrontendShellTag{})
+{
+    // Backend initialization follows construction, so a failed or retained
+    // adapter remains owned by a completed, inspectable Core object. The GUI
+    // controller only borrows this Core and cannot destroy its startup owner.
+    m_frontendStartupOwned = true;
 }
 
 void CCore::FrontendInputOwnership(void* context, bool requested) noexcept
@@ -1840,15 +1888,15 @@ void CCore::FrontendCloseRequested(void* context) noexcept
 bool CCore::StartFrontend(CGUI* borrowedGui)
 {
     using namespace DefinitiveFrontend;
-    if (GetCurrentThreadId() != m_frontendCoreOwnerThread || !borrowedGui || m_frontendResources || m_pGUI || m_pXML || m_pConfigFile || m_pLocalGUI ||
-        m_pLocalization || m_pCommands || m_pConsoleLogger || m_pKeyBinds)
+    if (GetCurrentThreadId() != m_frontendCoreOwnerThread || (m_frontendStartupOwned && !m_frontendStartupAccepting) || !borrowedGui || m_frontendResources ||
+        m_pGUI || m_pXML || m_pConfigFile || m_pLocalGUI || m_pLocalization || m_pCommands || m_pConsoleLogger || m_pKeyBinds)
         return false;
     m_frontendResources = new FrontendResources;
     auto& state = *m_frontendResources;
     state.snapshot[Version] = ApiVersion;
     state.snapshot[Phase] = 1;
     state.snapshot[OwnerThread] = GetCurrentThreadId();
-    state.snapshot[OwnsCoreShell] = m_frontendShellOnly ? 1u : 0u;
+    state.snapshot[OwnsCoreShell] = m_frontendShellOnly && !m_frontendStartupOwned ? 1u : 0u;
     state.snapshot[ConfigurationReadOnly] = 1;
     state.consoleSnapshot[DefinitiveFrontendConsole::Version] = DefinitiveFrontendConsole::ApiVersion;
     state.consoleSnapshot[DefinitiveFrontendConsole::OwnerThread] = GetCurrentThreadId();
@@ -1921,6 +1969,10 @@ namespace DefinitiveFrontend
             // A partial normal Core still owns its adapter and constructor
             // scope. Frontend adoption cannot move it onto a foreign thread.
             if (controller->core && controller->core->m_frontendCoreOwnerThread != controller->owner)
+                return nullptr;
+            // A completed startup Core remains inspectable after failure or
+            // Shutdown, but that retention does not admit a new GUI borrower.
+            if (controller->core && controller->core->m_frontendStartupOwned && !controller->core->m_frontendStartupAccepting)
                 return nullptr;
             if (!controller->core)
             {

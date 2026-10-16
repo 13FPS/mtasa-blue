@@ -59,7 +59,7 @@ namespace DefinitiveInputReference
     using CancelCallback = bool (*)();
     using PublishCallback = void (*)(const std::uint32_t*, std::uint32_t);
 
-    // Both callbacks execute on InitializeCore's worker, outside loader lock.
+    // Both callbacks execute on the explicit Core owner, outside loader lock.
     // The bridge copies values before return; it never holds Core pointers while
     // the owning worker tears down XML, binds, adapter or the loaded Core itself.
     struct Request

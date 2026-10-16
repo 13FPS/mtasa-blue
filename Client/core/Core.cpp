@@ -26,6 +26,7 @@
 #include "DefinitiveGuiFrontendInputReference.h"
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
     #include "DefinitiveProcess.h"
+    #include "DefinitiveFrontendStartup.h"
 #endif
 
 #define CORE_API extern "C" __declspec(dllexport)
@@ -191,6 +192,53 @@ CORE_API void SetGTADirectory(const wchar_t* path, size_t length)
 
     g_gtaDirectory.assign(std::wstring_view{path, length});
 }
+
+#if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
+CORE_API std::uint32_t MTA_DEFrontendStartupApiVersion()
+{
+    return DefinitiveFrontendStartup::ApiVersion;
+}
+
+CORE_API void* MTA_BeginDEFrontendStartup(std::uint32_t version)
+{
+    // A completed frontend is a separate opt-in lifecycle. Its success cannot
+    // enter InitializeCore's FullCoreReady path or skip the gameplay gate.
+    if (version != DefinitiveFrontendStartup::ApiVersion || !g_isDefinitiveProcessCandidate || g_mtaDirectory.empty() || g_gtaDirectory.empty())
+        return nullptr;
+    return DefinitiveFrontendStartup::BeginOwner();
+}
+
+CORE_API DefinitiveFrontendStartup::Status MTA_PulseDEFrontendStartup(void* handle)
+{
+    return DefinitiveFrontendStartup::PulseOwner(handle);
+}
+
+CORE_API DefinitiveFrontendStartup::Status MTA_BindDEFrontendStartupInput(void* handle)
+{
+    return DefinitiveFrontendStartup::BindOwner(handle);
+}
+
+CORE_API DefinitiveFrontendStartup::Status MTA_ReadDEFrontendStartup(void* handle, std::uint32_t* output, std::uint32_t count)
+{
+    return DefinitiveFrontendStartup::ReadOwner(handle, output, count);
+}
+
+CORE_API DefinitiveFrontendStartup::Status MTA_ShutdownDEFrontendStartup(void* handle)
+{
+    return DefinitiveFrontendStartup::ShutdownOwner(handle);
+}
+
+CORE_API DefinitiveFrontendStartup::Status MTA_ReleaseDEFrontendStartup(void* handle)
+{
+    return DefinitiveFrontendStartup::ReleaseOwner(handle);
+}
+
+CORE_API DefinitiveFrontendStartup::Status MTA_RunDEFrontendStartupView(void* handle, std::uint32_t durationMs, DefinitiveInputReference::CancelCallback cancel,
+                                                                        DefinitiveInputReference::PublishCallback publish)
+{
+    return DefinitiveFrontendStartup::RunViewOwner(handle, durationMs, cancel, publish);
+}
+#endif
 
 CORE_API int InitializeCore()
 {

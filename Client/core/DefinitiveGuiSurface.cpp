@@ -128,6 +128,23 @@ namespace DefinitiveGuiSurface
             explicit FrontendCall(bool& value) noexcept : active(value) { active = true; }
             ~FrontendCall() { active = false; }
         };
+        void FocusFrontendOnStart() noexcept
+        {
+            // F9 and the caller's native-control acknowledgement explicitly
+            // admit this frontend. Give its own child the first keyboard input
+            // without requiring a mouse click, but never activate a background
+            // game or reclaim focus after the user has left the frontend.
+            if (!frontendEnabled || !interaction.enabled || !child || !IsWindowVisible(child) || !IsWindowVisible(parent) || !IsWindowEnabled(parent) ||
+                IsIconic(parent) || GetForegroundWindow() != parent || GetWindowThreadProcessId(child, nullptr) != GetCurrentThreadId())
+                return;
+            GUITHREADINFO parentInput{};
+            parentInput.cbSize = sizeof(parentInput);
+            if (!GetGUIThreadInfo(parentThread, &parentInput) || parentInput.hwndActive != parent || GetForegroundWindow() != parent)
+                return;
+            // A denied transfer keeps the existing click-to-focus path. This
+            // is deliberately a single startup attempt, never a Poll retry.
+            SetFocus(child);
+        }
         bool PulseFrontend()
         {
             // Match the translator's client coordinates rather than sampling
@@ -948,6 +965,7 @@ namespace DefinitiveGuiSurface
             impl->result.widgetsCreated = 1;
             impl->result.stage = static_cast<unsigned>(Stage::Running);
             impl->Retained();
+            impl->FocusFrontendOnStart();
             const auto submitted = impl->Submit();
             return submitted == Status::Busy ? Status::Ok : submitted;
         }

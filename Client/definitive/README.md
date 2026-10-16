@@ -26,10 +26,29 @@ and generic CVar paths until their real dependencies exist. History navigation
 and completion use `CEntryHistory` in memory without loading or saving disk history.
 Menu and console input claims are combined, so closing either cannot release the
 other's ownership. Classic console behavior retains its existing policy.
-Eleven owned WARP cases pass 1,045 checks of the real parser, Unicode, history,
+Thirteen owned WARP cases pass 1,314 checks of the real parser, Unicode, history,
 command refusals, ownership and partial/retained cleanup. They exposed a Default
 skin close button clipped out of its titlebar; using the existing system-button
 type fixes its hitbox while preserving the ordinary button look.
+
+The first live console trial displayed the menu and console, but did not submit
+`help`: the terminal input contained four bytes while accepted/executed command
+counts stayed zero. Near the end of the 30-second window, native player control
+became enabled unexpectedly and the script cancelled the trial. Its writer is
+not established by the logs. Native readback and the same-generation restoration
+acknowledgement completed without another engine write; Core/cgui/XML/pthread
+unloaded. Command execution remains unverified in GTA. Clean cancellation is
+reported separately from workload success, so it cannot turn this failed trial
+into a console interaction pass. F8 is available only while the trial is active.
+
+Startup now attempts keyboard focus once after the admitted frontend has created
+its widgets, while GTA's parent window is already foreground and active. This
+removes the initial mouse-click requirement for F8 and typing. Background games
+are not activated, denied focus keeps the existing click path, and later focus
+loss is respected. This correction still needs its own live console test.
+The owned host queues F8, `help` and Enter through the actual startup focus,
+verifies the existing Help handler, then checks that focus is not reclaimed.
+Another case preserves a different disposable window's foreground and focus.
 
 Console1 has a separate 32-field owner-thread API and bounded copied UTF8 text.
 The existing Frontend1/32 and Frontend160 layouts stay unchanged. The live runner
@@ -57,9 +76,9 @@ retrying; a past timeout or input fault cannot conceal completed cleanup.
 Forced CLEO termination still has no independently validated engine-command
 executor for restoration.
 
-The real-menu composition host passes 514 checks, including Win32 interaction,
-focus, resize, partial startup and retained GPU/CPU cleanup. The script suite
-passes 880 mock checks; separate controlled worker tests exercise lease expiry,
+Owned menu and console hosts cover Win32 interaction, focus, resize, partial
+startup and retained GPU/CPU cleanup. The script suite passes 895 mock checks;
+separate controlled worker tests exercise lease expiry,
 generation/owner rejection, restoration and final-read contention. These are
 owned-host results. The live result above adds native restoration proof and the
 user's visual report; control-command readback alone is not camera proof. Full

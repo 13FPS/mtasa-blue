@@ -74,25 +74,42 @@ namespace
             }
             return DefWindowProcW(window, message, wparam, lparam);
         }
-        void Start()
+        void Start(bool activate = false)
         {
             // Match the foreign-thread parent relationship without attaching
             // to a game process or intercepting a foreign input procedure.
             thread = std::thread(
                 [&]
                 {
-                    WNDCLASSW cls{};
+                    const auto className = L"MtaFrontendConsoleOwnedParent" + std::to_wstring(GetCurrentThreadId());
+                    WNDCLASSW  cls{};
                     cls.hInstance = GetModuleHandleW(nullptr);
                     cls.lpfnWndProc = &Procedure;
-                    cls.lpszClassName = L"MtaFrontendConsoleOwnedParent";
+                    cls.lpszClassName = className.c_str();
                     if (RegisterClassW(&cls))
                     {
                         RECT area{0, 0, 1280, 1024};
                         AdjustWindowRect(&area, WS_OVERLAPPEDWINDOW, FALSE);
-                        window.store(CreateWindowExW(WS_EX_NOACTIVATE, cls.lpszClassName, L"Owned actual MTA console", WS_OVERLAPPEDWINDOW, 40, 40,
-                                                     area.right - area.left, area.bottom - area.top, nullptr, nullptr, cls.hInstance, nullptr));
+                        window.store(CreateWindowExW(activate ? 0 : WS_EX_NOACTIVATE, cls.lpszClassName, L"Owned actual MTA console", WS_OVERLAPPEDWINDOW, 40,
+                                                     40, area.right - area.left, area.bottom - area.top, nullptr, nullptr, cls.hInstance, nullptr));
                         if (window.load())
-                            ShowWindow(window.load(), SW_SHOWNOACTIVATE);
+                        {
+                            ShowWindow(window.load(), activate ? SW_SHOWNORMAL : SW_SHOWNOACTIVATE);
+                            if (activate)
+                            {
+                                // Only these disposable windows participate in
+                                // activation tests; no game or external HWND is
+                                // inspected, focused, subclassed or clicked.
+                                // The hidden launcher sets STARTF_USESHOWWINDOW,
+                                // which overrides this process's first ShowWindow.
+                                // A second explicit show gives this admission test
+                                // a genuinely visible parent, as GTA must provide.
+                                ShowWindow(window.load(), SW_SHOWNORMAL);
+                                SetForegroundWindow(window.load());
+                                SetActiveWindow(window.load());
+                                SetFocus(window.load());
+                            }
+                        }
                     }
                     ready.store(true);
                     if (window.load())
@@ -111,6 +128,14 @@ namespace
             while (!ready.load() && GetTickCount64() < deadline)
                 Sleep(1);
             Check(ready.load() && window.load(), "independent disposable parent thread is ready");
+            if (activate)
+            {
+                GUITHREADINFO info{sizeof(info)};
+                Check(IsWindowVisible(window.load()) && GetForegroundWindow() == window.load() &&
+                          GetGUIThreadInfo(GetWindowThreadProcessId(window.load(), nullptr), &info) && info.hwndActive == window.load() &&
+                          info.hwndFocus == window.load(),
+                      "only disposable parent is explicitly foreground, active and focused before admission");
+            }
         }
         ~Parent()
         {
@@ -298,6 +323,51 @@ namespace
         for (const auto unit : text)
             SendMessageW(child, WM_CHAR, static_cast<WPARAM>(unit), 0);
     }
+    void QueuedKey(HWND receiver, WPARAM key)
+    {
+        const auto held = static_cast<LPARAM>(1u | (MapVirtualKeyW(static_cast<UINT>(key), MAPVK_VK_TO_VSC) << 16));
+        Check(PostMessageW(receiver, WM_KEYDOWN, key, held) && PostMessageW(receiver, WM_KEYUP, key, held | static_cast<LPARAM>(0xc0000000u)),
+              "queue keyboard messages to the actual focus receiver");
+    }
+    void StartupFocus(Session& surface, HWND child, Menu& menu)
+    {
+        // The old host explicitly SetFocus(child) before every command. This
+        // path must instead begin with the focus established by Surface.Start,
+        // and dispatch queued input through the ordinary Win32 message pump.
+        Check(GetFocus() == child && surface.InteractionSnapshot().focused && surface.InteractionSnapshot().focusAcquired == 1,
+              "frontend admission gives its owned child keyboard focus once without a click or host focus override");
+        QueuedKey(GetFocus(), VK_F8);
+        Pump();
+        Check(menu.ConsoleState()[Console::ConsoleVisible] && menu.ConsoleState()[Console::InputActive],
+              "queued F8 reaches the actual focused child immediately after startup");
+        for (const auto unit : std::wstring(L"help"))
+            Check(GetFocus() == child && PostMessageW(GetFocus(), WM_CHAR, static_cast<WPARAM>(unit), 1),
+                  "queue console text only to the verified current keyboard focus");
+        Pump();
+        Check(menu.Text(0) == "help", "queued Win32 text reaches the real console without first clicking its window");
+        QueuedKey(GetFocus(), VK_RETURN);
+        Pump();
+        const auto console = menu.ConsoleState();
+        Check(console[Console::CommandsExecuted] == 1 && console[Console::TextAccepted] == 1 && console[Console::LastCommand] == 1 && menu.Text(0).empty() &&
+                  menu.Text(1).find("COMMAND HELP") != std::string::npos,
+              "queued Enter invokes the existing parser and Help handler through startup focus");
+        const auto acquired = surface.InteractionSnapshot().focusAcquired;
+        SetFocus(nullptr);
+        for (unsigned count = 0; count < 3; ++count)
+        {
+            const auto status = surface.Poll();
+            Check(status == Status::Ok || status == Status::Busy, "frontend keeps polling after owned keyboard focus loss");
+            Sleep(1);
+        }
+        Check(GetFocus() != child && !surface.InteractionSnapshot().focused && surface.InteractionSnapshot().focusAcquired == acquired &&
+                  surface.InteractionSnapshot().focusLost == 1,
+              "startup focus is never reacquired automatically after focus loss");
+        const auto callbacks = menu.messageCalls;
+        QueuedKey(child, VK_F8);
+        Pump();
+        Check(menu.messageCalls == callbacks && menu.ConsoleState()[Console::CommandsExecuted] == 1,
+              "queued shortcuts after focus loss cannot reach real console callbacks");
+    }
     void ClearEdit(HWND child)
     {
         // Use the existing edit selection and Delete behavior, rather than a
@@ -443,7 +513,8 @@ int wmain(int argc, wchar_t** argv)
         const std::wstring          mode(argv[2]);
         Check(root.is_absolute() && root.filename() == L"de-online", "explicit disposable adapter asset layout");
         Check(mode == L"normal" || mode == L"cancel" || mode == L"focus" || mode == L"gated" || mode == L"cpu-busy" || mode == L"partial-start" ||
-                  mode == L"throw-start" || mode == L"startup-failure" || mode == L"message-failure" || mode == L"message-throw" || mode == L"child-destroy",
+                  mode == L"throw-start" || mode == L"startup-failure" || mode == L"message-failure" || mode == L"message-throw" || mode == L"child-destroy" ||
+                  mode == L"startup-focus" || mode == L"background-focus",
               "explicit frontend surface workload");
         std::printf("Frontend console case=%ls\n", mode.c_str());
         const auto core = LoadLibraryExW((root / L"core.dll").c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -484,8 +555,12 @@ int wmain(int argc, wchar_t** argv)
         Hr(factory->EnumWarpAdapter(IID_PPV_ARGS(&adapter)), "select Microsoft WARP");
         Hr(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)), "create real owned WARP device");
         device.As(&info);
-        Parent parent;
-        parent.Start();
+        Parent     parent;
+        const bool startupFocus = mode == L"startup-focus", backgroundFocus = mode == L"background-focus";
+        parent.Start(startupFocus || backgroundFocus);
+        Parent foregroundParent;
+        if (backgroundFocus)
+            foregroundParent.Start(true);
         ComPtr<ID3D12Fence> gate;
         if (mode == L"gated")
             Hr(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&gate)), "create deterministic owned queue gate");
@@ -514,17 +589,42 @@ int wmain(int argc, wchar_t** argv)
             ConsoleGuards(menu);
             const auto child = GetWindow(parent.window.load(), GW_CHILD);
             Check(child && GetWindowThreadProcessId(child, nullptr) == GetCurrentThreadId(), "actual composition child belongs to GUI worker");
-            SetFocus(child);
-            Check(GetFocus() == child && surface.InteractionSnapshot().focused, "owned child acquires exact Win32 input focus");
+            if (startupFocus)
+                Check(GetFocus() == child && surface.InteractionSnapshot().focused, "Surface startup owns child focus without a host SetFocus or click");
+            else if (backgroundFocus)
+                Check(GetForegroundWindow() == foregroundParent.window.load() && GetFocus() != child && !surface.InteractionSnapshot().focused &&
+                          !surface.InteractionSnapshot().focusAcquired,
+                      "background frontend admission preserves the other disposable window's foreground and focus");
+            else
+            {
+                SetFocus(child);
+                Check(GetFocus() == child && surface.InteractionSnapshot().focused, "owned child acquires exact Win32 input focus");
+            }
             if (mode != L"gated")
             {
                 Settle(surface, menu);
                 const auto pixels = surface.Snapshot();
                 Check(pixels.readbackPixels > 10000 && pixels.premultipliedPixelsVerified && !pixels.readbackRedVerified && !pixels.transparentPixelVerified,
                       "real menu produces substantial premultiplied pixels without fixture color claims");
-                Check(menu.reentrantRejected && menu.focused, "frontend callback cannot reenter destructive Surface operations");
+                Check(menu.reentrantRejected && menu.focused == !backgroundFocus, "frontend callback keeps real focus and rejects destructive reentry");
             }
-            if (mode == L"normal")
+            if (startupFocus)
+                StartupFocus(surface, child, menu);
+            else if (backgroundFocus)
+            {
+                const auto callbacks = menu.messageCalls;
+                QueuedKey(child, VK_F8);
+                Pump();
+                const auto    status = surface.Poll();
+                GUITHREADINFO foreground{sizeof(foreground)};
+                Check((status == Status::Ok || status == Status::Busy) && menu.messageCalls == callbacks && !menu.ConsoleState()[Console::ConsoleVisible] &&
+                          GetForegroundWindow() == foregroundParent.window.load() &&
+                          GetGUIThreadInfo(GetWindowThreadProcessId(foregroundParent.window.load(), nullptr), &foreground) &&
+                          foreground.hwndFocus == foregroundParent.window.load() && foreground.hwndActive == foregroundParent.window.load() &&
+                          !surface.InteractionSnapshot().focusAcquired,
+                      "polling and queued shortcuts cannot steal the other disposable parent's active keyboard focus");
+            }
+            else if (mode == L"normal")
             {
                 Ownership(menu);
                 Commands(child, menu);
@@ -660,6 +760,10 @@ int wmain(int argc, wchar_t** argv)
             Check(menu.finalConsole[Console::CommandsExecuted] == 3 && menu.finalConsole[Console::CommandsRejected] == 5 &&
                       menu.finalConsole[Console::TextAccepted] == 8 && menu.finalConsole[Console::HistoryEntries] >= 5,
                   "teardown retains actual parser/history evidence without retaining callbacks or command owners");
+        if (startupFocus)
+            Check(menu.finalConsole[Console::CommandsExecuted] == 1 && menu.finalConsole[Console::TextAccepted] == 1 &&
+                      menu.finalConsole[Console::LastCommand] == 1,
+                  "terminal console retains queued startup-focus Help evidence after all owners retire");
         Check(menu.stops >= 1 && !menu.handle && menu.state[Frontend::CleanupComplete] && !menu.state[Frontend::FullMtaReady] &&
                   !menu.state[Frontend::GameplayReady] && !menu.state[Frontend::NetworkStarted],
               "completed cleanup never grants full/gameplay/network readiness");

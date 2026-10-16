@@ -1222,7 +1222,7 @@ async function main() {
                 if (name === 'GET_CHAR_COORDINATES') return { x: 1.25, y: -2.5, z: 3.75 };
                 if (name === 'GET_CHAR_HEADING') return 90;
                 throw new Error('Unexpected game mutation: ' + name); },
-            log: value => logs.push(JSON.parse(value)), wait: milliseconds => {
+            log: value => { const event = JSON.parse(value); logs.push(event); overrides.observeLog?.(event); }, wait: milliseconds => {
                 waits.push({ frame, milliseconds });
                 ++frame;
                 if (frame >= keyFrames.length) throw new Error('Adapter did not stop on the final key frame');
@@ -1242,7 +1242,7 @@ async function main() {
             }
             for (const name of ['native', 'wait']) sandbox[name] = () => { record('forbidden', name); throw new Error('Forbidden diagnostic call: ' + name); };
         }
-        vm.runInNewContext(entry, sandbox, { timeout: 1000 });
+        vm.runInNewContext(entry, sandbox, { timeout: overrides.executionTimeout ?? 1000 });
         return { calls, callFrames, runtimeAccess, waits, logs, fromFloat };
     }
     // This fixture transports reported scalar evidence only. Its opaque lease
@@ -1437,7 +1437,8 @@ async function main() {
             functions: {
                 DE_CoreGuiFrontendApiVersion: () => 1, DE_CoreGuiFrontendBegin: () => 1,
                 DE_CoreGuiFrontendCapture: () => {
-                    if (options.captureErrorAt === polls) throw Error('temporary snapshot failure'); return 1;
+                    if (options.captureErrorAt === polls) throw Error('temporary snapshot failure');
+                    return options.skipTerminalCapture && polls >= 6 ? 0 : 1;
                 },
                 DE_CoreGuiFrontendRead: field => snapshot()[field],
                 DE_CoreGuiFrontendControlFocused: () => options.focusLostAt === polls ? 0 : 1,
@@ -1456,18 +1457,20 @@ async function main() {
                     ++polls;
                     if (polls === 2) { mailbox[0] = 17; mailbox[1] = 1; }
                     if (polls >= 4) { mailbox[4] = mailbox[5] = 1; mailbox[3] = 0; }
+                    if (options.externalControlAt === polls) enabled = true;
                     if (options.controlFaultAt === polls) mailbox[7] = 1;
                     if (options.pollErrorAt === polls) throw Error('temporary poll failure');
-                    return polls >= 6 && mailbox[6] === 1 ? 1 : 0;
+                    return polls >= (options.workerTerminalAt ?? 6) && (mailbox[6] === 1 || options.workerTerminalAt) ? 1 : 0;
                 },
                 DE_CoreStartupCancel: () => 1,
-                DE_CoreStartupRead: field => [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5, 0, 0, 1, 0, 1, 0, 1, 0][field],
+                DE_CoreStartupRead: field => Object.assign([1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5, 0, 0, 1, 0, 1, 0, 1, 0], options.workerState)[field],
                 ...options.functions
             },
             natives: { IS_CHAR_ON_FOOT: ped => { assert.equal(ped, 10); return true; },
                 IS_PLAYER_CONTROL_ON: index => { assert.equal(index, 0); return enabled; },
                 SET_PLAYER_CONTROL: (index, value) => {
-                    assert.equal(index, 0); assert.equal(typeof value, 'boolean'); enabled = value;
+                    assert.equal(index, 0); assert.equal(typeof value, 'boolean');
+                    if (!options.restoreDenied || !value) enabled = value;
                     if (options.throwAfterDisable && value === false) throw Error('setter return failure');
                 }, ...options.natives }
         });
@@ -1520,6 +1523,50 @@ async function main() {
         assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true);
         assert.equal(result.enabled, true); assert.equal(finish.control.native_restored_verified, true);
         assert.equal(finish.control.completed, true);
+    });
+    test('Frontend native-control divergence fails workload but accepted cancellation can prove completed cleanup', () => {
+        const result = coreFrontend({ externalControlAt: 3, workerState: { 11: 2, 12: 2, 16: 12, 17: 0 } });
+        const finish = frontendFinish(result);
+        assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true);
+        assert.equal(finish.stop_requested, true); assert.match(finish.error, /Player control changed during ownership/);
+        assert.equal(finish.state[16], 12); assert.equal(finish.state[17], 0);
+        assert.equal(finish.control.completed, true); assert.equal(finish.control.input_detached, true);
+        assert.equal(finish.control.native_restored_verified, true); assert.equal(finish.control.restored_acknowledged, true);
+        assert.equal(finish.control.restore_attempts, 0);
+        assert.deepEqual(result.calls.filter(call => call[0] === 'SET_PLAYER_CONTROL'), [['SET_PLAYER_CONTROL', 0, false]]);
+        assert.equal(result.enabled, true);
+    });
+    for (const workerState of [{ 13: 0 }, { 14: 1 }, { 15: 0 }, { 7: 0 }, { 18: 5 },
+        { 11: 2, 12: 3 }, { 16: 15 }, { 17: 1 }, { 16: 0, 17: 0 }])
+        test('Frontend cancellation refuses retained or inconsistent worker cleanup ' + JSON.stringify(workerState), () => {
+            const result = coreFrontend({ externalControlAt: 3, workerState: { 16: 12, 17: 0, ...workerState } });
+            const finish = frontendFinish(result);
+            assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, false);
+            assert.equal(finish.control.completed, true); assert.equal(result.enabled, true);
+        });
+    test('Frontend CheckCancellation bookkeeping cannot substitute for an accepted script cancellation', () => {
+        const result = coreFrontend({ workerState: { 16: 12, 17: 0 } });
+        const finish = frontendFinish(result);
+        assert.equal(finish.stop_requested, false); assert.equal(finish.passed, false);
+        assert.equal(finish.cleanup_passed, false); assert.equal(finish.control.completed, true);
+    });
+    for (const options of [{ skipTerminalCapture: true }, { scalarOverrides: polls => polls >= 6 ? { 149: 2 } : {} },
+        { scalarOverrides: polls => polls >= 6 ? { 49: 1 } : {} }])
+        test('Frontend cancelled cleanup needs a valid terminal retirement publication ' + Object.keys(options)[0], () => {
+            const result = coreFrontend({ externalControlAt: 3, workerState: { 16: 12, 17: 0 }, ...options });
+            const finish = frontendFinish(result);
+            assert.equal(finish.cleanup_passed, false); assert.equal(finish.passed, false);
+            assert.equal(finish.control.completed, true); assert.equal(result.enabled, true);
+        });
+    test('Frontend terminal worker cannot finish cleanup while native restoration still fails', () => {
+        const events = [];
+        // Bound this deliberately unfinished fixture externally: a false worker
+        // terminal flag must not discard the script's real native obligation.
+        assert.throws(() => coreFrontend({ focusLostAt: 3, restoreDenied: true, workerTerminalAt: 6,
+            workerState: { 16: 12, 17: 0 },
+            entry: { executionTimeout: 100, observeLog: event => events.push(event) } }), /timed out/);
+        assert.ok(events.some(event => event.event === 'core_gui_frontend_control' && event.action === 'cleanup_pending'));
+        assert.ok(!events.some(event => event.event === 'core_gui_frontend_reference_finished'));
     });
     for (const field of [7, 140]) test('Frontend historical diagnostic permits proved cleanup, not workload: field ' + field, () => {
         const result = coreFrontend({ scalarOverrides: polls => polls >= 6 ? { [field]: 1, ...(field === 7 ? { 4: 10 } : {}) } : {} });

@@ -355,11 +355,16 @@ function runAdapter() {
         }
         const state = Array.from({ length: 19 }, (_, field) => read(field));
         const control = lease.snapshot();
-        const cleanupPassed = unsigned(state) && latest !== null && latest[1] === 2 && latest[6] === 1 && !latest[5] &&
+        // Worker error12 records accepted cancellation after its owned cleanup;
+        // it is not an unload failure. Keep the workload failed, while requiring
+        // the same independent GUI/native retirement proof as a normal finish.
+        const workerRetired = (state[16] === 0 && state[17] === 1) ||
+            (state[16] === 12 && state[17] === 0 && cancelAccepted);
+        const cleanupPassed = terminal && unsigned(state) && latest !== null && latest[1] === 2 && latest[6] === 1 && !latest[5] &&
             !latest[59] && control.completed &&
             (!control.mutation_attempted || control.native_restored_verified) &&
             state[7] === 1 && state[13] === 1 && state[14] === 0 && state[15] === latest[57] &&
-            state[16] === 0 && state[17] === 1 && state[18] === 0;
+            !(state[12] & ~state[11]) && workerRetired && state[18] === 0;
         const expected = [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5];
         const pairPresent = field => latest !== null && (latest[field] !== 0 || latest[field + 1] !== 0);
         const fenceComplete = latest !== null && !(latest[35] === 0xffffffff && latest[36] === 0xffffffff) &&

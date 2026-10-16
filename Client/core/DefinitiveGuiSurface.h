@@ -95,6 +95,8 @@ namespace DefinitiveGuiSurface
         // Separate from the widget fixture. The caller must first acknowledge
         // its native control lease; GUI ownership alone cannot suppress GTA.
         // A false stop is Busy and retains callbacks/context/CGUI for retry.
+        // Successful Start attempts keyboard focus once if the borrowed parent
+        // is already foreground/active; later focus loss is never overridden.
         Status EnableFrontend(const FrontendCallbacks& callbacks) noexcept;
         // Ok consumes one existing device reference by storage only. The HWND
         // remains borrowed; Start validates it after native End has fully drained.

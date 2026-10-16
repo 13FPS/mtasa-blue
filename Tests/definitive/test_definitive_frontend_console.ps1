@@ -148,7 +148,7 @@ try {
     if ($compileExit -ne 0) { throw 'Owned frontend host compilation failed.' }
     if ((Sha $hostPath) -eq '63e633bb51c35fe35ca98f503b62e7ddb8403abe4c9d501cfa9162892453846f') { throw 'Disposable host unexpectedly matches the real game.' }
     $testExit=0
-    foreach ($case in @('normal','cancel','focus','gated','cpu-busy','partial-start','throw-start','startup-failure','message-failure','message-throw','child-destroy')) {
+    foreach ($case in @('normal','cancel','focus','gated','cpu-busy','partial-start','throw-start','startup-failure','message-failure','message-throw','child-destroy','startup-focus','background-focus')) {
         $caseRoot=Join-Path $outputRoot ('case-'+$case)
         $assetRoot=Join-Path $caseRoot 'Win64/CLEO/de-online'
         [IO.Directory]::CreateDirectory((Join-Path $assetRoot 'mta/logs')) | Out-Null
@@ -192,7 +192,7 @@ try {
     $executionArtifacts=@(Get-ChildItem -LiteralPath $outputRoot -Recurse -File | Where-Object { $_.Extension -in @('.exe','.obj','.log','.json','.bmp') } | ForEach-Object {
         [ordered]@{path=$_.FullName;sha256=(Sha $_.FullName);bytes=$_.Length}
     })
-    $success=$null -eq $failure -and $compileExit -eq 0 -and $testExit -eq 0 -and $testCount -gt 0 -and $runs.Count -eq 11 -and
+    $success=$null -eq $failure -and $compileExit -eq 0 -and $testExit -eq 0 -and $testCount -gt 0 -and $runs.Count -eq 13 -and
         @($runs | Where-Object { -not $_.success }).Count -eq 0 -and -not $timedOut -and $sourceUnchanged -and $artifactsUnchanged -and
         $assetsUnchanged -and $certificatesUnchanged -and $platformUnchanged
     $receipt=[ordered]@{schema='mta_owned_frontend_console_host_tests_v1';recordedAt=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=$success;
@@ -203,8 +203,9 @@ try {
         targetFormat=87;width=1280;height=1024;coreFrontendApi=1;frontendFields=32;consoleApi=1;consoleFields=32;consoleExplicitlyEnabled=$success;automaticLiveConsoleEnabled=$false;
         actualMtaConsoleOnOwnedCompositionSurface=$success;actualWin32ConsoleParserVerified=$success;frontendOnlyCommandRefusalsVerified=$success;inMemoryHistoryAndAutocompleteVerified=$success;
         cpuFrontendTeardownWhileGpuRetainedVerified=$success;startupFailureOwnerCleanupVerified=$success;partialStartCleanupVerified=$success;frontendBusyRetainsBorrowedGuiVerified=$success;focusAndEscapeCleanupVerified=$success;
+        startupFocusQueuedConsoleCommandsVerified=$success;backgroundAdmissionPreservesOtherOwnedFocusVerified=$success;
         configurationCopiesUnchanged=$assetsUnchanged;installedFilesChanged=$false;gameLaunched=$false;gameAttached=$false;engineInputSuppressionVerified=$false;fullMtaReady=$false;
-        scope='Real normal-build Core frontend and explicitly enabled MTA console with CGUI on the production Surface owned WARP queue, child HWND and DirectComposition swapchain. Actual widget text/Enter/parser/Help/Clear, refused commands and unchanged CVar revision, in-memory history/autocomplete, Unicode/focus and aggregated menu+console ownership; partial/throw/missing-XML startup, CPU-Busy/GPU-gated detachment, optional-message failure/throw and actual child destruction. No GTA/native control write, engine facade, network startup or full readiness claim.'}
+        scope='Real normal-build Core frontend and explicitly enabled MTA console with CGUI on the production Surface owned WARP queue, child HWND and DirectComposition swapchain. Actual widget text/Enter/parser/Help/Clear, refused commands and unchanged CVar revision, in-memory history/autocomplete, Unicode/focus and aggregated menu+console ownership; queued F8/help/Enter through automatic startup focus, no refocus after loss, preservation of another disposable foreground parent; partial/throw/missing-XML startup, CPU-Busy/GPU-gated detachment, optional-message failure/throw and actual child destruction. No GTA/native control write, engine facade, network startup or full readiness claim.'}
     $receipt | ConvertTo-Json -Depth 9 | Set-Content -LiteralPath (Join-Path $outputRoot 'test-result.json') -Encoding utf8
 }
 [ordered]@{success=$success;receipt=(Join-Path $outputRoot 'test-result.json');checks=$testCount;failure=$failure} | ConvertTo-Json -Compress

@@ -68,6 +68,65 @@ int wmain(int argc, wchar_t** argv)
               "fixture cleanup-publication setup");
         deonline::CoreStartupReference worker;
         Check(!worker.CaptureGuiFrontend() && !worker.CaptureGuiFrontendControl() && !worker.ReadGuiFrontend(0), "unbegun caches empty");
+        if (mode >= 100)
+        {
+            // This controlled producer checks the real worker/cache/retirement
+            // boundary. It contains no MTA GUI or native engine implementation.
+            namespace New = DefinitiveGuiFrontendInputReference;
+            Check(!worker.CaptureGuiFrontendInput() && !worker.ReadGuiFrontendInput(0), "new frontend input cache is empty before Begin");
+            Check(worker.BeginGuiFrontendInputReference(&anchor), "independent Core-owned frontend input begins");
+            Check(!worker.Begin(&anchor) && !worker.BeginGuiFrontendReference(&anchor) && !worker.BeginGuiSurfaceReference(&anchor),
+                  "Core-owned input shares exclusive worker ownership with historical protocols");
+            if (mode == 101 || mode == 102)
+            {
+                Until([&] { return worker.Poll() == 1; }, "new protocol rejection completes");
+                Check(worker.Read(16) == (mode == 101 ? 13u : 14u) && !GetModuleHandleW(L"core.dll"),
+                      "wrong new version/configuration unloads before retaining an owner");
+                Check(!worker.CaptureGuiFrontendInput(), "rejected new protocol invents no snapshot");
+            }
+            else
+            {
+                Until([&] { return worker.CaptureGuiFrontendInput() && worker.ReadGuiFrontendInput(DefinitiveGuiStartupReference::Phase) == 1; },
+                      "new coherent256 active snapshot");
+                Check(worker.ReadGuiFrontendInput(New::NativeMetrics + 7) == 2 && worker.ReadGuiFrontendInput(New::Bindings + 11) == 2 &&
+                          !worker.ReadGuiFrontendInput(256),
+                      "new cache preserves native high counter halves and independent binding fields");
+                Check(!worker.CaptureGuiFrontend() && !worker.CaptureGuiSurface() && !worker.CaptureGuiFrontendControl(),
+                      "new mode neither exposes old caches nor opens the script control mailbox");
+                bool        foreign = true;
+                std::thread observer([&] { foreign = worker.CaptureGuiFrontendInput() || worker.ReadGuiFrontendInput(0) != 0; });
+                observer.join();
+                Check(!foreign, "foreign observer cannot capture or read the new input cache");
+                auto& lock = deonline::CoreStartupReferenceTestAccess::Lock(worker);
+                AcquireSRWLockExclusive(&lock);
+                Check(!worker.CaptureGuiFrontendInput() && worker.ReadGuiFrontendInput(New::NativeMetrics + 7) == 2,
+                      "contended capture preserves the last complete new snapshot");
+                ReleaseSRWLockExclusive(&lock);
+                if (mode == 111)
+                    Check(worker.Cancel(), "new input worker accepts cooperative cancellation without a script restoration Ack");
+                else
+                    SetEvent(release);
+                Until([&] { return worker.Poll() == 1; }, "new input worker terminal cleanup");
+                const bool unsafe = mode >= 103 && mode <= 109;
+                Check(worker.Read(16) == (unsafe ? 15u : mode == 111 ? 12u : 0u), "new worker independently checks native/binding retirement");
+                Check((GetModuleHandleW(L"core.dll") != nullptr) == unsafe, "new unsafe native or CPU ownership retains Core code");
+                Check(worker.CaptureGuiFrontendInput() && worker.ReadGuiFrontendInput(DefinitiveGuiStartupReference::Phase) == 2,
+                      "new terminal copied snapshot remains available");
+                if (unsafe)
+                    Check(!worker.Begin(&anchor) && !worker.BeginGuiFrontendReference(&anchor) && !worker.BeginGuiFrontendInputReference(&anchor),
+                          "new input quarantine cannot be bypassed by another protocol");
+                if (mode == 110)
+                    Check(worker.ReadGuiFrontendInput(DefinitiveGuiStartupReference::CleanupDeadlineExceeded) == 1,
+                          "new eventual cleanup preserves historical workload deadline failure");
+            }
+            CloseHandle(release);
+            CloseHandle(ready);
+            CloseHandle(final);
+            CloseHandle(detachReady);
+            CloseHandle(detachGate);
+            std::printf("{\"success\":true,\"checks\":%u,\"mode\":%u,\"fixture_is_mta\":false,\"game_launched\":false}\n", checks, mode);
+            return 0;
+        }
         std::uint32_t previous = 0;
         for (unsigned attempt = 0; attempt < (mode == 0 ? 2u : 1u); ++attempt)
         {

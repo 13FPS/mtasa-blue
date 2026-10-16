@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Real configured records exercise the MTA loader. Command binds remain data
+     during neutral production; out-of-scope controls never become gameplay. -->
+<mainconfig>
+    <binds>
+        <bind key="w" control="forwards" />
+        <bind key="s" control="backwards" />
+        <bind key="a" control="left" />
+        <bind key="d" control="right" />
+        <bind key="lshift" control="sprint" />
+        <bind key="rshift" control="walk" />
+        <bind key="mouse1" control="fire" />
+        <bind key="lalt" control="walk" />
+        <bind key="b" command="help" state="down" />
+        <bind key="c" command="connect" state="down" arguments="127.0.0.1 22003" />
+    </binds>
+</mainconfig>

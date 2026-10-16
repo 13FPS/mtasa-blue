@@ -16,6 +16,7 @@
 #include <thread>
 #include "../../Client/core/DefinitiveInputReference.h"
 #include "../../Client/core/DefinitiveRenderReference.h"
+#include "../../Client/core/DefinitiveGuiFrontendInputReference.h"
 
 namespace
 {
@@ -108,6 +109,13 @@ int wmain(int argc, wchar_t** argv)
         using ConfigureFrontend = std::uint32_t (*)(std::uint32_t, std::uint32_t, DefinitiveInputReference::CancelCallback,
                                                     DefinitiveInputReference::PublishCallback, DefinitiveGuiFrontendReference::ControlCallback);
         const auto configureFrontend = Resolve<ConfigureFrontend>(core, "MTA_ConfigureDEGuiFrontendReference");
+        const auto frontendInputVersion = Resolve<std::uint32_t (*)()>(core, "MTA_DEGuiFrontendInputReferenceApiVersion");
+        const auto configureFrontendInput = Resolve<ConfigureInput>(core, "MTA_ConfigureDEGuiFrontendInputReference");
+        Check(frontendInputVersion() == 1 && DefinitiveGuiFrontendInputReference::FieldCount == 256,
+              "Core-owned frontend input has an independent API1 and copied256 contract");
+        Check(configureFrontendInput(0, CancelInput, PublishInput) == 0 && configureFrontendInput(35001, CancelInput, PublishInput) == 0 &&
+                  configureFrontendInput(35000, nullptr, PublishInput) == 0 && configureFrontendInput(35000, CancelInput, nullptr) == 0,
+              "Core-owned frontend input requires bounded duration and live owner callbacks");
         Check(frontendVersion() == 1 && DefinitiveGuiFrontendReference::FieldCount == 160, "real frontend trial has a distinct value-only API");
         Check(configureFrontend(0, 40000, CancelInput, PublishInput, ControlLease) == 0 &&
                   configureFrontend(2, 40000, CancelInput, PublishInput, ControlLease) == 0,
@@ -185,6 +193,7 @@ int wmain(int argc, wchar_t** argv)
         Check(configureInput(1, nullptr, PublishInput) == 0, "input request must carry worker cancellation");
         Check(configureInput(1, CancelInput, nullptr) == 0, "input request must carry value-only publication");
         Check(configureInput(1, CancelInput, PublishInput) == 1, "bounded configured input request must be accepted");
+        Check(configureFrontendInput(35000, CancelInput, PublishInput) == 0, "Core-owned frontend input cannot replace a pending historical input request");
         Check(configureRender(1, CancelInput, PublishInput) == 0, "render observation cannot replace pending configured input");
         Check(configureRenderV2(1, 2, CancelInput, PublishInput) == 0, "API2 route cannot replace a pending input request");
         Check(configureRenderV3(1, 2, CancelInput, PublishInput) == 0, "API3 cannot replace a pending configured input owner");
@@ -311,6 +320,22 @@ int wmain(int argc, wchar_t** argv)
               "wrong-image frontend trial reaches no control callback or GUI and releases its backend lease");
         NoGameModules();
         NoClassicRendererModules();
+        Check(configureFrontendInput(35000, CancelInput, PublishInput) == 1,
+              "consumed script-control frontend request permits an explicitly separate Core-owned input owner");
+        Check(configureFrontendInput(35000, CancelInput, PublishInput) == 0 && configureInput(1, CancelInput, PublishInput) == 0 &&
+                  configureFrontend(1, 40000, CancelInput, PublishInput, ControlLease) == 0,
+              "Core-owned neutral input excludes duplicate, legacy input and script-control requests");
+        std::uint32_t foreignFrontendInput = 1;
+        std::thread   frontendInputRequester([&] { foreignFrontendInput = configureFrontendInput(35000, CancelInput, PublishInput); });
+        frontendInputRequester.join();
+        Check(foreignFrontendInput == 0, "foreign caller cannot replace the actual Core-owned frontend input request");
+        const int api14Result = initialize();
+        Check(api14Result == 5, "Core-owned frontend input rejects the nongame image before XML, GUI or native input access");
+        CheckStartup(readStartup, 5, 3, 33);
+        Check(!inputPublications && !controlCalls && !GetModuleHandleW(L"game_de.dll") && !GetModuleHandleW(L"cgui.dll"),
+              "wrong-image Core14 request owns no native scope or script control obligation and releases the adapter");
+        NoGameModules();
+        NoClassicRendererModules();
         // A diagnostic reader cannot accidentally become a cross-thread Core
         // control channel or erase the completed owner-thread failure snapshot.
         std::array<unsigned int, 8> foreign{};
@@ -332,9 +357,10 @@ int wmain(int argc, wchar_t** argv)
         std::printf(
             "{\"success\":true,\"checks\":%d,\"initialize_results\":[%d,%d,%d,%d],\"continued_after_free_library\":true,\"backend_unloaded_after_each_"
             "failure\":true,\"classic_modules_unloaded\":true,\"legacy_renderer_modules_unloaded\":true,\"startup_diagnostics_verified\":true,\"api3_"
-            "initialize_result\":%d,\"api4_initialize_result\":%d,\"api5_initialize_result\":%d,\"api6_initialize_result\":%d,\"api13_initialize_result\":%d}"
+            "initialize_result\":%d,\"api4_initialize_result\":%d,\"api5_initialize_result\":%d,\"api6_initialize_result\":%d,\"api13_initialize_result\":%d,"
+            "\"api14_initialize_result\":%d}"
             "\n",
-            checks, results[0], results[1], results[2], results[3], api3Result, api4Result, api5Result, api6Result, api13Result);
+            checks, results[0], results[1], results[2], results[3], api3Result, api4Result, api5Result, api6Result, api13Result, api14Result);
         return 0;
     }
     catch (const std::exception& error)

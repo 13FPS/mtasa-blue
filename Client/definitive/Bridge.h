@@ -153,6 +153,12 @@ DE_BRIDGE_API std::uint32_t DE_CoreGuiSurfaceRead(std::uint32_t component);
 // changes native player control and acknowledges its generation through this
 // scalar mailbox; no native engine command executes on the Core worker.
 DE_BRIDGE_API std::uint32_t DE_CoreGuiFrontendApiVersion();
+// Core14 keeps configured neutral native input on its owning worker. These
+// copied256 values do not borrow the older script player-control mailbox.
+DE_BRIDGE_API std::uint32_t DE_CoreGuiFrontendInputApiVersion();
+DE_BRIDGE_API int           DE_CoreGuiFrontendInputBegin();
+DE_BRIDGE_API int           DE_CoreGuiFrontendInputCapture();
+DE_BRIDGE_API std::uint32_t DE_CoreGuiFrontendInputRead(std::uint32_t component);
 DE_BRIDGE_API int           DE_CoreGuiFrontendBegin();
 DE_BRIDGE_API int           DE_CoreGuiFrontendCapture();
 DE_BRIDGE_API std::uint32_t DE_CoreGuiFrontendRead(std::uint32_t component);

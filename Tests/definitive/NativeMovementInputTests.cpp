@@ -88,6 +88,28 @@ namespace
         Put(runtime.ped + 0x600, std::uint32_t{6});
     }
 
+    void OriginalNeutral(void*)
+    {
+        ++originalCalls;
+        const auto replacement = Pad();
+        Check(replacement != physical && std::all_of(replacement.begin(), replacement.end(), [](auto value) { return value == std::byte{0}; }),
+              "neutral frontend scope supplies zero current and previous blocks over nonzero physical input");
+        auto* provider = reinterpret_cast<void*>(runtime.provider);
+        for (const auto action : {0x1e, 0x1f, 2, 0x6d, 0xfe})
+        {
+            float value = 42.0f;
+            Check(HookMembership(provider, action) && HookAvailability(provider, action), "neutral frontend scope owns the real provider query path");
+            Check(HookQuery(provider, action, &value) == 1 && value == 0.0f,
+                  "neutral frontend movement, sprint, walk and unknown queries cannot fall through to physical input");
+        }
+        std::uint16_t disabled = 0xffff;
+        Check(Read(runtime.image + padRva + 0x30, disabled) && disabled == 0,
+              "neutral scoped input never changes the separate native player-control disable word");
+        // Restoration must recover the saved physical bytes even when the
+        // original consumer modifies its temporary neutral pad before return.
+        Put(runtime.image + padRva + NativePadCurrentOffset, std::uint32_t{0xabcdef01});
+    }
+
     void OriginalException(void*)
     {
         ++originalCalls;
@@ -521,6 +543,21 @@ int main()
     Check(runtime.active.load() && runtime.counters.reason.load() == 0, "normal scope remains healthy");
     float value = 0;
     Check(HookQuery(reinterpret_cast<void*>(runtime.provider), 2, &value) == 3 && value == 0.75f, "query outside scope forwards original");
+
+    Configure(OriginalNeutral);
+    runtime.frame = {};
+    HookControl(reinterpret_cast<void*>(runtime.ped));
+    HookControl(reinterpret_cast<void*>(runtime.ped));
+    Check(Pad() == physical && !runtime.transaction.Active() && !runtime.scopes.load() && !runtime.inFlight.load(),
+          "repeated neutral frontend scopes retire every physical snapshot before returning");
+    Check(runtime.counters.steps.load() == 2 && runtime.counters.restored.load() == 2 && runtime.counters.queries.load() == 10 &&
+              runtime.counters.neutral.load() == 4,
+          "neutral scope accounting distinguishes neutral-query subset from all routed movement queries");
+    Check(runtime.active.load() && !runtime.counters.reason.load() && !runtime.counters.restoreFailures.load(),
+          "neutral frontend callback remains eligible without player-control flag writes");
+    value = 0;
+    Check(HookQuery(reinterpret_cast<void*>(runtime.provider), 2, &value) == 3 && value == 0.75f,
+          "neutral frontend scope grants no camera or physical-query suppression outside its actual native callback");
 
     Configure(OriginalMovement);
     Put(runtime.ped + 0x7c8, std::uintptr_t{0x123456});

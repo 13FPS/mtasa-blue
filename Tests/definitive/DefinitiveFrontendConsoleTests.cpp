@@ -20,6 +20,7 @@
 #include <vector>
 #include "../../Client/core/DefinitiveFrontend.h"
 #include "../../Client/core/DefinitiveFrontendConsole.h"
+#include "../../Client/core/DefinitiveFrontendBindings.h"
 #include "../../Client/core/DefinitiveGuiSurface.h"
 #include "GuiFrontendSurfaceDevice.h"
 
@@ -154,6 +155,7 @@ namespace
             thread.join();
         }
     };
+    namespace Bindings = DefinitiveFrontendBindings;
     struct Menu
     {
         using EnableConsole = Frontend::Status (*)(void*, std::uint32_t);
@@ -161,29 +163,34 @@ namespace
         using Visible = Frontend::Status (*)(void*, std::uint32_t);
         using Message = Frontend::Status (*)(void*, std::uint32_t, std::uintptr_t, std::intptr_t, std::uint32_t*);
         using ReadText = Frontend::Status (*)(void*, std::uint32_t, char*, std::uint32_t, std::uint32_t*);
-        EnableConsole      enableConsole = nullptr;
-        ReadConsole        readConsole = nullptr;
-        Visible            consoleVisible = nullptr, menuVisible = nullptr;
-        Message            processMessage = nullptr;
-        ReadText           readText = nullptr;
-        Console::Snapshot  initialConsole{};
-        Console::Snapshot  finalConsole{};
-        unsigned           messageCalls = 0, lifetimeMessages = 0;
-        bool               failMessage = false, throwMessage = false, consumeLifetime = false;
-        Frontend::Create   create = nullptr;
-        Frontend::Pulse    pulse = nullptr;
-        Frontend::Read     read = nullptr;
-        Frontend::Shutdown shutdown = nullptr;
-        Frontend::Release  release = nullptr;
-        void*              handle = nullptr;
-        Frontend::Snapshot state{};
-        unsigned           starts = 0, pulses = 0, stops = 0, busyStops = 0;
-        bool               failStart = false, throwStart = false, focused = false;
-        std::int32_t       mouseX = 0, mouseY = 0;
-        Session*           surface = nullptr;
-        bool               reentrantRejected = false;
-        bool               Read() { return handle && read(handle, state.data(), static_cast<std::uint32_t>(state.size())) == Frontend::Status::Ok; }
-        static bool        Start(void* context, CGUI* gui)
+        EnableConsole            enableConsole = nullptr;
+        ReadConsole              readConsole = nullptr;
+        Visible                  consoleVisible = nullptr, menuVisible = nullptr;
+        Message                  processMessage = nullptr;
+        ReadText                 readText = nullptr;
+        Console::Snapshot        initialConsole{};
+        Console::Snapshot        finalConsole{};
+        Bindings::Enable         enableBindings = nullptr;
+        Bindings::Read           readBindings = nullptr;
+        Bindings::ProduceNeutral produceNeutral = nullptr;
+        Bindings::Snapshot       initialBindings{}, finalBindings{};
+        bool                     bindingsEnabled = false;
+        unsigned                 messageCalls = 0, lifetimeMessages = 0;
+        bool                     failMessage = false, throwMessage = false, consumeLifetime = false;
+        Frontend::Create         create = nullptr;
+        Frontend::Pulse          pulse = nullptr;
+        Frontend::Read           read = nullptr;
+        Frontend::Shutdown       shutdown = nullptr;
+        Frontend::Release        release = nullptr;
+        void*                    handle = nullptr;
+        Frontend::Snapshot       state{};
+        unsigned                 starts = 0, pulses = 0, stops = 0, busyStops = 0;
+        bool                     failStart = false, throwStart = false, focused = false;
+        std::int32_t             mouseX = 0, mouseY = 0;
+        Session*                 surface = nullptr;
+        bool                     reentrantRejected = false;
+        bool                     Read() { return handle && read(handle, state.data(), static_cast<std::uint32_t>(state.size())) == Frontend::Status::Ok; }
+        static bool              Start(void* context, CGUI* gui)
         {
             auto& self = *static_cast<Menu*>(context);
             ++self.starts;
@@ -192,6 +199,16 @@ namespace
                 return false;
             if (self.readConsole(self.handle, self.initialConsole.data(), Console::FieldCount) != Frontend::Status::Ok ||
                 self.enableConsole(self.handle, Console::ApiVersion) != Frontend::Status::Ok)
+                return false;
+            if (self.readBindings(self.handle, self.initialBindings.data(), Bindings::FieldCount) != Frontend::Status::Ok)
+                return false;
+            mta::game_de::MtaInputState disabledOutput;
+            std::memset(&disabledOutput, 0x5a, sizeof(disabledOutput));
+            const auto disabledBefore = disabledOutput;
+            Check(self.produceNeutral(self.handle, &disabledOutput, static_cast<std::uint32_t>(sizeof(disabledOutput))) == Frontend::Status::Stopped &&
+                      std::memcmp(&disabledOutput, &disabledBefore, sizeof(disabledOutput)) == 0,
+                  "disabled bindings cannot silently create a producer or overwrite caller state");
+            if (self.bindingsEnabled && self.enableBindings(self.handle, Bindings::ApiVersion) != Frontend::Status::Ok)
                 return false;
             // A successful Core factory can still be followed by a failed host
             // start. Surface must retain and invoke its stop obligation.
@@ -206,7 +223,8 @@ namespace
             self.mouseX = x;
             self.mouseY = y;
             self.focused = focused;
-            self.reentrantRejected = self.surface->Shutdown() == Status::Busy;
+            self.reentrantRejected =
+                self.surface->Shutdown() == Status::Busy && self.surface->DetachInput() == Status::Busy && self.surface->AdmitFrontendInput() == Status::Busy;
             return self.pulse(self.handle, x, y, focused ? 1u : 0u) == Frontend::Status::Ok && self.Read();
         }
         static bool Stop(void* context)
@@ -222,7 +240,15 @@ namespace
             {
                 if (self.shutdown(self.handle) != Frontend::Status::Ok || !self.Read() ||
                     self.readConsole(self.handle, self.finalConsole.data(), Console::FieldCount) != Frontend::Status::Ok ||
-                    self.release(self.handle) != Frontend::Status::Ok)
+                    self.readBindings(self.handle, self.finalBindings.data(), Bindings::FieldCount) != Frontend::Status::Ok)
+                    return false;
+                mta::game_de::MtaInputState stoppedOutput;
+                std::memset(&stoppedOutput, 0x5a, sizeof(stoppedOutput));
+                const auto stoppedBefore = stoppedOutput;
+                Check(self.produceNeutral(self.handle, &stoppedOutput, static_cast<std::uint32_t>(sizeof(stoppedOutput))) == Frontend::Status::Stopped &&
+                          std::memcmp(&stoppedOutput, &stoppedBefore, sizeof(stoppedOutput)) == 0,
+                      "stopped frontend keeps copied input unchanged after actual bindings retire");
+                if (self.release(self.handle) != Frontend::Status::Ok)
                     return false;
                 self.handle = nullptr;
             }
@@ -263,6 +289,16 @@ namespace
             Check(result[Console::Version] == Console::ApiVersion && !result[Console::HistoryPersistent] && !result[Console::NetworkStarted] &&
                       !result[Console::GameplayReady] && !result[Console::FullMtaReady] && !result[Console::Reserved31],
                   "console metadata keeps history, network and game readiness gates explicit");
+            return result;
+        }
+        Bindings::Snapshot BindingsState()
+        {
+            Bindings::Snapshot result{};
+            Check(readBindings(handle, result.data(), Bindings::FieldCount) == Frontend::Status::Ok, "read actual optional MTA bindings state");
+            Check(result[Bindings::Version] == Bindings::ApiVersion && !result[Bindings::NetworkStarted] && !result[Bindings::GameplayReady] &&
+                      !result[Bindings::FullMtaReady] &&
+                      std::all_of(result.begin() + Bindings::Reserved22, result.end(), [](auto value) { return value == 0; }),
+                  "configured input producer keeps native/game/network readiness and reserved fields closed");
             return result;
         }
         std::string Text(std::uint32_t field)
@@ -362,6 +398,8 @@ namespace
         Check(GetFocus() != child && !surface.InteractionSnapshot().focused && surface.InteractionSnapshot().focusAcquired == acquired &&
                   surface.InteractionSnapshot().focusLost == 1,
               "startup focus is never reacquired automatically after focus loss");
+        Check(surface.AdmitFrontendInput() == Status::Ok && GetFocus() != child && surface.InteractionSnapshot().focusAcquired == acquired,
+              "repeated explicit admission cannot reclaim focus after the user leaves the frontend");
         const auto callbacks = menu.messageCalls;
         QueuedKey(child, VK_F8);
         Pump();
@@ -493,6 +531,63 @@ namespace
         Check(!menu.ConsoleState()[Console::ConsoleVisible] && menu.Read() && menu.state[Frontend::InputRequested],
               "actual console close callback hides console while menu retains input ownership");
     }
+    void BindingsGuards(Menu& menu)
+    {
+        Check(menu.initialBindings[Bindings::Phase] == 0 && !menu.initialBindings[Bindings::BindingsCreated] &&
+                  !menu.initialBindings[Bindings::BindingsRetained] && menu.initialBindings[Bindings::CleanupComplete],
+              "ordinary frontend startup does not automatically create configured bindings");
+        auto state = menu.BindingsState();
+        Check(state[Bindings::Phase] == 2 && state[Bindings::BindingsCreated] && state[Bindings::ConfigurationLoaded] && state[Bindings::BindingsRetained] &&
+                  state[Bindings::BindCount] == 10 && state[Bindings::SupportedBindings] == 6 && state[Bindings::IgnoredBindings] == 2 &&
+                  state[Bindings::EligibleKeys] == 6 && state[Bindings::UnsupportedKeys] == 1 && state[Bindings::CurrentZero] && state[Bindings::PreviousZero],
+              "real XML loader retains configured command data and classifies supported versus ignored controls");
+        Check(menu.enableBindings(menu.handle, Bindings::ApiVersion) == Frontend::Status::Ok &&
+                  menu.enableBindings(menu.handle, Bindings::ApiVersion + 1) == Frontend::Status::InvalidArgument,
+              "bindings opt-in is idempotent and version checked");
+        Bindings::Snapshot guard;
+        guard.fill(0x12345678);
+        mta::game_de::MtaInputState output;
+        std::memset(&output, 0x5a, sizeof(output));
+        const auto original = output;
+        const auto bytes = static_cast<std::uint32_t>(sizeof(output));
+        Check(menu.readBindings(menu.handle, guard.data(), Bindings::FieldCount - 1) == Frontend::Status::InvalidArgument &&
+                  std::all_of(guard.begin(), guard.end(), [](auto value) { return value == 0x12345678; }) &&
+                  menu.produceNeutral(menu.handle, &output, bytes - 1) == Frontend::Status::InvalidArgument &&
+                  std::memcmp(&output, &original, sizeof(output)) == 0,
+              "wrong snapshot count and copied input size preserve caller storage");
+        bool        foreignRejected = false;
+        std::thread foreign(
+            [&]
+            {
+                foreignRejected = menu.enableBindings(menu.handle, Bindings::ApiVersion) == Frontend::Status::WrongThread &&
+                                  menu.readBindings(menu.handle, guard.data(), Bindings::FieldCount) == Frontend::Status::WrongThread &&
+                                  menu.produceNeutral(menu.handle, &output, bytes) == Frontend::Status::WrongThread;
+            });
+        foreign.join();
+        Check(foreignRejected && std::memcmp(&output, &original, sizeof(output)) == 0 &&
+                  std::all_of(guard.begin(), guard.end(), [](auto value) { return value == 0x12345678; }),
+              "foreign thread cannot drive bindings or mutate copied outputs");
+        const auto                        consoleBefore = menu.ConsoleState();
+        const auto                        revision = state[Bindings::CVarRevision];
+        const auto                        frames = state[Bindings::NeutralFrames];
+        const mta::game_de::MtaInputState zero;
+        for (unsigned index = 0; index < 3; ++index)
+            Check(menu.produceNeutral(menu.handle, &output, bytes) == Frontend::Status::Ok && std::memcmp(&output, &zero, sizeof(output)) == 0,
+                  "actual configured-control synthesis produces coherent zero current and previous states");
+        state = menu.BindingsState();
+        Check(state[Bindings::NeutralFrames] == frames + 3 && state[Bindings::InputSuppressed] && state[Bindings::CVarRevision] == revision,
+              "real producer counts neutral frames while menu owns input without changing CVars");
+        Check(menu.menuVisible(menu.handle, 0) == Frontend::Status::Ok && menu.consoleVisible(menu.handle, 0) == Frontend::Status::Ok &&
+                  menu.produceNeutral(menu.handle, &output, bytes) == Frontend::Status::Ok && std::memcmp(&output, &zero, sizeof(output)) == 0 &&
+                  !menu.BindingsState()[Bindings::InputSuppressed],
+              "producer remains explicitly neutral even when both actual frontend windows release input");
+        Check(menu.menuVisible(menu.handle, 1) == Frontend::Status::Ok, "restore real menu after neutral producer ownership check");
+        const auto consoleAfter = menu.ConsoleState();
+        Check(consoleAfter[Console::CommandsExecuted] == consoleBefore[Console::CommandsExecuted] &&
+                  consoleAfter[Console::CommandsRejected] == consoleBefore[Console::CommandsRejected] &&
+                  consoleAfter[Console::TextAccepted] == consoleBefore[Console::TextAccepted] && menu.BindingsState()[Bindings::CVarRevision] == revision,
+              "configured Help/connect command records never execute during neutral polling or release");
+    }
     void Isolation()
     {
         Check(!GetModuleHandleW(L"game_de.dll") && !GetModuleHandleW(L"game_sa.dll") && !GetModuleHandleW(L"multiplayer_sa.dll") &&
@@ -536,6 +631,12 @@ int wmain(int argc, wchar_t** argv)
         menu.menuVisible = Export<Menu::Visible>(core, "MTA_SetDEFrontendMenuVisible");
         menu.processMessage = Export<Menu::Message>(core, "MTA_ProcessDEFrontendConsoleMessage");
         menu.readText = Export<Menu::ReadText>(core, "MTA_ReadDEFrontendConsoleText");
+        Check(Export<std::uint32_t (*)()>(core, "MTA_DEFrontendBindingsApiVersion")() == Bindings::ApiVersion,
+              "optional bindings have an independent version without changing existing protocols");
+        menu.enableBindings = Export<Bindings::Enable>(core, "MTA_EnableDEFrontendBindings");
+        menu.readBindings = Export<Bindings::Read>(core, "MTA_ReadDEFrontendBindings");
+        menu.produceNeutral = Export<Bindings::ProduceNeutral>(core, "MTA_ProduceDEFrontendNeutralInput");
+        menu.bindingsEnabled = mode == L"normal" || mode == L"cpu-busy" || mode == L"gated" || mode == L"partial-start" || mode == L"throw-start";
         menu.failStart = mode == L"partial-start";
         menu.throwStart = mode == L"throw-start";
         menu.busyStops = mode == L"cpu-busy" ? 1u : 0u;
@@ -576,7 +677,7 @@ int wmain(int argc, wchar_t** argv)
         std::thread foreign([&] { foreignRejected = surface.EnableFrontend(menu.Callbacks()) == Status::WrongThread; });
         foreign.join();
         Check(foreignRejected && menu.starts == 0, "foreign owner cannot enable or create real frontend");
-        Check(surface.EnableFrontend(menu.Callbacks()) == Status::Ok && surface.EnableInteraction() == Status::InvalidArgument,
+        Check(surface.EnableFrontend(menu.Callbacks(), startupFocus) == Status::Ok && surface.EnableInteraction() == Status::InvalidArgument,
               "explicit frontend content is separate from the interactive widget fixture");
         device->AddRef();
         Check(surface.AttachDeviceWindow(gate ? static_cast<ID3D12Device*>(&proxy) : device.Get(), parent.window.load(), true) == Status::Ok,
@@ -587,10 +688,37 @@ int wmain(int argc, wchar_t** argv)
         if (!startupFailure)
         {
             ConsoleGuards(menu);
+            if (menu.bindingsEnabled)
+                BindingsGuards(menu);
             const auto child = GetWindow(parent.window.load(), GW_CHILD);
             Check(child && GetWindowThreadProcessId(child, nullptr) == GetCurrentThreadId(), "actual composition child belongs to GUI worker");
             if (startupFocus)
-                Check(GetFocus() == child && surface.InteractionSnapshot().focused, "Surface startup owns child focus without a host SetFocus or click");
+            {
+                Check(!IsWindowVisible(child) && !surface.Snapshot().childShown && GetFocus() != child && !surface.InteractionSnapshot().focused &&
+                          !surface.InteractionSnapshot().focusAcquired,
+                      "deferred frontend creates actual CPU widgets while its child stays hidden and unfocused");
+                const auto callbacks = menu.messageCalls;
+                Key(child, VK_F8);
+                Type(child, L"help");
+                Key(child, VK_RETURN);
+                Check(menu.messageCalls == callbacks && !surface.InteractionSnapshot().events && !menu.ConsoleState()[Console::ConsoleVisible] &&
+                          !menu.ConsoleState()[Console::TextAccepted] && menu.Text(0).empty(),
+                      "unadmitted hidden child discards keys and text before shortcut or GUI dispatch");
+                const auto hiddenPoll = surface.Poll();
+                Check((hiddenPoll == Status::Ok || hiddenPoll == Status::Busy) && !IsWindowVisible(child) && GetFocus() != child,
+                      "render polling cannot silently admit deferred input or show its child");
+                bool        foreignAdmissionRejected = false;
+                std::thread foreignAdmission(
+                    [&] { foreignAdmissionRejected = surface.AdmitFrontendInput() == Status::WrongThread && surface.DetachInput() == Status::WrongThread; });
+                foreignAdmission.join();
+                Check(foreignAdmissionRejected && !IsWindowVisible(child), "foreign thread cannot admit or detach frontend input ownership");
+                Check(surface.AdmitFrontendInput() == Status::Ok && IsWindowVisible(child) && surface.Snapshot().childShown && GetFocus() == child &&
+                          surface.InteractionSnapshot().focused && surface.InteractionSnapshot().focusAcquired == 1,
+                      "explicit admission shows and focuses the actual child once without a host click or SetFocus");
+                const auto focused = surface.InteractionSnapshot().focusAcquired;
+                Check(surface.AdmitFrontendInput() == Status::Ok && surface.InteractionSnapshot().focusAcquired == focused,
+                      "repeated admission does not refocus an already admitted frontend");
+            }
             else if (backgroundFocus)
                 Check(GetForegroundWindow() == foregroundParent.window.load() && GetFocus() != child && !surface.InteractionSnapshot().focused &&
                           !surface.InteractionSnapshot().focusAcquired,
@@ -709,6 +837,22 @@ int wmain(int argc, wchar_t** argv)
                 }
             }
         }
+        if (startupFocus)
+        {
+            const auto child = GetWindow(parent.window.load(), GW_CHILD);
+            const auto callbacks = menu.messageCalls;
+            const auto executed = menu.ConsoleState()[Console::CommandsExecuted];
+            Check(surface.DetachInput() == Status::Ok && surface.InteractionSnapshot().inputDetached && menu.stops == 0 && menu.handle && menu.Read() &&
+                      menu.state[Frontend::Phase] == 2 && surface.Snapshot().sessionRetained,
+                  "input detaches independently while actual Core CPU services and borrowed GUI remain alive");
+            Check(surface.AdmitFrontendInput() == Status::InvalidArgument && surface.DetachInput() == Status::Ok,
+                  "detachment is idempotent and cannot be reversed into another admission");
+            Key(child, VK_F8);
+            Type(child, L"help");
+            Key(child, VK_RETURN);
+            Check(menu.messageCalls == callbacks && menu.ConsoleState()[Console::CommandsExecuted] == executed && menu.stops == 0,
+                  "detached input cannot reenter real console callbacks before later CPU retirement");
+        }
         const auto beforeStop = GetTickCount64();
         const auto firstStop = surface.Shutdown();
         Check(GetTickCount64() - beforeStop < 1000, "frontend CPU stop never blocks for a GPU fence");
@@ -738,8 +882,13 @@ int wmain(int argc, wchar_t** argv)
             Check(menu.messageCalls == callbacks && surface.InteractionSnapshot().inputDetached,
                   "detached child cannot reenter hotkeys or console callbacks while CPU/GPU owners remain retained");
             if (menu.handle)
+            {
                 Check(!menu.ConsoleState()[Console::ConsoleVisible] && !menu.ConsoleState()[Console::TextAccepted],
                       "retained console owner receives no text or commands after input detachment");
+                if (menu.bindingsEnabled)
+                    Check(menu.BindingsState()[Bindings::BindingsRetained] && menu.BindingsState()[Bindings::Phase] == 2,
+                          "CPU-Busy keeps actual configured bindings with their frontend owner");
+            }
         }
         if (mode == L"gated")
         {
@@ -760,6 +909,12 @@ int wmain(int argc, wchar_t** argv)
             Check(menu.finalConsole[Console::CommandsExecuted] == 3 && menu.finalConsole[Console::CommandsRejected] == 5 &&
                       menu.finalConsole[Console::TextAccepted] == 8 && menu.finalConsole[Console::HistoryEntries] >= 5,
                   "teardown retains actual parser/history evidence without retaining callbacks or command owners");
+        if (menu.bindingsEnabled)
+            Check(menu.finalBindings[Bindings::Phase] == 4 && menu.finalBindings[Bindings::CleanupComplete] &&
+                      !menu.finalBindings[Bindings::BindingsRetained] && !menu.finalBindings[Bindings::InputSuppressed] &&
+                      menu.finalBindings[Bindings::BindCount] == 10 && menu.finalBindings[Bindings::NeutralFrames] >= 2 &&
+                      menu.finalBindings[Bindings::CurrentZero] && menu.finalBindings[Bindings::PreviousZero] && !menu.finalBindings[Bindings::ReleaseFault],
+                  "actual bindings flush and retire before XML while retaining coherent neutral production evidence");
         if (startupFocus)
             Check(menu.finalConsole[Console::CommandsExecuted] == 1 && menu.finalConsole[Console::TextAccepted] == 1 &&
                       menu.finalConsole[Console::LastCommand] == 1,

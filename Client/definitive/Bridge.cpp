@@ -466,6 +466,22 @@ std::uint32_t DE_CoreGuiFrontendApiVersion()
 {
     return DefinitiveGuiFrontendReference::ApiVersion;
 }
+std::uint32_t DE_CoreGuiFrontendInputApiVersion()
+{
+    return DefinitiveGuiFrontendInputReference::ApiVersion;
+}
+int DE_CoreGuiFrontendInputBegin()
+{
+    return ControllerAccessAllowed() && !movementAdapter && !client && coreStartup.BeginGuiFrontendInputReference(&moduleAnchor) ? 1 : 0;
+}
+int DE_CoreGuiFrontendInputCapture()
+{
+    return ControllerAccessAllowed() && coreStartup.CaptureGuiFrontendInput() ? 1 : 0;
+}
+std::uint32_t DE_CoreGuiFrontendInputRead(std::uint32_t component)
+{
+    return ControllerAccessAllowed() ? coreStartup.ReadGuiFrontendInput(component) : 0;
+}
 int DE_CoreGuiFrontendBegin()
 {
     return ControllerAccessAllowed() && !movementAdapter && !client && coreStartup.BeginGuiFrontendReference(&moduleAnchor) ? 1 : 0;

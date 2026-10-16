@@ -392,11 +392,16 @@ namespace
         const bool startup = flag("MTA_CORE_GUI_STARTUP_REFERENCE", fileCount >= 36);
         const bool surface = flag("MTA_CORE_GUI_SURFACE_REFERENCE", false);
         const bool frontend = flag("MTA_CORE_GUI_FRONTEND_REFERENCE", fileCount == 58);
-        if (startup || surface || frontend)
+        // The Core-owned scoped input trial shares the real frontend assets,
+        // but cannot inherit the older script-owned player-control lease.
+        const bool frontendInput = flag("MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE", false);
+        if (startup || surface || frontend || frontendInput)
         {
-            Require(mode == "Smoke" && fileCount >= 36 && (!frontend || fileCount == 58) &&
-                        static_cast<unsigned>(startup) + static_cast<unsigned>(surface) + static_cast<unsigned>(frontend) == 1,
-                    "gui_mode_conflict");
+            Require(
+                mode == "Smoke" && fileCount >= 36 && (!(frontend || frontendInput) || fileCount == 58) &&
+                    static_cast<unsigned>(startup) + static_cast<unsigned>(surface) + static_cast<unsigned>(frontend) + static_cast<unsigned>(frontendInput) ==
+                        1,
+                "gui_mode_conflict");
             for (const auto name : {"GAIT_REFERENCE", "GAIT_RATE", "GAIT_ROOT_LOCK", "INPUT_REFERENCE", "MTA_NATIVE_PAD_REFERENCE", "MTA_NATIVE_MOVEMENT_TRIAL",
                                     "MTA_CORE_STARTUP_REFERENCE", "MTA_CORE_INPUT_REFERENCE", "MTA_CORE_MOVEMENT_REFERENCE", "MTA_CORE_RENDER_REFERENCE",
                                     "MTA_CORE_RENDER_GPU_REFERENCE", "MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE", "MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE",

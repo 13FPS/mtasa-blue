@@ -46,6 +46,9 @@
 #include "DefinitiveGuiSurface.h"
 #include "DefinitiveGuiSurfaceReference.h"
 #include "DefinitiveGuiFrontendReference.h"
+#include "DefinitiveGuiFrontendInputReference.h"
+#include "DefinitiveFrontendBindings.h"
+#include <type_traits>
 
 using SharedUtil::CalcMTASAPath;
 using namespace std;
@@ -75,6 +78,9 @@ extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_EnableDEFrontend
 extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_ReadDEFrontendConsole(void*, std::uint32_t*, std::uint32_t);
 extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_ProcessDEFrontendConsoleMessage(void*, std::uint32_t, std::uintptr_t, std::intptr_t,
                                                                                                 std::uint32_t*);
+extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_EnableDEFrontendBindings(void*, std::uint32_t);
+extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_ReadDEFrontendBindings(void*, std::uint32_t*, std::uint32_t);
+extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_ProduceDEFrontendNeutralInput(void*, mta::game_de::MtaInputState*, std::uint32_t);
 
 namespace
 {
@@ -603,10 +609,11 @@ namespace
         }
     }
 
-    void RunGuiFrontendReference(CGameAdapterModule& adapter, const DefinitiveInputReference::Request& request) noexcept
+    template <bool CoreOwnedInput>
+    void RunGuiFrontendReferenceImpl(CGameAdapterModule& adapter, const DefinitiveInputReference::Request& request) noexcept
     {
         using namespace DefinitiveGuiStartupReference;
-        using SurfaceSnapshot = DefinitiveGuiFrontendReference::Snapshot;
+        using SurfaceSnapshot = std::conditional_t<CoreOwnedInput, DefinitiveGuiFrontendInputReference::Snapshot, DefinitiveGuiFrontendReference::Snapshot>;
         using SurfaceStatus = DefinitiveGuiSurface::Status;
         struct Owner
         {
@@ -625,13 +632,21 @@ namespace
             bool                                            consoleAttempted = false;
             bool                                            controlAttempted = false, surfaceStarted = false;
             std::uint64_t                                   controlStarted = 0;
+            DefinitiveFrontendBindings::Snapshot            bindingsState{};
+            mta::game_de::NativeMovementTrialState          nativeState{};
+            bool                                            bindingsAttempted = false;
+            bool                                            nativeAttempted = false, nativeStarted = false, nativeVerified = false, nativeEnded = true;
+            bool                                            nativeAcquireTimeout = false;
+            std::uint64_t                                   nativeStartedAt = 0, nativeAcquireStarted = 0;
 
             bool ReadFrontend() noexcept
             {
                 return !frontend ||
                        (MTA_ReadDEFrontendSession(frontend, frontendState.data(), DefinitiveFrontend::FieldCount) == DefinitiveFrontend::Status::Ok &&
                         (!consoleAttempted ||
-                         MTA_ReadDEFrontendConsole(frontend, consoleState.data(), DefinitiveFrontendConsole::FieldCount) == DefinitiveFrontend::Status::Ok));
+                         MTA_ReadDEFrontendConsole(frontend, consoleState.data(), DefinitiveFrontendConsole::FieldCount) == DefinitiveFrontend::Status::Ok) &&
+                        (!bindingsAttempted ||
+                         MTA_ReadDEFrontendBindings(frontend, bindingsState.data(), DefinitiveFrontendBindings::FieldCount) == DefinitiveFrontend::Status::Ok));
             }
             static bool StartFrontend(void* context, CGUI* gui)
             {
@@ -642,18 +657,33 @@ namespace
                 self.frontend = MTA_CreateDEFrontendSession(DefinitiveFrontend::ApiVersion, gui);
                 if (!self.frontend || !self.ReadFrontend() || self.frontendState[DefinitiveFrontend::Phase] != 2)
                     return false;
-                // The script already acknowledged native control capture.
-                // Reuse the real console on the same frontend owner; failure
-                // keeps the entire partial lifecycle available for teardown.
+                // Reuse the real console on the same frontend owner. Native
+                // admission is established by the caller before input is shown;
+                // failure retains the partial lifecycle for explicit teardown.
                 self.consoleAttempted = true;
                 const auto enabled = MTA_EnableDEFrontendConsole(self.frontend, DefinitiveFrontendConsole::ApiVersion);
-                return self.ReadFrontend() && enabled == DefinitiveFrontend::Status::Ok && self.consoleState[DefinitiveFrontendConsole::Phase] == 2;
+                if (!self.ReadFrontend() || enabled != DefinitiveFrontend::Status::Ok || self.consoleState[DefinitiveFrontendConsole::Phase] != 2)
+                    return false;
+                if constexpr (CoreOwnedInput)
+                {
+                    self.bindingsAttempted = true;
+                    if (MTA_EnableDEFrontendBindings(self.frontend, DefinitiveFrontendBindings::ApiVersion) != DefinitiveFrontend::Status::Ok ||
+                        !self.ReadFrontend())
+                        return false;
+                }
+                return true;
             }
             static bool PulseFrontend(void* context, std::int32_t x, std::int32_t y, bool focused)
             {
                 auto& self = *static_cast<Owner*>(context);
-                if (!self.Control(DefinitiveGuiFrontendReference::ControlAction::Poll) || !self.control[DefinitiveGuiFrontendReference::Fresh] ||
-                    self.control[DefinitiveGuiFrontendReference::Revoked] || self.control[DefinitiveGuiFrontendReference::Fault] || !InputReferenceFocused())
+                if constexpr (CoreOwnedInput)
+                {
+                    if (!self.NativeHealthy() || !InputReferenceFocused())
+                        return false;
+                }
+                else if (!self.Control(DefinitiveGuiFrontendReference::ControlAction::Poll) || !self.control[DefinitiveGuiFrontendReference::Fresh] ||
+                         self.control[DefinitiveGuiFrontendReference::Revoked] || self.control[DefinitiveGuiFrontendReference::Fault] ||
+                         !InputReferenceFocused())
                     return false;
                 return self.frontend && MTA_PulseDEFrontendSession(self.frontend, x, y, focused ? 1u : 0u) == DefinitiveFrontend::Status::Ok &&
                        self.ReadFrontend();
@@ -684,10 +714,18 @@ namespace
                 // Shortcut admission needs the same fresh native lease as menu
                 // input. Focus/capture cancellation may still reset local state
                 // after focus leaves; it never invokes an engine command.
-                if (keyboard &&
-                    (!self.Control(DefinitiveGuiFrontendReference::ControlAction::Poll) || !self.control[DefinitiveGuiFrontendReference::Fresh] ||
-                     self.control[DefinitiveGuiFrontendReference::Revoked] || self.control[DefinitiveGuiFrontendReference::Fault] || !InputReferenceFocused()))
-                    return false;
+                if (keyboard)
+                {
+                    if constexpr (CoreOwnedInput)
+                    {
+                        if (!self.nativeVerified || !self.NativeHealthy() || !InputReferenceFocused())
+                            return false;
+                    }
+                    else if (!self.Control(DefinitiveGuiFrontendReference::ControlAction::Poll) || !self.control[DefinitiveGuiFrontendReference::Fresh] ||
+                             self.control[DefinitiveGuiFrontendReference::Revoked] || self.control[DefinitiveGuiFrontendReference::Fault] ||
+                             !InputReferenceFocused())
+                        return false;
+                }
                 std::uint32_t consumed = 0;
                 if (MTA_ProcessDEFrontendConsoleMessage(self.frontend, message, wparam, lparam, &consumed) != DefinitiveFrontend::Status::Ok || consumed > 1)
                     return false;
@@ -713,6 +751,25 @@ namespace
                 {
                     return false;
                 }
+            }
+            bool PublishNeutral() noexcept
+            {
+                if (!frontend || !bindingsAttempted)
+                    return false;
+                mta::game_de::MtaInputState expected, actual;
+                if (MTA_ProduceDEFrontendNeutralInput(frontend, &expected, sizeof(expected)) != DefinitiveFrontend::Status::Ok || !adapter.Pulse() ||
+                    !adapter.SubmitControlActions({0, {}}) || !adapter.GetMtaInputState(actual))
+                    return false;
+                // Both sides reuse MTA's canonical synthesis. The native path
+                // receives copied values only; no script owns a restore flag.
+                const mta::game_de::MtaInputState zero;
+                return std::memcmp(&expected, &zero, sizeof(zero)) == 0 && std::memcmp(&actual, &zero, sizeof(zero)) == 0 && ReadFrontend();
+            }
+            bool NativeHealthy() noexcept
+            {
+                return nativeStarted && !nativeEnded && adapter.GetNativeMovementTrialState(nativeState) && nativeState.bound && nativeState.active &&
+                       nativeState.modulePinned && !nativeState.failureReason && !nativeState.restoreFailures && !nativeState.nestedCallbacks &&
+                       nativeState.restoredSteps <= nativeState.scopedSteps;
             }
             void CopyGui(SurfaceSnapshot& values) noexcept
             {
@@ -773,40 +830,85 @@ namespace
                 values[ParentThreadId] = s.parentThreadId;
                 values[AlphaMode] = s.alphaMode;
                 values[SignalAttempts] = s.signalAttempts;
-                values[DisplayDuration] = DefinitiveGuiFrontendReference::DisplayDurationMs;
+                values[DisplayDuration] =
+                    CoreOwnedInput ? DefinitiveGuiFrontendInputReference::DisplayDurationMs : DefinitiveGuiFrontendReference::DisplayDurationMs;
                 values[PrivateSurface] = 1;
-                using namespace DefinitiveGuiFrontendReference;
-                // StartGpu first requests engine control; an actual GUI session
-                // is created later, only after the script's fresh Ack.
                 values[GuiStarted] = s.sessionCreated;
                 ReadFrontend();
-                std::copy(frontendState.begin(), frontendState.end(), values.begin() + Frontend);
+                std::copy(frontendState.begin(), frontendState.end(), values.begin() + DefinitiveGuiFrontendReference::Frontend);
                 const auto input = gui.InteractionSnapshot();
-                values[InteractionVersion] = input.version;
-                values[InteractionEnabled] = input.enabled;
-                values[InteractionFocused] = input.focused;
-                values[FocusAcquired] = input.focusAcquired;
-                values[FocusLost] = input.focusLost;
-                SetPair(values, InputEventsLow, input.events);
-                SetPair(values, SyntheticReleasesLow, input.syntheticReleases);
-                values[PressedKeys] = input.pressedKeys;
-                values[PressedButtons] = input.pressedButtons;
-                values[InputDetached] = input.inputDetached;
-                values[InputFailed] = input.inputFailed;
-                values[GuiCloseRequested] = input.closeRequested;
-                std::copy(control.begin(), control.end(), values.begin() + ControlGeneration);
-                const auto now = static_cast<std::uint64_t>(GetTickCount64_());
-                values[ControlWaitingMs] = !surfaceStarted && controlStarted && now >= controlStarted
-                                               ? static_cast<std::uint32_t>(std::min<std::uint64_t>(now - controlStarted, UINT32_MAX))
-                                               : 0;
-                values[ControlExpiryMs] = HeartbeatExpiryMs;
-                values[ActiveDuration] =
-                    surfaceStarted && now >= displayStarted ? static_cast<std::uint32_t>(std::min<std::uint64_t>(now - displayStarted, UINT32_MAX)) : 0;
-                values[FrontendStarted] = surfaceStarted ? 1u : 0u;
-                values[FrontendStopped] = frontendStopped ? 1u : 0u;
-                // Native bool readback establishes the control command only.
-                // Mouse-camera exclusion remains a separate human test gate.
-                values[CameraCaptureVerified] = values[FullEngineInputReady] = 0;
+                if constexpr (CoreOwnedInput)
+                {
+                    using namespace DefinitiveGuiFrontendInputReference;
+                    std::copy(consoleState.begin(), consoleState.end(), values.begin() + Console);
+                    std::copy(bindingsState.begin(), bindingsState.end(), values.begin() + Bindings);
+                    values[InteractionVersion] = input.version;
+                    values[InteractionEnabled] = input.enabled;
+                    values[InteractionFocused] = input.focused;
+                    values[FocusAcquired] = input.focusAcquired;
+                    values[FocusLost] = input.focusLost;
+                    DefinitiveGuiFrontendInputReference::SetPair(values, InputEventsLow, input.events);
+                    DefinitiveGuiFrontendInputReference::SetPair(values, SyntheticReleasesLow, input.syntheticReleases);
+                    values[PressedKeys] = input.pressedKeys;
+                    values[PressedButtons] = input.pressedButtons;
+                    values[InputDetached] = input.inputDetached;
+                    values[InputFailed] = input.inputFailed;
+                    values[GuiCloseRequested] = input.closeRequested;
+                    const std::uint64_t metrics[]{nativeState.bound,           nativeState.active,          nativeState.callbackCount,
+                                                  nativeState.scopedSteps,     nativeState.routedQueries,   nativeState.neutralQueries,
+                                                  nativeState.restoredSteps,   nativeState.restoreFailures, nativeState.foreignThreadCallbacks,
+                                                  nativeState.nestedCallbacks, nativeState.failureReason,   nativeState.lastMoveState};
+                    for (std::size_t index = 0; index < std::size(metrics); ++index)
+                    {
+                        values[NativeMetrics + index * 2] = static_cast<std::uint32_t>(metrics[index]);
+                        values[NativeMetrics + index * 2 + 1] = static_cast<std::uint32_t>(metrics[index] >> 32);
+                    }
+                    values[NativeModulePinned] = nativeState.modulePinned;
+                    values[NativeStarted] = nativeStarted;
+                    values[NativeVerified] = nativeVerified;
+                    values[NativeEnded] = nativeEnded;
+                    values[NativeCleanupPending] = nativeAttempted && !nativeEnded;
+                    const auto now = static_cast<std::uint64_t>(GetTickCount64_());
+                    values[NativeAcquireElapsed] = nativeAcquireStarted && now >= nativeAcquireStarted
+                                                       ? static_cast<std::uint32_t>(std::min<std::uint64_t>(now - nativeAcquireStarted, NativeAcquireMs))
+                                                       : 0;
+                    values[NativeAcquireTimeout] = nativeAcquireTimeout;
+                    values[NativeActiveMs] =
+                        nativeStartedAt && now >= nativeStartedAt ? static_cast<std::uint32_t>(std::min<std::uint64_t>(now - nativeStartedAt, UINT32_MAX)) : 0;
+                    values[NativeOwnerRetained] = nativeAttempted && !nativeEnded;
+                    // These counters prove only local scoped pad ownership.
+                    // Camera queries outside ProcessControl need a live test.
+                    values[CameraCaptureVerified] = values[FullEngineInputReady] = 0;
+                }
+                else
+                {
+                    using namespace DefinitiveGuiFrontendReference;
+                    values[InteractionVersion] = input.version;
+                    values[InteractionEnabled] = input.enabled;
+                    values[InteractionFocused] = input.focused;
+                    values[FocusAcquired] = input.focusAcquired;
+                    values[FocusLost] = input.focusLost;
+                    SetPair(values, InputEventsLow, input.events);
+                    SetPair(values, SyntheticReleasesLow, input.syntheticReleases);
+                    values[PressedKeys] = input.pressedKeys;
+                    values[PressedButtons] = input.pressedButtons;
+                    values[InputDetached] = input.inputDetached;
+                    values[InputFailed] = input.inputFailed;
+                    values[GuiCloseRequested] = input.closeRequested;
+                    std::copy(control.begin(), control.end(), values.begin() + ControlGeneration);
+                    const auto now = static_cast<std::uint64_t>(GetTickCount64_());
+                    values[ControlWaitingMs] = !surfaceStarted && controlStarted && now >= controlStarted
+                                                   ? static_cast<std::uint32_t>(std::min<std::uint64_t>(now - controlStarted, UINT32_MAX))
+                                                   : 0;
+                    values[ControlExpiryMs] = HeartbeatExpiryMs;
+                    values[ActiveDuration] =
+                        surfaceStarted && now >= displayStarted ? static_cast<std::uint32_t>(std::min<std::uint64_t>(now - displayStarted, UINT32_MAX)) : 0;
+                    values[FrontendStarted] = surfaceStarted ? 1u : 0u;
+                    values[FrontendStopped] = frontendStopped ? 1u : 0u;
+                    // Native bool readback establishes the control command only.
+                    // Mouse-camera exclusion remains a separate human test gate.
+                    values[CameraCaptureVerified] = values[FullEngineInputReady] = 0;
+                }
             }
             bool Prepare(SurfaceSnapshot& values)
             {
@@ -868,6 +970,18 @@ namespace
             {
                 if (!Attach())
                     return false;
+                if constexpr (CoreOwnedInput)
+                {
+                    const DefinitiveGuiSurface::FrontendCallbacks callbacks{this, &Owner::StartFrontend, &Owner::PulseFrontend, &Owner::StopFrontend,
+                                                                            &Owner::FrontendMessage};
+                    // Build the actual MTA frontend and its bindings hidden.
+                    // Native scope evidence, not a script flag, admits input.
+                    nativeAcquireStarted = static_cast<std::uint64_t>(GetTickCount64_());
+                    const bool started =
+                        gui.EnableFrontend(callbacks, true) == SurfaceStatus::Ok && gui.Start() == SurfaceStatus::Ok && PublishNeutral() && PublishNeutral();
+                    CopyGui(values);
+                    return started;
+                }
                 // Native observation has ended before the script is asked to
                 // disable player control. No interactive HWND exists until Ack.
                 controlAttempted = true;
@@ -878,6 +992,8 @@ namespace
             }
             Outcome PollGpu(SurfaceSnapshot& values) noexcept
             {
+                if constexpr (CoreOwnedInput)
+                    return PollCoreInput(values);
                 using namespace DefinitiveGuiFrontendReference;
                 if (!Control(ControlAction::Poll) || control[Revoked] || control[Fault] || !InputReferenceFocused())
                 {
@@ -936,6 +1052,8 @@ namespace
             {
                 if (!Attach())
                     return false;
+                if constexpr (CoreOwnedInput)
+                    return ShutdownCoreInput(values);
                 const auto status = gui.Shutdown();
                 const auto input = gui.InteractionSnapshot();
                 const auto surface = gui.Snapshot();
@@ -954,6 +1072,109 @@ namespace
                 values[GuiShutdownStatus] = static_cast<std::uint32_t>(status);
                 return status == SurfaceStatus::Ok && values[GuiCleanupComplete] && restored && !frontend;
             }
+            Outcome PollCoreInput(SurfaceSnapshot& values) noexcept
+            {
+                const auto now = static_cast<std::uint64_t>(GetTickCount64_());
+                const auto failed = [&]()
+                {
+                    CopyGui(values);
+                    return Outcome::Failed;
+                };
+                if (!InputReferenceFocused() || now < nativeAcquireStarted || !PublishNeutral())
+                    return failed();
+                mta::game_de::NativeMovementEligibility eligibility;
+                const bool                              eligible = adapter.GetNativeMovementEligibility(eligibility) &&
+                                      eligibility.knownMask == mta::game_de::NativeMovementEligibilityMask &&
+                                      eligibility.flags == mta::game_de::NativeMovementEligibilityMask && eligibility.eligible;
+                if (!nativeAttempted && eligible)
+                {
+                    // Begin may partially install hooks. Publish ownership first
+                    // so every failure still retries End before deleting binds.
+                    nativeAttempted = true;
+                    nativeEnded = false;
+                    nativeStartedAt = now;
+                    nativeStarted = adapter.BeginNativeMovementTrial();
+                    if (!nativeStarted)
+                        return failed();
+                }
+                if (nativeStarted && !NativeHealthy())
+                    return failed();
+                if (!nativeVerified)
+                {
+                    if (now - nativeAcquireStarted >= DefinitiveGuiFrontendInputReference::NativeAcquireMs)
+                    {
+                        nativeAcquireTimeout = true;
+                        return failed();
+                    }
+                    // neutralQueries counts unknown provider actions only. The
+                    // copied zero producer, routed queries and restored scopes
+                    // together prove neutral input; those counts need not match.
+                    if (!nativeStarted || !eligible || !nativeState.scopedSteps || !nativeState.routedQueries ||
+                        nativeState.restoredSteps != nativeState.scopedSteps)
+                    {
+                        CopyGui(values);
+                        return Outcome::Pending;
+                    }
+                    nativeVerified = true;
+                    if (gui.AdmitFrontendInput() != SurfaceStatus::Ok)
+                        return failed();
+                    surfaceStarted = true;
+                    displayStarted = now;
+                }
+                else if (!eligible)
+                    return failed();
+                const auto status = gui.Poll();
+                CopyGui(values);
+                const auto s = gui.Snapshot();
+                const auto input = gui.InteractionSnapshot();
+                if (status == SurfaceStatus::Failed || status == SurfaceStatus::InvalidArgument || status == SurfaceStatus::WrongThread || s.parentDestroyed ||
+                    !s.parentAlive || s.releaseFault || s.deviceRemoved || input.inputFailed || frontendState[DefinitiveFrontend::Phase] != 2 ||
+                    now < displayStarted)
+                    return Outcome::Failed;
+                const bool closing = input.closeRequested || frontendState[DefinitiveFrontend::CloseRequested];
+                if (!closing && now - displayStarted < DefinitiveGuiFrontendInputReference::DisplayDurationMs)
+                    return Outcome::Pending;
+                const bool accounted = s.presentSucceeded <= s.presentCalls && s.presentBusy == s.presentCalls - s.presentSucceeded;
+                return s.readbackComplete && s.readbackPixels > 10000 && s.premultipliedPixelsVerified && s.presentSucceeded >= 2 &&
+                               frontendState[DefinitiveFrontend::Frames] >= 2 && accounted && !s.presentHresult && s.guiFrames >= s.presentSucceeded &&
+                               s.childShown && !s.failureStage
+                           ? Outcome::Passed
+                           : Outcome::Failed;
+            }
+            bool ShutdownCoreInput(SurfaceSnapshot& values) noexcept
+            {
+                // First stop GUI messages, then let the native callback restore
+                // its borrowed physical state, then retire CPU and GPU owners.
+                if (gui.DetachInput() != SurfaceStatus::Ok)
+                {
+                    CopyGui(values);
+                    return false;
+                }
+                if (nativeAttempted && !nativeEnded)
+                {
+                    const bool ended = adapter.EndNativeMovementTrial();
+                    const bool observed = adapter.GetNativeMovementTrialState(nativeState);
+                    nativeEnded = ended && observed && !nativeState.bound && !nativeState.active && nativeState.scopedSteps == nativeState.restoredSteps &&
+                                  !nativeState.restoreFailures;
+                    if (!nativeEnded)
+                    {
+                        CopyGui(values);
+                        return false;
+                    }
+                }
+                // Clear canonical history while the actual manager still owns
+                // it. Failure stays visible, but never skips real CPU teardown.
+                if (frontend && bindingsAttempted)
+                {
+                    PublishNeutral();
+                    PublishNeutral();
+                }
+                const auto status = gui.Shutdown();
+                CopyGui(values);
+                values[GuiShutdownStatus] = static_cast<std::uint32_t>(status);
+                return status == SurfaceStatus::Ok && values[GuiCleanupComplete] && !frontend && nativeEnded &&
+                       !bindingsState[DefinitiveFrontendBindings::BindingsRetained];
+            }
         } owner{adapter, request};
         struct Clock
         {
@@ -961,13 +1182,13 @@ namespace
             void          Wait(std::uint32_t milliseconds) const noexcept { Sleep(milliseconds); }
         } clock;
         const auto runMs = clock.Now();
-        const auto result = DefinitiveGuiFrontendReference::Run(owner, clock, request);
+        const auto result = DefinitiveGuiStartupReference::Run<SurfaceSnapshot>(owner, clock, request);
         try
         {
             // All native holds, GUI/GPU owners and the child window have ended
             // before file I/O; failure to log cannot relabel cleanup or drawing.
-            std::string line = "{\"schema\":\"mta_core_gui_frontend_v1\",\"pid\":" + std::to_string(GetCurrentProcessId()) +
-                               ",\"runMs\":" + std::to_string(runMs) + ",\"values\":[";
+            std::string line = std::string("{\"schema\":\"") + (CoreOwnedInput ? "mta_core_gui_frontend_input_v1" : "mta_core_gui_frontend_v1") +
+                               "\",\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"runMs\":" + std::to_string(runMs) + ",\"values\":[";
             for (std::size_t index = 0; index < result.size(); ++index)
             {
                 if (index)
@@ -975,7 +1196,7 @@ namespace
                 line += std::to_string(result[index]);
             }
             line += "]}\n";
-            const auto path = CalcMTASAPath("mta/logs/gui-frontend.log");
+            const auto path = CalcMTASAPath(CoreOwnedInput ? "mta/logs/gui-frontend-input.log" : "mta/logs/gui-frontend.log");
             SharedUtil::MakeSureDirExists(path);
             SharedUtil::FileAppend(path, line.data(), static_cast<unsigned long>(line.size()));
             if (owner.consoleAttempted && owner.consoleState[DefinitiveFrontendConsole::Version] == DefinitiveFrontendConsole::ApiVersion)
@@ -1562,12 +1783,15 @@ static HMODULE WINAPI SkipDirectPlay_LoadLibraryA(LPCSTR fileName)
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
 struct CCore::FrontendResources
 {
-    InputReferenceXml                   xml;
-    CLocalization*                      previousLocalization = nullptr;
-    bool                                updaterAcquired = false;
-    DefinitiveFrontend::Snapshot        snapshot{};
-    DefinitiveFrontendConsole::Snapshot consoleSnapshot{};
-    bool                                menuInputRequested = false, consoleInputRequested = false, consoleEnabled = false;
+    InputReferenceXml                    xml;
+    CLocalization*                       previousLocalization = nullptr;
+    bool                                 updaterAcquired = false;
+    DefinitiveFrontend::Snapshot         snapshot{};
+    DefinitiveFrontendConsole::Snapshot  consoleSnapshot{};
+    DefinitiveFrontendBindings::Snapshot bindingsSnapshot{};
+    mta::game_de::MtaInputState          neutralInput{};
+    bool                                 bindingsEnabled = false;
+    bool                                 menuInputRequested = false, consoleInputRequested = false, consoleEnabled = false;
 };
 
 CCore::CCore(FrontendShellTag)
@@ -1617,7 +1841,7 @@ bool CCore::StartFrontend(CGUI* borrowedGui)
 {
     using namespace DefinitiveFrontend;
     if (GetCurrentThreadId() != m_frontendCoreOwnerThread || !borrowedGui || m_frontendResources || m_pGUI || m_pXML || m_pConfigFile || m_pLocalGUI ||
-        m_pLocalization || m_pCommands || m_pConsoleLogger)
+        m_pLocalization || m_pCommands || m_pConsoleLogger || m_pKeyBinds)
         return false;
     m_frontendResources = new FrontendResources;
     auto& state = *m_frontendResources;
@@ -1631,6 +1855,10 @@ bool CCore::StartFrontend(CGUI* borrowedGui)
     state.consoleSnapshot[DefinitiveFrontendConsole::CleanupComplete] = 1;
     state.consoleSnapshot[DefinitiveFrontendConsole::ConfigurationReadOnly] = 1;
     state.consoleSnapshot[DefinitiveFrontendConsole::MaxInputCharacters] = 255;
+    state.bindingsSnapshot[DefinitiveFrontendBindings::Version] = DefinitiveFrontendBindings::ApiVersion;
+    state.bindingsSnapshot[DefinitiveFrontendBindings::OwnerThread] = GetCurrentThreadId();
+    state.bindingsSnapshot[DefinitiveFrontendBindings::CleanupComplete] = 1;
+    state.bindingsSnapshot[DefinitiveFrontendBindings::ConfigurationReadOnly] = 1;
     state.previousLocalization = g_pLocalization;
     m_pGUI = borrowedGui;
     try
@@ -1727,7 +1955,10 @@ namespace DefinitiveFrontend
         {
             return core->ReadFrontendConsoleText(field, output, capacity, required);
         }
-        Status Retire()
+        Status                               EnableBindings() { return core->EnableFrontendBindings(); }
+        DefinitiveFrontendBindings::Snapshot ReadBindings() { return core->ReadFrontendBindings(); }
+        Status                               ProduceNeutral(mta::game_de::MtaInputState& output) { return core->ProduceFrontendNeutralInput(output); }
+        Status                               Retire()
         {
             const auto status = Stop();
             if (status != Status::Ok)
@@ -1923,6 +2154,167 @@ extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_ReadDEFrontendCo
         (!output && capacity) || (output && !capacity))
         return Status::InvalidArgument;
     return activeFrontend->ConsoleText(field, output, capacity, *required);
+}
+
+extern "C" __declspec(dllexport) std::uint32_t MTA_DEFrontendBindingsApiVersion()
+{
+    return DefinitiveFrontendBindings::ApiVersion;
+}
+
+extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_EnableDEFrontendBindings(void* handle, std::uint32_t version)
+{
+    using namespace DefinitiveFrontend;
+    FrontendOperation operation;
+    const auto        status = operation.Validate(handle);
+    if (status != Status::Ok)
+        return status;
+    return version == DefinitiveFrontendBindings::ApiVersion ? activeFrontend->EnableBindings() : Status::InvalidArgument;
+}
+
+extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_ReadDEFrontendBindings(void* handle, std::uint32_t* output, std::uint32_t count)
+{
+    using namespace DefinitiveFrontend;
+    FrontendOperation operation;
+    const auto        status = operation.Validate(handle);
+    if (status != Status::Ok)
+        return status;
+    if (!output || count != DefinitiveFrontendBindings::FieldCount)
+        return Status::InvalidArgument;
+    try
+    {
+        const auto snapshot = activeFrontend->ReadBindings();
+        std::copy(snapshot.begin(), snapshot.end(), output);
+        return Status::Ok;
+    }
+    catch (...)
+    {
+        return Status::Failed;
+    }
+}
+
+extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_ProduceDEFrontendNeutralInput(void* handle, mta::game_de::MtaInputState* output,
+                                                                                              std::uint32_t bytes)
+{
+    using namespace DefinitiveFrontend;
+    FrontendOperation operation;
+    const auto        status = operation.Validate(handle);
+    if (status != Status::Ok)
+        return status;
+    if (!output || bytes != sizeof(*output))
+        return Status::InvalidArgument;
+    return activeFrontend->ProduceNeutral(*output);
+}
+
+DefinitiveFrontend::Status CCore::EnableFrontendBindings()
+{
+    using Status = DefinitiveFrontend::Status;
+    using namespace DefinitiveFrontendBindings;
+    if (!m_frontendResources)
+        return Status::InvalidArgument;
+    auto& resources = *m_frontendResources;
+    auto& state = resources.bindingsSnapshot;
+    if (resources.snapshot[DefinitiveFrontend::Phase] != 2 || !m_pConfigFile)
+        return Status::Stopped;
+    if (state[Phase] == static_cast<std::uint32_t>(Lifecycle::Running))
+        return Status::Ok;
+    if (state[ReleaseFault] || m_pKeyBinds)
+        return Status::Failed;
+    resources.bindingsEnabled = true;
+    state[Phase] = static_cast<std::uint32_t>(Lifecycle::Starting);
+    state[CleanupComplete] = 0;
+    state[CVarRevision] = static_cast<std::uint32_t>(m_ClientVariables.GetRevision());
+    try
+    {
+        // Own the real MTA manager alongside the existing XML owner. Loading
+        // configured records avoids GTA defaults, CGame and command dispatch.
+        m_pKeyBinds = new CKeyBinds(this);
+        state[BindingsCreated] = 1;
+        auto* root = m_pConfigFile->GetRootNode();
+        if (!root)
+            throw std::runtime_error("Frontend bindings configuration has no root");
+        auto* configured = root->FindSubNode(CONFIG_NODE_KEYBINDS);
+        if (configured && !m_pKeyBinds->LoadConfiguredBindsFromXML(configured))
+            throw std::runtime_error("Frontend configured bindings could not be loaded");
+        // A missing configured list is an empty list, never admission to
+        // discover classic GTA defaults or start a gameplay input producer.
+        state[ConfigurationLoaded] = 1;
+        state[BindCount] = m_pKeyBinds->Count();
+        state[Phase] = static_cast<std::uint32_t>(Lifecycle::Running);
+        mta::game_de::MtaInputState neutral;
+        if (ProduceFrontendNeutralInput(neutral) != Status::Ok)
+            throw std::runtime_error("Frontend bindings did not produce neutral input");
+        return Status::Ok;
+    }
+    catch (...)
+    {
+        state[Phase] = static_cast<std::uint32_t>(Lifecycle::Failed);
+        SAFE_DELETE(m_pKeyBinds);
+        state[CleanupComplete] = 1;
+        return Status::Failed;
+    }
+}
+
+DefinitiveFrontendBindings::Snapshot CCore::ReadFrontendBindings()
+{
+    using namespace DefinitiveFrontendBindings;
+    if (!m_frontendResources)
+        return {};
+    const auto& resources = *m_frontendResources;
+    auto        state = resources.bindingsSnapshot;
+    state[BindingsRetained] = m_pKeyBinds != nullptr;
+    state[InputSuppressed] = resources.snapshot[DefinitiveFrontend::InputRequested];
+    state[NetworkStarted] = m_pNet != nullptr;
+    state[ReleaseFault] = state[ReleaseFault] || resources.snapshot[DefinitiveFrontend::ReleaseFault];
+    if (m_pKeyBinds)
+        state[BindCount] = m_pKeyBinds->Count();
+    if (resources.snapshot[DefinitiveFrontend::Phase] == 2)
+        state[CVarRevision] = static_cast<std::uint32_t>(m_ClientVariables.GetRevision());
+    return state;
+}
+
+DefinitiveFrontend::Status CCore::ProduceFrontendNeutralInput(mta::game_de::MtaInputState& output, bool cleanup)
+{
+    using Status = DefinitiveFrontend::Status;
+    using namespace DefinitiveFrontendBindings;
+    if (!m_frontendResources || !m_frontendResources->bindingsEnabled || !m_pKeyBinds)
+        return Status::Stopped;
+    auto& resources = *m_frontendResources;
+    auto& state = resources.bindingsSnapshot;
+    if (!cleanup && (resources.snapshot[DefinitiveFrontend::Phase] != 2 || state[Phase] != static_cast<std::uint32_t>(Lifecycle::Running)))
+        return Status::Stopped;
+    try
+    {
+        // Configured XML can contain command records, but this producer never
+        // takes the mixed GUI/script/function dispatch path. Refuse any later
+        // function registration before a control release could invoke it.
+        if (m_pKeyBinds->Count(KeyBindType::FUNCTION) || m_pKeyBinds->Count(KeyBindType::CONTROL_FUNCTION))
+            throw std::runtime_error("Frontend input cannot invoke function bindings");
+        const auto poll = m_pKeyBinds->PollConfiguredControlKeys(false, nullptr, nullptr, MovementActions);
+        const auto frame = m_pKeyBinds->BuildConfiguredControlFrame({});
+        m_pKeyBinds->FinishConfiguredControlFrame();
+        mta::game_de::MtaInputState next;
+        next.current = frame.controller;
+        next.previous = resources.neutralInput.current;
+        const CControllerState zero;
+        state[CurrentZero] = !frame.heldActions && std::memcmp(&next.current, &zero, sizeof(zero)) == 0;
+        state[PreviousZero] = std::memcmp(&next.previous, &zero, sizeof(zero)) == 0;
+        if (!state[CurrentZero] || !state[PreviousZero])
+            throw std::runtime_error("Frontend input synthesis was not neutral");
+        state[SupportedBindings] = poll.supportedBindings;
+        state[IgnoredBindings] = poll.ignoredBindings;
+        state[EligibleKeys] = poll.eligibleKeys;
+        state[UnsupportedKeys] = poll.unsupportedKeys;
+        if (state[NeutralFrames] != UINT32_MAX)
+            ++state[NeutralFrames];
+        resources.neutralInput = next;
+        output = next;
+        return Status::Ok;
+    }
+    catch (...)
+    {
+        state[Phase] = static_cast<std::uint32_t>(Lifecycle::Failed);
+        return Status::Failed;
+    }
 }
 
 DefinitiveFrontend::Status CCore::EnableFrontendConsole()
@@ -2143,7 +2535,8 @@ DefinitiveFrontend::Snapshot CCore::ReadFrontend() const
         state[BackgroundRequestsRejected] = static_cast<std::uint32_t>(std::min<std::uint64_t>(updater.backgroundRequestsRejected, UINT32_MAX));
         state[UpdaterConfigLoaded] = updater.configLoaded;
     }
-    state[ServicesRetained] = m_pLocalGUI || m_pLocalization || m_pConsoleLogger || m_pCommands || resources.xml.module || resources.updaterAcquired;
+    state[ServicesRetained] =
+        m_pLocalGUI || m_pLocalization || m_pConsoleLogger || m_pCommands || m_pKeyBinds || resources.xml.module || resources.updaterAcquired;
     state[GuiBorrowed] = m_pGUI != nullptr;
     state[AdapterStarted] = m_DefinitiveAdapter.IsStarted() ? 1u : 0u;
     state[NetworkStarted] = m_pNet != nullptr;
@@ -2175,6 +2568,22 @@ DefinitiveFrontend::Status CCore::StopFrontend()
             resources.consoleSnapshot[DefinitiveFrontendConsole::CleanupComplete] = 0;
             if (resources.consoleSnapshot[DefinitiveFrontendConsole::ReleaseFault])
                 throw std::runtime_error("Frontend console cleanup ownership is unresolved");
+        }
+        if (resources.bindingsEnabled)
+        {
+            resources.bindingsSnapshot = ReadFrontendBindings();
+            resources.bindingsSnapshot[DefinitiveFrontendBindings::Phase] = 3;
+            resources.bindingsSnapshot[DefinitiveFrontendBindings::CleanupComplete] = 0;
+            if (m_pKeyBinds)
+            {
+                // The native owner ends its scope before this CPU callback.
+                // Flush MTA's own released controls while all services still
+                // exist, then retire bindings before their XML configuration.
+                mta::game_de::MtaInputState neutral;
+                if (ProduceFrontendNeutralInput(neutral, true) != Status::Ok)
+                    throw std::runtime_error("Frontend bindings could not flush neutral input");
+                SAFE_DELETE(m_pKeyBinds);
+            }
         }
         // Stop input first. CPU widget destruction is supported while the GUI
         // renderer retains submitted texture versions; the external GUI/GPU
@@ -2236,6 +2645,13 @@ DefinitiveFrontend::Status CCore::StopFrontend()
             resources.consoleSnapshot[DefinitiveFrontendConsole::CleanupComplete] = 1;
             resources.consoleSnapshot[DefinitiveFrontendConsole::Phase] = 4;
         }
+        if (resources.bindingsEnabled)
+        {
+            resources.bindingsSnapshot[DefinitiveFrontendBindings::InputSuppressed] = 0;
+            resources.bindingsSnapshot[DefinitiveFrontendBindings::BindingsRetained] = 0;
+            resources.bindingsSnapshot[DefinitiveFrontendBindings::CleanupComplete] = 1;
+            resources.bindingsSnapshot[DefinitiveFrontendBindings::Phase] = 4;
+        }
         return Status::Ok;
     }
     catch (...)
@@ -2243,6 +2659,8 @@ DefinitiveFrontend::Status CCore::StopFrontend()
         state[ReleaseFault] = 1;
         if (resources.consoleEnabled)
             resources.consoleSnapshot[DefinitiveFrontendConsole::ReleaseFault] = 1;
+        if (resources.bindingsEnabled)
+            resources.bindingsSnapshot[DefinitiveFrontendBindings::ReleaseFault] = 1;
         return Status::Failed;
     }
 }
@@ -2278,8 +2696,10 @@ CCore::CCore()
         DefinitiveInputReference::Request inputReference;
         if (DefinitiveInputReference::GetActiveRequest(inputReference))
         {
-            if (inputReference.guiFrontend)
-                RunGuiFrontendReference(m_DefinitiveAdapter, inputReference);
+            if (inputReference.guiFrontendInput)
+                RunGuiFrontendReferenceImpl<true>(m_DefinitiveAdapter, inputReference);
+            else if (inputReference.guiFrontend)
+                RunGuiFrontendReferenceImpl<false>(m_DefinitiveAdapter, inputReference);
             else if (inputReference.guiSurface)
                 RunGuiSurfaceReference(m_DefinitiveAdapter, inputReference);
             else if (inputReference.guiStartup)

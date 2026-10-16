@@ -26,6 +26,7 @@ class CDiscordInterface;
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
     #include "DefinitiveFrontend.h"
     #include "DefinitiveFrontendConsole.h"
+    #include "DefinitiveFrontendBindings.h"
 #endif
 #include "CSingleton.h"
 #include "CGUI.h"
@@ -331,6 +332,9 @@ private:
     DefinitiveFrontend::Status          SetFrontendMenuVisible(bool visible);
     DefinitiveFrontend::Status ProcessFrontendConsoleMessage(std::uint32_t message, std::uintptr_t wparam, std::intptr_t lparam, std::uint32_t& handled);
     DefinitiveFrontend::Status ReadFrontendConsoleText(std::uint32_t field, char* output, std::uint32_t capacity, std::uint32_t& required);
+    DefinitiveFrontend::Status EnableFrontendBindings();
+    DefinitiveFrontendBindings::Snapshot ReadFrontendBindings();
+    DefinitiveFrontend::Status           ProduceFrontendNeutralInput(mta::game_de::MtaInputState& output, bool cleanup = false);
 #endif
     void InitializeFrontendInfrastructure();
     void DestroyFrontendCommands();

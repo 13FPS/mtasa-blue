@@ -91,6 +91,7 @@ namespace DefinitiveGuiSurface
         bool                               inputQuiescing = false;
         FrontendCallbacks                  frontend;
         bool                               frontendEnabled = false, frontendStartAttempted = false, frontendCallbackActive = false;
+        bool                               frontendInputDeferred = false;
         POINT                              frontendMouse{};
         HMODULE                            module = nullptr, windowModule = nullptr;
         wchar_t                            windowClass[96]{};
@@ -134,8 +135,9 @@ namespace DefinitiveGuiSurface
             // admit this frontend. Give its own child the first keyboard input
             // without requiring a mouse click, but never activate a background
             // game or reclaim focus after the user has left the frontend.
-            if (!frontendEnabled || !interaction.enabled || !child || !IsWindowVisible(child) || !IsWindowVisible(parent) || !IsWindowEnabled(parent) ||
-                IsIconic(parent) || GetForegroundWindow() != parent || GetWindowThreadProcessId(child, nullptr) != GetCurrentThreadId())
+            if (!frontendEnabled || frontendInputDeferred || !interaction.enabled || !child || !IsWindowVisible(child) || !IsWindowVisible(parent) ||
+                !IsWindowEnabled(parent) || IsIconic(parent) || GetForegroundWindow() != parent ||
+                GetWindowThreadProcessId(child, nullptr) != GetCurrentThreadId())
                 return;
             GUITHREADINFO parentInput{};
             parentInput.cbSize = sizeof(parentInput);
@@ -243,7 +245,7 @@ namespace DefinitiveGuiSurface
         }
         bool ProcessInput(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
         {
-            if (!interaction.enabled || interaction.inputDetached || !gui || result.stopRequested || inputQuiescing)
+            if (!interaction.enabled || frontendInputDeferred || interaction.inputDetached || !gui || result.stopRequested || inputQuiescing)
                 return false;
             if (message == WM_SETFOCUS)
             {
@@ -397,15 +399,17 @@ namespace DefinitiveGuiSurface
                 self = static_cast<Impl*>(reinterpret_cast<CREATESTRUCTW*>(lparam)->lpCreateParams);
                 SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
             }
+            const bool admitsInput = self && self->interaction.enabled && !self->frontendInputDeferred && !self->interaction.inputDetached &&
+                                     !self->result.stopRequested && !self->inputQuiescing;
             if (message == WM_NCHITTEST)
-                return self && self->interaction.enabled ? HTCLIENT : HTTRANSPARENT;
+                return admitsInput ? HTCLIENT : HTTRANSPARENT;
             if (message == WM_MOUSEACTIVATE)
-                return self && self->interaction.enabled ? MA_ACTIVATE : MA_NOACTIVATE;
+                return admitsInput ? MA_ACTIVATE : MA_NOACTIVATE;
             if (self && self->interaction.enabled)
             {
                 try
                 {
-                    if (message == WM_SETCURSOR && LOWORD(lparam) == HTCLIENT && self->gui)
+                    if (admitsInput && message == WM_SETCURSOR && LOWORD(lparam) == HTCLIENT && self->gui)
                     {
                         // Draw MTA's own cursor without changing the process
                         // ShowCursor counter or the native parent's cursor.
@@ -755,7 +759,7 @@ namespace DefinitiveGuiSurface
         impl->interaction.enabled = 1;
         return Status::Ok;
     }
-    Status Session::EnableFrontend(const FrontendCallbacks& callbacks) noexcept
+    Status Session::EnableFrontend(const FrontendCallbacks& callbacks, bool deferredInput) noexcept
     {
         if (!impl)
             return Status::InvalidArgument;
@@ -766,6 +770,7 @@ namespace DefinitiveGuiSurface
             return Status::InvalidArgument;
         impl->frontend = callbacks;
         impl->frontendEnabled = true;
+        impl->frontendInputDeferred = deferredInput;
         impl->interaction.enabled = 1;
         return Status::Ok;
     }
@@ -865,8 +870,8 @@ namespace DefinitiveGuiSurface
                 return impl->Fail(HRESULT_FROM_WIN32(GetLastError()));
             impl->classRegistered = true;
             const DWORD extendedStyle = WS_EX_NOREDIRECTIONBITMAP | (impl->interaction.enabled ? 0 : WS_EX_NOACTIVATE | WS_EX_TRANSPARENT);
-            impl->child = CreateWindowExW(extendedStyle, impl->windowClass, L"MTA experimental GUI", WS_CHILD | WS_VISIBLE, 0, 0, static_cast<int>(width),
-                                          static_cast<int>(height), impl->parent, nullptr, impl->windowModule, impl);
+            impl->child = CreateWindowExW(extendedStyle, impl->windowClass, L"MTA experimental GUI", WS_CHILD | (impl->frontendInputDeferred ? 0 : WS_VISIBLE),
+                                          0, 0, static_cast<int>(width), static_cast<int>(height), impl->parent, nullptr, impl->windowModule, impl);
             if (!impl->child)
                 return impl->Fail(HRESULT_FROM_WIN32(GetLastError()));
             impl->result.childCreated = 1;
@@ -974,6 +979,31 @@ namespace DefinitiveGuiSurface
             return impl->Fail(E_FAIL);
         }
     }
+    Status Session::AdmitFrontendInput() noexcept
+    {
+        if (!impl)
+            return Status::InvalidArgument;
+        if (GetCurrentThreadId() != impl->owner)
+            return Status::WrongThread;
+        if (impl->frontendCallbackActive)
+            return Status::Busy;
+        if (!impl->frontendEnabled || !impl->started || !impl->gui || !impl->child || impl->failed || impl->result.stopRequested ||
+            impl->interaction.inputDetached)
+            return Status::InvalidArgument;
+        if (!impl->frontendInputDeferred)
+            return Status::Ok;
+        // The native owner has already proved a completed/restored scope. Show
+        // only our child without activating any background parent or app.
+        if (!SetWindowPos(impl->child, nullptr, 0, 0, 0, 0, SWP_SHOWWINDOW | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER))
+            return impl->Fail(HRESULT_FROM_WIN32(GetLastError()));
+        impl->frontendInputDeferred = false;
+        impl->result.childVisible = impl->result.childShown = IsWindowVisible(impl->child) ? 1u : 0u;
+        if (!impl->result.childShown)
+            return impl->Fail(E_FAIL);
+        impl->FocusFrontendOnStart();
+        return Status::Ok;
+    }
+
     Status Session::Poll() noexcept
     {
         if (!impl)
@@ -1029,7 +1059,7 @@ namespace DefinitiveGuiSurface
             return impl->Fail(E_FAIL);
         }
     }
-    Status Session::Shutdown() noexcept
+    Status Session::DetachInput() noexcept
     {
         if (!impl)
             return Status::Ok;
@@ -1037,10 +1067,6 @@ namespace DefinitiveGuiSurface
             return Status::WrongThread;
         if (impl->frontendCallbackActive)
             return Status::Busy;
-        if (impl->result.cleanupComplete)
-            return Status::Ok;
-        if (impl->result.releaseFault)
-            return Status::Failed;
         impl->result.stopRequested = 1;
         impl->result.stage = static_cast<unsigned>(Stage::Stopping);
         try
@@ -1063,6 +1089,24 @@ namespace DefinitiveGuiSurface
             impl->interaction.inputFailed = 1;
             return impl->Fail(E_FAIL);
         }
+        return Status::Ok;
+    }
+
+    Status Session::Shutdown() noexcept
+    {
+        if (!impl)
+            return Status::Ok;
+        if (GetCurrentThreadId() != impl->owner)
+            return Status::WrongThread;
+        if (impl->frontendCallbackActive)
+            return Status::Busy;
+        if (impl->result.cleanupComplete)
+            return Status::Ok;
+        if (impl->result.releaseFault)
+            return Status::Failed;
+        const auto detached = DetachInput();
+        if (detached != Status::Ok)
+            return detached;
         // GPU retirement may outlive the last Poll. Refresh borrowed-window
         // facts during every drain retry, without preventing owned cleanup.
         if (impl->started && impl->result.parentValidated)

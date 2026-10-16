@@ -14,6 +14,7 @@
 #include "../core/DefinitiveRenderReference.h"
 #include "../core/DefinitiveGuiStartupReference.h"
 #include "../core/DefinitiveGuiSurfaceReference.h"
+#include "../core/DefinitiveGuiFrontendInputReference.h"
 #include "FrontendControlMailbox.h"
 
 namespace deonline
@@ -50,6 +51,9 @@ namespace deonline
         bool          BeginGuiFrontendReference(const void* moduleAddress) noexcept;
         bool          CaptureGuiFrontend() noexcept;
         std::uint32_t ReadGuiFrontend(std::uint32_t field) const noexcept;
+        bool          BeginGuiFrontendInputReference(const void* moduleAddress) noexcept;
+        bool          CaptureGuiFrontendInput() noexcept;
+        std::uint32_t ReadGuiFrontendInput(std::uint32_t field) const noexcept;
         bool          CaptureGuiFrontendControl() noexcept;
         std::uint32_t ReadGuiFrontendControl(std::uint32_t field) const noexcept;
         bool          AcknowledgeGuiFrontendControl(std::uint32_t generation) noexcept;
@@ -80,7 +84,7 @@ namespace deonline
         bool                      CheckCancellation() noexcept;
         bool                      Start(const void* moduleAddress, bool configuredInput, bool configuredMovement = false, bool configuredRender = false,
                                         std::uint32_t configuredRenderRoute = 0, std::uint32_t configuredRenderApi = 1, bool configuredGuiStartup = false,
-                                        bool configuredGuiSurface = false, bool configuredGuiFrontend = false) noexcept;
+                                        bool configuredGuiSurface = false, bool configuredGuiFrontend = false, bool configuredGuiFrontendInput = false) noexcept;
         static bool               InputCancelled();
         static void               PublishInput(const std::uint32_t* values, std::uint32_t count);
         static bool               ControlInput(std::uint32_t action, std::uint32_t* values, std::uint32_t count);
@@ -88,24 +92,26 @@ namespace deonline
         // Only Begin/Poll's owning thread touches the handle or input address.
         // State2 publishes the worker's immutable values; State3 also proves
         // the thread has exited, allowing another attempt without a live job.
-        std::atomic<DWORD>                       ownerThread{0};
-        std::atomic<unsigned>                    state{0};
-        std::atomic<bool>                        cancellation{false};
-        HANDLE                                   thread = nullptr;
-        const void*                              address = nullptr;
-        std::array<std::uint32_t, 19>            values{};
-        bool                                     inputRequested = false;
-        bool                                     movementRequested = false;
-        bool                                     renderRequested = false;
-        bool                                     guiRequested = false;
-        bool                                     guiAvailable = false;
-        DefinitiveGuiStartupReference::Snapshot  publishedGui{}, capturedGui{};
-        bool                                     guiSurfaceRequested = false, guiSurfaceAvailable = false;
-        DefinitiveGuiSurfaceReference::Snapshot  publishedGuiSurface{}, capturedGuiSurface{};
-        bool                                     guiFrontendRequested = false, guiFrontendAvailable = false;
-        DefinitiveGuiFrontendReference::Snapshot publishedGuiFrontend{}, capturedGuiFrontend{};
-        FrontendControlMailbox                   frontendControl;
-        FrontendControlMailbox::Snapshot         capturedFrontendControl{};
+        std::atomic<DWORD>                            ownerThread{0};
+        std::atomic<unsigned>                         state{0};
+        std::atomic<bool>                             cancellation{false};
+        HANDLE                                        thread = nullptr;
+        const void*                                   address = nullptr;
+        std::array<std::uint32_t, 19>                 values{};
+        bool                                          inputRequested = false;
+        bool                                          movementRequested = false;
+        bool                                          renderRequested = false;
+        bool                                          guiRequested = false;
+        bool                                          guiAvailable = false;
+        DefinitiveGuiStartupReference::Snapshot       publishedGui{}, capturedGui{};
+        bool                                          guiSurfaceRequested = false, guiSurfaceAvailable = false;
+        DefinitiveGuiSurfaceReference::Snapshot       publishedGuiSurface{}, capturedGuiSurface{};
+        bool                                          guiFrontendRequested = false, guiFrontendAvailable = false;
+        DefinitiveGuiFrontendReference::Snapshot      publishedGuiFrontend{}, capturedGuiFrontend{};
+        bool                                          guiFrontendInputRequested = false, guiFrontendInputAvailable = false;
+        DefinitiveGuiFrontendInputReference::Snapshot publishedGuiFrontendInput{}, capturedGuiFrontendInput{};
+        FrontendControlMailbox                        frontendControl;
+        FrontendControlMailbox::Snapshot              capturedFrontendControl{};
         // Retain a faulty new frontend's code rather than unloading callbacks
         // or allowing a second attempt while ownership remains unresolved.
         bool                                  frontendQuarantined = false;

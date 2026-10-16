@@ -65,3 +65,7 @@ export const MTA_CORE_GUI_SURFACE_REFERENCE = false;
 // Real MTA menu interaction needs a separately acknowledged, reversible local
 // player-control lease. Ordinary Smoke and the passive GUI trials stay read-only.
 export const MTA_CORE_GUI_FRONTEND_REFERENCE = false;
+// Core owns a bounded neutral configured-input/native scope alongside its
+// actual menu and console. This distinct mode never changes player-control
+// flags through CLEO and does not establish camera or gameplay readiness.
+export const MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE = false;

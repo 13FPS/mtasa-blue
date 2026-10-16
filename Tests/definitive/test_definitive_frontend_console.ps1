@@ -27,6 +27,7 @@ function Assert-NoLinks([string]$Path) {
     }
 }
 $sourceNames=@('Tests/definitive/DefinitiveFrontendConsoleTests.cpp','Tests/definitive/test_definitive_frontend_console.ps1','Client/core/DefinitiveFrontend.h','Client/core/DefinitiveFrontendConsole.h','Client/core/CConsole.cpp','Client/core/CConsole.h','Client/core/CCommands.cpp','Client/core/CCommands.h','Client/core/CEntryHistory.cpp','Client/core/CEntryHistory.h',
+    'Client/core/DefinitiveFrontendBindings.h','Tests/definitive/frontend-bindings-coreconfig.xml',
     'Tests/definitive/GuiFrontendSurfaceDevice.h','Client/core/DefinitiveGuiSurface.h','Client/core/DefinitiveGuiSurface.cpp','Client/core/GuiWin32Input.h','Client/core/GuiWin32Input.cpp',
     'Client/core/CCore.cpp','Client/core/CCore.h','Client/core/CGUI.cpp','Client/core/CGUI.h','Client/core/CMainMenu.cpp','Client/core/CMainMenu.h',
     'Client/core/CCredits.cpp','Client/core/CQuestionBox.cpp','Client/core/CNewsBrowser.cpp','Client/core/CLocalization.cpp','Client/core/CClientVariables.cpp',
@@ -112,7 +113,7 @@ try {
     foreach ($name in @('menu_disconnect.png','menu_quick_connect.png','menu_browse_servers.png','menu_settings.png','menu_about.png','menu_quit.png','latest_news.png','client.pot')) {
         $assetSpecs+=@(@{source=(Join-Path $taskRoot ('Shared/data/MTA San Andreas/MTA/locale/en_US/'+$name));path=('mta/locale/en_US/'+$name)})
     }
-    $assetSpecs+=@(@{source=(Join-Path $taskRoot 'Client/definitive/coreconfig.xml');path='mta/config/coreconfig.xml'})
+    $assetSpecs+=@(@{source=(Join-Path $PSScriptRoot 'frontend-bindings-coreconfig.xml');path='mta/config/coreconfig.xml'})
     # A pre-existing disposable history proves the optional console does not
     # silently adopt or overwrite the classic process-persistent input log.
     $historySeed=Join-Path $outputRoot 'console-input-seed.log'
@@ -204,6 +205,8 @@ try {
         actualMtaConsoleOnOwnedCompositionSurface=$success;actualWin32ConsoleParserVerified=$success;frontendOnlyCommandRefusalsVerified=$success;inMemoryHistoryAndAutocompleteVerified=$success;
         cpuFrontendTeardownWhileGpuRetainedVerified=$success;startupFailureOwnerCleanupVerified=$success;partialStartCleanupVerified=$success;frontendBusyRetainsBorrowedGuiVerified=$success;focusAndEscapeCleanupVerified=$success;
         startupFocusQueuedConsoleCommandsVerified=$success;backgroundAdmissionPreservesOtherOwnedFocusVerified=$success;
+        bindingsApi=1;bindingsFields=32;actualConfiguredBindingOwnershipVerified=$success;neutralInputProducerVerified=$success;bindingsCommandNonDispatchVerified=$success;
+        deferredFrontendAdmissionVerified=$success;inputDetachedBeforeCpuRetirementVerified=$success;
         configurationCopiesUnchanged=$assetsUnchanged;installedFilesChanged=$false;gameLaunched=$false;gameAttached=$false;engineInputSuppressionVerified=$false;fullMtaReady=$false;
         scope='Real normal-build Core frontend and explicitly enabled MTA console with CGUI on the production Surface owned WARP queue, child HWND and DirectComposition swapchain. Actual widget text/Enter/parser/Help/Clear, refused commands and unchanged CVar revision, in-memory history/autocomplete, Unicode/focus and aggregated menu+console ownership; queued F8/help/Enter through automatic startup focus, no refocus after loss, preservation of another disposable foreground parent; partial/throw/missing-XML startup, CPU-Busy/GPU-gated detachment, optional-message failure/throw and actual child destruction. No GTA/native control write, engine facade, network startup or full readiness claim.'}
     $receipt | ConvertTo-Json -Depth 9 | Set-Content -LiteralPath (Join-Path $outputRoot 'test-result.json') -Encoding utf8

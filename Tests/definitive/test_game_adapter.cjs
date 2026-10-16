@@ -1211,6 +1211,7 @@ async function main() {
             MTA_CORE_GUI_STARTUP_REFERENCE: overrides.mtaCoreGuiStartupReference ?? false,
             MTA_CORE_GUI_SURFACE_REFERENCE: overrides.mtaCoreGuiSurfaceReference ?? false,
             MTA_CORE_GUI_FRONTEND_REFERENCE: overrides.mtaCoreGuiFrontendReference ?? false,
+            MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE: overrides.mtaCoreGuiFrontendInputReference ?? false,
             Date: { now: () => overrides.times ? overrides.times[frame] : frame * 50 },
             CLEO: { version: overrides.version || '1.5.1', apiVersion: overrides.definitions || '0.500', hostVersion: '1.0.113.49697469' },
             native: (name, ...args) => { record(name, ...args);
@@ -1477,6 +1478,138 @@ async function main() {
         return { ...result, enabled, polls, restoredAt };
     };
     const frontendFinish = result => result.logs.find(event => event.event === 'core_gui_frontend_reference_finished');
+    const frontendInputState = (polls, overrides = {}) => {
+        const done = polls >= 3;
+        return Object.assign(Array(256).fill(0), coreSurfaceState({
+            1: done ? 2 : 1, 2: polls, 3: polls * 50, 4: done ? 1 : 0, 6: done ? 1 : 0,
+            20: done ? 1 : 0, 21: done ? 1 : 0, 39: done ? 1 : 0,
+            49: done ? 0 : 1, 50: done ? 0 : 1, 51: done ? 0 : 1,
+            53: 0, 54: 0, 75: done ? 0 : 1, 76: done ? 0 : 1, 77: done ? 0 : 1,
+            78: done ? 1 : 0, 79: done ? 1 : 0, 80: done ? 1 : 0, 85: 20000
+        }), {
+            96: 1, 97: done ? 4 : 2, 98: 42, 99: 3, 100: done ? 0 : 1, 102: done ? 0 : 1,
+            106: 1, 107: 1, 108: 1, 109: 1, 113: done ? 1 : 0, 117: done ? 0 : 1, 118: 1, 121: 1, 124: 1,
+            128: 1, 129: done ? 4 : 2, 130: 42, 131: 1, 134: done ? 0 : 1, 136: done ? 0 : 1,
+            137: done ? 0 : 1, 138: done ? 0 : 2, 149: done ? 1 : 0, 150: done ? 0 : 1, 151: done ? 0 : 1, 152: 1, 157: 255, 158: 111,
+            160: 1, 161: 1, 162: done ? 0 : 1, 163: 1, 165: 4, 171: done ? 1 : 0,
+            176: 1, 177: done ? 4 : 2, 178: 42, 179: 1, 180: 1, 181: 6, 182: 6, 184: 6,
+            186: done ? 0 : 1, 187: 3, 188: 1, 189: 1, 190: done ? 1 : 0, 191: done ? 0 : 1, 192: 1, 193: 111,
+            208: done ? 0 : 1, 210: done ? 0 : 1, 212: 3, 214: 3, 216: 3, 220: 3, 232: 1,
+            236: 1, 237: 1, 238: done ? 1 : 0, 242: 20000, 243: done ? 0 : 1
+        }, overrides);
+    };
+    const coreFrontendInput = (options = {}) => {
+        let polls = 0;
+        const result = runEntry({ mtaCoreGuiFrontendInputReference: true,
+            keyFrames: [[17, 16, 120], [16], [], [], []], times: [0, 50, 100, 300, 20500], ...options.entry,
+            functions: {
+                DE_CoreGuiFrontendInputApiVersion: () => 1, DE_CoreGuiFrontendInputBegin: () => 1,
+                DE_CoreGuiFrontendInputCapture: () => options.skipTerminalCapture && polls >= 3 ? 0 : 1,
+                DE_CoreGuiFrontendInputRead: field => frontendInputState(polls, options.scalarOverrides?.(polls) || {})[field],
+                DE_CoreStartupPoll: () => { ++polls; if (options.pollErrorAt === polls) throw Error('temporary input worker poll failure'); return polls >= 3 ? 1 : 0; },
+                DE_CoreStartupRead: field => Object.assign([1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5, 0, 0, 1, 0, 1, 0, 1, 0], options.workerState)[field],
+                ...options.functions
+            }
+        });
+        return { ...result, polls };
+    };
+    const frontendInputFinish = result => result.logs.find(event => event.event === 'core_gui_frontend_input_reference_finished');
+    test('Core14 frontend input uses separate256 evidence and no script player-control lease or native writes', () => {
+        const result = coreFrontendInput(); const finish = frontendInputFinish(result);
+        assert.equal(finish.passed, true); assert.equal(finish.cleanup_passed, true);
+        assert.deepEqual(result.calls.filter(call => call[0].startsWith('DE_CoreGuiFrontendInputRead')).map(call => call[1]).slice(-256),
+            Array.from({ length: 256 }, (_, field) => field));
+        assert.ok(!result.calls.some(call => /SET_PLAYER_CONTROL|IS_PLAYER_CONTROL_ON|DE_CoreGuiFrontendControl|DE_CoreGuiFrontendBegin|DE_ConnectLocal|CREATE_CHAR/.test(call[0])));
+        assert.equal(result.callFrames.find(call => call.name === 'DE_CoreGuiFrontendInputBegin').frame, 2);
+        const start = result.logs.find(event => event.event === 'adapter_start');
+        assert.equal(start.core_api, 14); assert.equal(start.frontend_input_trial_api, 1);
+        assert.equal(start.native_player_control_lease_planned, false); assert.equal(start.native_player_control_writes, false);
+        assert.equal(finish.native_player_control_writes, false); assert.equal(finish.native_pad_writes, true);
+        assert.deepEqual(finish.native_scoped_write_steps, [3, 0]); assert.deepEqual(finish.native_scoped_restored_steps, [3, 0]);
+        assert.equal(finish.actual_console_commands_verified, false);
+        for (const claim of ['full_core_ready', 'full_mta_ready', 'gameplay_ready', 'camera_capture_verified', 'network_active',
+            'remote_peds_created', 'native_queue_commands_issued', 'native_backbuffer_touched']) assert.equal(finish[claim], false);
+    });
+    test('Core14 neutral-query subset does not have to equal all routed movement queries', () => {
+        const result = coreFrontendInput({ scalarOverrides: () => ({ 218: 1 }) });
+        assert.equal(frontendInputFinish(result).passed, true);
+    });
+    test('Core14 deferred hidden frontend is enabled historically while native admission is still pending', () => {
+        const result = coreFrontendInput({ scalarOverrides: polls => polls === 1 ? {
+            162: 0, 163: 0, 165: 0, 208: 0, 210: 0, 212: 0, 214: 0, 216: 0, 220: 0,
+            232: 0, 236: 0, 237: 0, 238: 1, 243: 0
+        } : {} });
+        const finish = frontendInputFinish(result);
+        assert.equal(finish.passed, true); assert.equal(finish.stop_requested, false);
+    });
+    test('Core14 foreign callbacks forwarded outside the local scope do not invalidate successful ownership', () => {
+        const result = coreFrontendInput({ scalarOverrides: () => ({ 224: 4 }) });
+        assert.equal(frontendInputFinish(result).passed, true);
+    });
+    test('Core14 late F9 waits indefinitely and releases all modifiers before binding', () => {
+        const result = coreFrontendInput({ entry: { keyFrames: [[], [], [17, 16, 120], [16], [], [], []],
+            times: [0, 100, 14400000, 14400050, 14400100, 14400150, 14400200] } });
+        assert.equal(result.callFrames.find(call => call.name === 'DE_CoreGuiFrontendInputBegin').frame, 4);
+        assert.equal(frontendInputFinish(result).passed, true);
+    });
+    test('Core14 paused script can observe already completed Core cleanup without a heartbeat or late cancellation', () => {
+        const result = coreFrontendInput({ entry: { times: [0, 50, 100, 300, 130000] } });
+        const finish = frontendInputFinish(result);
+        assert.equal(finish.cleanup_passed, true); assert.equal(finish.passed, true); assert.equal(finish.stop_requested, false);
+        assert.ok(!result.calls.some(call => call[0] === 'DE_CoreStartupCancel'));
+    });
+    test('Core14 End requests cancellation while worker cleanup still drains', () => {
+        const result = coreFrontendInput({ entry: { keyFrames: [[17, 16, 120], [16], [], [17, 16, 35], []] }, workerState: { 16: 12, 17: 0 } });
+        const finish = frontendInputFinish(result);
+        assert.equal(finish.stop_requested, true); assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true);
+        assert.equal(result.polls, 3); assert.ok(result.logs.some(event => event.event === 'core_gui_frontend_input_reference_stop_requested'));
+    });
+    test('Core14 transient poll failure requests cleanup and keeps polling to actual terminal', () => {
+        const result = coreFrontendInput({ pollErrorAt: 1, workerState: { 16: 12, 17: 0 } });
+        const finish = frontendInputFinish(result);
+        assert.equal(result.polls, 3); assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true);
+        assert.match(finish.error, /temporary input worker/);
+    });
+    for (const [field, value] of [[7, 1], [172, 1], [226, 1], [228, 7], [241, 1], [187, 1], [188, 0], [189, 0],
+        [33, 0], [35, 3], [38, 10000], [67, 4], [68, 1], [69, 1], [85, 30000], [99, 1], [181, 0], [182, 0], [184, 0], [242, 19999]])
+        test('Core14 workload independently rejects insufficient native/frontend evidence: field ' + field, () => {
+            const result = coreFrontendInput({ scalarOverrides: polls => polls >= 3 ? { [field]: value } : {} });
+            const finish = frontendInputFinish(result); assert.ok(finish); assert.equal(finish.passed, false);
+            assert.equal(finish.cleanup_passed, true);
+        });
+    for (const [field, value] of [[49, 1], [75, 1], [102, 1], [150, 1], [191, 1], [169, 1], [171, 0],
+        [208, 1], [210, 1], [220, 2], [222, 1], [238, 0], [239, 1], [243, 1], [244, 1], [245, 1], [246, 1]])
+        test('Core14 never certifies terminal cleanup with retained or invalid state: field ' + field, () => {
+            const result = coreFrontendInput({ scalarOverrides: polls => polls >= 3 ? { [field]: value } : {} });
+            const finish = frontendInputFinish(result); assert.ok(finish); assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, false);
+        });
+    for (const options of [{ skipTerminalCapture: true }, { workerState: { 13: 0 } }, { workerState: { 15: 0 } },
+        { workerState: { 11: 2, 12: 3 } }, { workerState: { 16: 12, 17: 0 } }])
+        test('Core14 requires fresh final publication and actual worker unload evidence ' + JSON.stringify(options), () => {
+            const result = coreFrontendInput(options); const finish = frontendInputFinish(result);
+            assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, false);
+        });
+    test('Core14 console command evidence is separate from native/render workload and Clear may leave empty output', () => {
+        const result = coreFrontendInput({ scalarOverrides: polls => polls >= 3 ? { 139: 2, 141: 2, 142: 2, 146: 0 } : {} });
+        const finish = frontendInputFinish(result);
+        assert.equal(finish.actual_console_commands_verified, true); assert.equal(finish.passed, true);
+    });
+    for (const options of [{ mode: 'online' }, { mode: 'diagnostic' }, { mtaCoreGuiFrontendInputReference: 'true' },
+        { mtaCoreGuiFrontendReference: true }, { mtaCoreGuiSurfaceReference: true }, { mtaCoreGuiStartupReference: true },
+        { inputReference: true }, { reference: true }, { gaitRate: true }, { gaitRootLock: true }, { mtaNativePadReference: true },
+        { mtaNativeMovementTrial: true }, { mtaCoreStartupReference: true }, { mtaCoreInputReference: true }, { mtaCoreMovementReference: true },
+        { mtaCoreRenderReference: true }, { mtaCoreRenderGpuReference: true }, { mtaCoreRenderCustomPresentReference: true },
+        { mtaCoreRenderFrameBoundaryReference: true }, { mtaCoreRenderNativeDispatchReference: true }])
+        test('Core14 refuses mode conflicts before runtime lookup ' + JSON.stringify(options), () => {
+            const result = coreFrontendInput({ entry: { ...options, forbidRuntimeAccess: true } });
+            assert.equal(result.calls.length, 0); assert.ok(result.logs.some(event => event.event === 'adapter_failed'));
+        });
+    for (const name of ['DE_CoreGuiFrontendInputApiVersion', 'DE_CoreGuiFrontendInputBegin', 'DE_CoreGuiFrontendInputCapture', 'DE_CoreGuiFrontendInputRead'])
+        test('Core14 refuses a missing independent export before Begin: ' + name, () => {
+            const result = coreFrontendInput({ functions: { [name]: null } });
+            assert.ok(!result.calls.some(call => call[0] === 'DE_CoreGuiFrontendInputBegin'));
+            assert.ok(result.logs.some(event => event.event === 'adapter_failed' && event.error.includes(name)));
+        });
     test('Frontend requires separate F9-release activation and verified real native bool lease', () => {
         const result = coreFrontend(); const finish = frontendFinish(result);
         assert.equal(result.callFrames.find(call => call.name === 'DynamicLibrary.Load').frame, 2);

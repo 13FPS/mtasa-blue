@@ -97,14 +97,21 @@ namespace DefinitiveGuiSurface
         // A false stop is Busy and retains callbacks/context/CGUI for retry.
         // Successful Start attempts keyboard focus once if the borrowed parent
         // is already foreground/active; later focus loss is never overridden.
-        Status EnableFrontend(const FrontendCallbacks& callbacks) noexcept;
+        Status EnableFrontend(const FrontendCallbacks& callbacks, bool deferredInput = false) noexcept;
+        // A Core-owned native producer needs the real frontend/XML/bindings
+        // before it can prove input capture. Deferred Start creates them hidden;
+        // only that owner may admit visible interaction after native scope proof.
+        Status AdmitFrontendInput() noexcept;
         // Ok consumes one existing device reference by storage only. The HWND
         // remains borrowed; Start validates it after native End has fully drained.
         Status AttachDeviceWindow(ID3D12Device* transferredReference, HWND__* borrowedParent, bool windowed) noexcept;
         Status Start() noexcept;
         // Pumps only this worker's owned child and polls fences without waits.
         // The Core owner supplies the bounded display duration and stop request.
-        Status            Poll() noexcept;
+        Status Poll() noexcept;
+        // Retire GUI input independently of CPU/GPU owners so the native input
+        // producer can End and restore its scope before Core deletes bindings.
+        Status            DetachInput() noexcept;
         Status            Shutdown() noexcept;
         Result            Snapshot() const noexcept;
         InteractionResult InteractionSnapshot() const noexcept;

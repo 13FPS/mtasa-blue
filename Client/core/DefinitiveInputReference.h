@@ -85,6 +85,9 @@ namespace DefinitiveInputReference
         // engine-control lease. A passive surface can never imply admission.
         bool                                            guiFrontend = false;
         DefinitiveGuiFrontendReference::ControlCallback controlLease = nullptr;
+        // A separate mode transfers neutral input ownership to Core's native
+        // callback. Existing script-lease requests keep their original ABI.
+        bool guiFrontendInput = false;
     };
 
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)

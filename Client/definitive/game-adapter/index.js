@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { MODE, ONLINE_ACTIVATION, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE, MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE, MTA_CORE_RENDER_ROUTE, MTA_CORE_RENDER_GPU_REFERENCE, MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE, MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE, MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE, MTA_CORE_GUI_STARTUP_REFERENCE, MTA_CORE_GUI_SURFACE_REFERENCE, MTA_CORE_GUI_FRONTEND_REFERENCE } from './config.mjs';
+import { MODE, ONLINE_ACTIVATION, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE, MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE, MTA_CORE_RENDER_ROUTE, MTA_CORE_RENDER_GPU_REFERENCE, MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE, MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE, MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE, MTA_CORE_GUI_STARTUP_REFERENCE, MTA_CORE_GUI_SURFACE_REFERENCE, MTA_CORE_GUI_FRONTEND_REFERENCE, MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE } from './config.mjs';
 import { AdapterController, NativeGaitReferenceController, NativeInputReferenceController, PlayerControlLease } from './controller.mjs';
 import { MtaNativePadReferenceController } from './native-pad-reference.mjs';
 import { MtaNativeMovementTrialController } from './native-movement-trial.mjs';
@@ -13,6 +13,14 @@ function runAdapter() {
     emit({ event: 'adapter_phase', phase, mode: MODE, host: HOST, cleo: String(CLEO.version),
         host_version: String(CLEO.hostVersion), definitions: String(CLEO.apiVersion) });
     if (!['diagnostic', 'smoke', 'online'].includes(MODE)) throw new Error('Unknown adapter mode');
+    if (typeof MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE !== 'boolean' ||
+        (MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE && (MODE !== 'smoke' || [INPUT_REFERENCE, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK,
+            MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE,
+            MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE, MTA_CORE_RENDER_GPU_REFERENCE,
+            MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE, MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE,
+            MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE, MTA_CORE_GUI_STARTUP_REFERENCE, MTA_CORE_GUI_SURFACE_REFERENCE,
+            MTA_CORE_GUI_FRONTEND_REFERENCE].some(Boolean))))
+        throw new Error('MTA Core frontend input requires separate opt-in Smoke mode');
     if (typeof MTA_CORE_GUI_FRONTEND_REFERENCE !== 'boolean' ||
         (MTA_CORE_GUI_FRONTEND_REFERENCE && (MODE !== 'smoke' || [INPUT_REFERENCE, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK,
             MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE,
@@ -103,20 +111,20 @@ function runAdapter() {
         throw new Error('SA Unreal API definitions 0.493 or newer are required');
     // These untested input/velocity bindings come from the pinned 0.500 API.
     // Reject older definitions before activation reads, DLL access, or CJ reads.
-    if ((INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE) && definitionVersion < 0.500)
+    if ((INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE) && definitionVersion < 0.500)
         throw new Error('Native input reference requires SA Unreal API definitions 0.500 or newer');
 
     const stopKey = 'Ctrl+Shift+End';
     // Home opens the Rockstar console on the tested build and interrupts this
     // read-only observation, so the input reference needs its own shortcut.
-    const activateKey = (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE) ? 'Ctrl+Shift+F9' : 'Ctrl+Shift+Home';
+    const activateKey = (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE) ? 'Ctrl+Shift+F9' : 'Ctrl+Shift+Home';
     const chordHeld = keys => keys.every(key => native('IS_KEY_PRESSED', key));
-    if (MODE === 'online' || GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE) {
+    if (MODE === 'online' || GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE) {
         if (MODE === 'online' && !['manual', 'automatic'].includes(ONLINE_ACTIVATION))
             throw new Error('Unknown online activation mode');
         // The reference changes one owned NPC, so even an automatic Online
         // preference cannot start this separate experiment during save loading.
-        if (GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || ONLINE_ACTIVATION === 'manual') {
+        if (GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || ONLINE_ACTIVATION === 'manual') {
             // Startup freezes have also occurred before this script enters.
             // Waiting here cannot prevent those loader failures, but it gives
             // a usable game session a separate, observable boundary before
@@ -132,7 +140,7 @@ function runAdapter() {
                         bridge_loaded: false, game_adapter_active: false, network_active: false });
                     return;
                 }
-                if (chordHeld([17, 16, (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE) ? 120 : 36]) && native('IS_PLAYER_PLAYING', 0)) {
+                if (chordHeld([17, 16, (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE) ? 120 : 36]) && native('IS_PLAYER_PLAYING', 0)) {
                     emit({ event: 'adapter_activation_requested', mode: MODE, activate_key: activateKey });
                     break;
                 }
@@ -140,7 +148,7 @@ function runAdapter() {
             }
         }
     }
-    if (MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE) {
+    if (MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE) {
         // Holding the activation modifiers contaminated the prior source-state
         // window. Begin DLL access and the recorder only after their release,
         // while keeping cancellation and a finite pre-binding deadline.
@@ -203,6 +211,149 @@ function runAdapter() {
     enterPhase('runtime_bind');
     if (bindRuntime() !== 1) throw new Error('CLEO runtime lifecycle binding failed');
     enterPhase('runtime_bound');
+    if (MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE) {
+        const version = bind('DE_CoreGuiFrontendInputApiVersion', 'X64U32');
+        const begin = bind('DE_CoreGuiFrontendInputBegin');
+        const capture = bind('DE_CoreGuiFrontendInputCapture');
+        const readInput = bind('DE_CoreGuiFrontendInputRead', 'X64U32');
+        const poll = bind('DE_CoreStartupPoll'), cancel = bind('DE_CoreStartupCancel');
+        const read = bind('DE_CoreStartupRead', 'X64U32');
+        if (version() !== 1) throw new Error('Core frontend input API1 is required');
+        emit({ event: 'adapter_start', host: HOST, cleo: String(CLEO.version), host_version: String(CLEO.hostVersion),
+            definitions: String(CLEO.apiVersion), mode: MODE, endpoint: null, stop_key: stopKey,
+            core_gui_frontend_input_reference: true, provenance: 'mta_core_owned_frontend_native_input', core_api: 14, frontend_input_trial_api: 1,
+            adapter_abi: 6, network_active: false, core_scoped_native_input_planned: true, native_pad_writes: false,
+            native_player_control_lease_planned: false, native_player_control_writes: false,
+            gameplay_ready: false, full_mta_ready: false, camera_capture_verified: false });
+        enterPhase('core_gui_frontend_input_reference');
+        const startedAt = Date.now();
+        if (!Number.isSafeInteger(startedAt) || startedAt < 0) throw new Error('Invalid Core frontend input clock');
+        emit({ event: 'core_gui_frontend_input_reference_started', at_ms: startedAt, core_api: 14, frontend_input_trial_api: 1,
+            fields: 256, sample_interval_ms: 100, poll_interval_ms: 50, maximum_duration_ms: 35000,
+            display_duration_ms: 20000, native_acquire_ms: 5000, native_player_control_writes: false });
+        if (begin() !== 1) throw new Error('MTA Core frontend input worker could not start');
+        let terminal = false, cancelRequested = false, cancelAccepted = false, trialError = null;
+        let lastAt = startedAt, nextSampleAt = startedAt, latest = null, samples = 0;
+        const unsigned = state => state.every(value => Number.isInteger(value) && value >= 0 && value <= 0xffffffff);
+        const pairPresent = (state, field) => state[field] !== 0 || state[field + 1] !== 0;
+        const pairEqual = (state, first, second) => state[first] === state[second] && state[first + 1] === state[second + 1];
+        const range = (first, end) => Array.from({ length: end - first }, (_, field) => first + field);
+        const frontendClean = state => state.slice(96, 128).every(value => !value) ||
+            (state[96] === 1 && state[97] === 4 && state[113] === 1 && [102, 112, 115, 116, 117].every(field => !state[field]));
+        const consoleClean = state => state.slice(128, 160).every(value => !value) ||
+            (state[128] === 1 && [0, 4].includes(state[129]) && state[149] === 1 &&
+                [132, 133, 136, 137, 138, 150, 151, 156].every(field => !state[field]));
+        const bindingsClean = state => state.slice(176, 208).every(value => !value) ||
+            (state[176] === 1 && [0, 4].includes(state[177]) && state[190] === 1 && [186, 191, 197].every(field => !state[field]));
+        const nativeClean = state => state[238] === 1 && [208, 209, 210, 211, 222, 223, 239, 243].every(field => !state[field]) &&
+            pairEqual(state, 214, 220);
+        const ownersClean = state => state[1] === 2 && state[6] === 1 && [5, 41, 43, 49, 50, 51, 59, 72, 75, 76, 77, 162, 169, 170].every(field => !state[field]) &&
+            [9, 39, 78, 79, 80].every(field => state[field] === 1) && (!state[161] || state[171] === 1) &&
+            frontendClean(state) && consoleClean(state) && bindingsClean(state) && nativeClean(state);
+        const requestCancel = reason => {
+            cancelRequested = true;
+            if (!cancelAccepted) {
+                if (cancel() !== 1) throw new Error('MTA Core frontend input cancellation was rejected');
+                cancelAccepted = true;
+                emit({ event: 'core_gui_frontend_input_reference_stop_requested', at_ms: lastAt, reason });
+            }
+        };
+        const captureSample = at => {
+            const captured = capture();
+            if (captured !== 0 && captured !== 1) throw new Error('Core frontend input capture status unavailable');
+            if (!captured) return;
+            const state = Array.from({ length: 256 }, (_, field) => readInput(field));
+            const booleans = [5, 6, 7, 8, 9, 10, 11, 19, 20, 21, 30, 31, 32, 37, 39, 43, 44, 45, 49, 50, 51, 52, 53, 54,
+                55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 72, 73, 74, 75, 76, 77, 78, 79, 80, 86,
+                100, 101, 102, 103, 104, 106, 107, 108, 109, 110, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124,
+                131, 132, 133, 134, 135, 136, 137, 148, 149, 150, 151, 152, 153, 154, 155, 156,
+                161, 162, 171, 172, 173, 179, 180, 186, 188, 189, 190, 191, 192, 194, 195, 196, 197,
+                208, 210, 232, 236, 237, 238, 239, 241, 243, 244, 245];
+            const reserved = [...range(88, 96), ...range(125, 128), 159, 174, 175, ...range(198, 208), 209, 211, 229, 231,
+                233, 234, 235, ...range(246, 256)];
+            if (!unsigned(state) || state[0] !== 1 || ![1, 2, 3].includes(state[1]) || !state[2] || state[4] > 11 ||
+                booleans.some(field => state[field] > 1) || reserved.some(field => state[field]) || state[228] > 18 ||
+                ![0, 2].includes(state[18]) || state[23] > 6 || state[41] > 4 || state[42] > 10 || state[47] > 9 || state[48] > 9 ||
+                [44, 45, 53, 54, 110, 119, 120, 122, 123, 148, 153, 154, 155, 194, 195, 196, 244, 245].some(field => state[field]) ||
+                ![0, 1].includes(state[96]) || ![0, 1].includes(state[128]) || state[160] !== 1 || ![0, 1].includes(state[176]) ||
+                (state[96] && (![1, 2, 3, 4, 5].includes(state[97]) || !state[98] || !state[118])) ||
+                (state[128] && (state[129] > 5 || !state[152] || state[157] !== 255 || state[138] > 2 || state[141] > 3)) ||
+                (state[176] && (state[177] > 5 || !state[192])))
+                throw new Error('Invalid Core frontend input scalar state');
+            if ((state[5] && state[6]) || (state[6] && !ownersClean(state)) ||
+                (state[238] && !nativeClean(state)) || (state[237] && (!state[236] || !state[232] ||
+                    ![212, 214, 216].every(field => pairPresent(state, field)))) ||
+                // Enabled is historical opt-in even while deferred/hidden.
+                // Actual focused/event input needs completed native admission.
+                (!state[171] && (state[162] || pairPresent(state, 165)) && (!state[237] || !state[210] || state[238])) ||
+                (state[171] && (state[162] || state[169] || state[170])) ||
+                (state[179] && state[177] === 2 && (!state[180] || !state[186] || !state[188] || !state[189] || !state[191])) ||
+                (state[113] && [112, 114, 115, 116, 117].some(field => state[field])))
+                throw new Error('Invalid Core frontend input ownership state');
+            if (latest && (state[2] < latest[2] || state[3] < latest[3])) throw new Error('Core frontend input publication order is invalid');
+            if (latest && state[2] === latest[2]) {
+                if (state.some((value, field) => value !== latest[field])) throw new Error('Core frontend input changed without a new sequence');
+                return;
+            }
+            latest = state; ++samples;
+            emit({ event: 'core_gui_frontend_input_reference_sample', at_ms: at, elapsed_ms: at - startedAt, state });
+        };
+        // Polling transports evidence only. The worker retains and ends its
+        // native scopes even if CLEO pauses or this copied sample is rejected.
+        while (true) {
+            try {
+                const at = Date.now();
+                if (!Number.isSafeInteger(at) || at < lastAt) throw new Error('Invalid Core frontend input clock');
+                lastAt = at;
+                const status = poll();
+                if (status !== 0 && status !== 1) throw new Error('Core frontend input worker status unavailable');
+                terminal = status === 1;
+                if (!terminal && chordHeld([17, 16, 35])) requestCancel(stopKey);
+                if (!terminal && at - startedAt >= 45000) requestCancel('worker_deadline');
+                if (at >= nextSampleAt || terminal) { captureSample(at); nextSampleAt = at + 100; }
+                if (terminal) break;
+            } catch (error) {
+                trialError = trialError || String(error);
+                try { requestCancel('error'); } catch (_) {}
+                if (terminal) break;
+            }
+            try { wait(50); }
+            catch (error) { trialError = trialError || String(error); try { requestCancel('wait_error'); } catch (_) {} }
+        }
+        const state = Array.from({ length: 19 }, (_, field) => read(field));
+        const workerRetired = (state[16] === 0 && state[17] === 1) || (state[16] === 12 && state[17] === 0 && cancelAccepted);
+        const cleanupPassed = terminal && unsigned(state) && latest !== null && ownersClean(latest) &&
+            state[7] === 1 && state[13] === 1 && state[14] === 0 && state[15] === latest[57] &&
+            !(state[12] & ~state[11]) && workerRetired && !state[18];
+        const fenceComplete = latest && !(latest[35] === 0xffffffff && latest[36] === 0xffffffff) &&
+            (latest[36] > latest[34] || (latest[36] === latest[34] && latest[35] >= latest[33]));
+        const expected = [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5];
+        const passed = !trialError && !cancelRequested && cleanupPassed && expected.every((value, field) => state[field] === value) &&
+            latest[4] === 1 && [8, 9, 10, 11, 19, 20, 21, 30, 31, 32, 37, 55, 56, 58, 60, 61, 62, 63, 64, 65, 66, 86,
+                96, 106, 107, 108, 109, 113, 118, 124, 128, 131, 149, 152, 160, 161, 171, 176, 179, 180, 188, 189, 190, 192,
+                232, 236, 237, 238].every(field => latest[field] === 1) &&
+            [7, 22, 23, 42, 48, 52, 73, 172, 222, 223, 226, 227, 228, 229, 241].every(field => !latest[field]) &&
+            [12, 14, 16, 33, 212, 214, 216].every(field => pairPresent(latest, field)) && fenceComplete && latest[38] > 10000 &&
+            latest[24] > 0 && latest[27] === 87 && latest[28] > 0 && latest[28] <= 16384 && latest[29] > 0 && latest[29] <= 16384 &&
+            latest[46] > 0 && latest[47] === 9 && latest[68] >= 2 && latest[67] === latest[68] + latest[87] && !latest[69] &&
+            latest[70] >= latest[68] && latest[81] > 0 && latest[82] > 0 && latest[83] === 1 && latest[84] > 0 && latest[85] === 20000 &&
+            latest[99] >= 2 && latest[181] > 0 && latest[182] > 0 && latest[184] > 0 && latest[187] >= 2 &&
+            (latest[242] >= 20000 || latest[103] === 1 || latest[173] === 1);
+        const consoleCommands = latest !== null && latest[131] === 1 && latest[139] > 0 && latest[142] > 0 &&
+            [1, 2].includes(latest[141]) && (latest[141] !== 1 || latest[146] > 0);
+        emit({ event: 'core_gui_frontend_input_reference_finished', at_ms: Date.now(), elapsed_ms: lastAt - startedAt, state,
+            passed, cleanup_passed: cleanupPassed, stop_requested: cancelRequested, error: trialError, samples,
+            own_surface_workload_verified: passed, native_scope_workload_verified: passed, composition_present_verified: passed,
+            actual_console_commands_verified: consoleCommands, actual_about_clicks: latest ? latest[105] : 0,
+            actual_quit_requested: latest ? latest[103] === 1 : false,
+            native_scoped_write_steps: latest ? latest.slice(214, 216) : [0, 0],
+            native_scoped_restored_steps: latest ? latest.slice(220, 222) : [0, 0],
+            native_pad_writes: latest ? pairPresent(latest, 214) : false, native_player_control_writes: false,
+            native_queue_commands_issued: false, native_backbuffer_touched: false, remote_peds_created: false,
+            network_active: false, full_core_ready: false, gameplay_ready: false, full_mta_ready: false, camera_capture_verified: false });
+        if (!passed) throw new Error('MTA Core frontend input incomplete; inspect its saved state');
+        return;
+    }
     if (MTA_CORE_GUI_FRONTEND_REFERENCE) {
         const version = bind('DE_CoreGuiFrontendApiVersion', 'X64U32');
         const begin = bind('DE_CoreGuiFrontendBegin');

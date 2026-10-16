@@ -23,6 +23,7 @@
 #include "DefinitiveRenderReference.h"
 #include "DefinitiveGuiStartupReference.h"
 #include "DefinitiveGuiSurfaceReference.h"
+#include "DefinitiveGuiFrontendInputReference.h"
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
     #include "DefinitiveProcess.h"
 #endif
@@ -60,13 +61,16 @@ namespace DefinitiveInputReference
 
     bool Configure(const Request& request) noexcept
     {
-        const auto maximum = request.guiFrontend         ? DefinitiveGuiFrontendReference::MaximumDurationMs
+        const auto maximum = request.guiFrontendInput    ? DefinitiveGuiFrontendInputReference::MaximumDurationMs
+                             : request.guiFrontend       ? DefinitiveGuiFrontendReference::MaximumDurationMs
                              : request.guiSurface        ? DefinitiveGuiSurfaceReference::MaximumDurationMs
                              : request.guiStartup        ? DefinitiveGuiStartupReference::MaximumDurationMs
                              : request.renderObservation ? DefinitiveRenderReference::MaximumDurationMs
                              : request.nativeMovement    ? DefinitiveMovementReference::MaximumDurationMs
                                                          : MaximumDurationMs;
-        if ((request.guiFrontend && (request.guiSurface || request.guiStartup || request.nativeMovement || request.renderObservation || request.renderRoute ||
+        if ((request.guiFrontendInput && (request.guiFrontend || request.guiSurface || request.guiStartup || request.nativeMovement ||
+                                          request.renderObservation || request.renderRoute || request.renderApiVersion != 1 || request.controlLease)) ||
+            (request.guiFrontend && (request.guiSurface || request.guiStartup || request.nativeMovement || request.renderObservation || request.renderRoute ||
                                      request.renderApiVersion != 1 || !request.controlLease)) ||
             (!request.guiFrontend && request.controlLease) ||
             (request.guiSurface &&
@@ -390,5 +394,18 @@ CORE_API std::uint32_t MTA_ConfigureDEGuiFrontendReference(std::uint32_t version
     request.guiFrontend = true;
     request.controlLease = control;
     return version == DefinitiveGuiFrontendReference::ApiVersion && g_isDefinitiveProcessCandidate && DefinitiveInputReference::Configure(request) ? 1u : 0u;
+}
+CORE_API std::uint32_t MTA_DEGuiFrontendInputReferenceApiVersion()
+{
+    return DefinitiveGuiFrontendInputReference::ApiVersion;
+}
+CORE_API std::uint32_t MTA_ConfigureDEGuiFrontendInputReference(std::uint32_t durationMs, DefinitiveInputReference::CancelCallback cancel,
+                                                                DefinitiveInputReference::PublishCallback publish)
+{
+    // A separate export cannot grant native input to a passive or historical
+    // script-owned frontend request. No control-mailbox callback is accepted.
+    DefinitiveInputReference::Request request{durationMs, cancel, publish};
+    request.guiFrontendInput = true;
+    return g_isDefinitiveProcessCandidate && DefinitiveInputReference::Configure(request) ? 1u : 0u;
 }
 #endif

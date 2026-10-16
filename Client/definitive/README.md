@@ -6,6 +6,37 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
+**The next frontend trial transfers input ownership to MTA Core.** The separate
+Smoke option `-MtaCoreGuiFrontendInputReference` selects Core14 / FrontendInput1
+with 256 copied fields. It reuses the actual menu, console, parsed XML and
+`CKeyBinds` configured-control synthesis. Core refreshes neutral current/previous
+controller frames while the frontend owns input; the existing DE ProcessControl
+callback borrows the pad/provider only for its local scope and restores physical
+state before returning. This mode makes no script `SET_PLAYER_CONTROL` write.
+
+The frontend starts hidden. Eligible native identity, routed provider queries
+and a completed/restored scope must be observed before its child becomes visible
+and accepts input. Closing, cancellation or focus loss detaches GUI input first,
+then retries native End before retiring bindings, XML, GUI and GPU owners. Core
+keeps those owners alive while native restoration is pending, including after a
+cleanup deadline. Script pauses therefore cannot hold a persistent player-control
+disable flag in this new mode. Historical Frontend160 trials keep their separate
+script lease and unchanged layouts.
+
+This combined path still needs its live GTA test. Owned-host tests cannot prove
+camera exclusion: native queries outside local ProcessControl remain physical.
+Camera capture and full engine/game/network readiness stay false. The menu runs
+for up to 20 seconds after native admission, and activation still waits
+indefinitely for Ctrl+Shift+F9 and release. Use F8 for the actual console, About/OK
+for credits and Quit to end this trial; Quit does not close GTA.
+
+Validation includes 1,507 checks in thirteen actual MTA menu/console/bindings
+hosts, 1,294 native callback checks, 26 controlled worker cases, 970 script mocks
+and 51 saved-log reader tests. The normal x64 Core build and classic compile
+passed, with 294 entry checks for each classic and nonclassic diagnostic layout.
+Deferred admission, discarded early input, one-time focus, retained cleanup and
+neutral current/previous history are covered separately from live GTA behavior.
+
 **The real MTA menu and player-control handoff passed in GTA.** Runtime commit
 `c949c4a90` recorded 323 GUI frames and successful presents, a completed 323/323
 fence, and 34,647 nonzero pixels at 1920x1001. About opened the existing credits

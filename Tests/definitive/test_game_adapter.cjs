@@ -1213,6 +1213,7 @@ async function main() {
             MTA_CORE_GUI_FRONTEND_REFERENCE: overrides.mtaCoreGuiFrontendReference ?? false,
             MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE: overrides.mtaCoreGuiFrontendInputReference ?? false,
             MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE: overrides.mtaCoreGuiFrontendStartupReference ?? false,
+            MTA_CORE_PERSISTENT_FRONTEND: overrides.mtaCorePersistentFrontend ?? false,
             Date: { now: () => overrides.times ? overrides.times[frame] : frame * 50 },
             CLEO: { version: overrides.version || '1.5.1', apiVersion: overrides.definitions || '0.500', hostVersion: '1.0.113.49697469' },
             native: (name, ...args) => { record(name, ...args);
@@ -1674,6 +1675,114 @@ async function main() {
         { mtaCoreRenderCustomPresentReference: true }, { mtaCoreRenderFrameBoundaryReference: true }, { mtaCoreRenderNativeDispatchReference: true }])
         test('Core15 refuses competing modes before runtime lookup ' + JSON.stringify(options), () => {
             const result = coreFrontendStartup({ entry: { ...options, forbidRuntimeAccess: true } });
+            assert.equal(result.calls.length, 0); assert.ok(result.logs.some(event => event.event === 'adapter_failed'));
+        });
+    const persistentInputState = (polls, overrides = {}) => {
+        const done = polls >= 4;
+        return Object.assign(Array(288).fill(0), frontendInputState(done ? 3 : Math.min(polls, 2)), {
+            2: polls, 3: done ? 45100 : polls * 50, 85: 0, 173: done ? 1 : 0, 242: done ? 45000 : polls * 50,
+            256: 1, 257: 17, 258: 0, 259: 1, 260: 31, 262: done ? 0 : 1,
+            263: done ? 1 : 0, 264: done ? 5 : 0, 265: 1000, 266: 500, 267: 27, 269: done ? 1 : 0
+        }, overrides);
+    };
+    const corePersistent = (options = {}) => {
+        let polls = 0, heartbeats = 0;
+        const result = runEntry({ mtaCorePersistentFrontend: true,
+            keyFrames: [[17, 16, 120], [16], [], [], [], []], times: [0, 50, 100, 300, 45100, 45200], ...options.entry,
+            functions: {
+                DE_CorePersistentFrontendApiVersion: () => 1, DE_CorePersistentFrontendBegin: () => 17,
+                DE_CorePersistentFrontendCapture: () => options.skipTerminalInput && polls >= 4 ? 0 : 1,
+                DE_CorePersistentFrontendRead: field => persistentInputState(polls, options.scalarOverrides?.(polls) || {})[field],
+                DE_CorePersistentFrontendCaptureLifecycle: () => 1,
+                DE_CorePersistentFrontendReadLifecycle: field => frontendStartupReport(options.lifecycleOverrides)[field],
+                DE_CorePersistentFrontendHeartbeat: generation => { assert.equal(generation, 17); ++heartbeats; return options.heartbeatRejected ? 0 : 1; },
+                DE_CoreStartupPoll: () => ++polls >= 4 ? 1 : 0,
+                DE_CoreStartupRead: field => Object.assign([0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0], options.workerState)[field],
+                ...options.functions
+            }
+        });
+        return { ...result, polls, heartbeats };
+    };
+    const persistentFinish = result => result.logs.find(event => event.event === 'core_persistent_frontend_finished');
+    test('Core16 persistent frontend uses separate288+96 reports and host heartbeats past the old45-second timeout', () => {
+        const result = corePersistent(); const finish = persistentFinish(result);
+        assert.equal(finish.passed, true); assert.equal(finish.cleanup_passed, true);
+        assert.equal(finish.schema, 'mta_core_persistent_frontend_v1'); assert.equal(finish.core_api, 16);
+        assert.equal(finish.input_values.length, 288); assert.equal(finish.lifecycle_values.length, 96);
+        assert.equal(finish.generation, 17); assert.equal(finish.input_values[85], 0);
+        assert.equal(result.heartbeats, 3); assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 0);
+        assert.ok(!result.calls.some(call => /SET_PLAYER_CONTROL|DE_CoreGuiFrontend|DE_ConnectLocal|CREATE_CHAR/.test(call[0])));
+        assert.equal(result.logs.find(event => event.event === 'core_persistent_frontend_started').maximum_duration_ms, 0);
+        for (const claim of ['full_core_ready', 'full_mta_ready', 'gameplay_ready', 'camera_capture_verified', 'network_active']) assert.equal(finish[claim], false);
+        if (process.env.MTA_GAME_ADAPTER_MOCK_EVIDENCE_DIR) {
+            fs.mkdirSync(process.env.MTA_GAME_ADAPTER_MOCK_EVIDENCE_DIR, { recursive: true });
+            fs.writeFileSync(path.join(process.env.MTA_GAME_ADAPTER_MOCK_EVIDENCE_DIR, 'script-mock-persistent-success.jsonl'),
+                result.logs.map(event => JSON.stringify(event)).join('\n') + '\n');
+        }
+    });
+    test('Core16 heartbeat rejection racing GUI closure does not invent host expiry', () => {
+        const finish = persistentFinish(corePersistent({ heartbeatRejected: true }));
+        assert.equal(finish.passed, true); assert.equal(finish.host_heartbeat_rejected, true); assert.equal(finish.host_lease_lost, false);
+    });
+    for (const [name, reason, cancelled] of [['host expiry', 3, false], ['focus loss', 4, false], ['explicit cancel', 2, true]])
+        test('Core16 clean ' + name + ' proves retirement separately from persistent workload', () => {
+            const result = corePersistent({
+                entry: cancelled ? { keyFrames: [[17, 16, 120], [16], [], [17, 16, 35], [], []] } : {},
+                workerState: { 9: 5, 16: cancelled ? 12 : 0, 17: 0 },
+                scalarOverrides: polls => polls >= 4 ? { 269: reason, 10: 0, 173: 0, 259: reason === 3 ? 0 : 1 } : {}, heartbeatRejected: reason === 3
+            });
+            const finish = persistentFinish(result);
+            assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true);
+            assert.equal(finish.host_lease_lost, reason === 3); assert.equal(finish.cancel_requested, cancelled);
+        });
+    test('Core16 host expiry may retain active native lease only during explicit pending cleanup', () => {
+        const result = corePersistent({ workerState: { 9: 5, 17: 0 }, scalarOverrides: polls => polls >= 4
+            ? { 269: 3, 10: 0, 173: 0, 259: 0 } : polls >= 2 ? { 1: 3, 5: 1, 259: 0, 269: 3 } : {} });
+        const finish = persistentFinish(result);
+        assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true);
+        assert.equal(finish.error, null); assert.equal(finish.cancel_requested, false);
+    });
+    test('Core16 active lease without host freshness outside cleanup is rejected', () => {
+        const finish = persistentFinish(corePersistent({ scalarOverrides: polls => polls < 4 ? { 259: 0, 269: 3 } : {} }));
+        assert.equal(finish.passed, false); assert.equal(finish.cancel_requested, true);
+        assert.match(finish.error, /persistent Core frontend lifetime/);
+    });
+    test('Core16 clean GUI-close reason without a fresh terminal host cannot prove persistent workload', () => {
+        const finish = persistentFinish(corePersistent({ scalarOverrides: polls => polls >= 4 ? { 259: 0 } : {} }));
+        assert.equal(finish.cleanup_passed, true); assert.equal(finish.passed, false);
+        assert.equal(finish.error, null); assert.equal(finish.cancel_requested, false);
+    });
+    test('Core16 clean GUI-close reason requires actual menu or GUI close evidence', () => {
+        const finish = persistentFinish(corePersistent({ scalarOverrides: polls => polls >= 4 ? { 103: 0, 173: 0 } : {} }));
+        assert.equal(finish.cleanup_passed, true); assert.equal(finish.passed, false);
+        assert.equal(finish.error, null); assert.equal(finish.cancel_requested, false);
+    });
+    test('Core16 early GUI close is clean but does not prove the persistent duration', () => {
+        const finish = persistentFinish(corePersistent({ scalarOverrides: polls => polls >= 4 ? { 242: 1000 } : {} }));
+        assert.equal(finish.cleanup_passed, true); assert.equal(finish.passed, false);
+    });
+    test('Core16 rejected expiry cannot silently renew on later polls', () => {
+        const result = corePersistent({ heartbeatRejected: true, workerState: { 9: 5, 17: 0 }, scalarOverrides: polls => polls >= 4 ? { 269: 3, 10: 0, 173: 0, 259: 0 } : {} });
+        assert.equal(result.heartbeats, 1); assert.equal(persistentFinish(result).passed, false);
+    });
+    for (const field of [85, 256, 257, 258, 259, 262, 263, 264, 265, 266, 269, 270, 287])
+        test('Core16 rejects malformed persistent extension field ' + field, () => {
+            const value = field === 85 ? 20000 : field === 256 || field === 265 || field === 266 ? 0 : field === 257 ? 18 : field === 269 ? 6 : field === 264 ? 7 : 2;
+            const finish = persistentFinish(corePersistent({ scalarOverrides: () => ({ [field]: value }) }));
+            assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, false);
+        });
+    for (const name of ['DE_CorePersistentFrontendApiVersion', 'DE_CorePersistentFrontendBegin', 'DE_CorePersistentFrontendHeartbeat',
+        'DE_CorePersistentFrontendCapture', 'DE_CorePersistentFrontendRead', 'DE_CorePersistentFrontendCaptureLifecycle', 'DE_CorePersistentFrontendReadLifecycle'])
+        test('Core16 requires independent persistent export ' + name, () => {
+            const result = corePersistent({ functions: { [name]: null } });
+            assert.ok(!result.calls.some(call => call[0] === 'DE_CorePersistentFrontendBegin'));
+            assert.ok(result.logs.some(event => event.event === 'adapter_failed'));
+        });
+    for (const options of [{ mode: 'online' }, { mtaCoreGuiFrontendStartupReference: true }, { mtaCoreGuiFrontendInputReference: true }, { mtaCoreGuiFrontendReference: true },
+        { mtaCoreGuiSurfaceReference: true }, { mtaCoreGuiStartupReference: true }, { mtaCoreMovementReference: true }, { mtaCoreRenderReference: true },
+        { reference: true }, { inputReference: true }, { mtaNativeMovementTrial: true }])
+        test('Core16 refuses combined mode ' + JSON.stringify(options), () => {
+            const result = corePersistent({ entry: { ...options, forbidRuntimeAccess: true } });
             assert.equal(result.calls.length, 0); assert.ok(result.logs.some(event => event.event === 'adapter_failed'));
         });
     test('Core14 frontend input uses separate256 evidence and no script player-control lease or native writes', () => {

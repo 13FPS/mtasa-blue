@@ -294,6 +294,51 @@ bool CGameAdapterModule::EndNativeMovementTrial()
     return RequireOwnerThread("EndNativeMovementTrial") && RecordStatus(m_adapter->EndNativeMovementTrial(), "EndNativeMovementTrial");
 }
 
+bool CGameAdapterModule::BeginFrontendInputLease(void* window, mta::game_de::FrontendInputLeaseStateV1& state)
+{
+    using namespace mta::game_de;
+    if (!RequireOwnerThread("BeginFrontendInputLease"))
+        return false;
+    const auto resolve = [&](auto& function, const char* name)
+    {
+        const auto address = GetProcAddress(static_cast<HMODULE>(m_module), name);
+        static_assert(sizeof(function) == sizeof(address));
+        std::memcpy(&function, &address, sizeof(function));
+        return function != nullptr;
+    };
+    // This optional neutral-only contract has its own exports. Never fall back
+    // to a movement trial whose absolute lifetime remains capped at 35 seconds.
+    const bool available = resolve(m_frontendLeaseBegin, "BeginGameFrontendInputLeaseV1") && resolve(m_frontendLeaseRenew, "RenewGameFrontendInputLeaseV1") &&
+                           resolve(m_frontendLeaseRead, "ReadGameFrontendInputLeaseV1") && resolve(m_frontendLeaseEnd, "EndGameFrontendInputLeaseV1");
+    if (!available)
+    {
+        SetError("The adapter lacks the complete optional frontend input lease contract");
+        return false;
+    }
+    FrontendInputLeaseRequestV1 request;
+    request.window = window;
+    return RecordStatus(m_frontendLeaseBegin(FrontendInputLeaseVersionV1, m_adapter, &request, &state), "BeginFrontendInputLease");
+}
+
+bool CGameAdapterModule::RenewFrontendInputLease(std::uint64_t generation)
+{
+    const mta::game_de::MtaInputState neutral;
+    return RequireOwnerThread("RenewFrontendInputLease") && m_frontendLeaseRenew &&
+           RecordStatus(m_frontendLeaseRenew(mta::game_de::FrontendInputLeaseVersionV1, m_adapter, generation, &neutral), "RenewFrontendInputLease");
+}
+
+bool CGameAdapterModule::ReadFrontendInputLease(mta::game_de::FrontendInputLeaseStateV1& state)
+{
+    return RequireOwnerThread("ReadFrontendInputLease") && m_frontendLeaseRead &&
+           RecordStatus(m_frontendLeaseRead(mta::game_de::FrontendInputLeaseVersionV1, m_adapter, &state), "ReadFrontendInputLease");
+}
+
+bool CGameAdapterModule::EndFrontendInputLease(std::uint64_t generation)
+{
+    return RequireOwnerThread("EndFrontendInputLease") && m_frontendLeaseEnd &&
+           RecordStatus(m_frontendLeaseEnd(mta::game_de::FrontendInputLeaseVersionV1, m_adapter, generation), "EndFrontendInputLease");
+}
+
 bool CGameAdapterModule::GetNativeMovementEligibility(mta::game_de::NativeMovementEligibility& state)
 {
     return RequireOwnerThread("GetNativeMovementEligibility") && RecordStatus(m_adapter->GetNativeMovementEligibility(state), "GetNativeMovementEligibility");
@@ -1272,6 +1317,10 @@ void CGameAdapterModule::Stop() noexcept
     }
     m_ownerThread = 0;
     m_ownerIdentity = nullptr;
+    m_frontendLeaseBegin = nullptr;
+    m_frontendLeaseRenew = nullptr;
+    m_frontendLeaseRead = nullptr;
+    m_frontendLeaseEnd = nullptr;
     m_renderEndpointReaderV2 = nullptr;
     m_renderSetupReaderV1 = nullptr;
     m_renderRootsReaderV1 = nullptr;

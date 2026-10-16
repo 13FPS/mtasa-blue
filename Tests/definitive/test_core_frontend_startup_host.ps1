@@ -27,7 +27,7 @@ function Assert-NoLinks([string]$Path) {
     }
 }
 $sourceNames=@('Tests/definitive/CoreFrontendStartupHostTests.cpp','Tests/definitive/test_core_frontend_startup_host.ps1','Client/core/DefinitiveFrontend.h','Client/core/DefinitiveFrontendStartup.h',
-    'Client/core/DefinitiveFrontendConsole.h','Client/core/DefinitiveFrontendBindings.h','Client/core/DefinitiveFrontendStartup.cpp','Client/core/Core.cpp','Client/core/CGameAdapterModule.cpp','Client/core/CGameAdapterModule.h',
+    'Client/core/DefinitivePersistentFrontend.h','Client/core/DefinitiveFrontendConsole.h','Client/core/DefinitiveFrontendBindings.h','Client/core/DefinitiveFrontendStartup.cpp','Client/core/Core.cpp','Client/core/CGameAdapterModule.cpp','Client/core/CGameAdapterModule.h',
     'Client/core/CCore.cpp','Client/core/CCore.h','Client/core/CGUI.cpp','Client/core/CGUI.h','Client/core/CMainMenu.cpp','Client/core/CMainMenu.h',
     'Client/core/CCredits.cpp','Client/core/CQuestionBox.cpp','Client/core/CNewsBrowser.cpp','Client/core/CLocalization.cpp','Client/core/CClientVariables.cpp',
     'Client/core/CVersionUpdater.cpp','Client/core/CVersionUpdater.h','Client/core/ServerBrowser/CServerCache.cpp','Client/core/ServerBrowser/CServerCache.h',
@@ -197,10 +197,11 @@ try {
         sourceHashes=$sourceHashes;sourceUnchanged=$sourceUnchanged;sourceSnapshotScope='Fixture plus complete current declared Core and GUI normal-build inputs; a declared superset, not an independently recovered compiler-read trace.';
         normalBuildCertificates=$certificates;certificatesUnchanged=$certificatesUnchanged;artifacts=$artifacts;artifactsUnchanged=$artifactsUnchanged;
         assets=$assets;assetsUnchanged=$assetsUnchanged;windowsFonts=$windowsFonts;systemDlls=$systemDlls;compiler=$compilerRecord;platformUnchanged=$platformUnchanged;executionArtifacts=$executionArtifacts;
-        targetFormat=87;width=1280;height=1024;coreFrontendApi=1;frontendFields=32;frontendStartupApi=1;frontendStartupFields=32;actualCompletedCoreBackendAndBorrowedFrontend=$success;actualMtaMenuCreditsAndConsoleOnOwnedWarp=$success;
+        targetFormat=87;width=1280;height=1024;coreFrontendApi=1;frontendFields=32;frontendStartupApi=1;frontendStartupFields=32;persistentFrontendApi=1;persistentFrontendFields=288;
+        persistentRequestAdmissionVerified=$success;persistentWrongImageRefusalVerified=$success;persistentForeignThreadRefusalVerified=$success;persistentNativeLeaseStarted=$false;persistentVisibleRenderingVerified=$false;actualCompletedCoreBackendAndBorrowedFrontend=$success;actualMtaMenuCreditsAndConsoleOnOwnedWarp=$success;
         cpuFrontendTeardownWhileGpuRetainedVerified=$success;startupFailureOwnerCleanupVerified=$success;normalFrontendReacquireVerified=$success;completedCoreRetainedAfterFrontendReleaseVerified=$success;backendFailureOwnerCleanupVerified=$success;
         configurationCopiesUnchanged=$assetsUnchanged;installedFilesChanged=$false;gameLaunched=$false;gameAttached=$false;engineInputSuppressionVerified=$false;fullMtaReady=$false;
-        scope='Completed real Core and actual Game DE lifecycle, borrowed actual MTA menu/credits/console/configured bindings on a private WARP target, explicit wrong-image native bind refusal, GPU-retained and partial backend/frontend failure cleanup. Disposable SanAndreas.exe is this hashed owned host, not GTA. No engine facade stubs, native engine binding, game/device attachment, native hooks, full multiplayer startup or visible GTA claim.'}
+        scope='Completed real Core and actual Game DE lifecycle, borrowed actual MTA menu/credits/console/configured bindings on a private WARP target, explicit bounded/persistent wrong-image native bind refusal and versioned persistent request/owner admission, GPU-retained and partial backend/frontend failure cleanup. Disposable SanAndreas.exe is this hashed owned host, not GTA. No engine facade stubs, native engine binding, game/device attachment, native hooks, full multiplayer startup or visible GTA claim.'}
     $receipt | ConvertTo-Json -Depth 9 | Set-Content -LiteralPath (Join-Path $outputRoot 'test-result.json') -Encoding utf8
 }
 [ordered]@{success=$success;receipt=(Join-Path $outputRoot 'test-result.json');checks=$testCount;failure=$failure} | ConvertTo-Json -Compress

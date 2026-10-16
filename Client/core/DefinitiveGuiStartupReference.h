@@ -124,7 +124,7 @@ namespace DefinitiveGuiStartupReference
     // The surface trial shares this ownership order with the offscreen trial.
     // Only its separately versioned scalar tail differs; old callers keep64.
     template <typename SnapshotType = Snapshot, typename Owner, typename Clock, typename Request>
-    SnapshotType Run(Owner& owner, Clock& clock, const Request& request) noexcept
+    SnapshotType Run(Owner& owner, Clock& clock, const Request& request, bool renewableFrontend = false) noexcept
     {
         static_assert(noexcept(clock.Now()) && noexcept(clock.Wait(std::uint32_t{})));
         SnapshotType snapshot{};
@@ -274,7 +274,10 @@ namespace DefinitiveGuiStartupReference
                             break;
                         }
                         const auto now = elapsed();
-                        if (now < gpuStarted || now - gpuStarted >= request.durationMs)
+                        // Renewable frontend owners check host and native leases
+                        // independently on every poll. All historical workloads
+                        // retain the same absolute GPU duration bound.
+                        if (now < gpuStarted || (!renewableFrontend && now - gpuStarted >= request.durationMs))
                         {
                             reason = StopReason::GpuError;
                             break;

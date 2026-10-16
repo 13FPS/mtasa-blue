@@ -7,6 +7,7 @@
 #pragma once
 
 #include "../sdk/game/CGameAdapter.h"
+#include "../sdk/game/CGameFrontendInputLease.h"
 #include <cstdint>
 
 namespace mta::game_de
@@ -20,11 +21,17 @@ namespace mta::game_de
     class NativeMovementInput final
     {
     public:
-        bool Begin(const MtaInputState& state) noexcept;
-        bool Update(const MtaInputState& state) noexcept;
-        bool End() noexcept;
-        bool IsBound() const noexcept;
-        bool IsActive() const noexcept;
+        bool        Begin(const MtaInputState& state) noexcept;
+        bool        Update(const MtaInputState& state) noexcept;
+        bool        BeginFrontendLease(const FrontendInputLeaseRequestV1& request) noexcept;
+        static bool ValidateFrontendLeaseRequest(const FrontendInputLeaseRequestV1& request) noexcept;
+        bool        RenewFrontendLease(std::uint64_t requestedGeneration, const MtaInputState& state) noexcept;
+        bool        ReadFrontendLease(FrontendInputLeaseStateV1& state) noexcept;
+        bool        EndFrontendLease(std::uint64_t requestedGeneration) noexcept;
+        bool        IsFrontendLease() const noexcept;
+        bool        End() noexcept;
+        bool        IsBound() const noexcept;
+        bool        IsActive() const noexcept;
         // The adapter first verifies its existing native-reader binding.
         // Before Begin this observes local on-foot/IDLE/controls-enabled
         // admission. During a trial it consumes fresh, generation/identity-bound
@@ -35,6 +42,7 @@ namespace mta::game_de
         void ReadState(NativeMovementTrialState& state) const noexcept;
 
     private:
+        bool                     BeginInternal(const MtaInputState& state, void* frontendWindow) noexcept;
         std::uint64_t            generation = 0;
         NativeMovementTrialState finalState;
         bool                     hasFinalState = false;

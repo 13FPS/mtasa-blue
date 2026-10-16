@@ -11,10 +11,10 @@ $output=Join-Path $root ('Build/mta-frontend-control-worker/'+(Get-Date -Format 
 [IO.Directory]::CreateDirectory($output)|Out-Null
 function Sha([string]$Path){(Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()}
 $names=@('Client/definitive/FrontendControlMailbox.h','Client/definitive/CoreStartupReference.h','Client/definitive/CoreStartupReference.cpp',
-    'Client/definitive/FrontendStartupReport.h','Client/core/DefinitiveFrontendStartup.h',
+    'Client/definitive/FrontendStartupReport.h','Client/definitive/PersistentFrontendHostLease.h','Client/core/DefinitivePersistentFrontend.h','Client/core/DefinitiveFrontendStartup.h',
     'Client/core/DefinitiveFrontend.h','Client/core/DefinitiveGuiFrontendReference.h','Client/core/DefinitiveGuiFrontendInputReference.h','Client/core/DefinitiveGuiSurfaceReference.h',
     'Client/core/DefinitiveGuiStartupReference.h','Client/core/DefinitiveInputReference.h','Client/core/DefinitiveMovementReference.h','Client/core/DefinitiveRenderReference.h',
-    'Tests/definitive/FrontendControlMailboxTests.cpp','Tests/definitive/CoreGuiFrontendFixture.cpp','Tests/definitive/CoreGuiFrontendWorkerTests.cpp','Tests/definitive/test_frontend_control_worker.ps1')
+    'Tests/definitive/FrontendControlMailboxTests.cpp','Tests/definitive/PersistentFrontendHostLeaseTests.cpp','Tests/definitive/CoreGuiFrontendFixture.cpp','Tests/definitive/CoreGuiFrontendWorkerTests.cpp','Tests/definitive/test_frontend_control_worker.ps1')
 $hashes=[ordered]@{}
 foreach($name in $names){
     $source=Join-Path $root $name;$hashes[$name]=Sha $source
@@ -57,11 +57,14 @@ try{
     $mailbox=Join-Path $output 'mailbox/FrontendControlMailboxTests.exe'
     Compile 'mailbox' @((Join-Path $PSScriptRoot 'FrontendControlMailboxTests.cpp')) $mailbox
     Run 'deterministic-mailbox' $mailbox
+    $hostLease=Join-Path $output 'host-lease/PersistentFrontendHostLeaseTests.exe'
+    Compile 'host-lease' @((Join-Path $PSScriptRoot 'PersistentFrontendHostLeaseTests.cpp')) $hostLease
+    Run 'deterministic-host-lease' $hostLease
     $fixture=Join-Path $output 'fixture/CoreGuiFrontendFixture.dll'
     Compile 'controlled-core' @((Join-Path $PSScriptRoot 'CoreGuiFrontendFixture.cpp')) $fixture @('/LD')
     $workerHostPath=Join-Path $output 'host/FrontendWorkerHost.exe'
     Compile 'production-worker' @((Join-Path $PSScriptRoot 'CoreGuiFrontendWorkerTests.cpp'),(Join-Path $root 'Client/definitive/CoreStartupReference.cpp')) $workerHostPath @('/DMTA_TEST_CORE_STARTUP_ACCESS=1','/DMTA_TEST_FRONTEND_CONTROL_ACCESS=1')
-    foreach($mode in @((0..12)+(100..111)+(200..229))){
+    foreach($mode in @((0..12)+(100..111)+(200..229)+(300..311))){
         $directory=Join-Path $output ('case-'+$mode);[IO.Directory]::CreateDirectory($directory)|Out-Null
         $owned=Join-Path $directory 'FrontendWorkerHost.exe'
         Copy-Item -LiteralPath $workerHostPath -Destination $owned
@@ -71,7 +74,7 @@ try{
 }catch{$failure=$_.Exception.Message}
 $unchanged=$true
 foreach($name in $names){if((Sha (Join-Path $root $name)) -ne $hashes[$name]){$unchanged=$false}}
-$record=[ordered]@{success=($null -eq $failure -and $unchanged -and $runs.Count -eq 56);failure=$failure;directory=$output;
+$record=[ordered]@{success=($null -eq $failure -and $unchanged -and $runs.Count -eq 69);failure=$failure;directory=$output;
     source_hashes=$hashes;sources_unchanged=$unchanged;compiles=$compiles;runs=$runs;game_launched=$false;game_memory_read=$false;
     synthetic_core_is_mta=$false;engine_control_write_verified=$false;full_mta_startup_verified=$false}
 $result=Join-Path $output 'test-result.json';$record|ConvertTo-Json -Depth 10|Set-Content -LiteralPath $result -Encoding utf8

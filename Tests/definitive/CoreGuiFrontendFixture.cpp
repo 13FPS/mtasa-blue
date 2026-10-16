@@ -8,6 +8,7 @@
 #include "../../Client/core/DefinitiveInputReference.h"
 #include "../../Client/core/DefinitiveGuiFrontendInputReference.h"
 #include "../../Client/core/DefinitiveFrontendStartup.h"
+#include "../../Client/core/DefinitivePersistentFrontend.h"
 #include <windows.h>
 #include <algorithm>
 #include <cwchar>
@@ -29,6 +30,44 @@ namespace
         wchar_t value[32]{};
         GetEnvironmentVariableW(L"MTA_FRONTEND_FIXTURE_MODE", value, 32);
         return static_cast<unsigned>(std::wcstoul(value, nullptr, 10));
+    }
+    DefinitivePersistentFrontend::RequestV1 persistentRequest{};
+    bool                                    PersistentStop()
+    {
+        return persistentRequest.cancelled() || !persistentRequest.heartbeat();
+    }
+    void PublishPersistent(const std::uint32_t* input, std::uint32_t count)
+    {
+        namespace Persistent = DefinitivePersistentFrontend;
+        if (count != DefinitiveGuiFrontendInputReference::FieldCount)
+            return;
+        Persistent::Snapshot sample{};
+        std::copy_n(input, count, sample.begin());
+        sample[DefinitiveGuiSurfaceReference::DisplayDuration] = 0;
+        sample[Persistent::PersistentVersion] = 1;
+        sample[Persistent::SessionGenerationLow] = static_cast<std::uint32_t>(persistentRequest.generation);
+        sample[Persistent::SessionGenerationHigh] = static_cast<std::uint32_t>(persistentRequest.generation >> 32);
+        const bool cancelled = persistentRequest.cancelled();
+        const bool fresh = persistentRequest.heartbeat();
+        const bool terminal = sample[DefinitiveGuiStartupReference::Phase] == 2;
+        sample[Persistent::HostLeaseFresh] = terminal && Mode() == 310 ? 0u : fresh ? 1u : 0u;
+        sample[DefinitiveGuiFrontendInputReference::GuiCloseRequested] = terminal && !cancelled && fresh && Mode() != 311 ? 1u : 0u;
+        sample[Persistent::NativeLeaseGenerationLow] = 7;
+        sample[Persistent::NativeLeaseActive] = terminal ? 0u : 1u;
+        sample[Persistent::NativeLeaseRevoked] = terminal ? 1u : 0u;
+        sample[Persistent::NativeLeaseReason] = terminal ? 5u : 0u;
+        sample[Persistent::HostHeartbeatBudgetMs] = 1000;
+        sample[Persistent::NativeHeartbeatBudgetMs] = 500;
+        sample[Persistent::NativeLeaseRenewalsLow] = 4;
+        sample[DefinitiveGuiFrontendInputReference::NativeActiveMs] = terminal ? 36000u : 0u;
+        sample[Persistent::StopReason] = !terminal ? 0u : cancelled ? 2u : !fresh ? 3u : 1u;
+        if (terminal && (cancelled || !fresh))
+            sample[DefinitiveGuiStartupReference::WorkloadSucceeded] = 0;
+        if (Mode() == 308 && terminal)
+            sample[Persistent::NativeLeaseActive] = 1;
+        if (Mode() == 309)
+            sample[Persistent::Reserved270] = 1;
+        persistentRequest.publish(sample.data(), Persistent::FieldCount);
     }
     void ControlledFrontendInput()
     {
@@ -417,7 +456,8 @@ extern "C" __declspec(dllexport) DefinitiveFrontendStartup::Status MTA_ShutdownD
     if (Mode() == 223)
         throw std::runtime_error("controlled shutdown throw");
     ++startupShutdowns;
-    if (((Mode() == 206 || Mode() == 207 || Mode() == 227) && startupShutdowns < 4) || (Mode() == 226 && startupShutdowns < 44) || Mode() == 213)
+    if (((Mode() == 206 || Mode() == 207 || Mode() == 227 || Mode() == 306) && startupShutdowns < 4) || (Mode() == 226 && startupShutdowns < 44) ||
+        Mode() == 213)
     {
         startup[Phase] = 3;
         startup[CleanupPending] = 1;
@@ -439,4 +479,38 @@ extern "C" __declspec(dllexport) DefinitiveFrontendStartup::Status MTA_ReleaseDE
         throw std::runtime_error("controlled release throw");
     ++startupReleases;
     return (Mode() == 208 || Mode() == 228) && startupReleases < 4 ? Status::Busy : Mode() == 214 ? Status::Failed : Status::Ok;
+}
+
+extern "C" __declspec(dllexport) std::uint32_t MTA_DEPersistentFrontendApiVersion()
+{
+    return Mode() == 304 ? 2u : 1u;
+}
+extern "C" __declspec(dllexport) DefinitivePersistentFrontend::Status MTA_RunDEPersistentFrontendV1(
+    void* handle, const DefinitivePersistentFrontend::RequestV1* request) noexcept(false)
+{
+    LogStartup('P');
+    using namespace DefinitiveFrontendStartup;
+    if (handle != &startupToken || !request || request->size != sizeof(*request) || request->version != 1 || !request->generation || request->reserved[0] ||
+        request->reserved[1] || !request->cancelled || !request->publish || !request->heartbeat)
+        return Status::InvalidArgument;
+    if (startup[OwnerThread] != GetCurrentThreadId())
+        return Status::WrongThread;
+    if (Mode() == 305)
+        return Status::Failed;
+    if (Mode() == 307)
+        throw std::runtime_error("controlled persistent Run throw");
+    persistentRequest = *request;
+    cancel = PersistentStop;
+    publish = PublishPersistent;
+    startup[ExactImageBound] = startup[ViewRuns] = 1;
+    ++startup[Pulses];
+    ControlledFrontendInput();
+    if (Mode() == 306)
+    {
+        startup[Phase] = 3;
+        startup[CleanupPending] = 1;
+        startup[LastViewCleanupComplete] = 0;
+        return Status::Busy;
+    }
+    return request->cancelled() || !request->heartbeat() ? Status::Stopped : Status::Ok;
 }

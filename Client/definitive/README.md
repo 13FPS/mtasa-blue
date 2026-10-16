@@ -26,7 +26,25 @@ after-view snapshot must prove Core/backend survival before explicit shutdown;
 the stopped snapshot is copied before final release. Busy cleanup keeps the
 same worker alive and retries, including after cancellation or a deadline.
 The existing Core14 input256 route and all older contracts remain separate.
-Persistent menu input remains deferred beyond the native 35-second trial limit.
+The historical view keeps its native 35-second trial limit.
+
+**A separate persistent frontend candidate reuses this same MTA owner.**
+`-MtaCorePersistentFrontend` selects a Smoke package that runs the existing
+menu, console, bindings and rendering until close, cancellation, focus loss or
+a fault. Its script owner renews a generation-bound one-second heartbeat; Core
+independently renews a neutral-only 500 ms native input lease. Either stalled
+owner therefore loses input admission. Expired, revoked or stale generations
+cannot resume. Native window-family focus is checked before new scopes, while
+every admitted scope retains its original physical-input restoration obligation.
+
+This optional native export contract preserves Adapter ABI6 and does not grant
+gameplay or remote-player capability. Its distinct 288-field report and bridge
+exports leave the old input256/lifecycle96 trials unchanged. Device acquisition
+stays bounded; cleanup deadlines still retain owners and retry. The existing
+20-second menu and 35-second native trial limits are separately regression tested.
+The renewable runner passes simulated execution beyond two minutes, and actual
+Core hosts reject wrong-image persistent startup without starting a view. The
+persistent candidate still needs its own live GTA test.
 
 The installed 58-file candidate passes 733 ownership/package checks, including
 22 real launcher preflight cases and missing-export/architecture rejection.
@@ -71,6 +89,16 @@ owner/coroutine pointers, MTA pre/post-call and undump hooks, garbage collection
 allocator retirement and loading a genuine four-byte-size_t Lua chunk. Classic
 Lua also builds, and twelve project-policy guards pass. This does not enable
 the x64 deathmatch client or supply the missing compatible network/BASS modules.
+
+**The existing Speex voice dependency also builds for x64 under the DE opt-in.**
+Its output is isolated beside the x64 Lua dependency, and default/classic build
+selection is preserved. Actual x86 and x64 hosts exchange compressed packets in
+both directions using MTA's codec/preprocessor settings: 18 cases and 864 frames
+per direction, including all three voice sample rates and repeated ownership.
+Decoded audio is checked against reconstruction and opposite-architecture
+reference tolerances. This tests codec interoperability, without audio hardware
+or a running multiplayer client; deathmatch, BASS and network admission remain
+unchanged.
 
 **Core-owned frontend input uses MTA's existing systems.** The separate
 Smoke option `-MtaCoreGuiFrontendInputReference` selects Core14 / FrontendInput1

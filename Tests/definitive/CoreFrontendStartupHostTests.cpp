@@ -25,22 +25,25 @@
 #include <gui/CGUID3D12.h>
 #include "../../Client/core/DefinitiveFrontend.h"
 #include "../../Client/core/DefinitiveFrontendStartup.h"
+#include "../../Client/core/DefinitivePersistentFrontend.h"
 #include "../../Client/core/DefinitiveFrontendConsole.h"
 #include "../../Client/core/DefinitiveFrontendBindings.h"
 
 using Microsoft::WRL::ComPtr;
 namespace Frontend = DefinitiveFrontend;
 namespace Startup = DefinitiveFrontendStartup;
+namespace Persistent = DefinitivePersistentFrontend;
 namespace Console = DefinitiveFrontendConsole;
 namespace Bindings = DefinitiveFrontendBindings;
 using mta::gui::GuiD3D12Status;
 static_assert(Frontend::ApiVersion == 1 && Frontend::FieldCount == 32);
 static_assert(Startup::ApiVersion == 1 && Startup::FieldCount == 32);
+static_assert(Persistent::ApiVersion == 1 && Persistent::FieldCount == 288);
 
 namespace
 {
     unsigned checks = 0;
-    unsigned cancelCalls = 0, publishCalls = 0;
+    unsigned cancelCalls = 0, publishCalls = 0, heartbeatCalls = 0;
     bool     CancelView()
     {
         ++cancelCalls;
@@ -49,6 +52,22 @@ namespace
     void PublishView(const std::uint32_t*, std::uint32_t)
     {
         ++publishCalls;
+    }
+    bool HostHeartbeat()
+    {
+        ++heartbeatCalls;
+        return true;
+    }
+    Persistent::RequestV1 PersistentRequest()
+    {
+        Persistent::RequestV1 request;
+        // High bits must survive the real C ABI even though the script owner
+        // currently issues only uint32 generation tokens through the bridge.
+        request.generation = UINT64_C(0x100000002);
+        request.cancelled = &CancelView;
+        request.publish = &PublishView;
+        request.heartbeat = &HostHeartbeat;
+        return request;
     }
     void Check(bool condition, const char* why)
     {
@@ -97,6 +116,7 @@ namespace
         Startup::Shutdown                  shutdownStartup = nullptr;
         Startup::Release                   releaseStartup = nullptr;
         Startup::RunView                   runView = nullptr;
+        Persistent::Run                    runPersistent = nullptr;
         Frontend::Create                   create = nullptr;
         Frontend::Pulse                    pulse = nullptr;
         Frontend::Read                     read = nullptr;
@@ -314,6 +334,48 @@ namespace
               "completed frontend Core never upgrades network, gameplay or full-client readiness");
         return state;
     }
+    void PersistentArgumentChecks(Owned& owned)
+    {
+        const auto request = PersistentRequest();
+        const auto before = StartupState(owned);
+        Check(owned.runPersistent(nullptr, &request) == Frontend::Status::InvalidArgument &&
+                  owned.runPersistent(reinterpret_cast<void*>(std::uintptr_t{1}), &request) == Frontend::Status::InvalidArgument &&
+                  owned.runPersistent(owned.startup, nullptr) == Frontend::Status::InvalidArgument,
+              "persistent API refuses missing request and unknown owner identities before invoking callbacks");
+        const auto invalid = [&](const Persistent::RequestV1& value, const char* why)
+        { Check(owned.runPersistent(owned.startup, &value) == Frontend::Status::InvalidArgument, why); };
+        auto changed = request;
+        changed.size = sizeof(request) - 1;
+        invalid(changed, "persistent API refuses a truncated request size");
+        changed = request;
+        changed.size = sizeof(request) + 1;
+        invalid(changed, "persistent API refuses an extended request size without a matching version");
+        changed = request;
+        changed.version = 0;
+        invalid(changed, "persistent API refuses a missing request version");
+        changed.version = Persistent::ApiVersion + 1;
+        invalid(changed, "persistent API refuses an unsupported request version");
+        changed = request;
+        changed.generation = 0;
+        invalid(changed, "persistent API refuses a zero generation token");
+        changed = request;
+        changed.reserved[0] = 1;
+        invalid(changed, "persistent API refuses first reserved request value");
+        changed = request;
+        changed.reserved[1] = 1;
+        invalid(changed, "persistent API refuses second reserved request value");
+        changed = request;
+        changed.cancelled = nullptr;
+        invalid(changed, "persistent API requires an explicit cancellation callback");
+        changed = request;
+        changed.publish = nullptr;
+        invalid(changed, "persistent API requires independent value publication");
+        changed = request;
+        changed.heartbeat = nullptr;
+        invalid(changed, "persistent API requires the independently renewed host lifetime callback");
+        Check(StartupState(owned) == before && !cancelCalls && !publishCalls && !heartbeatCalls,
+              "malformed persistent requests leave real Core/backend lifecycle and every caller callback untouched");
+    }
     void SaveResult(const std::filesystem::path& root, const Startup::Snapshot& startup, const Frontend::Snapshot& frontend)
     {
         std::ofstream result(root / L"frontend-startup-result.json");
@@ -323,7 +385,10 @@ namespace
         result << "],\"frontendTerminal\":[";
         for (std::size_t index = 0; index < frontend.size(); ++index)
             result << (index ? "," : "") << frontend[index];
-        result << "],\"nativeEngineBindingVerified\":false,\"fullMtaReady\":false,\"gameLaunched\":false}\n";
+        result << "],\"persistentApiVersion\":1,\"persistentFields\":288,\"persistentRequestAdmissionVerified\":true,\"persistentWrongImageRefusalVerified\":"
+               << (startup[Startup::LastFailure] == static_cast<std::uint32_t>(Startup::Failure::InputBind) ? "true" : "false")
+               << ",\"persistentNativeLeaseStarted\":false,\"persistentVisibleRenderingVerified\":false,\"nativeEngineBindingVerified\":false,\"fullMtaReady\":"
+                  "false,\"gameLaunched\":false}\n";
         Check(result.good(), "save actual completed-Core and frontend terminal values");
     }
     void ConsoleAndBindings(Owned& owned)
@@ -424,6 +489,9 @@ int wmain(int argc, wchar_t** argv)
         owned.shutdownStartup = Export<Startup::Shutdown>(owned.core, "MTA_ShutdownDEFrontendStartup");
         owned.releaseStartup = Export<Startup::Release>(owned.core, "MTA_ReleaseDEFrontendStartup");
         owned.runView = Export<Startup::RunView>(owned.core, "MTA_RunDEFrontendStartupView");
+        Check(Export<std::uint32_t (*)()>(owned.core, "MTA_DEPersistentFrontendApiVersion")() == Persistent::ApiVersion,
+              "normal Core exposes separate renewable frontend API1 without changing completed startup or bounded trials");
+        owned.runPersistent = Export<Persistent::Run>(owned.core, "MTA_RunDEPersistentFrontendV1");
         Check(!owned.beginStartup(0) && !owned.beginStartup(Startup::ApiVersion + 1) && !owned.beginStartup(Startup::ApiVersion),
               "wrong versions and missing explicit directories cannot construct a frontend Core owner");
         CheckIsolation(false);
@@ -437,6 +505,8 @@ int wmain(int argc, wchar_t** argv)
         owned.startup = owned.beginStartup(Startup::ApiVersion);
         Check(owned.startup != nullptr, "allocated startup publishes completed Core ownership even if backend preparation fails");
         auto startup = StartupState(owned);
+        PersistentArgumentChecks(owned);
+        const auto persistentRequest = PersistentRequest();
         Check(!owned.beginStartup(Startup::ApiVersion), "second startup cannot replace an existing completed Core owner");
         Startup::Snapshot sentinel;
         sentinel.fill(0x13572468);
@@ -456,10 +526,11 @@ int wmain(int argc, wchar_t** argv)
                           owned.bindStartup(owned.startup) == Frontend::Status::WrongThread &&
                           owned.shutdownStartup(owned.startup) == Frontend::Status::WrongThread &&
                           owned.releaseStartup(owned.startup) == Frontend::Status::WrongThread &&
-                          owned.runView(owned.startup, 100, &CancelView, &PublishView) == Frontend::Status::WrongThread;
+                          owned.runView(owned.startup, 100, &CancelView, &PublishView) == Frontend::Status::WrongThread &&
+                          owned.runPersistent(owned.startup, &persistentRequest) == Frontend::Status::WrongThread;
             });
         other.join();
-        Check(foreign, "foreign thread cannot read, bind, pulse, stop or release the completed Core owner");
+        Check(foreign, "foreign thread cannot read, bind, pulse, stop, release or start persistent input on the completed Core owner");
         Check(owned.runView(owned.startup, 0, &CancelView, &PublishView) == Frontend::Status::InvalidArgument &&
                   owned.runView(owned.startup, 35001, &CancelView, &PublishView) == Frontend::Status::InvalidArgument &&
                   owned.runView(owned.startup, 100, nullptr, &PublishView) == Frontend::Status::InvalidArgument &&
@@ -495,6 +566,9 @@ int wmain(int argc, wchar_t** argv)
                       !startup[Startup::BackendStarted] && startup[Startup::LastFailure],
                   "missing actual Game DE publishes a failed handle retaining its completed Core for explicit cleanup");
             CheckIsolation(false);
+            Check(owned.runPersistent(owned.startup, &persistentRequest) == Frontend::Status::Failed && !cancelCalls && !publishCalls && !heartbeatCalls &&
+                      !StartupState(owned)[Startup::ViewRuns],
+                  "failed backend owner refuses persistent native work without invoking callbacks or inventing a view");
             initializeGui();
             Check(!owned.create(Frontend::ApiVersion, owned.gui) && !StartupState(owned)[Startup::FrontendRetained],
                   "a failed backend Core cannot admit a borrowed frontend or leave a partial GUI owner");
@@ -518,6 +592,15 @@ int wmain(int argc, wchar_t** argv)
             Check(owned.runView(owned.startup, 100, &CancelView, &PublishView) == Frontend::Status::Failed && !cancelCalls && !publishCalls &&
                       !StartupState(owned)[Startup::ViewRuns] && StartupState(owned)[Startup::LastViewCleanupComplete],
                   "real bounded view refuses wrong-image native binding before callbacks, GUI work or new ownership");
+            const auto beforePersistent = StartupState(owned);
+            Check(owned.runPersistent(owned.startup, &persistentRequest) == Frontend::Status::Failed && !cancelCalls && !publishCalls && !heartbeatCalls,
+                  "real persistent API refuses the owned host's wrong image before callbacks, native lease or GUI work");
+            startup = StartupState(owned);
+            Check(startup == beforePersistent && startup[Startup::Phase] == 2 && startup[Startup::CoreRetained] && startup[Startup::BackendStarted] &&
+                      !startup[Startup::ExactImageBound] && !startup[Startup::ViewRuns] && startup[Startup::LastViewCleanupComplete] &&
+                      startup[Startup::LastFailure] == static_cast<std::uint32_t>(Startup::Failure::InputBind),
+                  "persistent wrong-image refusal retains exact completed Core/backend capabilities and admits no view ownership");
+            CheckIsolation(true);
             initializeGui();
             const auto empty = Raster(owned, true);
             Check(std::all_of(empty.begin(), empty.end(), [&](auto value) { return value == empty.front(); }), "empty actual GUI target is uniform");
@@ -532,6 +615,8 @@ int wmain(int argc, wchar_t** argv)
                   "live or failed borrowed frontend prevents completed Core destruction");
             Check(owned.runView(owned.startup, 100, &CancelView, &PublishView) == Frontend::Status::Busy && !cancelCalls && !publishCalls,
                   "retained frontend prevents a second bounded view from replacing its Core/GUI ownership");
+            Check(owned.runPersistent(owned.startup, &persistentRequest) == Frontend::Status::Busy && !cancelCalls && !publishCalls && !heartbeatCalls,
+                  "retained actual frontend prevents persistent input from replacing existing Core/GUI ownership");
             if (mode == L"frontend-failure")
                 Check(state[Frontend::Phase] == 5, "missing XML fails only borrowed frontend startup while the completed Core remains owned");
             else
@@ -629,6 +714,8 @@ int wmain(int argc, wchar_t** argv)
         Check(owned.shutdownStartup(owned.startup) == Frontend::Status::Ok && owned.pulseStartup(owned.startup) == Frontend::Status::Stopped &&
                   owned.bindStartup(owned.startup) == Frontend::Status::Stopped,
               "completed shutdown is idempotent and blocks new backend work");
+        Check(owned.runPersistent(owned.startup, &persistentRequest) == Frontend::Status::Stopped && !cancelCalls && !publishCalls && !heartbeatCalls,
+              "stopped completed Core refuses persistent work without renewing a host lifetime or native lease");
         Check(!owned.create(Frontend::ApiVersion, owned.gui) && !StartupState(owned)[Startup::FrontendRetained],
               "stopped completed Core rejects a new borrowed frontend before final release");
         const auto staleStartup = owned.startup;
@@ -636,6 +723,8 @@ int wmain(int argc, wchar_t** argv)
         owned.startup = nullptr;
         Check(owned.readStartup(staleStartup, sentinel.data(), 32) == Frontend::Status::InvalidArgument && sentinel == unchanged,
               "released completed Core handle cannot access freed singleton state");
+        Check(owned.runPersistent(staleStartup, &persistentRequest) == Frontend::Status::InvalidArgument && !cancelCalls && !publishCalls && !heartbeatCalls,
+              "retired completed Core identity cannot start persistent work or access freed state");
         CheckIsolation(false);
         if (mode == L"normal")
         {

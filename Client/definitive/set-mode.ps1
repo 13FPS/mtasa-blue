@@ -16,13 +16,19 @@ param(
     [switch]$MtaCoreRenderReference,
     [switch]$MtaCoreRenderGpuReference,
     [switch]$MtaCoreRenderCustomPresentReference, [switch]$MtaCoreRenderFrameBoundaryReference, [switch]$MtaCoreRenderNativeDispatchReference,
-    [switch]$MtaCoreGuiStartupReference, [switch]$MtaCoreGuiSurfaceReference, [switch]$MtaCoreGuiFrontendReference, [switch]$MtaCoreGuiFrontendInputReference, [switch]$MtaCoreGuiFrontendStartupReference,
+    [switch]$MtaCoreGuiStartupReference, [switch]$MtaCoreGuiSurfaceReference, [switch]$MtaCoreGuiFrontendReference, [switch]$MtaCoreGuiFrontendInputReference, [switch]$MtaCoreGuiFrontendStartupReference, [switch]$MtaCorePersistentFrontend,
     [ValidateSet('D3D11', 'D3D12')][string]$MtaCoreRenderRoute = 'D3D11',
     [string]$GameDirectory = 'C:\Program Files (x86)\Steam\steamapps\common\GTA San Andreas - The Definitive Edition\Gameface\Binaries\Win64'
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+# Persistent input has independent host/native leases and must never inherit
+# one of the bounded diagnostic modes or a script player-control lease.
+$persistentConflicts = @(@('NativeGaitReference','MatchedGaitRate','LockWalkRoot','NativeInputReference','MtaNativePadReference','MtaNativeMovementTrial','MtaCoreStartupReference','MtaCoreInputReference','MtaCoreMovementReference','MtaCoreRenderReference','MtaCoreRenderGpuReference','MtaCoreRenderCustomPresentReference','MtaCoreRenderFrameBoundaryReference','MtaCoreRenderNativeDispatchReference','MtaCoreGuiStartupReference','MtaCoreGuiSurfaceReference','MtaCoreGuiFrontendReference','MtaCoreGuiFrontendInputReference','MtaCoreGuiFrontendStartupReference') | Where-Object { $PSBoundParameters.ContainsKey($_) -and $PSBoundParameters[$_] })
+if ($MtaCorePersistentFrontend -and ($Mode -ne 'Smoke' -or $persistentConflicts.Count -gt 0 -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
+    throw 'Persistent MTA frontend requires separate opt-in Smoke mode without other trials.'
+}
 # Completed frontend ownership is independent of the rejecting gameplay constructor.
 if ($MtaCoreGuiFrontendStartupReference -and ($Mode -ne 'Smoke' -or $MtaCoreGuiFrontendInputReference -or $MtaCoreGuiFrontendReference -or $MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference -or $MtaCoreRenderReference -or $MtaCoreRenderGpuReference -or $MtaCoreRenderCustomPresentReference -or $MtaCoreRenderFrameBoundaryReference -or $MtaCoreRenderNativeDispatchReference -or $MtaCoreMovementReference -or $MtaCoreInputReference -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
     throw 'MTA Core GUI frontend startup requires separate opt-in Smoke mode without other trials or an explicit renderer route.'
@@ -268,7 +274,7 @@ if ($coreRenderNativeDispatchMatches -eq 1) {
 $guiPattern = 'export const MTA_CORE_GUI_STARTUP_REFERENCE = (true|false);'
 $guiMatches = [regex]::Matches($configText, $guiPattern).Count
 if ($guiMatches -gt 1 -or ($MtaCoreGuiStartupReference -and $guiMatches -ne 1)) { throw 'Update the adapter before selecting MTA Core GUI startup.' }
-if ($MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference -or $MtaCoreGuiFrontendReference -or $MtaCoreGuiFrontendInputReference -or $MtaCoreGuiFrontendStartupReference) {
+if ($MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference -or $MtaCoreGuiFrontendReference -or $MtaCoreGuiFrontendInputReference -or $MtaCoreGuiFrontendStartupReference -or $MtaCorePersistentFrontend) {
     $guiPaths = @('CLEO/de-online/cgui.dll',
         'CLEO/de-online/mta/cgui/sans.ttf', 'CLEO/de-online/mta/cgui/saheader.ttf', 'CLEO/de-online/mta/cgui/sagothic.ttf',
         'CLEO/de-online/mta/cgui/Imageset.xsd', 'CLEO/de-online/mta/cgui/GUIScheme.xsd', 'CLEO/de-online/mta/cgui/Font.xsd',
@@ -294,7 +300,7 @@ if ($surfaceMatches -eq 1) {
 $frontendPattern = 'export const MTA_CORE_GUI_FRONTEND_REFERENCE = (true|false);'
 $frontendMatches = [regex]::Matches($configText, $frontendPattern).Count
 if ($frontendMatches -gt 1 -or ($MtaCoreGuiFrontendReference -and $frontendMatches -ne 1)) { throw 'Update the adapter before selecting MTA Core GUI frontend.' }
-if ($MtaCoreGuiFrontendReference -or $MtaCoreGuiFrontendInputReference -or $MtaCoreGuiFrontendStartupReference) {
+if ($MtaCoreGuiFrontendReference -or $MtaCoreGuiFrontendInputReference -or $MtaCoreGuiFrontendStartupReference -or $MtaCorePersistentFrontend) {
     $frontendPaths = @(
         'CLEO/de-online/mta/cgui/images/background.png',
         'CLEO/de-online/mta/cgui/images/background_logo.png',
@@ -343,6 +349,13 @@ if ($frontendStartupMatches -eq 1) {
     $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $frontendStartupPattern,
         "export const MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE = $($MtaCoreGuiFrontendStartupReference.IsPresent.ToString().ToLowerInvariant());"))
 }
+$persistentPattern = 'export const MTA_CORE_PERSISTENT_FRONTEND = (true|false);'
+$persistentMatches = [regex]::Matches($configText, $persistentPattern).Count
+if ($persistentMatches -gt 1 -or [regex]::Matches($configText, 'export const MTA_CORE_PERSISTENT_FRONTEND\b').Count -ne $persistentMatches -or ($MtaCorePersistentFrontend -and $persistentMatches -ne 1)) { throw 'Update the adapter before selecting persistent MTA frontend.' }
+if ($persistentMatches -eq 1) {
+    $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $persistentPattern,
+        "export const MTA_CORE_PERSISTENT_FRONTEND = $($MtaCorePersistentFrontend.IsPresent.ToString().ToLowerInvariant());"))
+}
 $configEntry = @($installed.files | Where-Object { $_.path -eq 'CLEO/de-online/config.mjs' })
 if ($configEntry.Count -ne 1) { throw 'Missing owned configuration record.' }
 $configEntry[0].sha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($newConfig)).ToLowerInvariant()
@@ -375,7 +388,9 @@ try {
     Write-AtomicFile $manifestPath $originalManifest
     throw $failure
 }
-if ($MtaCoreGuiFrontendStartupReference) {
+if ($MtaCorePersistentFrontend) {
+    Write-Host 'Installed adapter mode: Smoke, renewable MTA frontend. Ctrl+Shift+F9 starts after release; Quit/Escape/End closes it. Focus loss or heartbeat expiry requests cleanup.'
+} elseif ($MtaCoreGuiFrontendStartupReference) {
     Write-Host 'Installed adapter mode: Smoke, completed MTA Core frontend startup armed. Ctrl+Shift+F9 starts after release; Ctrl+Shift+End requests cleanup.'
 } elseif ($MtaCoreGuiFrontendInputReference) {
     Write-Host 'Installed adapter mode: Smoke, MTA Core frontend with scoped neutral engine input armed. Ctrl+Shift+F9 starts after release; Ctrl+Shift+End requests cleanup.'

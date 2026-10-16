@@ -10,6 +10,8 @@
 #include <game/CGameRenderSetupDiagnostic.h>
 #include <game/CGameRenderDeviceLease.h>
 #include <game/CGameRenderDeviceWindowLease.h>
+#include <game/CGameFrontendInputLease.h>
+#include "FrontendInputLeasePolicy.h"
 #include "ControllerSnapshot.h"
 #include "RemoteDataStorage.h"
 #include "NativePadReader.h"
@@ -25,6 +27,10 @@ namespace mta::game_de
 {
     namespace
     {
+        class GameAdapter;
+        SRWLOCK      frontendAdapterLock = SRWLOCK_INIT;
+        GameAdapter* frontendAdapters = nullptr;
+
         bool Finite(const AdapterVector3& value) noexcept
         {
             return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
@@ -33,6 +39,87 @@ namespace mta::game_de
         class GameAdapter final : public IGameAdapter
         {
         public:
+            GameAdapter() noexcept
+            {
+                // Optional exports validate a retained factory object against
+                // this registry before dereferencing a caller-supplied pointer.
+                AcquireSRWLockExclusive(&frontendAdapterLock);
+                nextFrontendAdapter = frontendAdapters;
+                frontendAdapters = this;
+                ReleaseSRWLockExclusive(&frontendAdapterLock);
+            }
+            ~GameAdapter() override
+            {
+                AcquireSRWLockExclusive(&frontendAdapterLock);
+                auto** entry = &frontendAdapters;
+                while (*entry && *entry != this)
+                    entry = &(*entry)->nextFrontendAdapter;
+                if (*entry)
+                    *entry = nextFrontendAdapter;
+                ReleaseSRWLockExclusive(&frontendAdapterLock);
+            }
+
+            enum class FrontendLeaseAction
+            {
+                Begin,
+                Renew,
+                Read,
+                End
+            };
+            static Status FrontendLease(IGameAdapter* adapter, FrontendLeaseAction action, const FrontendInputLeaseRequestV1* request, std::uint64_t generation,
+                                        const MtaInputState* neutral, FrontendInputLeaseStateV1* output) noexcept
+            {
+                // Nonblocking registry access cannot strand a simulation thread
+                // while the producer installs/detaches existing native hooks.
+                if (!TryAcquireSRWLockShared(&frontendAdapterLock))
+                    return Status::Unsupported;
+                Status result = Status::InvalidArgument;
+                for (auto* current = frontendAdapters; current; current = current->nextFrontendAdapter)
+                {
+                    if (static_cast<IGameAdapter*>(current) != adapter)
+                        continue;
+                    result = current->Access();
+                    if (result != Status::Ok)
+                        break;
+                    if (action == FrontendLeaseAction::Begin)
+                    {
+                        if (!NativeMovementInput::ValidateFrontendLeaseRequest(*request))
+                            result = Status::InvalidArgument;
+                        else if (!current->nativePad.IsBound() || !current->hasInputState ||
+                                 !FrontendInputLeasePolicy::Neutral(current->inputStorage.ReadInput()))
+                            result = Status::NotInitialized;
+                        else
+                        {
+                            const bool                started = current->nativeMovement.BeginFrontendLease(*request);
+                            FrontendInputLeaseStateV1 state;
+                            // A valid native attempt may own partial hooks even
+                            // on refusal. Publish its token for explicit End.
+                            if (current->nativeMovement.ReadFrontendLease(state))
+                                *output = state;
+                            result = started ? Status::Ok : Status::Unsupported;
+                        }
+                    }
+                    else if (action == FrontendLeaseAction::Renew)
+                        result = current->nativeMovement.RenewFrontendLease(generation, *neutral) ? Status::Ok : Status::Unsupported;
+                    else if (action == FrontendLeaseAction::End)
+                        result = current->nativeMovement.EndFrontendLease(generation) ? Status::Ok : Status::Unsupported;
+                    else
+                    {
+                        FrontendInputLeaseStateV1 state;
+                        if (current->nativeMovement.ReadFrontendLease(state))
+                        {
+                            *output = state;
+                            result = Status::Ok;
+                        }
+                        else
+                            result = Status::Unsupported;
+                    }
+                    break;
+                }
+                ReleaseSRWLockShared(&frontendAdapterLock);
+                return result;
+            }
+
             Status Initialize(CCoreInterface* newOwner) noexcept override
             {
                 if (!newOwner)
@@ -153,7 +240,14 @@ namespace mta::game_de
                 MtaInputState next;
                 next.previous = *inputStorage.CurrentControllerState();
                 next.current = MtaInput::BuildControllerState(frame.heldActions, frame.context, nextHistory);
-                if (nativeMovement.IsActive() && !nativeMovement.Update(next))
+                if (nativeMovement.IsActive() && nativeMovement.IsFrontendLease() && !FrontendInputLeasePolicy::Neutral(next))
+                {
+                    EndMovement();
+                    return Status::InvalidArgument;
+                }
+                // Publishing MTA's canonical neutral history remains useful,
+                // but only the explicit lease token API may renew native input.
+                if (nativeMovement.IsActive() && !nativeMovement.IsFrontendLease() && !nativeMovement.Update(next))
                 {
                     EndMovement();
                     return Status::Unsupported;
@@ -284,7 +378,9 @@ namespace mta::game_de
 
             std::uint64_t MovementCapability() const noexcept
             {
-                return nativeMovement.IsBound() ? static_cast<std::uint64_t>(AdapterCapability::NativeMovementWriteCandidate) : 0;
+                return nativeMovement.IsBound() && !nativeMovement.IsFrontendLease()
+                           ? static_cast<std::uint64_t>(AdapterCapability::NativeMovementWriteCandidate)
+                           : 0;
             }
 
             void RefreshMovementCapability() noexcept
@@ -344,6 +440,7 @@ namespace mta::game_de
             std::atomic<std::uint64_t> capabilities{BaseCapabilities};
             NativePadReader            nativePad;
             NativeMovementInput        nativeMovement;
+            GameAdapter*               nextFrontendAdapter = nullptr;
         };
 
         RenderObservationState CopyRenderObservation(const NativeRenderObservationState& native) noexcept
@@ -861,6 +958,36 @@ namespace mta::game_de
             // Allocation/constructor failures cannot escape the module ABI.
             return nullptr;
         }
+    }
+
+    extern "C" Status BeginGameFrontendInputLeaseV1(std::uint32_t version, IGameAdapter* adapter, const FrontendInputLeaseRequestV1* request,
+                                                    FrontendInputLeaseStateV1* output) noexcept
+    {
+        if (version != FrontendInputLeaseVersionV1 || !adapter || !request || !output)
+            return Status::InvalidArgument;
+        return GameAdapter::FrontendLease(adapter, GameAdapter::FrontendLeaseAction::Begin, request, 0, nullptr, output);
+    }
+
+    extern "C" Status RenewGameFrontendInputLeaseV1(std::uint32_t version, IGameAdapter* adapter, std::uint64_t generation,
+                                                    const MtaInputState* neutral) noexcept
+    {
+        if (version != FrontendInputLeaseVersionV1 || !adapter || !generation || !neutral)
+            return Status::InvalidArgument;
+        return GameAdapter::FrontendLease(adapter, GameAdapter::FrontendLeaseAction::Renew, nullptr, generation, neutral, nullptr);
+    }
+
+    extern "C" Status ReadGameFrontendInputLeaseV1(std::uint32_t version, IGameAdapter* adapter, FrontendInputLeaseStateV1* output) noexcept
+    {
+        if (version != FrontendInputLeaseVersionV1 || !adapter || !output)
+            return Status::InvalidArgument;
+        return GameAdapter::FrontendLease(adapter, GameAdapter::FrontendLeaseAction::Read, nullptr, 0, nullptr, output);
+    }
+
+    extern "C" Status EndGameFrontendInputLeaseV1(std::uint32_t version, IGameAdapter* adapter, std::uint64_t generation) noexcept
+    {
+        if (version != FrontendInputLeaseVersionV1 || !adapter || !generation)
+            return Status::InvalidArgument;
+        return GameAdapter::FrontendLease(adapter, GameAdapter::FrontendLeaseAction::End, nullptr, generation, nullptr, nullptr);
     }
 
     extern "C" IGameRenderObservation* CreateGameRenderObservation(std::uint32_t apiVersion, CCoreInterface* owner) noexcept

@@ -83,7 +83,8 @@ namespace DefinitiveGuiFrontendReference
 
     // Keep the new counters typed to this protocol; the common ownership
     // helper accepts its own enum and cannot represent these added positions.
-    inline void SetPair(Snapshot& values, Field field, std::uint64_t value) noexcept
+    template <std::size_t Count>
+    inline void SetPair(std::array<std::uint32_t, Count>& values, Field field, std::uint64_t value) noexcept
     {
         values[field] = static_cast<std::uint32_t>(value);
         values[field + 1] = static_cast<std::uint32_t>(value >> 32);

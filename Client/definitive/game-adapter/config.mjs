@@ -73,3 +73,6 @@ export const MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE = false;
 // frontend input view. This additive lifecycle is separate from InitializeCore
 // and never advertises gameplay, networking or complete engine readiness.
 export const MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE = false;
+// Keep the same MTA frontend alive until explicit GUI closure or an expired
+// independent host/native heartbeat. Historical trials retain their timers.
+export const MTA_CORE_PERSISTENT_FRONTEND = false;

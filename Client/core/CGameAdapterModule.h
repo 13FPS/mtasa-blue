@@ -13,6 +13,7 @@
 #include <game/CGameRenderRootsDiagnostic.h>
 #include <game/CGameRenderDeviceLease.h>
 #include <game/CGameRenderDeviceWindowLease.h>
+#include <game/CGameFrontendInputLease.h>
 #include <cstdint>
 #include <string>
 
@@ -39,6 +40,10 @@ public:
     bool                BeginNativeMovementTrial();
     bool                GetNativeMovementTrialState(mta::game_de::NativeMovementTrialState& state);
     bool                EndNativeMovementTrial();
+    bool                BeginFrontendInputLease(void* window, mta::game_de::FrontendInputLeaseStateV1& state);
+    bool                RenewFrontendInputLease(std::uint64_t generation);
+    bool                ReadFrontendInputLease(mta::game_de::FrontendInputLeaseStateV1& state);
+    bool                EndFrontendInputLease(std::uint64_t generation);
     bool                GetNativeMovementEligibility(mta::game_de::NativeMovementEligibility& state);
     bool                BorrowGameInterface(CGame*& game);
     bool                BeginNativeRenderObservation();
@@ -79,8 +84,14 @@ private:
 
     // Instance callbacks and teardown belong to the same Core thread. Keeping
     // the DLL alive until Release avoids retaining a vtable into unloaded code.
-    void*                                                       m_module = nullptr;
-    mta::game_de::IGameAdapter*                                 m_adapter = nullptr;
+    void*                       m_module = nullptr;
+    mta::game_de::IGameAdapter* m_adapter = nullptr;
+    // Resolve before native hook admission. Cleanup must never need loader
+    // lookup while a retained peer might be suspended inside loader code.
+    decltype(&mta::game_de::BeginGameFrontendInputLeaseV1)      m_frontendLeaseBegin = nullptr;
+    decltype(&mta::game_de::RenewGameFrontendInputLeaseV1)      m_frontendLeaseRenew = nullptr;
+    decltype(&mta::game_de::ReadGameFrontendInputLeaseV1)       m_frontendLeaseRead = nullptr;
+    decltype(&mta::game_de::EndGameFrontendInputLeaseV1)        m_frontendLeaseEnd = nullptr;
     mta::game_de::IGameRenderObservation*                       m_renderObservation = nullptr;
     mta::game_de::IGameRenderObservationV2*                     m_renderObservationV2 = nullptr;
     mta::game_de::RenderObservationState                        m_lastRenderObservation;

@@ -790,6 +790,92 @@ int wmain(int argc, wchar_t** argv)
             Check(!GetModuleHandleW(L"core.dll") && !GetModuleHandleW(L"game_de.dll") && !GetModuleHandleW(L"pthread.dll"),
                   "actual completed async owner releases its Core/backend/pthread modules");
         }
+        else if (std::wstring(argv[2]) == L"actual-persistent-frontend")
+        {
+            namespace Startup = DefinitiveFrontendStartup;
+            namespace Report = deonline::FrontendStartupReport;
+            namespace Persistent = DefinitivePersistentFrontend;
+            static_assert(Persistent::ApiVersion == 1 && Persistent::FieldCount == 288);
+            const auto generation = Fast([&] { return worker.BeginPersistentFrontend(&anchor); });
+            Check(generation != 0, "actual persistent Core worker begins with a nonzero host-owned token without loader work on script thread");
+            Check(!worker.Begin(&anchor) && !worker.BeginGuiFrontendStartupReference(&anchor), "pending persistent owner excludes historical worker attempts");
+            Check(!Fast([&] { return worker.HeartbeatPersistentFrontend(generation + 1); }), "actual worker refuses a stale host generation");
+            const auto started = GetTickCount64();
+            // Keep the independent host lease live while the actual DLL loads.
+            // A rejection racing normal cleanup is not an expiry claim: only
+            // the copied final Core/lifetime values establish what happened.
+            while (Fast([&] { return worker.Poll(); }) == 0)
+            {
+                Fast([&] { return worker.HeartbeatPersistentFrontend(generation); });
+                Check(GetTickCount64() - started < 15000, "actual persistent worker failed to retire within owned fixture budget");
+                Sleep(10);
+            }
+            Check(worker.Poll() == 1 && !worker.IsPending() && !worker.HeartbeatPersistentFrontend(generation),
+                  "actual persistent completion retires the worker and prevents later host renewal");
+            for (unsigned field = 0; field < 8; ++field)
+                Check(!worker.Read(field), "persistent worker keeps historical startup8 positions reserved instead of reinterpreting them");
+            Check(worker.Read(8) == 2 && worker.Read(9) == static_cast<std::uint32_t>(Startup::Status::Failed) &&
+                      worker.Read(10) == static_cast<std::uint32_t>(Startup::Status::Ok) && worker.Read(13) == 1 && !worker.Read(14) && !worker.Read(15) &&
+                      worker.Read(16) == 23 && !worker.Read(17) && !worker.Read(18),
+                  "actual persistent wrong-image workload fails while its separate completed owner and modules cleanly retire");
+            Check(worker.CapturePersistentFrontendLifecycle(), "actual persistent lifecycle96 remains copied after Core unload");
+            const auto read = [&](std::uint32_t field) { return worker.ReadPersistentFrontendLifecycle(field); };
+            const auto owner = read(Startup::OwnerThread);
+            Check(owner && owner != GetCurrentThreadId() && read(Report::AfterView + Startup::OwnerThread) == owner &&
+                      read(Report::Stopped + Startup::OwnerThread) == owner,
+                  "actual Begin, persistent refusal, shutdown and final publication retain the same independent Core worker owner");
+            for (const auto offset : {Report::Begin, Report::AfterView})
+            {
+                Check(read(offset + Startup::Version) == 1 && read(offset + Startup::Phase) == 2 && read(offset + Startup::CoreRetained) == 1 &&
+                          read(offset + Startup::BackendStartAttempted) == 1 && read(offset + Startup::BackendStarted) == 1 &&
+                          !read(offset + Startup::ExactImageBound) && !read(offset + Startup::ViewRuns) &&
+                          read(offset + Startup::LastViewCleanupComplete) == 1 && read(offset + Startup::CapabilitiesLow) == 33 &&
+                          !read(offset + Startup::CapabilitiesHigh),
+                      "actual persistent refusal retains completed Core/backend and CPU-only synthesis capabilities without a native lease or view");
+            }
+            Check(!read(Startup::LastFailure) && read(Report::AfterView + Startup::LastFailure) == static_cast<std::uint32_t>(Startup::Failure::InputBind) &&
+                      read(Report::AfterView + Startup::Pulses) >= read(Startup::Pulses),
+                  "real exact-image binding supplies the persistent refusal without corrupting completed Core pulses");
+            Check(read(Report::Stopped + Startup::Phase) == 4 && read(Report::Stopped + Startup::CoreRetained) == 1 &&
+                      !read(Report::Stopped + Startup::BackendStarted) && !read(Report::Stopped + Startup::CapabilitiesLow) &&
+                      !read(Report::Stopped + Startup::CapabilitiesHigh) && !read(Report::Stopped + Startup::CleanupPending) &&
+                      read(Report::Stopped + Startup::CleanupComplete) == 1 && !read(Report::Stopped + Startup::ReleaseFault) &&
+                      read(Report::Stopped + Startup::LastViewCleanupComplete) == 1,
+                  "actual persistent worker reads a retained stopped Core with no backend capability before explicit Release/unload");
+            for (const auto offset : {Report::Begin, Report::AfterView, Report::Stopped})
+            {
+                for (unsigned field = Startup::FrontendRetained; field <= Startup::InputRequested; ++field)
+                    Check(!read(offset + field), "wrong-image persistent startup creates no GUI/service/input ownership");
+                Check(!read(offset + Startup::NetworkStarted) && !read(offset + Startup::GameplayReady) && !read(offset + Startup::FullMtaReady),
+                      "actual persistent lifecycle never advertises network, gameplay or full MTA readiness");
+                for (unsigned field = Startup::Reserved24; field < Startup::FieldCount; ++field)
+                    Check(!read(offset + field), "actual persistent lifecycle reserved fields stay zero");
+            }
+            bool neutralPersistent = true, neutralHistorical = true;
+            for (std::uint32_t field = 0; field < Persistent::FieldCount; ++field)
+                neutralPersistent = neutralPersistent && !worker.ReadPersistentFrontend(field);
+            for (std::uint32_t field = 0; field < DefinitiveGuiFrontendInputReference::FieldCount; ++field)
+                neutralHistorical = neutralHistorical && !worker.ReadGuiFrontendInput(field);
+            Check(!worker.CapturePersistentFrontend() && neutralPersistent && !worker.ReadPersistentFrontend(Persistent::FieldCount) &&
+                      !worker.CaptureGuiFrontendInput() && neutralHistorical && !worker.CaptureGuiFrontendStartup() && !worker.ReadGuiFrontendStartup(0) &&
+                      !worker.ReadPersistentFrontendLifecycle(Report::FieldCount),
+                  "unstarted persistent view invents no288 input, leaks no historical256/96 cache and obeys each separate report bound");
+            Check(!GetModuleHandleW(L"core.dll") && !GetModuleHandleW(L"game_de.dll") && !GetModuleHandleW(L"pthread.dll") && !GetModuleHandleW(L"cgui.dll") &&
+                      !GetModuleHandleW(L"xmll.dll"),
+                  "actual persistent wrong-image cleanup unloads all real Core/backend dependencies without starting GUI");
+            // Reuse the same script owner for the unchanged historical gate.
+            // Safe persistent refusal must neither quarantine the worker nor
+            // convert InitializeCore/Startup8 into a completed-gameplay claim.
+            Check(Fast([&] { return worker.Begin(&anchor); }), "actual clean persistent refusal permits an ordinary Core startup retry");
+            Wait(worker);
+            const std::array<unsigned, 11> legacy{1, 5, 3, 33, 0, 0, 0, 1, 3, 4, 5};
+            for (unsigned field = 0; field < legacy.size(); ++field)
+                Check(worker.Read(field) == legacy[field], "actual legacy Startup8 and directory-gate diagnostics remain unchanged after persistent cleanup");
+            VerifyCleanup(worker, 8);
+            Check(!worker.CapturePersistentFrontend() && !worker.CapturePersistentFrontendLifecycle() && !worker.ReadPersistentFrontend(0) &&
+                      !worker.ReadPersistentFrontendLifecycle(0) && !GetModuleHandleW(L"game_de.dll"),
+                  "ordinary retry retires its actual backend and cannot expose predecessor persistent evidence");
+        }
         else if (std::wstring(argv[2]) == L"actual")
         {
             Check(Fast([&] { return worker.Begin(&anchor); }), "actual Core worker failed to begin");

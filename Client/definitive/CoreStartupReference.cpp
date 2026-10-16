@@ -117,18 +117,28 @@ namespace deonline
 
     bool CoreStartupReference::Start(const void* moduleAddress, bool configuredInput, bool configuredMovement, bool configuredRender,
                                      std::uint32_t configuredRenderRoute, std::uint32_t configuredRenderApi, bool configuredGuiStartup,
-                                     bool configuredGuiSurface, bool configuredGuiFrontend, bool configuredGuiFrontendInput,
-                                     bool configuredFrontendStartup) noexcept
+                                     bool configuredGuiSurface, bool configuredGuiFrontend, bool configuredGuiFrontendInput, bool configuredFrontendStartup,
+                                     bool configuredPersistentFrontend) noexcept
     {
         DWORD      expected = 0;
         const auto current = GetCurrentThreadId();
         if ((static_cast<unsigned>(configuredMovement) + static_cast<unsigned>(configuredRender) + static_cast<unsigned>(configuredGuiStartup) +
                  static_cast<unsigned>(configuredGuiSurface) + static_cast<unsigned>(configuredGuiFrontend) +
-                 static_cast<unsigned>(configuredGuiFrontendInput) + static_cast<unsigned>(configuredFrontendStartup) >
+                 static_cast<unsigned>(configuredGuiFrontendInput) + static_cast<unsigned>(configuredFrontendStartup) +
+                 static_cast<unsigned>(configuredPersistentFrontend) >
              1) ||
             (!ownerThread.compare_exchange_strong(expected, current) && expected != current) || !moduleAddress || IsPending() || thread ||
-            frontendQuarantined || (!configuredGuiFrontendInput && !configuredFrontendStartup && !frontendControl.PrepareAttempt(current)))
+            frontendQuarantined ||
+            (!configuredGuiFrontendInput && !configuredFrontendStartup && !configuredPersistentFrontend && !frontendControl.PrepareAttempt(current)))
             return false;
+        if (configuredPersistentFrontend && !persistentHostLease.Begin(current, GetTickCount64()))
+            return false;
+        persistentFrontendRequested = configuredPersistentFrontend;
+        persistentFrontendAvailable.store(false);
+        persistentFrontendSequence.store(0);
+        for (auto& field : publishedPersistentFrontend)
+            field.store(0);
+        capturedPersistentFrontend = {};
         address = moduleAddress;
         inputRequested = configuredInput;
         movementRequested = configuredMovement;
@@ -191,6 +201,8 @@ namespace deonline
         const auto handle = _beginthreadex(nullptr, 0, ThreadMain, this, 0, nullptr);
         if (!handle)
         {
+            if (persistentFrontendRequested)
+                persistentHostLease.Revoke();
             state.store(0, std::memory_order_release);
             return false;
         }
@@ -423,7 +435,19 @@ namespace deonline
 
     bool CoreStartupReference::CaptureGuiFrontendStartup() noexcept
     {
-        if (ownerThread.load() != GetCurrentThreadId() || !frontendStartupRequested || !frontendStartupAvailable.load())
+        if (!frontendStartupRequested)
+            return false;
+        return CaptureFrontendLifecycle();
+    }
+
+    bool CoreStartupReference::CapturePersistentFrontendLifecycle() noexcept
+    {
+        return persistentFrontendRequested && CaptureFrontendLifecycle();
+    }
+
+    bool CoreStartupReference::CaptureFrontendLifecycle() noexcept
+    {
+        if (ownerThread.load() != GetCurrentThreadId() || (!frontendStartupRequested && !persistentFrontendRequested) || !frontendStartupAvailable.load())
             return false;
         for (unsigned attempt = 0; attempt < 2; ++attempt)
         {
@@ -446,6 +470,71 @@ namespace deonline
     {
         return ownerThread.load() == GetCurrentThreadId() && frontendStartupRequested && field < capturedFrontendStartup.size() ? capturedFrontendStartup[field]
                                                                                                                                 : 0;
+    }
+
+    std::uint32_t CoreStartupReference::BeginPersistentFrontend(const void* moduleAddress) noexcept
+    {
+        return Start(moduleAddress, true, false, false, 0, 1, false, false, false, false, false, true) ? persistentHostLease.Generation() : 0;
+    }
+
+    bool CoreStartupReference::HeartbeatPersistentFrontend(std::uint32_t generation) noexcept
+    {
+        return ownerThread.load() == GetCurrentThreadId() && persistentFrontendRequested && IsPending() &&
+               persistentHostLease.Heartbeat(GetCurrentThreadId(), generation, GetTickCount64());
+    }
+
+    std::uint32_t CoreStartupReference::ReadPersistentFrontendLifecycle(std::uint32_t field) const noexcept
+    {
+        return ownerThread.load() == GetCurrentThreadId() && persistentFrontendRequested && field < capturedFrontendStartup.size()
+                   ? capturedFrontendStartup[field]
+                   : 0;
+    }
+
+    bool CoreStartupReference::CapturePersistentFrontend() noexcept
+    {
+        if (ownerThread.load() != GetCurrentThreadId() || !persistentFrontendRequested || !persistentFrontendAvailable.load())
+            return false;
+        for (unsigned attempt = 0; attempt < 2; ++attempt)
+        {
+            const auto before = persistentFrontendSequence.load();
+            if (before & 1)
+                continue;
+            DefinitivePersistentFrontend::Snapshot next{};
+            for (std::size_t index = 0; index < next.size(); ++index)
+                next[index] = publishedPersistentFrontend[index].load();
+            if (persistentFrontendSequence.load() == before)
+            {
+                capturedPersistentFrontend = next;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    std::uint32_t CoreStartupReference::ReadPersistentFrontend(std::uint32_t field) const noexcept
+    {
+        return ownerThread.load() == GetCurrentThreadId() && persistentFrontendRequested && field < capturedPersistentFrontend.size()
+                   ? capturedPersistentFrontend[field]
+                   : 0;
+    }
+
+    bool CoreStartupReference::PersistentHostFresh()
+    {
+        return inputOwner && inputOwner->persistentFrontendRequested &&
+               inputOwner->persistentHostLease.Fresh(inputOwner->persistentHostLease.Generation(), GetTickCount64());
+    }
+
+    void CoreStartupReference::PublishPersistentFrontend(const std::uint32_t* snapshot, std::uint32_t count)
+    {
+        if (!inputOwner || !inputOwner->persistentFrontendRequested || !snapshot || count != DefinitivePersistentFrontend::FieldCount)
+            return;
+        // Atomic value publication cannot wait behind the script while native
+        // cleanup still owns held peers. This is a distinct persistent cache.
+        inputOwner->persistentFrontendSequence.fetch_add(1);
+        for (std::size_t index = 0; index < count; ++index)
+            inputOwner->publishedPersistentFrontend[index].store(snapshot[index]);
+        inputOwner->persistentFrontendAvailable.store(true);
+        inputOwner->persistentFrontendSequence.fetch_add(1);
     }
 
     bool CoreStartupReference::CaptureGuiFrontendInput() noexcept
@@ -666,15 +755,17 @@ namespace deonline
         using Status = Startup::Status;
         using Version = std::uint32_t (*)();
         using SetDirectory = void (*)(const wchar_t*, std::size_t);
-        const auto                      version = reinterpret_cast<Version>(GetProcAddress(core, "MTA_DEFrontendStartupApiVersion"));
-        const auto                      begin = reinterpret_cast<Startup::Begin>(GetProcAddress(core, "MTA_BeginDEFrontendStartup"));
-        const auto                      read = reinterpret_cast<Startup::Read>(GetProcAddress(core, "MTA_ReadDEFrontendStartup"));
-        const auto                      view = reinterpret_cast<Startup::RunView>(GetProcAddress(core, "MTA_RunDEFrontendStartupView"));
-        const auto                      shutdown = reinterpret_cast<Startup::Shutdown>(GetProcAddress(core, "MTA_ShutdownDEFrontendStartup"));
-        const auto                      release = reinterpret_cast<Startup::Release>(GetProcAddress(core, "MTA_ReleaseDEFrontendStartup"));
-        const auto                      setMta = reinterpret_cast<SetDirectory>(GetProcAddress(core, "SetMTADirectory"));
-        const auto                      setGta = reinterpret_cast<SetDirectory>(GetProcAddress(core, "SetGTADirectory"));
-        void*                           handle = nullptr;
+        const auto version = reinterpret_cast<Version>(GetProcAddress(core, "MTA_DEFrontendStartupApiVersion"));
+        const auto begin = reinterpret_cast<Startup::Begin>(GetProcAddress(core, "MTA_BeginDEFrontendStartup"));
+        const auto read = reinterpret_cast<Startup::Read>(GetProcAddress(core, "MTA_ReadDEFrontendStartup"));
+        const auto view = reinterpret_cast<Startup::RunView>(GetProcAddress(core, "MTA_RunDEFrontendStartupView"));
+        const auto persistentVersion = reinterpret_cast<Version>(GetProcAddress(core, "MTA_DEPersistentFrontendApiVersion"));
+        const auto persistentView = reinterpret_cast<DefinitivePersistentFrontend::Run>(GetProcAddress(core, "MTA_RunDEPersistentFrontendV1"));
+        const auto shutdown = reinterpret_cast<Startup::Shutdown>(GetProcAddress(core, "MTA_ShutdownDEFrontendStartup"));
+        const auto release = reinterpret_cast<Startup::Release>(GetProcAddress(core, "MTA_ReleaseDEFrontendStartup"));
+        const auto setMta = reinterpret_cast<SetDirectory>(GetProcAddress(core, "SetMTADirectory"));
+        const auto setGta = reinterpret_cast<SetDirectory>(GetProcAddress(core, "SetGTADirectory"));
+        void*      handle = nullptr;
         FrontendStartupReport::Snapshot report{};
         Startup::Snapshot               initial{}, after{}, stopped{};
         bool                            initialValid = false, afterValid = false, viewCalled = false;
@@ -710,7 +801,8 @@ namespace deonline
         };
         try
         {
-            if (!version || !begin || !read || !view || !shutdown || !release || !setMta || !setGta || version() != Startup::ApiVersion)
+            if (!version || !begin || !read || !view || !shutdown || !release || !setMta || !setGta || version() != Startup::ApiVersion ||
+                (persistentFrontendRequested && (!persistentVersion || !persistentView || persistentVersion() != DefinitivePersistentFrontend::ApiVersion)))
             {
                 error(20);
                 return;
@@ -747,7 +839,18 @@ namespace deonline
                     viewCalled = true;
                     try
                     {
-                        viewStatus = view(handle, DefinitiveGuiFrontendInputReference::MaximumDurationMs, InputCancelled, PublishInput);
+                        if (persistentFrontendRequested)
+                        {
+                            DefinitivePersistentFrontend::RequestV1 request;
+                            request.generation = persistentHostLease.Generation();
+                            request.cancelled = InputCancelled;
+                            request.publish = PublishPersistentFrontend;
+                            request.heartbeat = PersistentHostFresh;
+                            viewStatus = persistentView(handle, &request);
+                            persistentHostLease.Revoke();
+                        }
+                        else
+                            viewStatus = view(handle, DefinitiveGuiFrontendInputReference::MaximumDurationMs, InputCancelled, PublishInput);
                         values[9] = static_cast<std::uint32_t>(viewStatus);
                     }
                     catch (...)
@@ -757,7 +860,7 @@ namespace deonline
                     afterValid = capture(after, FrontendStartupReport::AfterView);
                     if (!afterValid)
                         error(22);
-                    if (viewStatus != Status::Ok)
+                    if (viewStatus != Status::Ok && !(persistentFrontendRequested && viewStatus == Status::Stopped))
                     {
                         if (!CheckCancellation())
                             error(23);
@@ -822,12 +925,56 @@ namespace deonline
             bool workload = false;
             if (!noView && stoppedClean)
             {
-                AcquireSRWLockShared(&inputLock);
-                inputClean = FrontendInputRetired(publishedGuiFrontendInput, guiFrontendInputAvailable);
-                workload = inputClean && publishedGuiFrontendInput[DefinitiveGuiStartupReference::WorkloadSucceeded] == 1 &&
-                           publishedGuiFrontendInput[DefinitiveGuiStartupReference::WorkloadComplete] == 1 &&
-                           !publishedGuiFrontendInput[DefinitiveGuiStartupReference::CleanupDeadlineExceeded];
-                ReleaseSRWLockShared(&inputLock);
+                DefinitiveGuiFrontendInputReference::Snapshot sample{};
+                bool                                          available = false;
+                if (persistentFrontendRequested)
+                {
+                    available = persistentFrontendAvailable.load();
+                    // The sole publishing worker has returned from Run here;
+                    // its atomic values are final and cannot race another writer.
+                    for (std::size_t index = 0; index < sample.size(); ++index)
+                        sample[index] = publishedPersistentFrontend[index].load();
+                }
+                else
+                {
+                    AcquireSRWLockShared(&inputLock);
+                    sample = publishedGuiFrontendInput;
+                    available = guiFrontendInputAvailable;
+                    ReleaseSRWLockShared(&inputLock);
+                }
+                inputClean = FrontendInputRetired(sample, available);
+                if (persistentFrontendRequested)
+                {
+                    namespace Persistent = DefinitivePersistentFrontend;
+                    const auto scalar = [&](std::uint32_t field) { return publishedPersistentFrontend[field].load(); };
+                    inputClean = inputClean && !sample[DefinitiveGuiSurfaceReference::DisplayDuration] && scalar(Persistent::PersistentVersion) == 1 &&
+                                 scalar(Persistent::SessionGenerationLow) == persistentHostLease.Generation() && !scalar(Persistent::SessionGenerationHigh) &&
+                                 scalar(Persistent::HostLeaseFresh) <= 1 && !scalar(Persistent::NativeLeaseActive) &&
+                                 scalar(Persistent::NativeLeaseRevoked) <= 1 && scalar(Persistent::NativeLeaseReason) <= 6 &&
+                                 (!(scalar(Persistent::NativeLeaseGenerationLow) || scalar(Persistent::NativeLeaseGenerationHigh)) ||
+                                  (scalar(Persistent::NativeLeaseRevoked) == 1 && scalar(Persistent::NativeLeaseReason) != 0)) &&
+                                 scalar(Persistent::HostHeartbeatBudgetMs) == Persistent::HostHeartbeatMs &&
+                                 scalar(Persistent::NativeHeartbeatBudgetMs) == 500 && scalar(Persistent::StopReason) >= 1 &&
+                                 scalar(Persistent::StopReason) <= 5;
+                    for (std::uint32_t field = Persistent::Reserved270; field < Persistent::FieldCount; ++field)
+                        inputClean = inputClean && !scalar(field);
+                }
+                // Retirement alone also succeeds after expiry or an early close.
+                // Certify a persistent workload only when a fresh host reaches
+                // an actual GUI close beyond the historical bounded duration.
+                workload =
+                    inputClean && sample[DefinitiveGuiStartupReference::WorkloadSucceeded] == 1 &&
+                    sample[DefinitiveGuiStartupReference::WorkloadComplete] == 1 && !sample[DefinitiveGuiStartupReference::CleanupDeadlineExceeded] &&
+                    (!persistentFrontendRequested || (sample[DefinitiveGuiFrontendInputReference::NativeActiveMs] > 35000 &&
+                                                      publishedPersistentFrontend[DefinitivePersistentFrontend::HostLeaseFresh].load() == 1 &&
+                                                      (sample[DefinitiveGuiFrontendInputReference::GuiCloseRequested] == 1 ||
+                                                       sample[DefinitiveGuiFrontendInputReference::Frontend + DefinitiveFrontend::CloseRequested] == 1) &&
+                                                      publishedPersistentFrontend[DefinitivePersistentFrontend::StopReason].load() == 1 &&
+                                                      publishedPersistentFrontend[DefinitivePersistentFrontend::NativeLeaseReason].load() == 5 &&
+                                                      (publishedPersistentFrontend[DefinitivePersistentFrontend::NativeLeaseGenerationLow].load() ||
+                                                       publishedPersistentFrontend[DefinitivePersistentFrontend::NativeLeaseGenerationHigh].load()) &&
+                                                      (publishedPersistentFrontend[DefinitivePersistentFrontend::NativeLeaseRenewalsLow].load() ||
+                                                       publishedPersistentFrontend[DefinitivePersistentFrontend::NativeLeaseRenewalsHigh].load())));
             }
             if (!stoppedClean || !inputClean)
             {
@@ -888,7 +1035,7 @@ namespace deonline
     {
         values = {};
         values[8] = values[9] = values[10] = 0xffffffffu;
-        if (frontendStartupRequested)
+        if (frontendStartupRequested || persistentFrontendRequested)
         {
             values[8] = 0;
             values[9] = values[10] = static_cast<std::uint32_t>(DefinitiveFrontendStartup::Status::Stopped);
@@ -942,7 +1089,7 @@ namespace deonline
                 }
                 if (CheckCancellation())
                     return;
-                if (frontendStartupRequested)
+                if (frontendStartupRequested || persistentFrontendRequested)
                 {
                     RunFrontendStartup(core, mtaDirectory.wstring(), gtaDirectory.wstring());
                     return;
@@ -1211,7 +1358,8 @@ namespace deonline
         inputOwner = nullptr;
         // Cancellation never interrupts the loader or unloads Core from a
         // second thread. Completion is published only after this owned cleanup.
-        if ((guiFrontendRequested || guiFrontendInputRequested) && core && values[16] == 11)
+        persistentHostLease.Revoke();
+        if ((guiFrontendRequested || guiFrontendInputRequested || persistentFrontendRequested) && core && values[16] == 11)
             frontendQuarantined = true;
         if (core && !frontendQuarantined && !FreeLibrary(core))
             values[16] = 9;
@@ -1221,7 +1369,9 @@ namespace deonline
         if ((values[12] & ~values[11]) && !values[16])
             values[16] = 10;
         const auto expectedBackend =
-            guiFrontendInputRequested && guiFrontendInputAvailable   ? publishedGuiFrontendInput[DefinitiveGuiStartupReference::BackendPinnedExpected]
+            persistentFrontendRequested && persistentFrontendAvailable.load()
+                ? publishedPersistentFrontend[DefinitiveGuiStartupReference::BackendPinnedExpected].load()
+            : guiFrontendInputRequested && guiFrontendInputAvailable ? publishedGuiFrontendInput[DefinitiveGuiStartupReference::BackendPinnedExpected]
             : guiFrontendRequested && guiFrontendAvailable           ? publishedGuiFrontend[DefinitiveGuiStartupReference::BackendPinnedExpected]
             : guiSurfaceRequested && guiSurfaceAvailable             ? publishedGuiSurface[DefinitiveGuiStartupReference::BackendPinnedExpected]
             : guiRequested && guiAvailable                           ? publishedGui[DefinitiveGuiStartupReference::BackendPinnedExpected]

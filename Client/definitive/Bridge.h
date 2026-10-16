@@ -166,6 +166,15 @@ DE_BRIDGE_API std::uint32_t DE_CoreGuiFrontendStartupApiVersion();
 DE_BRIDGE_API int           DE_CoreGuiFrontendStartupBegin();
 DE_BRIDGE_API int           DE_CoreGuiFrontendStartupCapture();
 DE_BRIDGE_API std::uint32_t DE_CoreGuiFrontendStartupRead(std::uint32_t component);
+// A renewable host lifetime is independently selected. Neither these288
+// values nor the generation token can be read through historical trial APIs.
+DE_BRIDGE_API std::uint32_t DE_CorePersistentFrontendApiVersion();
+DE_BRIDGE_API std::uint32_t DE_CorePersistentFrontendBegin();
+DE_BRIDGE_API int           DE_CorePersistentFrontendHeartbeat(std::uint32_t generation);
+DE_BRIDGE_API int           DE_CorePersistentFrontendCapture();
+DE_BRIDGE_API std::uint32_t DE_CorePersistentFrontendRead(std::uint32_t component);
+DE_BRIDGE_API int           DE_CorePersistentFrontendCaptureLifecycle();
+DE_BRIDGE_API std::uint32_t DE_CorePersistentFrontendReadLifecycle(std::uint32_t component);
 DE_BRIDGE_API int           DE_CoreGuiFrontendBegin();
 DE_BRIDGE_API int           DE_CoreGuiFrontendCapture();
 DE_BRIDGE_API std::uint32_t DE_CoreGuiFrontendRead(std::uint32_t component);

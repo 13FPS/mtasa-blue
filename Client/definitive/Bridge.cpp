@@ -501,6 +501,34 @@ std::uint32_t DE_CoreGuiFrontendStartupRead(std::uint32_t component)
 {
     return ControllerAccessAllowed() ? coreStartup.ReadGuiFrontendStartup(component) : 0;
 }
+std::uint32_t DE_CorePersistentFrontendApiVersion()
+{
+    return DefinitivePersistentFrontend::ApiVersion;
+}
+std::uint32_t DE_CorePersistentFrontendBegin()
+{
+    return ControllerAccessAllowed() && !movementAdapter && !client ? coreStartup.BeginPersistentFrontend(&moduleAnchor) : 0;
+}
+int DE_CorePersistentFrontendHeartbeat(std::uint32_t generation)
+{
+    return ControllerAccessAllowed() && coreStartup.HeartbeatPersistentFrontend(generation) ? 1 : 0;
+}
+int DE_CorePersistentFrontendCapture()
+{
+    return ControllerAccessAllowed() && coreStartup.CapturePersistentFrontend() ? 1 : 0;
+}
+std::uint32_t DE_CorePersistentFrontendRead(std::uint32_t component)
+{
+    return ControllerAccessAllowed() ? coreStartup.ReadPersistentFrontend(component) : 0;
+}
+int DE_CorePersistentFrontendCaptureLifecycle()
+{
+    return ControllerAccessAllowed() && coreStartup.CapturePersistentFrontendLifecycle() ? 1 : 0;
+}
+std::uint32_t DE_CorePersistentFrontendReadLifecycle(std::uint32_t component)
+{
+    return ControllerAccessAllowed() ? coreStartup.ReadPersistentFrontendLifecycle(component) : 0;
+}
 int DE_CoreGuiFrontendBegin()
 {
     return ControllerAccessAllowed() && !movementAdapter && !client && coreStartup.BeginGuiFrontendReference(&moduleAnchor) ? 1 : 0;

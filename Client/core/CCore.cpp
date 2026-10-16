@@ -48,6 +48,7 @@
 #include "DefinitiveGuiFrontendReference.h"
 #include "DefinitiveGuiFrontendInputReference.h"
 #include "DefinitiveFrontendBindings.h"
+#include "DefinitivePersistentFrontend.h"
 #include <type_traits>
 
 using SharedUtil::CalcMTASAPath;
@@ -609,20 +610,25 @@ namespace
         }
     }
 
-    template <bool CoreOwnedInput>
-    auto RunGuiFrontendReferenceImpl(CGameAdapterModule& adapter, const DefinitiveInputReference::Request& request) noexcept
+    template <bool CoreOwnedInput, bool Persistent = false>
+    auto RunGuiFrontendReferenceImpl(CGameAdapterModule& adapter, const DefinitiveInputReference::Request& request,
+                                     const DefinitivePersistentFrontend::RequestV1* persistent = nullptr) noexcept
     {
+        static_assert(!Persistent || CoreOwnedInput);
         using namespace DefinitiveGuiStartupReference;
-        using SurfaceSnapshot = std::conditional_t<CoreOwnedInput, DefinitiveGuiFrontendInputReference::Snapshot, DefinitiveGuiFrontendReference::Snapshot>;
+        using SurfaceSnapshot =
+            std::conditional_t<Persistent, DefinitivePersistentFrontend::Snapshot,
+                               std::conditional_t<CoreOwnedInput, DefinitiveGuiFrontendInputReference::Snapshot, DefinitiveGuiFrontendReference::Snapshot>>;
         using SurfaceStatus = DefinitiveGuiSurface::Status;
         struct Owner
         {
-            CGameAdapterModule&                      adapter;
-            const DefinitiveInputReference::Request& request;
-            DefinitiveGuiSurface::Session            gui;
-            mta::game_de::RenderDeviceWindowLeaseV2  lease;
-            bool                                     beginAttempted = false;
-            std::uint64_t                            displayStarted = 0;
+            CGameAdapterModule&                            adapter;
+            const DefinitiveInputReference::Request&       request;
+            const DefinitivePersistentFrontend::RequestV1* persistent;
+            DefinitiveGuiSurface::Session                  gui;
+            mta::game_de::RenderDeviceWindowLeaseV2        lease;
+            bool                                           beginAttempted = false;
+            std::uint64_t                                  displayStarted = 0;
 
             void*                                           frontend = nullptr;
             DefinitiveFrontend::Snapshot                    frontendState{};
@@ -638,6 +644,27 @@ namespace
             bool                                            nativeAttempted = false, nativeStarted = false, nativeVerified = false, nativeEnded = true;
             bool                                            nativeAcquireTimeout = false;
             std::uint64_t                                   nativeStartedAt = 0, nativeAcquireStarted = 0;
+            std::uint64_t                                   nativeStoppedAt = 0;
+            mta::game_de::FrontendInputLeaseStateV1         nativeLease{};
+            bool                                            hostFresh = false;
+            DefinitivePersistentFrontend::Stop              persistentStop = DefinitivePersistentFrontend::Stop::Running;
+
+            bool HostFresh() noexcept
+            {
+                if constexpr (!Persistent)
+                    return true;
+                try
+                {
+                    hostFresh = persistent && persistent->heartbeat && persistent->heartbeat();
+                }
+                catch (...)
+                {
+                    hostFresh = false;
+                }
+                if (!hostFresh && persistentStop == DefinitivePersistentFrontend::Stop::Running)
+                    persistentStop = DefinitivePersistentFrontend::Stop::HostLeaseExpired;
+                return hostFresh;
+            }
 
             bool ReadFrontend() noexcept
             {
@@ -678,7 +705,7 @@ namespace
                 auto& self = *static_cast<Owner*>(context);
                 if constexpr (CoreOwnedInput)
                 {
-                    if (!self.NativeHealthy() || !InputReferenceFocused())
+                    if (!self.HostFresh() || !self.NativeHealthy() || !InputReferenceFocused())
                         return false;
                 }
                 else if (!self.Control(DefinitiveGuiFrontendReference::ControlAction::Poll) || !self.control[DefinitiveGuiFrontendReference::Fresh] ||
@@ -718,7 +745,7 @@ namespace
                 {
                     if constexpr (CoreOwnedInput)
                     {
-                        if (!self.nativeVerified || !self.NativeHealthy() || !InputReferenceFocused())
+                        if (!self.nativeVerified || !self.HostFresh() || !self.NativeHealthy() || !InputReferenceFocused())
                             return false;
                     }
                     else if (!self.Control(DefinitiveGuiFrontendReference::ControlAction::Poll) || !self.control[DefinitiveGuiFrontendReference::Fresh] ||
@@ -754,7 +781,7 @@ namespace
             }
             bool PublishNeutral() noexcept
             {
-                if (!frontend || !bindingsAttempted)
+                if (!frontend || !bindingsAttempted || !HostFresh())
                     return false;
                 mta::game_de::MtaInputState expected, actual;
                 if (MTA_ProduceDEFrontendNeutralInput(frontend, &expected, sizeof(expected)) != DefinitiveFrontend::Status::Ok || !adapter.Pulse() ||
@@ -763,10 +790,29 @@ namespace
                 // Both sides reuse MTA's canonical synthesis. The native path
                 // receives copied values only; no script owns a restore flag.
                 const mta::game_de::MtaInputState zero;
-                return std::memcmp(&expected, &zero, sizeof(zero)) == 0 && std::memcmp(&actual, &zero, sizeof(zero)) == 0 && ReadFrontend();
+                const bool neutral = std::memcmp(&expected, &zero, sizeof(zero)) == 0 && std::memcmp(&actual, &zero, sizeof(zero)) == 0 && ReadFrontend();
+                if constexpr (Persistent)
+                {
+                    // Only the optional neutral-only lease can outlive a trial.
+                    // Ordinary canonical input publication does not renew it.
+                    if (neutral && nativeStarted && !nativeEnded)
+                        return adapter.RenewFrontendInputLease(nativeLease.generation);
+                }
+                return neutral;
             }
             bool NativeHealthy() noexcept
             {
+                if constexpr (Persistent)
+                {
+                    if (!adapter.ReadFrontendInputLease(nativeLease) || !nativeLease.active || nativeLease.revoked)
+                    {
+                        if (persistentStop == DefinitivePersistentFrontend::Stop::Running)
+                            persistentStop = nativeLease.reason == static_cast<std::uint32_t>(mta::game_de::FrontendInputLeaseReason::FocusLost)
+                                                 ? DefinitivePersistentFrontend::Stop::FocusLost
+                                                 : DefinitivePersistentFrontend::Stop::Fault;
+                        return false;
+                    }
+                }
                 return nativeStarted && !nativeEnded && adapter.GetNativeMovementTrialState(nativeState) && nativeState.bound && nativeState.active &&
                        nativeState.modulePinned && !nativeState.failureReason && !nativeState.restoreFailures && !nativeState.nestedCallbacks &&
                        nativeState.restoredSteps <= nativeState.scopedSteps;
@@ -830,8 +876,9 @@ namespace
                 values[ParentThreadId] = s.parentThreadId;
                 values[AlphaMode] = s.alphaMode;
                 values[SignalAttempts] = s.signalAttempts;
-                values[DisplayDuration] =
-                    CoreOwnedInput ? DefinitiveGuiFrontendInputReference::DisplayDurationMs : DefinitiveGuiFrontendReference::DisplayDurationMs;
+                values[DisplayDuration] = Persistent       ? 0u
+                                          : CoreOwnedInput ? DefinitiveGuiFrontendInputReference::DisplayDurationMs
+                                                           : DefinitiveGuiFrontendReference::DisplayDurationMs;
                 values[PrivateSurface] = 1;
                 values[GuiStarted] = s.sessionCreated;
                 ReadFrontend();
@@ -873,14 +920,46 @@ namespace
                                                        ? static_cast<std::uint32_t>(std::min<std::uint64_t>(now - nativeAcquireStarted, NativeAcquireMs))
                                                        : 0;
                     values[NativeAcquireTimeout] = nativeAcquireTimeout;
-                    values[NativeActiveMs] =
-                        nativeStartedAt && now >= nativeStartedAt ? static_cast<std::uint32_t>(std::min<std::uint64_t>(now - nativeStartedAt, UINT32_MAX)) : 0;
+                    const auto nativeActiveUntil = Persistent && nativeStoppedAt ? nativeStoppedAt : now;
+                    values[NativeActiveMs] = nativeStartedAt && nativeActiveUntil >= nativeStartedAt
+                                                 ? static_cast<std::uint32_t>(std::min<std::uint64_t>(nativeActiveUntil - nativeStartedAt, UINT32_MAX))
+                                                 : 0;
                     values[NativeOwnerRetained] = nativeAttempted && !nativeEnded;
                     // These counters prove only local scoped pad ownership.
                     // Camera queries outside ProcessControl need a live test.
                     values[CameraCaptureVerified] = values[FullEngineInputReady] = 0;
                 }
-                else
+                if constexpr (Persistent)
+                {
+                    using namespace DefinitivePersistentFrontend;
+                    HostFresh();
+                    try
+                    {
+                        if (persistentStop == DefinitivePersistentFrontend::Stop::Running && request.cancelled())
+                            persistentStop = DefinitivePersistentFrontend::Stop::Cancelled;
+                    }
+                    catch (...)
+                    {
+                        persistentStop = DefinitivePersistentFrontend::Stop::Fault;
+                    }
+                    values[PersistentVersion] = DefinitivePersistentFrontend::ApiVersion;
+                    const auto pair = [&](DefinitivePersistentFrontend::Field field, std::uint64_t value)
+                    {
+                        values[field] = static_cast<std::uint32_t>(value);
+                        values[field + 1] = static_cast<std::uint32_t>(value >> 32);
+                    };
+                    pair(SessionGenerationLow, persistent->generation);
+                    pair(NativeLeaseGenerationLow, nativeLease.generation);
+                    pair(NativeLeaseRenewalsLow, nativeLease.renewals);
+                    values[HostLeaseFresh] = hostFresh;
+                    values[NativeLeaseActive] = nativeLease.active;
+                    values[NativeLeaseRevoked] = nativeLease.revoked;
+                    values[NativeLeaseReason] = nativeLease.reason;
+                    values[HostHeartbeatBudgetMs] = HostHeartbeatMs;
+                    values[NativeHeartbeatBudgetMs] = mta::game_de::FrontendInputLeaseLifetimeMsV1;
+                    values[DefinitivePersistentFrontend::StopReason] = static_cast<std::uint32_t>(persistentStop);
+                }
+                else if constexpr (!CoreOwnedInput)
                 {
                     using namespace DefinitiveGuiFrontendReference;
                     values[InteractionVersion] = input.version;
@@ -1080,7 +1159,13 @@ namespace
                     CopyGui(values);
                     return Outcome::Failed;
                 };
-                if (!InputReferenceFocused() || now < nativeAcquireStarted || !PublishNeutral())
+                if (!InputReferenceFocused())
+                {
+                    if constexpr (Persistent)
+                        persistentStop = DefinitivePersistentFrontend::Stop::FocusLost;
+                    return failed();
+                }
+                if (!HostFresh() || now < nativeAcquireStarted || !PublishNeutral())
                     return failed();
                 mta::game_de::NativeMovementEligibility eligibility;
                 const bool                              eligible = adapter.GetNativeMovementEligibility(eligibility) &&
@@ -1093,7 +1178,17 @@ namespace
                     nativeAttempted = true;
                     nativeEnded = false;
                     nativeStartedAt = now;
-                    nativeStarted = adapter.BeginNativeMovementTrial();
+                    if constexpr (Persistent)
+                    {
+                        nativeStarted = adapter.BeginFrontendInputLease(lease.window, nativeLease);
+                        // A rejected request with no published generation never
+                        // acquired lease ownership. Native setup failures do
+                        // publish a generation and must retry their own End.
+                        if (!nativeStarted && !nativeLease.generation)
+                            nativeEnded = true;
+                    }
+                    else
+                        nativeStarted = adapter.BeginNativeMovementTrial();
                     if (!nativeStarted)
                         return failed();
                 }
@@ -1132,8 +1227,13 @@ namespace
                     now < displayStarted)
                     return Outcome::Failed;
                 const bool closing = input.closeRequested || frontendState[DefinitiveFrontend::CloseRequested];
-                if (!closing && now - displayStarted < DefinitiveGuiFrontendInputReference::DisplayDurationMs)
+                if (!closing && (Persistent || now - displayStarted < DefinitiveGuiFrontendInputReference::DisplayDurationMs))
                     return Outcome::Pending;
+                if constexpr (Persistent)
+                {
+                    persistentStop = DefinitivePersistentFrontend::Stop::GuiClosed;
+                    CopyGui(values);
+                }
                 const bool accounted = s.presentSucceeded <= s.presentCalls && s.presentBusy == s.presentCalls - s.presentSucceeded;
                 return s.readbackComplete && s.readbackPixels > 10000 && s.premultipliedPixelsVerified && s.presentSucceeded >= 2 &&
                                frontendState[DefinitiveFrontend::Frames] >= 2 && accounted && !s.presentHresult && s.guiFrames >= s.presentSucceeded &&
@@ -1143,6 +1243,37 @@ namespace
             }
             bool ShutdownCoreInput(SurfaceSnapshot& values) noexcept
             {
+                if constexpr (Persistent)
+                {
+                    // Persistent duration proof ends before input detachment
+                    // and native/GPU retries. Cleanup time cannot turn an
+                    // early close into a successful long-running workload.
+                    if (nativeStarted && !nativeStoppedAt)
+                        nativeStoppedAt = static_cast<std::uint64_t>(GetTickCount64_());
+                    if (persistentStop == DefinitivePersistentFrontend::Stop::Running)
+                    {
+                        // Setup, renewal or rendering can fail before the
+                        // polling path classifies its stop. A fully retired
+                        // owner must never retain a misleading Running reason.
+                        try
+                        {
+                            if (request.cancelled())
+                                persistentStop = DefinitivePersistentFrontend::Stop::Cancelled;
+                            else if (HostFresh())
+                            {
+                                if (nativeLease.generation)
+                                    adapter.ReadFrontendInputLease(nativeLease);
+                                persistentStop = nativeLease.reason == static_cast<std::uint32_t>(mta::game_de::FrontendInputLeaseReason::FocusLost)
+                                                     ? DefinitivePersistentFrontend::Stop::FocusLost
+                                                     : DefinitivePersistentFrontend::Stop::Fault;
+                            }
+                        }
+                        catch (...)
+                        {
+                            persistentStop = DefinitivePersistentFrontend::Stop::Fault;
+                        }
+                    }
+                }
                 // First stop GUI messages, then let the native callback restore
                 // its borrowed physical state, then retire CPU and GPU owners.
                 if (gui.DetachInput() != SurfaceStatus::Ok)
@@ -1152,7 +1283,9 @@ namespace
                 }
                 if (nativeAttempted && !nativeEnded)
                 {
-                    const bool ended = adapter.EndNativeMovementTrial();
+                    const bool ended = Persistent ? adapter.EndFrontendInputLease(nativeLease.generation) : adapter.EndNativeMovementTrial();
+                    if constexpr (Persistent)
+                        adapter.ReadFrontendInputLease(nativeLease);
                     const bool observed = adapter.GetNativeMovementTrialState(nativeState);
                     nativeEnded = ended && observed && !nativeState.bound && !nativeState.active && nativeState.scopedSteps == nativeState.restoredSteps &&
                                   !nativeState.restoreFailures;
@@ -1175,19 +1308,22 @@ namespace
                 return status == SurfaceStatus::Ok && values[GuiCleanupComplete] && !frontend && nativeEnded &&
                        !bindingsState[DefinitiveFrontendBindings::BindingsRetained];
             }
-        } owner{adapter, request};
+        } owner{adapter, request, persistent};
         struct Clock
         {
             std::uint64_t Now() const noexcept { return static_cast<std::uint64_t>(GetTickCount64_()); }
             void          Wait(std::uint32_t milliseconds) const noexcept { Sleep(milliseconds); }
         } clock;
         const auto runMs = clock.Now();
-        const auto result = DefinitiveGuiStartupReference::Run<SurfaceSnapshot>(owner, clock, request);
+        const auto result = DefinitiveGuiStartupReference::Run<SurfaceSnapshot>(owner, clock, request, Persistent);
         try
         {
             // All native holds, GUI/GPU owners and the child window have ended
             // before file I/O; failure to log cannot relabel cleanup or drawing.
-            std::string line = std::string("{\"schema\":\"") + (CoreOwnedInput ? "mta_core_gui_frontend_input_v1" : "mta_core_gui_frontend_v1") +
+            std::string line = std::string("{\"schema\":\"") +
+                               (Persistent       ? "mta_core_persistent_frontend_v1"
+                                : CoreOwnedInput ? "mta_core_gui_frontend_input_v1"
+                                                 : "mta_core_gui_frontend_v1") +
                                "\",\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"runMs\":" + std::to_string(runMs) + ",\"values\":[";
             for (std::size_t index = 0; index < result.size(); ++index)
             {
@@ -1196,7 +1332,9 @@ namespace
                 line += std::to_string(result[index]);
             }
             line += "]}\n";
-            const auto path = CalcMTASAPath(CoreOwnedInput ? "mta/logs/gui-frontend-input.log" : "mta/logs/gui-frontend.log");
+            const auto path = CalcMTASAPath(Persistent       ? "mta/logs/persistent-frontend.log"
+                                            : CoreOwnedInput ? "mta/logs/gui-frontend-input.log"
+                                                             : "mta/logs/gui-frontend.log");
             SharedUtil::MakeSureDirExists(path);
             SharedUtil::FileAppend(path, line.data(), static_cast<unsigned long>(line.size()));
             if (owner.consoleAttempted && owner.consoleState[DefinitiveFrontendConsole::Version] == DefinitiveFrontendConsole::ApiVersion)
@@ -1809,6 +1947,30 @@ DefinitiveFrontend::Status CCore::RunFrontendStartupView(const DefinitiveInputRe
     if (!result[CleanupComplete] || result[CleanupPending])
         return DefinitiveFrontend::Status::Busy;
     return result[WorkloadSucceeded] && !result[CleanupDeadlineExceeded] ? DefinitiveFrontend::Status::Ok : DefinitiveFrontend::Status::Failed;
+}
+
+DefinitiveFrontend::Status CCore::RunPersistentFrontend(const DefinitivePersistentFrontend::RequestV1& persistent,
+                                                        DefinitivePersistentFrontend::Snapshot&        result)
+{
+    DefinitiveInputReference::Request request;
+    // Native device acquisition remains bounded. Only the interactive phase
+    // uses renewable host/native leases rather than the old absolute timer.
+    request.durationMs = DefinitiveGuiFrontendInputReference::MaximumDurationMs;
+    request.cancelled = persistent.cancelled;
+    request.publish = persistent.publish;
+    request.guiFrontendInput = true;
+    result = RunGuiFrontendReferenceImpl<true, true>(m_DefinitiveAdapter, request, &persistent);
+    using namespace DefinitiveGuiStartupReference;
+    if (!result[CleanupComplete] || result[CleanupPending])
+        return DefinitiveFrontend::Status::Busy;
+    if (result[WorkloadSucceeded] && !result[CleanupDeadlineExceeded])
+        return DefinitiveFrontend::Status::Ok;
+    const auto stop = static_cast<DefinitivePersistentFrontend::Stop>(result[DefinitivePersistentFrontend::StopReason]);
+    if (!result[CleanupDeadlineExceeded] &&
+        (stop == DefinitivePersistentFrontend::Stop::Cancelled || stop == DefinitivePersistentFrontend::Stop::HostLeaseExpired ||
+         stop == DefinitivePersistentFrontend::Stop::FocusLost))
+        return DefinitiveFrontend::Status::Stopped;
+    return DefinitiveFrontend::Status::Failed;
 }
 
 CCore::CCore(FrontendShellTag)

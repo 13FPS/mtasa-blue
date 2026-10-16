@@ -6,11 +6,17 @@ param([ValidateSet('Diagnostic', 'Smoke', 'Online')][string]$Mode = 'Smoke',
     [switch]$NativeGaitReference, [switch]$MatchedGaitRate, [switch]$LockWalkRoot, [switch]$NativeInputReference,
     [switch]$MtaNativePadReference, [switch]$MtaNativeMovementTrial, [switch]$MtaCoreStartupReference, [switch]$MtaCoreInputReference,
     [switch]$MtaCoreMovementReference, [switch]$MtaCoreRenderReference, [switch]$MtaCoreRenderGpuReference, [switch]$MtaCoreRenderCustomPresentReference, [switch]$MtaCoreRenderFrameBoundaryReference, [switch]$MtaCoreRenderNativeDispatchReference,
-    [ValidateSet('D3D11', 'D3D12')][string]$MtaCoreRenderRoute = 'D3D11', [switch]$MtaCoreGuiStartupReference, [switch]$MtaCoreGuiSurfaceReference, [switch]$MtaCoreGuiFrontendReference, [switch]$MtaCoreGuiFrontendInputReference, [switch]$MtaCoreGuiFrontendStartupReference,
+    [ValidateSet('D3D11', 'D3D12')][string]$MtaCoreRenderRoute = 'D3D11', [switch]$MtaCoreGuiStartupReference, [switch]$MtaCoreGuiSurfaceReference, [switch]$MtaCoreGuiFrontendReference, [switch]$MtaCoreGuiFrontendInputReference, [switch]$MtaCoreGuiFrontendStartupReference, [switch]$MtaCorePersistentFrontend,
     [string]$OutputDirectory)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+# Persistent input has independent host/native leases and must never inherit
+# one of the bounded diagnostic modes or a script player-control lease.
+$persistentConflicts = @(@('NativeGaitReference','MatchedGaitRate','LockWalkRoot','NativeInputReference','MtaNativePadReference','MtaNativeMovementTrial','MtaCoreStartupReference','MtaCoreInputReference','MtaCoreMovementReference','MtaCoreRenderReference','MtaCoreRenderGpuReference','MtaCoreRenderCustomPresentReference','MtaCoreRenderFrameBoundaryReference','MtaCoreRenderNativeDispatchReference','MtaCoreGuiStartupReference','MtaCoreGuiSurfaceReference','MtaCoreGuiFrontendReference','MtaCoreGuiFrontendInputReference','MtaCoreGuiFrontendStartupReference') | Where-Object { $PSBoundParameters.ContainsKey($_) -and $PSBoundParameters[$_] })
+if ($MtaCorePersistentFrontend -and ($Mode -ne 'Smoke' -or $persistentConflicts.Count -gt 0 -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
+    throw 'Persistent MTA frontend requires separate opt-in Smoke mode without other trials.'
+}
 # Completed frontend ownership is independent of the rejecting gameplay constructor.
 if ($MtaCoreGuiFrontendStartupReference -and ($Mode -ne 'Smoke' -or $MtaCoreGuiFrontendInputReference -or $MtaCoreGuiFrontendReference -or $MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference -or $MtaCoreRenderReference -or $MtaCoreRenderGpuReference -or $MtaCoreRenderCustomPresentReference -or $MtaCoreRenderFrameBoundaryReference -or $MtaCoreRenderNativeDispatchReference -or $MtaCoreMovementReference -or $MtaCoreInputReference -or $MtaCoreStartupReference -or $MtaNativeMovementTrial -or $MtaNativePadReference -or $NativeInputReference -or $NativeGaitReference -or $MatchedGaitRate -or $LockWalkRoot -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
     throw 'MTA Core GUI frontend startup requires separate opt-in Smoke mode without other trials or an explicit renderer route.'
@@ -217,8 +223,18 @@ if ($MtaCoreGuiFrontendStartupReference) {
         if (-not $coreExports.Contains($name)) { throw "Required completed frontend Core export missing: $name" }
     }
 }
+if ($MtaCorePersistentFrontend) {
+    foreach ($pair in @(
+        @{path=$bridgePath; names=@('DE_CorePersistentFrontendApiVersion','DE_CorePersistentFrontendBegin','DE_CorePersistentFrontendHeartbeat','DE_CorePersistentFrontendCapture','DE_CorePersistentFrontendRead','DE_CorePersistentFrontendCaptureLifecycle','DE_CorePersistentFrontendReadLifecycle','DE_CoreStartupPoll','DE_CoreStartupCancel','DE_CoreStartupRead')},
+        @{path=$corePath; names=@('MTA_DEPersistentFrontendApiVersion','MTA_RunDEPersistentFrontendV1','MTA_DEFrontendStartupApiVersion','MTA_BeginDEFrontendStartup','MTA_ReadDEFrontendStartup','MTA_ShutdownDEFrontendStartup','MTA_ReleaseDEFrontendStartup','SetMTADirectory','SetGTADirectory')},
+        @{path=$gameDePath; names=@('BeginGameFrontendInputLeaseV1','RenewGameFrontendInputLeaseV1','ReadGameFrontendInputLeaseV1','EndGameFrontendInputLeaseV1')}
+    )) {
+        $exports = Get-Amd64Exports $pair.path
+        foreach ($name in $pair.names) { if (-not $exports.Contains($name)) { throw "Required persistent frontend export missing: $name" } }
+    }
+}
 $guiSources = @()
-if ($MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference -or $MtaCoreGuiFrontendReference -or $MtaCoreGuiFrontendInputReference -or $MtaCoreGuiFrontendStartupReference) {
+if ($MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference -or $MtaCoreGuiFrontendReference -or $MtaCoreGuiFrontendInputReference -or $MtaCoreGuiFrontendStartupReference -or $MtaCorePersistentFrontend) {
     $guiSources += @{ source=(Join-Path $repositoryRoot 'Bin/mta/x64/cgui.dll'); path='cgui.dll' }
     foreach ($name in @('sans.ttf', 'saheader.ttf', 'sagothic.ttf', 'Imageset.xsd', 'GUIScheme.xsd', 'Font.xsd', 'Falagard.xsd')) {
         $guiSources += @{ source=(Join-Path $repositoryRoot ('Shared/data/MTA San Andreas/MTA/cgui/' + $name)); path=('mta/cgui/' + $name) }
@@ -234,7 +250,7 @@ if ($MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference -or $MtaCoreGuiF
     $unifont = @($guiSources | Where-Object path -eq 'mta/cgui/unifont.ttf')[0]
     if ((Get-FileHash -LiteralPath $unifont.source -Algorithm SHA256).Hash.ToLowerInvariant() -ne '6b18fdcf0f61f3df2e61db9737af6de9f37048ec93083621d41504ebf8cb18f4') { throw 'Pinned GUI Unifont hash mismatch.' }
 }
-if ($MtaCoreGuiFrontendReference -or $MtaCoreGuiFrontendInputReference -or $MtaCoreGuiFrontendStartupReference) {
+if ($MtaCoreGuiFrontendReference -or $MtaCoreGuiFrontendInputReference -or $MtaCoreGuiFrontendStartupReference -or $MtaCorePersistentFrontend) {
     $guiSources += @{ source=(Join-Path $repositoryRoot 'Shared/data/MTA San Andreas/MTA/cgui/images/background.png'); path='mta/cgui/images/background.png' }
     $guiSources += @{ source=(Join-Path $repositoryRoot 'Shared/data/MTA San Andreas/MTA/cgui/images/background_logo.png'); path='mta/cgui/images/background_logo.png' }
     $guiSources += @{ source=(Join-Path $repositoryRoot 'Shared/data/MTA San Andreas/MTA/cgui/images/mta_filler.png'); path='mta/cgui/images/mta_filler.png' }
@@ -430,6 +446,10 @@ $configText = $configText.Replace($frontendInputMarker,
     "export const MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE = $($MtaCoreGuiFrontendInputReference.IsPresent.ToString().ToLowerInvariant());")
 # A completed Core owner has a distinct opt-in and cannot inherit a bounded
 # InitializeCore experiment merely because both modes ship the same GUI assets.
+$persistentMarker = 'export const MTA_CORE_PERSISTENT_FRONTEND = false;'
+if ([regex]::Matches($configText, [regex]::Escape($persistentMarker)).Count -ne 1) { throw 'Expected disabled persistent frontend in source configuration.' }
+$configText = $configText.Replace($persistentMarker,
+    "export const MTA_CORE_PERSISTENT_FRONTEND = $($MtaCorePersistentFrontend.IsPresent.ToString().ToLowerInvariant());")
 $frontendStartupMarker = 'export const MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE = false;'
 if ([regex]::Matches($configText, [regex]::Escape($frontendStartupMarker)).Count -ne 1) { throw 'Expected disabled MTA Core GUI frontend startup in source configuration.' }
 $configText = $configText.Replace($frontendStartupMarker,
@@ -466,7 +486,7 @@ $files = @(Get-ChildItem -LiteralPath $stagingWin64 -File -Recurse | Sort-Object
         sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     }
 })
-if ($files.Count -ne $(if ($MtaCoreGuiFrontendReference -or $MtaCoreGuiFrontendInputReference -or $MtaCoreGuiFrontendStartupReference) { 58 } elseif ($MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference) { 36 } else { 23 })) { throw 'Unexpected package ownership count.' }
+if ($files.Count -ne $(if ($MtaCoreGuiFrontendReference -or $MtaCoreGuiFrontendInputReference -or $MtaCoreGuiFrontendStartupReference -or $MtaCorePersistentFrontend) { 58 } elseif ($MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference) { 36 } else { 23 })) { throw 'Unexpected package ownership count.' }
 $manifest = [ordered]@{
     packageId = 'de-online-prototype'
     formatVersion = 1

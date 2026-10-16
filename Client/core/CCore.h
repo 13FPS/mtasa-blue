@@ -28,6 +28,7 @@ class CDiscordInterface;
     #include "DefinitiveFrontendConsole.h"
     #include "DefinitiveFrontendBindings.h"
     #include "DefinitiveFrontendStartup.h"
+    #include "DefinitivePersistentFrontend.h"
     #include "DefinitiveGuiFrontendInputReference.h"
 #endif
 #include "CSingleton.h"
@@ -323,6 +324,7 @@ private:
     };
     explicit CCore(FrontendStartupTag);
     DefinitiveFrontend::Status RunFrontendStartupView(const DefinitiveInputReference::Request&, DefinitiveGuiFrontendInputReference::Snapshot&);
+    DefinitiveFrontend::Status RunPersistentFrontend(const DefinitivePersistentFrontend::RequestV1&, DefinitivePersistentFrontend::Snapshot&);
     struct FrontendResources;
     FrontendResources*                  m_frontendResources = nullptr;
     bool                                m_frontendShellOnly = false;

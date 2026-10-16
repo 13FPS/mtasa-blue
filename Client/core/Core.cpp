@@ -238,6 +238,16 @@ CORE_API DefinitiveFrontendStartup::Status MTA_RunDEFrontendStartupView(void* ha
 {
     return DefinitiveFrontendStartup::RunViewOwner(handle, durationMs, cancel, publish);
 }
+
+CORE_API std::uint32_t MTA_DEPersistentFrontendApiVersion()
+{
+    return DefinitivePersistentFrontend::ApiVersion;
+}
+
+CORE_API DefinitivePersistentFrontend::Status MTA_RunDEPersistentFrontendV1(void* handle, const DefinitivePersistentFrontend::RequestV1* request)
+{
+    return DefinitivePersistentFrontend::RunOwner(handle, request);
+}
 #endif
 
 CORE_API int InitializeCore()

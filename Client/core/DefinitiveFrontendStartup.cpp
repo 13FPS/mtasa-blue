@@ -6,6 +6,7 @@
 
 #include "StdInc.h"
 #include "DefinitiveFrontendStartup.h"
+#include "DefinitivePersistentFrontend.h"
 
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
 
@@ -215,6 +216,31 @@ namespace DefinitiveFrontendStartup
             // alive. Only the separate Shutdown/Release owns their retirement.
             return status;
         }
+
+        Status RunPersistent(const DefinitivePersistentFrontend::RequestV1& request)
+        {
+            if (state[Phase] != 2)
+                return state[Phase] == 5 ? Status::Failed : Status::Stopped;
+            if (core->m_frontendResources)
+                return Status::Busy;
+            if (Bind() != Status::Ok || Pulse() != Status::Ok)
+                return Status::Failed;
+            if (state[ViewRuns] != UINT32_MAX)
+                ++state[ViewRuns];
+            state[LastViewCleanupComplete] = 0;
+            DefinitivePersistentFrontend::Snapshot result{};
+            const auto                             status = core->RunPersistentFrontend(request, result);
+            state[LastViewCleanupComplete] = result[DefinitiveGuiStartupReference::CleanupComplete];
+            if (status != Status::Ok && status != Status::Stopped)
+                state[LastFailure] = static_cast<std::uint32_t>(Failure::View);
+            if (status == Status::Busy)
+            {
+                state[Phase] = 3;
+                state[CleanupPending] = 1;
+                core->m_frontendStartupAccepting = false;
+            }
+            return status;
+        }
     };
 
     namespace
@@ -336,6 +362,34 @@ namespace DefinitiveFrontendStartup
             activeStartup->RetainFailedView();
             return Status::Failed;
         }
+    }
+
+    Status RunPersistentOwner(void* handle, const DefinitivePersistentFrontend::RequestV1* request) noexcept
+    {
+        Operation  operation;
+        const auto status = operation.Validate(handle);
+        if (status != Status::Ok)
+            return status;
+        if (!request || request->size != sizeof(*request) || request->version != DefinitivePersistentFrontend::ApiVersion || !request->generation ||
+            request->reserved[0] || request->reserved[1] || !request->cancelled || !request->publish || !request->heartbeat)
+            return Status::InvalidArgument;
+        try
+        {
+            return activeStartup->RunPersistent(*request);
+        }
+        catch (...)
+        {
+            activeStartup->RetainFailedView();
+            return Status::Failed;
+        }
+    }
+}
+
+namespace DefinitivePersistentFrontend
+{
+    Status RunOwner(void* handle, const RequestV1* request) noexcept
+    {
+        return DefinitiveFrontendStartup::RunPersistentOwner(handle, request);
     }
 }
 #endif

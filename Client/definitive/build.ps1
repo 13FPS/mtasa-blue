@@ -47,7 +47,9 @@ try {
     $bridgeExports = & $dumpbinPath /nologo /exports de_client_bridge.dll
     if ($LASTEXITCODE -ne 0) { throw 'Client bridge export inspection failed.' }
     foreach ($name in @('DE_CoreGuiFrontendStartupApiVersion', 'DE_CoreGuiFrontendStartupBegin', 'DE_CoreGuiFrontendStartupCapture', 'DE_CoreGuiFrontendStartupRead',
-        'DE_CoreGuiFrontendInputApiVersion', 'DE_CoreGuiFrontendInputBegin', 'DE_CoreGuiFrontendInputCapture', 'DE_CoreGuiFrontendInputRead')) {
+        'DE_CoreGuiFrontendInputApiVersion', 'DE_CoreGuiFrontendInputBegin', 'DE_CoreGuiFrontendInputCapture', 'DE_CoreGuiFrontendInputRead',
+        'DE_CorePersistentFrontendApiVersion', 'DE_CorePersistentFrontendBegin', 'DE_CorePersistentFrontendHeartbeat', 'DE_CorePersistentFrontendCapture',
+        'DE_CorePersistentFrontendRead', 'DE_CorePersistentFrontendCaptureLifecycle', 'DE_CorePersistentFrontendReadLifecycle')) {
         if (-not @($bridgeExports | Where-Object { $_ -match ('\s' + [regex]::Escape($name) + '\s*$') }).Count) { throw "Client bridge export missing: $name" }
     }
     & $compilerPath @commonArguments (Join-Path $repositoryRoot 'Tests/definitive/ProtocolTests.cpp') /Fede_protocol_tests.exe

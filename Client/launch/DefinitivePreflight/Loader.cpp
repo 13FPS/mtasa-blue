@@ -396,11 +396,12 @@ namespace
         // but cannot inherit the older script-owned player-control lease.
         const bool frontendInput = flag("MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE", false);
         const bool frontendStartup = flag("MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE", false);
-        if (startup || surface || frontend || frontendInput || frontendStartup)
+        const bool persistentFrontend = flag("MTA_CORE_PERSISTENT_FRONTEND", false);
+        if (startup || surface || frontend || frontendInput || frontendStartup || persistentFrontend)
         {
-            Require(mode == "Smoke" && fileCount >= 36 && (!(frontend || frontendInput || frontendStartup) || fileCount == 58) &&
+            Require(mode == "Smoke" && fileCount >= 36 && (!(frontend || frontendInput || frontendStartup || persistentFrontend) || fileCount == 58) &&
                         static_cast<unsigned>(startup) + static_cast<unsigned>(surface) + static_cast<unsigned>(frontend) +
-                                static_cast<unsigned>(frontendInput) + static_cast<unsigned>(frontendStartup) ==
+                                static_cast<unsigned>(frontendInput) + static_cast<unsigned>(frontendStartup) + static_cast<unsigned>(persistentFrontend) ==
                             1,
                     "gui_mode_conflict");
             for (const auto name : {"GAIT_REFERENCE", "GAIT_RATE", "GAIT_ROOT_LOCK", "INPUT_REFERENCE", "MTA_NATIVE_PAD_REFERENCE", "MTA_NATIVE_MOVEMENT_TRIAL",

@@ -18,6 +18,8 @@
 #include "../core/DefinitiveGuiFrontendInputReference.h"
 #include "FrontendControlMailbox.h"
 #include "FrontendStartupReport.h"
+#include "PersistentFrontendHostLease.h"
+#include "../core/DefinitivePersistentFrontend.h"
 
 namespace deonline
 {
@@ -59,6 +61,12 @@ namespace deonline
         bool          BeginGuiFrontendStartupReference(const void* moduleAddress) noexcept;
         bool          CaptureGuiFrontendStartup() noexcept;
         std::uint32_t ReadGuiFrontendStartup(std::uint32_t field) const noexcept;
+        std::uint32_t BeginPersistentFrontend(const void* moduleAddress) noexcept;
+        bool          HeartbeatPersistentFrontend(std::uint32_t generation) noexcept;
+        bool          CapturePersistentFrontend() noexcept;
+        std::uint32_t ReadPersistentFrontend(std::uint32_t field) const noexcept;
+        bool          CapturePersistentFrontendLifecycle() noexcept;
+        std::uint32_t ReadPersistentFrontendLifecycle(std::uint32_t field) const noexcept;
         bool          CaptureGuiFrontendControl() noexcept;
         std::uint32_t ReadGuiFrontendControl(std::uint32_t field) const noexcept;
         bool          AcknowledgeGuiFrontendControl(std::uint32_t generation) noexcept;
@@ -92,8 +100,11 @@ namespace deonline
         bool                      Start(const void* moduleAddress, bool configuredInput, bool configuredMovement = false, bool configuredRender = false,
                                         std::uint32_t configuredRenderRoute = 0, std::uint32_t configuredRenderApi = 1, bool configuredGuiStartup = false,
                                         bool configuredGuiSurface = false, bool configuredGuiFrontend = false, bool configuredGuiFrontendInput = false,
-                                        bool configuredFrontendStartup = false) noexcept;
+                                        bool configuredFrontendStartup = false, bool configuredPersistentFrontend = false) noexcept;
+        bool                      CaptureFrontendLifecycle() noexcept;
         static bool               InputCancelled();
+        static bool               PersistentHostFresh();
+        static void               PublishPersistentFrontend(const std::uint32_t* values, std::uint32_t count);
         static void               PublishInput(const std::uint32_t* values, std::uint32_t count);
         static bool               ControlInput(std::uint32_t action, std::uint32_t* values, std::uint32_t count);
 
@@ -119,6 +130,13 @@ namespace deonline
         bool                                          guiFrontendInputRequested = false, guiFrontendInputAvailable = false;
         DefinitiveGuiFrontendInputReference::Snapshot publishedGuiFrontendInput{}, capturedGuiFrontendInput{};
         bool                                          frontendStartupRequested = false;
+        bool                                          persistentFrontendRequested = false;
+        PersistentFrontendHostLease                   persistentHostLease;
+        // Persistent reports never enter the historical 256-field cache.
+        std::array<std::atomic<std::uint32_t>, DefinitivePersistentFrontend::FieldCount> publishedPersistentFrontend{};
+        std::atomic<std::uint32_t>                                                       persistentFrontendSequence{0};
+        std::atomic<bool>                                                                persistentFrontendAvailable{false};
+        DefinitivePersistentFrontend::Snapshot                                           capturedPersistentFrontend{};
         // Atomic scalar publication cannot block a worker behind a script peer
         // retained inside the other protocol's capture lock during cleanup.
         std::array<std::atomic<std::uint32_t>, FrontendStartupReport::FieldCount> publishedFrontendStartup{};

@@ -72,6 +72,85 @@ int wmain(int argc, wchar_t** argv)
               "fixture cleanup-publication setup");
         deonline::CoreStartupReference worker;
         Check(!worker.CaptureGuiFrontend() && !worker.CaptureGuiFrontendControl() && !worker.ReadGuiFrontend(0), "unbegun caches empty");
+        if (mode >= 300)
+        {
+            namespace Persistent = DefinitivePersistentFrontend;
+            namespace Startup = DefinitiveFrontendStartup;
+            const auto token = worker.BeginPersistentFrontend(&anchor);
+            Check(token != 0, "persistent frontend starts with generation token");
+            Check(!worker.Begin(&anchor) && !worker.BeginGuiFrontendStartupReference(&anchor), "persistent owner excludes old worker modes");
+            if (mode != 304 && mode != 305 && mode != 307)
+            {
+                Until([&] { return worker.CapturePersistentFrontend(); }, "persistent288 active snapshot");
+                Check(worker.ReadPersistentFrontend(Persistent::SessionGenerationLow) == token &&
+                          worker.ReadPersistentFrontend(Persistent::NativeLeaseActive) == 1,
+                      "persistent report binds host generation and native lease");
+                Check(!worker.CaptureGuiFrontendInput() && !worker.CaptureGuiFrontendStartup() && !worker.ReadGuiFrontendInput(0) &&
+                          !worker.ReadGuiFrontendStartup(0),
+                      "persistent values never leak into historical caches");
+                Check(worker.CapturePersistentFrontendLifecycle() && worker.ReadPersistentFrontendLifecycle(Startup::Phase) == 2,
+                      "persistent lifecycle copied through independent capture");
+                bool        foreign = true;
+                std::thread observer(
+                    [&]
+                    {
+                        foreign = worker.CapturePersistentFrontend() || worker.CapturePersistentFrontendLifecycle() ||
+                                  worker.HeartbeatPersistentFrontend(token) || worker.ReadPersistentFrontend(0) != 0;
+                    });
+                observer.join();
+                Check(!foreign && !worker.HeartbeatPersistentFrontend(token + 1), "host heartbeat and captures reject foreign/stale callers");
+                if (mode == 301)
+                    Sleep(1100);  // Deliberately omit owner heartbeats; worker cannot renew them.
+                else if (mode == 302)
+                    Check(worker.Cancel(), "explicit persistent cancellation is cooperative");
+                else if (mode == 303)
+                {
+                    const auto started = GetTickCount64();
+                    while (GetTickCount64() - started < 1200)
+                    {
+                        Check(worker.HeartbeatPersistentFrontend(token), "owner heartbeat sustains lifetime beyond initial budget");
+                        Sleep(10);
+                    }
+                    Check(worker.Poll() == 0, "heartbeat keeps persistent worker alive beyond one second");
+                }
+                if (mode == 301)
+                    Check(!worker.HeartbeatPersistentFrontend(token), "expired host generation cannot be revived");
+                SetEvent(release);
+            }
+            Until([&] { return worker.Poll() == 1; }, "persistent worker finishes owned cleanup");
+            const bool unsafe = mode == 308 || mode == 309;
+            const auto error = unsafe                                                                    ? 24u
+                               : mode == 302                                                             ? 12u
+                               : mode == 304                                                             ? 20u
+                               : mode == 305 || mode == 306 || mode == 307 || mode == 310 || mode == 311 ? 23u
+                                                                                                         : 0u;
+            Check(worker.Read(16) == error, "persistent result separates cleanup from orderly stopped workload");
+            Check((GetModuleHandleW(L"core.dll") != nullptr) == unsafe, "only unproved persistent cleanup retains Core code");
+            Check(!worker.HeartbeatPersistentFrontend(token), "terminal host lease cannot renew");
+            if (mode != 304)
+                Check(worker.CapturePersistentFrontendLifecycle() && worker.ReadPersistentFrontendLifecycle(64 + Startup::Phase) == 4,
+                      "persistent owner reaches explicit stopped lifecycle");
+            if (mode == 301 || mode == 302)
+                Check(worker.Read(9) == static_cast<std::uint32_t>(Startup::Status::Stopped) && worker.Read(17) == 0,
+                      "expiry/cancellation is safely stopped without claiming workload success");
+            if (mode == 300 || mode == 303)
+                Check(worker.Read(17) == 1 && worker.CapturePersistentFrontend() && worker.ReadPersistentFrontend(Persistent::StopReason) == 1,
+                      "natural GUI closure proves persistent workload and retirement");
+            if (mode == 310 || mode == 311)
+                Check(worker.Read(17) == 0 && worker.CapturePersistentFrontend() && worker.ReadPersistentFrontend(Persistent::StopReason) == 1 &&
+                          (mode == 310 ? worker.ReadPersistentFrontend(Persistent::HostLeaseFresh) == 0
+                                       : worker.ReadPersistentFrontend(DefinitiveGuiFrontendInputReference::GuiCloseRequested) == 0),
+                      "clean stopped lease and GUI-close reason cannot replace fresh-host and actual close evidence");
+            if (unsafe)
+                Check(!worker.BeginPersistentFrontend(&anchor) && !worker.Begin(&anchor), "persistent quarantine cannot be bypassed");
+            CloseHandle(release);
+            CloseHandle(ready);
+            CloseHandle(final);
+            CloseHandle(detachReady);
+            CloseHandle(detachGate);
+            std::printf("{\"success\":true,\"checks\":%u,\"mode\":%u,\"fixture_is_mta\":false,\"game_launched\":false}\n", checks, mode);
+            return 0;
+        }
         if (mode >= 200)
         {
             namespace Startup = DefinitiveFrontendStartup;

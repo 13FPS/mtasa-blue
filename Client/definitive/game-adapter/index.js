@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { MODE, ONLINE_ACTIVATION, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE, MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE, MTA_CORE_RENDER_ROUTE, MTA_CORE_RENDER_GPU_REFERENCE, MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE, MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE, MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE, MTA_CORE_GUI_STARTUP_REFERENCE, MTA_CORE_GUI_SURFACE_REFERENCE, MTA_CORE_GUI_FRONTEND_REFERENCE, MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE, MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE } from './config.mjs';
+import { MODE, ONLINE_ACTIVATION, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE, MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE, MTA_CORE_RENDER_ROUTE, MTA_CORE_RENDER_GPU_REFERENCE, MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE, MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE, MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE, MTA_CORE_GUI_STARTUP_REFERENCE, MTA_CORE_GUI_SURFACE_REFERENCE, MTA_CORE_GUI_FRONTEND_REFERENCE, MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE, MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE, MTA_CORE_PERSISTENT_FRONTEND } from './config.mjs';
 import { AdapterController, NativeGaitReferenceController, NativeInputReferenceController, PlayerControlLease } from './controller.mjs';
 import { MtaNativePadReferenceController } from './native-pad-reference.mjs';
 import { MtaNativeMovementTrialController } from './native-movement-trial.mjs';
@@ -13,6 +13,14 @@ function runAdapter() {
     emit({ event: 'adapter_phase', phase, mode: MODE, host: HOST, cleo: String(CLEO.version),
         host_version: String(CLEO.hostVersion), definitions: String(CLEO.apiVersion) });
     if (!['diagnostic', 'smoke', 'online'].includes(MODE)) throw new Error('Unknown adapter mode');
+    if (typeof MTA_CORE_PERSISTENT_FRONTEND !== 'boolean' ||
+        (MTA_CORE_PERSISTENT_FRONTEND && (MODE !== 'smoke' || [INPUT_REFERENCE, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK,
+            MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE,
+            MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE, MTA_CORE_RENDER_GPU_REFERENCE,
+            MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE, MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE,
+            MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE, MTA_CORE_GUI_STARTUP_REFERENCE, MTA_CORE_GUI_SURFACE_REFERENCE,
+            MTA_CORE_GUI_FRONTEND_REFERENCE, MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE, MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE].some(Boolean))))
+        throw new Error('MTA persistent frontend requires separate opt-in Smoke mode');
     if (typeof MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE !== 'boolean' ||
         (MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE && (MODE !== 'smoke' || [INPUT_REFERENCE, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK,
             MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE,
@@ -119,20 +127,20 @@ function runAdapter() {
         throw new Error('SA Unreal API definitions 0.493 or newer are required');
     // These untested input/velocity bindings come from the pinned 0.500 API.
     // Reject older definitions before activation reads, DLL access, or CJ reads.
-    if ((INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE) && definitionVersion < 0.500)
+    if ((INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND) && definitionVersion < 0.500)
         throw new Error('Native input reference requires SA Unreal API definitions 0.500 or newer');
 
     const stopKey = 'Ctrl+Shift+End';
     // Home opens the Rockstar console on the tested build and interrupts this
     // read-only observation, so the input reference needs its own shortcut.
-    const activateKey = (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE) ? 'Ctrl+Shift+F9' : 'Ctrl+Shift+Home';
+    const activateKey = (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND) ? 'Ctrl+Shift+F9' : 'Ctrl+Shift+Home';
     const chordHeld = keys => keys.every(key => native('IS_KEY_PRESSED', key));
-    if (MODE === 'online' || GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE) {
+    if (MODE === 'online' || GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND) {
         if (MODE === 'online' && !['manual', 'automatic'].includes(ONLINE_ACTIVATION))
             throw new Error('Unknown online activation mode');
         // The reference changes one owned NPC, so even an automatic Online
         // preference cannot start this separate experiment during save loading.
-        if (GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || ONLINE_ACTIVATION === 'manual') {
+        if (GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND || ONLINE_ACTIVATION === 'manual') {
             // Startup freezes have also occurred before this script enters.
             // Waiting here cannot prevent those loader failures, but it gives
             // a usable game session a separate, observable boundary before
@@ -148,7 +156,7 @@ function runAdapter() {
                         bridge_loaded: false, game_adapter_active: false, network_active: false });
                     return;
                 }
-                if (chordHeld([17, 16, (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE) ? 120 : 36]) && native('IS_PLAYER_PLAYING', 0)) {
+                if (chordHeld([17, 16, (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND) ? 120 : 36]) && native('IS_PLAYER_PLAYING', 0)) {
                     emit({ event: 'adapter_activation_requested', mode: MODE, activate_key: activateKey });
                     break;
                 }
@@ -156,7 +164,7 @@ function runAdapter() {
             }
         }
     }
-    if (MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE) {
+    if (MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND) {
         // Holding the activation modifiers contaminated the prior source-state
         // window. Begin DLL access and the recorder only after their release,
         // while keeping cancellation and a finite pre-binding deadline.
@@ -219,22 +227,27 @@ function runAdapter() {
     enterPhase('runtime_bind');
     if (bindRuntime() !== 1) throw new Error('CLEO runtime lifecycle binding failed');
     enterPhase('runtime_bound');
-    if (MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE) {
-        const startupMode = MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE;
-        const coreApi = startupMode ? 15 : 14;
-        const eventPrefix = startupMode ? 'core_gui_frontend_startup_reference' : 'core_gui_frontend_input_reference';
-        const version = bind(startupMode ? 'DE_CoreGuiFrontendStartupApiVersion' : 'DE_CoreGuiFrontendInputApiVersion', 'X64U32');
-        const begin = bind(startupMode ? 'DE_CoreGuiFrontendStartupBegin' : 'DE_CoreGuiFrontendInputBegin');
-        const captureLifecycle = startupMode ? bind('DE_CoreGuiFrontendStartupCapture') : null;
-        const readLifecycle = startupMode ? bind('DE_CoreGuiFrontendStartupRead', 'X64U32') : null;
-        const capture = bind('DE_CoreGuiFrontendInputCapture');
-        const readInput = bind('DE_CoreGuiFrontendInputRead', 'X64U32');
+    if (MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND) {
+        const persistentMode = MTA_CORE_PERSISTENT_FRONTEND;
+        const startupMode = MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || persistentMode;
+        const fieldCount = persistentMode ? 288 : 256;
+        const schema = persistentMode ? 'mta_core_persistent_frontend_v1' : 'mta_core_gui_frontend_startup_v1';
+        const coreApi = persistentMode ? 16 : startupMode ? 15 : 14;
+        const eventPrefix = persistentMode ? 'core_persistent_frontend' : startupMode ? 'core_gui_frontend_startup_reference' : 'core_gui_frontend_input_reference';
+        const version = bind(persistentMode ? 'DE_CorePersistentFrontendApiVersion' : startupMode ? 'DE_CoreGuiFrontendStartupApiVersion' : 'DE_CoreGuiFrontendInputApiVersion', 'X64U32');
+        const begin = bind(persistentMode ? 'DE_CorePersistentFrontendBegin' : startupMode ? 'DE_CoreGuiFrontendStartupBegin' : 'DE_CoreGuiFrontendInputBegin', persistentMode ? 'X64U32' : 'X64I32');
+        const captureLifecycle = startupMode ? bind(persistentMode ? 'DE_CorePersistentFrontendCaptureLifecycle' : 'DE_CoreGuiFrontendStartupCapture') : null;
+        const readLifecycle = startupMode ? bind(persistentMode ? 'DE_CorePersistentFrontendReadLifecycle' : 'DE_CoreGuiFrontendStartupRead', 'X64U32') : null;
+        const capture = bind(persistentMode ? 'DE_CorePersistentFrontendCapture' : 'DE_CoreGuiFrontendInputCapture');
+        const readInput = bind(persistentMode ? 'DE_CorePersistentFrontendRead' : 'DE_CoreGuiFrontendInputRead', 'X64U32');
+        const heartbeat = persistentMode ? bind('DE_CorePersistentFrontendHeartbeat') : null;
         const poll = bind('DE_CoreStartupPoll'), cancel = bind('DE_CoreStartupCancel');
         const read = bind('DE_CoreStartupRead', 'X64U32');
         if (version() !== 1) throw new Error(startupMode ? 'Core frontend startup API1 is required' : 'Core frontend input API1 is required');
         emit({ event: 'adapter_start', host: HOST, cleo: String(CLEO.version), host_version: String(CLEO.hostVersion),
             definitions: String(CLEO.apiVersion), mode: MODE, endpoint: null, stop_key: stopKey,
-            ...(startupMode ? { core_gui_frontend_startup_reference: true, provenance: 'mta_completed_core_frontend_startup', core_api: coreApi, trial_api: 1 }
+            ...(persistentMode ? { core_persistent_frontend: true, provenance: 'mta_renewable_completed_core_frontend', core_api: coreApi, trial_api: 1 }
+                : startupMode ? { core_gui_frontend_startup_reference: true, provenance: 'mta_completed_core_frontend_startup', core_api: coreApi, trial_api: 1 }
                 : { core_gui_frontend_input_reference: true, provenance: 'mta_core_owned_frontend_native_input', core_api: coreApi, frontend_input_trial_api: 1 }),
             adapter_abi: 6, network_active: false, core_scoped_native_input_planned: true, native_pad_writes: false,
             native_player_control_lease_planned: false, native_player_control_writes: false,
@@ -243,14 +256,17 @@ function runAdapter() {
         const startedAt = Date.now();
         if (!Number.isSafeInteger(startedAt) || startedAt < 0) throw new Error('Invalid Core frontend input clock');
         emit({ event: eventPrefix + '_started', at_ms: startedAt, core_api: coreApi,
-            ...(startupMode ? { schema: 'mta_core_gui_frontend_startup_v1', started_at_ms: startedAt, trial_api: 1, lifecycle_fields: 96, input_fields: 256 }
+            ...(startupMode ? { schema, started_at_ms: startedAt, trial_api: 1, lifecycle_fields: 96, input_fields: fieldCount }
                 : { frontend_input_trial_api: 1 }),
-            fields: 256, sample_interval_ms: 100, poll_interval_ms: 50, maximum_duration_ms: 35000,
-            display_duration_ms: 20000, native_acquire_ms: 5000, native_player_control_writes: false });
-        if (begin() !== 1) throw new Error('MTA Core frontend input worker could not start');
+            fields: fieldCount, sample_interval_ms: 100, poll_interval_ms: 50, maximum_duration_ms: persistentMode ? 0 : 35000,
+            display_duration_ms: persistentMode ? 0 : 20000, ...(persistentMode ? { host_heartbeat_budget_ms: 1000, native_heartbeat_budget_ms: 500 } : {}), native_acquire_ms: 5000, native_player_control_writes: false });
+        const generation = begin();
+        if (!Number.isInteger(generation) || generation < 1 || generation > 0xffffffff || (!persistentMode && generation !== 1))
+            throw new Error('MTA Core frontend input worker could not start');
+        if (persistentMode) emit({ event: eventPrefix + '_generation', at_ms: startedAt, generation });
         let terminal = false, cancelRequested = false, cancelAccepted = false, trialError = null;
         let lastAt = startedAt, nextSampleAt = startedAt, latest = null, samples = 0;
-        let lifecycle = null, terminalInputCaptured = false;
+        let lifecycle = null, terminalInputCaptured = false, hostLeaseLost = false;
         const unsigned = state => state.every(value => Number.isInteger(value) && value >= 0 && value <= 0xffffffff);
         const pairPresent = (state, field) => state[field] !== 0 || state[field + 1] !== 0;
         const pairEqual = (state, first, second) => state[first] === state[second] && state[first + 1] === state[second + 1];
@@ -279,7 +295,7 @@ function runAdapter() {
             const captured = capture();
             if (captured !== 0 && captured !== 1) throw new Error('Core frontend input capture status unavailable');
             if (!captured) return;
-            const state = Array.from({ length: 256 }, (_, field) => readInput(field));
+            const state = Array.from({ length: fieldCount }, (_, field) => readInput(field));
             const booleans = [5, 6, 7, 8, 9, 10, 11, 19, 20, 21, 30, 31, 32, 37, 39, 43, 44, 45, 49, 50, 51, 52, 53, 54,
                 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 72, 73, 74, 75, 76, 77, 78, 79, 80, 86,
                 100, 101, 102, 103, 104, 106, 107, 108, 109, 110, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124,
@@ -297,6 +313,11 @@ function runAdapter() {
                 (state[128] && (state[129] > 5 || !state[152] || state[157] !== 255 || state[138] > 2 || state[141] > 3)) ||
                 (state[176] && (state[177] > 5 || !state[192])))
                 throw new Error('Invalid Core frontend input scalar state');
+            if (persistentMode && (state[85] !== 0 || state[256] !== 1 || state[257] !== generation || state[258] !== 0 ||
+                [259, 262, 263].some(field => state[field] > 1) || state[265] !== 1000 || state[266] !== 500 ||
+                state[264] > 6 || state[269] > 5 || state.slice(270, 288).some(Boolean) || (state[262] && (state[263] || (!state[259] && !(state[1] === 3 && state[5] === 1 && state[269] !== 0)))) ||
+                (state[1] === 2 && (state[262] || !state[269] || (pairPresent(state, 260) && (!state[263] || !state[264]))))))
+                throw new Error('Invalid persistent Core frontend lifetime state');
             if ((state[5] && state[6]) || (state[6] && !ownersClean(state)) ||
                 (state[238] && !nativeClean(state)) || (state[237] && (!state[236] || !state[232] ||
                     ![212, 214, 216].every(field => pairPresent(state, field)))) ||
@@ -329,7 +350,11 @@ function runAdapter() {
                 if (status !== 0 && status !== 1) throw new Error('Core frontend input worker status unavailable');
                 terminal = status === 1;
                 if (!terminal && chordHeld([17, 16, 35])) requestCancel(stopKey);
-                if (!terminal && at - startedAt >= 45000) requestCancel('worker_deadline');
+                if (!terminal && persistentMode && !hostLeaseLost && heartbeat(generation) !== 1) {
+                    hostLeaseLost = true;
+                    emit({ event: eventPrefix + '_host_heartbeat_rejected', at_ms: at, generation });
+                }
+                if (!terminal && !persistentMode && at - startedAt >= 45000) requestCancel('worker_deadline');
                 if (at >= nextSampleAt || terminal) { captureSample(at); nextSampleAt = at + 100; }
                 if (terminal) break;
             } catch (error) {
@@ -408,14 +433,15 @@ function runAdapter() {
             [12, 14, 16, 33, 212, 214, 216].every(field => pairPresent(latest, field)) && fenceComplete && latest[38] > 10000 &&
             latest[24] > 0 && latest[27] === 87 && latest[28] > 0 && latest[28] <= 16384 && latest[29] > 0 && latest[29] <= 16384 &&
             latest[46] > 0 && latest[47] === 9 && latest[68] >= 2 && latest[67] === latest[68] + latest[87] && !latest[69] &&
-            latest[70] >= latest[68] && latest[81] > 0 && latest[82] > 0 && latest[83] === 1 && latest[84] > 0 && latest[85] === 20000 &&
+            latest[70] >= latest[68] && latest[81] > 0 && latest[82] > 0 && latest[83] === 1 && latest[84] > 0 && latest[85] === (persistentMode ? 0 : 20000) &&
             latest[99] >= 2 && latest[181] > 0 && latest[182] > 0 && latest[184] > 0 && latest[187] >= 2 &&
-            (latest[242] >= 20000 || latest[103] === 1 || latest[173] === 1);
+            (persistentMode ? latest[269] === 1 && latest[259] === 1 && (latest[103] === 1 || latest[173] === 1) && latest[263] === 1 && latest[264] === 5 && pairPresent(latest, 260) && pairPresent(latest, 267) && latest[242] > 35000 : (latest[242] >= 20000 || latest[103] === 1 || latest[173] === 1));
         const consoleCommands = latest !== null && latest[131] === 1 && latest[139] > 0 && latest[142] > 0 &&
             [1, 2].includes(latest[141]) && (latest[141] !== 1 || latest[146] > 0);
         emit({ event: eventPrefix + '_finished', at_ms: startupMode ? terminalAt : Date.now(), elapsed_ms: lastAt - startedAt, state,
-            ...(startupMode ? { schema: 'mta_core_gui_frontend_startup_v1', core_api: coreApi, trial_api: 1, started_at_ms: startedAt,
+            ...(startupMode ? { schema, core_api: coreApi, trial_api: 1, started_at_ms: startedAt,
                 lifecycle_values: lifecycle, input_values: latest, cancel_requested: cancelRequested,
+                ...(persistentMode ? { generation, host_lease_lost: latest !== null && latest[269] === 3, host_heartbeat_rejected: hostLeaseLost } : {}),
                 completed_core_lifecycle_verified: lifecyclePassed && cleanupPassed } : {}),
             passed, cleanup_passed: cleanupPassed, stop_requested: cancelRequested, error: trialError, samples,
             own_surface_workload_verified: passed, native_scope_workload_verified: passed, composition_present_verified: passed,

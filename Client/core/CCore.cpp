@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <stdexcept>
 #include <cstring>
+#include <memory>
 #include "Userenv.h"  // This will enable SharedUtil::ExpandEnvString
 #define ALLOC_STATS_MODULE_NAME "core"
 #include "SharedUtil.hpp"
@@ -646,6 +647,8 @@ namespace
             std::uint64_t                                   nativeStartedAt = 0, nativeAcquireStarted = 0;
             std::uint64_t                                   nativeStoppedAt = 0;
             mta::game_de::FrontendInputLeaseStateV1         nativeLease{};
+            std::unique_ptr<CSetCursorPosHook>              cursor;
+            bool                                            cursorAttempted = false, cursorEnded = true, cursorFault = false;
             bool                                            hostFresh = false;
             DefinitivePersistentFrontend::Stop              persistentStop = DefinitivePersistentFrontend::Stop::Running;
 
@@ -899,7 +902,7 @@ namespace
                     values[PressedKeys] = input.pressedKeys;
                     values[PressedButtons] = input.pressedButtons;
                     values[InputDetached] = input.inputDetached;
-                    values[InputFailed] = input.inputFailed;
+                    values[InputFailed] = input.inputFailed || (Persistent && cursorFault);
                     values[GuiCloseRequested] = input.closeRequested;
                     const std::uint64_t metrics[]{nativeState.bound,           nativeState.active,          nativeState.callbackCount,
                                                   nativeState.scopedSteps,     nativeState.routedQueries,   nativeState.neutralQueries,
@@ -1211,6 +1214,35 @@ namespace
                         return Outcome::Pending;
                     }
                     nativeVerified = true;
+                    if constexpr (Persistent)
+                    {
+                        // Classic MTA prevents the game from recentering the
+                        // pointer while its GUI owns input. The DE frontend
+                        // uses that same hook only after native neutral input
+                        // has been proved, before admitting visible interaction.
+                        if (CSetCursorPosHook::GetSingletonPtr())
+                        {
+                            cursorFault = true;
+                            return failed();
+                        }
+                        cursorAttempted = true;
+                        cursorEnded = false;
+                        try
+                        {
+                            cursor = std::make_unique<CSetCursorPosHook>();
+                        }
+                        catch (...)
+                        {
+                            cursorEnded = true;
+                            cursorFault = true;
+                            return failed();
+                        }
+                        if (!cursor->BeginFrontendLease(static_cast<HWND>(lease.window)))
+                        {
+                            cursorFault = true;
+                            return failed();
+                        }
+                    }
                     if (gui.AdmitFrontendInput() != SurfaceStatus::Ok)
                         return failed();
                     surfaceStarted = true;
@@ -1218,6 +1250,17 @@ namespace
                 }
                 else if (!eligible)
                     return failed();
+                if constexpr (Persistent)
+                {
+                    // Only the Core owner renews pointer suppression. A stalled
+                    // producer, expired lease or lost game-window focus passes
+                    // engine cursor calls through independently of GUI polling.
+                    if (!cursor || !cursor->RenewFrontendLease())
+                    {
+                        cursorFault = true;
+                        return failed();
+                    }
+                }
                 const auto status = gui.Poll();
                 CopyGui(values);
                 const auto s = gui.Snapshot();
@@ -1243,6 +1286,11 @@ namespace
             }
             bool ShutdownCoreInput(SurfaceSnapshot& values) noexcept
             {
+                if constexpr (Persistent)
+                {
+                    if (cursor)
+                        cursor->DisarmFrontendLease();
+                }
                 if constexpr (Persistent)
                 {
                     // Persistent duration proof ends before input detachment
@@ -1295,6 +1343,21 @@ namespace
                         return false;
                     }
                 }
+                if constexpr (Persistent)
+                {
+                    // A failed detach retains the same cursor hook and Core
+                    // until every callback and trampoline is safe to retire.
+                    // Native physical-input restoration is already complete.
+                    if (cursor && !cursorEnded)
+                    {
+                        cursorEnded = cursor->EndFrontendLease();
+                        if (!cursorEnded)
+                        {
+                            CopyGui(values);
+                            return false;
+                        }
+                    }
+                }
                 // Clear canonical history while the actual manager still owns
                 // it. Failure stays visible, but never skips real CPU teardown.
                 if (frontend && bindingsAttempted)
@@ -1337,6 +1400,32 @@ namespace
                                                              : "mta/logs/gui-frontend.log");
             SharedUtil::MakeSureDirExists(path);
             SharedUtil::FileAppend(path, line.data(), static_cast<unsigned long>(line.size()));
+            if constexpr (Persistent)
+            {
+                // Cursor ownership has a separate diagnostic. Keep the public
+                // 288-field input report unchanged, while recording whether
+                // actual engine warps were suppressed and the hook retired.
+                const auto  state = owner.cursor ? owner.cursor->ReadFrontendLease() : CSetCursorPosHook::FrontendLeaseState{};
+                std::string cursorLine = "{\"schema\":\"mta_core_frontend_cursor_v1\",\"pid\":" + std::to_string(GetCurrentProcessId()) +
+                                         ",\"runMs\":" + std::to_string(runMs) + ",\"sessionGeneration\":" + std::to_string(persistent->generation) +
+                                         ",\"nativeGeneration\":" + std::to_string(owner.nativeLease.generation) +
+                                         ",\"attempted\":" + std::to_string(owner.cursorAttempted) + ",\"fault\":" + std::to_string(owner.cursorFault) +
+                                         ",\"cleanupComplete\":" + std::to_string(owner.cursorEnded && !state.hooked && !state.inFlight) +
+                                         ",\"state\":{\"generation\":" + std::to_string(state.generation) +
+                                         ",\"ownerThread\":" + std::to_string(state.ownerThread) + ",\"hooked\":" + std::to_string(state.hooked) +
+                                         ",\"active\":" + std::to_string(state.active) + ",\"revoked\":" + std::to_string(state.revoked) +
+                                         ",\"ended\":" + std::to_string(state.ended) + ",\"lifetimeMs\":" + std::to_string(state.lifetimeMs) +
+                                         ",\"renewals\":" + std::to_string(state.renewals) + ",\"callbacks\":" + std::to_string(state.callbacks) +
+                                         ",\"suppressed\":" + std::to_string(state.suppressed) + ",\"passthrough\":" + std::to_string(state.passthrough) +
+                                         ",\"inFlight\":" + std::to_string(state.inFlight) + ",\"reason\":" + std::to_string(state.reason) +
+                                         ",\"lastFailure\":" + std::to_string(state.lastFailure) + ",\"attachStatus\":" + std::to_string(state.attachStatus) +
+                                         ",\"detachStatus\":" + std::to_string(state.detachStatus) + ",\"clipObserved\":" + std::to_string(state.clipObserved) +
+                                         ",\"clip\":[" + std::to_string(state.clip.left) + ',' + std::to_string(state.clip.top) + ',' +
+                                         std::to_string(state.clip.right) + ',' + std::to_string(state.clip.bottom) + "]}}\n";
+                const auto cursorPath = CalcMTASAPath("mta/logs/frontend-cursor.log");
+                SharedUtil::MakeSureDirExists(cursorPath);
+                SharedUtil::FileAppend(cursorPath, cursorLine.data(), static_cast<unsigned long>(cursorLine.size()));
+            }
             if (owner.consoleAttempted && owner.consoleState[DefinitiveFrontendConsole::Version] == DefinitiveFrontendConsole::ApiVersion)
             {
                 // Console diagnostics use their own schema and copied fields;

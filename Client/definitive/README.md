@@ -43,15 +43,37 @@ exports leave the old input256/lifecycle96 trials unchanged. Device acquisition
 stays bounded; cleanup deadlines still retain owners and retry. The existing
 20-second menu and 35-second native trial limits are separately regression tested.
 The renewable runner passes simulated execution beyond two minutes, and actual
-Core hosts reject wrong-image persistent startup without starting a view. The
-persistent candidate still needs its own live GTA test.
+Core hosts reject wrong-image persistent startup without starting a view.
 
-The installed 58-file candidate passes 733 ownership/package checks, including
-22 real launcher preflight cases and missing-export/architecture rejection.
-Compiled worker tests pass 56 controlled cases and 90 regression cases, including
-the real Core's completed startup followed by deliberate wrong-image refusal.
-The script passes 1,084 mocks; 69 saved-log reader tests include the new lifetime
-report and exact script/Core input matching. These are offline checks.
+**The latest persistent GTA attempt exceeded 35 seconds but failed cursor interaction.**
+Runtime `8b2226a04` recorded **39,781 ms** of native input admission, **775 lease
+renewals**, **2,379 scopes with matching restores** and **776 successful presents**.
+The user saw the menu remain visible, but the cursor stayed centred and could not
+reach Quit. Escape closed the menu and normal gameplay controls returned. CJ was
+obscured by the panel; this attempt supplies no human confirmation of player or
+camera exclusion. Its overall frontend workload remains unverified.
+
+Cleanup and module removal passed, and normal exit appended 74 CLEO shutdown
+bytes. A fresh post-launch, pre-F9 baseline was captured for this attempt; the
+earlier closed-game recovery snapshot is not its trial prefix. The next candidate
+reuses MTA's existing `CSetCursorPosHook` with renewable frontend cursor ownership
+to stop native recentring while MTA owns the menu. That correction still needs
+its own live cursor/console/Quit and control-restoration test. Older successful
+bounded trials below remain separate evidence. Full game/network readiness stays
+false and the port remains EXPERIMENTAL.
+
+The preceding persistent 58-file package passed 1,117 ownership/package checks,
+including 29 real launcher preflight cases and missing-export/architecture
+rejection. Its worker passed 69 controlled cases and 91 regression cases;
+1,126 script mocks and 100 saved-log reader tests passed separately. These are
+offline checks, not proof that the cursor correction works in GTA.
+
+The earlier completed-frontend package passed 733 ownership/package checks,
+including 22 launcher preflight cases. Its worker passed 56 controlled cases and
+90 regression cases, including the real Core's completed startup followed by
+deliberate wrong-image refusal. Its script passed 1,084 mocks, and 69 saved-log
+reader tests covered the lifetime report and exact script/Core input matching.
+These remain historical offline checks.
 
 **The completed frontend lifecycle was exercised in GTA on runtime `91819c896`.**
 The fresh PID 19148 / run 348502 Core record shows 370 successful presents,

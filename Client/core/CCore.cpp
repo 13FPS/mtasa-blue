@@ -1211,28 +1211,10 @@ CCore::CCore()
     }
 #endif
 
-    m_pConfigFile = NULL;
+    InitializeFrontendInfrastructure();
 
-    // Set our locale to the C locale, except for character handling which is the system's default
-    std::setlocale(LC_ALL, "C");
-    std::setlocale(LC_CTYPE, "");
-    // check LC_COLLATE is the old-time raw ASCII sort order
-    assert(strcoll("a", "B") > 0);
-
-    // Parse the command line
-    const char* pszNoValOptions[] = {"window", NULL};
-    ParseCommandLine(m_CommandLineOptions, m_szCommandLineArgs, pszNoValOptions);
-
-    // Load our settings and localization as early as possible
-    CreateXML();
-    ApplyCoreInitSettings();
-    g_pLocalization = new CLocalization;
-
-    // Create a logger instance.
-    m_pConsoleLogger = new CConsoleLogger();
-
-    // Create interaction objects.
-    m_pCommands = new CCommands;
+    // Connection management still belongs to classic startup: its callbacks
+    // require the game, multiplayer and local GUI that a DE frontend lacks.
     m_pConnectManager = new CConnectManager;
 
     // Create the GUI manager and the graphics lib wrapper
@@ -1325,7 +1307,11 @@ CCore::~CCore()
 
     // This will set the GTA volume to the GTA volume value in the settings,
     // and is not affected by the master volume setting.
-    m_pLocalGUI->GetMainMenu()->GetSettingsWindow()->ResetGTAVolume();
+    if (auto* menu = m_pLocalGUI ? m_pLocalGUI->GetMainMenu() : nullptr)
+    {
+        if (auto* settings = menu->GetSettingsWindow())
+            settings->ResetGTAVolume();
+    }
 
     // Remove input hook
     CMessageLoopHook::GetSingleton().RemoveHook();
@@ -1365,7 +1351,7 @@ CCore::~CCore()
     CVARS_SET("console_size", m_pLocalGUI->GetConsole()->GetSize());
 
     // Delete interaction objects.
-    delete m_pCommands;
+    DestroyFrontendCommands();
     delete m_pConnectManager;
     delete m_pDirect3DData;
 
@@ -1383,9 +1369,7 @@ CCore::~CCore()
 
     // Delete lazy subsystems
     DestroyGUI();
-    DestroyXML();
-
-    SAFE_DELETE(g_pLocalization);
+    DestroyFrontendConfiguration(true);
 
     // Delete keybinds
     delete m_pKeyBinds;
@@ -1394,10 +1378,76 @@ CCore::~CCore()
     delete m_pMouseControl;
 
     // Delete the logger
-    delete m_pConsoleLogger;
+    DestroyFrontendLogger();
 
     // Delete last so calls to GetHookedWindowHandle do not crash
     delete m_pMessageLoopHook;
+}
+
+void CCore::InitializeFrontendInfrastructure()
+{
+    // Keep the real Core configuration and interaction services separate from
+    // classic GUI, renderer and hook creation. A future DE frontend can reuse
+    // this boundary without claiming that its CGame or multiplayer is ready;
+    // current DE startup still rejects before entering it.
+    if (m_pXML || m_pConfigFile || m_pKeyBinds || m_XMLModule.IsOk() || m_pLocalization || m_pConsoleLogger || m_pCommands)
+        throw std::logic_error("Core frontend infrastructure is already initialized");
+
+    CLocalization* previousLocalization = g_pLocalization;
+    try
+    {
+        // Set our locale to the C locale, except for character handling which is the system's default.
+        std::setlocale(LC_ALL, "C");
+        std::setlocale(LC_CTYPE, "");
+        // Check LC_COLLATE is the old-time raw ASCII sort order.
+        assert(strcoll("a", "B") > 0);
+
+        const char* pszNoValOptions[] = {"window", NULL};
+        ParseCommandLine(m_CommandLineOptions, m_szCommandLineArgs, pszNoValOptions);
+
+        CreateXML();
+        ApplyCoreInitSettings();
+        m_pLocalization = new CLocalization;
+        g_pLocalization = m_pLocalization;
+        m_pConsoleLogger = new CConsoleLogger;
+        m_pCommands = new CCommands;
+    }
+    catch (...)
+    {
+        // The containing Core destructor does not run when its constructor
+        // throws. Roll back only this initialized phase, while its XML owners
+        // still exist, without saving through uncreated keybind/menu services.
+        DestroyFrontendCommands();
+        DestroyFrontendLogger();
+        if (g_pLocalization == m_pLocalization)
+            g_pLocalization = nullptr;
+        SAFE_DELETE(m_pLocalization);
+        g_pLocalization = previousLocalization;
+        ReleaseXML(false);
+        throw;
+    }
+}
+
+void CCore::DestroyFrontendCommands()
+{
+    SAFE_DELETE(m_pCommands);
+}
+
+void CCore::DestroyFrontendConfiguration(bool saveConfig)
+{
+    // Normal classic shutdown reaches this after GUI destruction and before
+    // keybind destruction. Preserve that order so its existing save path can
+    // still use keybinds, updater and server cache; partial startup skips it.
+    ReleaseXML(saveConfig);
+    if (g_pLocalization == m_pLocalization)
+        g_pLocalization = nullptr;
+    SAFE_DELETE(m_pLocalization);
+}
+
+void CCore::DestroyFrontendLogger()
+{
+    // Keep logging available to the other frontend owners during teardown.
+    SAFE_DELETE(m_pConsoleLogger);
 }
 
 eCoreVersion CCore::GetVersion()
@@ -1742,9 +1792,12 @@ int CCore::GetChatboxMaxCharacterLimit()
 
 bool CCore::IsSettingsVisible()
 {
-    if (m_pLocalGUI)
+    if (auto* menu = m_pLocalGUI ? m_pLocalGUI->GetMainMenu() : nullptr)
     {
-        return (m_pLocalGUI->GetMainMenu()->GetSettingsWindow()->IsVisible());
+        // Frontend visibility queries must not construct game settings before
+        // their engine and renderer have been admitted.
+        if (auto* settings = menu->GetSettingsWindow())
+            return settings->IsVisible();
     }
 
     return false;
@@ -2341,12 +2394,18 @@ void CCore::DestroyMultiplayer()
 
 void CCore::DestroyXML()
 {
+    ReleaseXML(true);
+}
+
+void CCore::ReleaseXML(bool saveConfig)
+{
     WriteDebugEvent("CCore::DestroyXML");
 
     // Save and unload configuration
     if (m_pConfigFile)
     {
-        SaveConfig(true);
+        if (saveConfig)
+            SaveConfig(true);
         delete m_pConfigFile;
         m_pConfigFile = nullptr;
     }
@@ -2573,8 +2632,12 @@ void CCore::DoPostFramePulse()
             !GetLocalGUI()->GetMainMenu()->GetQuestionWindow()->IsVisible())
         {
             // Request a new nickname if we're waiting for one
-            GetLocalGUI()->GetMainMenu()->GetSettingsWindow()->RequestNewNickname();
-            m_requestNewNickname = false;
+            if (auto* settings = GetLocalGUI()->GetMainMenu()->GetSettingsWindow())
+            {
+                settings->RequestNewNickname();
+                m_requestNewNickname = false;
+            }
+            // Preserve the request while a frontend defers game settings.
         }
     }
 

@@ -1682,6 +1682,11 @@ public:
 	*/
 	void	releaseInput(void);
 
+    // Cancellation ends the whole capture gesture; restoring an older capture
+    // would keep a suspended drag alive after its native input was lost.
+    // Keep releaseInput(void) unchanged for existing callers and its ABI.
+    void releaseInputForCancellation(void);
+
 
 	/*!
 	\brief

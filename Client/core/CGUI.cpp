@@ -737,6 +737,16 @@ void CLocalGUI::EchoDebug(const char* szText)
     }
 }
 
+void CLocalGUI::ResetInputState()
+{
+    // The classic window hook consumes focus-loss messages before ordinary
+    // GUI dispatch. Retire their holds here while the GUI is still available.
+    if (IsFaultDialogOpen())
+        return;
+    if (auto* gui = CCore::GetSingleton().GetGUI())
+        m_Win32Input.Reset(*gui);
+}
+
 bool CLocalGUI::ProcessMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
     CGUI* pGUI = CCore::GetSingleton().GetGUI();
@@ -744,92 +754,10 @@ bool CLocalGUI::ProcessMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPara
     // If we have the focus, we handle the message
     if (InputGoesToGUI())
     {
-        // Pass the message to the GUI manager
-        // ACHTUNG: fix the CEGUI ones!
+        // Shared ordinary input keeps the classic GUI and an owner-thread DE
+        // surface on the same MTA/CEGUI path. IME retains its existing context.
         switch (uMsg)
         {
-            case WM_MOUSEWHEEL:
-                if (GET_WHEEL_DELTA_WPARAM(wParam) > 0)
-                    pGUI->ProcessMouseInput(CGUI_MI_MOUSEWHEEL, 1, NULL);
-                else
-                    pGUI->ProcessMouseInput(CGUI_MI_MOUSEWHEEL, 0, NULL);
-                return true;
-
-            case WM_MOUSEMOVE:
-                pGUI->ProcessMouseInput(CGUI_MI_MOUSEPOS, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
-                return true;
-
-            case WM_LBUTTONDOWN:
-                pGUI->ProcessMouseInput(CGUI_MI_MOUSEDOWN, 0, 0, LeftButton);
-                return true;
-
-            case WM_RBUTTONDOWN:
-                pGUI->ProcessMouseInput(CGUI_MI_MOUSEDOWN, 0, 0, RightButton);
-                return true;
-
-            case WM_MBUTTONDOWN:
-                pGUI->ProcessMouseInput(CGUI_MI_MOUSEDOWN, 0, 0, MiddleButton);
-                return true;
-
-            case WM_LBUTTONUP:
-                pGUI->ProcessMouseInput(CGUI_MI_MOUSEUP, 0, 0, LeftButton);
-                return true;
-
-            case WM_RBUTTONUP:
-                pGUI->ProcessMouseInput(CGUI_MI_MOUSEUP, 0, 0, RightButton);
-                return true;
-
-            case WM_MBUTTONUP:
-                pGUI->ProcessMouseInput(CGUI_MI_MOUSEUP, 0, 0, MiddleButton);
-                return true;
-#ifdef WM_XBUTTONDOWN
-            case WM_XBUTTONDOWN:
-                pGUI->ProcessMouseInput(CGUI_MI_MOUSEDOWN, 0, 0, X1Button);
-                return true;
-
-            case WM_XBUTTONUP:
-                pGUI->ProcessMouseInput(CGUI_MI_MOUSEUP, 0, 0, X1Button);
-                return true;
-#endif
-            case WM_KEYDOWN:
-            {
-                DWORD dwTemp = TranslateScanCodeToGUIKey(wParam);
-                if (dwTemp > 0)
-                {
-                    pGUI->ProcessKeyboardInput(dwTemp, true);
-                    return true;
-                }
-
-                return true;
-            }
-
-            case WM_KEYUP:
-            {
-                DWORD dwTemp = TranslateScanCodeToGUIKey(wParam);
-                if (dwTemp > 0)
-                {
-                    pGUI->ProcessKeyboardInput(dwTemp, false);
-                }
-
-                return false;
-            }
-
-            case WM_SYSKEYDOWN:
-            case WM_SYSKEYUP:
-            {
-                // While Alt is held every key arrives as a system key message. Keep the modifier state of the GUI in
-                // step anyway, otherwise a Control or Shift released with Alt down stays pressed for it and the next
-                // letter acts as a shortcut. Nothing is consumed, so Alt+F4 and Alt+Enter still reach the window.
-                if (wParam == VK_CONTROL || wParam == VK_SHIFT)
-                {
-                    DWORD dwTemp = TranslateScanCodeToGUIKey(wParam);
-                    if (dwTemp > 0)
-                        pGUI->ProcessKeyboardInput(dwTemp, uMsg == WM_SYSKEYDOWN);
-                }
-
-                return false;
-            }
-
             case WM_IME_COMPOSITION:
             {
                 if (lParam & GCS_RESULTSTR)
@@ -899,12 +827,12 @@ bool CLocalGUI::ProcessMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPara
             }
             break;
 
-            case WM_CHAR:
-            {
-                pGUI->ProcessCharacter(wParam);
-                return true;
-            }
-            break;
+            case WM_UNICHAR:
+                // Classic input historically leaves this message unconsumed;
+                // the owned Unicode child can opt into the helper's support.
+                return false;
+            default:
+                return m_Win32Input.Process(*pGUI, uMsg, wParam, lParam);
         }
     }
 
@@ -991,8 +919,9 @@ void CLocalGUI::UpdateCursor()
             CSetCursorPosHook::GetSingleton().EnableSetCursorPos();
             pGUI->SetCursorEnabled(false);
 
-            // Clear any held system keys
-            pGUI->ClearSystemKeys();
+            // A GUI can relinquish input before Windows delivers releases.
+            // Clear every hold injected by the shared translator, plus IME modifiers.
+            m_Win32Input.Reset(*pGUI);
 
             m_bGUIHasInput = false;
         }
@@ -1001,50 +930,7 @@ void CLocalGUI::UpdateCursor()
 
 DWORD CLocalGUI::TranslateScanCodeToGUIKey(DWORD dwCharacter)
 {
-    // The following switch case is necessary to convert input WM_KEY* messages
-    // to corresponding DirectInput key messages.  CEGUI needs these.
-
-    switch (dwCharacter)
-    {
-        case VK_HOME:
-            return DIK_HOME;
-        case VK_END:
-            return DIK_END;
-        case VK_RETURN:
-            return DIK_RETURN;
-        case VK_TAB:
-            return DIK_TAB;
-        case VK_BACK:
-            return DIK_BACK;
-        case VK_LEFT:
-            return DIK_LEFTARROW;
-        case VK_RIGHT:
-            return DIK_RIGHTARROW;
-        case VK_UP:
-            return DIK_UPARROW;
-        case VK_DOWN:
-            return DIK_DOWNARROW;
-        case VK_LSHIFT:
-            return DIK_LSHIFT;
-        case VK_RSHIFT:
-            return DIK_RSHIFT;
-        case VK_SHIFT:
-            return DIK_LSHIFT;
-        case VK_CONTROL:
-            return DIK_LCONTROL;
-        case VK_DELETE:
-            return DIK_DELETE;
-        case 0x56:
-            return DIK_V;  // V
-        case 0x43:
-            return DIK_C;  // C
-        case 0x58:
-            return DIK_X;  // X
-        case 0x41:
-            return DIK_A;  // A
-        default:
-            return 0;
-    }
+    return GuiWin32Input::Translator::TranslateVirtualKey(dwCharacter);
 }
 
 void CLocalGUI::SetCursorPos(int iX, int iY, bool bForce, bool overrideStored)

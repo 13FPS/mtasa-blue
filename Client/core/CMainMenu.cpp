@@ -61,7 +61,11 @@ static const int       BODGE_FACTOR_4 = 5;
 static const CVector2D BODGE_FACTOR_5(0, -50);
 static const CVector2D BODGE_FACTOR_6(0, 100);
 
-CMainMenu::CMainMenu(CGUI* pManager)
+CMainMenu::CMainMenu(CGUI* pManager, SettingsCreation settingsCreation)
+    // Preserve classic member construction order and its game-volume baseline.
+    // Deferred creation only removes the settings dependency; the rest of the
+    // menu still requires ported Core/game/multiplayer services before DE use.
+    : m_Settings(settingsCreation == SettingsCreation::Eager ? std::make_unique<CSettings>() : nullptr)
 {
     m_pNewsBrowser = new CNewsBrowser();
 
@@ -293,7 +297,8 @@ CMainMenu::CMainMenu(CGUI* pManager)
     // Submenus
     m_ServerBrowser.SetVisible(false);
     m_ServerInfo.Hide();
-    m_Settings.SetVisible(false);
+    if (m_Settings)
+        m_Settings->SetVisible(false);
     m_Credits.SetVisible(false);
     m_pNewsBrowser->SetVisible(false);
     m_pLanguageSelector = new CLanguageSelector(m_pCanvas);
@@ -410,6 +415,44 @@ CMainMenu::~CMainMenu()
     destroyElement(m_pFiller2);
 }
 
+void CMainMenu::InitializeSettingsWindow()
+{
+    if (!m_Settings)
+    {
+        // Core must admit the actual game settings and renderer before calling
+        // this explicit transition. Queries, pulses and menu clicks cannot create
+        // classic settings while a frontend is waiting for those dependencies.
+        auto settings = std::make_unique<CSettings>();
+        settings->SetIsModLoaded(m_bIsIngame);
+        settings->SetVisible(false);
+        m_Settings = std::move(settings);
+    }
+
+    // A question failure must remain retryable after settings creation commits.
+    TryShowPendingRichPresenceQuestion();
+}
+
+void CMainMenu::TryShowPendingRichPresenceQuestion()
+{
+    if (!m_bPendingRichPresenceQuestion || !m_Settings)
+        return;
+
+    // Recheck preferences after the deferred transition, and leave an existing
+    // question intact. The original prompt resets the shared question window.
+    if (!g_pCore->GetCVars()->GetValue("discord_rpc_share_data_firsttime", false) && g_pCore->GetCVars()->GetValue("allow_discord_rpc", false) &&
+        !g_pCore->GetCVars()->GetValue("discord_rpc_share_data", false))
+    {
+        if (m_QuestionBox.IsVisible())
+            return;
+        m_Settings->ShowRichPresenceShareDataQuestionBox();
+    }
+
+    // Keep the pending intent on a failed show; only success or changed
+    // preferences may consume this deferred first-menu-pulse question.
+    CVARS_SET("discord_rpc_share_data_firsttime", true);
+    m_bPendingRichPresenceQuestion = false;
+}
+
 void CMainMenu::SetMenuVerticalPosition(int iPosY)
 {
     if (m_pHoveredItem)
@@ -473,7 +516,8 @@ void CMainMenu::Update()
     SystemState::Enum systemState = pGame->GetSystemState();
 
     m_Credits.Update();
-    m_Settings.Update();
+    if (m_Settings)
+        m_Settings->Update();
 
     unsigned long ulCurrentTick = GetTickCount32();
     unsigned long ulTimePassed = ulCurrentTick - ulPreviousTick;
@@ -684,13 +728,21 @@ void CMainMenu::Update()
             if (!g_pCore->GetCVars()->GetValue("discord_rpc_share_data_firsttime", false) && g_pCore->GetCVars()->GetValue("allow_discord_rpc", false) &&
                 !g_pCore->GetCVars()->GetValue("discord_rpc_share_data", false))
             {
-                m_Settings.ShowRichPresenceShareDataQuestionBox();
-                CVARS_SET("discord_rpc_share_data_firsttime", true);
+                if (m_Settings)
+                {
+                    m_Settings->ShowRichPresenceShareDataQuestionBox();
+                    CVARS_SET("discord_rpc_share_data_firsttime", true);
+                }
+                else
+                    m_bPendingRichPresenceQuestion = true;
             }
             else
                 CVARS_SET("discord_rpc_share_data_firsttime", true);
         }
     }
+
+    if (m_bPendingRichPresenceQuestion)
+        TryShowPendingRichPresenceQuestion();
 
     // If we're visible
     if (m_bIsVisible && systemState != SystemState::GS_INIT_PLAYING_GAME)
@@ -760,7 +812,8 @@ void CMainMenu::SetVisible(bool bVisible, bool bOverlay, bool bFrameDelay)
         m_bFrameDelay = bFrameDelay;
         SetMenuUnhovered();
         m_ServerBrowser.SetVisible(false);
-        m_Settings.SetVisible(false);
+        if (m_Settings)
+            m_Settings->SetVisible(false);
         m_Credits.SetVisible(false);
         m_pNewsBrowser->SetVisible(false);
 
@@ -795,7 +848,8 @@ void CMainMenu::SetIsIngame(bool bIsIngame)
     if (m_bIsIngame != bIsIngame)
     {
         m_bIsIngame = bIsIngame;
-        m_Settings.SetIsModLoaded(bIsIngame);
+        if (m_Settings)
+            m_Settings->SetIsModLoaded(bIsIngame);
 
         // Reset frame rate limit
         CCore::GetSingleton().GetFPSLimiter()->Reset();
@@ -1026,12 +1080,12 @@ bool CMainMenu::OnEditorButtonClick()
 bool CMainMenu::OnSettingsButtonClick(CGUIElement* pElement)
 {
     // Return if we haven't faded in yet
-    if (m_ucFade != FADE_VISIBLE)
+    if (m_ucFade != FADE_VISIBLE || !m_Settings)
         return false;
 
     //    if ( !m_bIsInSubWindow )
     {
-        m_Settings.SetVisible(true);
+        m_Settings->SetVisible(true);
 
         // Jax: not sure why this was commented, need it here if our main-menu is set to AlwaysOnTop
         //        m_bIsInSubWindow = true;

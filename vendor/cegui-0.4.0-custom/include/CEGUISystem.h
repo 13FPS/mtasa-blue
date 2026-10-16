@@ -740,6 +740,10 @@ public:
 	*/
 	bool	injectMouseButtonUp(MouseButton button);
 
+    // Focus/capture loss cancels the mouse gesture rather than completing it.
+    // Preserve keyboard modifiers and send no mouse-up or click notifications.
+    void cancelMouseInput(void);
+
 
 	/*!
 	\brief

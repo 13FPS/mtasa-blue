@@ -14,7 +14,7 @@ if ([IntPtr]::Size -ne 8) { throw 'This fixture requires native x64 PowerShell.'
 $taskRoot=(Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
 $outputRoot=Join-Path $taskRoot ('Build/mta-core-gui-surface-tests/'+(Get-Date -Format 'yyyyMMdd-HHmmss')+'-'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path (Join-Path $outputRoot 'MTA/logs') -Force | Out-Null
-$sourcePaths=@('Tests/definitive/DefinitiveGuiSurfaceTests.cpp','Tests/definitive/test_definitive_gui_surface.ps1','Client/core/DefinitiveGuiSurface.h','Client/core/DefinitiveGuiSurface.cpp',
+$sourcePaths=@('Tests/definitive/DefinitiveGuiSurfaceTests.cpp','Tests/definitive/test_definitive_gui_surface.ps1','Client/core/DefinitiveGuiSurface.h','Client/core/DefinitiveGuiSurface.cpp','Client/core/GuiWin32Input.h','Client/core/GuiWin32Input.cpp',
     'Client/gui/D3D12GuiRenderer.h','Client/gui/D3D12GuiRenderer.cpp','Client/gui/Main.cpp','Client/gui/CGUI_Impl.h','Client/gui/CGUI_Impl.cpp',
     'Client/gui/CGUITexture_Impl.cpp','Client/gui/CGUIStaticImage_Impl.cpp','Client/gui/CGUIFont_Impl.cpp','Client/gui/premake5.lua',
     'Shared/sdk/SharedUtil.Defines.h','Shared/sdk/SString.h','utils/buildactions/install_unifont.lua',
@@ -99,7 +99,7 @@ foreach ($name in @('dxgi.dll','d3d12.dll','D3D12Core.dll','d3d12warp.dll','D3D1
 $executable=Join-Path $outputRoot 'OwnedGuiSurface.exe'
 $arguments=@('/nologo','/std:c++17','/EHsc','/O2','/MT','/W4','/WX','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN','/DMTA_WITH_DEFINITIVE_ADAPTER',
     ('/I'+(Join-Path $taskRoot 'Shared/sdk')),('/I'+(Join-Path $taskRoot 'Client/sdk')),
-    (Join-Path $PSScriptRoot 'DefinitiveGuiSurfaceTests.cpp'),(Join-Path $taskRoot 'Client/core/DefinitiveGuiSurface.cpp'),('/Fo'+$outputRoot+[IO.Path]::DirectorySeparatorChar),('/Fe'+$executable),
+    (Join-Path $PSScriptRoot 'DefinitiveGuiSurfaceTests.cpp'),(Join-Path $taskRoot 'Client/core/DefinitiveGuiSurface.cpp'),(Join-Path $taskRoot 'Client/core/GuiWin32Input.cpp'),('/Fo'+$outputRoot+[IO.Path]::DirectorySeparatorChar),('/Fe'+$executable),
     '/link','d3d12.lib','dxgi.lib','user32.lib','ole32.lib','dcomp.lib','dwmapi.lib','gdi32.lib')
 $compileCommand=Join-Path $outputRoot 'compile-command.json'
 [ordered]@{compiler=$compilerRecord;arguments=$arguments} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $compileCommand -Encoding utf8
@@ -110,7 +110,7 @@ if ($compileExit -eq 0) {
     $testExit=0
     # Each case has its own process/tree. The release-fault case deliberately
     # retains unresolved ownership until its exact disposable process exits.
-    foreach ($format in @('normal','gated','gated-destroy','destroy','resize-failure','release')) {
+    foreach ($format in @('normal','gated','gated-destroy','destroy','resize-failure','release','interactive','interactive-destroy','interactive-gated')) {
         $formatRoot=Join-Path $outputRoot ('case-'+$format)
         $assetRoot=Join-Path $formatRoot 'Win64/CLEO/de-online'
         New-Item -ItemType Directory -Path $assetRoot -Force | Out-Null
@@ -168,12 +168,12 @@ foreach ($entry in $assets) {
 foreach ($entry in $certificates) { if ((Get-FileHash -Algorithm SHA256 -LiteralPath $entry.path).Hash.ToLowerInvariant() -ne $entry.sha256) { $certificatesUnchanged=$false } }
 foreach ($entry in @($fonts)+@($systemDlls)+@($compilerRecord)) { if ((Get-FileHash -Algorithm SHA256 -LiteralPath $entry.path).Hash.ToLowerInvariant() -ne $entry.sha256) { $platformUnchanged=$false } }
 $executionArtifacts=@(Get-ChildItem -LiteralPath $outputRoot -File -Recurse | Where-Object { $_.Extension -in @('.exe','.obj','.log','.json','.bmp') } | ForEach-Object { [ordered]@{path=$_.FullName;bytes=$_.Length;sha256=(Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant()} })
-$success=$compileExit -eq 0 -and $testExit -eq 0 -and $testCount -gt 0 -and $runs.Count -eq 6 -and @($runs | Where-Object { -not $_.success }).Count -eq 0 -and -not $timedOut -and $sourceUnchanged -and $artifactsUnchanged -and $assetsUnchanged -and $certificatesUnchanged -and $platformUnchanged
+$success=$compileExit -eq 0 -and $testExit -eq 0 -and $testCount -gt 0 -and $runs.Count -eq 9 -and @($runs | Where-Object { -not $_.success }).Count -eq 0 -and -not $timedOut -and $sourceUnchanged -and $artifactsUnchanged -and $assetsUnchanged -and $certificatesUnchanged -and $platformUnchanged
 $receipt=[ordered]@{recordedAt=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=$success;checks=$testCount;compileExit=$compileExit;testExit=$testExit;timedOut=$timedOut;
     sourceHashes=$sourceHashes;sourceSnapshotScope='Fixture and selected inputs plus exact complete declared GUI normal-build certificate inputs; declared superset, not an independently recovered compiler-read trace. Historical uninitialized Core asset-resolver certificate is excluded from current source union.';sourceUnchanged=$sourceUnchanged;
     normalBuildCertificates=$certificates;certificatesUnchanged=$certificatesUnchanged;compiler=$compilerRecord;systemDlls=$systemDlls;platformUnchanged=$platformUnchanged;executionArtifacts=$executionArtifacts;
     artifacts=$artifacts;artifactsUnchanged=$artifactsUnchanged;assets=$assets;assetsUnchanged=$assetsUnchanged;windowsFonts=$fonts;
-    cases=@('normal','gated','gated-destroy','destroy','resize-failure','release');caseRuns=$runs;targetFormat=87;width=640;height=480;
+    cases=@('normal','gated','gated-destroy','destroy','resize-failure','release','interactive','interactive-destroy','interactive-gated');caseRuns=$runs;targetFormat=87;width=640;height=480;
     explicitGuiAssetRootVerified=$success;fixtureLayout='Win64/OwnedGuiSurface.exe with adjacent Core/cgui in Win64/CLEO/de-online and explicit assets below that adapter root; no MTA/core.dll fallback';
     productionHelperCompiledAndExecuted=$success;actualMtaWidgetsRenderedOnOwnedD3D12Warp=$success;ownQueueAndCompositionReadbackVerified=$success;pointerOnlyAttachVerified=$success;gatedQueueRetainsUntilCompletion=$success;unknownReleaseNeverRetried=$success;wrongOwnerRejected=$success;parentDestroyAndResizeVerified=$success;legacyD3DX9RemainsUnloaded=$success;debugLayerAvailable=$testText.Contains('D3D12 debug layer available=1');
     installedFilesChanged=$false;gameLaunched=$false;gameAttached=$false;coreInitialized=$false;deDrawingVerified=$false;fullMtaReady=$false;

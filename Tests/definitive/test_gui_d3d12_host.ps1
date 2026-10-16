@@ -20,7 +20,10 @@ $sourcePaths=@('Tests/definitive/GuiD3D12HostTests.cpp','Tests/definitive/test_g
     'Client/gui/CGUITexture_Impl.cpp','Client/gui/CGUIStaticImage_Impl.cpp','Client/gui/CGUIFont_Impl.cpp','Client/gui/premake5.lua',
     'Shared/sdk/SharedUtil.Defines.h','Shared/sdk/SString.h','utils/buildactions/install_unifont.lua',
     'vendor/cegui-0.4.0-custom/include/CEGUIRenderer.h','vendor/cegui-0.4.0-custom/include/CEGUITexture.h',
-    'vendor/cegui-0.4.0-custom/src/CEGUISystem.cpp','vendor/cegui-0.4.0-custom/src/CEGUIFont.cpp')
+    'vendor/cegui-0.4.0-custom/src/CEGUISystem.cpp','vendor/cegui-0.4.0-custom/src/CEGUIFont.cpp',
+    'vendor/cegui-0.4.0-custom/src/CEGUIMouseCursor.cpp',
+    'vendor/cegui-0.4.0-custom/include/CEGUISystem.h','vendor/cegui-0.4.0-custom/include/CEGUIWindow.h',
+    'vendor/cegui-0.4.0-custom/src/CEGUIWindow.cpp')
 $sourcePaths+=@(Get-ChildItem -LiteralPath (Join-Path $taskRoot 'Client/sdk/gui') -File -Filter '*.h' | ForEach-Object { [IO.Path]::GetRelativePath($taskRoot,$_.FullName) })
 $sourceHashes=@($sourcePaths | Sort-Object -Unique | ForEach-Object { [ordered]@{path=$_;sha256=(Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $taskRoot $_)).Hash.ToLowerInvariant()} })
 $artifacts=@();$assets=@();$fonts=@()
@@ -134,9 +137,11 @@ $receipt=[ordered]@{recordedAt=[DateTimeOffset]::Now.ToString('o');directory=$ou
     artifacts=$artifacts;artifactsUnchanged=$artifactsUnchanged;assets=$assets;assetsUnchanged=$assetsUnchanged;windowsFonts=$fonts;images=$images;nativeReadbacks=$nativeReadbacks;
     targetFormats=@(87,28,24);formatRuns=$runs;artifactNormalization='Only BMP copies are normalized to BGRA8; numerical assertions and .raw artifacts use untouched native target precision.';
     explicitGuiAssetRootVerified=$success;fixtureLayout='Win64/SanAndreas.exe with adjacent Core/cgui in Win64/CLEO/de-online and explicit assets below that adapter root; no MTA/core.dll fallback';
-    actualMtaWidgetsRenderedOnOwnedD3D12Warp=$success;debugLayerAvailable=$testText.Contains('D3D12 debug layer available=1');
+    actualMtaWidgetsRenderedOnOwnedD3D12Warp=$success;actualMtaCursorRenderedOnOwnedD3D12Warp=$success;cursorAndMainBusyPreserved=$success;
+    actualMtaMouseCancellationVerified=$success;
+    debugLayerAvailable=$testText.Contains('D3D12 debug layer available=1');
     installedFilesChanged=$false;gameLaunched=$false;gameAttached=$false;coreInitialized=$false;deDrawingVerified=$false;fullMtaReady=$false;
-    scope='Actual MTA CGUI/CEGUI widgets, fonts and textures on separate owned offscreen WARP sessions for BGRA8, RGBA8 and R10G10B10A2_UNORM targets; no engine target, real game device, color-space/HDR claim, or visible GTA drawing.'}
+    scope='Actual MTA CGUI/CEGUI widgets, fonts, textures and enabled/disabled cursor pixels, plus main/cursor Busy retention, on separate owned offscreen WARP sessions for BGRA8, RGBA8 and R10G10B10A2_UNORM targets; no engine target, real game device, color-space/HDR claim, or visible GTA drawing.'}
 $receipt | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $outputRoot 'test-result.json') -Encoding utf8
 [pscustomobject]@{directory=$outputRoot;success=$success;checks=$testCount;compileExit=$compileExit;testExit=$testExit;sourceUnchanged=$sourceUnchanged;artifactsUnchanged=$artifactsUnchanged;assetsUnchanged=$assetsUnchanged} | ConvertTo-Json -Compress
 if (-not $success) { throw "Actual owned D3D12 GUI fixture failed; see $outputRoot" }

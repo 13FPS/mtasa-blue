@@ -324,6 +324,67 @@ namespace
         } while (GetTickCount64() < deadline);
         Check(false, "owned composition frames and readback complete before test deadline");
     }
+    HWND InteractionProof(Session& surface, HWND parent)
+    {
+        const auto child = GetWindow(parent, GW_CHILD);
+        Check(child && GetWindowThreadProcessId(child, nullptr) == GetCurrentThreadId(), "interactive child belongs to the GUI owner");
+        Check(SendMessageW(child, WM_NCHITTEST, 0, 0) == HTCLIENT, "explicit interaction owns its client hit testing");
+        Check(!(GetWindowLongPtrW(child, GWL_EXSTYLE) & (WS_EX_NOACTIVATE | WS_EX_TRANSPARENT)), "interactive child allows local focus and mouse routing");
+        SetFocus(child);
+        Check(GetFocus() == child && surface.InteractionSnapshot().focused, "owned child acquires actual keyboard focus across parent threads");
+        const auto click = [child](int x, int y)
+        {
+            SendMessageW(child, WM_MOUSEMOVE, 0, MAKELPARAM(x, y));
+            SendMessageW(child, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(x, y));
+            SendMessageW(child, WM_LBUTTONUP, 0, MAKELPARAM(x, y));
+        };
+        click(170, 110);
+        Check(surface.InteractionSnapshot().buttonClicks == 1, "native child messages invoke the existing MTA button callback");
+        Check(GetCapture() != child && !surface.InteractionSnapshot().pressedButtons, "button release retires owned mouse capture");
+        click(120, 163);
+        SendMessageW(child, WM_CHAR, 'M', 0);
+        SendMessageW(child, WM_CHAR, 'T', 0);
+        SendMessageW(child, WM_CHAR, 'A', 0);
+        SendMessageW(child, WM_KEYDOWN, VK_RETURN, 0);
+        SendMessageW(child, WM_KEYUP, VK_RETURN, 0);
+        auto input = surface.InteractionSnapshot();
+        Check(input.textChanges == 3 && input.textBytes == 3 && input.textAccepted == 1, "native text and Return reach existing MTA edit callbacks");
+        SendMessageW(child, WM_KEYDOWN, VK_SHIFT, 0);
+        click(170, 110);
+        Check(surface.InteractionSnapshot().pressedKeys == 1 && surface.InteractionSnapshot().buttonClicks == 2,
+              "normal click capture release preserves a held keyboard modifier");
+        SendMessageW(child, WM_KEYUP, VK_SHIFT, 0);
+        SendMessageW(child, WM_KEYDOWN, VK_SHIFT, 0);
+        SendMessageW(child, WM_KEYDOWN, VK_CONTROL, 0);
+        SendMessageW(child, WM_MOUSEMOVE, 0, MAKELPARAM(170, 110));
+        SendMessageW(child, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(170, 110));
+        Check(surface.InteractionSnapshot().pressedKeys == 2 && surface.InteractionSnapshot().pressedButtons == 1,
+              "GUI holds modifiers and mouse before focus loss");
+        SetFocus(nullptr);
+        input = surface.InteractionSnapshot();
+        Check(!input.focused && input.focusLost >= 1 && !input.pressedKeys && !input.pressedButtons && input.syntheticReleases >= 3,
+              "actual focus loss releases every injected modifier and button");
+        Check(GetCapture() != child, "focus loss releases only the owned capture");
+        Check(input.buttonClicks == 2, "focus-loss cancellation cannot activate a held MTA button");
+        const auto events = input.events;
+        SendMessageW(child, WM_CHAR, 'Z', 0);
+        SendMessageW(child, WM_UNICHAR, 'Z', 0);
+        SendMessageW(child, WM_KEYDOWN, VK_SHIFT, 0);
+        Check(surface.InteractionSnapshot().events == events && surface.InteractionSnapshot().textBytes == 3,
+              "unfocused queued text and keys do not reach CEGUI");
+        SetFocus(child);
+        Check(surface.InteractionSnapshot().focusAcquired >= 2, "same owned child can rearm after focus loss");
+        SendMessageW(child, WM_MOUSEMOVE, 0, MAKELPARAM(170, 110));
+        SendMessageW(child, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(170, 110));
+        Check(GetCapture() == child && surface.InteractionSnapshot().pressedButtons == 1, "owned drag captures the mouse");
+        ReleaseCapture();
+        Check(!surface.InteractionSnapshot().pressedButtons, "capture loss synthesizes the missing button release");
+        // Leave real GUI input held: normal close, parent destruction and a
+        // gated GPU drain must all retire it before any widget/module teardown.
+        SendMessageW(child, WM_KEYDOWN, VK_SHIFT, 0);
+        SendMessageW(child, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(120, 163));
+        return child;
+    }
     void Capture(HWND parent, const std::filesystem::path& path)
     {
         // This is a crop of the disposable owned parent, never the game or a
@@ -382,7 +443,9 @@ int wmain(int argc, wchar_t** argv)
         const std::filesystem::path root(argv[1]);
         const std::wstring          mode(argv[2]);
         Check(root.is_absolute() && root.filename() == L"de-online", "use explicit DE-layout assets");
-        Check(mode == L"normal" || mode == L"gated" || mode == L"gated-destroy" || mode == L"destroy" || mode == L"resize-failure" || mode == L"release",
+        const bool interactive = mode == L"interactive" || mode == L"interactive-destroy" || mode == L"interactive-gated";
+        Check(mode == L"normal" || mode == L"gated" || mode == L"gated-destroy" || mode == L"destroy" || mode == L"resize-failure" || mode == L"release" ||
+                  interactive,
               "one explicit normal/gated/parent-destroy/release case");
         std::printf("GUI surface case=%ls\n", mode.c_str());
         Check(!GetModuleHandleW(L"d3dx9_43.dll"), "fixture begins without legacy D3DX9 renderer");
@@ -415,7 +478,7 @@ int wmain(int argc, wchar_t** argv)
         auto                parent = parentOwner.window.load();
         const auto          focus = GetForegroundWindow();
         ComPtr<ID3D12Fence> gate;
-        if (mode == L"gated" || mode == L"gated-destroy")
+        if (mode == L"gated" || mode == L"gated-destroy" || mode == L"interactive-gated")
             Hr(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&gate)), "create owned queue gate");
         DeviceProxy proxy(device.Get(), gate.Get());
         proxy.faultFinalRelease = mode == L"release";
@@ -424,6 +487,8 @@ int wmain(int argc, wchar_t** argv)
         if (mode == L"normal")
             Check(!std::filesystem::exists(root / L"mta/logs"), "fresh owned package has no generated logs");
         Check(surface.Prepare((root / L"cgui.dll").c_str(), root.c_str()) == Status::Ok, "preload actual cgui and explicit assets");
+        if (interactive)
+            Check(surface.EnableInteraction() == Status::Ok, "explicitly opt in only the owned-window GUI interaction host");
         Check(std::filesystem::is_directory(root / L"mta/logs"), "surface Prepare creates generated logs before GUI configuration");
         Check(!GetModuleHandleW(L"d3dx9_43.dll"), "Prepare keeps legacy renderer unloaded");
         bool        wrongThread = false;
@@ -432,6 +497,7 @@ int wmain(int argc, wchar_t** argv)
             {
                 wrongThread = surface.AttachDeviceWindow(reinterpret_cast<ID3D12Device*>(UINT_PTR(1)), parent, true) == Status::WrongThread &&
                               surface.Start() == Status::WrongThread && surface.Poll() == Status::WrongThread && surface.Shutdown() == Status::WrongThread &&
+                              surface.EnableInteraction() == Status::WrongThread && !surface.InteractionSnapshot().enabled &&
                               !surface.Snapshot().cleanupComplete && !surface.Snapshot().ownerThreadId;
             });
         foreign.join();
@@ -460,10 +526,20 @@ int wmain(int argc, wchar_t** argv)
         Check(surface.AttachDeviceWindow(transferred, parent, true) == Status::Ok, "attach one device reference and borrowed parent");
         Check(proxy.calls == calls, "AttachDeviceWindow itself invokes no COM");
         Check(surface.Start() == Status::Ok, "start actual GUI on owned composition queue and swapchain");
-        if (mode == L"gated" || mode == L"gated-destroy")
+        if (interactive)
+        {
+            Check(surface.EnableInteraction() == Status::InvalidArgument, "running surface cannot change input ownership mode");
+            InteractionProof(surface, parent);
+        }
+        if (mode == L"gated" || mode == L"gated-destroy" || mode == L"interactive-gated")
         {
             const auto before = GetTickCount64();
             Check(surface.Shutdown() == Status::Busy && GetTickCount64() - before < 1000, "gated stop remains nonblocking without a future Present");
+            if (interactive)
+            {
+                const auto input = surface.InteractionSnapshot();
+                Check(input.inputDetached && !input.pressedKeys && !input.pressedButtons && !input.focused, "Busy GPU shutdown already retired all GUI input");
+            }
             const auto retained = surface.Snapshot();
             Check(retained.moduleRetained && retained.sessionRetained && retained.deviceRetained && retained.queueRetained && retained.surfaceRetained &&
                       !retained.cleanupComplete,
@@ -496,7 +572,8 @@ int wmain(int argc, wchar_t** argv)
             Check(result.childCreated && result.childShown && result.compositionCreated && result.parentValidated &&
                       result.ownerThreadId == GetCurrentThreadId() && result.parentThreadId != GetCurrentThreadId(),
                   "owned child and DComp parent association recorded");
-            Check(GetForegroundWindow() == focus, "surface does not activate or focus its child");
+            if (!interactive)
+                Check(GetForegroundWindow() == focus, "passive surface does not activate or focus its child");
             if (mode == L"normal")
             {
                 Capture(parent, std::filesystem::current_path() / L"owned-composition.bmp");
@@ -542,7 +619,16 @@ int wmain(int argc, wchar_t** argv)
                           surface.Snapshot().hresult == static_cast<unsigned>(E_OUTOFMEMORY),
                       "successful cleanup clears resizePending without relabeling failed workload");
             }
-            if (mode == L"destroy")
+            if (mode == L"interactive")
+            {
+                const auto child = GetWindow(parent, GW_CHILD);
+                SendMessageW(child, WM_KEYDOWN, VK_ESCAPE, 0);
+                Check(surface.InteractionSnapshot().closeRequested && surface.Snapshot().stopRequested && !surface.InteractionSnapshot().pressedKeys &&
+                          !surface.InteractionSnapshot().pressedButtons,
+                      "Escape closes the interactive GUI and releases held input");
+                Check(surface.Poll() == Status::Ok, "closed interactive surface reports graceful stop to its owner");
+            }
+            if (mode == L"destroy" || mode == L"interactive-destroy")
             {
                 Check(PostMessageW(parent, WM_CLOSE, 0, 0) != FALSE, "request destruction on disposable parent owner");
                 const auto deadline = GetTickCount64() + 5000;
@@ -577,6 +663,13 @@ int wmain(int argc, wchar_t** argv)
         }
         if (mode != L"release")
         {
+            if (interactive)
+            {
+                const auto input = surface.InteractionSnapshot();
+                Check(input.inputDetached && !input.inputFailed && !input.focused && !input.pressedKeys && !input.pressedButtons,
+                      "interactive shutdown retires input before cgui unload");
+                Check(input.buttonClicks == 2, "shutdown cannot click a held MTA button");
+            }
             const auto result = surface.Snapshot();
             Check(result.cleanupComplete && result.windowCleanupComplete && result.compositionCleanupComplete && result.classUnregistered &&
                       !result.moduleRetained && !result.sessionRetained && !result.deviceRetained && !result.childRetained && !result.queueRetained &&

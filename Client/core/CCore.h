@@ -304,20 +304,25 @@ public:
     void OnPostColorFilterRender() override;
 
 private:
+    void InitializeFrontendInfrastructure();
+    void DestroyFrontendCommands();
+    void DestroyFrontendConfiguration(bool saveConfig);
+    void DestroyFrontendLogger();
+    void ReleaseXML(bool saveConfig);
     void ApplyCoreInitSettings();
 
 private:
     // Core devices.
-    CXML*               m_pXML;
+    CXML*               m_pXML = nullptr;
     CLocalGUI*          m_pLocalGUI;
     CGraphics*          m_pGraphics;
-    CCommands*          m_pCommands;
+    CCommands*          m_pCommands = nullptr;
     CDirect3DData*      m_pDirect3DData;
     CConnectManager*    m_pConnectManager;
     CModelCacheManager* m_pModelCacheManager;
 
     // Instances (put new classes here!)
-    CXMLFile*                               m_pConfigFile;
+    CXMLFile*                               m_pConfigFile = nullptr;
     CClientVariables                        m_ClientVariables;
     CWebCoreInterface*                      m_pWebCore = nullptr;
     CTrayIcon*                              m_pTrayIcon;
@@ -368,11 +373,11 @@ private:
     CGUI*         m_pGUI;
 
     // Logger utility interface.
-    CConsoleLogger* m_pConsoleLogger;
+    CConsoleLogger* m_pConsoleLogger = nullptr;
 
-    CLocalization* m_pLocalization;
+    CLocalization* m_pLocalization = nullptr;
 
-    CKeyBinds*     m_pKeyBinds;
+    CKeyBinds*     m_pKeyBinds = nullptr;
     CMouseControl* m_pMouseControl;
 
     unsigned short    m_menuFrame{};

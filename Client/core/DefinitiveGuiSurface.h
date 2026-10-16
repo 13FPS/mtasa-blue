@@ -52,6 +52,18 @@ namespace DefinitiveGuiSurface
         std::uint64_t fenceValue = 0, completedFenceValue = 0;
     };
 
+    // Input validation has a separate contract so the successful passive
+    // surface trial keeps its original layout and remains non-interactive.
+    // This is GUI ownership only, not permission to suppress native game input.
+    struct InteractionResult
+    {
+        std::uint32_t version = 1, enabled = 0, focused = 0, focusAcquired = 0, focusLost = 0;
+        std::uint64_t events = 0, syntheticReleases = 0;
+        std::uint32_t pressedKeys = 0, pressedButtons = 0;
+        std::uint32_t buttonClicks = 0, textChanges = 0, textAccepted = 0, textBytes = 0;
+        std::uint32_t closeRequested = 0, inputFailed = 0, inputDetached = 0;
+    };
+
     class Session
     {
     public:
@@ -61,15 +73,19 @@ namespace DefinitiveGuiSurface
         Session& operator=(const Session&) = delete;
 
         Status Prepare(const wchar_t* absoluteGuiDll, const wchar_t* absoluteAssetRoot) noexcept;
+        // Explicit opt-in before Start. Until native gameplay input capture is
+        // available, only the disposable owned-window host enables this mode.
+        Status EnableInteraction() noexcept;
         // Ok consumes one existing device reference by storage only. The HWND
         // remains borrowed; Start validates it after native End has fully drained.
         Status AttachDeviceWindow(ID3D12Device* transferredReference, HWND__* borrowedParent, bool windowed) noexcept;
         Status Start() noexcept;
         // Pumps only this worker's owned child and polls fences without waits.
         // The Core owner supplies the bounded display duration and stop request.
-        Status Poll() noexcept;
-        Status Shutdown() noexcept;
-        Result Snapshot() const noexcept;
+        Status            Poll() noexcept;
+        Status            Shutdown() noexcept;
+        Result            Snapshot() const noexcept;
+        InteractionResult InteractionSnapshot() const noexcept;
 
     private:
         struct Impl;

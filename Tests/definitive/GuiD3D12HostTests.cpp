@@ -29,6 +29,7 @@ using Microsoft::WRL::ComPtr;
 using namespace mta::gui;
 static_assert(GuiD3D12ApiVersion == 1 && GuiD3D12AssetRootApiVersion == 1);
 static_assert(sizeof(GuiD3D12CreateInfo) == 40 && sizeof(GuiD3D12Frame) == 24);
+static_assert(CGUI_MI_MOUSEMOVE == 0 && CGUI_MI_MOUSEWHEEL == 4 && CGUI_MI_MOUSECANCEL == 5);
 namespace
 {
     unsigned checks = 0, clicks = 0;
@@ -73,6 +74,73 @@ namespace
         gui->ProcessMouseInput(CGUI_MI_MOUSEPOS, x, y);
         gui->ProcessMouseInput(CGUI_MI_MOUSEDOWN, 0, 0, LeftButton);
         gui->ProcessMouseInput(CGUI_MI_MOUSEUP, 0, 0, LeftButton);
+    }
+    struct MouseCancellationProbe
+    {
+        unsigned buttonClicks = 0, genericClicks = 0, mouseUps = 0, lastSysKeys = 0;
+        bool     Button(CGUIElement*)
+        {
+            ++buttonClicks;
+            return true;
+        }
+        bool Click(CGUIMouseEventArgs)
+        {
+            ++genericClicks;
+            return true;
+        }
+        bool Up(CGUIMouseEventArgs)
+        {
+            ++mouseUps;
+            return true;
+        }
+        bool Move(CGUIMouseEventArgs args)
+        {
+            lastSysKeys = args.sysKeys;
+            return true;
+        }
+    };
+    void CheckMouseCancellation(CGUI& gui, unsigned width, unsigned height)
+    {
+        // Cover the entire viewport so moving outside the button cannot make a
+        // fabricated mouse-up look like cancellation. Exercise actual CEGUI's
+        // pushed state and generic click tracker through the unchanged CGUI API.
+        auto* button = gui.CreateButton(static_cast<CGUIElement*>(nullptr), "Fullscreen cancellation proof");
+        button->SetPosition(CVector2D(0, 0));
+        button->SetSize(CVector2D(static_cast<float>(width), static_cast<float>(height)));
+        button->SetAlwaysOnTop(true);
+        button->BringToFront();
+        MouseCancellationProbe probe;
+        button->SetClickHandler(GUI_CALLBACK(&MouseCancellationProbe::Button, &probe));
+        gui.SetMouseClickHandler(INPUT_CORE, GUI_CALLBACK_MOUSE(&MouseCancellationProbe::Click, &probe));
+        gui.SetMouseButtonUpHandler(INPUT_CORE, GUI_CALLBACK_MOUSE(&MouseCancellationProbe::Up, &probe));
+        gui.SetMouseMoveHandler(INPUT_CORE, GUI_CALLBACK_MOUSE(&MouseCancellationProbe::Move, &probe));
+        gui.ProcessMouseInput(CGUI_MI_MOUSEPOS, width / 2, height / 2);
+        gui.ProcessKeyboardInput(CGUIKeys::LeftShift, true);
+        gui.ProcessKeyboardInput(CGUIKeys::LeftControl, true);
+        for (const auto mouse : {LeftButton, RightButton, MiddleButton, X1Button, X2Button})
+            gui.ProcessMouseInput(CGUI_MI_MOUSEDOWN, 0, 0, mouse);
+        gui.ProcessMouseInput(CGUI_MI_MOUSECANCEL);
+        gui.ProcessMouseInput(CGUI_MI_MOUSECANCEL);
+        Check(!probe.buttonClicks && !probe.genericClicks && !probe.mouseUps,
+              "idempotent mouse cancellation fires no button activation, generic click or synthetic mouse-up");
+        gui.ProcessMouseInput(CGUI_MI_MOUSEPOS, width / 2, height / 2);
+        // CGUIMouseEventArgs forwards CEGUI's public system-key flags: Shift=4,
+        // Control=8. Every mouse flag must be gone while both modifiers remain.
+        Check(probe.lastSysKeys == (4u | 8u), "actual mouse cancellation clears all five mouse flags and preserves held Shift/Control");
+        for (const auto mouse : {LeftButton, RightButton, MiddleButton, X1Button, X2Button})
+            gui.ProcessMouseInput(CGUI_MI_MOUSEUP, 0, 0, mouse);
+        Check(!probe.buttonClicks && !probe.genericClicks && probe.mouseUps == 5,
+              "later physical mouse releases cannot activate the cancelled fullscreen button or stale generic click trackers");
+        InputClick(&gui, width / 2, height / 2);
+        Check(probe.buttonClicks == 1 && probe.genericClicks > 0,
+              "a fresh real click works after cancellation instead of inheriting a stale multiclick or pressed state");
+        gui.ProcessKeyboardInput(CGUIKeys::LeftShift, false);
+        gui.ProcessKeyboardInput(CGUIKeys::LeftControl, false);
+        gui.SetMouseClickHandler(INPUT_CORE, GUI_CALLBACK_MOUSE());
+        gui.SetMouseButtonUpHandler(INPUT_CORE, GUI_CALLBACK_MOUSE());
+        gui.SetMouseMoveHandler(INPUT_CORE, GUI_CALLBACK_MOUSE());
+        button->SetClickHandler(GUI_CALLBACK());
+        gui.DestroyElementRecursive(button);
     }
     struct ReentrantResize
     {
@@ -516,6 +584,9 @@ int wmain(int argc, wchar_t** argv)
         foreign.join();
         Check(foreignCorrect, "foreign owner calls preserve output and do not render, resize, destroy, or release");
         owned.gui->SetSkin("Default");
+        // Existing widget and three-slot retention checks use a single main
+        // submission. Cursor submission is exercised separately below.
+        owned.gui->SetCursorEnabled(false);
         Check(owned.gui->GetDefaultFont() && owned.gui->GetTextExtent("Actual MTA D3D12") > 0, "actual MTA FreeType font glyphs available");
         auto* window = owned.gui->CreateWnd(nullptr, "Actual MTA GUI / D3D12 WARP");
         window->SetPosition(CVector2D(40, 40));
@@ -560,6 +631,7 @@ int wmain(int argc, wchar_t** argv)
         image->SetFrameEnabled(false);
         image->SetVisible(true);
         Check(image->LoadFromTexture(texture), "actual static image references actual CEGUI D3D12 memory texture");
+        owned.gui->SetCursorEnabled(true);
         auto invalidFrame = Frame(owned);
         invalidFrame.resource = nullptr;
         Check(owned.session->RenderFrame(invalidFrame) == GuiD3D12Status::InvalidArgument, "reject missing target before recording GPU commands");
@@ -580,6 +652,9 @@ int wmain(int argc, wchar_t** argv)
         Check(owned.session->RenderFrame(invalidFrame) == GuiD3D12Status::InvalidArgument,
               "reject another supported resource layout instead of recording against the wrong PSO format");
         mismatchedTarget.Reset();
+        Check(owned.gui->IsCursorEnabled(), "enabled cursor does not replace invalid main target errors with cursor success");
+        owned.gui->SetCursorEnabled(false);
+        owned.gui->ProcessMouseInput(CGUI_MI_MOUSEPOS, 590, 400);
         Clear(owned, D3D12_RESOURCE_STATE_RENDER_TARGET);
         Check(owned.session->RenderFrame(Frame(owned)) == GuiD3D12Status::Ok, "submit actual CEGUI skin/fonts/widget quads on WARP");
         const auto before = Read(owned);
@@ -599,8 +674,38 @@ int wmain(int argc, wchar_t** argv)
                   Near(blended.blue, clear.blue * (1 - alpha)) && blended.alpha == blended.maximumAlpha,
               "CEGUI BGRA texture channels and straight alpha match native target precision and opaque alpha");
         Save(root / L"d3d12-before.bmp", owned.format, owned.width, owned.height, before);
+
+        // Keep the pointer over empty background so native pixel differences
+        // prove the existing MTA cursor, rather than a widget hover redraw.
+        owned.gui->SetCursorEnabled(true);
+        Clear(owned, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        Check(owned.session->RenderFrame(Frame(owned)) == GuiD3D12Status::Ok, "render main widgets and enabled MTA cursor through the session");
+        const auto withCursor = Read(owned);
+        unsigned   cursorPixels = 0, unrelatedPixels = 0;
+        for (UINT y = 0; y < owned.height; ++y)
+        {
+            for (UINT x = 0; x < owned.width; ++x)
+            {
+                const auto index = SIZE_T(y) * owned.width + x;
+                if (withCursor[index] != before[index])
+                {
+                    if (x >= 560 && y >= 370)
+                        ++cursorPixels;
+                    else
+                        ++unrelatedPixels;
+                }
+            }
+        }
+        Check(cursorPixels > 0 && unrelatedPixels == 0, "enabled cursor changes only its empty-background footprint in native-format readback");
+        Save(root / L"d3d12-cursor.bmp", owned.format, owned.width, owned.height, withCursor);
+        owned.gui->SetCursorEnabled(false);
+        Clear(owned, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        Check(owned.session->RenderFrame(Frame(owned)) == GuiD3D12Status::Ok, "render disabled cursor without a transient cursor submission");
+        Check(Read(owned) == before, "disabling the cursor exactly restores the unchanged widget-only native raster");
+
         InputClick(owned.gui, 170, 105);
         Check(clicks == 1, "actual GUI callback fires through the D3D12-backed widget");
+        CheckMouseCancellation(*owned.gui, owned.width, owned.height);
         InputClick(owned.gui, 80, 167);
         Check(checkbox->GetSelected(), "actual checkbox changes state through existing MTA input");
         edit->Activate();
@@ -617,15 +722,20 @@ int wmain(int argc, wchar_t** argv)
         // pending GPU ownership deterministic without sleeps or driver timing.
         Hr(owned.queue->Wait(owned.blocker.Get(), 1), "gate the owned queue for deterministic resource retention");
         owned.blocked = true;
-        for (unsigned i = 0; i < 3; ++i)
-            Check(owned.session->RenderFrame(Frame(owned, D3D12_RESOURCE_STATE_COPY_SOURCE)) == GuiD3D12Status::Ok,
-                  "submit one of three fenced renderer slots");
+        owned.gui->SetCursorEnabled(true);
+        Check(owned.session->RenderFrame(Frame(owned, D3D12_RESOURCE_STATE_COPY_SOURCE)) == GuiD3D12Status::Ok,
+              "main batch and cursor occupy two separately fenced renderer slots");
+        Check(owned.session->RenderFrame(Frame(owned, D3D12_RESOURCE_STATE_COPY_SOURCE)) == GuiD3D12Status::Busy,
+              "cursor slot exhaustion remains Busy after the second main batch submitted successfully");
         Check(owned.session->Resize(800, 600) == GuiD3D12Status::Busy && owned.gui->GetResolution().fX == 640,
               "pending target references prevent resize until every GPU slot retires");
         const ULONGLONG busyStarted = GetTickCount64();
         Check(owned.session->RenderFrame(Frame(owned, D3D12_RESOURCE_STATE_COPY_SOURCE)) == GuiD3D12Status::Busy,
-              "a fourth pending frame returns Busy without allocator reuse");
+              "main slot exhaustion stays Busy with cursor enabled instead of being replaced by cursor status");
         Check(GetTickCount64() - busyStarted < 1000, "renderer never waits on its blocked GPU queue");
+        owned.gui->SetCursorEnabled(false);
+        Check(owned.session->RenderFrame(Frame(owned, D3D12_RESOURCE_STATE_COPY_SOURCE)) == GuiD3D12Status::Busy,
+              "disabling the cursor cannot repair the blocked main batch or reuse a live allocator");
         image->Clear();
         delete texture;
         texture = nullptr;

@@ -28,6 +28,7 @@
     #include <SString.h>
     #include <gui/CGUI.h>
     #include <gui/CGUID3D12.h>
+    #include "GuiWin32Input.h"
 
 namespace DefinitiveGuiSurface
 {
@@ -85,6 +86,9 @@ namespace DefinitiveGuiSurface
     {
         DWORD                              owner = GetCurrentThreadId(), parentThread = 0;
         Result                             result;
+        InteractionResult                  interaction;
+        GuiWin32Input::Translator          input;
+        bool                               inputQuiescing = false;
         HMODULE                            module = nullptr, windowModule = nullptr;
         wchar_t                            windowClass[96]{};
         bool                               classRegistered = false, comInitialized = false, prepared = false, started = false, failed = false;
@@ -97,6 +101,8 @@ namespace DefinitiveGuiSurface
         CGUI*                              gui = nullptr;
         CGUITexture*                       texture = nullptr;
         CGUIStaticImage*                   image = nullptr;
+        CGUIEdit*                          edit = nullptr;
+        CGUILabel*                         interactionLabel = nullptr;
         ComPtr<ID3D12CommandQueue>         queue;
         ComPtr<ID3D12Fence>                fence;
         ComPtr<ID3D12CommandAllocator>     clearAllocator, copyAllocator;
@@ -113,6 +119,108 @@ namespace DefinitiveGuiSurface
         UINT                               captureWidth = 0, captureHeight = 0, redX = 0, redY = 0;
 
         Impl() noexcept { result.ownerThreadId = owner; }
+        bool ButtonClicked(CGUIElement*)
+        {
+            if (inputQuiescing)
+                return true;
+            ++interaction.buttonClicks;
+            interactionLabel->SetText("MTA button callback received");
+            return true;
+        }
+        bool TextChanged(CGUIElement*)
+        {
+            if (inputQuiescing)
+                return true;
+            ++interaction.textChanges;
+            interaction.textBytes = static_cast<std::uint32_t>(edit->GetText().size());
+            return true;
+        }
+        bool TextAccepted(CGUIElement*)
+        {
+            if (inputQuiescing)
+                return true;
+            ++interaction.textAccepted;
+            interactionLabel->SetText("MTA edit accepted text");
+            return true;
+        }
+        bool CloseRequested(CGUIElement*)
+        {
+            if (inputQuiescing)
+                return true;
+            interaction.closeRequested = 1;
+            result.stopRequested = 1;
+            return true;
+        }
+        void ResetInput(bool buttonsOnly = false)
+        {
+            if (inputQuiescing)
+                return;
+            struct Quiescing
+            {
+                bool& value;
+                explicit Quiescing(bool& flag) : value(flag) { value = true; }
+                ~Quiescing() { value = false; }
+            } quiescing(inputQuiescing);
+            // Native capture must retire even if a GUI callback throws while
+            // synthesizing releases. Nested capture notifications are ignored.
+            if (GetCapture() == child)
+                ReleaseCapture();
+            if (gui && interaction.enabled)
+            {
+                if (buttonsOnly)
+                    input.ResetButtons(*gui);
+                else
+                    input.Reset(*gui);
+            }
+        }
+        bool ProcessInput(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
+        {
+            if (!interaction.enabled || !gui || result.stopRequested || inputQuiescing)
+                return false;
+            if (message == WM_SETFOCUS)
+            {
+                interaction.focused = 1;
+                ++interaction.focusAcquired;
+            }
+            if (message == WM_KILLFOCUS)
+            {
+                interaction.focused = 0;
+                ++interaction.focusLost;
+                ResetInput();
+                return false;
+            }
+            if (message == WM_CANCELMODE || message == WM_CAPTURECHANGED)
+            {
+                ResetInput(true);
+                return false;
+            }
+            // Clicks target only this worker's HWND. Never install a foreign
+            // parent hook or inject GUI callbacks onto the game's UI thread.
+            if (message == WM_LBUTTONDOWN || message == WM_RBUTTONDOWN || message == WM_MBUTTONDOWN || message == WM_XBUTTONDOWN)
+            {
+                SetFocus(window);
+                if (GetFocus() != window)
+                    return false;
+                SetCapture(window);
+            }
+            if (message == WM_KEYDOWN && wparam == VK_ESCAPE && GetFocus() == window)
+            {
+                CloseRequested(nullptr);
+                ResetInput();
+                return true;
+            }
+            // Text and shortcuts are admitted only while this exact owned
+            // child has keyboard focus; queued input after deactivation drops.
+            if ((message == WM_KEYDOWN || message == WM_KEYUP || message == WM_SYSKEYDOWN || message == WM_SYSKEYUP || message == WM_CHAR ||
+                 message == WM_UNICHAR) &&
+                GetFocus() != window)
+                return false;
+            const bool handled = input.Process(*gui, message, wparam, lparam);
+            if ((message == WM_LBUTTONUP || message == WM_RBUTTONUP || message == WM_MBUTTONUP || message == WM_XBUTTONUP) &&
+                !input.Snapshot().pressedButtons && GetCapture() == window)
+                ReleaseCapture();
+            return handled;
+        }
         void Retained() noexcept
         {
             result.moduleRetained = module != nullptr;
@@ -175,9 +283,29 @@ namespace DefinitiveGuiSurface
                 SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
             }
             if (message == WM_NCHITTEST)
-                return HTTRANSPARENT;
+                return self && self->interaction.enabled ? HTCLIENT : HTTRANSPARENT;
             if (message == WM_MOUSEACTIVATE)
-                return MA_NOACTIVATE;
+                return self && self->interaction.enabled ? MA_ACTIVATE : MA_NOACTIVATE;
+            if (self && self->interaction.enabled)
+            {
+                try
+                {
+                    if (message == WM_SETCURSOR && LOWORD(lparam) == HTCLIENT && self->gui)
+                    {
+                        // Draw MTA's own cursor without changing the process
+                        // ShowCursor counter or the native parent's cursor.
+                        SetCursor(nullptr);
+                        return TRUE;
+                    }
+                    if (self->ProcessInput(window, message, wparam, lparam))
+                        return message == WM_XBUTTONDOWN || message == WM_XBUTTONUP ? TRUE : 0;
+                }
+                catch (...)
+                {
+                    self->interaction.inputFailed = 1;
+                    self->result.stopRequested = 1;
+                }
+            }
             if (message == WM_ERASEBKGND)
                 return 1;
             if (message == WM_PAINT)
@@ -188,7 +316,11 @@ namespace DefinitiveGuiSurface
                 return 0;
             }
             if (message == WM_CLOSE)
+            {
+                if (self && self->interaction.enabled)
+                    self->CloseRequested(nullptr);
                 return 0;
+            }
             if (message == WM_NCDESTROY && self)
             {
                 self->child = nullptr;
@@ -484,6 +616,17 @@ namespace DefinitiveGuiSurface
         impl->Retained();
         return Status::Ok;
     }
+    Status Session::EnableInteraction() noexcept
+    {
+        if (!impl)
+            return Status::InvalidArgument;
+        if (GetCurrentThreadId() != impl->owner)
+            return Status::WrongThread;
+        if (!impl->prepared || impl->started || impl->failed || impl->result.stopRequested)
+            return Status::InvalidArgument;
+        impl->interaction.enabled = 1;
+        return Status::Ok;
+    }
     Status Session::Start() noexcept
     {
         if (!impl)
@@ -579,9 +722,9 @@ namespace DefinitiveGuiSurface
             if (!RegisterClassExW(&windowClass))
                 return impl->Fail(HRESULT_FROM_WIN32(GetLastError()));
             impl->classRegistered = true;
-            impl->child = CreateWindowExW(WS_EX_NOACTIVATE | WS_EX_TRANSPARENT | WS_EX_NOREDIRECTIONBITMAP, impl->windowClass, L"MTA experimental GUI",
-                                          WS_CHILD | WS_VISIBLE, 0, 0, static_cast<int>(width), static_cast<int>(height), impl->parent, nullptr,
-                                          impl->windowModule, impl);
+            const DWORD extendedStyle = WS_EX_NOREDIRECTIONBITMAP | (impl->interaction.enabled ? 0 : WS_EX_NOACTIVATE | WS_EX_TRANSPARENT);
+            impl->child = CreateWindowExW(extendedStyle, impl->windowClass, L"MTA experimental GUI", WS_CHILD | WS_VISIBLE, 0, 0, static_cast<int>(width),
+                                          static_cast<int>(height), impl->parent, nullptr, impl->windowModule, impl);
             if (!impl->child)
                 return impl->Fail(HRESULT_FROM_WIN32(GetLastError()));
             impl->result.childCreated = 1;
@@ -619,7 +762,9 @@ namespace DefinitiveGuiSurface
             if (status != GuiD3D12Status::Ok || !impl->gui)
                 return impl->Fail(E_FAIL, status);
             impl->gui->SetSkin("Default");
-            impl->gui->SetCursorEnabled(false);
+            impl->gui->SetCursorEnabled(impl->interaction.enabled != 0);
+            if (impl->interaction.enabled)
+                impl->gui->ProcessMouseInput(CGUI_MI_MOUSEPOS, width - 24, height - 24);
             if (!impl->gui->GetDefaultFont() || impl->gui->GetTextExtent("MTA: Definitive Edition") <= 0)
                 return impl->Fail(E_FAIL);
             auto* window = impl->gui->CreateWnd(nullptr, "MTA: Definitive Edition / EXPERIMENTAL");
@@ -630,6 +775,25 @@ namespace DefinitiveGuiSurface
             button->SetPosition(CVector2D(20, 55));
             button->SetSize(CVector2D(300, 44));
             button->SetVisible(true);
+            if (impl->interaction.enabled)
+            {
+                // These are the same widgets and callbacks used by MTA menus.
+                // The owned host validates routing, not a replacement frontend.
+                button->SetText("Test MTA button");
+                button->SetClickHandler(GUI_CALLBACK(&Impl::ButtonClicked, impl));
+                impl->edit = impl->gui->CreateEdit(window, "");
+                impl->edit->SetPosition(CVector2D(20, 110));
+                impl->edit->SetSize(CVector2D(300, 30));
+                impl->edit->SetMaxLength(64);
+                impl->edit->SetVisible(true);
+                impl->edit->SetTextChangedHandler(GUI_CALLBACK(&Impl::TextChanged, impl));
+                impl->edit->SetTextAcceptedHandler(GUI_CALLBACK(&Impl::TextAccepted, impl));
+                impl->interactionLabel = impl->gui->CreateLabel(window, "Click the button or type and press Enter");
+                impl->interactionLabel->SetPosition(CVector2D(20, 150));
+                impl->interactionLabel->SetSize(CVector2D(370, 28));
+                impl->interactionLabel->SetVisible(true);
+                window->SetCloseClickHandler(GUI_CALLBACK(&Impl::CloseRequested, impl));
+            }
             impl->texture = impl->gui->CreateTexture();
             std::array<std::uint32_t, 16> red{};
             red.fill(0xffff0000);
@@ -658,8 +822,10 @@ namespace DefinitiveGuiSurface
             return Status::InvalidArgument;
         if (GetCurrentThreadId() != impl->owner)
             return Status::WrongThread;
-        if (!impl->started || impl->result.stopRequested)
+        if (!impl->started)
             return Status::InvalidArgument;
+        if (impl->result.stopRequested)
+            return impl->interaction.enabled ? (impl->interaction.inputFailed ? Status::Failed : Status::Ok) : Status::InvalidArgument;
         try
         {
             MSG message{};
@@ -668,6 +834,8 @@ namespace DefinitiveGuiSurface
                 TranslateMessage(&message);
                 DispatchMessageW(&message);
             }
+            if (impl->result.stopRequested)
+                return impl->interaction.inputFailed ? Status::Failed : Status::Ok;
             UINT width = 0, height = 0;
             if (!impl->ParentSize(width, height))
                 return Status::Ok;
@@ -711,6 +879,24 @@ namespace DefinitiveGuiSurface
             return Status::Failed;
         impl->result.stopRequested = 1;
         impl->result.stage = static_cast<unsigned>(Stage::Stopping);
+        try
+        {
+            if (impl->interaction.enabled && !impl->interaction.inputDetached)
+            {
+                // Retire input immediately even if GPU resources need several
+                // nonblocking drain attempts. No held GUI key survives hiding.
+                impl->ResetInput();
+                if (impl->gui)
+                    impl->gui->SetCursorEnabled(false);
+                impl->interaction.focused = 0;
+                impl->interaction.inputDetached = 1;
+            }
+        }
+        catch (...)
+        {
+            impl->interaction.inputFailed = 1;
+            return impl->Fail(E_FAIL);
+        }
         // GPU retirement may outlive the last Poll. Refresh borrowed-window
         // facts during every drain retry, without preventing owned cleanup.
         if (impl->started && impl->result.parentValidated)
@@ -838,6 +1024,18 @@ namespace DefinitiveGuiSurface
             return empty;
         }
         return GetCurrentThreadId() == impl->owner ? impl->result : Result{};
+    }
+    InteractionResult Session::InteractionSnapshot() const noexcept
+    {
+        if (!impl || GetCurrentThreadId() != impl->owner)
+            return {};
+        auto       result = impl->interaction;
+        const auto input = impl->input.Snapshot();
+        result.events = input.injectedEvents;
+        result.syntheticReleases = input.syntheticReleases;
+        result.pressedKeys = input.pressedKeys;
+        result.pressedButtons = input.pressedButtons;
+        return result;
     }
 }
 #endif

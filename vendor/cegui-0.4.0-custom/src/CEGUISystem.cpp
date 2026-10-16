@@ -974,6 +974,22 @@ bool System::injectMouseButtonUp(MouseButton button)
 	return (ma.handled | wasUpHandled);
 }
 
+void System::cancelMouseInput(void)
+{
+    // Neutralize every mouse tracker before capture-lost callbacks can inspect
+    // or reenter input. A later physical release cannot finish a stale click.
+    d_sysKeys &= ~(LeftMouse | RightMouse | MiddleMouse | X1Mouse | X2Mouse);
+    for (int button = 0; button < MouseButtonCount; ++button)
+    {
+        MouseClickTracker& tracker = d_clickTrackerPimpl->click_trackers[button];
+        tracker.d_click_count = 0;
+        tracker.d_click_area = Rect(0, 0, 0, 0);
+        tracker.d_target_window = NULL;
+    }
+    if (Window* captured = Window::getCaptureWindow())
+        captured->releaseInputForCancellation();
+}
+
 
 /*************************************************************************
 	Method that injects a key down event into the system.

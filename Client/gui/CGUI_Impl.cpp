@@ -461,6 +461,10 @@ void CGUI_Impl::DrawMouseCursor()
     }
     catch (const CEGUI::Exception& exception)
     {
+        // The explicit D3D12 session owns its drain and error result; a legacy
+        // fatal dialog here would bypass that owner while GPU work is retained.
+        if (!IsDirect3D9Renderer())
+            throw;
         ShowFatalCEGUIException(exception, "DrawMouseCursor");
     }
 }
@@ -483,6 +487,10 @@ void CGUI_Impl::ProcessMouseInput(CGUIMouseInput eMouseInput, unsigned long ulX,
 
         case CGUI_MI_MOUSEUP:
             m_pSystem->injectMouseButtonUp(static_cast<CEGUI::MouseButton>(eMouseButton));
+            break;
+
+        case CGUI_MI_MOUSECANCEL:
+            m_pSystem->cancelMouseInput();
             break;
 
         case CGUI_MI_MOUSEWHEEL:

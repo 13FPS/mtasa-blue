@@ -6,6 +6,22 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
+**Frontend startup and GUI interaction groundwork is implemented.** Core now
+separates its existing XML/configuration, localization, logging and commands
+from classic renderer/game hooks, with cleanup for partial initialization.
+The existing main menu supports explicitly deferred game settings; classic
+startup keeps its eager settings creation and shutdown order.
+
+The Core-owned surface has a separate internal interaction opt-in, using the
+same Win32 translator as classic MTA and the actual CGUI button/edit callbacks.
+The D3D12 session draws MTA's cursor. Focus loss, capture loss and shutdown
+cancel mouse presses without completing clicks, while mouse capture changes
+preserve keyboard modifiers. Unicode input and owner-thread checks are shared.
+Owned WARP tests exercise these paths with real MTA widgets and GPU readback.
+This interaction mode is not exported or installed into GTA: native gameplay
+input capture, remaining main-menu dependencies and full Core/game startup
+still need implementation. No new GTA test is required for this groundwork.
+
 **The Windowed MTA GUI trial passed, with user-confirmed eight-second visibility.**
 Runtime commit `27c54ea9d` acquired GTA's device/window lease and ran the existing
 CGUI/CEGUI through an MTA-owned child composition surface. Core recorded 158 GUI
@@ -22,7 +38,7 @@ pinned as expected. All 36 installed hashes matched. Normal exit preserved the
 unchanged. Independent reviews and the completed checkpoint preserve the source,
 package, whole logs and explicit user visibility report together. No independent
 screen image was captured, so screenshot-based visibility verification remains
-false. Full client startup, GUI interaction and multiplayer remain unfinished.
+false. Full client startup, GTA GUI input capture and multiplayer remain unfinished.
 
 An earlier attempt canceled after 392 ms because validation incorrectly required
 full display completion before accepting early readback. The frontend and reader

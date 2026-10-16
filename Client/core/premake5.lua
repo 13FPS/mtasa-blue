@@ -42,6 +42,9 @@ project "Client Core"
 		flags { "NoPCH" }
 	filter { "files:DefinitiveGuiSurface.cpp" }
 		flags { "NoPCH" }
+	-- Shared Win32 translation must not inherit classic engine dependencies.
+	filter { "files:GuiWin32Input.cpp" }
+		flags { "NoPCH" }
 	filter {}
 
 	if _OPTIONS["with-definitive-adapter"] then

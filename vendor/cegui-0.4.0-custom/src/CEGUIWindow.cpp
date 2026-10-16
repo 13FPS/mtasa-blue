@@ -1264,6 +1264,18 @@ void Window::releaseInput(void)
     }
 }
 
+void Window::releaseInputForCancellation(void)
+{
+    if (!isCapturedByThis())
+        return;
+
+    // Detach before notifying widgets: capture-lost resets their pressed/drag
+    // state without executing the activation behavior of a mouse-button release.
+    d_captureWindow = NULL;
+    WindowEventArgs args(this);
+    onCaptureLost(args);
+}
+
 
 /*************************************************************************
 	Set whether this window will remember and restore the previous window
@@ -3926,8 +3938,11 @@ void Window::onCaptureLost(WindowEventArgs& e)
 
 	// handle restore of previous capture window as required.
 	if (d_restoreOldCapture && (d_oldCapture != NULL)) {
-		d_oldCapture->onCaptureLost(e);
+		Window* oldCapture = d_oldCapture;
+		// Detach the restore chain before callbacks so cancellation and nested
+		// capture-lost processing cannot restore or revisit a suspended drag.
 		d_oldCapture = NULL;
+		oldCapture->onCaptureLost(e);
 	}
 
 	// handle case where mouse is now in a different window

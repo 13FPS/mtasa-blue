@@ -28,6 +28,7 @@ class CLocalGUI;
 #include "CSetCursorPosHook.h"
 #include "CSingleton.h"
 #include "CVersionUpdater.h"
+#include "GuiWin32Input.h"
 
 #include <windows.h>
 
@@ -88,6 +89,7 @@ public:
     void        EchoDebug(const char* szText);
 
     bool ProcessMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+    void ResetInputState();
     bool InputGoesToGUI();
     bool IsCursorForcedVisible() { return m_bForceCursorVisible; }
     void ForceCursorVisible(bool bVisible);
@@ -121,13 +123,14 @@ private:
 
     CGUILabel* m_pLabelVersionTag;
 
-    bool  m_bForceCursorVisible;
-    bool  m_bChatboxVisible;
-    bool  m_bChatboxInputBlocked;
-    bool  m_pDebugViewVisible;
-    bool  m_bGUIHasInput;
-    int   m_uiActiveCompositionSize;
-    POINT m_StoredMousePosition;
+    bool                      m_bForceCursorVisible;
+    bool                      m_bChatboxVisible;
+    bool                      m_bChatboxInputBlocked;
+    bool                      m_pDebugViewVisible;
+    bool                      m_bGUIHasInput;
+    int                       m_uiActiveCompositionSize;
+    POINT                     m_StoredMousePosition;
+    GuiWin32Input::Translator m_Win32Input;
 
     int     m_LastSettingsRevision;  // the revision number the last time we saw the skin change
     SString m_LastSkinName;

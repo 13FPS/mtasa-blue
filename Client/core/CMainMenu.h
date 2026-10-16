@@ -13,6 +13,7 @@ class CMainMenu;
 
 #pragma once
 
+#include <memory>
 #include "CCore.h"
 #include "CQuestionBox.h"
 #include <ServerBrowser/CServerBrowser.h>
@@ -43,7 +44,13 @@ class CMainMenu
     friend class CCredits;
 
 public:
-    CMainMenu(CGUI* pManager);
+    enum class SettingsCreation
+    {
+        Eager,
+        Deferred
+    };
+
+    CMainMenu(CGUI* pManager, SettingsCreation settingsCreation = SettingsCreation::Eager);
     ~CMainMenu();
 
     void Update();
@@ -59,7 +66,8 @@ public:
     bool GetIsIngame();
 
     CServerBrowser* GetServerBrowser() { return &m_ServerBrowser; };
-    CSettings*      GetSettingsWindow() { return &m_Settings; };
+    CSettings*      GetSettingsWindow() { return m_Settings.get(); };
+    void            InitializeSettingsWindow();
     CQuestionBox*   GetQuestionWindow() { return &m_QuestionBox; };
     CNewsBrowser*   GetNewsBrowser() { return m_pNewsBrowser; };
 
@@ -100,6 +108,7 @@ private:
     bool OnNewsButtonClick(CGUIElement* pElement);
 
     void HideServerInfo();
+    void TryShowPendingRichPresenceQuestion();
 
     CGUI* m_pManager;
 
@@ -121,13 +130,13 @@ private:
     bool                   m_bMouseOverMenu;
 
     // Submenu classes
-    CQuestionBox       m_QuestionBox;
-    CSettings          m_Settings;
-    CNewsBrowser*      m_pNewsBrowser;
-    CCredits           m_Credits;
-    CServerBrowser     m_ServerBrowser;
-    CServerInfo        m_ServerInfo;
-    CLanguageSelector* m_pLanguageSelector;
+    CQuestionBox               m_QuestionBox;
+    std::unique_ptr<CSettings> m_Settings;
+    CNewsBrowser*              m_pNewsBrowser;
+    CCredits                   m_Credits;
+    CServerBrowser             m_ServerBrowser;
+    CServerInfo                m_ServerInfo;
+    CLanguageSelector*         m_pLanguageSelector;
 
     // Properties
     bool m_bIsIngame;
@@ -151,6 +160,7 @@ private:
 
     CGraphics* m_pGraphics;
     bool       m_bStarted{false};
+    bool       m_bPendingRichPresenceQuestion{false};
     CVector2D  m_ScreenSize;
 
     // Fade variables

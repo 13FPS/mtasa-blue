@@ -37,7 +37,10 @@ enum CGUIMouseInput
     CGUI_MI_MOUSEPOS,
     CGUI_MI_MOUSEDOWN,
     CGUI_MI_MOUSEUP,
-    CGUI_MI_MOUSEWHEEL
+    CGUI_MI_MOUSEWHEEL,
+    // Cancel a lost mouse interaction without generating an activation click.
+    // Appending preserves every existing input value and the CGUI vtable.
+    CGUI_MI_MOUSECANCEL
 };
 
 enum CGUIMouseButton  // Synchronized with CEGUI::MouseButton in ceguiinputevent.h

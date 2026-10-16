@@ -131,6 +131,14 @@ namespace
             try
             {
                 gui->Draw();
+                const auto mainStatus = nativeRenderer->GetLastStatus();
+                if (mainStatus != D3D12GuiStatus::Ok)
+                    return SessionStatus(mainStatus);
+                // MTA draws CEGUI's cursor after its retained widget batch. Use
+                // that same path for explicit frames, and preserve either
+                // batch's Busy/error instead of reporting a partial frame as Ok.
+                if (gui->IsCursorEnabled())
+                    gui->DrawMouseCursor();
                 return SessionStatus(nativeRenderer->GetLastStatus());
             }
             catch (...)

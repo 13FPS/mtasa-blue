@@ -227,6 +227,9 @@ LRESULT CALLBACK CMessageLoopHook::ProcessMessage(HWND hwnd, UINT uMsg, WPARAM w
     // Prevent GTA from knowing about kill focuses. Prevents pausing.
     if (uMsg == WM_KILLFOCUS || (uMsg == WM_ACTIVATE && LOWORD(wParam) == WA_INACTIVE))
     {
+        // GUI dispatch below will not see this message. Cancel its existing
+        // presses now so returning to MTA cannot complete a stale click.
+        g_pCore->GetLocalGUI()->ResetInputState();
         return true;
     }
 

@@ -238,12 +238,14 @@ function runAdapter() {
                     state.slice(49, 52).some(Boolean) || state[59] || state[41] || state.slice(75, 78).some(Boolean) || state[72] || ![78, 79, 80].every(field => state[field] === 1))))
                 throw new Error('Core GUI surface claimed cleanup with retained ownership');
             const pairPresent = field => state[field] !== 0 || state[field + 1] !== 0;
+            // A surface can verify its first frame while the display interval is
+            // still running. Readback needs owned rendering, not final success.
             if ((state[1] === 2 && (!state[6] || !state[4])) || (state[1] === 3 && (!state[5] || state[6])) ||
                 (!state[10] && (state.slice(12, 19).some(Boolean) || state[58])) ||
                 (state[58] && (!state[10] || state[18] !== 2 || ![12, 14, 16].every(pairPresent))) ||
                 (state[19] && (![8, 9, 10, 11, 58].every(field => state[field] === 1) || state[42])) ||
                 (state[20] && !state[19]) || (state[21] && (!state[19] || !state[20])) ||
-                (state[37] && (!state[20] || !state[21])) || (state[4] === 1 && (!state[20] || !state[21])) ||
+                (state[37] && ![19, 30, 31, 32].every(field => state[field] === 1)) || (state[4] === 1 && (!state[20] || !state[21])) ||
                 (state[35] === 0xffffffff && state[36] === 0xffffffff && !state[52]))
                 throw new Error('Invalid Core GUI surface ownership state');
             if (latest && (state[2] < latest[2] || state[3] < latest[3]))

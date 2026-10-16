@@ -23,6 +23,15 @@ def passed_values():
     return values
 
 
+def active_readback_values():
+    values = passed_values()
+    for field, value in {1: 1, 2: 2, 3: 300, 4: 0, 5: 1, 6: 0, 20: 0, 21: 0, 39: 0,
+                         47: 6, 49: 1, 50: 1, 51: 1, 74: 0, 75: 1, 76: 1, 77: 1,
+                         78: 0, 79: 0, 80: 0}.items():
+        values[field] = value
+    return values
+
+
 def encoded(values=None, pid=71, run_ms=100, **extra):
     record = dict(schema=reader.SCHEMA, pid=pid, runMs=run_ms,
                   values=passed_values() if values is None else values)
@@ -46,6 +55,49 @@ class GuiSurfaceLogTests(unittest.TestCase):
                       "native_backbuffer_touched", "bridge_worker_lifecycle_verified"):
             self.assertFalse(result[claim])
         self.assertEqual(result["reason"], "Completed")
+
+    def test_active_verified_readback_precedes_display_completion(self):
+        values = active_readback_values()
+        self.assertEqual(values[37], 1)
+        self.assertEqual(values[20:22], [0, 0])
+        result = assess(encoded(values))
+        self.assertTrue(result["diagnostic_valid"])
+        self.assertFalse(result["cleanup_complete"])
+        self.assertFalse(result["own_surface_workload_verified"])
+        self.assertFalse(result["composition_present_verified"])
+        self.assertFalse(result["visible_gta_drawing_verified"])
+
+    def test_cancelled_terminal_keeps_readback_without_completed_display(self):
+        values = active_readback_values()
+        for field, value in {1: 2, 2: 3, 3: 392, 4: 2, 5: 0, 6: 1, 39: 1, 47: 9,
+                             49: 0, 50: 0, 51: 0, 74: 1, 75: 0, 76: 0, 77: 0,
+                             78: 1, 79: 1, 80: 1}.items():
+            values[field] = value
+        result = assess(encoded(values))
+        self.assertTrue(result["diagnostic_valid"])
+        self.assertTrue(result["cleanup_complete"])
+        self.assertEqual(result["reason"], "Cancelled")
+        self.assertFalse(result["own_surface_workload_verified"])
+        self.assertFalse(result["composition_present_verified"])
+        self.assertFalse(result["visible_gta_drawing_verified"])
+
+    def test_readback_requires_started_owned_render_resources(self):
+        for field in (19, 30, 31, 32):
+            with self.subTest(missing_field=field):
+                values = active_readback_values()
+                values[field] = 0
+                self.assertFalse(assess(encoded(values))["diagnostic_valid"])
+
+    def test_completed_proof_still_requires_workload_flags_and_eight_seconds(self):
+        for updates in ({20: 0, 21: 0}, {21: 0}, {3: 7999}):
+            with self.subTest(updates=updates):
+                values = passed_values()
+                for field, value in updates.items():
+                    values[field] = value
+                result = assess(encoded(values))
+                self.assertFalse(result["own_surface_workload_verified"])
+                self.assertFalse(result["composition_present_verified"])
+        self.assertTrue(assess()["own_surface_workload_verified"])
 
     def test_exact_pid_and_explicit_baseline_required(self):
         with self.assertRaises(TypeError):

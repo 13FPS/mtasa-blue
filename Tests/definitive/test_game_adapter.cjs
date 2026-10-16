@@ -1385,7 +1385,8 @@ async function main() {
             times: [0, 50, 100, 8600], ...overrides, functions: {
                 DE_CoreGuiSurfaceApiVersion: () => 1, DE_CoreGuiSurfaceBegin: () => 1, DE_CoreGuiSurfaceCapture: () => 1,
                 DE_CoreGuiSurfaceRead: field => coreSurfaceState(polls < 2 ? {
-                    1: 1, 2: 1, 3: 50, 4: 0, 6: 0, 20: 0, 21: 0, 37: 0, 39: 0,
+                    // Production readback finishes before the eight-second display.
+                    1: 1, 2: 1, 3: 50, 4: 0, 6: 0, 20: 0, 21: 0, 37: 1, 39: 0, 47: 6, 74: 0,
                     49: 1, 50: 1, 51: 1, 75: 1, 76: 1, 77: 1, 78: 0, 79: 0, 80: 0,
                     ...(overrides.surfacePendingState || {})
                 } : overrides.surfaceState)[field],
@@ -1411,6 +1412,66 @@ async function main() {
         assert.equal(finish.own_surface_workload_verified, true); assert.equal(finish.composition_present_verified, true);
         for (const claim of ['full_core_ready', 'visible_gta_drawing_verified', 'network_active', 'input_writes',
             'remote_peds_created', 'native_queue_commands_issued', 'native_backbuffer_touched']) assert.equal(finish[claim], false);
+    });
+    test('Surface early readback survives active polling until full display completion', () => {
+        let polls = 0;
+        const result = coreSurface({ keyFrames: [[17, 16, 120], [], [], [], []], times: [0, 50, 100, 1000, 8600], functions: {
+            DE_CoreStartupPoll: () => ++polls >= 3 ? 1 : 0,
+            DE_CoreGuiSurfaceRead: field => coreSurfaceState(polls < 3 ? {
+                1: 1, 2: polls, 3: polls === 1 ? 392 : 1000, 4: 0, 6: 0, 20: 0, 21: 0, 37: 1, 39: 0,
+                47: 6, 49: 1, 50: 1, 51: 1, 74: 0, 75: 1, 76: 1, 77: 1, 78: 0, 79: 0, 80: 0
+            } : {})[field]
+        } });
+        const samples = result.logs.filter(event => event.event === 'core_gui_surface_reference_sample');
+        assert.deepEqual(samples.map(event => [event.state[1], event.state[20], event.state[21], event.state[37]]),
+            [[1, 0, 0, 1], [1, 0, 0, 1], [2, 1, 1, 1]]);
+        assert.equal(polls, 3);
+        assert.ok(!result.calls.some(call => call[0] === 'DE_CoreStartupCancel'));
+        assert.equal(surfaceFinish(result).passed, true);
+        assert.equal(surfaceFinish(result).samples, 3);
+    });
+    test('Surface canceled after early readback preserves final cleanup without claiming a full display', () => {
+        // PID10304 reached this state after its first pixels, before the display
+        // interval completed. Readback is useful evidence even on cancellation.
+        const result = coreSurface({ surfaceState: { 3: 392, 4: 2, 20: 0, 21: 0, 37: 1, 67: 2, 68: 2, 70: 2 } });
+        const finish = surfaceFinish(result);
+        assert.ok(finish);
+        assert.equal(finish.cleanup_passed, true);
+        assert.equal(finish.passed, false);
+        assert.equal(finish.own_surface_workload_verified, false);
+        assert.equal(finish.composition_present_verified, false);
+        assert.equal(finish.visible_gta_drawing_verified, false);
+        assert.ok(!result.calls.some(call => call[0] === 'DE_CoreStartupCancel'));
+    });
+    test('Surface early readback remains valid while cancellation drains retained resources', () => {
+        let polls = 0;
+        const result = coreSurface({ functions: {
+            DE_CoreStartupPoll: () => ++polls >= 2 ? 1 : 0,
+            DE_CoreGuiSurfaceRead: field => coreSurfaceState(polls < 2 ? {
+                1: 3, 2: 1, 3: 392, 4: 2, 5: 1, 6: 0, 20: 0, 21: 0, 37: 1, 39: 0, 47: 8,
+                49: 1, 50: 1, 51: 1, 75: 1, 76: 1, 77: 1, 78: 0, 79: 0, 80: 0
+            } : { 3: 442, 4: 2, 20: 0, 21: 0, 37: 1 })[field]
+        } });
+        const samples = result.logs.filter(event => event.event === 'core_gui_surface_reference_sample');
+        assert.deepEqual(samples.map(event => event.state[1]), [3, 2]);
+        assert.equal(samples[0].state[5], 1);
+        assert.equal(samples[0].state[6], 0);
+        assert.equal(polls, 2);
+        assert.ok(!result.calls.some(call => call[0] === 'DE_CoreStartupCancel'));
+        assert.equal(surfaceFinish(result).cleanup_passed, true);
+        assert.equal(surfaceFinish(result).passed, false);
+        assert.equal(surfaceFinish(result).composition_present_verified, false);
+    });
+    for (const field of [19, 30, 31, 32]) test('Surface readback without owned rendering is rejected field ' + field, () => {
+        const result = coreSurface({ surfacePendingState: { [field]: 0, 37: 1 } });
+        assert.ok(!surfaceFinish(result));
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 1);
+        assert.ok(result.logs.some(event => event.event === 'adapter_failed' && /ownership state/.test(event.error)));
+    });
+    for (const field of [20, 21]) test('Surface Completed reason still requires full workload field ' + field, () => {
+        const result = coreSurface({ surfaceState: { [field]: 0, 37: 1 } });
+        assert.ok(!surfaceFinish(result));
+        assert.ok(result.logs.some(event => event.event === 'adapter_failed' && /ownership state/.test(event.error)));
     });
     for (const options of [{ mode: 'online' }, { mode: 'diagnostic' }, { mtaCoreGuiSurfaceReference: 'true' },
         { inputReference: true }, { reference: true }, { gaitRate: true }, { gaitRootLock: true },
@@ -1454,7 +1515,7 @@ async function main() {
         assert.ok(result.logs.some(event => event.event === 'adapter_failed' && /retained ownership/.test(event.error)));
     });
     for (const [field, value] of [[3, 7999], [7, 1], [22, 1], [23, 1], [24, 0], [27, 24], [28, 0], [29, 16385],
-        [30, 0], [31, 0], [32, 0], [35, 3], [38, 0], [46, 0], [47, 8], [48, 1], [52, 1],
+        [35, 3], [38, 0], [46, 0], [47, 8], [48, 1], [52, 1],
         [53, 0], [54, 0], [55, 0], [56, 0], [60, 0], [61, 0], [62, 0], [63, 0], [64, 0], [65, 0], [66, 0],
         [67, 1], [68, 2], [69, 1], [70, 2], [73, 1], [81, 0], [82, 0], [83, 0], [84, 0],
         [85, 7999], [85, 8001], [86, 0]])

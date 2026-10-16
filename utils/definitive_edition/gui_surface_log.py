@@ -68,7 +68,10 @@ def fields_valid(values):
         return False
     if values[20] and not values[19] or values[21] and (not values[19] or not values[20]):
         return False
-    if values[37] and (not values[20] or not values[21]):
+    # Readback certifies one submitted private-surface frame while Core may
+    # still be displaying it. Only the final workload policy below can certify
+    # all eight seconds; cancellation must retain valid local readback facts.
+    if values[37] and not all(values[field] for field in (19, 30, 31, 32)):
         return False
     if values[4] == 1 and (not values[20] or not values[21]):
         return False

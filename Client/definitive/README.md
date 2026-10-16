@@ -6,7 +6,17 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
-**Latest live GUI result: Core-owned offscreen rendering, cleanup and normal exit passed.**
+**The Windowed visible trial now acquires GTA's device and window.** MTA's
+existing GUI rendered verified pixels and presented two frames, but the
+frontend canceled the display after 392 ms. Its validation incorrectly required
+the full eight-second workload to finish before accepting early pixel readback.
+The frontend and saved-log reader now accept readback from started, submitted
+MTA-owned rendering while keeping full-duration success and cleanup separate.
+The user reported a brief flash; sustained visibility remains unconfirmed until
+the corrected trial is tested in GTA. Fullscreen attempts did not acquire the
+required window/device lease. Use Windowed mode inside GTA for this trial.
+
+**Latest completed GUI workload: Core-owned offscreen rendering, cleanup and normal exit passed.**
 Actual MTA Core started the existing CGUI/CEGUI session on GTA's retained
 D3D12 device. Its real widgets, text and texture rendered into an MTA-owned
 640x480 BGRA8 target. Pixel readback verified 133,058 changed pixels, the

@@ -37,7 +37,7 @@ counts stayed zero. Near the end of the 30-second window, native player control
 became enabled unexpectedly and the script cancelled the trial. Its writer is
 not established by the logs. Native readback and the same-generation restoration
 acknowledgement completed without another engine write; Core/cgui/XML/pthread
-unloaded. Command execution remains unverified in GTA. Clean cancellation is
+unloaded. That attempt did not verify command execution. Clean cancellation is
 reported separately from workload success, so it cannot turn this failed trial
 into a console interaction pass. F8 is available only while the trial is active.
 
@@ -45,10 +45,26 @@ Startup now attempts keyboard focus once after the admitted frontend has created
 its widgets, while GTA's parent window is already foreground and active. This
 removes the initial mouse-click requirement for F8 and typing. Background games
 are not activated, denied focus keeps the existing click path, and later focus
-loss is respected. This correction still needs its own live console test.
+loss is respected.
 The owned host queues F8, `help` and Enter through the actual startup focus,
 verifies the existing Help handler, then checks that focus is not reclaimed.
 Another case preserves a different disposable window's foreground and focus.
+
+**Live console command dispatch passed on runtime commit `db2d4f0f1`.** The
+matched PID/run records show three accepted and executed commands, no refusals,
+and the final Help handler. The raw console log records `help`, `clear`, `help`
+in order with two Help output sections; the user confirmed Help/Clear worked.
+The first copied focused snapshot arrived 518 ms after trial start.
+
+This is a console-command milestone, not a complete frontend trial pass. The
+script paused before its restoration acknowledgement, and Core exceeded its
+cleanup deadline. Refocusing GTA let the script restore the saved native control
+state with one verified write and acknowledge the same generation. Core, GUI,
+XML and pthread then unloaded; normal exit appended exactly 74 shutdown bytes.
+The final script reports cleanup complete and overall workload failed. No Quit
+callback was recorded in this run, and full client/game/network readiness stays
+false. After future menu trials, keep GTA focused for five seconds after the
+menu disappears before returning to the test prompt, so script cleanup can run.
 
 Console1 has a separate 32-field owner-thread API and bounded copied UTF8 text.
 The existing Frontend1/32 and Frontend160 layouts stay unchanged. The live runner

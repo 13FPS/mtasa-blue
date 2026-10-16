@@ -15,6 +15,10 @@ $developerCommand = Join-Path $visualStudio 'Common7/Tools/VsDevCmd.bat'
 $outputRoot = Join-Path $taskRoot ('Build/mta-game-de-module/' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
 $sourceNames = @('Client/sdk/game/CGameAdapter.h', 'Client/game_de/GameAdapter.cpp', 'Client/game_de/ControllerSnapshot.h',
+    'Client/sdk/multiplayer/CRemoteDataStorage.h', 'Client/sdk/multiplayer/CRemoteDataStorageImpl.h', 'Client/game_de/RemoteDataStorage.h',
+    'Client/sdk/game/Common.h', 'Shared/sdk/SharedUtil.Defines.h',
+    'Client/sdk/game/CStats.h', 'Client/sdk/game/CWeaponInfo.h', 'Shared/sdk/Common.h',
+    'Shared/sdk/SharedUtil.IntTypes.h', 'Shared/sdk/CVector.h', 'Shared/sdk/CVector4D.h',
     'Client/game_de/premake5.lua', 'vendor/detours/premake5.lua',
     'Client/game_de/NativePadReader.h', 'Client/game_de/NativePadReader.cpp',
     'Client/game_de/NativeMovementInput.h', 'Client/game_de/NativeMovementInput.cpp', 'Client/game_de/NativeInputRouting.h',

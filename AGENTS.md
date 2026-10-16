@@ -2,6 +2,8 @@
 
 Run ./utils/clang-format.ps1 after making changes to C++ files, to ensure that the changes are correctly formatted.
 
+Keep task files, checkpoints, and durable build evidence in this workspace. Use a task-specific folder under `Build/tmp` for disposable scratch files, direct compiler temporary files there when possible, and clean up that task's scratch files after the run. Never rely on the system temp directory for work that must survive cleanup or a restart.
+
 ## Code comments
 
 When making code changes, explain *why* the code you've written should exist and the motivation behind the changes. This ensures that future engineers don't have to read between the lines.

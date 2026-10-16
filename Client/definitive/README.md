@@ -53,6 +53,21 @@ passed, with 294 entry checks for each classic and nonclassic diagnostic layout.
 Deferred admission, discarded early input, one-time focus, retained cleanup and
 neutral current/previous history are covered separately from live GTA behavior.
 
+**The following offline step reuses MTA's per-player data storage.** The existing
+`CRemoteDataStorage` SDK interface and classic accessors now share an implementation
+parameterized by the backend pad. Classic MTA retains its full `CPadSAInterface`,
+public member order and borrowed state pointers; DE uses only the canonical
+96-byte current/previous controller pair. The adapter commits this history only
+after its existing native update succeeds. Shot, stats, camera and gravity values
+remain CPU data; this grants no remote engine-context or gameplay capability.
+
+Both storage architectures pass their focused checks, including the original
+classic layout and complete pad copying. Actual module tests pass 1,733 checks,
+and the x64 Core adapter consumer passes 1,684. Normal x64 Core, classic Core and
+classic multiplayer consumer compilation also pass. This source/build step is
+not installed; the successfully tested `e93524ae3` runtime is preserved until a
+later candidate is ready for another live regression.
+
 **The real MTA menu and player-control handoff passed in GTA.** Runtime commit
 `c949c4a90` recorded 323 GUI frames and successful presents, a completed 323/323
 fence, and 34,647 nonzero pixels at 1920x1001. About opened the existing credits

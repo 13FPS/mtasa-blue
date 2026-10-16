@@ -11,54 +11,22 @@
 
 #pragma once
 
-#include "multiplayersa_init.h"
-#include <multiplayer/CMultiplayer.h>
+#include <multiplayer/CRemoteDataStorageImpl.h>
+#include <map>
 
-#include <game/CPlayerPed.h>
-#include <game/CPad.h>
-
-// These includes have to be fixed!
+// Storage needs the concrete classic pad, but not the module's hook setup or
+// complete game facade. Keep the registry's engine identities opaque here.
 #include "../game_sa/CPadSA.h"
 
-class CRemoteDataStorageSA : public CRemoteDataStorage
+class CPools;
+class CPlayerPed;
+class CPedSAInterface;
+
+// Classic context switching still owns and copies the complete CPadSAInterface.
+// Sharing its storage implementation must not replace that layout with the
+// smaller canonical DE controller pair or change the SDK's ownership contract.
+class CRemoteDataStorageSA : public CRemoteDataStorageImpl<CPadSAInterface>
 {
-public:
-    CRemoteDataStorageSA()
-    {
-        memset(&m_pad, 0, sizeof(CPadSAInterface));
-        m_fCameraRotation = 0.0f;
-        memset(&m_stats, 0, sizeof(CStatsData));
-        m_fGravity = 0.008f;
-        m_bAkimboTargetUp = false;
-        m_bProcessPlayerWeapon = false;
-        m_shotSyncData.m_bRemoteBulletSyncVectorsValid = false;
-    }
-
-    CControllerState* CurrentControllerState() { return &m_pad.NewState; }
-    CControllerState* LastControllerState() { return &m_pad.OldState; }
-    CShotSyncData*    ShotSyncData() { return &m_shotSyncData; }
-    CStatsData*       Stats() { return &m_stats; }
-    void              SetCameraRotation(float fCameraRotation) { m_fCameraRotation = fCameraRotation; }
-    float             GetCameraRotation() { return m_fCameraRotation; }
-    void              SetGravity(float fGravity) { m_fGravity = fGravity; }
-    bool              ProcessPlayerWeapon() { return m_bProcessPlayerWeapon; }
-    void              SetProcessPlayerWeapon(bool bProcess) { m_bProcessPlayerWeapon = bProcess; }
-
-    CVector& GetAkimboTarget() { return m_vecAkimboTarget; }
-    bool     GetAkimboTargetUp() { return m_bAkimboTargetUp; }
-
-    void SetAkimboTarget(const CVector& vecTarget) { m_vecAkimboTarget = vecTarget; }
-    void SetAkimboTargetUp(bool bUp) { m_bAkimboTargetUp = bUp; }
-
-    // The player's pad
-    CPadSAInterface m_pad;
-    float           m_fCameraRotation;
-    CShotSyncData   m_shotSyncData;
-    CVector         m_vecAkimboTarget;
-    bool            m_bAkimboTargetUp;
-    CStatsData      m_stats;
-    float           m_fGravity;
-    bool            m_bProcessPlayerWeapon;
 };
 
 class CRemoteDataSA

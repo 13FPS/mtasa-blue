@@ -11,6 +11,7 @@
 #include <game/CGameRenderDeviceLease.h>
 #include <game/CGameRenderDeviceWindowLease.h>
 #include "ControllerSnapshot.h"
+#include "RemoteDataStorage.h"
 #include "NativePadReader.h"
 #include "NativeMovementInput.h"
 #include "NativeRenderObservation.h"
@@ -150,7 +151,7 @@ namespace mta::game_de
                 // twenty-field mask cannot describe MTA's walk/radio fields.
                 auto          nextHistory = directionHistory;
                 MtaInputState next;
-                next.previous = inputState.current;
+                next.previous = *inputStorage.CurrentControllerState();
                 next.current = MtaInput::BuildControllerState(frame.heldActions, frame.context, nextHistory);
                 if (nativeMovement.IsActive() && !nativeMovement.Update(next))
                 {
@@ -158,7 +159,7 @@ namespace mta::game_de
                     return Status::Unsupported;
                 }
                 directionHistory = nextHistory;
-                inputState = next;
+                inputStorage.WriteInput(next);
                 inputFrame = frame;
                 hasInputState = true;
                 return Status::Ok;
@@ -171,7 +172,7 @@ namespace mta::game_de
                     return status;
                 if (!hasInputState)
                     return Status::NotInitialized;
-                state = inputState;
+                state = inputStorage.ReadInput();
                 return Status::Ok;
             }
 
@@ -233,7 +234,7 @@ namespace mta::game_de
                     return Status::NotInitialized;
                 if (!TrialFrame(inputFrame))
                     return Status::InvalidArgument;
-                const bool started = nativeMovement.Begin(inputState);
+                const bool started = nativeMovement.Begin(inputStorage.ReadInput());
                 RefreshMovementCapability();
                 return started ? Status::Ok : Status::Unsupported;
             }
@@ -317,7 +318,7 @@ namespace mta::game_de
                 latest = LocalObservation();
                 hasObservation = false;
                 directionHistory = MtaInput::DirectionHistory();
-                inputState = MtaInputState();
+                inputStorage.WriteInput(MtaInputState{});
                 inputFrame = ControlActionFrame();
                 hasInputState = false;
                 nativePad.Reset();
@@ -326,14 +327,16 @@ namespace mta::game_de
 
             // Native access will require a real backend binding. For this first
             // module, the Core pointer is identity only and is never dereferenced.
-            CCoreInterface*                owner = nullptr;
-            std::atomic<DWORD>             ownerThread{0};
-            bool                           initialized = false;
-            bool                           hasObservation = false;
-            LocalObservation               latest;
-            deonline::ControllerSnapshot   controller;
-            MtaInput::DirectionHistory     directionHistory;
-            MtaInputState                  inputState;
+            CCoreInterface*              owner = nullptr;
+            std::atomic<DWORD>           ownerThread{0};
+            bool                         initialized = false;
+            bool                         hasObservation = false;
+            LocalObservation             latest;
+            deonline::ControllerSnapshot controller;
+            MtaInput::DirectionHistory   directionHistory;
+            // Typed ownership keeps cached SDK state addresses stable and avoids
+            // deleting through CRemoteDataStorage, which has no virtual destructor.
+            RemoteDataStorage              inputStorage;
             ControlActionFrame             inputFrame;
             bool                           hasInputState = false;
             static constexpr std::uint64_t BaseCapabilities =

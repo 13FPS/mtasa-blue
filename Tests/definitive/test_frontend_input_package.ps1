@@ -329,3 +329,6 @@ $result = [ordered]@{schema='mta_frontend_input_package_tests_v1';success=$succe
 Write-FixtureJson (Join-Path $outputRoot 'test-result.json') $result
 Write-Host ("Frontend input package checks: $($checks.Count); success=$success; receipt=" + (Join-Path $outputRoot 'test-result.json'))
 if (-not $success) { throw $failure }
+# Expected negative native CLI cases must not leak their child exit status to
+# callers after the complete ownership/preflight suite has succeeded.
+$global:LASTEXITCODE = 0

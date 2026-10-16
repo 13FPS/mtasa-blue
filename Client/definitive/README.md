@@ -31,7 +31,7 @@ indefinitely for Ctrl+Shift+F9 and release. Use F8 for the actual console, About
 for credits and Quit to end this trial; Quit does not close GTA.
 
 Validation includes 1,507 checks in thirteen actual MTA menu/console/bindings
-hosts, 1,294 native callback checks, 26 controlled worker cases, 970 script mocks
+hosts, 1,294 native callback checks, 26 worker/mailbox cases, 970 script mocks
 and 51 saved-log reader tests. The normal x64 Core build and classic compile
 passed, with 294 entry checks for each classic and nonclassic diagnostic layout.
 Deferred admission, discarded early input, one-time focus, retained cleanup and

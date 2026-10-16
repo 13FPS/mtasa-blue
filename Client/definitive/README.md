@@ -23,9 +23,25 @@ cleanup deadline. Script pauses therefore cannot hold a persistent player-contro
 disable flag in this new mode. Historical Frontend160 trials keep their separate
 script lease and unchanged layouts.
 
-This combined path still needs its live GTA test. Owned-host tests cannot prove
-camera exclusion: native queries outside local ProcessControl remain physical.
-Camera capture and full engine/game/network readiness stay false. The menu runs
+**Core-owned frontend input passed in GTA on runtime `e93524ae3`.** The matched
+PID 10412 / run 389063 records show 138 successful presents at 1920x1001, 34,647
+nonzero readback pixels and all 426 native input scopes restored without failure.
+The real configured manager produced 145 neutral frames. Help and Clear each
+executed once, with two accepted commands and no rejections. All 56 ordered
+script snapshots agree with Core's final 256 fields; the embedded console fields
+match the separate fresh 32-field console record.
+
+The script reports successful workload and cleanup without player-control
+disable/restore writes; no independent opcode-level trace is claimed. Core,
+GUI, XML and pthread unloaded, while the reusable bridge and pinned game adapter
+remained. Normal exit preserved every live log prefix, appended exactly 74 CLEO
+shutdown bytes and left the other eleven logs unchanged. The early GUI close
+completed the test after about 7.6 seconds; no Quit callback was recorded.
+
+The user confirmed the menu worked, CJ/camera stayed blocked and controls
+returned. This is separate human evidence: native queries outside local
+ProcessControl remain physical, and the machine camera/full-input flags still
+stay false. Full game/network readiness also remains false. The menu runs
 for up to 20 seconds after native admission, and activation still waits
 indefinitely for Ctrl+Shift+F9 and release. Use F8 for the actual console, About/OK
 for credits and Quit to end this trial; Quit does not close GTA.

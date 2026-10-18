@@ -52,6 +52,7 @@
 #include "DefinitiveGuiFrontendInputReference.h"
 #include "DefinitiveFrontendBindings.h"
 #include "DefinitivePersistentFrontend.h"
+#include "FrontendCursorLeaseOwner.h"
 #include <type_traits>
 
 using SharedUtil::CalcMTASAPath;
@@ -649,8 +650,7 @@ namespace
             std::uint64_t                                   nativeStartedAt = 0, nativeAcquireStarted = 0;
             std::uint64_t                                   nativeStoppedAt = 0;
             mta::game_de::FrontendInputLeaseStateV1         nativeLease{};
-            std::unique_ptr<CSetCursorPosHook>              cursor;
-            bool                                            cursorAttempted = false, cursorEnded = true, cursorFault = false;
+            FrontendCursorLease::Owner<CSetCursorPosHook>   cursor;
             bool                                            hostFresh = false;
             DefinitivePersistentFrontend::Stop              persistentStop = DefinitivePersistentFrontend::Stop::Running;
 
@@ -904,7 +904,7 @@ namespace
                     values[PressedKeys] = input.pressedKeys;
                     values[PressedButtons] = input.pressedButtons;
                     values[InputDetached] = input.inputDetached;
-                    values[InputFailed] = input.inputFailed || (Persistent && cursorFault);
+                    values[InputFailed] = input.inputFailed || cursor.Fault();
                     values[GuiCloseRequested] = input.closeRequested;
                     const std::uint64_t metrics[]{nativeState.bound,           nativeState.active,          nativeState.callbackCount,
                                                   nativeState.scopedSteps,     nativeState.routedQueries,   nativeState.neutralQueries,
@@ -1216,54 +1216,22 @@ namespace
                         return Outcome::Pending;
                     }
                     nativeVerified = true;
-                    if constexpr (Persistent)
-                    {
-                        // Classic MTA prevents the game from recentering the
-                        // pointer while its GUI owns input. The DE frontend
-                        // uses that same hook only after native neutral input
-                        // has been proved, before admitting visible interaction.
-                        if (CSetCursorPosHook::GetSingletonPtr())
-                        {
-                            cursorFault = true;
-                            return failed();
-                        }
-                        cursorAttempted = true;
-                        cursorEnded = false;
-                        try
-                        {
-                            cursor = std::make_unique<CSetCursorPosHook>();
-                        }
-                        catch (...)
-                        {
-                            cursorEnded = true;
-                            cursorFault = true;
-                            return failed();
-                        }
-                        if (!cursor->BeginFrontendLease(static_cast<HWND>(lease.window)))
-                        {
-                            cursorFault = true;
-                            return failed();
-                        }
-                    }
-                    if (gui.AdmitFrontendInput() != SurfaceStatus::Ok)
+                    // Menu lifetime does not change pointer ownership. Both
+                    // bounded and persistent Core input reuse MTA's cursor
+                    // lease after neutral input, before visible interaction.
+                    if (!cursor.AdmitAfterNeutral(nativeVerified, static_cast<HWND>(lease.window),
+                                                  [&]() noexcept { return gui.AdmitFrontendInput() == SurfaceStatus::Ok; }))
                         return failed();
                     surfaceStarted = true;
                     displayStarted = now;
                 }
                 else if (!eligible)
                     return failed();
-                if constexpr (Persistent)
-                {
-                    // Only the Core owner renews pointer suppression. A stalled
-                    // producer, expired lease or lost game-window focus passes
-                    // engine cursor calls through independently of GUI polling.
-                    if (!cursor || !cursor->RenewFrontendLease())
-                    {
-                        cursorFault = true;
-                        return failed();
-                    }
-                }
-                const auto status = gui.Poll();
+                // Only the same Core owner renews before drawing. The existing
+                // lease still expires independently if that owner stalls.
+                auto status = SurfaceStatus::Failed;
+                if (!cursor.RenewBeforeDraw([&]() noexcept { status = gui.Poll(); }))
+                    return failed();
                 CopyGui(values);
                 const auto s = gui.Snapshot();
                 const auto input = gui.InteractionSnapshot();
@@ -1288,45 +1256,44 @@ namespace
             }
             bool ShutdownCoreInput(SurfaceSnapshot& values) noexcept
             {
-                if constexpr (Persistent)
-                {
-                    if (cursor)
-                        cursor->DisarmFrontendLease();
-                }
-                if constexpr (Persistent)
-                {
-                    // Persistent duration proof ends before input detachment
-                    // and native/GPU retries. Cleanup time cannot turn an
-                    // early close into a successful long-running workload.
-                    if (nativeStarted && !nativeStoppedAt)
-                        nativeStoppedAt = static_cast<std::uint64_t>(GetTickCount64_());
-                    if (persistentStop == DefinitivePersistentFrontend::Stop::Running)
-                    {
-                        // Setup, renewal or rendering can fail before the
-                        // polling path classifies its stop. A fully retired
-                        // owner must never retain a misleading Running reason.
-                        try
+                if (!cursor.DisarmBeforeDetach(
+                        [&]() noexcept
                         {
-                            if (request.cancelled())
-                                persistentStop = DefinitivePersistentFrontend::Stop::Cancelled;
-                            else if (HostFresh())
+                            if constexpr (Persistent)
                             {
-                                if (nativeLease.generation)
-                                    adapter.ReadFrontendInputLease(nativeLease);
-                                persistentStop = nativeLease.reason == static_cast<std::uint32_t>(mta::game_de::FrontendInputLeaseReason::FocusLost)
-                                                     ? DefinitivePersistentFrontend::Stop::FocusLost
-                                                     : DefinitivePersistentFrontend::Stop::Fault;
+                                // Persistent duration proof ends before input detachment
+                                // and native/GPU retries. Cleanup time cannot turn an
+                                // early close into a successful long-running workload.
+                                if (nativeStarted && !nativeStoppedAt)
+                                    nativeStoppedAt = static_cast<std::uint64_t>(GetTickCount64_());
+                                if (persistentStop == DefinitivePersistentFrontend::Stop::Running)
+                                {
+                                    // Setup, renewal or rendering can fail before the
+                                    // polling path classifies its stop. A fully retired
+                                    // owner must never retain a misleading Running reason.
+                                    try
+                                    {
+                                        if (request.cancelled())
+                                            persistentStop = DefinitivePersistentFrontend::Stop::Cancelled;
+                                        else if (HostFresh())
+                                        {
+                                            if (nativeLease.generation)
+                                                adapter.ReadFrontendInputLease(nativeLease);
+                                            persistentStop = nativeLease.reason == static_cast<std::uint32_t>(mta::game_de::FrontendInputLeaseReason::FocusLost)
+                                                                 ? DefinitivePersistentFrontend::Stop::FocusLost
+                                                                 : DefinitivePersistentFrontend::Stop::Fault;
+                                        }
+                                    }
+                                    catch (...)
+                                    {
+                                        persistentStop = DefinitivePersistentFrontend::Stop::Fault;
+                                    }
+                                }
                             }
-                        }
-                        catch (...)
-                        {
-                            persistentStop = DefinitivePersistentFrontend::Stop::Fault;
-                        }
-                    }
-                }
-                // First stop GUI messages, then let the native callback restore
-                // its borrowed physical state, then retire CPU and GPU owners.
-                if (gui.DetachInput() != SurfaceStatus::Ok)
+                            // Disarm engine warps before detaching GUI messages, then
+                            // restore native state before retiring the cursor and GPU.
+                            return gui.DetachInput() == SurfaceStatus::Ok;
+                        }))
                 {
                     CopyGui(values);
                     return false;
@@ -1345,20 +1312,12 @@ namespace
                         return false;
                     }
                 }
-                if constexpr (Persistent)
+                // A failed detach keeps the same MTA hook and owner alive for
+                // a later retry in both bounded and persistent menus.
+                if (!cursor.EndAfterNative(nativeEnded))
                 {
-                    // A failed detach retains the same cursor hook and Core
-                    // until every callback and trampoline is safe to retire.
-                    // Native physical-input restoration is already complete.
-                    if (cursor && !cursorEnded)
-                    {
-                        cursorEnded = cursor->EndFrontendLease();
-                        if (!cursorEnded)
-                        {
-                            CopyGui(values);
-                            return false;
-                        }
-                    }
+                    CopyGui(values);
+                    return false;
                 }
                 // Clear canonical history while the actual manager still owns
                 // it. Failure stays visible, but never skips real CPU teardown.
@@ -1402,28 +1361,32 @@ namespace
                                                              : "mta/logs/gui-frontend.log");
             SharedUtil::MakeSureDirExists(path);
             SharedUtil::FileAppend(path, line.data(), static_cast<unsigned long>(line.size()));
-            if constexpr (Persistent)
+            if constexpr (CoreOwnedInput)
             {
                 // Cursor ownership has a separate diagnostic. Keep the public
-                // 288-field input report unchanged, while recording whether
-                // actual engine warps were suppressed and the hook retired.
-                const auto  state = owner.cursor ? owner.cursor->ReadFrontendLease() : CSetCursorPosHook::FrontendLeaseState{};
-                std::string cursorLine = "{\"schema\":\"mta_core_frontend_cursor_v1\",\"pid\":" + std::to_string(GetCurrentProcessId()) +
-                                         ",\"runMs\":" + std::to_string(runMs) + ",\"sessionGeneration\":" + std::to_string(persistent->generation) +
-                                         ",\"nativeGeneration\":" + std::to_string(owner.nativeLease.generation) +
-                                         ",\"attempted\":" + std::to_string(owner.cursorAttempted) + ",\"fault\":" + std::to_string(owner.cursorFault) +
-                                         ",\"cleanupComplete\":" + std::to_string(owner.cursorEnded && !state.hooked && !state.inFlight) +
-                                         ",\"state\":{\"generation\":" + std::to_string(state.generation) +
-                                         ",\"ownerThread\":" + std::to_string(state.ownerThread) + ",\"hooked\":" + std::to_string(state.hooked) +
-                                         ",\"active\":" + std::to_string(state.active) + ",\"revoked\":" + std::to_string(state.revoked) +
-                                         ",\"ended\":" + std::to_string(state.ended) + ",\"lifetimeMs\":" + std::to_string(state.lifetimeMs) +
-                                         ",\"renewals\":" + std::to_string(state.renewals) + ",\"callbacks\":" + std::to_string(state.callbacks) +
-                                         ",\"suppressed\":" + std::to_string(state.suppressed) + ",\"passthrough\":" + std::to_string(state.passthrough) +
-                                         ",\"inFlight\":" + std::to_string(state.inFlight) + ",\"reason\":" + std::to_string(state.reason) +
-                                         ",\"lastFailure\":" + std::to_string(state.lastFailure) + ",\"attachStatus\":" + std::to_string(state.attachStatus) +
-                                         ",\"detachStatus\":" + std::to_string(state.detachStatus) + ",\"clipObserved\":" + std::to_string(state.clipObserved) +
-                                         ",\"clip\":[" + std::to_string(state.clip.left) + ',' + std::to_string(state.clip.top) + ',' +
-                                         std::to_string(state.clip.right) + ',' + std::to_string(state.clip.bottom) + "]}}\n";
+                // 256/288-field reports unchanged. A bounded scope has neither
+                // a persistent host generation nor a renewable native lease.
+                const auto  state = owner.cursor.Get() ? owner.cursor.Get()->ReadFrontendLease() : CSetCursorPosHook::FrontendLeaseState{};
+                std::string cursorLine;
+                if constexpr (Persistent)
+                    cursorLine = "{\"schema\":\"mta_core_frontend_cursor_v1\",\"pid\":" + std::to_string(GetCurrentProcessId()) +
+                                 ",\"runMs\":" + std::to_string(runMs) + ",\"sessionGeneration\":" + std::to_string(persistent->generation) +
+                                 ",\"nativeGeneration\":" + std::to_string(owner.nativeLease.generation);
+                else
+                    cursorLine = "{\"schema\":\"mta_core_bounded_frontend_cursor_v1\",\"pid\":" + std::to_string(GetCurrentProcessId()) +
+                                 ",\"runMs\":" + std::to_string(runMs);
+                cursorLine += ",\"attempted\":" + std::to_string(owner.cursor.Attempted()) + ",\"fault\":" + std::to_string(owner.cursor.Fault()) +
+                              ",\"cleanupComplete\":" + std::to_string(owner.cursor.Ended() && !state.hooked && !state.inFlight) +
+                              ",\"state\":{\"generation\":" + std::to_string(state.generation) + ",\"ownerThread\":" + std::to_string(state.ownerThread) +
+                              ",\"hooked\":" + std::to_string(state.hooked) + ",\"active\":" + std::to_string(state.active) +
+                              ",\"revoked\":" + std::to_string(state.revoked) + ",\"ended\":" + std::to_string(state.ended) +
+                              ",\"lifetimeMs\":" + std::to_string(state.lifetimeMs) + ",\"renewals\":" + std::to_string(state.renewals) +
+                              ",\"callbacks\":" + std::to_string(state.callbacks) + ",\"suppressed\":" + std::to_string(state.suppressed) +
+                              ",\"passthrough\":" + std::to_string(state.passthrough) + ",\"inFlight\":" + std::to_string(state.inFlight) +
+                              ",\"reason\":" + std::to_string(state.reason) + ",\"lastFailure\":" + std::to_string(state.lastFailure) +
+                              ",\"attachStatus\":" + std::to_string(state.attachStatus) + ",\"detachStatus\":" + std::to_string(state.detachStatus) +
+                              ",\"clipObserved\":" + std::to_string(state.clipObserved) + ",\"clip\":[" + std::to_string(state.clip.left) + ',' +
+                              std::to_string(state.clip.top) + ',' + std::to_string(state.clip.right) + ',' + std::to_string(state.clip.bottom) + "]}}\n";
                 const auto cursorPath = CalcMTASAPath("mta/logs/frontend-cursor.log");
                 SharedUtil::MakeSureDirExists(cursorPath);
                 SharedUtil::FileAppend(cursorPath, cursorLine.data(), static_cast<unsigned long>(cursorLine.size()));

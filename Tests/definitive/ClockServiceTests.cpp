@@ -668,11 +668,13 @@ namespace
               "even the producer on the adopted OS thread cannot access native SDK values outside its callback scope");
         ClockServiceStateV1 unchanged;
         unchanged.hour = 99;
-        runtime.completionVersion.fetch_add(1);
+        unchanged.lastCompletedSequence = 123;
+        unchanged.lastCommandResult = ClockResult::OwnerConflict;
+        runtime.publishedClock.version.fetch_add(1);
         const bool busyRead = service.Read(unchanged);
-        runtime.completionVersion.fetch_add(1);
-        Check(!busyRead && unchanged.hour == 99,
-              "an in-progress command publication fails boundedly without publishing a torn result or changing the caller's output");
+        runtime.publishedClock.version.fetch_add(1);
+        Check(!busyRead && unchanged.hour == 99 && unchanged.lastCompletedSequence == 123 && unchanged.lastCommandResult == ClockResult::OwnerConflict,
+              "an in-progress combined clock/command publication refuses boundedly without changing the caller's values or acknowledgement");
         auto command = Command(state, 1);
         Check(service.Submit(command) && !service.Submit(Command(state, 2)), "an occupied production mailbox cannot silently overwrite a pending command");
         fixture.invoke();
@@ -722,6 +724,68 @@ namespace
         Check(fixture.Get<std::uint8_t>(hoursRva) == 12 && fixture.Get<std::uint8_t>(minutesRva) == 34 && fixture.Get<std::uint16_t>(secondsRva) == 27 &&
                   fixture.Get<std::uint32_t>(nativeTimerRva) == 15000 && fixture.Get<std::uint32_t>(lastChangeRva) == 14900,
               "normal owner release restores captured display and fractional phase without rewinding the native game timer");
+    }
+
+    void NativeCoherentCommandPublication(ClockImageFixture& fixture)
+    {
+        NativeClockService service;
+        BeginOwned(service, fixture);
+        auto state = State(service);
+        auto command = Command(state, 1, ClockOperation::Set);
+        command.hour = 18;
+        command.minute = 19;
+        // This owned fixture already adopted the real SDK/native owner. Split
+        // its command and callback publication phases deliberately, so the
+        // regression observes the exact gap without a shipping test seam or
+        // timing a racing OS thread. Other cases exercise the real mailbox.
+        ++callbackDepth;
+        CompleteCommand(command);
+        --callbackDepth;
+        Check(runtime.lastCompletedSequence.load() == 1 && runtime.lastCommandResult.load() == ClockResult::Ok && fixture.Get<std::uint8_t>(hoursRva) == 18 &&
+                  fixture.Get<std::uint8_t>(minutesRva) == 19,
+              "the actual SDK Set completes and changes owned native memory before callback readback is published");
+        state = State(service);
+        Check(state.lastCompletedSequence == 0 && state.lastCommandResult == ClockResult::NotInitialized && state.hour == 12 && state.minute == 34 &&
+                  state.seconds == 27 && state.nativeTimer == 10000 && state.lastMinuteChange == 9900,
+              "delayed native readback cannot expose a new Set acknowledgement paired with the previous clock values");
+        fixture.invoke();
+        state = State(service);
+        Check(state.lastCompletedSequence == 1 && state.lastCommandResult == ClockResult::Ok && state.hour == 18 && state.minute == 19 && state.seconds == 27 &&
+                  state.nativeTimer == 10000 && state.lastMinuteChange == 10000,
+              "the qualified callback publishes the completed Set and its actual native readback in one epoch");
+
+        fixture.Put(minutesRva, std::uint8_t{20});
+        fixture.Put(nativeTimerRva, std::uint32_t{10500});
+        fixture.Put(lastChangeRva, std::uint32_t{10400});
+        fixture.invoke();
+        state = State(service);
+        Check(state.lastCompletedSequence == 1 && state.lastCommandResult == ClockResult::Ok && state.hour == 18 && state.minute == 20 &&
+                  state.nativeTimer == 10500 && state.lastMinuteChange == 10400,
+              "ordinary captures carry the latest completed command forward while publishing natural clock advancement");
+
+        command = Command(state, 2, ClockOperation::Set);
+        command.hour = 20;
+        command.minute = 21;
+        ClockTestFaults::partialDataWrites.store(1);
+        ++callbackDepth;
+        CompleteCommand(command);
+        --callbackDepth;
+        Check(runtime.lastCompletedSequence.load() == 2 && runtime.lastCommandResult.load() == ClockResult::WriteFailure && runtime.dataRecovery.load(),
+              "an actual partial Set records its failed completion and retains native restoration before publication");
+        state = State(service);
+        Check(state.lastCompletedSequence == 1 && state.lastCommandResult == ClockResult::Ok && state.hour == 18 && state.minute == 20 &&
+                  state.nativeTimer == 10500 && state.lastMinuteChange == 10400,
+              "an unpublished failed command cannot mix its result with the preceding successful clock publication");
+        fixture.invoke();
+        state = State(service);
+        Check(state.lastCompletedSequence == 2 && state.lastCommandResult == ClockResult::WriteFailure && state.restored && state.hour == 12 &&
+                  state.minute == 34 && state.seconds == 27 && state.nativeTimer == 10500 && state.lastMinuteChange == 10400,
+              "the recovery callback pairs the latest failed completion with its verified restored clock values");
+        FinishOwned(service, fixture);
+        state = State(service);
+        Check(state.lastCompletedSequence == 2 && state.lastCommandResult == ClockResult::WriteFailure && state.restored && state.hour == 12 &&
+                  state.minute == 34 && state.seconds == 27 && state.nativeTimer == 10500 && state.lastMinuteChange == 10400,
+              "End retains the final coherent completion and restoration values after native detachment");
     }
 
     void NativeFailureAndLease(ClockImageFixture& fixture)
@@ -871,7 +935,18 @@ namespace
         Check(handle != nullptr, "observe only the disposable fixture peer's suspension count");
         ClockTestFaults::resumeTarget.store(peerId.load());
         ClockTestFaults::failResumes.store(64);
-        const auto state = Execute(service, fixture, ClockOperation::Set);
+        const auto before = State(service);
+        Check(service.Submit(Command(before, 1, ClockOperation::Set)), "queue the actual SDK Set before holding its peer-resume recovery debt");
+        fixture.invoke();
+        const auto state = State(service);
+        // A retained peer prevents the callback from reaching coherent native
+        // readback/publication. The internal SDK completion is not yet a
+        // producer acknowledgement; Execute's ordinary completion assertion
+        // would incorrectly require exposing it with the old clock values.
+        Check(runtime.lastCompletedSequence.load() == 1 && runtime.lastCommandResult.load() == ClockResult::RestoreFailure &&
+                  state.lastCompletedSequence == before.lastCompletedSequence && state.lastCommandResult == before.lastCommandResult &&
+                  state.hour == before.hour && state.minute == before.minute && state.seconds == before.seconds && !state.pendingSequence && !state.inFlight,
+              "retained peer recovery withholds a newly completed SDK result until coherent callback readback can be published");
         Check(state.failure == ClockResult::RestoreFailure && state.retainedPeerThreads == 1 && state.dataRecoveryPending && !state.restored &&
                   !service.End() && service.IsRetained(),
               "failed ResumeThread keeps the actual suspended handle and native snapshot owned across callback and End");
@@ -879,8 +954,11 @@ namespace
         Check(count == 1 && ::ResumeThread(handle) == 2, "independent suspend-count probe proves the retained peer was not falsely acknowledged as running");
         ClockTestFaults::failResumes.store(0);
         fixture.invoke();
-        Check(!State(service).retainedPeerThreads && runtime.recoveryPeers.empty(),
-              "the next native callback retries and releases the exact retained peer handle");
+        const auto recovered = State(service);
+        Check(!recovered.retainedPeerThreads && runtime.recoveryPeers.empty() && recovered.restored && recovered.lastCompletedSequence == 1 &&
+                  recovered.lastCommandResult == ClockResult::RestoreFailure && recovered.hour == before.hour && recovered.minute == before.minute &&
+                  recovered.seconds == before.seconds,
+              "the next native callback releases the exact retained peer and publishes its failed SDK result with verified restored clock values");
         SetEvent(stop);
         peer.join();
         CloseHandle(handle);
@@ -1112,6 +1190,7 @@ int main(int argc, char** argv)
     ClockImageFixture fixture;
     fixture.Create(argv[1]);
     NativeReadSetAndRestoration(fixture);
+    NativeCoherentCommandPublication(fixture);
     NativeReadOnlyRetirement(fixture);
     NativeFailureAndLease(fixture);
     NativeCaptureAndWraparound(fixture);

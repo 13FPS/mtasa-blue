@@ -6,7 +6,7 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
-**A separate read-only Core clock candidate is ready for validation.**
+**Read-only Core clock integration passed in GTA on runtime `d9de393a1`.**
 `package.ps1 -Mode Smoke -MtaCoreClockReference` selects an optional 23-file
 package using MTA's existing Core startup worker and `CClock` adapter. It is
 disabled by default and exclusive with every input, rendering, GUI and other
@@ -29,8 +29,59 @@ enables an intact clock-capable base installation. Ordinary
 `set-mode.ps1 -Mode Smoke` clears the opt-in. Install/update reject clock-enabled
 GUI ownership, mixed trials and malformed or duplicate clock declarations.
 Intact older configurations without the marker retain ordinary mode switching;
-enabling this new trial requires an update. The clock candidate remains
-**untested in GTA**, and full game/network readiness remains false. Existing
+enabling this trial requires an update.
+
+The fresh PID 13288 / October 18 runtime
+`d9de393a1078deb12432bcdd984357eefb60b261` completed **198 Read commands with
+198 matching acknowledgements**, **608 qualified native callbacks** and
+**200 advancing-timer observations** over **10,000 ms**. The user reported
+that GTA continued normally. All 88 recorded 96-field samples retained one
+generation and consistent owners. Native hooks, pending commands, peer holds
+and recovery debt ended cleanly, and Core/GUI/XML/pthread unloaded. The backend
+module's expected PIN does not represent a retained clock service.
+
+The saved raw recording passed **5,033 independent protocol checks** and a
+separate **51-check metadata/layout review**. Normal exit preserved all fourteen
+live log prefixes and all 23 installed hashes, adding only CLEO's 74 shutdown
+bytes. The machine exit code is unknown; process absence, the new shutdown/Exit
+markers and the user's normal-exit report are recorded separately. Frozen
+runtime source copies, the fresh pre-F9 baseline, raw logs and both reviews are
+archived behind the workspace pointer
+`Build/definitive-recovery/current-actual-clock-read-checkpoint.json`.
+
+**A separate clock Set candidate passed offline validation.**
+`package.ps1 -Mode Smoke -MtaCoreClockSetReference` selects the optional base
+23-file candidate. `MTA_CORE_CLOCK_SET_REFERENCE` defaults false. Set and the
+existing `MTA_CORE_CLOCK_REFERENCE` Read trial are mutually exclusive, along
+with every input, rendering, GUI and other trial. Set reuses MTA's `CClock`
+interface and engine owner for controlled time changes, readback and restoration;
+it creates no GUI, NPC or network connection and applies no player input.
+Its distinct mode18 / API1 / 128-field Bridge/Core contract preserves the
+completed Read mode17 / 96-field route.
+
+After a qualified callback, the five-second workload first reads the clock and
+requires the normal 1,000 ms per game minute rate. It issues exactly one Set to
+12:15 (06:15 when the initial hour is 12), verifies coherent acknowledgement and
+subsequent native progression, then ends the provider to restore its captured
+clock values and phase. Freeze, Unfreeze and ResetTimeFrozen remain unused.
+The provider capture predates the producer's first Read; restoration proof does
+not claim those two observations are identical.
+
+Ordinary Smoke selection clears both clock opt-ins; explicit Set selection
+requires its reviewed marker and intact 23-file ownership. Historical intact
+configurations without the new Set marker retain ordinary mode switching and
+require an update before enabling it. The new package matrix covers both
+23/58-file transitions, dual Read+Set and malformed-marker refusal, backups,
+loader preservation and historical compatibility without running GTA.
+Offline checks passed: 710 native clock checks; 670 Set lifecycle and 648
+preserved Read lifecycle checks per x86/x64 architecture; 125 worker cases;
+1,202 script checks; 1,415 actual MTA frontend host checks; and package ownership
+matrices with 980 Set, 716 Read and 687 legacy checks. The normal Core/Game DE
+build passed 66 guards, with classic compatibility and both owned Core entry
+hosts retained. A separate saved-evidence review passed 8,310 checks.
+
+The GTA Set trial is still pending. Clock mutation/freezing and full
+game/network readiness remain unverified. Existing
 Settings/menu results below describe their separate runtime. The port remains
 EXPERIMENTAL.
 

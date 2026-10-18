@@ -7,7 +7,7 @@ param([ValidateSet('Diagnostic', 'Smoke', 'Online')][string]$Mode = 'Smoke',
     [switch]$MtaNativePadReference, [switch]$MtaNativeMovementTrial, [switch]$MtaCoreStartupReference, [switch]$MtaCoreInputReference,
     [switch]$MtaCoreMovementReference, [switch]$MtaCoreRenderReference, [switch]$MtaCoreRenderGpuReference, [switch]$MtaCoreRenderCustomPresentReference, [switch]$MtaCoreRenderFrameBoundaryReference, [switch]$MtaCoreRenderNativeDispatchReference,
     [ValidateSet('D3D11', 'D3D12')][string]$MtaCoreRenderRoute = 'D3D11', [switch]$MtaCoreGuiStartupReference, [switch]$MtaCoreGuiSurfaceReference, [switch]$MtaCoreGuiFrontendReference, [switch]$MtaCoreGuiFrontendInputReference, [switch]$MtaCoreGuiFrontendStartupReference, [switch]$MtaCorePersistentFrontend,
-    [switch]$MtaCoreClockReference,
+    [switch]$MtaCoreClockReference, [switch]$MtaCoreClockSetReference,
     [string]$OutputDirectory)
 
 $ErrorActionPreference = 'Stop'
@@ -15,15 +15,17 @@ Set-StrictMode -Version Latest
 # Native clock ownership excludes other native service lifetimes. Reject a
 # mixed package before touching build outputs or downloading dependencies.
 $clockConflicts = @($PSBoundParameters.Keys | Where-Object {
-    $_ -match '^(Native|Matched|Lock|Mta)' -and $_ -ne 'MtaCoreClockReference' -and
+    $_ -match '^(Native|Matched|Lock|Mta)' -and $_ -notin @('MtaCoreClockReference', 'MtaCoreClockSetReference') -and
         $PSBoundParameters[$_] -is [Management.Automation.SwitchParameter] -and $PSBoundParameters[$_].IsPresent
 })
-if ($MtaCoreClockReference -and ($Mode -ne 'Smoke' -or $clockConflicts.Count -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
+if (($MtaCoreClockReference -and $MtaCoreClockSetReference) -or
+    (($MtaCoreClockReference -or $MtaCoreClockSetReference) -and ($Mode -ne 'Smoke' -or $clockConflicts.Count -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute')))) {
     throw 'MTA Core clock reference requires separate opt-in Smoke mode without other trials.'
 }
 # Persistent input has independent host/native leases and must never inherit
 # one of the bounded diagnostic modes or a script player-control lease.
-$persistentConflicts = @(@('NativeGaitReference','MatchedGaitRate','LockWalkRoot','NativeInputReference','MtaNativePadReference','MtaNativeMovementTrial','MtaCoreStartupReference','MtaCoreInputReference','MtaCoreMovementReference','MtaCoreRenderReference','MtaCoreRenderGpuReference','MtaCoreRenderCustomPresentReference','MtaCoreRenderFrameBoundaryReference','MtaCoreRenderNativeDispatchReference','MtaCoreGuiStartupReference','MtaCoreGuiSurfaceReference','MtaCoreGuiFrontendReference','MtaCoreGuiFrontendInputReference','MtaCoreGuiFrontendStartupReference') | Where-Object { $PSBoundParameters.ContainsKey($_) -and $PSBoundParameters[$_] })
+$persistentConflicts = @(@('NativeGaitReference','MatchedGaitRate','LockWalkRoot','NativeInputReference','MtaNativePadReference','MtaNativeMovementTrial','MtaCoreStartupReference','MtaCoreInputReference','MtaCoreMovementReference','MtaCoreRenderReference','MtaCoreRenderGpuReference','MtaCoreRenderCustomPresentReference','MtaCoreRenderFrameBoundaryReference','MtaCoreRenderNativeDispatchReference','MtaCoreGuiStartupReference','MtaCoreGuiSurfaceReference','MtaCoreGuiFrontendReference','MtaCoreGuiFrontendInputReference','MtaCoreGuiFrontendStartupReference') | Where-Object { $PSBoundParameters.ContainsKey($_) -and $PSBoundParameters[$_] }
+)
 if ($MtaCorePersistentFrontend -and ($Mode -ne 'Smoke' -or $persistentConflicts.Count -gt 0 -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
     throw 'Persistent MTA frontend requires separate opt-in Smoke mode without other trials.'
 }
@@ -233,7 +235,7 @@ if ($MtaCoreGuiFrontendStartupReference) {
         if (-not $coreExports.Contains($name)) { throw "Required completed frontend Core export missing: $name" }
     }
 }
-if ($MtaCoreClockReference) {
+if ($MtaCoreClockReference -or $MtaCoreClockSetReference) {
     foreach ($provider in @(
         @{path=$bridgePath; names=@('DE_CoreClockApiVersion','DE_CoreClockBegin','DE_CoreClockCapture','DE_CoreClockRead','DE_CoreStartupPoll','DE_CoreStartupCancel','DE_CoreStartupRead')},
         @{path=$corePath; names=@('MTA_DEClockReferenceApiVersion','MTA_ConfigureDEClockReference')},
@@ -242,6 +244,17 @@ if ($MtaCoreClockReference) {
         $exports = Get-Amd64Exports $provider.path
         foreach ($name in $provider.names) {
             if (-not $exports.Contains($name)) { throw "Clock reference provider lacks export: $name" }
+        }
+    }
+}
+if ($MtaCoreClockSetReference) {
+    foreach ($provider in @(
+        @{path=$bridgePath; names=@('DE_CoreClockSetApiVersion','DE_CoreClockSetBegin','DE_CoreClockSetCapture','DE_CoreClockSetRead')},
+        @{path=$corePath; names=@('MTA_DEClockSetReferenceApiVersion','MTA_ConfigureDEClockSetReference')}
+    )) {
+        $exports = Get-Amd64Exports $provider.path
+        foreach ($name in $provider.names) {
+            if (-not $exports.Contains($name)) { throw "Clock Set reference provider lacks export: $name" }
         }
     }
 }
@@ -472,6 +485,10 @@ $clockMarker = 'export const MTA_CORE_CLOCK_REFERENCE = false;'
 if ([regex]::Matches($configText, [regex]::Escape($clockMarker)).Count -ne 1) { throw 'Expected disabled MTA Core clock reference in source configuration.' }
 $configText = $configText.Replace($clockMarker,
     "export const MTA_CORE_CLOCK_REFERENCE = $($MtaCoreClockReference.IsPresent.ToString().ToLowerInvariant());")
+$clockSetMarker = 'export const MTA_CORE_CLOCK_SET_REFERENCE = false;'
+if ([regex]::Matches($configText, [regex]::Escape($clockSetMarker)).Count -ne 1) { throw 'Expected disabled MTA Core clock Set reference in source configuration.' }
+$configText = $configText.Replace($clockSetMarker,
+    "export const MTA_CORE_CLOCK_SET_REFERENCE = $($MtaCoreClockSetReference.IsPresent.ToString().ToLowerInvariant());")
 $persistentMarker = 'export const MTA_CORE_PERSISTENT_FRONTEND = false;'
 if ([regex]::Matches($configText, [regex]::Escape($persistentMarker)).Count -ne 1) { throw 'Expected disabled persistent frontend in source configuration.' }
 $configText = $configText.Replace($persistentMarker,

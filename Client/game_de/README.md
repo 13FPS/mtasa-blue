@@ -46,8 +46,39 @@ memory and recovery paths. The deterministic Core lifecycle fixture checks
 matching Read acknowledgements, timer progression, cancellation, deadlines and
 retained cleanup with allocation tracking on x86 and x64. Optional-module and
 classic compatibility remain separate checks. These fixtures do not execute
-GTA's clock update. The new clock trial is still untested in GTA; full MTA
-readiness remains false and the port remains EXPERIMENTAL.
+GTA's clock update.
+
+The read-only trial passed in GTA on October 18 using runtime
+`d9de393a1078deb12432bcdd984357eefb60b261`: **198 acknowledged Read commands**,
+**608 qualified native callbacks**, **200 advancing-timer observations** and
+**10,000 ms** of workload. The user reported normal GTA continuation. Native
+hooks, pending commands, peer holds and recovery debt all retired; Core, GUI,
+XML and pthread were absent from the final live module snapshot. The expected
+backend module PIN remained separate from native service ownership.
+
+Independent saved-evidence validation passed **5,033 protocol checks** and
+**51 metadata/layout checks**. Normal exit preserved all fourteen captured log
+prefixes and all 23 installed hashes; only CLEO appended its 74 shutdown bytes.
+The runtime's thirteen source files were frozen before subsequent development,
+and its raw logs, reviews and normal-exit proof are sealed in the workspace.
+The pointer is `Build/definitive-recovery/current-actual-clock-read-checkpoint.json`.
+This result covers Read only. Clock mutation, freezing and full MTA readiness
+remain unverified; the port remains EXPERIMENTAL.
+
+The next candidate is the separate Smoke opt-in `-MtaCoreClockSetReference`,
+with `MTA_CORE_CLOCK_SET_REFERENCE` disabled by default. It keeps the same 23
+owned files and reuses Core's optional `CClock` provider for controlled Set/Read
+commands and restoration on the native owner. Its separate mode18 / API1 /
+128-field report preserves the completed Read trial's mode17 / 96-field
+contract. Read and Set selections are mutually exclusive, as are input,
+rendering and GUI trials. No GUI, NPC, networking or player-input write is
+part of the Set candidate. Offline validation passed 710 native checks,
+670 Set lifecycle checks per x86/x64 architecture, 125 worker cases and the
+980-check Set package matrix. Native command completion now shares one
+publication epoch with its observed clock values, preventing a new Set
+acknowledgement from being paired with the previous observation. The first
+GTA mutation trial is still pending; the completed Read milestone belongs to
+its earlier runtime.
 
 Optional native rendering diagnostics use the separate API1
 `game/CGameRenderObservation.h` factory. It supplies an owner-thread checked

@@ -38,6 +38,7 @@
 #include "DefinitiveStartupState.h"
 #include "DefinitiveInputReference.h"
 #include "DefinitiveClockReference.h"
+#include "DefinitiveClockSetReference.h"
 #include "DefinitiveMovementReference.h"
 #include "DefinitiveRenderReference.h"
 #include "DefinitiveRenderEndpointLog.h"
@@ -3017,7 +3018,12 @@ CCore::CCore()
     #if defined(_WIN64)
         if (hasInputReference)
         {
-            if (inputReference.clockReference)
+            if (inputReference.clockSetReference)
+            {
+                clockEntered = true;
+                DefinitiveClockSetReference::Run(m_DefinitiveAdapter, inputReference);
+            }
+            else if (inputReference.clockReference)
             {
                 clockEntered = true;
                 DefinitiveClockReference::Run(m_DefinitiveAdapter, inputReference);
@@ -3052,7 +3058,7 @@ CCore::CCore()
         // including failed teardown, rather than a potentially pinned DLL name.
         m_DefinitiveAdapter.Stop();
     #if defined(_WIN64)
-        if (hasInputReference && inputReference.clockReference && !clockEntered)
+        if (hasInputReference && (inputReference.clockReference || inputReference.clockSetReference) && !clockEntered)
         {
             // Binding can refuse before the clock workload begins. Keep this
             // Core owner alive until adapter retirement, then publish that
@@ -3062,7 +3068,10 @@ CCore::CCore()
                 Sleep(DefinitiveClockReference::CleanupBackoffMs);
                 m_DefinitiveAdapter.Stop();
             }
-            DefinitiveClockReference::PublishNotEntered(inputReference, true);
+            if (inputReference.clockSetReference)
+                DefinitiveClockSetReference::PublishNotEntered(inputReference, true);
+            else
+                DefinitiveClockReference::PublishNotEntered(inputReference, true);
         }
     #endif
         DefinitiveStartup::SetCleanupComplete(!m_DefinitiveAdapter.IsStarted());

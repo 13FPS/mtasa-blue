@@ -38,6 +38,9 @@ export const MTA_CORE_INPUT_REFERENCE = false;
 // Observe MTA's clock on its engine owner before allowing clock writes.
 // This independent mode never inherits a native input or rendering lease.
 export const MTA_CORE_CLOCK_REFERENCE = false;
+// A bounded Set/readback/restoration trial has separate admission so the
+// established observation mode can never acquire clock write permission.
+export const MTA_CORE_CLOCK_SET_REFERENCE = false;
 // Drive only the bounded eligible local on-foot scope from Core's configured
 // bindings. Keep this write trial separate from both read-only Core references.
 export const MTA_CORE_MOVEMENT_REFERENCE = false;

@@ -40,6 +40,8 @@ project "Client Core"
 	-- can be tested without classic game objects or the legacy PCH.
 	filter { "files:DefinitiveClockReference.cpp" }
 		flags { "NoPCH" }
+	filter { "files:DefinitiveClockSetReference.cpp" }
+		flags { "NoPCH" }
 	-- This new translation unit is empty in classic builds. A per-file override
 	-- keeps its independent owned-host build free of classic PCH dependencies.
 	filter { "files:DefinitiveGuiStartup.cpp" }

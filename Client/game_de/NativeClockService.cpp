@@ -67,6 +67,8 @@ namespace mta::game_de
         {
             std::atomic<std::uint64_t> version{0};
             std::atomic<std::uint32_t> hour{0}, minute{0}, seconds{0}, nativeTimer{0}, lastMinuteChange{0}, millisecondsPerGameMinute{0};
+            std::atomic<std::uint64_t> lastCompletedSequence{0};
+            std::atomic<ClockResult>   lastCommandResult{ClockResult::NotInitialized};
         };
 
         struct Runtime
@@ -82,7 +84,6 @@ namespace mta::game_de
             std::atomic<std::uint64_t> generation{0}, refreshed{0}, lastSubmitted{0}, pendingSequence{0};
             std::atomic<std::uint64_t> admissionGeneration{0}, admissionSerial{0};
             std::atomic<std::uint64_t> lastCompletedSequence{0};
-            std::atomic<std::uint64_t> completionVersion{0};
             std::atomic<ClockResult>   failure{ClockResult::Ok};
             std::atomic<ClockResult>   lastCommandResult{ClockResult::NotInitialized};
             DWORD                      producerThread = 0;
@@ -673,6 +674,11 @@ namespace mta::game_de
             state.nativeTimer.store(runtime.observed.nativeTimer);
             state.lastMinuteChange.store(runtime.observed.lastMinuteChange);
             state.millisecondsPerGameMinute.store(runtime.observed.millisecondsPerGameMinute);
+            // A completed SDK call can precede the callback's native readback.
+            // Publish its acknowledgement with those observed values, never
+            // pair a new Set result with the previous callback's clock values.
+            state.lastCompletedSequence.store(runtime.lastCompletedSequence.load());
+            state.lastCommandResult.store(runtime.lastCommandResult.load());
             state.version.fetch_add(1);
         }
 
@@ -708,11 +714,10 @@ namespace mta::game_de
             if (command.operation == ClockOperation::ResetTimeFrozen && result == ClockResult::Ok)
                 runtime.counters.resets.fetch_add(1);
             // The mailbox is already released before SDK/native operations.
-            // Publishing a completed sequence never blocks a parked producer.
-            runtime.completionVersion.fetch_add(1);
+            // Keep completion private until Publish pairs it with this
+            // callback's native readback, including recovery-only callbacks.
             runtime.lastCommandResult.store(result);
             runtime.lastCompletedSequence.store(command.sequence);
-            runtime.completionVersion.fetch_add(1);
             if (result != ClockResult::Ok)
                 Stop(result);
         }
@@ -894,6 +899,8 @@ namespace mta::game_de
                     continue;
                 const auto hour = clock.hour.load(), minute = clock.minute.load(), seconds = clock.seconds.load();
                 const auto timer = clock.nativeTimer.load(), lastChange = clock.lastMinuteChange.load(), duration = clock.millisecondsPerGameMinute.load();
+                const auto completed = clock.lastCompletedSequence.load();
+                const auto result = clock.lastCommandResult.load();
                 if (clock.version.load() == before)
                 {
                     next.hour = hour;
@@ -902,6 +909,8 @@ namespace mta::game_de
                     next.nativeTimer = timer;
                     next.lastMinuteChange = lastChange;
                     next.millisecondsPerGameMinute = duration;
+                    next.lastCompletedSequence = completed;
+                    next.lastCommandResult = result;
                     clockRead = true;
                     break;
                 }
@@ -921,24 +930,6 @@ namespace mta::game_de
             next.modulePinned = runtime.modulePinned.load();
             next.failure = runtime.failure.load();
             next.pendingSequence = runtime.pendingSequence.load();
-            bool completionRead = false;
-            for (unsigned retry = 0; retry != 32; ++retry)
-            {
-                const auto before = runtime.completionVersion.load();
-                if (before & 1)
-                    continue;
-                const auto completed = runtime.lastCompletedSequence.load();
-                const auto result = runtime.lastCommandResult.load();
-                if (runtime.completionVersion.load() == before)
-                {
-                    next.lastCompletedSequence = completed;
-                    next.lastCommandResult = result;
-                    completionRead = true;
-                    break;
-                }
-            }
-            if (!completionRead)
-                return false;
             next.callbacks = runtime.counters.callbacks.load();
             next.qualifiedCallbacks = runtime.counters.qualified.load();
             next.foreignCallbacks = runtime.counters.foreign.load();
@@ -1005,7 +996,6 @@ namespace mta::game_de
         runtime.pendingSequence.store(0);
         runtime.lastSubmitted.store(0);
         runtime.lastCompletedSequence.store(0);
-        runtime.completionVersion.store(0);
         runtime.lastCommandResult.store(ClockResult::NotInitialized);
         runtime.hasPending = false;
         runtime.pending = {};
@@ -1018,6 +1008,8 @@ namespace mta::game_de
         runtime.publishedClock.nativeTimer.store(0);
         runtime.publishedClock.lastMinuteChange.store(0);
         runtime.publishedClock.millisecondsPerGameMinute.store(0);
+        runtime.publishedClock.lastCompletedSequence.store(0);
+        runtime.publishedClock.lastCommandResult.store(ClockResult::NotInitialized);
         runtime.protectionPending = false;
         runtime.patchProtection = 0;
         runtime.nativeTouched.store(false);

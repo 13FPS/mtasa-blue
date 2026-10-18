@@ -112,7 +112,14 @@ $clockMarkers = [regex]::Matches($configText, 'export const MTA_CORE_CLOCK_REFER
 if ($clockMarkers.Count -gt 1 -or [regex]::Matches($configText, 'export const MTA_CORE_CLOCK_REFERENCE\b').Count -ne $clockMarkers.Count) {
     throw 'Invalid MTA Core clock reference configuration marker.'
 }
-if ($clockMarkers.Count -eq 1 -and $clockMarkers[0].Groups[1].Value -eq 'true') {
+$clockSetMarkers = [regex]::Matches($configText, 'export const MTA_CORE_CLOCK_SET_REFERENCE = (true|false);')
+if ($clockSetMarkers.Count -gt 1 -or [regex]::Matches($configText, 'export const MTA_CORE_CLOCK_SET_REFERENCE\b').Count -ne $clockSetMarkers.Count) {
+    throw 'Invalid MTA Core clock Set reference configuration marker.'
+}
+$clockEnabled = $clockMarkers.Count -eq 1 -and $clockMarkers[0].Groups[1].Value -eq 'true'
+$clockSetEnabled = $clockSetMarkers.Count -eq 1 -and $clockSetMarkers[0].Groups[1].Value -eq 'true'
+if ($clockEnabled -and $clockSetEnabled) { throw 'Clock Read and Set trials require independent opt-in packages.' }
+if ($clockEnabled -or $clockSetEnabled) {
     if ($packagePaths.Count -ne 23 -or $guiCount -or $frontendCount -or $package.mode -ne 'Smoke' -or
         $configText -match 'export const (GAIT_REFERENCE|GAIT_RATE|GAIT_ROOT_LOCK|INPUT_REFERENCE|MTA_NATIVE_PAD_REFERENCE|MTA_NATIVE_MOVEMENT_TRIAL|MTA_CORE_STARTUP_REFERENCE|MTA_CORE_INPUT_REFERENCE|MTA_CORE_MOVEMENT_REFERENCE|MTA_CORE_RENDER_REFERENCE|MTA_CORE_RENDER_GPU_REFERENCE|MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE|MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE|MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE|MTA_CORE_GUI_STARTUP_REFERENCE|MTA_CORE_GUI_SURFACE_REFERENCE|MTA_CORE_GUI_FRONTEND_REFERENCE|MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE|MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE|MTA_CORE_PERSISTENT_FRONTEND) = true;') {
         throw 'MTA Core clock reference requires base ownership and separate opt-in Smoke mode.'

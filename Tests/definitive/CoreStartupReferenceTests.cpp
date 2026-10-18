@@ -58,6 +58,9 @@ static_assert(DefinitiveGuiStartupReference::DeviceReleaseFault == 59);
 static_assert(DefinitiveGuiSurfaceReference::ApiVersion == 1 && DefinitiveGuiSurfaceReference::FieldCount == 96);
 static_assert(sizeof(DefinitiveGuiSurfaceReference::Snapshot) == 96 * sizeof(std::uint32_t));
 static_assert(DefinitiveGuiSurfaceReference::ChildRetained == 75 && DefinitiveGuiSurfaceReference::ClassUnregistered == 80);
+static_assert(DefinitiveClockReference::ApiVersion == 1 && DefinitiveClockReference::FieldCount == 96);
+static_assert(DefinitiveClockSetReference::ApiVersion == 1 && DefinitiveClockSetReference::FieldCount == 128);
+static_assert(DefinitiveClockSetReference::InitialReadAcknowledged == 88 && DefinitiveClockSetReference::ProviderCapturedSnapshotNotCompared == 121);
 
 namespace deonline
 {
@@ -84,6 +87,10 @@ namespace deonline
         static bool ConflictingClockStart(CoreStartupReference& worker, const void* address) noexcept
         {
             return worker.Start(address, true, true, false, 0, 1, false, false, false, false, false, false, true);
+        }
+        static bool ConflictingClockSetStart(CoreStartupReference& worker, const void* address) noexcept
+        {
+            return worker.Start(address, true, false, false, 0, 1, false, false, false, false, false, false, true, true);
         }
     };
 }
@@ -241,7 +248,8 @@ namespace
         if (scenario == 8 || scenario == 12)
             deleteObservation.Arm(fixture.counters);
         Check(!worker.Begin(&anchor) && !worker.BeginInputReference(&anchor) && !worker.BeginMovementReference(&anchor) &&
-                  !worker.BeginRenderReferenceV6(&anchor, 2) && !worker.BeginGuiStartupReference(&anchor) && !worker.BeginClockReference(&anchor),
+                  !worker.BeginRenderReferenceV6(&anchor, 2) && !worker.BeginGuiStartupReference(&anchor) && !worker.BeginClockReference(&anchor) &&
+                  !worker.BeginClockSetReference(&anchor),
               "clock reference excludes every other worker mode during its complete ownership lifetime");
         SetEvent(fixture.release);
         if (scenario == 2 || scenario == 3 || mode == L"clock-missing-export")
@@ -263,7 +271,8 @@ namespace
                   !worker.ReadClock(SetsLow) && !worker.ReadClock(FreezesLow) && !worker.ReadClock(UnfreezesLow) && !worker.ReadClock(ResetsLow) &&
                   worker.ReadClock(BackendPinnedExpected) == 1 && worker.ReadClock(NativeTimer) - worker.ReadClock(LastMinuteChange) == 100,
               "coherent clock capture preserves read-only command and independent backend PIN evidence without mixed native timer fields");
-        Check(!worker.CaptureInput() && !worker.CaptureMovement() && !worker.CaptureRenderV6() && !worker.ReadClock(FieldCount),
+        Check(!worker.CaptureClockSet() && !worker.ReadClockSet(DefinitiveClockSetReference::Version) && !worker.CaptureInput() && !worker.CaptureMovement() &&
+                  !worker.CaptureRenderV6() && !worker.ReadClock(FieldCount),
               "the separate 96-field clock cache cannot masquerade as historical input, movement or renderer snapshots");
         bool        foreignRefused = false;
         std::thread foreign(
@@ -332,6 +341,179 @@ namespace
         Check(Retired(sample) && sample[ReadOnlyVerified] && !sample[SetsLow] && !sample[FreezesLow] && !sample[UnfreezesLow] && !sample[ResetsLow] &&
                   sample[Reason] == static_cast<std::uint32_t>(scenario == 1 ? StopReason::Cancelled : StopReason::Completed),
               "read-only final clock proof retires native hook/data/peer ownership without changing the workload's cancellation outcome");
+        Check(worker.Read(13) == 1 && worker.Read(15) == 1 &&
+                  worker.Read(16) == (scenario == 1   ? 12u
+                                      : scenario == 4 ? 7u
+                                      : scenario == 5 ? 11u
+                                                      : 0u) &&
+                  fixture.counters[2] == 0 && fixture.counters[1] == fixture.counters[0],
+              "failed or thrown Initialize still requires same-worker terminal retirement before actual unload and backend PIN accounting");
+        Check(worker.Read(17) == (scenario == 0 || scenario == 6 ? 1u : 0u),
+              "safe native retirement cannot promote an incomplete, cancelled, failed or thrown clock workload into startup success");
+    }
+
+    void TestClockSetWorker(deonline::CoreStartupReference& worker, const std::filesystem::path& root, const std::wstring& mode,
+                            const std::filesystem::path& coreFixture)
+    {
+        using namespace DefinitiveClockSetReference;
+        const unsigned          scenario = mode == L"clock-set-cancel"                    ? 1u
+                                           : mode == L"clock-set-wrong-api"               ? 2u
+                                           : mode == L"clock-set-config-refused"          ? 3u
+                                           : mode == L"clock-set-init-failed"             ? 4u
+                                           : mode == L"clock-set-init-thrown"             ? 5u
+                                           : mode == L"clock-set-cache-contention"        ? 6u
+                                           : mode == L"clock-set-returned-pending"        ? 7u
+                                           : mode == L"clock-set-thrown-pending"          ? 8u
+                                           : mode == L"clock-set-stale-terminal"          ? 9u
+                                           : mode == L"clock-set-retained-terminal"       ? 10u
+                                           : mode == L"clock-set-workload-incomplete"     ? 11u
+                                           : mode == L"clock-set-readback-thrown-pending" ? 12u
+                                           : mode == L"clock-set-corrupt-workload"        ? 13u
+                                           : mode == L"clock-set-not-entered"             ? 14u
+                                           : mode == L"clock-set-reserved-terminal"       ? 15u
+                                           : mode == L"clock-set-wrong-count"             ? 16u
+                                                                                          : 0u;
+        Fixture                 fixture(240 + scenario);
+        WorkerDeleteObservation deleteObservation;
+        CopyCore(coreFixture, root);
+        Set(L"MTA_CORE_FIXTURE_CLOCK_SET_MODE", std::to_wstring(scenario));
+        Check(!worker.CaptureClockSet() && !worker.ReadClockSet(Version), "clock cache starts unavailable without borrowing another protocol's values");
+        Check(!deonline::CoreStartupReferenceTestAccess::ConflictingClockSetStart(worker, &anchor),
+              "actual Start refuses mixed read-only and Set clock modes before starting a worker");
+        Check(Fast([&] { return worker.BeginClockSetReference(&anchor); }), "clock reference queues on the actual existing asynchronous worker");
+        Check(WaitForSingleObject(fixture.entered, 5000) == WAIT_OBJECT_0, "clock controlled Core entered its loader on the worker");
+        if (scenario == 8 || scenario == 12)
+            deleteObservation.Arm(fixture.counters);
+        Check(!worker.Begin(&anchor) && !worker.BeginInputReference(&anchor) && !worker.BeginMovementReference(&anchor) &&
+                  !worker.BeginRenderReferenceV6(&anchor, 2) && !worker.BeginGuiStartupReference(&anchor) && !worker.BeginClockReference(&anchor) &&
+                  !worker.BeginClockSetReference(&anchor),
+              "clock reference excludes every other worker mode during its complete ownership lifetime");
+        SetEvent(fixture.release);
+        if (scenario == 2 || scenario == 3 || mode == L"clock-set-missing-export")
+        {
+            Wait(worker);
+            Check(worker.Read(16) == (scenario == 3 ? 14u : 13u) && !worker.CaptureClockSet() && !worker.ReadClockSet(Version) && !fixture.counters[9] &&
+                      fixture.counters[1] == fixture.counters[0],
+                  "missing, wrong-version and refused clock configuration unload only unused Core without inventing clock evidence");
+            return;
+        }
+        const auto deadline = GetTickCount64() + 10000;
+        if (scenario == 14)
+        {
+            Wait(worker);
+            Check(worker.CaptureClockSet(), "explicit Set non-entry evidence remains available after unused Core unload");
+            Snapshot sample{};
+            for (std::uint32_t field = 0; field != FieldCount; ++field)
+                sample[field] = worker.ReadClockSet(field);
+            Check(Retired(sample) && !Completed(sample) && sample[NotEntered] && sample[AdapterStopped] && !sample[BeginAttempted] && !sample[SetSubmitted] &&
+                      !sample[SetAcknowledged] && !sample[NativeRestored] && !sample[BackendPinnedExpected] && !worker.Read(17) && worker.Read(13) == 1 &&
+                      !worker.Read(15) && !fixture.counters[2] && fixture.counters[1] == fixture.counters[0],
+                  "safe preflight non-entry permits unload without inventing native restoration, a write or Set workload success");
+            return;
+        }
+        if (scenario == 16)
+        {
+            // A wrong-width provider must never populate either public cache.
+            // Its return cannot prove cleanup when no valid report arrived.
+            SetEvent(fixture.inputRelease);
+            SetEvent(fixture.movementRelease);
+            while (!fixture.counters[24] && GetTickCount64() < deadline)
+                Sleep(5);
+            Check(fixture.counters[24], "wrong-width Set provider actually returned from Initialize");
+            const auto until = GetTickCount64() + 100;
+            while (GetTickCount64() < until)
+            {
+                Check(Fast([&] { return worker.Poll(); }) == 0 && worker.IsPending() && GetModuleHandleW(L"core.dll") && !fixture.counters[1] &&
+                          !worker.CaptureClockSet() && !worker.CaptureClock() && !worker.ReadClockSet(Version) && !worker.BeginClockSetReference(&anchor),
+                      "wrong-width Set reports stay unavailable and cannot authorize Core unload or a replacement worker");
+                Sleep(5);
+            }
+            return;
+        }
+        while (!Fast([&] { return worker.CaptureClockSet(); }))
+        {
+            Check(worker.Poll() == 0 && GetTickCount64() < deadline, "clock fixture failed to publish its independent atomic snapshot");
+            Sleep(5);
+        }
+        Check(worker.ReadClockSet(Version) == ApiVersion && worker.ReadClockSet(Phase) == 1 && !worker.ReadClockSet(ReadOnlyVerified) &&
+                  worker.ReadClockSet(ReadSubmitted) == worker.ReadClockSet(ReadAcknowledged) && worker.ReadClockSet(ReadAcknowledged) == 3 &&
+                  worker.ReadClockSet(SetsLow) == 1 && worker.ReadClockSet(SetSubmitted) == 1 && worker.ReadClockSet(SetAcknowledged) == 1 &&
+                  worker.ReadClockSet(CoherentSetReadback) == 1 && worker.ReadClockSet(TargetHour) == 6 && worker.ReadClockSet(TargetMinute) == 15 &&
+                  !worker.ReadClockSet(FreezesLow) && !worker.ReadClockSet(UnfreezesLow) && !worker.ReadClockSet(ResetsLow) &&
+                  worker.ReadClockSet(BackendPinnedExpected) == 1 && worker.ReadClockSet(NativeTimer) - worker.ReadClockSet(LastMinuteChange) == 100,
+              "coherent Set capture preserves its explicit write/readback facts and independent backend PIN without relabelling read-only proof");
+        Check(!worker.CaptureClock() && !worker.ReadClock(DefinitiveClockReference::Version) && !worker.CaptureInput() && !worker.CaptureMovement() &&
+                  !worker.CaptureRenderV6() && !worker.ReadClockSet(FieldCount),
+              "the separate 128-field Set cache cannot masquerade as the historical read-only clock or other protocols");
+        bool        foreignRefused = false;
+        std::thread foreign(
+            [&]
+            { foreignRefused = !worker.CaptureClockSet() && !worker.ReadClockSet(Version) && !worker.BeginClockSetReference(&anchor) && worker.Poll() == -1; });
+        foreign.join();
+        Check(foreignRefused, "clock capture/read/start/poll reject a foreign script caller without touching Core exports");
+        if (scenario == 1)
+            Check(Fast([&] { return worker.Cancel(); }), "clock cancellation is a nonblocking request rather than unload permission");
+        if (scenario == 6)
+            AcquireSRWLockShared(&deonline::CoreStartupReferenceTestAccess::InputLock(worker));
+        SetEvent(fixture.inputRelease);
+        bool sawPending = false;
+        while (GetTickCount64() < deadline && worker.Poll() == 0)
+        {
+            if (worker.CaptureClockSet() && worker.ReadClockSet(Phase) == 3 && fixture.counters[21])
+            {
+                sawPending = true;
+                break;
+            }
+            Sleep(5);
+        }
+        if (scenario == 6)
+        {
+            const auto count = fixture.counters[9];
+            Sleep(30);
+            const bool progressed = Fast([&] { return worker.CaptureClockSet(); }) && fixture.counters[9] > count && worker.ReadClockSet(Phase) == 3;
+            ReleaseSRWLockShared(&deonline::CoreStartupReferenceTestAccess::InputLock(worker));
+            Check(progressed, "clock pending publication and capture never block behind the actual historical input cache lock");
+        }
+        Check(sawPending && GetModuleHandleW(L"core.dll") && !fixture.counters[1] && worker.ReadClockSet(CleanupPending) == 1,
+              "clock cleanup retains its actual worker/Core owner and coherent pending evidence before final retirement");
+        SetEvent(fixture.movementRelease);
+        const bool quarantined = (scenario >= 7 && scenario <= 10) || scenario == 12;
+        if (quarantined)
+        {
+            while (!fixture.counters[24] && GetTickCount64() < deadline)
+                Sleep(5);
+            const auto until = GetTickCount64() + 100;
+            while (GetTickCount64() < until)
+            {
+                Check(Fast([&] { return worker.Poll(); }) == 0 && worker.IsPending() && GetModuleHandleW(L"core.dll") && !fixture.counters[1],
+                      "a returned/thrown Initialize or malformed retirement proof cannot unload retained clock Core or terminate its worker");
+                Sleep(5);
+            }
+            Check(fixture.counters[24] && worker.CaptureClockSet(),
+                  "faulty Initialize actually returned or threw after publishing its controlled clock evidence");
+            if (scenario == 8 || scenario == 12)
+                Check(fixture.counters[25] && !fixture.counters[26],
+                      "pending Initialize/readback exceptions quarantine before destroying any consumer-owned worker heap objects");
+            if (scenario == 12)
+                Check(fixture.counters[6] == 1, "controlled pending exception occurs during first diagnostic readback after Initialize returned");
+            Snapshot sample{};
+            for (std::uint32_t field = 0; field != FieldCount; ++field)
+                sample[field] = worker.ReadClockSet(field);
+            Check(!Retired(sample) && !worker.BeginClockSetReference(&anchor),
+                  "the actual terminal predicate refuses pending, stale-version or retained-peer evidence");
+            // This disposable non-game host ends with its deliberately faulty
+            // provider still quarantined. Production clock Run never returns
+            // pending; the test does not force-unload its worker or callbacks.
+            return;
+        }
+        Wait(worker);
+        Check(worker.CaptureClockSet(), "final coherent clock evidence remains captured after actual Core unload");
+        Snapshot sample{};
+        for (std::uint32_t field = 0; field != FieldCount; ++field)
+            sample[field] = worker.ReadClockSet(field);
+        Check(Retired(sample) && !sample[ReadOnlyVerified] && sample[SetsLow] == 1 && !sample[FreezesLow] && !sample[UnfreezesLow] && !sample[ResetsLow] &&
+                  sample[Reason] == static_cast<std::uint32_t>(scenario == 1 ? StopReason::Cancelled : StopReason::Completed),
+              "final Set retirement remains independent of cancellation and workload success");
         Check(worker.Read(13) == 1 && worker.Read(15) == 1 &&
                   worker.Read(16) == (scenario == 1   ? 12u
                                       : scenario == 4 ? 7u
@@ -640,7 +822,12 @@ int wmain(int argc, wchar_t** argv)
         Check(!worker.Begin(nullptr), "null anchor must be rejected");
         for (unsigned field = 0; field < 20; ++field)
             Check(worker.Read(field) == 0, "idle cache must be neutral");
-        if (std::wstring(argv[2]).find(L"clock") == 0)
+        if (std::wstring(argv[2]).find(L"clock-set") == 0)
+        {
+            Check(argc == 4, "Set worker fixture requires its controlled Core DLL");
+            TestClockSetWorker(worker, root, argv[2], argv[3]);
+        }
+        else if (std::wstring(argv[2]).find(L"clock") == 0)
         {
             Check(argc == 4, "clock worker fixture requires its controlled Core DLL");
             TestClockWorker(worker, root, argv[2], argv[3]);
@@ -1066,6 +1253,22 @@ int wmain(int argc, wchar_t** argv)
             Check(!worker.CapturePersistentFrontend() && !worker.CapturePersistentFrontendLifecycle() && !worker.ReadPersistentFrontend(0) &&
                       !worker.ReadPersistentFrontendLifecycle(0) && !GetModuleHandleW(L"game_de.dll"),
                   "ordinary retry retires its actual backend and cannot expose predecessor persistent evidence");
+        }
+        else if (std::wstring(argv[2]) == L"actual-clock-set")
+        {
+            using namespace DefinitiveClockSetReference;
+            Check(Fast([&] { return worker.BeginClockSetReference(&anchor); }), "actual normal Core accepts the separate Set worker protocol");
+            Wait(worker);
+            Check(worker.CaptureClockSet(), "actual Core publishes Set preflight refusal evidence before worker unload");
+            Snapshot sample{};
+            for (std::uint32_t field = 0; field != FieldCount; ++field)
+                sample[field] = worker.ReadClockSet(field);
+            Check(Retired(sample) && !Completed(sample) && sample[NotEntered] && sample[AdapterStopped] && !sample[BeginAttempted] && !sample[SetSubmitted] &&
+                      !sample[SetAcknowledged] && !sample[NativeRestored] && !sample[BackendPinnedExpected] && !sample[FullMtaReady] && !worker.CaptureClock(),
+                  "actual wrong-image Set preflight proves non-entry cleanup without borrowing read-only evidence or certifying native writes");
+            VerifyCleanup(worker, 8);
+            Check(!GetModuleHandleW(L"game_de.dll") && !GetModuleHandleW(L"pthread.dll") && !worker.Read(17),
+                  "actual refused Set releases Core/backend dependencies without claiming a GTA workload");
         }
         else if (std::wstring(argv[2]) == L"actual-clock")
         {

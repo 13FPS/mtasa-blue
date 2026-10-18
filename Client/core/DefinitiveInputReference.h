@@ -91,6 +91,9 @@ namespace DefinitiveInputReference
         // Clock observation reuses this Core initialization owner but never
         // configures input, rendering or the incomplete gameplay modules.
         bool clockReference = false;
+        // A clock mutation needs its own admission and proof; observing the
+        // clock must never implicitly grant write ownership.
+        bool clockSetReference = false;
     };
 
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { MODE, ONLINE_ACTIVATION, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE, MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE, MTA_CORE_RENDER_ROUTE, MTA_CORE_RENDER_GPU_REFERENCE, MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE, MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE, MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE, MTA_CORE_GUI_STARTUP_REFERENCE, MTA_CORE_GUI_SURFACE_REFERENCE, MTA_CORE_GUI_FRONTEND_REFERENCE, MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE, MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE, MTA_CORE_PERSISTENT_FRONTEND, MTA_CORE_CLOCK_REFERENCE } from './config.mjs';
+import { MODE, ONLINE_ACTIVATION, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE, MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE, MTA_CORE_RENDER_ROUTE, MTA_CORE_RENDER_GPU_REFERENCE, MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE, MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE, MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE, MTA_CORE_GUI_STARTUP_REFERENCE, MTA_CORE_GUI_SURFACE_REFERENCE, MTA_CORE_GUI_FRONTEND_REFERENCE, MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE, MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE, MTA_CORE_PERSISTENT_FRONTEND, MTA_CORE_CLOCK_REFERENCE, MTA_CORE_CLOCK_SET_REFERENCE } from './config.mjs';
 import { AdapterController, NativeGaitReferenceController, NativeInputReferenceController, PlayerControlLease } from './controller.mjs';
 import { MtaNativePadReferenceController } from './native-pad-reference.mjs';
 import { MtaNativeMovementTrialController } from './native-movement-trial.mjs';
@@ -13,6 +13,16 @@ function runAdapter() {
     emit({ event: 'adapter_phase', phase, mode: MODE, host: HOST, cleo: String(CLEO.version),
         host_version: String(CLEO.hostVersion), definitions: String(CLEO.apiVersion) });
     if (!['diagnostic', 'smoke', 'online'].includes(MODE)) throw new Error('Unknown adapter mode');
+    // Set is a separate mutation recipe. Neither an older Read selection nor
+    // ownership of the same backend files can implicitly authorize it.
+    if (typeof MTA_CORE_CLOCK_SET_REFERENCE !== 'boolean' ||
+        (MTA_CORE_CLOCK_SET_REFERENCE && (MODE !== 'smoke' || [MTA_CORE_CLOCK_REFERENCE, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK,
+            INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE,
+            MTA_CORE_INPUT_REFERENCE, MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE, MTA_CORE_RENDER_GPU_REFERENCE,
+            MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE, MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE, MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE,
+            MTA_CORE_GUI_STARTUP_REFERENCE, MTA_CORE_GUI_SURFACE_REFERENCE, MTA_CORE_GUI_FRONTEND_REFERENCE,
+            MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE, MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE, MTA_CORE_PERSISTENT_FRONTEND].some(Boolean))))
+        throw new Error('MTA Core clock Set reference requires separate opt-in Smoke mode');
     if (typeof MTA_CORE_CLOCK_REFERENCE !== 'boolean' ||
         (MTA_CORE_CLOCK_REFERENCE && (MODE !== 'smoke' || [GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE, MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE, MTA_CORE_RENDER_GPU_REFERENCE, MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE, MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE, MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE, MTA_CORE_GUI_STARTUP_REFERENCE, MTA_CORE_GUI_SURFACE_REFERENCE, MTA_CORE_GUI_FRONTEND_REFERENCE, MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE, MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE, MTA_CORE_PERSISTENT_FRONTEND].some(Boolean))))
         throw new Error('MTA Core clock reference requires separate opt-in Smoke mode');
@@ -130,20 +140,20 @@ function runAdapter() {
         throw new Error('SA Unreal API definitions 0.493 or newer are required');
     // These untested input/velocity bindings come from the pinned 0.500 API.
     // Reject older definitions before activation reads, DLL access, or CJ reads.
-    if ((INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND || MTA_CORE_CLOCK_REFERENCE) && definitionVersion < 0.500)
+    if ((INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND || MTA_CORE_CLOCK_REFERENCE || MTA_CORE_CLOCK_SET_REFERENCE) && definitionVersion < 0.500)
         throw new Error('Native input reference requires SA Unreal API definitions 0.500 or newer');
 
     const stopKey = 'Ctrl+Shift+End';
     // Home opens the Rockstar console on the tested build and interrupts this
     // read-only observation, so the input reference needs its own shortcut.
-    const activateKey = (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND || MTA_CORE_CLOCK_REFERENCE) ? 'Ctrl+Shift+F9' : 'Ctrl+Shift+Home';
+    const activateKey = (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND || MTA_CORE_CLOCK_REFERENCE || MTA_CORE_CLOCK_SET_REFERENCE) ? 'Ctrl+Shift+F9' : 'Ctrl+Shift+Home';
     const chordHeld = keys => keys.every(key => native('IS_KEY_PRESSED', key));
-    if (MODE === 'online' || GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND || MTA_CORE_CLOCK_REFERENCE) {
+    if (MODE === 'online' || GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND || MTA_CORE_CLOCK_REFERENCE || MTA_CORE_CLOCK_SET_REFERENCE) {
         if (MODE === 'online' && !['manual', 'automatic'].includes(ONLINE_ACTIVATION))
             throw new Error('Unknown online activation mode');
         // The reference changes one owned NPC, so even an automatic Online
         // preference cannot start this separate experiment during save loading.
-        if (GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND || MTA_CORE_CLOCK_REFERENCE || ONLINE_ACTIVATION === 'manual') {
+        if (GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND || MTA_CORE_CLOCK_REFERENCE || MTA_CORE_CLOCK_SET_REFERENCE || ONLINE_ACTIVATION === 'manual') {
             // Startup freezes have also occurred before this script enters.
             // Waiting here cannot prevent those loader failures, but it gives
             // a usable game session a separate, observable boundary before
@@ -159,7 +169,7 @@ function runAdapter() {
                         bridge_loaded: false, game_adapter_active: false, network_active: false });
                     return;
                 }
-                if (chordHeld([17, 16, (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND || MTA_CORE_CLOCK_REFERENCE) ? 120 : 36]) && native('IS_PLAYER_PLAYING', 0)) {
+                if (chordHeld([17, 16, (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND || MTA_CORE_CLOCK_REFERENCE || MTA_CORE_CLOCK_SET_REFERENCE) ? 120 : 36]) && native('IS_PLAYER_PLAYING', 0)) {
                     emit({ event: 'adapter_activation_requested', mode: MODE, activate_key: activateKey });
                     break;
                 }
@@ -167,7 +177,7 @@ function runAdapter() {
             }
         }
     }
-    if (MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND || MTA_CORE_CLOCK_REFERENCE) {
+    if (MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND || MTA_CORE_CLOCK_REFERENCE || MTA_CORE_CLOCK_SET_REFERENCE) {
         // Holding the activation modifiers contaminated the prior source-state
         // window. Begin DLL access and the recorder only after their release,
         // while keeping cancellation and a finite pre-binding deadline.
@@ -230,6 +240,122 @@ function runAdapter() {
     enterPhase('runtime_bind');
     if (bindRuntime() !== 1) throw new Error('CLEO runtime lifecycle binding failed');
     enterPhase('runtime_bound');
+    if (MTA_CORE_CLOCK_SET_REFERENCE) {
+        const version = bind('DE_CoreClockSetApiVersion', 'X64U32');
+        const begin = bind('DE_CoreClockSetBegin');
+        const capture = bind('DE_CoreClockSetCapture');
+        const readClock = bind('DE_CoreClockSetRead', 'X64U32');
+        const poll = bind('DE_CoreStartupPoll');
+        const cancel = bind('DE_CoreStartupCancel');
+        const read = bind('DE_CoreStartupRead', 'X64U32');
+        if (version() !== 1) throw new Error('MTA Core clock Set reference API1 is required');
+        enterPhase('core_clock_set_reference');
+        const startedAt = Date.now();
+        if (!Number.isSafeInteger(startedAt) || startedAt < 0) throw new Error('Invalid Core clock Set reference time');
+        emit({ event: 'core_clock_set_reference_started', schema: 'mta_core_clock_set_reference_v1', at_ms: startedAt,
+            core_api: 18, budget_ms: 5000, readiness_budget_ms: 10000, field_count: 128,
+            network_active: false, input_writes: false, rendering_started: false, controlled_set_requested: true,
+            freeze_requested: false, provider_capture_compared_to_initial_read: false });
+        if (begin() !== 1) throw new Error('MTA Core clock Set reference worker could not start');
+        let terminal = false, stopRequested = false, latest = null, samples = 0, trialError = null;
+        let lastAt = startedAt, lastSequence = 0, lastElapsed = 0;
+        const captureSample = at => {
+            const status = capture();
+            if (status !== 0 && status !== 1) throw new Error('Core clock Set capture status unavailable');
+            if (!status) return;
+            const state = Array.from({ length: 128 }, (_, field) => readClock(field));
+            if (!state.every(value => Number.isInteger(value) && value >= 0 && value <= 0xffffffff) ||
+                state[0] !== 1 || ![1, 2, 3].includes(state[1]) || !state[2] || state[12] !== 0 ||
+                state[2] < lastSequence || state[3] < lastElapsed || state[85] !== 0 || state.slice(122).some(Boolean))
+                throw new Error('Core clock Set publication is invalid');
+            if (state[2] === lastSequence) {
+                if (!latest || state.some((value, field) => value !== latest[field]))
+                    throw new Error('Core clock Set publication changed without a new sequence');
+                return;
+            }
+            if (latest && (state[14] !== latest[14] || state[15] !== latest[15]))
+                throw new Error('Core clock Set publication changed generation');
+            latest = state; lastSequence = state[2]; lastElapsed = state[3]; ++samples;
+            emit({ event: 'core_clock_set_reference_sample', at_ms: at, elapsed_ms: at - startedAt, state });
+        };
+        // Telemetry rejection is not native retirement. Continue polling and
+        // yielding until the same worker acknowledges cleanup or quarantines
+        // itself; never abandon its callback context after a copied-state error.
+        while (true) {
+            try {
+                const status = poll();
+                if (status !== 0 && status !== 1) throw new Error('Core clock Set worker status unavailable');
+                terminal = status === 1;
+                const at = Date.now();
+                if (!Number.isSafeInteger(at) || at < lastAt) throw new Error('Invalid Core clock Set reference time');
+                lastAt = at;
+                if (!terminal && !stopRequested && (chordHeld([17, 16, 35]) || !native('IS_PLAYER_PLAYING', 0))) {
+                    if (cancel() !== 1) throw new Error('Core clock Set cancellation was rejected');
+                    stopRequested = true;
+                    emit({ event: 'core_clock_set_reference_stop_requested', at_ms: at });
+                }
+                captureSample(at);
+            } catch (error) {
+                trialError = trialError || String(error);
+                if (!terminal) {
+                    try { cancel(); stopRequested = true; } catch (_) {}
+                }
+            }
+            if (terminal) break;
+            try { wait(100); }
+            catch (error) {
+                trialError = trialError || String(error);
+                try { cancel(); stopRequested = true; } catch (_) {}
+            }
+        }
+        const state = Array.from({ length: 19 }, (_, field) => read(field));
+        if (!state.every(value => Number.isInteger(value) && value >= 0 && value <= 0xffffffff))
+            throw new Error('Core clock Set returned invalid unsigned final state');
+        const zeroPair = first => latest !== null && latest[first] === 0 && latest[first + 1] === 0;
+        const nonzeroPair = first => latest !== null && (latest[first] !== 0 || latest[first + 1] !== 0);
+        const nativeClean = latest !== null && latest[43] === 1 && latest[46] === 1 && latest[23] === 1 &&
+            [18, 19, 20, 21, 24, 76, 77, 78, 79, 80, 81].every(field => latest[field] === 0) && zeroPair(50);
+        const refusalClean = latest !== null && ((latest[86] === 1 && latest[87] === 1 && !latest[8]) ||
+            (latest[47] === 1 && latest[44] === 1));
+        const cleanupPassed = latest !== null && latest[1] === 2 && latest[5] === 0 && latest[6] === 1 &&
+            (nativeClean || refusalClean) && state[7] === 1 && state[13] === 1 && state[14] === 0 && state[15] === latest[13];
+        // These extended values describe the Set acknowledgement and later
+        // producer Reads. Terminal common time values are restored provider
+        // values, so comparing them with the later initial Read would invent
+        // a capture-equality proof that the native interface does not expose.
+        const targetValues = (timer, hour, minute, seconds) => {
+            const elapsed = (timer - latest[92]) >>> 0;
+            return hour === latest[95] && minute >= latest[96] && minute <= latest[96] + Math.floor(elapsed / 1000) + 1 &&
+                seconds <= 59 && elapsed <= 6250;
+        };
+        const expected = [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5];
+        const passed = !trialError && !stopRequested && cleanupPassed && expected.every((value, field) => state[field] === value) &&
+            state[11] <= 3 && state[12] <= 3 && (state[12] & ~state[11]) === 0 && state[16] === 0 && state[17] === 1 && state[18] === 0 &&
+            latest[4] === 1 && latest[7] === 0 && latest[8] === 1 && latest[9] === 1 && latest[10] === 1 && latest[11] === 1 &&
+            latest[12] === 0 && latest[13] === 1 && latest[16] > 0 && latest[17] > 0 && latest[25] === 0 && latest[26] === 0 &&
+            latest[33] === latest[34] && latest[34] === latest[107] + 1 && latest[34] > 1 && latest[83] > 0 &&
+            latest[84] >= 5000 && latest[84] <= 5250 && nonzeroPair(54) && nonzeroPair(60) &&
+            latest[62] === 1 && latest[63] === 0 && [64, 66, 68, 74].every(zeroPair) &&
+            [35, 37, 38, 39, 40, 41, 47, 86, 87, 110, 112, 113].every(field => latest[field] === 0) &&
+            [88, 97, 98, 105, 106, 108, 109, 121].every(field => latest[field] === 1) &&
+            latest[89] <= 23 && latest[90] <= 59 && latest[91] <= 59 && latest[94] === 1000 &&
+            latest[95] === (latest[89] === 12 ? 6 : 12) && latest[96] === 15 &&
+            latest[99] === 2 && latest[100] === 0 && latest[119] === 1 && latest[120] === 0 &&
+            latest[111] > 0 && latest[114] < 1000 && latest[115] !== latest[101] &&
+            targetValues(latest[101], latest[102], latest[103], latest[104]) &&
+            targetValues(latest[115], latest[116], latest[117], latest[118]);
+        emit({ event: 'core_clock_set_reference_finished', schema: 'mta_core_clock_set_reference_v1', at_ms: lastAt,
+            elapsed_ms: lastAt - startedAt, state, clock_state: latest, passed, cleanup_passed: cleanupPassed,
+            stop_requested: stopRequested, samples, error: trialError, full_core_ready: state[6] === 1,
+            clock_writes: latest !== null && [62, 63, 64, 65, 66, 67, 68, 69, 77, 79, 80, 81].some(field => latest[field] !== 0),
+            exactly_one_set_verified: latest !== null && latest[97] === 1 && latest[98] === 1 && latest[109] === 1 &&
+                latest[62] === 1 && latest[63] === 0 && latest[110] === 0,
+            provider_restoration_verified: latest !== null && latest[108] === 1 && nativeClean,
+            provider_capture_compared_to_initial_read: false, freeze_requested: false,
+            input_writes: false, rendering_started: false, network_active: false, remote_peds_created: false });
+        if (!passed) throw new Error('MTA Core clock Set reference failed; inspect its saved state');
+        return;
+    }
     if (MTA_CORE_CLOCK_REFERENCE) {
         // The first live clock reference asks only for SDK reads. The worker
         // owns all callbacks and retirement; this script copies scalar evidence.

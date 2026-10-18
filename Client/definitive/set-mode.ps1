@@ -18,22 +18,24 @@ param(
     [switch]$MtaCoreRenderCustomPresentReference, [switch]$MtaCoreRenderFrameBoundaryReference, [switch]$MtaCoreRenderNativeDispatchReference,
     [switch]$MtaCoreGuiStartupReference, [switch]$MtaCoreGuiSurfaceReference, [switch]$MtaCoreGuiFrontendReference, [switch]$MtaCoreGuiFrontendInputReference, [switch]$MtaCoreGuiFrontendStartupReference, [switch]$MtaCorePersistentFrontend,
     [ValidateSet('D3D11', 'D3D12')][string]$MtaCoreRenderRoute = 'D3D11',
-    [switch]$MtaCoreClockReference,
+    [switch]$MtaCoreClockReference, [switch]$MtaCoreClockSetReference,
     [string]$GameDirectory = 'C:\Program Files (x86)\Steam\steamapps\common\GTA San Andreas - The Definitive Edition\Gameface\Binaries\Win64'
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $clockConflicts = @($PSBoundParameters.Keys | Where-Object {
-    $_ -match '^(Native|Matched|Lock|Mta)' -and $_ -ne 'MtaCoreClockReference' -and
+    $_ -match '^(Native|Matched|Lock|Mta)' -and $_ -notin @('MtaCoreClockReference', 'MtaCoreClockSetReference') -and
         $PSBoundParameters[$_] -is [Management.Automation.SwitchParameter] -and $PSBoundParameters[$_].IsPresent
 })
-if ($MtaCoreClockReference -and ($Mode -ne 'Smoke' -or $clockConflicts.Count -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
+if (($MtaCoreClockReference -and $MtaCoreClockSetReference) -or
+    (($MtaCoreClockReference -or $MtaCoreClockSetReference) -and ($Mode -ne 'Smoke' -or $clockConflicts.Count -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute')))) {
     throw 'MTA Core clock reference requires separate opt-in Smoke mode without other trials.'
 }
 # Persistent input has independent host/native leases and must never inherit
 # one of the bounded diagnostic modes or a script player-control lease.
-$persistentConflicts = @(@('NativeGaitReference','MatchedGaitRate','LockWalkRoot','NativeInputReference','MtaNativePadReference','MtaNativeMovementTrial','MtaCoreStartupReference','MtaCoreInputReference','MtaCoreMovementReference','MtaCoreRenderReference','MtaCoreRenderGpuReference','MtaCoreRenderCustomPresentReference','MtaCoreRenderFrameBoundaryReference','MtaCoreRenderNativeDispatchReference','MtaCoreGuiStartupReference','MtaCoreGuiSurfaceReference','MtaCoreGuiFrontendReference','MtaCoreGuiFrontendInputReference','MtaCoreGuiFrontendStartupReference') | Where-Object { $PSBoundParameters.ContainsKey($_) -and $PSBoundParameters[$_] })
+$persistentConflicts = @(@('NativeGaitReference','MatchedGaitRate','LockWalkRoot','NativeInputReference','MtaNativePadReference','MtaNativeMovementTrial','MtaCoreStartupReference','MtaCoreInputReference','MtaCoreMovementReference','MtaCoreRenderReference','MtaCoreRenderGpuReference','MtaCoreRenderCustomPresentReference','MtaCoreRenderFrameBoundaryReference','MtaCoreRenderNativeDispatchReference','MtaCoreGuiStartupReference','MtaCoreGuiSurfaceReference','MtaCoreGuiFrontendReference','MtaCoreGuiFrontendInputReference','MtaCoreGuiFrontendStartupReference') | Where-Object { $PSBoundParameters.ContainsKey($_) -and $PSBoundParameters[$_] }
+)
 if ($MtaCorePersistentFrontend -and ($Mode -ne 'Smoke' -or $persistentConflicts.Count -gt 0 -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
     throw 'Persistent MTA frontend requires separate opt-in Smoke mode without other trials.'
 }
@@ -192,6 +194,21 @@ if ($clockMatches -eq 1) {
     # without the marker remain usable for their historical modes.
     $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $clockPattern,
         "export const MTA_CORE_CLOCK_REFERENCE = $($MtaCoreClockReference.IsPresent.ToString().ToLowerInvariant());"))
+}
+# Set is separately admitted and revoked on ordinary mode changes. Historical
+# intact packages without this newer marker retain their original mode support.
+$clockSetPattern = 'export const MTA_CORE_CLOCK_SET_REFERENCE = (true|false);'
+$clockSetMarkers = [regex]::Matches($configText, $clockSetPattern)
+if ($clockSetMarkers.Count -gt 1 -or [regex]::Matches($configText, 'export const MTA_CORE_CLOCK_SET_REFERENCE\b').Count -ne $clockSetMarkers.Count -or
+    ($MtaCoreClockSetReference -and ($clockSetMarkers.Count -ne 1 -or $installed.files.Count -ne 23))) {
+    throw 'Update the adapter before selecting the separate MTA Core clock Set reference.'
+}
+if ($configText -match 'export const MTA_CORE_CLOCK_REFERENCE = true;' -and $configText -match 'export const MTA_CORE_CLOCK_SET_REFERENCE = true;') {
+    throw 'Installed configuration combines the independent clock Read and Set trials.'
+}
+if ($clockSetMarkers.Count -eq 1) {
+    $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $clockSetPattern,
+        "export const MTA_CORE_CLOCK_SET_REFERENCE = $($MtaCoreClockSetReference.IsPresent.ToString().ToLowerInvariant());"))
 }
 $coreInputPattern = 'export const MTA_CORE_INPUT_REFERENCE = (true|false);'
 $coreInputMatches = [regex]::Matches($configText, $coreInputPattern).Count

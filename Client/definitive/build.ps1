@@ -49,7 +49,9 @@ try {
     foreach ($name in @('DE_CoreGuiFrontendStartupApiVersion', 'DE_CoreGuiFrontendStartupBegin', 'DE_CoreGuiFrontendStartupCapture', 'DE_CoreGuiFrontendStartupRead',
         'DE_CoreGuiFrontendInputApiVersion', 'DE_CoreGuiFrontendInputBegin', 'DE_CoreGuiFrontendInputCapture', 'DE_CoreGuiFrontendInputRead',
         'DE_CorePersistentFrontendApiVersion', 'DE_CorePersistentFrontendBegin', 'DE_CorePersistentFrontendHeartbeat', 'DE_CorePersistentFrontendCapture',
-        'DE_CorePersistentFrontendRead', 'DE_CorePersistentFrontendCaptureLifecycle', 'DE_CorePersistentFrontendReadLifecycle')) {
+        'DE_CorePersistentFrontendRead', 'DE_CorePersistentFrontendCaptureLifecycle', 'DE_CorePersistentFrontendReadLifecycle',
+        'DE_CoreClockApiVersion','DE_CoreClockBegin','DE_CoreClockCapture','DE_CoreClockRead',
+        'DE_CoreClockSetApiVersion','DE_CoreClockSetBegin','DE_CoreClockSetCapture','DE_CoreClockSetRead')) {
         if (-not @($bridgeExports | Where-Object { $_ -match ('\s' + [regex]::Escape($name) + '\s*$') }).Count) { throw "Client bridge export missing: $name" }
     }
     & $compilerPath @commonArguments (Join-Path $repositoryRoot 'Tests/definitive/ProtocolTests.cpp') /Fede_protocol_tests.exe

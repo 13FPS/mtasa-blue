@@ -1215,6 +1215,7 @@ async function main() {
             MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE: overrides.mtaCoreGuiFrontendStartupReference ?? false,
             MTA_CORE_PERSISTENT_FRONTEND: overrides.mtaCorePersistentFrontend ?? false,
             MTA_CORE_CLOCK_REFERENCE: overrides.mtaCoreClockReference ?? false,
+            MTA_CORE_CLOCK_SET_REFERENCE: overrides.mtaCoreClockSetReference ?? false,
             Date: { now: () => overrides.times ? overrides.times[frame] : frame * 50 },
             CLEO: { version: overrides.version || '1.5.1', apiVersion: overrides.definitions || '0.500', hostVersion: '1.0.113.49697469' },
             native: (name, ...args) => { record(name, ...args);
@@ -1328,6 +1329,166 @@ async function main() {
         const f = runClockEntry({}, { final, functions: { DE_CoreClockRead: field => refused[field] } });
         const done = f.logs.find(event => event.event === 'core_clock_reference_finished');
         assert.ok(done && done.cleanup_passed && !done.passed && !done.clock_writes);
+    });
+    // The Set report has its own namespace and evidence. Its restored common
+    // clock values deliberately differ from the initial producer Read, which
+    // was taken after the provider's private restoration snapshot.
+    const clockSetFinalState = (changes = {}) => Object.assign(Array(128).fill(0), clockFinalState({
+        3: 5250, 12: 0, 27: 9, 28: 19, 29: 30, 30: 6200, 31: 6000, 48: 11, 62: 1, 84: 5000
+    }), {
+        88: 1, 89: 10, 90: 20, 91: 30, 92: 1000, 93: 800, 94: 1000,
+        95: 12, 96: 15, 97: 1, 98: 1, 99: 2, 101: 1100, 102: 12, 103: 15, 104: 30,
+        105: 1, 106: 1, 107: 9, 108: 1, 109: 1, 111: 9, 114: 50,
+        115: 6000, 116: 12, 117: 20, 118: 30, 119: 1, 121: 1, ...changes
+    });
+    function runClockSetEntry(changes = {}, options = {}) {
+        const clock = clockSetFinalState(changes);
+        const final = options.final || [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5, 0, 0, 1, 0, 1, 0, 1, 0];
+        return runEntry({ mode: 'smoke', mtaCoreClockSetReference: true,
+            // Leave enough idle frames for malformed telemetry, cancellation,
+            // and a later retirement poll without inventing a wait failure.
+            keyFrames: [[], [], [17, 16, 120], [17, 16, 120], [], [], []], ...options,
+            functions: { DE_CoreClockSetApiVersion: () => 1, DE_CoreClockSetBegin: () => 1,
+                DE_CoreClockSetCapture: () => 1, DE_CoreClockSetRead: field => clock[field],
+                DE_CoreStartupPoll: () => 1, DE_CoreStartupCancel: () => 1,
+                DE_CoreStartupRead: field => final[field], ...(options.functions || {}) } });
+    }
+    const clockSetFinish = f => f.logs.find(event => event.event === 'core_clock_set_reference_finished');
+    test('clock Set waits for F9 release and accepts one Set with subsequent Readback and provider retirement', () => {
+        const f = runClockSetEntry(), done = clockSetFinish(f);
+        assert.ok(done && done.passed && done.cleanup_passed && done.clock_writes && done.exactly_one_set_verified);
+        assert.ok(done.provider_restoration_verified && !done.provider_capture_compared_to_initial_read && !done.full_core_ready);
+        assert.equal(done.clock_state.length, 128);
+        assert.equal(done.clock_state[12], 0);
+        assert.notEqual(done.clock_state[27], done.clock_state[89]);
+        assert.ok(f.runtimeAccess.every(value => value.frame >= 4));
+        assert.ok(!f.calls.some(([name]) => /SET_TIME|SET_PLAYER|CREATE_CHAR|DE_Connect/.test(name)));
+        assert.ok(!f.calls.some(([name]) => /^DE_CoreClock(ApiVersion|Begin|Capture|Read)$/.test(name)));
+        const started = f.logs.find(event => event.event === 'core_clock_set_reference_started');
+        assert.deepEqual([started.core_api, started.field_count, started.budget_ms, started.readiness_budget_ms], [18, 128, 5000, 10000]);
+    });
+    test('clock Set chooses the distinct nonmidnight target when the initial Read is at noon', () => {
+        assert.ok(clockSetFinish(runClockSetEntry({ 89: 12, 95: 6, 102: 6, 116: 6 })).passed);
+    });
+    test('clock Set indefinite manual arming never accesses the runtime before a delayed F9 chord', () => {
+        const f = runClockSetEntry({}, {
+            keyFrames: [...Array.from({ length: 6 }, () => []), [17, 16, 120], [], []],
+            times: [0, 60000, 120000, 180000, 240000, 300000, 360000, 360050, 360100]
+        });
+        assert.ok(clockSetFinish(f).passed);
+        assert.ok(f.runtimeAccess.every(value => value.frame >= 7));
+    });
+    test('clock Set cancellation while armed never loads the bridge', () => {
+        const f = runClockSetEntry({}, { keyFrames: [[], [], [], [17, 16, 35]] });
+        assert.equal(f.runtimeAccess.length, 0);
+        assert.ok(f.logs.some(event => event.event === 'adapter_activation_cancelled'));
+        assert.ok(!clockSetFinish(f));
+    });
+    for (const [label, options] of [
+        ['Read at the same time', { mtaCoreClockReference: true }],
+        ['persistent frontend', { mtaCorePersistentFrontend: true }],
+        ['native movement', { mtaCoreMovementReference: true }],
+        ['renderer', { mtaCoreRenderReference: true }],
+        ['nonboolean Set marker', { mtaCoreClockSetReference: 'true' }],
+        ['Online mode', { mode: 'online' }],
+        ['old input definitions', { definitions: '0.499' }]
+    ]) test('clock Set rejects ' + label + ' before bridge access', () => {
+        const f = runClockSetEntry({}, options);
+        assert.equal(f.runtimeAccess.length, 0);
+        assert.ok(!f.logs.some(event => event.event === 'core_clock_set_reference_started'));
+        assert.ok(f.logs.some(event => event.event === 'adapter_failed'));
+    });
+    test('clock Set checks its separately named optional API before Begin', () => {
+        let begins = 0;
+        const f = runClockSetEntry({}, { functions: { DE_CoreClockSetApiVersion: () => 2, DE_CoreClockSetBegin: () => ++begins } });
+        assert.equal(begins, 0);
+        assert.ok(!clockSetFinish(f));
+    });
+    test('clock Set missing optional exports fail before worker admission', () => {
+        const f = runClockSetEntry({}, { functions: { DE_CoreClockSetRead: null } });
+        assert.ok(!f.calls.some(([name]) => name === 'DE_CoreClockSetBegin'));
+        assert.ok(!clockSetFinish(f));
+    });
+    for (const [label, changes] of [
+        ['peer cleanup debt', { 78: 1 }], ['pending command', { 50: 1 }], ['missing hook retirement', { 19: 1 }],
+        ['data recovery debt', { 80: 1 }], ['protection debt', { 81: 1 }], ['read-only relabelling', { 12: 1 }],
+        ['dirty reserved field', { 127: 1 }], ['invalid unsigned field', { 99: NaN }],
+        ['missing initial Read', { 88: 0 }], ['unsupported clock rate', { 94: 2000 }],
+        ['wrong initial command sequence', { 119: 2 }], ['wrong Set sequence', { 99: 3 }],
+        ['second Set', { 62: 2 }], ['missing Set acknowledgement', { 98: 0 }], ['missing Set counter', { 62: 0 }],
+        ['unexpected freeze', { 64: 1 }], ['unexpected unfreeze', { 66: 1 }], ['unexpected SDK reset', { 68: 1 }],
+        ['missing coherent Set Readback', { 105: 0 }], ['missing later Readback', { 106: 0 }],
+        ['mismatched subsequent Read count', { 107: 8 }], ['missing provider restoration', { 108: 0 }],
+        ['missing one-Set proof', { 109: 0 }], ['forbidden operation', { 110: 1 }],
+        ['stale target timer', { 115: 1100 }], ['no target progress', { 111: 0 }], ['no native timer progress', { 83: 0 }],
+        ['recorded readback mismatch', { 112: 1 }], ['rate refusal', { 113: 1 }], ['late Set acknowledgement', { 114: 1000 }],
+        ['missing provider-capture qualification', { 121: 0 }], ['wrong target hour', { 95: 6 }],
+        ['wrong target minute', { 96: 16 }], ['forged Set Readback hour', { 102: 11 }],
+        ['forged later Readback minute', { 117: 59 }], ['forged Readback seconds', { 118: 60 }],
+        ['implausible native target elapsed', { 115: 7251 }], ['short configured workload', { 84: 4950 }],
+        ['excessive workload', { 84: 5251 }], ['unexpected full readiness', { 85: 1 }]
+    ]) test('clock Set refuses ' + label, () => {
+        const f = runClockSetEntry(changes);
+        assert.ok(!clockSetFinish(f)?.passed);
+    });
+    test('clock Set retains the last valid cache after malformed telemetry until the worker retires', () => {
+        let polls = 0, cancels = 0;
+        const final = clockSetFinalState();
+        const f = runClockSetEntry({}, { functions: {
+            DE_CoreStartupPoll: () => ++polls >= 2 ? 1 : 0,
+            DE_CoreClockSetRead: field => polls === 1 && field === 127 ? 1 : final[field],
+            DE_CoreStartupCancel: () => { ++cancels; return 1; }
+        } });
+        const done = clockSetFinish(f);
+        assert.ok(done && !done.passed && done.cleanup_passed && done.error && done.stop_requested);
+        assert.equal(polls, 2); assert.equal(cancels, 1);
+        assert.ok(f.waits.some(value => value.milliseconds === 100));
+    });
+    test('clock Set unchanged sequence cannot silently change a copied publication', () => {
+        let polls = 0, cancels = 0;
+        const final = clockSetFinalState();
+        const f = runClockSetEntry({}, { functions: {
+            DE_CoreStartupPoll: () => ++polls >= 3 ? 1 : 0,
+            DE_CoreClockSetRead: field => polls === 2 && field === 27 ? 8 : final[field],
+            DE_CoreStartupCancel: () => { ++cancels; return 1; }
+        } });
+        const done = clockSetFinish(f);
+        assert.ok(done && !done.passed && done.cleanup_passed && /without a new sequence/.test(done.error));
+        assert.equal(done.samples, 1); assert.equal(polls, 3); assert.equal(cancels, 1);
+    });
+    test('clock Set active cancellation requests cleanup and still polls to a terminal worker', () => {
+        let polls = 0, cancels = 0;
+        const f = runClockSetEntry({}, { keyFrames: [[17, 16, 120], [], [17, 16, 35], []], functions: {
+            DE_CoreStartupPoll: () => ++polls >= 3 ? 1 : 0,
+            DE_CoreStartupCancel: () => { ++cancels; return 1; }
+        } });
+        const done = clockSetFinish(f);
+        assert.ok(done && !done.passed && done.cleanup_passed && done.stop_requested);
+        assert.equal(polls, 3); assert.equal(cancels, 1);
+    });
+    test('clock Set poll rejection cannot skip the next native retirement poll', () => {
+        let polls = 0, cancels = 0;
+        const f = runClockSetEntry({}, { functions: {
+            DE_CoreStartupPoll: () => ++polls === 1 ? 7 : 1,
+            DE_CoreStartupCancel: () => { ++cancels; return 1; }
+        } });
+        assert.equal(polls, 2); assert.equal(cancels, 1);
+        assert.ok(clockSetFinish(f).cleanup_passed && !clockSetFinish(f).passed);
+    });
+    test('clock Set distinguishes safely stopped preflight refusal from a mutation success', () => {
+        const refused = Array(128).fill(0);
+        Object.assign(refused, { 0: 1, 1: 2, 2: 1, 4: 16, 6: 1, 86: 1, 87: 1 });
+        const final = [1, 5, 3, 3, 0, 0, 0, 1, 3, 4, 5, 0, 0, 1, 0, 0, 8, 0, 0];
+        const f = runClockSetEntry({}, { final, functions: { DE_CoreClockSetRead: field => refused[field] } });
+        assert.ok(clockSetFinish(f)?.cleanup_passed && !clockSetFinish(f).passed && !clockSetFinish(f).clock_writes);
+    });
+    test('clock Set unretired worker never publishes finished success after telemetry failure', () => {
+        let finished = false, cancels = 0;
+        assert.throws(() => runClockSetEntry({ 127: 1 }, { executionTimeout: 20,
+            observeLog: event => { if (event.event === 'core_clock_set_reference_finished') finished = true; },
+            functions: { DE_CoreStartupPoll: () => 0, DE_CoreStartupCancel: () => { ++cancels; return 1; } }
+        }), /Script execution timed out/);
+        assert.equal(finished, false); assert.ok(cancels > 0);
     });
     // This fixture transports reported scalar evidence only. Its opaque lease
     // provenance and pixel facts cannot establish real COM or GPU execution.
@@ -3652,6 +3813,8 @@ async function main() {
     const sourceConfig = await import(pathToFileURL(path.join(adapterDirectory, 'config.mjs')).href);
     test('source configuration makes online activation manual by default', () => {
         assert.equal(sourceConfig.ONLINE_ACTIVATION, 'manual');
+        assert.equal(sourceConfig.MTA_CORE_CLOCK_REFERENCE, false);
+        assert.equal(sourceConfig.MTA_CORE_CLOCK_SET_REFERENCE, false);
         assert.equal(sourceConfig.MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE, false);
         assert.equal(sourceConfig.MTA_CORE_GUI_STARTUP_REFERENCE, false);
         assert.equal(sourceConfig.MTA_CORE_GUI_SURFACE_REFERENCE, false);

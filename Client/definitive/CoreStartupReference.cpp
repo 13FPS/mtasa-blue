@@ -79,6 +79,13 @@ namespace deonline
         return Start(moduleAddress, true, false, false, 0, 1, false, false, false, false, false, false, true);
     }
 
+    bool CoreStartupReference::BeginClockSetReference(const void* moduleAddress) noexcept
+    {
+        // A write reference is independently selected and cached. It borrows
+        // only the existing worker's ownership and retained-cleanup lifetime.
+        return Start(moduleAddress, true, false, false, 0, 1, false, false, false, false, false, false, false, true);
+    }
+
     bool CoreStartupReference::BeginRenderReference(const void* moduleAddress) noexcept
     {
         return Start(moduleAddress, true, false, true);
@@ -125,30 +132,36 @@ namespace deonline
     bool CoreStartupReference::Start(const void* moduleAddress, bool configuredInput, bool configuredMovement, bool configuredRender,
                                      std::uint32_t configuredRenderRoute, std::uint32_t configuredRenderApi, bool configuredGuiStartup,
                                      bool configuredGuiSurface, bool configuredGuiFrontend, bool configuredGuiFrontendInput, bool configuredFrontendStartup,
-                                     bool configuredPersistentFrontend, bool configuredClock) noexcept
+                                     bool configuredPersistentFrontend, bool configuredClock, bool configuredClockSet) noexcept
     {
         DWORD      expected = 0;
         const auto current = GetCurrentThreadId();
         if ((static_cast<unsigned>(configuredMovement) + static_cast<unsigned>(configuredRender) + static_cast<unsigned>(configuredGuiStartup) +
                  static_cast<unsigned>(configuredGuiSurface) + static_cast<unsigned>(configuredGuiFrontend) +
                  static_cast<unsigned>(configuredGuiFrontendInput) + static_cast<unsigned>(configuredFrontendStartup) +
-                 static_cast<unsigned>(configuredPersistentFrontend) + static_cast<unsigned>(configuredClock) >
+                 static_cast<unsigned>(configuredPersistentFrontend) + static_cast<unsigned>(configuredClock) + static_cast<unsigned>(configuredClockSet) >
              1) ||
             (!ownerThread.compare_exchange_strong(expected, current) && expected != current) || !moduleAddress || IsPending() || thread ||
             frontendQuarantined || clockQuarantined ||
-            (!configuredClock && !configuredGuiFrontendInput && !configuredFrontendStartup && !configuredPersistentFrontend &&
+            (!configuredClock && !configuredClockSet && !configuredGuiFrontendInput && !configuredFrontendStartup && !configuredPersistentFrontend &&
              !frontendControl.PrepareAttempt(current)))
             return false;
         if (configuredPersistentFrontend && !persistentHostLease.Begin(current, GetTickCount64()))
             return false;
         persistentFrontendRequested = configuredPersistentFrontend;
         clockRequested = configuredClock;
+        clockSetRequested = configuredClockSet;
         clockInitializationInvoked = false;
         clockAvailable.store(false);
         clockSequence.store(0);
         for (auto& field : publishedClock)
             field.store(0);
         capturedClock = {};
+        clockSetAvailable.store(false);
+        clockSetSequence.store(0);
+        for (auto& field : publishedClockSet)
+            field.store(0);
+        capturedClockSet = {};
         persistentFrontendAvailable.store(false);
         persistentFrontendSequence.store(0);
         for (auto& field : publishedPersistentFrontend)
@@ -327,16 +340,62 @@ namespace deonline
         inputOwner->clockSequence.fetch_add(1);
     }
 
+    bool CoreStartupReference::CopyClockSetSnapshot(DefinitiveClockSetReference::Snapshot& output) const noexcept
+    {
+        if (!clockSetRequested || !clockSetAvailable.load())
+            return false;
+        for (unsigned attempt = 0; attempt != 2; ++attempt)
+        {
+            const auto before = clockSetSequence.load();
+            if (before & 1)
+                continue;
+            DefinitiveClockSetReference::Snapshot next{};
+            for (std::size_t index = 0; index != next.size(); ++index)
+                next[index] = publishedClockSet[index].load();
+            if (clockSetSequence.load() == before)
+            {
+                output = next;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool CoreStartupReference::CaptureClockSet() noexcept
+    {
+        return ownerThread.load() == GetCurrentThreadId() && CopyClockSetSnapshot(capturedClockSet);
+    }
+
+    std::uint32_t CoreStartupReference::ReadClockSet(std::uint32_t field) const noexcept
+    {
+        return ownerThread.load() == GetCurrentThreadId() && clockSetRequested && field < capturedClockSet.size() ? capturedClockSet[field] : 0;
+    }
+
+    void CoreStartupReference::PublishClockSet(const std::uint32_t* snapshot, std::uint32_t count)
+    {
+        if (!inputOwner || !inputOwner->clockSetRequested || !snapshot || count != DefinitiveClockSetReference::FieldCount)
+            return;
+        // Native recovery may have parked a peer inside the legacy cache or
+        // heap. This independent atomic path must remain callable throughout.
+        inputOwner->clockSetSequence.fetch_add(1);
+        for (std::size_t index = 0; index != count; ++index)
+            inputOwner->publishedClockSet[index].store(snapshot[index]);
+        inputOwner->clockSetAvailable.store(true);
+        inputOwner->clockSetSequence.fetch_add(1);
+    }
+
     void CoreStartupReference::WaitForClockRetirement() noexcept
     {
-        if (!clockRequested || !clockInitializationInvoked)
+        if ((!clockRequested && !clockSetRequested) || !clockInitializationInvoked)
             return;
         clockQuarantined = true;
         const auto started = GetTickCount64();
         for (;;)
         {
-            DefinitiveClockReference::Snapshot snapshot{};
-            if (CopyClockSnapshot(snapshot) && DefinitiveClockReference::Retired(snapshot))
+            DefinitiveClockReference::Snapshot    snapshot{};
+            DefinitiveClockSetReference::Snapshot setSnapshot{};
+            if ((clockRequested && CopyClockSnapshot(snapshot) && DefinitiveClockReference::Retired(snapshot)) ||
+                (clockSetRequested && CopyClockSetSnapshot(setSnapshot) && DefinitiveClockSetReference::Retired(setSnapshot)))
             {
                 clockQuarantined = false;
                 return;
@@ -1215,7 +1274,8 @@ namespace deonline
                     using ConfigureFrontend = std::uint32_t (*)(std::uint32_t, std::uint32_t, DefinitiveInputReference::CancelCallback,
                                                                 DefinitiveInputReference::PublishCallback, DefinitiveGuiFrontendReference::ControlCallback);
                     const auto inputVersion =
-                        reinterpret_cast<Version>(GetProcAddress(core, clockRequested                      ? "MTA_DEClockReferenceApiVersion"
+                        reinterpret_cast<Version>(GetProcAddress(core, clockSetRequested                   ? "MTA_DEClockSetReferenceApiVersion"
+                                                                       : clockRequested                    ? "MTA_DEClockReferenceApiVersion"
                                                                        : guiFrontendInputRequested         ? "MTA_DEGuiFrontendInputReferenceApiVersion"
                                                                        : guiFrontendRequested              ? "MTA_DEGuiFrontendReferenceApiVersion"
                                                                        : guiSurfaceRequested               ? "MTA_DEGuiSurfaceReferenceApiVersion"
@@ -1229,7 +1289,8 @@ namespace deonline
                                                                        : movementRequested                 ? "MTA_DEMovementReferenceApiVersion"
                                                                                                            : "MTA_DEInputReferenceApiVersion"));
                     const auto configure =
-                        reinterpret_cast<Configure>(GetProcAddress(core, clockRequested              ? "MTA_ConfigureDEClockReference"
+                        reinterpret_cast<Configure>(GetProcAddress(core, clockSetRequested           ? "MTA_ConfigureDEClockSetReference"
+                                                                         : clockRequested            ? "MTA_ConfigureDEClockReference"
                                                                          : guiFrontendInputRequested ? "MTA_ConfigureDEGuiFrontendInputReference"
                                                                          : guiSurfaceRequested       ? "MTA_ConfigureDEGuiSurfaceReference"
                                                                          : guiRequested              ? "MTA_ConfigureDEGuiStartupReference"
@@ -1242,7 +1303,8 @@ namespace deonline
                                                                                                       : renderApi == 3 ? "MTA_ConfigureDERenderReferenceV3"
                                                                                                                        : "MTA_ConfigureDERenderReferenceV2"));
                     const auto configureFrontend = reinterpret_cast<ConfigureFrontend>(GetProcAddress(core, "MTA_ConfigureDEGuiFrontendReference"));
-                    const auto expectedVersion = clockRequested                      ? DefinitiveClockReference::ApiVersion
+                    const auto expectedVersion = clockSetRequested                   ? DefinitiveClockSetReference::ApiVersion
+                                                 : clockRequested                    ? DefinitiveClockReference::ApiVersion
                                                  : guiFrontendInputRequested         ? DefinitiveGuiFrontendInputReference::ApiVersion
                                                  : guiFrontendRequested              ? DefinitiveGuiFrontendReference::ApiVersion
                                                  : guiSurfaceRequested               ? DefinitiveGuiSurfaceReference::ApiVersion
@@ -1264,7 +1326,8 @@ namespace deonline
                         return;
                     }
                     inputOwner = this;
-                    const auto duration = clockRequested              ? DefinitiveClockReference::MaximumDurationMs
+                    const auto duration = clockSetRequested           ? DefinitiveClockSetReference::MaximumDurationMs
+                                          : clockRequested            ? DefinitiveClockReference::MaximumDurationMs
                                           : guiFrontendInputRequested ? DefinitiveGuiFrontendInputReference::MaximumDurationMs
                                           : guiFrontendRequested      ? DefinitiveGuiFrontendReference::MaximumDurationMs
                                           : guiSurfaceRequested       ? DefinitiveGuiSurfaceReference::MaximumDurationMs
@@ -1272,7 +1335,7 @@ namespace deonline
                                           : renderRequested           ? DefinitiveRenderReference::MaximumDurationMs
                                           : movementRequested         ? DefinitiveMovementReference::MaximumDurationMs
                                                                       : DefinitiveInputReference::MaximumDurationMs;
-                    const auto publish = clockRequested ? PublishClock : PublishInput;
+                    const auto publish = clockSetRequested ? PublishClockSet : clockRequested ? PublishClock : PublishInput;
                     if ((guiFrontendRequested ? configureFrontend(DefinitiveGuiFrontendReference::ApiVersion, duration, InputCancelled, publish, ControlInput)
                          : renderRoute        ? configureV2(duration, renderRoute, InputCancelled, publish)
                                               : configure(duration, InputCancelled, publish)) != 1)
@@ -1281,7 +1344,7 @@ namespace deonline
                         return;
                     }
                 }
-                clockInitializationInvoked = clockRequested;
+                clockInitializationInvoked = clockRequested || clockSetRequested;
                 try
                 {
                     values[10] = static_cast<std::uint32_t>(initialize());
@@ -1297,13 +1360,13 @@ namespace deonline
                     // the enclosing directory/path objects alive as well as
                     // Core and TLS; unwinding them before retirement may free
                     // heap blocks through a lock that stopped peer owns.
-                    if (clockRequested)
+                    if (clockRequested || clockSetRequested)
                         WaitForClockRetirement();
                     throw;
                 }
-                if (clockRequested)
+                if (clockRequested || clockSetRequested)
                     WaitForClockRetirement();
-                if (inputRequested && !clockRequested)
+                if (inputRequested && !clockRequested && !clockSetRequested)
                 {
                     // Native peer holds and GUI callbacks have ended. Wait for
                     // a final independent control read before taking the cache
@@ -1453,7 +1516,14 @@ namespace deonline
                     values[16] = 8;
                     return;
                 }
-                if (clockRequested)
+                if (clockSetRequested)
+                {
+                    DefinitiveClockSetReference::Snapshot sample{};
+                    // Workload completion and unload permission remain
+                    // independent: safe preflight refusal never proves Set.
+                    values[17] = CopyClockSetSnapshot(sample) && DefinitiveClockSetReference::Completed(sample) ? 1u : 0u;
+                }
+                else if (clockRequested)
                 {
                     DefinitiveClockReference::Snapshot sample{};
                     using namespace DefinitiveClockReference;
@@ -1479,7 +1549,7 @@ namespace deonline
         // Initialize's numeric/exception result is not evidence that native
         // callbacks, admission or suspended peers have retired. Keep both Core
         // and this live publication context until an independent proof arrives.
-        if (core && clockRequested && clockInitializationInvoked)
+        if (core && (clockRequested || clockSetRequested) && clockInitializationInvoked)
             WaitForClockRetirement();
         inputOwner = nullptr;
         // Cancellation never interrupts the loader or unloads Core from a
@@ -1495,7 +1565,8 @@ namespace deonline
         if ((values[12] & ~values[11]) && !values[16])
             values[16] = 10;
         const auto expectedBackend =
-            clockRequested && clockAvailable.load() ? publishedClock[DefinitiveClockReference::BackendPinnedExpected].load()
+            clockSetRequested && clockSetAvailable.load() ? publishedClockSet[DefinitiveClockSetReference::BackendPinnedExpected].load()
+            : clockRequested && clockAvailable.load()     ? publishedClock[DefinitiveClockReference::BackendPinnedExpected].load()
             : persistentFrontendRequested && persistentFrontendAvailable.load()
                 ? publishedPersistentFrontend[DefinitiveGuiStartupReference::BackendPinnedExpected].load()
             : guiFrontendInputRequested && guiFrontendInputAvailable ? publishedGuiFrontendInput[DefinitiveGuiStartupReference::BackendPinnedExpected]

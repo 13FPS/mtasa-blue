@@ -106,6 +106,13 @@ DE_BRIDGE_API int           DE_CoreClockBegin();
 DE_BRIDGE_API int           DE_CoreClockCapture();
 DE_BRIDGE_API std::uint32_t DE_CoreClockRead(std::uint32_t component);
 
+// The Set/restore reference uses its own API1 128-field report. Historical
+// read-only clock entry points never select or expose a time-writing job.
+DE_BRIDGE_API std::uint32_t DE_CoreClockSetApiVersion();
+DE_BRIDGE_API int           DE_CoreClockSetBegin();
+DE_BRIDGE_API int           DE_CoreClockSetCapture();
+DE_BRIDGE_API std::uint32_t DE_CoreClockSetRead(std::uint32_t component);
+
 // Configured movement keeps the same actual Core owner through native teardown.
 // The producer's 96 values include eligibility, native restoration and real pin
 // ownership; a pinned backend is distinct from an active adapter or live hooks.

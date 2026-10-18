@@ -13,6 +13,7 @@
 #include "../core/DefinitiveInputReference.h"
 #include "../core/DefinitiveMovementReference.h"
 #include "../core/DefinitiveClockReference.h"
+#include "../core/DefinitiveClockSetReference.h"
 #include "../core/DefinitiveRenderReference.h"
 #include "../core/DefinitiveGuiStartupReference.h"
 #include "../core/DefinitiveGuiSurfaceReference.h"
@@ -36,6 +37,9 @@ namespace deonline
         bool          BeginClockReference(const void* moduleAddress) noexcept;
         bool          CaptureClock() noexcept;
         std::uint32_t ReadClock(std::uint32_t field) const noexcept;
+        bool          BeginClockSetReference(const void* moduleAddress) noexcept;
+        bool          CaptureClockSet() noexcept;
+        std::uint32_t ReadClockSet(std::uint32_t field) const noexcept;
         bool          BeginRenderReference(const void* moduleAddress) noexcept;
         bool          BeginRenderReferenceV2(const void* moduleAddress, std::uint32_t route) noexcept;
         bool          BeginRenderReferenceV3(const void* moduleAddress, std::uint32_t route) noexcept;
@@ -104,8 +108,10 @@ namespace deonline
         bool                      Start(const void* moduleAddress, bool configuredInput, bool configuredMovement = false, bool configuredRender = false,
                                         std::uint32_t configuredRenderRoute = 0, std::uint32_t configuredRenderApi = 1, bool configuredGuiStartup = false,
                                         bool configuredGuiSurface = false, bool configuredGuiFrontend = false, bool configuredGuiFrontendInput = false,
-                                        bool configuredFrontendStartup = false, bool configuredPersistentFrontend = false, bool configuredClock = false) noexcept;
+                                        bool configuredFrontendStartup = false, bool configuredPersistentFrontend = false, bool configuredClock = false,
+                                        bool configuredClockSet = false) noexcept;
         bool                      CopyClockSnapshot(DefinitiveClockReference::Snapshot& output) const noexcept;
+        bool                      CopyClockSetSnapshot(DefinitiveClockSetReference::Snapshot& output) const noexcept;
         void                      WaitForClockRetirement() noexcept;
         bool                      CaptureFrontendLifecycle() noexcept;
         static bool               InputCancelled();
@@ -113,6 +119,7 @@ namespace deonline
         static void               PublishPersistentFrontend(const std::uint32_t* values, std::uint32_t count);
         static void               PublishInput(const std::uint32_t* values, std::uint32_t count);
         static void               PublishClock(const std::uint32_t* values, std::uint32_t count);
+        static void               PublishClockSet(const std::uint32_t* values, std::uint32_t count);
         static bool               ControlInput(std::uint32_t action, std::uint32_t* values, std::uint32_t count);
 
         // Only Begin/Poll's owning thread touches the handle or input address.
@@ -127,6 +134,7 @@ namespace deonline
         bool                          inputRequested = false;
         bool                          movementRequested = false;
         bool                          clockRequested = false;
+        bool                          clockSetRequested = false;
         bool                          clockInitializationInvoked = false, clockQuarantined = false;
         // Clock cleanup can retain a script peer inside the historical cache
         // lock. Its independent publication/capture path never takes that lock.
@@ -134,19 +142,25 @@ namespace deonline
         std::atomic<std::uint32_t>                                                   clockSequence{0};
         std::atomic<bool>                                                            clockAvailable{false};
         DefinitiveClockReference::Snapshot                                           capturedClock{};
-        bool                                                                         renderRequested = false;
-        bool                                                                         guiRequested = false;
-        bool                                                                         guiAvailable = false;
-        DefinitiveGuiStartupReference::Snapshot                                      publishedGui{}, capturedGui{};
-        bool                                                                         guiSurfaceRequested = false, guiSurfaceAvailable = false;
-        DefinitiveGuiSurfaceReference::Snapshot                                      publishedGuiSurface{}, capturedGuiSurface{};
-        bool                                                                         guiFrontendRequested = false, guiFrontendAvailable = false;
-        DefinitiveGuiFrontendReference::Snapshot                                     publishedGuiFrontend{}, capturedGuiFrontend{};
-        bool                                                                         guiFrontendInputRequested = false, guiFrontendInputAvailable = false;
-        DefinitiveGuiFrontendInputReference::Snapshot                                publishedGuiFrontendInput{}, capturedGuiFrontendInput{};
-        bool                                                                         frontendStartupRequested = false;
-        bool                                                                         persistentFrontendRequested = false;
-        PersistentFrontendHostLease                                                  persistentHostLease;
+        // Set has a distinct report so its bounded write proof cannot be
+        // interpreted as the historical API1 read-only observation.
+        std::array<std::atomic<std::uint32_t>, DefinitiveClockSetReference::FieldCount> publishedClockSet{};
+        std::atomic<std::uint32_t>                                                      clockSetSequence{0};
+        std::atomic<bool>                                                               clockSetAvailable{false};
+        DefinitiveClockSetReference::Snapshot                                           capturedClockSet{};
+        bool                                                                            renderRequested = false;
+        bool                                                                            guiRequested = false;
+        bool                                                                            guiAvailable = false;
+        DefinitiveGuiStartupReference::Snapshot                                         publishedGui{}, capturedGui{};
+        bool                                                                            guiSurfaceRequested = false, guiSurfaceAvailable = false;
+        DefinitiveGuiSurfaceReference::Snapshot                                         publishedGuiSurface{}, capturedGuiSurface{};
+        bool                                                                            guiFrontendRequested = false, guiFrontendAvailable = false;
+        DefinitiveGuiFrontendReference::Snapshot                                        publishedGuiFrontend{}, capturedGuiFrontend{};
+        bool                                                                            guiFrontendInputRequested = false, guiFrontendInputAvailable = false;
+        DefinitiveGuiFrontendInputReference::Snapshot                                   publishedGuiFrontendInput{}, capturedGuiFrontendInput{};
+        bool                                                                            frontendStartupRequested = false;
+        bool                                                                            persistentFrontendRequested = false;
+        PersistentFrontendHostLease                                                     persistentHostLease;
         // Persistent reports never enter the historical 256-field cache.
         std::array<std::atomic<std::uint32_t>, DefinitivePersistentFrontend::FieldCount> publishedPersistentFrontend{};
         std::atomic<std::uint32_t>                                                       persistentFrontendSequence{0};

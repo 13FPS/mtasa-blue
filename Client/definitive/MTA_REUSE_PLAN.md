@@ -15,8 +15,8 @@ current values, allowing natural progression without clock writes. Clock
 transactions exclude native input/render ownership and retain failed patch,
 protection, data or thread-resume cleanup for retry.
 This is one service toward the real `CGame` implementation. It does not expose
-a partial `CGame`, enable gameplay capabilities or establish live clock
-behavior; the clock service has not been tested in GTA yet.
+a partial `CGame` or enable gameplay capabilities. Read-only live behavior is
+now established for the exact runtime below; clock mutation remains untested.
 
 The first live candidate is the separate Smoke opt-in
 `-MtaCoreClockReference`, using the existing Core startup worker and optional
@@ -28,8 +28,32 @@ window and up to ten seconds of observation. Generation-bound acknowledgements
 and advancing native time are workload proof; safe retirement is a separate
 requirement before Core unload. Ordinary mode changes clear the opt-in, while
 intact historical configurations without its declaration require an update to
-enable it. This candidate is still untested in GTA. Full MTA readiness remains
-false and the port remains EXPERIMENTAL.
+enable it.
+
+The October 18 runtime `d9de393a1078deb12432bcdd984357eefb60b261` passed its
+actual Read trial: **198 acknowledged Reads**, **608 qualified callbacks**,
+**200 timer-progress observations** and **10,000 ms** of workload. The user
+reported normal GTA continuation. Independent validation covered all 88 logged
+samples with **5,033 protocol checks** plus **51 metadata/layout checks**.
+Native ownership retired and Core/GUI/XML/pthread unloaded. Normal exit kept
+all fourteen live log prefixes and 23 installed hashes exact, with only 74 new
+CLEO shutdown bytes. The machine exit code is unknown; saved shutdown markers,
+process absence and the human report supply the qualified normal-exit proof.
+The source cohort was frozen before later changes and sealed with the raw
+recording at `Build/definitive-recovery/current-actual-clock-read-checkpoint.json`.
+
+The next separate candidate, `-MtaCoreClockSetReference`, keeps base 23-file
+Smoke ownership and reuses the optional `CClock` provider for controlled
+Set/Read commands and native restoration. Its default-false
+`MTA_CORE_CLOCK_SET_REFERENCE` flag excludes the completed Read flag and all
+input/render/GUI trials. The distinct mode18 / API1 / 128-field Bridge/Core
+report preserves Read's mode17 / 96-field contract; no new MJS module or
+separate game lifecycle is introduced. GUI, NPC, network and player-input
+operations are outside this candidate. Its offline validation passed the
+normal Core/Game DE build, 710 native checks, 670 Set lifecycle checks per
+x86/x64 architecture, 125 worker cases, 1,202 script checks and the
+980-check Set package matrix. The first live Set validation is pending. Clock mutation/freezing and full MTA readiness remain unverified,
+and the port remains EXPERIMENTAL.
 
 Visible GUI integration continues inside Core using the existing CGUI/CEGUI
 renderer. The new opt-in surface attaches an MTA-owned transparent child window

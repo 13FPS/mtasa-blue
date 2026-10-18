@@ -131,7 +131,8 @@ try {
     $runs += Run-Host 'actual-runtime-core-wrong-image' $actualRoot @($actualRoot,'actual-runtime')
     foreach ($mode in @('runtime-two-views','runtime-stop-hidden','runtime-stop-showing','runtime-stop-visible','runtime-host-expired',
         'runtime-visible-expired','runtime-focus-hide','runtime-gui-hide','runtime-wrong-api','runtime-refused','runtime-view-fault',
-        'runtime-cursor-begin-fault','runtime-cursor-renew-fault','runtime-retained-stop','runtime-shutdown-busy','runtime-cache-contention','runtime-returned-pending','runtime-malformed-first-failed')) {
+        'runtime-cursor-begin-fault','runtime-cursor-renew-fault','runtime-retained-stop','runtime-shutdown-busy','runtime-cache-contention','runtime-returned-pending','runtime-malformed-first-failed',
+        'runtime-active-without-cleanup-debt','runtime-active-already-complete')) {
         $runtimeRoot = Join-Path $outputRoot ($mode + '-host')
         New-Item -ItemType Directory -Path $runtimeRoot -Force | Out-Null
         Copy-Item -LiteralPath $hostPath -Destination (Join-Path $runtimeRoot 'SanAndreas.exe')
@@ -186,13 +187,13 @@ $unchanged = $true
 foreach ($name in $sourceNames) { if ((Hash (Join-Path $repositoryRoot $name)) -ne $sourceHashes[$name]) { $unchanged=$false } }
 foreach ($artifact in $artifacts) { if ((Hash $artifact.source) -ne $artifact.sha256) { $unchanged=$false } }
 $record = [ordered]@{
-    recorded_at=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=($null -eq $failure -and $unchanged -and $runs.Count -eq 170);
+    recorded_at=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=($null -eq $failure -and $unchanged -and $runs.Count -eq 172);
     failure=$failure;source_hashes=$sourceHashes;sources_unchanged=$unchanged;compiles=$compiles;runs=$runs;normal_artifacts=$artifacts;
     historical_cases_expected=65;surface_cases_expected=24;completed_core_actual_cases_expected=1;persistent_core_actual_cases_expected=1;
     clock_controlled_cases_expected=14;clock_actual_preflight_cases_expected=1;historical_total_preserved=91;
     clock_set_controlled_cases_expected=18;clock_set_actual_preflight_cases_expected=1;prior_read_clock_total_preserved=106;
     completed_clock_controlled_cases_expected=25;completed_clock_actual_preflight_cases_expected=1;prior_total_preserved=125;
-    runtime_controlled_cases_expected=18;runtime_actual_preflight_cases_expected=1;prior_runtime_total_preserved=151;
+    runtime_controlled_cases_expected=20;runtime_actual_preflight_cases_expected=1;prior_runtime_total_preserved=151;
     fixture_executable_is_game=$false;game_launched=$false;game_memory_read=$false;game_process_attached=$false;game_files_changed=$false;
     synthetic_core_is_mta=$false;full_mta_boot_verified=$false;engine_input_write_verified=$false;
     scope='Actual production async worker, controlled non-MTA loader-lock/read-only-clock/Set/completed-clock-before-view/runtime Show-Hide-Stop fixtures, and normal Core bounded/completed/persistent/runtime/clock exact-image rejection in owned nonclassic hosts. Runtime416 command admission, dominant Stop, independent atomic cache, retained same-owner services, partial cursor refusal, host expiry and pre-unwind quarantine are exercised alongside all 151 earlier cases; no real native lease, time write, GUI or GTA workload is admitted.'

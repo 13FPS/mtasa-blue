@@ -8,7 +8,29 @@
 // private callback state without weakening any shipping executable/hash gate.
 // Synthetic memory belongs solely to this ordinary test process; Begin still
 // rejects this executable before pinning a module or installing any hook.
+#include <windows.h>
+#include <cstdint>
+#if defined(MTA_NATIVE_ELIGIBILITY_PUBLISHED_CACHE)
+namespace
+{
+    std::uintptr_t eligibilityAdmissionTestImage = 0;
+
+    HMODULE WINAPI EligibilityTestModuleHandleW(LPCWSTR name) noexcept
+    {
+        // Only this included observation/callback translation unit sees the
+        // synthetic image. The separately compiled NativePadReader still binds
+        // the real test executable and refuses every production Begin attempt.
+        if (!name && eligibilityAdmissionTestImage)
+            return reinterpret_cast<HMODULE>(eligibilityAdmissionTestImage);
+        return ::GetModuleHandleW(name);
+    }
+}
+    #define GetModuleHandleW EligibilityTestModuleHandleW
+#endif
 #include "../../Client/game_de/NativeMovementInput.cpp"
+#if defined(MTA_NATIVE_ELIGIBILITY_PUBLISHED_CACHE)
+    #undef GetModuleHandleW
+#endif
 #include <cstdio>
 #include <cstdlib>
 #include <thread>
@@ -981,6 +1003,90 @@ int main()
     Check(!eligibilityOwner.ReadEligibility(publishedEligibility) && publishedEligibility.knownMask == 0xaabbccdd,
           "ended writer clears its publication and preserves output");
 
+#if defined(MTA_NATIVE_ELIGIBILITY_PUBLISHED_CACHE)
+    // A retained Core uses this same NativeMovementInput for the next menu.
+    // Substitute only this test's observation image: Begin must still refuse
+    // our executable, and the public ReadEligibility/End decisions stay real.
+    eligibilityAdmissionTestImage = fixtureImage;
+    NativeMovementTrialState endedBefore, endedAfter;
+    eligibilityOwner.ReadState(endedBefore);
+    Check(eligibilityOwner.ReadEligibility(publishedEligibility) && publishedEligibility.eligible &&
+              publishedEligibility.knownMask == NativeMovementEligibilityMask,
+          "same adapter can freshly admit another view after successful native End");
+    Check(!runtime.eligibilityPublication.valid && !runtime.hooked.load() && !runtime.bound.load() && !runtime.active.load(),
+          "post-End admission creates no old publication, hooks or native ownership");
+    eligibilityOwner.ReadState(endedAfter);
+    Check(endedBefore.callbackCount == endedAfter.callbackCount && endedBefore.scopedSteps == endedAfter.scopedSteps &&
+              endedBefore.restoredSteps == endedAfter.restoredSteps && endedBefore.failureReason == endedAfter.failureReason &&
+              endedBefore.modulePinned == endedAfter.modulePinned,
+          "fresh admission preserves final native diagnostics and pinned-module facts");
+    Put(runtime.ped + 0x5fc, std::uint32_t{6});
+    Check(eligibilityOwner.ReadEligibility(publishedEligibility) && !publishedEligibility.eligible && publishedEligibility.rawPedState == 6,
+          "post-End observation rechecks actual current state instead of reviving old eligible cache");
+    Put(runtime.ped + 0x5fc, std::uint32_t{1});
+    Check(eligibilityOwner.End() && eligibilityOwner.ReadEligibility(publishedEligibility) && publishedEligibility.eligible,
+          "idempotent End preserves guarded admission for the next same-owner view");
+
+    Check(!eligibilityOwner.Begin(neutral), "new admission attempt still applies the shipping executable guard");
+    runtime.image = fixtureImage;
+    runtime.ped = fixturePed;
+    runtime.provider = fixtureProvider;
+    Configure(OriginalEligibilityPublication, false);
+    ClearEligibility();
+    publishedEligibility.knownMask = 0x187ab234;
+    Check(!eligibilityOwner.ReadEligibility(publishedEligibility) && publishedEligibility.knownMask == 0x187ab234,
+          "new generation resets retirement permission and cannot fall back to local eligibility");
+    runtime.inFlight.store(1);
+    Check(!eligibilityOwner.End(), "in-flight native ownership keeps End pending");
+    publishedEligibility.knownMask = 0x287ab234;
+    Check(!eligibilityOwner.ReadEligibility(publishedEligibility) && publishedEligibility.knownMask == 0x287ab234,
+          "pending End cannot reopen guarded pre-Begin eligibility");
+    runtime.inFlight.store(0);
+    Check(eligibilityOwner.End() && eligibilityOwner.ReadEligibility(publishedEligibility) && publishedEligibility.eligible,
+          "actual producer End retry opens admission only after in-flight debt is retired");
+
+    Check(!eligibilityOwner.Begin(neutral), "wrong-thread cleanup fixture preserves exact-image Begin refusal");
+    runtime.image = fixtureImage;
+    runtime.ped = fixturePed;
+    runtime.provider = fixtureProvider;
+    Configure(OriginalEligibilityPublication, false);
+    bool        foreignEnd = true;
+    std::thread foreignEndThread([&] { foreignEnd = eligibilityOwner.End(); });
+    foreignEndThread.join();
+    publishedEligibility.knownMask = 0x387ab234;
+    Check(!foreignEnd && !eligibilityOwner.ReadEligibility(publishedEligibility) && publishedEligibility.knownMask == 0x387ab234,
+          "wrong-thread End does not reopen local admission despite disarming native input");
+    Check(eligibilityOwner.End() && eligibilityOwner.ReadEligibility(publishedEligibility) && publishedEligibility.eligible,
+          "owner cleanup retry recovers fresh admission after rejected foreign cleanup");
+
+    Check(!eligibilityOwner.Begin(neutral), "admission-debt fixture keeps production executable refusal");
+    runtime.image = fixtureImage;
+    runtime.ped = fixturePed;
+    runtime.provider = fixtureProvider;
+    Configure(OriginalEligibilityPublication, false);
+    Admission::Token heldInput;
+    Check(Admission::TryAcquire(Admission::Category::Input, heldInput), "fixture retains an actual native Input admission claim");
+    runtime.admissionGeneration.store(runtime.generation.load());
+    runtime.admissionSerial.store(heldInput.serial + 1);
+    Check(!eligibilityOwner.End(), "native cleanup cannot retire a mismatched admission claim");
+    publishedEligibility.knownMask = 0x487ab234;
+    Check(!eligibilityOwner.ReadEligibility(publishedEligibility) && publishedEligibility.knownMask == 0x487ab234,
+          "clean hooks alone do not reopen admission while release debt remains");
+    runtime.admissionSerial.store(heldInput.serial);
+    Check(eligibilityOwner.End() && !Admission::IsClaimed(Admission::Category::Input) && eligibilityOwner.ReadEligibility(publishedEligibility) &&
+              publishedEligibility.eligible,
+          "successful admission-release retry authorizes the next guarded observation");
+
+    runtime.frontendLease = true;
+    Check(runtime.frontendPolicy.Begin(runtime.generation.load(), GetCurrentThreadId(), GetTickCount64(), true, neutral),
+          "terminal frontend lease fixture adopts its actual retained generation");
+    Check(eligibilityOwner.End(), "terminal frontend fixture retires cleanly");
+    FrontendInputLeaseStateV1 endedLease;
+    Check(eligibilityOwner.ReadFrontendLease(endedLease) && endedLease.generation == runtime.generation.load() && !endedLease.active && !endedLease.bound,
+          "eligibility retirement preserves terminal frontend lease generation and readback");
+    eligibilityAdmissionTestImage = 0;
+#endif
+
     NativeMovementInput nextEligibilityOwner;
     Check(!nextEligibilityOwner.Begin(neutral), "replacement owner preserves wrong-executable guard");
     runtime.image = fixtureImage;
@@ -994,6 +1100,15 @@ int main()
     Check(!eligibilityOwner.ReadEligibility(publishedEligibility) && publishedEligibility.knownMask == 0xdeadbeef,
           "retired adapter owner cannot consume the next generation publication");
     Check(nextEligibilityOwner.End(), "replacement eligibility owner ends cleanly");
+#if defined(MTA_NATIVE_ELIGIBILITY_PUBLISHED_CACHE)
+    eligibilityAdmissionTestImage = fixtureImage;
+    publishedEligibility.knownMask = 0x587ab234;
+    Check(!eligibilityOwner.ReadEligibility(publishedEligibility) && publishedEligibility.knownMask == 0x587ab234,
+          "old retired adapter cannot regain local admission after a replacement generation retires");
+    Check(nextEligibilityOwner.ReadEligibility(publishedEligibility) && publishedEligibility.eligible,
+          "only the most recent successfully retired owner can freshly observe its next admission");
+    eligibilityAdmissionTestImage = 0;
+#endif
     for (HANDLE event : {splitEntered, splitResume, splitFinished, splitNext})
         Check(CloseHandle(event) != FALSE, "coordination event closed");
 

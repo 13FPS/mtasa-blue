@@ -19,12 +19,14 @@ const copy = value => JSON.parse(JSON.stringify(value));
 function viewState(generation, retired = false) {
     if (!generation) return Array(288).fill(0);
     const view = Array(288).fill(0);
-    Object.assign(view, { 0: 1, 1: 1, 68: 12, 70: 12, 96: 1, 97: 2, 98: 77, 99: 1, 100: 1,
+    // The actual GUI reference keeps CleanupPending set for the whole live
+    // workload. It becomes zero only after the view's owners have retired.
+    Object.assign(view, { 0: 1, 1: 1, 5: 1, 68: 12, 70: 12, 96: 1, 97: 2, 98: 77, 99: 1, 100: 1,
         161: 1, 162: 1, 208: 1, 210: 1, 214: generation + 100, 220: generation + 100,
         232: 1, 236: 1, 237: 1, 256: 1, 257: generation, 259: 1, 260: generation + 100,
         262: 1, 265: 1000, 266: 500 });
     if (retired) {
-        Object.assign(view, { 1: 2, 6: 1, 9: 1, 39: 1, 78: 1, 79: 1, 80: 1, 97: 4,
+        Object.assign(view, { 1: 2, 5: 0, 6: 1, 9: 1, 39: 1, 78: 1, 79: 1, 80: 1, 97: 4,
             100: 0, 113: 1, 128: 1, 129: 4, 149: 1, 162: 0, 171: 1, 176: 1,
             177: 4, 190: 1, 208: 0, 210: 0, 238: 1, 259: 0, 262: 0, 263: 1, 269: 1 });
     }
@@ -284,6 +286,8 @@ module.exports = function frontendRuntimeEntryTests({ test, runEntry }) {
         ['worker owner replacement', 2, value => { value[8] = 78; }, /changed owner/],
         ['Core session replacement', 2, value => { ++value[99]; }, /replaced its retained Core/],
         ['view generation mismatch', 2, value => { value[128 + 257] = 9; }, /view sample/],
+        ['active view without retirement ownership', 2, value => { value[128 + 5] = 0; }, /before input\/cursor\/render/],
+        ['active view claiming cleanup complete', 2, value => { value[128 + 6] = 1; }, /before input\/cursor\/render/],
         ['unsafe active native scope', 2, value => { value[128 + 162] = 0; }, /before input\/cursor\/render/],
         ['unsafe active cursor', 2, value => { value[128 + 210] = 0; }, /before input\/cursor\/render/],
         ['unsafe active rendering', 2, value => { value[128 + 70] = 0; }, /before input\/cursor\/render/],

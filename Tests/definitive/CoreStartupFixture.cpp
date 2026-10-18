@@ -304,6 +304,9 @@ extern "C" __declspec(dllexport) DefinitiveFrontendRuntime::Status MTA_RunDEFron
         factory && GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN, reinterpret_cast<LPCWSTR>(factory), &retained);
     P::Snapshot sample{};
     sample[0] = sample[1] = 1;
+    // Match the real GUI lifecycle: a live view owns eventual cleanup debt
+    // even after its short native render observer has already retired.
+    sample[5] = 1;
     sample[57] = sample[232] = pinned ? 1u : 0u;
     sample[68] = sample[70] = 1;
     sample[96] = 1;
@@ -334,9 +337,17 @@ extern "C" __declspec(dllexport) DefinitiveFrontendRuntime::Status MTA_RunDEFron
     }
     if (mode == 11 || mode == 12)
         sample[172] = 1;
+    if (mode == 18)
+        sample[5] = 0;
+    if (mode == 19)
+        sample[6] = 1;
     publish();
     const auto started = GetTickCount64();
     auto       reason = P::Stop::Cancelled;
+    // Hold these otherwise fully admitted samples until the test has observed
+    // their sole invalid ownership word. A timer could skip the actual guard
+    // boundary on a busy host and test only the later terminal publication.
+    const auto ownershipRelease = mode == 18 || mode == 19 ? Event(L"MTA_CORE_FIXTURE_INPUT_RELEASE", SYNCHRONIZE) : nullptr;
     for (;;)
     {
         if (!request->heartbeat())
@@ -346,6 +357,11 @@ extern "C" __declspec(dllexport) DefinitiveFrontendRuntime::Status MTA_RunDEFron
         }
         if (request->cancelled())
             break;
+        if (ownershipRelease && WaitForSingleObject(ownershipRelease, 0) == WAIT_OBJECT_0)
+        {
+            reason = P::Stop::Fault;
+            break;
+        }
         if (mode == 6 || mode == 7 || mode == 10 || mode == 11 || mode == 12)
         {
             if (GetTickCount64() - started >= 100)
@@ -357,6 +373,8 @@ extern "C" __declspec(dllexport) DefinitiveFrontendRuntime::Status MTA_RunDEFron
         Sleep(10);
         publish();
     }
+    if (ownershipRelease)
+        CloseHandle(ownershipRelease);
     if (mode == 13)
     {
         sample[1] = 3;

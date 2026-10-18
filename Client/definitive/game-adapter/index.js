@@ -1964,8 +1964,11 @@ function runFrontendRuntime(bind, chordHeld, stopKey) {
         }
         if (values[1] === 4 && (values[26] !== 2 || !values[24] || values[13] !== 1 ||
             view[1] !== 1 || view[96] !== 1 || view[97] !== 2 || !view[99] ||
-            ![100, 161, 162, 208, 210, 232, 236, 237, 259, 262].every(field => view[field] === 1) ||
-            [5, 6, 171, 172, 238].some(field => view[field]) || !view[68] || !view[70]))
+            // The active GUI owner owes retirement until its workload ends.
+            // CleanupPending is therefore required here; only a retired view
+            // may clear it and publish CleanupComplete.
+            ![5, 100, 161, 162, 208, 210, 232, 236, 237, 259, 262].every(field => view[field] === 1) ||
+            [6, 171, 172, 238].some(field => view[field]) || !view[68] || !view[70]))
             throw new Error('Frontend runtime acknowledged Show before input/cursor/render admission');
         if (values[1] === 7 && (!values[34] || values[33] || values[30] || values[31] ||
             !values[39] || !values[40] || !values[41] || !retiredCore(values) ||

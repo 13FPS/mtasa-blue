@@ -236,15 +236,26 @@ namespace
                            const std::filesystem::path& fixturePath)
     {
         namespace R = deonline::FrontendRuntimeReport;
-        const std::array<const wchar_t*, 18> modes{L"runtime-two-views",          L"runtime-stop-hidden",
-                                                   L"runtime-stop-showing",       L"runtime-stop-visible",
-                                                   L"runtime-host-expired",       L"runtime-visible-expired",
-                                                   L"runtime-focus-hide",         L"runtime-gui-hide",
-                                                   L"runtime-wrong-api",          L"runtime-refused",
-                                                   L"runtime-view-fault",         L"runtime-cursor-begin-fault",
-                                                   L"runtime-cursor-renew-fault", L"runtime-retained-stop",
-                                                   L"runtime-shutdown-busy",      L"runtime-cache-contention",
-                                                   L"runtime-returned-pending",   L"runtime-malformed-first-failed"};
+        const std::array<const wchar_t*, 20> modes{L"runtime-two-views",
+                                                   L"runtime-stop-hidden",
+                                                   L"runtime-stop-showing",
+                                                   L"runtime-stop-visible",
+                                                   L"runtime-host-expired",
+                                                   L"runtime-visible-expired",
+                                                   L"runtime-focus-hide",
+                                                   L"runtime-gui-hide",
+                                                   L"runtime-wrong-api",
+                                                   L"runtime-refused",
+                                                   L"runtime-view-fault",
+                                                   L"runtime-cursor-begin-fault",
+                                                   L"runtime-cursor-renew-fault",
+                                                   L"runtime-retained-stop",
+                                                   L"runtime-shutdown-busy",
+                                                   L"runtime-cache-contention",
+                                                   L"runtime-returned-pending",
+                                                   L"runtime-malformed-first-failed",
+                                                   L"runtime-active-without-cleanup-debt",
+                                                   L"runtime-active-already-complete"};
         const auto                           found = std::find(modes.begin(), modes.end(), mode);
         Check(found != modes.end(), "known runtime fixture mode");
         const auto scenario = static_cast<unsigned>(found - modes.begin());
@@ -314,12 +325,23 @@ namespace
                 Check(!read(R::ShowAcknowledgements), "native-only partial cursor admission cannot acknowledge Show");
                 command(2, R::Command::Stop);
             }
+            else if (scenario == 18 || scenario == 19)
+            {
+                wait([&] { return read(R::ViewSamples) > 0 && read(R::ViewOffset + 1) == 1; });
+                Check(!read(R::ShowAcknowledgements) && read(R::WorkerPhase) == static_cast<std::uint32_t>(R::Phase::Showing) &&
+                          read(R::ViewOffset + 5) == (scenario == 18 ? 0u : 1u) && read(R::ViewOffset + 6) == (scenario == 19 ? 1u : 0u),
+                      "a live sample without cleanup debt or already marked complete cannot acknowledge Show");
+                Check(read(R::ViewOffset + 68) && read(R::ViewOffset + 70) && read(R::ViewOffset + 161) == 1 && read(R::ViewOffset + 162) == 1 &&
+                          read(R::ViewOffset + 236) == 1 && read(R::ViewOffset + 237) == 1 && read(R::ViewOffset + 262) == 1,
+                      "ownership-word rejection is independent of otherwise admitted GUI/native/cursor evidence");
+                SetEvent(fixture.inputRelease);
+            }
             else if (scenario != 9 && scenario != 10 && scenario != 11 && scenario != 12)
             {
                 wait([&] { return read(R::WorkerPhase) == static_cast<std::uint32_t>(R::Phase::Visible); });
                 Check(read(R::AcknowledgedSequence) == 1 && read(R::AcknowledgementCode) == 1 && read(R::CoreSampleStage) == 2 &&
-                          read(R::CoreOffset + 33) == 2 && !fixture.counters[52],
-                      "Show acknowledges actual GUI admission and keeps historical Core sample");
+                          read(R::CoreOffset + 33) == 2 && !fixture.counters[52] && read(R::ViewOffset + 5) == 1 && !read(R::ViewOffset + 6),
+                      "Show acknowledges real active cleanup ownership and GUI admission while keeping the historical Core sample");
                 Check(!worker.CommandFrontendRuntime(generation, 1, 2) && !worker.CommandFrontendRuntime(generation, 2, 1),
                       "stale sequence and Show-while-visible refused");
                 if (scenario == 3 || scenario == 13)
@@ -392,6 +414,10 @@ namespace
             Check(read(R::HostExpiryObserved) == 1 && read(R::LastFailure) == 12, "host expiry is irrevocable and fail-closed");
         if (scenario == 11 || scenario == 12)
             Check(!read(R::ShowAcknowledgements), "cursor admission fault never acknowledges Show");
+        if (scenario == 18 || scenario == 19)
+            Check(!read(R::ShowAcknowledgements) && read(R::AcknowledgementCode) == 2 && read(R::LastFailure) == 5 && !read(R::ViewOffset + 5) &&
+                      read(R::ViewOffset + 6) == 1 && read(R::ViewsRetired) == 1,
+                  "invalid active ownership is refused without changing the independently qualified terminal retirement contract");
         if (scenario == 2)
             Check(read(R::SupersededRequests) == 1 && read(R::AcknowledgedSequence) == 2,
                   "Stop supersedes pending Show and acknowledges only after retirement");

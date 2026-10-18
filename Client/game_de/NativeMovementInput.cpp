@@ -843,6 +843,7 @@ namespace mta::game_de
             return false;
         ClearCounters();
         generation = runtime.generation.fetch_add(1) + 1;
+        eligibilityRetired = false;
         runtime.admissionSerial.store(claim.serial);
         runtime.admissionGeneration.store(generation);
         bool setupAttempted = false;
@@ -1044,7 +1045,13 @@ namespace mta::game_de
             Fail(Failure::HookRemove);
         ReadState(finalState);
         hasFinalState = true;
-        return clean && ReleaseAdmission(generation);
+        if (!clean || !ReleaseAdmission(generation))
+            return false;
+        // The same adapter backs fresh GUI views. Retire only eligibility's
+        // live-cache obligation after every native scope/hook and admission
+        // claim has ended; keep generation and finalState for terminal reads.
+        eligibilityRetired = true;
+        return true;
     }
 
     bool NativeMovementInput::IsBound() const noexcept
@@ -1067,8 +1074,14 @@ namespace mta::game_de
         // evidence from this generation's seed or authoritative engine callback.
         // ApiOperation excludes Begin/End and their Detours transactions while
         // the short shared-lock copy runs; the callback publisher never blocks.
-        if (generation)
+        if (generation && (!eligibilityRetired || generation != runtime.generation.load()))
             return ReadPublishedEligibility(generation, eligibility);
+        // End may have returned pending, or another adapter may now own native
+        // pad globals. Neither case permits fresh local admission observation.
+        if (runtime.bound.load() || runtime.active.load() || runtime.hooked.load() || runtime.scopes.load() || runtime.inFlight.load() ||
+            runtime.padAccess.load() || runtime.transaction.Active() || runtime.admissionSerial.load() || runtime.admissionGeneration.load() ||
+            Admission::IsClaimed(Admission::Category::Input))
+            return false;
         // Before Begin the adapter requires its exact-image reader binding.
         // This admission observation installs no hooks and owns no old cache.
         const auto      image = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));

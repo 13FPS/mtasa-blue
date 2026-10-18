@@ -27,13 +27,21 @@ leases remain 500 ms.
 The additive API1 Core64 and Bridge416 reports preserve Startup32, Input256 and
 Persistent288 meanings. The Core sample identifies an actual owner read;
 live GUI state comes from the view publication while that owner is busy.
-This candidate needs a fresh GTA test. Earlier cursor, Settings and clock
+The first GTA reopening trial on `9cce69bf9` failed: the second F9 command was
+received, but the new view could not reacquire native input. The first view
+also exposed an acknowledgement check that confused active cleanup ownership
+with a cleanup fault. The correction keeps that ownership flag while visible
+and permits fresh input eligibility only after the same adapter has fully
+retired its previous native generation. Pending cleanup and replacement owners
+still refuse reacquisition. This correction needs a fresh GTA reopening test.
+Earlier cursor, Settings and clock
 results below remain separate evidence. Gameplay, networking and full client
 startup remain unavailable, and the root **EXPERIMENTAL** notice stays.
 
 Offline validation passed 69 normal Core build guards and both classic compile
-profiles; 2,237 actual MTA GUI host checks across seven cases; 170 worker cases;
-1,356 script checks; and 2,386 actual Bridge checks in a rejected non-game host.
+profiles; 2,239 actual MTA GUI host checks across seven cases; 172 worker cases;
+1,358 script checks; 1,329 native callback and input-retirement checks in an
+owned test process; and 2,386 Bridge checks in a rejected non-game host.
 The new package matrix passed 3,746 checks using one disposable game copy, and
 the preceding frontend ownership matrix passed all 1,175 checks again. These
 results verify service ownership and failure handling; live hide/show and

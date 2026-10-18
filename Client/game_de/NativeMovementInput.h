@@ -37,7 +37,9 @@ namespace mta::game_de
         // admission. During a trial it consumes fresh, generation/identity-bound
         // engine publications, since ambient pad globals may belong to another
         // ped. Missing/stale/inactive evidence preserves the caller's output;
-        // weapon/task context and general gameplay readiness remain unknown.
+        // successful End reopens guarded admission only after native ownership
+        // has retired, while retaining the old generation's final diagnostics.
+        // Weapon/task context and general gameplay readiness remain unknown.
         bool ReadEligibility(NativeMovementEligibility& eligibility) const noexcept;
         void ReadState(NativeMovementTrialState& state) const noexcept;
 
@@ -46,5 +48,6 @@ namespace mta::game_de
         std::uint64_t            generation = 0;
         NativeMovementTrialState finalState;
         bool                     hasFinalState = false;
+        bool                     eligibilityRetired = false;
     };
 }

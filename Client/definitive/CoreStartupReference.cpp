@@ -817,7 +817,10 @@ namespace deonline
         // NativeVerified is set before cursor admission. Focused actual GUI
         // input and a successful present prove that the later cursor admission
         // and GUI Poll also completed; a partial Begin cannot acknowledge Show.
-        const bool admitted = snapshot[1] == 1 && !snapshot[5] && !snapshot[6] && snapshot[68] && snapshot[70] && snapshot[96] == 1 && snapshot[97] == 2 &&
+        // The shared GUI lifecycle keeps CleanupPending set while its active
+        // view still owns resources. Only final retirement clears that debt;
+        // requiring zero here would reject a healthy visibly running menu.
+        const bool admitted = snapshot[1] == 1 && snapshot[5] == 1 && !snapshot[6] && snapshot[68] && snapshot[70] && snapshot[96] == 1 && snapshot[97] == 2 &&
                               snapshot[99] && snapshot[100] == 1 && snapshot[161] == 1 && snapshot[162] == 1 && !snapshot[171] && !snapshot[172] &&
                               snapshot[208] == 1 && snapshot[210] == 1 && snapshot[232] == 1 && snapshot[236] == 1 && snapshot[237] == 1 && !snapshot[238] &&
                               snapshot[259] == 1 && snapshot[262] == 1;

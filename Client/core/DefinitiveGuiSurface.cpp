@@ -290,7 +290,20 @@ namespace DefinitiveGuiSurface
                 return false;
             }
             if (frontendHandled)
+            {
+                // Modal key capture consumes shortcuts, but a key pressed
+                // before capture still owes the existing GUI its release.
+                // Discharge only recorded holds, without injecting a press or
+                // turning an unrelated consumed key-up into another action.
+                if ((message == WM_KEYUP || message == WM_SYSKEYUP) && !input.ProcessConsumedRelease(*gui, message, wparam, lparam))
+                {
+                    interaction.inputFailed = 1;
+                    result.stopRequested = 1;
+                    Fail(E_FAIL);
+                    return false;
+                }
                 return true;
+            }
             if (message == WM_KEYDOWN && wparam == VK_ESCAPE && GetFocus() == window)
             {
                 CloseRequested(nullptr);

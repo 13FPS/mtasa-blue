@@ -393,6 +393,9 @@ CMainMenu::~CMainMenu()
 
 void CMainMenu::DestroyOwnedGui()
 {
+    // A separate capture prompt borrows a selected settings cell. It must die
+    // while this completed menu and its GUI still own both objects.
+    CancelFrontendBindingsCapture();
     if (m_FrontendOnly)
         m_FrontendHost.setInputOwnership(m_FrontendHost.context, false);
 
@@ -505,6 +508,42 @@ void CMainMenu::InitializeSettingsWindow()
 
     // A question failure must remain retryable after settings creation commits.
     TryShowPendingRichPresenceQuestion();
+}
+
+void CMainMenu::EnableFrontendBindingsSettings()
+{
+    if (!m_FrontendOnly || !CCore::GetSingleton().GetKeyBinds())
+        throw std::logic_error("MTA frontend settings require an admitted configured-bindings owner");
+    if (m_Settings)
+    {
+        if (!m_Settings->IsFrontendBindings())
+            throw std::logic_error("MTA frontend cannot adopt classic game settings");
+        return;
+    }
+    // Admission follows creation of the actual configured manager. Queries and
+    // menu hover still cannot construct classic settings or an engine facade.
+    auto settings = std::make_unique<CSettings>(CSettings::Mode::FrontendBindings);
+    settings->SetVisible(false);
+    m_Settings = std::move(settings);
+    for (auto* item : m_menuItems)
+    {
+        if (item && item->menuType == MENU_ITEM_SETTINGS && item->image)
+        {
+            item->image->SetEnabled(true);
+            item->image->SetAlpha(CORE_MTA_NORMAL_ALPHA);
+        }
+    }
+}
+
+bool CMainMenu::ProcessFrontendSettingsMessage(UINT message, WPARAM wparam, LPARAM lparam)
+{
+    return m_FrontendOnly && m_Settings && m_Settings->IsFrontendBindings() && m_Settings->ProcessMessage(message, wparam, lparam);
+}
+
+void CMainMenu::CancelFrontendBindingsCapture()
+{
+    if (m_FrontendOnly && m_Settings)
+        m_Settings->CancelFrontendCapture();
 }
 
 void CMainMenu::TryShowPendingRichPresenceQuestion()
@@ -1018,12 +1057,14 @@ bool CMainMenu::OnMenuClick(CGUIMouseEventArgs Args)
     if (!IsMenuActionAvailable(m_pHoveredItem->menuType))
         return true;
 
-    // Menu-only actions use the existing credits dialog or signal the owning
-    // host. No network, command, mod or gameplay path is entered by a click.
+    // Frontend actions reuse admitted local dialogs or signal the owning host.
+    // No network, mod or gameplay path is entered by a click.
     if (m_FrontendOnly)
     {
         if (m_pHoveredItem->menuType == MENU_ITEM_ABOUT)
             OnAboutButtonClick(pElement);
+        else if (m_pHoveredItem->menuType == MENU_ITEM_SETTINGS)
+            OnSettingsButtonClick(pElement);
         else if (m_pHoveredItem->menuType == MENU_ITEM_QUIT)
             OnQuitButtonClick(pElement);
         return true;
@@ -1276,7 +1317,8 @@ bool CMainMenu::OnNewsButtonClick(CGUIElement* pElement)
 
 bool CMainMenu::IsMenuActionAvailable(unsigned char menuType) const noexcept
 {
-    return !m_FrontendOnly || menuType == MENU_ITEM_ABOUT || menuType == MENU_ITEM_QUIT;
+    return !m_FrontendOnly || menuType == MENU_ITEM_ABOUT || menuType == MENU_ITEM_QUIT ||
+           (menuType == MENU_ITEM_SETTINGS && m_Settings && m_Settings->IsFrontendBindings());
 }
 
 sMenuItem* CMainMenu::CreateItem(unsigned char menuType, const char* szFilename, CVector2D vecRelPosition)

@@ -433,9 +433,36 @@ void CSettings::ResetGuiPointers()
     m_pCheckBoxBrowserVideoAccelEnabled = NULL;
 }
 
-CSettings::CSettings()
+CSettings::CSettings(Mode mode) : m_Mode(mode)
 {
     ResetGuiPointers();
+
+    if (IsFrontendBindings())
+    {
+        // Reuse the ordinary bindings grid/capture implementation without
+        // manufacturing CGame, D3D9, joystick or audio settings for the shell.
+        m_bCaptureKey = false;
+        m_bCaptureAxis = false;
+        m_uiCaptureKey = 0;
+        m_bIsModLoaded = false;
+        m_dwFrameCount = 0;
+        m_bBrowserListsChanged = false;
+        m_bBrowserListsLoadEnabled = false;
+        if (!CCore::GetSingleton().GetKeyBinds())
+            throw std::logic_error("Frontend settings require an admitted configured-bindings owner");
+        try
+        {
+            CreateGUI();
+        }
+        catch (...)
+        {
+            // Partial widgets already borrow this owner through callbacks.
+            // Retire them before the failed constructor loses its context.
+            DestroyGUI();
+            throw;
+        }
+        return;
+    }
 
     CClientVariables& clientVars = CClientVariables::GetSingleton();
     CGameSettings*    gameSettings = CCore::GetSingleton().GetGame()->GetSettings();
@@ -533,6 +560,10 @@ void CSettings::CreateGUI()
     {
         // Create window (with frame) if it will fit inside the screen resolution
         CGUIWindow* pWindow = reinterpret_cast<CGUIWindow*>(pManager->CreateWnd(NULL, _("SETTINGS")));
+        // Frontend construction rolls back partial widgets; publish the root
+        // before any later property/callback setup can throw.
+        if (IsFrontendBindings())
+            m_pWindow = pWindow;
         pWindow->SetCloseButtonEnabled(true);
         pWindow->SetMovable(true);
         pWindow->SetPosition((resolution - windowSize) / 2);
@@ -540,6 +571,8 @@ void CSettings::CreateGUI()
         pWindow->SetSizingEnabled(false);
         pWindow->SetAlwaysOnTop(true);
         pWindow->BringToFront();
+        if (IsFrontendBindings())
+            pWindow->SetCloseClickHandler(GUI_CALLBACK(&CSettings::OnCancelButtonClick, this));
         m_pWindow = pWindow;
         tabPanelPosition = CVector2D(0, 20);
     }
@@ -547,6 +580,8 @@ void CSettings::CreateGUI()
     {
         // Otherwise use black background image
         CGUIStaticImage* pFiller = reinterpret_cast<CGUIStaticImage*>(pManager->CreateStaticImage());
+        if (IsFrontendBindings())
+            m_pWindow = pFiller;
         pFiller->LoadFromFile(CORE_MTA_FILLER);
         pFiller->SetVisible(false);
         pFiller->SetZOrderingEnabled(false);
@@ -579,19 +614,25 @@ void CSettings::CreateGUI()
         button->SetPosition(CVector2D(std::max(0.0f, tabPanelSize.fX - buttonSize.fX - bottomPadding), buttonY));
     };
 
-    pTabMultiplayer = m_pTabMultiplayer = m_pTabs->CreateTab(_("Multiplayer"));
-    pTabVideo = m_pTabVideo = m_pTabs->CreateTab(_("Video"));
-    pTabPostFX = m_pTabPostFX = m_pTabs->CreateTab(_("PostFX"));
-    pTabAudio = m_pTabAudio = m_pTabs->CreateTab(_("Audio"));
+    if (!IsFrontendBindings())
+    {
+        pTabMultiplayer = m_pTabMultiplayer = m_pTabs->CreateTab(_("Multiplayer"));
+        pTabVideo = m_pTabVideo = m_pTabs->CreateTab(_("Video"));
+        pTabPostFX = m_pTabPostFX = m_pTabs->CreateTab(_("PostFX"));
+        pTabAudio = m_pTabAudio = m_pTabs->CreateTab(_("Audio"));
+    }
     pTabBinds = m_pTabBinds = m_pTabs->CreateTab(_("Binds"));
-    pTabControls = m_pTabControls = m_pTabs->CreateTab(_("Controls"));
-    m_pTabInterface = m_pTabs->CreateTab(_("Interface"));
-    m_pTabBrowser = m_pTabs->CreateTab(_("Web Browser"));
-    pTabAdvanced = m_pTabAdvanced = m_pTabs->CreateTab(_("Advanced"));
+    if (!IsFrontendBindings())
+    {
+        pTabControls = m_pTabControls = m_pTabs->CreateTab(_("Controls"));
+        m_pTabInterface = m_pTabs->CreateTab(_("Interface"));
+        m_pTabBrowser = m_pTabs->CreateTab(_("Web Browser"));
+        pTabAdvanced = m_pTabAdvanced = m_pTabs->CreateTab(_("Advanced"));
+    }
 
     // Create buttons
     //  OK button
-    m_pButtonOK = reinterpret_cast<CGUIButton*>(pManager->CreateButton(m_pWindow, _("OK")));
+    m_pButtonOK = reinterpret_cast<CGUIButton*>(pManager->CreateButton(m_pWindow, IsFrontendBindings() ? _("Apply (session only)") : _("OK")));
     m_pButtonOK->SetPosition(CVector2D(contentSize.fX * 0.5f, tabPanelSize.fY + tabPanelPosition.fY + 8));
     m_pButtonOK->SetZOrderingEnabled(false);
 
@@ -603,28 +644,19 @@ void CSettings::CreateGUI()
     /**
      *  Binds tab
      **/
-    m_pBindsList = reinterpret_cast<CGUIGridList*>(pManager->CreateGridList(pTabBinds, false));
-    const float bindsListX = tabHorizontalPadding * 0.5f;
-    const float bindsListTop = 15.0f;
-    m_pBindsList->SetPosition(CVector2D(bindsListX, bindsListTop));
-    m_pBindsList->SetSortingEnabled(false);
-    m_pBindsList->SetSelectionMode(SelectionModes::CellSingle);
-    m_pBindsList->SetDoubleClickHandler(GUI_CALLBACK(&CSettings::OnBindsListClick, this));
-
-    m_pTabs->GetSize(vecTemp);
-    m_pBindsDefButton = reinterpret_cast<CGUIButton*>(pManager->CreateButton(pTabBinds, _("Load defaults")));
-    m_pBindsDefButton->SetClickHandler(GUI_CALLBACK(&CSettings::OnBindsDefaultClick, this));
-    m_pBindsDefButton->AutoSize(NULL, 20.0f, 8.0f);
-    m_pBindsDefButton->GetSize(vecSize);
-    placeBottomRightButton(m_pBindsDefButton);
-    m_pBindsDefButton->SetZOrderingEnabled(false);
-    CVector2D bindsButtonPos;
-    m_pBindsDefButton->GetPosition(bindsButtonPos);
-    const float minBindsListHeight = 120.0f;
-    const float maxBindsListHeight = std::max(minBindsListHeight, tabPanelSize.fY - bindsListTop - 20.0f);
-    const float availableBindsHeight = bindsButtonPos.fY - bindsListTop - 10.0f;
-    const float bindsListHeight = std::clamp(availableBindsHeight, minBindsListHeight, maxBindsListHeight);
-    m_pBindsList->SetSize(CVector2D(std::max(0.0f, tabPanelSize.fX - tabHorizontalPadding), bindsListHeight));
+    CreateBindsTabGUI(pManager, pTabBinds, tabPanelSize);
+    if (IsFrontendBindings())
+    {
+        // Only the configured movement records are editable in this session.
+        // Keeping all other tabs unconstructed prevents their callbacks from
+        // reaching absent game/audio/network services, even through Tab/Enter.
+        m_pButtonOK->AutoSize(NULL, 20.0f, 8.0f);
+        m_pWindow->SetEnterKeyHandler(GUI_CALLBACK(&CSettings::OnOKButtonClick, this));
+        m_pButtonOK->SetClickHandler(GUI_CALLBACK(&CSettings::OnOKButtonClick, this));
+        m_pButtonCancel->SetClickHandler(GUI_CALLBACK(&CSettings::OnCancelButtonClick, this));
+        m_pWindow->SetVisible(false);
+        return;
+    }
 
     /**
      *  Controls tab
@@ -853,11 +885,6 @@ void CSettings::CreateGUI()
     pControlsDefButton->GetSize(vecSize);
     placeBottomRightButton(pControlsDefButton);
     pControlsDefButton->SetZOrderingEnabled(false);
-
-    m_hBind = m_pBindsList->AddColumn(_("DESCRIPTION"), 0.35f);
-    m_hPriKey = m_pBindsList->AddColumn(_("KEY"), 0.24f);
-    for (int k = 0; k < SecKeyNum; k++)
-        m_hSecKeys[k] = m_pBindsList->AddColumn(_("ALT. KEY"), 0.24f);
 
     /**
      *    Multiplayer tab
@@ -2104,8 +2131,63 @@ void CSettings::CreateGUI()
     LoadSkins();
 }
 
+void CSettings::CreateBindsTabGUI(CGUI* manager, CGUITab* tab, const CVector2D& panelSize)
+{
+    // Both startup policies use the original MTA grid, columns and capture
+    // callback. The frontend omits the GTA-defaults action rather than offering
+    // a button whose implementation requires an unavailable controller config.
+    m_pBindsList = reinterpret_cast<CGUIGridList*>(manager->CreateGridList(tab, false));
+    const float bindsListTop = 15.0f;
+    m_pBindsList->SetPosition(CVector2D(kSettingsTabHorizontalPadding * 0.5f, bindsListTop));
+    m_pBindsList->SetSortingEnabled(false);
+    m_pBindsList->SetSelectionMode(SelectionModes::CellSingle);
+    m_pBindsList->SetDoubleClickHandler(GUI_CALLBACK(&CSettings::OnBindsListClick, this));
+    m_hBind = m_pBindsList->AddColumn(_("DESCRIPTION"), 0.35f);
+    m_hPriKey = m_pBindsList->AddColumn(_("KEY"), 0.24f);
+    for (int k = 0; k < SecKeyNum; k++)
+        m_hSecKeys[k] = m_pBindsList->AddColumn(_("ALT. KEY"), 0.24f);
+
+    float availableBindsHeight = panelSize.fY - bindsListTop - 20.0f;
+    if (!IsFrontendBindings())
+    {
+        m_pBindsDefButton = reinterpret_cast<CGUIButton*>(manager->CreateButton(tab, _("Load defaults")));
+        m_pBindsDefButton->SetClickHandler(GUI_CALLBACK(&CSettings::OnBindsDefaultClick, this));
+        m_pBindsDefButton->AutoSize(NULL, 20.0f, 8.0f);
+        CVector2D buttonSize;
+        m_pBindsDefButton->GetSize(buttonSize);
+        const float bottomPadding = 32.0f;
+        const float buttonY = std::max(0.0f, panelSize.fY - buttonSize.fY - bottomPadding - 4.0f);
+        m_pBindsDefButton->SetPosition(CVector2D(std::max(0.0f, panelSize.fX - buttonSize.fX - bottomPadding), buttonY));
+        m_pBindsDefButton->SetZOrderingEnabled(false);
+        availableBindsHeight = buttonY - bindsListTop - 10.0f;
+    }
+    const float minimumHeight = 120.0f;
+    const float maximumHeight = std::max(minimumHeight, panelSize.fY - bindsListTop - 20.0f);
+    const float height = std::clamp(availableBindsHeight, minimumHeight, maximumHeight);
+    m_pBindsList->SetSize(CVector2D(std::max(0.0f, panelSize.fX - kSettingsTabHorizontalPadding), height));
+}
+
+bool CSettings::IsFrontendControl(const SBindableGTAControl* control) noexcept
+{
+    return control && (control->action == FORWARDS || control->action == BACKWARDS || control->action == LEFT || control->action == RIGHT ||
+                       control->action == WALK || control->action == SPRINT);
+}
+
+void CSettings::CancelFrontendCapture()
+{
+    if (!IsFrontendBindings() || !m_bCaptureKey)
+        return;
+    // The capture prompt is a separate Core-owned widget. Remove it before
+    // its selected grid cell or the borrowed GUI can be retired on focus loss.
+    m_bCaptureKey = false;
+    m_pSelectedBind = nullptr;
+    m_uiCaptureKey = 0;
+    CCore::GetSingleton().RemoveMessageBox(false);
+}
+
 void CSettings::DestroyGUI()
 {
+    CancelFrontendCapture();
     if (!m_pWindow)
     {
         RemoveAllKeyBindSections();
@@ -2170,6 +2252,8 @@ bool CSettings::OnMouseDoubleClick(CGUIMouseEventArgs Args)
 
 void CSettings::Update()
 {
+    if (IsFrontendBindings())
+        return;
     // Once each 30 frames
     if (m_dwFrameCount >= CORE_SETTINGS_UPDATE_INTERVAL)
     {
@@ -2947,6 +3031,10 @@ bool CSettings::OnControlsDefaultClick(CGUIElement* pElement)
 //
 bool CSettings::OnBindsDefaultClick(CGUIElement* pElement)
 {
+    // No caller, including a retained callback, may promote the frontend's
+    // configured-only records into reads of the classic controller defaults.
+    if (IsFrontendBindings())
+        return false;
     // Load the default binds
     CCore::GetSingleton().GetKeyBinds()->LoadDefaultBinds();
 
@@ -3387,7 +3475,10 @@ void CSettings::ProcessKeyBinds()
         else if (bindType == KeyBindType::GTA_CONTROL)
         {
             // Get the previous bind
-            CGTAControlBind* pBind = reinterpret_cast<CGTAControlBind*>(m_pBindsList->GetItemData(i, m_hPriKey));
+            CGTAControlBind*     pBind = reinterpret_cast<CGTAControlBind*>(m_pBindsList->GetItemData(i, m_hPriKey));
+            SBindableGTAControl* pControl = pBind ? pBind->control : nullptr;
+            if (IsFrontendBindings() && !IsFrontendControl(pControl))
+                continue;
             if (pBind)
             {
                 // If theres a primary key, change it
@@ -3425,9 +3516,10 @@ void CSettings::ProcessKeyBinds()
                         pKeyBinds->Remove(pSecBind);
                     }
                 }
-                else if (pSecKeys[k] && pBind)
+                else if (pSecKeys[k] && pControl)
                 {
-                    SBindableGTAControl* pControl = pBind->control;
+                    // Removing a cleared primary key above can destroy pBind.
+                    // Its table-owned control survives and also admits an alt.
                     if (!pKeyBinds->GTAControlExists(pSecKeys[k], pControl))
                         pKeyBinds->AddGTAControl(pSecKeys[k], pControl);
                 }
@@ -3438,6 +3530,8 @@ void CSettings::ProcessKeyBinds()
         {
             // Grab the stored control
             SBindableGTAControl* pControl = reinterpret_cast<SBindableGTAControl*>(m_pBindsList->GetItemData(i, m_hPriKey));
+            if (IsFrontendBindings() && !IsFrontendControl(pControl))
+                continue;
             if (pPriKey)
                 // If theres a new key for primary, add a new bind
                 pKeyBinds->AddGTAControl(pPriKey, pControl);
@@ -3449,6 +3543,8 @@ void CSettings::ProcessKeyBinds()
         // If the type is a command
         else if (bindType == KeyBindType::COMMAND)
         {
+            if (IsFrontendBindings())
+                continue;
             SString strCmdArgs = m_pBindsList->GetItemText(i, m_hBind);
 
             SString strCommand, strArguments;
@@ -3601,6 +3697,22 @@ bool CSettings::OnBindsListClick(CGUIElement* pElement)
 
 bool CSettings::ProcessMessage(UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
+    if (IsFrontendBindings())
+    {
+        if (uMsg == WM_KILLFOCUS || uMsg == WM_CANCELMODE || (uMsg == WM_ACTIVATE && LOWORD(wParam) == WA_INACTIVE))
+        {
+            CancelFrontendCapture();
+            return false;
+        }
+        if (!IsVisible())
+            return false;
+        if (!m_bCaptureKey && uMsg == WM_KEYDOWN && wParam == VK_ESCAPE)
+            return OnCancelButtonClick(nullptr);
+        // A reserved or untranslated key cannot fall through to F8, Enter or
+        // trial cancellation while the bindings grid owns a modal capture.
+        if (m_bCaptureKey && (uMsg == WM_CHAR || uMsg == WM_UNICHAR))
+            return true;
+    }
     if (m_bCaptureKey)
     {
         CKeyBindsInterface* pKeyBinds = CCore::GetSingleton().GetKeyBinds();
@@ -3616,7 +3728,12 @@ bool CSettings::ProcessMessage(UINT uMsg, WPARAM wParam, LPARAM lParam)
         if (m_uiCaptureKey == 0)
         {
             m_uiCaptureKey++;
-            return false;
+            // Classic routing includes the initiating click. The frontend may
+            // first receive a genuine keyboard press, which must not be lost.
+            if (!IsFrontendBindings() || uMsg == WM_LBUTTONUP)
+                // Its mouse-down was already delivered to the GUI translator;
+                // let the matching release discharge that existing ownership.
+                return false;
         }
 
         bool                bState;
@@ -3633,7 +3750,7 @@ bool CSettings::ProcessMessage(UINT uMsg, WPARAM wParam, LPARAM lParam)
         }
         else
         {
-            return false;
+            return IsFrontendBindings();
         }
 
         // Remove the messagebox we created earlier
@@ -3643,6 +3760,8 @@ bool CSettings::ProcessMessage(UINT uMsg, WPARAM wParam, LPARAM lParam)
         m_pBindsList->Activate();
 
         m_bCaptureKey = false;
+        if (IsFrontendBindings())
+            m_pSelectedBind = nullptr;
         return true;
     }
 
@@ -3660,9 +3779,12 @@ void CSettings::Initialize()
     // Add the rows
     CKeyBinds* pKeyBinds = reinterpret_cast<CKeyBinds*>(CCore::GetSingleton().GetKeyBinds());
     iRowGame = m_pBindsList->AddRow();
-    m_pBindsList->SetItemText(iRowGame, m_hBind, _("GTA GAME CONTROLS"), false, true);
-    m_pBindsList->SetItemText(m_pBindsList->AddRow(), m_hBind, CORE_SETTINGS_HEADER_SPACER, false, true);
-    m_pBindsList->SetItemText(m_pBindsList->AddRow(), m_hBind, _("MULTIPLAYER CONTROLS"), false, true);
+    m_pBindsList->SetItemText(iRowGame, m_hBind, IsFrontendBindings() ? _("MTA MOVEMENT BINDS (SESSION ONLY)") : _("GTA GAME CONTROLS"), false, true);
+    if (!IsFrontendBindings())
+    {
+        m_pBindsList->SetItemText(m_pBindsList->AddRow(), m_hBind, CORE_SETTINGS_HEADER_SPACER, false, true);
+        m_pBindsList->SetItemText(m_pBindsList->AddRow(), m_hBind, _("MULTIPLAYER CONTROLS"), false, true);
+    }
     // iRows = CORE_SETTINGS_HEADERS;            // (game keys), (multiplayer keys)
     int iGameRowCount = 1;
     int iMultiplayerRowCount = 2;
@@ -3674,7 +3796,8 @@ void CSettings::Initialize()
         (*iters)->rowCount = 0;
     }
 
-    pKeyBinds->SortCommandBinds();
+    if (!IsFrontendBindings())
+        pKeyBinds->SortCommandBinds();
 
     // Loop through all the available controls
     int i = 0;
@@ -3686,6 +3809,8 @@ void CSettings::Initialize()
     for (i--; i >= 0; i--)
     {
         SBindableGTAControl* pControl = &g_bcControls[i];
+        if (IsFrontendBindings() && !IsFrontendControl(pControl))
+            continue;
 
         // Loop through the binds for a matching control
         size_t numMatches = 0;
@@ -3740,6 +3865,11 @@ void CSettings::Initialize()
             iGameRowCount++;
         }
     }
+
+    // The editable rows above borrow stable controller-table pointers or the
+    // session's real control binds. Command/resource records remain untouched.
+    if (IsFrontendBindings())
+        return;
 
     struct SListedCommand
     {
@@ -3862,6 +3992,10 @@ void CSettings::Initialize()
 
 void CSettings::SetVisible(bool bVisible)
 {
+    // Reopening also rebuilds the grid. End capture before either transition
+    // so its selected-cell pointer cannot outlive the old staged rows.
+    if (IsFrontendBindings())
+        CancelFrontendCapture();
     // Hide / show the form
     m_pWindow->SetVisible(bVisible);
 
@@ -3874,7 +4008,8 @@ void CSettings::SetVisible(bool bVisible)
 #endif
         m_pWindow->BringToFront();
         m_pWindow->Activate();
-        LoadData();
+        if (!IsFrontendBindings())
+            LoadData();
 
         // Clear the binds list
         m_pBindsList->Clear();
@@ -3899,6 +4034,18 @@ void CSettings::SetIsModLoaded(bool bLoaded)
 bool CSettings::OnOKButtonClick(CGUIElement* pElement)
 {
     CMainMenu* pMainMenu = CLocalGUI::GetSingleton().GetMainMenu();
+
+    if (IsFrontendBindings())
+    {
+        if (m_bCaptureKey)
+            return true;
+        // Grid text stages edits until Apply; the actual MTA control manager
+        // receives them here. Its XML and native GTA controls stay unchanged.
+        ProcessKeyBinds();
+        SetVisible(false);
+        pMainMenu->m_bIsInSubWindow = false;
+        return true;
+    }
 
     // Process keybinds
     ProcessKeyBinds();
@@ -3930,6 +4077,15 @@ bool CSettings::OnNickButtonClick(CGUIElement* pElement)
 bool CSettings::OnCancelButtonClick(CGUIElement* pElement)
 {
     CMainMenu* pMainMenu = CLocalGUI::GetSingleton().GetMainMenu();
+
+    if (IsFrontendBindings())
+    {
+        // Nothing has mutated the real manager before Apply, so cancellation
+        // only retires the staged cells and any owned capture prompt.
+        SetVisible(false);
+        pMainMenu->m_bIsInSubWindow = false;
+        return true;
+    }
 
     m_pWindow->SetVisible(false);
     pMainMenu->m_bIsInSubWindow = false;
@@ -3964,6 +4120,10 @@ bool CSettings::OnCancelButtonClick(CGUIElement* pElement)
 
 void CSettings::LoadData()
 {
+    // Public refresh callers cannot turn the configured-bindings view into a
+    // game-settings read. Its grid is refreshed separately by Initialize.
+    if (IsFrontendBindings())
+        return;
     // Ensure CVARS ranges ok
     CClientVariables::GetSingleton().ValidateValues();
 
@@ -4318,6 +4478,8 @@ void CSettings::ReloadBrowserLists()
 
 bool CSettings::OnTabChanged(CGUIElement* pElement)
 {
+    if (IsFrontendBindings())
+        return true;
     if (pElement == m_pTabBrowser && !m_bBrowserListsLoadEnabled)
     {
         // Load browser lists when tab is selected for the first time
@@ -4329,6 +4491,10 @@ bool CSettings::OnTabChanged(CGUIElement* pElement)
 
 void CSettings::SaveData()
 {
+    // Frontend Apply is deliberately session-only. The ordinary save path also
+    // updates engine, audio, browser and application preferences we do not own.
+    if (IsFrontendBindings())
+        return;
     std::string    strVar;
     CGameSettings* gameSettings = CCore::GetSingleton().GetGame()->GetSettings();
 

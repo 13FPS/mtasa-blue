@@ -86,6 +86,9 @@ public:
     CServerBrowser* GetServerBrowser() { return m_ServerBrowser.get(); };
     CSettings*      GetSettingsWindow() { return m_Settings.get(); };
     void            InitializeSettingsWindow();
+    void            EnableFrontendBindingsSettings();
+    bool            ProcessFrontendSettingsMessage(UINT message, WPARAM wparam, LPARAM lparam);
+    void            CancelFrontendBindingsCapture();
     CQuestionBox*   GetQuestionWindow() { return &m_QuestionBox; };
     CNewsBrowser*   GetNewsBrowser() { return m_pNewsBrowser; };
 

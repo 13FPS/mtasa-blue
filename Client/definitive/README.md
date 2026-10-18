@@ -45,7 +45,42 @@ stays bounded; cleanup deadlines still retain owners and retry. The existing
 The renewable runner passes simulated execution beyond two minutes, and actual
 Core hosts reject wrong-image persistent startup without starting a view.
 
-**The latest persistent GTA attempt exceeded 35 seconds but failed cursor interaction.**
+**The frontend now reuses MTA's existing Settings / Binds tab.** Once the real
+configured-bindings manager is admitted, Settings exposes its six supported
+movement controls. Keyboard capture stages edits in the original grid; Apply
+updates the session's actual MTA bindings, and Cancel discards staged changes.
+Changes last for that frontend session. The other settings tabs and GTA-defaults
+action remain unavailable because they require later game services; configuration
+files stay unchanged. Classic settings retain their ordinary mode and save path.
+
+Capture owns Escape and reserved shortcuts before console or menu handling.
+Reopening, focus loss and teardown cancel its prompt before retiring the grid or
+bindings. A consumed modifier release also discharges any earlier GUI key hold.
+Actual MTA GUI hosts pass **1,416 checks across four profiles**, with Apply,
+Cancel, real binding-record reload, alternate keys and retained cleanup. A real
+owned-window surface passes **512 checks**, including the modifier-release path;
+the shared translator passes **130 checks each on x86 and x64**. The normal
+Core build and both classic compile profiles pass. These are offline checks;
+Settings interaction in GTA still needs its own visual test.
+
+**The cursor correction worked in GTA on runtime `7e7018b66`.** MTA's existing
+`CSetCursorPosHook` recorded **383 lease renewals**, **1,177 suppressed native
+recentres** and four forwarded calls. The user confirmed free pointer movement,
+a working menu Quit and restored walking, sprinting and camera controls. The
+fresh Core/script records agree on the real Quit callback, and **1,182 native
+input scopes have matching restores**. Cursor retirement ended with no hook,
+active lease or callback in flight; Core, GUI, XML and pthread unloaded.
+
+This attempt supplied **19,794 ms** of native input admission. The unchanged
+greater-than-35-second persistence criterion therefore remains false; this is
+a positive cursor-interaction result, not a completed long-duration workload.
+Independent post-launch/pre-F9 prefixes bind all three protocol logs to the
+fresh PID/run. Normal exit preserved all fourteen saved live prefixes, appended
+74 CLEO shutdown bytes and left the other logs and all 58 installed files
+unchanged. Camera exclusion remains unverified by machine observation. Full
+game/network readiness stays false and the port remains EXPERIMENTAL.
+
+**The preceding persistent attempt exceeded 35 seconds but failed cursor interaction.**
 Runtime `8b2226a04` recorded **39,781 ms** of native input admission, **775 lease
 renewals**, **2,379 scopes with matching restores** and **776 successful presents**.
 The user saw the menu remain visible, but the cursor stayed centred and could not
@@ -55,18 +90,15 @@ camera exclusion. Its overall frontend workload remains unverified.
 
 Cleanup and module removal passed, and normal exit appended 74 CLEO shutdown
 bytes. A fresh post-launch, pre-F9 baseline was captured for this attempt; the
-earlier closed-game recovery snapshot is not its trial prefix. The next candidate
-reuses MTA's existing `CSetCursorPosHook` with renewable frontend cursor ownership
-to stop native recentring while MTA owns the menu. That correction still needs
-its own live cursor/console/Quit and control-restoration test. Older successful
-bounded trials below remain separate evidence. Full game/network readiness stays
-false and the port remains EXPERIMENTAL.
+earlier closed-game recovery snapshot is not its trial prefix. Its cursor failure
+is retained separately from the corrected runtime's result above. Older
+successful bounded trials below remain separate evidence.
 
 The preceding persistent 58-file package passed 1,117 ownership/package checks,
 including 29 real launcher preflight cases and missing-export/architecture
 rejection. Its worker passed 69 controlled cases and 91 regression cases;
 1,126 script mocks and 100 saved-log reader tests passed separately. These are
-offline checks, not proof that the cursor correction works in GTA.
+offline checks, separate from the corrected runtime's live cursor result.
 
 The earlier completed-frontend package passed 733 ownership/package checks,
 including 22 launcher preflight cases. Its worker passed 56 controlled cases and

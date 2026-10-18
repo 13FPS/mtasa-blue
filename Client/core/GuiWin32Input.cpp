@@ -144,6 +144,30 @@ namespace GuiWin32Input
         return Process(GuiTarget(gui), message, wparam, lparam);
     }
 
+    bool Translator::ProcessConsumedRelease(CGUI& gui, UINT message, WPARAM wparam, LPARAM lparam)
+    {
+        return ProcessConsumedRelease(GuiTarget(gui), message, wparam, lparam);
+    }
+
+    bool Translator::ProcessConsumedRelease(const Target& target, UINT message, WPARAM wparam, LPARAM)
+    {
+        if (message != WM_KEYUP && message != WM_SYSKEYUP)
+            return false;
+        if (!Valid(target) || !BindOwner())
+            return false;
+        // Match the ordinary system-key policy: Windows still owns Alt and
+        // its shortcuts, while Ctrl/Shift can have accepted GUI holds. A modal
+        // capture must not strand those earlier presses in the translator.
+        if (message == WM_SYSKEYUP && wparam != VK_CONTROL && wparam != VK_SHIFT)
+            return true;
+        const auto code = TranslateVirtualKey(static_cast<DWORD>(wparam));
+        if (code && keys[code])
+            // Key clears the hold only after successful dispatch. If CEGUI
+            // throws, the same owner retains the obligation for cleanup/retry.
+            Key(target, code, false);
+        return true;
+    }
+
     bool Translator::Process(const Target& target, UINT message, WPARAM wparam, LPARAM lparam)
     {
         switch (message)

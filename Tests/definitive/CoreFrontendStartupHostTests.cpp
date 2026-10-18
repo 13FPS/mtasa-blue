@@ -15,6 +15,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -23,6 +24,8 @@
 #include <SString.h>
 #include <gui/CGUI.h>
 #include <gui/CGUID3D12.h>
+#include <core/CKeyBindsInterface.h>
+#include "ObservedFrontendGui.h"
 #include "../../Client/core/DefinitiveFrontend.h"
 #include "../../Client/core/DefinitiveFrontendStartup.h"
 #include "../../Client/core/DefinitivePersistentFrontend.h"
@@ -39,10 +42,12 @@ using mta::gui::GuiD3D12Status;
 static_assert(Frontend::ApiVersion == 1 && Frontend::FieldCount == 32);
 static_assert(Startup::ApiVersion == 1 && Startup::FieldCount == 32);
 static_assert(Persistent::ApiVersion == 1 && Persistent::FieldCount == 288);
+static_assert(Console::ApiVersion == 1 && Console::FieldCount == 32 && Bindings::ApiVersion == 1 && Bindings::FieldCount == 32);
 
 namespace
 {
     unsigned checks = 0;
+    bool     settingsVerified = false, settingsCaptureRetainedForCleanup = false;
     unsigned cancelCalls = 0, publishCalls = 0, heartbeatCalls = 0;
     bool     CancelView()
     {
@@ -91,37 +96,38 @@ namespace
     }
     struct Owned
     {
-        static constexpr UINT              Width = 1280, Height = 1024;
-        ComPtr<ID3D12Device>               device;
-        ComPtr<ID3D12CommandQueue>         queue;
-        ComPtr<ID3D12CommandAllocator>     allocator;
-        ComPtr<ID3D12GraphicsCommandList>  list;
-        ComPtr<ID3D12Resource>             target, readback;
-        ComPtr<ID3D12Fence>                fence, gate;
-        ComPtr<ID3D12DescriptorHeap>       rtv;
-        ComPtr<ID3D12InfoQueue>            info;
-        D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
-        HANDLE                             event = nullptr;
-        UINT64                             nextFence = 1;
-        bool                               blocked = false;
-        HMODULE                            core = nullptr, cgui = nullptr;
-        mta::gui::IGuiD3D12Session*        renderer = nullptr;
-        CGUI*                              gui = nullptr;
-        void*                              frontend = nullptr;
-        void*                              startup = nullptr;
-        Startup::Begin                     beginStartup = nullptr;
-        Startup::Pulse                     pulseStartup = nullptr;
-        Startup::BindInput                 bindStartup = nullptr;
-        Startup::Read                      readStartup = nullptr;
-        Startup::Shutdown                  shutdownStartup = nullptr;
-        Startup::Release                   releaseStartup = nullptr;
-        Startup::RunView                   runView = nullptr;
-        Persistent::Run                    runPersistent = nullptr;
-        Frontend::Create                   create = nullptr;
-        Frontend::Pulse                    pulse = nullptr;
-        Frontend::Read                     read = nullptr;
-        Frontend::Shutdown                 shutdown = nullptr;
-        Frontend::Release                  release = nullptr;
+        static constexpr UINT                Width = 1280, Height = 1024;
+        ComPtr<ID3D12Device>                 device;
+        ComPtr<ID3D12CommandQueue>           queue;
+        ComPtr<ID3D12CommandAllocator>       allocator;
+        ComPtr<ID3D12GraphicsCommandList>    list;
+        ComPtr<ID3D12Resource>               target, readback;
+        ComPtr<ID3D12Fence>                  fence, gate;
+        ComPtr<ID3D12DescriptorHeap>         rtv;
+        ComPtr<ID3D12InfoQueue>              info;
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT   footprint{};
+        HANDLE                               event = nullptr;
+        UINT64                               nextFence = 1;
+        bool                                 blocked = false;
+        HMODULE                              core = nullptr, cgui = nullptr;
+        mta::gui::IGuiD3D12Session*          renderer = nullptr;
+        CGUI*                                gui = nullptr;
+        std::unique_ptr<ObservedFrontendGui> observed;
+        void*                                frontend = nullptr;
+        void*                                startup = nullptr;
+        Startup::Begin                       beginStartup = nullptr;
+        Startup::Pulse                       pulseStartup = nullptr;
+        Startup::BindInput                   bindStartup = nullptr;
+        Startup::Read                        readStartup = nullptr;
+        Startup::Shutdown                    shutdownStartup = nullptr;
+        Startup::Release                     releaseStartup = nullptr;
+        Startup::RunView                     runView = nullptr;
+        Persistent::Run                      runPersistent = nullptr;
+        Frontend::Create                     create = nullptr;
+        Frontend::Pulse                      pulse = nullptr;
+        Frontend::Read                       read = nullptr;
+        Frontend::Shutdown                   shutdown = nullptr;
+        Frontend::Release                    release = nullptr;
 
         ~Owned()
         {
@@ -387,6 +393,8 @@ namespace
             result << (index ? "," : "") << frontend[index];
         result << "],\"persistentApiVersion\":1,\"persistentFields\":288,\"persistentRequestAdmissionVerified\":true,\"persistentWrongImageRefusalVerified\":"
                << (startup[Startup::LastFailure] == static_cast<std::uint32_t>(Startup::Failure::InputBind) ? "true" : "false")
+               << ",\"actualSessionBindingsSettingsVerified\":" << (settingsVerified ? "true" : "false")
+               << ",\"settingsCaptureRetainedForCleanup\":" << (settingsCaptureRetainedForCleanup ? "true" : "false")
                << ",\"persistentNativeLeaseStarted\":false,\"persistentVisibleRenderingVerified\":false,\"nativeEngineBindingVerified\":false,\"fullMtaReady\":"
                   "false,\"gameLaunched\":false}\n";
         Check(result.good(), "save actual completed-Core and frontend terminal values");
@@ -449,6 +457,199 @@ namespace
                   bindings[Bindings::CurrentZero] && bindings[Bindings::PreviousZero] && !bindings[Bindings::NetworkStarted] &&
                   !bindings[Bindings::FullMtaReady],
               "configured synthesis proves both neutral histories while keeping native engine binding unclaimed");
+    }
+
+    void SessionBindingsSettings(Owned& owned, const std::filesystem::path& root, bool retainCapture)
+    {
+        auto& observed = *owned.observed;
+        auto* window = observed.settingsWindow;
+        auto* grid = observed.settingsGrid;
+        auto* tabs = observed.settingsTabs;
+        std::printf("Settings observer root=%p grid=%p tabs=%p apply=%p cancel=%p buttons=%zu\n", static_cast<void*>(window), static_cast<void*>(grid),
+                    static_cast<void*>(tabs), static_cast<void*>(observed.settingsApply), static_cast<void*>(observed.settingsCancel),
+                    observed.settingsButtons.size());
+        Check(window != nullptr, "actual configured bindings constructed the existing SETTINGS window");
+        Check(grid && tabs && observed.settingsApply && observed.settingsCancel,
+              "actual configured bindings own a complete existing grid, tab and session buttons");
+        Check(!window->IsVisible(), "actual configured bindings settings window remains initially hidden");
+        Check(tabs->GetTabCount() == 1 && tabs->GetSelectedTab()->GetText() == "Binds" && grid->GetColumnCount() == 5 &&
+                  observed.settingsButtons == std::vector<std::string>{"Apply (session only)", "Cancel"},
+              "only the existing Binds grid and session Apply/Cancel are constructed; unavailable tabs and defaults stay absent");
+        const auto open = [&]
+        {
+            Click(owned, 230, 716);
+            Check(window->IsVisible() && owned.State()[Frontend::InputRequested] && !owned.State()[Frontend::CloseRequested],
+                  "real Settings menu image opens the existing bindings window and retains menu input ownership");
+        };
+        const auto clickButton = [&](CGUIButton* button)
+        {
+            CVector2D point = button->GetSize() / 2;
+            for (auto* element = static_cast<CGUIElement*>(button); element; element = element->GetParent())
+                point += element->GetPosition();
+            Click(owned, static_cast<int>(point.fX), static_cast<int>(point.fY));
+        };
+        const auto process = Export<Console::ProcessMessage>(owned.core, "MTA_ProcessDEFrontendConsoleMessage");
+        const auto message = [&](UINT type, WPARAM key, LPARAM detail = 0)
+        {
+            std::uint32_t handled = UINT32_MAX;
+            Check(process(owned.frontend, type, key, detail, &handled) == Frontend::Status::Ok && handled <= 1,
+                  "actual frontend routes owned keyboard/focus input through the existing Core message API");
+            return handled != 0;
+        };
+        const auto consoleHidden = [&]
+        {
+            Console::Snapshot state{};
+            Check(Export<Console::Read>(owned.core, "MTA_ReadDEFrontendConsole")(owned.frontend, state.data(), Console::FieldCount) == Frontend::Status::Ok &&
+                      !state[Console::ConsoleVisible] && state[Console::CommandsRegistered] == 2 && state[Console::CommandsExecuted] == 2,
+                  "settings capture preserves the existing hidden Help/Clear console without adding commands");
+        };
+        constexpr int                             descriptionColumn = 1, primaryColumn = 2;
+        const std::array<std::string, 6>          controls{"forwards", "backwards", "left", "right", "sprint", "walk"};
+        const std::array<std::string, 6>          replacement{"i", "k", "j", "l", "u", "o"};
+        const std::array<WPARAM, 6>               keys{'I', 'K', 'J', 'L', 'U', 'O'};
+        std::array<int, 6>                        rows{};
+        std::array<CGTAControlBind*, 6>           realBinds{};
+        std::array<std::string, 6>                original{};
+        std::array<std::array<std::string, 3>, 6> originalAlternates{};
+        const auto                                findRows = [&]
+        {
+            rows.fill(-1);
+            unsigned count = 0;
+            for (int row = 0; row < grid->GetRowCount(); ++row)
+            {
+                const auto type = static_cast<KeyBindType>(reinterpret_cast<std::intptr_t>(grid->GetItemData(row, descriptionColumn)));
+                if (type != KeyBindType::GTA_CONTROL)
+                    continue;
+                auto* bind = static_cast<CGTAControlBind*>(grid->GetItemData(row, primaryColumn));
+                Check(bind && bind->type == KeyBindType::GTA_CONTROL && bind->boundKey && bind->control,
+                      "existing grid borrows a real configured MTA control bind rather than fixture data");
+                const auto action = std::find(controls.begin(), controls.end(), std::string(bind->control->szControl));
+                Check(action != controls.end(), "settings lists only one of the six admitted movement controls");
+                const auto index = static_cast<std::size_t>(action - controls.begin());
+                Check(rows[index] == -1, "each admitted movement control occupies exactly one existing grid row");
+                rows[index] = row;
+                realBinds[index] = bind;
+                ++count;
+            }
+            Check(count == controls.size() && grid->GetRowCount() == 7,
+                  "actual session settings include six movement rows and their single noneditable section header");
+        };
+        const auto beginCapture = [&](std::size_t index, int column = 2)
+        {
+            grid->SetSelectedItem(rows[index], column, true);
+            Check(grid->GetSelectedItemRow() == rows[index] && grid->GetSelectedItemColumn() == column - 1,
+                  "actual existing grid selects the requested movement binding cell");
+            Check(grid->Event_OnDoubleClick(), "existing grid dispatches its real production key-capture callback");
+        };
+        open();
+        findRows();
+        Save(root / L"frontend-settings.bmp", Raster(owned));
+        for (std::size_t index = 0; index < controls.size(); ++index)
+        {
+            original[index] = realBinds[index]->boundKey->szKey;
+            for (int alternate = 0; alternate < 3; ++alternate)
+                originalAlternates[index][alternate] = grid->GetItemText(rows[index], 3 + alternate);
+            Check(grid->GetItemText(rows[index], primaryColumn) == original[index], "initial grid text matches its actual CKeyBinds record");
+            beginCapture(index);
+            if (index == 0)
+                Check(!message(WM_LBUTTONUP, 0), "the initiating mouse release reaches the surface translator while settings capture remains armed");
+            Check(message(WM_KEYDOWN, keys[index]) && grid->GetItemText(rows[index], primaryColumn) == replacement[index] &&
+                      std::string(realBinds[index]->boundKey->szKey) == original[index],
+                  "real key capture changes only the staged cell until session Apply");
+            message(WM_KEYUP, keys[index]);
+        }
+        clickButton(observed.settingsApply);
+        Check(!window->IsVisible(), "actual session Apply callback closes the existing settings window");
+        for (std::size_t index = 0; index < controls.size(); ++index)
+            Check(std::string(realBinds[index]->boundKey->szKey) == replacement[index],
+                  "session Apply changes the real MTA manager's configured movement binding");
+        open();
+        findRows();
+        for (std::size_t index = 0; index < controls.size(); ++index)
+            Check(grid->GetItemText(rows[index], primaryColumn) == replacement[index],
+                  "reopening reloads applied movement keys from the actual retained MTA binding manager");
+        beginCapture(0);
+        Check(message(WM_KEYDOWN, 'P') && grid->GetItemText(rows[0], primaryColumn) == std::string("p"),
+              "another real key can be staged before testing Cancel");
+        message(WM_KEYUP, 'P');
+        clickButton(observed.settingsCancel);
+        Check(!window->IsVisible() && std::string(realBinds[0]->boundKey->szKey) == replacement[0],
+              "actual Cancel closes the dialog without applying staged edits to real MTA bindings");
+        open();
+        findRows();
+        Check(grid->GetItemText(rows[0], primaryColumn) == replacement[0], "Cancel discards its staged key when the grid reloads");
+        beginCapture(0);
+        Check(message(WM_KEYDOWN, VK_ESCAPE) && window->IsVisible() && grid->GetItemText(rows[0], primaryColumn) != replacement[0] &&
+                  std::string(realBinds[0]->boundKey->szKey) == replacement[0] && !owned.State()[Frontend::CloseRequested],
+              "Escape clears only the staged captured cell and cannot close the trial or mutate the manager");
+        message(WM_KEYUP, VK_ESCAPE);
+        clickButton(observed.settingsCancel);
+        open();
+        findRows();
+        beginCapture(0);
+        Check(message(WM_KEYDOWN, VK_F8), "a settings capture consumes F8 before the existing console shortcut");
+        message(WM_KEYUP, VK_F8);
+        consoleHidden();
+        Check(grid->GetItemText(rows[0], primaryColumn) == replacement[0] && message(WM_KEYDOWN, 'I'),
+              "reserved F8 leaves capture active so a subsequent bindable key completes the real capture");
+        message(WM_KEYUP, 'I');
+        clickButton(observed.settingsCancel);
+        open();
+        findRows();
+        beginCapture(0);
+        message(WM_KILLFOCUS, 0);
+        Check(!message(WM_KEYDOWN, 'P') && grid->GetItemText(rows[0], primaryColumn) == replacement[0] &&
+                  std::string(realBinds[0]->boundKey->szKey) == replacement[0],
+              "focus loss cancels modal capture without changing either the staged cell or actual configured key");
+        message(WM_KEYUP, 'P');
+        consoleHidden();
+        beginCapture(0);
+        open();
+        findRows();
+        Check(!message(WM_KEYDOWN, 'P') && grid->GetItemText(rows[0], primaryColumn) == replacement[0] &&
+                  std::string(realBinds[0]->boundKey->szKey) == replacement[0],
+              "opening settings again retires capture before rebuilding rows and cannot write through its old selected cell");
+        message(WM_KEYUP, 'P');
+        beginCapture(0);
+        Check(message(WM_KEYDOWN, VK_ESCAPE), "real capture stages removal of the configured primary movement key");
+        message(WM_KEYUP, VK_ESCAPE);
+        const std::string cleared = grid->GetItemText(rows[0], primaryColumn);
+        for (int alternate = 0; alternate < 3; ++alternate)
+            grid->SetItemText(rows[0], 3 + alternate, cleared.c_str());
+        beginCapture(0, 5);
+        Check(message(WM_KEYDOWN, 'P') && grid->GetItemText(rows[0], 5) == std::string("p"),
+              "the same staged edit captures a new alternate key after staging removal of the old configured keys");
+        message(WM_KEYUP, 'P');
+        clickButton(observed.settingsApply);
+        Check(!window->IsVisible(), "primary removal and alternate replacement finish through the real session Apply callback");
+        // Apply may retire the old primary CKeyBind. Reopen and obtain the new
+        // borrowed grid records before observing manager ownership again.
+        open();
+        findRows();
+        Check(grid->GetItemText(rows[0], primaryColumn) == std::string("p") && std::string(realBinds[0]->boundKey->szKey) == "p",
+              "clearing primary and adding an alternate retains a valid real control record after manager removal");
+        // Restore the disposable session through the actual Apply callback. No
+        // configuration file or native control is needed to observe ownership.
+        for (std::size_t index = 0; index < controls.size(); ++index)
+        {
+            grid->SetItemText(rows[index], primaryColumn, original[index].c_str());
+            for (int alternate = 0; alternate < 3; ++alternate)
+                grid->SetItemText(rows[index], 3 + alternate, originalAlternates[index][alternate].c_str());
+        }
+        clickButton(observed.settingsApply);
+        for (std::size_t index = 0; index < controls.size(); ++index)
+            Check(std::string(realBinds[index]->boundKey->szKey) == original[index],
+                  "session Apply restores the disposable host's real original movement bindings");
+        if (retainCapture)
+        {
+            open();
+            findRows();
+            beginCapture(0);
+            Check(message(WM_CHAR, 'P'), "a live capture owns text immediately before actual frontend teardown");
+            settingsCaptureRetainedForCleanup = true;
+        }
+        CheckIsolation(true);
+        settingsVerified = true;
     }
 }
 
@@ -558,6 +759,8 @@ int wmain(int argc, wchar_t** argv)
             Check(owned.renderer && owned.renderer->GetGUI(owned.gui) == GuiD3D12Status::Ok && owned.gui, "borrow actual owner-thread MTA D3D12 GUI");
             owned.gui->SetSkin("Default");
             owned.gui->SetCursorEnabled(false);
+            owned.observed = std::make_unique<ObservedFrontendGui>(*owned.gui);
+            owned.gui = owned.observed.get();
         };
         Frontend::Snapshot state{};
         if (mode == L"backend-failure")
@@ -570,6 +773,7 @@ int wmain(int argc, wchar_t** argv)
                       !StartupState(owned)[Startup::ViewRuns],
                   "failed backend owner refuses persistent native work without invoking callbacks or inventing a view");
             initializeGui();
+            owned.observed->ResetSettingsObservation();
             Check(!owned.create(Frontend::ApiVersion, owned.gui) && !StartupState(owned)[Startup::FrontendRetained],
                   "a failed backend Core cannot admit a borrowed frontend or leave a partial GUI owner");
         }
@@ -604,6 +808,7 @@ int wmain(int argc, wchar_t** argv)
             initializeGui();
             const auto empty = Raster(owned, true);
             Check(std::all_of(empty.begin(), empty.end(), [&](auto value) { return value == empty.front(); }), "empty actual GUI target is uniform");
+            owned.observed->ResetSettingsObservation();
             owned.frontend = owned.create(Frontend::ApiVersion, owned.gui);
             Check(owned.frontend != nullptr, "actual borrowed frontend publishes a handle even on XML startup failure");
             state = owned.State();
@@ -647,6 +852,7 @@ int wmain(int argc, wchar_t** argv)
                 Click(owned, 840, 644);
                 Check(!owned.State()[Frontend::CreditsVisible], "existing credits OK callback closes its real window");
                 ConsoleAndBindings(owned);
+                SessionBindingsSettings(owned, root, mode == L"gated");
                 if (mode == L"gated")
                 {
                     Hr(owned.queue->Wait(owned.gate.Get(), 1), "gate only the disposable renderer queue");
@@ -696,6 +902,7 @@ int wmain(int argc, wchar_t** argv)
             Check(!GetModuleHandleW(L"xmll.dll"), "frontend XML module unloads while the completed Core remains alive");
             if (mode == L"normal")
             {
+                owned.observed->ResetSettingsObservation();
                 owned.frontend = owned.create(Frontend::ApiVersion, owned.gui);
                 Check(owned.frontend && owned.State()[Frontend::Phase] == 2 && !owned.State()[Frontend::OwnsCoreShell],
                       "a second real menu can borrow the same retained completed Core");
@@ -716,6 +923,7 @@ int wmain(int argc, wchar_t** argv)
               "completed shutdown is idempotent and blocks new backend work");
         Check(owned.runPersistent(owned.startup, &persistentRequest) == Frontend::Status::Stopped && !cancelCalls && !publishCalls && !heartbeatCalls,
               "stopped completed Core refuses persistent work without renewing a host lifetime or native lease");
+        owned.observed->ResetSettingsObservation();
         Check(!owned.create(Frontend::ApiVersion, owned.gui) && !StartupState(owned)[Startup::FrontendRetained],
               "stopped completed Core rejects a new borrowed frontend before final release");
         const auto staleStartup = owned.startup;

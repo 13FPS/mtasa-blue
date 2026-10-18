@@ -139,6 +139,8 @@ namespace
         std::int32_t       mouseX = 0, mouseY = 0;
         Session*           surface = nullptr;
         bool               reentrantRejected = false;
+        bool               consumeModifierInput = false, consumedModifierReleaseVerified = false;
+        unsigned           consumedModifierMessages = 0;
         bool               Read() { return handle && read(handle, state.data(), static_cast<std::uint32_t>(state.size())) == Frontend::Status::Ok; }
         static bool        Start(void* context, CGUI* gui)
         {
@@ -180,7 +182,18 @@ namespace
             }
             return true;
         }
-        FrontendCallbacks Callbacks() { return {this, &Start, &Pulse, &Stop}; }
+        static bool Message(void* context, std::uint32_t message, std::uintptr_t key, std::intptr_t, bool* handled)
+        {
+            if (!handled)
+                return false;
+            auto& self = *static_cast<Menu*>(context);
+            *handled = self.consumeModifierInput && (key == VK_SHIFT || key == VK_CONTROL) &&
+                       (message == WM_KEYDOWN || message == WM_KEYUP || message == WM_SYSKEYDOWN || message == WM_SYSKEYUP);
+            if (*handled)
+                ++self.consumedModifierMessages;
+            return true;
+        }
+        FrontendCallbacks Callbacks() { return {this, &Start, &Pulse, &Stop, &Message}; }
     };
     void Drain(Session& surface)
     {
@@ -310,6 +323,35 @@ int wmain(int argc, wchar_t** argv)
             }
             if (mode == L"normal")
             {
+                // A modal frontend can start between a modifier's physical
+                // press and release. Exercise the real Surface HWND so this
+                // fails if its consumed-message branch bypasses the ledger.
+                for (const auto key : {WPARAM{VK_SHIFT}, WPARAM{VK_CONTROL}})
+                {
+                    const auto down = key == VK_SHIFT ? WM_KEYDOWN : WM_SYSKEYDOWN;
+                    const auto up = key == VK_SHIFT ? WM_KEYUP : WM_SYSKEYUP;
+                    const auto before = surface.InteractionSnapshot();
+                    menu.consumeModifierInput = false;
+                    SendMessageW(child, down, key, 0);
+                    const auto held = surface.InteractionSnapshot();
+                    Check(held.pressedKeys == 1 && held.events == before.events + 1,
+                          "actual owned HWND records a modifier press before modal frontend capture");
+                    menu.consumeModifierInput = true;
+                    SendMessageW(child, up, key, 0);
+                    const auto released = surface.InteractionSnapshot();
+                    Check(!released.pressedKeys && released.events == held.events + 1 && !released.inputFailed,
+                          "frontend-consumed key-up still releases the exact existing GUI hold through production Surface dispatch");
+                    SendMessageW(child, up, key, 0);
+                    Check(!surface.InteractionSnapshot().pressedKeys && surface.InteractionSnapshot().events == released.events,
+                          "orphan consumed key-up injects no additional GUI event");
+                    SendMessageW(child, down, key, 0);
+                    SendMessageW(child, up, key, 0);
+                    Check(!surface.InteractionSnapshot().pressedKeys && surface.InteractionSnapshot().events == released.events,
+                          "a new frontend-consumed modifier press cannot create a GUI hold or an unmatched release");
+                }
+                Check(menu.consumedModifierMessages == 8, "the actual Surface message callback consumed both normal and system modifier messages");
+                menu.consumeModifierInput = false;
+                menu.consumedModifierReleaseVerified = true;
                 Click(child, 230, 760);
                 Check(menu.Read() && menu.state[Frontend::AboutClicks] == 1 && menu.state[Frontend::CreditsVisible],
                       "actual HWND messages invoke real menu About and Credits");
@@ -414,6 +456,7 @@ int wmain(int argc, wchar_t** argv)
         std::ofstream result(root / L"frontend-surface-result.json");
         result << "{\"schema\":\"mta_owned_frontend_surface_v1\",\"success\":true,\"checks\":" << checks + 1 << ",\"starts\":" << menu.starts
                << ",\"pulses\":" << menu.pulses << ",\"stops\":" << menu.stops << ",\"aboutClicks\":" << menu.state[Frontend::AboutClicks]
+               << ",\"consumedModifierReleaseVerified\":" << (menu.consumedModifierReleaseVerified ? "true" : "false")
                << ",\"cleanupComplete\":true,\"gameLaunched\":false,\"fullMtaReady\":false}";
         Check(result.good(), "save actual owned frontend composition lifecycle evidence");
         std::printf("Passed %u actual MTA frontend surface host checks\n", checks);

@@ -189,6 +189,100 @@ namespace
         translator.Process(target, WM_UNICHAR, 0x110000, 0);
         Check(receiver.events.back().value == 0xfffd, "invalid Unicode scalar is not passed to CEGUI");
     }
+    void TestConsumedReleases()
+    {
+        Receiver                  receiver;
+        const auto                target = receiver.Target();
+        GuiWin32Input::Translator translator;
+        const UINT                unrelated[] = {WM_PAINT, WM_KEYDOWN, WM_SYSKEYDOWN, WM_CHAR, WM_LBUTTONUP, WM_MOUSEWHEEL, WM_KILLFOCUS};
+        for (const auto message : unrelated)
+            Check(!translator.ProcessConsumedRelease(target, message, VK_SHIFT, 0) && !translator.Snapshot().ownerThread && receiver.events.empty(),
+                  "consumed-release path cannot acquire ownership or forward non-key-up messages");
+        auto invalid = target;
+        invalid.key = nullptr;
+        Check(!translator.ProcessConsumedRelease(invalid, WM_KEYUP, VK_SHIFT, 0) && !translator.Snapshot().ownerThread && receiver.events.empty(),
+              "invalid consumed-release target fails before acquiring owner state");
+
+        translator.Process(target, WM_KEYDOWN, VK_SHIFT, 0);
+        const auto heldEvents = receiver.events.size();
+        for (const auto message : unrelated)
+            Check(!translator.ProcessConsumedRelease(target, message, VK_SHIFT, 0) && translator.Snapshot().pressedKeys == 1 &&
+                      receiver.events.size() == heldEvents,
+                  "modal press, text, mouse and focus events cannot manufacture releases");
+        bool        foreignRelease = true;
+        std::thread foreign([&] { foreignRelease = translator.ProcessConsumedRelease(target, WM_KEYUP, VK_SHIFT, 0); });
+        foreign.join();
+        Check(
+            !foreignRelease && translator.Snapshot().pressedKeys == 1 && translator.Snapshot().rejectedWrongThread == 1 && receiver.events.size() == heldEvents,
+            "foreign modal key-up cannot access or discharge the owner's earlier press");
+        Check(translator.ProcessConsumedRelease(target, WM_KEYUP, VK_SHIFT, 0) && !translator.Snapshot().pressedKeys &&
+                  receiver.events.size() == heldEvents + 1 && receiver.events.back().kind == 'k' && receiver.events.back().value == DIK_LSHIFT &&
+                  !receiver.events.back().down,
+              "Shift held before modal capture is released exactly once through the existing GUI target");
+        Check(translator.Snapshot().injectedEvents == 2 && !translator.Snapshot().syntheticReleases,
+              "consumed physical release is a normal GUI event, not a fabricated reset");
+        const auto releasedEvents = receiver.events.size();
+        Check(translator.ProcessConsumedRelease(target, WM_KEYUP, VK_SHIFT, 0) && receiver.events.size() == releasedEvents,
+              "orphan mapped key-up is a successful no-op without unknown GUI release");
+        Check(translator.ProcessConsumedRelease(target, WM_KEYUP, 'B', 0) && receiver.events.size() == releasedEvents,
+              "unmapped consumed key-up never injects an invented scan code");
+
+        translator.Process(target, WM_SYSKEYDOWN, VK_CONTROL, 0);
+        Check(translator.Snapshot().pressedKeys == 1 && translator.ProcessConsumedRelease(target, WM_SYSKEYUP, VK_CONTROL, 0) &&
+                  !translator.Snapshot().pressedKeys && receiver.events.back().value == DIK_LCONTROL && !receiver.events.back().down,
+              "system Ctrl release discharges a tracked system modifier press");
+        translator.Process(target, WM_KEYDOWN, VK_RETURN, 0);
+        const auto beforeSystem = receiver.events.size();
+        Check(translator.ProcessConsumedRelease(target, WM_SYSKEYUP, VK_RETURN, 0) && translator.Snapshot().pressedKeys == 1 &&
+                  receiver.events.size() == beforeSystem,
+              "system shortcuts cannot release unrelated GUI keys through the modal path");
+        Check(translator.ProcessConsumedRelease(target, WM_KEYUP, VK_RETURN, 0) && !translator.Snapshot().pressedKeys,
+              "ordinary key-up still discharges the same held Enter after system shortcut refusal");
+        translator.Process(target, WM_KEYDOWN, VK_RSHIFT, 0);
+        const auto rightShift = receiver.events.size();
+        Check(translator.ProcessConsumedRelease(target, WM_SYSKEYUP, VK_RSHIFT, 0) && translator.Snapshot().pressedKeys == 1 &&
+                  receiver.events.size() == rightShift,
+              "system policy accepts only the same generic Ctrl/Shift keys as ordinary translation");
+        Check(translator.ProcessConsumedRelease(target, WM_KEYUP, VK_RSHIFT, 0) && !translator.Snapshot().pressedKeys &&
+                  receiver.events.back().value == DIK_RSHIFT,
+              "ordinary right Shift uses the existing precise scan-code mapping");
+
+        receiver.throwPress = true;
+        bool threw = false;
+        try
+        {
+            translator.Process(target, WM_KEYDOWN, VK_CONTROL, 0);
+        }
+        catch (const std::runtime_error&)
+        {
+            threw = true;
+        }
+        Check(threw && translator.Snapshot().pressedKeys == 1, "faulted press is retained before a modal capture begins");
+        receiver.throwPress = false;
+        receiver.throwRelease = true;
+        threw = false;
+        const auto beforeFailedRelease = translator.Snapshot().injectedEvents;
+        try
+        {
+            translator.ProcessConsumedRelease(target, WM_KEYUP, VK_CONTROL, 0);
+        }
+        catch (const std::runtime_error&)
+        {
+            threw = true;
+        }
+        Check(threw && translator.Snapshot().pressedKeys == 1 && translator.Snapshot().injectedEvents == beforeFailedRelease,
+              "failed consumed release keeps the exact existing cleanup obligation for retry");
+        receiver.throwRelease = false;
+        Check(translator.ProcessConsumedRelease(target, WM_KEYUP, VK_CONTROL, 0) && !translator.Snapshot().pressedKeys &&
+                  translator.Snapshot().injectedEvents == beforeFailedRelease + 1,
+              "same owner can retry a failed modal release without a new press");
+        const auto retiredEvents = receiver.events.size();
+        Check(translator.ProcessConsumedRelease(target, WM_KEYUP, VK_CONTROL, 0) && receiver.events.size() == retiredEvents,
+              "retired modal release is idempotent after the throwing GUI recovers");
+        Check(translator.Reset(target) && !translator.Snapshot().pressedKeys && !translator.Snapshot().syntheticReleases,
+              "subsequent full cleanup has no stranded modal keyboard holds to release");
+    }
+
     void TestOwnerAndFailure()
     {
         Receiver                  receiver;
@@ -270,6 +364,7 @@ int main()
         TestMouseButtons();
         TestReset();
         TestCharacters();
+        TestConsumedReleases();
         TestOwnerAndFailure();
         std::printf("Passed %u shared Win32 GUI input checks\n", checks);
         return 0;

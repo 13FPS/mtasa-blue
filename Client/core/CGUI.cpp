@@ -491,7 +491,13 @@ void CLocalGUI::DestroyFrontendConsole()
 
 bool CLocalGUI::ProcessFrontendConsoleMessage(UINT message, WPARAM wparam, LPARAM lparam)
 {
-    if (!m_frontendOnly || !m_pConsole)
+    if (!m_frontendOnly)
+        return false;
+    // A key captured by Settings belongs to that dialog, including F8 and
+    // Escape. Route it before console shortcuts or the surface's close path.
+    if (m_pMainMenu && m_pMainMenu->ProcessFrontendSettingsMessage(message, wparam, lparam))
+        return true;
+    if (!m_pConsole)
         return false;
     if (message == WM_KILLFOCUS || message == WM_CANCELMODE || (message == WM_ACTIVATE && LOWORD(wparam) == WA_INACTIVE))
         m_frontendConsoleF8Down = false;

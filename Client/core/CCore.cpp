@@ -2546,6 +2546,12 @@ DefinitiveFrontend::Status CCore::EnableFrontendBindings()
         mta::game_de::MtaInputState neutral;
         if (ProduceFrontendNeutralInput(neutral) != Status::Ok)
             throw std::runtime_error("Frontend bindings did not produce neutral input");
+        // The existing settings UI may edit this session's real manager only
+        // after configured input is admitted. Its frontend mode never reaches
+        // classic game settings, joystick polling or configuration saves.
+        if (!m_pLocalGUI || !m_pLocalGUI->GetMainMenu())
+            throw std::runtime_error("Frontend bindings settings require the owned menu");
+        m_pLocalGUI->GetMainMenu()->EnableFrontendBindingsSettings();
         return Status::Ok;
     }
     catch (...)
@@ -2862,6 +2868,13 @@ DefinitiveFrontend::Status CCore::StopFrontend()
     state[Phase] = 3;
     try
     {
+        // Capture retains grid row pointers and an ordinary Core message box.
+        // Retire both while the menu, real bindings and borrowed GUI still
+        // exist; a completed frontend skips classic destructor cleanup.
+        if (m_pLocalGUI && m_pLocalGUI->GetMainMenu())
+            m_pLocalGUI->GetMainMenu()->CancelFrontendBindingsCapture();
+        RemoveMessageBox(false);
+        m_bDestroyMessageBox = false;
         if (resources.consoleEnabled)
         {
             // Preserve real parser/history/output evidence before deleting

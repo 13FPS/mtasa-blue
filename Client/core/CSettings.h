@@ -17,6 +17,8 @@ class CSettings;
 #include "CMainMenu.h"
 #include "CCore.h"
 
+struct SBindableGTAControl;
+
 #define SKINS_PATH        "skins/*"
 #define CHAT_PRESETS_PATH "mta/config/chatboxpresets.xml"
 #define CHAT_PRESETS_ROOT "chatboxpresets"
@@ -78,7 +80,13 @@ class CSettings
     friend class CCore;
 
 public:
-    CSettings();
+    enum class Mode
+    {
+        Full,
+        FrontendBindings
+    };
+
+    explicit CSettings(Mode mode = Mode::Full);
     ~CSettings();
 
     void CreateGUI();
@@ -97,6 +105,8 @@ public:
     void LoadData();
 
     bool IsCapturingKey() { return m_bCaptureKey; }
+    bool IsFrontendBindings() const noexcept { return m_Mode == Mode::FrontendBindings; }
+    void CancelFrontendCapture();
     void UpdateCaptureAxis();
     void UpdateJoypadTab();
 
@@ -459,8 +469,10 @@ protected:
     void ReloadBrowserLists();
 
 private:
-    void CreateInterfaceTabGUI();
-    void UpdateChatColorPreview(eChatColorType eType);
+    void        CreateBindsTabGUI(CGUI* manager, CGUITab* tab, const CVector2D& panelSize);
+    static bool IsFrontendControl(const SBindableGTAControl* control) noexcept;
+    void        CreateInterfaceTabGUI();
+    void        UpdateChatColorPreview(eChatColorType eType);
 
     void ProcessKeyBinds();
     void ProcessJoypad();
@@ -485,6 +497,10 @@ private:
     void RefreshBorderlessDisplayCalibration();
     void UpdateBorderlessAdjustmentControls();
     void ResetGuiPointers();
+
+    // A completed frontend has real configured binds but no game settings,
+    // audio or renderer owner. Its explicit mode must never enter those paths.
+    const Mode m_Mode;
 
     unsigned int m_uiCaptureKey;
     bool         m_bCaptureKey;

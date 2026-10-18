@@ -197,6 +197,7 @@ try {
         assets=$assets;assetsUnchanged=$assetsUnchanged;windowsFonts=$windowsFonts;systemDlls=$systemDlls;compiler=$compilerRecord;platformUnchanged=$platformUnchanged;executionArtifacts=$executionArtifacts;
         targetFormat=87;width=1280;height=1024;coreFrontendApi=1;frontendFields=32;actualMtaMenuAndCreditsOnOwnedCompositionSurface=$success;actualWin32MenuCallbacksVerified=$success;
         cpuFrontendTeardownWhileGpuRetainedVerified=$success;startupFailureOwnerCleanupVerified=$success;partialStartCleanupVerified=$success;frontendBusyRetainsBorrowedGuiVerified=$success;focusAndEscapeCleanupVerified=$success;
+        actualHwndConsumedModifierReleaseLedgerVerified=$success;
         configurationCopiesUnchanged=$assetsUnchanged;installedFilesChanged=$false;gameLaunched=$false;gameAttached=$false;engineInputSuppressionVerified=$false;fullMtaReady=$false;
         scope='Real normal-build Core frontend and CGUI on the production Surface owned WARP queue, child HWND and DirectComposition swapchain. Actual Win32 About/Credits/Quit, focus/Escape/resize, partial/throw/missing-XML startup, CPU-Busy and GPU-gated teardown. No GTA/native control write, engine facade, network startup or full readiness claim.'}
     $receipt | ConvertTo-Json -Depth 9 | Set-Content -LiteralPath (Join-Path $outputRoot 'test-result.json') -Encoding utf8

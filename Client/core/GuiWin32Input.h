@@ -45,9 +45,15 @@ namespace GuiWin32Input
         // classic Core construction and Windows message dispatch share a thread.
         // GUI exceptions propagate to the owning lifecycle's existing handler.
         bool Process(CGUI& gui, UINT message, WPARAM wparam, LPARAM lparam);
+        // A modal frontend may consume a physical key-up after its matching
+        // press reached CEGUI. Complete only an existing tracked release; never
+        // inject a new press or an orphan key-up. True means a valid owner
+        // processed a key-up (including a safe no-op); all other calls fail.
+        bool ProcessConsumedRelease(CGUI& gui, UINT message, WPARAM wparam, LPARAM lparam);
         bool Reset(CGUI& gui);
         bool ResetButtons(CGUI& gui);
         bool Process(const Target& target, UINT message, WPARAM wparam, LPARAM lparam);
+        bool ProcessConsumedRelease(const Target& target, UINT message, WPARAM wparam, LPARAM lparam);
         bool Reset(const Target& target);
         bool ResetButtons(const Target& target);
         // A foreign observer gets only the atomic owner/rejection facts. GUI

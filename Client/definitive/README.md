@@ -6,20 +6,30 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
-**The combined clock-to-menu trial still needs a successful pointer test.**
-On runtime `0dedf0b06`, the clock stage, same-Core GUI startup and cleanup
-passed the recorded machine checks, but the user reported the pointer being
-pulled toward the centre and used Escape. That run does not verify clicking
-Quit or successful combined interaction. Its failed result and normal shutdown
-logs remain saved separately from the earlier successful Settings trial.
+**Combined clock-to-menu cursor interaction passed in GTA on runtime `f731beec0`.**
+The user reported a free pointer, a successful Quit click and restored movement
+and camera controls. The same completed MTA Core owner performed the read-only
+clock stage and then the existing menu. Forty Read commands were acknowledged
+over a 2,016 ms native workload; all 273 borrowed input scopes were restored.
+MTA's existing cursor lease renewed 87 times and suppressed 267 engine cursor
+warps. Its hook detached with no active callbacks, and Core/GUI/XML/pthread
+unloaded. Quit is a human-reported click; the close flag also covers Escape and
+does not provide a separate machine-verified Quit callback count.
 
-The correction reuses MTA's existing cursor lease for bounded Core-owned menus
-as well as persistent menus. It begins only after neutral input is verified,
-renews before drawing, and retires after GUI detachment and native input
-restoration. Failed cleanup retains the same resource for retry. The existing
-cursor policy, persistent timing and public input layouts remain unchanged.
-The bounded diagnostic is `mta_core_bounded_frontend_cursor_v1`; offline tests
-use fake resources and do not establish visible pointer behaviour in GTA.
+The bounded path now shares the existing cursor lease with persistent menus:
+begin after neutral input proof, renew before drawing, disarm before GUI input
+detachment, and retire after native input restoration. Failed cleanup retains
+the same resource for retry. Cursor policy, persistent timing and public input
+layouts remain unchanged. The bounded diagnostic is
+`mta_core_bounded_frontend_cursor_v1`.
+
+All fourteen logs, the fresh pre-F9 baseline, source snapshots, runtime package
+and normal shutdown evidence are sealed behind
+`Build/definitive-recovery/current-actual-bounded-cursor-checkpoint.json`.
+The earlier `0dedf0b06` trial remains recorded as a pointer interaction failure;
+its clock/cleanup results do not turn Escape into a Quit click. Full gameplay,
+network and complete client startup remain gated; this result verifies the
+bounded frontend sequence. The root **EXPERIMENTAL** notice remains in place.
 
 **Read-only Core clock integration passed in GTA on runtime `d9de393a1`.**
 `package.ps1 -Mode Smoke -MtaCoreClockReference` selects an optional 23-file

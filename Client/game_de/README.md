@@ -62,10 +62,10 @@ prefixes and all 23 installed hashes; only CLEO appended its 74 shutdown bytes.
 The runtime's thirteen source files were frozen before subsequent development,
 and its raw logs, reviews and normal-exit proof are sealed in the workspace.
 The pointer is `Build/definitive-recovery/current-actual-clock-read-checkpoint.json`.
-This result covers Read only. Clock mutation, freezing and full MTA readiness
-remain unverified; the port remains EXPERIMENTAL.
+This result covers Read only; the later bounded Set result below has its own
+runtime and evidence. Full MTA readiness remains unverified.
 
-The next candidate is the separate Smoke opt-in `-MtaCoreClockSetReference`,
+The separate Smoke trial uses `-MtaCoreClockSetReference`,
 with `MTA_CORE_CLOCK_SET_REFERENCE` disabled by default. It keeps the same 23
 owned files and reuses Core's optional `CClock` provider for controlled Set/Read
 commands and restoration on the native owner. Its separate mode18 / API1 /
@@ -76,9 +76,29 @@ part of the Set candidate. Offline validation passed 710 native checks,
 670 Set lifecycle checks per x86/x64 architecture, 125 worker cases and the
 980-check Set package matrix. Native command completion now shares one
 publication epoch with its observed clock values, preventing a new Set
-acknowledgement from being paired with the previous observation. The first
-GTA mutation trial is still pending; the completed Read milestone belongs to
-its earlier runtime.
+acknowledgement from being paired with the previous observation.
+
+On October 18, runtime `f749e634f1b8227123bb035a0868d4e614d620fa` passed the
+actual bounded single-Set recipe. The initial producer Read was **19:11:53**;
+**one Set to 12:15** was acknowledged after **62 ms**. **97 subsequent Reads /
+98 total Read acknowledgements** observed progression through **12:19:43** over
+**5,000 ms**, with **305 qualified callbacks** and **101 timer-progress
+observations**. The user reported normal GTA continuation and a visible time
+change. All **45 saved samples** passed **3,348 independent checks**.
+
+Provider End verified restoration of its captured **19:11:48** and fractional
+phase. The provider's capture is earlier than the producer's first Read;
+restoration does not imply those observations are identical. Hooks, pending
+commands, peer holds and recovery debt retired, and the final module snapshot
+contained no Core/GUI/XML/pthread. Normal exit passed **159 checks**, retaining
+all fourteen live log prefixes and 23 installed hashes, with only CLEO's
+74-byte shutdown suffix added. The human normal-exit report and shutdown/Exit
+markers are separate from the unknown OS exit code. Evidence is recorded at
+`Build/definitive-recovery/current-actual-clock-set-checkpoint.json`.
+
+This result does not exercise live Freeze, Unfreeze or ResetTimeFrozen and does
+not enable full gameplay or networking. The completed Read milestone remains
+associated with its earlier runtime. The port remains EXPERIMENTAL.
 
 Optional native rendering diagnostics use the separate API1
 `game/CGameRenderObservation.h` factory. It supplies an owner-thread checked

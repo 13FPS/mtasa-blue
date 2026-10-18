@@ -49,7 +49,7 @@ runtime source copies, the fresh pre-F9 baseline, raw logs and both reviews are
 archived behind the workspace pointer
 `Build/definitive-recovery/current-actual-clock-read-checkpoint.json`.
 
-**A separate clock Set candidate passed offline validation.**
+**Core-owned Set/readback/restoration passed in GTA on runtime `f749e634f`.**
 `package.ps1 -Mode Smoke -MtaCoreClockSetReference` selects the optional base
 23-file candidate. `MTA_CORE_CLOCK_SET_REFERENCE` defaults false. Set and the
 existing `MTA_CORE_CLOCK_REFERENCE` Read trial are mutually exclusive, along
@@ -80,10 +80,30 @@ matrices with 980 Set, 716 Read and 687 legacy checks. The normal Core/Game DE
 build passed 66 guards, with classic compatibility and both owned Core entry
 hosts retained. A separate saved-evidence review passed 8,310 checks.
 
-The GTA Set trial is still pending. Clock mutation/freezing and full
-game/network readiness remain unverified. Existing
-Settings/menu results below describe their separate runtime. The port remains
-EXPERIMENTAL.
+The October 18 runtime `f749e634f1b8227123bb035a0868d4e614d620fa`
+completed **one Set to 12:15**, acknowledged after **62 ms**, from an initial
+producer Read of **19:11:53**. It then completed **97 subsequent Reads / 98
+total Read acknowledgements** and observed **12:19:43** before ending the
+provider. The workload lasted **5,000 ms**, with **305 qualified callbacks** and
+**101 timer-progress observations**. The user reported normal GTA continuation
+and a visible time change.
+
+All **45 saved 128-field samples** passed **3,348 independent checks**. End
+verified restoration to the provider's captured **19:11:48** and fractional
+phase. That capture predates the producer Read of 19:11:53; these observations
+are not claimed to be equal. Native hooks, pending commands, peer holds and
+recovery debt retired, and Core/GUI/XML/pthread were absent from the final
+module snapshot. Normal-exit capture passed **159 checks**, preserving all
+fourteen live log prefixes and 23 installed hashes; only CLEO appended its
+74 shutdown bytes. The OS exit code remains unknown and is recorded separately
+from process absence, shutdown/Exit markers and the human normal-exit report.
+The saved evidence has its own workspace pointer:
+`Build/definitive-recovery/current-actual-clock-set-checkpoint.json`.
+
+This establishes the bounded single-Set recipe, without exercising live Freeze,
+Unfreeze or ResetTimeFrozen. Full game/network readiness remains unverified.
+The earlier Read and Settings/menu results retain their separate runtime
+evidence. The port remains EXPERIMENTAL.
 
 **Frontend startup now has a separate completed Core owner.**
 `DefinitiveFrontendStartup` creates a successfully constructed `CCore`, then

@@ -15,8 +15,9 @@ current values, allowing natural progression without clock writes. Clock
 transactions exclude native input/render ownership and retain failed patch,
 protection, data or thread-resume cleanup for retry.
 This is one service toward the real `CGame` implementation. It does not expose
-a partial `CGame` or enable gameplay capabilities. Read-only live behavior is
-now established for the exact runtime below; clock mutation remains untested.
+a partial `CGame` or enable gameplay capabilities. Read-only live behavior and
+the later bounded single-Set recipe are established for their separate runtimes
+below; live freezing remains untested.
 
 The first live candidate is the separate Smoke opt-in
 `-MtaCoreClockReference`, using the existing Core startup worker and optional
@@ -42,7 +43,7 @@ process absence and the human report supply the qualified normal-exit proof.
 The source cohort was frozen before later changes and sealed with the raw
 recording at `Build/definitive-recovery/current-actual-clock-read-checkpoint.json`.
 
-The next separate candidate, `-MtaCoreClockSetReference`, keeps base 23-file
+The separate trial, `-MtaCoreClockSetReference`, keeps base 23-file
 Smoke ownership and reuses the optional `CClock` provider for controlled
 Set/Read commands and native restoration. Its default-false
 `MTA_CORE_CLOCK_SET_REFERENCE` flag excludes the completed Read flag and all
@@ -52,8 +53,30 @@ separate game lifecycle is introduced. GUI, NPC, network and player-input
 operations are outside this candidate. Its offline validation passed the
 normal Core/Game DE build, 710 native checks, 670 Set lifecycle checks per
 x86/x64 architecture, 125 worker cases, 1,202 script checks and the
-980-check Set package matrix. The first live Set validation is pending. Clock mutation/freezing and full MTA readiness remain unverified,
-and the port remains EXPERIMENTAL.
+980-check Set package matrix.
+
+Runtime `f749e634f1b8227123bb035a0868d4e614d620fa` passed this recipe in GTA on
+October 18: from an initial producer Read of **19:11:53**, it issued **one Set
+to 12:15**, acknowledged after **62 ms**, then completed **97 subsequent Reads /
+98 total Read acknowledgements** through **12:19:43**. The **5,000 ms** workload
+recorded **305 qualified callbacks** and **101 timer-progress observations**.
+The user reported normal GTA continuation and a visible time change. All
+**45 saved samples** passed **3,348 independent checks**.
+
+End restored the provider's captured **19:11:48** and fractional phase. The
+earlier provider capture and later producer Read are distinct observations;
+their equality is not part of the restoration proof. Native hooks, commands,
+peer holds and recovery debt retired, and Core/GUI/XML/pthread were absent from
+the final module snapshot. Normal exit passed **159 checks**, preserving all
+fourteen log prefixes and 23 installed hashes; only CLEO added its 74 shutdown
+bytes. The OS exit code remains unknown, separately from the human normal-exit
+report, process absence and ordered shutdown/Exit markers. The new evidence
+pointer is `Build/definitive-recovery/current-actual-clock-set-checkpoint.json`;
+the earlier Read and Settings evidence remains separate.
+
+Live Freeze, Unfreeze and ResetTimeFrozen remain untested. This bounded result
+does not unlock full MTA gameplay or networking, and the port remains
+EXPERIMENTAL.
 
 Visible GUI integration continues inside Core using the existing CGUI/CEGUI
 renderer. The new opt-in surface attaches an MTA-owned transparent child window

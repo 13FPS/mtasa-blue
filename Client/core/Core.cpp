@@ -30,6 +30,7 @@
     #include "DefinitiveProcess.h"
     #include "DefinitiveFrontendStartup.h"
     #include "DefinitiveFrontendClockReference.h"
+    #include "DefinitiveFrontendRuntime.h"
 #endif
 
 #define CORE_API extern "C" __declspec(dllexport)
@@ -269,6 +270,45 @@ CORE_API std::uint32_t MTA_DEPersistentFrontendApiVersion()
 CORE_API DefinitivePersistentFrontend::Status MTA_RunDEPersistentFrontendV1(void* handle, const DefinitivePersistentFrontend::RequestV1* request)
 {
     return DefinitivePersistentFrontend::RunOwner(handle, request);
+}
+
+CORE_API std::uint32_t MTA_DEFrontendRuntimeApiVersion()
+{
+    return DefinitiveFrontendRuntime::ApiVersion;
+}
+
+CORE_API void* MTA_BeginDEFrontendRuntime(std::uint32_t version)
+{
+    // Runtime configuration belongs to one completed frontend Core. Starting
+    // it neither binds the native image nor admits the ordinary gameplay path.
+    if (version != DefinitiveFrontendRuntime::ApiVersion || !g_isDefinitiveProcessCandidate || g_mtaDirectory.empty() || g_gtaDirectory.empty())
+        return nullptr;
+    return DefinitiveFrontendRuntime::BeginOwner();
+}
+
+CORE_API DefinitiveFrontendRuntime::Status MTA_ReadDEFrontendRuntime(void* handle, std::uint32_t* output, std::uint32_t count)
+{
+    return DefinitiveFrontendRuntime::ReadOwner(handle, output, count);
+}
+
+CORE_API DefinitiveFrontendRuntime::Status MTA_PulseDEFrontendRuntime(void* handle)
+{
+    return DefinitiveFrontendRuntime::PulseOwner(handle);
+}
+
+CORE_API DefinitiveFrontendRuntime::Status MTA_RunDEFrontendRuntimeView(void* handle, const DefinitivePersistentFrontend::RequestV1* request)
+{
+    return DefinitiveFrontendRuntime::RunViewOwner(handle, request);
+}
+
+CORE_API DefinitiveFrontendRuntime::Status MTA_ShutdownDEFrontendRuntime(void* handle)
+{
+    return DefinitiveFrontendRuntime::ShutdownOwner(handle);
+}
+
+CORE_API DefinitiveFrontendRuntime::Status MTA_ReleaseDEFrontendRuntime(void* handle)
+{
+    return DefinitiveFrontendRuntime::ReleaseOwner(handle);
 }
 #endif
 

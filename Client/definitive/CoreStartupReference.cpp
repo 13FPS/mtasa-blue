@@ -132,8 +132,8 @@ namespace deonline
     bool CoreStartupReference::Start(const void* moduleAddress, bool configuredInput, bool configuredMovement, bool configuredRender,
                                      std::uint32_t configuredRenderRoute, std::uint32_t configuredRenderApi, bool configuredGuiStartup,
                                      bool configuredGuiSurface, bool configuredGuiFrontend, bool configuredGuiFrontendInput, bool configuredFrontendStartup,
-                                     bool configuredPersistentFrontend, bool configuredClock, bool configuredClockSet,
-                                     bool configuredClockBeforeFrontend) noexcept
+                                     bool configuredPersistentFrontend, bool configuredClock, bool configuredClockSet, bool configuredClockBeforeFrontend,
+                                     bool configuredFrontendRuntime) noexcept
     {
         DWORD      expected = 0;
         const auto current = GetCurrentThreadId();
@@ -141,15 +141,31 @@ namespace deonline
             (static_cast<unsigned>(configuredMovement) + static_cast<unsigned>(configuredRender) + static_cast<unsigned>(configuredGuiStartup) +
                  static_cast<unsigned>(configuredGuiSurface) + static_cast<unsigned>(configuredGuiFrontend) +
                  static_cast<unsigned>(configuredGuiFrontendInput) + static_cast<unsigned>(configuredFrontendStartup) +
-                 static_cast<unsigned>(configuredPersistentFrontend) + static_cast<unsigned>(configuredClock) + static_cast<unsigned>(configuredClockSet) >
+                 static_cast<unsigned>(configuredPersistentFrontend) + static_cast<unsigned>(configuredClock) + static_cast<unsigned>(configuredClockSet) +
+                 static_cast<unsigned>(configuredFrontendRuntime) >
              1) ||
             (!ownerThread.compare_exchange_strong(expected, current) && expected != current) || !moduleAddress || IsPending() || thread ||
             frontendQuarantined || clockQuarantined ||
             (!configuredClock && !configuredClockSet && !configuredGuiFrontendInput && !configuredFrontendStartup && !configuredPersistentFrontend &&
-             !frontendControl.PrepareAttempt(current)))
+             !configuredFrontendRuntime && !frontendControl.PrepareAttempt(current)))
             return false;
         if (configuredPersistentFrontend && !persistentHostLease.Begin(current, GetTickCount64()))
             return false;
+        if (configuredFrontendRuntime)
+        {
+            const auto token = runtimeMailbox.Begin(current);
+            if (!token || runtimeHostLease.Begin(current, GetTickCount64()) != token)
+                return false;
+        }
+        frontendRuntimeRequested = configuredFrontendRuntime;
+        runtimeCache.Reset();
+        runtimeReport = {};
+        capturedRuntime = {};
+        runtimePublicationFault.store(false);
+        runtimeViewAvailable = false;
+        runtimeViewRequest = {};
+        runtimeStartedAt = GetTickCount64();
+        runtimePublicationSequence = 0;
         persistentFrontendRequested = configuredPersistentFrontend;
         clockRequested = configuredClock;
         clockSetRequested = configuredClockSet;
@@ -239,6 +255,8 @@ namespace deonline
         {
             if (persistentFrontendRequested)
                 persistentHostLease.Revoke();
+            if (frontendRuntimeRequested)
+                runtimeHostLease.Revoke();
             state.store(0, std::memory_order_release);
             return false;
         }
@@ -267,7 +285,9 @@ namespace deonline
 
     std::uint32_t CoreStartupReference::Read(std::uint32_t field) const noexcept
     {
-        return ownerThread.load() == GetCurrentThreadId() && state.load(std::memory_order_acquire) == 3 && field < values.size() ? values[field] : 0;
+        return !frontendRuntimeRequested && ownerThread.load() == GetCurrentThreadId() && state.load(std::memory_order_acquire) == 3 && field < values.size()
+                   ? values[field]
+                   : 0;
     }
 
     bool CoreStartupReference::CaptureInput() noexcept
@@ -683,6 +703,142 @@ namespace deonline
         return Start(moduleAddress, true, false, false, 0, 1, false, false, false, false, false, true) ? persistentHostLease.Generation() : 0;
     }
 
+    std::uint32_t CoreStartupReference::BeginFrontendRuntime(const void* moduleAddress) noexcept
+    {
+        return Start(moduleAddress, true, false, false, 0, 1, false, false, false, false, false, false, false, false, false, true) ? runtimeMailbox.Generation()
+                                                                                                                                   : 0;
+    }
+
+    bool CoreStartupReference::CommandFrontendRuntime(std::uint32_t generation, std::uint32_t sequence, std::uint32_t command) noexcept
+    {
+        if (!frontendRuntimeRequested || ownerThread.load() != GetCurrentThreadId() || !IsPending())
+            return false;
+        if (command != static_cast<std::uint32_t>(FrontendRuntimeReport::Command::Stop))
+        {
+            FrontendRuntimeReport::Snapshot sample{};
+            if (!runtimeCache.Capture(sample) ||
+                (command == 1 && sample[FrontendRuntimeReport::WorkerPhase] != static_cast<std::uint32_t>(FrontendRuntimeReport::Phase::Hidden)) ||
+                (command == 2 && sample[FrontendRuntimeReport::WorkerPhase] != static_cast<std::uint32_t>(FrontendRuntimeReport::Phase::Visible)))
+                return false;
+        }
+        return runtimeMailbox.Submit(GetCurrentThreadId(), generation, sequence, static_cast<FrontendRuntimeReport::Command>(command));
+    }
+
+    bool CoreStartupReference::HeartbeatFrontendRuntime(std::uint32_t generation) noexcept
+    {
+        return frontendRuntimeRequested && ownerThread.load() == GetCurrentThreadId() && IsPending() &&
+               runtimeHostLease.Heartbeat(GetCurrentThreadId(), generation, GetTickCount64());
+    }
+
+    int CoreStartupReference::PollFrontendRuntime() noexcept
+    {
+        return frontendRuntimeRequested ? Poll() : -1;
+    }
+
+    bool CoreStartupReference::CaptureFrontendRuntime() noexcept
+    {
+        return frontendRuntimeRequested && ownerThread.load() == GetCurrentThreadId() && runtimeCache.Capture(capturedRuntime);
+    }
+
+    std::uint32_t CoreStartupReference::ReadFrontendRuntime(std::uint32_t field) const noexcept
+    {
+        return frontendRuntimeRequested && ownerThread.load() == GetCurrentThreadId() && field < capturedRuntime.size() ? capturedRuntime[field] : 0;
+    }
+
+    void CoreStartupReference::PublishRuntime() noexcept
+    {
+        namespace R = FrontendRuntimeReport;
+        const auto superseded = runtimeMailbox.TakeSuperseded();
+        if (superseded.sequence)
+        {
+            ++runtimeReport[R::SupersededRequests];
+            if (superseded.sequence > runtimeReport[R::AcknowledgedSequence])
+            {
+                runtimeReport[R::AcknowledgedSequence] = superseded.sequence;
+                runtimeReport[R::AcknowledgedCommand] = static_cast<std::uint32_t>(superseded.command);
+                runtimeReport[R::AcknowledgementCode] = static_cast<std::uint32_t>(R::Acknowledgement::Superseded);
+            }
+        }
+        const auto accepted = runtimeMailbox.Accepted();
+        const auto pending = runtimeMailbox.Pending();
+        runtimeReport[R::Version] = R::ApiVersion;
+        ++runtimePublicationSequence;
+        runtimeReport[R::SequenceLow] = static_cast<std::uint32_t>(runtimePublicationSequence);
+        runtimeReport[R::SequenceHigh] = static_cast<std::uint32_t>(runtimePublicationSequence >> 32);
+        const auto now = GetTickCount64();
+        runtimeReport[R::ElapsedMs] = static_cast<std::uint32_t>((std::min)(now - runtimeStartedAt, std::uint64_t{UINT32_MAX}));
+        runtimeReport[R::SessionGenerationLow] = runtimeMailbox.Generation();
+        runtimeReport[R::ScriptThread] = ownerThread.load();
+        runtimeReport[R::WorkerThread] = GetCurrentThreadId();
+        runtimeReport[R::AcceptedSequence] = accepted.sequence;
+        runtimeReport[R::AcceptedCommand] = static_cast<std::uint32_t>(accepted.command);
+        runtimeReport[R::OutstandingSequence] = pending.sequence;
+        runtimeReport[R::OutstandingCommand] = static_cast<std::uint32_t>(pending.command);
+        runtimeReport[R::StopRequested] = runtimeMailbox.Stopping() || cancellation.load() || runtimeReport[R::HostExpiryObserved];
+        runtimeReport[R::StopSequence] = accepted.command == R::Command::Stop ? accepted.sequence : 0;
+        runtimeReport[R::HostLeaseFresh] = runtimeHostLease.Fresh(runtimeMailbox.Generation(), now) ? 1u : 0u;
+        runtimeReport[R::HostHeartbeatBudgetMs] = 1000;
+        runtimeReport[R::NativeHeartbeatBudgetMs] = runtimeReport[R::CursorHeartbeatBudgetMs] = 500;
+        runtimeCache.Publish(runtimeReport);
+    }
+
+    bool CoreStartupReference::RuntimeHostFresh()
+    {
+        return inputOwner && inputOwner->frontendRuntimeRequested &&
+               inputOwner->runtimeHostLease.Fresh(inputOwner->runtimeMailbox.Generation(), GetTickCount64());
+    }
+
+    bool CoreStartupReference::RuntimeViewCancelled()
+    {
+        if (!inputOwner || !inputOwner->frontendRuntimeRequested)
+            return true;
+        const auto command = inputOwner->runtimeMailbox.Pending().command;
+        return inputOwner->cancellation.load() || inputOwner->runtimePublicationFault.load() || command == FrontendRuntimeReport::Command::Hide ||
+               command == FrontendRuntimeReport::Command::Stop;
+    }
+
+    void CoreStartupReference::PublishRuntimeView(const std::uint32_t* snapshot, std::uint32_t count)
+    {
+        namespace R = FrontendRuntimeReport;
+        auto* owner = inputOwner;
+        if (!owner || !owner->frontendRuntimeRequested)
+            return;
+        if (!snapshot || count != DefinitivePersistentFrontend::FieldCount || GetCurrentThreadId() != owner->runtimeReport[R::WorkerThread] ||
+            snapshot[0] != 1 || snapshot[256] != 1 || snapshot[257] != owner->runtimeReport[R::ViewGenerationLow] || snapshot[258] || snapshot[244] ||
+            snapshot[245] || std::any_of(snapshot + 270, snapshot + count, [](auto value) { return value != 0; }))
+        {
+            owner->runtimePublicationFault.store(true);
+            return;
+        }
+        std::copy(snapshot, snapshot + count, owner->runtimeReport.begin() + R::ViewOffset);
+        owner->runtimeViewAvailable = true;
+        ++owner->runtimeReport[R::ViewSamples];
+        owner->runtimeReport[R::BackendPinnedExpected] |= snapshot[57] | snapshot[232];
+        // NativeVerified is set before cursor admission. Focused actual GUI
+        // input and a successful present prove that the later cursor admission
+        // and GUI Poll also completed; a partial Begin cannot acknowledge Show.
+        const bool admitted = snapshot[1] == 1 && !snapshot[5] && !snapshot[6] && snapshot[68] && snapshot[70] && snapshot[96] == 1 && snapshot[97] == 2 &&
+                              snapshot[99] && snapshot[100] == 1 && snapshot[161] == 1 && snapshot[162] == 1 && !snapshot[171] && !snapshot[172] &&
+                              snapshot[208] == 1 && snapshot[210] == 1 && snapshot[232] == 1 && snapshot[236] == 1 && snapshot[237] == 1 && !snapshot[238] &&
+                              snapshot[259] == 1 && snapshot[262] == 1;
+        if (admitted && owner->runtimeViewRequest.command == R::Command::Show && owner->runtimeMailbox.Complete(owner->runtimeViewRequest))
+        {
+            owner->runtimeReport[R::AcknowledgedSequence] = owner->runtimeViewRequest.sequence;
+            owner->runtimeReport[R::AcknowledgedCommand] = static_cast<std::uint32_t>(R::Command::Show);
+            owner->runtimeReport[R::AcknowledgementCode] = static_cast<std::uint32_t>(R::Acknowledgement::Completed);
+            ++owner->runtimeReport[R::ShowAcknowledgements];
+            owner->runtimeReport[R::WorkerPhase] = static_cast<std::uint32_t>(R::Phase::Visible);
+        }
+        if (snapshot[1] == 3)
+        {
+            owner->runtimeReport[R::WorkerPhase] = static_cast<std::uint32_t>(R::Phase::RetainedCleanup);
+            owner->runtimeReport[R::CleanupPending] = 1;
+        }
+        else if (RuntimeViewCancelled())
+            owner->runtimeReport[R::WorkerPhase] = static_cast<std::uint32_t>(owner->runtimeMailbox.Stopping() ? R::Phase::Stopping : R::Phase::Hiding);
+        owner->PublishRuntime();
+    }
+
     bool CoreStartupReference::HeartbeatPersistentFrontend(std::uint32_t generation) noexcept
     {
         return ownerThread.load() == GetCurrentThreadId() && persistentFrontendRequested && IsPending() &&
@@ -953,6 +1109,378 @@ namespace deonline
         if (!values[16])
             values[16] = 12;
         return true;
+    }
+
+    void CoreStartupReference::RunFrontendRuntime(HMODULE core, const std::wstring& mtaDirectory, const std::wstring& gtaDirectory) noexcept
+    {
+        namespace R = FrontendRuntimeReport;
+        namespace C = DefinitiveFrontendRuntime;
+        namespace S = DefinitiveFrontendStartup;
+        namespace P = DefinitivePersistentFrontend;
+        using Status = C::Status;
+        using Version = std::uint32_t (*)();
+        using SetDirectory = void (*)(const wchar_t*, std::size_t);
+        const auto version = reinterpret_cast<Version>(GetProcAddress(core, "MTA_DEFrontendRuntimeApiVersion"));
+        const auto begin = reinterpret_cast<C::Begin>(GetProcAddress(core, "MTA_BeginDEFrontendRuntime"));
+        const auto read = reinterpret_cast<C::Read>(GetProcAddress(core, "MTA_ReadDEFrontendRuntime"));
+        const auto pulse = reinterpret_cast<C::Pulse>(GetProcAddress(core, "MTA_PulseDEFrontendRuntime"));
+        const auto view = reinterpret_cast<C::RunView>(GetProcAddress(core, "MTA_RunDEFrontendRuntimeView"));
+        const auto shutdown = reinterpret_cast<C::Shutdown>(GetProcAddress(core, "MTA_ShutdownDEFrontendRuntime"));
+        const auto release = reinterpret_cast<C::Release>(GetProcAddress(core, "MTA_ReleaseDEFrontendRuntime"));
+        const auto setMta = reinterpret_cast<SetDirectory>(GetProcAddress(core, "SetMTADirectory"));
+        const auto setGta = reinterpret_cast<SetDirectory>(GetProcAddress(core, "SetGTADirectory"));
+        runtimeReport[R::CoreLoaded] = 1;
+        inputOwner = this;
+        void*         handle = nullptr;
+        C::Snapshot   lastCore{};
+        std::uint64_t coreGeneration = 0;
+        const auto    fail = [&](R::Failure failure, R::StopReason reason = R::StopReason::ViewFault) noexcept
+        {
+            if (!runtimeReport[R::LastFailure])
+                runtimeReport[R::LastFailure] = static_cast<std::uint32_t>(failure);
+            if (!runtimeReport[R::SessionStopReason])
+                runtimeReport[R::SessionStopReason] = static_cast<std::uint32_t>(reason);
+        };
+        const auto retain = [&]() noexcept
+        {
+            runtimeReport[R::WorkerPhase] = static_cast<std::uint32_t>(R::Phase::RetainedCleanup);
+            runtimeReport[R::CleanupPending] = 1;
+            const auto retainedAt = GetTickCount64();
+            // A returned Busy/throw without a qualified final publication may
+            // still own native peers. Keep code/TLS/owner indefinitely; neither
+            // the script nor elapsed time can certify this scope's retirement.
+            for (;;)
+            {
+                if (GetTickCount64() - retainedAt >= 2000)
+                    runtimeReport[R::CleanupDeadlineExceeded] = 1;
+                PublishRuntime();
+                Sleep(250);
+            }
+        };
+        const auto coreShape = [&](const C::Snapshot& sample) noexcept
+        {
+            return sample[S::Version] == 1 && sample[C::RuntimeVersion] == 1 && sample[S::OwnerThread] == GetCurrentThreadId() &&
+                   sample[C::OwnerThread] == GetCurrentThreadId() && sample[S::Phase] >= 1 && sample[S::Phase] <= 5 && sample[C::RuntimePhase] >= 1 &&
+                   sample[C::RuntimePhase] <= 6 && (sample[C::SessionGenerationLow] || sample[C::SessionGenerationHigh]) && !sample[S::NetworkStarted] &&
+                   !sample[S::GameplayReady] && !sample[S::FullMtaReady] && !sample[C::NetworkStarted] && !sample[C::GameplayReady] &&
+                   !sample[C::FullMtaReady] && !sample[C::Reserved59] && !sample[C::Reserved63] &&
+                   std::all_of(sample.begin() + S::Reserved24, sample.begin() + 32, [](auto value) { return value == 0; });
+        };
+        const auto hidden = [&](const C::Snapshot& sample) noexcept
+        {
+            return coreShape(sample) && sample[S::Phase] == 2 && sample[S::CoreRetained] == 1 && sample[S::BackendStarted] == 1 &&
+                   std::all_of(sample.begin() + S::FrontendRetained, sample.begin() + S::CleanupComplete + 1, [](auto value) { return value == 0; }) &&
+                   !sample[S::ReleaseFault] && sample[S::LastViewCleanupComplete] == 1 &&
+                   sample[C::RuntimePhase] == static_cast<std::uint32_t>(C::Phase::Hidden) && sample[C::ServicesInitialized] == 1 &&
+                   sample[C::ServicesRetained] == 1 && sample[C::XmlRetained] == 1 && sample[C::ConfigRetained] == 1 && sample[C::CVarsLoaded] == 1 &&
+                   sample[C::BindingsRetained] == 1 && sample[C::BindingManagerCreations] == 1 && sample[C::ConfigurationLoads] == 1 &&
+                   sample[C::BindingLoads] == 1 && sample[C::ViewsAttached] == sample[C::ViewsRetired] && !sample[C::ViewBorrowed] &&
+                   sample[C::HiddenNeutralVerified] == 1 && sample[C::ConfigurationReadOnly] == 1 && !sample[C::CleanupPending] && !sample[C::CleanupComplete];
+        };
+        const auto stopped = [&](const C::Snapshot& sample) noexcept
+        {
+            return coreShape(sample) && sample[S::Phase] == 4 && sample[S::CoreRetained] == 1 && sample[S::CleanupComplete] == 1 &&
+                   !sample[S::BackendStarted] && !sample[S::ExactImageBound] && !sample[S::CapabilitiesLow] && !sample[S::CapabilitiesHigh] &&
+                   std::all_of(sample.begin() + S::FrontendRetained, sample.begin() + S::CleanupPending + 1, [](auto value) { return value == 0; }) &&
+                   !sample[S::ReleaseFault] && sample[S::LastViewCleanupComplete] == 1 &&
+                   sample[C::RuntimePhase] == static_cast<std::uint32_t>(C::Phase::Stopped) && !sample[C::ServicesRetained] && !sample[C::XmlRetained] &&
+                   !sample[C::ConfigRetained] && !sample[C::CVarsLoaded] && !sample[C::BindingsRetained] && !sample[C::ViewBorrowed] &&
+                   !sample[C::CleanupPending] && sample[C::CleanupComplete] == 1;
+        };
+        const auto sampleCore = [&](R::CoreStage stage) noexcept
+        {
+            C::Snapshot sample{};
+            try
+            {
+                runtimeReport[R::LastCoreStatus] = static_cast<std::uint32_t>(read(handle, sample.data(), C::FieldCount));
+            }
+            catch (...)
+            {
+                fail(R::Failure::CoreRead);
+                return false;
+            }
+            if (runtimeReport[R::LastCoreStatus] != static_cast<std::uint32_t>(Status::Ok) || !coreShape(sample))
+                return false;
+            const auto generation =
+                static_cast<std::uint64_t>(sample[C::SessionGenerationLow]) | (static_cast<std::uint64_t>(sample[C::SessionGenerationHigh]) << 32);
+            if (coreGeneration && coreGeneration != generation)
+                return false;
+            coreGeneration = generation;
+            lastCore = sample;
+            std::copy(sample.begin(), sample.end(), runtimeReport.begin() + R::CoreOffset);
+            runtimeReport[R::CoreSampleStage] = static_cast<std::uint32_t>(stage);
+            ++runtimeReport[R::CoreSampleCount];
+            return true;
+        };
+        const auto viewRetired = [&]() noexcept
+        {
+            if (!runtimeViewAvailable)
+                return false;
+            DefinitiveGuiFrontendInputReference::Snapshot first{};
+            std::copy_n(runtimeReport.begin() + R::ViewOffset, first.size(), first.begin());
+            const auto* sample = runtimeReport.data() + R::ViewOffset;
+            return FrontendInputRetired(first, true) && sample[P::PersistentVersion] == 1 &&
+                   sample[P::SessionGenerationLow] == runtimeReport[R::ViewGenerationLow] && !sample[P::SessionGenerationHigh] &&
+                   !sample[P::NativeLeaseActive] && sample[P::HostLeaseFresh] <= 1 && sample[P::NativeLeaseRevoked] <= 1 && sample[P::NativeLeaseReason] <= 6 &&
+                   (!(sample[P::NativeLeaseGenerationLow] || sample[P::NativeLeaseGenerationHigh]) ||
+                    (sample[P::NativeLeaseRevoked] == 1 && sample[P::NativeLeaseReason])) &&
+                   sample[P::HostHeartbeatBudgetMs] == 1000 && sample[P::NativeHeartbeatBudgetMs] == 500 && sample[P::StopReason] >= 1 &&
+                   sample[P::StopReason] <= 5 && std::all_of(sample + P::Reserved270, sample + P::FieldCount, [](auto value) { return value == 0; });
+        };
+        const auto acknowledge = [&](const FrontendRuntimeMailbox::Request& request, R::Acknowledgement code) noexcept
+        {
+            if (!runtimeMailbox.Complete(request))
+                return false;
+            runtimeReport[R::AcknowledgedSequence] = request.sequence;
+            runtimeReport[R::AcknowledgedCommand] = static_cast<std::uint32_t>(request.command);
+            runtimeReport[R::AcknowledgementCode] = static_cast<std::uint32_t>(code);
+            return true;
+        };
+        try
+        {
+            if (!version || !begin || !read || !pulse || !view || !shutdown || !release || !setMta || !setGta || version() != C::ApiVersion)
+            {
+                fail(R::Failure::Exports, R::StopReason::LoaderFault);
+                inputOwner = nullptr;
+                return;
+            }
+            setMta(mtaDirectory.c_str(), mtaDirectory.size());
+            setGta(gtaDirectory.c_str(), gtaDirectory.size());
+            try
+            {
+                handle = begin(C::ApiVersion);
+            }
+            catch (...)
+            {
+                fail(R::Failure::Begin);
+                retain();
+            }
+            if (!handle)
+            {
+                fail(R::Failure::Begin, R::StopReason::LoaderFault);
+                inputOwner = nullptr;
+                return;
+            }
+            runtimeReport[R::CoreOwnerRetained] = 1;
+            if (!sampleCore(R::CoreStage::Initial))
+            {
+                fail(R::Failure::CoreRead);
+                retain();
+            }
+            if (!hidden(lastCore))
+                fail(R::Failure::CoreState);
+            runtimeReport[R::LastViewCleanupComplete] = 1;
+            runtimeReport[R::WorkerPhase] = static_cast<std::uint32_t>(R::Phase::Hidden);
+            PublishRuntime();
+            while (!runtimeReport[R::LastFailure])
+            {
+                const auto pending = runtimeMailbox.Pending();
+                if (pending.command == R::Command::Stop || cancellation.load())
+                    break;
+                if (!RuntimeHostFresh())
+                {
+                    runtimeReport[R::HostExpiryObserved] = 1;
+                    fail(R::Failure::HostExpired, R::StopReason::HostExpired);
+                    break;
+                }
+                if (pending.command == R::Command::Hide)
+                {
+                    if (acknowledge(pending, R::Acknowledgement::Completed))
+                        ++runtimeReport[R::HideAcknowledgements];
+                }
+                else if (pending.command == R::Command::Show)
+                {
+                    if (lastCore[C::ViewGenerationHigh] || lastCore[C::ViewGenerationLow] == UINT32_MAX)
+                    {
+                        fail(R::Failure::ViewGenerationExhausted);
+                        break;
+                    }
+                    if (pulse(handle) != Status::Ok || !sampleCore(R::CoreStage::BeforeShow) || !hidden(lastCore))
+                    {
+                        fail(R::Failure::CoreState);
+                        break;
+                    }
+                    runtimeReport[R::ViewGenerationLow] = lastCore[C::ViewGenerationLow] + 1;
+                    ++runtimeReport[R::ViewAttempts];
+                    runtimeReport[R::LastViewCleanupComplete] = 0;
+                    runtimeReport[R::WorkerPhase] = static_cast<std::uint32_t>(R::Phase::Showing);
+                    std::fill(runtimeReport.begin() + R::ViewOffset, runtimeReport.end(), 0);
+                    runtimeViewAvailable = false;
+                    runtimePublicationFault.store(false);
+                    runtimeViewRequest = pending;
+                    PublishRuntime();
+                    P::RequestV1 request;
+                    request.generation = runtimeReport[R::ViewGenerationLow];
+                    request.cancelled = RuntimeViewCancelled;
+                    request.publish = PublishRuntimeView;
+                    request.heartbeat = RuntimeHostFresh;
+                    Status viewStatus = Status::Busy;
+                    bool   threw = false;
+                    try
+                    {
+                        viewStatus = view(handle, &request);
+                    }
+                    catch (...)
+                    {
+                        threw = true;
+                    }
+                    runtimeReport[R::LastViewStatus] = static_cast<std::uint32_t>(viewStatus);
+                    // Failed/no-publication is admitted only for the concrete
+                    // unchanged hidden InputBind refusal. Every other missing
+                    // or nonretired report retains the native owner first.
+                    if (!runtimeViewAvailable && !runtimePublicationFault.load() && !threw && viewStatus == Status::Failed)
+                    {
+                        const auto before = lastCore;
+                        if (!sampleCore(R::CoreStage::AfterHide) || !hidden(lastCore) || lastCore[S::ExactImageBound] ||
+                            lastCore[S::LastFailure] != static_cast<std::uint32_t>(S::Failure::InputBind) || lastCore[C::LastFailure] ||
+                            lastCore[C::ViewsAttached] != before[C::ViewsAttached] || lastCore[C::ViewsRetired] != before[C::ViewsRetired] ||
+                            lastCore[C::ViewGenerationLow] != before[C::ViewGenerationLow] || lastCore[C::ViewGenerationHigh] != before[C::ViewGenerationHigh])
+                            retain();
+                        fail(R::Failure::View);
+                        runtimeReport[R::LastViewCleanupComplete] = 1;
+                        break;
+                    }
+                    if (!viewRetired())
+                        retain();
+                    ++runtimeReport[R::ViewsRetired];
+                    runtimeReport[R::LastRetiredViewGeneration] = runtimeReport[R::ViewGenerationLow];
+                    runtimeReport[R::LastViewCleanupComplete] = 1;
+                    runtimeReport[R::CleanupPending] = 0;
+                    if (!sampleCore(R::CoreStage::AfterHide) || !hidden(lastCore) || lastCore[C::ViewGenerationLow] != runtimeReport[R::ViewGenerationLow])
+                    {
+                        fail(R::Failure::CoreState);
+                        break;
+                    }
+                    const auto stop = runtimeReport[R::ViewOffset + P::StopReason];
+                    if (stop == static_cast<std::uint32_t>(P::Stop::GuiClosed))
+                        ++runtimeReport[R::GuiHideCount];
+                    if (stop == static_cast<std::uint32_t>(P::Stop::FocusLost))
+                        ++runtimeReport[R::FocusHideCount];
+                    if (threw || runtimePublicationFault.load() || (viewStatus != Status::Ok && viewStatus != Status::Stopped) ||
+                        stop == static_cast<std::uint32_t>(P::Stop::Fault))
+                    {
+                        fail(R::Failure::View);
+                        break;
+                    }
+                    if (!RuntimeHostFresh() || stop == static_cast<std::uint32_t>(P::Stop::HostLeaseExpired))
+                    {
+                        runtimeReport[R::HostExpiryObserved] = 1;
+                        fail(R::Failure::HostExpired, R::StopReason::HostExpired);
+                        break;
+                    }
+                    const auto next = runtimeMailbox.Pending();
+                    if (next.command == R::Command::Hide && acknowledge(next, R::Acknowledgement::Completed))
+                        ++runtimeReport[R::HideAcknowledgements];
+                    else if (next.command == R::Command::Show)
+                        acknowledge(next, R::Acknowledgement::Failed);
+                    runtimeReport[R::WorkerPhase] = static_cast<std::uint32_t>(R::Phase::Hidden);
+                }
+                else if (pulse(handle) != Status::Ok)
+                {
+                    fail(R::Failure::CoreState);
+                    break;
+                }
+                PublishRuntime();
+                Sleep(50);
+            }
+            runtimeReport[R::WorkerPhase] = static_cast<std::uint32_t>(R::Phase::Stopping);
+            runtimeReport[R::CleanupPending] = 1;
+            if (!runtimeReport[R::SessionStopReason])
+                runtimeReport[R::SessionStopReason] = static_cast<std::uint32_t>(cancellation.load() ? R::StopReason::Cancelled : R::StopReason::Requested);
+            const auto cleanupStarted = GetTickCount64();
+            const auto wait = [&]() noexcept
+            {
+                if (GetTickCount64() - cleanupStarted >= 2000)
+                    runtimeReport[R::CleanupDeadlineExceeded] = 1;
+                runtimeReport[R::WorkerPhase] = static_cast<std::uint32_t>(R::Phase::RetainedCleanup);
+                PublishRuntime();
+                Sleep(250);
+            };
+            Status status = Status::Busy;
+            do
+            {
+                try
+                {
+                    status = shutdown(handle);
+                }
+                catch (...)
+                {
+                    fail(R::Failure::Shutdown);
+                    retain();
+                }
+                if (status == Status::Busy)
+                    wait();
+            } while (status == Status::Busy);
+            runtimeReport[R::LastCoreStatus] = static_cast<std::uint32_t>(status);
+            if (status != Status::Ok || !sampleCore(R::CoreStage::Stopped) || !stopped(lastCore))
+            {
+                fail(R::Failure::Shutdown);
+                retain();
+            }
+            runtimeReport[R::CoreStoppedVerified] = 1;
+            do
+            {
+                try
+                {
+                    status = release(handle);
+                }
+                catch (...)
+                {
+                    fail(R::Failure::Release);
+                    retain();
+                }
+                if (status == Status::Busy)
+                    wait();
+            } while (status == Status::Busy);
+            if (status != Status::Ok)
+            {
+                fail(R::Failure::Release);
+                retain();
+            }
+            handle = nullptr;
+            runtimeReport[R::CoreReleasedVerified] = 1;
+            runtimeReport[R::CoreOwnerRetained] = 0;
+            runtimeHostLease.Revoke();
+        }
+        catch (...)
+        {
+            fail(R::Failure::Exception);
+            if (handle)
+                retain();
+        }
+        inputOwner = nullptr;
+    }
+
+    void CoreStartupReference::FinishRuntime(HMODULE core) noexcept
+    {
+        namespace R = FrontendRuntimeReport;
+        if (core && runtimeReport[R::CoreOwnerRetained])
+            return;
+        if (core && !FreeLibrary(core))
+            runtimeReport[R::LastFailure] = static_cast<std::uint32_t>(R::Failure::Unload);
+        runtimeReport[R::CoreLoaded] = GetModuleHandleW(L"core.dll") ? 1u : 0u;
+        runtimeReport[R::CoreUnloadedVerified] = runtimeReport[R::CoreLoaded] ? 0u : 1u;
+        runtimeReport[R::LegacyModulesAfter] = LegacyRendererModules();
+        if (runtimeReport[R::CoreLoaded] || (runtimeReport[R::LegacyModulesAfter] & ~runtimeReport[R::LegacyModulesBefore]))
+            runtimeReport[R::LastFailure] = static_cast<std::uint32_t>(R::Failure::Unload);
+        const auto expected = runtimeReport[R::BackendPinnedExpected];
+        if ((GetModuleHandleW(L"game_de.dll") ? 1u : 0u) != expected)
+            runtimeReport[R::LastFailure] = static_cast<std::uint32_t>(R::Failure::Unload);
+        if (values[16] && !runtimeReport[R::LastFailure])
+            runtimeReport[R::LastFailure] = static_cast<std::uint32_t>(R::Failure::Begin);
+        runtimeReport[R::CleanupPending] = 0;
+        runtimeReport[R::CleanupComplete] = 1;
+        runtimeReport[R::WorkerPhase] = static_cast<std::uint32_t>(runtimeReport[R::LastFailure] ? R::Phase::Failed : R::Phase::Stopped);
+        const auto pending = runtimeMailbox.Pending();
+        if (pending.sequence && runtimeMailbox.Complete(pending))
+        {
+            runtimeReport[R::AcknowledgedSequence] = pending.sequence;
+            runtimeReport[R::AcknowledgedCommand] = static_cast<std::uint32_t>(pending.command);
+            runtimeReport[R::AcknowledgementCode] = static_cast<std::uint32_t>(
+                pending.command == R::Command::Stop && !runtimeReport[R::LastFailure] ? R::Acknowledgement::Completed : R::Acknowledgement::Failed);
+        }
+        runtimeHostLease.Revoke();
+        PublishRuntime();
     }
 
     void CoreStartupReference::RunFrontendStartup(HMODULE core, const std::wstring& mtaDirectory, const std::wstring& gtaDirectory) noexcept
@@ -1352,6 +1880,12 @@ namespace deonline
     void CoreStartupReference::Run() noexcept
     {
         values = {};
+        if (frontendRuntimeRequested)
+        {
+            runtimeReport[FrontendRuntimeReport::WorkerPhase] = static_cast<std::uint32_t>(FrontendRuntimeReport::Phase::Starting);
+            runtimeReport[FrontendRuntimeReport::LegacyModulesBefore] = LegacyRendererModules();
+            PublishRuntime();
+        }
         values[8] = values[9] = values[10] = 0xffffffffu;
         if (frontendStartupRequested || persistentFrontendRequested)
         {
@@ -1407,6 +1941,11 @@ namespace deonline
                 }
                 if (CheckCancellation())
                     return;
+                if (frontendRuntimeRequested)
+                {
+                    RunFrontendRuntime(core, mtaDirectory.wstring(), gtaDirectory.wstring());
+                    return;
+                }
                 if (frontendStartupRequested || persistentFrontendRequested)
                 {
                     RunFrontendStartup(core, mtaDirectory.wstring(), gtaDirectory.wstring());
@@ -1729,6 +2268,11 @@ namespace deonline
         // Cancellation never interrupts the loader or unloads Core from a
         // second thread. Completion is published only after this owned cleanup.
         persistentHostLease.Revoke();
+        if (frontendRuntimeRequested)
+        {
+            FinishRuntime(core);
+            return;
+        }
         if ((guiFrontendRequested || guiFrontendInputRequested || persistentFrontendRequested) && core && values[16] == 11)
             frontendQuarantined = true;
         if (core && !frontendQuarantined && !clockQuarantined && !FreeLibrary(core))

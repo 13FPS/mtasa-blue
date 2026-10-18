@@ -26,7 +26,7 @@ function Assert-NoLinks([string]$Path) {
         $candidate=[IO.Path]::GetDirectoryName($candidate)
     }
 }
-$sourceNames=@('Tests/definitive/CoreFrontendStartupHostTests.cpp','Tests/definitive/ObservedFrontendGui.h','Tests/definitive/test_core_frontend_startup_host.ps1','Client/core/DefinitiveFrontend.h','Client/core/DefinitiveFrontendStartup.h',
+$sourceNames=@('Tests/definitive/CoreFrontendStartupHostTests.cpp','Tests/definitive/ObservedFrontendGui.h','Tests/definitive/test_core_frontend_startup_host.ps1','Client/core/DefinitiveFrontend.h','Client/core/DefinitiveFrontendStartup.h','Client/core/DefinitiveFrontendRuntime.h',
     'Client/core/DefinitivePersistentFrontend.h','Client/core/DefinitiveFrontendConsole.h','Client/core/DefinitiveFrontendBindings.h','Client/core/DefinitiveFrontendClockReference.h','Client/core/DefinitiveClockReference.h','Client/core/DefinitiveClockReference.cpp',
     'Client/sdk/game/CGameClockService.h','Client/core/DefinitiveFrontendStartup.cpp','Client/core/Core.cpp','Client/core/CGameAdapterModule.cpp','Client/core/CGameAdapterModule.h',
     'Client/core/CCore.cpp','Client/core/CCore.h','Client/core/CGUI.cpp','Client/core/CGUI.h','Client/core/CMainMenu.cpp','Client/core/CMainMenu.h',
@@ -145,12 +145,13 @@ try {
     if ($compileExit -ne 0) { throw 'Owned frontend host compilation failed.' }
     if ((Sha $hostPath) -eq '63e633bb51c35fe35ca98f503b62e7ddb8403abe4c9d501cfa9162892453846f') { throw 'Disposable host unexpectedly matches the real game.' }
     $testExit=0
-    foreach ($case in @('normal','gated','frontend-failure','backend-failure')) {
+    foreach ($case in @('normal','gated','frontend-failure','backend-failure','runtime','runtime-frontend-failure','runtime-backend-failure')) {
         $caseRoot=Join-Path $outputRoot ('case-'+$case)
         $assetRoot=Join-Path $caseRoot 'Win64/CLEO/de-online'
         [IO.Directory]::CreateDirectory((Join-Path $assetRoot 'mta/logs')) | Out-Null
         foreach ($entry in $selectedArtifacts) {
-            if (($case -eq 'frontend-failure' -and $entry.name -eq 'xmll.dll') -or ($case -eq 'backend-failure' -and $entry.name -eq 'game_de.dll')) { continue }
+            if (($case -in @('frontend-failure','runtime-frontend-failure') -and $entry.name -eq 'xmll.dll') -or
+                ($case -in @('backend-failure','runtime-backend-failure') -and $entry.name -eq 'game_de.dll')) { continue }
             $staged=Join-Path $assetRoot $entry.name
             Copy-Item -LiteralPath $entry.source -Destination $staged
             $artifacts+=@([ordered]@{source=$entry.source;staged=$staged;sha256=$entry.sha256;bytes=$entry.bytes;certificate=$entry.certificate;case=$case})
@@ -179,16 +180,38 @@ try {
         $resultPath=Join-Path $assetRoot 'frontend-startup-result.json'
         $hostResult=$null
         if ($success) {
-            # Bind the new boundary assertions to the actual host's value
-            # report, rather than labelling any successful GUI run clock proof.
+            # Retained runtime proof comes from the actual two-view host. A
+            # successful legacy GUI case cannot stand in for that ownership.
             $hostResult=Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json -DateKind String
+            $runtimeCase=$case.StartsWith('runtime',[StringComparison]::Ordinal)
             if ($hostResult.success -ne $true -or $hostResult.checks -ne $count -or
                 $hostResult.completedOwnerClockApiVersion -ne 1 -or $hostResult.completedOwnerClockFields -ne 96 -or
-                $hostResult.completedOwnerClockAdmissionVerified -ne $true -or $hostResult.completedOwnerClockNativeWorkloadVerified -ne $false -or
+                $hostResult.completedOwnerClockAdmissionVerified -ne (-not $runtimeCase) -or $hostResult.completedOwnerClockNativeWorkloadVerified -ne $false -or
                 $hostResult.completedOwnerClockPublishedSamples -ne 0 -or
-                $hostResult.completedOwnerClockWrongImageRefusalVerified -ne ($case -ne 'backend-failure') -or
+                $hostResult.completedOwnerClockWrongImageRefusalVerified -ne (-not $runtimeCase -and $case -ne 'backend-failure') -or
+                $hostResult.runtimeApiVersion -ne 1 -or $hostResult.runtimeFields -ne 64 -or $hostResult.runtimeCase -ne $runtimeCase -or
+                $hostResult.runtimeRetentionVerified -ne ($case -eq 'runtime') -or
+                $hostResult.runtimeFailureCleanupVerified -ne ($runtimeCase -and $case -ne 'runtime') -or
+                $hostResult.runtimeNativeViewVerified -ne $false -or @($hostResult.runtimeTerminal).Count -ne 64 -or
                 @($hostResult.startupTerminal).Count -ne 32 -or @($hostResult.frontendTerminal).Count -ne 32) {
                 throw "Actual host clock/unchanged frontend report differs: $case"
+            }
+            if ($runtimeCase) {
+                $runtime=@($hostResult.runtimeTerminal)
+                if ($runtime[32] -ne 1 -or $runtime[33] -ne 5 -or $runtime[34] -eq 0 -or
+                    ($runtime[35] -eq 0 -and $runtime[36] -eq 0) -or $runtime[55] -ne 1 -or $runtime[57] -ne 1 -or
+                    @(@(38,39,40,41,42,50,56,59,60,61,62,63) | Where-Object { $runtime[$_] -ne 0 }).Count -ne 0 -or
+                    $runtime[1] -ne 4 -or $runtime[3] -ne 1 -or $runtime[5] -ne 0) {
+                    throw "Actual runtime service/backend retirement differs: $case"
+                }
+                if ($case -eq 'runtime' -and ($runtime[43] -ne 1 -or $runtime[44] -ne 1 -or $runtime[45] -ne 1 -or
+                    $runtime[46] -ne 2 -or $runtime[47] -ne 2 -or $runtime[48] -ne 2 -or $runtime[49] -ne 0 -or
+                    $runtime[51] -ne 1 -or $hostResult.actualSessionBindingsSettingsVerified -ne $true -or
+                    $hostResult.settingsCaptureRetainedForCleanup -ne $true)) {
+                    throw 'Actual runtime two-view configuration/bindings retention differs.'
+                }
+            } elseif (@($hostResult.runtimeTerminal | Where-Object { $_ -ne 0 }).Count -ne 0) {
+                throw "Historical startup case unexpectedly populated runtime state: $case"
             }
         }
         if (-not $success) { $testExit=1 }
@@ -207,7 +230,7 @@ try {
     $executionArtifacts=@(Get-ChildItem -LiteralPath $outputRoot -Recurse -File | Where-Object { $_.Extension -in @('.exe','.obj','.log','.json','.bmp') } | ForEach-Object {
         [ordered]@{path=$_.FullName;sha256=(Sha $_.FullName);bytes=$_.Length}
     })
-    $success=$null -eq $failure -and $compileExit -eq 0 -and $testExit -eq 0 -and $testCount -gt 0 -and $runs.Count -eq 4 -and
+    $success=$null -eq $failure -and $compileExit -eq 0 -and $testExit -eq 0 -and $testCount -gt 0 -and $runs.Count -eq 7 -and
         @($runs | Where-Object { -not $_.success }).Count -eq 0 -and -not $timedOut -and $sourceUnchanged -and $artifactsUnchanged -and
         $assetsUnchanged -and $certificatesUnchanged -and $platformUnchanged
     $receipt=[ordered]@{schema='mta_owned_frontend_startup_host_tests_v1';recordedAt=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=$success;
@@ -220,10 +243,14 @@ try {
         completedOwnerClockApiVersion=1;completedOwnerClockFields=96;completedOwnerClockArgumentAdmissionVerified=$success;completedOwnerClockForeignThreadRefusalVerified=$success;
         completedOwnerClockGuiBorrowRefusalVerified=$success;completedOwnerClockStoppedBorrowRefusalVerified=$success;completedOwnerClockWrongImageRefusalVerified=$success;
         completedOwnerClockNativeWorkloadVerified=$false;completedOwnerClockFollowingCpuGuiReuseVerified=$success;frontendStartup32Preserved=$success;
+        frontendRuntimeApiVersion=1;frontendRuntimeFields=64;frontendRuntimeCases=3;
+        actualTwoViewRuntimeConfigurationRetentionVerified=($success -and @($runs | Where-Object { $_.case -eq 'runtime' -and $_.actualHostResult.runtimeRetentionVerified -eq $true }).Count -eq 1);
+        actualRuntimePartialFailureCleanupVerified=($success -and @($runs | Where-Object { $_.case -in @('runtime-frontend-failure','runtime-backend-failure') -and $_.actualHostResult.runtimeFailureCleanupVerified -eq $true }).Count -eq 2);
+        frontendRuntimeNativeViewVerified=$false;
         actualMtaSessionBindingsSettingsOnOwnedWarp=$success;actualSixMovementBindingsApplyAndCancelVerified=$success;reservedConsoleKeyCaptureAndFocusLossVerified=$success;modalCaptureRetiredDuringFrontendTeardownVerified=$success;
         cpuFrontendTeardownWhileGpuRetainedVerified=$success;startupFailureOwnerCleanupVerified=$success;normalFrontendReacquireVerified=$success;completedCoreRetainedAfterFrontendReleaseVerified=$success;backendFailureOwnerCleanupVerified=$success;
         configurationCopiesUnchanged=$assetsUnchanged;installedFilesChanged=$false;gameLaunched=$false;gameAttached=$false;engineInputSuppressionVerified=$false;fullMtaReady=$false;
-        scope='Completed real Core and actual Game DE lifecycle, borrowed actual MTA menu/credits/console/configured bindings and existing session-only settings on a private WARP target. Fixture GUI observation forwards actual widgets/callbacks; captured edits reach the real CKeyBinds records only through Apply, while Cancel, reserved F8, focus loss and modal teardown are exercised. Includes completed-owner Clock API1/Read96 argument/owner/GUI-borrow/stopped-owner admission and actual wrong-image preflight refusal with no callbacks, then existing bounded-view refusal and CPU GUI reuse; no positive native clock workload is claimed. Startup32 and its reserved values remain unchanged. Also covers bounded/persistent native bind refusal, versioned persistent admission, GPU-retained and partial backend/frontend failure cleanup. Disposable SanAndreas.exe is this hashed owned host, not GTA. No engine facade stubs, native engine binding, game/device attachment, native hooks, full multiplayer startup or visible GTA claim.'}
+        scope='Completed real Core and actual Game DE lifecycle, borrowed actual MTA menu/credits/console/configured bindings and existing session-only settings on a private WARP target. All four historical cases remain; three additive Runtime64 cases prove one actual Core/backend and one XML/CVars/CKeyBinds owner across two freshly borrowed GUI views, Apply I then hide/release then identical real bind record and Cancel O, neutral hidden input, unchanged disk configuration, stopped-unreleased borrower exclusion and final manager/CVars/XML/backend retirement. XML/backend preparation failures retain inspectable owners until explicit cleanup. Fixture GUI observation forwards actual widgets/callbacks. Includes completed-owner Clock API1/Read96 admission and actual wrong-image refusal in historical routes, while Runtime refuses clock and all legacy mutating owner routes. Startup32 and Persistent288 are unchanged. No positive native clock or runtime-view workload is claimed. Disposable SanAndreas.exe is this hashed owned host, not GTA. No engine facade stubs, native engine binding, game/device attachment, native hooks, full multiplayer startup or visible GTA claim.'}
     $receipt | ConvertTo-Json -Depth 9 | Set-Content -LiteralPath (Join-Path $outputRoot 'test-result.json') -Encoding utf8
 }
 [ordered]@{success=$success;receipt=(Join-Path $outputRoot 'test-result.json');checks=$testCount;failure=$failure} | ConvertTo-Json -Compress

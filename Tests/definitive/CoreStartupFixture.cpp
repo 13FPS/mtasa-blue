@@ -21,6 +21,7 @@
 #include "../../Client/core/DefinitiveGuiFrontendInputReference.h"
 #include "../../Client/core/DefinitiveFrontendClockReference.h"
 #include "../../Client/core/DefinitiveFrontendStartup.h"
+#include "../../Client/core/DefinitiveFrontendRuntime.h"
 #include <filesystem>
 #include <stdexcept>
 
@@ -34,6 +35,8 @@ namespace
     DefinitiveFrontendStartup::Snapshot frontendOwner{};
     HMODULE                             frontendBackend = nullptr;
     bool                                frontendClockReturned = false, frontendOwnerReadThrew = false;
+    DefinitiveFrontendRuntime::Snapshot runtimeOwner{};
+    bool                                runtimeViewActive = false;
 
     DWORD Setting(const wchar_t* name)
     {
@@ -208,6 +211,216 @@ extern "C" __declspec(dllexport) std::uint32_t MTA_DEFrontendStartupApiVersion()
 {
     Call(32);
     return DefinitiveFrontendStartup::ApiVersion;
+}
+
+extern "C" __declspec(dllexport) std::uint32_t MTA_DEFrontendRuntimeApiVersion()
+{
+    return Setting(L"MTA_CORE_FIXTURE_RUNTIME_MODE") == 8 ? 2u : 1u;
+}
+extern "C" __declspec(dllexport) void* MTA_BeginDEFrontendRuntime(std::uint32_t version)
+{
+    namespace C = DefinitiveFrontendRuntime;
+    namespace S = DefinitiveFrontendStartup;
+    Call(44);
+    if (version != 1 || !mtaSet || !gtaSet)
+        return nullptr;
+    runtimeOwner = {};
+    runtimeOwner[S::Version] = runtimeOwner[C::RuntimeVersion] = 1;
+    runtimeOwner[S::Phase] = runtimeOwner[C::RuntimePhase] = 2;
+    runtimeOwner[S::OwnerThread] = runtimeOwner[C::OwnerThread] = GetCurrentThreadId();
+    for (const auto field : {S::CoreRetained, S::BackendStartAttempted, S::BackendStarted, S::Pulses, S::LastViewCleanupComplete})
+        runtimeOwner[field] = 1;
+    runtimeOwner[S::CapabilitiesLow] = 33;
+    for (std::uint32_t field = C::SessionGenerationLow; field <= C::BindingLoads; ++field)
+        runtimeOwner[field] = field == C::SessionGenerationHigh ? 0u : 1u;
+    runtimeOwner[C::HiddenNeutralVerified] = runtimeOwner[C::ConfigurationReadOnly] = 1;
+    runtimeOwner[C::BindCount] = 87;
+    wchar_t path[32768]{};
+    GetModuleFileNameW(nullptr, path, 32768);
+    frontendBackend = LoadLibraryExW((std::filesystem::path(path).parent_path() / L"game_de.dll").c_str(), nullptr,
+                                     LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+    return frontendBackend ? &runtimeOwner : nullptr;
+}
+extern "C" __declspec(dllexport) DefinitiveFrontendRuntime::Status MTA_ReadDEFrontendRuntime(void* handle, std::uint32_t* output, std::uint32_t count)
+{
+    Call(45);
+    if (runtimeViewActive)
+        Call(52);
+    if (handle != &runtimeOwner || !output || count != DefinitiveFrontendRuntime::FieldCount)
+        return DefinitiveFrontend::Status::InvalidArgument;
+    std::copy(runtimeOwner.begin(), runtimeOwner.end(), output);
+    return DefinitiveFrontend::Status::Ok;
+}
+extern "C" __declspec(dllexport) DefinitiveFrontendRuntime::Status MTA_PulseDEFrontendRuntime(void* handle)
+{
+    Call(46);
+    if (handle != &runtimeOwner)
+        return DefinitiveFrontend::Status::InvalidArgument;
+    ++runtimeOwner[DefinitiveFrontendStartup::Pulses];
+    return DefinitiveFrontend::Status::Ok;
+}
+extern "C" __declspec(dllexport) DefinitiveFrontendRuntime::Status MTA_RunDEFrontendRuntimeView(void*                                          handle,
+                                                                                                const DefinitivePersistentFrontend::RequestV1* request)
+{
+    namespace C = DefinitiveFrontendRuntime;
+    namespace S = DefinitiveFrontendStartup;
+    namespace P = DefinitivePersistentFrontend;
+    Call(47);
+    const auto mode = Setting(L"MTA_CORE_FIXTURE_RUNTIME_MODE");
+    if (handle != &runtimeOwner || !request || !request->cancelled || !request->publish || !request->heartbeat ||
+        request->generation != runtimeOwner[C::ViewGenerationLow] + 1)
+        return DefinitiveFrontend::Status::InvalidArgument;
+    if (mode == 9)
+    {
+        runtimeOwner[S::LastFailure] = static_cast<std::uint32_t>(S::Failure::InputBind);
+        return DefinitiveFrontend::Status::Failed;
+    }
+    if (mode == 16)
+        return DefinitiveFrontend::Status::Busy;
+    if (mode == 17)
+    {
+        // Rejected publication is not absence of publication. An unchanged
+        // InputBind refusal cannot erase this uncertain callback lifetime.
+        P::Snapshot malformed{};
+        malformed[0] = malformed[P::PersistentVersion] = 1;
+        malformed[P::SessionGenerationLow] = static_cast<std::uint32_t>(request->generation) + 1;
+        Call(50);
+        request->publish(malformed.data(), P::FieldCount);
+        runtimeOwner[S::LastFailure] = static_cast<std::uint32_t>(S::Failure::InputBind);
+        return DefinitiveFrontend::Status::Failed;
+    }
+    runtimeViewActive = true;
+    ++runtimeOwner[C::ViewsAttached];
+    ++runtimeOwner[S::ViewRuns];
+    runtimeOwner[C::ViewGenerationLow] = static_cast<std::uint32_t>(request->generation);
+    runtimeOwner[C::RuntimePhase] = 3;
+    runtimeOwner[C::ViewBorrowed] = 1;
+    runtimeOwner[C::HiddenNeutralVerified] = runtimeOwner[S::LastViewCleanupComplete] = 0;
+    runtimeOwner[S::ExactImageBound] = 1;
+    runtimeOwner[S::CapabilitiesLow] = 97;
+    HMODULE    retained = nullptr;
+    const auto factory = frontendBackend ? GetProcAddress(frontendBackend, "CreateGameAdapter") : nullptr;
+    const bool pinned =
+        factory && GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN, reinterpret_cast<LPCWSTR>(factory), &retained);
+    P::Snapshot sample{};
+    sample[0] = sample[1] = 1;
+    sample[57] = sample[232] = pinned ? 1u : 0u;
+    sample[68] = sample[70] = 1;
+    sample[96] = 1;
+    sample[97] = 2;
+    sample[99] = sample[100] = 1;
+    sample[128] = sample[131] = sample[160] = sample[161] = sample[162] = sample[176] = 1;
+    sample[208] = sample[210] = sample[212] = 1;
+    sample[214] = sample[216] = sample[220] = 2;
+    sample[236] = sample[237] = sample[243] = 1;
+    sample[P::PersistentVersion] = 1;
+    sample[P::SessionGenerationLow] = sample[P::NativeLeaseGenerationLow] = static_cast<std::uint32_t>(request->generation);
+    sample[P::HostLeaseFresh] = sample[P::NativeLeaseActive] = 1;
+    sample[P::HostHeartbeatBudgetMs] = 1000;
+    sample[P::NativeHeartbeatBudgetMs] = 500;
+    const auto publish = [&]
+    {
+        ++sample[2];
+        ++sample[3];
+        Call(50);
+        request->publish(sample.data(), P::FieldCount);
+    };
+    // NativeVerified alone must not acknowledge a partial cursor Begin/renew
+    // failure: these controlled reports lack actual focused GUI admission.
+    if (mode == 2 || mode == 11 || mode == 12)
+    {
+        sample[162] = 0;
+        sample[68] = sample[70] = 0;
+    }
+    if (mode == 11 || mode == 12)
+        sample[172] = 1;
+    publish();
+    const auto started = GetTickCount64();
+    auto       reason = P::Stop::Cancelled;
+    for (;;)
+    {
+        if (!request->heartbeat())
+        {
+            reason = P::Stop::HostLeaseExpired;
+            break;
+        }
+        if (request->cancelled())
+            break;
+        if (mode == 6 || mode == 7 || mode == 10 || mode == 11 || mode == 12)
+        {
+            if (GetTickCount64() - started >= 100)
+            {
+                reason = mode == 6 ? P::Stop::FocusLost : mode == 7 ? P::Stop::GuiClosed : P::Stop::Fault;
+                break;
+            }
+        }
+        Sleep(10);
+        publish();
+    }
+    if (mode == 13)
+    {
+        sample[1] = 3;
+        sample[5] = 1;
+        publish();
+        auto gate = Event(L"MTA_CORE_FIXTURE_MOVEMENT_RELEASE", SYNCHRONIZE);
+        if (gate)
+        {
+            WaitForSingleObject(gate, 15000);
+            CloseHandle(gate);
+        }
+    }
+    sample[1] = 2;
+    sample[5] = 0;
+    sample[6] = sample[9] = sample[39] = 1;
+    sample[78] = sample[79] = sample[80] = 1;
+    sample[97] = 4;
+    sample[100] = 0;
+    sample[113] = 1;
+    sample[129] = sample[177] = 4;
+    sample[149] = sample[190] = 1;
+    sample[162] = sample[208] = sample[210] = sample[243] = 0;
+    sample[171] = sample[238] = 1;
+    sample[P::NativeLeaseActive] = 0;
+    sample[P::NativeLeaseRevoked] = 1;
+    sample[P::NativeLeaseReason] = 5;
+    sample[P::StopReason] = static_cast<std::uint32_t>(reason);
+    publish();
+    Call(51);
+    runtimeViewActive = false;
+    runtimeOwner[C::RuntimePhase] = 2;
+    runtimeOwner[C::ViewBorrowed] = 0;
+    runtimeOwner[C::HiddenNeutralVerified] = runtimeOwner[S::LastViewCleanupComplete] = 1;
+    ++runtimeOwner[C::ViewsRetired];
+    ++runtimeOwner[S::Pulses];
+    return reason == P::Stop::Fault ? DefinitiveFrontend::Status::Failed : DefinitiveFrontend::Status::Stopped;
+}
+extern "C" __declspec(dllexport) DefinitiveFrontendRuntime::Status MTA_ShutdownDEFrontendRuntime(void* handle)
+{
+    namespace C = DefinitiveFrontendRuntime;
+    namespace S = DefinitiveFrontendStartup;
+    Call(48);
+    if (handle != &runtimeOwner || runtimeViewActive)
+        return DefinitiveFrontend::Status::Busy;
+    if (Setting(L"MTA_CORE_FIXTURE_RUNTIME_MODE") == 14 && counters && counters[48] < 4)
+        return DefinitiveFrontend::Status::Busy;
+    runtimeOwner[S::Phase] = 4;
+    runtimeOwner[S::BackendStarted] = runtimeOwner[S::ExactImageBound] = runtimeOwner[S::CapabilitiesLow] = 0;
+    runtimeOwner[S::CleanupComplete] = 1;
+    runtimeOwner[C::RuntimePhase] = 5;
+    runtimeOwner[C::ServicesRetained] = runtimeOwner[C::XmlRetained] = runtimeOwner[C::ConfigRetained] = runtimeOwner[C::CVarsLoaded] =
+        runtimeOwner[C::BindingsRetained] = 0;
+    runtimeOwner[C::CleanupComplete] = 1;
+    if (frontendBackend)
+    {
+        FreeLibrary(frontendBackend);
+        frontendBackend = nullptr;
+    }
+    return DefinitiveFrontend::Status::Ok;
+}
+extern "C" __declspec(dllexport) DefinitiveFrontendRuntime::Status MTA_ReleaseDEFrontendRuntime(void* handle)
+{
+    Call(49);
+    return handle == &runtimeOwner ? DefinitiveFrontend::Status::Ok : DefinitiveFrontend::Status::InvalidArgument;
 }
 
 extern "C" __declspec(dllexport) void* MTA_BeginDEFrontendStartup(std::uint32_t version)

@@ -82,3 +82,7 @@ export const MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE = false;
 // Keep the same MTA frontend alive until explicit GUI closure or an expired
 // independent host/native heartbeat. Historical trials retain their timers.
 export const MTA_CORE_PERSISTENT_FRONTEND = false;
+
+// Retain real MTA Core/configuration/bindings across independently retired menu
+// views. This explicit frontend lifetime still excludes gameplay and networking.
+export const MTA_CORE_FRONTEND_RUNTIME = false;

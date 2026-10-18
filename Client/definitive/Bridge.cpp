@@ -569,6 +569,34 @@ std::uint32_t DE_CorePersistentFrontendApiVersion()
 {
     return DefinitivePersistentFrontend::ApiVersion;
 }
+std::uint32_t DE_FrontendRuntimeApiVersionV1()
+{
+    return deonline::FrontendRuntimeReport::ApiVersion;
+}
+std::uint32_t DE_FrontendRuntimeStartV1()
+{
+    return ControllerAccessAllowed() && !movementAdapter && !client ? coreStartup.BeginFrontendRuntime(&moduleAnchor) : 0;
+}
+int DE_FrontendRuntimeCommandV1(std::uint32_t generation, std::uint32_t sequence, std::uint32_t command)
+{
+    return ControllerAccessAllowed() && coreStartup.CommandFrontendRuntime(generation, sequence, command) ? 1 : 0;
+}
+int DE_FrontendRuntimeHeartbeatV1(std::uint32_t generation)
+{
+    return ControllerAccessAllowed() && coreStartup.HeartbeatFrontendRuntime(generation) ? 1 : 0;
+}
+int DE_FrontendRuntimePollV1()
+{
+    return ControllerAccessAllowed() ? coreStartup.PollFrontendRuntime() : -1;
+}
+int DE_FrontendRuntimeCaptureV1()
+{
+    return ControllerAccessAllowed() && coreStartup.CaptureFrontendRuntime() ? 1 : 0;
+}
+std::uint32_t DE_FrontendRuntimeReadV1(std::uint32_t field)
+{
+    return ControllerAccessAllowed() ? coreStartup.ReadFrontendRuntime(field) : 0;
+}
 std::uint32_t DE_CorePersistentFrontendBegin()
 {
     return ControllerAccessAllowed() && !movementAdapter && !client ? coreStartup.BeginPersistentFrontend(&moduleAnchor) : 0;

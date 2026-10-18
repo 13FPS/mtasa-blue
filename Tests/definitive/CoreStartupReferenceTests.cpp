@@ -186,7 +186,7 @@ namespace
             for (const auto* name :
                  {L"MTA_CORE_FIXTURE_DELAY_MS", L"MTA_CORE_FIXTURE_BAD_VERSION", L"MTA_CORE_FIXTURE_BAD_STATE", L"MTA_CORE_FIXTURE_BAD_INITIALIZE",
                   L"MTA_CORE_FIXTURE_FAIL_ATTACH", L"MTA_CORE_FIXTURE_INPUT_MODE", L"MTA_CORE_FIXTURE_RENDER_MODE", L"MTA_CORE_FIXTURE_GUI_MODE",
-                  L"MTA_CORE_FIXTURE_SURFACE_MODE", L"MTA_CORE_FIXTURE_CLOCK_MODE", L"MTA_CORE_FIXTURE_FRONTEND_CLOCK_MODE"})
+                  L"MTA_CORE_FIXTURE_SURFACE_MODE", L"MTA_CORE_FIXTURE_CLOCK_MODE", L"MTA_CORE_FIXTURE_FRONTEND_CLOCK_MODE", L"MTA_CORE_FIXTURE_RUNTIME_MODE"})
                 Set(name, L"0");
         }
         ~Fixture()
@@ -231,6 +231,175 @@ namespace
             }
         }
     };
+
+    void TestRuntimeWorker(deonline::CoreStartupReference& worker, const std::filesystem::path& root, const std::wstring& mode,
+                           const std::filesystem::path& fixturePath)
+    {
+        namespace R = deonline::FrontendRuntimeReport;
+        const std::array<const wchar_t*, 18> modes{L"runtime-two-views",          L"runtime-stop-hidden",
+                                                   L"runtime-stop-showing",       L"runtime-stop-visible",
+                                                   L"runtime-host-expired",       L"runtime-visible-expired",
+                                                   L"runtime-focus-hide",         L"runtime-gui-hide",
+                                                   L"runtime-wrong-api",          L"runtime-refused",
+                                                   L"runtime-view-fault",         L"runtime-cursor-begin-fault",
+                                                   L"runtime-cursor-renew-fault", L"runtime-retained-stop",
+                                                   L"runtime-shutdown-busy",      L"runtime-cache-contention",
+                                                   L"runtime-returned-pending",   L"runtime-malformed-first-failed"};
+        const auto                           found = std::find(modes.begin(), modes.end(), mode);
+        Check(found != modes.end(), "known runtime fixture mode");
+        const auto scenario = static_cast<unsigned>(found - modes.begin());
+        Fixture    fixture(500 + scenario);
+        Set(L"MTA_CORE_FIXTURE_RUNTIME_MODE", std::to_wstring(scenario));
+        CopyCore(fixturePath, root);
+        SetEvent(fixture.release);
+        const auto generation = Fast([&] { return worker.BeginFrontendRuntime(&anchor); });
+        Check(generation && !worker.BeginPersistentFrontend(&anchor) && !worker.Begin(&anchor), "runtime exclusively retains its worker");
+        const auto deadline = GetTickCount64() + 14000;
+        const auto read = [&](std::uint32_t field) { return worker.ReadFrontendRuntime(field); };
+        const auto capture = [&] { return Fast([&] { return worker.CaptureFrontendRuntime(); }); };
+        const auto wait = [&](const auto& predicate, bool heartbeat = true)
+        {
+            while (!capture() || !predicate())
+            {
+                if (heartbeat)
+                    worker.HeartbeatFrontendRuntime(generation);
+                Check(GetTickCount64() < deadline, "runtime state failed to reach controlled boundary");
+                Sleep(5);
+            }
+        };
+        const auto command = [&](std::uint32_t sequence, R::Command value)
+        { Check(Fast([&] { return worker.CommandFrontendRuntime(generation, sequence, static_cast<std::uint32_t>(value)); }), "runtime command admitted"); };
+        bool        foreignRefused = false;
+        std::thread foreign(
+            [&]
+            {
+                foreignRefused = worker.PollFrontendRuntime() == -1 && !worker.CaptureFrontendRuntime() && !worker.ReadFrontendRuntime(0) &&
+                                 !worker.HeartbeatFrontendRuntime(generation) && !worker.CommandFrontendRuntime(generation, 1, 3);
+            });
+        foreign.join();
+        Check(foreignRefused, "runtime mailbox/cache/heartbeat retain the script owner");
+        if (scenario == 8)
+        {
+            Wait(worker);
+            Check(capture() && read(R::LastFailure) == static_cast<std::uint32_t>(R::Failure::Exports) && !fixture.counters[44],
+                  "wrong runtime API never constructs Core");
+            return;
+        }
+        wait([&] { return read(R::WorkerPhase) == static_cast<std::uint32_t>(R::Phase::Hidden); });
+        Check(read(R::CoreSampleStage) == 1 && read(R::CoreOffset + 33) == 2 && read(R::CoreOffset + 43) == 1 && read(R::CoreOffset + 44) == 1 &&
+                  read(R::CoreOffset + 45) == 1,
+              "runtime retains one actual configuration/binding owner in Hidden");
+        Check(!worker.CommandFrontendRuntime(generation + 1, 1, 1) && !worker.CommandFrontendRuntime(generation, 1, 99) &&
+                  !worker.CommandFrontendRuntime(generation, UINT32_MAX, 1),
+              "stale session, unknown verb and nonwrapping Show sequence are refused");
+        if (scenario == 1 || scenario == 14)
+            command(1, R::Command::Stop);
+        else if (scenario != 4)
+        {
+            command(1, R::Command::Show);
+            if (scenario == 16 || scenario == 17)
+            {
+                wait([&] { return read(R::WorkerPhase) == static_cast<std::uint32_t>(R::Phase::RetainedCleanup); });
+                Check(worker.PollFrontendRuntime() == 0 && worker.IsPending() && GetModuleHandleW(L"core.dll") && fixture.counters[45] == 2 &&
+                          !fixture.counters[48] && !fixture.counters[49] && !fixture.counters[1],
+                      "unpublished Busy or malformed-first Failed retains code/TLS/owner before any later Core read or shutdown");
+                if (scenario == 17)
+                    Check(fixture.counters[50] == 1 && !read(R::ViewSamples),
+                          "rejected first publication cannot qualify the no-publication InputBind exception");
+                return;
+            }
+            if (scenario == 2)
+            {
+                wait([&] { return read(R::ViewSamples) > 0; });
+                Check(!read(R::ShowAcknowledgements), "native-only partial cursor admission cannot acknowledge Show");
+                command(2, R::Command::Stop);
+            }
+            else if (scenario != 9 && scenario != 10 && scenario != 11 && scenario != 12)
+            {
+                wait([&] { return read(R::WorkerPhase) == static_cast<std::uint32_t>(R::Phase::Visible); });
+                Check(read(R::AcknowledgedSequence) == 1 && read(R::AcknowledgementCode) == 1 && read(R::CoreSampleStage) == 2 &&
+                          read(R::CoreOffset + 33) == 2 && !fixture.counters[52],
+                      "Show acknowledges actual GUI admission and keeps historical Core sample");
+                Check(!worker.CommandFrontendRuntime(generation, 1, 2) && !worker.CommandFrontendRuntime(generation, 2, 1),
+                      "stale sequence and Show-while-visible refused");
+                if (scenario == 3 || scenario == 13)
+                    command(2, R::Command::Stop);
+                if (scenario == 13)
+                {
+                    wait([&] { return read(R::WorkerPhase) == static_cast<std::uint32_t>(R::Phase::RetainedCleanup); });
+                    Check(worker.PollFrontendRuntime() == 0 && !fixture.counters[48] && !fixture.counters[49] && GetModuleHandleW(L"core.dll"),
+                          "Stop is not acknowledged while per-view native cleanup remains retained");
+                    SetEvent(fixture.movementRelease);
+                }
+                if (scenario == 0 || scenario == 15)
+                {
+                    if (scenario == 15)
+                    {
+                        AcquireSRWLockExclusive(&deonline::CoreStartupReferenceTestAccess::InputLock(worker));
+                        const auto sequence = read(R::SequenceLow);
+                        const auto until = GetTickCount64() + 100;
+                        while (GetTickCount64() < until)
+                        {
+                            worker.HeartbeatFrontendRuntime(generation);
+                            capture();
+                            Sleep(5);
+                        }
+                        ReleaseSRWLockExclusive(&deonline::CoreStartupReferenceTestAccess::InputLock(worker));
+                        Check(read(R::SequenceLow) > sequence, "runtime416 atomic cache never takes historical input lock");
+                    }
+                    command(2, R::Command::Hide);
+                    wait([&] { return read(R::WorkerPhase) == static_cast<std::uint32_t>(R::Phase::Hidden) && read(R::AcknowledgedSequence) == 2; });
+                    Check(read(R::ViewsRetired) == 1 && read(R::CoreOffset + 46) == read(R::CoreOffset + 47) && read(R::CoreOffset + 37) == 1 &&
+                              read(R::CoreOffset + 38) == 1 && !fixture.counters[48],
+                          "Hide retires a fresh view while retaining Core/backend/session services");
+                    if (scenario == 0)
+                    {
+                        command(3, R::Command::Show);
+                        wait([&] { return read(R::AcknowledgedSequence) == 3 && read(R::WorkerPhase) == static_cast<std::uint32_t>(R::Phase::Visible); });
+                        command(4, R::Command::Hide);
+                        wait([&] { return read(R::AcknowledgedSequence) == 4 && read(R::WorkerPhase) == static_cast<std::uint32_t>(R::Phase::Hidden); });
+                        Check(read(R::ViewGenerationLow) == 2 && read(R::ViewsRetired) == 2 && read(R::CoreOffset + 43) == 1 && read(R::CoreOffset + 44) == 1 &&
+                                  read(R::CoreOffset + 45) == 1,
+                              "second Show reuses one retained owner and fresh native generation");
+                        command(5, R::Command::Stop);
+                    }
+                    else
+                        command(3, R::Command::Stop);
+                }
+                if (scenario == 6 || scenario == 7)
+                {
+                    wait([&] { return read(R::WorkerPhase) == static_cast<std::uint32_t>(R::Phase::Hidden); });
+                    Check(read(scenario == 6 ? R::FocusHideCount : R::GuiHideCount) == 1 && !fixture.counters[48],
+                          "focus/GUI closure hides instead of shutting down Core");
+                    command(2, R::Command::Stop);
+                }
+            }
+        }
+        while (worker.PollFrontendRuntime() == 0)
+        {
+            if (scenario != 4 && scenario != 5)
+                worker.HeartbeatFrontendRuntime(generation);
+            Check(GetTickCount64() < deadline, "runtime final cleanup remains pending beyond fixture budget");
+            Sleep(5);
+        }
+        Check(capture() && read(R::CleanupComplete) == 1 && !read(R::CleanupPending) && read(R::CoreStoppedVerified) == 1 &&
+                  read(R::CoreReleasedVerified) == 1 && read(R::CoreUnloadedVerified) == 1 && !read(R::CoreLoaded) && !read(R::CoreOwnerRetained),
+              "runtime Stop/failure proves same-owner shutdown/release/unload");
+        Check(fixture.counters[44] == 1 && fixture.counters[49] == 1 && !fixture.counters[52] && !fixture.counters[2] &&
+                  fixture.counters[1] == fixture.counters[0],
+              "no foreign or fictitious live Core reads; one completed owner is unloaded by its producer");
+        if (scenario == 4 || scenario == 5)
+            Check(read(R::HostExpiryObserved) == 1 && read(R::LastFailure) == 12, "host expiry is irrevocable and fail-closed");
+        if (scenario == 11 || scenario == 12)
+            Check(!read(R::ShowAcknowledgements), "cursor admission fault never acknowledges Show");
+        if (scenario == 2)
+            Check(read(R::SupersededRequests) == 1 && read(R::AcknowledgedSequence) == 2,
+                  "Stop supersedes pending Show and acknowledges only after retirement");
+        for (std::uint32_t field = 0; field < 19; ++field)
+            Check(!worker.Read(field), "runtime never reinterprets Common19");
+        Check(!worker.ReadFrontendRuntime(R::FieldCount) && !worker.CapturePersistentFrontend() && !worker.CaptureGuiFrontendStartupClockV2(),
+              "runtime keeps every old cache separate");
+    }
 
     struct WorkerDeleteObservation
     {
@@ -1041,7 +1210,12 @@ int wmain(int argc, wchar_t** argv)
         Check(!worker.Begin(nullptr), "null anchor must be rejected");
         for (unsigned field = 0; field < 20; ++field)
             Check(worker.Read(field) == 0, "idle cache must be neutral");
-        if (std::wstring(argv[2]).find(L"frontend-clock") == 0)
+        if (std::wstring(argv[2]).find(L"runtime-") == 0)
+        {
+            Check(argc == 4, "runtime worker fixture requires its controlled Core DLL");
+            TestRuntimeWorker(worker, root, argv[2], argv[3]);
+        }
+        else if (std::wstring(argv[2]).find(L"frontend-clock") == 0)
         {
             Check(argc == 4, "completed clock worker fixture requires its controlled Core DLL");
             TestFrontendClockWorker(worker, root, argv[2], argv[3]);
@@ -1398,6 +1572,40 @@ int wmain(int argc, wchar_t** argv)
                           worker.ReadGuiFrontendStartupClockOwnerV2(Startup::LastFailure) == static_cast<std::uint32_t>(Startup::Failure::InputBind) &&
                           !worker.ReadGuiFrontendStartupClockOwnerV2(Startup::ViewRuns),
                       "actual V2 rejects native binding without inventing96 clock evidence, then retains/copies the genuine clean owner32");
+        }
+        else if (std::wstring(argv[2]) == L"actual-runtime")
+        {
+            namespace R = deonline::FrontendRuntimeReport;
+            const auto generation = Fast([&] { return worker.BeginFrontendRuntime(&anchor); });
+            Check(generation != 0, "actual runtime start owns an independent host generation");
+            const auto deadline = GetTickCount64() + 15000;
+            while (!worker.CaptureFrontendRuntime() || worker.ReadFrontendRuntime(R::WorkerPhase) != static_cast<std::uint32_t>(R::Phase::Hidden))
+            {
+                worker.HeartbeatFrontendRuntime(generation);
+                Check(worker.PollFrontendRuntime() == 0 && GetTickCount64() < deadline, "actual runtime services failed before Hidden");
+                Sleep(5);
+            }
+            Check(worker.ReadFrontendRuntime(R::CoreOffset + 33) == 2 && worker.ReadFrontendRuntime(R::CoreOffset + 38) == 1 &&
+                      worker.ReadFrontendRuntime(R::CoreOffset + 43) == 1 && worker.ReadFrontendRuntime(R::CoreOffset + 44) == 1 &&
+                      worker.ReadFrontendRuntime(R::CoreOffset + 45) == 1,
+                  "actual Core owns one XML/config/CVars/binding session while hidden");
+            Check(worker.CommandFrontendRuntime(generation, 1, 1), "actual runtime requests one fresh native view");
+            while (worker.PollFrontendRuntime() == 0)
+            {
+                worker.HeartbeatFrontendRuntime(generation);
+                Check(GetTickCount64() < deadline, "actual wrong-image runtime did not safely retire");
+                Sleep(5);
+            }
+            Check(worker.CaptureFrontendRuntime() && worker.ReadFrontendRuntime(R::WorkerPhase) == static_cast<std::uint32_t>(R::Phase::Failed) &&
+                      worker.ReadFrontendRuntime(R::LastFailure) == static_cast<std::uint32_t>(R::Failure::View) &&
+                      worker.ReadFrontendRuntime(R::CoreSampleStage) == static_cast<std::uint32_t>(R::CoreStage::Stopped),
+                  "real engine image guard rejects runtime view without corrupting ownership");
+            for (const auto field : {R::CleanupComplete, R::CoreStoppedVerified, R::CoreReleasedVerified, R::CoreUnloadedVerified})
+                Check(worker.ReadFrontendRuntime(field) == 1, "actual runtime owner and real DLL dependencies retired");
+            for (std::uint32_t field = R::ViewOffset; field < R::FieldCount; ++field)
+                Check(!worker.ReadFrontendRuntime(field), "wrong-image refusal invents no288 native/GUI evidence");
+            Check(!GetModuleHandleW(L"core.dll") && !GetModuleHandleW(L"game_de.dll") && !GetModuleHandleW(L"xmll.dll") && !GetModuleHandleW(L"pthread.dll"),
+                  "actual refused runtime releases session XML before backend/Core unload");
         }
         else if (std::wstring(argv[2]) == L"actual-persistent-frontend")
         {

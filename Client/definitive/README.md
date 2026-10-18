@@ -6,6 +6,39 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
+**The retained frontend runtime candidate keeps real MTA services across menu reopenings.**
+`package.ps1 -Mode Smoke -MtaCoreFrontendRuntime` selects a separate 58-file
+package; the flag defaults to false and excludes every other trial. After the
+initial three-second Ctrl+Shift+F9 activation and key release, the existing
+MTA menu opens without a display timer or a clock-test prelude. Later presses
+of Ctrl+Shift+F9 hide/show the menu. Menu Quit, Escape or focus loss hides the
+view; Ctrl+Shift+End stops the retained runtime.
+
+One completed Core/backend owns the actual XML, CVars and configured `CKeyBinds`
+manager. Settings Apply changes these session bindings, so a fresh GUI can
+borrow them again after the old GUI is released. Cancel discards staged edits;
+configuration files are not saved. Each visible view still owns its native
+input, cursor and rendering leases. Hidden acknowledgement requires their
+retirement and neutral key history; final Stop releases the session services
+before the backend/Core. Cleanup debt retains its owners rather than unloading
+their code. The independent host lease remains one second; native and cursor
+leases remain 500 ms.
+
+The additive API1 Core64 and Bridge416 reports preserve Startup32, Input256 and
+Persistent288 meanings. The Core sample identifies an actual owner read;
+live GUI state comes from the view publication while that owner is busy.
+This candidate needs a fresh GTA test. Earlier cursor, Settings and clock
+results below remain separate evidence. Gameplay, networking and full client
+startup remain unavailable, and the root **EXPERIMENTAL** notice stays.
+
+Offline validation passed 69 normal Core build guards and both classic compile
+profiles; 2,237 actual MTA GUI host checks across seven cases; 170 worker cases;
+1,356 script checks; and 2,386 actual Bridge checks in a rejected non-game host.
+The new package matrix passed 3,746 checks using one disposable game copy, and
+the preceding frontend ownership matrix passed all 1,175 checks again. These
+results verify service ownership and failure handling; live hide/show and
+Settings retention still need the user's GTA test.
+
 **Combined clock-to-menu cursor interaction passed in GTA on runtime `f731beec0`.**
 The user reported a free pointer, a successful Quit click and restored movement
 and camera controls. The same completed MTA Core owner performed the read-only
@@ -151,7 +184,7 @@ same worker alive and retries, including after cancellation or a deadline.
 The existing Core14 input256 route and all older contracts remain separate.
 The historical view keeps its native 35-second trial limit.
 
-**The current completed-Core trial composes clock Read and the existing menu.**
+**The preceding completed-Core trial composes clock Read and the existing menu.**
 The same Smoke option `-MtaCoreGuiFrontendStartupReference` now requires distinct
 V2 bridge exports and selects Core19. After successful Core/backend creation,
 it runs the existing read-only clock lifecycle for two seconds, with a separate

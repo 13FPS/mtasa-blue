@@ -23,6 +23,9 @@
 #include "PersistentFrontendHostLease.h"
 #include "../core/DefinitivePersistentFrontend.h"
 #include "../core/DefinitiveFrontendClockReference.h"
+#include "../core/DefinitiveFrontendRuntime.h"
+#include "FrontendRuntimeMailbox.h"
+#include "FrontendRuntimeCache.h"
 
 namespace deonline
 {
@@ -81,6 +84,12 @@ namespace deonline
         std::uint32_t ReadPersistentFrontend(std::uint32_t field) const noexcept;
         bool          CapturePersistentFrontendLifecycle() noexcept;
         std::uint32_t ReadPersistentFrontendLifecycle(std::uint32_t field) const noexcept;
+        std::uint32_t BeginFrontendRuntime(const void* moduleAddress) noexcept;
+        bool          CommandFrontendRuntime(std::uint32_t generation, std::uint32_t sequence, std::uint32_t command) noexcept;
+        bool          HeartbeatFrontendRuntime(std::uint32_t generation) noexcept;
+        int           PollFrontendRuntime() noexcept;
+        bool          CaptureFrontendRuntime() noexcept;
+        std::uint32_t ReadFrontendRuntime(std::uint32_t field) const noexcept;
         bool          CaptureGuiFrontendControl() noexcept;
         std::uint32_t ReadGuiFrontendControl(std::uint32_t field) const noexcept;
         bool          AcknowledgeGuiFrontendControl(std::uint32_t generation) noexcept;
@@ -111,11 +120,17 @@ namespace deonline
         bool                      CheckCancellation() noexcept;
         void                      RunFrontendStartup(HMODULE core, const std::wstring& mtaDirectory, const std::wstring& gtaDirectory) noexcept;
         void                      PublishFrontendStartup(const FrontendStartupReport::Snapshot& report) noexcept;
+        void                      RunFrontendRuntime(HMODULE core, const std::wstring& mtaDirectory, const std::wstring& gtaDirectory) noexcept;
+        void                      PublishRuntime() noexcept;
+        void                      FinishRuntime(HMODULE core) noexcept;
+        static bool               RuntimeViewCancelled();
+        static bool               RuntimeHostFresh();
+        static void               PublishRuntimeView(const std::uint32_t* values, std::uint32_t count);
         bool                      Start(const void* moduleAddress, bool configuredInput, bool configuredMovement = false, bool configuredRender = false,
                                         std::uint32_t configuredRenderRoute = 0, std::uint32_t configuredRenderApi = 1, bool configuredGuiStartup = false,
                                         bool configuredGuiSurface = false, bool configuredGuiFrontend = false, bool configuredGuiFrontendInput = false,
                                         bool configuredFrontendStartup = false, bool configuredPersistentFrontend = false, bool configuredClock = false,
-                                        bool configuredClockSet = false, bool configuredClockBeforeFrontend = false) noexcept;
+                                        bool configuredClockSet = false, bool configuredClockBeforeFrontend = false, bool configuredFrontendRuntime = false) noexcept;
         bool                      CopyClockSnapshot(DefinitiveClockReference::Snapshot& output) const noexcept;
         bool                      CopyClockSetSnapshot(DefinitiveClockSetReference::Snapshot& output) const noexcept;
         void                      WaitForClockRetirement() noexcept;
@@ -175,6 +190,15 @@ namespace deonline
         bool                                                                            frontendStartupRequested = false;
         bool                                                                            persistentFrontendRequested = false;
         PersistentFrontendHostLease                                                     persistentHostLease;
+        bool                                                                            frontendRuntimeRequested = false;
+        FrontendRuntimeMailbox                                                          runtimeMailbox;
+        PersistentFrontendHostLease                                                     runtimeHostLease;
+        FrontendRuntimeCache                                                            runtimeCache;
+        FrontendRuntimeReport::Snapshot                                                 runtimeReport{}, capturedRuntime{};
+        FrontendRuntimeMailbox::Request                                                 runtimeViewRequest{};
+        std::atomic<bool>                                                               runtimePublicationFault{false};
+        std::uint64_t                                                                   runtimeStartedAt = 0, runtimePublicationSequence = 0;
+        bool                                                                            runtimeViewAvailable = false;
         // Persistent reports never enter the historical 256-field cache.
         std::array<std::atomic<std::uint32_t>, DefinitivePersistentFrontend::FieldCount> publishedPersistentFrontend{};
         std::atomic<std::uint32_t>                                                       persistentFrontendSequence{0};

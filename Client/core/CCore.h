@@ -28,6 +28,7 @@ class CDiscordInterface;
     #include "DefinitiveFrontendConsole.h"
     #include "DefinitiveFrontendBindings.h"
     #include "DefinitiveFrontendStartup.h"
+    #include "DefinitiveFrontendRuntime.h"
     #include "DefinitivePersistentFrontend.h"
     #include "DefinitiveGuiFrontendInputReference.h"
 #endif
@@ -326,7 +327,9 @@ private:
     DefinitiveFrontend::Status RunFrontendStartupView(const DefinitiveInputReference::Request&, DefinitiveGuiFrontendInputReference::Snapshot&);
     DefinitiveFrontend::Status RunPersistentFrontend(const DefinitivePersistentFrontend::RequestV1&, DefinitivePersistentFrontend::Snapshot&);
     struct FrontendResources;
+    struct FrontendRuntimeResources;
     FrontendResources*                  m_frontendResources = nullptr;
+    FrontendRuntimeResources*           m_frontendRuntimeResources = nullptr;
     bool                                m_frontendShellOnly = false;
     bool                                m_frontendStartupOwned = false;
     bool                                m_frontendStartupAccepting = false;
@@ -347,6 +350,10 @@ private:
     DefinitiveFrontend::Status EnableFrontendBindings();
     DefinitiveFrontendBindings::Snapshot ReadFrontendBindings();
     DefinitiveFrontend::Status           ProduceFrontendNeutralInput(mta::game_de::MtaInputState& output, bool cleanup = false);
+    DefinitiveFrontend::Status           EnableFrontendRuntimeServices() noexcept;
+    DefinitiveFrontendRuntime::Snapshot  ReadFrontendRuntimeServices() const noexcept;
+    DefinitiveFrontend::Status           StopFrontendRuntimeServices() noexcept;
+    bool                                 FlushFrontendRuntimeBindings() noexcept;
 #endif
     void InitializeFrontendInfrastructure();
     void DestroyFrontendCommands();

@@ -98,7 +98,7 @@ namespace
         bool retainModule = false;
 
         ~InputReferenceXml() { Close(); }
-        bool Close() noexcept
+        bool Close(bool retainOnUnloadFailure = false) noexcept
         {
             bool clean = true;
             // File wrappers must die before their factory and DLL. Attempt each
@@ -133,9 +133,12 @@ namespace
             if (module && !retainModule)
             {
                 const auto owned = module;
-                module = nullptr;
+                if (!retainOnUnloadFailure)
+                    module = nullptr;
                 if (!FreeLibrary(owned))
                     clean = false;
+                else
+                    module = nullptr;
             }
             // A failed foreign factory release may leave live XML objects. Keep
             // their code loaded and report failure instead of inventing cleanup.
@@ -1977,6 +1980,15 @@ static HMODULE WINAPI SkipDirectPlay_LoadLibraryA(LPCSTR fileName)
 }
 
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
+struct CCore::FrontendRuntimeResources
+{
+    InputReferenceXml                   xml;
+    std::unique_ptr<CKeyBinds>          bindings;
+    DefinitiveFrontendRuntime::Snapshot snapshot{};
+    bool                                cvarsLoaded = false;
+    bool                                cvarsAttempted = false;
+};
+
 struct CCore::FrontendResources
 {
     InputReferenceXml                    xml;
@@ -1987,8 +1999,192 @@ struct CCore::FrontendResources
     DefinitiveFrontendBindings::Snapshot bindingsSnapshot{};
     mta::game_de::MtaInputState          neutralInput{};
     bool                                 bindingsEnabled = false;
+    bool                                 runtimeBorrowed = false;
     bool                                 menuInputRequested = false, consoleInputRequested = false, consoleEnabled = false;
 };
+
+bool CCore::FlushFrontendRuntimeBindings() noexcept
+{
+    if (!m_frontendRuntimeResources || !m_frontendRuntimeResources->bindings)
+        return false;
+    try
+    {
+        auto& bindings = *m_frontendRuntimeResources->bindings;
+        if (bindings.Count(KeyBindType::FUNCTION) || bindings.Count(KeyBindType::CONTROL_FUNCTION))
+            return false;
+        const CControllerState zero;
+        // The manager survives a hidden view, but its held-key history must
+        // not. Use its existing configured producer without dispatching any
+        // command or function, including when a view failed before Enable.
+        for (unsigned frame = 0; frame != 2; ++frame)
+        {
+            bindings.PollConfiguredControlKeys(false, nullptr, nullptr, DefinitiveFrontendBindings::MovementActions);
+            const auto neutral = bindings.BuildConfiguredControlFrame({});
+            bindings.FinishConfiguredControlFrame();
+            if (neutral.heldActions || std::memcmp(&neutral.controller, &zero, sizeof(zero)) != 0)
+                return false;
+        }
+        return true;
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
+
+DefinitiveFrontend::Status CCore::EnableFrontendRuntimeServices() noexcept
+{
+    using namespace DefinitiveFrontendRuntime;
+    using Status = DefinitiveFrontend::Status;
+    if (GetCurrentThreadId() != m_frontendCoreOwnerThread)
+        return Status::WrongThread;
+    if (!m_frontendStartupOwned || !m_DefinitiveAdapter.IsStarted() || m_frontendResources || m_pXML || m_pConfigFile || m_pKeyBinds)
+        return Status::Busy;
+    if (m_frontendRuntimeResources)
+    {
+        const auto& state = m_frontendRuntimeResources->snapshot;
+        return state[CleanupComplete] ? Status::Stopped : state[ServicesInitialized] ? Status::Ok : Status::Failed;
+    }
+    try
+    {
+        // This explicit runtime owns configuration independently of a CGUI
+        // borrower. Legacy frontend sessions still own and close their own XML.
+        m_frontendRuntimeResources = new FrontendRuntimeResources;
+        auto& resources = *m_frontendRuntimeResources;
+        auto& state = resources.snapshot;
+        state[RuntimeVersion] = ApiVersion;
+        state[RuntimePhase] = static_cast<std::uint32_t>(Phase::Starting);
+        state[OwnerThread] = m_frontendCoreOwnerThread;
+        state[ConfigurationReadOnly] = 1;
+        if (!resources.xml.Open())
+            throw std::runtime_error("Runtime configuration could not be opened");
+        ++state[ConfigurationLoads];
+        m_pXML = resources.xml.xml;
+        m_pConfigFile = resources.xml.file;
+        resources.cvarsAttempted = true;
+        if (!m_ClientVariables.Load())
+            throw std::runtime_error("Runtime CVars could not be loaded");
+        resources.cvarsLoaded = true;
+        m_ClientVariables.Set("locale", std::string("en_US"));
+        resources.bindings = std::make_unique<CKeyBinds>(this);
+        ++state[BindingManagerCreations];
+        auto* root = m_pConfigFile->GetRootNode();
+        if (!root)
+            throw std::runtime_error("Runtime bindings configuration has no root");
+        auto* configured = root->FindSubNode(CONFIG_NODE_KEYBINDS);
+        if (configured && !resources.bindings->LoadConfiguredBindsFromXML(configured))
+            throw std::runtime_error("Runtime configured bindings could not be loaded");
+        ++state[BindingLoads];
+        if (!FlushFrontendRuntimeBindings())
+            throw std::runtime_error("Runtime bindings could not establish neutral history");
+        state[ServicesInitialized] = 1;
+        state[HiddenNeutralVerified] = 1;
+        state[RuntimePhase] = static_cast<std::uint32_t>(Phase::Hidden);
+        // Only an active view publishes aliases through the old frontend API.
+        // CVars keep their actual nodes in this still-owned XML document.
+        m_pXML = nullptr;
+        m_pConfigFile = nullptr;
+        return Status::Ok;
+    }
+    catch (...)
+    {
+        m_pXML = nullptr;
+        m_pConfigFile = nullptr;
+        if (m_frontendRuntimeResources)
+        {
+            auto& state = m_frontendRuntimeResources->snapshot;
+            state[RuntimePhase] = static_cast<std::uint32_t>(Phase::Failed);
+            state[LastFailure] = static_cast<std::uint32_t>(Failure::ServicesStart);
+            state[CleanupPending] = 1;
+        }
+        // A partially opened factory or manager remains attached to this Core
+        // until explicit owner-thread shutdown proves it can be released.
+        return Status::Failed;
+    }
+}
+
+DefinitiveFrontendRuntime::Snapshot CCore::ReadFrontendRuntimeServices() const noexcept
+{
+    using namespace DefinitiveFrontendRuntime;
+    if (GetCurrentThreadId() != m_frontendCoreOwnerThread)
+        return {};
+    if (!m_frontendRuntimeResources)
+    {
+        Snapshot state{};
+        state[RuntimeVersion] = ApiVersion;
+        state[OwnerThread] = m_frontendCoreOwnerThread;
+        state[RuntimePhase] = static_cast<std::uint32_t>(Phase::Stopped);
+        state[ConfigurationReadOnly] = 1;
+        // Construction can fail before allocating the configuration owner.
+        // There is then no session resource to retire, not an invented load.
+        state[CleanupComplete] = 1;
+        return state;
+    }
+    const auto& resources = *m_frontendRuntimeResources;
+    auto        state = resources.snapshot;
+    state[XmlRetained] = resources.xml.module || resources.xml.xml;
+    state[ConfigRetained] = resources.xml.file != nullptr;
+    state[CVarsLoaded] = resources.cvarsLoaded;
+    state[BindingsRetained] = resources.bindings != nullptr;
+    state[ServicesRetained] = state[XmlRetained] || state[ConfigRetained] || state[CVarsLoaded] || state[BindingsRetained];
+    state[ViewBorrowed] = m_frontendResources != nullptr;
+    state[CleanupPending] = state[CleanupPending] || (m_frontendResources && m_frontendResources->snapshot[DefinitiveFrontend::CleanupPending]);
+    const auto revision = static_cast<std::uint64_t>(static_cast<std::uint32_t>(const_cast<CClientVariables&>(m_ClientVariables).GetRevision()));
+    state[CVarRevisionLow] = static_cast<std::uint32_t>(revision);
+    state[CVarRevisionHigh] = static_cast<std::uint32_t>(revision >> 32);
+    state[BindCount] = resources.bindings ? resources.bindings->Count() : 0;
+    return state;
+}
+
+DefinitiveFrontend::Status CCore::StopFrontendRuntimeServices() noexcept
+{
+    using namespace DefinitiveFrontendRuntime;
+    using Status = DefinitiveFrontend::Status;
+    if (GetCurrentThreadId() != m_frontendCoreOwnerThread)
+        return Status::WrongThread;
+    if (!m_frontendRuntimeResources)
+        return Status::Ok;
+    if (m_frontendResources || m_pGUI || m_pLocalGUI || m_pXML || m_pConfigFile || m_pKeyBinds)
+        return Status::Busy;
+    auto& resources = *m_frontendRuntimeResources;
+    auto& state = resources.snapshot;
+    if (state[CleanupComplete])
+        return Status::Ok;
+    state[CleanupPending] = 1;
+    state[RuntimePhase] = static_cast<std::uint32_t>(Phase::Stopping);
+    try
+    {
+        if (resources.bindings)
+        {
+            if (!FlushFrontendRuntimeBindings())
+                throw std::runtime_error("Runtime bindings retained nonneutral input");
+            state[HiddenNeutralVerified] = 1;
+            resources.bindings.reset();
+        }
+        // CVars borrow XML nodes. They are invalidated only after the actual
+        // binding manager is gone, and before its factory/document is closed.
+        if (resources.cvarsAttempted)
+        {
+            m_ClientVariables.Unload();
+            resources.cvarsLoaded = false;
+            resources.cvarsAttempted = false;
+        }
+        // Keep the actual factory handle for a later owner-thread retry if
+        // unloading fails. The old short-lived reference uses its old policy.
+        if (!resources.xml.Close(true))
+            throw std::runtime_error("Runtime XML owner retained its module");
+        state[CleanupPending] = 0;
+        state[CleanupComplete] = 1;
+        state[RuntimePhase] = static_cast<std::uint32_t>(Phase::Stopped);
+        return Status::Ok;
+    }
+    catch (...)
+    {
+        state[LastFailure] = static_cast<std::uint32_t>(Failure::ServicesStop);
+        state[RuntimePhase] = static_cast<std::uint32_t>(Phase::Failed);
+        return Status::Failed;
+    }
+}
 
 DefinitiveFrontend::Status CCore::RunFrontendStartupView(const DefinitiveInputReference::Request&       request,
                                                          DefinitiveGuiFrontendInputReference::Snapshot& result)
@@ -2107,8 +2303,31 @@ bool CCore::StartFrontend(CGUI* borrowedGui)
     if (GetCurrentThreadId() != m_frontendCoreOwnerThread || (m_frontendStartupOwned && !m_frontendStartupAccepting) || !borrowedGui || m_frontendResources ||
         m_pGUI || m_pXML || m_pConfigFile || m_pLocalGUI || m_pLocalization || m_pCommands || m_pConsoleLogger || m_pKeyBinds)
         return false;
+    if (m_frontendRuntimeResources)
+    {
+        using namespace DefinitiveFrontendRuntime;
+        const auto& state = m_frontendRuntimeResources->snapshot;
+        const auto  generation = static_cast<std::uint64_t>(state[ViewGenerationLow]) | (static_cast<std::uint64_t>(state[ViewGenerationHigh]) << 32);
+        if (!state[ServicesInitialized] || state[DefinitiveFrontendRuntime::CleanupPending] || state[DefinitiveFrontendRuntime::CleanupComplete] ||
+            state[RuntimePhase] != static_cast<std::uint32_t>(DefinitiveFrontendRuntime::Phase::Hidden) || state[ViewsAttached] == UINT32_MAX ||
+            generation == UINT64_MAX || !m_frontendRuntimeResources->bindings || !m_frontendRuntimeResources->xml.file ||
+            !m_frontendRuntimeResources->cvarsLoaded)
+            return false;
+    }
     m_frontendResources = new FrontendResources;
     auto& state = *m_frontendResources;
+    state.runtimeBorrowed = m_frontendRuntimeResources != nullptr;
+    if (state.runtimeBorrowed)
+    {
+        using namespace DefinitiveFrontendRuntime;
+        auto&      runtime = m_frontendRuntimeResources->snapshot;
+        const auto generation = (static_cast<std::uint64_t>(runtime[ViewGenerationLow]) | (static_cast<std::uint64_t>(runtime[ViewGenerationHigh]) << 32)) + 1;
+        runtime[ViewGenerationLow] = static_cast<std::uint32_t>(generation);
+        runtime[ViewGenerationHigh] = static_cast<std::uint32_t>(generation >> 32);
+        ++runtime[ViewsAttached];
+        runtime[HiddenNeutralVerified] = 0;
+        runtime[RuntimePhase] = static_cast<std::uint32_t>(DefinitiveFrontendRuntime::Phase::Visible);
+    }
     state.snapshot[Version] = ApiVersion;
     state.snapshot[Phase] = 1;
     state.snapshot[OwnerThread] = GetCurrentThreadId();
@@ -2130,14 +2349,26 @@ bool CCore::StartFrontend(CGUI* borrowedGui)
         // Reuse the existing adjacent, recovery-disabled XML owner. Frontend
         // CVars remain real MTA XML nodes, but neither config nor global locale
         // preferences are saved by this bounded lifecycle.
-        if (!state.xml.Open())
-            throw std::runtime_error("Frontend XML/configuration could not be opened");
-        m_pXML = state.xml.xml;
-        m_pConfigFile = state.xml.file;
+        if (state.runtimeBorrowed)
+        {
+            // A fresh GUI borrows the same actual manager and configuration.
+            // Applied binds live here, not in old widgets or a reloaded file.
+            m_pXML = m_frontendRuntimeResources->xml.xml;
+            m_pConfigFile = m_frontendRuntimeResources->xml.file;
+            m_pKeyBinds = m_frontendRuntimeResources->bindings.get();
+        }
+        else
+        {
+            if (!state.xml.Open())
+                throw std::runtime_error("Frontend XML/configuration could not be opened");
+            m_pXML = state.xml.xml;
+            m_pConfigFile = state.xml.file;
+            state.snapshot[XmlLoaded] = state.snapshot[ConfigLoaded] = 1;
+            if (!m_ClientVariables.Load())
+                throw std::runtime_error("Frontend CVars could not be loaded");
+            m_ClientVariables.Set("locale", std::string("en_US"));
+        }
         state.snapshot[XmlLoaded] = state.snapshot[ConfigLoaded] = 1;
-        if (!m_ClientVariables.Load())
-            throw std::runtime_error("Frontend CVars could not be loaded");
-        m_ClientVariables.Set("locale", std::string("en_US"));
         const auto localeRoot = ToUTF8((g_mtaDirectory / L"MTA/locale").wstring());
         m_pLocalization = new CLocalization("en_US", localeRoot, false);
         g_pLocalization = m_pLocalization;
@@ -2166,6 +2397,8 @@ bool CCore::StartFrontend(CGUI* borrowedGui)
         // Keep the failed phase and every owner inspectable. The controller
         // must explicitly retire them instead of throwing away a failed handle.
         state.snapshot[Phase] = 5;
+        if (state.runtimeBorrowed)
+            m_frontendRuntimeResources->snapshot[DefinitiveFrontendRuntime::LastFailure] = static_cast<std::uint32_t>(DefinitiveFrontendRuntime::Failure::View);
         return false;
     }
 }
@@ -2244,6 +2477,15 @@ namespace DefinitiveFrontend
             const auto status = Stop();
             if (status != Status::Ok)
                 return status;
+            if (core->m_frontendResources->runtimeBorrowed)
+            {
+                using namespace DefinitiveFrontendRuntime;
+                auto& runtime = core->m_frontendRuntimeResources->snapshot;
+                // A stopped but unreleased GUI still borrows this Core. Only
+                // actual Release makes the next fresh view admissible.
+                ++runtime[ViewsRetired];
+                runtime[RuntimePhase] = static_cast<std::uint32_t>(DefinitiveFrontendRuntime::Phase::Hidden);
+            }
             delete core->m_frontendResources;
             core->m_frontendResources = nullptr;
             if (ownsCore)
@@ -2498,7 +2740,7 @@ DefinitiveFrontend::Status CCore::EnableFrontendBindings()
         return Status::Stopped;
     if (state[Phase] == static_cast<std::uint32_t>(Lifecycle::Running))
         return Status::Ok;
-    if (state[ReleaseFault] || m_pKeyBinds)
+    if (state[ReleaseFault] || (m_pKeyBinds && !resources.runtimeBorrowed))
         return Status::Failed;
     resources.bindingsEnabled = true;
     state[Phase] = static_cast<std::uint32_t>(Lifecycle::Starting);
@@ -2506,16 +2748,26 @@ DefinitiveFrontend::Status CCore::EnableFrontendBindings()
     state[CVarRevision] = static_cast<std::uint32_t>(m_ClientVariables.GetRevision());
     try
     {
-        // Own the real MTA manager alongside the existing XML owner. Loading
-        // configured records avoids GTA defaults, CGame and command dispatch.
-        m_pKeyBinds = new CKeyBinds(this);
+        // A runtime view borrows its owner's actual manager. Recreating or
+        // reloading it here would discard applied edits on every fresh GUI.
+        if (resources.runtimeBorrowed)
+        {
+            if (!m_frontendRuntimeResources || m_pKeyBinds != m_frontendRuntimeResources->bindings.get())
+                throw std::runtime_error("Runtime view lost its actual binding manager");
+        }
+        else
+        {
+            // Configured records avoid GTA defaults, CGame and command dispatch.
+            m_pKeyBinds = new CKeyBinds(this);
+            state[BindingsCreated] = 1;
+            auto* root = m_pConfigFile->GetRootNode();
+            if (!root)
+                throw std::runtime_error("Frontend bindings configuration has no root");
+            auto* configured = root->FindSubNode(CONFIG_NODE_KEYBINDS);
+            if (configured && !m_pKeyBinds->LoadConfiguredBindsFromXML(configured))
+                throw std::runtime_error("Frontend configured bindings could not be loaded");
+        }
         state[BindingsCreated] = 1;
-        auto* root = m_pConfigFile->GetRootNode();
-        if (!root)
-            throw std::runtime_error("Frontend bindings configuration has no root");
-        auto* configured = root->FindSubNode(CONFIG_NODE_KEYBINDS);
-        if (configured && !m_pKeyBinds->LoadConfiguredBindsFromXML(configured))
-            throw std::runtime_error("Frontend configured bindings could not be loaded");
         // A missing configured list is an empty list, never admission to
         // discover classic GTA defaults or start a gameplay input producer.
         state[ConfigurationLoaded] = 1;
@@ -2535,8 +2787,9 @@ DefinitiveFrontend::Status CCore::EnableFrontendBindings()
     catch (...)
     {
         state[Phase] = static_cast<std::uint32_t>(Lifecycle::Failed);
-        SAFE_DELETE(m_pKeyBinds);
-        state[CleanupComplete] = 1;
+        if (!resources.runtimeBorrowed)
+            SAFE_DELETE(m_pKeyBinds);
+        state[CleanupComplete] = resources.runtimeBorrowed ? 0u : 1u;
         return Status::Failed;
     }
 }
@@ -2844,6 +3097,8 @@ DefinitiveFrontend::Status CCore::StopFrontend()
         return Status::Failed;
     state[CleanupPending] = 1;
     state[Phase] = 3;
+    if (resources.runtimeBorrowed)
+        m_frontendRuntimeResources->snapshot[DefinitiveFrontendRuntime::RuntimePhase] = static_cast<std::uint32_t>(DefinitiveFrontendRuntime::Phase::Stopping);
     try
     {
         // Capture retains grid row pointers and an ordinary Core message box.
@@ -2876,9 +3131,12 @@ DefinitiveFrontend::Status CCore::StopFrontend()
                 mta::game_de::MtaInputState neutral;
                 if (ProduceFrontendNeutralInput(neutral, true) != Status::Ok)
                     throw std::runtime_error("Frontend bindings could not flush neutral input");
-                SAFE_DELETE(m_pKeyBinds);
+                if (!resources.runtimeBorrowed)
+                    SAFE_DELETE(m_pKeyBinds);
             }
         }
+        if (resources.runtimeBorrowed && !FlushFrontendRuntimeBindings())
+            throw std::runtime_error("Runtime view bindings could not release held input");
         // Stop input first. CPU widget destruction is supported while the GUI
         // renderer retains submitted texture versions; the external GUI/GPU
         // owner must still drain its session before unloading cgui or Core.
@@ -2918,12 +3176,15 @@ DefinitiveFrontend::Status CCore::StopFrontend()
         if (g_pLocalization == m_pLocalization)
             g_pLocalization = resources.previousLocalization;
         SAFE_DELETE(m_pLocalization);
-        // These views belong to the recovery-disabled XML owner, not the
-        // classic module/save path. Retire them before releasing that factory.
-        m_ClientVariables.Unload();
+        // Runtime CVars still borrow the parked session document. Only legacy
+        // per-view configuration is unloaded here; final runtime Stop owns
+        // the actual manager, its CVars nodes, then the XML factory lifetime.
+        if (!resources.runtimeBorrowed)
+            m_ClientVariables.Unload();
         m_pConfigFile = nullptr;
         m_pXML = nullptr;
-        if (!resources.xml.Close())
+        m_pKeyBinds = nullptr;
+        if (!resources.runtimeBorrowed && !resources.xml.Close())
             throw std::runtime_error("Frontend XML owner retained its module");
         DestroyFrontendLogger();
         m_pGUI = nullptr;
@@ -2931,6 +3192,8 @@ DefinitiveFrontend::Status CCore::StopFrontend()
         state[CleanupPending] = 0;
         state[CleanupComplete] = 1;
         state[Phase] = 4;
+        if (resources.runtimeBorrowed)
+            m_frontendRuntimeResources->snapshot[DefinitiveFrontendRuntime::HiddenNeutralVerified] = 1;
         if (resources.consoleEnabled)
         {
             resources.consoleSnapshot[DefinitiveFrontendConsole::ConsoleRetained] = 0;
@@ -3139,6 +3402,9 @@ CCore::~CCore()
         // Only the controller can destroy this shell after its explicit
         // frontend stop; classic hooks and settings were never constructed.
         assert(!m_frontendResources);
+        assert(!m_frontendRuntimeResources || m_frontendRuntimeResources->snapshot[DefinitiveFrontendRuntime::CleanupComplete]);
+        delete m_frontendRuntimeResources;
+        m_frontendRuntimeResources = nullptr;
         if (g_pCore == this)
             g_pCore = nullptr;
         return;

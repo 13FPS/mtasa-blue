@@ -25,6 +25,15 @@ struct DEPlayerState
 };
 
 DE_BRIDGE_API std::uint32_t DE_ApiVersion();
+// Runtime commands only request owner-thread transitions; capture fixes all416
+// words coherently and can transiently refuse without waiting on native peers.
+DE_BRIDGE_API std::uint32_t DE_FrontendRuntimeApiVersionV1();
+DE_BRIDGE_API std::uint32_t DE_FrontendRuntimeStartV1();
+DE_BRIDGE_API int           DE_FrontendRuntimeCommandV1(std::uint32_t generation, std::uint32_t sequence, std::uint32_t command);
+DE_BRIDGE_API int           DE_FrontendRuntimeHeartbeatV1(std::uint32_t generation);
+DE_BRIDGE_API int           DE_FrontendRuntimePollV1();
+DE_BRIDGE_API int           DE_FrontendRuntimeCaptureV1();
+DE_BRIDGE_API std::uint32_t DE_FrontendRuntimeReadV1(std::uint32_t field);
 // These guards keep the experimental CLEO adapter tied to the executable tested
 // here. Matching its hash is a prerequisite, not proof that game natives work.
 DE_BRIDGE_API int  DE_CheckExecutableBuild(const wchar_t* path);

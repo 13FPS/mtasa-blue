@@ -164,6 +164,16 @@ if ($frontendStartupMarkers.Count -eq 1 -and $frontendStartupMarkers[0].Groups[1
         throw 'MTA Core GUI frontend startup requires the complete frontend group and separate opt-in Smoke mode.'
     }
 }
+# Missing is compatible with intact older packages; a present marker is strict.
+# Runtime configuration cannot turn any historical native trial into a session.
+$runtimeMarkers = [regex]::Matches($configText, 'export const MTA_CORE_FRONTEND_RUNTIME = (true|false);')
+if ($runtimeMarkers.Count -gt 1 -or [regex]::Matches($configText, 'export const MTA_CORE_FRONTEND_RUNTIME\b').Count -ne $runtimeMarkers.Count) { throw 'Invalid MTA frontend runtime configuration marker.' }
+if ($runtimeMarkers.Count -eq 1 -and $runtimeMarkers[0].Groups[1].Value -eq 'true') {
+    $runtimeConflicts = @([regex]::Matches($configText, 'export const ((?:GAIT_|INPUT_|MTA_)[A-Z0-9_]+) = true;') | Where-Object {$_.Groups[1].Value -ne 'MTA_CORE_FRONTEND_RUNTIME'})
+    if ($frontendCount -ne 22 -or $guiCount -ne 13 -or $relativePaths.Count -ne 58 -or $Mode -ne 'Smoke' -or $runtimeConflicts.Count) {
+        throw 'MTA frontend runtime requires complete frontend ownership and separate opt-in Smoke mode.'
+    }
+}
 # Optional for intact historical packages; strict and exclusive when present.
 $persistentMarkers = [regex]::Matches($configText, 'export const MTA_CORE_PERSISTENT_FRONTEND = (true|false);')
 if ($persistentMarkers.Count -gt 1 -or [regex]::Matches($configText, 'export const MTA_CORE_PERSISTENT_FRONTEND\b').Count -ne $persistentMarkers.Count) { throw 'Invalid persistent frontend configuration marker.' }

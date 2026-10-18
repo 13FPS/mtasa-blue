@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { MODE, ONLINE_ACTIVATION, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE, MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE, MTA_CORE_RENDER_ROUTE, MTA_CORE_RENDER_GPU_REFERENCE, MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE, MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE, MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE, MTA_CORE_GUI_STARTUP_REFERENCE, MTA_CORE_GUI_SURFACE_REFERENCE, MTA_CORE_GUI_FRONTEND_REFERENCE, MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE, MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE, MTA_CORE_PERSISTENT_FRONTEND, MTA_CORE_CLOCK_REFERENCE, MTA_CORE_CLOCK_SET_REFERENCE } from './config.mjs';
+import { MODE, ONLINE_ACTIVATION, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE, MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE, MTA_CORE_RENDER_ROUTE, MTA_CORE_RENDER_GPU_REFERENCE, MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE, MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE, MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE, MTA_CORE_GUI_STARTUP_REFERENCE, MTA_CORE_GUI_SURFACE_REFERENCE, MTA_CORE_GUI_FRONTEND_REFERENCE, MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE, MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE, MTA_CORE_PERSISTENT_FRONTEND, MTA_CORE_FRONTEND_RUNTIME, MTA_CORE_CLOCK_REFERENCE, MTA_CORE_CLOCK_SET_REFERENCE } from './config.mjs';
 import { AdapterController, NativeGaitReferenceController, NativeInputReferenceController, PlayerControlLease } from './controller.mjs';
 import { MtaNativePadReferenceController } from './native-pad-reference.mjs';
 import { MtaNativeMovementTrialController } from './native-movement-trial.mjs';
@@ -13,6 +13,17 @@ function runAdapter() {
     emit({ event: 'adapter_phase', phase, mode: MODE, host: HOST, cleo: String(CLEO.version),
         host_version: String(CLEO.hostVersion), definitions: String(CLEO.apiVersion) });
     if (!['diagnostic', 'smoke', 'online'].includes(MODE)) throw new Error('Unknown adapter mode');
+    // This session selection owns Core/configuration across independently
+    // retired views. It must never inherit another native trial's lifetime.
+    if (typeof MTA_CORE_FRONTEND_RUNTIME !== 'boolean' ||
+        (MTA_CORE_FRONTEND_RUNTIME && (MODE !== 'smoke' || [GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE,
+            MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE,
+            MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE, MTA_CORE_RENDER_GPU_REFERENCE,
+            MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE, MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE,
+            MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE, MTA_CORE_GUI_STARTUP_REFERENCE, MTA_CORE_GUI_SURFACE_REFERENCE,
+            MTA_CORE_GUI_FRONTEND_REFERENCE, MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE, MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE,
+            MTA_CORE_PERSISTENT_FRONTEND, MTA_CORE_CLOCK_REFERENCE, MTA_CORE_CLOCK_SET_REFERENCE].some(Boolean))))
+        throw new Error('MTA frontend runtime requires separate opt-in Smoke mode');
     // Set is a separate mutation recipe. Neither an older Read selection nor
     // ownership of the same backend files can implicitly authorize it.
     if (typeof MTA_CORE_CLOCK_SET_REFERENCE !== 'boolean' ||
@@ -140,20 +151,20 @@ function runAdapter() {
         throw new Error('SA Unreal API definitions 0.493 or newer are required');
     // These untested input/velocity bindings come from the pinned 0.500 API.
     // Reject older definitions before activation reads, DLL access, or CJ reads.
-    if ((INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND || MTA_CORE_CLOCK_REFERENCE || MTA_CORE_CLOCK_SET_REFERENCE) && definitionVersion < 0.500)
+    if ((INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND || MTA_CORE_FRONTEND_RUNTIME || MTA_CORE_CLOCK_REFERENCE || MTA_CORE_CLOCK_SET_REFERENCE) && definitionVersion < 0.500)
         throw new Error('Native input reference requires SA Unreal API definitions 0.500 or newer');
 
     const stopKey = 'Ctrl+Shift+End';
     // Home opens the Rockstar console on the tested build and interrupts this
     // read-only observation, so the input reference needs its own shortcut.
-    const activateKey = (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND || MTA_CORE_CLOCK_REFERENCE || MTA_CORE_CLOCK_SET_REFERENCE) ? 'Ctrl+Shift+F9' : 'Ctrl+Shift+Home';
+    const activateKey = (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND || MTA_CORE_FRONTEND_RUNTIME || MTA_CORE_CLOCK_REFERENCE || MTA_CORE_CLOCK_SET_REFERENCE) ? 'Ctrl+Shift+F9' : 'Ctrl+Shift+Home';
     const chordHeld = keys => keys.every(key => native('IS_KEY_PRESSED', key));
-    if (MODE === 'online' || GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND || MTA_CORE_CLOCK_REFERENCE || MTA_CORE_CLOCK_SET_REFERENCE) {
+    if (MODE === 'online' || GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND || MTA_CORE_FRONTEND_RUNTIME || MTA_CORE_CLOCK_REFERENCE || MTA_CORE_CLOCK_SET_REFERENCE) {
         if (MODE === 'online' && !['manual', 'automatic'].includes(ONLINE_ACTIVATION))
             throw new Error('Unknown online activation mode');
         // The reference changes one owned NPC, so even an automatic Online
         // preference cannot start this separate experiment during save loading.
-        if (GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND || MTA_CORE_CLOCK_REFERENCE || MTA_CORE_CLOCK_SET_REFERENCE || ONLINE_ACTIVATION === 'manual') {
+        if (GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND || MTA_CORE_FRONTEND_RUNTIME || MTA_CORE_CLOCK_REFERENCE || MTA_CORE_CLOCK_SET_REFERENCE || ONLINE_ACTIVATION === 'manual') {
             // Startup freezes have also occurred before this script enters.
             // Waiting here cannot prevent those loader failures, but it gives
             // a usable game session a separate, observable boundary before
@@ -169,7 +180,7 @@ function runAdapter() {
                         bridge_loaded: false, game_adapter_active: false, network_active: false });
                     return;
                 }
-                if (chordHeld([17, 16, (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND || MTA_CORE_CLOCK_REFERENCE || MTA_CORE_CLOCK_SET_REFERENCE) ? 120 : 36]) && native('IS_PLAYER_PLAYING', 0)) {
+                if (chordHeld([17, 16, (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND || MTA_CORE_FRONTEND_RUNTIME || MTA_CORE_CLOCK_REFERENCE || MTA_CORE_CLOCK_SET_REFERENCE) ? 120 : 36]) && native('IS_PLAYER_PLAYING', 0)) {
                     emit({ event: 'adapter_activation_requested', mode: MODE, activate_key: activateKey });
                     break;
                 }
@@ -177,7 +188,7 @@ function runAdapter() {
             }
         }
     }
-    if (MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND || MTA_CORE_CLOCK_REFERENCE || MTA_CORE_CLOCK_SET_REFERENCE) {
+    if (MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND || MTA_CORE_FRONTEND_RUNTIME || MTA_CORE_CLOCK_REFERENCE || MTA_CORE_CLOCK_SET_REFERENCE) {
         // Holding the activation modifiers contaminated the prior source-state
         // window. Begin DLL access and the recorder only after their release,
         // while keeping cancellation and a finite pre-binding deadline.
@@ -240,6 +251,10 @@ function runAdapter() {
     enterPhase('runtime_bind');
     if (bindRuntime() !== 1) throw new Error('CLEO runtime lifecycle binding failed');
     enterPhase('runtime_bound');
+    if (MTA_CORE_FRONTEND_RUNTIME) {
+        runFrontendRuntime(bind, chordHeld, stopKey);
+        return;
+    }
     if (MTA_CORE_CLOCK_SET_REFERENCE) {
         const version = bind('DE_CoreClockSetApiVersion', 'X64U32');
         const begin = bind('DE_CoreClockSetBegin');
@@ -1867,6 +1882,192 @@ function runAdapter() {
         // yield; only an active online session takes the shorter display tick.
         if (controller.running) wait(MODE === 'online' ? 16 : 50);
     }
+}
+
+// The script transports commands and copied evidence only. Core owns every
+// view and its native cleanup; a hidden view never implies a stopped session.
+function runFrontendRuntime(bind, chordHeld, stopKey) {
+    const version = bind('DE_FrontendRuntimeApiVersionV1', 'X64U32');
+    const start = bind('DE_FrontendRuntimeStartV1', 'X64U32');
+    const command = bind('DE_FrontendRuntimeCommandV1');
+    const heartbeat = bind('DE_FrontendRuntimeHeartbeatV1');
+    const poll = bind('DE_FrontendRuntimePollV1');
+    const capture = bind('DE_FrontendRuntimeCaptureV1');
+    const read = bind('DE_FrontendRuntimeReadV1', 'X64U32');
+    if (version() !== 1) throw new Error('MTA frontend runtime API1 is required');
+    const schema = 'mta_frontend_runtime_v1';
+    const unsigned = values => values.every(value => Number.isInteger(value) && value >= 0 && value <= 0xffffffff);
+    const range = (first, end) => Array.from({ length: end - first }, (_, index) => first + index);
+    const equalPair = (values, first, second) => values[first] === values[second] && values[first + 1] === values[second + 1];
+    const nonzeroPair = (values, first) => values[first] !== 0 || values[first + 1] !== 0;
+    const retiredView = view => view.every(value => value === 0) ||
+        (view[0] === 1 && view[1] === 2 && view[6] === 1 && view[256] === 1 && view[85] === 0 &&
+            [5, 41, 43, 49, 50, 51, 59, 72, 75, 76, 77, 162, 169, 170, 208, 209, 210, 211, 222, 223, 239, 243, 262].every(field => !view[field]) &&
+            [9, 39, 78, 79, 80, 238].every(field => view[field] === 1) && (!view[161] || view[171] === 1) &&
+            equalPair(view, 214, 220) &&
+            (view.slice(96, 128).every(value => !value) || (view[96] === 1 && view[97] === 4 && view[113] === 1 && [102, 112, 115, 116, 117].every(field => !view[field]))) &&
+            (view.slice(128, 160).every(value => !value) || (view[128] === 1 && [0, 4].includes(view[129]) && view[149] === 1 && [132, 133, 136, 137, 138, 150, 151, 156].every(field => !view[field]))) &&
+            (view.slice(176, 208).every(value => !value) || (view[176] === 1 && [0, 4].includes(view[177]) && view[190] === 1 && [186, 191, 197].every(field => !view[field]))) &&
+            range(270, 288).every(field => !view[field]));
+    // A failed workload can still retire cleanly. Both terminal labels need
+    // the real stopped Core sample, rather than flags beside an old Hidden read.
+    const retiredCore = values => {
+        const core = values.slice(64, 128);
+        return values[26] === 4 && values[28] === 0 && core[1] === 4 && core[3] === 1 && core[14] === 1 &&
+            core[23] === 1 && core[33] === 5 && core[57] === 1 &&
+            [5, 6, 8, 9, 10, 11, 12, 13, 15, 16, 17, 38, 39, 40, 41, 42, 50, 56].every(field => !core[field]);
+    };
+    const validate = (values, previous, generation) => {
+        if (!unsigned(values) || values.length !== 416 || values[0] !== 1 || values[1] < 1 || values[1] > 9 ||
+            values[5] !== generation || values[6] !== 0 || !values[7] || values[19] !== 1000 ||
+            values[50] !== 500 || values[51] !== 500 || range(52, 64).some(field => values[field]) ||
+            values[10] > 3 || values[12] > 3 || values[13] > 3 || values[15] > 3 || values[26] > 4 ||
+            values[28] > 5 || values[29] > 5 || values[36] > 14 || values[37] > 5 ||
+            [16, 18, 30, 31, 32, 33, 34, 35, 39, 40, 41, 44, 45].some(field => values[field] > 1) ||
+            values[11] > values[9] || values[14] > values[9] || values[23] > values[22] ||
+            (values[33] && values[34])) throw new Error('Invalid frontend runtime ownership report');
+        if (previous && (values[3] < previous[3] || (values[3] === previous[3] && values[2] < previous[2]) ||
+            values[4] < previous[4] || [9, 11, 22, 23, 24, 25, 27, 38, 46, 47, 48].some(field => values[field] < previous[field]) ||
+            values[21] < previous[21] || (values[21] === previous[21] && values[20] < previous[20]) ||
+            (previous[32] && !values[32]) ||
+            values[7] !== previous[7] || (previous[8] && values[8] !== previous[8])))
+            throw new Error('Frontend runtime publication moved backwards or changed owner');
+        if (previous && values[2] === previous[2] && values[3] === previous[3] && values.some((value, field) => value !== previous[field]))
+            throw new Error('Frontend runtime changed without a publication');
+        const core = values.slice(64, 128), view = values.slice(128);
+        if (!values[26]) {
+            if (core.some(Boolean)) throw new Error('Frontend runtime has an unqualified Core sample');
+        } else {
+            if (core[0] !== 1 || core[32] !== 1 || !core[2] || core[2] !== core[34] || core[2] !== values[8] ||
+                !nonzeroPair(core, 35) || core[1] < 1 || core[1] > 5 || core[33] < 1 || core[33] > 6 ||
+                [18, 19, 20, ...range(24, 32), 59, 60, 61, 62, 63].some(field => core[field]) ||
+                [37, 38, 39, 40, 41, 42, 50, 51, 55, 56, 57].some(field => core[field] > 1))
+                throw new Error('Invalid retained MTA Core runtime sample');
+            if (previous && previous[26] && (core[35] !== previous[99] || core[36] !== previous[100] || core[2] !== previous[66]))
+                throw new Error('Frontend runtime replaced its retained Core session');
+            if (previous && previous[26] && ([43, 44, 45, 46, 47].some(field => core[field] < previous[64 + field]) ||
+                core[49] < previous[113] || (core[49] === previous[113] && core[48] < previous[112])))
+                throw new Error('Frontend runtime Core view history moved backwards');
+        }
+        if (view.some(Boolean) && (view[0] !== 1 || view[256] !== 1 || range(270, 288).some(field => view[field]) ||
+            view[257] !== values[20] || view[258] !== values[21] || view[266] !== 500 || view[265] !== 1000 ||
+            view[85] !== 0 || view[244] || view[245] || ((view[57] || view[232]) && !values[32])))
+            throw new Error('Invalid frontend runtime view sample');
+        if (values[1] === 2) {
+            if (![1, 3].includes(values[26]) || core[1] !== 2 || core[33] !== 2 ||
+                [3, 4, 5, 23, 37, 38, 39, 40, 41, 42, 51, 55].some(field => core[field] !== 1) ||
+                [8, 9, 10, 11, 12, 13, 14, 15, 50, 56, 57].some(field => core[field]) ||
+                core[43] !== 1 || core[44] !== 1 || core[45] !== 1 || core[46] !== core[47] ||
+                core[48] !== values[20] || core[49] !== values[21] || core[47] !== values[23] ||
+                !values[30] || !values[31] || values[33] || !values[44] || !retiredView(view))
+                throw new Error('Frontend runtime claimed Hidden before view retirement');
+        }
+        if (values[1] === 4 && (values[26] !== 2 || !values[24] || values[13] !== 1 ||
+            view[1] !== 1 || view[96] !== 1 || view[97] !== 2 || !view[99] ||
+            ![100, 161, 162, 208, 210, 232, 236, 237, 259, 262].every(field => view[field] === 1) ||
+            [5, 6, 171, 172, 238].some(field => view[field]) || !view[68] || !view[70]))
+            throw new Error('Frontend runtime acknowledged Show before input/cursor/render admission');
+        if (values[1] === 7 && (!values[34] || values[33] || values[30] || values[31] ||
+            !values[39] || !values[40] || !values[41] || !retiredCore(values) ||
+            values[14] || values[15] || !retiredView(view)))
+            throw new Error('Frontend runtime claimed Stopped before owner retirement');
+        return values;
+    };
+    enterPhase('frontend_runtime');
+    emit({ event: 'adapter_start', host: HOST, cleo: String(CLEO.version), mode: MODE, endpoint: null,
+        frontend_runtime: true, runtime_api: 1, adapter_abi: 6, network_active: false, gameplay_ready: false, full_mta_ready: false });
+    const generation = start();
+    if (!Number.isInteger(generation) || generation < 1 || generation > 0xffffffff) throw new Error('MTA frontend runtime could not start');
+    let latest = null, lastAt = null, nextEmitAt = 0, sequence = 0, pendingSequence = 0, iteration = 0, forceCapture = true;
+    let desiredVisible = true, toggleDown = false, stopRequested = false, stopAccepted = false, hostLost = false;
+    let sessionError = null, samples = 0, terminal = false;
+    const stop = reason => {
+        stopRequested = true;
+        if (stopAccepted || hostLost) return;
+        if (sequence === 0xffffffff || command(generation, ++sequence, 3) !== 1) {
+            // Ceasing the independent heartbeat also revokes a command path
+            // that cannot acknowledge Stop. Core still owns retirement.
+            hostLost = true;
+            emit({ event: 'frontend_runtime_stop_rejected', schema, generation, reason });
+            return;
+        }
+        stopAccepted = true;
+        emit({ event: 'frontend_runtime_stop_requested', schema, generation, sequence, reason });
+    };
+    emit({ event: 'frontend_runtime_started', schema, generation, fields: 416, core_fields: 64, view_fields: 288,
+        maximum_duration_ms: 0, display_duration_ms: 0, host_heartbeat_budget_ms: 1000,
+        native_heartbeat_budget_ms: 500, cursor_heartbeat_budget_ms: 500, clock_started: false, network_active: false, full_mta_ready: false });
+    while (true) {
+        ++iteration;
+        let status = 0;
+        try {
+            // Retirement polls and the independently timed native host lease
+            // precede script input/date sampling, even after a script error.
+            status = poll();
+            if (status !== 0 && status !== 1) throw new Error('Frontend runtime worker status unavailable');
+            terminal = status === 1;
+            if (!terminal && !hostLost && heartbeat(generation) !== 1) {
+                hostLost = true;
+                emit({ event: 'frontend_runtime_host_heartbeat_rejected', schema, generation });
+            }
+            let sampled = false, transition = false;
+            // Read terminal ownership before consulting Date or physical keys.
+            // A bad script clock must not discard the final native retirement.
+            if (terminal || forceCapture || iteration % 2 === 0) {
+                const captured = capture();
+                if (captured !== 0 && captured !== 1) throw new Error('Frontend runtime capture status unavailable');
+                if (captured) {
+                    const values = validate(Array.from({ length: 416 }, (_, field) => read(field)), latest, generation);
+                    transition = !latest || [1, 9, 11, 13, 23, 26, 33, 34, 36, 45, 46, 47].some(field => values[field] !== latest[field]);
+                    if (latest && (values[46] > latest[46] || values[47] > latest[47])) desiredVisible = false;
+                    latest = values; sequence = Math.max(sequence, values[9]); ++samples;
+                    if (pendingSequence && values[11] >= pendingSequence) pendingSequence = 0;
+                    forceCapture = false; sampled = true;
+                } else if (terminal) throw new Error('Frontend runtime terminal evidence unavailable');
+            }
+            const at = Date.now();
+            if (!Number.isSafeInteger(at) || at < 0 || (lastAt !== null && at < lastAt)) throw new Error('Invalid frontend runtime script clock');
+            lastAt = at;
+            if (sampled && (transition || terminal || at >= nextEmitAt)) {
+                emit({ event: 'frontend_runtime_sample', schema, generation, at_ms: at, values: latest });
+                nextEmitAt = at + 1000;
+            }
+            if (terminal) break;
+            if (chordHeld([17, 16, 35])) stop(stopKey);
+            const keys = [17, 16, 120].map(key => native('IS_KEY_PRESSED', key));
+            if (keys.every(held => !held)) toggleDown = false;
+            if (!toggleDown && keys.every(Boolean)) {
+                toggleDown = true;
+                if (!stopRequested) desiredVisible = !desiredVisible;
+            }
+            if (!stopRequested && latest && !pendingSequence && !latest[14] && [2, 4].includes(latest[1])) {
+                const action = latest[1] === 2 && desiredVisible ? 1 : latest[1] === 4 && !desiredVisible ? 2 : 0;
+                if (action) {
+                    if (sequence === 0xffffffff || command(generation, ++sequence, action) !== 1) throw new Error('Frontend runtime view command was rejected');
+                    // Do not issue another command from the same old capture.
+                    forceCapture = true; pendingSequence = sequence;
+                    emit({ event: 'frontend_runtime_command', schema, generation, sequence, command: action });
+                    // Keep the copied publication immutable while awaiting its acknowledgement.
+                }
+            }
+        } catch (error) {
+            sessionError = sessionError || String(error);
+            try { stop('script_error'); } catch (_) { hostLost = true; }
+            if (terminal) break;
+        }
+        try { wait(50); }
+        catch (error) { sessionError = sessionError || String(error); try { stop('wait_error'); } catch (_) { hostLost = true; } }
+    }
+    const cleanupPassed = latest !== null && [7, 8].includes(latest[1]) && latest[34] === 1 && !latest[33] &&
+        !latest[30] && !latest[31] && latest[39] === 1 && latest[40] === 1 && latest[41] === 1 &&
+        retiredCore(latest) && retiredView(latest.slice(128));
+    const passed = !sessionError && cleanupPassed && latest[1] === 7 && !latest[35] && !latest[36] && latest[37] === 1 &&
+        stopAccepted && latest[17] === sequence && latest[11] === sequence && latest[12] === 3 && latest[13] === 1;
+    emit({ event: 'frontend_runtime_finished', schema, generation, at_ms: lastAt, values: latest, samples,
+        passed, cleanup_passed: cleanupPassed, stop_requested: stopRequested, stop_accepted: stopAccepted,
+        error: sessionError, host_heartbeat_rejected: hostLost, clock_started: false,
+        view_workload_observed: latest !== null && latest[24] > 0, network_active: false, gameplay_ready: false, full_mta_ready: false });
+    if (!passed) throw new Error('MTA frontend runtime ended without a verified clean requested stop');
 }
 
 try {

@@ -16,7 +16,7 @@ param(
     [switch]$MtaCoreRenderReference,
     [switch]$MtaCoreRenderGpuReference,
     [switch]$MtaCoreRenderCustomPresentReference, [switch]$MtaCoreRenderFrameBoundaryReference, [switch]$MtaCoreRenderNativeDispatchReference,
-    [switch]$MtaCoreGuiStartupReference, [switch]$MtaCoreGuiSurfaceReference, [switch]$MtaCoreGuiFrontendReference, [switch]$MtaCoreGuiFrontendInputReference, [switch]$MtaCoreGuiFrontendStartupReference, [switch]$MtaCorePersistentFrontend,
+    [switch]$MtaCoreGuiStartupReference, [switch]$MtaCoreGuiSurfaceReference, [switch]$MtaCoreGuiFrontendReference, [switch]$MtaCoreGuiFrontendInputReference, [switch]$MtaCoreGuiFrontendStartupReference, [switch]$MtaCorePersistentFrontend, [switch]$MtaCoreFrontendRuntime,
     [ValidateSet('D3D11', 'D3D12')][string]$MtaCoreRenderRoute = 'D3D11',
     [switch]$MtaCoreClockReference, [switch]$MtaCoreClockSetReference,
     [string]$GameDirectory = 'C:\Program Files (x86)\Steam\steamapps\common\GTA San Andreas - The Definitive Edition\Gameface\Binaries\Win64'
@@ -24,6 +24,15 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+# Runtime owns one completed Core across views. Its selection must never inherit
+# another native lifetime merely because those packages share frontend assets.
+$runtimeConflicts = @($PSBoundParameters.Keys | Where-Object {
+    $_ -match '^(Native|Matched|Lock|Mta)' -and $_ -ne 'MtaCoreFrontendRuntime' -and
+    $PSBoundParameters[$_] -is [Management.Automation.SwitchParameter] -and $PSBoundParameters[$_].IsPresent
+})
+if ($MtaCoreFrontendRuntime -and ($Mode -ne 'Smoke' -or $runtimeConflicts.Count -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
+    throw 'MTA frontend runtime requires separate opt-in Smoke mode without other trials.'
+}
 $clockConflicts = @($PSBoundParameters.Keys | Where-Object {
     $_ -match '^(Native|Matched|Lock|Mta)' -and $_ -notin @('MtaCoreClockReference', 'MtaCoreClockSetReference') -and
         $PSBoundParameters[$_] -is [Management.Automation.SwitchParameter] -and $PSBoundParameters[$_].IsPresent
@@ -311,7 +320,7 @@ if ($coreRenderNativeDispatchMatches -eq 1) {
 $guiPattern = 'export const MTA_CORE_GUI_STARTUP_REFERENCE = (true|false);'
 $guiMatches = [regex]::Matches($configText, $guiPattern).Count
 if ($guiMatches -gt 1 -or ($MtaCoreGuiStartupReference -and $guiMatches -ne 1)) { throw 'Update the adapter before selecting MTA Core GUI startup.' }
-if ($MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference -or $MtaCoreGuiFrontendReference -or $MtaCoreGuiFrontendInputReference -or $MtaCoreGuiFrontendStartupReference -or $MtaCorePersistentFrontend) {
+if ($MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference -or $MtaCoreGuiFrontendReference -or $MtaCoreGuiFrontendInputReference -or $MtaCoreGuiFrontendStartupReference -or $MtaCorePersistentFrontend -or $MtaCoreFrontendRuntime) {
     $guiPaths = @('CLEO/de-online/cgui.dll',
         'CLEO/de-online/mta/cgui/sans.ttf', 'CLEO/de-online/mta/cgui/saheader.ttf', 'CLEO/de-online/mta/cgui/sagothic.ttf',
         'CLEO/de-online/mta/cgui/Imageset.xsd', 'CLEO/de-online/mta/cgui/GUIScheme.xsd', 'CLEO/de-online/mta/cgui/Font.xsd',
@@ -337,7 +346,7 @@ if ($surfaceMatches -eq 1) {
 $frontendPattern = 'export const MTA_CORE_GUI_FRONTEND_REFERENCE = (true|false);'
 $frontendMatches = [regex]::Matches($configText, $frontendPattern).Count
 if ($frontendMatches -gt 1 -or ($MtaCoreGuiFrontendReference -and $frontendMatches -ne 1)) { throw 'Update the adapter before selecting MTA Core GUI frontend.' }
-if ($MtaCoreGuiFrontendReference -or $MtaCoreGuiFrontendInputReference -or $MtaCoreGuiFrontendStartupReference -or $MtaCorePersistentFrontend) {
+if ($MtaCoreGuiFrontendReference -or $MtaCoreGuiFrontendInputReference -or $MtaCoreGuiFrontendStartupReference -or $MtaCorePersistentFrontend -or $MtaCoreFrontendRuntime) {
     $frontendPaths = @(
         'CLEO/de-online/mta/cgui/images/background.png',
         'CLEO/de-online/mta/cgui/images/background_logo.png',
@@ -386,6 +395,13 @@ if ($frontendStartupMatches -eq 1) {
     $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $frontendStartupPattern,
         "export const MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE = $($MtaCoreGuiFrontendStartupReference.IsPresent.ToString().ToLowerInvariant());"))
 }
+$runtimePattern = 'export const MTA_CORE_FRONTEND_RUNTIME = (true|false);'
+$runtimeMatches = [regex]::Matches($configText, $runtimePattern).Count
+if ($runtimeMatches -gt 1 -or [regex]::Matches($configText, 'export const MTA_CORE_FRONTEND_RUNTIME\b').Count -ne $runtimeMatches -or ($MtaCoreFrontendRuntime -and $runtimeMatches -ne 1)) { throw 'Update the adapter before selecting MTA frontend runtime.' }
+if ($runtimeMatches -eq 1) {
+    $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $runtimePattern,
+        "export const MTA_CORE_FRONTEND_RUNTIME = $($MtaCoreFrontendRuntime.IsPresent.ToString().ToLowerInvariant());"))
+}
 $persistentPattern = 'export const MTA_CORE_PERSISTENT_FRONTEND = (true|false);'
 $persistentMatches = [regex]::Matches($configText, $persistentPattern).Count
 if ($persistentMatches -gt 1 -or [regex]::Matches($configText, 'export const MTA_CORE_PERSISTENT_FRONTEND\b').Count -ne $persistentMatches -or ($MtaCorePersistentFrontend -and $persistentMatches -ne 1)) { throw 'Update the adapter before selecting persistent MTA frontend.' }
@@ -425,7 +441,9 @@ try {
     Write-AtomicFile $manifestPath $originalManifest
     throw $failure
 }
-if ($MtaCorePersistentFrontend) {
+if ($MtaCoreFrontendRuntime) {
+    Write-Host 'Installed adapter mode: Smoke, retained MTA frontend runtime. Ctrl+Shift+F9 toggles views after release; Quit/Escape hides, Ctrl+Shift+End stops. Applied bindings survive hide/show for this session.'
+} elseif ($MtaCorePersistentFrontend) {
     Write-Host 'Installed adapter mode: Smoke, renewable MTA frontend. Ctrl+Shift+F9 starts after release; Quit/Escape/End closes it. Focus loss or heartbeat expiry requests cleanup.'
 } elseif ($MtaCoreGuiFrontendStartupReference) {
     Write-Host 'Installed adapter mode: Smoke, completed MTA Core frontend startup armed. Ctrl+Shift+F9 starts after release; Ctrl+Shift+End requests cleanup.'

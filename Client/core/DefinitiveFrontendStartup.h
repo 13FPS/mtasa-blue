@@ -62,7 +62,8 @@ namespace DefinitiveFrontendStartup
         BackendPulse,
         InputBind,
         BackendStop,
-        View
+        View,
+        RuntimeServices
     };
 
     // Begin owns a completed Core and starts its actual backend without engine

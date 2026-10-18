@@ -81,6 +81,13 @@ def main():
         "DE_CoreGuiSurfaceBegin": (ctypes.c_int, []),
         "DE_CoreGuiSurfaceCapture": (ctypes.c_int, []),
         "DE_CoreGuiSurfaceRead": (ctypes.c_uint32, [ctypes.c_uint32]),
+        "DE_FrontendRuntimeApiVersionV1": (ctypes.c_uint32, []),
+        "DE_FrontendRuntimeStartV1": (ctypes.c_uint32, []),
+        "DE_FrontendRuntimeCommandV1": (ctypes.c_int, [ctypes.c_uint32] * 3),
+        "DE_FrontendRuntimeHeartbeatV1": (ctypes.c_int, [ctypes.c_uint32]),
+        "DE_FrontendRuntimePollV1": (ctypes.c_int, []),
+        "DE_FrontendRuntimeCaptureV1": (ctypes.c_int, []),
+        "DE_FrontendRuntimeReadV1": (ctypes.c_uint32, [ctypes.c_uint32]),
     }
     for name, (result, arguments) in signatures.items():
         function = getattr(bridge, name)
@@ -100,6 +107,21 @@ def main():
     # A regular Python executable must never masquerade as the verified GTA host
     # or obtain engine access merely by loading this DLL and resolving its ABI.
     check(bridge.DE_BindRuntime() == 0, "Wrong executable must reject runtime binding")
+    # Runtime ownership is additive, but resolving its exports in Python must
+    # never bypass the real game-image/owner gate or manufacture a Core cache.
+    check(bridge.DE_FrontendRuntimeApiVersionV1() == 1, "Retained frontend uses its separate API1")
+    check(bridge.DE_FrontendRuntimeStartV1() == 0, "Wrong host cannot start a retained MTA runtime")
+    check(bridge.DE_FrontendRuntimePollV1() == -1, "Wrong host has no retained worker completion")
+    check(bridge.DE_FrontendRuntimeCaptureV1() == 0, "Wrong host cannot capture runtime ownership")
+    for command in (0, 1, 2, 3, 0xFFFFFFFF):
+        check(bridge.DE_FrontendRuntimeCommandV1(1, 1, command) == 0,
+              "Wrong host cannot create a retained runtime command")
+    for generation in (0, 1, 0xFFFFFFFF):
+        check(bridge.DE_FrontendRuntimeHeartbeatV1(generation) == 0,
+              "Wrong host cannot renew a retained runtime lease")
+    for component in (*range(416), 416, 0xFFFFFFFF):
+        check(bridge.DE_FrontendRuntimeReadV1(component) == 0,
+              "Wrong host cannot manufacture a runtime416 publication")
     # The startup diagnostic loads the real adjacent Core only in its verified
     # owning game runtime. A rejected host must retain an empty cache and must
     # not load Core merely because all diagnostic exports can be resolved.

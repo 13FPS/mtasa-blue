@@ -15,6 +15,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -33,6 +34,7 @@
 #include "../../Client/core/DefinitiveFrontendBindings.h"
 #include "../../Client/core/DefinitiveClockReference.h"
 #include "../../Client/core/DefinitiveFrontendClockReference.h"
+#include "../../Client/core/DefinitiveFrontendRuntime.h"
 
 using Microsoft::WRL::ComPtr;
 namespace Frontend = DefinitiveFrontend;
@@ -42,6 +44,7 @@ namespace Console = DefinitiveFrontendConsole;
 namespace Bindings = DefinitiveFrontendBindings;
 namespace ClockReference = DefinitiveClockReference;
 namespace FrontendClock = DefinitiveFrontendClockReference;
+namespace Runtime = DefinitiveFrontendRuntime;
 using mta::gui::GuiD3D12Status;
 static_assert(Frontend::ApiVersion == 1 && Frontend::FieldCount == 32);
 static_assert(Startup::ApiVersion == 1 && Startup::FieldCount == 32);
@@ -49,6 +52,7 @@ static_assert(Persistent::ApiVersion == 1 && Persistent::FieldCount == 288);
 static_assert(Console::ApiVersion == 1 && Console::FieldCount == 32 && Bindings::ApiVersion == 1 && Bindings::FieldCount == 32);
 static_assert(ClockReference::ApiVersion == 1 && ClockReference::FieldCount == 96);
 static_assert(FrontendClock::ApiVersion == 1 && Startup::FieldCount == 32);
+static_assert(Runtime::ApiVersion == 1 && Runtime::FieldCount == 64 && Runtime::StartupFieldCount == 32);
 
 namespace
 {
@@ -57,6 +61,8 @@ namespace
     unsigned                 cancelCalls = 0, publishCalls = 0, heartbeatCalls = 0;
     unsigned                 clockCancelCalls = 0, clockPublishCalls = 0;
     bool                     clockPublicationShapeValid = true, clockAdmissionVerified = false, clockWrongImageRefusalVerified = false;
+    bool                     runtimeCase = false, runtimeRetentionVerified = false, runtimeFailureCleanupVerified = false;
+    Runtime::Snapshot        runtimeTerminal{};
     ClockReference::Snapshot clockSnapshot{};
     bool                     CancelClock()
     {
@@ -148,6 +154,13 @@ namespace
         Startup::RunView                     runView = nullptr;
         FrontendClock::Run                   runClock = nullptr;
         Persistent::Run                      runPersistent = nullptr;
+        Runtime::Begin                       beginRuntime = nullptr;
+        Runtime::Read                        readRuntime = nullptr;
+        Runtime::Pulse                       pulseRuntime = nullptr;
+        Runtime::RunView                     runRuntimeView = nullptr;
+        Runtime::Shutdown                    shutdownRuntime = nullptr;
+        Runtime::Release                     releaseRuntime = nullptr;
+        bool                                 runtimeOwner = false;
         Frontend::Create                     create = nullptr;
         Frontend::Pulse                      pulse = nullptr;
         Frontend::Read                       read = nullptr;
@@ -160,8 +173,12 @@ namespace
                 gate->Signal(UINT64_MAX - 1);
             if (frontend && release && release(frontend) == Frontend::Status::Ok)
                 frontend = nullptr;
-            if (!frontend && startup && releaseStartup && releaseStartup(startup) == Frontend::Status::Ok)
-                startup = nullptr;
+            if (!frontend && startup)
+            {
+                const auto releaseOwner = runtimeOwner ? releaseRuntime : releaseStartup;
+                if (releaseOwner && releaseOwner(startup) == Frontend::Status::Ok)
+                    startup = nullptr;
+            }
             if (!frontend && renderer)
             {
                 for (unsigned retry = 0; retry < 500; ++retry)
@@ -444,7 +461,8 @@ namespace
         result << "],\"frontendTerminal\":[";
         for (std::size_t index = 0; index < frontend.size(); ++index)
             result << (index ? "," : "") << frontend[index];
-        result << "],\"persistentApiVersion\":1,\"persistentFields\":288,\"persistentRequestAdmissionVerified\":true,\"persistentWrongImageRefusalVerified\":"
+        result << "],\"persistentApiVersion\":1,\"persistentFields\":288,\"persistentRequestAdmissionVerified\":" << (!runtimeCase ? "true" : "false")
+               << ",\"persistentWrongImageRefusalVerified\":"
                << (startup[Startup::LastFailure] == static_cast<std::uint32_t>(Startup::Failure::InputBind) ? "true" : "false")
                << ",\"completedOwnerClockApiVersion\":1,\"completedOwnerClockFields\":96,\"completedOwnerClockAdmissionVerified\":"
                << (clockAdmissionVerified ? "true" : "false")
@@ -452,6 +470,13 @@ namespace
                << ",\"completedOwnerClockNativeWorkloadVerified\":false,\"completedOwnerClockPublishedSamples\":" << clockPublishCalls
                << ",\"actualSessionBindingsSettingsVerified\":" << (settingsVerified ? "true" : "false")
                << ",\"settingsCaptureRetainedForCleanup\":" << (settingsCaptureRetainedForCleanup ? "true" : "false")
+               << ",\"runtimeApiVersion\":1,\"runtimeFields\":64,\"runtimeCase\":" << (runtimeCase ? "true" : "false")
+               << ",\"runtimeRetentionVerified\":" << (runtimeRetentionVerified ? "true" : "false")
+               << ",\"runtimeFailureCleanupVerified\":" << (runtimeFailureCleanupVerified ? "true" : "false")
+               << ",\"runtimeNativeViewVerified\":false,\"runtimeTerminal\":[";
+        for (std::size_t index = 0; index < runtimeTerminal.size(); ++index)
+            result << (index ? "," : "") << runtimeTerminal[index];
+        result << "]"
                << ",\"persistentNativeLeaseStarted\":false,\"persistentVisibleRenderingVerified\":false,\"nativeEngineBindingVerified\":false,\"fullMtaReady\":"
                   "false,\"gameLaunched\":false}\n";
         Check(result.good(), "save actual completed-Core and frontend terminal values");
@@ -708,6 +733,377 @@ namespace
         CheckIsolation(true);
         settingsVerified = true;
     }
+
+    Runtime::Snapshot RuntimeState(Owned& owned)
+    {
+        Runtime::Snapshot state{};
+        Check(owned.readRuntime(owned.startup, state.data(), Runtime::FieldCount) == Frontend::Status::Ok,
+              "read actual frontend Runtime64 without native admission");
+        const auto startup = StartupState(owned);
+        Check(std::equal(startup.begin(), startup.end(), state.begin()) && state[Runtime::RuntimeVersion] == 1 &&
+                  state[Runtime::OwnerThread] == GetCurrentThreadId() && (state[Runtime::SessionGenerationLow] || state[Runtime::SessionGenerationHigh]) &&
+                  !state[Runtime::Reserved59] && !state[Runtime::Reserved63] && !state[Runtime::NetworkStarted] && !state[Runtime::GameplayReady] &&
+                  !state[Runtime::FullMtaReady],
+              "Runtime64 preserves exact Startup32 and exposes a separate frontend-only session identity");
+        return state;
+    }
+    std::uint64_t RuntimePair(const Runtime::Snapshot& state, Runtime::Field field)
+    {
+        return std::uint64_t{state[field]} | (std::uint64_t{state[field + 1]} << 32);
+    }
+    void RuntimeHidden(const Runtime::Snapshot& state, unsigned views)
+    {
+        Check(state[Startup::Phase] == 2 && state[Startup::CoreRetained] && state[Startup::BackendStarted] && !state[Startup::FrontendRetained] &&
+                  !state[Startup::GuiBorrowed] && !state[Startup::ServicesRetained] && state[Startup::LastViewCleanupComplete] &&
+                  state[Runtime::RuntimePhase] == static_cast<std::uint32_t>(Runtime::Phase::Hidden) && state[Runtime::ServicesInitialized] &&
+                  state[Runtime::ServicesRetained] && state[Runtime::XmlRetained] && state[Runtime::ConfigRetained] && state[Runtime::CVarsLoaded] &&
+                  state[Runtime::BindingsRetained] && state[Runtime::BindingManagerCreations] == 1 && state[Runtime::ConfigurationLoads] == 1 &&
+                  state[Runtime::BindingLoads] == 1 && state[Runtime::ViewsAttached] == views && state[Runtime::ViewsRetired] == views &&
+                  !state[Runtime::ViewBorrowed] && state[Runtime::HiddenNeutralVerified] && state[Runtime::ConfigurationReadOnly] &&
+                  !state[Runtime::CleanupPending] && !state[Runtime::CleanupComplete],
+              "hidden runtime retains exactly one real XML/CVars/bindings owner with neutral view aliases");
+    }
+
+    std::uintptr_t RuntimeSettings(Owned& owned, bool secondView, std::uintptr_t previousIdentity)
+    {
+        auto& observed = *owned.observed;
+        auto* grid = observed.settingsGrid;
+        auto* window = observed.settingsWindow;
+        Check(window && grid && observed.settingsApply && observed.settingsCancel,
+              "fresh runtime view constructs actual Settings widgets over retained MTA bindings");
+        const auto process = Export<Console::ProcessMessage>(owned.core, "MTA_ProcessDEFrontendConsoleMessage");
+        const auto message = [&](UINT type, WPARAM key)
+        {
+            std::uint32_t handled = UINT32_MAX;
+            Check(process(owned.frontend, type, key, 0, &handled) == Frontend::Status::Ok && handled <= 1,
+                  "runtime Settings uses the real frontend message and key-capture route");
+            return handled != 0;
+        };
+        const auto button = [&](CGUIButton* value)
+        {
+            CVector2D point = value->GetSize() / 2;
+            for (auto* element = static_cast<CGUIElement*>(value); element; element = element->GetParent())
+                point += element->GetPosition();
+            Click(owned, static_cast<int>(point.fX), static_cast<int>(point.fY));
+        };
+        const auto open = [&]
+        {
+            Click(owned, 230, 716);
+            Check(window->IsVisible(), "runtime menu opens its genuine Settings window");
+        };
+        const auto forwards = [&]()
+        {
+            int row = -1;
+            for (int index = 0; index < grid->GetRowCount(); ++index)
+            {
+                const auto type = static_cast<KeyBindType>(reinterpret_cast<std::intptr_t>(grid->GetItemData(index, 1)));
+                if (type != KeyBindType::GTA_CONTROL)
+                    continue;
+                auto* bind = static_cast<CGTAControlBind*>(grid->GetItemData(index, 2));
+                Check(bind && bind->control && bind->boundKey, "runtime grid borrows an actual configured control record");
+                if (std::strcmp(bind->control->szControl, "forwards") == 0)
+                {
+                    Check(row == -1, "one retained Forwards record appears in runtime Settings");
+                    row = index;
+                }
+            }
+            Check(row >= 0, "runtime view exposes configured Forwards from its real manager");
+            return row;
+        };
+        const auto capture = [&](int row, WPARAM key)
+        {
+            grid->SetSelectedItem(row, 2, true);
+            Check(grid->Event_OnDoubleClick() && message(WM_KEYDOWN, key), "real runtime capture consumes the staged binding key");
+            message(WM_KEYUP, key);
+        };
+        open();
+        int row = forwards();
+        if (!secondView)
+        {
+            capture(row, 'I');
+            Check(grid->GetItemText(row, 2) == std::string("i"), "first runtime view stages Forwards I");
+            button(observed.settingsApply);
+            Check(!window->IsVisible(), "first runtime view applies through the actual Settings callback");
+            open();
+            row = forwards();
+        }
+        auto* bind = static_cast<CGTAControlBind*>(grid->GetItemData(row, 2));
+        Check(grid->GetItemText(row, 2) == std::string("i") && std::string(bind->boundKey->szKey) == "i",
+              "reopened runtime Settings reads applied I from the retained actual manager");
+        const auto identity = reinterpret_cast<std::uintptr_t>(bind);
+        if (secondView)
+        {
+            // An opaque comparison is safe while the first widget is gone.
+            // Dereference only the freshly borrowed second-view grid record.
+            Check(identity == previousIdentity, "fresh second GUI view borrows the identical retained MTA control record");
+            capture(row, 'O');
+            Check(grid->GetItemText(row, 2) == std::string("o") && std::string(bind->boundKey->szKey) == "i",
+                  "second runtime view stages O without changing actual retained I");
+            button(observed.settingsCancel);
+            open();
+            row = forwards();
+            bind = static_cast<CGTAControlBind*>(grid->GetItemData(row, 2));
+            Check(grid->GetItemText(row, 2) == std::string("i") && std::string(bind->boundKey->szKey) == "i",
+                  "second-view Cancel discards O across an actual grid rebuild");
+            grid->SetSelectedItem(row, 2, true);
+            Check(grid->Event_OnDoubleClick() && message(WM_CHAR, 'P'), "runtime hide retains a real modal capture for teardown coverage");
+            settingsCaptureRetainedForCleanup = true;
+        }
+        else
+            button(observed.settingsCancel);
+        return identity;
+    }
+
+    void RuntimeSessionCase(Owned& owned, const std::filesystem::path& root, const std::wstring& mode, Startup::Snapshot& startup, Frontend::Snapshot& frontend)
+    {
+        runtimeCase = true;
+        owned.runtimeOwner = true;
+        Check(Export<std::uint32_t (*)()>(owned.core, "MTA_DEFrontendRuntimeApiVersion")() == 1,
+              "actual Core exposes optional runtime API1 without changing old field counts");
+        owned.beginRuntime = Export<Runtime::Begin>(owned.core, "MTA_BeginDEFrontendRuntime");
+        owned.readRuntime = Export<Runtime::Read>(owned.core, "MTA_ReadDEFrontendRuntime");
+        owned.pulseRuntime = Export<Runtime::Pulse>(owned.core, "MTA_PulseDEFrontendRuntime");
+        owned.runRuntimeView = Export<Runtime::RunView>(owned.core, "MTA_RunDEFrontendRuntimeView");
+        owned.shutdownRuntime = Export<Runtime::Shutdown>(owned.core, "MTA_ShutdownDEFrontendRuntime");
+        owned.releaseRuntime = Export<Runtime::Release>(owned.core, "MTA_ReleaseDEFrontendRuntime");
+        Check(!owned.beginRuntime(0) && !owned.beginRuntime(2), "runtime rejects foreign API versions before creating Core");
+        owned.startup = owned.beginRuntime(1);
+        Check(owned.startup != nullptr, "runtime publishes the same completed Core owner even on partial preparation failure");
+        const auto initial = RuntimeState(owned);
+        Check(!owned.beginRuntime(1) && !owned.beginStartup(1), "runtime and historical startup cannot construct competing Core singletons");
+        Runtime::Snapshot sentinel;
+        sentinel.fill(0x75316824);
+        const auto unchanged = sentinel;
+        Check(owned.readRuntime(owned.startup, sentinel.data(), 63) == Frontend::Status::InvalidArgument && sentinel == unchanged &&
+                  owned.readRuntime(owned.startup, nullptr, 64) == Frontend::Status::InvalidArgument &&
+                  owned.readRuntime(reinterpret_cast<void*>(std::uintptr_t{1}), sentinel.data(), 64) == Frontend::Status::InvalidArgument &&
+                  sentinel == unchanged,
+              "runtime malformed reads preserve caller storage and reject unknown owners");
+        auto request = PersistentRequest();
+        request.generation = 1;
+        bool        foreign = false;
+        std::thread other(
+            [&]
+            {
+                auto output = unchanged;
+                foreign = owned.readRuntime(owned.startup, output.data(), 64) == Frontend::Status::WrongThread && output == unchanged &&
+                          owned.pulseRuntime(owned.startup) == Frontend::Status::WrongThread &&
+                          owned.runRuntimeView(owned.startup, &request) == Frontend::Status::WrongThread &&
+                          owned.shutdownRuntime(owned.startup) == Frontend::Status::WrongThread &&
+                          owned.releaseRuntime(owned.startup) == Frontend::Status::WrongThread;
+            });
+        other.join();
+        Check(foreign && !cancelCalls && !publishCalls && !heartbeatCalls, "runtime foreign calls cannot read mutate start or retire the real owner");
+        Check(owned.pulseStartup(owned.startup) == Frontend::Status::InvalidArgument && owned.bindStartup(owned.startup) == Frontend::Status::InvalidArgument &&
+                  owned.runView(owned.startup, 100, &CancelView, &PublishView) == Frontend::Status::InvalidArgument &&
+                  owned.runPersistent(owned.startup, &request) == Frontend::Status::InvalidArgument &&
+                  owned.runClock(owned.startup, 1000, &CancelClock, &PublishClock) == Frontend::Status::InvalidArgument &&
+                  owned.shutdownStartup(owned.startup) == Frontend::Status::InvalidArgument &&
+                  owned.releaseStartup(owned.startup) == Frontend::Status::InvalidArgument,
+              "old mutating owner APIs cannot bypass runtime service ownership or inject a clock prelude");
+        Check(!cancelCalls && !publishCalls && !heartbeatCalls && !clockCancelCalls && !clockPublishCalls,
+              "runtime mode refusals invoke no native or clock callbacks");
+        if (mode != L"runtime")
+        {
+            Check(initial[Startup::Phase] == 5 && initial[Startup::CoreRetained] &&
+                      initial[Runtime::RuntimePhase] == static_cast<std::uint32_t>(Runtime::Phase::Failed) && !initial[Runtime::ViewBorrowed] &&
+                      !initial[Runtime::ViewsAttached],
+                  "runtime preparation failure preserves an inspectable completed owner without a view");
+            Check(owned.runRuntimeView(owned.startup, &request) == Frontend::Status::Failed && !cancelCalls && !publishCalls && !heartbeatCalls,
+                  "failed runtime cannot admit native work or GUI ownership");
+            runtimeFailureCleanupVerified = true;
+        }
+        else
+        {
+            RuntimeHidden(initial, 0);
+            const auto session = RuntimePair(initial, Runtime::SessionGenerationLow);
+            const auto malformed = [&](Persistent::RequestV1 value)
+            {
+                const auto before = RuntimeState(owned);
+                Check(owned.runRuntimeView(owned.startup, &value) == Frontend::Status::InvalidArgument && RuntimeState(owned) == before && !cancelCalls &&
+                          !publishCalls && !heartbeatCalls,
+                      "malformed runtime request leaves service owner and callbacks unchanged");
+            };
+            Check(owned.runRuntimeView(owned.startup, nullptr) == Frontend::Status::InvalidArgument, "runtime view requires an explicit request");
+            auto changed = request;
+            changed.size = 0;
+            malformed(changed);
+            changed = request;
+            changed.version = 0;
+            malformed(changed);
+            changed = request;
+            changed.generation = 0;
+            malformed(changed);
+            changed = request;
+            changed.generation = 2;
+            malformed(changed);
+            changed = request;
+            changed.reserved[0] = 1;
+            malformed(changed);
+            changed = request;
+            changed.reserved[1] = 1;
+            malformed(changed);
+            changed = request;
+            changed.cancelled = nullptr;
+            malformed(changed);
+            changed = request;
+            changed.publish = nullptr;
+            malformed(changed);
+            changed = request;
+            changed.heartbeat = nullptr;
+            malformed(changed);
+            Check(owned.runRuntimeView(owned.startup, &request) == Frontend::Status::Failed && !cancelCalls && !publishCalls && !heartbeatCalls,
+                  "runtime native view rejects actual wrong image before publication or any borrowed view");
+            const auto refused = RuntimeState(owned);
+            RuntimeHidden(refused, 0);
+            Check(refused[Startup::LastFailure] == static_cast<std::uint32_t>(Startup::Failure::InputBind) && !refused[Startup::ExactImageBound] &&
+                      RuntimePair(refused, Runtime::SessionGenerationLow) == session && !refused[Runtime::LastFailure],
+                  "safe runtime native preflight refusal preserves the same hidden configured session");
+            const auto configBytes = [&]
+            {
+                std::ifstream stream(root / L"mta/config/coreconfig.xml", std::ios::binary);
+                Check(stream.good(), "read disposable configuration for before/after byte proof");
+                return std::string(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
+            };
+            const auto originalConfig = configBytes();
+            owned.create = Export<Frontend::Create>(owned.core, "MTA_CreateDEFrontendSession");
+            owned.pulse = Export<Frontend::Pulse>(owned.core, "MTA_PulseDEFrontendSession");
+            owned.read = Export<Frontend::Read>(owned.core, "MTA_ReadDEFrontendSession");
+            owned.shutdown = Export<Frontend::Shutdown>(owned.core, "MTA_ShutdownDEFrontendSession");
+            owned.release = Export<Frontend::Release>(owned.core, "MTA_ReleaseDEFrontendSession");
+            owned.cgui = LoadLibraryExW((root / L"cgui.dll").c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+            Check(owned.cgui != nullptr, "load actual normal cgui for two runtime CPU views");
+            const auto wide = root.wstring();
+            Check(Export<mta::gui::ConfigureGuiD3D12AssetRoot>(owned.cgui, "ConfigureGUID3D12AssetRoot")(mta::gui::GuiD3D12AssetRootApiVersion, wide.data(),
+                                                                                                         static_cast<std::uint32_t>(wide.size())) == 1,
+                  "configure runtime fixture assets without touching an installation");
+            mta::gui::GuiD3D12CreateInfo info;
+            info.device = owned.device.Get();
+            info.queue = owned.queue.Get();
+            info.targetFormat = DXGI_FORMAT_B8G8R8A8_UNORM;
+            info.width = Owned::Width;
+            info.height = Owned::Height;
+            owned.renderer = Export<mta::gui::CreateGuiD3D12Session>(owned.cgui, "CreateGUID3D12Session")(mta::gui::GuiD3D12ApiVersion, &info);
+            Check(owned.renderer && owned.renderer->GetGUI(owned.gui) == GuiD3D12Status::Ok && owned.gui, "runtime borrows an actual owner-thread WARP GUI");
+            owned.observed = std::make_unique<ObservedFrontendGui>(*owned.gui);
+            owned.gui = owned.observed.get();
+            const auto  beforeForeignBorrow = RuntimeState(owned);
+            bool        foreignBorrowRejected = false;
+            std::thread foreignBorrow([&] { foreignBorrowRejected = owned.create(Frontend::ApiVersion, owned.gui) == nullptr; });
+            foreignBorrow.join();
+            Check(foreignBorrowRejected && RuntimeState(owned) == beforeForeignBorrow,
+                  "foreign direct GUI creation cannot allocate or borrow retained runtime services");
+            std::uintptr_t identity = 0;
+            for (unsigned view = 1; view <= 2; ++view)
+            {
+                owned.observed->ResetSettingsObservation();
+                owned.frontend = owned.create(Frontend::ApiVersion, owned.gui);
+                Check(owned.frontend && owned.State()[Frontend::Phase] == 2, "runtime creates a fresh actual GUI view on its existing Core");
+                auto visible = RuntimeState(owned);
+                Check(visible[Runtime::RuntimePhase] == static_cast<std::uint32_t>(Runtime::Phase::Visible) && visible[Runtime::ViewBorrowed] &&
+                          visible[Runtime::ViewsAttached] == view && visible[Runtime::ViewsRetired] == view - 1 &&
+                          RuntimePair(visible, Runtime::ViewGenerationLow) == view && RuntimePair(visible, Runtime::SessionGenerationLow) == session,
+                      "fresh CPU view borrows the same runtime with one actual view generation");
+                Check(owned.shutdownRuntime(owned.startup) == Frontend::Status::Busy && owned.releaseRuntime(owned.startup) == Frontend::Status::Busy,
+                      "runtime refuses service and backend destruction behind a live GUI borrower");
+                // Exercise the real fade to completion before clicking the
+                // existing menu; a fixed short frame count is scheduler-dependent.
+                const auto settleUntil = GetTickCount64() + 750;
+                do
+                {
+                    Frame(owned, 4, 4);
+                    Sleep(15);
+                } while (GetTickCount64() < settleUntil);
+                Check(owned.State()[Frontend::MenuVisible] && !owned.State()[Frontend::MenuFading],
+                      "fresh runtime menu completes its actual fade before Settings interaction");
+                ConsoleAndBindings(owned);
+                identity = RuntimeSettings(owned, view == 2, identity);
+                Save(root / (view == 1 ? L"runtime-first-view.bmp" : L"runtime-second-view.bmp"), Raster(owned));
+                Check(owned.shutdown(owned.frontend) == Frontend::Status::Ok, "runtime hide retires actual widgets and their active settings capture");
+                frontend = owned.State();
+                Bindings::Snapshot stopped{};
+                Check(frontend[Frontend::CleanupComplete] && !frontend[Frontend::ServicesRetained] && !frontend[Frontend::GuiBorrowed] &&
+                          Export<Bindings::Read>(owned.core, "MTA_ReadDEFrontendBindings")(owned.frontend, stopped.data(), 32) == Frontend::Status::Ok &&
+                          stopped[Bindings::CleanupComplete] && !stopped[Bindings::BindingsRetained] && stopped[Bindings::CurrentZero] &&
+                          stopped[Bindings::PreviousZero],
+                      "old stopped-view fields retain their zero-alias meaning while session objects remain parked");
+                Check(owned.shutdownRuntime(owned.startup) == Frontend::Status::Busy && owned.releaseRuntime(owned.startup) == Frontend::Status::Busy,
+                      "stopped but unreleased GUI still excludes runtime final retirement");
+                const auto stale = owned.frontend;
+                Check(owned.release(owned.frontend) == Frontend::Status::Ok, "actual GUI Release completes a runtime view without retiring session services");
+                owned.frontend = nullptr;
+                Frontend::Snapshot output{};
+                output.fill(0x58135724);
+                const auto previous = output;
+                Check(owned.read(stale, output.data(), 32) == Frontend::Status::InvalidArgument && output == previous,
+                      "retired runtime view cannot expose freed widgets or service aliases");
+                const auto hidden = RuntimeState(owned);
+                RuntimeHidden(hidden, view);
+                Check(RuntimePair(hidden, Runtime::SessionGenerationLow) == session && GetModuleHandleW(L"xmll.dll") && configBytes() == originalConfig,
+                      "hidden runtime preserves same XML owner, configuration bytes and Core session identity");
+                const auto pulses = hidden[Startup::Pulses];
+                Check(owned.pulseRuntime(owned.startup) == Frontend::Status::Ok && RuntimeState(owned)[Startup::Pulses] == pulses + 1,
+                      "same actual backend remains usable between runtime views");
+            }
+            request.generation = 2;
+            Check(owned.runRuntimeView(owned.startup, &request) == Frontend::Status::InvalidArgument && !cancelCalls && !publishCalls && !heartbeatCalls,
+                  "retired runtime view generation cannot be reused for native input");
+            Check(configBytes() == originalConfig, "both runtime views leave actual configuration file bytes unchanged");
+            runtimeRetentionVerified = settingsVerified = true;
+        }
+        Check(owned.shutdownRuntime(owned.startup) == Frontend::Status::Ok && owned.shutdownRuntime(owned.startup) == Frontend::Status::Ok,
+              "runtime final shutdown retires actual manager then CVars/XML before backend, idempotently");
+        runtimeTerminal = RuntimeState(owned);
+        startup = StartupState(owned);
+        Check(runtimeTerminal[Runtime::RuntimePhase] == static_cast<std::uint32_t>(Runtime::Phase::Stopped) && runtimeTerminal[Runtime::CleanupComplete] &&
+                  !runtimeTerminal[Runtime::CleanupPending] && !runtimeTerminal[Runtime::ServicesRetained] && !runtimeTerminal[Runtime::XmlRetained] &&
+                  !runtimeTerminal[Runtime::ConfigRetained] && !runtimeTerminal[Runtime::CVarsLoaded] && !runtimeTerminal[Runtime::BindingsRetained] &&
+                  !runtimeTerminal[Runtime::ViewBorrowed] && startup[Startup::Phase] == 4 && startup[Startup::CoreRetained] &&
+                  !startup[Startup::BackendStarted] && !GetModuleHandleW(L"xmll.dll"),
+              "stopped runtime proves real session service and backend retirement while keeping its final value handle");
+        Check(owned.pulseRuntime(owned.startup) == Frontend::Status::Stopped && owned.runRuntimeView(owned.startup, &request) == Frontend::Status::Stopped &&
+                  !cancelCalls && !publishCalls && !heartbeatCalls,
+              "stopped runtime cannot reopen a native view or renew a host lease");
+        if (owned.gui)
+            Check(!owned.create(Frontend::ApiVersion, owned.gui) && RuntimeState(owned) == runtimeTerminal,
+                  "stopped runtime closes direct GUI borrowing before releasing its completed Core");
+        const auto stale = owned.startup;
+        Check(owned.releaseRuntime(owned.startup) == Frontend::Status::Ok, "release stopped actual runtime Core once all borrowed owners retired");
+        owned.startup = nullptr;
+        Check(owned.readRuntime(stale, sentinel.data(), 64) == Frontend::Status::InvalidArgument && sentinel == unchanged &&
+                  owned.releaseRuntime(stale) == Frontend::Status::InvalidArgument,
+              "stale runtime identity preserves output and cannot release another Core");
+        CheckIsolation(false);
+        if (owned.renderer)
+        {
+            Check(owned.renderer->Shutdown() == GuiD3D12Status::Ok && owned.renderer->Release() == GuiD3D12Status::Ok,
+                  "actual runtime fixture renderer drains after both CPU views");
+            owned.renderer = nullptr;
+            owned.gui = nullptr;
+        }
+        if (owned.cgui)
+        {
+            Check(FreeLibrary(owned.cgui) != FALSE, "unload drained runtime fixture cgui");
+            owned.cgui = nullptr;
+        }
+        if (owned.info)
+        {
+            unsigned errors = 0;
+            for (UINT64 index = 0; index < owned.info->GetNumStoredMessages(); ++index)
+            {
+                SIZE_T size = 0;
+                owned.info->GetMessage(index, nullptr, &size);
+                std::vector<BYTE> storage(size);
+                auto*             message = reinterpret_cast<D3D12_MESSAGE*>(storage.data());
+                if (SUCCEEDED(owned.info->GetMessage(index, message, &size)) && message->Severity <= D3D12_MESSAGE_SEVERITY_ERROR)
+                {
+                    ++errors;
+                    std::fprintf(stderr, "D3D12 debug error: %s\n", message->pDescription);
+                }
+            }
+            Check(errors == 0, "retained Core and two actual runtime GUI views emit no D3D12 debug errors");
+        }
+    }
 }
 
 int wmain(int argc, wchar_t** argv)
@@ -719,7 +1115,8 @@ int wmain(int argc, wchar_t** argv)
         Check(argc == 3 && sizeof(void*) == 8, "owned x64 frontend startup root and case supplied");
         const std::filesystem::path root(argv[1]);
         const std::wstring          mode(argv[2]);
-        Check(root.is_absolute() && (mode == L"normal" || mode == L"gated" || mode == L"frontend-failure" || mode == L"backend-failure"),
+        Check(root.is_absolute() && (mode == L"normal" || mode == L"gated" || mode == L"frontend-failure" || mode == L"backend-failure" || mode == L"runtime" ||
+                                     mode == L"runtime-frontend-failure" || mode == L"runtime-backend-failure"),
               "explicit completed-Core lifecycle case selected");
         Check(!std::filesystem::exists(root / L"server"), "owned frontend has no local-server startup assets");
         Owned owned;
@@ -755,6 +1152,8 @@ int wmain(int argc, wchar_t** argv)
         owned.runPersistent = Export<Persistent::Run>(owned.core, "MTA_RunDEPersistentFrontendV1");
         Check(!owned.beginStartup(0) && !owned.beginStartup(Startup::ApiVersion + 1) && !owned.beginStartup(Startup::ApiVersion),
               "wrong versions and missing explicit directories cannot construct a frontend Core owner");
+        Check(!Export<Runtime::Begin>(owned.core, "MTA_BeginDEFrontendRuntime")(Runtime::ApiVersion),
+              "runtime also requires explicit directories before constructing any Core or configuration owner");
         CheckIsolation(false);
         const auto wide = root.wstring();
         const auto gameWide = root.parent_path().parent_path().wstring();
@@ -763,12 +1162,44 @@ int wmain(int argc, wchar_t** argv)
         setGameRoot(gameWide.data(), gameWide.size());
         Check(!owned.beginStartup(0) && !owned.beginStartup(Startup::ApiVersion + 1),
               "wrong frontend startup versions remain rejected with both explicit directories ready");
+        if (mode.rfind(L"runtime", 0) == 0)
+        {
+            Startup::Snapshot  startup{};
+            Frontend::Snapshot frontend{};
+            RuntimeSessionCase(owned, root, mode, startup, frontend);
+            bool legacyUnchanged = true;
+            for (std::uint32_t index = 0; index < legacy.size(); ++index)
+                legacyUnchanged = legacyUnchanged && readLegacy(index) == legacy[index];
+            Check(legacyUnchanged, "runtime services and both actual views preserve historical Startup8 diagnostics");
+            Check(FreeLibrary(owned.core) != FALSE, "unload explicitly released actual runtime Core");
+            owned.core = nullptr;
+            Check(!GetModuleHandleW(L"core.dll") && !GetModuleHandleW(L"cgui.dll") && !GetModuleHandleW(L"game_de.dll") && !GetModuleHandleW(L"xmll.dll"),
+                  "no actual runtime Core GUI XML or backend module survives final retirement");
+            SaveResult(root, startup, frontend);
+            std::printf("Passed %u actual MTA frontend startup host checks\n", checks);
+            return 0;
+        }
         owned.startup = owned.beginStartup(Startup::ApiVersion);
         Check(owned.startup != nullptr, "allocated startup publishes completed Core ownership even if backend preparation fails");
         auto startup = StartupState(owned);
         PersistentArgumentChecks(owned);
         ClockArgumentChecks(owned);
         const auto persistentRequest = PersistentRequest();
+        Check(Export<std::uint32_t (*)()>(owned.core, "MTA_DEFrontendRuntimeApiVersion")() == 1,
+              "normal historical owner retains the independently versioned runtime export");
+        Runtime::Snapshot runtimeSentinel;
+        runtimeSentinel.fill(0x24687531);
+        const auto runtimeUnchanged = runtimeSentinel;
+        Check(
+            !Export<Runtime::Begin>(owned.core, "MTA_BeginDEFrontendRuntime")(1) &&
+                Export<Runtime::Read>(owned.core, "MTA_ReadDEFrontendRuntime")(owned.startup, runtimeSentinel.data(), 64) ==
+                    Frontend::Status::InvalidArgument &&
+                runtimeSentinel == runtimeUnchanged &&
+                Export<Runtime::Pulse>(owned.core, "MTA_PulseDEFrontendRuntime")(owned.startup) == Frontend::Status::InvalidArgument &&
+                Export<Runtime::RunView>(owned.core, "MTA_RunDEFrontendRuntimeView")(owned.startup, &persistentRequest) == Frontend::Status::InvalidArgument &&
+                Export<Runtime::Shutdown>(owned.core, "MTA_ShutdownDEFrontendRuntime")(owned.startup) == Frontend::Status::InvalidArgument &&
+                Export<Runtime::Release>(owned.core, "MTA_ReleaseDEFrontendRuntime")(owned.startup) == Frontend::Status::InvalidArgument,
+            "runtime API refuses historical startup handles without adoption replacement or output mutation");
         Check(!owned.beginStartup(Startup::ApiVersion), "second startup cannot replace an existing completed Core owner");
         Startup::Snapshot sentinel;
         sentinel.fill(0x13572468);

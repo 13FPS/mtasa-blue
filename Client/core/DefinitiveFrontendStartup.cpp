@@ -8,6 +8,7 @@
 #include "DefinitiveFrontendStartup.h"
 #include "DefinitiveFrontendClockReference.h"
 #include "DefinitivePersistentFrontend.h"
+#include "DefinitiveFrontendRuntime.h"
 
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
 
@@ -15,13 +16,17 @@ namespace DefinitiveFrontendStartup
 {
     struct Controller
     {
-        const DWORD owner = GetCurrentThreadId();
-        CCore*      core = nullptr;
-        Snapshot    state{};
-        bool        clockPending = false;
-        bool        lastClockRetired = true;
+        const DWORD                        owner = GetCurrentThreadId();
+        CCore*                             core = nullptr;
+        Snapshot                           state{};
+        bool                               clockPending = false;
+        bool                               lastClockRetired = true;
+        const bool                         runtimeMode;
+        const std::uint64_t                runtimeGeneration;
+        bool                               runtimeStopping = false, runtimeStopped = false;
+        DefinitiveFrontendRuntime::Failure runtimeFailure = DefinitiveFrontendRuntime::Failure::None;
 
-        Controller()
+        explicit Controller(bool runtime = false, std::uint64_t generation = 0) : runtimeMode(runtime), runtimeGeneration(generation)
         {
             state[Version] = ApiVersion;
             state[Phase] = 1;
@@ -42,6 +47,12 @@ namespace DefinitiveFrontendStartup
                 }
                 if (Pulse() != Status::Ok)
                     return;
+                if (runtimeMode && core->EnableFrontendRuntimeServices() != Status::Ok)
+                {
+                    runtimeFailure = DefinitiveFrontendRuntime::Failure::ServicesStart;
+                    Fail(Failure::RuntimeServices);
+                    return;
+                }
                 state[Phase] = 2;
                 core->m_frontendStartupAccepting = true;
             }
@@ -189,6 +200,82 @@ namespace DefinitiveFrontendStartup
             return Status::Ok;
         }
 
+        DefinitiveFrontendRuntime::Snapshot ReadRuntime() const
+        {
+            namespace Runtime = DefinitiveFrontendRuntime;
+            auto       result = core ? core->ReadFrontendRuntimeServices() : Runtime::Snapshot{};
+            const auto startup = Read();
+            std::copy(startup.begin(), startup.end(), result.begin());
+            result[Runtime::RuntimeVersion] = Runtime::ApiVersion;
+            result[Runtime::OwnerThread] = owner;
+            result[Runtime::SessionGenerationLow] = static_cast<std::uint32_t>(runtimeGeneration);
+            result[Runtime::SessionGenerationHigh] = static_cast<std::uint32_t>(runtimeGeneration >> 32);
+            if (!core || state[Phase] == 5)
+                result[Runtime::RuntimePhase] = static_cast<std::uint32_t>(Runtime::Phase::Failed);
+            if (runtimeStopping)
+            {
+                result[Runtime::RuntimePhase] = static_cast<std::uint32_t>(Runtime::Phase::Stopping);
+                result[Runtime::CleanupPending] = 1;
+                result[Runtime::CleanupComplete] = 0;
+            }
+            if (runtimeStopped)
+            {
+                result[Runtime::RuntimePhase] = static_cast<std::uint32_t>(Runtime::Phase::Stopped);
+                result[Runtime::CleanupPending] = 0;
+                result[Runtime::CleanupComplete] = 1;
+            }
+            if (runtimeFailure != Runtime::Failure::None)
+                result[Runtime::LastFailure] = static_cast<std::uint32_t>(runtimeFailure);
+            return result;
+        }
+
+        Status ShutdownRuntime() noexcept
+        {
+            namespace Runtime = DefinitiveFrontendRuntime;
+            // Even a stopped CPU view still borrows Core until Release. Parked
+            // session services cannot be destroyed behind that opaque handle.
+            if (clockPending || !lastClockRetired || (core && core->m_frontendResources) || !state[LastViewCleanupComplete])
+                return Status::Busy;
+            if (runtimeStopped)
+                return Status::Ok;
+            runtimeStopping = true;
+            if (core)
+            {
+                core->m_frontendStartupAccepting = false;
+                const auto status = core->StopFrontendRuntimeServices();
+                if (status != Status::Ok)
+                {
+                    if (status != Status::Busy)
+                        runtimeFailure = Runtime::Failure::ServicesStop;
+                    state[Phase] = 3;
+                    state[CleanupPending] = 1;
+                    state[LastFailure] = static_cast<std::uint32_t>(Failure::RuntimeServices);
+                    return status;
+                }
+            }
+            // The actual CKeyBinds/CVars/XML owner retires before the backend.
+            // A failed service or adapter stop keeps this same completed Core.
+            const auto stopped = Shutdown();
+            if (stopped != Status::Ok)
+            {
+                runtimeFailure = Runtime::Failure::BackendStop;
+                return stopped;
+            }
+            runtimeStopping = false;
+            runtimeStopped = true;
+            return Status::Ok;
+        }
+
+        Status RetireRuntime() noexcept
+        {
+            const auto stopped = ShutdownRuntime();
+            if (stopped != Status::Ok)
+                return stopped;
+            delete core;
+            core = nullptr;
+            return Status::Ok;
+        }
+
         Status RunView(std::uint32_t durationMs, DefinitiveInputReference::CancelCallback cancel, DefinitiveInputReference::PublishCallback publish)
         {
             if (clockPending || !lastClockRetired)
@@ -251,6 +338,29 @@ namespace DefinitiveFrontendStartup
                 state[CleanupPending] = 1;
                 core->m_frontendStartupAccepting = false;
             }
+            return status;
+        }
+
+        Status RunRuntimeView(const DefinitivePersistentFrontend::RequestV1& request)
+        {
+            namespace Runtime = DefinitiveFrontendRuntime;
+            if (runtimeStopping || runtimeStopped)
+                return runtimeStopped ? Status::Stopped : Status::Busy;
+            if (state[Phase] != 2)
+                return state[Phase] == 5 ? Status::Failed : Status::Stopped;
+            if (clockPending || !lastClockRetired || core->m_frontendResources || !state[LastViewCleanupComplete])
+                return Status::Busy;
+            const auto service = core->ReadFrontendRuntimeServices();
+            const auto generation = std::uint64_t{service[Runtime::ViewGenerationLow]} | (std::uint64_t{service[Runtime::ViewGenerationHigh]} << 32);
+            // A fresh view consumes one actual Core counter, including views
+            // created through the existing direct CPU/GUI borrowing API.
+            if (generation == UINT64_MAX || request.generation != generation + 1)
+                return Status::InvalidArgument;
+            const auto status = RunPersistent(request);
+            if (status == Status::Busy)
+                runtimeStopping = true;
+            else if (status == Status::Failed && state[LastFailure] == static_cast<std::uint32_t>(Failure::View))
+                runtimeFailure = Runtime::Failure::View;
             return status;
         }
 
@@ -319,6 +429,7 @@ namespace DefinitiveFrontendStartup
     {
         SRWLOCK           startupLock = SRWLOCK_INIT;
         Controller*       activeStartup = nullptr;
+        std::uint64_t     runtimeGeneration = 0;
         thread_local bool frontendBorrowAuthorized = false;
 
         struct FrontendBorrowAuthorization
@@ -390,6 +501,8 @@ namespace DefinitiveFrontendStartup
         const auto status = operation.Validate(handle);
         if (status != Status::Ok)
             return status;
+        if (activeStartup->runtimeMode)
+            return Status::InvalidArgument;
         if (activeStartup->state[Phase] != 2)
             return activeStartup->state[Phase] == 5 ? Status::Failed : Status::Stopped;
         return activeStartup->Pulse();
@@ -399,7 +512,7 @@ namespace DefinitiveFrontendStartup
     {
         Operation  operation;
         const auto status = operation.Validate(handle);
-        return status == Status::Ok ? activeStartup->Bind() : status;
+        return status == Status::Ok ? (activeStartup->runtimeMode ? Status::InvalidArgument : activeStartup->Bind()) : status;
     }
 
     Status ReadOwner(void* handle, std::uint32_t* output, std::uint32_t count) noexcept
@@ -426,7 +539,7 @@ namespace DefinitiveFrontendStartup
     {
         Operation  operation;
         const auto status = operation.Validate(handle);
-        return status == Status::Ok ? activeStartup->Shutdown() : status;
+        return status == Status::Ok ? (activeStartup->runtimeMode ? Status::InvalidArgument : activeStartup->Shutdown()) : status;
     }
 
     Status ReleaseOwner(void* handle) noexcept
@@ -435,6 +548,8 @@ namespace DefinitiveFrontendStartup
         const auto status = operation.Validate(handle);
         if (status != Status::Ok)
             return status;
+        if (activeStartup->runtimeMode)
+            return Status::InvalidArgument;
         const auto retired = activeStartup->Retire();
         if (retired != Status::Ok)
             return retired;
@@ -450,6 +565,8 @@ namespace DefinitiveFrontendStartup
         const auto status = operation.Validate(handle);
         if (status != Status::Ok)
             return status;
+        if (activeStartup->runtimeMode)
+            return Status::InvalidArgument;
         if (!durationMs || durationMs > DefinitiveGuiFrontendInputReference::MaximumDurationMs || !cancel || !publish)
             return Status::InvalidArgument;
         try
@@ -470,6 +587,8 @@ namespace DefinitiveFrontendStartup
         const auto status = operation.Validate(handle);
         if (status != Status::Ok)
             return status;
+        if (activeStartup->runtimeMode)
+            return Status::InvalidArgument;
         if (!request || request->size != sizeof(*request) || request->version != DefinitivePersistentFrontend::ApiVersion || !request->generation ||
             request->reserved[0] || request->reserved[1] || !request->cancelled || !request->publish || !request->heartbeat)
             return Status::InvalidArgument;
@@ -492,7 +611,136 @@ namespace DefinitiveFrontendStartup
         const auto status = operation.Validate(handle);
         if (status != Status::Ok)
             return status;
+        if (activeStartup->runtimeMode)
+            return Status::InvalidArgument;
         return activeStartup->RunClock({durationMs, cancel, publish});
+    }
+
+    void* BeginRuntimeOwner() noexcept
+    {
+        Operation operation;
+        if (!operation.acquired || activeStartup || g_pCore || CCore::GetSingletonPtr() || runtimeGeneration == UINT64_MAX)
+            return nullptr;
+        try
+        {
+            auto controller = std::make_unique<Controller>(true, ++runtimeGeneration);
+            controller->Begin();
+            activeStartup = controller.release();
+            return activeStartup;
+        }
+        catch (...)
+        {
+            return nullptr;
+        }
+    }
+
+    Status ReadRuntimeOwner(void* handle, std::uint32_t* output, std::uint32_t count) noexcept
+    {
+        Operation  operation;
+        const auto status = operation.Validate(handle);
+        if (status != Status::Ok)
+            return status;
+        if (!activeStartup->runtimeMode || !output || count != DefinitiveFrontendRuntime::FieldCount)
+            return Status::InvalidArgument;
+        try
+        {
+            const auto snapshot = activeStartup->ReadRuntime();
+            std::copy(snapshot.begin(), snapshot.end(), output);
+            return Status::Ok;
+        }
+        catch (...)
+        {
+            return Status::Failed;
+        }
+    }
+
+    Status PulseRuntimeOwner(void* handle) noexcept
+    {
+        Operation  operation;
+        const auto status = operation.Validate(handle);
+        if (status != Status::Ok)
+            return status;
+        if (!activeStartup->runtimeMode)
+            return Status::InvalidArgument;
+        if (activeStartup->runtimeStopping || activeStartup->runtimeStopped || activeStartup->state[Phase] != 2)
+            return activeStartup->runtimeStopped ? Status::Stopped : activeStartup->state[Phase] == 5 ? Status::Failed : Status::Busy;
+        return activeStartup->Pulse();
+    }
+
+    Status RunRuntimeViewOwner(void* handle, const DefinitivePersistentFrontend::RequestV1* request) noexcept
+    {
+        Operation  operation;
+        const auto status = operation.Validate(handle);
+        if (status != Status::Ok)
+            return status;
+        if (!activeStartup->runtimeMode || !request || request->size != sizeof(*request) || request->version != DefinitivePersistentFrontend::ApiVersion ||
+            !request->generation || request->reserved[0] || request->reserved[1] || !request->cancelled || !request->publish || !request->heartbeat)
+            return Status::InvalidArgument;
+        try
+        {
+            FrontendBorrowAuthorization borrow;
+            return activeStartup->RunRuntimeView(*request);
+        }
+        catch (...)
+        {
+            activeStartup->RetainFailedView();
+            activeStartup->runtimeStopping = true;
+            activeStartup->runtimeFailure = DefinitiveFrontendRuntime::Failure::View;
+            return Status::Failed;
+        }
+    }
+
+    Status ShutdownRuntimeOwner(void* handle) noexcept
+    {
+        Operation  operation;
+        const auto status = operation.Validate(handle);
+        if (status != Status::Ok)
+            return status;
+        return activeStartup->runtimeMode ? activeStartup->ShutdownRuntime() : Status::InvalidArgument;
+    }
+
+    Status ReleaseRuntimeOwner(void* handle) noexcept
+    {
+        Operation  operation;
+        const auto status = operation.Validate(handle);
+        if (status != Status::Ok)
+            return status;
+        if (!activeStartup->runtimeMode)
+            return Status::InvalidArgument;
+        const auto retired = activeStartup->RetireRuntime();
+        if (retired != Status::Ok)
+            return retired;
+        delete activeStartup;
+        activeStartup = nullptr;
+        return Status::Ok;
+    }
+}
+
+namespace DefinitiveFrontendRuntime
+{
+    void* BeginOwner() noexcept
+    {
+        return DefinitiveFrontendStartup::BeginRuntimeOwner();
+    }
+    Status ReadOwner(void* handle, std::uint32_t* output, std::uint32_t count) noexcept
+    {
+        return DefinitiveFrontendStartup::ReadRuntimeOwner(handle, output, count);
+    }
+    Status PulseOwner(void* handle) noexcept
+    {
+        return DefinitiveFrontendStartup::PulseRuntimeOwner(handle);
+    }
+    Status RunViewOwner(void* handle, const DefinitivePersistentFrontend::RequestV1* request) noexcept
+    {
+        return DefinitiveFrontendStartup::RunRuntimeViewOwner(handle, request);
+    }
+    Status ShutdownOwner(void* handle) noexcept
+    {
+        return DefinitiveFrontendStartup::ShutdownRuntimeOwner(handle);
+    }
+    Status ReleaseOwner(void* handle) noexcept
+    {
+        return DefinitiveFrontendStartup::ReleaseRuntimeOwner(handle);
     }
 }
 

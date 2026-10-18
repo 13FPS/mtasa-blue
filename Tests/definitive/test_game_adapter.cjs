@@ -1214,6 +1214,7 @@ async function main() {
             MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE: overrides.mtaCoreGuiFrontendInputReference ?? false,
             MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE: overrides.mtaCoreGuiFrontendStartupReference ?? false,
             MTA_CORE_PERSISTENT_FRONTEND: overrides.mtaCorePersistentFrontend ?? false,
+            MTA_CORE_FRONTEND_RUNTIME: overrides.mtaCoreFrontendRuntime ?? false,
             MTA_CORE_CLOCK_REFERENCE: overrides.mtaCoreClockReference ?? false,
             MTA_CORE_CLOCK_SET_REFERENCE: overrides.mtaCoreClockSetReference ?? false,
             Date: { now: () => overrides.times ? overrides.times[frame] : frame * 50 },
@@ -4062,6 +4063,7 @@ async function main() {
         assert.equal(result.logs.at(-1).event, 'adapter_diagnostic_complete');
         assert.ok(!result.logs.some(log => log.event === 'adapter_armed'));
     });
+    require('./test_frontend_runtime_entry.cjs')({ test, runEntry });
     console.log(`Passed ${tests} game-adapter mock tests. No installed game was run.`);
 }
 

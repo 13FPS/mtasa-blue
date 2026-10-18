@@ -60,8 +60,35 @@ Actual MTA GUI hosts pass **1,416 checks across four profiles**, with Apply,
 Cancel, real binding-record reload, alternate keys and retained cleanup. A real
 owned-window surface passes **512 checks**, including the modifier-release path;
 the shared translator passes **130 checks each on x86 and x64**. The normal
-Core build and both classic compile profiles pass. These are offline checks;
-Settings interaction in GTA still needs its own visual test.
+Core build and both classic compile profiles pass. These checks run offline;
+the separate GTA result below covers visible Settings interaction.
+
+**Settings and persistent menu interaction passed in GTA on runtime `af4f2dac1`.**
+On October 18 the user confirmed that applying primary Forwards as I survived
+reopening Settings, while staging O and pressing Cancel preserved I. The pointer
+moved freely, menu Quit worked, and walking, sprinting and camera controls
+returned. These Settings edits affect the current MTA session; they do not
+change GTA's normal bindings or write configuration files. Apply/Cancel and
+visible pointer movement are human observations, not fields added to the
+existing diagnostic protocols.
+
+The fresh PID 11412 / run 483836 records agree across Core, script and lifecycle
+reports. They record **61,090 ms** of native input admission, exceeding the
+unchanged greater-than-35-second persistence criterion, **1,193 presents** and
+**3,660 native scopes with matching restores** and no restoration failures.
+The cursor hook recorded **1,192 renewals**, **3,654 suppressed recentres** and
+five forwarded calls before orderly retirement with no hook or callback left
+in flight. The actual Quit callback and completed Core/backend cleanup passed;
+the saved process snapshot confirms Core, GUI, XML and pthread unloaded.
+
+Fresh pre-F9 raw prefixes distinguish this run from retained older records.
+Normal exit preserved all fourteen saved live prefixes, appended the usual
+74 CLEO shutdown bytes and left the other logs and all 58 installed files
+unchanged. The saved evidence and independent assessments are archived in the
+workspace. Console commands were not exercised during this Settings test;
+earlier console evidence remains separate. Camera exclusion remains unverified
+by machine observation, and full game/network readiness stays false. The port
+remains EXPERIMENTAL.
 
 **The cursor correction worked in GTA on runtime `7e7018b66`.** MTA's existing
 `CSetCursorPosHook` recorded **383 lease renewals**, **1,177 suppressed native
@@ -71,8 +98,8 @@ fresh Core/script records agree on the real Quit callback, and **1,182 native
 input scopes have matching restores**. Cursor retirement ended with no hook,
 active lease or callback in flight; Core, GUI, XML and pthread unloaded.
 
-This attempt supplied **19,794 ms** of native input admission. The unchanged
-greater-than-35-second persistence criterion therefore remains false; this is
+This earlier attempt supplied **19,794 ms** of native input admission. The unchanged
+greater-than-35-second persistence criterion remained false for that run; it is
 a positive cursor-interaction result, not a completed long-duration workload.
 Independent post-launch/pre-F9 prefixes bind all three protocol logs to the
 fresh PID/run. Normal exit preserved all fourteen saved live prefixes, appended

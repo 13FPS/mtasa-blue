@@ -20,7 +20,8 @@ function Hash([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA25
 $sourceNames = @('Client/definitive/CoreStartupReference.h','Client/definitive/CoreStartupReference.cpp','Client/definitive/FrontendControlMailbox.h',
     'Client/definitive/FrontendStartupReport.h','Client/definitive/PersistentFrontendHostLease.h','Client/core/DefinitivePersistentFrontend.h','Client/core/DefinitiveFrontendStartup.h','Client/core/DefinitiveGuiFrontendInputReference.h',
     'Client/core/DefinitiveFrontend.h','Client/core/DefinitiveGuiFrontendReference.h',
-    'Client/core/DefinitiveInputReference.h','Client/core/DefinitiveMovementReference.h','Client/core/DefinitiveRenderReference.h','Client/core/DefinitiveGuiStartupReference.h','Client/core/DefinitiveGuiSurfaceReference.h',
+    'Client/core/DefinitiveInputReference.h','Client/core/DefinitiveMovementReference.h','Client/core/DefinitiveClockReference.h','Client/core/DefinitiveRenderReference.h','Client/core/DefinitiveGuiStartupReference.h','Client/core/DefinitiveGuiSurfaceReference.h',
+    'Client/sdk/game/CGameClockService.h','Client/sdk/game/CGameAdapter.h','Shared/sdk/CControllerState.h','Shared/sdk/CControllerActions.h','Shared/sdk/CControlStateSynthesis.h',
     'Tests/definitive/CoreStartupReferenceTests.cpp','Tests/definitive/CoreStartupFixture.cpp','Tests/definitive/test_core_startup_worker.ps1')
 $sourceHashes = [ordered]@{}
 foreach ($name in $sourceNames) {
@@ -38,18 +39,23 @@ $environment = & $env:ComSpec /d /s /c ('call "{0}" -no_logo -arch=x64 -host_arc
 if ($LASTEXITCODE -ne 0) { throw 'Compiler environment initialization failed.' }
 foreach ($entry in $environment) { if ($entry -match '^([^=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process') } }
 $compiler = Join-Path $env:VCToolsInstallDir 'bin/Hostx64/x64/cl.exe'
-$common = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/MT','/O2','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN','/DUNICODE','/D_UNICODE')
+$common = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/MT','/O2','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN','/DUNICODE','/D_UNICODE',
+    ('/I'+(Join-Path $repositoryRoot 'Client/sdk')),('/I'+(Join-Path $repositoryRoot 'Shared/sdk')))
 $compiles = [Collections.Generic.List[object]]::new()
 function Compile([string]$Name, [string[]]$Sources, [string]$Destination, [string[]]$Extra = @()) {
     $objects = Join-Path $outputRoot ('objects/' + $Name)
     New-Item -ItemType Directory -Path $objects -Force | Out-Null
     New-Item -ItemType Directory -Path (Split-Path $Destination) -Force | Out-Null
-    $arguments = $common + $Extra + $Sources + @(('/Fo' + $objects + [IO.Path]::DirectorySeparatorChar),('/Fe' + $Destination))
+    # Controlled providers deliberately throw through C-named exports to test
+    # the worker's fault quarantine. Disable /EHc only for those fixture DLLs;
+    # the actual worker host retains production's /EHsc exception model.
+    $exceptionOptions = if ($Name.StartsWith('fixture-',[StringComparison]::Ordinal)) { @('/EHc-') } else { @() }
+    $arguments = $common + $exceptionOptions + $Extra + $Sources + @(('/Fo' + $objects + [IO.Path]::DirectorySeparatorChar),('/Fe' + $Destination))
     $messages = @(& $compiler @arguments 2>&1)
     $exit = $LASTEXITCODE
     $log = Join-Path $outputRoot ($Name + '-compile.log')
     $messages | Set-Content -LiteralPath $log -Encoding utf8
-    $compiles.Add([ordered]@{name=$Name;exit_code=$exit;log=$log;log_sha256=(Hash $log);output=$Destination})
+    $compiles.Add([ordered]@{name=$Name;exit_code=$exit;log=$log;log_sha256=(Hash $log);output=$Destination;exception_options=$exceptionOptions})
     if ($exit -ne 0) { throw "Compilation failed: $Name; see $log" }
 }
 function Run-Host([string]$Name, [string]$Directory, [string[]]$Arguments) {
@@ -75,10 +81,12 @@ try {
     $missingFixture = Join-Path $fixtureDirectory 'CoreMissingExport.dll'
     $missingGuiFixture = Join-Path $fixtureDirectory 'CoreMissingGuiExport.dll'
     $missingSurfaceFixture = Join-Path $fixtureDirectory 'CoreMissingSurfaceExport.dll'
+    $missingClockFixture = Join-Path $fixtureDirectory 'CoreMissingClockExport.dll'
     Compile 'fixture-normal' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $normalFixture @('/LD')
     Compile 'fixture-missing-export' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $missingFixture @('/LD','/DCORE_FIXTURE_MISSING_EXPORT=1')
     Compile 'fixture-missing-gui-export' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $missingGuiFixture @('/LD','/DCORE_FIXTURE_MISSING_GUI_EXPORT=1')
     Compile 'fixture-missing-surface-export' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $missingSurfaceFixture @('/LD','/DCORE_FIXTURE_MISSING_SURFACE_EXPORT=1')
+    Compile 'fixture-missing-clock-export' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $missingClockFixture @('/LD','/DCORE_FIXTURE_MISSING_CLOCK_EXPORT=1')
     $syntheticRoot = Join-Path $outputRoot 'synthetic-host'
     $hostPath = Join-Path $syntheticRoot 'SanAndreas.exe'
     Compile 'production-worker-host' @((Join-Path $PSScriptRoot 'CoreStartupReferenceTests.cpp'),(Join-Path $repositoryRoot 'Client/definitive/CoreStartupReference.cpp')) $hostPath @('/DMTA_TEST_CORE_STARTUP_ACCESS=1')
@@ -107,6 +115,7 @@ try {
     $runs += Run-Host 'actual-core-wrong-image' $actualRoot @($actualRoot,'actual')
     $runs += Run-Host 'actual-completed-core-wrong-image' $actualRoot @($actualRoot,'actual-frontend-startup')
     $runs += Run-Host 'actual-persistent-core-wrong-image' $actualRoot @($actualRoot,'actual-persistent-frontend')
+    $runs += Run-Host 'actual-clock-core-wrong-image' $actualRoot @($actualRoot,'actual-clock')
     foreach ($mode in @('movement','movement-cancel','render','render-cancel','render-deadline',
                         'render-v2','render-v2-d3d11','render-v2-cancel','render-v2-deadline','render-v2-missing',
                         'render-v2-cross-route','render-v2-mixed-version','render-v2-wrong-mask',
@@ -123,7 +132,10 @@ try {
                         'surface','surface-workload-failed','surface-cancel','surface-wrong-api','surface-config-refused','surface-mixed-version','surface-cache-contention',
                         'surface-deadline','surface-crosswire','surface-cleanup-incomplete','surface-retained','surface-unpinned','surface-device-release-fault','surface-missing-export',
                         'surface-child-retained','surface-queue-retained','surface-surface-retained','surface-window-incomplete','surface-composition-incomplete','surface-class-incomplete',
-                        'surface-observer-incomplete','surface-gui-incomplete','surface-shutdown-busy','surface-resize-pending')) {
+                        'surface-observer-incomplete','surface-gui-incomplete','surface-shutdown-busy','surface-resize-pending',
+                        'clock','clock-cancel','clock-wrong-api','clock-config-refused','clock-missing-export','clock-init-failed','clock-init-thrown',
+                        'clock-cache-contention','clock-returned-pending','clock-thrown-pending','clock-stale-terminal','clock-retained-terminal','clock-workload-incomplete',
+                        'clock-readback-thrown-pending')) {
         $movementRoot = Join-Path $outputRoot ($mode + '-host')
         New-Item -ItemType Directory -Path $movementRoot -Force | Out-Null
         Copy-Item -LiteralPath $hostPath -Destination (Join-Path $movementRoot 'SanAndreas.exe')
@@ -131,7 +143,7 @@ try {
         # or native methods. The controlled Core tests worker lifetime only.
         Copy-Item -LiteralPath $GameDeDll -Destination (Join-Path $movementRoot 'game_de.dll')
         if ((Hash (Join-Path $movementRoot 'game_de.dll')) -ne $ExpectedGameDeSha256.ToLowerInvariant()) { throw 'Movement PIN fixture backend hash differs.' }
-        $selectedFixture = if ($mode -eq 'gui-missing-export') { $missingGuiFixture } elseif ($mode -eq 'surface-missing-export') { $missingSurfaceFixture } else { $normalFixture }
+        $selectedFixture = if ($mode -eq 'gui-missing-export') { $missingGuiFixture } elseif ($mode -eq 'surface-missing-export') { $missingSurfaceFixture } elseif ($mode -eq 'clock-missing-export') { $missingClockFixture } else { $normalFixture }
         $runs += Run-Host $mode $movementRoot @($movementRoot,$mode,$selectedFixture)
     }
 } catch { $failure = $_.Exception.Message }
@@ -139,9 +151,10 @@ $unchanged = $true
 foreach ($name in $sourceNames) { if ((Hash (Join-Path $repositoryRoot $name)) -ne $sourceHashes[$name]) { $unchanged=$false } }
 foreach ($artifact in $artifacts) { if ((Hash $artifact.source) -ne $artifact.sha256) { $unchanged=$false } }
 $record = [ordered]@{
-    recorded_at=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=($null -eq $failure -and $unchanged -and $runs.Count -eq 91);
+    recorded_at=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=($null -eq $failure -and $unchanged -and $runs.Count -eq 106);
     failure=$failure;source_hashes=$sourceHashes;sources_unchanged=$unchanged;compiles=$compiles;runs=$runs;normal_artifacts=$artifacts;
     historical_cases_expected=65;surface_cases_expected=24;completed_core_actual_cases_expected=1;persistent_core_actual_cases_expected=1;
+    clock_controlled_cases_expected=14;clock_actual_preflight_cases_expected=1;historical_total_preserved=91;
     fixture_executable_is_game=$false;game_launched=$false;game_memory_read=$false;game_process_attached=$false;game_files_changed=$false;
     synthetic_core_is_mta=$false;full_mta_boot_verified=$false;engine_input_write_verified=$false;
     scope='Actual production async worker, controlled non-MTA loader-lock fixtures, and normal Core bounded/completed/persistent exact-image rejection in owned nonclassic hosts. Persistent generation/owner heartbeat and same-worker historical Startup8 retry are exercised; no native lease, GUI or GTA workload is admitted.'

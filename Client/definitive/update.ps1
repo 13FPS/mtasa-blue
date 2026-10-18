@@ -105,6 +105,20 @@ $sourceRoot = Join-Path $packageRoot 'Win64'
 $actualPaths = @(Get-ChildItem -LiteralPath $sourceRoot -File -Recurse | ForEach-Object { [IO.Path]::GetRelativePath($sourceRoot, $_.FullName).Replace('\', '/') })
 if (@(Compare-Object $packagePaths $actualPaths).Count -ne 0) { throw 'Package has unrecorded or missing files.' }
 $configText = [IO.File]::ReadAllText((Join-Path $sourceRoot 'CLEO/de-online/config.mjs'))
+
+# The clock package has no GUI or input lease. Its marker is optional only for
+# intact historical packages, and cannot hide a second active trial.
+$clockMarkers = [regex]::Matches($configText, 'export const MTA_CORE_CLOCK_REFERENCE = (true|false);')
+if ($clockMarkers.Count -gt 1 -or [regex]::Matches($configText, 'export const MTA_CORE_CLOCK_REFERENCE\b').Count -ne $clockMarkers.Count) {
+    throw 'Invalid MTA Core clock reference configuration marker.'
+}
+if ($clockMarkers.Count -eq 1 -and $clockMarkers[0].Groups[1].Value -eq 'true') {
+    if ($packagePaths.Count -ne 23 -or $guiCount -or $frontendCount -or $package.mode -ne 'Smoke' -or
+        $configText -match 'export const (GAIT_REFERENCE|GAIT_RATE|GAIT_ROOT_LOCK|INPUT_REFERENCE|MTA_NATIVE_PAD_REFERENCE|MTA_NATIVE_MOVEMENT_TRIAL|MTA_CORE_STARTUP_REFERENCE|MTA_CORE_INPUT_REFERENCE|MTA_CORE_MOVEMENT_REFERENCE|MTA_CORE_RENDER_REFERENCE|MTA_CORE_RENDER_GPU_REFERENCE|MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE|MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE|MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE|MTA_CORE_GUI_STARTUP_REFERENCE|MTA_CORE_GUI_SURFACE_REFERENCE|MTA_CORE_GUI_FRONTEND_REFERENCE|MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE|MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE|MTA_CORE_PERSISTENT_FRONTEND) = true;') {
+        throw 'MTA Core clock reference requires base ownership and separate opt-in Smoke mode.'
+    }
+}
+
 $guiMarkers = [regex]::Matches($configText, 'export const MTA_CORE_GUI_STARTUP_REFERENCE = (true|false);')
 if ($guiMarkers.Count -gt 1 -or ($guiCount -and $guiMarkers.Count -ne 1)) { throw 'Invalid GUI startup configuration marker.' }
 if ($guiMarkers.Count -eq 1 -and $guiMarkers[0].Groups[1].Value -eq 'true') {

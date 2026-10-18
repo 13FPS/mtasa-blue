@@ -20,6 +20,7 @@
 #include "DefinitiveStartupState.h"
 #include "DefinitiveInputReference.h"
 #include "DefinitiveMovementReference.h"
+#include "DefinitiveClockReference.h"
 #include "DefinitiveRenderReference.h"
 #include "DefinitiveGuiStartupReference.h"
 #include "DefinitiveGuiSurfaceReference.h"
@@ -62,14 +63,17 @@ namespace DefinitiveInputReference
 
     bool Configure(const Request& request) noexcept
     {
-        const auto maximum = request.guiFrontendInput    ? DefinitiveGuiFrontendInputReference::MaximumDurationMs
+        const auto maximum = request.clockReference      ? DefinitiveClockReference::MaximumDurationMs
+                             : request.guiFrontendInput  ? DefinitiveGuiFrontendInputReference::MaximumDurationMs
                              : request.guiFrontend       ? DefinitiveGuiFrontendReference::MaximumDurationMs
                              : request.guiSurface        ? DefinitiveGuiSurfaceReference::MaximumDurationMs
                              : request.guiStartup        ? DefinitiveGuiStartupReference::MaximumDurationMs
                              : request.renderObservation ? DefinitiveRenderReference::MaximumDurationMs
                              : request.nativeMovement    ? DefinitiveMovementReference::MaximumDurationMs
                                                          : MaximumDurationMs;
-        if ((request.guiFrontendInput && (request.guiFrontend || request.guiSurface || request.guiStartup || request.nativeMovement ||
+        if ((request.clockReference && (request.guiFrontendInput || request.guiFrontend || request.guiSurface || request.guiStartup || request.nativeMovement ||
+                                        request.renderObservation || request.renderRoute || request.renderApiVersion != 1 || request.controlLease)) ||
+            (request.guiFrontendInput && (request.guiFrontend || request.guiSurface || request.guiStartup || request.nativeMovement ||
                                           request.renderObservation || request.renderRoute || request.renderApiVersion != 1 || request.controlLease)) ||
             (request.guiFrontend && (request.guiSurface || request.guiStartup || request.nativeMovement || request.renderObservation || request.renderRoute ||
                                      request.renderApiVersion != 1 || !request.controlLease)) ||
@@ -322,6 +326,19 @@ CORE_API std::uint32_t MTA_ReadDEStartupState(std::uint32_t field)
 CORE_API std::uint32_t MTA_DEInputReferenceApiVersion()
 {
     return DefinitiveInputReference::ApiVersion;
+}
+
+CORE_API std::uint32_t MTA_DEClockReferenceApiVersion()
+{
+    return DefinitiveClockReference::ApiVersion;
+}
+
+CORE_API std::uint32_t MTA_ConfigureDEClockReference(std::uint32_t durationMs, DefinitiveInputReference::CancelCallback cancel,
+                                                     DefinitiveInputReference::PublishCallback publish)
+{
+    DefinitiveInputReference::Request request{durationMs, cancel, publish};
+    request.clockReference = true;
+    return g_isDefinitiveProcessCandidate && DefinitiveInputReference::Configure(request) ? 1u : 0u;
 }
 
 CORE_API std::uint32_t MTA_ConfigureDEInputReference(std::uint32_t durationMs, DefinitiveInputReference::CancelCallback cancel,

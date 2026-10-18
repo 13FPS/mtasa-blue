@@ -1214,6 +1214,7 @@ async function main() {
             MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE: overrides.mtaCoreGuiFrontendInputReference ?? false,
             MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE: overrides.mtaCoreGuiFrontendStartupReference ?? false,
             MTA_CORE_PERSISTENT_FRONTEND: overrides.mtaCorePersistentFrontend ?? false,
+            MTA_CORE_CLOCK_REFERENCE: overrides.mtaCoreClockReference ?? false,
             Date: { now: () => overrides.times ? overrides.times[frame] : frame * 50 },
             CLEO: { version: overrides.version || '1.5.1', apiVersion: overrides.definitions || '0.500', hostVersion: '1.0.113.49697469' },
             native: (name, ...args) => { record(name, ...args);
@@ -1248,6 +1249,86 @@ async function main() {
         vm.runInNewContext(entry, sandbox, { timeout: overrides.executionTimeout ?? 1000 });
         return { calls, callFrames, runtimeAccess, waits, logs, fromFloat };
     }
+    const clockFinalState = (changes = {}) => Object.assign(Array(96).fill(0), {
+        0: 1, 1: 2, 2: 5, 3: 10250, 4: 1, 6: 1, 8: 1, 9: 1, 10: 1, 11: 1, 12: 1, 13: 1,
+        14: 1, 16: 77, 17: 66, 22: 1, 23: 1, 27: 12, 28: 15, 30: 10000, 31: 9800, 32: 1000,
+        33: 10, 34: 10, 36: 20, 42: 2, 43: 1, 45: 32, 46: 1, 48: 10, 52: 44, 54: 44,
+        60: 10, 70: 20, 83: 12, 84: 10000, ...changes
+    });
+    function runClockEntry(changes = {}, options = {}) {
+        const clock = clockFinalState(changes);
+        const final = options.final || [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5, 0, 0, 1, 0, 1, 0, 1, 0];
+        return runEntry({ mode: 'smoke', mtaCoreClockReference: true,
+            keyFrames: [[], [], [17, 16, 120], [17, 16, 120], [], []], ...options,
+            functions: { DE_CoreClockApiVersion: () => 1, DE_CoreClockBegin: () => 1,
+                DE_CoreClockCapture: () => 1, DE_CoreClockRead: field => clock[field],
+                DE_CoreStartupPoll: () => 1, DE_CoreStartupCancel: () => 1,
+                DE_CoreStartupRead: field => final[field], ...(options.functions || {}) } });
+    }
+    test('clock reference waits indefinitely for F9 and its release, then accepts a separately retired read-only report', () => {
+        const f = runClockEntry();
+        const done = f.logs.find(event => event.event === 'core_clock_reference_finished');
+        assert.ok(done && done.passed && done.cleanup_passed && !done.clock_writes && !done.full_core_ready);
+        assert.ok(f.runtimeAccess.every(value => value.frame >= 4));
+        assert.ok(!f.calls.some(([name]) => /SET_TIME|SET_PLAYER|CREATE_CHAR|DE_Connect/.test(name)));
+    });
+    test('clock reference cancellation while armed never loads the bridge', () => {
+        const f = runClockEntry({}, { keyFrames: [[], [], [], [17, 16, 35]] });
+        assert.equal(f.runtimeAccess.length, 0);
+        assert.ok(f.logs.some(event => event.event === 'adapter_activation_cancelled'));
+    });
+    test('clock reference refuses mixed native modes before any bridge access', () => {
+        const f = runClockEntry({}, { mtaCorePersistentFrontend: true });
+        assert.equal(f.runtimeAccess.length, 0);
+        assert.ok(!f.logs.some(event => event.event === 'core_clock_reference_started'));
+    });
+    test('clock reference checks its optional API before starting the worker', () => {
+        let begins = 0;
+        const f = runClockEntry({}, { functions: { DE_CoreClockApiVersion: () => 2, DE_CoreClockBegin: () => ++begins } });
+        assert.equal(begins, 0);
+        assert.ok(!f.logs.some(event => event.event === 'core_clock_reference_finished'));
+    });
+    for (const [label, changes] of [
+        ['peer cleanup debt', { 78: 1 }], ['unacknowledged read', { 34: 9 }],
+        ['missing native timer progress', { 83: 0 }], ['short workload', { 84: 9950 }],
+        ['missing code retirement', { 19: 1 }], ['pending command', { 50: 1 }],
+        ['unexpected game readiness', { 85: 1 }], ['dirty reserved field', { 95: 1 }]
+    ]) test('clock reference refuses ' + label, () => {
+        const f = runClockEntry(changes);
+        assert.ok(!f.logs.some(event => event.event === 'core_clock_reference_finished' && event.passed));
+    });
+    test('clock reference reports unexpected clock writes instead of claiming a read-only success', () => {
+        const f = runClockEntry({ 62: 1 });
+        const done = f.logs.find(event => event.event === 'core_clock_reference_finished');
+        assert.ok(done && !done.passed && done.clock_writes);
+    });
+    for (const field of [80, 81]) test('clock reference reports native recovery debt at field ' + field, () => {
+        const f = runClockEntry({ [field]: 1 });
+        const done = f.logs.find(event => event.event === 'core_clock_reference_finished');
+        assert.ok(done && !done.passed && !done.cleanup_passed && done.clock_writes);
+    });
+    test('clock reference keeps yielding after a rejected sample until the worker retires', () => {
+        let polls = 0, cancels = 0;
+        const final = clockFinalState();
+        const f = runClockEntry({}, { functions: {
+            DE_CoreStartupPoll: () => ++polls >= 2 ? 1 : 0,
+            DE_CoreClockRead: field => polls === 1 && field === 95 ? 1 : final[field],
+            DE_CoreStartupCancel: () => { ++cancels; return 1; }
+        } });
+        const done = f.logs.find(event => event.event === 'core_clock_reference_finished');
+        assert.ok(done && !done.passed && done.cleanup_passed && done.error && done.stop_requested);
+        assert.equal(polls, 2);
+        assert.equal(cancels, 1);
+        assert.ok(f.waits.some(value => value.milliseconds === 100));
+    });
+    test('clock reference distinguishes a safe preflight refusal from a completed native workload', () => {
+        const refused = Array(96).fill(0);
+        Object.assign(refused, { 0: 1, 1: 2, 2: 1, 4: 16, 6: 1, 86: 1, 87: 1 });
+        const final = [1, 5, 3, 3, 0, 0, 0, 1, 3, 4, 5, 0, 0, 1, 0, 0, 8, 0, 0];
+        const f = runClockEntry({}, { final, functions: { DE_CoreClockRead: field => refused[field] } });
+        const done = f.logs.find(event => event.event === 'core_clock_reference_finished');
+        assert.ok(done && done.cleanup_passed && !done.passed && !done.clock_writes);
+    });
     // This fixture transports reported scalar evidence only. Its opaque lease
     // provenance and pixel facts cannot establish real COM or GPU execution.
     const coreGuiState = (overrides = {}) => Object.assign(Array(64).fill(0), {

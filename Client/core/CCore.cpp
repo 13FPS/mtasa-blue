@@ -37,6 +37,7 @@
 #include "FastFailCrashHandler/WerCrashHandler.h"
 #include "DefinitiveStartupState.h"
 #include "DefinitiveInputReference.h"
+#include "DefinitiveClockReference.h"
 #include "DefinitiveMovementReference.h"
 #include "DefinitiveRenderReference.h"
 #include "DefinitiveRenderEndpointLog.h"
@@ -2991,6 +2992,11 @@ CCore::CCore()
     // MTA owns the DE module before any classic configuration, hooks or game
     // factories run. Observations alone cannot satisfy CGame; reject incomplete
     // backends here rather than applying San Andreas addresses to a DE process.
+    #if defined(_WIN64)
+    DefinitiveInputReference::Request inputReference;
+    const bool                        hasInputReference = DefinitiveInputReference::GetActiveRequest(inputReference);
+    bool                              clockEntered = false;
+    #endif
     try
     {
         if (!m_DefinitiveAdapter.StartAdjacent(this))
@@ -3009,10 +3015,14 @@ CCore::CCore()
             throw std::runtime_error("DE adapter pulse: " + m_DefinitiveAdapter.GetError());
         DefinitiveStartup::SetPhase(DefinitiveStartup::Phase::PulseComplete);
     #if defined(_WIN64)
-        DefinitiveInputReference::Request inputReference;
-        if (DefinitiveInputReference::GetActiveRequest(inputReference))
+        if (hasInputReference)
         {
-            if (inputReference.guiFrontendInput)
+            if (inputReference.clockReference)
+            {
+                clockEntered = true;
+                DefinitiveClockReference::Run(m_DefinitiveAdapter, inputReference);
+            }
+            else if (inputReference.guiFrontendInput)
                 RunGuiFrontendReferenceImpl<true>(m_DefinitiveAdapter, inputReference);
             else if (inputReference.guiFrontend)
                 RunGuiFrontendReferenceImpl<false>(m_DefinitiveAdapter, inputReference);
@@ -3041,6 +3051,20 @@ CCore::CCore()
         // Stop before rethrow so diagnostics report the owned adapter lifetime,
         // including failed teardown, rather than a potentially pinned DLL name.
         m_DefinitiveAdapter.Stop();
+    #if defined(_WIN64)
+        if (hasInputReference && inputReference.clockReference && !clockEntered)
+        {
+            // Binding can refuse before the clock workload begins. Keep this
+            // Core owner alive until adapter retirement, then publish that
+            // distinct proof rather than inventing a native clock snapshot.
+            while (m_DefinitiveAdapter.IsStarted())
+            {
+                Sleep(DefinitiveClockReference::CleanupBackoffMs);
+                m_DefinitiveAdapter.Stop();
+            }
+            DefinitiveClockReference::PublishNotEntered(inputReference, true);
+        }
+    #endif
         DefinitiveStartup::SetCleanupComplete(!m_DefinitiveAdapter.IsStarted());
         throw;
     }

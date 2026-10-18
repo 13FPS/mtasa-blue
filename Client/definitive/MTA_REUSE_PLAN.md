@@ -8,13 +8,28 @@ experiment remains historical compatibility evidence.
 The DE clock service now implements MTA's existing five-method `CClock`
 interface behind an optional Core-owned adapter contract. Commands cross a
 mailbox to the exact-image native continuation after clock progression; Core
-does not write engine time from its worker thread. The bounded lease restores
-captured displayed time and fractional-minute phase without rewinding the
-native timer. Clock transactions exclude native input/render ownership and
-retain failed patch, protection, data or thread-resume cleanup for retry.
+does not write engine time from its worker thread. After mutation, the bounded
+lease restores captured displayed time and fractional-minute phase without
+rewinding the native timer. A read-only session instead retires using verified
+current values, allowing natural progression without clock writes. Clock
+transactions exclude native input/render ownership and retain failed patch,
+protection, data or thread-resume cleanup for retry.
 This is one service toward the real `CGame` implementation. It does not expose
 a partial `CGame`, enable gameplay capabilities or establish live clock
 behavior; the clock service has not been tested in GTA yet.
+
+The first live candidate is the separate Smoke opt-in
+`-MtaCoreClockReference`, using the existing Core startup worker and optional
+`CClock` provider. It owns only the base 23 files and excludes every GUI,
+rendering, input and other trial. It submits Read commands only, with no GUI,
+NPC, network connection, player-input write or game-time write. The F9 arming
+gate waits indefinitely, then requires release before the ten-second readiness
+window and up to ten seconds of observation. Generation-bound acknowledgements
+and advancing native time are workload proof; safe retirement is a separate
+requirement before Core unload. Ordinary mode changes clear the opt-in, while
+intact historical configurations without its declaration require an update to
+enable it. This candidate is still untested in GTA. Full MTA readiness remains
+false and the port remains EXPERIMENTAL.
 
 Visible GUI integration continues inside Core using the existing CGUI/CEGUI
 renderer. The new opt-in surface attaches an MTA-owned transparent child window

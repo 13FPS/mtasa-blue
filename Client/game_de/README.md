@@ -20,24 +20,34 @@ aligned atomic eight-byte change that preserves its three preceding bytes.
 Thread quiescence, original bytes, page protection and instruction-cache
 acknowledgements remain explicit cleanup obligations.
 
-This bounded service expires without a fresh producer heartbeat. Ending it
-restores captured displayed time and fractional-minute phase against the current
-native timer; it never rewinds that global timer or writes the engine's stored
-clock slot. Failed restoration, detachment or peer-thread resumption retains
-ownership for retry. `ResetTimeFrozen` itself retains the SDK meaning of
-unfreezing, separate from restoration of an experiment's captured state.
+This bounded service expires without a fresh producer heartbeat. After a clock
+mutation or an attempted mutation that leaves recovery debt, End restores captured
+displayed time and fractional-minute phase against the current native timer.
+A session that only reads retires using verified current values, preserving
+natural time progression without writing captured clock values back. Neither
+path rewinds the global timer or writes the engine's stored clock slot.
+Failed restoration, detachment or peer-thread resumption retains ownership for
+retry. `ResetTimeFrozen` itself retains the SDK meaning of unfreezing, separate
+from restoration of an experiment's captured state.
 Clock admission excludes native input and render service ownership across
 adapter instances; input and rendering can still coexist for MTA's frontend.
 Core reserves cleanup diagnostics before Begin and requires explicit End or
 Reset after any attempted admission before starting another native service.
-Native clock behavior in GTA has not been tested yet.
+The separate `package.ps1 -Mode Smoke -MtaCoreClockReference` candidate uses
+the existing Core startup worker and optional `CClock` provider for Read commands
+only. It owns the base 23-file package, excludes input/render/GUI trials, and
+creates no GUI or NPC. It applies no player input or game-time writes. After
+qualified readiness it observes up to ten seconds of natural clock progression;
+readiness has its own ten-second limit. Cleanup retains the worker and Core until
+native retirement is independently proved.
 
-Offline validation passes 626 clock checks using an owned Windows image and
-the production Detours callback, patch, memory and recovery paths. Input and
-render regressions pass, as do 1,737 x64 Core consumer checks, including retained
-cleanup without diagnostic allocations and older optional-module compatibility.
-Normal x64 Core/Game DE builds and classic x86 compile guards pass. These
-fixtures do not execute GTA's clock update or validate its live behavior.
+The Windows native fixtures exercise the production Detours callback, patch,
+memory and recovery paths. The deterministic Core lifecycle fixture checks
+matching Read acknowledgements, timer progression, cancellation, deadlines and
+retained cleanup with allocation tracking on x86 and x64. Optional-module and
+classic compatibility remain separate checks. These fixtures do not execute
+GTA's clock update. The new clock trial is still untested in GTA; full MTA
+readiness remains false and the port remains EXPERIMENTAL.
 
 Optional native rendering diagnostics use the separate API1
 `game/CGameRenderObservation.h` factory. It supplies an owner-thread checked

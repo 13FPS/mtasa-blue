@@ -13,10 +13,12 @@
 #include <cwchar>
 #include "../../Client/core/DefinitiveInputReference.h"
 #include "../../Client/core/DefinitiveMovementReference.h"
+#include "../../Client/core/DefinitiveClockReference.h"
 #include "../../Client/core/DefinitiveRenderReference.h"
 #include "../../Client/core/DefinitiveGuiStartupReference.h"
 #include "../../Client/core/DefinitiveGuiSurfaceReference.h"
 #include <filesystem>
+#include <stdexcept>
 
 namespace
 {
@@ -24,7 +26,7 @@ namespace
     volatile LONG*                    counters = nullptr;
     bool                              mtaSet = false, gtaSet = false;
     DefinitiveInputReference::Request inputRequest;
-    bool                              guiRequest = false, guiSurfaceRequest = false;
+    bool                              guiRequest = false, guiSurfaceRequest = false, clockRequest = false;
 
     DWORD Setting(const wchar_t* name)
     {
@@ -69,6 +71,103 @@ extern "C" __declspec(dllexport) std::uint32_t MTA_DEMovementReferenceApiVersion
 {
     Call(7);
     return 1;
+}
+
+extern "C" __declspec(dllexport) std::uint32_t MTA_DEClockReferenceApiVersion()
+{
+    Call(7);
+    return Setting(L"MTA_CORE_FIXTURE_CLOCK_MODE") == 2 ? 2u : DefinitiveClockReference::ApiVersion;
+}
+
+#ifndef CORE_FIXTURE_MISSING_CLOCK_EXPORT
+extern "C" __declspec(dllexport) std::uint32_t MTA_ConfigureDEClockReference(std::uint32_t duration, DefinitiveInputReference::CancelCallback cancelled,
+                                                                             DefinitiveInputReference::PublishCallback publish)
+{
+    Call(8);
+    if (duration != DefinitiveClockReference::MaximumDurationMs || !cancelled || !publish || Setting(L"MTA_CORE_FIXTURE_CLOCK_MODE") == 3)
+        return 0;
+    inputRequest = {duration, cancelled, publish};
+    clockRequest = true;
+    return 1;
+}
+#endif
+
+void ControlledClock()
+{
+    using namespace DefinitiveClockReference;
+    const auto mode = Setting(L"MTA_CORE_FIXTURE_CLOCK_MODE");
+    Snapshot   sample{};
+    sample[Version] = ApiVersion;
+    sample[Phase] = 1;
+    sample[BeginAttempted] = sample[BeginSucceeded] = sample[ReadyObserved] = sample[ReadOnlyVerified] = sample[NativeStateValid] = 1;
+    sample[GenerationLow] = 17;
+    sample[EngineThread] = GetCurrentThreadId() + 1;
+    sample[ProducerThread] = GetCurrentThreadId();
+    sample[NativeBound] = sample[NativeHooked] = sample[NativeActive] = sample[NativeReady] = 1;
+    sample[Hour] = 12;
+    sample[Minute] = 34;
+    sample[Seconds] = 27;
+    sample[MillisecondsPerGameMinute] = 1000;
+    sample[ReadSubmitted] = sample[ReadAcknowledged] = sample[ReadsLow] = 3;
+    sample[CallbacksLow] = sample[QualifiedCallbacksLow] = 10;
+    sample[NativeTimerProgressSamples] = 2;
+    // Load/PIN the genuine backend only to exercise the worker's independent
+    // module accounting. This controlled Core never calls its native factory.
+    wchar_t path[32768]{};
+    GetModuleFileNameW(nullptr, path, 32768);
+    const auto backendPath = std::filesystem::path(path).parent_path() / L"game_de.dll";
+    const auto backend = LoadLibraryExW(backendPath.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+    HMODULE    retained = nullptr;
+    const auto factory = backend ? GetProcAddress(backend, "CreateGameAdapter") : nullptr;
+    sample[BackendPinnedExpected] =
+        factory && GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN, reinterpret_cast<LPCWSTR>(factory), &retained)
+            ? 1u
+            : 0u;
+    if (backend)
+        FreeLibrary(backend);
+    const auto emit = [&]
+    {
+        ++sample[Sequence];
+        sample[NativeTimer] = 10000 + sample[Sequence];
+        sample[LastMinuteChange] = 9900 + sample[Sequence];
+        Call(9);
+        inputRequest.publish(sample.data(), FieldCount);
+    };
+    emit();
+    const auto release = Event(L"MTA_CORE_FIXTURE_INPUT_RELEASE", SYNCHRONIZE);
+    while (release && WaitForSingleObject(release, 5) == WAIT_TIMEOUT && !inputRequest.cancelled())
+        emit();
+    if (release)
+        CloseHandle(release);
+    sample[Phase] = 3;
+    sample[CleanupPending] = sample[RetainedPeerThreads] = sample[CleanupAttempts] = 1;
+    sample[NativeActive] = sample[NativeReady] = 0;
+    emit();
+    Call(21);
+    // A protocol fault that returns pending cannot be repaired by another
+    // thread's publication. The worker must quarantine its Core and TLS owner.
+    if (mode == 7 || mode == 8 || mode == 12)
+        return;
+    const auto cleanup = Event(L"MTA_CORE_FIXTURE_MOVEMENT_RELEASE", SYNCHRONIZE);
+    while (cleanup && WaitForSingleObject(cleanup, 5) == WAIT_TIMEOUT)
+    {
+        ++sample[CleanupAttempts];
+        emit();
+    }
+    if (cleanup)
+        CloseHandle(cleanup);
+    sample[Phase] = 2;
+    sample[Reason] = static_cast<std::uint32_t>(inputRequest.cancelled() ? StopReason::Cancelled : StopReason::Completed);
+    sample[CleanupComplete] = sample[EndSucceeded] = sample[NativeRestored] = sample[WorkloadComplete] = 1;
+    sample[CleanupPending] = sample[NativeBound] = sample[NativeHooked] = sample[RetainedPeerThreads] = 0;
+    sample[ElapsedMs] = sample[WorkloadElapsedMs] = MaximumDurationMs;
+    if (mode == 11)
+        sample[WorkloadComplete] = 0;
+    if (mode == 9)
+        sample[Version] = ApiVersion + 1;
+    if (mode == 10)
+        sample[RetainedPeerThreads] = 1;
+    emit();
 }
 
 extern "C" __declspec(dllexport) std::uint32_t MTA_ConfigureDEMovementReference(std::uint32_t duration, DefinitiveInputReference::CancelCallback cancelled,
@@ -644,6 +743,8 @@ extern "C" __declspec(dllexport) std::uint32_t MTA_DEStartupApiVersion()
 extern "C" __declspec(dllexport) std::uint32_t MTA_ReadDEStartupState(std::uint32_t field)
 {
     Call(6);
+    if (clockRequest && Setting(L"MTA_CORE_FIXTURE_CLOCK_MODE") == 12)
+        throw std::runtime_error("controlled pending clock diagnostic exception");
     const std::array<std::uint32_t, 8> values{1, 5, 6, Setting(L"MTA_CORE_FIXTURE_BAD_STATE") ? 33u : 97u, 0, 0, 0, 1};
     return field < values.size() ? values[field] : 0xffffffffu;
 }
@@ -663,6 +764,17 @@ extern "C" __declspec(dllexport) int InitializeCore()
     Call(3);
     if (Setting(L"MTA_CORE_FIXTURE_BAD_INITIALIZE"))
         return 0;
+    if (mtaSet && gtaSet && clockRequest)
+    {
+        ControlledClock();
+        const auto mode = Setting(L"MTA_CORE_FIXTURE_CLOCK_MODE");
+        Call(24);
+        if (mode == 8 || mode == 12)
+            Call(25);
+        if (mode == 5 || mode == 8)
+            throw std::runtime_error("controlled clock Initialize exception");
+        return mode == 4 || mode == 7 ? 0 : 5;
+    }
     if (mtaSet && gtaSet && guiSurfaceRequest)
     {
         ControlledGuiSurface();

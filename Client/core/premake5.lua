@@ -36,6 +36,10 @@ project "Client Core"
 	-- the same MTA-owned lifecycle can be checked by the x64 integration host.
 	filter { "files:CGameAdapterModule.cpp" }
 		flags { "NoPCH" }
+	-- Clock observation uses only the adapter/value contract, so the lifecycle
+	-- can be tested without classic game objects or the legacy PCH.
+	filter { "files:DefinitiveClockReference.cpp" }
+		flags { "NoPCH" }
 	-- This new translation unit is empty in classic builds. A per-file override
 	-- keeps its independent owned-host build free of classic PCH dependencies.
 	filter { "files:DefinitiveGuiStartup.cpp" }

@@ -25,6 +25,7 @@ if ($NonClassicLayout) {
     New-Item -ItemType Directory -Path (Join-Path $outputRoot ($moduleRelative+'/mta/logs')) | Out-Null
 }
 $sourceNames=@('Tests/definitive/MtaCoreEntryTests.cpp','Tests/definitive/test_mta_core_entry.ps1',
+    'Client/core/DefinitiveClockReference.h','Client/core/DefinitiveClockReference.cpp',
     'Client/core/DefinitiveGuiFrontendReference.h','Client/core/DefinitiveGuiFrontendInputReference.h',
     'Client/core/Core.cpp','Client/core/CCore.cpp','Client/core/CCore.h','Client/core/premake5.lua','Client/core/CGameAdapterModule.cpp',
     'Client/core/CGameAdapterModule.h','Client/core/DefinitiveProcess.h','Client/core/DefinitiveStartupState.h','Client/core/DefinitiveInputReference.h','Client/core/DefinitiveMovementReference.h','Client/core/DefinitiveRenderReference.h','Client/core/DefinitiveRenderEndpointLog.h','Client/sdk/game/CGameRenderEndpointDiagnostic.h',

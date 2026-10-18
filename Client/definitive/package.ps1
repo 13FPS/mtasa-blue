@@ -7,10 +7,20 @@ param([ValidateSet('Diagnostic', 'Smoke', 'Online')][string]$Mode = 'Smoke',
     [switch]$MtaNativePadReference, [switch]$MtaNativeMovementTrial, [switch]$MtaCoreStartupReference, [switch]$MtaCoreInputReference,
     [switch]$MtaCoreMovementReference, [switch]$MtaCoreRenderReference, [switch]$MtaCoreRenderGpuReference, [switch]$MtaCoreRenderCustomPresentReference, [switch]$MtaCoreRenderFrameBoundaryReference, [switch]$MtaCoreRenderNativeDispatchReference,
     [ValidateSet('D3D11', 'D3D12')][string]$MtaCoreRenderRoute = 'D3D11', [switch]$MtaCoreGuiStartupReference, [switch]$MtaCoreGuiSurfaceReference, [switch]$MtaCoreGuiFrontendReference, [switch]$MtaCoreGuiFrontendInputReference, [switch]$MtaCoreGuiFrontendStartupReference, [switch]$MtaCorePersistentFrontend,
+    [switch]$MtaCoreClockReference,
     [string]$OutputDirectory)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+# Native clock ownership excludes other native service lifetimes. Reject a
+# mixed package before touching build outputs or downloading dependencies.
+$clockConflicts = @($PSBoundParameters.Keys | Where-Object {
+    $_ -match '^(Native|Matched|Lock|Mta)' -and $_ -ne 'MtaCoreClockReference' -and
+        $PSBoundParameters[$_] -is [Management.Automation.SwitchParameter] -and $PSBoundParameters[$_].IsPresent
+})
+if ($MtaCoreClockReference -and ($Mode -ne 'Smoke' -or $clockConflicts.Count -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
+    throw 'MTA Core clock reference requires separate opt-in Smoke mode without other trials.'
+}
 # Persistent input has independent host/native leases and must never inherit
 # one of the bounded diagnostic modes or a script player-control lease.
 $persistentConflicts = @(@('NativeGaitReference','MatchedGaitRate','LockWalkRoot','NativeInputReference','MtaNativePadReference','MtaNativeMovementTrial','MtaCoreStartupReference','MtaCoreInputReference','MtaCoreMovementReference','MtaCoreRenderReference','MtaCoreRenderGpuReference','MtaCoreRenderCustomPresentReference','MtaCoreRenderFrameBoundaryReference','MtaCoreRenderNativeDispatchReference','MtaCoreGuiStartupReference','MtaCoreGuiSurfaceReference','MtaCoreGuiFrontendReference','MtaCoreGuiFrontendInputReference','MtaCoreGuiFrontendStartupReference') | Where-Object { $PSBoundParameters.ContainsKey($_) -and $PSBoundParameters[$_] })
@@ -221,6 +231,18 @@ if ($MtaCoreGuiFrontendStartupReference) {
     foreach ($name in @('MTA_DEFrontendStartupApiVersion', 'MTA_BeginDEFrontendStartup', 'MTA_PulseDEFrontendStartup', 'MTA_BindDEFrontendStartupInput',
         'MTA_ReadDEFrontendStartup', 'MTA_ShutdownDEFrontendStartup', 'MTA_ReleaseDEFrontendStartup', 'MTA_RunDEFrontendStartupView')) {
         if (-not $coreExports.Contains($name)) { throw "Required completed frontend Core export missing: $name" }
+    }
+}
+if ($MtaCoreClockReference) {
+    foreach ($provider in @(
+        @{path=$bridgePath; names=@('DE_CoreClockApiVersion','DE_CoreClockBegin','DE_CoreClockCapture','DE_CoreClockRead','DE_CoreStartupPoll','DE_CoreStartupCancel','DE_CoreStartupRead')},
+        @{path=$corePath; names=@('MTA_DEClockReferenceApiVersion','MTA_ConfigureDEClockReference')},
+        @{path=$gameDePath; names=@('BeginGameClockServiceV1','SubmitGameClockCommandV1','RenewGameClockServiceV1','ReadGameClockServiceV1','EndGameClockServiceV1')}
+    )) {
+        $exports = Get-Amd64Exports $provider.path
+        foreach ($name in $provider.names) {
+            if (-not $exports.Contains($name)) { throw "Clock reference provider lacks export: $name" }
+        }
     }
 }
 if ($MtaCorePersistentFrontend) {
@@ -446,6 +468,10 @@ $configText = $configText.Replace($frontendInputMarker,
     "export const MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE = $($MtaCoreGuiFrontendInputReference.IsPresent.ToString().ToLowerInvariant());")
 # A completed Core owner has a distinct opt-in and cannot inherit a bounded
 # InitializeCore experiment merely because both modes ship the same GUI assets.
+$clockMarker = 'export const MTA_CORE_CLOCK_REFERENCE = false;'
+if ([regex]::Matches($configText, [regex]::Escape($clockMarker)).Count -ne 1) { throw 'Expected disabled MTA Core clock reference in source configuration.' }
+$configText = $configText.Replace($clockMarker,
+    "export const MTA_CORE_CLOCK_REFERENCE = $($MtaCoreClockReference.IsPresent.ToString().ToLowerInvariant());")
 $persistentMarker = 'export const MTA_CORE_PERSISTENT_FRONTEND = false;'
 if ([regex]::Matches($configText, [regex]::Escape($persistentMarker)).Count -ne 1) { throw 'Expected disabled persistent frontend in source configuration.' }
 $configText = $configText.Replace($persistentMarker,

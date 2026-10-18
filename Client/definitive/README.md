@@ -6,6 +6,34 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
+**A separate read-only Core clock candidate is ready for validation.**
+`package.ps1 -Mode Smoke -MtaCoreClockReference` selects an optional 23-file
+package using MTA's existing Core startup worker and `CClock` adapter. It is
+disabled by default and exclusive with every input, rendering, GUI and other
+trial selection. No GUI, NPC, network connection, player-input write or
+game-time write is part of this trial. It does not enable full MTA startup.
+
+The trial waits indefinitely for Ctrl+Shift+F9 held for three seconds and
+starts after the keys are released. It allows ten seconds for a qualified
+engine callback, then observes natural clock progression for up to ten seconds
+using generation-bound Read commands and producer heartbeats. Ctrl+Shift+End,
+focus loss or a failed heartbeat requests cleanup. A cleanup deadline changes
+diagnostics and retry backoff; it never grants permission to unload a retained
+native owner. The separate 96-field clock report requires matched Read
+acknowledgements and advancing native timer values before calling the workload
+complete. A read-only session retires without restoring old time or writing
+clock fields.
+
+With GTA closed, `set-mode.ps1 -Mode Smoke -MtaCoreClockReference` explicitly
+enables an intact clock-capable base installation. Ordinary
+`set-mode.ps1 -Mode Smoke` clears the opt-in. Install/update reject clock-enabled
+GUI ownership, mixed trials and malformed or duplicate clock declarations.
+Intact older configurations without the marker retain ordinary mode switching;
+enabling this new trial requires an update. The clock candidate remains
+**untested in GTA**, and full game/network readiness remains false. Existing
+Settings/menu results below describe their separate runtime. The port remains
+EXPERIMENTAL.
+
 **Frontend startup now has a separate completed Core owner.**
 `DefinitiveFrontendStartup` creates a successfully constructed `CCore`, then
 starts the adjacent Game DE adapter outside its constructor. Native image

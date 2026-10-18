@@ -156,7 +156,13 @@ if ($FrontendPackagePath) {
     $frontendPackageHashes = @([ordered]@{ path='manifest.json'; sha256=(Get-Sha (Join-Path $frontendPackage 'manifest.json')) }) + @($frontendManifest.files | ForEach-Object { [ordered]@{ path=('Win64/' + $_.path); sha256=$_.sha256 } })
 }
 if ($FrontendOnly -and -not $frontendPackage) { throw 'FrontendOnly requires the real frontend package.' }
-$outputRoot = Join-Path $repositoryRoot ('Build/mta-movement-package-tests/' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N'))
+$runId = (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N')
+$outputRoot = Join-Path $repositoryRoot ('Build/mta-movement-package-tests/' + $runId)
+$scratchRoot = Join-Path $repositoryRoot ('Build/tmp/movement-package-' + $runId)
+$temporaryRoot = Join-Path $scratchRoot 'temp'
+$previousTemp = $env:TEMP
+$previousTmp = $env:TMP
+if ((Test-Path -LiteralPath $outputRoot) -or (Test-Path -LiteralPath $scratchRoot)) { throw 'A new ownership test run must not reuse existing evidence or scratch.' }
 [IO.Directory]::CreateDirectory($outputRoot) | Out-Null
 $logPath = Join-Path $outputRoot 'production-scripts.log'
 $sourceHashes = @($scriptNames | ForEach-Object {
@@ -168,17 +174,104 @@ $packageHashes = @([ordered]@{ path='manifest.json'; sha256=(Get-Sha (Join-Path 
 })
 $script:checks = [Collections.Generic.List[string]]::new()
 $script:cases = [Collections.Generic.List[object]]::new()
+$script:ownedFixtureRoots = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+$null = $script:ownedFixtureRoots.Add($temporaryRoot)
 
 function Assert-Check([bool]$Condition, [string]$Label) {
     if (-not $Condition) { throw "Check failed: $Label" }
     $script:checks.Add($Label)
 }
 function Assert-FixturePath([string]$Path) {
+    if (-not [IO.Path]::IsPathFullyQualified($Path)) { throw "Disposable fixture paths must be absolute: $Path" }
     $full = [IO.Path]::GetFullPath($Path)
-    if (-not $full.StartsWith($outputRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+    if (-not $full.StartsWith($scratchRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
         throw "Test mutation escaped the disposable root: $full"
     }
     return $full
+}
+function Assert-NoFixtureLinks([string]$Path) {
+    $current = [IO.Path]::GetFullPath($Path)
+    while ($current) {
+        if (Test-Path -LiteralPath $current) {
+            $item = Get-Item -LiteralPath $current -Force
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw "Fixture traversal refuses reparse points: $current" }
+        }
+        $parent = [IO.Path]::GetDirectoryName($current)
+        if ($parent -eq $current) { break }
+        $current = $parent
+    }
+}
+function Get-SafeFixtureItems([string]$Root) {
+    $full = Assert-FixturePath $Root
+    Assert-NoFixtureLinks $full
+    $items = [Collections.Generic.List[object]]::new()
+    $pending = [Collections.Generic.Stack[string]]::new()
+    $pending.Push($full)
+    while ($pending.Count) {
+        foreach ($item in @(Get-ChildItem -LiteralPath $pending.Pop() -Force)) {
+            $path = Assert-FixturePath $item.FullName
+            if (-not $path.StartsWith($full + [IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase) -or
+                ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw "Fixture descendant is not an owned regular path: $path" }
+            $items.Add($item)
+            if ($item.PSIsContainer) { $pending.Push($path) }
+        }
+    }
+    return @($items | Sort-Object FullName)
+}
+function Retire-Fixture([object]$Fixture) {
+    $root = Assert-FixturePath $Fixture.root
+    $evidence = Join-Path $outputRoot ('case-evidence/' + $Fixture.id)
+    if (-not [IO.Path]::GetFullPath($evidence).StartsWith($outputRoot + [IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Case evidence escaped this new durable run.'
+    }
+    Assert-NoFixtureLinks $evidence
+    if (Test-Path -LiteralPath $evidence) { throw "Case evidence already exists: $evidence" }
+    [IO.Directory]::CreateDirectory($evidence) | Out-Null
+    $receipt = [ordered]@{name=$Fixture.name;root=$root;evidence=$evidence;created=$script:ownedFixtureRoots.Contains($root);
+        disposed=$false;treeFingerprint=$null;treeIndexSha256=$null;files=0;bytes=0;retainedTextFiles=0;retainedTextBytes=0;failure=$null}
+    try {
+        if (-not $receipt.created) {
+            if (Test-Path -LiteralPath $root) { throw 'Refusing disposal of an unregistered fixture root.' }
+            $receipt.disposed = $true
+        } elseif (Test-Path -LiteralPath $root) {
+            $items = @(Get-SafeFixtureItems $root)
+            $index = @($items | ForEach-Object {
+                $relative = [IO.Path]::GetRelativePath($root,$_.FullName).Replace('\','/')
+                if ($_.PSIsContainer) { [ordered]@{kind='directory';path=$relative;bytes=0;sha256=$null} }
+                else { [ordered]@{kind='file';path=$relative;bytes=$_.Length;sha256=(Get-Sha $_.FullName)} }
+            })
+            $treeLines = @($index | ForEach-Object { if ($_.kind -eq 'directory') {'D ' + $_.path} else {'F ' + $_.path + ' ' + $_.sha256} })
+            $receipt.treeFingerprint = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($utf8.GetBytes(($treeLines -join "`n")))).ToLowerInvariant()
+            $receipt.files = @($index | Where-Object kind -eq 'file').Count
+            # These entries are dictionaries, so sum their explicit keys rather
+            # than relying on Measure-Object's property adapter or empty output.
+            [long]$totalBytes = 0
+            foreach ($entry in $index) { $totalBytes += [long]$entry['bytes'] }
+            $receipt.bytes = $totalBytes
+            ConvertTo-Json -InputObject $index -Depth 5 | Set-Content -LiteralPath (Join-Path $evidence 'tree-index.json') -Encoding utf8NoBOM
+            $receipt.treeIndexSha256 = Get-Sha (Join-Path $evidence 'tree-index.json')
+            foreach ($entry in @($index | Where-Object { $_.kind -eq 'file' -and $_.bytes -le 2MB -and
+                         [IO.Path]::GetExtension($_.path) -in @('.json','.xml','.mjs','.js','.ini','.txt','.log','.ps1','.md','.csv') })) {
+                $destination = Join-Path $evidence ('text/' + $entry.path)
+                [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($destination)) | Out-Null
+                [IO.File]::Copy((Join-Path $root $entry.path),$destination,$false)
+                if ((Get-Sha $destination) -ne $entry.sha256) { throw "Case evidence copy differs: $($entry.path)" }
+                ++$receipt.retainedTextFiles
+                $receipt.retainedTextBytes += $entry.bytes
+            }
+            $receipt | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $evidence 'before-disposal.json') -Encoding utf8NoBOM
+            # Deletion admits only this run's explicitly registered fresh root.
+            # Recheck absolute containment and every link immediately before a
+            # native PowerShell recursive remove; durable evidence stays outside.
+            $null = Assert-FixturePath $root
+            $null = Get-SafeFixtureItems $root
+            Remove-Item -LiteralPath $root -Recurse -Force
+            if (Test-Path -LiteralPath $root) { throw 'The owned fixture tree was not completely removed.' }
+            $receipt.disposed = $true
+        } else { $receipt.disposed = $true }
+    } catch { $receipt.failure = $_.Exception.Message }
+    $receipt | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $evidence 'disposal-result.json') -Encoding utf8NoBOM
+    return [pscustomobject]$receipt
 }
 function Write-FixtureBytes([string]$Path, [byte[]]$Bytes) {
     $target = Assert-FixturePath $Path
@@ -234,8 +327,14 @@ function New-GameDirectory([string]$Path) {
     Copy-FixtureFile $sourceExecutable (Join-Path $Path 'SanAndreas.exe')
     return $Path
 }
-function New-Fixture([string]$Name) {
-    $root = Join-Path $outputRoot $Name
+function New-Fixture([object]$Fixture) {
+    $root = Assert-FixturePath $Fixture.root
+    Assert-NoFixtureLinks $root
+    if (Test-Path -LiteralPath $root) { throw 'A disposable case must start at a new unique path.' }
+    # Register the new intended leaf before creation so even a partial directory
+    # or file-copy failure has an exact owner and reaches case-finally cleanup.
+    $null = $script:ownedFixtureRoots.Add($root)
+    [IO.Directory]::CreateDirectory($root) | Out-Null
     $repo = Join-Path $root 'repository'
     $scripts = Join-Path $repo 'Client/definitive'
     $package = Join-Path $repo 'Build/definitive-package/Smoke'
@@ -245,7 +344,10 @@ function New-Fixture([string]$Name) {
         Copy-FixtureFile (Join-Path $sourcePackage ('Win64/' + $entry.path)) (Join-Path $package ('Win64/' + $entry.path))
     }
     $game = New-GameDirectory (Join-Path $root 'game')
-    [pscustomobject]@{ name=$Name; root=$root; repository=$repo; scripts=$scripts; package=$package; game=$game }
+    $Fixture.repository = $repo
+    $Fixture.scripts = $scripts
+    $Fixture.package = $package
+    $Fixture.game = $game
 }
 function Install-Fresh([object]$Fixture) {
     Invoke-Production $Fixture 'install.ps1' @{ Mode='Smoke'; PackageDirectory=$Fixture.package; GameDirectory=$Fixture.game }
@@ -316,18 +418,41 @@ function Assert-InstalledPackage([object]$Fixture) {
 }
 function Invoke-Case([string]$Name, [scriptblock]$Action) {
     $initialChecks = $script:checks.Count
-    $fixture = New-Fixture $Name
+    if ($Name -notmatch '^[A-Za-z0-9_.-]+$') { throw 'Disposable case names must be single safe path components.' }
+    # Keep native helper paths short; the durable case record carries the full
+    # descriptive name while the fresh run and checked leaf ensure uniqueness.
+    $id = ('case-{0:D4}-' -f $script:cases.Count) + [guid]::NewGuid().ToString('N').Substring(0,12)
+    $fixture = [pscustomobject]@{name=$Name;id=$id;root=(Join-Path $scratchRoot ('cases/' + $id));repository=$null;scripts=$null;package=$null;game=$null}
+    $case = [ordered]@{name=$Name;success=$false;checks=0;directory=$fixture.root;failure=$null;disposal=$null}
     try {
+        New-Fixture $fixture
         & $Action $fixture
-        $script:cases.Add([ordered]@{ name=$Name; success=$true; checks=($script:checks.Count - $initialChecks); directory=$fixture.root })
+        $case.success = $true
     } catch {
-        $script:cases.Add([ordered]@{ name=$Name; success=$false; checks=($script:checks.Count - $initialChecks); directory=$fixture.root; failure=$_.Exception.Message })
-        throw
+        $case.failure = $_.Exception.Message
+    } finally {
+        $case.checks = $script:checks.Count - $initialChecks
+        try {
+            $case.disposal = Retire-Fixture $fixture
+            if (-not $case.disposal.disposed -or $case.disposal.failure) {
+                $case.success = $false
+                if (-not $case.failure) { $case.failure = 'Case evidence/disposal failed: ' + $case.disposal.failure }
+            }
+        } catch {
+            $case.success = $false
+            if (-not $case.failure) { $case.failure = 'Case evidence/disposal failed: ' + $_.Exception.Message }
+        }
+        $script:cases.Add($case)
     }
+    if (-not $case.success) { throw $case.failure }
 }
 
 $failure = $null
+$temporaryDisposal = $null
 try {
+    [IO.Directory]::CreateDirectory($temporaryRoot) | Out-Null
+    $env:TEMP = $temporaryRoot
+    $env:TMP = $temporaryRoot
     if ($FrontendOnly) {
         Invoke-Case 'frontend-bounded-legacy23-and-gui36-acceptance' {
             param($fixture)
@@ -1320,6 +1445,24 @@ try {
         }
     }
 } catch { $failure = $_.Exception.Message }
+finally {
+    $env:TEMP = $previousTemp
+    $env:TMP = $previousTmp
+    try {
+        $temporaryDisposal = Retire-Fixture ([pscustomobject]@{name='task-temp';id=('task-temp-' + [guid]::NewGuid().ToString('N'));root=$temporaryRoot})
+        if (-not $temporaryDisposal.disposed -or $temporaryDisposal.failure) {
+            if (-not $failure) { $failure = 'Task TEMP evidence/disposal failed: ' + $temporaryDisposal.failure }
+        }
+        # Only already-empty directories are removed here. A retained failing
+        # case stays intact; this never widens cleanup to an older run.
+        foreach ($empty in @((Join-Path $scratchRoot 'cases'),$scratchRoot)) {
+            if ((Test-Path -LiteralPath $empty) -and @(Get-ChildItem -LiteralPath $empty -Force).Count -eq 0) {
+                Assert-NoFixtureLinks $empty
+                [IO.Directory]::Delete($empty,$false)
+            }
+        }
+    } catch { if (-not $failure) { $failure = 'Task scratch cleanup failed: ' + $_.Exception.Message } }
+}
 $sourceUnchanged = $true
 foreach ($entry in $sourceHashes) { if ((Get-Sha (Join-Path $repositoryRoot $entry.path)) -ne $entry.sha256) { $sourceUnchanged = $false } }
 foreach ($entry in $packageHashes) { if ((Get-Sha (Join-Path $sourcePackage $entry.path)) -ne $entry.sha256) { $sourceUnchanged = $false } }
@@ -1335,6 +1478,8 @@ $record = [ordered]@{
     frontendOnly=$FrontendOnly.IsPresent; scope=$(if ($FrontendOnly) { 'Bounded frontend58 ownership plus legacy23/GUI36 compatibility and shared ownership/hash/destination guards' } else { 'All historical and optional GUI/frontend package ownership cases' }); frontendPackageRoot=$frontendPackage; frontendPackageHashes=$frontendPackageHashes; frontendCasesEnabled=($null -ne $frontendPackage);
     surfacePackageRoot=$surfacePackage; surfacePackageHashes=$surfacePackageHashes; surfaceCasesEnabled=($null -ne $surfacePackage);
     gameExecutableSource=$sourceExecutable; gameExecutableSha256=$knownGameHash; sourceExecutableUnchanged=$sourceExecutableUnchanged;
+    scratchDirectory=$scratchRoot;scratchDirectoryRemoved=(-not (Test-Path -LiteralPath $scratchRoot));temporaryDisposal=$temporaryDisposal;
+    disposablePolicy='Only freshly registered trees in this run under Build/tmp are removed per case after durable full tree hashes and small text evidence; evidence failures retain that new tree and stop the matrix.';
     actualGameInstallationChanged=$false; gameLaunched=$false; gameProcessAttached=$false; nativeInputWriteVerified=$false
 }
 $record | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $outputRoot 'test-result.json') -Encoding utf8

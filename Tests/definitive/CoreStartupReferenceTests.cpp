@@ -8,10 +8,46 @@
 #include <array>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <stdexcept>
 #include <string>
 #include <thread>
+
+namespace
+{
+    std::atomic<DWORD>          observedDeleteThread{0};
+    std::atomic<volatile LONG*> observedDeleteCounters{nullptr};
+    void                        ObserveWorkerDelete(void* memory) noexcept
+    {
+        if (!memory || GetCurrentThreadId() != observedDeleteThread.load())
+            return;
+        const auto counters = observedDeleteCounters.load();
+        if (counters && counters[25])
+            InterlockedIncrement(counters + 26);
+    }
+}
+
+// Observe consumer-owned path/string destruction only after the controlled
+// provider arms its pending-exception boundary. Nothing blocks the allocator;
+// the fixture verifies quarantine occurs before heap ownership is unwound.
+void operator delete(void* memory) noexcept
+{
+    ObserveWorkerDelete(memory);
+    std::free(memory);
+}
+void operator delete[](void* memory) noexcept
+{
+    ::operator delete(memory);
+}
+void operator delete(void* memory, std::size_t) noexcept
+{
+    ::operator delete(memory);
+}
+void operator delete[](void* memory, std::size_t) noexcept
+{
+    ::operator delete(memory);
+}
 
 static_assert(DefinitiveGuiStartupReference::ApiVersion == 1);
 static_assert(DefinitiveGuiStartupReference::FieldCount == 64);
@@ -44,6 +80,10 @@ namespace deonline
         static bool ConflictingGuiStart(CoreStartupReference& worker, const void* address, bool movement) noexcept
         {
             return worker.Start(address, true, movement, !movement, 2, 6, true);
+        }
+        static bool ConflictingClockStart(CoreStartupReference& worker, const void* address) noexcept
+        {
+            return worker.Start(address, true, true, false, 0, 1, false, false, false, false, false, false, true);
         }
     };
 }
@@ -109,9 +149,10 @@ namespace
             Set(L"MTA_CORE_FIXTURE_RELEASE", releaseName);
             Set(L"MTA_CORE_FIXTURE_INPUT_RELEASE", inputReleaseName);
             Set(L"MTA_CORE_FIXTURE_MOVEMENT_RELEASE", movementReleaseName);
-            for (const auto* name : {L"MTA_CORE_FIXTURE_DELAY_MS", L"MTA_CORE_FIXTURE_BAD_VERSION", L"MTA_CORE_FIXTURE_BAD_STATE",
-                                     L"MTA_CORE_FIXTURE_BAD_INITIALIZE", L"MTA_CORE_FIXTURE_FAIL_ATTACH", L"MTA_CORE_FIXTURE_INPUT_MODE",
-                                     L"MTA_CORE_FIXTURE_RENDER_MODE", L"MTA_CORE_FIXTURE_GUI_MODE", L"MTA_CORE_FIXTURE_SURFACE_MODE"})
+            for (const auto* name :
+                 {L"MTA_CORE_FIXTURE_DELAY_MS", L"MTA_CORE_FIXTURE_BAD_VERSION", L"MTA_CORE_FIXTURE_BAD_STATE", L"MTA_CORE_FIXTURE_BAD_INITIALIZE",
+                  L"MTA_CORE_FIXTURE_FAIL_ATTACH", L"MTA_CORE_FIXTURE_INPUT_MODE", L"MTA_CORE_FIXTURE_RENDER_MODE", L"MTA_CORE_FIXTURE_GUI_MODE",
+                  L"MTA_CORE_FIXTURE_SURFACE_MODE", L"MTA_CORE_FIXTURE_CLOCK_MODE"})
                 Set(name, L"0");
         }
         ~Fixture()
@@ -156,6 +197,151 @@ namespace
             }
         }
     };
+
+    struct WorkerDeleteObservation
+    {
+        void Arm(volatile LONG* counters) noexcept
+        {
+            observedDeleteCounters.store(counters);
+            observedDeleteThread.store(static_cast<DWORD>(counters[0]));
+        }
+        ~WorkerDeleteObservation()
+        {
+            observedDeleteThread.store(0);
+            observedDeleteCounters.store(nullptr);
+        }
+    };
+
+    void TestClockWorker(deonline::CoreStartupReference& worker, const std::filesystem::path& root, const std::wstring& mode,
+                         const std::filesystem::path& coreFixture)
+    {
+        using namespace DefinitiveClockReference;
+        const unsigned          scenario = mode == L"clock-cancel"                    ? 1u
+                                           : mode == L"clock-wrong-api"               ? 2u
+                                           : mode == L"clock-config-refused"          ? 3u
+                                           : mode == L"clock-init-failed"             ? 4u
+                                           : mode == L"clock-init-thrown"             ? 5u
+                                           : mode == L"clock-cache-contention"        ? 6u
+                                           : mode == L"clock-returned-pending"        ? 7u
+                                           : mode == L"clock-thrown-pending"          ? 8u
+                                           : mode == L"clock-stale-terminal"          ? 9u
+                                           : mode == L"clock-retained-terminal"       ? 10u
+                                           : mode == L"clock-workload-incomplete"     ? 11u
+                                           : mode == L"clock-readback-thrown-pending" ? 12u
+                                                                                      : 0u;
+        Fixture                 fixture(200 + scenario);
+        WorkerDeleteObservation deleteObservation;
+        CopyCore(coreFixture, root);
+        Set(L"MTA_CORE_FIXTURE_CLOCK_MODE", std::to_wstring(scenario));
+        Check(!worker.CaptureClock() && !worker.ReadClock(Version), "clock cache starts unavailable without borrowing another protocol's values");
+        Check(!deonline::CoreStartupReferenceTestAccess::ConflictingClockStart(worker, &anchor),
+              "actual Start refuses mixed clock and movement modes before starting a worker");
+        Check(Fast([&] { return worker.BeginClockReference(&anchor); }), "clock reference queues on the actual existing asynchronous worker");
+        Check(WaitForSingleObject(fixture.entered, 5000) == WAIT_OBJECT_0, "clock controlled Core entered its loader on the worker");
+        if (scenario == 8 || scenario == 12)
+            deleteObservation.Arm(fixture.counters);
+        Check(!worker.Begin(&anchor) && !worker.BeginInputReference(&anchor) && !worker.BeginMovementReference(&anchor) &&
+                  !worker.BeginRenderReferenceV6(&anchor, 2) && !worker.BeginGuiStartupReference(&anchor) && !worker.BeginClockReference(&anchor),
+              "clock reference excludes every other worker mode during its complete ownership lifetime");
+        SetEvent(fixture.release);
+        if (scenario == 2 || scenario == 3 || mode == L"clock-missing-export")
+        {
+            Wait(worker);
+            Check(worker.Read(16) == (scenario == 3 ? 14u : 13u) && !worker.CaptureClock() && !worker.ReadClock(Version) && !fixture.counters[9] &&
+                      fixture.counters[1] == fixture.counters[0],
+                  "missing, wrong-version and refused clock configuration unload only unused Core without inventing clock evidence");
+            return;
+        }
+        const auto deadline = GetTickCount64() + 10000;
+        while (!Fast([&] { return worker.CaptureClock(); }))
+        {
+            Check(worker.Poll() == 0 && GetTickCount64() < deadline, "clock fixture failed to publish its independent atomic snapshot");
+            Sleep(5);
+        }
+        Check(worker.ReadClock(Version) == ApiVersion && worker.ReadClock(Phase) == 1 && worker.ReadClock(ReadOnlyVerified) == 1 &&
+                  worker.ReadClock(ReadSubmitted) == worker.ReadClock(ReadAcknowledged) && worker.ReadClock(ReadAcknowledged) == 3 &&
+                  !worker.ReadClock(SetsLow) && !worker.ReadClock(FreezesLow) && !worker.ReadClock(UnfreezesLow) && !worker.ReadClock(ResetsLow) &&
+                  worker.ReadClock(BackendPinnedExpected) == 1 && worker.ReadClock(NativeTimer) - worker.ReadClock(LastMinuteChange) == 100,
+              "coherent clock capture preserves read-only command and independent backend PIN evidence without mixed native timer fields");
+        Check(!worker.CaptureInput() && !worker.CaptureMovement() && !worker.CaptureRenderV6() && !worker.ReadClock(FieldCount),
+              "the separate 96-field clock cache cannot masquerade as historical input, movement or renderer snapshots");
+        bool        foreignRefused = false;
+        std::thread foreign(
+            [&] { foreignRefused = !worker.CaptureClock() && !worker.ReadClock(Version) && !worker.BeginClockReference(&anchor) && worker.Poll() == -1; });
+        foreign.join();
+        Check(foreignRefused, "clock capture/read/start/poll reject a foreign script caller without touching Core exports");
+        if (scenario == 1)
+            Check(Fast([&] { return worker.Cancel(); }), "clock cancellation is a nonblocking request rather than unload permission");
+        if (scenario == 6)
+            AcquireSRWLockShared(&deonline::CoreStartupReferenceTestAccess::InputLock(worker));
+        SetEvent(fixture.inputRelease);
+        bool sawPending = false;
+        while (GetTickCount64() < deadline && worker.Poll() == 0)
+        {
+            if (worker.CaptureClock() && worker.ReadClock(Phase) == 3 && fixture.counters[21])
+            {
+                sawPending = true;
+                break;
+            }
+            Sleep(5);
+        }
+        if (scenario == 6)
+        {
+            const auto count = fixture.counters[9];
+            Sleep(30);
+            const bool progressed = Fast([&] { return worker.CaptureClock(); }) && fixture.counters[9] > count && worker.ReadClock(Phase) == 3;
+            ReleaseSRWLockShared(&deonline::CoreStartupReferenceTestAccess::InputLock(worker));
+            Check(progressed, "clock pending publication and capture never block behind the actual historical input cache lock");
+        }
+        Check(sawPending && GetModuleHandleW(L"core.dll") && !fixture.counters[1] && worker.ReadClock(CleanupPending) == 1,
+              "clock cleanup retains its actual worker/Core owner and coherent pending evidence before final retirement");
+        SetEvent(fixture.movementRelease);
+        const bool quarantined = (scenario >= 7 && scenario <= 10) || scenario == 12;
+        if (quarantined)
+        {
+            while (!fixture.counters[24] && GetTickCount64() < deadline)
+                Sleep(5);
+            const auto until = GetTickCount64() + 100;
+            while (GetTickCount64() < until)
+            {
+                Check(Fast([&] { return worker.Poll(); }) == 0 && worker.IsPending() && GetModuleHandleW(L"core.dll") && !fixture.counters[1],
+                      "a returned/thrown Initialize or malformed retirement proof cannot unload retained clock Core or terminate its worker");
+                Sleep(5);
+            }
+            Check(fixture.counters[24] && worker.CaptureClock(), "faulty Initialize actually returned or threw after publishing its controlled clock evidence");
+            if (scenario == 8 || scenario == 12)
+                Check(fixture.counters[25] && !fixture.counters[26],
+                      "pending Initialize/readback exceptions quarantine before destroying any consumer-owned worker heap objects");
+            if (scenario == 12)
+                Check(fixture.counters[6] == 1, "controlled pending exception occurs during first diagnostic readback after Initialize returned");
+            Snapshot sample{};
+            for (std::uint32_t field = 0; field != FieldCount; ++field)
+                sample[field] = worker.ReadClock(field);
+            Check(!Retired(sample) && !worker.BeginClockReference(&anchor),
+                  "the actual terminal predicate refuses pending, stale-version or retained-peer evidence");
+            // This disposable non-game host ends with its deliberately faulty
+            // provider still quarantined. Production clock Run never returns
+            // pending; the test does not force-unload its worker or callbacks.
+            return;
+        }
+        Wait(worker);
+        Check(worker.CaptureClock(), "final coherent clock evidence remains captured after actual Core unload");
+        Snapshot sample{};
+        for (std::uint32_t field = 0; field != FieldCount; ++field)
+            sample[field] = worker.ReadClock(field);
+        Check(Retired(sample) && sample[ReadOnlyVerified] && !sample[SetsLow] && !sample[FreezesLow] && !sample[UnfreezesLow] && !sample[ResetsLow] &&
+                  sample[Reason] == static_cast<std::uint32_t>(scenario == 1 ? StopReason::Cancelled : StopReason::Completed),
+              "read-only final clock proof retires native hook/data/peer ownership without changing the workload's cancellation outcome");
+        Check(worker.Read(13) == 1 && worker.Read(15) == 1 &&
+                  worker.Read(16) == (scenario == 1   ? 12u
+                                      : scenario == 4 ? 7u
+                                      : scenario == 5 ? 11u
+                                                      : 0u) &&
+                  fixture.counters[2] == 0 && fixture.counters[1] == fixture.counters[0],
+              "failed or thrown Initialize still requires same-worker terminal retirement before actual unload and backend PIN accounting");
+        Check(worker.Read(17) == (scenario == 0 || scenario == 6 ? 1u : 0u),
+              "safe native retirement cannot promote an incomplete, cancelled, failed or thrown clock workload into startup success");
+    }
 
     void TestGuiWorker(deonline::CoreStartupReference& worker, const std::filesystem::path& root, const std::wstring& mode,
                        const std::filesystem::path& coreFixture)
@@ -454,7 +640,12 @@ int wmain(int argc, wchar_t** argv)
         Check(!worker.Begin(nullptr), "null anchor must be rejected");
         for (unsigned field = 0; field < 20; ++field)
             Check(worker.Read(field) == 0, "idle cache must be neutral");
-        if (std::wstring(argv[2]).find(L"surface") == 0)
+        if (std::wstring(argv[2]).find(L"clock") == 0)
+        {
+            Check(argc == 4, "clock worker fixture requires its controlled Core DLL");
+            TestClockWorker(worker, root, argv[2], argv[3]);
+        }
+        else if (std::wstring(argv[2]).find(L"surface") == 0)
         {
             Check(argc == 4, "surface worker fixture requires its controlled Core DLL");
             TestGuiSurfaceWorker(worker, root, argv[2], argv[3]);
@@ -875,6 +1066,23 @@ int wmain(int argc, wchar_t** argv)
             Check(!worker.CapturePersistentFrontend() && !worker.CapturePersistentFrontendLifecycle() && !worker.ReadPersistentFrontend(0) &&
                       !worker.ReadPersistentFrontendLifecycle(0) && !GetModuleHandleW(L"game_de.dll"),
                   "ordinary retry retires its actual backend and cannot expose predecessor persistent evidence");
+        }
+        else if (std::wstring(argv[2]) == L"actual-clock")
+        {
+            using namespace DefinitiveClockReference;
+            Check(Fast([&] { return worker.BeginClockReference(&anchor); }), "actual normal Core accepts the separate clock worker protocol");
+            Wait(worker);
+            Check(worker.CaptureClock(), "actual Core publishes explicit preflight refusal evidence before worker unload");
+            Snapshot sample{};
+            for (std::uint32_t field = 0; field != FieldCount; ++field)
+                sample[field] = worker.ReadClock(field);
+            Check(Retired(sample) && !sample[BeginAttempted] && !sample[BeginSucceeded] && !sample[ReadyObserved] && !sample[ReadSubmitted] &&
+                      !sample[ReadAcknowledged] && !sample[ReadOnlyVerified] && !sample[NativeRestored] && !sample[BackendPinnedExpected] &&
+                      !sample[FullMtaReady],
+                  "actual earlier input binding refusal proves only pre-native cleanup and cannot certify any native clock callbacks, reads or restore");
+            VerifyCleanup(worker, 8);
+            Check(!GetModuleHandleW(L"game_de.dll") && !GetModuleHandleW(L"pthread.dll") && !worker.Read(17),
+                  "actual wrong-image clock preflight releases Core/backend dependencies without claiming a GTA workload");
         }
         else if (std::wstring(argv[2]) == L"actual")
         {

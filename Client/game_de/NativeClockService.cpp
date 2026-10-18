@@ -75,6 +75,7 @@ namespace mta::game_de
             std::atomic<bool>          apiBusy{false}, bound{false}, hooked{false}, active{false}, ready{false}, stopping{false}, restored{true};
             std::atomic<bool>          modulePinned{false}, captured{false}, patchInstalled{false}, patchRecovery{false}, dataRecovery{false};
             std::atomic<bool>          peerBusy{false}, peersRetained{false};
+            std::atomic<bool>          nativeTouched{false};
             std::atomic<unsigned>      inFlight{0};
             std::atomic<std::uint32_t> retainedPeerThreads{0};
             std::atomic<DWORD>         engineThread{0};
@@ -478,6 +479,7 @@ namespace mta::game_de
                 (!runtime.patchRecovery.load() && before != (runtime.patchInstalled.load() ? Profile::frozenPatch : Profile::originalPatch)))
                 return ClockResult::BindingChanged;
             DWORD oldProtection = 0;
+            runtime.nativeTouched.store(true);
             if (!VirtualProtect(reinterpret_cast<void*>(runtime.image + atomicPatchRva), sizeof(LONG64), PAGE_EXECUTE_READWRITE, &oldProtection))
                 return ClockResult::PatchFailure;
             if (!runtime.protectionPending)
@@ -561,6 +563,7 @@ namespace mta::game_de
                 return ClockResult::ReadFailure;
             // Classic CClock writes these three values only. Calling DE's
             // normalized script setter would also mutate seconds/calendar.
+            runtime.nativeTouched.store(true);
             runtime.dataRecovery.store(true);
             const bool written = WriteValue(hoursRva, hour) && WriteValue(minutesRva, minute) && WriteValue(lastChangeRva, timer);
             const bool released = peers.Release();
@@ -579,6 +582,7 @@ namespace mta::game_de
             const auto status = CheckOwner();
             if (status != ClockResult::Ok)
                 return status;
+            runtime.nativeTouched.store(true);
             const auto changed = ChangeFreezePatch(frozen);
             if (changed == ClockResult::Ok)
             {
@@ -602,7 +606,25 @@ namespace mta::game_de
         bool RestoreOriginal() noexcept
         {
             runtime.counters.restoreAttempts.fetch_add(1);
-            bool     clean = callbackDepth && GetCurrentThreadId() == runtime.engineThread.load() && CheckBinding(false, true);
+            bool clean = callbackDepth && GetCurrentThreadId() == runtime.engineThread.load() && CheckBinding(false, true);
+            if (clean && !runtime.nativeTouched.load() && !runtime.dataRecovery.load() && !runtime.patchInstalled.load() && !runtime.patchRecovery.load() &&
+                !runtime.protectionPending.load())
+            {
+                ClockValues current;
+                if (RawRead(current))
+                {
+                    // A captured read owns lifetime, not time. Retire it using
+                    // current verified values so a read-only reference never
+                    // rewinds the game clock or writes a restoration snapshot.
+                    runtime.observed = current;
+                    runtime.restored.store(true);
+                    runtime.ready.store(false);
+                    return true;
+                }
+                runtime.counters.restoreFailures.fetch_add(1);
+                Stop(ClockResult::RestoreFailure);
+                return false;
+            }
             PeerHold peers;
             if (clean)
                 clean = peers.Prepare() && peers.Suspend() && CheckBinding(false, true);
@@ -616,6 +638,7 @@ namespace mta::game_de
             const std::uint32_t rebased = timer - phase;
             if (clean)
             {
+                runtime.nativeTouched.store(true);
                 runtime.dataRecovery.store(true);
                 clean = WriteValue(hoursRva, runtime.original.hour) && WriteValue(minutesRva, runtime.original.minute) &&
                         WriteValue(secondsRva, runtime.original.seconds) && WriteValue(lastChangeRva, rebased);
@@ -997,6 +1020,7 @@ namespace mta::game_de
         runtime.publishedClock.millisecondsPerGameMinute.store(0);
         runtime.protectionPending = false;
         runtime.patchProtection = 0;
+        runtime.nativeTouched.store(false);
         bool valid = Image::CheckExecutableBuild() && CheckBinding(true);
         if (!valid)
             Stop(ClockResult::UnsupportedBuild);

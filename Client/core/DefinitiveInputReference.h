@@ -88,6 +88,9 @@ namespace DefinitiveInputReference
         // A separate mode transfers neutral input ownership to Core's native
         // callback. Existing script-lease requests keep their original ABI.
         bool guiFrontendInput = false;
+        // Clock observation reuses this Core initialization owner but never
+        // configures input, rendering or the incomplete gameplay modules.
+        bool clockReference = false;
     };
 
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)

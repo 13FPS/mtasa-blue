@@ -11,6 +11,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <intrin.h>
 #include <thread>
 #include <tlhelp32.h>
 #include <type_traits>
@@ -21,11 +22,13 @@ namespace ClockTestFaults
     std::atomic<unsigned> partialDataWrites{0}, failFlushes{0}, protectionCountdown{0};
     std::atomic<bool>     failEnumeration{false}, failProtectionRestores{false};
     std::atomic<unsigned> failResumes{0};
+    std::atomic<unsigned> clockDataWrites{0}, clockCodeExchanges{0};
     std::atomic<DWORD>    resumeTarget{0};
     std::uintptr_t        patchAddress = 0, dataAddress = 0;
 
     BOOL WINAPI Write(HANDLE process, LPVOID address, LPCVOID bytes, SIZE_T size, SIZE_T* copied)
     {
+        clockDataWrites.fetch_add(1);
         if (reinterpret_cast<std::uintptr_t>(address) == dataAddress && size == 4 && partialDataWrites.load())
         {
             partialDataWrites.fetch_sub(1);
@@ -37,6 +40,12 @@ namespace ClockTestFaults
             return result;
         }
         return ::WriteProcessMemory(process, address, bytes, size, copied);
+    }
+    LONG64 WINAPI CompareExchange(volatile LONG64* address, LONG64 desired, LONG64 expected)
+    {
+        if (reinterpret_cast<std::uintptr_t>(address) == patchAddress)
+            clockCodeExchanges.fetch_add(1);
+        return ::InterlockedCompareExchange64(address, desired, expected);
     }
     BOOL WINAPI Protect(LPVOID address, SIZE_T size, DWORD protection, PDWORD previous)
     {
@@ -95,7 +104,12 @@ namespace ClockTestFaults
 #define FlushInstructionCache ClockTestFaults::Flush
 #define Thread32Next          ClockTestFaults::Next
 #define ResumeThread          ClockTestFaults::Resume
+#ifdef InterlockedCompareExchange64
+    #undef InterlockedCompareExchange64
+#endif
+#define InterlockedCompareExchange64 ClockTestFaults::CompareExchange
 #include "../../Client/game_de/NativeClockService.cpp"
+#undef InterlockedCompareExchange64
 #undef ResumeThread
 #undef Thread32Next
 #undef FlushInstructionCache
@@ -449,6 +463,7 @@ namespace
         // data/code validation, Detours and callback ownership remain real.
         runtime.image = fixture.image;
         runtime.failure.store(ClockResult::Ok);
+        runtime.nativeTouched.store(false);
         runtime.stopping.store(false);
         runtime.bound.store(true);
         runtime.active.store(true);
@@ -727,6 +742,7 @@ namespace
         {
             NativeClockService service;
             BeginOwned(service, fixture);
+            Execute(service, fixture, ClockOperation::Set);
             auto modified = NativeClockProfile::getterCase;
             modified[0] ^= 1;
             fixture.Patch(NativeClockProfile::getterCaseRva, modified.data(), modified.size());
@@ -802,10 +818,38 @@ namespace
         fixture.Put(lastChangeRva, std::uint32_t{0xffffffce});
         fixture.invoke();
         Check(State(service).ready, "native DWORD timer wraparound retains a valid one-hundred-millisecond captured phase");
+        Execute(service, fixture, ClockOperation::Set);
         fixture.Put(nativeTimerRva, std::uint32_t{125});
         FinishOwned(service, fixture);
         Check(fixture.Get<std::uint32_t>(nativeTimerRva) == 125 && fixture.Get<std::uint32_t>(lastChangeRva) == 25,
               "restore uses modular native timer arithmetic instead of rejecting or rewinding a wrapped timer");
+    }
+
+    void NativeReadOnlyRetirement(ClockImageFixture& fixture)
+    {
+        NativeClockService service;
+        BeginOwned(service, fixture);
+        ClockTestFaults::clockDataWrites.store(0);
+        ClockTestFaults::clockCodeExchanges.store(0);
+        const auto state = Execute(service, fixture, ClockOperation::Read);
+        Check(state.lastCommandResult == ClockResult::Ok && state.reads == 1 && !runtime.nativeTouched.load(),
+              "actual SDK Read leaves the native clock mutation obligation untouched");
+        // Model natural engine advancement after capture. Read-only cleanup
+        // must retire ownership without replaying or rebasing the old snapshot.
+        fixture.Put(hoursRva, std::uint8_t{17});
+        fixture.Put(minutesRva, std::uint8_t{18});
+        fixture.Put(secondsRva, std::uint16_t{19});
+        fixture.Put(nativeTimerRva, std::uint32_t{25000});
+        fixture.Put(lastChangeRva, std::uint32_t{24750});
+        std::vector<unsigned char> natural(ClockImageFixture::DataSize);
+        std::memcpy(natural.data(), reinterpret_cast<const void*>(fixture.image + ClockImageFixture::DataRva), natural.size());
+        FinishOwned(service, fixture);
+        Check(!ClockTestFaults::clockDataWrites.load() && !ClockTestFaults::clockCodeExchanges.load() && !runtime.nativeTouched.load(),
+              "actual read-only retirement makes zero native clock WriteProcessMemory calls or atomic code exchanges");
+        Check(std::memcmp(natural.data(), reinterpret_cast<const void*>(fixture.image + ClockImageFixture::DataRva), natural.size()) == 0 &&
+                  fixture.Get<std::uint8_t>(hoursRva) == 17 && fixture.Get<std::uint8_t>(minutesRva) == 18 && fixture.Get<std::uint16_t>(secondsRva) == 19 &&
+                  fixture.Get<std::uint32_t>(nativeTimerRva) == 25000 && fixture.Get<std::uint32_t>(lastChangeRva) == 24750,
+              "read-only cleanup preserves the complete naturally advanced data image instead of restoring old display or fractional-minute fields");
     }
 
     void NativePeerResumeRecovery(ClockImageFixture& fixture)
@@ -1068,6 +1112,7 @@ int main(int argc, char** argv)
     ClockImageFixture fixture;
     fixture.Create(argv[1]);
     NativeReadSetAndRestoration(fixture);
+    NativeReadOnlyRetirement(fixture);
     NativeFailureAndLease(fixture);
     NativeCaptureAndWraparound(fixture);
     NativePeerResumeRecovery(fixture);

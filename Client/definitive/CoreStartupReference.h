@@ -22,6 +22,7 @@
 #include "FrontendStartupReport.h"
 #include "PersistentFrontendHostLease.h"
 #include "../core/DefinitivePersistentFrontend.h"
+#include "../core/DefinitiveFrontendClockReference.h"
 
 namespace deonline
 {
@@ -67,6 +68,11 @@ namespace deonline
         bool          CaptureGuiFrontendInput() noexcept;
         std::uint32_t ReadGuiFrontendInput(std::uint32_t field) const noexcept;
         bool          BeginGuiFrontendStartupReference(const void* moduleAddress) noexcept;
+        bool          BeginGuiFrontendStartupReferenceV2(const void* moduleAddress) noexcept;
+        bool          CaptureGuiFrontendStartupClockV2() noexcept;
+        std::uint32_t ReadGuiFrontendStartupClockV2(std::uint32_t field) const noexcept;
+        bool          CaptureGuiFrontendStartupClockOwnerV2() noexcept;
+        std::uint32_t ReadGuiFrontendStartupClockOwnerV2(std::uint32_t field) const noexcept;
         bool          CaptureGuiFrontendStartup() noexcept;
         std::uint32_t ReadGuiFrontendStartup(std::uint32_t field) const noexcept;
         std::uint32_t BeginPersistentFrontend(const void* moduleAddress) noexcept;
@@ -109,10 +115,11 @@ namespace deonline
                                         std::uint32_t configuredRenderRoute = 0, std::uint32_t configuredRenderApi = 1, bool configuredGuiStartup = false,
                                         bool configuredGuiSurface = false, bool configuredGuiFrontend = false, bool configuredGuiFrontendInput = false,
                                         bool configuredFrontendStartup = false, bool configuredPersistentFrontend = false, bool configuredClock = false,
-                                        bool configuredClockSet = false) noexcept;
+                                        bool configuredClockSet = false, bool configuredClockBeforeFrontend = false) noexcept;
         bool                      CopyClockSnapshot(DefinitiveClockReference::Snapshot& output) const noexcept;
         bool                      CopyClockSetSnapshot(DefinitiveClockSetReference::Snapshot& output) const noexcept;
         void                      WaitForClockRetirement() noexcept;
+        void                      PublishClockOwner(const DefinitiveFrontendStartup::Snapshot& report) noexcept;
         bool                      CaptureFrontendLifecycle() noexcept;
         static bool               InputCancelled();
         static bool               PersistentHostFresh();
@@ -135,6 +142,7 @@ namespace deonline
         bool                          movementRequested = false;
         bool                          clockRequested = false;
         bool                          clockSetRequested = false;
+        bool                          clockBeforeFrontendRequested = false;
         bool                          clockInitializationInvoked = false, clockQuarantined = false;
         // Clock cleanup can retain a script peer inside the historical cache
         // lock. Its independent publication/capture path never takes that lock.
@@ -142,6 +150,12 @@ namespace deonline
         std::atomic<std::uint32_t>                                                   clockSequence{0};
         std::atomic<bool>                                                            clockAvailable{false};
         DefinitiveClockReference::Snapshot                                           capturedClock{};
+        // The completed owner is copied only after its independent clock
+        // retirement proof, before admitting the existing GUI view.
+        std::array<std::atomic<std::uint32_t>, DefinitiveFrontendStartup::FieldCount> publishedClockOwner{};
+        std::atomic<std::uint32_t>                                                    clockOwnerSequence{0};
+        std::atomic<bool>                                                             clockOwnerAvailable{false};
+        DefinitiveFrontendStartup::Snapshot                                           capturedClockOwner{};
         // Set has a distinct report so its bounded write proof cannot be
         // interpreted as the historical API1 read-only observation.
         std::array<std::atomic<std::uint32_t>, DefinitiveClockSetReference::FieldCount> publishedClockSet{};

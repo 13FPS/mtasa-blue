@@ -78,6 +78,11 @@ namespace DefinitiveFrontendStartup
 
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
     struct Controller;
+    // Internal frontend creation pins the same owner lock before touching the
+    // Core singleton. Only an authorized owner-thread view may reuse its lock;
+    // clock callbacks must refuse borrowing before allocating GUI owners.
+    bool   AcquireFrontendBorrow(bool& ownsLock) noexcept;
+    void   ReleaseFrontendBorrow(bool ownsLock) noexcept;
     void*  BeginOwner() noexcept;
     Status PulseOwner(void* handle) noexcept;
     Status BindOwner(void* handle) noexcept;

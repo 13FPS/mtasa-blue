@@ -455,24 +455,31 @@ function runAdapter() {
     if (MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND) {
         const persistentMode = MTA_CORE_PERSISTENT_FRONTEND;
         const startupMode = MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || persistentMode;
+        const clockStartupMode = MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE;
+        const trialApi = clockStartupMode ? 2 : 1;
         const fieldCount = persistentMode ? 288 : 256;
-        const schema = persistentMode ? 'mta_core_persistent_frontend_v1' : 'mta_core_gui_frontend_startup_v1';
-        const coreApi = persistentMode ? 16 : startupMode ? 15 : 14;
+        const schema = persistentMode ? 'mta_core_persistent_frontend_v1' : 'mta_core_gui_frontend_startup_v2';
+        const coreApi = persistentMode ? 16 : startupMode ? 19 : 14;
         const eventPrefix = persistentMode ? 'core_persistent_frontend' : startupMode ? 'core_gui_frontend_startup_reference' : 'core_gui_frontend_input_reference';
-        const version = bind(persistentMode ? 'DE_CorePersistentFrontendApiVersion' : startupMode ? 'DE_CoreGuiFrontendStartupApiVersion' : 'DE_CoreGuiFrontendInputApiVersion', 'X64U32');
-        const begin = bind(persistentMode ? 'DE_CorePersistentFrontendBegin' : startupMode ? 'DE_CoreGuiFrontendStartupBegin' : 'DE_CoreGuiFrontendInputBegin', persistentMode ? 'X64U32' : 'X64I32');
+        const version = bind(persistentMode ? 'DE_CorePersistentFrontendApiVersion' : startupMode ? 'DE_CoreGuiFrontendStartupApiVersionV2' : 'DE_CoreGuiFrontendInputApiVersion', 'X64U32');
+        const begin = bind(persistentMode ? 'DE_CorePersistentFrontendBegin' : startupMode ? 'DE_CoreGuiFrontendStartupBeginV2' : 'DE_CoreGuiFrontendInputBegin', persistentMode ? 'X64U32' : 'X64I32');
         const captureLifecycle = startupMode ? bind(persistentMode ? 'DE_CorePersistentFrontendCaptureLifecycle' : 'DE_CoreGuiFrontendStartupCapture') : null;
         const readLifecycle = startupMode ? bind(persistentMode ? 'DE_CorePersistentFrontendReadLifecycle' : 'DE_CoreGuiFrontendStartupRead', 'X64U32') : null;
+        const captureClock = clockStartupMode ? bind('DE_CoreGuiFrontendStartupCaptureClockV2') : null;
+        const readClock = clockStartupMode ? bind('DE_CoreGuiFrontendStartupReadClockV2', 'X64U32') : null;
+        const captureClockOwner = clockStartupMode ? bind('DE_CoreGuiFrontendStartupCaptureClockOwnerV2') : null;
+        const readClockOwner = clockStartupMode ? bind('DE_CoreGuiFrontendStartupReadClockOwnerV2', 'X64U32') : null;
         const capture = bind(persistentMode ? 'DE_CorePersistentFrontendCapture' : 'DE_CoreGuiFrontendInputCapture');
         const readInput = bind(persistentMode ? 'DE_CorePersistentFrontendRead' : 'DE_CoreGuiFrontendInputRead', 'X64U32');
         const heartbeat = persistentMode ? bind('DE_CorePersistentFrontendHeartbeat') : null;
         const poll = bind('DE_CoreStartupPoll'), cancel = bind('DE_CoreStartupCancel');
         const read = bind('DE_CoreStartupRead', 'X64U32');
-        if (version() !== 1) throw new Error(startupMode ? 'Core frontend startup API1 is required' : 'Core frontend input API1 is required');
+        if (version() !== trialApi) throw new Error(clockStartupMode ? 'Core frontend startup API2 is required'
+            : startupMode ? 'Core frontend startup API1 is required' : 'Core frontend input API1 is required');
         emit({ event: 'adapter_start', host: HOST, cleo: String(CLEO.version), host_version: String(CLEO.hostVersion),
             definitions: String(CLEO.apiVersion), mode: MODE, endpoint: null, stop_key: stopKey,
             ...(persistentMode ? { core_persistent_frontend: true, provenance: 'mta_renewable_completed_core_frontend', core_api: coreApi, trial_api: 1 }
-                : startupMode ? { core_gui_frontend_startup_reference: true, provenance: 'mta_completed_core_frontend_startup', core_api: coreApi, trial_api: 1 }
+                : startupMode ? { core_gui_frontend_startup_reference: true, provenance: 'mta_completed_core_clock_then_frontend', core_api: coreApi, trial_api: trialApi }
                 : { core_gui_frontend_input_reference: true, provenance: 'mta_core_owned_frontend_native_input', core_api: coreApi, frontend_input_trial_api: 1 }),
             adapter_abi: 6, network_active: false, core_scoped_native_input_planned: true, native_pad_writes: false,
             native_player_control_lease_planned: false, native_player_control_writes: false,
@@ -481,9 +488,11 @@ function runAdapter() {
         const startedAt = Date.now();
         if (!Number.isSafeInteger(startedAt) || startedAt < 0) throw new Error('Invalid Core frontend input clock');
         emit({ event: eventPrefix + '_started', at_ms: startedAt, core_api: coreApi,
-            ...(startupMode ? { schema, started_at_ms: startedAt, trial_api: 1, lifecycle_fields: 96, input_fields: fieldCount }
+            ...(startupMode ? { schema, started_at_ms: startedAt, trial_api: trialApi, lifecycle_fields: 96, input_fields: fieldCount,
+                ...(clockStartupMode ? { clock_fields: 96, clock_owner_fields: 32, clock_workload_ms: 2000, clock_readiness_budget_ms: 10000,
+                    clock_writes: false, same_completed_core_owner_required: true } : {}) }
                 : { frontend_input_trial_api: 1 }),
-            fields: fieldCount, sample_interval_ms: 100, poll_interval_ms: 50, maximum_duration_ms: persistentMode ? 0 : 35000,
+            fields: fieldCount, sample_interval_ms: 100, poll_interval_ms: 50, maximum_duration_ms: persistentMode ? 0 : clockStartupMode ? 50000 : 35000,
             display_duration_ms: persistentMode ? 0 : 20000, ...(persistentMode ? { host_heartbeat_budget_ms: 1000, native_heartbeat_budget_ms: 500 } : {}), native_acquire_ms: 5000, native_player_control_writes: false });
         const generation = begin();
         if (!Number.isInteger(generation) || generation < 1 || generation > 0xffffffff || (!persistentMode && generation !== 1))
@@ -492,10 +501,81 @@ function runAdapter() {
         let terminal = false, cancelRequested = false, cancelAccepted = false, trialError = null;
         let lastAt = startedAt, nextSampleAt = startedAt, latest = null, samples = 0;
         let lifecycle = null, terminalInputCaptured = false, hostLeaseLost = false;
+        let clockState = null, clockOwnerState = null, clockSamples = 0, clockStageEmitted = false;
+        let terminalClockCaptured = false, terminalClockOwnerCaptured = false;
         const unsigned = state => state.every(value => Number.isInteger(value) && value >= 0 && value <= 0xffffffff);
         const pairPresent = (state, field) => state[field] !== 0 || state[field + 1] !== 0;
         const pairEqual = (state, first, second) => state[first] === state[second] && state[first + 1] === state[second + 1];
         const range = (first, end) => Array.from({ length: end - first }, (_, field) => first + field);
+        const clockRetired = state => {
+            if (state === null || state[1] !== 2 || state[5] !== 0 || state[6] !== 1) return false;
+            if (!state[8]) {
+                const permitted = [0, 1, 2, 3, 4, 6, 38, 86];
+                return [2, 3, 11, 14, 16].includes(state[4]) && state[38] === (state[4] === 11 ? 1 : 0) &&
+                    state.every((value, field) => permitted.includes(field) || value === 0);
+            }
+            if (state[47]) return state[44] === 1 &&
+                [18, 19, 20, 21, 24, 50, 51, 76, 77, 78, 79, 80, 81].every(field => state[field] === 0);
+            return state[43] === 1 && state[46] === 1 && state[23] === 1 &&
+                [18, 19, 20, 21, 24, 50, 51, 76, 77, 78, 79, 80, 81].every(field => state[field] === 0);
+        };
+        const clockWorkload = state => clockRetired(state) && state[4] === 1 &&
+            [8, 9, 10, 11, 12, 13, 46].every(field => state[field] === 1) && state[16] > 0 && state[17] > 0 &&
+            pairPresent(state, 14) && pairPresent(state, 54) && pairPresent(state, 60) &&
+            state[33] === state[34] && state[34] > 0 && state[83] > 0 && state[84] >= 2000 && state[84] <= 2250 &&
+            [7, 25, 26, 35, 37, 38, 39, 40, 41, 47, 62, 63, 64, 65, 66, 67, 68, 69, 74, 75, 85, 86, 87].every(field => !state[field]);
+        const clockOwnerValid = state => unsigned(state) && state[0] === 1 && state[1] === 2 && state[2] > 0 &&
+            [3, 4, 5, 6, 23].every(field => state[field] === 1) && state[7] > 0 &&
+            [8, 9, 10, 11, 12, 13, 14, 15, 18, 19, 20, 21, 22, ...range(24, 32)].every(field => state[field] === 0);
+        const clockOwnerPreflightRefused = state => unsigned(state) && state[0] === 1 && state[1] === 2 && state[2] > 0 &&
+            [3, 4, 5, 23].every(field => state[field] === 1) && state[7] > 0 && state[21] === 4 &&
+            [6, 8, 9, 10, 11, 12, 13, 14, 15, 18, 19, 20, 22, ...range(24, 32)].every(field => state[field] === 0);
+        const captureClockStage = at => {
+            const captured = captureClock();
+            if (captured !== 0 && captured !== 1) throw new Error('Completed Core clock capture status unavailable');
+            if (captured) {
+                const value = Array.from({ length: 96 }, (_, field) => readClock(field));
+                const booleans = [5, 6, 7, 8, 9, 10, 11, 12, 13, 18, 19, 20, 21, 22, 23, 24, 43, 44, 46, 47, 77, 79, 80, 81, 85, 86, 87];
+                if (!unsigned(value) || value[0] !== 1 || ![1, 2, 3].includes(value[1]) || !value[2] ||
+                    booleans.some(field => value[field] > 1) || value[4] > 16 || value[25] > 14 || value[26] > 14 ||
+                    value[85] || value.slice(88).some(Boolean) || value.slice(62, 70).some(Boolean) ||
+                    (value[5] && value[6]) || (value[1] === 1 && (value[4] || value[5] || value[6])) ||
+                    (value[1] === 3 && (!value[5] || value[6])))
+                    throw new Error('Invalid completed Core clock scalar state');
+                if (clockState && (value[2] < clockState[2] || value[3] < clockState[3] ||
+                    (pairPresent(clockState, 14) && (value[14] !== clockState[14] || value[15] !== clockState[15])) ||
+                    (clockState[16] && value[16] !== clockState[16]) || (clockState[17] && value[17] !== clockState[17])))
+                    throw new Error('Completed Core clock changed generation, owner or publication order');
+                if (clockState && value[2] === clockState[2]) {
+                    if (value.some((field, index) => field !== clockState[index]))
+                        throw new Error('Completed Core clock changed without a new sequence');
+                } else {
+                    if (clockState && clockState[1] === 2) throw new Error('Completed Core clock published after retirement');
+                    clockState = value; ++clockSamples;
+                    emit({ event: eventPrefix + '_clock_sample', at_ms: at, elapsed_ms: at - startedAt, clock_state: value });
+                }
+                if (terminal) terminalClockCaptured = true;
+            }
+            const ownerCaptured = captureClockOwner();
+            if (ownerCaptured !== 0 && ownerCaptured !== 1) throw new Error('Completed Core clock owner capture status unavailable');
+            if (!ownerCaptured) return;
+            const owner = Array.from({ length: 32 }, (_, field) => readClockOwner(field));
+            const preflightRefusal = clockState === null && clockOwnerPreflightRefused(owner);
+            if (!preflightRefusal && (!clockOwnerValid(owner) || !clockWorkload(clockState) || clockState[17] !== owner[2]))
+                throw new Error('Completed Core clock owner is not the retired read-only producer');
+            if (clockOwnerState && owner.some((value, field) => value !== clockOwnerState[field]))
+                throw new Error('Completed Core clock owner cache changed after its boundary');
+            clockOwnerState = owner;
+            if (terminal) terminalClockOwnerCaptured = true;
+            if (preflightRefusal) return;
+            if (!clockStageEmitted) {
+                clockStageEmitted = true;
+                emit({ event: eventPrefix + '_clock_stage', schema, trial_api: trialApi, core_api: coreApi, at_ms: at,
+                    elapsed_ms: at - startedAt, clock_state: clockState, clock_owner_state: clockOwnerState,
+                    clock_read_only_workload_verified: true, clock_writes: false, provider_core_retained: true,
+                    input_writes: false, rendering_started: false, network_active: false, remote_peds_created: false, full_mta_ready: false });
+            }
+        };
         const frontendClean = state => state.slice(96, 128).every(value => !value) ||
             (state[96] === 1 && state[97] === 4 && state[113] === 1 && [102, 112, 115, 116, 117].every(field => !state[field]));
         const consoleClean = state => state.slice(128, 160).every(value => !value) ||
@@ -520,6 +600,8 @@ function runAdapter() {
             const captured = capture();
             if (captured !== 0 && captured !== 1) throw new Error('Core frontend input capture status unavailable');
             if (!captured) return;
+            if (clockStartupMode && !clockStageEmitted)
+                throw new Error('Core frontend input appeared before its completed clock owner boundary');
             const state = Array.from({ length: fieldCount }, (_, field) => readInput(field));
             const booleans = [5, 6, 7, 8, 9, 10, 11, 19, 20, 21, 30, 31, 32, 37, 39, 43, 44, 45, 49, 50, 51, 52, 53, 54,
                 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 72, 73, 74, 75, 76, 77, 78, 79, 80, 86,
@@ -568,10 +650,17 @@ function runAdapter() {
         // native scopes even if CLEO pauses or this copied sample is rejected.
         while (true) {
             try {
+                // The clock may retain native peers. Its V2 owner must still
+                // receive retirement polls after script timing/input errors.
+                const earlyStatus = clockStartupMode ? poll() : null;
+                if (clockStartupMode) {
+                    if (earlyStatus !== 0 && earlyStatus !== 1) throw new Error('Core frontend input worker status unavailable');
+                    terminal = earlyStatus === 1;
+                }
                 const at = Date.now();
                 if (!Number.isSafeInteger(at) || at < lastAt) throw new Error('Invalid Core frontend input clock');
                 lastAt = at;
-                const status = poll();
+                const status = clockStartupMode ? earlyStatus : poll();
                 if (status !== 0 && status !== 1) throw new Error('Core frontend input worker status unavailable');
                 terminal = status === 1;
                 if (!terminal && chordHeld([17, 16, 35])) requestCancel(stopKey);
@@ -579,8 +668,11 @@ function runAdapter() {
                     hostLeaseLost = true;
                     emit({ event: eventPrefix + '_host_heartbeat_rejected', at_ms: at, generation });
                 }
-                if (!terminal && !persistentMode && at - startedAt >= 45000) requestCancel('worker_deadline');
-                if (at >= nextSampleAt || terminal) { captureSample(at); nextSampleAt = at + 100; }
+                if (!terminal && !persistentMode && at - startedAt >= (clockStartupMode ? 60000 : 45000)) requestCancel('worker_deadline');
+                if (at >= nextSampleAt || terminal) {
+                    if (clockStartupMode) captureClockStage(at);
+                    captureSample(at); nextSampleAt = at + 100;
+                }
                 if (terminal) break;
             } catch (error) {
                 trialError = trialError || String(error);
@@ -631,12 +723,24 @@ function runAdapter() {
             [81, 98, 130, 178].every(field => !latest[field] || latest[field] === lifecycle[2]);
         const startupWorkerRetired = unsigned(state) && state.slice(0, 8).every(value => !value) && lifecycle !== null &&
             state[8] === lifecycle[1] && state[9] <= 5 && state[10] === 0 && state[11] <= 3 && state[12] <= 3 &&
-            !(state[12] & ~state[11]) && state[13] === 1 && state[14] === 0 && state[16] <= 25 && state[17] <= 1 && !state[18];
+            !(state[12] & ~state[11]) && state[13] === 1 && state[14] === 0 && state[16] <= (clockStartupMode ? 27 : 25) && state[17] <= 1 && !state[18] &&
+            (!clockStartupMode || !state[16] || state[17] === 0);
+        const noClockPreflight = clockStartupMode && clockState === null && noViewAttempted &&
+            lifecycle[1] === 2 && lifecycle[33] === 2 && [35, 36, 37, 55].every(field => lifecycle[field] === 1) &&
+            lifecycle[38] === 0 && lifecycle[53] === 4 && lifecycle[54] === 0 && state[16] === 27 && state[17] === 0 &&
+            terminalClockOwnerCaptured && clockOwnerState !== null && clockOwnerPreflightRefused(clockOwnerState) &&
+            clockOwnerState.every((value, field) => value === lifecycle[32 + field]);
+        const noClockFailedBegin = clockStartupMode && clockState === null && noViewAttempted &&
+            lifecycle[1] === 5 && lifecycle[5] === 0 && lifecycle.slice(32, 64).every(value => !value) && state[16] === 21 && state[17] === 0;
+        const clockCleanup = !clockStartupMode || (terminalClockCaptured && clockRetired(clockState)) || noClockPreflight || noClockFailedBegin;
         const workerRetired = (state[16] === 0 && state[17] === 1) || (state[16] === 12 && state[17] === 0 && cancelAccepted);
+        const expectedBackendPinned = clockStartupMode
+            ? Number((clockState !== null && clockState[13] === 1) || (latest !== null && latest[57] === 1))
+            : latest === null ? 0 : latest[57];
         const cleanupPassed = startupMode
-            ? terminal && startupWorkerRetired && lifecycleStopped &&
-                ((terminalInputCaptured && latest !== null && lifecycleInputMatches && ownersClean(latest) && state[15] === latest[57]) ||
-                    (latest === null && noViewAttempted && state[15] === 0))
+            ? terminal && startupWorkerRetired && lifecycleStopped && clockCleanup &&
+                ((terminalInputCaptured && latest !== null && lifecycleInputMatches && ownersClean(latest) && state[15] === expectedBackendPinned) ||
+                    (latest === null && noViewAttempted && state[15] === expectedBackendPinned))
             : terminal && unsigned(state) && latest !== null && ownersClean(latest) &&
                 state[7] === 1 && state[13] === 1 && state[14] === 0 && state[15] === latest[57] &&
                 !(state[12] & ~state[11]) && workerRetired && !state[18];
@@ -649,8 +753,14 @@ function runAdapter() {
             lifecycle[33] === 2 && [35, 36, 37, 38, 54, 55].every(field => lifecycle[field] === 1) &&
             lifecycle[39] > lifecycle[7] && [40, 41, 42, 43, 44, 45, 46, 47, 53, 85].every(field => !lifecycle[field]) &&
             lifecycle[68] === 1 && lifecycle[86] === 1 && lifecycle[87] === 1 && state[9] === 0 && state[16] === 0 && state[17] === 1;
+        const clockLifecyclePassed = !clockStartupMode || (terminalClockCaptured && terminalClockOwnerCaptured && clockStageEmitted &&
+            clockWorkload(clockState) && clockOwnerValid(clockOwnerState) && lifecycle !== null &&
+            clockState[17] === clockOwnerState[2] && clockOwnerState[2] === lifecycle[2] &&
+            clockOwnerState[7] >= lifecycle[7] && lifecycle[39] > clockOwnerState[7] &&
+            (lifecycle[16] & ~clockOwnerState[16]) === 0 && (lifecycle[17] & ~clockOwnerState[17]) === 0 &&
+            clockOwnerState[16] === lifecycle[48] && clockOwnerState[17] === lifecycle[49]);
         const workerPassed = startupMode ? lifecyclePassed : expected.every((value, field) => state[field] === value);
-        const passed = !trialError && !cancelRequested && cleanupPassed && workerPassed && latest !== null &&
+        const passed = !trialError && !cancelRequested && cleanupPassed && workerPassed && clockLifecyclePassed && latest !== null &&
             latest[4] === 1 && [8, 9, 10, 11, 19, 20, 21, 30, 31, 32, 37, 55, 56, 58, 60, 61, 62, 63, 64, 65, 66, 86,
                 96, 106, 107, 108, 109, 113, 118, 124, 128, 131, 149, 152, 160, 161, 171, 176, 179, 180, 188, 189, 190, 192,
                 232, 236, 237, 238].every(field => latest[field] === 1) &&
@@ -664,8 +774,11 @@ function runAdapter() {
         const consoleCommands = latest !== null && latest[131] === 1 && latest[139] > 0 && latest[142] > 0 &&
             [1, 2].includes(latest[141]) && (latest[141] !== 1 || latest[146] > 0);
         emit({ event: eventPrefix + '_finished', at_ms: startupMode ? terminalAt : Date.now(), elapsed_ms: lastAt - startedAt, state,
-            ...(startupMode ? { schema, core_api: coreApi, trial_api: 1, started_at_ms: startedAt,
+            ...(startupMode ? { schema, core_api: coreApi, trial_api: trialApi, started_at_ms: startedAt,
                 lifecycle_values: lifecycle, input_values: latest, cancel_requested: cancelRequested,
+                ...(clockStartupMode ? { clock_state: clockState, clock_owner_state: clockOwnerState, clock_samples: clockSamples,
+                    completed_core_clock_verified: clockLifecyclePassed, clock_stage_emitted: clockStageEmitted,
+                    same_completed_core_owner_verified: lifecyclePassed && clockLifecyclePassed, clock_writes: false } : {}),
                 ...(persistentMode ? { generation, host_lease_lost: latest !== null && latest[269] === 3, host_heartbeat_rejected: hostLeaseLost } : {}),
                 completed_core_lifecycle_verified: lifecyclePassed && cleanupPassed } : {}),
             passed, cleanup_passed: cleanupPassed, stop_requested: cancelRequested, error: trialError, samples,

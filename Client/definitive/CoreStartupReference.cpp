@@ -132,11 +132,13 @@ namespace deonline
     bool CoreStartupReference::Start(const void* moduleAddress, bool configuredInput, bool configuredMovement, bool configuredRender,
                                      std::uint32_t configuredRenderRoute, std::uint32_t configuredRenderApi, bool configuredGuiStartup,
                                      bool configuredGuiSurface, bool configuredGuiFrontend, bool configuredGuiFrontendInput, bool configuredFrontendStartup,
-                                     bool configuredPersistentFrontend, bool configuredClock, bool configuredClockSet) noexcept
+                                     bool configuredPersistentFrontend, bool configuredClock, bool configuredClockSet,
+                                     bool configuredClockBeforeFrontend) noexcept
     {
         DWORD      expected = 0;
         const auto current = GetCurrentThreadId();
-        if ((static_cast<unsigned>(configuredMovement) + static_cast<unsigned>(configuredRender) + static_cast<unsigned>(configuredGuiStartup) +
+        if ((configuredClockBeforeFrontend && !configuredFrontendStartup) ||
+            (static_cast<unsigned>(configuredMovement) + static_cast<unsigned>(configuredRender) + static_cast<unsigned>(configuredGuiStartup) +
                  static_cast<unsigned>(configuredGuiSurface) + static_cast<unsigned>(configuredGuiFrontend) +
                  static_cast<unsigned>(configuredGuiFrontendInput) + static_cast<unsigned>(configuredFrontendStartup) +
                  static_cast<unsigned>(configuredPersistentFrontend) + static_cast<unsigned>(configuredClock) + static_cast<unsigned>(configuredClockSet) >
@@ -151,12 +153,18 @@ namespace deonline
         persistentFrontendRequested = configuredPersistentFrontend;
         clockRequested = configuredClock;
         clockSetRequested = configuredClockSet;
+        clockBeforeFrontendRequested = configuredClockBeforeFrontend;
         clockInitializationInvoked = false;
         clockAvailable.store(false);
         clockSequence.store(0);
         for (auto& field : publishedClock)
             field.store(0);
         capturedClock = {};
+        clockOwnerAvailable.store(false);
+        clockOwnerSequence.store(0);
+        for (auto& field : publishedClockOwner)
+            field.store(0);
+        capturedClockOwner = {};
         clockSetAvailable.store(false);
         clockSetSequence.store(0);
         for (auto& field : publishedClockSet)
@@ -298,7 +306,7 @@ namespace deonline
 
     bool CoreStartupReference::CopyClockSnapshot(DefinitiveClockReference::Snapshot& output) const noexcept
     {
-        if (!clockRequested || !clockAvailable.load())
+        if ((!clockRequested && !clockBeforeFrontendRequested) || !clockAvailable.load())
             return false;
         for (unsigned attempt = 0; attempt != 2; ++attempt)
         {
@@ -319,7 +327,7 @@ namespace deonline
 
     bool CoreStartupReference::CaptureClock() noexcept
     {
-        return ownerThread.load() == GetCurrentThreadId() && CopyClockSnapshot(capturedClock);
+        return ownerThread.load() == GetCurrentThreadId() && clockRequested && CopyClockSnapshot(capturedClock);
     }
 
     std::uint32_t CoreStartupReference::ReadClock(std::uint32_t field) const noexcept
@@ -329,7 +337,8 @@ namespace deonline
 
     void CoreStartupReference::PublishClock(const std::uint32_t* snapshot, std::uint32_t count)
     {
-        if (!inputOwner || !inputOwner->clockRequested || !snapshot || count != DefinitiveClockReference::FieldCount)
+        if (!inputOwner || (!inputOwner->clockRequested && !inputOwner->clockBeforeFrontendRequested) || !snapshot ||
+            count != DefinitiveClockReference::FieldCount)
             return;
         // A retained clock transaction can own a script peer's heap or cache
         // lock. Publication is value-only and takes neither kind of lock.
@@ -386,7 +395,7 @@ namespace deonline
 
     void CoreStartupReference::WaitForClockRetirement() noexcept
     {
-        if ((!clockRequested && !clockSetRequested) || !clockInitializationInvoked)
+        if ((!clockRequested && !clockSetRequested && !clockBeforeFrontendRequested) || !clockInitializationInvoked)
             return;
         clockQuarantined = true;
         const auto started = GetTickCount64();
@@ -395,6 +404,7 @@ namespace deonline
             DefinitiveClockReference::Snapshot    snapshot{};
             DefinitiveClockSetReference::Snapshot setSnapshot{};
             if ((clockRequested && CopyClockSnapshot(snapshot) && DefinitiveClockReference::Retired(snapshot)) ||
+                (clockBeforeFrontendRequested && CopyClockSnapshot(snapshot) && DefinitiveFrontendClockReference::RetiredForCompletedOwner(snapshot)) ||
                 (clockSetRequested && CopyClockSetSnapshot(setSnapshot) && DefinitiveClockSetReference::Retired(setSnapshot)))
             {
                 clockQuarantined = false;
@@ -563,6 +573,58 @@ namespace deonline
         // This owns a completed Core through the separate frontend lifecycle;
         // the historical constructor-rejection diagnostic remains untouched.
         return Start(moduleAddress, true, false, false, 0, 1, false, false, false, false, true);
+    }
+
+    bool CoreStartupReference::BeginGuiFrontendStartupReferenceV2(const void* moduleAddress) noexcept
+    {
+        // V1 remains the historical GUI-only owner. This explicit upgrade
+        // composes the existing read-only clock on the same completed Core.
+        return Start(moduleAddress, true, false, false, 0, 1, false, false, false, false, true, false, false, false, true);
+    }
+
+    bool CoreStartupReference::CaptureGuiFrontendStartupClockV2() noexcept
+    {
+        return ownerThread.load() == GetCurrentThreadId() && clockBeforeFrontendRequested && CopyClockSnapshot(capturedClock);
+    }
+
+    std::uint32_t CoreStartupReference::ReadGuiFrontendStartupClockV2(std::uint32_t field) const noexcept
+    {
+        return ownerThread.load() == GetCurrentThreadId() && clockBeforeFrontendRequested && field < capturedClock.size() ? capturedClock[field] : 0;
+    }
+
+    void CoreStartupReference::PublishClockOwner(const DefinitiveFrontendStartup::Snapshot& report) noexcept
+    {
+        clockOwnerSequence.fetch_add(1);
+        for (std::size_t index = 0; index != report.size(); ++index)
+            publishedClockOwner[index].store(report[index]);
+        clockOwnerAvailable.store(true);
+        clockOwnerSequence.fetch_add(1);
+    }
+
+    bool CoreStartupReference::CaptureGuiFrontendStartupClockOwnerV2() noexcept
+    {
+        if (ownerThread.load() != GetCurrentThreadId() || !clockBeforeFrontendRequested || !clockOwnerAvailable.load())
+            return false;
+        for (unsigned attempt = 0; attempt != 2; ++attempt)
+        {
+            const auto before = clockOwnerSequence.load();
+            if (before & 1)
+                continue;
+            DefinitiveFrontendStartup::Snapshot next{};
+            for (std::size_t index = 0; index != next.size(); ++index)
+                next[index] = publishedClockOwner[index].load();
+            if (clockOwnerSequence.load() == before)
+            {
+                capturedClockOwner = next;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    std::uint32_t CoreStartupReference::ReadGuiFrontendStartupClockOwnerV2(std::uint32_t field) const noexcept
+    {
+        return ownerThread.load() == GetCurrentThreadId() && clockBeforeFrontendRequested && field < capturedClockOwner.size() ? capturedClockOwner[field] : 0;
     }
 
     void CoreStartupReference::PublishFrontendStartup(const FrontendStartupReport::Snapshot& report) noexcept
@@ -903,6 +965,8 @@ namespace deonline
         const auto begin = reinterpret_cast<Startup::Begin>(GetProcAddress(core, "MTA_BeginDEFrontendStartup"));
         const auto read = reinterpret_cast<Startup::Read>(GetProcAddress(core, "MTA_ReadDEFrontendStartup"));
         const auto view = reinterpret_cast<Startup::RunView>(GetProcAddress(core, "MTA_RunDEFrontendStartupView"));
+        const auto clockVersion = reinterpret_cast<Version>(GetProcAddress(core, "MTA_DEFrontendClockReferenceApiVersion"));
+        const auto clockRun = reinterpret_cast<DefinitiveFrontendClockReference::Run>(GetProcAddress(core, "MTA_RunDEFrontendClockReference"));
         const auto persistentVersion = reinterpret_cast<Version>(GetProcAddress(core, "MTA_DEPersistentFrontendApiVersion"));
         const auto persistentView = reinterpret_cast<DefinitivePersistentFrontend::Run>(GetProcAddress(core, "MTA_RunDEPersistentFrontendV1"));
         const auto shutdown = reinterpret_cast<Startup::Shutdown>(GetProcAddress(core, "MTA_ShutdownDEFrontendStartup"));
@@ -913,6 +977,8 @@ namespace deonline
         FrontendStartupReport::Snapshot report{};
         Startup::Snapshot               initial{}, after{}, stopped{};
         bool                            initialValid = false, afterValid = false, viewCalled = false;
+        bool                            clockStageSucceeded = !clockBeforeFrontendRequested;
+        std::uint64_t                   clockOwnerCapabilities = 0;
         Status                          viewStatus = Status::Stopped;
         const auto                      error = [&](std::uint32_t code, bool ownershipFailure = false)
         {
@@ -951,6 +1017,11 @@ namespace deonline
                 error(20);
                 return;
             }
+            if (clockBeforeFrontendRequested && (!clockVersion || !clockRun || clockVersion() != DefinitiveFrontendClockReference::ApiVersion))
+            {
+                error(26);
+                return;
+            }
             setMta(mtaDirectory.c_str(), mtaDirectory.size());
             setGta(gtaDirectory.c_str(), gtaDirectory.size());
             if (CheckCancellation())
@@ -980,40 +1051,138 @@ namespace deonline
                 else if (!CheckCancellation())
                 {
                     inputOwner = this;
-                    viewCalled = true;
-                    try
+                    bool admitView = true;
+                    if (clockBeforeFrontendRequested)
                     {
-                        if (persistentFrontendRequested)
+                        namespace Clock = DefinitiveClockReference;
+                        constexpr std::uint32_t clockDurationMs = 2000;
+                        Status                  clockStatus = Status::Busy;
+                        bool                    clockThrew = false;
+                        clockInitializationInvoked = true;
+                        try
                         {
-                            DefinitivePersistentFrontend::RequestV1 request;
-                            request.generation = persistentHostLease.Generation();
-                            request.cancelled = InputCancelled;
-                            request.publish = PublishPersistentFrontend;
-                            request.heartbeat = PersistentHostFresh;
-                            viewStatus = persistentView(handle, &request);
-                            persistentHostLease.Revoke();
+                            clockStatus = clockRun(handle, clockDurationMs, InputCancelled, PublishClock);
+                        }
+                        catch (...)
+                        {
+                            // A bad clock return can retain a peer inside its
+                            // allocator. Keep all enclosing path objects and
+                            // TLS alive before attempting any owner read/unwind.
+                            WaitForClockRetirement();
+                            clockThrew = true;
+                        }
+                        Clock::Snapshot   clockSnapshot{};
+                        const bool        published = CopyClockSnapshot(clockSnapshot);
+                        Startup::Snapshot clockOwner{};
+                        bool              clockOwnerValid = false;
+                        if (!published && clockStatus == Status::Failed && !clockThrew)
+                        {
+                            // The completed Core rejects wrong-image Bind
+                            // before native Begin or callbacks. Qualify only
+                            // that narrow refusal through its actual owner;
+                            // missing evidence after Busy/throw never permits it.
+                            clockOwnerValid = read(handle, clockOwner.data(), Startup::FieldCount) == Status::Ok && valid(clockOwner) &&
+                                              clockOwner[Startup::Phase] == 2 && clockOwner[Startup::CoreRetained] == 1 &&
+                                              clockOwner[Startup::BackendStarted] == 1 && clockOwner[Startup::BackendStartAttempted] == 1 &&
+                                              clockOwner[Startup::Pulses] == initial[Startup::Pulses] && !clockOwner[Startup::ExactImageBound] &&
+                                              noFrontend(clockOwner) && !clockOwner[Startup::CleanupPending] && !clockOwner[Startup::CleanupComplete] &&
+                                              !clockOwner[Startup::ReleaseFault] && !clockOwner[Startup::ViewRuns] &&
+                                              clockOwner[Startup::LastViewCleanupComplete] == 1 &&
+                                              clockOwner[Startup::LastFailure] == static_cast<std::uint32_t>(Startup::Failure::InputBind) &&
+                                              clockOwner[Startup::CapabilitiesLow] == initial[Startup::CapabilitiesLow] &&
+                                              clockOwner[Startup::CapabilitiesHigh] == initial[Startup::CapabilitiesHigh];
+                            if (!clockOwnerValid)
+                                WaitForClockRetirement();
+                            // No clock scope entered, so there is no native
+                            // report to synthesize and no adapter-stop claim.
+                            clockInitializationInvoked = false;
                         }
                         else
-                            viewStatus = view(handle, DefinitiveGuiFrontendInputReference::MaximumDurationMs, InputCancelled, PublishInput);
-                        values[9] = static_cast<std::uint32_t>(viewStatus);
+                        {
+                            // Any publication must independently prove this
+                            // clock scope retired before CoreRead or GUI locks.
+                            do
+                            {
+                                WaitForClockRetirement();
+                            } while (!CopyClockSnapshot(clockSnapshot) || !DefinitiveFrontendClockReference::RetiredForCompletedOwner(clockSnapshot));
+                            clockOwnerValid = read(handle, clockOwner.data(), Startup::FieldCount) == Status::Ok && valid(clockOwner);
+                            clockStageSucceeded =
+                                !clockThrew && clockStatus == Status::Ok && DefinitiveFrontendClockReference::WorkloadSucceeded(clockSnapshot) &&
+                                clockSnapshot[Clock::WorkloadElapsedMs] >= clockDurationMs &&
+                                clockSnapshot[Clock::ProducerThread] == initial[Startup::OwnerThread] && clockOwnerValid && clockOwner[Startup::Phase] == 2 &&
+                                clockOwner[Startup::CoreRetained] == 1 && clockOwner[Startup::BackendStartAttempted] == 1 &&
+                                clockOwner[Startup::BackendStarted] == 1 && clockOwner[Startup::ExactImageBound] == 1 &&
+                                clockOwner[Startup::Pulses] > initial[Startup::Pulses] && noFrontend(clockOwner) && !clockOwner[Startup::CleanupPending] &&
+                                !clockOwner[Startup::CleanupComplete] && !clockOwner[Startup::ReleaseFault] && !clockOwner[Startup::ViewRuns] &&
+                                clockOwner[Startup::LastViewCleanupComplete] == 1 && !clockOwner[Startup::LastFailure] &&
+                                // Bind legitimately adds only its build-pinned native-pad
+                                // capability to the completed backend's initial services.
+                                clockOwner[Startup::CapabilitiesLow] ==
+                                    (initial[Startup::CapabilitiesLow] | static_cast<std::uint32_t>(mta::game_de::NativePadBindingCapabilities)) &&
+                                clockOwner[Startup::CapabilitiesHigh] ==
+                                    (initial[Startup::CapabilitiesHigh] | static_cast<std::uint32_t>(mta::game_de::NativePadBindingCapabilities >> 32));
+                        }
+                        PublishClockOwner(clockOwner);
+                        if (clockStageSucceeded)
+                            clockOwnerCapabilities = static_cast<std::uint64_t>(clockOwner[Startup::CapabilitiesLow]) |
+                                                     (static_cast<std::uint64_t>(clockOwner[Startup::CapabilitiesHigh]) << 32);
+                        // A retired cancelled scope is not a failed workload.
+                        // Preserve the existing worker cancellation code before
+                        // recording the separate clock-stage failure outcome.
+                        CheckCancellation();
+                        if (!clockStageSucceeded)
+                        {
+                            error(27);
+                            admitView = false;
+                        }
+                        if (!admitView || CheckCancellation())
+                        {
+                            after = clockOwner;
+                            afterValid = clockOwnerValid;
+                            std::copy(after.begin(), after.end(), report.begin() + FrontendStartupReport::AfterView);
+                            PublishFrontendStartup(report);
+                            admitView = false;
+                        }
                     }
-                    catch (...)
+                    if (admitView)
                     {
-                        error(23);
-                    }
-                    afterValid = capture(after, FrontendStartupReport::AfterView);
-                    if (!afterValid)
-                        error(22);
-                    if (viewStatus != Status::Ok && !(persistentFrontendRequested && viewStatus == Status::Stopped))
-                    {
-                        if (!CheckCancellation())
+                        viewCalled = true;
+                        try
+                        {
+                            if (persistentFrontendRequested)
+                            {
+                                DefinitivePersistentFrontend::RequestV1 request;
+                                request.generation = persistentHostLease.Generation();
+                                request.cancelled = InputCancelled;
+                                request.publish = PublishPersistentFrontend;
+                                request.heartbeat = PersistentHostFresh;
+                                viewStatus = persistentView(handle, &request);
+                                persistentHostLease.Revoke();
+                            }
+                            else
+                                viewStatus = view(handle, DefinitiveGuiFrontendInputReference::MaximumDurationMs, InputCancelled, PublishInput);
+                            values[9] = static_cast<std::uint32_t>(viewStatus);
+                        }
+                        catch (...)
+                        {
                             error(23);
+                        }
+                        afterValid = capture(after, FrontendStartupReport::AfterView);
+                        if (!afterValid)
+                            error(22);
+                        if (viewStatus != Status::Ok && !(persistentFrontendRequested && viewStatus == Status::Stopped))
+                        {
+                            if (!CheckCancellation())
+                                error(23);
+                        }
                     }
                 }
             }
         }
         catch (...)
         {
+            if (clockBeforeFrontendRequested && clockInitializationInvoked)
+                WaitForClockRetirement();
             error(handle ? 22u : 21u);
         }
 
@@ -1126,10 +1295,15 @@ namespace deonline
                 frontendQuarantined = true;
                 return;
             }
-            const bool retainedAfterView = afterValid && after[Startup::Phase] == 2 && after[Startup::CoreRetained] == 1 &&
-                                           after[Startup::BackendStarted] == 1 && after[Startup::ExactImageBound] == 1 && noFrontend(after) &&
-                                           !after[Startup::CleanupPending] && !after[Startup::CleanupComplete] && !after[Startup::ReleaseFault] &&
-                                           after[Startup::ViewRuns] == 1 && after[Startup::LastViewCleanupComplete] == 1;
+            // The GUI borrows the same completed backend; it cannot silently
+            // replace the capability set proven at clock retirement.
+            const bool retainedAfterView =
+                afterValid && after[Startup::Phase] == 2 && after[Startup::CoreRetained] == 1 && after[Startup::BackendStarted] == 1 &&
+                after[Startup::ExactImageBound] == 1 && noFrontend(after) && !after[Startup::CleanupPending] && !after[Startup::CleanupComplete] &&
+                !after[Startup::ReleaseFault] && after[Startup::ViewRuns] == 1 && after[Startup::LastViewCleanupComplete] == 1 &&
+                (!clockBeforeFrontendRequested ||
+                 (clockStageSucceeded && (static_cast<std::uint64_t>(after[Startup::CapabilitiesLow]) |
+                                          (static_cast<std::uint64_t>(after[Startup::CapabilitiesHigh]) << 32)) == clockOwnerCapabilities));
             if (viewStatus == Status::Ok && (!workload || !retainedAfterView))
                 error(23);
             Status releaseStatus = Status::Busy;
@@ -1165,7 +1339,7 @@ namespace deonline
             }
             handle = nullptr;
             CheckCancellation();
-            if (!values[16] && viewStatus == Status::Ok && workload && retainedAfterView)
+            if (!values[16] && clockStageSucceeded && viewStatus == Status::Ok && workload && retainedAfterView)
                 values[17] = 1;
         }
         catch (...)
@@ -1549,7 +1723,7 @@ namespace deonline
         // Initialize's numeric/exception result is not evidence that native
         // callbacks, admission or suspended peers have retired. Keep both Core
         // and this live publication context until an independent proof arrives.
-        if (core && (clockRequested || clockSetRequested) && clockInitializationInvoked)
+        if (core && (clockRequested || clockSetRequested || clockBeforeFrontendRequested) && clockInitializationInvoked)
             WaitForClockRetirement();
         inputOwner = nullptr;
         // Cancellation never interrupts the loader or unloads Core from a
@@ -1565,8 +1739,10 @@ namespace deonline
         if ((values[12] & ~values[11]) && !values[16])
             values[16] = 10;
         const auto expectedBackend =
-            clockSetRequested && clockSetAvailable.load() ? publishedClockSet[DefinitiveClockSetReference::BackendPinnedExpected].load()
-            : clockRequested && clockAvailable.load()     ? publishedClock[DefinitiveClockReference::BackendPinnedExpected].load()
+            clockBeforeFrontendRequested ? ((clockAvailable.load() ? publishedClock[DefinitiveClockReference::BackendPinnedExpected].load() : 0u) |
+                                            (guiFrontendInputAvailable ? publishedGuiFrontendInput[DefinitiveGuiStartupReference::BackendPinnedExpected] : 0u))
+            : clockSetRequested && clockSetAvailable.load() ? publishedClockSet[DefinitiveClockSetReference::BackendPinnedExpected].load()
+            : clockRequested && clockAvailable.load()       ? publishedClock[DefinitiveClockReference::BackendPinnedExpected].load()
             : persistentFrontendRequested && persistentFrontendAvailable.load()
                 ? publishedPersistentFrontend[DefinitiveGuiStartupReference::BackendPinnedExpected].load()
             : guiFrontendInputRequested && guiFrontendInputAvailable ? publishedGuiFrontendInput[DefinitiveGuiStartupReference::BackendPinnedExpected]

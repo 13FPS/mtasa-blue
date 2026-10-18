@@ -226,13 +226,22 @@ $bindConfigPath = Join-Path $PSScriptRoot 'coreconfig.xml'
 if ($MtaCoreGuiFrontendStartupReference) {
     $bridgeExports = Get-Amd64Exports $bridgePath
     foreach ($name in @('DE_CoreGuiFrontendStartupApiVersion', 'DE_CoreGuiFrontendStartupBegin', 'DE_CoreGuiFrontendStartupCapture', 'DE_CoreGuiFrontendStartupRead',
-        'DE_CoreGuiFrontendInputCapture', 'DE_CoreGuiFrontendInputRead', 'DE_CoreStartupPoll', 'DE_CoreStartupCancel', 'DE_CoreStartupRead')) {
+        'DE_CoreGuiFrontendInputCapture', 'DE_CoreGuiFrontendInputRead', 'DE_CoreStartupPoll', 'DE_CoreStartupCancel', 'DE_CoreStartupRead',
+        'DE_CoreGuiFrontendStartupApiVersionV2','DE_CoreGuiFrontendStartupBeginV2','DE_CoreGuiFrontendStartupCaptureClockV2',
+        'DE_CoreGuiFrontendStartupReadClockV2','DE_CoreGuiFrontendStartupCaptureClockOwnerV2','DE_CoreGuiFrontendStartupReadClockOwnerV2')) {
         if (-not $bridgeExports.Contains($name)) { throw "Required completed frontend bridge export missing: $name" }
     }
     $coreExports = Get-Amd64Exports $corePath
     foreach ($name in @('MTA_DEFrontendStartupApiVersion', 'MTA_BeginDEFrontendStartup', 'MTA_PulseDEFrontendStartup', 'MTA_BindDEFrontendStartupInput',
-        'MTA_ReadDEFrontendStartup', 'MTA_ShutdownDEFrontendStartup', 'MTA_ReleaseDEFrontendStartup', 'MTA_RunDEFrontendStartupView')) {
+        'MTA_ReadDEFrontendStartup', 'MTA_ShutdownDEFrontendStartup', 'MTA_ReleaseDEFrontendStartup', 'MTA_RunDEFrontendStartupView',
+        'MTA_DEFrontendClockReferenceApiVersion','MTA_RunDEFrontendClockReference')) {
         if (-not $coreExports.Contains($name)) { throw "Required completed frontend Core export missing: $name" }
+    }
+}
+if ($MtaCoreGuiFrontendStartupReference) {
+    $clockExports = Get-Amd64Exports $gameDePath
+    foreach ($name in @('BeginGameClockServiceV1','SubmitGameClockCommandV1','RenewGameClockServiceV1','ReadGameClockServiceV1','EndGameClockServiceV1')) {
+        if (-not $clockExports.Contains($name)) { throw "Completed Core clock provider lacks export: $name" }
     }
 }
 if ($MtaCoreClockReference -or $MtaCoreClockSetReference) {

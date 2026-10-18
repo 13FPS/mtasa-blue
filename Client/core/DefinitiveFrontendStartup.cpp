@@ -6,6 +6,7 @@
 
 #include "StdInc.h"
 #include "DefinitiveFrontendStartup.h"
+#include "DefinitiveFrontendClockReference.h"
 #include "DefinitivePersistentFrontend.h"
 
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
@@ -17,6 +18,8 @@ namespace DefinitiveFrontendStartup
         const DWORD owner = GetCurrentThreadId();
         CCore*      core = nullptr;
         Snapshot    state{};
+        bool        clockPending = false;
+        bool        lastClockRetired = true;
 
         Controller()
         {
@@ -69,6 +72,8 @@ namespace DefinitiveFrontendStartup
 
         Status Pulse() noexcept
         {
+            if (clockPending || !lastClockRetired)
+                return Status::Busy;
             if (!core || !core->m_DefinitiveAdapter.IsStarted())
                 return Status::Failed;
             try
@@ -91,6 +96,8 @@ namespace DefinitiveFrontendStartup
 
         Status Bind() noexcept
         {
+            if (clockPending || !lastClockRetired)
+                return Status::Busy;
             if (state[Phase] != 2)
                 return state[Phase] == 5 ? Status::Failed : Status::Stopped;
             if (state[ExactImageBound])
@@ -116,6 +123,7 @@ namespace DefinitiveFrontendStartup
         Snapshot Read() const
         {
             auto result = state;
+            result[CleanupPending] = result[CleanupPending] || clockPending || !lastClockRetired;
             result[CoreRetained] = core != nullptr;
             if (core)
             {
@@ -145,7 +153,7 @@ namespace DefinitiveFrontendStartup
         {
             // Even a stopped GUI controller still holds a borrowed Core until
             // its Release. Its opaque handle must never become a dangling view.
-            if ((core && core->m_frontendResources) || !state[LastViewCleanupComplete])
+            if (clockPending || !lastClockRetired || (core && core->m_frontendResources) || !state[LastViewCleanupComplete])
                 return Status::Busy;
             if (state[Phase] == 4)
                 return Status::Ok;
@@ -183,6 +191,8 @@ namespace DefinitiveFrontendStartup
 
         Status RunView(std::uint32_t durationMs, DefinitiveInputReference::CancelCallback cancel, DefinitiveInputReference::PublishCallback publish)
         {
+            if (clockPending || !lastClockRetired)
+                return Status::Busy;
             if (state[Phase] != 2)
                 return state[Phase] == 5 ? Status::Failed : Status::Stopped;
             if (core->m_frontendResources)
@@ -219,6 +229,8 @@ namespace DefinitiveFrontendStartup
 
         Status RunPersistent(const DefinitivePersistentFrontend::RequestV1& request)
         {
+            if (clockPending || !lastClockRetired)
+                return Status::Busy;
             if (state[Phase] != 2)
                 return state[Phase] == 5 ? Status::Failed : Status::Stopped;
             if (core->m_frontendResources)
@@ -241,12 +253,80 @@ namespace DefinitiveFrontendStartup
             }
             return status;
         }
+
+        Status CheckClockAdmission() const noexcept
+        {
+            if (clockPending || !lastClockRetired)
+                return Status::Busy;
+            if (state[Phase] != 2)
+                return state[Phase] == 5 ? Status::Failed : Status::Stopped;
+            if (!core || !core->m_DefinitiveAdapter.IsStarted())
+                return Status::Failed;
+            // A stopped frontend still borrows Core until its Release. Clock
+            // ownership cannot overlap that GUI owner or an unretired view.
+            return core->m_frontendResources || !state[LastViewCleanupComplete] ? Status::Busy : Status::Ok;
+        }
+
+        Status PrepareClock() noexcept
+        {
+            // Bind/Pulse can invoke a host callback before native Begin. Close
+            // the separate frontend API first, while the startup lock pins Core.
+            core->m_frontendStartupAccepting = false;
+            auto prepared = Bind();
+            if (prepared == Status::Ok)
+                prepared = Pulse();
+            if (prepared != Status::Ok && lastClockRetired && state[Phase] == 2)
+                core->m_frontendStartupAccepting = true;
+            return prepared;
+        }
+
+        void EnterClock() noexcept
+        {
+            clockPending = true;
+            lastClockRetired = false;
+        }
+
+        void ClockRetired() noexcept
+        {
+            // Only the existing lifecycle's qualified native retirement can
+            // reopen borrowing. A nonretired return retains Core, adapter and
+            // its native callback context, without poisoning GUI view state.
+            lastClockRetired = true;
+            clockPending = false;
+            // A refused Begin may have reset the adapter's native binding.
+            // Keep the next same-Core view's Bind admission tied to the actual
+            // backend rather than a stale successful pre-clock preparation.
+            state[ExactImageBound] =
+                (core->m_DefinitiveAdapter.GetCapabilities() & mta::game_de::NativePadBindingCapabilities) == mta::game_de::NativePadBindingCapabilities;
+            core->m_frontendStartupAccepting = state[Phase] == 2;
+        }
+
+        Status RunClock(const DefinitiveFrontendClockReference::Request& request) noexcept
+        {
+            DefinitiveInputReference::Request nativeRequest;
+            nativeRequest.durationMs = request.durationMs;
+            nativeRequest.cancelled = request.cancelled;
+            nativeRequest.publish = request.publish;
+            nativeRequest.clockReference = true;
+            // Reuse Read96 unchanged. Preparation completes all adapter work
+            // before native Begin; the entered scope uses fixed values only.
+            return DefinitiveFrontendClockReference::RunTransaction(
+                *this, request, [&]() noexcept { return DefinitiveClockReference::Run(core->m_DefinitiveAdapter, nativeRequest); });
+        }
     };
 
     namespace
     {
-        SRWLOCK     startupLock = SRWLOCK_INIT;
-        Controller* activeStartup = nullptr;
+        SRWLOCK           startupLock = SRWLOCK_INIT;
+        Controller*       activeStartup = nullptr;
+        thread_local bool frontendBorrowAuthorized = false;
+
+        struct FrontendBorrowAuthorization
+        {
+            const bool previous = frontendBorrowAuthorized;
+            FrontendBorrowAuthorization() noexcept { frontendBorrowAuthorized = true; }
+            ~FrontendBorrowAuthorization() { frontendBorrowAuthorized = previous; }
+        };
 
         struct Operation
         {
@@ -265,6 +345,25 @@ namespace DefinitiveFrontendStartup
                 return activeStartup->owner == GetCurrentThreadId() ? Status::Ok : Status::WrongThread;
             }
         };
+    }
+
+    bool AcquireFrontendBorrow(bool& ownsLock) noexcept
+    {
+        ownsLock = false;
+        // RunView/RunPersistent alone authorize a synchronous borrow while
+        // already holding startupLock. A clock callback gets no such bypass.
+        if (frontendBorrowAuthorized)
+            return true;
+        if (!TryAcquireSRWLockExclusive(&startupLock))
+            return false;
+        ownsLock = true;
+        return true;
+    }
+
+    void ReleaseFrontendBorrow(bool ownsLock) noexcept
+    {
+        if (ownsLock)
+            ReleaseSRWLockExclusive(&startupLock);
     }
 
     void* BeginOwner() noexcept
@@ -355,6 +454,7 @@ namespace DefinitiveFrontendStartup
             return Status::InvalidArgument;
         try
         {
+            FrontendBorrowAuthorization borrow;
             return activeStartup->RunView(durationMs, cancel, publish);
         }
         catch (...)
@@ -375,6 +475,7 @@ namespace DefinitiveFrontendStartup
             return Status::InvalidArgument;
         try
         {
+            FrontendBorrowAuthorization borrow;
             return activeStartup->RunPersistent(*request);
         }
         catch (...)
@@ -382,6 +483,25 @@ namespace DefinitiveFrontendStartup
             activeStartup->RetainFailedView();
             return Status::Failed;
         }
+    }
+
+    Status RunClockOwner(void* handle, std::uint32_t durationMs, DefinitiveInputReference::CancelCallback cancel,
+                         DefinitiveInputReference::PublishCallback publish) noexcept
+    {
+        Operation  operation;
+        const auto status = operation.Validate(handle);
+        if (status != Status::Ok)
+            return status;
+        return activeStartup->RunClock({durationMs, cancel, publish});
+    }
+}
+
+namespace DefinitiveFrontendClockReference
+{
+    Status RunOwner(void* handle, std::uint32_t durationMs, DefinitiveInputReference::CancelCallback cancel,
+                    DefinitiveInputReference::PublishCallback publish) noexcept
+    {
+        return DefinitiveFrontendStartup::RunClockOwner(handle, durationMs, cancel, publish);
     }
 }
 

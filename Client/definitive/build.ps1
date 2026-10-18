@@ -51,7 +51,9 @@ try {
         'DE_CorePersistentFrontendApiVersion', 'DE_CorePersistentFrontendBegin', 'DE_CorePersistentFrontendHeartbeat', 'DE_CorePersistentFrontendCapture',
         'DE_CorePersistentFrontendRead', 'DE_CorePersistentFrontendCaptureLifecycle', 'DE_CorePersistentFrontendReadLifecycle',
         'DE_CoreClockApiVersion','DE_CoreClockBegin','DE_CoreClockCapture','DE_CoreClockRead',
-        'DE_CoreClockSetApiVersion','DE_CoreClockSetBegin','DE_CoreClockSetCapture','DE_CoreClockSetRead')) {
+        'DE_CoreClockSetApiVersion','DE_CoreClockSetBegin','DE_CoreClockSetCapture','DE_CoreClockSetRead',
+        'DE_CoreGuiFrontendStartupApiVersionV2','DE_CoreGuiFrontendStartupBeginV2','DE_CoreGuiFrontendStartupCaptureClockV2',
+        'DE_CoreGuiFrontendStartupReadClockV2','DE_CoreGuiFrontendStartupCaptureClockOwnerV2','DE_CoreGuiFrontendStartupReadClockOwnerV2')) {
         if (-not @($bridgeExports | Where-Object { $_ -match ('\s' + [regex]::Escape($name) + '\s*$') }).Count) { throw "Client bridge export missing: $name" }
     }
     & $compilerPath @commonArguments (Join-Path $repositoryRoot 'Tests/definitive/ProtocolTests.cpp') /Fede_protocol_tests.exe

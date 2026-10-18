@@ -27,7 +27,8 @@ function Assert-NoLinks([string]$Path) {
     }
 }
 $sourceNames=@('Tests/definitive/CoreFrontendStartupHostTests.cpp','Tests/definitive/ObservedFrontendGui.h','Tests/definitive/test_core_frontend_startup_host.ps1','Client/core/DefinitiveFrontend.h','Client/core/DefinitiveFrontendStartup.h',
-    'Client/core/DefinitivePersistentFrontend.h','Client/core/DefinitiveFrontendConsole.h','Client/core/DefinitiveFrontendBindings.h','Client/core/DefinitiveFrontendStartup.cpp','Client/core/Core.cpp','Client/core/CGameAdapterModule.cpp','Client/core/CGameAdapterModule.h',
+    'Client/core/DefinitivePersistentFrontend.h','Client/core/DefinitiveFrontendConsole.h','Client/core/DefinitiveFrontendBindings.h','Client/core/DefinitiveFrontendClockReference.h','Client/core/DefinitiveClockReference.h','Client/core/DefinitiveClockReference.cpp',
+    'Client/sdk/game/CGameClockService.h','Client/core/DefinitiveFrontendStartup.cpp','Client/core/Core.cpp','Client/core/CGameAdapterModule.cpp','Client/core/CGameAdapterModule.h',
     'Client/core/CCore.cpp','Client/core/CCore.h','Client/core/CGUI.cpp','Client/core/CGUI.h','Client/core/CMainMenu.cpp','Client/core/CMainMenu.h',
     'Client/core/CSettings.cpp','Client/core/CSettings.h','Client/sdk/core/CKeyBindsInterface.h','vendor/ksignals/ksignals.h',
     'Client/core/CCredits.cpp','Client/core/CQuestionBox.cpp','Client/core/CNewsBrowser.cpp','Client/core/CLocalization.cpp','Client/core/CClientVariables.cpp',
@@ -175,9 +176,25 @@ try {
         $count=0
         if ($text -match 'Passed (\d+) actual MTA frontend startup host checks') { $count=[int]$Matches[1];$testCount+=$count }
         $success=$exit -eq 0 -and $count -gt 0 -and -not $runTimedOut
+        $resultPath=Join-Path $assetRoot 'frontend-startup-result.json'
+        $hostResult=$null
+        if ($success) {
+            # Bind the new boundary assertions to the actual host's value
+            # report, rather than labelling any successful GUI run clock proof.
+            $hostResult=Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json -DateKind String
+            if ($hostResult.success -ne $true -or $hostResult.checks -ne $count -or
+                $hostResult.completedOwnerClockApiVersion -ne 1 -or $hostResult.completedOwnerClockFields -ne 96 -or
+                $hostResult.completedOwnerClockAdmissionVerified -ne $true -or $hostResult.completedOwnerClockNativeWorkloadVerified -ne $false -or
+                $hostResult.completedOwnerClockPublishedSamples -ne 0 -or
+                $hostResult.completedOwnerClockWrongImageRefusalVerified -ne ($case -ne 'backend-failure') -or
+                @($hostResult.startupTerminal).Count -ne 32 -or @($hostResult.frontendTerminal).Count -ne 32) {
+                throw "Actual host clock/unchanged frontend report differs: $case"
+            }
+        }
         if (-not $success) { $testExit=1 }
         $runs+=@([ordered]@{case=$case;success=$success;exitCode=$exit;checks=$count;timedOut=$runTimedOut;directory=$caseRoot;assetRoot=$assetRoot;
-            stdout=$stdout;stdoutSha256=(Sha $stdout);stderr=$stderr;stderrSha256=(Sha $stderr)})
+            stdout=$stdout;stdoutSha256=(Sha $stdout);stderr=$stderr;stderrSha256=(Sha $stderr);
+            actualHostResult=$hostResult;actualHostResultPath=$(if($hostResult){$resultPath}else{$null});actualHostResultSha256=$(if($hostResult){Sha $resultPath}else{$null})})
     }
 } catch {
     $failure=$_.Exception.ToString()
@@ -200,10 +217,13 @@ try {
         assets=$assets;assetsUnchanged=$assetsUnchanged;windowsFonts=$windowsFonts;systemDlls=$systemDlls;compiler=$compilerRecord;platformUnchanged=$platformUnchanged;executionArtifacts=$executionArtifacts;
         targetFormat=87;width=1280;height=1024;coreFrontendApi=1;frontendFields=32;frontendStartupApi=1;frontendStartupFields=32;persistentFrontendApi=1;persistentFrontendFields=288;
         persistentRequestAdmissionVerified=$success;persistentWrongImageRefusalVerified=$success;persistentForeignThreadRefusalVerified=$success;persistentNativeLeaseStarted=$false;persistentVisibleRenderingVerified=$false;actualCompletedCoreBackendAndBorrowedFrontend=$success;actualMtaMenuCreditsAndConsoleOnOwnedWarp=$success;
+        completedOwnerClockApiVersion=1;completedOwnerClockFields=96;completedOwnerClockArgumentAdmissionVerified=$success;completedOwnerClockForeignThreadRefusalVerified=$success;
+        completedOwnerClockGuiBorrowRefusalVerified=$success;completedOwnerClockStoppedBorrowRefusalVerified=$success;completedOwnerClockWrongImageRefusalVerified=$success;
+        completedOwnerClockNativeWorkloadVerified=$false;completedOwnerClockFollowingCpuGuiReuseVerified=$success;frontendStartup32Preserved=$success;
         actualMtaSessionBindingsSettingsOnOwnedWarp=$success;actualSixMovementBindingsApplyAndCancelVerified=$success;reservedConsoleKeyCaptureAndFocusLossVerified=$success;modalCaptureRetiredDuringFrontendTeardownVerified=$success;
         cpuFrontendTeardownWhileGpuRetainedVerified=$success;startupFailureOwnerCleanupVerified=$success;normalFrontendReacquireVerified=$success;completedCoreRetainedAfterFrontendReleaseVerified=$success;backendFailureOwnerCleanupVerified=$success;
         configurationCopiesUnchanged=$assetsUnchanged;installedFilesChanged=$false;gameLaunched=$false;gameAttached=$false;engineInputSuppressionVerified=$false;fullMtaReady=$false;
-        scope='Completed real Core and actual Game DE lifecycle, borrowed actual MTA menu/credits/console/configured bindings and existing session-only settings on a private WARP target. Fixture GUI observation forwards actual widgets/callbacks; captured edits reach the real CKeyBinds records only through Apply, while Cancel, reserved F8, focus loss and modal teardown are exercised. Includes explicit bounded/persistent wrong-image native bind refusal and versioned persistent request/owner admission, GPU-retained and partial backend/frontend failure cleanup. Disposable SanAndreas.exe is this hashed owned host, not GTA. No engine facade stubs, native engine binding, game/device attachment, native hooks, full multiplayer startup or visible GTA claim.'}
+        scope='Completed real Core and actual Game DE lifecycle, borrowed actual MTA menu/credits/console/configured bindings and existing session-only settings on a private WARP target. Fixture GUI observation forwards actual widgets/callbacks; captured edits reach the real CKeyBinds records only through Apply, while Cancel, reserved F8, focus loss and modal teardown are exercised. Includes completed-owner Clock API1/Read96 argument/owner/GUI-borrow/stopped-owner admission and actual wrong-image preflight refusal with no callbacks, then existing bounded-view refusal and CPU GUI reuse; no positive native clock workload is claimed. Startup32 and its reserved values remain unchanged. Also covers bounded/persistent native bind refusal, versioned persistent admission, GPU-retained and partial backend/frontend failure cleanup. Disposable SanAndreas.exe is this hashed owned host, not GTA. No engine facade stubs, native engine binding, game/device attachment, native hooks, full multiplayer startup or visible GTA claim.'}
     $receipt | ConvertTo-Json -Depth 9 | Set-Content -LiteralPath (Join-Path $outputRoot 'test-result.json') -Encoding utf8
 }
 [ordered]@{success=$success;receipt=(Join-Path $outputRoot 'test-result.json');checks=$testCount;failure=$failure} | ConvertTo-Json -Compress

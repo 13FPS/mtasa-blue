@@ -1765,17 +1765,25 @@ async function main() {
         ...Object.assign(Array(32).fill(0), { 0: 1, 1: 2, 2: 42, 3: 1, 4: 1, 5: 1, 6: 1, 7: 2, 16: 97, 22: 1, 23: 1 }),
         ...Object.assign(Array(32).fill(0), { 0: 1, 1: 4, 2: 42, 3: 1, 4: 1, 7: 2, 14: 1, 22: 1, 23: 1 })
     ], overrides);
+    const frontendStartupClock = (overrides = {}) => clockFinalState({ 3: 2250, 17: 42, 84: 2000, ...overrides });
+    const frontendStartupClockOwner = (overrides = {}) => Object.assign(Array(32).fill(0),
+        { 0: 1, 1: 2, 2: 42, 3: 1, 4: 1, 5: 1, 6: 1, 7: 2, 16: 97, 23: 1 }, overrides);
     const coreFrontendStartup = (options = {}) => {
         let polls = 0;
         const result = runEntry({ mtaCoreGuiFrontendStartupReference: true,
             keyFrames: [[17, 16, 120], [16], [], [], []], times: [0, 50, 100, 300, 20500], ...options.entry,
             functions: {
-                DE_CoreGuiFrontendStartupApiVersion: () => 1, DE_CoreGuiFrontendStartupBegin: () => 1,
+                DE_CoreGuiFrontendStartupApiVersionV2: () => 2, DE_CoreGuiFrontendStartupBeginV2: () => 1,
                 DE_CoreGuiFrontendStartupCapture: () => options.lifecycleCaptureStatus ?? 1,
-                DE_CoreGuiFrontendStartupRead: field => frontendStartupReport(options.lifecycleOverrides)[field],
-                DE_CoreGuiFrontendInputCapture: () => options.noInput || (options.skipTerminalInput && polls >= 3) ? 0 : 1,
+                DE_CoreGuiFrontendStartupRead: field => frontendStartupReport({ 39: 3, 71: 3, ...options.lifecycleOverrides })[field],
+                DE_CoreGuiFrontendStartupCaptureClockV2: () => options.noClock || (options.skipTerminalClock && polls >= 3) ? 0 : options.clockCaptureStatus ?? 1,
+                DE_CoreGuiFrontendStartupReadClockV2: field => (options.clockState?.(polls) || frontendStartupClock(options.clockOverrides))[field],
+                DE_CoreGuiFrontendStartupCaptureClockOwnerV2: () => options.noClockOwner || polls < (options.clockOwnerAfterPoll ?? 0) ||
+                    (options.skipTerminalClockOwner && polls >= 3) ? 0 : options.clockOwnerCaptureStatus ?? 1,
+                DE_CoreGuiFrontendStartupReadClockOwnerV2: field => (options.clockOwnerState?.(polls) || frontendStartupClockOwner(options.clockOwnerOverrides))[field],
+                DE_CoreGuiFrontendInputCapture: () => options.noInput || polls < (options.inputAfterPoll ?? 0) || (options.skipTerminalInput && polls >= 3) ? 0 : 1,
                 DE_CoreGuiFrontendInputRead: field => (options.inputState?.(polls) || frontendInputState(polls, options.scalarOverrides?.(polls) || {}))[field],
-                DE_CoreStartupPoll: () => { ++polls; if (options.pollErrorAt === polls) throw Error('temporary startup worker poll failure'); return polls >= 3 ? 1 : 0; },
+                DE_CoreStartupPoll: () => { ++polls; if (options.pollErrorAt === polls) throw Error('temporary startup worker poll failure'); return !options.neverRetires && polls >= 3 ? 1 : 0; },
                 DE_CoreStartupRead: field => Object.assign([0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0], options.workerState)[field],
                 ...options.functions
             }
@@ -1783,11 +1791,18 @@ async function main() {
         return { ...result, polls };
     };
     const frontendStartupFinish = result => result.logs.find(event => event.event === 'core_gui_frontend_startup_reference_finished');
-    test('Core15 completed startup uses separate96 lifecycle plus unchanged256 input evidence without script control writes', () => {
+    test('Core19 completed startup uses separate96 lifecycle plus unchanged256 input evidence without script control writes', () => {
         const result = coreFrontendStartup(); const finish = frontendStartupFinish(result);
         assert.equal(finish.passed, true); assert.equal(finish.cleanup_passed, true);
         assert.equal(finish.completed_core_lifecycle_verified, true);
-        assert.equal(finish.schema, 'mta_core_gui_frontend_startup_v1'); assert.equal(finish.core_api, 15); assert.equal(finish.trial_api, 1);
+        assert.equal(finish.schema, 'mta_core_gui_frontend_startup_v2'); assert.equal(finish.core_api, 19); assert.equal(finish.trial_api, 2);
+        assert.equal(finish.completed_core_clock_verified, true); assert.equal(finish.same_completed_core_owner_verified, true);
+        assert.equal(finish.clock_state.length, 96); assert.equal(finish.clock_owner_state.length, 32);
+        const stage = result.logs.find(event => event.event === 'core_gui_frontend_startup_reference_clock_stage');
+        assert.ok(stage && stage.clock_read_only_workload_verified && !stage.clock_writes && stage.provider_core_retained);
+        assert.equal(stage.clock_state[17], stage.clock_owner_state[2]); assert.equal(stage.clock_owner_state[2], finish.lifecycle_values[2]);
+        assert.equal(stage.clock_owner_state[16], finish.lifecycle_values[48]); assert.equal(finish.lifecycle_values[16], 33);
+        assert.ok(result.logs.indexOf(stage) < result.logs.findIndex(event => event.event === 'core_gui_frontend_startup_reference_sample'));
         assert.equal(finish.started_at_ms, result.logs.find(event => event.event === 'core_gui_frontend_startup_reference_started').at_ms);
         assert.equal(finish.lifecycle_values.length, 96); assert.equal(finish.input_values.length, 256); assert.equal(finish.state.length, 19);
         if (process.env.MTA_GAME_ADAPTER_MOCK_EVIDENCE_DIR) {
@@ -1796,118 +1811,123 @@ async function main() {
             // GTA evidence and do not change any production logging behavior.
             const directory = process.env.MTA_GAME_ADAPTER_MOCK_EVIDENCE_DIR;
             fs.mkdirSync(directory, { recursive: true });
-            fs.writeFileSync(path.join(directory, 'script-mock-startup-success.jsonl'), result.logs.map(event => JSON.stringify(event)).join('\n') + '\n');
-            fs.writeFileSync(path.join(directory, 'core-mock-startup-success.jsonl'), JSON.stringify({ schema: 'mta_core_gui_frontend_input_v1',
+            fs.writeFileSync(path.join(directory, 'script-mock-startup-v2-success.jsonl'), result.logs.map(event => JSON.stringify(event)).join('\n') + '\n');
+            fs.writeFileSync(path.join(directory, 'core-mock-startup-v2-success.jsonl'), JSON.stringify({ schema: 'mta_core_gui_frontend_input_v1',
                 pid: 71, runMs: 100, values: finish.input_values }) + '\n');
         }
         assert.deepEqual(result.calls.filter(call => call[0] === 'DE_CoreGuiFrontendStartupRead').map(call => call[1]), Array.from({ length: 96 }, (_, field) => field));
         assert.deepEqual(result.calls.filter(call => call[0] === 'DE_CoreGuiFrontendInputRead').map(call => call[1]).slice(-256), Array.from({ length: 256 }, (_, field) => field));
         assert.ok(result.logs.filter(event => event.event === 'core_gui_frontend_startup_reference_sample').every(event => event.input_values.length === 256 && !('state' in event)));
         assert.ok(!result.calls.some(call => /SET_PLAYER_CONTROL|IS_PLAYER_CONTROL_ON|DE_CoreGuiFrontendControl|DE_CoreGuiFrontendInputBegin|DE_CoreStartupBegin|DE_ConnectLocal|CREATE_CHAR/.test(call[0])));
-        assert.equal(result.callFrames.find(call => call.name === 'DE_CoreGuiFrontendStartupBegin').frame, 2);
+        assert.equal(result.callFrames.find(call => call.name === 'DE_CoreGuiFrontendStartupBeginV2').frame, 2);
         const start = result.logs.find(event => event.event === 'adapter_start');
-        assert.equal(start.core_api, 15); assert.equal(start.core_gui_frontend_startup_reference, true); assert.equal(start.native_player_control_lease_planned, false);
+        assert.equal(start.core_api, 19); assert.equal(start.core_gui_frontend_startup_reference, true); assert.equal(start.native_player_control_lease_planned, false);
         for (const claim of ['full_core_ready', 'full_mta_ready', 'gameplay_ready', 'camera_capture_verified', 'network_active',
             'remote_peds_created', 'native_queue_commands_issued', 'native_backbuffer_touched', 'native_player_control_writes']) assert.equal(finish[claim], false);
     });
-    test('Core15 arming waits indefinitely then releases every F9 modifier before bridge lookup', () => {
+    test('Core19 arming waits indefinitely then releases every F9 modifier before bridge lookup', () => {
         const result = coreFrontendStartup({ entry: { keyFrames: [[], [], [17, 16, 120], [120], [], [], []],
             times: [0, 100, 14400000, 14400050, 14400100, 14400150, 14400200] } });
         assert.equal(result.callFrames.find(call => call.name === 'DynamicLibrary.Load').frame, 4);
-        assert.equal(result.callFrames.find(call => call.name === 'DE_CoreGuiFrontendStartupBegin').frame, 4);
+        assert.equal(result.callFrames.find(call => call.name === 'DE_CoreGuiFrontendStartupBeginV2').frame, 4);
         assert.equal(frontendStartupFinish(result).passed, true);
     });
-    test('Core15 End cancellation drains native, GUI and completed Core ownership without promoting failed workload', () => {
+    test('Core19 End cancellation drains native, GUI and completed Core ownership without promoting failed workload', () => {
         const result = coreFrontendStartup({ entry: { keyFrames: [[17, 16, 120], [16], [], [17, 16, 35], []] }, workerState: { 16: 12, 17: 0 } });
         const finish = frontendStartupFinish(result);
         assert.equal(result.polls, 3); assert.equal(finish.cancel_requested, true); assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true);
         assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 1);
     });
-    test('Core15 transient poll error keeps owner cleanup polling until actual terminal', () => {
+    test('Core19 transient poll error keeps owner cleanup polling until actual terminal', () => {
         const result = coreFrontendStartup({ pollErrorAt: 1, workerState: { 16: 12, 17: 0 } }); const finish = frontendStartupFinish(result);
         assert.equal(result.polls, 3); assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true);
         assert.match(finish.error, /temporary startup worker/);
     });
-    test('Core15 saved failed view can prove cleanup while preserving worker failure and failed workload', () => {
+    test('Core19 saved failed view can prove cleanup while preserving worker failure and failed workload', () => {
         const result = coreFrontendStartup({ workerState: { 9: 4, 16: 23, 17: 0 }, lifecycleOverrides: { 53: 6 } }); const finish = frontendStartupFinish(result);
         assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true); assert.equal(finish.state[16], 23);
         assert.equal(finish.completed_core_lifecycle_verified, false);
     });
-    const noViewReport = { 38: 0, 48: 33, 53: 4, 54: 0, 86: 0 };
-    test('Core15 native bind refusal without an attempted view can prove actual completed Core cleanup without256', () => {
-        const result = coreFrontendStartup({ noInput: true, lifecycleOverrides: noViewReport, workerState: { 9: 4, 15: 0, 16: 23, 17: 0 } });
+    const noViewReport = { 38: 0, 39: 1, 48: 33, 53: 4, 54: 0, 71: 1, 86: 0 };
+    const clockPreflightRefusal = { noInput: true, noClock: true, clockOwnerOverrides: { 6: 0, 7: 1, 16: 33, 21: 4 },
+        lifecycleOverrides: noViewReport, workerState: { 9: 4, 15: 0, 16: 27, 17: 0 } };
+    test('Core19 native bind refusal without an attempted view can prove actual completed Core cleanup without256', () => {
+        const result = coreFrontendStartup(clockPreflightRefusal);
         const finish = frontendStartupFinish(result);
         assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true); assert.equal(finish.input_values, null);
-        assert.equal(finish.lifecycle_values[54], 0); assert.equal(finish.state[16], 23);
+        assert.equal(finish.lifecycle_values[54], 0); assert.equal(finish.state[16], 27);
+        assert.equal(finish.clock_state, null); assert.equal(finish.clock_owner_state[21], 4); assert.equal(finish.clock_stage_emitted, false);
     });
-    test('Core15 failed Begin with no view retains its historical failure and proves explicit shutdown', () => {
+    test('Core19 failed Begin with no view retains its historical failure and proves explicit shutdown', () => {
         const overrides = { 1: 5, 5: 0, 7: 0, 16: 0, 21: 2, ...Object.fromEntries(Array.from({ length: 32 }, (_, field) => [32 + field, 0])), 71: 0, 85: 2, 86: 0 };
-        const result = coreFrontendStartup({ noInput: true, lifecycleOverrides: overrides, workerState: { 8: 5, 9: 5, 15: 0, 16: 21, 17: 0 } });
+        const result = coreFrontendStartup({ noInput: true, noClock: true, noClockOwner: true,
+            lifecycleOverrides: overrides, workerState: { 8: 5, 9: 5, 15: 0, 16: 21, 17: 0 } });
         const finish = frontendStartupFinish(result);
         assert.equal(finish.cleanup_passed, true); assert.equal(finish.passed, false); assert.equal(finish.lifecycle_values[21], 2);
     });
     for (const options of [{ lifecycleOverrides: { 86: 1 } }, { lifecycleOverrides: { 54: 1 } }, { lifecycleOverrides: { 55: 0 } },
         { lifecycleOverrides: { 72: 1, 73: 4 } }, { lifecycleOverrides: { 75: 1 } }, { workerState: { 15: 1 } }])
-        test('Core15 absent256 cannot hide an attempted view or retained obligation ' + JSON.stringify(options), () => {
-            const result = coreFrontendStartup({ noInput: true, lifecycleOverrides: noViewReport, workerState: { 9: 4, 15: 0, 16: 23, 17: 0 },
-                ...options, lifecycleOverrides: { ...noViewReport, ...options.lifecycleOverrides }, workerState: { 9: 4, 15: 0, 16: 23, 17: 0, ...options.workerState } });
+        test('Core19 absent256 cannot hide an attempted view or retained obligation ' + JSON.stringify(options), () => {
+            const result = coreFrontendStartup({ ...clockPreflightRefusal,
+                ...options, lifecycleOverrides: { ...noViewReport, ...options.lifecycleOverrides }, workerState: { ...clockPreflightRefusal.workerState, ...options.workerState } });
             const finish = frontendStartupFinish(result); assert.equal(finish.cleanup_passed, false); assert.equal(finish.passed, false);
         });
     for (const [field, value] of [[1, 5], [5, 0], [6, 1], [7, 0], [21, 4], [22, 1], [33, 5], [35, 0], [37, 0], [38, 0], [39, 0], [53, 6], [54, 0], [55, 0], [86, 0], [87, 0]])
-        test('Core15 lifecycle workload requires its actual completed boundaries: field ' + field, () => {
+        test('Core19 lifecycle workload requires its actual completed boundaries: field ' + field, () => {
             const result = coreFrontendStartup({ lifecycleOverrides: { [field]: value } }); const finish = frontendStartupFinish(result);
             assert.equal(finish.passed, false);
         });
     for (const [field, value] of [[0, 2], [2, 0], [34, 43], [65, 2], [67, 0], [69, 1], [70, 1], [72, 1], [73, 2], [74, 1], [75, 1], [87, 0],
         [76, 1], [77, 1], [78, 0], [79, 1], [80, 33], [81, 1], [82, 1], [83, 1], [84, 1], [88, 1], [95, 1], [55, 2], [53, 7], [3, -1]])
-        test('Core15 retained, invalid or uncorrelated lifecycle state cannot certify cleanup: field ' + field, () => {
+        test('Core19 retained, invalid or uncorrelated lifecycle state cannot certify cleanup: field ' + field, () => {
             const result = coreFrontendStartup({ lifecycleOverrides: { [field]: value } }); const finish = frontendStartupFinish(result);
             assert.equal(finish.cleanup_passed, false); assert.equal(finish.passed, false);
         });
     for (const [field, value] of [[0, 1], [7, 1], [8, 5], [10, 1], [11, 4], [12, 3], [13, 0], [14, 1], [15, 0], [16, 26], [17, 2], [18, 1]])
-        test('Core15 worker bookkeeping cannot substitute for actual unload proof: field ' + field, () => {
+        test('Core19 worker bookkeeping cannot substitute for actual unload proof: field ' + field, () => {
             const result = coreFrontendStartup({ workerState: { [field]: value } }); const finish = frontendStartupFinish(result);
             assert.equal(finish.cleanup_passed, false); assert.equal(finish.passed, false);
         });
     for (const options of [{ lifecycleCaptureStatus: 0 }, { lifecycleCaptureStatus: 2 }, { skipTerminalInput: true }, { noInput: true }])
-        test('Core15 requires fresh terminal lifecycle and attempted-view input captures ' + JSON.stringify(options), () => {
+        test('Core19 requires fresh terminal lifecycle and attempted-view input captures ' + JSON.stringify(options), () => {
             const finish = frontendStartupFinish(coreFrontendStartup(options)); assert.equal(finish.cleanup_passed, false); assert.equal(finish.passed, false);
         });
-    test('Core15 rejects a changed terminal copy that reuses an earlier clean publication sequence', () => {
+    test('Core19 rejects a changed terminal copy that reuses an earlier clean publication sequence', () => {
         const result = coreFrontendStartup({ inputState: polls => frontendInputState(polls >= 2 ? 3 : polls,
             { 2: polls >= 2 ? 2 : polls, 105: polls >= 3 ? 1 : 0 }) });
         const finish = frontendStartupFinish(result);
         assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, false);
         assert.match(finish.error, /without a new sequence/);
     });
-    test('Core15 internally coherent lifecycle owners must still match the actual input256 GUI/Core owner', () => {
+    test('Core19 internally coherent lifecycle owners must still match the actual input256 GUI/Core owner', () => {
         const result = coreFrontendStartup({ lifecycleOverrides: { 2: 43, 34: 43, 66: 43 } });
         const finish = frontendStartupFinish(result);
         assert.equal(finish.cleanup_passed, false); assert.equal(finish.passed, false);
         assert.equal(finish.lifecycle_values[2], 43); assert.equal(finish.input_values[81], 42);
     });
     for (const [field, value] of [[7, 1], [172, 1], [226, 1], [228, 7], [241, 1], [187, 1], [188, 0], [189, 0], [33, 0], [38, 10000], [242, 19999]])
-        test('Core15 retains the unchanged native/render input256 workload requirement: field ' + field, () => {
+        test('Core19 retains the unchanged native/render input256 workload requirement: field ' + field, () => {
             const result = coreFrontendStartup({ scalarOverrides: polls => polls >= 3 ? { [field]: value } : {} }); const finish = frontendStartupFinish(result);
             assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true);
         });
-    test('Core15 reports actual console callbacks independently and never invents a Quit click', () => {
+    test('Core19 reports actual console callbacks independently and never invents a Quit click', () => {
         const result = coreFrontendStartup({ scalarOverrides: polls => polls >= 3 ? { 139: 2, 141: 2, 142: 2, 146: 0, 105: 1 } : {} });
         const finish = frontendStartupFinish(result);
         assert.equal(finish.actual_console_commands_verified, true); assert.equal(finish.actual_about_clicks, 1); assert.equal(finish.actual_quit_requested, false);
         assert.equal(finish.passed, true);
     });
-    for (const name of ['DE_CoreGuiFrontendStartupApiVersion', 'DE_CoreGuiFrontendStartupBegin', 'DE_CoreGuiFrontendStartupCapture',
-        'DE_CoreGuiFrontendStartupRead', 'DE_CoreGuiFrontendInputCapture', 'DE_CoreGuiFrontendInputRead'])
-        test('Core15 refuses missing independent worker exports before Begin: ' + name, () => {
+    for (const name of ['DE_CoreGuiFrontendStartupApiVersionV2', 'DE_CoreGuiFrontendStartupBeginV2', 'DE_CoreGuiFrontendStartupCapture',
+        'DE_CoreGuiFrontendStartupRead', 'DE_CoreGuiFrontendStartupCaptureClockV2', 'DE_CoreGuiFrontendStartupReadClockV2',
+        'DE_CoreGuiFrontendStartupCaptureClockOwnerV2', 'DE_CoreGuiFrontendStartupReadClockOwnerV2', 'DE_CoreGuiFrontendInputCapture', 'DE_CoreGuiFrontendInputRead'])
+        test('Core19 refuses missing independent worker exports before Begin: ' + name, () => {
             const result = coreFrontendStartup({ functions: { [name]: null } });
-            assert.ok(!result.calls.some(call => call[0] === 'DE_CoreGuiFrontendStartupBegin'));
+            assert.ok(!result.calls.some(call => call[0] === 'DE_CoreGuiFrontendStartupBeginV2'));
             assert.ok(result.logs.some(event => event.event === 'adapter_failed' && event.error.includes(name)));
         });
-    for (const api of [0, 2]) test('Core15 refuses an unsupported lifecycle API before Begin: ' + api, () => {
-        const result = coreFrontendStartup({ functions: { DE_CoreGuiFrontendStartupApiVersion: () => api } });
-        assert.ok(!result.calls.some(call => call[0] === 'DE_CoreGuiFrontendStartupBegin'));
-        assert.ok(result.logs.some(event => event.event === 'adapter_failed' && event.error.includes('API1')));
+    for (const api of [0, 1, 3]) test('Core19 refuses an unsupported lifecycle API before Begin: ' + api, () => {
+        const result = coreFrontendStartup({ functions: { DE_CoreGuiFrontendStartupApiVersionV2: () => api } });
+        assert.ok(!result.calls.some(call => call[0] === 'DE_CoreGuiFrontendStartupBeginV2'));
+        assert.ok(result.logs.some(event => event.event === 'adapter_failed' && event.error.includes('API2')));
     });
     for (const options of [{ mode: 'online' }, { mode: 'diagnostic' }, { mtaCoreGuiFrontendStartupReference: 'true' },
         { mtaCoreGuiFrontendInputReference: true }, { mtaCoreGuiFrontendReference: true }, { mtaCoreGuiSurfaceReference: true },
@@ -1915,10 +1935,131 @@ async function main() {
         { mtaNativePadReference: true }, { mtaNativeMovementTrial: true }, { mtaCoreStartupReference: true }, { mtaCoreInputReference: true },
         { mtaCoreMovementReference: true }, { mtaCoreRenderReference: true }, { mtaCoreRenderGpuReference: true },
         { mtaCoreRenderCustomPresentReference: true }, { mtaCoreRenderFrameBoundaryReference: true }, { mtaCoreRenderNativeDispatchReference: true }])
-        test('Core15 refuses competing modes before runtime lookup ' + JSON.stringify(options), () => {
+        test('Core19 refuses competing modes before runtime lookup ' + JSON.stringify(options), () => {
             const result = coreFrontendStartup({ entry: { ...options, forbidRuntimeAccess: true } });
             assert.equal(result.calls.length, 0); assert.ok(result.logs.some(event => event.event === 'adapter_failed'));
         });
+    test('Core19 accepts active clock diagnostics only before a retired clock and immutable owner stage', () => {
+        const result = coreFrontendStartup({ inputAfterPoll: 2, clockOwnerAfterPoll: 2,
+            clockState: polls => polls === 1 ? frontendStartupClock({ 1: 1, 2: 1, 3: 100, 4: 0, 6: 0, 11: 0, 12: 0,
+                18: 1, 19: 1, 20: 1, 21: 1, 22: 0, 23: 0, 43: 0, 76: 1, 80: 1, 84: 1000 })
+                : frontendStartupClock({ 2: 2 }) });
+        const finish = frontendStartupFinish(result);
+        assert.equal(finish.passed, true); assert.equal(finish.clock_samples, 2);
+        const samples = result.logs.filter(event => event.event === 'core_gui_frontend_startup_reference_clock_sample');
+        assert.equal(samples[0].clock_state[76], 1); assert.equal(samples[0].clock_state[80], 1);
+        assert.equal(finish.clock_state[76], 0); assert.equal(finish.clock_state[80], 0);
+        assert.equal(result.logs.filter(event => event.event === 'core_gui_frontend_startup_reference_clock_stage').length, 1);
+    });
+    for (const [field, value] of [[0, 2], [1, 4], [2, 0], [3, -1], [4, 16], [7, 1], [9, 0], [10, 0], [11, 0], [12, 0], [13, 0],
+        [14, 0], [16, 0], [17, 43], [23, 0], [24, 1], [25, 1], [26, 5], [33, 11], [34, 0], [35, 1], [37, 1], [38, 1],
+        [39, 1], [40, 1], [41, 1], [43, 0], [46, 0], [47, 1], [50, 1], [54, 0], [60, 0], [62, 1], [64, 1], [66, 1], [68, 1],
+        [74, 1], [76, 1], [77, 1], [78, 1], [79, 1], [80, 1], [81, 1], [83, 0], [84, 1999], [84, 2251], [85, 1], [88, 1], [95, 1]])
+        test('Core19 refuses missing or contradictory independent clock proof: field ' + field, () => {
+            const result = coreFrontendStartup({ clockOverrides: { [field]: value } });
+            assert.equal(frontendStartupFinish(result).passed, false);
+        });
+    for (const [field, value] of [[0, 2], [1, 4], [2, 43], [3, 0], [4, 0], [5, 0], [6, 0], [7, 0], [8, 1], [9, 2], [10, 1],
+        [11, 1], [12, 1], [13, 1], [14, 1], [15, 1], [16, 33], [16, 65], [17, 1], [18, 1], [19, 1], [20, 1], [21, 4],
+        [22, 1], [23, 0], [24, 1], [31, 1]])
+        test('Core19 refuses an unrelated or retained clock owner: field ' + field, () => {
+            assert.equal(frontendStartupFinish(coreFrontendStartup({ clockOwnerOverrides: { [field]: value } })).passed, false);
+        });
+    for (const options of [{ clockCaptureStatus: 2 }, { clockOwnerCaptureStatus: 2 }, { noClock: true }, { noClockOwner: true },
+        { skipTerminalClock: true }, { skipTerminalClockOwner: true }])
+        test('Core19 requires independent fresh terminal clock and owner captures ' + JSON.stringify(options), () => {
+            assert.equal(frontendStartupFinish(coreFrontendStartup(options)).passed, false);
+        });
+    test('Core19 rejects GUI evidence which appeared before clock retirement and still drains the worker', () => {
+        const result = coreFrontendStartup({ clockOwnerAfterPoll: 2 });
+        const finish = frontendStartupFinish(result);
+        assert.equal(result.polls, 3); assert.equal(finish.passed, false);
+        assert.match(finish.error, /before its completed clock owner/);
+    });
+    test('Core19 changed clock copy with the same sequence retains the last valid retirement while cancelling', () => {
+        const result = coreFrontendStartup({ clockState: polls => frontendStartupClock(polls === 2 ? { 27: 13 } : {}) });
+        const finish = frontendStartupFinish(result);
+        assert.equal(result.polls, 3); assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true);
+        assert.match(finish.error, /without a new sequence/);
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 1);
+    });
+    test('Core19 rejects a changed clock generation before accepting a new publication', () => {
+        const result = coreFrontendStartup({ clockState: polls => frontendStartupClock(polls === 2 ? { 2: 6, 14: 2 } : {}) });
+        const finish = frontendStartupFinish(result);
+        assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true);
+        assert.match(finish.error, /changed generation/);
+    });
+    test('Core19 clock owner cache is immutable after its boundary', () => {
+        const result = coreFrontendStartup({ clockOwnerState: polls => frontendStartupClockOwner(polls === 2 ? { 7: 3 } : {}) });
+        const finish = frontendStartupFinish(result);
+        assert.equal(finish.passed, false); assert.equal(finish.cleanup_passed, true);
+        assert.match(finish.error, /owner cache changed/);
+    });
+    test('Core19 same-owner proof correlates the clock with lifecycle and actual GUI owners', () => {
+        const result = coreFrontendStartup({ lifecycleOverrides: { 2: 43, 34: 43, 66: 43 },
+            scalarOverrides: () => ({ 81: 43, 98: 43, 130: 43, 178: 43 }) });
+        const finish = frontendStartupFinish(result);
+        assert.equal(finish.passed, false); assert.equal(finish.completed_core_clock_verified, false);
+        assert.equal(finish.same_completed_core_owner_verified, false);
+    });
+    test('Core19 completed clock cancellation before a view accounts for the clock backend PIN without input256', () => {
+        const result = coreFrontendStartup({ noInput: true, lifecycleOverrides: { 54: 0, 86: 0 },
+            entry: { keyFrames: [[17, 16, 120], [16], [], [17, 16, 35], []] }, workerState: { 16: 12, 17: 0 } });
+        const finish = frontendStartupFinish(result);
+        assert.equal(finish.input_values, null); assert.equal(finish.state[15], 1); assert.equal(finish.clock_state[13], 1);
+        assert.equal(finish.cleanup_passed, true); assert.equal(finish.passed, false);
+    });
+    test('Core19 safe pre-Begin cancellation retires without relabelling the retained backend as stopped', () => {
+        const safe = Object.assign(Array(96).fill(0), { 0: 1, 1: 2, 2: 1, 4: 2, 6: 1 });
+        const result = coreFrontendStartup({ noInput: true, noClockOwner: true, clockState: () => safe,
+            lifecycleOverrides: { ...noViewReport, 53: 0 }, workerState: { 15: 0, 16: 12, 17: 0 },
+            entry: { keyFrames: [[17, 16, 120], [16], [], [17, 16, 35], []] } });
+        const finish = frontendStartupFinish(result);
+        assert.equal(finish.cleanup_passed, true); assert.equal(finish.passed, false);
+        assert.equal(finish.clock_state[87], 0); assert.equal(finish.clock_stage_emitted, false);
+    });
+    test('Core19 missing clock publication cannot hide an unqualified clean-looking owner', () => {
+        const finish = frontendStartupFinish(coreFrontendStartup({ ...clockPreflightRefusal, clockOwnerOverrides: { 6: 0, 7: 1, 16: 33, 21: 0 } }));
+        assert.equal(finish.cleanup_passed, false); assert.equal(finish.passed, false);
+    });
+    test('Core19 fresh capture is mandatory even when a stale copied clock state was clean', () => {
+        const finish = frontendStartupFinish(coreFrontendStartup({ skipTerminalClock: true }));
+        assert.equal(finish.cleanup_passed, false); assert.equal(finish.passed, false);
+    });
+    test('Core19 clock API V2 never falls back to the historical startup V1 exports', () => {
+        let historicalBegins = 0;
+        const result = coreFrontendStartup({ functions: { DE_CoreGuiFrontendStartupApiVersionV2: null,
+            DE_CoreGuiFrontendStartupApiVersion: () => 1, DE_CoreGuiFrontendStartupBegin: () => ++historicalBegins } });
+        assert.equal(historicalBegins, 0); assert.ok(!frontendStartupFinish(result));
+    });
+    test('Core19 extends only the V2 active deadline beyond the separate clock readiness budget', () => {
+        const result = coreFrontendStartup({ entry: { times: [0, 50, 100, 46000, 46100] } });
+        assert.equal(frontendStartupFinish(result).passed, true);
+        assert.equal(result.calls.filter(call => call[0] === 'DE_CoreStartupCancel').length, 0);
+        const start = result.logs.find(event => event.event === 'core_gui_frontend_startup_reference_started');
+        assert.equal(start.maximum_duration_ms, 50000); assert.equal(start.display_duration_ms, 20000);
+        assert.equal(start.clock_workload_ms, 2000); assert.equal(start.clock_readiness_budget_ms, 10000);
+    });
+    test('Core19 active deadline requests cancellation and waits for final owner cleanup', () => {
+        const result = coreFrontendStartup({ entry: { times: [0, 50, 100, 60100, 60200] }, workerState: { 16: 12, 17: 0 } });
+        const finish = frontendStartupFinish(result);
+        assert.equal(result.polls, 3); assert.equal(finish.cleanup_passed, true); assert.equal(finish.passed, false);
+        assert.ok(result.logs.some(event => event.reason === 'worker_deadline'));
+    });
+    test('Core19 poll-first cleanup survives a script wait failure after clock completion', () => {
+        const result = coreFrontendStartup({ entry: { keyFrames: [[17, 16, 120], [], []] }, workerState: { 16: 12, 17: 0 } });
+        const finish = frontendStartupFinish(result);
+        assert.equal(result.polls, 3); assert.equal(finish.cleanup_passed, true); assert.equal(finish.passed, false);
+        assert.match(finish.error, /final key frame/);
+    });
+    test('Core19 quarantined clock ownership never emits finished merely because script telemetry failed', () => {
+        let polls = 0, cancels = 0, finished = false;
+        assert.throws(() => coreFrontendStartup({ noClock: true, noClockOwner: true, noInput: true,
+            entry: { executionTimeout: 20, observeLog: event => { if (event.event === 'core_gui_frontend_startup_reference_finished') finished = true; } },
+            functions: { DE_CoreStartupPoll: () => { ++polls; return 0; }, DE_CoreStartupCancel: () => { ++cancels; return 1; } } }),
+        /Script execution timed out/);
+        assert.equal(finished, false); assert.ok(polls > 3); assert.ok(cancels > 0);
+    });
     const persistentInputState = (polls, overrides = {}) => {
         const done = polls >= 4;
         return Object.assign(Array(288).fill(0), frontendInputState(done ? 3 : Math.min(polls, 2)), {

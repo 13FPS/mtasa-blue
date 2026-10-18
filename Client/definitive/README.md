@@ -118,14 +118,43 @@ The bounded view operation reuses the tested MTA menu, console, configured
 neutral input, rendering and cleanup path. It no longer needs the ordinary
 `CCore` constructor to deliberately fail after rendering a menu. The existing
 `InitializeCore` result and eight full-startup fields retain their meanings.
-The separate Smoke option `-MtaCoreGuiFrontendStartupReference` now selects a
-Core15 worker that uses this completed lifecycle instead of `InitializeCore`.
-Its 96-field report preserves Begin, after-view and stopped snapshots. The
+The historical Core15 worker uses this completed lifecycle instead of
+`InitializeCore`. Its 96-field report preserves Begin, after-view and stopped snapshots. The
 after-view snapshot must prove Core/backend survival before explicit shutdown;
 the stopped snapshot is copied before final release. Busy cleanup keeps the
 same worker alive and retries, including after cancellation or a deadline.
 The existing Core14 input256 route and all older contracts remain separate.
 The historical view keeps its native 35-second trial limit.
+
+**The current completed-Core trial composes clock Read and the existing menu.**
+The same Smoke option `-MtaCoreGuiFrontendStartupReference` now requires distinct
+V2 bridge exports and selects Core19. After successful Core/backend creation,
+it runs the existing read-only clock lifecycle for two seconds, with a separate
+ten-second readiness budget. Only independently qualified clock retirement
+allows the same Core owner to enter the existing twenty-second MTA menu trial.
+The separate Read96 and owner32 snapshots must agree with the completed owner;
+the input256 and lifecycle96 reports keep their existing field meanings.
+
+Direct GUI borrowing is synchronized with Core startup operations and refused
+before allocation while clock callbacks may hold native peers. Cancellation or
+a deadline cannot release the Core, unload its backend or start the GUI while
+clock retirement remains pending. The backend stays alive between the clock
+and menu stages, then follows the existing explicit shutdown and release path.
+This composition adds no clock writes or new native offsets. The historical
+Core15 exports, persistent Core16 route, standalone Read and Set trials, classic
+startup and full-game readiness gates remain separate. The combined sequence
+still requires its own GTA test; the successful standalone results above do not
+establish live clock-to-menu startup.
+
+Offline validation passes 473 policy checks on each of x86 and x64, all 151
+worker cases (including the 125 prior cases), 1,304 script tests and 293 bridge
+checks. Actual Core/GUI hosts pass 1,559 checks across four profiles. The normal
+Core/Game DE build passes 67 guards, both classic compile profiles and both
+294-check entry classifications. Controlled failures cover cancelled startup,
+missing or malformed clock evidence, capability changes and retained cleanup;
+they never authorize a GUI view or unload while native retirement is pending.
+These checks preserve the historical live results rather than replace the
+pending GTA validation of this combined sequence.
 
 **A separate persistent frontend candidate reuses this same MTA owner.**
 `-MtaCorePersistentFrontend` selects a Smoke package that runs the existing

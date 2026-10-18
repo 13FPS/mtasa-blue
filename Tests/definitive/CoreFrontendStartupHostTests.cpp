@@ -31,6 +31,8 @@
 #include "../../Client/core/DefinitivePersistentFrontend.h"
 #include "../../Client/core/DefinitiveFrontendConsole.h"
 #include "../../Client/core/DefinitiveFrontendBindings.h"
+#include "../../Client/core/DefinitiveClockReference.h"
+#include "../../Client/core/DefinitiveFrontendClockReference.h"
 
 using Microsoft::WRL::ComPtr;
 namespace Frontend = DefinitiveFrontend;
@@ -38,18 +40,40 @@ namespace Startup = DefinitiveFrontendStartup;
 namespace Persistent = DefinitivePersistentFrontend;
 namespace Console = DefinitiveFrontendConsole;
 namespace Bindings = DefinitiveFrontendBindings;
+namespace ClockReference = DefinitiveClockReference;
+namespace FrontendClock = DefinitiveFrontendClockReference;
 using mta::gui::GuiD3D12Status;
 static_assert(Frontend::ApiVersion == 1 && Frontend::FieldCount == 32);
 static_assert(Startup::ApiVersion == 1 && Startup::FieldCount == 32);
 static_assert(Persistent::ApiVersion == 1 && Persistent::FieldCount == 288);
 static_assert(Console::ApiVersion == 1 && Console::FieldCount == 32 && Bindings::ApiVersion == 1 && Bindings::FieldCount == 32);
+static_assert(ClockReference::ApiVersion == 1 && ClockReference::FieldCount == 96);
+static_assert(FrontendClock::ApiVersion == 1 && Startup::FieldCount == 32);
 
 namespace
 {
-    unsigned checks = 0;
-    bool     settingsVerified = false, settingsCaptureRetainedForCleanup = false;
-    unsigned cancelCalls = 0, publishCalls = 0, heartbeatCalls = 0;
-    bool     CancelView()
+    unsigned                 checks = 0;
+    bool                     settingsVerified = false, settingsCaptureRetainedForCleanup = false;
+    unsigned                 cancelCalls = 0, publishCalls = 0, heartbeatCalls = 0;
+    unsigned                 clockCancelCalls = 0, clockPublishCalls = 0;
+    bool                     clockPublicationShapeValid = true, clockAdmissionVerified = false, clockWrongImageRefusalVerified = false;
+    ClockReference::Snapshot clockSnapshot{};
+    bool                     CancelClock()
+    {
+        ++clockCancelCalls;
+        return false;
+    }
+    void PublishClock(const std::uint32_t* values, std::uint32_t count)
+    {
+        ++clockPublishCalls;
+        if (!values || count != clockSnapshot.size())
+        {
+            clockPublicationShapeValid = false;
+            return;
+        }
+        std::copy_n(values, clockSnapshot.size(), clockSnapshot.begin());
+    }
+    bool CancelView()
     {
         ++cancelCalls;
         return false;
@@ -122,6 +146,7 @@ namespace
         Startup::Shutdown                    shutdownStartup = nullptr;
         Startup::Release                     releaseStartup = nullptr;
         Startup::RunView                     runView = nullptr;
+        FrontendClock::Run                   runClock = nullptr;
         Persistent::Run                      runPersistent = nullptr;
         Frontend::Create                     create = nullptr;
         Frontend::Pulse                      pulse = nullptr;
@@ -382,6 +407,34 @@ namespace
         Check(StartupState(owned) == before && !cancelCalls && !publishCalls && !heartbeatCalls,
               "malformed persistent requests leave real Core/backend lifecycle and every caller callback untouched");
     }
+    void ClockArgumentChecks(Owned& owned)
+    {
+        const auto before = StartupState(owned);
+        const auto cancelled = clockCancelCalls, published = clockPublishCalls;
+        const auto values = clockSnapshot;
+        Check(owned.runClock(nullptr, 1000, &CancelClock, &PublishClock) == Frontend::Status::InvalidArgument &&
+                  owned.runClock(reinterpret_cast<void*>(std::uintptr_t{1}), 1000, &CancelClock, &PublishClock) == Frontend::Status::InvalidArgument,
+              "completed-owner clock rejects absent and unknown handles before callbacks or backend work");
+        Check(owned.runClock(owned.startup, 0, &CancelClock, &PublishClock) == Frontend::Status::InvalidArgument &&
+                  owned.runClock(owned.startup, ClockReference::MaximumDurationMs + 1, &CancelClock, &PublishClock) == Frontend::Status::InvalidArgument &&
+                  owned.runClock(owned.startup, 1000, nullptr, &PublishClock) == Frontend::Status::InvalidArgument &&
+                  owned.runClock(owned.startup, 1000, &CancelClock, nullptr) == Frontend::Status::InvalidArgument,
+              "completed-owner clock refuses zero or excessive duration and absent cancellation/publication callbacks");
+        Check(StartupState(owned) == before && clockCancelCalls == cancelled && clockPublishCalls == published && clockSnapshot == values,
+              "invalid clock requests preserve actual Startup32 values, reserved fields and callback-owned storage");
+        clockAdmissionVerified = true;
+    }
+    void ClockRejected(Owned& owned, Frontend::Status expected, const char* why)
+    {
+        const auto before = StartupState(owned);
+        const auto cancelled = clockCancelCalls, published = clockPublishCalls;
+        const auto values = clockSnapshot;
+        Check(owned.runClock(owned.startup, 1000, &CancelClock, &PublishClock) == expected, why);
+        // Rejected admission must not borrow the retained Core or replace its
+        // existing GUI owner, including a stopped but unreleased frontend.
+        Check(StartupState(owned) == before && clockCancelCalls == cancelled && clockPublishCalls == published && clockSnapshot == values,
+              "clock admission refusal preserves completed Core/backend ownership and invokes no caller callback");
+    }
     void SaveResult(const std::filesystem::path& root, const Startup::Snapshot& startup, const Frontend::Snapshot& frontend)
     {
         std::ofstream result(root / L"frontend-startup-result.json");
@@ -393,6 +446,10 @@ namespace
             result << (index ? "," : "") << frontend[index];
         result << "],\"persistentApiVersion\":1,\"persistentFields\":288,\"persistentRequestAdmissionVerified\":true,\"persistentWrongImageRefusalVerified\":"
                << (startup[Startup::LastFailure] == static_cast<std::uint32_t>(Startup::Failure::InputBind) ? "true" : "false")
+               << ",\"completedOwnerClockApiVersion\":1,\"completedOwnerClockFields\":96,\"completedOwnerClockAdmissionVerified\":"
+               << (clockAdmissionVerified ? "true" : "false")
+               << ",\"completedOwnerClockWrongImageRefusalVerified\":" << (clockWrongImageRefusalVerified ? "true" : "false")
+               << ",\"completedOwnerClockNativeWorkloadVerified\":false,\"completedOwnerClockPublishedSamples\":" << clockPublishCalls
                << ",\"actualSessionBindingsSettingsVerified\":" << (settingsVerified ? "true" : "false")
                << ",\"settingsCaptureRetainedForCleanup\":" << (settingsCaptureRetainedForCleanup ? "true" : "false")
                << ",\"persistentNativeLeaseStarted\":false,\"persistentVisibleRenderingVerified\":false,\"nativeEngineBindingVerified\":false,\"fullMtaReady\":"
@@ -690,6 +747,9 @@ int wmain(int argc, wchar_t** argv)
         owned.shutdownStartup = Export<Startup::Shutdown>(owned.core, "MTA_ShutdownDEFrontendStartup");
         owned.releaseStartup = Export<Startup::Release>(owned.core, "MTA_ReleaseDEFrontendStartup");
         owned.runView = Export<Startup::RunView>(owned.core, "MTA_RunDEFrontendStartupView");
+        Check(Export<std::uint32_t (*)()>(owned.core, "MTA_DEFrontendClockReferenceApiVersion")() == FrontendClock::ApiVersion,
+              "normal Core exposes additive completed-owner clock API1 without widening Startup32 or Read96");
+        owned.runClock = Export<FrontendClock::Run>(owned.core, "MTA_RunDEFrontendClockReference");
         Check(Export<std::uint32_t (*)()>(owned.core, "MTA_DEPersistentFrontendApiVersion")() == Persistent::ApiVersion,
               "normal Core exposes separate renewable frontend API1 without changing completed startup or bounded trials");
         owned.runPersistent = Export<Persistent::Run>(owned.core, "MTA_RunDEPersistentFrontendV1");
@@ -707,6 +767,7 @@ int wmain(int argc, wchar_t** argv)
         Check(owned.startup != nullptr, "allocated startup publishes completed Core ownership even if backend preparation fails");
         auto startup = StartupState(owned);
         PersistentArgumentChecks(owned);
+        ClockArgumentChecks(owned);
         const auto persistentRequest = PersistentRequest();
         Check(!owned.beginStartup(Startup::ApiVersion), "second startup cannot replace an existing completed Core owner");
         Startup::Snapshot sentinel;
@@ -728,10 +789,12 @@ int wmain(int argc, wchar_t** argv)
                           owned.shutdownStartup(owned.startup) == Frontend::Status::WrongThread &&
                           owned.releaseStartup(owned.startup) == Frontend::Status::WrongThread &&
                           owned.runView(owned.startup, 100, &CancelView, &PublishView) == Frontend::Status::WrongThread &&
+                          owned.runClock(owned.startup, 1000, &CancelClock, &PublishClock) == Frontend::Status::WrongThread &&
                           owned.runPersistent(owned.startup, &persistentRequest) == Frontend::Status::WrongThread;
             });
         other.join();
-        Check(foreign, "foreign thread cannot read, bind, pulse, stop, release or start persistent input on the completed Core owner");
+        Check(foreign && !clockCancelCalls && !clockPublishCalls,
+              "foreign thread cannot read, bind, pulse, stop, release or start clock/persistent work on the completed Core owner");
         Check(owned.runView(owned.startup, 0, &CancelView, &PublishView) == Frontend::Status::InvalidArgument &&
                   owned.runView(owned.startup, 35001, &CancelView, &PublishView) == Frontend::Status::InvalidArgument &&
                   owned.runView(owned.startup, 100, nullptr, &PublishView) == Frontend::Status::InvalidArgument &&
@@ -765,6 +828,7 @@ int wmain(int argc, wchar_t** argv)
         Frontend::Snapshot state{};
         if (mode == L"backend-failure")
         {
+            ClockRejected(owned, Frontend::Status::Failed, "failed backend owner rejects completed-owner clock before invoking callbacks");
             Check(startup[Startup::Phase] == 5 && startup[Startup::CoreRetained] && startup[Startup::BackendStartAttempted] &&
                       !startup[Startup::BackendStarted] && startup[Startup::LastFailure],
                   "missing actual Game DE publishes a failed handle retaining its completed Core for explicit cleanup");
@@ -783,6 +847,18 @@ int wmain(int argc, wchar_t** argv)
                       startup[Startup::BackendStarted] && !startup[Startup::ExactImageBound] && startup[Startup::Pulses] >= 1,
                   "Begin completes a real Core and initializes its actual backend without native engine binding");
             CheckIsolation(true);
+            const auto beforeClock = StartupState(owned);
+            Check(owned.runClock(owned.startup, 1000, &CancelClock, &PublishClock) == Frontend::Status::Failed && !clockCancelCalls && !clockPublishCalls,
+                  "completed-owner clock refuses actual wrong-image backend binding before native Begin or publication");
+            const auto afterClock = StartupState(owned);
+            Check(afterClock[Startup::Phase] == 2 && afterClock[Startup::CoreRetained] && afterClock[Startup::BackendStarted] &&
+                      !afterClock[Startup::ExactImageBound] && afterClock[Startup::Pulses] == beforeClock[Startup::Pulses] &&
+                      afterClock[Startup::CapabilitiesLow] == beforeClock[Startup::CapabilitiesLow] &&
+                      afterClock[Startup::CapabilitiesHigh] == beforeClock[Startup::CapabilitiesHigh] &&
+                      afterClock[Startup::ViewRuns] == beforeClock[Startup::ViewRuns] && afterClock[Startup::LastViewCleanupComplete] &&
+                      afterClock[Startup::LastFailure] == static_cast<std::uint32_t>(Startup::Failure::InputBind),
+                  "safe clock preflight refusal keeps actual completed Core phase2, initialized backend and existing Startup32 semantics");
+            clockWrongImageRefusalVerified = true;
             const auto pulses = startup[Startup::Pulses];
             Check(owned.pulseStartup(owned.startup) == Frontend::Status::Ok && StartupState(owned)[Startup::Pulses] == pulses + 1,
                   "same owner pulses its actual initialized Game DE backend");
@@ -806,6 +882,12 @@ int wmain(int argc, wchar_t** argv)
                   "persistent wrong-image refusal retains exact completed Core/backend capabilities and admits no view ownership");
             CheckIsolation(true);
             initializeGui();
+            const auto  beforeForeignBorrow = StartupState(owned);
+            bool        foreignBorrowRejected = false;
+            std::thread foreignBorrow([&] { foreignBorrowRejected = owned.create(Frontend::ApiVersion, owned.gui) == nullptr; });
+            foreignBorrow.join();
+            Check(foreignBorrowRejected && StartupState(owned) == beforeForeignBorrow,
+                  "foreign-thread direct frontend creation cannot allocate or alter the completed Core before owner admission");
             const auto empty = Raster(owned, true);
             Check(std::all_of(empty.begin(), empty.end(), [&](auto value) { return value == empty.front(); }), "empty actual GUI target is uniform");
             owned.observed->ResetSettingsObservation();
@@ -822,6 +904,7 @@ int wmain(int argc, wchar_t** argv)
                   "retained frontend prevents a second bounded view from replacing its Core/GUI ownership");
             Check(owned.runPersistent(owned.startup, &persistentRequest) == Frontend::Status::Busy && !cancelCalls && !publishCalls && !heartbeatCalls,
                   "retained actual frontend prevents persistent input from replacing existing Core/GUI ownership");
+            ClockRejected(owned, Frontend::Status::Busy, "retained actual frontend prevents completed-owner clock from borrowing Core concurrently");
             if (mode == L"frontend-failure")
                 Check(state[Frontend::Phase] == 5, "missing XML fails only borrowed frontend startup while the completed Core remains owned");
             else
@@ -886,6 +969,7 @@ int wmain(int argc, wchar_t** argv)
                   "actual CPU frontend services retire independently of the backend owner");
             Check(owned.shutdownStartup(owned.startup) == Frontend::Status::Busy && owned.releaseStartup(owned.startup) == Frontend::Status::Busy,
                   "stopped but unreleased frontend handle still prevents destroying its borrowed completed Core");
+            ClockRejected(owned, Frontend::Status::Busy, "stopped but unreleased frontend still excludes completed-owner clock admission");
             const auto staleFrontend = owned.frontend;
             Check(owned.release(owned.frontend) == Frontend::Status::Ok, "release the completed actual borrowed frontend");
             owned.frontend = nullptr;
@@ -923,6 +1007,7 @@ int wmain(int argc, wchar_t** argv)
               "completed shutdown is idempotent and blocks new backend work");
         Check(owned.runPersistent(owned.startup, &persistentRequest) == Frontend::Status::Stopped && !cancelCalls && !publishCalls && !heartbeatCalls,
               "stopped completed Core refuses persistent work without renewing a host lifetime or native lease");
+        ClockRejected(owned, Frontend::Status::Stopped, "stopped completed Core rejects new clock work without callbacks");
         owned.observed->ResetSettingsObservation();
         Check(!owned.create(Frontend::ApiVersion, owned.gui) && !StartupState(owned)[Startup::FrontendRetained],
               "stopped completed Core rejects a new borrowed frontend before final release");
@@ -933,6 +1018,9 @@ int wmain(int argc, wchar_t** argv)
               "released completed Core handle cannot access freed singleton state");
         Check(owned.runPersistent(staleStartup, &persistentRequest) == Frontend::Status::InvalidArgument && !cancelCalls && !publishCalls && !heartbeatCalls,
               "retired completed Core identity cannot start persistent work or access freed state");
+        Check(owned.runClock(staleStartup, 1000, &CancelClock, &PublishClock) == Frontend::Status::InvalidArgument && !clockCancelCalls && !clockPublishCalls &&
+                  clockPublicationShapeValid,
+              "retired completed Core identity cannot start clock work or publish through stale callbacks");
         CheckIsolation(false);
         if (mode == L"normal")
         {

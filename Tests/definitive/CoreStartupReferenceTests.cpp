@@ -92,6 +92,10 @@ namespace deonline
         {
             return worker.Start(address, true, false, false, 0, 1, false, false, false, false, false, false, true, true);
         }
+        static bool ClockBeforeWithoutFrontend(CoreStartupReference& worker, const void* address) noexcept
+        {
+            return worker.Start(address, true, false, false, 0, 1, false, false, false, false, false, false, false, false, true);
+        }
     };
 }
 
@@ -115,6 +119,29 @@ namespace
         worstApiMs = (std::max)(worstApiMs, elapsed);
         Check(elapsed < 500, "value-only worker API blocked near the loader delay");
         return result;
+    }
+    template <class Capture, class Read>
+    bool ContendedClockProgress(Capture capture, Read read, volatile LONG* counters)
+    {
+        const auto previousCount = counters[9];
+        const auto previousSequence = read(DefinitiveClockReference::Sequence);
+        const auto deadline = GetTickCount64() + 1000;
+        bool       lastCapture = false;
+        // A bounded seqlock capture may legitimately refuse one concurrent
+        // publication. Observe a later coherent publication while the real
+        // input lock stays held, without assuming a fixed scheduler interval.
+        do
+        {
+            lastCapture = Fast(capture);
+            if (lastCapture && counters[9] > previousCount && read(DefinitiveClockReference::Phase) == 3 &&
+                read(DefinitiveClockReference::Sequence) > previousSequence)
+                return true;
+            Sleep(1);
+        } while (GetTickCount64() < deadline);
+        std::fprintf(stderr, "Clock cache contention timeout: count_before=%ld count_after=%ld sequence_before=%u sequence_after=%u phase=%u captured=%u\n",
+                     static_cast<long>(previousCount), static_cast<long>(counters[9]), previousSequence, read(DefinitiveClockReference::Sequence),
+                     read(DefinitiveClockReference::Phase), lastCapture ? 1u : 0u);
+        return false;
     }
     void Wait(deonline::CoreStartupReference& worker)
     {
@@ -159,7 +186,7 @@ namespace
             for (const auto* name :
                  {L"MTA_CORE_FIXTURE_DELAY_MS", L"MTA_CORE_FIXTURE_BAD_VERSION", L"MTA_CORE_FIXTURE_BAD_STATE", L"MTA_CORE_FIXTURE_BAD_INITIALIZE",
                   L"MTA_CORE_FIXTURE_FAIL_ATTACH", L"MTA_CORE_FIXTURE_INPUT_MODE", L"MTA_CORE_FIXTURE_RENDER_MODE", L"MTA_CORE_FIXTURE_GUI_MODE",
-                  L"MTA_CORE_FIXTURE_SURFACE_MODE", L"MTA_CORE_FIXTURE_CLOCK_MODE"})
+                  L"MTA_CORE_FIXTURE_SURFACE_MODE", L"MTA_CORE_FIXTURE_CLOCK_MODE", L"MTA_CORE_FIXTURE_FRONTEND_CLOCK_MODE"})
                 Set(name, L"0");
         }
         ~Fixture()
@@ -218,6 +245,200 @@ namespace
             observedDeleteCounters.store(nullptr);
         }
     };
+
+    void TestFrontendClockWorker(deonline::CoreStartupReference& worker, const std::filesystem::path& root, const std::wstring& mode,
+                                 const std::filesystem::path& coreFixture)
+    {
+        namespace Clock = DefinitiveClockReference;
+        namespace Startup = DefinitiveFrontendStartup;
+        namespace Report = deonline::FrontendStartupReport;
+        const std::array<const wchar_t*, 25> modes = {L"frontend-clock",
+                                                      L"frontend-clock-cancel",
+                                                      L"frontend-clock-wrong-api",
+                                                      L"frontend-clock-refused",
+                                                      L"frontend-clock-workload-incomplete",
+                                                      L"frontend-clock-short-workload",
+                                                      L"frontend-clock-owner-corrupt",
+                                                      L"frontend-clock-returned-pending",
+                                                      L"frontend-clock-thrown-pending",
+                                                      L"frontend-clock-stale-terminal",
+                                                      L"frontend-clock-retained-terminal",
+                                                      L"frontend-clock-cache-contention",
+                                                      L"frontend-clock-thrown-retired",
+                                                      L"frontend-clock-missing-export",
+                                                      L"frontend-clock-no-publication-busy",
+                                                      L"frontend-clock-no-publication-failed-unqualified",
+                                                      L"frontend-clock-no-publication-thrown",
+                                                      L"frontend-clock-mismatched-producer",
+                                                      L"frontend-clock-wrong-clock-count",
+                                                      L"frontend-clock-prebegin-cancel",
+                                                      L"frontend-clock-reserved-terminal",
+                                                      L"frontend-clock-view-failed",
+                                                      L"frontend-clock-owner-read-thrown",
+                                                      L"frontend-clock-binding-missing",
+                                                      L"frontend-clock-view-caps-changed"};
+        const auto                           found = std::find_if(modes.begin(), modes.end(), [&](const auto* value) { return mode == value; });
+        Check(found != modes.end(), "completed clock worker fixture mode must be explicit");
+        const auto              scenario = static_cast<unsigned>(found - modes.begin());
+        Fixture                 fixture(400 + scenario);
+        WorkerDeleteObservation deleteObservation;
+        CopyCore(coreFixture, root);
+        Set(L"MTA_CORE_FIXTURE_FRONTEND_CLOCK_MODE", std::to_wstring(scenario));
+        Check(!deonline::CoreStartupReferenceTestAccess::ClockBeforeWithoutFrontend(worker, &anchor),
+              "clock-before-view is an additive completed-owner policy, never an independent Start mode");
+        Check(!worker.CaptureGuiFrontendStartupClockV2() && !worker.CaptureGuiFrontendStartupClockOwnerV2() && !worker.ReadGuiFrontendStartupClockV2(0) &&
+                  !worker.ReadGuiFrontendStartupClockOwnerV2(0),
+              "V2 clock and retained owner caches begin neutral");
+        Check(Fast([&] { return worker.BeginGuiFrontendStartupReferenceV2(&anchor); }), "V2 queues the same asynchronous completed owner");
+        Check(WaitForSingleObject(fixture.entered, 5000) == WAIT_OBJECT_0, "V2 fixture loaded on its worker");
+        deleteObservation.Arm(fixture.counters);
+        Check(!worker.BeginGuiFrontendStartupReference(&anchor) && !worker.BeginClockReference(&anchor) && !worker.BeginClockSetReference(&anchor),
+              "pending V2 excludes historical view and standalone clock protocols");
+        SetEvent(fixture.release);
+        const auto deadline = GetTickCount64() + 10000;
+        if (scenario == 2 || scenario == 13)
+        {
+            Wait(worker);
+            Check(worker.Read(16) == 26 && !worker.Read(17) && !fixture.counters[33] && !fixture.counters[34] && !fixture.counters[35] &&
+                      !worker.CaptureGuiFrontendStartupClockV2() && !worker.CaptureGuiFrontendStartupClockOwnerV2(),
+                  "missing or wrong optional completed clock API refuses before Core Begin or callbacks");
+            return;
+        }
+        const bool noPublication = scenario == 3 || scenario == 14 || scenario == 15 || scenario == 16 || scenario == 18;
+        if (!noPublication && scenario != 19)
+        {
+            while (!Fast([&] { return worker.CaptureGuiFrontendStartupClockV2(); }))
+            {
+                Check(GetTickCount64() < deadline, "V2 clock publication did not reach the script cache");
+                Sleep(5);
+            }
+            Check(worker.ReadGuiFrontendStartupClockV2(Clock::Version) == 1 && worker.ReadGuiFrontendStartupClockV2(Clock::Phase) == 1 &&
+                      !worker.CaptureGuiFrontendStartupClockOwnerV2() && fixture.counters[35] == 0 && fixture.counters[36] == 1,
+                  "clock executes before view or a post-clock owner read, with independently captured Read96");
+            Check(!worker.CaptureClock() && !worker.ReadClock(0) && !worker.CaptureClockSet() && !worker.CaptureGuiFrontendInput(),
+                  "V2 cannot expose its clock through historical Read/Set or premature GUI caches");
+            bool        foreignRefused = false;
+            std::thread foreign(
+                [&]
+                {
+                    foreignRefused = !worker.CaptureGuiFrontendStartupClockV2() && !worker.CaptureGuiFrontendStartupClockOwnerV2() &&
+                                     !worker.ReadGuiFrontendStartupClockV2(0) && !worker.ReadGuiFrontendStartupClockOwnerV2(0);
+                });
+            foreign.join();
+            Check(foreignRefused, "V2 caches retain the script owner's foreign-thread refusal");
+        }
+        if (scenario == 1)
+            Check(Fast([&] { return worker.Cancel(); }), "V2 cancellation remains a nonblocking request");
+        if (scenario == 11)
+            AcquireSRWLockShared(&deonline::CoreStartupReferenceTestAccess::InputLock(worker));
+        SetEvent(fixture.inputRelease);
+        if (!noPublication && scenario != 19)
+        {
+            while (!fixture.counters[21] && GetTickCount64() < deadline)
+                Sleep(5);
+            Check(fixture.counters[21] && !fixture.counters[35] && fixture.counters[36] == 1 && worker.IsPending(),
+                  "pending native retirement admits neither view nor CoreRead32");
+        }
+        if (scenario == 11)
+        {
+            const bool progressed = ContendedClockProgress([&] { return worker.CaptureGuiFrontendStartupClockV2(); },
+                                                           [&](auto field) { return worker.ReadGuiFrontendStartupClockV2(field); }, fixture.counters);
+            ReleaseSRWLockShared(&deonline::CoreStartupReferenceTestAccess::InputLock(worker));
+            Check(progressed, "clock publication/capture does not acquire the actual contended historical input cache lock");
+        }
+        SetEvent(fixture.movementRelease);
+        const bool quarantined =
+            scenario == 7 || scenario == 8 || scenario == 9 || scenario == 10 || scenario == 14 || scenario == 15 || scenario == 16 || scenario == 18;
+        if (quarantined)
+        {
+            while (!fixture.counters[39] && GetTickCount64() < deadline)
+                Sleep(5);
+            const auto until = GetTickCount64() + 100;
+            while (GetTickCount64() < until)
+            {
+                const auto polled = Fast([&] { return worker.Poll(); });
+                const bool retained = polled == 0 && worker.IsPending() && GetModuleHandleW(L"core.dll") && !fixture.counters[1] && !fixture.counters[35] &&
+                                      !fixture.counters[37] && !fixture.counters[38];
+                if (!retained)
+                {
+                    std::fprintf(stderr, "Completed clock quarantine mismatch: poll=%d pending=%u core=%u counters=", polled, worker.IsPending() ? 1u : 0u,
+                                 GetModuleHandleW(L"core.dll") ? 1u : 0u);
+                    for (const auto field : {0u, 1u, 2u, 33u, 34u, 35u, 36u, 37u, 38u, 39u, 40u})
+                        std::fprintf(stderr, "%u:%ld,", field, static_cast<long>(fixture.counters[field]));
+                    std::fprintf(stderr, " common19=");
+                    for (std::uint32_t field = 0; field != 19; ++field)
+                        std::fprintf(stderr, "%s%u", field ? "," : "", worker.Read(field));
+                    std::fprintf(stderr, "\n");
+                }
+                Check(retained, "unqualified clock return retains live worker/TLS/Core before owner read, view or shutdown");
+                Sleep(5);
+            }
+            Check(fixture.counters[39] && !fixture.counters[26] && fixture.counters[36] == (scenario == 15 ? 2 : 1) &&
+                      fixture.counters[40] == (scenario == 15 ? 1 : 0) && !worker.CaptureGuiFrontendStartupClockOwnerV2(),
+                  "pending/thrown or malformed evidence quarantines before consumer heap unwind; only Failed preflight can probe owner32");
+            return;
+        }
+        Wait(worker);
+        const bool success = scenario == 0 || scenario == 11;
+        const auto expectedError = scenario == 1 ? 12u : scenario == 22 ? 22u : scenario == 21 || scenario == 24 ? 23u : success ? 0u : 27u;
+        const bool terminalMatches = worker.Read(13) == 1 && worker.Read(16) == expectedError && worker.Read(17) == (success ? 1u : 0u) &&
+                                     fixture.counters[33] == 1 && fixture.counters[34] == 1 && fixture.counters[37] == 1 && fixture.counters[38] == 1 &&
+                                     !fixture.counters[40] && !fixture.counters[2] && fixture.counters[1] == fixture.counters[0];
+        if (!terminalMatches)
+        {
+            std::fprintf(stderr, "Completed clock terminal mismatch: expected_error=%u common19=", expectedError);
+            for (std::uint32_t field = 0; field != 19; ++field)
+                std::fprintf(stderr, "%s%u", field ? "," : "", worker.Read(field));
+            std::fprintf(stderr, " counters=");
+            for (const auto field : {0u, 1u, 2u, 33u, 34u, 35u, 36u, 37u, 38u, 40u})
+                std::fprintf(stderr, "%u:%ld,", field, static_cast<long>(fixture.counters[field]));
+            std::fprintf(stderr, "\n");
+        }
+        Check(terminalMatches, "both stages succeed only on one completed owner; every retired failure still shuts down/releases/unloads on its worker");
+        Check(fixture.counters[35] == (success || scenario == 21 || scenario == 24 ? 1 : 0), "any failed clock stage skips GUI admission");
+        if (success)
+            Check(worker.CaptureGuiFrontendStartup() && worker.CaptureGuiFrontendStartupClockOwnerV2() &&
+                      worker.ReadGuiFrontendStartup(Report::Begin + Startup::CapabilitiesLow) == 33 &&
+                      worker.ReadGuiFrontendStartupClockOwnerV2(Startup::CapabilitiesLow) == 97 &&
+                      worker.ReadGuiFrontendStartup(Report::AfterView + Startup::CapabilitiesLow) == 97,
+                  "real Bind33-to97 adds exactly the native-pad capability and preserves it through the same-Core GUI");
+        Check(
+            worker.CaptureGuiFrontendStartup() &&
+                worker.ReadGuiFrontendStartup(Report::Begin + Startup::OwnerThread) == worker.ReadGuiFrontendStartup(Report::Stopped + Startup::OwnerThread) &&
+                worker.ReadGuiFrontendStartup(Report::Stopped + Startup::Phase) == 4 &&
+                worker.ReadGuiFrontendStartup(Report::Stopped + Startup::CleanupComplete) == 1,
+            "original lifecycle96 retains the same completed owner through stop independently of clock outcome");
+        if (scenario == 24)
+            Check(worker.CaptureGuiFrontendStartupClockOwnerV2() && worker.ReadGuiFrontendStartupClockOwnerV2(Startup::CapabilitiesLow) == 97 &&
+                      worker.ReadGuiFrontendStartup(Report::AfterView + Startup::CapabilitiesLow) == 225 && !worker.Read(17),
+                  "retired clock and successful GUI cannot certify final workload success after the borrowed backend capabilities change");
+        if (scenario == 3)
+        {
+            Check(!worker.CaptureGuiFrontendStartupClockV2() && worker.CaptureGuiFrontendStartupClockOwnerV2() && !worker.Read(15) &&
+                      worker.ReadGuiFrontendStartup(Report::AfterView + Startup::Phase) == 2 &&
+                      worker.ReadGuiFrontendStartup(Report::AfterView + Startup::LastFailure) == static_cast<std::uint32_t>(Startup::Failure::InputBind) &&
+                      !worker.ReadGuiFrontendStartup(Report::AfterView + Startup::ViewRuns),
+                  "known Failed bind refusal records genuine owner32 without fabricating native96 or AdapterStopped");
+        }
+        else
+        {
+            Check(worker.CaptureGuiFrontendStartupClockV2(), "final clock snapshot remains available after same-Core GUI and unload");
+            Clock::Snapshot sample{};
+            for (std::uint32_t field = 0; field != Clock::FieldCount; ++field)
+                sample[field] = worker.ReadGuiFrontendStartupClockV2(field);
+            Check(DefinitiveFrontendClockReference::RetiredForCompletedOwner(sample), "every admitted cleanup independently retires the clock");
+            Check(worker.Read(15) == (scenario == 19 ? 0u : 1u), "backend module accounting follows actual clock PIN, including safe no-Begin cancel");
+            if (scenario != 22)
+                Check(worker.CaptureGuiFrontendStartupClockOwnerV2() && worker.ReadGuiFrontendStartupClockOwnerV2(Startup::Phase) == 2 &&
+                          worker.ReadGuiFrontendStartupClockOwnerV2(Startup::CoreRetained) == 1 &&
+                          worker.ReadGuiFrontendStartupClockOwnerV2(Startup::BackendStarted) == 1 &&
+                          !worker.ReadGuiFrontendStartupClockOwnerV2(Startup::ViewRuns) &&
+                          worker.ReadGuiFrontendStartupClockOwnerV2(Startup::LastViewCleanupComplete) == 1,
+                      "independent owner32 is captured after clock retirement and before the GUI view changes ViewRuns");
+        }
+        Check(!worker.ReadGuiFrontendStartupClockV2(Clock::FieldCount) && !worker.ReadGuiFrontendStartupClockOwnerV2(Startup::FieldCount),
+              "V2 scalar cache bounds remain neutral");
+    }
 
     void TestClockWorker(deonline::CoreStartupReference& worker, const std::filesystem::path& root, const std::wstring& mode,
                          const std::filesystem::path& coreFixture)
@@ -296,9 +517,8 @@ namespace
         }
         if (scenario == 6)
         {
-            const auto count = fixture.counters[9];
-            Sleep(30);
-            const bool progressed = Fast([&] { return worker.CaptureClock(); }) && fixture.counters[9] > count && worker.ReadClock(Phase) == 3;
+            const bool progressed =
+                ContendedClockProgress([&] { return worker.CaptureClock(); }, [&](auto field) { return worker.ReadClock(field); }, fixture.counters);
             ReleaseSRWLockShared(&deonline::CoreStartupReferenceTestAccess::InputLock(worker));
             Check(progressed, "clock pending publication and capture never block behind the actual historical input cache lock");
         }
@@ -468,9 +688,8 @@ namespace
         }
         if (scenario == 6)
         {
-            const auto count = fixture.counters[9];
-            Sleep(30);
-            const bool progressed = Fast([&] { return worker.CaptureClockSet(); }) && fixture.counters[9] > count && worker.ReadClockSet(Phase) == 3;
+            const bool progressed =
+                ContendedClockProgress([&] { return worker.CaptureClockSet(); }, [&](auto field) { return worker.ReadClockSet(field); }, fixture.counters);
             ReleaseSRWLockShared(&deonline::CoreStartupReferenceTestAccess::InputLock(worker));
             Check(progressed, "clock pending publication and capture never block behind the actual historical input cache lock");
         }
@@ -822,7 +1041,12 @@ int wmain(int argc, wchar_t** argv)
         Check(!worker.Begin(nullptr), "null anchor must be rejected");
         for (unsigned field = 0; field < 20; ++field)
             Check(worker.Read(field) == 0, "idle cache must be neutral");
-        if (std::wstring(argv[2]).find(L"clock-set") == 0)
+        if (std::wstring(argv[2]).find(L"frontend-clock") == 0)
+        {
+            Check(argc == 4, "completed clock worker fixture requires its controlled Core DLL");
+            TestFrontendClockWorker(worker, root, argv[2], argv[3]);
+        }
+        else if (std::wstring(argv[2]).find(L"clock-set") == 0)
         {
             Check(argc == 4, "Set worker fixture requires its controlled Core DLL");
             TestClockSetWorker(worker, root, argv[2], argv[3]);
@@ -1121,19 +1345,20 @@ int wmain(int argc, wchar_t** argv)
                 "final movement metrics must prove inactive restored scopes");
             Check(fixture.counters[2] == 0 && fixture.counters[1] == fixture.counters[0], "movement callback/unload must share the worker thread");
         }
-        else if (std::wstring(argv[2]) == L"actual-frontend-startup")
+        else if (std::wstring(argv[2]) == L"actual-frontend-startup" || std::wstring(argv[2]) == L"actual-frontend-startup-v2")
         {
             namespace Startup = DefinitiveFrontendStartup;
             namespace Report = deonline::FrontendStartupReport;
-            Check(Fast([&] { return worker.BeginGuiFrontendStartupReference(&anchor); }),
+            const bool v2 = std::wstring(argv[2]) == L"actual-frontend-startup-v2";
+            Check(Fast([&] { return v2 ? worker.BeginGuiFrontendStartupReferenceV2(&anchor) : worker.BeginGuiFrontendStartupReference(&anchor); }),
                   "actual completed Core worker begins without script-thread loader work");
             Wait(worker);
             for (unsigned field = 0; field < 8; ++field)
                 Check(!worker.Read(field), "actual completed Core worker leaves historical startup8 fields reserved");
-            Check(worker.Read(8) == 2 && worker.Read(9) == static_cast<std::uint32_t>(Startup::Status::Failed) &&
+            Check(worker.Read(8) == 2 && worker.Read(9) == static_cast<std::uint32_t>(v2 ? Startup::Status::Stopped : Startup::Status::Failed) &&
                       worker.Read(10) == static_cast<std::uint32_t>(Startup::Status::Ok),
                   "actual Core completes construction, rejects native binding, and shuts down independently");
-            Check(worker.Read(13) == 1 && !worker.Read(14) && !worker.Read(15) && worker.Read(16) == 23 && !worker.Read(17) && !worker.Read(18),
+            Check(worker.Read(13) == 1 && !worker.Read(14) && !worker.Read(15) && worker.Read(16) == (v2 ? 27u : 23u) && !worker.Read(17) && !worker.Read(18),
                   "wrong-image completed view fails workload while actual owner/backend/code cleanup succeeds");
             Check(worker.CaptureGuiFrontendStartup(), "actual copied completed Core lifecycle report survives DLL unload");
             for (const auto offset : {Report::Begin, Report::AfterView})
@@ -1167,6 +1392,12 @@ int wmain(int argc, wchar_t** argv)
                   "a never-started native view invents no256 evidence and obeys report bounds");
             Check(!GetModuleHandleW(L"core.dll") && !GetModuleHandleW(L"game_de.dll") && !GetModuleHandleW(L"pthread.dll"),
                   "actual completed async owner releases its Core/backend/pthread modules");
+            if (v2)
+                Check(!worker.CaptureGuiFrontendStartupClockV2() && worker.CaptureGuiFrontendStartupClockOwnerV2() &&
+                          worker.ReadGuiFrontendStartupClockOwnerV2(Startup::Phase) == 2 &&
+                          worker.ReadGuiFrontendStartupClockOwnerV2(Startup::LastFailure) == static_cast<std::uint32_t>(Startup::Failure::InputBind) &&
+                          !worker.ReadGuiFrontendStartupClockOwnerV2(Startup::ViewRuns),
+                      "actual V2 rejects native binding without inventing96 clock evidence, then retains/copies the genuine clean owner32");
         }
         else if (std::wstring(argv[2]) == L"actual-persistent-frontend")
         {

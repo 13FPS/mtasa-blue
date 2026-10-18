@@ -180,6 +180,14 @@ DE_BRIDGE_API std::uint32_t DE_CoreGuiFrontendStartupApiVersion();
 DE_BRIDGE_API int           DE_CoreGuiFrontendStartupBegin();
 DE_BRIDGE_API int           DE_CoreGuiFrontendStartupCapture();
 DE_BRIDGE_API std::uint32_t DE_CoreGuiFrontendStartupRead(std::uint32_t component);
+// V2 composes Read96 on this completed Core before the existing bounded GUI.
+// The owner32 cache proves that retirement retained the same backend and Core.
+DE_BRIDGE_API std::uint32_t DE_CoreGuiFrontendStartupApiVersionV2();
+DE_BRIDGE_API int           DE_CoreGuiFrontendStartupBeginV2();
+DE_BRIDGE_API int           DE_CoreGuiFrontendStartupCaptureClockV2();
+DE_BRIDGE_API std::uint32_t DE_CoreGuiFrontendStartupReadClockV2(std::uint32_t component);
+DE_BRIDGE_API int           DE_CoreGuiFrontendStartupCaptureClockOwnerV2();
+DE_BRIDGE_API std::uint32_t DE_CoreGuiFrontendStartupReadClockOwnerV2(std::uint32_t component);
 // A renewable host lifetime is independently selected. Neither these288
 // values nor the generation token can be read through historical trial APIs.
 DE_BRIDGE_API std::uint32_t DE_CorePersistentFrontendApiVersion();

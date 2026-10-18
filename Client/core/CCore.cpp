@@ -2217,16 +2217,29 @@ namespace DefinitiveFrontend
 
         static Controller* CreateSession(CGUI* gui)
         {
-            auto controller = std::make_unique<Controller>();
-            controller->core = CCore::GetSingletonPtr();
+            bool ownsStartupLock = false;
+            if (!DefinitiveFrontendStartup::AcquireFrontendBorrow(ownsStartupLock))
+                return nullptr;
+            struct StartupBorrowPin
+            {
+                bool ownsLock;
+                ~StartupBorrowPin() { DefinitiveFrontendStartup::ReleaseFrontendBorrow(ownsLock); }
+            } pin{ownsStartupLock};
+            // Pin singleton lookup through allocation and StartFrontend. The
+            // startup owner cannot release Core or begin a native clock scope
+            // between an admission check and this borrow becoming observable.
+            auto*      existingCore = CCore::GetSingletonPtr();
+            const auto ownerThread = GetCurrentThreadId();
             // A partial normal Core still owns its adapter and constructor
             // scope. Frontend adoption cannot move it onto a foreign thread.
-            if (controller->core && controller->core->m_frontendCoreOwnerThread != controller->owner)
+            if (existingCore && existingCore->m_frontendCoreOwnerThread != ownerThread)
                 return nullptr;
             // A completed startup Core remains inspectable after failure or
             // Shutdown, but that retention does not admit a new GUI borrower.
-            if (controller->core && controller->core->m_frontendStartupOwned && !controller->core->m_frontendStartupAccepting)
+            if (existingCore && existingCore->m_frontendStartupOwned && !existingCore->m_frontendStartupAccepting)
                 return nullptr;
+            auto controller = std::make_unique<Controller>();
+            controller->core = existingCore;
             if (!controller->core)
             {
                 controller->core = new CCore(CCore::FrontendShellTag{});

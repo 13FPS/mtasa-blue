@@ -18,16 +18,22 @@
 #include "../../Client/core/DefinitiveRenderReference.h"
 #include "../../Client/core/DefinitiveGuiStartupReference.h"
 #include "../../Client/core/DefinitiveGuiSurfaceReference.h"
+#include "../../Client/core/DefinitiveGuiFrontendInputReference.h"
+#include "../../Client/core/DefinitiveFrontendClockReference.h"
+#include "../../Client/core/DefinitiveFrontendStartup.h"
 #include <filesystem>
 #include <stdexcept>
 
 namespace
 {
-    HANDLE                            mapping = nullptr;
-    volatile LONG*                    counters = nullptr;
-    bool                              mtaSet = false, gtaSet = false;
-    DefinitiveInputReference::Request inputRequest;
-    bool                              guiRequest = false, guiSurfaceRequest = false, clockRequest = false, clockSetRequest = false;
+    HANDLE                              mapping = nullptr;
+    volatile LONG*                      counters = nullptr;
+    bool                                mtaSet = false, gtaSet = false;
+    DefinitiveInputReference::Request   inputRequest;
+    bool                                guiRequest = false, guiSurfaceRequest = false, clockRequest = false, clockSetRequest = false;
+    DefinitiveFrontendStartup::Snapshot frontendOwner{};
+    HMODULE                             frontendBackend = nullptr;
+    bool                                frontendClockReturned = false, frontendOwnerReadThrew = false;
 
     DWORD Setting(const wchar_t* name)
     {
@@ -112,10 +118,14 @@ extern "C" __declspec(dllexport) std::uint32_t MTA_ConfigureDEClockSetReference(
 }
 #endif
 
-void ControlledClock()
+void ControlledClock(bool completedOwner = false)
 {
     using namespace DefinitiveClockReference;
-    const auto mode = Setting(L"MTA_CORE_FIXTURE_CLOCK_MODE");
+    const auto frontendMode = completedOwner ? Setting(L"MTA_CORE_FIXTURE_FRONTEND_CLOCK_MODE") : 0u;
+    const auto mode = completedOwner ? (frontendMode == 4                         ? 11u
+                                        : frontendMode >= 7 && frontendMode <= 10 ? frontendMode
+                                                                                  : 0u)
+                                     : Setting(L"MTA_CORE_FIXTURE_CLOCK_MODE");
     Snapshot   sample{};
     sample[Version] = ApiVersion;
     sample[Phase] = 1;
@@ -123,6 +133,8 @@ void ControlledClock()
     sample[GenerationLow] = 17;
     sample[EngineThread] = GetCurrentThreadId() + 1;
     sample[ProducerThread] = GetCurrentThreadId();
+    if (completedOwner && frontendMode == 17)
+        ++sample[ProducerThread];
     sample[NativeBound] = sample[NativeHooked] = sample[NativeActive] = sample[NativeReady] = 1;
     sample[Hour] = 12;
     sample[Minute] = 34;
@@ -151,7 +163,7 @@ void ControlledClock()
         sample[NativeTimer] = 10000 + sample[Sequence];
         sample[LastMinuteChange] = 9900 + sample[Sequence];
         Call(9);
-        inputRequest.publish(sample.data(), FieldCount);
+        inputRequest.publish(sample.data(), completedOwner && frontendMode == 18 ? FieldCount - 1 : FieldCount);
     };
     emit();
     const auto release = Event(L"MTA_CORE_FIXTURE_INPUT_RELEASE", SYNCHRONIZE);
@@ -180,14 +192,177 @@ void ControlledClock()
     sample[Reason] = static_cast<std::uint32_t>(inputRequest.cancelled() ? StopReason::Cancelled : StopReason::Completed);
     sample[CleanupComplete] = sample[EndSucceeded] = sample[NativeRestored] = sample[WorkloadComplete] = 1;
     sample[CleanupPending] = sample[NativeBound] = sample[NativeHooked] = sample[RetainedPeerThreads] = 0;
-    sample[ElapsedMs] = sample[WorkloadElapsedMs] = MaximumDurationMs;
+    sample[ElapsedMs] = sample[WorkloadElapsedMs] = completedOwner ? (frontendMode == 5 ? 1000u : 2000u) : MaximumDurationMs;
     if (mode == 11)
         sample[WorkloadComplete] = 0;
     if (mode == 9)
         sample[Version] = ApiVersion + 1;
     if (mode == 10)
         sample[RetainedPeerThreads] = 1;
+    if (completedOwner && frontendMode == 20)
+        sample[88] = 1;
     emit();
+}
+
+extern "C" __declspec(dllexport) std::uint32_t MTA_DEFrontendStartupApiVersion()
+{
+    Call(32);
+    return DefinitiveFrontendStartup::ApiVersion;
+}
+
+extern "C" __declspec(dllexport) void* MTA_BeginDEFrontendStartup(std::uint32_t version)
+{
+    namespace Startup = DefinitiveFrontendStartup;
+    Call(33);
+    if (version != Startup::ApiVersion || !mtaSet || !gtaSet)
+        return nullptr;
+    frontendOwner = {};
+    frontendOwner[Startup::Version] = Startup::ApiVersion;
+    frontendOwner[Startup::Phase] = 2;
+    frontendOwner[Startup::OwnerThread] = GetCurrentThreadId();
+    frontendOwner[Startup::CoreRetained] = frontendOwner[Startup::BackendStartAttempted] = frontendOwner[Startup::BackendStarted] = 1;
+    frontendOwner[Startup::Pulses] = frontendOwner[Startup::LastViewCleanupComplete] = 1;
+    frontendOwner[Startup::CapabilitiesLow] = 33;
+    wchar_t path[32768]{};
+    GetModuleFileNameW(nullptr, path, 32768);
+    frontendBackend = LoadLibraryExW((std::filesystem::path(path).parent_path() / L"game_de.dll").c_str(), nullptr,
+                                     LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+    return frontendBackend ? &frontendOwner : nullptr;
+}
+
+extern "C" __declspec(dllexport) DefinitiveFrontendStartup::Status MTA_ReadDEFrontendStartup(void* handle, std::uint32_t* output, std::uint32_t count)
+{
+    namespace Startup = DefinitiveFrontendStartup;
+    Call(36);
+    if (handle != &frontendOwner || !output || count != Startup::FieldCount)
+        return Startup::Status::InvalidArgument;
+    if (Setting(L"MTA_CORE_FIXTURE_FRONTEND_CLOCK_MODE") == 22 && frontendClockReturned && !frontendOwnerReadThrew)
+    {
+        frontendOwnerReadThrew = true;
+        throw std::runtime_error("controlled completed owner read exception after clock retirement");
+    }
+    if (counters && counters[34] && !frontendClockReturned)
+        Call(40);
+    std::copy(frontendOwner.begin(), frontendOwner.end(), output);
+    return Startup::Status::Ok;
+}
+
+extern "C" __declspec(dllexport) std::uint32_t MTA_DEFrontendClockReferenceApiVersion()
+{
+    return Setting(L"MTA_CORE_FIXTURE_FRONTEND_CLOCK_MODE") == 2 ? 2u : DefinitiveFrontendClockReference::ApiVersion;
+}
+
+#ifndef CORE_FIXTURE_MISSING_FRONTEND_CLOCK_EXPORT
+extern "C" __declspec(dllexport) DefinitiveFrontendClockReference::Status MTA_RunDEFrontendClockReference(void* handle, std::uint32_t duration,
+                                                                                                          DefinitiveInputReference::CancelCallback  cancelled,
+                                                                                                          DefinitiveInputReference::PublishCallback publish)
+{
+    namespace Startup = DefinitiveFrontendStartup;
+    using Status = Startup::Status;
+    const auto mode = Setting(L"MTA_CORE_FIXTURE_FRONTEND_CLOCK_MODE");
+    Call(34);
+    if (handle != &frontendOwner || duration != 2000 || !cancelled || !publish)
+        return Status::InvalidArgument;
+    if (mode == 3)
+    {
+        frontendOwner[Startup::LastFailure] = static_cast<std::uint32_t>(Startup::Failure::InputBind);
+        frontendClockReturned = true;
+        return Status::Failed;
+    }
+    if (mode == 14 || mode == 15 || mode == 16)
+    {
+        Call(39);
+        Call(25);
+        if (mode == 16)
+            throw std::runtime_error("controlled missing completed clock report exception");
+        return mode == 14 ? Status::Busy : Status::Failed;
+    }
+    frontendOwner[Startup::ExactImageBound] = 1;
+    frontendOwner[Startup::CapabilitiesLow] |= static_cast<std::uint32_t>(mta::game_de::NativePadBindingCapabilities);
+    ++frontendOwner[Startup::Pulses];
+    inputRequest = {duration, cancelled, publish};
+    if (mode == 19)
+    {
+        namespace Clock = DefinitiveClockReference;
+        Clock::Snapshot sample{};
+        sample[Clock::Version] = Clock::ApiVersion;
+        sample[Clock::Phase] = 2;
+        sample[Clock::Sequence] = sample[Clock::CleanupComplete] = 1;
+        sample[Clock::Reason] = static_cast<std::uint32_t>(Clock::StopReason::Cancelled);
+        publish(sample.data(), Clock::FieldCount);
+        frontendClockReturned = true;
+        return Status::Stopped;
+    }
+    ControlledClock(true);
+    Call(39);
+    if (mode == 7 || mode == 8 || mode == 9 || mode == 10 || mode == 18)
+    {
+        Call(25);
+        if (mode == 8)
+            throw std::runtime_error("controlled completed clock returned pending exception");
+        return Status::Ok;
+    }
+    frontendClockReturned = true;
+    if (mode == 6)
+        frontendOwner[Startup::CapabilitiesLow] |= static_cast<std::uint32_t>(mta::game_de::AdapterCapability::NativeDeviceStateCandidateRead);
+    if (mode == 23)
+        frontendOwner[Startup::CapabilitiesLow] &= ~static_cast<std::uint32_t>(mta::game_de::NativePadBindingCapabilities);
+    if (mode == 12)
+        throw std::runtime_error("controlled completed clock exception after retirement");
+    return cancelled() ? Status::Stopped : Status::Ok;
+}
+#endif
+
+extern "C" __declspec(dllexport) DefinitiveFrontendStartup::Status MTA_RunDEFrontendStartupView(void* handle, std::uint32_t duration,
+                                                                                                DefinitiveInputReference::CancelCallback  cancelled,
+                                                                                                DefinitiveInputReference::PublishCallback publish)
+{
+    namespace Startup = DefinitiveFrontendStartup;
+    namespace Gui = DefinitiveGuiStartupReference;
+    namespace Input = DefinitiveGuiFrontendInputReference;
+    namespace Surface = DefinitiveGuiSurfaceReference;
+    Call(35);
+    if (handle != &frontendOwner || duration != Input::MaximumDurationMs || !cancelled || !publish || !frontendClockReturned)
+        return Startup::Status::InvalidArgument;
+    Input::Snapshot sample{};
+    sample[Gui::Version] = Input::ApiVersion;
+    sample[Gui::Phase] = 2;
+    sample[Gui::Sequence] = 1;
+    sample[Gui::CleanupComplete] = sample[Gui::ObserverEnded] = sample[Gui::GuiCleanupComplete] = 1;
+    sample[Surface::WindowCleanupComplete] = sample[Surface::CompositionCleanupComplete] = sample[Surface::ClassUnregistered] = 1;
+    sample[Input::NativeEnded] = 1;
+    sample[Gui::BackendPinnedExpected] = 1;
+    sample[Gui::WorkloadComplete] = sample[Gui::WorkloadSucceeded] = Setting(L"MTA_CORE_FIXTURE_FRONTEND_CLOCK_MODE") == 21 ? 0u : 1u;
+    publish(sample.data(), Input::FieldCount);
+    frontendOwner[Startup::ViewRuns] = frontendOwner[Startup::LastViewCleanupComplete] = 1;
+    if (Setting(L"MTA_CORE_FIXTURE_FRONTEND_CLOCK_MODE") == 24)
+        frontendOwner[Startup::CapabilitiesLow] |= static_cast<std::uint32_t>(mta::game_de::AdapterCapability::NativeDeviceStateCandidateRead);
+    ++frontendOwner[Startup::Pulses];
+    return sample[Gui::WorkloadSucceeded] ? Startup::Status::Ok : Startup::Status::Failed;
+}
+
+extern "C" __declspec(dllexport) DefinitiveFrontendStartup::Status MTA_ShutdownDEFrontendStartup(void* handle)
+{
+    namespace Startup = DefinitiveFrontendStartup;
+    Call(37);
+    if (handle != &frontendOwner)
+        return Startup::Status::InvalidArgument;
+    frontendOwner[Startup::Phase] = 4;
+    frontendOwner[Startup::BackendStarted] = frontendOwner[Startup::ExactImageBound] = 0;
+    frontendOwner[Startup::CapabilitiesLow] = frontendOwner[Startup::CapabilitiesHigh] = 0;
+    frontendOwner[Startup::CleanupComplete] = 1;
+    if (frontendBackend)
+    {
+        FreeLibrary(frontendBackend);
+        frontendBackend = nullptr;
+    }
+    return Startup::Status::Ok;
+}
+
+extern "C" __declspec(dllexport) DefinitiveFrontendStartup::Status MTA_ReleaseDEFrontendStartup(void* handle)
+{
+    Call(38);
+    return handle == &frontendOwner ? DefinitiveFrontendStartup::Status::Ok : DefinitiveFrontendStartup::Status::InvalidArgument;
 }
 
 void ControlledClockSet()

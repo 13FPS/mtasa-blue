@@ -29,6 +29,7 @@
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
     #include "DefinitiveProcess.h"
     #include "DefinitiveFrontendStartup.h"
+    #include "DefinitiveFrontendClockReference.h"
 #endif
 
 #define CORE_API extern "C" __declspec(dllexport)
@@ -246,6 +247,18 @@ CORE_API DefinitiveFrontendStartup::Status MTA_RunDEFrontendStartupView(void* ha
                                                                         DefinitiveInputReference::PublishCallback publish)
 {
     return DefinitiveFrontendStartup::RunViewOwner(handle, durationMs, cancel, publish);
+}
+
+CORE_API std::uint32_t MTA_DEFrontendClockReferenceApiVersion()
+{
+    return DefinitiveFrontendClockReference::ApiVersion;
+}
+
+CORE_API DefinitiveFrontendClockReference::Status MTA_RunDEFrontendClockReference(void* handle, std::uint32_t durationMs,
+                                                                                  DefinitiveInputReference::CancelCallback  cancel,
+                                                                                  DefinitiveInputReference::PublishCallback publish)
+{
+    return DefinitiveFrontendClockReference::RunOwner(handle, durationMs, cancel, publish);
 }
 
 CORE_API std::uint32_t MTA_DEPersistentFrontendApiVersion()

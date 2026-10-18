@@ -541,6 +541,30 @@ std::uint32_t DE_CoreGuiFrontendStartupRead(std::uint32_t component)
 {
     return ControllerAccessAllowed() ? coreStartup.ReadGuiFrontendStartup(component) : 0;
 }
+std::uint32_t DE_CoreGuiFrontendStartupApiVersionV2()
+{
+    return 2;
+}
+int DE_CoreGuiFrontendStartupBeginV2()
+{
+    return ControllerAccessAllowed() && !movementAdapter && !client && coreStartup.BeginGuiFrontendStartupReferenceV2(&moduleAnchor) ? 1 : 0;
+}
+int DE_CoreGuiFrontendStartupCaptureClockV2()
+{
+    return ControllerAccessAllowed() && coreStartup.CaptureGuiFrontendStartupClockV2() ? 1 : 0;
+}
+std::uint32_t DE_CoreGuiFrontendStartupReadClockV2(std::uint32_t component)
+{
+    return ControllerAccessAllowed() ? coreStartup.ReadGuiFrontendStartupClockV2(component) : 0;
+}
+int DE_CoreGuiFrontendStartupCaptureClockOwnerV2()
+{
+    return ControllerAccessAllowed() && coreStartup.CaptureGuiFrontendStartupClockOwnerV2() ? 1 : 0;
+}
+std::uint32_t DE_CoreGuiFrontendStartupReadClockOwnerV2(std::uint32_t component)
+{
+    return ControllerAccessAllowed() ? coreStartup.ReadGuiFrontendStartupClockOwnerV2(component) : 0;
+}
 std::uint32_t DE_CorePersistentFrontendApiVersion()
 {
     return DefinitivePersistentFrontend::ApiVersion;

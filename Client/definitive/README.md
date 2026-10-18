@@ -33,14 +33,23 @@ also exposed an acknowledgement check that confused active cleanup ownership
 with a cleanup fault. The correction keeps that ownership flag while visible
 and permits fresh input eligibility only after the same adapter has fully
 retired its previous native generation. Pending cleanup and replacement owners
-still refuse reacquisition. This correction needs a fresh GTA reopening test.
-Earlier cursor, Settings and clock
+still refuse reacquisition.
+
+The follow-up GTA trial on `dcf4ee357` acknowledged and retired its first menu
+correctly, then stopped cleanly. No second Show command was recorded, so native
+re-entry remains untested. The user was unsure which reopening chord was used;
+that recording contains no key-state evidence to resolve the cause. The script
+now rearms when F9 is released with modifiers held and preserves a newer reopen
+request while GUI closing finishes. Focus loss still hides the menu. A change
+log for only Ctrl, Shift and F9 distinguishes observed keys, debounce and queued
+intent without recording other keystrokes. A shorter two-menu GTA test remains
+required. Earlier cursor, Settings and clock
 results below remain separate evidence. Gameplay, networking and full client
 startup remain unavailable, and the root **EXPERIMENTAL** notice stays.
 
 Offline validation passed 69 normal Core build guards and both classic compile
-profiles; 2,239 actual MTA GUI host checks across seven cases; 172 worker cases;
-1,358 script checks; 1,329 native callback and input-retirement checks in an
+profiles; seven actual MTA GUI host cases; 172 worker cases;
+1,361 script checks; 1,329 native callback and input-retirement checks in an
 owned test process; and 2,386 Bridge checks in a rejected non-game host.
 The new package matrix passed 3,746 checks using one disposable game copy, and
 the preceding frontend ownership matrix passed all 1,175 checks again. These

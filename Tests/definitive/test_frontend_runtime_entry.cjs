@@ -44,7 +44,7 @@ function protocolFixture(options = {}) {
     let pending = null, stage = 1, coreSamples = 1, viewSamples = 0, guiHides = 0, focusHides = 0;
     let lastCoreGeneration = 0, lastCoreRetired = 0, backendPinned = false, hostExpired = false;
     let snapshot = null, captured = null, mutated = false, heartbeatRejected = false;
-    let stopSequence = 0, failure = 0, reason = 0;
+    let stopSequence = 0, failure = 0, reason = 0, closeRetirementPending = null, viewStopReason = 1;
     const takeCore = nextStage => {
         stage = nextStage;
         ++coreSamples;
@@ -69,7 +69,7 @@ function protocolFixture(options = {}) {
     };
     const publish = () => {
         const terminal = phase === 7 || phase === 8;
-        const retired = phase !== 4;
+        const retired = viewGeneration <= viewsRetired;
         const values = Array(416).fill(0);
         Object.assign(values, { 0: 1, 1: phase, 2: polls, 4: polls * 50, 5: generation, 7: 66, 8: 77,
             9: accepted, 10: acceptedCommand, 11: acknowledged, 12: acknowledgedCommand,
@@ -83,7 +83,10 @@ function protocolFixture(options = {}) {
             45: hostExpired ? 1 : 0, 46: focusHides, 47: guiHides,
             49: viewsRetired, 50: 500, 51: 500 });
         values.splice(64, 64, ...core());
-        values.splice(128, 288, ...viewState(viewGeneration, retired));
+        const view = viewState(viewGeneration, retired);
+        if (retired && viewGeneration) view[269] = viewStopReason;
+        if (phase === 9 && !retired) Object.assign(view, { 1: 3, 269: viewStopReason });
+        values.splice(128, 288, ...view);
         options.mutateEvery?.(values, { polls, phase, viewGeneration });
         if (!mutated && options.mutate && options.mutateAt === polls) {
             options.mutate(values, { polls, phase, viewGeneration });
@@ -112,13 +115,28 @@ function protocolFixture(options = {}) {
             ++polls;
             trace.push({ kind: 'poll', polls });
             if (options.pollThrowAt === polls) throw new Error('owned poll failure');
-            if (pending) {
+            if (closeRetirementPending) {
+                // GUI/focus closing is selected before native cleanup completes.
+                // A Hide can be accepted during that debt, but its acknowledgement
+                // and the one selected close counter wait for actual retirement.
+                const retiresAt = closeRetirementPending === 'focus' ? options.focusHideRetiresAt : options.guiHideRetiresAt;
+                if (polls >= retiresAt) {
+                    retireView(); phase = 2; takeCore(3);
+                    if (closeRetirementPending === 'focus') ++focusHides;
+                    else ++guiHides;
+                    closeRetirementPending = null;
+                    if (pending?.command === 2) {
+                        acknowledged = pending.sequence; acknowledgedCommand = pending.command;
+                        pending = null; ++hideAcks;
+                    }
+                }
+            } else if (pending) {
                 const request = pending;
                 pending = null;
                 acknowledged = request.sequence; acknowledgedCommand = request.command;
                 if (request.command === 1) {
                     takeCore(2);
-                    ++viewGeneration; ++showAcks; backendPinned = true; phase = 4;
+                    ++viewGeneration; ++showAcks; backendPinned = true; phase = 4; viewStopReason = 1;
                 } else if (request.command === 2) {
                     retireView(); ++hideAcks; phase = 2; takeCore(3);
                 } else {
@@ -128,10 +146,16 @@ function protocolFixture(options = {}) {
                 retireView(); hostExpired = true; failure = 12; reason = 2;
                 phase = options.retainedCleanup ? 9 : 8; takeCore(4);
             } else if (phase === 4 && (options.guiHideAt === polls || options.focusHideAt === polls)) {
-                retireView(); phase = 2;
-                if (options.guiHideAt === polls) ++guiHides;
-                if (options.focusHideAt === polls) ++focusHides;
-                takeCore(3);
+                const focused = options.focusHideAt === polls;
+                viewStopReason = focused ? 4 : 1;
+                if ((focused ? options.focusHideRetiresAt : options.guiHideRetiresAt) > polls) {
+                    closeRetirementPending = focused ? 'focus' : 'gui'; phase = 9;
+                } else {
+                    retireView(); phase = 2;
+                    if (focused) ++focusHides;
+                    else ++guiHides;
+                    takeCore(3);
+                }
             }
             if (phase === 4) ++viewSamples;
             publish();
@@ -222,6 +246,41 @@ module.exports = function frontendRuntimeEntryTests({ test, runEntry }) {
         assert.equal(result.finished.values[108], 1);
         assert.equal(result.finished.values[109], 1);
     });
+    test('frontend F9 release rearms the chord but cycling modifiers with F9 held cannot retrigger', () => {
+        const result = execute({ stopAt: 10, keys: poll => {
+            if ([3, 5, 7, 8].includes(poll)) return [17, 16, 120];
+            if (poll === 4) return [120];
+            if (poll === 6) return [17, 16];
+            return [];
+        } });
+        clean(result);
+        // Poll 5 has no new F9 edge despite a full chord. Poll 7 does, because
+        // F9 alone was released at 6 while both modifiers remained held.
+        assert.deepEqual(result.fixture.commands.map(value => value.command), [1, 2, 1, 3]);
+        assert.deepEqual(result.fixture.commands.map(value => value.sequence), [1, 2, 3, 4]);
+        assert.deepEqual(result.fixture.trace.filter(value => value.kind === 'command').map(value => value.polls), [1, 3, 7, 10]);
+        assert.equal(result.finished.values[20], 2);
+        assert.equal(result.finished.values[23], 2);
+        const hotkeys = result.events.filter(event => event.event === 'frontend_runtime_hotkey');
+        assert.deepEqual(hotkeys.map(event => event.keys_mask), [0, 7, 4, 7, 3, 7, 0]);
+        assert.ok(hotkeys.every(event => Number.isInteger(event.keys_mask) && event.keys_mask >= 0 && event.keys_mask <= 7));
+        const modifiersOnlyCycle = hotkeys.find(event => event.at_ms === 5 * 50);
+        assert.equal(modifiersOnlyCycle.full_chord, true);
+        assert.equal(modifiersOnlyCycle.trigger_down, true);
+        assert.equal(modifiersOnlyCycle.toggle_accepted, false);
+        const rearmed = hotkeys.find(event => event.at_ms === 6 * 50);
+        assert.equal(rearmed.keys_mask, 3);
+        assert.equal(rearmed.trigger_down, false);
+        const reopened = hotkeys.find(event => event.at_ms === 7 * 50);
+        assert.equal(reopened.toggle_accepted, true);
+        assert.equal(reopened.desired_visible, true);
+        assert.equal(reopened.pending_sequence, 0);
+        assert.equal(reopened.worker_phase, 2);
+        for (let poll = 1; poll <= 10; ++poll) {
+            assert.equal(result.fixture.trace.filter(value => value.kind === 'native' && value.polls === poll).length, 3,
+                'hotkey diagnostics reuse the three existing key reads');
+        }
+    });
     test('frontend runtime keeps the session alive beyond old absolute menu deadlines until explicit Stop', () => {
         const result = execute({ stopAt: 6, dateStep: 40000 });
         clean(result);
@@ -245,11 +304,58 @@ module.exports = function frontendRuntimeEntryTests({ test, runEntry }) {
         assert.deepEqual(result.fixture.commands.map(value => value.command), [1, 1, 3]);
         assert.equal(result.finished.values[20], 2);
     });
+    test('frontend late GUI-hide retirement preserves a newer explicit reopen intent', () => {
+        const result = execute({ guiHideAt: 3, guiHideRetiresAt: 8, stopAt: 12,
+            keys: poll => [3, 6, 7].includes(poll) ? [17, 16, 120] : [] });
+        clean(result);
+        // Poll 3 begins GUI close before the script's next capture. Its F9
+        // edge queues Hide from the last Visible sample. After release at 4,
+        // a new edge at 6 requests reopen while that Hide still owes cleanup.
+        // Hidden/GuiHideCount arrives at 8 and must not replace that newer wish.
+        const samples = result.events.filter(event => event.event === 'frontend_runtime_sample');
+        assert.ok(samples.some(event => event.values[2] === 4 && event.values[1] === 9 &&
+            event.values[14] === 2 && event.values[23] === 0 && event.values[47] === 0 &&
+            event.values[128 + 1] === 3 && event.values[128 + 5] === 1 && event.values[128 + 6] === 0));
+        assert.ok(samples.some(event => event.values[2] === 8 && event.values[1] === 2 &&
+            event.values[11] === 2 && event.values[14] === 0 && event.values[23] === 1 && event.values[47] === 1));
+        assert.deepEqual(result.fixture.commands.map(value => value.command), [1, 2, 1, 3]);
+        assert.deepEqual(result.fixture.trace.filter(value => value.kind === 'command').map(value => value.polls), [1, 3, 8, 12]);
+        assert.equal(result.finished.values[24], 2);
+        assert.equal(result.finished.values[23], 2);
+        assert.equal(result.finished.values[47], 1);
+    });
+    test('frontend late focus-loss retirement overrides queued reopen until a new post-focus edge', () => {
+        const result = execute({ focusHideAt: 3, focusHideRetiresAt: 8, stopAt: 14,
+            keys: poll => [3, 6, 7, 11, 12].includes(poll) ? [17, 16, 120] : [] });
+        clean(result);
+        // The newer intent at 6 does not authorize showing after focus loss.
+        // Only the separate, rearmed chord at 11 may create another view.
+        const samples = result.events.filter(event => event.event === 'frontend_runtime_sample');
+        assert.ok(samples.some(event => event.values[2] === 4 && event.values[1] === 9 &&
+            event.values[14] === 2 && event.values[23] === 0 && event.values[46] === 0 &&
+            event.values[128 + 1] === 3 && event.values[128 + 269] === 4));
+        assert.ok(samples.some(event => event.values[2] === 8 && event.values[1] === 2 &&
+            event.values[11] === 2 && event.values[14] === 0 && event.values[23] === 1 &&
+            event.values[46] === 1 && event.values[47] === 0 && event.desired_visible === false));
+        assert.deepEqual(result.fixture.commands.map(value => value.command), [1, 2, 1, 3]);
+        assert.deepEqual(result.fixture.trace.filter(value => value.kind === 'command').map(value => value.polls), [1, 3, 11, 14]);
+        assert.equal(result.finished.values[24], 2);
+        assert.equal(result.finished.values[23], 2);
+        assert.equal(result.finished.values[46], 1);
+        assert.equal(result.finished.values[47], 0);
+    });
     test('frontend Stop has priority over Show or simultaneous F9', () => {
         const result = execute({ stopAt: 1, keys: () => [17, 16, 120] });
         clean(result);
         assert.deepEqual(result.fixture.commands.map(value => value.command), [3]);
         assert.equal(result.finished.view_workload_observed, false);
+        const hotkeys = result.events.filter(event => event.event === 'frontend_runtime_hotkey');
+        assert.equal(hotkeys.length, 1);
+        assert.equal(hotkeys[0].keys_mask, 7);
+        assert.equal(hotkeys[0].full_chord, true);
+        assert.equal(hotkeys[0].stop_requested, true);
+        assert.equal(hotkeys[0].toggle_accepted, false);
+        assert.equal(result.fixture.trace.filter(value => value.kind === 'native').length, 3);
     });
     test('frontend transient capture refusal preserves coherent state and still retires', () => {
         const result = execute({ captureZeroAt: [1, 3, 4], stopAt: 8 });

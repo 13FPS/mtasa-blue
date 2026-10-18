@@ -1981,7 +1981,8 @@ function runFrontendRuntime(bind, chordHeld, stopKey) {
         frontend_runtime: true, runtime_api: 1, adapter_abi: 6, network_active: false, gameplay_ready: false, full_mta_ready: false });
     const generation = start();
     if (!Number.isInteger(generation) || generation < 1 || generation > 0xffffffff) throw new Error('MTA frontend runtime could not start');
-    let latest = null, lastAt = null, nextEmitAt = 0, sequence = 0, pendingSequence = 0, iteration = 0, forceCapture = true;
+    let latest = null, lastAt = null, nextEmitAt = 0, sequence = 0, pendingSequence = 0, pendingCommand = 0, iteration = 0, forceCapture = true;
+    let lastKeyMask = -1;
     let desiredVisible = true, toggleDown = false, stopRequested = false, stopAccepted = false, hostLost = false;
     let sessionError = null, samples = 0, terminal = false;
     const stop = reason => {
@@ -2022,9 +2023,17 @@ function runFrontendRuntime(bind, chordHeld, stopKey) {
                 if (captured) {
                     const values = validate(Array.from({ length: 416 }, (_, field) => read(field)), latest, generation);
                     transition = !latest || [1, 9, 11, 13, 23, 26, 33, 34, 36, 45, 46, 47].some(field => values[field] !== latest[field]);
-                    if (latest && (values[46] > latest[46] || values[47] > latest[47])) desiredVisible = false;
+                    if (latest) {
+                        // GUI retirement can arrive after a Hide command and a
+                        // newer F9 reopen request. Preserve that newer intent;
+                        // ordinary GUI closing and focus loss still hide the view.
+                        const focusHidden = values[46] > latest[46];
+                        const guiHidden = values[47] > latest[47];
+                        const reopenQueued = pendingSequence && pendingCommand === 2 && desiredVisible;
+                        if (focusHidden || (guiHidden && !reopenQueued)) desiredVisible = false;
+                    }
                     latest = values; sequence = Math.max(sequence, values[9]); ++samples;
-                    if (pendingSequence && values[11] >= pendingSequence) pendingSequence = 0;
+                    if (pendingSequence && values[11] >= pendingSequence) { pendingSequence = 0; pendingCommand = 0; }
                     forceCapture = false; sampled = true;
                 } else if (terminal) throw new Error('Frontend runtime terminal evidence unavailable');
             }
@@ -2032,23 +2041,43 @@ function runFrontendRuntime(bind, chordHeld, stopKey) {
             if (!Number.isSafeInteger(at) || at < 0 || (lastAt !== null && at < lastAt)) throw new Error('Invalid frontend runtime script clock');
             lastAt = at;
             if (sampled && (transition || terminal || at >= nextEmitAt)) {
-                emit({ event: 'frontend_runtime_sample', schema, generation, at_ms: at, values: latest });
+                emit({ event: 'frontend_runtime_sample', schema, generation, at_ms: at, values: latest,
+                    desired_visible: desiredVisible, pending_sequence: pendingSequence, pending_command: pendingCommand,
+                    toggle_down: toggleDown, keys_mask: lastKeyMask < 0 ? null : lastKeyMask });
                 nextEmitAt = at + 1000;
             }
             if (terminal) break;
             if (chordHeld([17, 16, 35])) stop(stopKey);
             const keys = [17, 16, 120].map(key => native('IS_KEY_PRESSED', key));
-            if (keys.every(held => !held)) toggleDown = false;
+            // F9 is the trigger. Its release must rearm the chord even when
+            // Ctrl/Shift stay held, without retriggering a held F9 when only
+            // those modifiers are released and pressed again.
+            if (!keys[2]) toggleDown = false;
+            let toggled = false;
             if (!toggleDown && keys.every(Boolean)) {
                 toggleDown = true;
-                if (!stopRequested) desiredVisible = !desiredVisible;
+                if (!stopRequested) { desiredVisible = !desiredVisible; toggled = true; }
+            }
+            const keyMask = keys.reduce((mask, held, bit) => mask | (held ? 1 << bit : 0), 0);
+            if (keyMask !== lastKeyMask || toggled) {
+                // Record only the three activation keys, on state changes.
+                // This distinguishes a missing chord from an intent/command
+                // handoff failure without sampling other player keystrokes.
+                emit({ event: 'frontend_runtime_hotkey', schema, generation, at_ms: at,
+                    keys_mask: keyMask, previous_keys_mask: lastKeyMask < 0 ? null : lastKeyMask,
+                    trigger_down: toggleDown, full_chord: keys.every(Boolean), toggle_accepted: toggled,
+                    desired_visible: desiredVisible, pending_sequence: pendingSequence, pending_command: pendingCommand,
+                    worker_phase: latest ? latest[1] : 0, publication_low: latest ? latest[2] : 0,
+                    publication_high: latest ? latest[3] : 0, stop_requested: stopRequested,
+                    clock_started: false, network_active: false, gameplay_ready: false, full_mta_ready: false });
+                lastKeyMask = keyMask;
             }
             if (!stopRequested && latest && !pendingSequence && !latest[14] && [2, 4].includes(latest[1])) {
                 const action = latest[1] === 2 && desiredVisible ? 1 : latest[1] === 4 && !desiredVisible ? 2 : 0;
                 if (action) {
                     if (sequence === 0xffffffff || command(generation, ++sequence, action) !== 1) throw new Error('Frontend runtime view command was rejected');
                     // Do not issue another command from the same old capture.
-                    forceCapture = true; pendingSequence = sequence;
+                    forceCapture = true; pendingSequence = sequence; pendingCommand = action;
                     emit({ event: 'frontend_runtime_command', schema, generation, sequence, command: action });
                     // Keep the copied publication immutable while awaiting its acknowledgement.
                 }

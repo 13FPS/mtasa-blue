@@ -1989,6 +1989,15 @@ struct CCore::FrontendRuntimeResources
     bool                                cvarsAttempted = false;
 };
 
+struct CCore::LocalInputRuntimeResources
+{
+    DefinitiveLocalInputRuntime::Snapshot snapshot{};
+    mta::game_de::LocalInputLeaseStateV1  lease;
+    HWND                                  window = nullptr;
+    bool                                  nativePending = false;
+    bool                                  fault = false;
+};
+
 struct CCore::FrontendResources
 {
     InputReferenceXml                    xml;
@@ -2029,6 +2038,319 @@ bool CCore::FlushFrontendRuntimeBindings() noexcept
     catch (...)
     {
         return false;
+    }
+}
+
+bool CCore::LocalInputAllowsFrontend() const noexcept
+{
+    using namespace DefinitiveLocalInputRuntime;
+    return !m_localInputRuntimeResources ||
+           (!m_localInputRuntimeResources->nativePending && !m_localInputRuntimeResources->snapshot[Enabled] &&
+            !m_localInputRuntimeResources->snapshot[CleanupPending] && m_localInputRuntimeResources->snapshot[CleanupComplete] &&
+            m_localInputRuntimeResources->snapshot[CanonicalNeutral]);
+}
+
+bool CCore::FlushLocalInputRuntime() noexcept
+{
+    using namespace DefinitiveLocalInputRuntime;
+    if (!m_localInputRuntimeResources)
+        return true;
+    auto& state = m_localInputRuntimeResources->snapshot;
+    state[CanonicalNeutral] = 0;
+    if (m_frontendRuntimeResources)
+        m_frontendRuntimeResources->snapshot[DefinitiveFrontendRuntime::HiddenNeutralVerified] = 0;
+    try
+    {
+        if (!FlushFrontendRuntimeBindings())
+            return false;
+        // Both canonical frames must become neutral. Releasing physical keys
+        // or the manager's current state alone does not clear previous edges.
+        mta::game_de::MtaInputState       observed;
+        const mta::game_de::MtaInputState zero;
+        const bool                        neutral = m_DefinitiveAdapter.SubmitControlActions({0, {}}) && m_DefinitiveAdapter.SubmitControlActions({0, {}}) &&
+                             m_DefinitiveAdapter.GetMtaInputState(observed) && std::memcmp(&observed, &zero, sizeof(zero)) == 0;
+        state[CanonicalNeutral] = neutral;
+        state[HeldActionsLow] = state[HeldActionsHigh] = state[PhysicalRearmReady] = 0;
+        if (m_frontendRuntimeResources)
+            m_frontendRuntimeResources->snapshot[DefinitiveFrontendRuntime::HiddenNeutralVerified] = neutral;
+        return neutral;
+    }
+    catch (...)
+    {
+        state[CanonicalNeutral] = 0;
+        return false;
+    }
+}
+
+DefinitiveLocalInputRuntime::Snapshot CCore::ReadLocalInputRuntime() noexcept
+{
+    using namespace DefinitiveLocalInputRuntime;
+    if (GetCurrentThreadId() != m_frontendCoreOwnerThread)
+        return {};
+    Snapshot empty{};
+    empty[Version] = ApiVersion;
+    empty[Phase] = static_cast<std::uint32_t>(State::Disabled);
+    empty[OwnerThread] = m_frontendCoreOwnerThread;
+    empty[CleanupComplete] = 1;
+    if (!m_localInputRuntimeResources)
+        return empty;
+    auto& resources = *m_localInputRuntimeResources;
+    if (resources.nativePending && resources.lease.generation)
+    {
+        try
+        {
+            mta::game_de::LocalInputLeaseStateV1 latest;
+            if (m_DefinitiveAdapter.ReadLocalInputLease(latest) && latest.generation == resources.lease.generation)
+                resources.lease = latest;
+        }
+        catch (...)
+        {
+            // A failed diagnostic read cannot discard the last known owner or
+            // claim cleanup. Pulse/Suspend still have to retire that attempt.
+            resources.snapshot[LastFailure] = static_cast<std::uint32_t>(Failure::NativeRead);
+        }
+    }
+    auto&       state = resources.snapshot;
+    const auto& lease = resources.lease;
+    state[NativeGenerationLow] = static_cast<std::uint32_t>(lease.generation);
+    state[NativeGenerationHigh] = static_cast<std::uint32_t>(lease.generation >> 32);
+    state[NativeActive] = lease.active;
+    state[NativeBound] = lease.bound;
+    state[NativeRevoked] = lease.revoked;
+    state[NativeReason] = lease.reason;
+    state[NativeLifetimeMs] = lease.lifetimeMs;
+    state[RenewalsLow] = static_cast<std::uint32_t>(lease.renewals);
+    state[RenewalsHigh] = static_cast<std::uint32_t>(lease.renewals >> 32);
+    state[BindingsBorrowed] = state[Configured] && m_frontendRuntimeResources && m_frontendRuntimeResources->bindings != nullptr;
+    return state;
+}
+
+DefinitiveLocalInputRuntime::Status CCore::StopLocalInputRuntime(bool disable, DefinitiveLocalInputRuntime::Failure failure, bool fault) noexcept
+{
+    using namespace DefinitiveLocalInputRuntime;
+    if (GetCurrentThreadId() != m_frontendCoreOwnerThread)
+        return Status::WrongThread;
+    if (!m_localInputRuntimeResources)
+        return Status::Ok;
+    auto& resources = *m_localInputRuntimeResources;
+    auto& state = resources.snapshot;
+    state[Enabled] = 0;
+    if (disable)
+        state[Configured] = 0;
+    if (failure != Failure::None)
+        state[LastFailure] = static_cast<std::uint32_t>(failure);
+    resources.fault |= fault;
+    if (!resources.nativePending && !state[CleanupPending] && state[CleanupComplete] && state[CanonicalNeutral])
+    {
+        state[Phase] = static_cast<std::uint32_t>(!state[Configured] ? State::Disabled : resources.fault ? State::Failed : State::Suspended);
+        return Status::Ok;
+    }
+    state[Phase] = static_cast<std::uint32_t>(State::RetainedCleanup);
+    state[CleanupPending] = 1;
+    state[CleanupComplete] = 0;
+    try
+    {
+        if (resources.nativePending)
+        {
+            if (state[NativeEndAttempts] != UINT32_MAX)
+                ++state[NativeEndAttempts];
+            if (resources.lease.generation)
+            {
+                if (m_DefinitiveAdapter.EndLocalInputLease(resources.lease.generation))
+                {
+                    mta::game_de::LocalInputLeaseStateV1 ended;
+                    if (m_DefinitiveAdapter.ReadLocalInputLease(ended) && ended.generation == resources.lease.generation && !ended.active && !ended.bound &&
+                        ended.revoked && ended.reason)
+                    {
+                        resources.lease = ended;
+                        resources.nativePending = false;
+                    }
+                }
+            }
+            else if (m_DefinitiveAdapter.Reset())
+            {
+                // Unsupported Begin without a token is not retirement proof.
+                // A successful provider Reset explicitly retires that attempt.
+                resources.nativePending = false;
+            }
+        }
+        const bool neutral = FlushLocalInputRuntime();
+        if (resources.nativePending || !neutral)
+            return Status::Busy;
+        state[CleanupPending] = 0;
+        state[CleanupComplete] = 1;
+        state[Phase] = static_cast<std::uint32_t>(!state[Configured] ? State::Disabled : resources.fault ? State::Failed : State::Suspended);
+        // Historical workload failures never prevent a later safe shutdown.
+        // Only the actual retained obligations above can keep resources alive.
+        return Status::Ok;
+    }
+    catch (...)
+    {
+        state[LastFailure] = static_cast<std::uint32_t>(Failure::Exception);
+        resources.fault = true;
+        return Status::Busy;
+    }
+}
+
+DefinitiveLocalInputRuntime::Status CCore::ConfigureLocalInputRuntime(const DefinitiveLocalInputRuntime::RequestV1& request) noexcept
+{
+    using namespace DefinitiveLocalInputRuntime;
+    if (GetCurrentThreadId() != m_frontendCoreOwnerThread)
+        return Status::WrongThread;
+    DWORD      process = 0;
+    const auto window = static_cast<HWND>(request.window);
+    if (request.size != sizeof(request) || request.version != ApiVersion || request.reserved[0] || request.reserved[1] || !window || !IsWindow(window) ||
+        GetAncestor(window, GA_ROOT) != window || !GetWindowThreadProcessId(window, &process) || process != GetCurrentProcessId())
+        return Status::InvalidArgument;
+    if (!m_frontendStartupOwned || !m_frontendRuntimeResources || !m_frontendRuntimeResources->bindings || m_frontendResources || !LocalInputAllowsFrontend())
+        return Status::Busy;
+    try
+    {
+        if (!m_localInputRuntimeResources)
+            m_localInputRuntimeResources = new LocalInputRuntimeResources;
+        auto& resources = *m_localInputRuntimeResources;
+        resources.window = window;
+        resources.lease = {};
+        resources.fault = false;
+        resources.snapshot = {};
+        auto& state = resources.snapshot;
+        state[Version] = ApiVersion;
+        state[Phase] = static_cast<std::uint32_t>(State::Arming);
+        state[OwnerThread] = m_frontendCoreOwnerThread;
+        state[Configured] = state[Enabled] = state[BindingsBorrowed] = 1;
+        state[NativeLifetimeMs] = mta::game_de::LocalInputLeaseLifetimeMsV1;
+        if (!FlushLocalInputRuntime())
+        {
+            const auto stopped = StopLocalInputRuntime(false, Failure::CanonicalInput, true);
+            return stopped == Status::Ok ? Status::Failed : stopped;
+        }
+        state[CleanupComplete] = 1;
+        return Status::Ok;
+    }
+    catch (...)
+    {
+        if (m_localInputRuntimeResources)
+        {
+            const auto stopped = StopLocalInputRuntime(false, Failure::Exception, true);
+            return stopped == Status::Ok ? Status::Failed : stopped;
+        }
+        return Status::Failed;
+    }
+}
+
+DefinitiveLocalInputRuntime::Status CCore::PulseLocalInputRuntime() noexcept
+{
+    using namespace DefinitiveLocalInputRuntime;
+    if (GetCurrentThreadId() != m_frontendCoreOwnerThread)
+        return Status::WrongThread;
+    if (!m_localInputRuntimeResources)
+        return Status::Stopped;
+    auto&      resources = *m_localInputRuntimeResources;
+    auto&      state = resources.snapshot;
+    const auto stop = [&](Failure failure, bool fault = false) noexcept
+    {
+        const auto result = StopLocalInputRuntime(false, failure, fault);
+        return result == Status::Ok && fault ? Status::Failed : result;
+    };
+    if (!state[Enabled])
+        return resources.nativePending || state[CleanupPending] ? StopLocalInputRuntime(false) : Status::Ok;
+    if (!m_frontendRuntimeResources || !m_frontendRuntimeResources->bindings || m_frontendResources)
+        return Status::Busy;
+    try
+    {
+        auto& bindings = *m_frontendRuntimeResources->bindings;
+        if (bindings.Count(KeyBindType::FUNCTION) || bindings.Count(KeyBindType::CONTROL_FUNCTION))
+            return stop(Failure::Bindings, true);
+        DWORD      process = 0, foregroundProcess = 0;
+        const auto foreground = GetForegroundWindow();
+        const bool focused = resources.window && IsWindow(resources.window) && GetAncestor(resources.window, GA_ROOT) == resources.window &&
+                             GetWindowThreadProcessId(resources.window, &process) && process == GetCurrentProcessId() && foreground &&
+                             GetWindowThreadProcessId(foreground, &foregroundProcess) && foregroundProcess == process &&
+                             GetAncestor(foreground, GA_ROOT) == resources.window;
+        state[Focused] = focused;
+        if (!focused)
+        {
+            if (resources.nativePending)
+                return stop(Failure::FocusLost);
+            return FlushLocalInputRuntime() ? Status::Ok : stop(Failure::CanonicalInput, true);
+        }
+        const auto poll = bindings.PollConfiguredControlKeys(true, nullptr, nullptr, DefinitiveFrontendBindings::MovementActions);
+        state[SupportedBindings] = poll.supportedBindings;
+        state[IgnoredBindings] = poll.ignoredBindings;
+        state[EligibleKeys] = poll.eligibleKeys;
+        state[UnsupportedKeys] = poll.unsupportedKeys;
+        state[PhysicalRearmReady] = poll.armed;
+        if (!poll.eligibleKeys)
+            return stop(Failure::Bindings, true);
+        if (resources.nativePending)
+        {
+            mta::game_de::LocalInputLeaseStateV1 current;
+            if (!m_DefinitiveAdapter.ReadLocalInputLease(current) || current.generation != resources.lease.generation)
+                return stop(Failure::NativeRead, true);
+            resources.lease = current;
+            if (!current.active || !current.bound || current.revoked)
+                return stop(Failure::LeaseRevoked);
+            if (!poll.armed)
+                return stop(Failure::Bindings);
+        }
+        mta::game_de::NativeMovementEligibility eligibility;
+        const bool                              eligible = m_DefinitiveAdapter.GetNativeMovementEligibility(eligibility) &&
+                              eligibility.knownMask == mta::game_de::NativeMovementEligibilityMask &&
+                              eligibility.flags == mta::game_de::NativeMovementEligibilityMask && eligibility.eligible;
+        state[ContextKnownMask] = eligibility.knownMask;
+        state[ContextFlags] = eligibility.flags;
+        state[ContextEligible] = eligible;
+        if (!eligible)
+        {
+            if (resources.nativePending)
+                return stop(Failure::EligibilityLost);
+            return FlushLocalInputRuntime() ? Status::Ok : stop(Failure::CanonicalInput, true);
+        }
+        const auto frame = bindings.BuildConfiguredControlFrame(eligibility.context);
+        if (!resources.nativePending)
+        {
+            // A focused poll arms only after release. Keep both logical and
+            // canonical histories neutral until that release and fresh exact
+            // eligibility are observed together; never Begin on a held key.
+            if (!poll.armed || frame.heldActions)
+                return FlushLocalInputRuntime() ? Status::Ok : stop(Failure::CanonicalInput, true);
+            resources.nativePending = true;
+            state[NativeAttempted] = 1;
+            state[CleanupComplete] = 0;
+            if (!m_DefinitiveAdapter.BeginLocalInputLease(resources.window, resources.lease))
+                return stop(Failure::NativeBegin, true);
+            if (!resources.lease.generation || !resources.lease.active || !resources.lease.bound || resources.lease.revoked)
+                return stop(Failure::NativeRead, true);
+        }
+        mta::game_de::MtaInputState canonical;
+        if ((frame.heldActions & ~DefinitiveFrontendBindings::MovementActions) ||
+            !m_DefinitiveAdapter.SubmitControlActions({frame.heldActions, frame.context}) || !m_DefinitiveAdapter.GetMtaInputState(canonical) ||
+            std::memcmp(&frame.controller, &canonical.current, sizeof(frame.controller)) != 0)
+            return stop(Failure::CanonicalInput, true);
+        if (!m_DefinitiveAdapter.RenewLocalInputLease(resources.lease.generation))
+        {
+            mta::game_de::LocalInputLeaseStateV1 revoked;
+            if (m_DefinitiveAdapter.ReadLocalInputLease(revoked) && revoked.generation == resources.lease.generation && revoked.revoked)
+            {
+                resources.lease = revoked;
+                return stop(Failure::LeaseRevoked);
+            }
+            return stop(Failure::NativeRenew, true);
+        }
+        bindings.FinishConfiguredControlFrame();
+        const mta::game_de::MtaInputState zero;
+        state[CanonicalNeutral] = std::memcmp(&canonical, &zero, sizeof(zero)) == 0;
+        state[HeldActionsLow] = static_cast<std::uint32_t>(frame.heldActions);
+        state[HeldActionsHigh] = static_cast<std::uint32_t>(frame.heldActions >> 32);
+        state[Phase] = static_cast<std::uint32_t>(State::Active);
+        state[CleanupComplete] = 0;
+        m_frontendRuntimeResources->snapshot[DefinitiveFrontendRuntime::HiddenNeutralVerified] = state[CanonicalNeutral];
+        ReadLocalInputRuntime();
+        return Status::Ok;
+    }
+    catch (...)
+    {
+        return stop(Failure::Exception, true);
     }
 }
 
@@ -2142,6 +2464,9 @@ DefinitiveFrontend::Status CCore::StopFrontendRuntimeServices() noexcept
     using Status = DefinitiveFrontend::Status;
     if (GetCurrentThreadId() != m_frontendCoreOwnerThread)
         return Status::WrongThread;
+    const auto localStopped = StopLocalInputRuntime(true);
+    if (localStopped != Status::Ok)
+        return localStopped;
     if (!m_frontendRuntimeResources)
         return Status::Ok;
     if (m_frontendResources || m_pGUI || m_pLocalGUI || m_pXML || m_pConfigFile || m_pKeyBinds)
@@ -2300,8 +2625,9 @@ void CCore::FrontendCloseRequested(void* context) noexcept
 bool CCore::StartFrontend(CGUI* borrowedGui)
 {
     using namespace DefinitiveFrontend;
-    if (GetCurrentThreadId() != m_frontendCoreOwnerThread || (m_frontendStartupOwned && !m_frontendStartupAccepting) || !borrowedGui || m_frontendResources ||
-        m_pGUI || m_pXML || m_pConfigFile || m_pLocalGUI || m_pLocalization || m_pCommands || m_pConsoleLogger || m_pKeyBinds)
+    if (GetCurrentThreadId() != m_frontendCoreOwnerThread || (m_frontendStartupOwned && !m_frontendStartupAccepting) || !LocalInputAllowsFrontend() ||
+        !borrowedGui || m_frontendResources || m_pGUI || m_pXML || m_pConfigFile || m_pLocalGUI || m_pLocalization || m_pCommands || m_pConsoleLogger ||
+        m_pKeyBinds)
         return false;
     if (m_frontendRuntimeResources)
     {
@@ -2433,6 +2759,8 @@ namespace DefinitiveFrontend
             // A completed startup Core remains inspectable after failure or
             // Shutdown, but that retention does not admit a new GUI borrower.
             if (existingCore && existingCore->m_frontendStartupOwned && !existingCore->m_frontendStartupAccepting)
+                return nullptr;
+            if (existingCore && !existingCore->LocalInputAllowsFrontend())
                 return nullptr;
             auto controller = std::make_unique<Controller>();
             controller->core = existingCore;
@@ -3402,6 +3730,10 @@ CCore::~CCore()
         // Only the controller can destroy this shell after its explicit
         // frontend stop; classic hooks and settings were never constructed.
         assert(!m_frontendResources);
+        assert(!m_localInputRuntimeResources ||
+               (!m_localInputRuntimeResources->nativePending && m_localInputRuntimeResources->snapshot[DefinitiveLocalInputRuntime::CleanupComplete]));
+        delete m_localInputRuntimeResources;
+        m_localInputRuntimeResources = nullptr;
         assert(!m_frontendRuntimeResources || m_frontendRuntimeResources->snapshot[DefinitiveFrontendRuntime::CleanupComplete]);
         delete m_frontendRuntimeResources;
         m_frontendRuntimeResources = nullptr;

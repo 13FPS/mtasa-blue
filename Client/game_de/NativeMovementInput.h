@@ -8,6 +8,7 @@
 
 #include "../sdk/game/CGameAdapter.h"
 #include "../sdk/game/CGameFrontendInputLease.h"
+#include "../sdk/game/CGameLocalInputLease.h"
 #include <cstdint>
 
 namespace mta::game_de
@@ -29,6 +30,12 @@ namespace mta::game_de
         bool        ReadFrontendLease(FrontendInputLeaseStateV1& state) noexcept;
         bool        EndFrontendLease(std::uint64_t requestedGeneration) noexcept;
         bool        IsFrontendLease() const noexcept;
+        bool        BeginLocalLease(const LocalInputLeaseRequestV1& request) noexcept;
+        static bool ValidateLocalLeaseRequest(const LocalInputLeaseRequestV1& request) noexcept;
+        bool        RenewLocalLease(std::uint64_t requestedGeneration, const MtaInputState& state) noexcept;
+        bool        ReadLocalLease(LocalInputLeaseStateV1& state) noexcept;
+        bool        EndLocalLease(std::uint64_t requestedGeneration) noexcept;
+        bool        IsLocalLease() const noexcept;
         bool        End() noexcept;
         bool        IsBound() const noexcept;
         bool        IsActive() const noexcept;
@@ -44,7 +51,7 @@ namespace mta::game_de
         void ReadState(NativeMovementTrialState& state) const noexcept;
 
     private:
-        bool                     BeginInternal(const MtaInputState& state, void* frontendWindow) noexcept;
+        bool                     BeginInternal(const MtaInputState& state, void* frontendWindow, bool localLease = false) noexcept;
         std::uint64_t            generation = 0;
         NativeMovementTrialState finalState;
         bool                     hasFinalState = false;

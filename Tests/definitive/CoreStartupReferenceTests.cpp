@@ -186,7 +186,8 @@ namespace
             for (const auto* name :
                  {L"MTA_CORE_FIXTURE_DELAY_MS", L"MTA_CORE_FIXTURE_BAD_VERSION", L"MTA_CORE_FIXTURE_BAD_STATE", L"MTA_CORE_FIXTURE_BAD_INITIALIZE",
                   L"MTA_CORE_FIXTURE_FAIL_ATTACH", L"MTA_CORE_FIXTURE_INPUT_MODE", L"MTA_CORE_FIXTURE_RENDER_MODE", L"MTA_CORE_FIXTURE_GUI_MODE",
-                  L"MTA_CORE_FIXTURE_SURFACE_MODE", L"MTA_CORE_FIXTURE_CLOCK_MODE", L"MTA_CORE_FIXTURE_FRONTEND_CLOCK_MODE", L"MTA_CORE_FIXTURE_RUNTIME_MODE"})
+                  L"MTA_CORE_FIXTURE_SURFACE_MODE", L"MTA_CORE_FIXTURE_CLOCK_MODE", L"MTA_CORE_FIXTURE_FRONTEND_CLOCK_MODE", L"MTA_CORE_FIXTURE_RUNTIME_MODE",
+                  L"MTA_CORE_FIXTURE_LOCAL_RUNTIME_MODE"})
                 Set(name, L"0");
         }
         ~Fixture()
@@ -231,6 +232,56 @@ namespace
             }
         }
     };
+
+    void AdmitRuntimeCommand(deonline::CoreStartupReference& worker, std::uint32_t generation, std::uint32_t sequence,
+                             deonline::FrontendRuntimeReport::Command command)
+    {
+        namespace R = deonline::FrontendRuntimeReport;
+        const auto read = [&](R::Field field) { return worker.ReadFrontendRuntime(field); };
+        for (unsigned attempt = 1;; ++attempt)
+        {
+            const auto previousPhase = read(R::WorkerPhase);
+            if (Fast([&] { return worker.CommandFrontendRuntime(generation, sequence, static_cast<std::uint32_t>(command)); }))
+            {
+                Check(true, "runtime command admitted");
+                return;
+            }
+            // The public API's bounded seqlock capture may refuse while its
+            // producer publishes. Retry the same sequence only after a fresh
+            // healthy capture proves that nothing accepted or superseded it.
+            // A wrong phase, owned mailbox, fault or refused Stop stays fatal.
+            bool       captured = worker.CaptureFrontendRuntime();
+            const auto coherenceStarted = GetTickCount64();
+            while (!captured && GetTickCount64() - coherenceStarted < 250)
+            {
+                // The confirming copy has the same nonblocking refusal
+                // contract. Yield until a fresh coherent value is available;
+                // a prior cached phase can never authorize the retry.
+                if (!worker.HeartbeatFrontendRuntime(generation))
+                    break;
+                Sleep(1);
+                captured = worker.CaptureFrontendRuntime();
+            }
+            const auto expectedPhase = command == R::Command::Show ? R::Phase::Hidden : R::Phase::Visible;
+            const bool retryable = command != R::Command::Stop && captured && read(R::WorkerPhase) == static_cast<std::uint32_t>(expectedPhase) &&
+                                   read(R::SessionGenerationLow) == generation && !read(R::SessionGenerationHigh) && !read(R::LastFailure) &&
+                                   !read(R::StopRequested) && read(R::HostLeaseFresh) == 1 && read(R::AcceptedSequence) < sequence &&
+                                   read(R::AcknowledgedSequence) < sequence && !read(R::OutstandingSequence) && !read(R::OutstandingCommand);
+            if (attempt < 3 && retryable && worker.HeartbeatFrontendRuntime(generation))
+            {
+                Sleep(1);
+                continue;
+            }
+            const auto reason = std::string("runtime command refused: sequence=") + std::to_string(sequence) +
+                                " verb=" + std::to_string(static_cast<std::uint32_t>(command)) + " attempt=" + std::to_string(attempt) +
+                                " previous_phase=" + std::to_string(previousPhase) + " captured=" + std::to_string(captured ? 1 : 0) +
+                                " coherence_ms=" + std::to_string(GetTickCount64() - coherenceStarted) + " phase=" + std::to_string(read(R::WorkerPhase)) +
+                                " failure=" + std::to_string(read(R::LastFailure)) + " accepted=" + std::to_string(read(R::AcceptedSequence)) +
+                                " acknowledged=" + std::to_string(read(R::AcknowledgedSequence)) + " ack_code=" + std::to_string(read(R::AcknowledgementCode)) +
+                                " outstanding=" + std::to_string(read(R::OutstandingSequence));
+            Check(false, reason.c_str());
+        }
+    }
 
     void TestRuntimeWorker(deonline::CoreStartupReference& worker, const std::filesystem::path& root, const std::wstring& mode,
                            const std::filesystem::path& fixturePath)
@@ -278,8 +329,7 @@ namespace
                 Sleep(5);
             }
         };
-        const auto command = [&](std::uint32_t sequence, R::Command value)
-        { Check(Fast([&] { return worker.CommandFrontendRuntime(generation, sequence, static_cast<std::uint32_t>(value)); }), "runtime command admitted"); };
+        const auto  command = [&](std::uint32_t sequence, R::Command value) { AdmitRuntimeCommand(worker, generation, sequence, value); };
         bool        foreignRefused = false;
         std::thread foreign(
             [&]
@@ -425,6 +475,145 @@ namespace
             Check(!worker.Read(field), "runtime never reinterprets Common19");
         Check(!worker.ReadFrontendRuntime(R::FieldCount) && !worker.CapturePersistentFrontend() && !worker.CaptureGuiFrontendStartupClockV2(),
               "runtime keeps every old cache separate");
+    }
+
+    void TestLocalRuntimeWorker(deonline::CoreStartupReference& worker, const std::filesystem::path& root, const std::wstring& mode,
+                                const std::filesystem::path& fixturePath)
+    {
+        namespace R = deonline::FrontendRuntimeReport;
+        namespace L = DefinitiveLocalInputRuntime;
+        const std::array<const wchar_t*, 7> modes{L"local-runtime-two-views",       L"local-runtime-suspend-busy",   L"local-runtime-stop-waiting-show",
+                                                  L"local-runtime-focus-suspended", L"local-runtime-missing-export", L"local-runtime-wrong-api",
+                                                  L"local-runtime-config-refused"};
+        const auto                          found = std::find(modes.begin(), modes.end(), mode);
+        Check(found != modes.end(), "known local runtime worker fixture mode");
+        const auto scenario = static_cast<unsigned>(found - modes.begin()) + 1;
+        Fixture    fixture(600 + scenario);
+        Set(L"MTA_CORE_FIXTURE_LOCAL_RUNTIME_MODE", std::to_wstring(scenario));
+        CopyCore(fixturePath, root);
+        SetEvent(fixture.release);
+        Check(!worker.CaptureLocalInputRuntime() && !worker.ReadLocalInputRuntime(L::Version), "local32 starts separately neutral");
+        const auto generation = Fast([&] { return worker.BeginFrontendRuntime(&anchor, true); });
+        Check(generation && !worker.BeginFrontendRuntime(&anchor) && !worker.BeginPersistentFrontend(&anchor),
+              "local32 extends the one existing runtime worker instead of starting another owner");
+        const auto deadline = GetTickCount64() + 14000;
+        const auto read = [&](std::uint32_t field) { return worker.ReadFrontendRuntime(field); };
+        const auto local = [&](L::Field field) { return worker.ReadLocalInputRuntime(field); };
+        const auto capture = [&] { return Fast([&] { return worker.CaptureFrontendRuntime(); }); };
+        const auto wait = [&](const auto& predicate)
+        {
+            while (!capture() || !worker.CaptureLocalInputRuntime() || !predicate())
+            {
+                worker.HeartbeatFrontendRuntime(generation);
+                Check(worker.PollFrontendRuntime() == 0 && GetTickCount64() < deadline, "local worker failed to reach its bounded handoff state");
+                Sleep(5);
+            }
+        };
+        const auto  command = [&](std::uint32_t sequence, R::Command action) { AdmitRuntimeCommand(worker, generation, sequence, action); };
+        bool        foreignRefused = false;
+        std::thread foreign([&] { foreignRefused = !worker.CaptureLocalInputRuntime() && !worker.ReadLocalInputRuntime(L::Version); });
+        foreign.join();
+        Check(foreignRefused, "local copied cache retains the existing script owner");
+        if (scenario == 5 || scenario == 6)
+        {
+            Wait(worker);
+            Check(capture() && read(R::LastFailure) == static_cast<std::uint32_t>(R::Failure::Exports) && !fixture.counters[44] && !fixture.counters[54] &&
+                      !fixture.counters[55] && !worker.CaptureLocalInputRuntime(),
+                  "missing or wrong optional local API refuses before any completed Core Begin");
+            return;
+        }
+        wait([&] { return read(R::WorkerPhase) == static_cast<std::uint32_t>(R::Phase::Hidden) && local(L::Phase) == 1; });
+        Check(local(L::Version) == 1 && !local(L::Configured) && !local(L::Enabled) && !local(L::NativeAttempted) && !local(L::CanonicalNeutral) &&
+                  local(L::CleanupComplete) == 1 && !fixture.counters[54] && !fixture.counters[55],
+              "initial Hidden is an absent Disabled local service, never automatic engine input");
+        const auto coreGeneration = read(R::CoreOffset + 35);
+        command(1, R::Command::Show);
+        wait([&] { return read(R::WorkerPhase) == static_cast<std::uint32_t>(R::Phase::Visible); });
+        Check(!fixture.counters[54] && !fixture.counters[55] && fixture.counters[47] == 1 && !local(L::NativeAttempted),
+              "first GUI owns input before local configuration is ever attempted");
+        command(2, R::Command::Hide);
+        if (scenario != 7)
+        {
+            wait([&] { return read(R::AcknowledgedSequence) == 2 && local(L::Phase) == static_cast<std::uint32_t>(L::State::Active); });
+            Check(read(R::ViewsRetired) == 1 && fixture.counters[51] == 1 && fixture.counters[54] == 1 && fixture.counters[55] >= 1 &&
+                      local(L::NativeAttempted) == 1 && local(L::NativeActive) == 1 && local(L::NativeBound) == 1 && local(L::NativeLifetimeMs) == 500 &&
+                      local(L::BindingsBorrowed) == 1 && !local(L::CleanupComplete) && read(R::CoreOffset + 35) == coreGeneration,
+                  "local input starts only after real view retirement on the same retained Core");
+            if (scenario == 4)
+            {
+                SetEvent(fixture.inputRelease);
+                wait([&] { return local(L::Phase) == static_cast<std::uint32_t>(L::State::Suspended); });
+                const auto renewals = local(L::RenewalsLow);
+                const auto until = GetTickCount64() + 100;
+                do
+                {
+                    worker.HeartbeatFrontendRuntime(generation);
+                    Check(capture() && worker.CaptureLocalInputRuntime() && local(L::CanonicalNeutral) == 1 && !local(L::Enabled) && !local(L::NativeActive) &&
+                              !local(L::NativeBound) && !local(L::CleanupPending) && local(L::CleanupComplete) == 1,
+                          "focus suspension remains canonically neutral while the existing hidden owner is pulsed");
+                    Sleep(5);
+                } while (GetTickCount64() < until);
+                Check(local(L::RenewalsLow) == renewals && fixture.counters[54] == 1 && local(L::Configured) == 1 && local(L::BindingsBorrowed) == 1 &&
+                          local(L::LastFailure) == static_cast<std::uint32_t>(L::Failure::FocusLost) && local(L::NativeReason) == 3,
+                      "focus recovery cannot silently configure or renew the suspended native generation");
+                command(3, R::Command::Stop);
+            }
+            else
+            {
+                command(3, R::Command::Show);
+                if (scenario == 2 || scenario == 3)
+                {
+                    wait([&] { return read(R::WorkerPhase) == static_cast<std::uint32_t>(R::Phase::RetainedCleanup) && fixture.counters[60] >= 2; });
+                    Check(local(L::Phase) == static_cast<std::uint32_t>(L::State::RetainedCleanup) && local(L::NativeAttempted) == 1 &&
+                              local(L::NativeBound) == 1 && local(L::CleanupPending) == 1 && !local(L::CleanupComplete) && !local(L::CanonicalNeutral) &&
+                              fixture.counters[47] == 1 && !fixture.counters[48] && GetModuleHandleW(L"core.dll"),
+                          "Suspend Busy retains movement restoration and prevents another GUI or Core shutdown");
+                    if (scenario == 3)
+                    {
+                        command(4, R::Command::Stop);
+                        wait([&] { return read(R::StopSequence) == 4 && read(R::SupersededRequests) == 1; });
+                        Check(fixture.counters[47] == 1 && !fixture.counters[48] && worker.PollFrontendRuntime() == 0,
+                              "dominant Stop supersedes waiting Show but cannot erase its native cleanup debt");
+                    }
+                    SetEvent(fixture.movementRelease);
+                }
+                if (scenario != 3)
+                {
+                    wait([&] { return read(R::AcknowledgedSequence) == 3 && read(R::WorkerPhase) == static_cast<std::uint32_t>(R::Phase::Visible); });
+                    Check(fixture.counters[47] == 2 && local(L::CanonicalNeutral) == 1 && !local(L::NativeAttempted) && !local(L::NativeActive) &&
+                              !local(L::NativeBound) && !local(L::CleanupPending) && local(L::CleanupComplete) == 1 && !local(L::Enabled),
+                          "second GUI begins only after actual local suspension and canonical neutral readback");
+                    command(4, R::Command::Hide);
+                    wait([&] { return read(R::AcknowledgedSequence) == 4 && local(L::Phase) == static_cast<std::uint32_t>(L::State::Active); });
+                    Check(fixture.counters[54] == 2 && read(R::ViewsRetired) == 2 && read(R::CoreOffset + 35) == coreGeneration &&
+                              read(R::CoreOffset + 43) == 1 && read(R::CoreOffset + 44) == 1 && read(R::CoreOffset + 45) == 1,
+                          "two views deliberately resume local input through one configuration and binding manager");
+                    command(5, R::Command::Stop);
+                }
+            }
+        }
+        while (worker.PollFrontendRuntime() == 0)
+        {
+            worker.HeartbeatFrontendRuntime(generation);
+            Check(GetTickCount64() < deadline, "local runtime final retirement exceeded the controlled budget");
+            Sleep(5);
+        }
+        Check(capture() && worker.CaptureLocalInputRuntime() && local(L::Phase) == static_cast<std::uint32_t>(L::State::Disabled) && !local(L::Configured) &&
+                  !local(L::Enabled) && !local(L::BindingsBorrowed) && !local(L::NativeAttempted) && !local(L::NativeActive) && !local(L::NativeBound) &&
+                  !local(L::CleanupPending) && local(L::CleanupComplete) == 1 && local(L::CanonicalNeutral) == 1,
+              "Disable publishes actual local retirement before completed owner shutdown");
+        Check(read(R::CoreStoppedVerified) == 1 && read(R::CoreReleasedVerified) == 1 && read(R::CoreUnloadedVerified) == 1 && !read(R::CleanupPending) &&
+                  read(R::CleanupComplete) == 1 && fixture.counters[58] >= 1 && fixture.counters[44] == 1 && fixture.counters[48] >= 1 &&
+                  fixture.counters[49] == 1 && !fixture.counters[59] && !fixture.counters[52] && !fixture.counters[2],
+              "local handoff never overlaps a live GUI, fabricates live Core reads or unloads before Disable");
+        Check(read(R::LastFailure) == (scenario == 7 ? static_cast<std::uint32_t>(R::Failure::CoreState) : 0u),
+              "controlled configuration refusal is a workload failure without losing local retirement");
+        if (scenario == 3)
+            Check(read(R::ShowAcknowledgements) == 1 && read(R::ViewsRetired) == 1 && read(R::AcknowledgedSequence) == 4,
+                  "superseded waiting Show never enters a second GUI before Stop acknowledgement");
+        Check(!worker.ReadLocalInputRuntime(L::FieldCount), "unknown local32 fields stay neutral");
+        for (std::uint32_t field = 0; field < 19; ++field)
+            Check(!worker.Read(field), "local service does not reinterpret Common19 or Runtime416");
     }
 
     struct WorkerDeleteObservation
@@ -1236,7 +1425,12 @@ int wmain(int argc, wchar_t** argv)
         Check(!worker.Begin(nullptr), "null anchor must be rejected");
         for (unsigned field = 0; field < 20; ++field)
             Check(worker.Read(field) == 0, "idle cache must be neutral");
-        if (std::wstring(argv[2]).find(L"runtime-") == 0)
+        if (std::wstring(argv[2]).find(L"local-runtime-") == 0)
+        {
+            Check(argc == 4, "local runtime fixture requires its controlled Core DLL");
+            TestLocalRuntimeWorker(worker, root, argv[2], argv[3]);
+        }
+        else if (std::wstring(argv[2]).find(L"runtime-") == 0)
         {
             Check(argc == 4, "runtime worker fixture requires its controlled Core DLL");
             TestRuntimeWorker(worker, root, argv[2], argv[3]);
@@ -1599,10 +1793,12 @@ int wmain(int argc, wchar_t** argv)
                           !worker.ReadGuiFrontendStartupClockOwnerV2(Startup::ViewRuns),
                       "actual V2 rejects native binding without inventing96 clock evidence, then retains/copies the genuine clean owner32");
         }
-        else if (std::wstring(argv[2]) == L"actual-runtime")
+        else if (std::wstring(argv[2]) == L"actual-runtime" || std::wstring(argv[2]) == L"actual-runtime-local")
         {
             namespace R = deonline::FrontendRuntimeReport;
-            const auto generation = Fast([&] { return worker.BeginFrontendRuntime(&anchor); });
+            namespace L = DefinitiveLocalInputRuntime;
+            const bool localInput = std::wstring(argv[2]) == L"actual-runtime-local";
+            const auto generation = Fast([&] { return worker.BeginFrontendRuntime(&anchor, localInput); });
             Check(generation != 0, "actual runtime start owns an independent host generation");
             const auto deadline = GetTickCount64() + 15000;
             while (!worker.CaptureFrontendRuntime() || worker.ReadFrontendRuntime(R::WorkerPhase) != static_cast<std::uint32_t>(R::Phase::Hidden))
@@ -1615,6 +1811,11 @@ int wmain(int argc, wchar_t** argv)
                       worker.ReadFrontendRuntime(R::CoreOffset + 43) == 1 && worker.ReadFrontendRuntime(R::CoreOffset + 44) == 1 &&
                       worker.ReadFrontendRuntime(R::CoreOffset + 45) == 1,
                   "actual Core owns one XML/config/CVars/binding session while hidden");
+            if (localInput)
+                Check(worker.CaptureLocalInputRuntime() && worker.ReadLocalInputRuntime(L::Version) == 1 &&
+                          worker.ReadLocalInputRuntime(L::Phase) == static_cast<std::uint32_t>(L::State::Disabled) &&
+                          !worker.ReadLocalInputRuntime(L::Configured) && !worker.ReadLocalInputRuntime(L::NativeAttempted),
+                      "actual optional local API begins Disabled without touching native input before the first GUI retires");
             Check(worker.CommandFrontendRuntime(generation, 1, 1), "actual runtime requests one fresh native view");
             while (worker.PollFrontendRuntime() == 0)
             {
@@ -1632,6 +1833,11 @@ int wmain(int argc, wchar_t** argv)
                 Check(!worker.ReadFrontendRuntime(field), "wrong-image refusal invents no288 native/GUI evidence");
             Check(!GetModuleHandleW(L"core.dll") && !GetModuleHandleW(L"game_de.dll") && !GetModuleHandleW(L"xmll.dll") && !GetModuleHandleW(L"pthread.dll"),
                   "actual refused runtime releases session XML before backend/Core unload");
+            if (localInput)
+                Check(worker.CaptureLocalInputRuntime() && worker.ReadLocalInputRuntime(L::Phase) == static_cast<std::uint32_t>(L::State::Disabled) &&
+                          !worker.ReadLocalInputRuntime(L::Configured) && !worker.ReadLocalInputRuntime(L::NativeAttempted) &&
+                          !worker.ReadLocalInputRuntime(L::NativeBound) && worker.ReadLocalInputRuntime(L::CleanupComplete) == 1,
+                      "actual wrong-image view refusal disables local input without manufacturing a native generation");
         }
         else if (std::wstring(argv[2]) == L"actual-persistent-frontend")
         {

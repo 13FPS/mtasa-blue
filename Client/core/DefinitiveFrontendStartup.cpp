@@ -9,6 +9,7 @@
 #include "DefinitiveFrontendClockReference.h"
 #include "DefinitivePersistentFrontend.h"
 #include "DefinitiveFrontendRuntime.h"
+#include "DefinitiveLocalInputRuntime.h"
 
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
 
@@ -111,8 +112,13 @@ namespace DefinitiveFrontendStartup
                 return Status::Busy;
             if (state[Phase] != 2)
                 return state[Phase] == 5 ? Status::Failed : Status::Stopped;
-            if (state[ExactImageBound])
+            // A retired optional service can Reset the adapter and discard its
+            // native reader. Never let the cached owner bit skip rebinding on
+            // the next same-Core view or producer admission.
+            if (state[ExactImageBound] &&
+                (core->m_DefinitiveAdapter.GetCapabilities() & mta::game_de::NativePadBindingCapabilities) == mta::game_de::NativePadBindingCapabilities)
                 return Status::Ok;
+            state[ExactImageBound] = 0;
             try
             {
                 if (core->m_DefinitiveAdapter.BindNativeInput())
@@ -356,12 +362,106 @@ namespace DefinitiveFrontendStartup
             // created through the existing direct CPU/GUI borrowing API.
             if (generation == UINT64_MAX || request.generation != generation + 1)
                 return Status::InvalidArgument;
+            core->m_frontendStartupAccepting = false;
+            const auto localStopped = core->StopLocalInputRuntime(false);
+            if (localStopped != Status::Ok)
+                return localStopped;
+            core->m_frontendStartupAccepting = core->LocalInputAllowsFrontend();
             const auto status = RunPersistent(request);
             if (status == Status::Busy)
                 runtimeStopping = true;
             else if (status == Status::Failed && state[LastFailure] == static_cast<std::uint32_t>(Failure::View))
                 runtimeFailure = Runtime::Failure::View;
             return status;
+        }
+
+        Status CheckLocalAdmission() const noexcept
+        {
+            if (!runtimeMode)
+                return Status::InvalidArgument;
+            if (runtimeStopped)
+                return Status::Stopped;
+            if (runtimeStopping || clockPending || !lastClockRetired)
+                return Status::Busy;
+            if (state[Phase] != 2 || !core || !core->m_DefinitiveAdapter.IsStarted())
+                return state[Phase] == 5 ? Status::Failed : Status::Stopped;
+            return core->m_frontendResources || !state[LastViewCleanupComplete] ? Status::Busy : Status::Ok;
+        }
+
+        void RefreshLocalBorrowGate() noexcept
+        {
+            if (core)
+            {
+                // A no-token native refusal can retire through Reset, which
+                // clears the reader binding. The next same-Core service must
+                // rebind instead of trusting its previous ExactImageBound bit.
+                state[ExactImageBound] =
+                    (core->m_DefinitiveAdapter.GetCapabilities() & mta::game_de::NativePadBindingCapabilities) == mta::game_de::NativePadBindingCapabilities;
+                core->m_frontendStartupAccepting =
+                    state[Phase] == 2 && !runtimeStopping && !runtimeStopped && !clockPending && lastClockRetired && core->LocalInputAllowsFrontend();
+            }
+        }
+
+        Status ConfigureLocal(const DefinitiveLocalInputRuntime::RequestV1& request) noexcept
+        {
+            const auto admitted = CheckLocalAdmission();
+            if (admitted != Status::Ok)
+                return admitted;
+            // The same operation lock pins Core through native admission and
+            // cleanup. A direct GUI factory must refuse before allocating its
+            // borrower while this distinct input owner is enabled or retained.
+            core->m_frontendStartupAccepting = false;
+            const auto configured = core->ConfigureLocalInputRuntime(request);
+            RefreshLocalBorrowGate();
+            return configured;
+        }
+
+        Status PulseLocal() noexcept
+        {
+            namespace Local = DefinitiveLocalInputRuntime;
+            const auto admitted = CheckLocalAdmission();
+            if (admitted != Status::Ok)
+                return admitted;
+            core->m_frontendStartupAccepting = false;
+            const auto local = core->ReadLocalInputRuntime();
+            if (local[Local::Enabled] && (Bind() != Status::Ok || Pulse() != Status::Ok))
+            {
+                const auto retired = core->StopLocalInputRuntime(false, Local::Failure::InputBind, true);
+                RefreshLocalBorrowGate();
+                return retired == Status::Ok ? Status::Failed : retired;
+            }
+            const auto result = core->PulseLocalInputRuntime();
+            RefreshLocalBorrowGate();
+            return result;
+        }
+
+        DefinitiveLocalInputRuntime::Snapshot ReadLocal() noexcept
+        {
+            namespace Local = DefinitiveLocalInputRuntime;
+            if (core)
+                return core->ReadLocalInputRuntime();
+            Local::Snapshot absent{};
+            absent[Local::Version] = Local::ApiVersion;
+            absent[Local::Phase] = static_cast<std::uint32_t>(Local::State::Disabled);
+            absent[Local::OwnerThread] = owner;
+            absent[Local::CleanupComplete] = 1;
+            return absent;
+        }
+
+        Status StopLocal(bool disable) noexcept
+        {
+            // Retirement remains callable after a failed backend pulse. A
+            // historical workload error cannot strand its still-owned lease.
+            if (!runtimeMode)
+                return Status::InvalidArgument;
+            if (!core)
+                return Status::Stopped;
+            if (clockPending || !lastClockRetired || core->m_frontendResources || !state[LastViewCleanupComplete])
+                return Status::Busy;
+            core->m_frontendStartupAccepting = false;
+            const auto result = core->StopLocalInputRuntime(disable);
+            RefreshLocalBorrowGate();
+            return result;
         }
 
         Status CheckClockAdmission() const noexcept
@@ -374,7 +474,7 @@ namespace DefinitiveFrontendStartup
                 return Status::Failed;
             // A stopped frontend still borrows Core until its Release. Clock
             // ownership cannot overlap that GUI owner or an unretired view.
-            return core->m_frontendResources || !state[LastViewCleanupComplete] ? Status::Busy : Status::Ok;
+            return core->m_frontendResources || !state[LastViewCleanupComplete] || !core->LocalInputAllowsFrontend() ? Status::Busy : Status::Ok;
         }
 
         Status PrepareClock() noexcept
@@ -713,6 +813,71 @@ namespace DefinitiveFrontendStartup
         delete activeStartup;
         activeStartup = nullptr;
         return Status::Ok;
+    }
+
+    Status ConfigureLocalOwner(void* handle, const DefinitiveLocalInputRuntime::RequestV1* request) noexcept
+    {
+        Operation  operation;
+        const auto status = operation.Validate(handle);
+        if (status != Status::Ok)
+            return status;
+        if (!request || request->size != sizeof(*request) || request->version != DefinitiveLocalInputRuntime::ApiVersion || !request->window ||
+            request->reserved[0] || request->reserved[1])
+            return Status::InvalidArgument;
+        return activeStartup->ConfigureLocal(*request);
+    }
+
+    Status PulseLocalOwner(void* handle) noexcept
+    {
+        Operation  operation;
+        const auto status = operation.Validate(handle);
+        return status == Status::Ok ? activeStartup->PulseLocal() : status;
+    }
+
+    Status ReadLocalOwner(void* handle, std::uint32_t* output, std::uint32_t count) noexcept
+    {
+        Operation  operation;
+        const auto status = operation.Validate(handle);
+        if (status != Status::Ok)
+            return status;
+        if (!activeStartup->runtimeMode || !output || count != DefinitiveLocalInputRuntime::FieldCount)
+            return Status::InvalidArgument;
+        if (activeStartup->clockPending || !activeStartup->lastClockRetired)
+            return Status::Busy;
+        const auto sample = activeStartup->ReadLocal();
+        std::copy(sample.begin(), sample.end(), output);
+        return Status::Ok;
+    }
+
+    Status StopLocalOwner(void* handle, bool disable) noexcept
+    {
+        Operation  operation;
+        const auto status = operation.Validate(handle);
+        return status == Status::Ok ? activeStartup->StopLocal(disable) : status;
+    }
+}
+
+namespace DefinitiveLocalInputRuntime
+{
+    Status ConfigureOwner(void* handle, const RequestV1* request) noexcept
+    {
+        return DefinitiveFrontendStartup::ConfigureLocalOwner(handle, request);
+    }
+    Status PulseOwner(void* handle) noexcept
+    {
+        return DefinitiveFrontendStartup::PulseLocalOwner(handle);
+    }
+    Status ReadOwner(void* handle, std::uint32_t* output, std::uint32_t count) noexcept
+    {
+        return DefinitiveFrontendStartup::ReadLocalOwner(handle, output, count);
+    }
+    Status SuspendOwner(void* handle) noexcept
+    {
+        return DefinitiveFrontendStartup::StopLocalOwner(handle, false);
+    }
+    Status DisableOwner(void* handle) noexcept
+    {
+        return DefinitiveFrontendStartup::StopLocalOwner(handle, true);
     }
 }
 

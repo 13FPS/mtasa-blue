@@ -35,6 +35,7 @@
 #include "../../Client/core/DefinitiveClockReference.h"
 #include "../../Client/core/DefinitiveFrontendClockReference.h"
 #include "../../Client/core/DefinitiveFrontendRuntime.h"
+#include "../../Client/core/DefinitiveLocalInputRuntime.h"
 
 using Microsoft::WRL::ComPtr;
 namespace Frontend = DefinitiveFrontend;
@@ -45,6 +46,7 @@ namespace Bindings = DefinitiveFrontendBindings;
 namespace ClockReference = DefinitiveClockReference;
 namespace FrontendClock = DefinitiveFrontendClockReference;
 namespace Runtime = DefinitiveFrontendRuntime;
+namespace LocalInput = DefinitiveLocalInputRuntime;
 using mta::gui::GuiD3D12Status;
 static_assert(Frontend::ApiVersion == 1 && Frontend::FieldCount == 32);
 static_assert(Startup::ApiVersion == 1 && Startup::FieldCount == 32);
@@ -53,6 +55,7 @@ static_assert(Console::ApiVersion == 1 && Console::FieldCount == 32 && Bindings:
 static_assert(ClockReference::ApiVersion == 1 && ClockReference::FieldCount == 96);
 static_assert(FrontendClock::ApiVersion == 1 && Startup::FieldCount == 32);
 static_assert(Runtime::ApiVersion == 1 && Runtime::FieldCount == 64 && Runtime::StartupFieldCount == 32);
+static_assert(LocalInput::ApiVersion == 1 && LocalInput::FieldCount == 32 && sizeof(LocalInput::RequestV1) == 24);
 
 namespace
 {
@@ -62,6 +65,7 @@ namespace
     unsigned                 clockCancelCalls = 0, clockPublishCalls = 0;
     bool                     clockPublicationShapeValid = true, clockAdmissionVerified = false, clockWrongImageRefusalVerified = false;
     bool                     runtimeCase = false, runtimeRetentionVerified = false, runtimeFailureCleanupVerified = false;
+    bool                     localInputAdmissionVerified = false, localInputWrongImageVerified = false;
     Runtime::Snapshot        runtimeTerminal{};
     ClockReference::Snapshot clockSnapshot{};
     bool                     CancelClock()
@@ -160,6 +164,12 @@ namespace
         Runtime::RunView                     runRuntimeView = nullptr;
         Runtime::Shutdown                    shutdownRuntime = nullptr;
         Runtime::Release                     releaseRuntime = nullptr;
+        LocalInput::Configure                configureLocal = nullptr;
+        LocalInput::Pulse                    pulseLocal = nullptr;
+        LocalInput::Read                     readLocal = nullptr;
+        LocalInput::Suspend                  suspendLocal = nullptr;
+        LocalInput::Disable                  disableLocal = nullptr;
+        HWND                                 localWindow = nullptr;
         bool                                 runtimeOwner = false;
         Frontend::Create                     create = nullptr;
         Frontend::Pulse                      pulse = nullptr;
@@ -179,6 +189,8 @@ namespace
                 if (releaseOwner && releaseOwner(startup) == Frontend::Status::Ok)
                     startup = nullptr;
             }
+            if (!startup && localWindow)
+                DestroyWindow(localWindow);
             if (!frontend && renderer)
             {
                 for (unsigned retry = 0; retry < 500; ++retry)
@@ -473,6 +485,8 @@ namespace
                << ",\"runtimeApiVersion\":1,\"runtimeFields\":64,\"runtimeCase\":" << (runtimeCase ? "true" : "false")
                << ",\"runtimeRetentionVerified\":" << (runtimeRetentionVerified ? "true" : "false")
                << ",\"runtimeFailureCleanupVerified\":" << (runtimeFailureCleanupVerified ? "true" : "false")
+               << ",\"localInputApiVersion\":1,\"localInputFields\":32,\"localInputAdmissionVerified\":" << (localInputAdmissionVerified ? "true" : "false")
+               << ",\"localInputWrongImageVerified\":" << (localInputWrongImageVerified ? "true" : "false") << ",\"localInputNativeMovementVerified\":false"
                << ",\"runtimeNativeViewVerified\":false,\"runtimeTerminal\":[";
         for (std::size_t index = 0; index < runtimeTerminal.size(); ++index)
             result << (index ? "," : "") << runtimeTerminal[index];
@@ -866,10 +880,79 @@ namespace
         owned.runRuntimeView = Export<Runtime::RunView>(owned.core, "MTA_RunDEFrontendRuntimeView");
         owned.shutdownRuntime = Export<Runtime::Shutdown>(owned.core, "MTA_ShutdownDEFrontendRuntime");
         owned.releaseRuntime = Export<Runtime::Release>(owned.core, "MTA_ReleaseDEFrontendRuntime");
+        Check(Export<std::uint32_t (*)()>(owned.core, "MTA_DELocalInputRuntimeApiVersion")() == 1, "actual Core exposes separate local-input API1/32");
+        owned.configureLocal = Export<LocalInput::Configure>(owned.core, "MTA_ConfigureDELocalInputRuntime");
+        owned.pulseLocal = Export<LocalInput::Pulse>(owned.core, "MTA_PulseDELocalInputRuntime");
+        owned.readLocal = Export<LocalInput::Read>(owned.core, "MTA_ReadDELocalInputRuntime");
+        owned.suspendLocal = Export<LocalInput::Suspend>(owned.core, "MTA_SuspendDELocalInputRuntime");
+        owned.disableLocal = Export<LocalInput::Disable>(owned.core, "MTA_DisableDELocalInputRuntime");
         Check(!owned.beginRuntime(0) && !owned.beginRuntime(2), "runtime rejects foreign API versions before creating Core");
         owned.startup = owned.beginRuntime(1);
         Check(owned.startup != nullptr, "runtime publishes the same completed Core owner even on partial preparation failure");
         const auto initial = RuntimeState(owned);
+        const auto localState = [&]
+        {
+            LocalInput::Snapshot values{};
+            Check(owned.readLocal(owned.startup, values.data(), LocalInput::FieldCount) == Frontend::Status::Ok,
+                  "read separate actual Core local-input32 values");
+            return values;
+        };
+        const auto absentLocal = localState();
+        Check(absentLocal[LocalInput::Version] == 1 && absentLocal[LocalInput::Phase] == static_cast<std::uint32_t>(LocalInput::State::Disabled) &&
+                  absentLocal[LocalInput::OwnerThread] == GetCurrentThreadId() && absentLocal[LocalInput::CleanupComplete] &&
+                  !absentLocal[LocalInput::Configured] && !absentLocal[LocalInput::Enabled] && !absentLocal[LocalInput::NativeAttempted] &&
+                  !absentLocal[LocalInput::NativeActive] && !absentLocal[LocalInput::NativeBound] && !absentLocal[LocalInput::CleanupPending] &&
+                  !absentLocal[LocalInput::CanonicalNeutral],
+              "unconfigured local service reports absence without inventing a canonical neutral readback or native ownership");
+        Check(owned.suspendLocal(owned.startup) == Frontend::Status::Ok && owned.disableLocal(owned.startup) == Frontend::Status::Ok &&
+                  localState() == absentLocal,
+              "absent-service Suspend and Disable are safe no-ops on a retained or failed runtime owner");
+        LocalInput::Snapshot localSentinel;
+        localSentinel.fill(0x37516824);
+        const auto            localUnchanged = localSentinel;
+        const auto            unknownOwner = reinterpret_cast<void*>(std::uintptr_t{1});
+        LocalInput::RequestV1 localRequest;
+        localRequest.window = reinterpret_cast<void*>(std::uintptr_t{1});
+        Check(owned.readLocal(owned.startup, localSentinel.data(), 31) == Frontend::Status::InvalidArgument && localSentinel == localUnchanged &&
+                  owned.readLocal(owned.startup, nullptr, 32) == Frontend::Status::InvalidArgument &&
+                  owned.readLocal(unknownOwner, localSentinel.data(), 32) == Frontend::Status::InvalidArgument && localSentinel == localUnchanged &&
+                  owned.configureLocal(unknownOwner, &localRequest) == Frontend::Status::InvalidArgument &&
+                  owned.pulseLocal(unknownOwner) == Frontend::Status::InvalidArgument &&
+                  owned.suspendLocal(unknownOwner) == Frontend::Status::InvalidArgument &&
+                  owned.disableLocal(unknownOwner) == Frontend::Status::InvalidArgument &&
+                  owned.configureLocal(owned.startup, nullptr) == Frontend::Status::InvalidArgument,
+              "malformed local reads and unknown owner operations preserve caller bytes and cannot adopt another Core");
+        for (unsigned field = 0; field != 5; ++field)
+        {
+            auto malformedLocal = localRequest;
+            if (field == 0)
+                malformedLocal.size = 0;
+            if (field == 1)
+                malformedLocal.version = 0;
+            if (field == 2)
+                malformedLocal.window = nullptr;
+            if (field == 3)
+                malformedLocal.reserved[0] = 1;
+            if (field == 4)
+                malformedLocal.reserved[1] = 1;
+            Check(owned.configureLocal(owned.startup, &malformedLocal) == Frontend::Status::InvalidArgument && localState() == absentLocal,
+                  "malformed local configuration never allocates a producer or changes its absent snapshot");
+        }
+        bool        foreignLocal = false;
+        std::thread localOther(
+            [&]
+            {
+                auto output = localUnchanged;
+                foreignLocal = owned.readLocal(owned.startup, output.data(), LocalInput::FieldCount) == Frontend::Status::WrongThread &&
+                               output == localUnchanged && owned.configureLocal(owned.startup, &localRequest) == Frontend::Status::WrongThread &&
+                               owned.pulseLocal(owned.startup) == Frontend::Status::WrongThread &&
+                               owned.suspendLocal(owned.startup) == Frontend::Status::WrongThread &&
+                               owned.disableLocal(owned.startup) == Frontend::Status::WrongThread;
+            });
+        localOther.join();
+        Check(foreignLocal && localState() == absentLocal && RuntimeState(owned) == initial,
+              "foreign local service calls cannot read mutate admit or retire the same real Core and binding manager");
+        localInputAdmissionVerified = true;
         Check(!owned.beginRuntime(1) && !owned.beginStartup(1), "runtime and historical startup cannot construct competing Core singletons");
         Runtime::Snapshot sentinel;
         sentinel.fill(0x75316824);
@@ -993,6 +1076,37 @@ namespace
             foreignBorrow.join();
             Check(foreignBorrowRejected && RuntimeState(owned) == beforeForeignBorrow,
                   "foreign direct GUI creation cannot allocate or borrow retained runtime services");
+            // A hidden real owned HWND satisfies configuration admission. The
+            // actual executable remains the synthetic host, so Pulse must
+            // refuse native binding before any engine hook or input lease.
+            owned.localWindow = CreateWindowExW(0, L"STATIC", L"MTA local input owned host", WS_OVERLAPPEDWINDOW, 0, 0, 320, 240, nullptr, nullptr,
+                                                GetModuleHandleW(nullptr), nullptr);
+            Check(owned.localWindow != nullptr, "create an undisplayed real owner-process root window for local configuration");
+            localRequest.window = owned.localWindow;
+            Check(owned.configureLocal(owned.startup, &localRequest) == Frontend::Status::Ok, "configure real local producer on the same parked MTA bindings");
+            const auto arming = localState();
+            Check(arming[LocalInput::Phase] == static_cast<std::uint32_t>(LocalInput::State::Arming) && arming[LocalInput::Configured] &&
+                      arming[LocalInput::Enabled] && arming[LocalInput::BindingsBorrowed] && arming[LocalInput::CanonicalNeutral] &&
+                      arming[LocalInput::CleanupComplete] && !arming[LocalInput::NativeAttempted] && !arming[LocalInput::NativeActive] &&
+                      !arming[LocalInput::NativeBound] && arming[LocalInput::NativeLifetimeMs] == 500,
+                  "configuration verifies actual canonical neutral history without native Begin or a replacement binding manager");
+            const auto beforeLocalBorrow = RuntimeState(owned);
+            Check(!owned.create(Frontend::ApiVersion, owned.gui) && RuntimeState(owned) == beforeLocalBorrow && localState() == arming,
+                  "enabled local owner excludes a direct GUI borrower before allocating or changing either owner");
+            Check(owned.pulseLocal(owned.startup) == Frontend::Status::Failed, "local producer refuses the actual host's wrong game image before native Begin");
+            const auto refusedLocal = localState();
+            Check(refusedLocal[LocalInput::Phase] == static_cast<std::uint32_t>(LocalInput::State::Failed) &&
+                      refusedLocal[LocalInput::LastFailure] == static_cast<std::uint32_t>(LocalInput::Failure::InputBind) &&
+                      refusedLocal[LocalInput::Configured] && !refusedLocal[LocalInput::Enabled] && refusedLocal[LocalInput::BindingsBorrowed] &&
+                      !refusedLocal[LocalInput::NativeAttempted] && !refusedLocal[LocalInput::NativeGenerationLow] &&
+                      !refusedLocal[LocalInput::NativeGenerationHigh] && !refusedLocal[LocalInput::NativeActive] && !refusedLocal[LocalInput::NativeBound] &&
+                      !refusedLocal[LocalInput::CleanupPending] && refusedLocal[LocalInput::CleanupComplete] && refusedLocal[LocalInput::CanonicalNeutral] &&
+                      RuntimePair(RuntimeState(owned), Runtime::SessionGenerationLow) == session && !RuntimeState(owned)[Startup::ExactImageBound] &&
+                      RuntimeState(owned)[Startup::CapabilitiesLow] == beforeLocalBorrow[Startup::CapabilitiesLow],
+                  "wrong-image local refusal preserves the same Core and actual neutral history with no fabricated native lease");
+            Check(owned.suspendLocal(owned.startup) == Frontend::Status::Ok && localState()[LocalInput::CanonicalNeutral],
+                  "qualified local suspension permits subsequent CPU GUI borrowing while preserving historical refusal");
+            localInputWrongImageVerified = true;
             std::uintptr_t identity = 0;
             for (unsigned view = 1; view <= 2; ++view)
             {
@@ -1006,6 +1120,11 @@ namespace
                       "fresh CPU view borrows the same runtime with one actual view generation");
                 Check(owned.shutdownRuntime(owned.startup) == Frontend::Status::Busy && owned.releaseRuntime(owned.startup) == Frontend::Status::Busy,
                       "runtime refuses service and backend destruction behind a live GUI borrower");
+                const auto beforeLocalBusy = localState();
+                Check(owned.configureLocal(owned.startup, &localRequest) == Frontend::Status::Busy &&
+                          owned.pulseLocal(owned.startup) == Frontend::Status::Busy && owned.suspendLocal(owned.startup) == Frontend::Status::Busy &&
+                          owned.disableLocal(owned.startup) == Frontend::Status::Busy && localState() == beforeLocalBusy,
+                      "live actual GUI borrower excludes local configuration polling and binding-history cleanup");
                 // Exercise the real fade to completion before clicking the
                 // existing menu; a fixed short frame count is scheduler-dependent.
                 const auto settleUntil = GetTickCount64() + 750;
@@ -1044,6 +1163,21 @@ namespace
                 const auto pulses = hidden[Startup::Pulses];
                 Check(owned.pulseRuntime(owned.startup) == Frontend::Status::Ok && RuntimeState(owned)[Startup::Pulses] == pulses + 1,
                       "same actual backend remains usable between runtime views");
+                if (view == 1)
+                {
+                    Check(owned.configureLocal(owned.startup, &localRequest) == Frontend::Status::Ok && !owned.create(Frontend::ApiVersion, owned.gui),
+                          "explicit local resume after view retirement borrows the same applied binding manager and excludes another GUI");
+                    Check(owned.disableLocal(owned.startup) == Frontend::Status::Ok, "Disable retires armed local ownership before the second real GUI view");
+                    const auto disabled = localState();
+                    Check(disabled[LocalInput::Phase] == static_cast<std::uint32_t>(LocalInput::State::Disabled) && !disabled[LocalInput::Configured] &&
+                              !disabled[LocalInput::Enabled] && !disabled[LocalInput::BindingsBorrowed] && !disabled[LocalInput::NativeAttempted] &&
+                              !disabled[LocalInput::CleanupPending] && disabled[LocalInput::CleanupComplete] && disabled[LocalInput::CanonicalNeutral] &&
+                              RuntimeState(owned)[Runtime::BindingManagerCreations] == 1 && RuntimeState(owned)[Runtime::ConfigurationLoads] == 1 &&
+                              RuntimeState(owned)[Runtime::BindingLoads] == 1,
+                          "disabled local producer leaves no native debt and retains one actual manager/configuration for the second I/CancelO view");
+                    Check(owned.suspendLocal(owned.startup) == Frontend::Status::Ok && localState() == disabled,
+                          "Suspend after Disable remains idempotently Disabled with unchanged qualified neutral values");
+                }
             }
             request.generation = 2;
             Check(owned.runRuntimeView(owned.startup, &request) == Frontend::Status::InvalidArgument && !cancelCalls && !publishCalls && !heartbeatCalls,
@@ -1064,6 +1198,11 @@ namespace
         Check(owned.pulseRuntime(owned.startup) == Frontend::Status::Stopped && owned.runRuntimeView(owned.startup, &request) == Frontend::Status::Stopped &&
                   !cancelCalls && !publishCalls && !heartbeatCalls,
               "stopped runtime cannot reopen a native view or renew a host lease");
+        const auto stoppedLocal = localState();
+        Check(!stoppedLocal[LocalInput::Configured] && !stoppedLocal[LocalInput::Enabled] && !stoppedLocal[LocalInput::BindingsBorrowed] &&
+                  !stoppedLocal[LocalInput::NativeActive] && !stoppedLocal[LocalInput::NativeBound] && !stoppedLocal[LocalInput::CleanupPending] &&
+                  stoppedLocal[LocalInput::CleanupComplete],
+              "runtime final shutdown leaves the separate local producer retired before its real bindings and backend disappear");
         if (owned.gui)
             Check(!owned.create(Frontend::ApiVersion, owned.gui) && RuntimeState(owned) == runtimeTerminal,
                   "stopped runtime closes direct GUI borrowing before releasing its completed Core");
@@ -1073,6 +1212,9 @@ namespace
         Check(owned.readRuntime(stale, sentinel.data(), 64) == Frontend::Status::InvalidArgument && sentinel == unchanged &&
                   owned.releaseRuntime(stale) == Frontend::Status::InvalidArgument,
               "stale runtime identity preserves output and cannot release another Core");
+        Check(owned.readLocal(stale, localSentinel.data(), 32) == Frontend::Status::InvalidArgument && localSentinel == localUnchanged &&
+                  owned.suspendLocal(stale) == Frontend::Status::InvalidArgument && owned.disableLocal(stale) == Frontend::Status::InvalidArgument,
+              "stale local input identity preserves output and cannot retire another completed Core");
         CheckIsolation(false);
         if (owned.renderer)
         {
@@ -1200,6 +1342,20 @@ int wmain(int argc, wchar_t** argv)
                 Export<Runtime::Shutdown>(owned.core, "MTA_ShutdownDEFrontendRuntime")(owned.startup) == Frontend::Status::InvalidArgument &&
                 Export<Runtime::Release>(owned.core, "MTA_ReleaseDEFrontendRuntime")(owned.startup) == Frontend::Status::InvalidArgument,
             "runtime API refuses historical startup handles without adoption replacement or output mutation");
+        LocalInput::Snapshot historicalLocal;
+        historicalLocal.fill(0x35724681);
+        const auto            historicalLocalUnchanged = historicalLocal;
+        LocalInput::RequestV1 historicalLocalRequest;
+        historicalLocalRequest.window = reinterpret_cast<void*>(std::uintptr_t{1});
+        Check(Export<LocalInput::Read>(owned.core, "MTA_ReadDELocalInputRuntime")(owned.startup, historicalLocal.data(), LocalInput::FieldCount) ==
+                      Frontend::Status::InvalidArgument &&
+                  historicalLocal == historicalLocalUnchanged &&
+                  Export<LocalInput::Configure>(owned.core, "MTA_ConfigureDELocalInputRuntime")(owned.startup, &historicalLocalRequest) ==
+                      Frontend::Status::InvalidArgument &&
+                  Export<LocalInput::Pulse>(owned.core, "MTA_PulseDELocalInputRuntime")(owned.startup) == Frontend::Status::InvalidArgument &&
+                  Export<LocalInput::Suspend>(owned.core, "MTA_SuspendDELocalInputRuntime")(owned.startup) == Frontend::Status::InvalidArgument &&
+                  Export<LocalInput::Disable>(owned.core, "MTA_DisableDELocalInputRuntime")(owned.startup) == Frontend::Status::InvalidArgument,
+              "local input runtime cannot adopt historical startup handles or change their output and ownership");
         Check(!owned.beginStartup(Startup::ApiVersion), "second startup cannot replace an existing completed Core owner");
         Startup::Snapshot sentinel;
         sentinel.fill(0x13572468);

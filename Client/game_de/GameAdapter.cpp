@@ -11,8 +11,10 @@
 #include <game/CGameRenderDeviceLease.h>
 #include <game/CGameRenderDeviceWindowLease.h>
 #include <game/CGameFrontendInputLease.h>
+#include <game/CGameLocalInputLease.h>
 #include <game/CGameClockService.h>
 #include "FrontendInputLeasePolicy.h"
+#include "LocalInputLeasePolicy.h"
 #include "ControllerSnapshot.h"
 #include "RemoteDataStorage.h"
 #include "NativePadReader.h"
@@ -76,6 +78,68 @@ namespace mta::game_de
                 Read,
                 End
             };
+            enum class LocalLeaseAction
+            {
+                Begin,
+                Renew,
+                Read,
+                End
+            };
+            static Status LocalLease(IGameAdapter* adapter, LocalLeaseAction action, const LocalInputLeaseRequestV1* request, std::uint64_t generation,
+                                     const MtaInputState* movement, LocalInputLeaseStateV1* output) noexcept
+            {
+                // The optional API shares the retained-adapter registry. It
+                // must not dereference an unknown object or wait on a registry
+                // lock while the producer needs native hook quiescence.
+                if (!TryAcquireSRWLockShared(&frontendAdapterLock))
+                    return Status::Unsupported;
+                Status result = Status::InvalidArgument;
+                for (auto* current = frontendAdapters; current; current = current->nextFrontendAdapter)
+                {
+                    if (static_cast<IGameAdapter*>(current) != adapter)
+                        continue;
+                    result = current->Access();
+                    if (result != Status::Ok)
+                        break;
+                    if (action == LocalLeaseAction::Begin)
+                    {
+                        if (current->nativeClock.IsRetained())
+                            result = Status::Unsupported;
+                        else if (!NativeMovementInput::ValidateLocalLeaseRequest(*request))
+                            result = Status::InvalidArgument;
+                        else if (!current->nativePad.IsBound() || !current->hasInputState || !LocalInputLeasePolicy::Neutral(current->inputStorage.ReadInput()))
+                            result = Status::NotInitialized;
+                        else
+                        {
+                            const bool             started = current->nativeMovement.BeginLocalLease(*request);
+                            LocalInputLeaseStateV1 state;
+                            // A valid native attempt can retain partial hooks
+                            // after refusal. Return that real token for End.
+                            if (current->nativeMovement.ReadLocalLease(state))
+                                *output = state;
+                            result = started ? Status::Ok : Status::Unsupported;
+                        }
+                    }
+                    else if (action == LocalLeaseAction::Renew)
+                        result = current->nativeMovement.RenewLocalLease(generation, *movement) ? Status::Ok : Status::Unsupported;
+                    else if (action == LocalLeaseAction::End)
+                        result = current->nativeMovement.EndLocalLease(generation) ? Status::Ok : Status::Unsupported;
+                    else
+                    {
+                        LocalInputLeaseStateV1 state;
+                        if (current->nativeMovement.ReadLocalLease(state))
+                        {
+                            *output = state;
+                            result = Status::Ok;
+                        }
+                        else
+                            result = Status::Unsupported;
+                    }
+                    break;
+                }
+                ReleaseSRWLockShared(&frontendAdapterLock);
+                return result;
+            }
             static Status ClockService(IGameAdapter* adapter, ClockAction action, const ClockServiceRequestV1* request, const ClockCommandV1* command,
                                        std::uint64_t generation, ClockServiceStateV1* output) noexcept
             {
@@ -301,7 +365,7 @@ namespace mta::game_de
                 }
                 // Publishing MTA's canonical neutral history remains useful,
                 // but only the explicit lease token API may renew native input.
-                if (nativeMovement.IsActive() && !nativeMovement.IsFrontendLease() && !nativeMovement.Update(next))
+                if (nativeMovement.IsActive() && !nativeMovement.IsFrontendLease() && !nativeMovement.IsLocalLease() && !nativeMovement.Update(next))
                 {
                     EndMovement();
                     return Status::Unsupported;
@@ -434,7 +498,7 @@ namespace mta::game_de
 
             std::uint64_t MovementCapability() const noexcept
             {
-                return nativeMovement.IsBound() && !nativeMovement.IsFrontendLease()
+                return nativeMovement.IsBound() && !nativeMovement.IsFrontendLease() && !nativeMovement.IsLocalLease()
                            ? static_cast<std::uint64_t>(AdapterCapability::NativeMovementWriteCandidate)
                            : 0;
             }
@@ -1015,6 +1079,35 @@ namespace mta::game_de
             // Allocation/constructor failures cannot escape the module ABI.
             return nullptr;
         }
+    }
+
+    extern "C" Status BeginGameLocalInputLeaseV1(std::uint32_t version, IGameAdapter* adapter, const LocalInputLeaseRequestV1* request,
+                                                 LocalInputLeaseStateV1* output) noexcept
+    {
+        if (version != LocalInputLeaseVersionV1 || !adapter || !request || !output)
+            return Status::InvalidArgument;
+        return GameAdapter::LocalLease(adapter, GameAdapter::LocalLeaseAction::Begin, request, 0, nullptr, output);
+    }
+
+    extern "C" Status RenewGameLocalInputLeaseV1(std::uint32_t version, IGameAdapter* adapter, std::uint64_t generation, const MtaInputState* movement) noexcept
+    {
+        if (version != LocalInputLeaseVersionV1 || !adapter || !generation || !movement)
+            return Status::InvalidArgument;
+        return GameAdapter::LocalLease(adapter, GameAdapter::LocalLeaseAction::Renew, nullptr, generation, movement, nullptr);
+    }
+
+    extern "C" Status ReadGameLocalInputLeaseV1(std::uint32_t version, IGameAdapter* adapter, LocalInputLeaseStateV1* output) noexcept
+    {
+        if (version != LocalInputLeaseVersionV1 || !adapter || !output)
+            return Status::InvalidArgument;
+        return GameAdapter::LocalLease(adapter, GameAdapter::LocalLeaseAction::Read, nullptr, 0, nullptr, output);
+    }
+
+    extern "C" Status EndGameLocalInputLeaseV1(std::uint32_t version, IGameAdapter* adapter, std::uint64_t generation) noexcept
+    {
+        if (version != LocalInputLeaseVersionV1 || !adapter || !generation)
+            return Status::InvalidArgument;
+        return GameAdapter::LocalLease(adapter, GameAdapter::LocalLeaseAction::End, nullptr, generation, nullptr, nullptr);
     }
 
     extern "C" Status BeginGameFrontendInputLeaseV1(std::uint32_t version, IGameAdapter* adapter, const FrontendInputLeaseRequestV1* request,

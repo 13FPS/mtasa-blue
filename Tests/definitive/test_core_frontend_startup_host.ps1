@@ -27,6 +27,7 @@ function Assert-NoLinks([string]$Path) {
     }
 }
 $sourceNames=@('Tests/definitive/CoreFrontendStartupHostTests.cpp','Tests/definitive/ObservedFrontendGui.h','Tests/definitive/test_core_frontend_startup_host.ps1','Client/core/DefinitiveFrontend.h','Client/core/DefinitiveFrontendStartup.h','Client/core/DefinitiveFrontendRuntime.h',
+    'Client/core/DefinitiveLocalInputRuntime.h','Client/sdk/game/CGameLocalInputLease.h','Client/game_de/LocalInputLeasePolicy.h',
     'Client/core/DefinitivePersistentFrontend.h','Client/core/DefinitiveFrontendConsole.h','Client/core/DefinitiveFrontendBindings.h','Client/core/DefinitiveFrontendClockReference.h','Client/core/DefinitiveClockReference.h','Client/core/DefinitiveClockReference.cpp',
     'Client/sdk/game/CGameClockService.h','Client/core/DefinitiveFrontendStartup.cpp','Client/core/Core.cpp','Client/core/CGameAdapterModule.cpp','Client/core/CGameAdapterModule.h',
     'Client/core/CCore.cpp','Client/core/CCore.h','Client/core/CGUI.cpp','Client/core/CGUI.h','Client/core/CMainMenu.cpp','Client/core/CMainMenu.h',
@@ -193,6 +194,9 @@ try {
                 $hostResult.runtimeRetentionVerified -ne ($case -eq 'runtime') -or
                 $hostResult.runtimeFailureCleanupVerified -ne ($runtimeCase -and $case -ne 'runtime') -or
                 $hostResult.runtimeNativeViewVerified -ne $false -or @($hostResult.runtimeTerminal).Count -ne 64 -or
+                $hostResult.localInputApiVersion -ne 1 -or $hostResult.localInputFields -ne 32 -or
+                $hostResult.localInputAdmissionVerified -ne $runtimeCase -or $hostResult.localInputWrongImageVerified -ne ($case -eq 'runtime') -or
+                $hostResult.localInputNativeMovementVerified -ne $false -or
                 @($hostResult.startupTerminal).Count -ne 32 -or @($hostResult.frontendTerminal).Count -ne 32) {
                 throw "Actual host clock/unchanged frontend report differs: $case"
             }
@@ -247,6 +251,10 @@ try {
         actualTwoViewRuntimeConfigurationRetentionVerified=($success -and @($runs | Where-Object { $_.case -eq 'runtime' -and $_.actualHostResult.runtimeRetentionVerified -eq $true }).Count -eq 1);
         actualRuntimePartialFailureCleanupVerified=($success -and @($runs | Where-Object { $_.case -in @('runtime-frontend-failure','runtime-backend-failure') -and $_.actualHostResult.runtimeFailureCleanupVerified -eq $true }).Count -eq 2);
         frontendRuntimeNativeViewVerified=$false;
+        localInputRuntimeApiVersion=1;localInputRuntimeFields=32;
+        actualLocalInputOwnerArgumentAndThreadAdmissionVerified=($success -and @($runs | Where-Object { $_.case.StartsWith('runtime') -and $_.actualHostResult.localInputAdmissionVerified -eq $true }).Count -eq 3);
+        actualLocalInputWrongImageRefusalAndFollowingGuiReuseVerified=($success -and @($runs | Where-Object { $_.case -eq 'runtime' -and $_.actualHostResult.localInputWrongImageVerified -eq $true }).Count -eq 1);
+        localInputNativeMovementVerified=$false;
         actualMtaSessionBindingsSettingsOnOwnedWarp=$success;actualSixMovementBindingsApplyAndCancelVerified=$success;reservedConsoleKeyCaptureAndFocusLossVerified=$success;modalCaptureRetiredDuringFrontendTeardownVerified=$success;
         cpuFrontendTeardownWhileGpuRetainedVerified=$success;startupFailureOwnerCleanupVerified=$success;normalFrontendReacquireVerified=$success;completedCoreRetainedAfterFrontendReleaseVerified=$success;backendFailureOwnerCleanupVerified=$success;
         configurationCopiesUnchanged=$assetsUnchanged;installedFilesChanged=$false;gameLaunched=$false;gameAttached=$false;engineInputSuppressionVerified=$false;fullMtaReady=$false;

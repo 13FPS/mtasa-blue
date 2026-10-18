@@ -379,9 +379,12 @@ try {
     $stagedScript=Join-Path $runtime.root 'Win64/CLEO/de-online/index.js'
     Check 'staged-script-is-current-reviewed-source' ((Sha $stagedScript) -ceq (Sha (Join-Path $repositoryRoot 'Client/definitive/game-adapter/index.js')))
     foreach($provider in @(
-        @{relative='CLEO/de-online/core.dll';names=@('MTA_DEFrontendRuntimeApiVersion','MTA_BeginDEFrontendRuntime','MTA_ReadDEFrontendRuntime','MTA_PulseDEFrontendRuntime','MTA_RunDEFrontendRuntimeView','MTA_ShutdownDEFrontendRuntime','MTA_ReleaseDEFrontendRuntime')},
-        @{relative='CLEO/de-online/de_client_bridge.dll';names=@('DE_FrontendRuntimeApiVersionV1','DE_FrontendRuntimeStartV1','DE_FrontendRuntimeCommandV1','DE_FrontendRuntimeHeartbeatV1','DE_FrontendRuntimePollV1','DE_FrontendRuntimeCaptureV1','DE_FrontendRuntimeReadV1')},
-        @{relative='CLEO/de-online/game_de.dll';names=@('BeginGameFrontendInputLeaseV1','RenewGameFrontendInputLeaseV1','ReadGameFrontendInputLeaseV1','EndGameFrontendInputLeaseV1')})) {
+        @{relative='CLEO/de-online/core.dll';names=@('MTA_DEFrontendRuntimeApiVersion','MTA_BeginDEFrontendRuntime','MTA_ReadDEFrontendRuntime','MTA_PulseDEFrontendRuntime','MTA_RunDEFrontendRuntimeView','MTA_ShutdownDEFrontendRuntime','MTA_ReleaseDEFrontendRuntime',
+            'MTA_DELocalInputRuntimeApiVersion','MTA_ConfigureDELocalInputRuntime','MTA_PulseDELocalInputRuntime','MTA_ReadDELocalInputRuntime','MTA_SuspendDELocalInputRuntime','MTA_DisableDELocalInputRuntime')},
+        @{relative='CLEO/de-online/de_client_bridge.dll';names=@('DE_FrontendRuntimeApiVersionV1','DE_FrontendRuntimeStartV1','DE_FrontendRuntimeCommandV1','DE_FrontendRuntimeHeartbeatV1','DE_FrontendRuntimePollV1','DE_FrontendRuntimeCaptureV1','DE_FrontendRuntimeReadV1',
+            'DE_LocalInputRuntimeApiVersionV1','DE_LocalInputRuntimeStartV1','DE_LocalInputRuntimeCaptureV1','DE_LocalInputRuntimeReadV1')},
+        @{relative='CLEO/de-online/game_de.dll';names=@('BeginGameFrontendInputLeaseV1','RenewGameFrontendInputLeaseV1','ReadGameFrontendInputLeaseV1','EndGameFrontendInputLeaseV1',
+            'BeginGameLocalInputLeaseV1','RenewGameLocalInputLeaseV1','ReadGameLocalInputLeaseV1','EndGameLocalInputLeaseV1')})) {
         $exports=Get-Amd64Exports (Join-Path $runtime.root ('Win64/'+$provider.relative))
         foreach($name in $provider.names){Check ('static-AMD64-runtime-export:'+ $name) $exports.Contains($name)}
     }

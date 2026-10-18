@@ -287,10 +287,16 @@ if ($MtaCorePersistentFrontend) {
     }
 }
 if ($MtaCoreFrontendRuntime) {
+    # The current runtime script hands native input between the menu and the
+    # same retained Core bindings. Require that complete optional group before
+    # staging, while historical menu-only exports remain compatibility APIs.
     foreach ($pair in @(
-        @{path=$bridgePath; names=@('DE_FrontendRuntimeApiVersionV1','DE_FrontendRuntimeStartV1','DE_FrontendRuntimeCommandV1','DE_FrontendRuntimeHeartbeatV1','DE_FrontendRuntimePollV1','DE_FrontendRuntimeCaptureV1','DE_FrontendRuntimeReadV1')},
-        @{path=$corePath; names=@('MTA_DEFrontendRuntimeApiVersion','MTA_BeginDEFrontendRuntime','MTA_ReadDEFrontendRuntime','MTA_PulseDEFrontendRuntime','MTA_RunDEFrontendRuntimeView','MTA_ShutdownDEFrontendRuntime','MTA_ReleaseDEFrontendRuntime','SetMTADirectory','SetGTADirectory')},
-        @{path=$gameDePath; names=@('BeginGameFrontendInputLeaseV1','RenewGameFrontendInputLeaseV1','ReadGameFrontendInputLeaseV1','EndGameFrontendInputLeaseV1')}
+        @{path=$bridgePath; names=@('DE_FrontendRuntimeApiVersionV1','DE_FrontendRuntimeStartV1','DE_FrontendRuntimeCommandV1','DE_FrontendRuntimeHeartbeatV1','DE_FrontendRuntimePollV1','DE_FrontendRuntimeCaptureV1','DE_FrontendRuntimeReadV1',
+            'DE_LocalInputRuntimeApiVersionV1','DE_LocalInputRuntimeStartV1','DE_LocalInputRuntimeCaptureV1','DE_LocalInputRuntimeReadV1')},
+        @{path=$corePath; names=@('MTA_DEFrontendRuntimeApiVersion','MTA_BeginDEFrontendRuntime','MTA_ReadDEFrontendRuntime','MTA_PulseDEFrontendRuntime','MTA_RunDEFrontendRuntimeView','MTA_ShutdownDEFrontendRuntime','MTA_ReleaseDEFrontendRuntime','SetMTADirectory','SetGTADirectory',
+            'MTA_DELocalInputRuntimeApiVersion','MTA_ConfigureDELocalInputRuntime','MTA_PulseDELocalInputRuntime','MTA_ReadDELocalInputRuntime','MTA_SuspendDELocalInputRuntime','MTA_DisableDELocalInputRuntime')},
+        @{path=$gameDePath; names=@('BeginGameFrontendInputLeaseV1','RenewGameFrontendInputLeaseV1','ReadGameFrontendInputLeaseV1','EndGameFrontendInputLeaseV1',
+            'BeginGameLocalInputLeaseV1','RenewGameLocalInputLeaseV1','ReadGameLocalInputLeaseV1','EndGameLocalInputLeaseV1')}
     )) {
         $exports = Get-Amd64Exports $pair.path
         foreach ($name in $pair.names) { if (-not $exports.Contains($name)) { throw "Required frontend runtime export missing: $name" } }

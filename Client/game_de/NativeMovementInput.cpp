@@ -8,6 +8,7 @@
 #include "NativeInputRouting.h"
 #include "NativePadReader.h"
 #include "FrontendInputLeasePolicy.h"
+#include "LocalInputLeasePolicy.h"
 #include "NativeServiceAdmission.h"
 
 #include <array>
@@ -81,11 +82,13 @@ namespace mta::game_de
             ULONGLONG                  started = 0, refreshed = 0;
             MtaInputState              frame;
             // Historical movement trials retain their absolute 35-second
-            // limit. Only an explicitly admitted neutral frontend uses short,
-            // renewable leases checked independently on the engine callback.
+            // limit. Separately admitted frontend/local leases use short,
+            // renewable deadlines checked independently on the engine callback.
             bool                     frontendLease = false;
+            bool                     localLease = false;
             HWND                     frontendWindow = nullptr;
             FrontendInputLeasePolicy frontendPolicy;
+            LocalInputLeasePolicy    localPolicy;
             // The adopted callback owns this snapshot while in flight. End
             // may retry it only after suspending threads and proving quiescence;
             // an exited engine thread must not take the recovery bytes with it.
@@ -188,6 +191,8 @@ namespace mta::game_de
             runtime.active.store(false);
             if (runtime.frontendLease)
                 runtime.frontendPolicy.Revoke(FrontendInputLeaseReason::NativeFailure);
+            if (runtime.localLease)
+                runtime.localPolicy.Revoke(LocalInputLeaseReason::NativeFailure);
             std::uint32_t expected = 0;
             runtime.counters.reason.compare_exchange_strong(expected, static_cast<std::uint32_t>(reason));
         }
@@ -400,6 +405,15 @@ namespace mta::game_de
             if (runtime.frontendLease)
             {
                 if (!runtime.frontendPolicy.Check(now, FrontendWindowFocused(runtime.frontendWindow)))
+                {
+                    Fail(Failure::Expired);
+                    return false;
+                }
+                return true;
+            }
+            if (runtime.localLease)
+            {
+                if (!runtime.localPolicy.Check(now, FrontendWindowFocused(runtime.frontendWindow)))
                 {
                     Fail(Failure::Expired);
                     return false;
@@ -832,7 +846,7 @@ namespace mta::game_de
         return ValidateFrontendLeaseRequest(request) && BeginInternal(request.neutral, request.window);
     }
 
-    bool NativeMovementInput::BeginInternal(const MtaInputState& state, void* frontendWindow) noexcept
+    bool NativeMovementInput::BeginInternal(const MtaInputState& state, void* frontendWindow, bool localLease) noexcept
     {
         ApiOperation operation;
         if (!operation.acquired || runtime.hooked.load() || runtime.scopes.load() || runtime.inFlight.load() || runtime.active.load() ||
@@ -850,15 +864,20 @@ namespace mta::game_de
         runtime.bound.store(false);
         ClearEligibility();
         runtime.producerThread = GetCurrentThreadId();
-        runtime.frontendLease = frontendWindow != nullptr;
+        runtime.frontendLease = frontendWindow != nullptr && !localLease;
+        runtime.localLease = frontendWindow != nullptr && localLease;
         runtime.frontendWindow = static_cast<HWND>(frontendWindow);
         runtime.frontendPolicy.Revoke(FrontendInputLeaseReason::Stopped);
+        runtime.localPolicy.Revoke(LocalInputLeaseReason::Stopped);
         runtime.engineThread.store(0);
         runtime.ped = runtime.provider = 0;
         bool ready = NativeInputRouting::ValidateMovementState(state);
         if (runtime.frontendLease)
             ready = ready &&
                     runtime.frontendPolicy.Begin(generation, runtime.producerThread, GetTickCount64(), FrontendWindowFocused(runtime.frontendWindow), state);
+        if (runtime.localLease)
+            ready =
+                ready && runtime.localPolicy.Begin(generation, runtime.producerThread, GetTickCount64(), FrontendWindowFocused(runtime.frontendWindow), state);
         if (!ready)
             Fail(Failure::InvalidState);
         // Wrong executables fail before pinning the module or creating hooks.
@@ -913,6 +932,13 @@ namespace mta::game_de
                 Fail(Failure::Expired);
                 ready = false;
             }
+            if (runtime.localLease && !runtime.localPolicy.Check(runtime.started, FrontendWindowFocused(runtime.frontendWindow), true))
+            {
+                // Focus and the producer deadline may expire during setup.
+                // Preserve installed hooks for End without admitting a scope.
+                Fail(Failure::Expired);
+                ready = false;
+            }
             // The first producer poll can precede the first engine callback.
             // Seed from the already successful pre-install guard, preserving
             // its real observation time rather than manufacturing a fresh read.
@@ -937,9 +963,9 @@ namespace mta::game_de
         ApiOperation operation;
         if (!operation.acquired)
             return false;
-        // Existing action publication must not renew the optional frontend
-        // lease. Its exact-neutral/generation API is the only renewal authority.
-        bool ready = generation && generation == runtime.generation.load() && runtime.active.load() && !runtime.frontendLease;
+        // Existing action publication must not renew either optional lease.
+        // Their generation-checked API is the only native renewal authority.
+        bool ready = generation && generation == runtime.generation.load() && runtime.active.load() && !runtime.frontendLease && !runtime.localLease;
         if (ready && GetCurrentThreadId() != runtime.producerThread)
         {
             Fail(Failure::WrongThread);
@@ -1009,6 +1035,91 @@ namespace mta::game_de
         return End();
     }
 
+    bool NativeMovementInput::ValidateLocalLeaseRequest(const LocalInputLeaseRequestV1& request) noexcept
+    {
+        return request.size == sizeof(request) && request.version == LocalInputLeaseVersionV1 && !request.reserved[0] && !request.reserved[1] &&
+               LocalInputLeasePolicy::Neutral(request.neutral) && FrontendWindowFocused(static_cast<HWND>(request.window));
+    }
+
+    bool NativeMovementInput::BeginLocalLease(const LocalInputLeaseRequestV1& request) noexcept
+    {
+        return ValidateLocalLeaseRequest(request) && BeginInternal(request.neutral, request.window, true);
+    }
+
+    bool NativeMovementInput::IsLocalLease() const noexcept
+    {
+        return generation && generation == runtime.generation.load() && runtime.localLease;
+    }
+
+    bool NativeMovementInput::RenewLocalLease(std::uint64_t requestedGeneration, const MtaInputState& state) noexcept
+    {
+        ApiOperation operation;
+        if (!operation.acquired || !IsLocalLease() || requestedGeneration != generation || !runtime.active.load() ||
+            GetCurrentThreadId() != runtime.producerThread)
+            return false;
+        if (!runtime.localPolicy.Check(GetTickCount64(), FrontendWindowFocused(runtime.frontendWindow), true))
+        {
+            Fail(Failure::Expired);
+            return false;
+        }
+        if (!LocalInputLeasePolicy::Valid(state))
+        {
+            runtime.localPolicy.Revoke(LocalInputLeaseReason::InvalidState);
+            Fail(Failure::InvalidState);
+            return false;
+        }
+        // Reject stale/native-context evidence before extending the deadline.
+        // Native scopes also recheck the same local identity and eligibility,
+        // so a producer cannot turn a cached on-foot observation into a write.
+        NativeMovementEligibility eligibility;
+        if (!ReadPublishedEligibility(generation, eligibility) || eligibility.knownMask != NativeMovementEligibilityMask ||
+            eligibility.flags != NativeMovementEligibilityMask || !eligibility.eligible)
+        {
+            runtime.localPolicy.Revoke(LocalInputLeaseReason::EligibilityLost);
+            Fail(Failure::IneligibleContext);
+            return false;
+        }
+        AcquireSRWLockExclusive(&runtime.mailboxLock);
+        const bool renewed = runtime.active.load() && runtime.localPolicy.Renew(requestedGeneration, GetCurrentThreadId(), GetTickCount64(),
+                                                                                FrontendWindowFocused(runtime.frontendWindow), state);
+        if (renewed)
+        {
+            // Publish current state with its deadline under the same mailbox.
+            // Previous-frame edges belong to the engine consumer, as in the
+            // historical scoped writer; a producer cannot replay old edges.
+            runtime.frame.current = state.current;
+            runtime.refreshed = GetTickCount64();
+        }
+        ReleaseSRWLockExclusive(&runtime.mailboxLock);
+        if (!renewed && runtime.localPolicy.Revoked())
+            Fail(Failure::Expired);
+        return renewed;
+    }
+
+    bool NativeMovementInput::ReadLocalLease(LocalInputLeaseStateV1& state) noexcept
+    {
+        ApiOperation operation;
+        if (!operation.acquired || !IsLocalLease() || GetCurrentThreadId() != runtime.producerThread)
+            return false;
+        // Read may discover expiry/focus loss, but cannot renew or revive it.
+        if (runtime.active.load() && !runtime.localPolicy.Check(GetTickCount64(), FrontendWindowFocused(runtime.frontendWindow), true))
+            Fail(Failure::Expired);
+        auto next = runtime.localPolicy.Read();
+        next.generation = generation;
+        next.producerThread = runtime.producerThread;
+        next.active = next.active && runtime.active.load();
+        next.bound = runtime.bound.load();
+        state = next;
+        return true;
+    }
+
+    bool NativeMovementInput::EndLocalLease(std::uint64_t requestedGeneration) noexcept
+    {
+        if (!IsLocalLease() || !requestedGeneration || requestedGeneration != generation || GetCurrentThreadId() != runtime.producerThread)
+            return false;
+        return End();
+    }
+
     bool NativeMovementInput::End() noexcept
     {
         if (!generation || generation != runtime.generation.load())
@@ -1029,6 +1140,8 @@ namespace mta::game_de
         }
         if (runtime.frontendLease)
             runtime.frontendPolicy.Revoke(FrontendInputLeaseReason::Stopped);
+        if (runtime.localLease)
+            runtime.localPolicy.Revoke(LocalInputLeaseReason::Stopped);
         // Busy is ordinary asynchronous cleanup, not a permanent trial fault.
         // The producer retries after native finally has released its scope.
         if (runtime.inFlight.load())

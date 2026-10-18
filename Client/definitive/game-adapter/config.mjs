@@ -84,5 +84,7 @@ export const MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE = false;
 export const MTA_CORE_PERSISTENT_FRONTEND = false;
 
 // Retain real MTA Core/configuration/bindings across independently retired menu
-// views. This explicit frontend lifetime still excludes gameplay and networking.
+// views. Hidden views use those configured on-foot controls through the
+// renewable local-input service; Show first retires that writer. This remains
+// separate from the incomplete CGame/network/full-client startup path.
 export const MTA_CORE_FRONTEND_RUNTIME = false;

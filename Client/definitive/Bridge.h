@@ -34,6 +34,12 @@ DE_BRIDGE_API int           DE_FrontendRuntimeHeartbeatV1(std::uint32_t generati
 DE_BRIDGE_API int           DE_FrontendRuntimePollV1();
 DE_BRIDGE_API int           DE_FrontendRuntimeCaptureV1();
 DE_BRIDGE_API std::uint32_t DE_FrontendRuntimeReadV1(std::uint32_t field);
+// The existing menu runtime may opt into actual configured local input after
+// Hide. Its separate32-word record never changes the frontend416 ABI.
+DE_BRIDGE_API std::uint32_t DE_LocalInputRuntimeApiVersionV1();
+DE_BRIDGE_API std::uint32_t DE_LocalInputRuntimeStartV1();
+DE_BRIDGE_API int           DE_LocalInputRuntimeCaptureV1();
+DE_BRIDGE_API std::uint32_t DE_LocalInputRuntimeReadV1(std::uint32_t field);
 // These guards keep the experimental CLEO adapter tied to the executable tested
 // here. Matching its hash is a prerequisite, not proof that game natives work.
 DE_BRIDGE_API int  DE_CheckExecutableBuild(const wchar_t* path);

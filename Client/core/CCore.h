@@ -29,6 +29,7 @@ class CDiscordInterface;
     #include "DefinitiveFrontendBindings.h"
     #include "DefinitiveFrontendStartup.h"
     #include "DefinitiveFrontendRuntime.h"
+    #include "DefinitiveLocalInputRuntime.h"
     #include "DefinitivePersistentFrontend.h"
     #include "DefinitiveGuiFrontendInputReference.h"
 #endif
@@ -328,8 +329,10 @@ private:
     DefinitiveFrontend::Status RunPersistentFrontend(const DefinitivePersistentFrontend::RequestV1&, DefinitivePersistentFrontend::Snapshot&);
     struct FrontendResources;
     struct FrontendRuntimeResources;
+    struct LocalInputRuntimeResources;
     FrontendResources*                  m_frontendResources = nullptr;
     FrontendRuntimeResources*           m_frontendRuntimeResources = nullptr;
+    LocalInputRuntimeResources*         m_localInputRuntimeResources = nullptr;
     bool                                m_frontendShellOnly = false;
     bool                                m_frontendStartupOwned = false;
     bool                                m_frontendStartupAccepting = false;
@@ -348,12 +351,20 @@ private:
     DefinitiveFrontend::Status ProcessFrontendConsoleMessage(std::uint32_t message, std::uintptr_t wparam, std::intptr_t lparam, std::uint32_t& handled);
     DefinitiveFrontend::Status ReadFrontendConsoleText(std::uint32_t field, char* output, std::uint32_t capacity, std::uint32_t& required);
     DefinitiveFrontend::Status EnableFrontendBindings();
-    DefinitiveFrontendBindings::Snapshot ReadFrontendBindings();
-    DefinitiveFrontend::Status           ProduceFrontendNeutralInput(mta::game_de::MtaInputState& output, bool cleanup = false);
-    DefinitiveFrontend::Status           EnableFrontendRuntimeServices() noexcept;
-    DefinitiveFrontendRuntime::Snapshot  ReadFrontendRuntimeServices() const noexcept;
-    DefinitiveFrontend::Status           StopFrontendRuntimeServices() noexcept;
-    bool                                 FlushFrontendRuntimeBindings() noexcept;
+    DefinitiveFrontendBindings::Snapshot  ReadFrontendBindings();
+    DefinitiveFrontend::Status            ProduceFrontendNeutralInput(mta::game_de::MtaInputState& output, bool cleanup = false);
+    DefinitiveFrontend::Status            EnableFrontendRuntimeServices() noexcept;
+    DefinitiveFrontendRuntime::Snapshot   ReadFrontendRuntimeServices() const noexcept;
+    DefinitiveFrontend::Status            StopFrontendRuntimeServices() noexcept;
+    bool                                  FlushFrontendRuntimeBindings() noexcept;
+    DefinitiveLocalInputRuntime::Status   ConfigureLocalInputRuntime(const DefinitiveLocalInputRuntime::RequestV1&) noexcept;
+    DefinitiveLocalInputRuntime::Status   PulseLocalInputRuntime() noexcept;
+    DefinitiveLocalInputRuntime::Snapshot ReadLocalInputRuntime() noexcept;
+    DefinitiveLocalInputRuntime::Status   StopLocalInputRuntime(bool                                 disable,
+                                                                DefinitiveLocalInputRuntime::Failure failure = DefinitiveLocalInputRuntime::Failure::None,
+                                                                bool                                 fault = false) noexcept;
+    bool                                  FlushLocalInputRuntime() noexcept;
+    bool                                  LocalInputAllowsFrontend() const noexcept;
 #endif
     void InitializeFrontendInfrastructure();
     void DestroyFrontendCommands();

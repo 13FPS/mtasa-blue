@@ -20,7 +20,7 @@ $outputRoot = Join-Path $repositoryRoot ('Build/mta-core-startup-worker/' + (Get
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
 function Hash([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 $sourceNames = @('Client/definitive/CoreStartupReference.h','Client/definitive/CoreStartupReference.cpp','Client/definitive/FrontendControlMailbox.h',
-    'Client/definitive/FrontendRuntimeReport.h','Client/definitive/FrontendRuntimeMailbox.h','Client/definitive/FrontendRuntimeCache.h','Client/core/DefinitiveFrontendRuntime.h','Client/definitive/coreconfig.xml',
+    'Client/definitive/FrontendRuntimeReport.h','Client/definitive/FrontendRuntimeMailbox.h','Client/definitive/FrontendRuntimeCache.h','Client/core/DefinitiveFrontendRuntime.h','Client/core/DefinitiveLocalInputRuntime.h','Client/definitive/coreconfig.xml',
     'Client/definitive/FrontendStartupReport.h','Client/definitive/PersistentFrontendHostLease.h','Client/core/DefinitivePersistentFrontend.h','Client/core/DefinitiveFrontendStartup.h','Client/core/DefinitiveGuiFrontendInputReference.h',
     'Client/core/DefinitiveFrontend.h','Client/core/DefinitiveFrontendClockReference.h','Client/core/DefinitiveGuiFrontendReference.h',
     'Client/core/DefinitiveInputReference.h','Client/core/DefinitiveMovementReference.h','Client/core/DefinitiveClockReference.h','Client/core/DefinitiveClockSetReference.h','Client/core/DefinitiveRenderReference.h','Client/core/DefinitiveGuiStartupReference.h','Client/core/DefinitiveGuiSurfaceReference.h',
@@ -87,6 +87,7 @@ try {
     $missingClockFixture = Join-Path $fixtureDirectory 'CoreMissingClockExport.dll'
     $missingClockSetFixture = Join-Path $fixtureDirectory 'CoreMissingClockSetExport.dll'
     $missingFrontendClockFixture = Join-Path $fixtureDirectory 'CoreMissingFrontendClockExport.dll'
+    $missingLocalRuntimeFixture = Join-Path $fixtureDirectory 'CoreMissingLocalRuntimeExport.dll'
     Compile 'fixture-normal' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $normalFixture @('/LD')
     Compile 'fixture-missing-export' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $missingFixture @('/LD','/DCORE_FIXTURE_MISSING_EXPORT=1')
     Compile 'fixture-missing-gui-export' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $missingGuiFixture @('/LD','/DCORE_FIXTURE_MISSING_GUI_EXPORT=1')
@@ -94,9 +95,12 @@ try {
     Compile 'fixture-missing-clock-export' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $missingClockFixture @('/LD','/DCORE_FIXTURE_MISSING_CLOCK_EXPORT=1')
     Compile 'fixture-missing-clock-set-export' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $missingClockSetFixture @('/LD','/DCORE_FIXTURE_MISSING_CLOCK_SET_EXPORT=1')
     Compile 'fixture-missing-frontend-clock-export' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $missingFrontendClockFixture @('/LD','/DCORE_FIXTURE_MISSING_FRONTEND_CLOCK_EXPORT=1')
+    Compile 'fixture-missing-local-runtime-export' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $missingLocalRuntimeFixture @('/LD','/DCORE_FIXTURE_MISSING_LOCAL_RUNTIME_EXPORT=1')
     $syntheticRoot = Join-Path $outputRoot 'synthetic-host'
     $hostPath = Join-Path $syntheticRoot 'SanAndreas.exe'
-    Compile 'production-worker-host' @((Join-Path $PSScriptRoot 'CoreStartupReferenceTests.cpp'),(Join-Path $repositoryRoot 'Client/definitive/CoreStartupReference.cpp')) $hostPath @('/DMTA_TEST_CORE_STARTUP_ACCESS=1')
+    # Local input selection observes the foreground root HWND in the production
+    # worker. Link its actual Win32 imports explicitly in this owned host too.
+    Compile 'production-worker-host' @((Join-Path $PSScriptRoot 'CoreStartupReferenceTests.cpp'),(Join-Path $repositoryRoot 'Client/definitive/CoreStartupReference.cpp')) $hostPath @('/DMTA_TEST_CORE_STARTUP_ACCESS=1','user32.lib')
     if ((Hash $hostPath) -eq '63e633bb51c35fe35ca98f503b62e7ddb8403abe4c9d501cfa9162892453846f') { throw 'Owned host unexpectedly matches the real game image.' }
     $runs += Run-Host 'controlled-loader' $syntheticRoot @($syntheticRoot,'synthetic',$normalFixture,$missingFixture)
     $actualRoot = Join-Path $outputRoot 'actual-host/CLEO/de-online'
@@ -129,6 +133,7 @@ try {
     $runs += Run-Host 'actual-clock-core-wrong-image' $actualRoot @($actualRoot,'actual-clock')
     $runs += Run-Host 'actual-clock-set-core-wrong-image' $actualRoot @($actualRoot,'actual-clock-set')
     $runs += Run-Host 'actual-runtime-core-wrong-image' $actualRoot @($actualRoot,'actual-runtime')
+    $runs += Run-Host 'actual-runtime-local-core-wrong-image' $actualRoot @($actualRoot,'actual-runtime-local')
     foreach ($mode in @('runtime-two-views','runtime-stop-hidden','runtime-stop-showing','runtime-stop-visible','runtime-host-expired',
         'runtime-visible-expired','runtime-focus-hide','runtime-gui-hide','runtime-wrong-api','runtime-refused','runtime-view-fault',
         'runtime-cursor-begin-fault','runtime-cursor-renew-fault','runtime-retained-stop','runtime-shutdown-busy','runtime-cache-contention','runtime-returned-pending','runtime-malformed-first-failed',
@@ -139,6 +144,16 @@ try {
         Copy-Item -LiteralPath $GameDeDll -Destination (Join-Path $runtimeRoot 'game_de.dll')
         if ((Hash (Join-Path $runtimeRoot 'game_de.dll')) -ne $ExpectedGameDeSha256.ToLowerInvariant()) { throw 'Runtime fixture backend hash differs.' }
         $runs += Run-Host $mode $runtimeRoot @($runtimeRoot,$mode,$normalFixture)
+    }
+    foreach ($mode in @('local-runtime-two-views','local-runtime-suspend-busy','local-runtime-stop-waiting-show','local-runtime-focus-suspended',
+        'local-runtime-missing-export','local-runtime-wrong-api','local-runtime-config-refused')) {
+        $localRuntimeRoot = Join-Path $outputRoot ($mode + '-host')
+        New-Item -ItemType Directory -Path $localRuntimeRoot -Force | Out-Null
+        Copy-Item -LiteralPath $hostPath -Destination (Join-Path $localRuntimeRoot 'SanAndreas.exe')
+        Copy-Item -LiteralPath $GameDeDll -Destination (Join-Path $localRuntimeRoot 'game_de.dll')
+        if ((Hash (Join-Path $localRuntimeRoot 'game_de.dll')) -ne $ExpectedGameDeSha256.ToLowerInvariant()) { throw 'Local runtime fixture backend hash differs.' }
+        $selectedLocalFixture = if ($mode -eq 'local-runtime-missing-export') { $missingLocalRuntimeFixture } else { $normalFixture }
+        $runs += Run-Host $mode $localRuntimeRoot @($localRuntimeRoot,$mode,$selectedLocalFixture)
     }
     foreach ($mode in @('movement','movement-cancel','render','render-cancel','render-deadline',
                         'render-v2','render-v2-d3d11','render-v2-cancel','render-v2-deadline','render-v2-missing',
@@ -187,16 +202,17 @@ $unchanged = $true
 foreach ($name in $sourceNames) { if ((Hash (Join-Path $repositoryRoot $name)) -ne $sourceHashes[$name]) { $unchanged=$false } }
 foreach ($artifact in $artifacts) { if ((Hash $artifact.source) -ne $artifact.sha256) { $unchanged=$false } }
 $record = [ordered]@{
-    recorded_at=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=($null -eq $failure -and $unchanged -and $runs.Count -eq 172);
+    recorded_at=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=($null -eq $failure -and $unchanged -and $runs.Count -eq 180);
     failure=$failure;source_hashes=$sourceHashes;sources_unchanged=$unchanged;compiles=$compiles;runs=$runs;normal_artifacts=$artifacts;
     historical_cases_expected=65;surface_cases_expected=24;completed_core_actual_cases_expected=1;persistent_core_actual_cases_expected=1;
     clock_controlled_cases_expected=14;clock_actual_preflight_cases_expected=1;historical_total_preserved=91;
     clock_set_controlled_cases_expected=18;clock_set_actual_preflight_cases_expected=1;prior_read_clock_total_preserved=106;
     completed_clock_controlled_cases_expected=25;completed_clock_actual_preflight_cases_expected=1;prior_total_preserved=125;
     runtime_controlled_cases_expected=20;runtime_actual_preflight_cases_expected=1;prior_runtime_total_preserved=151;
+    local_runtime_controlled_cases_expected=7;local_runtime_actual_preflight_cases_expected=1;prior_local_runtime_total_preserved=172;
     fixture_executable_is_game=$false;game_launched=$false;game_memory_read=$false;game_process_attached=$false;game_files_changed=$false;
     synthetic_core_is_mta=$false;full_mta_boot_verified=$false;engine_input_write_verified=$false;
-    scope='Actual production async worker, controlled non-MTA loader-lock/read-only-clock/Set/completed-clock-before-view/runtime Show-Hide-Stop fixtures, and normal Core bounded/completed/persistent/runtime/clock exact-image rejection in owned nonclassic hosts. Runtime416 command admission, dominant Stop, independent atomic cache, retained same-owner services, partial cursor refusal, host expiry and pre-unwind quarantine are exercised alongside all 151 earlier cases; no real native lease, time write, GUI or GTA workload is admitted.'
+    scope='Actual production async worker, controlled non-MTA loader-lock/read-only-clock/Set/completed-clock-before-view/runtime Show-Hide-Stop/local-input handoff fixtures, and normal Core exact-image rejection in owned nonclassic hosts. The separate local32 cache covers post-GUI configure, Busy suspension before Show, dominant Stop, focus suspension, export refusal and Disable before shutdown while preserving all172 earlier cases. Controlled local32 values are not a real native lease; no time write, GUI or GTA workload is admitted.'
 }
 $resultPath = Join-Path $outputRoot 'test-result.json'
 $record | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $resultPath -Encoding utf8

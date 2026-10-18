@@ -14,6 +14,7 @@
 #include <game/CGameRenderDeviceLease.h>
 #include <game/CGameRenderDeviceWindowLease.h>
 #include <game/CGameFrontendInputLease.h>
+#include <game/CGameLocalInputLease.h>
 #include <game/CGameClockService.h>
 #include <cstdint>
 #include <string>
@@ -45,6 +46,10 @@ public:
     bool                RenewFrontendInputLease(std::uint64_t generation);
     bool                ReadFrontendInputLease(mta::game_de::FrontendInputLeaseStateV1& state);
     bool                EndFrontendInputLease(std::uint64_t generation);
+    bool                BeginLocalInputLease(void* window, mta::game_de::LocalInputLeaseStateV1& state);
+    bool                RenewLocalInputLease(std::uint64_t generation);
+    bool                ReadLocalInputLease(mta::game_de::LocalInputLeaseStateV1& state);
+    bool                EndLocalInputLease(std::uint64_t generation);
     bool                BeginNativeClockService(const mta::game_de::ClockServiceRequestV1& request, mta::game_de::ClockServiceStateV1& state);
     bool                SubmitNativeClockCommand(const mta::game_de::ClockCommandV1& command);
     bool                RenewNativeClockService(std::uint64_t generation);
@@ -85,6 +90,7 @@ public:
 private:
     bool RequireOwnerThread(const char* operation);
     bool RequireClockRetired();
+    bool RequireLocalInputRetired();
     bool StartNativeRenderDispatchObservation(mta::game_de::RenderObservationRoute route, bool captureDevice, bool captureWindow = false);
     bool RecordStatus(mta::game_de::Status status, const char* operation);
     void SetError(const char* error) noexcept;
@@ -99,6 +105,10 @@ private:
     decltype(&mta::game_de::RenewGameFrontendInputLeaseV1)      m_frontendLeaseRenew = nullptr;
     decltype(&mta::game_de::ReadGameFrontendInputLeaseV1)       m_frontendLeaseRead = nullptr;
     decltype(&mta::game_de::EndGameFrontendInputLeaseV1)        m_frontendLeaseEnd = nullptr;
+    decltype(&mta::game_de::BeginGameLocalInputLeaseV1)         m_localLeaseBegin = nullptr;
+    decltype(&mta::game_de::RenewGameLocalInputLeaseV1)         m_localLeaseRenew = nullptr;
+    decltype(&mta::game_de::ReadGameLocalInputLeaseV1)          m_localLeaseRead = nullptr;
+    decltype(&mta::game_de::EndGameLocalInputLeaseV1)           m_localLeaseEnd = nullptr;
     decltype(&mta::game_de::BeginGameClockServiceV1)            m_clockBegin = nullptr;
     decltype(&mta::game_de::SubmitGameClockCommandV1)           m_clockSubmit = nullptr;
     decltype(&mta::game_de::RenewGameClockServiceV1)            m_clockRenew = nullptr;
@@ -139,7 +149,12 @@ private:
     // A failed Begin may retain a peer holding the allocator or loader lock.
     // Keep diagnostics bounded until unload, and serialize other services
     // until explicit End/Reset acknowledges clock cleanup.
-    bool        m_clockDiagnostics = false;
-    bool        m_clockAttemptPending = false;
-    std::string m_error;
+    bool m_clockDiagnostics = false;
+    bool m_clockAttemptPending = false;
+    // Even failed native admission may owe End. Keep this separate from the
+    // optional export group and never infer retirement from inactive input.
+    bool          m_localLeaseAttemptPending = false;
+    bool          m_localLeaseDiagnostics = false;
+    std::uint64_t m_localLeaseGeneration = 0;
+    std::string   m_error;
 };

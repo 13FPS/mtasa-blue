@@ -133,11 +133,11 @@ namespace deonline
                                      std::uint32_t configuredRenderRoute, std::uint32_t configuredRenderApi, bool configuredGuiStartup,
                                      bool configuredGuiSurface, bool configuredGuiFrontend, bool configuredGuiFrontendInput, bool configuredFrontendStartup,
                                      bool configuredPersistentFrontend, bool configuredClock, bool configuredClockSet, bool configuredClockBeforeFrontend,
-                                     bool configuredFrontendRuntime) noexcept
+                                     bool configuredFrontendRuntime, bool configuredLocalInputRuntime) noexcept
     {
         DWORD      expected = 0;
         const auto current = GetCurrentThreadId();
-        if ((configuredClockBeforeFrontend && !configuredFrontendStartup) ||
+        if ((configuredLocalInputRuntime && !configuredFrontendRuntime) || (configuredClockBeforeFrontend && !configuredFrontendStartup) ||
             (static_cast<unsigned>(configuredMovement) + static_cast<unsigned>(configuredRender) + static_cast<unsigned>(configuredGuiStartup) +
                  static_cast<unsigned>(configuredGuiSurface) + static_cast<unsigned>(configuredGuiFrontend) +
                  static_cast<unsigned>(configuredGuiFrontendInput) + static_cast<unsigned>(configuredFrontendStartup) +
@@ -158,6 +158,9 @@ namespace deonline
                 return false;
         }
         frontendRuntimeRequested = configuredFrontendRuntime;
+        localInputRuntimeRequested = configuredLocalInputRuntime;
+        localInputRuntimeCache.Reset();
+        capturedLocalInputRuntime = {};
         runtimeCache.Reset();
         runtimeReport = {};
         capturedRuntime = {};
@@ -703,10 +706,23 @@ namespace deonline
         return Start(moduleAddress, true, false, false, 0, 1, false, false, false, false, false, true) ? persistentHostLease.Generation() : 0;
     }
 
-    std::uint32_t CoreStartupReference::BeginFrontendRuntime(const void* moduleAddress) noexcept
+    std::uint32_t CoreStartupReference::BeginFrontendRuntime(const void* moduleAddress, bool localInput) noexcept
     {
-        return Start(moduleAddress, true, false, false, 0, 1, false, false, false, false, false, false, false, false, false, true) ? runtimeMailbox.Generation()
-                                                                                                                                   : 0;
+        return Start(moduleAddress, true, false, false, 0, 1, false, false, false, false, false, false, false, false, false, true, localInput)
+                   ? runtimeMailbox.Generation()
+                   : 0;
+    }
+
+    bool CoreStartupReference::CaptureLocalInputRuntime() noexcept
+    {
+        return localInputRuntimeRequested && ownerThread.load() == GetCurrentThreadId() && localInputRuntimeCache.Capture(capturedLocalInputRuntime);
+    }
+
+    std::uint32_t CoreStartupReference::ReadLocalInputRuntime(std::uint32_t field) const noexcept
+    {
+        return localInputRuntimeRequested && ownerThread.load() == GetCurrentThreadId() && field < capturedLocalInputRuntime.size()
+                   ? capturedLocalInputRuntime[field]
+                   : 0;
     }
 
     bool CoreStartupReference::CommandFrontendRuntime(std::uint32_t generation, std::uint32_t sequence, std::uint32_t command) noexcept
@@ -1118,6 +1134,7 @@ namespace deonline
     {
         namespace R = FrontendRuntimeReport;
         namespace C = DefinitiveFrontendRuntime;
+        namespace L = DefinitiveLocalInputRuntime;
         namespace S = DefinitiveFrontendStartup;
         namespace P = DefinitivePersistentFrontend;
         using Status = C::Status;
@@ -1130,12 +1147,21 @@ namespace deonline
         const auto view = reinterpret_cast<C::RunView>(GetProcAddress(core, "MTA_RunDEFrontendRuntimeView"));
         const auto shutdown = reinterpret_cast<C::Shutdown>(GetProcAddress(core, "MTA_ShutdownDEFrontendRuntime"));
         const auto release = reinterpret_cast<C::Release>(GetProcAddress(core, "MTA_ReleaseDEFrontendRuntime"));
+        const auto localVersion = reinterpret_cast<Version>(GetProcAddress(core, "MTA_DELocalInputRuntimeApiVersion"));
+        const auto localConfigure = reinterpret_cast<L::Configure>(GetProcAddress(core, "MTA_ConfigureDELocalInputRuntime"));
+        const auto localPulse = reinterpret_cast<L::Pulse>(GetProcAddress(core, "MTA_PulseDELocalInputRuntime"));
+        const auto localRead = reinterpret_cast<L::Read>(GetProcAddress(core, "MTA_ReadDELocalInputRuntime"));
+        const auto localSuspend = reinterpret_cast<L::Suspend>(GetProcAddress(core, "MTA_SuspendDELocalInputRuntime"));
+        const auto localDisable = reinterpret_cast<L::Disable>(GetProcAddress(core, "MTA_DisableDELocalInputRuntime"));
         const auto setMta = reinterpret_cast<SetDirectory>(GetProcAddress(core, "SetMTADirectory"));
         const auto setGta = reinterpret_cast<SetDirectory>(GetProcAddress(core, "SetGTADirectory"));
         runtimeReport[R::CoreLoaded] = 1;
         inputOwner = this;
         void*         handle = nullptr;
         C::Snapshot   lastCore{};
+        L::Snapshot   lastLocal{};
+        HWND          localWindow = nullptr;
+        bool          localConfigured = false;
         std::uint64_t coreGeneration = 0;
         const auto    fail = [&](R::Failure failure, R::StopReason reason = R::StopReason::ViewFault) noexcept
         {
@@ -1239,9 +1265,102 @@ namespace deonline
             runtimeReport[R::AcknowledgementCode] = static_cast<std::uint32_t>(code);
             return true;
         };
+        const auto sampleLocal = [&]() noexcept
+        {
+            if (!localInputRuntimeRequested)
+                return true;
+            L::Snapshot sample{};
+            Status      status = Status::Failed;
+            try
+            {
+                status = localRead(handle, sample.data(), L::FieldCount);
+            }
+            catch (...)
+            {
+                return false;
+            }
+            if (status != Status::Ok || sample[L::Version] != L::ApiVersion || sample[L::OwnerThread] != GetCurrentThreadId() ||
+                sample[L::Phase] < static_cast<std::uint32_t>(L::State::Disabled) || sample[L::Phase] > static_cast<std::uint32_t>(L::State::Failed) ||
+                sample[L::LastFailure] > static_cast<std::uint32_t>(L::Failure::Exception))
+                return false;
+            for (const auto field : {L::Configured, L::Enabled, L::NativeAttempted, L::NativeActive, L::NativeBound, L::NativeRevoked, L::PhysicalRearmReady,
+                                     L::CanonicalNeutral, L::BindingsBorrowed, L::CleanupPending, L::CleanupComplete, L::Focused, L::ContextEligible})
+                if (sample[field] > 1)
+                    return false;
+            if (sample[L::NativeReason] > 7 || (sample[L::NativeLifetimeMs] && sample[L::NativeLifetimeMs] != 500) ||
+                (sample[L::NativeActive] && (!sample[L::NativeAttempted] || !sample[L::NativeBound] || sample[L::NativeRevoked] ||
+                                             !(sample[L::NativeGenerationLow] || sample[L::NativeGenerationHigh]))))
+                return false;
+            if (sample[L::CleanupComplete] && (sample[L::NativeActive] || sample[L::NativeBound] || sample[L::CleanupPending] ||
+                                               (sample[L::NativeAttempted] && (!sample[L::CanonicalNeutral] || !sample[L::NativeEndAttempts] ||
+                                                                               ((sample[L::NativeGenerationLow] || sample[L::NativeGenerationHigh]) &&
+                                                                                (!sample[L::NativeRevoked] || !sample[L::NativeReason]))))))
+                return false;
+            lastLocal = sample;
+            localInputRuntimeCache.Publish(sample);
+            return true;
+        };
+        const auto retireLocal = [&](bool final) noexcept
+        {
+            if (!localInputRuntimeRequested)
+                return true;
+            // A fresh menu may not race the old movement callback. Busy keeps
+            // this exact owner/module alive; elapsed time is never retirement.
+            for (;;)
+            {
+                Status status = Status::Failed;
+                try
+                {
+                    status = final ? localDisable(handle) : localSuspend(handle);
+                }
+                catch (...)
+                {
+                    return false;
+                }
+                if (!sampleLocal())
+                    return false;
+                if (status != Status::Busy)
+                    return status == Status::Ok && !lastLocal[L::NativeActive] && !lastLocal[L::NativeBound] && !lastLocal[L::CleanupPending] &&
+                           lastLocal[L::CleanupComplete] &&
+                           (!lastLocal[L::NativeAttempted] ||
+                            (lastLocal[L::NativeEndAttempts] && (!(lastLocal[L::NativeGenerationLow] || lastLocal[L::NativeGenerationHigh]) ||
+                                                                 (lastLocal[L::NativeRevoked] && lastLocal[L::NativeReason])))) &&
+                           (lastLocal[L::CanonicalNeutral] ||
+                            (!lastLocal[L::Configured] && lastLocal[L::Phase] == static_cast<std::uint32_t>(L::State::Disabled)));
+                runtimeReport[R::WorkerPhase] = static_cast<std::uint32_t>(R::Phase::RetainedCleanup);
+                runtimeReport[R::CleanupPending] = 1;
+                PublishRuntime();
+                Sleep(10);
+            }
+        };
+        const auto configureLocal = [&]() noexcept
+        {
+            if (!localInputRuntimeRequested)
+                return true;
+            L::RequestV1 request;
+            request.window = localWindow;
+            Status configured = Status::Failed;
+            try
+            {
+                configured = localConfigure(handle, &request);
+            }
+            catch (...)
+            {
+                return false;
+            }
+            localConfigured = configured == Status::Ok;
+            return localConfigured && sampleLocal();
+        };
         try
         {
             if (!version || !begin || !read || !pulse || !view || !shutdown || !release || !setMta || !setGta || version() != C::ApiVersion)
+            {
+                fail(R::Failure::Exports, R::StopReason::LoaderFault);
+                inputOwner = nullptr;
+                return;
+            }
+            if (localInputRuntimeRequested &&
+                (!localVersion || !localConfigure || !localPulse || !localRead || !localSuspend || !localDisable || localVersion() != L::ApiVersion))
             {
                 fail(R::Failure::Exports, R::StopReason::LoaderFault);
                 inputOwner = nullptr;
@@ -1270,7 +1389,7 @@ namespace deonline
                 fail(R::Failure::CoreRead);
                 retain();
             }
-            if (!hidden(lastCore))
+            if (!hidden(lastCore) || !sampleLocal())
                 fail(R::Failure::CoreState);
             runtimeReport[R::LastViewCleanupComplete] = 1;
             runtimeReport[R::WorkerPhase] = static_cast<std::uint32_t>(R::Phase::Hidden);
@@ -1293,6 +1412,18 @@ namespace deonline
                 }
                 else if (pending.command == R::Command::Show)
                 {
+                    if (!retireLocal(false))
+                    {
+                        fail(R::Failure::CoreState);
+                        break;
+                    }
+                    runtimeReport[R::CleanupPending] = 0;
+                    runtimeReport[R::WorkerPhase] = static_cast<std::uint32_t>(R::Phase::Hidden);
+                    // Stop may supersede Show while the callback retires.
+                    if (runtimeMailbox.Pending().command == R::Command::Stop || cancellation.load() || !RuntimeHostFresh())
+                        continue;
+                    if (localInputRuntimeRequested && !localWindow)
+                        localWindow = GetAncestor(GetForegroundWindow(), GA_ROOT);
                     if (lastCore[C::ViewGenerationHigh] || lastCore[C::ViewGenerationLow] == UINT32_MAX)
                     {
                         fail(R::Failure::ViewGenerationExhausted);
@@ -1377,11 +1508,35 @@ namespace deonline
                     else if (next.command == R::Command::Show)
                         acknowledge(next, R::Acknowledgement::Failed);
                     runtimeReport[R::WorkerPhase] = static_cast<std::uint32_t>(R::Phase::Hidden);
+                    if (localInputRuntimeRequested && runtimeMailbox.Pending().command != R::Command::Stop && !configureLocal())
+                    {
+                        fail(R::Failure::CoreState);
+                        break;
+                    }
                 }
                 else if (pulse(handle) != Status::Ok)
                 {
                     fail(R::Failure::CoreState);
                     break;
+                }
+                if (localInputRuntimeRequested && localConfigured && runtimeReport[R::WorkerPhase] == static_cast<std::uint32_t>(R::Phase::Hidden))
+                {
+                    const auto status = localPulse(handle);
+                    if (!sampleLocal() || (status != Status::Ok && status != Status::Busy))
+                    {
+                        fail(R::Failure::CoreState);
+                        break;
+                    }
+                    if (status == Status::Busy)
+                    {
+                        if (!retireLocal(false))
+                        {
+                            fail(R::Failure::CoreState);
+                            break;
+                        }
+                        runtimeReport[R::WorkerPhase] = static_cast<std::uint32_t>(R::Phase::Hidden);
+                        runtimeReport[R::CleanupPending] = 0;
+                    }
                 }
                 PublishRuntime();
                 Sleep(50);
@@ -1400,6 +1555,11 @@ namespace deonline
                 Sleep(250);
             };
             Status status = Status::Busy;
+            if (!retireLocal(true))
+            {
+                fail(R::Failure::Shutdown);
+                retain();
+            }
             do
             {
                 try

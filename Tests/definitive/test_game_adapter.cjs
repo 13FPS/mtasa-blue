@@ -4063,6 +4063,125 @@ async function main() {
         assert.equal(result.logs.at(-1).event, 'adapter_diagnostic_complete');
         assert.ok(!result.logs.some(log => log.event === 'adapter_armed'));
     });
+    // Read the actual production validator rather than duplicating its field
+    // rules in the fixture. Copied Core32 telemetry is independent of the
+    // existing Runtime416 record and cannot confer gameplay readiness.
+    const localInputValidatorStart = entry.indexOf('function validateMtaLocalInputRuntimeSample(');
+    const localInputValidatorEnd = entry.indexOf('\nfunction runFrontendRuntime(', localInputValidatorStart);
+    assert.ok(localInputValidatorStart >= 0 && localInputValidatorEnd > localInputValidatorStart);
+    const validateLocalInput = vm.runInNewContext(entry.slice(localInputValidatorStart, localInputValidatorEnd) +
+        '\nvalidateMtaLocalInputRuntimeSample;');
+    const disabledLocalInput = () => Object.assign(Array(32).fill(0), { 0: 1, 1: 1, 2: 77, 21: 1 });
+    const activeLocalInput = () => Object.assign(disabledLocalInput(), { 1: 3, 3: 1, 4: 1, 5: 1,
+        6: 701, 8: 1, 9: 1, 12: 500, 13: 24, 15: 1, 17: 1, 19: 1,
+        21: 0, 23: 1, 24: 15, 25: 15, 26: 1, 28: 6, 30: 6 });
+    test('local Core32 validator accepts initial Disabled without inventing neutral or native ownership', () => {
+        const values = disabledLocalInput();
+        assert.equal(validateLocalInput(values), values);
+        assert.equal(values[18], 0);
+        assert.equal(values[5], 0);
+    });
+    test('local Core32 validator accepts a qualified renewable active sample with 64-bit counters and held actions', () => {
+        const values = activeLocalInput();
+        values[7] = 1; values[14] = 2;
+        assert.equal(validateLocalInput(values), values);
+        assert.equal(values[18], 0, 'active input is allowed to carry a non-neutral canonical frame');
+    });
+    for (const phase of [2, 4, 6]) test('local Core32 validator preserves non-active phase ' + phase + ' as diagnostic telemetry', () => {
+        const values = Object.assign(disabledLocalInput(), { 1: phase, 3: 1, 12: 500, 18: 1,
+            19: 1, 22: phase === 6 ? 11 : 0 });
+        assert.equal(validateLocalInput(values), values);
+        assert.equal(values[8], 0);
+    });
+    test('local Core32 validator accepts retained native cleanup only while its pending owner is explicit', () => {
+        const values = Object.assign(disabledLocalInput(), { 1: 5, 3: 1, 5: 1, 6: 701,
+            9: 1, 12: 500, 18: 1, 19: 1, 20: 1, 21: 0, 27: 3 });
+        assert.equal(validateLocalInput(values), values);
+        assert.equal(values[20], 1);
+        assert.equal(values[21], 0);
+    });
+    const retiredLocalInput = () => Object.assign(disabledLocalInput(), { 5: 1, 6: 701,
+        10: 1, 11: 5, 12: 500, 18: 1, 27: 2 });
+    test('local Core32 validator preserves qualified native-attempt history after token retirement', () => {
+        const values = retiredLocalInput();
+        assert.equal(validateLocalInput(values), values);
+        assert.equal(values[5], 1);
+        assert.equal(values[6], 701);
+        assert.ok([8, 9, 20].every(field => values[field] === 0));
+        assert.equal(values[21], 1);
+    });
+    test('local Core32 validator accepts actual Reset cleanup without a token or fabricated revoke reason', () => {
+        const values = Object.assign(retiredLocalInput(), { 6: 0, 7: 0, 10: 0, 11: 0 });
+        assert.equal(validateLocalInput(values), values);
+        assert.equal(values[5], 1);
+        assert.equal(values[27], 2);
+        assert.equal(values[18], 1);
+    });
+    for (const [name, mutate] of [
+        ['live native activity', values => { values[8] = 1; }],
+        ['live native binding', values => { values[9] = 1; }],
+        ['pending cleanup', values => { values[20] = 1; }],
+        ['no End or Reset attempt', values => { values[27] = 0; }],
+        ['canonical frame not neutral', values => { values[18] = 0; }],
+        ['historical token not revoked', values => { values[10] = 0; }],
+        ['historical token without retirement reason', values => { values[11] = 0; }],
+        ['zero-token Reset without cleanup attempt', values => {
+            Object.assign(values, { 6: 0, 7: 0, 10: 0, 11: 0, 27: 0 });
+        }]
+    ]) test('local Core32 validator refuses claimed cleanup with ' + name, () => {
+        const values = retiredLocalInput(); mutate(values);
+        assert.throws(() => validateLocalInput(values), /local-input runtime/);
+    });
+    const malformedLocalInput = [
+        ['short record', values => values.pop()],
+        ['extra record field', values => values.push(0)],
+        ['negative word', values => { values[28] = -1; }],
+        ['fractional word', values => { values[28] = 0.5; }],
+        ['nonfinite word', values => { values[28] = NaN; }],
+        ['overflow word', values => { values[28] = 0x100000000; }],
+        ['string word', values => { values[28] = '1'; }],
+        ['wrong protocol version', values => { values[0] = 2; }],
+        ['unknown low phase', values => { values[1] = 0; }],
+        ['unknown high phase', values => { values[1] = 7; }],
+        ['missing owner', values => { values[2] = 0; }],
+        ['unknown revoke reason', values => { values[11] = 8; }],
+        ['changed lease lifetime', values => { values[12] = 501; }],
+        ['unknown failure code', values => { values[22] = 12; }],
+        ['simultaneous pending and complete cleanup', values => { values[20] = 1; }]
+    ];
+    for (const [name, mutate] of malformedLocalInput) test('local Core32 validator rejects ' + name, () => {
+        const values = disabledLocalInput();
+        mutate(values);
+        assert.throws(() => validateLocalInput(values), /local-input runtime report/);
+    });
+    test('local Core32 validator rejects nonboolean ownership, cleanup, focus and eligibility flags', () => {
+        for (const field of [3, 4, 5, 8, 9, 10, 17, 18, 19, 20, 21, 23, 26]) {
+            const values = disabledLocalInput(); values[field] = 2;
+            assert.throws(() => validateLocalInput(values), /local-input runtime report/, 'field ' + field);
+        }
+    });
+    for (const [name, mutate] of [
+        ['not configured', values => { values[3] = 0; }],
+        ['not enabled', values => { values[4] = 0; }],
+        ['native admission never attempted', values => { values[5] = 0; }],
+        ['no native generation', values => { values[6] = 0; }],
+        ['no native binding', values => { values[9] = 0; }],
+        ['revoked lease', values => { values[10] = 1; }],
+        ['native revoke reason', values => { values[11] = 1; }],
+        ['missing native heartbeat budget', values => { values[12] = 0; }],
+        ['physical release not qualified', values => { values[17] = 0; }],
+        ['real bindings not borrowed', values => { values[19] = 0; }],
+        ['focus absent', values => { values[23] = 0; }],
+        ['context ineligible', values => { values[26] = 0; }],
+        ['phase not Active', values => { values[1] = 4; }]
+    ]) test('local Core32 validator refuses active input with ' + name, () => {
+        const values = activeLocalInput(); mutate(values);
+        assert.throws(() => validateLocalInput(values), /unqualified active input/);
+    });
+    test('local Core32 validator refuses a RetainedCleanup phase with no pending obligation', () => {
+        const values = Object.assign(disabledLocalInput(), { 1: 5, 21: 0 });
+        assert.throws(() => validateLocalInput(values), /pending cleanup owner/);
+    });
     require('./test_frontend_runtime_entry.cjs')({ test, runEntry });
     console.log(`Passed ${tests} game-adapter mock tests. No installed game was run.`);
 }

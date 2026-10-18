@@ -9,7 +9,11 @@
 
 namespace deonline
 {
-    class FrontendRuntimeCache
+    // Both frontend and local-input publications use the same bounded,
+    // nonblocking copy. A script suspended by native admission must never
+    // hold a lock needed by the Core producer's next publication.
+    template <typename Snapshot>
+    class FrontendValueCache
     {
     public:
         void Reset() noexcept
@@ -17,7 +21,7 @@ namespace deonline
             available.store(false);
             sequence.store(0);
         }
-        void Publish(const FrontendRuntimeReport::Snapshot& value) noexcept
+        void Publish(const Snapshot& value) noexcept
         {
             sequence.fetch_add(1);
             for (std::size_t field = 0; field < value.size(); ++field)
@@ -25,7 +29,7 @@ namespace deonline
             available.store(true);
             sequence.fetch_add(1);
         }
-        bool Capture(FrontendRuntimeReport::Snapshot& value) const noexcept
+        bool Capture(Snapshot& value) const noexcept
         {
             if (!available.load())
                 return false;
@@ -34,7 +38,7 @@ namespace deonline
                 const auto before = sequence.load();
                 if (before & 1)
                     continue;
-                FrontendRuntimeReport::Snapshot next{};
+                Snapshot next{};
                 for (std::size_t field = 0; field < next.size(); ++field)
                     next[field] = words[field].load();
                 if (sequence.load() == before)
@@ -47,8 +51,9 @@ namespace deonline
         }
 
     private:
-        std::array<std::atomic<std::uint32_t>, FrontendRuntimeReport::FieldCount> words{};
-        std::atomic<std::uint64_t>                                                sequence{0};
-        std::atomic<bool>                                                         available{false};
+        std::array<std::atomic<std::uint32_t>, std::tuple_size<Snapshot>::value> words{};
+        std::atomic<std::uint64_t>                                               sequence{0};
+        std::atomic<bool>                                                        available{false};
     };
+    using FrontendRuntimeCache = FrontendValueCache<FrontendRuntimeReport::Snapshot>;
 }

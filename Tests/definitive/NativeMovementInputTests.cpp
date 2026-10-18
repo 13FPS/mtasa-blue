@@ -10,10 +10,28 @@
 // rejects this executable before pinning a module or installing any hook.
 #include <windows.h>
 #include <cstdint>
+#include <atomic>
 #if defined(MTA_NATIVE_ELIGIBILITY_PUBLISHED_CACHE)
 namespace
 {
-    std::uintptr_t eligibilityAdmissionTestImage = 0;
+    std::uintptr_t         eligibilityAdmissionTestImage = 0;
+    std::atomic<HWND>      localInputTestWindow{nullptr};
+    std::atomic<bool>      localInputTestFocused{true}, localInputTestClockEnabled{false};
+    std::atomic<ULONGLONG> localInputTestNow{1000};
+
+    HWND WINAPI LocalInputTestForegroundWindow() noexcept
+    {
+        // Own a real hidden HWND without stealing the desktop foreground.
+        // Only the included callback TU receives deterministic focus evidence.
+        if (const auto window = localInputTestWindow.load())
+            return localInputTestFocused.load() ? window : nullptr;
+        return ::GetForegroundWindow();
+    }
+
+    ULONGLONG WINAPI LocalInputTestTickCount64() noexcept
+    {
+        return localInputTestClockEnabled.load() ? localInputTestNow.load() : ::GetTickCount64();
+    }
 
     HMODULE WINAPI EligibilityTestModuleHandleW(LPCWSTR name) noexcept
     {
@@ -25,11 +43,15 @@ namespace
         return ::GetModuleHandleW(name);
     }
 }
-    #define GetModuleHandleW EligibilityTestModuleHandleW
+    #define GetModuleHandleW    EligibilityTestModuleHandleW
+    #define GetForegroundWindow LocalInputTestForegroundWindow
+    #define GetTickCount64      LocalInputTestTickCount64
 #endif
 #include "../../Client/game_de/NativeMovementInput.cpp"
 #if defined(MTA_NATIVE_ELIGIBILITY_PUBLISHED_CACHE)
     #undef GetModuleHandleW
+    #undef GetForegroundWindow
+    #undef GetTickCount64
 #endif
 #include <cstdio>
 #include <cstdlib>
@@ -371,8 +393,364 @@ namespace
     }
 }
 
+#if defined(MTA_NATIVE_ELIGIBILITY_PUBLISHED_CACHE)
+namespace
+{
+    MtaInputState LocalMovement(std::size_t action)
+    {
+        MtaInputState state;
+        switch (action)
+        {
+            case 0:
+                state.current.LeftStickY = -128;
+                break;
+            case 1:
+                state.current.LeftStickY = 128;
+                break;
+            case 2:
+                state.current.LeftStickX = -128;
+                break;
+            case 3:
+                state.current.LeftStickX = 128;
+                break;
+            case 4:
+                state.current.LeftStickY = -128;
+                state.current.m_bPedWalk = 255;
+                break;
+            case 5:
+                state.current.LeftStickY = -128;
+                state.current.ButtonCross = 255;
+                break;
+        }
+        return state;
+    }
+
+    void CheckLocalInputPolicy()
+    {
+        using Reason = LocalInputLeaseReason;
+        static_assert(sizeof(LocalInputLeaseRequestV1) == 120 && sizeof(LocalInputLeaseStateV1) == 64);
+        static_assert(LocalInputLeaseVersionV1 == 1 && LocalInputLeaseLifetimeMsV1 == 500);
+        const MtaInputState   neutral;
+        LocalInputLeasePolicy initial;
+        Check(initial.Revoked() && !initial.Read().active && !initial.Read().generation, "unstarted local lease is never an active input authority");
+        Check(!initial.Begin(0, 77, 1000, true, neutral) && !initial.Begin(1, 0, 1000, true, neutral) && !initial.Begin(1, 77, 1000, false, neutral),
+              "local policy requires generation, owner and focused admission");
+        const auto movement = LocalMovement(0);
+        Check(!initial.Begin(1, 77, 1000, true, movement) && !initial.Read().generation,
+              "local admission refuses nonneutral input without adopting a generation");
+        MtaInputState previousMovement;
+        previousMovement.previous.ButtonCross = 255;
+        Check(!initial.Begin(1, 77, 1000, true, previousMovement) && !initial.Read().generation,
+              "local admission requires the previous frame neutral as well as the current frame");
+        Check(initial.Begin(1, 77, 1000, true, neutral), "local policy accepts neutral owner admission");
+        Check(!initial.Begin(2, 77, 1001, true, neutral) && initial.Read().generation == 1, "another Begin cannot replace a live local lease");
+        auto state = initial.Read();
+        Check(state.generation == 1 && state.producerThread == 77 && state.active && !state.revoked && state.refreshedAtMs == 1000 && state.renewals == 0 &&
+                  state.lifetimeMs == 500,
+              "local admission publishes its actual owner, generation and short lease");
+        Check(initial.Check(1499, true) && !initial.Check(1500, true), "local callback deadline is exclusive at exactly 500 ms");
+        state = initial.Read();
+        Check(state.revoked && !state.active && state.reason == static_cast<std::uint32_t>(Reason::Expired),
+              "deadline expiry is retained separately from input values");
+        Check(!initial.Renew(1, 77, 1500, true, neutral) && !initial.Begin(1, 77, 1501, true, neutral),
+              "neither renewal nor same-generation Begin resurrects expired local input");
+        Check(initial.Begin(2, 77, 1501, true, neutral), "quiescent owner may admit a later local generation");
+        initial.Revoke(Reason::Stopped);
+        initial.Revoke(Reason::NativeFailure);
+        Check(initial.Read().reason == static_cast<std::uint32_t>(Reason::Stopped), "local lease retains its first irreversible stop reason");
+
+        for (std::size_t action = 0; action < 6; ++action)
+        {
+            LocalInputLeasePolicy policy;
+            Check(policy.Begin(1, 77, 1000, true, neutral), "six-action policy starts neutral");
+            auto current = LocalMovement(action);
+            current.previous = LocalMovement((action + 1) % 6).current;
+            Check(policy.Renew(1, 77, 1200, true, current), "local policy accepts each canonical on-foot action and its previous frame");
+            Check(policy.Check(1699, true) && !policy.Check(1700, true), "renewal extends only the 500 ms callback deadline");
+            Check(policy.Read().renewals == 1 && policy.Read().refreshedAtMs == 1200, "local deadline proof records actual renewal rather than a read");
+        }
+
+        using Member = signed short  CControllerState::*;
+        const std::array<Member, 20> unrelated = {&CControllerState::RightStickX,
+                                                  &CControllerState::RightStickY,
+                                                  &CControllerState::LeftShoulder1,
+                                                  &CControllerState::LeftShoulder2,
+                                                  &CControllerState::RightShoulder1,
+                                                  &CControllerState::RightShoulder2,
+                                                  &CControllerState::DPadUp,
+                                                  &CControllerState::DPadDown,
+                                                  &CControllerState::DPadLeft,
+                                                  &CControllerState::DPadRight,
+                                                  &CControllerState::Start,
+                                                  &CControllerState::Select,
+                                                  &CControllerState::ButtonSquare,
+                                                  &CControllerState::ButtonTriangle,
+                                                  &CControllerState::ButtonCircle,
+                                                  &CControllerState::ShockButtonL,
+                                                  &CControllerState::ShockButtonR,
+                                                  &CControllerState::m_bChatIndicated,
+                                                  &CControllerState::m_bVehicleMouseLook,
+                                                  &CControllerState::m_bRadioTrackSkip};
+        for (const auto field : unrelated)
+            for (const bool previous : {false, true})
+            {
+                LocalInputLeasePolicy policy;
+                Check(policy.Begin(1, 77, 1000, true, neutral), "invalid-control policy starts neutral");
+                MtaInputState invalid;
+                (previous ? invalid.previous : invalid.current).*field = 255;
+                Check(!policy.Renew(1, 77, 1001, true, invalid) && policy.Read().reason == static_cast<std::uint32_t>(Reason::InvalidState),
+                      "unrelated current or previous control revokes local input instead of expanding supported gameplay");
+                Check(!policy.Renew(1, 77, 1002, true, neutral), "valid input cannot revive an invalid owner publication");
+            }
+        for (const auto field : {&CControllerState::LeftStickX, &CControllerState::LeftStickY, &CControllerState::ButtonCross, &CControllerState::m_bPedWalk})
+            for (const short invalidValue : std::array<short, 3>{-129, 129, 1})
+            {
+                if ((field == &CControllerState::LeftStickX || field == &CControllerState::LeftStickY) && invalidValue == 1)
+                    continue;
+                LocalInputLeasePolicy policy;
+                Check(policy.Begin(1, 77, 1000, true, neutral), "invalid-value policy starts neutral");
+                MtaInputState invalid;
+                invalid.current.*field = invalidValue;
+                Check(!policy.Renew(1, 77, 1001, true, invalid) && policy.Read().revoked,
+                      "out-of-range axes and noncanonical sprint or walk values revoke the owner");
+            }
+
+        LocalInputLeasePolicy authority;
+        Check(authority.Begin(5, 77, 1000, true, neutral), "stale-caller policy starts neutral");
+        MtaInputState invalid;
+        invalid.current.ButtonCircle = 255;
+        Check(!authority.Renew(4, 77, 1100, false, invalid) && !authority.Renew(5, 78, 1100, false, invalid),
+              "stale generation and foreign owner cannot submit local input");
+        Check(authority.Read().active && !authority.Read().revoked && authority.Read().renewals == 0,
+              "unowned renewal cannot revoke or refresh the current local owner");
+        Check(authority.Renew(5, 77, 1300, true, movement) && authority.Check(1200, true),
+              "producer and callback clocks may arrive out of order without false rollback");
+        Check(!authority.Check(1199, true) && authority.Read().reason == static_cast<std::uint32_t>(Reason::ClockRollback),
+              "callback-local time rollback irreversibly revokes local input");
+        LocalInputLeasePolicy producerRollback;
+        Check(producerRollback.Begin(1, 77, 1000, true, neutral) && producerRollback.Renew(1, 77, 1100, true, movement),
+              "producer rollback fixture has a real successful publication");
+        Check(!producerRollback.Renew(1, 77, 1099, true, movement) && producerRollback.Read().reason == static_cast<std::uint32_t>(Reason::ClockRollback),
+              "producer-local time rollback revokes its own publication");
+        LocalInputLeasePolicy focus;
+        Check(focus.Begin(1, 77, 1000, true, neutral) && !focus.Check(1001, false) && focus.Read().reason == static_cast<std::uint32_t>(Reason::FocusLost) &&
+                  !focus.Renew(1, 77, 1002, true, movement),
+              "returning focus cannot resurrect a revoked local input generation");
+        LocalInputLeasePolicy overflow;
+        Check(!overflow.Begin(1, 77, UINT64_MAX - 499, true, neutral) && !overflow.Read().generation,
+              "local deadline overflow refuses admission without adopting an owner");
+        Check(overflow.Begin(1, 77, UINT64_MAX - 500, true, neutral) && !overflow.Renew(1, 77, UINT64_MAX - 499, true, neutral) &&
+                  overflow.Read().reason == static_cast<std::uint32_t>(Reason::InvalidState),
+              "owner renewal cannot wrap the local deadline back into an active lease");
+        FrontendInputLeasePolicy frontend;
+        Check(frontend.Begin(1, 77, 1000, true, neutral) && !frontend.Renew(1, 77, 1001, true, movement) &&
+                  frontend.Read().reason == static_cast<std::uint32_t>(FrontendInputLeaseReason::NonNeutral),
+              "movement lease support does not relax the existing frontend's exact-neutral authority");
+    }
+
+    CControllerState     localExpectedCurrent, localExpectedPrevious;
+    NativeMovementInput* localLeaseOwner = nullptr;
+    std::uint64_t        localLeaseGeneration = 0;
+
+    void OriginalLocalMovement(void*)
+    {
+        ++originalCalls;
+        MtaInputState observed;
+        Check(Read(runtime.image + padRva + NativePadCurrentOffset, observed), "local callback reads its actual scoped controller blocks");
+        Check(std::memcmp(&observed.current, &localExpectedCurrent, sizeof(localExpectedCurrent)) == 0 &&
+                  std::memcmp(&observed.previous, &localExpectedPrevious, sizeof(localExpectedPrevious)) == 0,
+              "local Renew reaches the native callback while previous belongs to the actual consumer");
+        float query = 42.0f;
+        auto* provider = reinterpret_cast<void*>(runtime.provider);
+        Check(HookMembership(provider, 0xfe) && HookAvailability(provider, 0xfe) && HookQuery(provider, 0xfe, &query) == 1 && query == 0.0f,
+              "local callback owns unknown action queries instead of leaking physical fallback");
+        Check(HookQuery(provider, 0x6d, &query) == 1 && query == 0.0f, "canonical walk is not rescaled a second time by the native walk action");
+        Put(runtime.image + padRva + NativePadCurrentOffset, std::uint32_t{0xabcdef01});
+    }
+
+    void OriginalLocalEndAttempt(void* ped)
+    {
+        OriginalLocalMovement(ped);
+        Check(localLeaseOwner && !localLeaseOwner->EndLocalLease(localLeaseGeneration),
+              "local End cannot detach while its actual callback still owes restoration");
+        Check(runtime.transaction.Active() && runtime.scopes.load() == 1, "pending local End retains its original physical snapshot");
+    }
+
+    void CheckNativeLocalInput(std::uintptr_t image, std::uintptr_t ped, std::uintptr_t provider)
+    {
+        using Reason = LocalInputLeaseReason;
+        const MtaInputState neutral;
+        const auto          window =
+            CreateWindowExW(0, L"STATIC", L"MTA own-process local-input test", WS_POPUP, 0, 0, 1, 1, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+        Check(window && IsWindow(window) && !IsWindowVisible(window), "local lease fixture owns a hidden process window");
+        localInputTestWindow.store(window);
+        localInputTestFocused.store(true);
+
+        NativeMovementInput      owner;
+        LocalInputLeaseRequestV1 request;
+        request.window = window;
+        Check(NativeMovementInput::ValidateLocalLeaseRequest(request), "local request validates actual hidden root plus controlled focus evidence");
+        Check(!owner.BeginLocalLease(request) && !runtime.hooked.load() && !runtime.modulePinned.load(),
+              "local Begin still refuses the test executable before hook installation or module pinning");
+        Check(owner.End(), "wrong-executable local admission retires cleanly");
+        Check(!owner.Begin(neutral), "controlled local callback receives a later generation through the unchanged executable refusal");
+        const auto configure = [&](ControlFunction original)
+        {
+            runtime.image = image;
+            runtime.ped = ped;
+            runtime.provider = provider;
+            Configure(original, false);
+            runtime.localLease = true;
+            runtime.frontendLease = false;
+            runtime.frontendWindow = window;
+            runtime.frame = {};
+            scope.consumed = {};
+            scope.consumedGeneration = 0;
+            runtime.started = runtime.refreshed = 1000;
+            localInputTestNow.store(1000);
+            localInputTestClockEnabled.store(true);
+            localInputTestFocused.store(true);
+            Check(runtime.localPolicy.Begin(runtime.generation.load(), GetCurrentThreadId(), 1000, true, neutral),
+                  "controlled callback fixture admits only a fresh neutral local generation");
+            localExpectedCurrent = {};
+            localExpectedPrevious = {};
+        };
+        configure(OriginalLocalMovement);
+        HookControl(reinterpret_cast<void*>(runtime.ped));
+        Check(runtime.counters.steps.load() == 1 && runtime.counters.restored.load() == 1 && Pad() == physical,
+              "initial local neutral callback restores every physical byte and publishes eligibility");
+        const auto generation = runtime.generation.load();
+        for (std::size_t action = 0; action < 6; ++action)
+        {
+            auto movement = LocalMovement(action);
+            movement.previous.ButtonCross = 255;
+            localInputTestNow.fetch_add(50);
+            const auto before = Pad();
+            Check(owner.RenewLocalLease(generation, movement) && Pad() == before, "each local action is published without producer-side native pad writes");
+            localExpectedPrevious = localExpectedCurrent;
+            localExpectedCurrent = movement.current;
+            HookControl(reinterpret_cast<void*>(runtime.ped));
+            Check(runtime.active.load() && Pad() == physical && runtime.counters.steps.load() == runtime.counters.restored.load(),
+                  "six-action local callback restores its physical pad before the producer resumes");
+        }
+        LocalInputLeaseStateV1 state;
+        Check(owner.ReadLocalLease(state) && state.active && state.generation == generation && state.renewals == 6 && state.refreshedAtMs == 1300,
+              "native local read reports the six actual renewals and their generation");
+        const auto refreshed = state.refreshedAtMs;
+        Check(!owner.Update(LocalMovement(0)) && owner.ReadLocalLease(state) && state.refreshedAtMs == refreshed && state.renewals == 6,
+              "legacy Update cannot publish or renew the separately owned local lease");
+        Check(!owner.RenewLocalLease(generation + 1, LocalMovement(0)) && !owner.EndLocalLease(generation + 1) && owner.ReadLocalLease(state) && state.active,
+              "stale local API generation cannot publish or end the current owner");
+        bool                   foreignRenewed = true, foreignEnded = true, foreignRead = true;
+        LocalInputLeaseStateV1 foreignState;
+        foreignState.generation = UINT64_MAX;
+        std::thread foreign(
+            [&]
+            {
+                foreignRenewed = owner.RenewLocalLease(generation, LocalMovement(0));
+                foreignRead = owner.ReadLocalLease(foreignState);
+                foreignEnded = owner.EndLocalLease(generation);
+            });
+        foreign.join();
+        Check(!foreignRenewed && !foreignEnded && !foreignRead && foreignState.generation == UINT64_MAX && owner.ReadLocalLease(state) && state.active &&
+                  state.renewals == 6,
+              "foreign local renew/read/End preserve output and cannot revoke or refresh the producer's active lease");
+        localInputTestNow.store(1800);
+        const auto beforeExpired = runtime.counters.steps.load();
+        runtime.originalControl = OriginalPhysical;
+        HookControl(reinterpret_cast<void*>(runtime.ped));
+        Check(!runtime.active.load() && runtime.counters.steps.load() == beforeExpired && Pad() == physical,
+              "native local callback independently expires at its exact deadline without another producer call");
+        Check(owner.ReadLocalLease(state) && state.reason == static_cast<std::uint32_t>(Reason::Expired) && !state.active &&
+                  !owner.RenewLocalLease(generation, neutral),
+              "expired native local read stays revoked even with neutral renewal");
+        Check(owner.EndLocalLease(generation) && owner.ReadLocalLease(state) && !state.bound && !state.active,
+              "expired local owner explicitly retires native ownership");
+        localInputTestClockEnabled.store(false);
+
+        Check(!owner.Begin(neutral), "second local callback fixture still refuses ordinary executable admission");
+        configure(OriginalLocalMovement);
+        HookControl(reinterpret_cast<void*>(runtime.ped));
+        localInputTestFocused.store(false);
+        runtime.originalControl = OriginalPhysical;
+        HookControl(reinterpret_cast<void*>(runtime.ped));
+        Check(owner.ReadLocalLease(state) && state.reason == static_cast<std::uint32_t>(Reason::FocusLost) && !state.active && Pad() == physical,
+              "actual local callback focus loss revokes before applying movement");
+        localInputTestFocused.store(true);
+        Check(!owner.RenewLocalLease(runtime.generation.load(), LocalMovement(5)) && owner.EndLocalLease(runtime.generation.load()),
+              "refocus cannot resume movement before old local ownership is retired");
+        localInputTestClockEnabled.store(false);
+
+        Check(!owner.Begin(neutral), "invalid native local fixture keeps the executable gate");
+        configure(OriginalLocalMovement);
+        HookControl(reinterpret_cast<void*>(runtime.ped));
+        MtaInputState invalid;
+        invalid.current.ButtonCircle = 255;
+        const auto beforeInvalid = Pad();
+        Check(!owner.RenewLocalLease(runtime.generation.load(), invalid) && Pad() == beforeInvalid && owner.ReadLocalLease(state) &&
+                  state.reason == static_cast<std::uint32_t>(Reason::InvalidState) && !state.active,
+              "invalid native local publication revokes without expanding action authority or writing the pad");
+        Check(owner.EndLocalLease(runtime.generation.load()), "invalid native local owner retires explicitly");
+        localInputTestClockEnabled.store(false);
+
+        Check(!owner.Begin(neutral), "stale eligibility local fixture keeps the executable gate");
+        configure(OriginalLocalMovement);
+        HookControl(reinterpret_cast<void*>(runtime.ped));
+        localInputTestNow.store(1251);
+        Check(!owner.RenewLocalLease(runtime.generation.load(), LocalMovement(0)) && owner.ReadLocalLease(state) &&
+                  state.reason == static_cast<std::uint32_t>(Reason::EligibilityLost) && state.renewals == 0 && Pad() == physical,
+              "fresh local lease cannot renew from native eligibility older than 250 ms or publish its requested frame");
+        Check(std::memcmp(&runtime.frame.current, &neutral.current, sizeof(neutral.current)) == 0 && owner.EndLocalLease(runtime.generation.load()),
+              "eligibility refusal preserves neutral native publication until explicit retirement");
+        localInputTestClockEnabled.store(false);
+
+        Check(!owner.Begin(neutral), "renewable long-running local fixture keeps the executable gate");
+        configure(OriginalLocalMovement);
+        HookControl(reinterpret_cast<void*>(runtime.ped));
+        for (std::size_t sample = 0; sample < 180; ++sample)
+        {
+            localInputTestNow.fetch_add(200);
+            const auto movement = LocalMovement(sample % 6);
+            Check(owner.RenewLocalLease(runtime.generation.load(), movement),
+                  "repeated local publication requires a still-fresh short lease and actual native eligibility");
+            localExpectedPrevious = localExpectedCurrent;
+            localExpectedCurrent = movement.current;
+            HookControl(reinterpret_cast<void*>(runtime.ped));
+            Check(runtime.active.load() && Pad() == physical, "renewable local movement keeps scoped restoration throughout the former trial limit");
+        }
+        Check(localInputTestNow.load() - runtime.started > maximumTrialMs && owner.ReadLocalLease(state) && state.active && state.renewals == 180,
+              "optional renewable local service crosses 35 seconds only through independently fresh 500 ms leases");
+        Check(owner.EndLocalLease(runtime.generation.load()), "long-running local owner retires without a timer-driven menu or trial stop");
+        localInputTestClockEnabled.store(false);
+
+        Check(!owner.Begin(neutral), "pending-End local fixture preserves executable guard");
+        configure(OriginalLocalMovement);
+        HookControl(reinterpret_cast<void*>(runtime.ped));
+        localLeaseOwner = &owner;
+        localLeaseGeneration = runtime.generation.load();
+        runtime.originalControl = OriginalLocalEndAttempt;
+        HookControl(reinterpret_cast<void*>(runtime.ped));
+        Check(Pad() == physical && !runtime.transaction.Active() && runtime.counters.steps.load() == runtime.counters.restored.load(),
+              "local callback finally restores physical input after pending End");
+        Check(owner.EndLocalLease(localLeaseGeneration) && owner.ReadLocalLease(state) && state.generation == localLeaseGeneration && !state.active &&
+                  !state.bound,
+              "same producer retries local End only after actual callback retirement");
+        localLeaseOwner = nullptr;
+        localInputTestClockEnabled.store(false);
+        localInputTestWindow.store(nullptr);
+        runtime.localLease = false;
+        runtime.frontendLease = false;
+        runtime.frontendWindow = nullptr;
+        Check(DestroyWindow(window) != FALSE, "hidden local fixture window is destroyed without desktop interaction");
+    }
+}
+#endif
+
 int main()
 {
+#if defined(MTA_NATIVE_ELIGIBILITY_PUBLISHED_CACHE)
+    CheckLocalInputPolicy();
+#endif
     NativeMovementInput rejected;
     MtaInputState       neutral;
     Check(!rejected.Begin(neutral), "ordinary executable rejected");
@@ -1108,6 +1486,9 @@ int main()
     Check(nextEligibilityOwner.ReadEligibility(publishedEligibility) && publishedEligibility.eligible,
           "only the most recent successfully retired owner can freshly observe its next admission");
     eligibilityAdmissionTestImage = 0;
+#endif
+#if defined(MTA_NATIVE_ELIGIBILITY_PUBLISHED_CACHE)
+    CheckNativeLocalInput(fixtureImage, fixturePed, fixtureProvider);
 #endif
     for (HANDLE event : {splitEntered, splitResume, splitFinished, splitNext})
         Check(CloseHandle(event) != FALSE, "coordination event closed");

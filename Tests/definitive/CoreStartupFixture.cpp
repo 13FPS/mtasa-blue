@@ -22,21 +22,23 @@
 #include "../../Client/core/DefinitiveFrontendClockReference.h"
 #include "../../Client/core/DefinitiveFrontendStartup.h"
 #include "../../Client/core/DefinitiveFrontendRuntime.h"
+#include "../../Client/core/DefinitiveLocalInputRuntime.h"
 #include <filesystem>
 #include <stdexcept>
 
 namespace
 {
-    HANDLE                              mapping = nullptr;
-    volatile LONG*                      counters = nullptr;
-    bool                                mtaSet = false, gtaSet = false;
-    DefinitiveInputReference::Request   inputRequest;
-    bool                                guiRequest = false, guiSurfaceRequest = false, clockRequest = false, clockSetRequest = false;
-    DefinitiveFrontendStartup::Snapshot frontendOwner{};
-    HMODULE                             frontendBackend = nullptr;
-    bool                                frontendClockReturned = false, frontendOwnerReadThrew = false;
-    DefinitiveFrontendRuntime::Snapshot runtimeOwner{};
-    bool                                runtimeViewActive = false;
+    HANDLE                                mapping = nullptr;
+    volatile LONG*                        counters = nullptr;
+    bool                                  mtaSet = false, gtaSet = false;
+    DefinitiveInputReference::Request     inputRequest;
+    bool                                  guiRequest = false, guiSurfaceRequest = false, clockRequest = false, clockSetRequest = false;
+    DefinitiveFrontendStartup::Snapshot   frontendOwner{};
+    HMODULE                               frontendBackend = nullptr;
+    bool                                  frontendClockReturned = false, frontendOwnerReadThrew = false;
+    DefinitiveFrontendRuntime::Snapshot   runtimeOwner{};
+    bool                                  runtimeViewActive = false;
+    DefinitiveLocalInputRuntime::Snapshot localRuntime{};
 
     DWORD Setting(const wchar_t* name)
     {
@@ -235,6 +237,11 @@ extern "C" __declspec(dllexport) void* MTA_BeginDEFrontendRuntime(std::uint32_t 
         runtimeOwner[field] = field == C::SessionGenerationHigh ? 0u : 1u;
     runtimeOwner[C::HiddenNeutralVerified] = runtimeOwner[C::ConfigurationReadOnly] = 1;
     runtimeOwner[C::BindCount] = 87;
+    localRuntime = {};
+    localRuntime[DefinitiveLocalInputRuntime::Version] = 1;
+    localRuntime[DefinitiveLocalInputRuntime::Phase] = static_cast<std::uint32_t>(DefinitiveLocalInputRuntime::State::Disabled);
+    localRuntime[DefinitiveLocalInputRuntime::OwnerThread] = GetCurrentThreadId();
+    localRuntime[DefinitiveLocalInputRuntime::CleanupComplete] = 1;
     wchar_t path[32768]{};
     GetModuleFileNameW(nullptr, path, 32768);
     frontendBackend = LoadLibraryExW((std::filesystem::path(path).parent_path() / L"game_de.dll").c_str(), nullptr,
@@ -259,13 +266,172 @@ extern "C" __declspec(dllexport) DefinitiveFrontendRuntime::Status MTA_PulseDEFr
     ++runtimeOwner[DefinitiveFrontendStartup::Pulses];
     return DefinitiveFrontend::Status::Ok;
 }
-extern "C" __declspec(dllexport) DefinitiveFrontendRuntime::Status MTA_RunDEFrontendRuntimeView(void*                                          handle,
-                                                                                                const DefinitivePersistentFrontend::RequestV1* request)
+
+namespace
+{
+    void LocalRetired(bool disabled)
+    {
+        namespace L = DefinitiveLocalInputRuntime;
+        if (localRuntime[L::NativeAttempted])
+            ++localRuntime[L::NativeEndAttempts];
+        localRuntime[L::Phase] = static_cast<std::uint32_t>(disabled ? L::State::Disabled : L::State::Suspended);
+        for (const auto field : {L::NativeAttempted, L::NativeActive, L::NativeBound, L::CleanupPending, L::HeldActionsLow, L::HeldActionsHigh})
+            localRuntime[field] = 0;
+        localRuntime[L::NativeRevoked] = localRuntime[L::NativeGenerationLow] ? 1u : 0u;
+        if (localRuntime[L::NativeGenerationLow] && !localRuntime[L::NativeReason])
+            localRuntime[L::NativeReason] = 5;
+        localRuntime[L::CanonicalNeutral] = localRuntime[L::CleanupComplete] = 1;
+        localRuntime[L::Enabled] = 0;
+        if (disabled)
+            localRuntime[L::Configured] = localRuntime[L::BindingsBorrowed] = 0;
+    }
+}
+
+extern "C" __declspec(dllexport) std::uint32_t MTA_DELocalInputRuntimeApiVersion()
+{
+    Call(53);
+    return Setting(L"MTA_CORE_FIXTURE_LOCAL_RUNTIME_MODE") == 6 ? 2u : 1u;
+}
+extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_ConfigureDELocalInputRuntime(void*                                         handle,
+                                                                                             const DefinitiveLocalInputRuntime::RequestV1* request)
+{
+    namespace L = DefinitiveLocalInputRuntime;
+    Call(54);
+    if (handle != &runtimeOwner || !request || request->size != sizeof(*request) || request->version != 1 || request->reserved[0] || request->reserved[1] ||
+        runtimeViewActive || !runtimeOwner[DefinitiveFrontendRuntime::ViewsRetired])
+    {
+        Call(59);
+        return DefinitiveFrontend::Status::InvalidArgument;
+    }
+    // The controlled provider transports an opaque HWND only. Its copied
+    // values exercise worker ownership; it never admits real native input.
+    if (Setting(L"MTA_CORE_FIXTURE_LOCAL_RUNTIME_MODE") == 7)
+        return DefinitiveFrontend::Status::Failed;
+    localRuntime[L::Phase] = static_cast<std::uint32_t>(L::State::Arming);
+    for (const auto field :
+         {L::Configured, L::Enabled, L::CanonicalNeutral, L::BindingsBorrowed, L::CleanupComplete, L::PhysicalRearmReady, L::Focused, L::ContextEligible})
+        localRuntime[field] = 1;
+    localRuntime[L::ContextKnownMask] = localRuntime[L::ContextFlags] = 15;
+    localRuntime[L::SupportedBindings] = localRuntime[L::EligibleKeys] = 6;
+    localRuntime[L::LastFailure] = 0;
+    return DefinitiveFrontend::Status::Ok;
+}
+extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_PulseDELocalInputRuntime(void* handle)
+{
+    namespace L = DefinitiveLocalInputRuntime;
+    Call(55);
+    if (handle != &runtimeOwner || runtimeViewActive)
+    {
+        Call(59);
+        return DefinitiveFrontend::Status::InvalidArgument;
+    }
+    if (!localRuntime[L::Configured] || !localRuntime[L::Enabled])
+        return DefinitiveFrontend::Status::Ok;
+    const auto focusGate = Setting(L"MTA_CORE_FIXTURE_LOCAL_RUNTIME_MODE") == 4 ? Event(L"MTA_CORE_FIXTURE_INPUT_RELEASE", SYNCHRONIZE) : nullptr;
+    const bool focusLost = focusGate && WaitForSingleObject(focusGate, 0) == WAIT_OBJECT_0;
+    if (focusGate)
+        CloseHandle(focusGate);
+    if (focusLost)
+    {
+        LocalRetired(false);
+        localRuntime[L::Focused] = 0;
+        localRuntime[L::NativeReason] = 3;
+        localRuntime[L::LastFailure] = static_cast<std::uint32_t>(L::Failure::FocusLost);
+        return DefinitiveFrontend::Status::Ok;
+    }
+    localRuntime[L::Phase] = static_cast<std::uint32_t>(L::State::Active);
+    for (const auto field : {L::NativeAttempted, L::NativeActive, L::NativeBound})
+        localRuntime[field] = 1;
+    localRuntime[L::NativeGenerationLow] = static_cast<std::uint32_t>(counters ? counters[54] : 1) + 100;
+    localRuntime[L::NativeRevoked] = localRuntime[L::NativeReason] = 0;
+    localRuntime[L::NativeLifetimeMs] = 500;
+    localRuntime[L::CleanupComplete] = 0;
+    localRuntime[L::CanonicalNeutral] = 0;
+    localRuntime[L::HeldActionsLow] = 1;
+    ++localRuntime[L::RenewalsLow];
+    return DefinitiveFrontend::Status::Ok;
+}
+extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_ReadDELocalInputRuntime(void* handle, std::uint32_t* output, std::uint32_t count)
+{
+    Call(56);
+    if (handle != &runtimeOwner || !output || count != DefinitiveLocalInputRuntime::FieldCount || runtimeViewActive)
+    {
+        Call(59);
+        return DefinitiveFrontend::Status::InvalidArgument;
+    }
+    std::copy(localRuntime.begin(), localRuntime.end(), output);
+    return DefinitiveFrontend::Status::Ok;
+}
+extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_SuspendDELocalInputRuntime(void* handle)
+{
+    namespace L = DefinitiveLocalInputRuntime;
+    Call(57);
+    if (handle != &runtimeOwner || runtimeViewActive)
+    {
+        Call(59);
+        return DefinitiveFrontend::Status::InvalidArgument;
+    }
+    const auto mode = Setting(L"MTA_CORE_FIXTURE_LOCAL_RUNTIME_MODE");
+    const auto gate = localRuntime[L::NativeAttempted] && (mode == 2 || mode == 3) ? Event(L"MTA_CORE_FIXTURE_MOVEMENT_RELEASE", SYNCHRONIZE) : nullptr;
+    const bool pending = gate && WaitForSingleObject(gate, 0) == WAIT_TIMEOUT;
+    if (gate)
+        CloseHandle(gate);
+    if (pending)
+    {
+        Call(60);
+        localRuntime[L::Phase] = static_cast<std::uint32_t>(L::State::RetainedCleanup);
+        localRuntime[L::NativeActive] = 0;
+        localRuntime[L::CleanupPending] = 1;
+        localRuntime[L::CleanupComplete] = 0;
+        return DefinitiveFrontend::Status::Busy;
+    }
+    if (localRuntime[L::Configured])
+        LocalRetired(false);
+    return DefinitiveFrontend::Status::Ok;
+}
+#ifndef CORE_FIXTURE_MISSING_LOCAL_RUNTIME_EXPORT
+extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_DisableDELocalInputRuntime(void* handle)
+{
+    namespace L = DefinitiveLocalInputRuntime;
+    Call(58);
+    if (handle != &runtimeOwner || runtimeViewActive)
+    {
+        Call(59);
+        return DefinitiveFrontend::Status::InvalidArgument;
+    }
+    const auto mode = Setting(L"MTA_CORE_FIXTURE_LOCAL_RUNTIME_MODE");
+    const auto gate = localRuntime[L::NativeAttempted] && (mode == 2 || mode == 3) ? Event(L"MTA_CORE_FIXTURE_MOVEMENT_RELEASE", SYNCHRONIZE) : nullptr;
+    const bool pending = gate && WaitForSingleObject(gate, 0) == WAIT_TIMEOUT;
+    if (gate)
+        CloseHandle(gate);
+    if (pending)
+    {
+        Call(60);
+        localRuntime[L::Phase] = static_cast<std::uint32_t>(L::State::RetainedCleanup);
+        localRuntime[L::NativeActive] = 0;
+        localRuntime[L::CleanupPending] = 1;
+        localRuntime[L::CleanupComplete] = 0;
+        return DefinitiveFrontend::Status::Busy;
+    }
+    LocalRetired(true);
+    return DefinitiveFrontend::Status::Ok;
+}
+#endif
+
+extern "C"
+    __declspec(dllexport) DefinitiveFrontendRuntime::Status MTA_RunDEFrontendRuntimeView(void* handle, const DefinitivePersistentFrontend::RequestV1* request)
 {
     namespace C = DefinitiveFrontendRuntime;
     namespace S = DefinitiveFrontendStartup;
     namespace P = DefinitivePersistentFrontend;
     Call(47);
+    if (localRuntime[DefinitiveLocalInputRuntime::NativeAttempted] || localRuntime[DefinitiveLocalInputRuntime::NativeBound] ||
+        localRuntime[DefinitiveLocalInputRuntime::NativeActive] || localRuntime[DefinitiveLocalInputRuntime::CleanupPending] ||
+        (!localRuntime[DefinitiveLocalInputRuntime::CanonicalNeutral] && localRuntime[DefinitiveLocalInputRuntime::Configured]))
+    {
+        Call(59);
+        return DefinitiveFrontend::Status::Failed;
+    }
     const auto mode = Setting(L"MTA_CORE_FIXTURE_RUNTIME_MODE");
     if (handle != &runtimeOwner || !request || !request->cancelled || !request->publish || !request->heartbeat ||
         request->generation != runtimeOwner[C::ViewGenerationLow] + 1)
@@ -419,6 +585,15 @@ extern "C" __declspec(dllexport) DefinitiveFrontendRuntime::Status MTA_ShutdownD
     Call(48);
     if (handle != &runtimeOwner || runtimeViewActive)
         return DefinitiveFrontend::Status::Busy;
+    if (Setting(L"MTA_CORE_FIXTURE_LOCAL_RUNTIME_MODE") &&
+        (localRuntime[DefinitiveLocalInputRuntime::NativeAttempted] || localRuntime[DefinitiveLocalInputRuntime::NativeBound] ||
+         localRuntime[DefinitiveLocalInputRuntime::NativeActive] || localRuntime[DefinitiveLocalInputRuntime::CleanupPending] ||
+         localRuntime[DefinitiveLocalInputRuntime::Configured] || localRuntime[DefinitiveLocalInputRuntime::BindingsBorrowed] ||
+         !localRuntime[DefinitiveLocalInputRuntime::CleanupComplete] || !localRuntime[DefinitiveLocalInputRuntime::CanonicalNeutral] || !counters[58]))
+    {
+        Call(59);
+        return DefinitiveFrontend::Status::Busy;
+    }
     if (Setting(L"MTA_CORE_FIXTURE_RUNTIME_MODE") == 14 && counters && counters[48] < 4)
         return DefinitiveFrontend::Status::Busy;
     runtimeOwner[S::Phase] = 4;

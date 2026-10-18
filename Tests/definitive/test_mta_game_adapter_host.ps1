@@ -15,7 +15,7 @@ $developerCommand = Join-Path $visualStudio 'Common7/Tools/VsDevCmd.bat'
 $outputRoot = Join-Path $taskRoot ('Build/definitive-game-adapter-host/' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
 $sourceNames = @('Client/core/CGameAdapterModule.h', 'Client/core/CGameAdapterModule.cpp',
-    'Client/sdk/game/CGameClockService.h',
+    'Client/sdk/game/CGameClockService.h', 'Client/sdk/game/CGameLocalInputLease.h', 'Client/sdk/game/CGameFrontendInputLease.h',
     'Client/sdk/game/CGameAdapter.h', 'Client/sdk/game/CGameRenderObservation.h', 'Client/sdk/game/CGameRenderEndpointDiagnostic.h', 'Client/sdk/game/CGameRenderSetupDiagnostic.h', 'Client/sdk/game/CGameRenderRootsDiagnostic.h', 'Client/sdk/game/CGameRenderDeviceLease.h', 'Client/sdk/game/CGameRenderDeviceWindowLease.h', 'Shared/sdk/CControllerState.h',
     'Shared/sdk/CControllerActions.h', 'Shared/sdk/CControlStateSynthesis.h',
     'Tests/definitive/MtaGameAdapterHostTests.cpp', 'Tests/definitive/test_mta_game_adapter_host.ps1')
@@ -45,6 +45,7 @@ foreach ($architecture in @('x86', 'x64')) {
     $facadeFixtures = @()
     $renderFixtures = @()
     $clockFixtures = @()
+    $localInputFixtures = @()
     if ($architecture -eq 'x64') {
         # This explicitly named failure provider tests the consumer's unload
         # policy; actual movement and capability checks still use ModulePath.
@@ -88,6 +89,24 @@ foreach ($architecture in @('x86', 'x64')) {
             $clockFixtures += [ordered]@{ mode=$mode; path=$clockFixture; compilerExit=$clockExit; log=$clockLog;
                 sha256=$(if (Test-Path -LiteralPath $clockFixture) { (Get-FileHash -LiteralPath $clockFixture -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null }) }
             if ($clockExit -ne 0) { $failure = "Clock provider fixture $mode did not compile"; break }
+        }
+        if ($failure) { break }
+        foreach ($mode in 1..4) {
+            $localFixture = Join-Path $outputDirectory ("local-input-provider-$mode.dll")
+            $localArguments = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/LD','/DMTA_TEST_SHUTDOWN_FAILURE_MODULE',
+                "/DMTA_TEST_LOCAL_INPUT_MODE=$mode", '/DNOMINMAX','/DWIN32_LEAN_AND_MEAN',
+                ('/I' + (Join-Path $taskRoot 'Shared/sdk')), ('/I' + (Join-Path $taskRoot 'Client/sdk')),
+                (Join-Path $PSScriptRoot 'MtaGameAdapterHostTests.cpp'), ('/Fo' + (Join-Path $outputDirectory "local-input-$mode.obj")), ('/Fe' + $localFixture),
+                '/link', '/EXPORT:CreateGameAdapter', '/EXPORT:CreateGameRenderObservation', '/EXPORT:BeginGameLocalInputLeaseV1',
+                '/EXPORT:RenewGameLocalInputLeaseV1', '/EXPORT:ReadGameLocalInputLeaseV1')
+            if ($mode -ne 2) { $localArguments += '/EXPORT:EndGameLocalInputLeaseV1' }
+            $localOutput = @(& $compiler @localArguments 2>&1)
+            $localExit = $LASTEXITCODE
+            $localLog = Join-Path $outputDirectory "local-input-$mode-compile.log"
+            $localOutput | Set-Content -LiteralPath $localLog -Encoding utf8
+            $localInputFixtures += [ordered]@{ mode=$mode; path=$localFixture; compilerExit=$localExit; log=$localLog;
+                sha256=$(if (Test-Path -LiteralPath $localFixture) { (Get-FileHash -LiteralPath $localFixture -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null }) }
+            if ($localExit -ne 0) { $failure = "Local input provider fixture $mode did not compile"; break }
         }
         if ($failure) { break }
         foreach ($mode in 1..5) {
@@ -212,7 +231,7 @@ foreach ($architecture in @('x86', 'x64')) {
     $testCount = $null
     if ($compilerExit -eq 0) {
         $testArguments = @($ModulePath)
-        if ($architecture -eq 'x64') { $testArguments += $fixture; $testArguments += @($facadeFixtures | ForEach-Object path); $testArguments += @($renderFixtures | ForEach-Object path); $testArguments += @($renderV2Fixtures | ForEach-Object path); $testArguments += @($renderV3Fixtures | ForEach-Object path); $testArguments += @($renderV4Fixtures | ForEach-Object path); $testArguments += @($renderV5Fixtures | ForEach-Object path); $testArguments += @($renderV6Fixtures | ForEach-Object path); $testArguments += @($clockFixtures | ForEach-Object path) }
+        if ($architecture -eq 'x64') { $testArguments += $fixture; $testArguments += @($facadeFixtures | ForEach-Object path); $testArguments += @($renderFixtures | ForEach-Object path); $testArguments += @($renderV2Fixtures | ForEach-Object path); $testArguments += @($renderV3Fixtures | ForEach-Object path); $testArguments += @($renderV4Fixtures | ForEach-Object path); $testArguments += @($renderV5Fixtures | ForEach-Object path); $testArguments += @($renderV6Fixtures | ForEach-Object path); $testArguments += @($clockFixtures | ForEach-Object path); $testArguments += @($localInputFixtures | ForEach-Object path) }
         $testOutput = @(& $executable @testArguments 2>&1)
         $testExit = $LASTEXITCODE
         $testOutput | Set-Content -LiteralPath (Join-Path $outputDirectory 'test.log') -Encoding utf8
@@ -225,6 +244,7 @@ foreach ($architecture in @('x86', 'x64')) {
         facadeProviderFixtures=$facadeFixtures;
         renderProviderFixtures=$renderFixtures;
         clockProviderFixtures=$clockFixtures;
+        localInputProviderFixtures=$localInputFixtures;
         renderV2ProviderFixtures=$(if ($architecture -eq 'x64') { $renderV2Fixtures } else { @() });
         renderV3ProviderFixtures=$(if ($architecture -eq 'x64') { $renderV3Fixtures } else { @() });
         renderV4ProviderFixtures=$(if ($architecture -eq 'x64') { $renderV4Fixtures } else { @() });

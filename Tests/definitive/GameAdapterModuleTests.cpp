@@ -12,6 +12,7 @@
 #include <game/CGameRenderDeviceLease.h>
 #include <game/CGameRenderDeviceWindowLease.h>
 #include <game/CGameClockService.h>
+#include <game/CGameLocalInputLease.h>
 
 #include <array>
 #include <algorithm>
@@ -472,6 +473,68 @@ namespace
               "public clock cleanup and renewal never treat zero as an owned token");
         Check(adapter.value->Reset() == Status::Ok && adapter.value->Shutdown() == Status::Ok,
               "rejected clock setup leaves the adapter's existing reset and shutdown usable");
+    }
+
+    void TestLocalInputLeaseRejection()
+    {
+        OwnedAdapter             adapter;
+        OwnerIdentity            owner;
+        LocalInputLeaseRequestV1 request;
+        LocalInputLeaseStateV1   output;
+        output.generation = 991;
+        const auto original = output;
+        const auto unchanged = [&] { return std::memcmp(&output, &original, sizeof(output)) == 0; };
+        Check(BeginGameLocalInputLeaseV1(1, adapter.value, &request, &output) == Status::NotInitialized && unchanged(),
+              "local lease requires the initialized adapter owner without replacing output");
+        Check(adapter.value->Initialize(owner.Get()) == Status::Ok, "initialize actual optional local-input adapter");
+        Check(BeginGameLocalInputLeaseV1(0, adapter.value, &request, &output) == Status::InvalidArgument && unchanged(),
+              "local lease version refusal precedes native admission");
+        Check(BeginGameLocalInputLeaseV1(1, nullptr, &request, &output) == Status::InvalidArgument &&
+                  BeginGameLocalInputLeaseV1(1, adapter.value, nullptr, &output) == Status::InvalidArgument &&
+                  BeginGameLocalInputLeaseV1(1, adapter.value, &request, nullptr) == Status::InvalidArgument && unchanged(),
+              "optional local exports reject absent arguments");
+        auto* unknown = reinterpret_cast<IGameAdapter*>(static_cast<std::uintptr_t>(0x12345));
+        Check(BeginGameLocalInputLeaseV1(1, unknown, &request, &output) == Status::InvalidArgument &&
+                  ReadGameLocalInputLeaseV1(1, unknown, &output) == Status::InvalidArgument && unchanged(),
+              "unknown optional local owners are rejected before dereferencing their identity");
+        request.size = 0;
+        Check(BeginGameLocalInputLeaseV1(1, adapter.value, &request, &output) == Status::InvalidArgument && unchanged(), "local request size is exact");
+        request = {};
+        request.reserved[0] = 1;
+        Check(BeginGameLocalInputLeaseV1(1, adapter.value, &request, &output) == Status::InvalidArgument && unchanged(),
+              "reserved local request fields reject");
+        request = {};
+        request.neutral.previous.LeftStickY = -128;
+        Check(BeginGameLocalInputLeaseV1(1, adapter.value, &request, &output) == Status::InvalidArgument && unchanged(),
+              "local Begin requires both controller histories neutral");
+        request = {};
+        Status      foreignBegin = Status::Ok, foreignRead = Status::Ok, foreignRenew = Status::Ok, foreignEnd = Status::Ok;
+        std::thread foreign(
+            [&]
+            {
+                foreignBegin = BeginGameLocalInputLeaseV1(1, adapter.value, &request, &output);
+                foreignRead = ReadGameLocalInputLeaseV1(1, adapter.value, &output);
+                foreignRenew = RenewGameLocalInputLeaseV1(1, adapter.value, 1, &request.neutral);
+                foreignEnd = EndGameLocalInputLeaseV1(1, adapter.value, 1);
+            });
+        foreign.join();
+        Check(foreignBegin == Status::WrongThread && foreignRead == Status::WrongThread && foreignRenew == Status::WrongThread &&
+                  foreignEnd == Status::WrongThread && unchanged(),
+              "all optional local operations keep the real adapter producer thread");
+        Check(RenewGameLocalInputLeaseV1(1, adapter.value, 0, &request.neutral) == Status::InvalidArgument &&
+                  EndGameLocalInputLeaseV1(1, adapter.value, 0) == Status::InvalidArgument,
+              "zero is never an owned local cleanup or renewal token");
+        Check(adapter.value->SubmitControlActions({}) == Status::Ok && adapter.value->BindNativeInput() == Status::Unsupported,
+              "actual test executable stages canonical input but cannot bind the build-pinned game reader");
+        const auto refused = BeginGameLocalInputLeaseV1(1, adapter.value, &request, &output);
+        Check((refused == Status::InvalidArgument || refused == Status::NotInitialized || refused == Status::Unsupported) && unchanged(),
+              "wrong-image or absent foreground admission cannot produce a live local lease");
+        Check(ReadGameLocalInputLeaseV1(1, adapter.value, &output) == Status::Unsupported && unchanged(),
+              "unowned local Read cannot manufacture a native generation");
+        Check(adapter.value->GetCapabilities() == implementedCapabilities && !adapter.value->GetGameInterface(),
+              "optional local availability does not promote engine input or full gameplay");
+        Check(adapter.value->Reset() == Status::Ok && adapter.value->Shutdown() == Status::Ok,
+              "refused optional local admission preserves normal adapter retirement");
     }
 
     void TestNativeMovementEligibilityRejection()
@@ -1316,6 +1379,14 @@ int main()
     static_assert(std::is_nothrow_invocable_r_v<Status, decltype(TakeGameRenderDeviceWindowLeaseV2), std::uint32_t, IGameRenderObservationV6*,
                                                 RenderDeviceWindowLeaseV2*>);
     static_assert(AdapterAbiVersion == 6 && AdapterControllerMask == 0xfffff);
+    static_assert(sizeof(LocalInputLeaseRequestV1) == 120 && sizeof(LocalInputLeaseStateV1) == 64);
+    static_assert(LocalInputLeaseVersionV1 == 1 && LocalInputLeaseLifetimeMsV1 == 500);
+    static_assert(std::is_nothrow_invocable_r_v<Status, decltype(BeginGameLocalInputLeaseV1), std::uint32_t, IGameAdapter*, const LocalInputLeaseRequestV1*,
+                                                LocalInputLeaseStateV1*>);
+    static_assert(
+        std::is_nothrow_invocable_r_v<Status, decltype(RenewGameLocalInputLeaseV1), std::uint32_t, IGameAdapter*, std::uint64_t, const MtaInputState*>);
+    static_assert(std::is_nothrow_invocable_r_v<Status, decltype(ReadGameLocalInputLeaseV1), std::uint32_t, IGameAdapter*, LocalInputLeaseStateV1*>);
+    static_assert(std::is_nothrow_invocable_r_v<Status, decltype(EndGameLocalInputLeaseV1), std::uint32_t, IGameAdapter*, std::uint64_t>);
     static_assert(static_cast<std::uint64_t>(AdapterCapability::NativeMovementWriteCandidate) == 256);
     static_assert(NativeDeviceStateCount == 127 && sizeof(NativeDeviceState) == 508);
     static_assert(static_cast<std::uint64_t>(AdapterCapability::NativeDeviceStateCandidateRead) == 128);
@@ -1356,6 +1427,7 @@ int main()
         TestNativeMovementRejection();
         TestNativeMovementEligibilityRejection();
         TestClockServiceRejection();
+        TestLocalInputLeaseRejection();
         // Exercise historical factory layouts after the additive lease has
         // completed, so API5 cannot silently replace their module contract.
         TestRenderObservationV5FactoryRejection();

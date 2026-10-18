@@ -597,6 +597,23 @@ std::uint32_t DE_FrontendRuntimeReadV1(std::uint32_t field)
 {
     return ControllerAccessAllowed() ? coreStartup.ReadFrontendRuntime(field) : 0;
 }
+
+std::uint32_t DE_LocalInputRuntimeApiVersionV1()
+{
+    return DefinitiveLocalInputRuntime::ApiVersion;
+}
+std::uint32_t DE_LocalInputRuntimeStartV1()
+{
+    return ControllerAccessAllowed() && !movementAdapter && !client ? coreStartup.BeginFrontendRuntime(&moduleAnchor, true) : 0;
+}
+int DE_LocalInputRuntimeCaptureV1()
+{
+    return ControllerAccessAllowed() && coreStartup.CaptureLocalInputRuntime() ? 1 : 0;
+}
+std::uint32_t DE_LocalInputRuntimeReadV1(std::uint32_t field)
+{
+    return ControllerAccessAllowed() ? coreStartup.ReadLocalInputRuntime(field) : 0;
+}
 std::uint32_t DE_CorePersistentFrontendBegin()
 {
     return ControllerAccessAllowed() && !movementAdapter && !client ? coreStartup.BeginPersistentFrontend(&moduleAnchor) : 0;

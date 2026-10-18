@@ -6,6 +6,38 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
+**The current source connects the retained MTA bindings to local on-foot input.**
+The existing runtime selection now starts a separate renewable input service
+after the menu closes. It uses the same `CKeyBinds` manager and controller
+synthesis as Settings and the earlier movement work. A fresh menu must wait
+for that writer's actual retirement; final shutdown retires it before releasing
+bindings or the backend. There is no additional trial flag or walking timer.
+
+The optional local-input API keeps Adapter ABI6 and the existing frontend
+reports unchanged. Its 500 ms owner/generation/focus lease permits only forward,
+backward, left, right, walk and sprint. Lost eligibility or focus suspends it;
+a later menu closure deliberately rearms through released keys and fresh
+eligibility. The original 35-second movement trial and neutral frontend lease
+retain their limits. The combined path still needs a GTA milestone test;
+gameplay, networking and full client startup remain incomplete.
+
+Development now batches related wiring and checks it offline before a combined
+GTA test at an integration milestone. Individual source edits do not require
+relaunching the game.
+
+Show/Hide admission also tolerates a brief concurrent cache publication. The
+script retains the unused command sequence and requires a fresh coherent read
+before retrying, with three attempts at most. Stop takes priority over a deferred
+view command. Invalid replies or persistent refusal still retire the runtime;
+this does not establish the cause of the earlier missing GTA reopening command.
+
+This batch passed the normal Core build and both classic compile profiles,
+seven actual Core/GUI host cases, 180 worker cases, 1,454 script checks and
+2,463 Bridge checks. Native input tests passed 2,930 checks in an owned test
+process; the real module and x64 MTA consumer passed 1,763 and 1,782 checks.
+These are offline results. The combined menu, changed bindings and native
+movement path has not yet been tested in GTA.
+
 **The retained frontend runtime candidate keeps real MTA services across menu reopenings.**
 `package.ps1 -Mode Smoke -MtaCoreFrontendRuntime` selects a separate 58-file
 package; the flag defaults to false and excludes every other trial. After the
@@ -47,7 +79,7 @@ required. Earlier cursor, Settings and clock
 results below remain separate evidence. Gameplay, networking and full client
 startup remain unavailable, and the root **EXPERIMENTAL** notice stays.
 
-Offline validation passed 69 normal Core build guards and both classic compile
+The preceding menu-only candidate's offline validation passed 69 normal Core build guards and both classic compile
 profiles; seven actual MTA GUI host cases; 172 worker cases;
 1,361 script checks; 1,329 native callback and input-retirement checks in an
 owned test process; and 2,386 Bridge checks in a rejected non-game host.

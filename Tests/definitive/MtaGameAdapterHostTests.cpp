@@ -66,6 +66,13 @@ struct FixtureClockStats
     std::uint32_t control = 0;
 };
 
+struct FixtureLocalInputStats
+{
+    std::uint32_t               begins = 0, renewals = 0, reads = 0, ends = 0, resets = 0, shutdowns = 0, releases = 0, submissions = 0, canonicalReads = 0;
+    std::uint32_t               allowCleanup = 0, neutralBegin = 0;
+    mta::game_de::MtaInputState lastRenewed;
+};
+
 #if !defined(MTA_TEST_SHUTDOWN_FAILURE_MODULE)
 namespace
 {
@@ -134,6 +141,9 @@ void operator delete[](void* memory, std::size_t) noexcept
     #ifndef MTA_TEST_CLOCK_MODE
         #define MTA_TEST_CLOCK_MODE 0
     #endif
+    #ifndef MTA_TEST_LOCAL_INPUT_MODE
+        #define MTA_TEST_LOCAL_INPUT_MODE 0
+    #endif
 // This deliberately failing provider tests Core's DLL lifetime only. It is not
 // an engine writer, replacement Game DE implementation or gameplay fixture.
 namespace mta::game_de
@@ -153,6 +163,13 @@ namespace mta::game_de
         alignas(void*) unsigned char windowIdentity[sizeof(void*)]{};
         void (*v6OperationObserver)() noexcept = nullptr;
         alignas(void*) unsigned char facadeIdentity[sizeof(void*)]{};
+    #if MTA_TEST_LOCAL_INPUT_MODE
+        FixtureLocalInputStats*    localFixtureStats = nullptr;
+        LocalInputLeaseStateV1     fixtureLocalState;
+        MtaInputState              fixtureLocalInput;
+        MtaInput::DirectionHistory fixtureLocalHistory;
+        bool                       fixtureLocalHasInput = false, fixtureLocalUnknownDebt = false;
+    #endif
     #if MTA_TEST_CLOCK_MODE
         FixtureClockStats*  clockFixtureStats = nullptr;
         ClockServiceStateV1 fixtureClockState;
@@ -176,7 +193,18 @@ namespace mta::game_de
                     ++fixtureCounters[3];
                     fixtureCounters[10] = ++fixtureCounters[8];
                 }
+    #if MTA_TEST_LOCAL_INPUT_MODE
+                if (localFixtureStats)
+                    ++localFixtureStats->resets;
+                if ((fixtureLocalState.active || fixtureLocalState.bound || fixtureLocalUnknownDebt) &&
+                    (!localFixtureStats || !localFixtureStats->allowCleanup))
+                    return Status::Unsupported;
+                fixtureLocalState.active = fixtureLocalState.bound = 0;
+                fixtureLocalUnknownDebt = fixtureLocalHasInput = false;
+                return Status::Ok;
+    #else
                 return MTA_TEST_RENDER_MODE ? Status::Ok : Status::Unsupported;
+    #endif
             }
             Status Shutdown() noexcept override
             {
@@ -186,7 +214,11 @@ namespace mta::game_de
                     ++fixtureCounters[0];
                     fixtureCounters[11] = ++fixtureCounters[8];
                 }
-    #if MTA_TEST_CLOCK_MODE
+    #if MTA_TEST_LOCAL_INPUT_MODE
+                if (localFixtureStats)
+                    ++localFixtureStats->shutdowns;
+                return fixtureLocalState.active || fixtureLocalState.bound || fixtureLocalUnknownDebt ? Status::Unsupported : Status::Ok;
+    #elif MTA_TEST_CLOCK_MODE
                 if (clockFixtureStats)
                     ++clockFixtureStats->shutdowns;
                 const bool retained = fixtureClockState.hooked || fixtureClockState.retainedPeerThreads ||
@@ -200,6 +232,10 @@ namespace mta::game_de
             }
             void Release() noexcept override
             {
+    #if MTA_TEST_LOCAL_INPUT_MODE
+                if (localFixtureStats)
+                    ++localFixtureStats->releases;
+    #endif
     #if MTA_TEST_CLOCK_MODE
                 if (clockFixtureStats)
                     ++clockFixtureStats->releases;
@@ -223,8 +259,34 @@ namespace mta::game_de
             }
             Status PublishLocalObservation(const LocalObservation&) noexcept override { return Status::Unsupported; }
             Status GetLocalObservation(LocalObservation&) noexcept override { return Status::Unsupported; }
-            Status SubmitControlActions(const ControlActionFrame&) noexcept override { return Status::Unsupported; }
-            Status GetMtaInputState(MtaInputState&) noexcept override { return Status::Unsupported; }
+            Status SubmitControlActions(const ControlActionFrame& frame) noexcept override
+            {
+    #if MTA_TEST_LOCAL_INPUT_MODE
+                fixtureLocalInput.previous = fixtureLocalInput.current;
+                fixtureLocalInput.current = MtaInput::BuildControllerState(frame.heldActions, frame.context, fixtureLocalHistory);
+                fixtureLocalHasInput = true;
+                if (localFixtureStats)
+                    ++localFixtureStats->submissions;
+                return Status::Ok;
+    #else
+                (void)frame;
+                return Status::Unsupported;
+    #endif
+            }
+            Status GetMtaInputState(MtaInputState& state) noexcept override
+            {
+    #if MTA_TEST_LOCAL_INPUT_MODE
+                if (localFixtureStats)
+                    ++localFixtureStats->canonicalReads;
+                if (!fixtureLocalHasInput)
+                    return Status::NotInitialized;
+                state = fixtureLocalInput;
+                return Status::Ok;
+    #else
+                (void)state;
+                return Status::Unsupported;
+    #endif
+            }
             Status BindNativeInput() noexcept override { return Status::Unsupported; }
             Status ReadNativeControllerState(std::uint32_t, NativeControllerState&) noexcept override { return Status::Unsupported; }
             Status ReadNativeDeviceState(NativeDeviceState&) noexcept override { return Status::Unsupported; }
@@ -689,6 +751,72 @@ namespace mta::game_de
         return clean ? Status::Ok : Status::Unsupported;
     }
         #endif
+    #endif
+
+    #if MTA_TEST_LOCAL_INPUT_MODE
+    extern "C" __declspec(dllexport) void SetLocalInputFixtureStats(FixtureLocalInputStats* stats) noexcept
+    {
+        localFixtureStats = stats;
+    }
+    extern "C" Status BeginGameLocalInputLeaseV1(std::uint32_t version, IGameAdapter* adapter, const LocalInputLeaseRequestV1* request,
+                                                 LocalInputLeaseStateV1* output) noexcept
+    {
+        if (version != 1 || !adapter || !request || !output)
+            return Status::InvalidArgument;
+        if (localFixtureStats)
+        {
+            ++localFixtureStats->begins;
+            const MtaInputState neutral;
+            localFixtureStats->neutralBegin = std::memcmp(&neutral, &request->neutral, sizeof(neutral)) == 0;
+        }
+        if (MTA_TEST_LOCAL_INPUT_MODE == 4)
+        {
+            fixtureLocalUnknownDebt = true;
+            return Status::Unsupported;
+        }
+        fixtureLocalState = {};
+        fixtureLocalState.generation = 31;
+        fixtureLocalState.producerThread = GetCurrentThreadId();
+        fixtureLocalState.active = fixtureLocalState.bound = 1;
+        *output = fixtureLocalState;
+        return MTA_TEST_LOCAL_INPUT_MODE == 3 ? Status::Unsupported : Status::Ok;
+    }
+    extern "C" Status RenewGameLocalInputLeaseV1(std::uint32_t version, IGameAdapter* adapter, std::uint64_t generation, const MtaInputState* movement) noexcept
+    {
+        if (version != 1 || !adapter || generation != 31 || !movement)
+            return Status::InvalidArgument;
+        if (localFixtureStats)
+        {
+            ++localFixtureStats->renewals;
+            localFixtureStats->lastRenewed = *movement;
+        }
+        ++fixtureLocalState.renewals;
+        return Status::Ok;
+    }
+    extern "C" Status ReadGameLocalInputLeaseV1(std::uint32_t version, IGameAdapter* adapter, LocalInputLeaseStateV1* output) noexcept
+    {
+        if (version != 1 || !adapter || !output)
+            return Status::InvalidArgument;
+        if (localFixtureStats)
+            ++localFixtureStats->reads;
+        if (!fixtureLocalState.generation)
+            return Status::Unsupported;
+        *output = fixtureLocalState;
+        return Status::Ok;
+    }
+    extern "C" Status EndGameLocalInputLeaseV1(std::uint32_t version, IGameAdapter* adapter, std::uint64_t generation) noexcept
+    {
+        if (version != 1 || !adapter || generation != 31)
+            return Status::InvalidArgument;
+        if (localFixtureStats)
+            ++localFixtureStats->ends;
+        if (!localFixtureStats || !localFixtureStats->allowCleanup)
+            return Status::Unsupported;
+        fixtureLocalState.active = fixtureLocalState.bound = 0;
+        fixtureLocalState.revoked = 1;
+        fixtureLocalState.reason = static_cast<std::uint32_t>(LocalInputLeaseReason::Stopped);
+        return Status::Ok;
+    }
     #endif
 
     extern "C" IGameRenderObservation* CreateGameRenderObservation(std::uint32_t apiVersion, CCoreInterface* owner) noexcept
@@ -1248,6 +1376,94 @@ namespace
         Check(std::filesystem::path(path).filename() == L"game_de.dll", "adjacent module name remains fixed");
     }
 
+    void TestControlledLocalInputProvider(CCoreInterface* owner, const std::wstring& path, unsigned mode)
+    {
+        using namespace mta::game_de;
+        CGameAdapterModule host;
+        Check(host.Start(owner, path), "Core starts the existing ABI6 provider with an optional local input group");
+        const auto module = GetModuleHandleW(path.c_str());
+        using Configure = void (*)(FixtureLocalInputStats*) noexcept;
+        Configure  configure = nullptr;
+        const auto address = GetProcAddress(module, "SetLocalInputFixtureStats");
+        std::memcpy(&configure, &address, sizeof(configure));
+        Check(configure != nullptr, "local fixture exposes independent provider counters only");
+        FixtureLocalInputStats stats;
+        configure(&stats);
+        LocalInputLeaseStateV1 state;
+        state.generation = 99;
+        if (mode == 2)
+        {
+            Check(!host.BeginLocalInputLease(reinterpret_cast<void*>(static_cast<std::uintptr_t>(1)), state) && state.generation == 99 && !stats.begins &&
+                      host.GetError().find("complete optional local input") != std::string::npos,
+                  "all four optional local exports are required before provider admission");
+            Check(!host.RenewLocalInputLease(31) && !host.ReadLocalInputLease(state) && !host.EndLocalInputLease(31) && state.generation == 99,
+                  "an incomplete optional group cannot expose partial Read/Renew/End");
+            Check(host.SubmitControlActions({}), "unavailable local service leaves historical action staging usable");
+            host.Stop();
+            Check(!host.IsStarted() && !GetModuleHandleW(path.c_str()) && stats.shutdowns == 1 && stats.releases == 1,
+                  "missing optional local service leaves ABI6 shutdown and module unload usable");
+            return;
+        }
+        Check(host.SubmitControlActions({}), "stage real canonical neutral input before local lease admission");
+        const bool began = host.BeginLocalInputLease(reinterpret_cast<void*>(static_cast<std::uintptr_t>(1)), state);
+        Check(began == (mode == 1) && stats.begins == 1 && stats.neutralBegin == 1,
+              "local Begin uses neutral controller history without substituting a bounded trial");
+        if (mode == 4)
+        {
+            Check(state.generation == 99 && !host.EndLocalInputLease(0) && !host.EndLocalInputLease(31) && !stats.ends,
+                  "Unsupported without an owned token preserves output and cannot certify End(0)");
+            host.Stop();
+            Check(host.IsStarted() && GetModuleHandleW(path.c_str()) && stats.resets == 1 && !stats.shutdowns && !stats.releases,
+                  "unidentified partial admission retains the module while provider Reset is pending");
+            stats.allowCleanup = 1;
+            Check(host.Reset(), "provider Reset retry explicitly retires unidentified local ownership");
+            host.Stop();
+            Check(!host.IsStarted() && !GetModuleHandleW(path.c_str()) && stats.releases == 1,
+                  "only acknowledged unknown-token cleanup permits adapter unload");
+            return;
+        }
+        Check(state.generation == 31 && state.producerThread == GetCurrentThreadId(), "Begin retains a real provider cleanup token even on refusal");
+        Check(!host.BeginLocalInputLease(reinterpret_cast<void*>(static_cast<std::uintptr_t>(1)), state) && stats.begins == 1,
+              "pending local ownership refuses duplicate Begin before provider entry");
+        ClockServiceStateV1 clock;
+        Check(!host.BeginNativeClockService({}, clock) && host.GetError().find("local input lease") != std::string::npos && !host.BeginNativeMovementTrial() &&
+                  !host.EndNativeMovementTrial(),
+              "pending local input cannot overlap or be silently retired through clock or old bounded movement APIs");
+        LocalInputLeaseStateV1 foreignState;
+        foreignState.generation = 77;
+        bool        foreignRejected = false;
+        std::thread foreign([&]
+                            { foreignRejected = !host.ReadLocalInputLease(foreignState) && !host.RenewLocalInputLease(31) && !host.EndLocalInputLease(31); });
+        foreign.join();
+        Check(foreignRejected && foreignState.generation == 77 && !stats.reads && !stats.renewals && !stats.ends,
+              "all local loader operations preserve Core thread ownership and refused output");
+        if (mode == 1)
+        {
+            ControlActionFrame movement;
+            movement.heldActions = MtaInput::ActionBit(FORWARDS) | MtaInput::ActionBit(WALK);
+            Check(host.SubmitControlActions(movement) && !stats.renewals, "MTA staging alone cannot renew or publish a native local frame");
+            Check(host.RenewLocalInputLease(31) && stats.renewals == 1 && stats.canonicalReads == 1 && stats.lastRenewed.current.LeftStickY == -128 &&
+                      stats.lastRenewed.current.m_bPedWalk == 255 && !stats.lastRenewed.previous.LeftStickY,
+                  "explicit local renewal consumes the adapter's actual staged canonical walk history");
+            movement.heldActions = MtaInput::ActionBit(FORWARDS) | MtaInput::ActionBit(SPRINT);
+            Check(host.SubmitControlActions(movement) && stats.renewals == 1 && host.RenewLocalInputLease(31) && stats.renewals == 2 &&
+                      stats.lastRenewed.current.ButtonCross == 255 && !stats.lastRenewed.current.m_bPedWalk && stats.lastRenewed.previous.m_bPedWalk == 255,
+                  "next explicit renewal carries canonical sprint and preceding walk without rereading raw keys");
+        }
+        Check(!host.EndLocalInputLease(0) && !host.EndLocalInputLease(32) && !stats.ends, "stale and zero cleanup tokens never reach the provider");
+        Check(!host.EndLocalInputLease(31) && stats.ends == 1 && host.IsStarted(), "busy local End retains the owned adapter");
+        host.Stop();
+        Check(host.IsStarted() && GetModuleHandleW(path.c_str()) && stats.ends == 2 && !stats.shutdowns && !stats.releases,
+              "Stop retries busy End and retains all code before Shutdown/Release/unload");
+        stats.allowCleanup = 1;
+        Check(host.EndLocalInputLease(31) && host.ReadLocalInputLease(state) && !state.active && !state.bound && state.revoked,
+              "successful same-token cleanup keeps terminal local state readable");
+        Check(!host.RenewLocalInputLease(31) && host.EndLocalInputLease(31), "ended local input cannot renew while cleanup remains idempotent");
+        host.Stop();
+        Check(!host.IsStarted() && !GetModuleHandleW(path.c_str()) && stats.shutdowns == 1 && stats.releases == 1 && !host.IsGameplayReady(),
+              "only successful local retirement releases the module without promoting full gameplay");
+    }
+
     void TestControlledClockProvider(CCoreInterface* owner, const std::wstring& path, unsigned mode)
     {
         using namespace mta::game_de;
@@ -1287,9 +1503,12 @@ namespace
         Check(!observedCoreAllocations.load(), "clock post-Begin status diagnostics allocate nothing after a provider can retain stopped heap peers");
         observedCoreAllocations.store(0);
         observeCoreAllocations.store(true);
+        LocalInputLeaseStateV1 localInputState;
+        localInputState.generation = 99;
         const bool excluded = !host.BeginNativeClockService({}, state) && !host.BeginNativeRenderObservation() &&
                               !host.BeginNativeRenderDispatchObservation(RenderObservationRoute::D3D12) && !host.BeginNativeMovementTrial() &&
-                              !host.StartAdjacent(owner) && host.GameplayUnavailableReason().empty();
+                              !host.BeginLocalInputLease(reinterpret_cast<void*>(static_cast<std::uintptr_t>(1)), localInputState) &&
+                              localInputState.generation == 99 && !host.StartAdjacent(owner) && host.GameplayUnavailableReason().empty();
         observeCoreAllocations.store(false);
         Check(excluded && stats.begins == 1 && !observedCoreAllocations.load(),
               "an active or failed clock attempt excludes duplicate services and loader paths without allocating recovery diagnostics");
@@ -2890,7 +3109,7 @@ int wmain(int argc, wchar_t** argv)
 {
     try
     {
-        if (argc != 2 && argc != 3 && argc != 6 && argc != 11 && argc != 18 && argc != 26 && argc != 34 && argc != 42 && argc != 50 && argc != 54)
+        if (argc != 2 && argc != 3 && argc != 6 && argc != 11 && argc != 18 && argc != 26 && argc != 34 && argc != 42 && argc != 50 && argc != 54 && argc != 58)
             throw std::runtime_error("Pass the absolute path of the built Game DE module");
         const std::wstring modulePath = argv[1];
         // The adapter stores this identity but must never dereference it. This
@@ -2946,9 +3165,12 @@ int wmain(int argc, wchar_t** argv)
             for (unsigned mode = 1; mode <= 8; ++mode)
                 TestDeviceWindowLeaseProvider(owner, argv[mode + 41], mode, argv[49]);
         }
-        if (argc == 54)
+        if (argc >= 54)
             for (unsigned mode = 1; mode <= 4; ++mode)
                 TestControlledClockProvider(owner, argv[mode + 49], mode);
+        if (argc == 58)
+            for (unsigned mode = 1; mode <= 4; ++mode)
+                TestControlledLocalInputProvider(owner, argv[mode + 53], mode);
     #else
         CGameAdapterModule host;
         Check(!host.Start(owner, modulePath), "x86 must reject the x64 backend before loading it");

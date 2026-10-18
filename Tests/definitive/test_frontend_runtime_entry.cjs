@@ -9,7 +9,7 @@ const vm = require('node:vm');
 const scriptPath = path.resolve(__dirname, '../../Client/definitive/game-adapter/index.js');
 const runtimeSource = () => {
     const source = fs.readFileSync(scriptPath, 'utf8');
-    const first = source.indexOf('function runFrontendRuntime(');
+    const first = source.indexOf('function validateMtaLocalInputRuntimeSample(');
     const last = source.indexOf('\ntry {', first);
     assert.ok(first >= 0 && last > first, 'extract the production runtime function without replacing its validator');
     return source.slice(first, last);
@@ -39,11 +39,13 @@ function viewState(generation, retired = false) {
 function protocolFixture(options = {}) {
     const generation = 7;
     const commands = [], trace = [];
+    const viewCommandAttempts = new Map();
     let polls = 0, phase = 2, viewGeneration = 0, viewsRetired = 0, showAcks = 0, hideAcks = 0;
     let accepted = 0, acceptedCommand = 0, acknowledged = 0, acknowledgedCommand = 0;
     let pending = null, stage = 1, coreSamples = 1, viewSamples = 0, guiHides = 0, focusHides = 0;
     let lastCoreGeneration = 0, lastCoreRetired = 0, backendPinned = false, hostExpired = false;
     let snapshot = null, captured = null, mutated = false, heartbeatRejected = false;
+    let localSnapshot = null, localCaptured = null;
     let stopSequence = 0, failure = 0, reason = 0, closeRetirementPending = null, viewStopReason = 1;
     const takeCore = nextStage => {
         stage = nextStage;
@@ -93,15 +95,64 @@ function protocolFixture(options = {}) {
             mutated = true;
         }
         snapshot = values;
+        // This is a separate copied Core32 cache. It deliberately carries no
+        // synthetic native proof into the existing Runtime416 publication.
+        const local = Array(32).fill(0);
+        Object.assign(local, { 0: 1, 1: 1, 2: 77, 21: 1 });
+        if (!options.localNeverConfigured) {
+            Object.assign(local, { 1: terminal ? 1 : phase === 9 ? 5 : phase === 4 ? 4 : viewGeneration ? 3 : 2,
+                3: terminal ? 0 : 1, 4: !terminal && phase === 2 ? 1 : 0,
+                12: 500, 17: 1, 18: 1, 19: terminal ? 0 : 1, 23: 1,
+                24: 15, 25: 15, 26: 1, 28: 6, 30: 6 });
+            if (!terminal && phase === 2 && viewGeneration) {
+                Object.assign(local, { 5: 1, 6: 701, 8: 1, 9: 1, 13: polls,
+                    15: 1, 18: 0, 21: 0 });
+            }
+            if (!terminal && phase === 9) Object.assign(local, { 5: 1, 6: 701, 9: 1, 20: 1, 21: 0 });
+            // Attempted and generation are historical facts. Successful End
+            // retains them; absence of active/bound/debt proves retirement.
+            if (terminal) Object.assign(local, { 5: 1, 6: 701, 10: 1, 11: 5, 13: polls, 27: 1 });
+        }
+        options.mutateLocalEvery?.(local, { polls, phase, terminal, viewGeneration });
+        if (options.mutateLocal && options.mutateLocalAt === polls)
+            options.mutateLocal(local, { polls, phase, terminal, viewGeneration });
+        localSnapshot = local;
     };
     const functions = {
         DE_FrontendRuntimeApiVersionV1: () => options.apiVersion ?? 1,
         DE_FrontendRuntimeStartV1: () => options.startResult ?? generation,
+        DE_LocalInputRuntimeApiVersionV1: () => options.localApiVersion ?? 1,
+        DE_LocalInputRuntimeStartV1: () => {
+            trace.push({ kind: 'localStart', polls });
+            return options.localStartResult ?? generation;
+        },
+        DE_LocalInputRuntimeCaptureV1: () => {
+            trace.push({ kind: 'localCapture', polls });
+            if (options.localCaptureThrowAt === polls) throw new Error('owned local capture failure');
+            if (options.localCaptureZeroAt?.includes(polls)) return 0;
+            if (options.localCaptureStatusAt === polls) return 2;
+            localCaptured = localSnapshot.slice();
+            return 1;
+        },
+        DE_LocalInputRuntimeReadV1: field => {
+            trace.push({ kind: 'localRead', polls, field });
+            if (options.localReadThrowAt === polls) throw new Error('owned local read failure');
+            return localCaptured[field];
+        },
         DE_FrontendRuntimeCommandV1: (session, sequence, command) => {
             trace.push({ kind: 'command', polls, session, sequence, command });
             commands.push({ session, sequence, command });
             if (session !== generation || sequence <= accepted || command < 1 || command > 3) return 0;
             if (command === 3 && options.rejectStop) { heartbeatRejected = true; return 0; }
+            if (command !== 3 && options.viewCommandResult) {
+                const key = sequence + ':' + command;
+                const attempt = (viewCommandAttempts.get(key) || 0) + 1;
+                viewCommandAttempts.set(key, attempt);
+                // Refusal has no acceptance side effects: the same unused
+                // sequence remains available to a fresh retry or to Stop.
+                const result = options.viewCommandResult({ polls, session, sequence, command, attempt });
+                if (result !== undefined && result !== 1) return result;
+            }
             accepted = sequence; acceptedCommand = command; pending = { sequence, command };
             if (command === 3) stopSequence = sequence;
             return 1;
@@ -162,15 +213,17 @@ function protocolFixture(options = {}) {
             return phase === 7 || phase === 8 ? 1 : 0;
         },
         DE_FrontendRuntimeCaptureV1: () => {
-            trace.push({ kind: 'capture', polls });
-            if (options.captureZeroAt?.includes(polls)) return 0;
+            const result = options.captureZeroAt?.includes(polls) ? 0 : 1;
+            trace.push({ kind: 'capture', polls, result });
+            if (!result) return 0;
             captured = snapshot.slice();
             return 1;
         },
         DE_FrontendRuntimeReadV1: field => captured[field]
     };
+    for (const name of options.missingFunctions || []) delete functions[name];
     return { functions, commands, trace, generation, get polls() { return polls; },
-        get values() { return snapshot; } };
+        get values() { return snapshot; }, get localValues() { return localSnapshot; } };
 }
 
 function execute(options = {}) {
@@ -207,7 +260,8 @@ function execute(options = {}) {
         emit: event => events.push(copy(event)), enterPhase: () => {}, HOST: 'sa_unreal', MODE: 'smoke', CLEO: { version: '1.5.1' }
     };
     try {
-        vm.runInNewContext(runtimeSource() + '\nrunFrontendRuntime(__bind, __chord, "Ctrl+Shift+End");', context,
+        vm.runInNewContext(runtimeSource() + '\nrunFrontendRuntime(__bind, __chord, "Ctrl+Shift+End", ' +
+            JSON.stringify(options.localInput ?? false) + ');', context,
             { timeout: options.timeout ?? 1000 });
     } catch (caught) { error = caught; }
     return { fixture, events, waits, error, lastDate,
@@ -230,6 +284,17 @@ module.exports = function frontendRuntimeEntryTests({ test, runEntry }) {
         if (pattern) assert.match(result.finished.error || '', pattern);
         assert.match(String(result.error), /without a verified clean requested stop/);
         assert.equal(result.fixture.values[41], 1);
+    };
+    const freshViewCommands = result => {
+        const trace = result.fixture.trace;
+        const attempted = new Set();
+        for (const call of trace.filter(value => value.kind === 'command' && value.command !== 3)) {
+            const key = call.sequence + ':' + call.command;
+            if (!attempted.has(key)) { attempted.add(key); continue; }
+            const capture = trace.find(value => value.kind === 'capture' && value.polls === call.polls && value.result === 1);
+            assert.ok(capture && trace.indexOf(capture) < trace.indexOf(call),
+                'view retry at poll ' + call.polls + ' follows its own successful fresh capture');
+        }
     };
     test('frontend Runtime416 retains one Core/session through debounced hide and fresh show', () => {
         const result = execute({ stopAt: 10, keys: poll => [3, 4, 5, 7, 8].includes(poll) ? [17, 16, 120] : [] });
@@ -363,6 +428,75 @@ module.exports = function frontendRuntimeEntryTests({ test, runEntry }) {
         assert.ok(result.fixture.trace.filter(value => value.kind === 'capture').length > result.finished.samples);
         assert.deepEqual(result.fixture.commands.map(value => value.command), [1, 3]);
     });
+    test('frontend retries a transient Show refusal with the same unused sequence and fresh capture', () => {
+        const result = execute({ stopAt: 7, viewCommandResult: ({ command, attempt }) => command === 1 && attempt === 1 ? 0 : 1 });
+        clean(result);
+        assert.deepEqual(result.fixture.commands.map(value => [value.sequence, value.command]), [[1, 1], [1, 1], [2, 3]]);
+        assert.deepEqual(result.fixture.trace.filter(value => value.kind === 'command').map(value => value.polls), [1, 2, 7]);
+        assert.equal(result.finished.values[24], 1);
+        assert.equal(result.events.filter(value => value.event === 'frontend_runtime_command').length, 1);
+        freshViewCommands(result);
+    });
+    test('frontend retries a transient Hide refusal without replacing the accepted Show sequence', () => {
+        const result = execute({ stopAt: 8, keys: poll => poll === 3 ? [17, 16, 120] : [],
+            viewCommandResult: ({ command, attempt }) => command === 2 && attempt === 1 ? 0 : 1 });
+        clean(result);
+        assert.deepEqual(result.fixture.commands.map(value => [value.sequence, value.command]), [[1, 1], [2, 2], [2, 2], [3, 3]]);
+        assert.deepEqual(result.fixture.trace.filter(value => value.kind === 'command').map(value => value.polls), [1, 3, 4, 8]);
+        assert.equal(result.finished.values[25], 1);
+        assert.equal(result.finished.values[23], 1);
+        freshViewCommands(result);
+    });
+    test('frontend bounds permanent Show refusal to three attempts then reuses the unused sequence for Stop', () => {
+        const result = execute({ viewCommandResult: () => 0 });
+        failedClean(result, /view command was rejected/);
+        assert.deepEqual(result.fixture.commands.map(value => [value.sequence, value.command]), [[1, 1], [1, 1], [1, 1], [1, 3]]);
+        assert.deepEqual(result.fixture.trace.filter(value => value.kind === 'command').map(value => value.polls), [1, 2, 3, 3]);
+        assert.equal(result.finished.values[17], 1);
+        assert.equal(result.finished.values[11], 1);
+        assert.equal(result.finished.values[24], 0);
+        freshViewCommands(result);
+    });
+    test('frontend bounds permanent Hide refusal to three attempts without skipping the next Stop sequence', () => {
+        const result = execute({ keys: poll => poll === 3 ? [17, 16, 120] : [],
+            viewCommandResult: ({ command }) => command === 2 ? 0 : 1 });
+        failedClean(result, /view command was rejected/);
+        assert.deepEqual(result.fixture.commands.map(value => [value.sequence, value.command]),
+            [[1, 1], [2, 2], [2, 2], [2, 2], [2, 3]]);
+        assert.equal(result.finished.values[17], 2);
+        assert.equal(result.finished.values[11], 2);
+        assert.equal(result.finished.values[25], 0);
+        assert.equal(result.finished.values[23], 1);
+        freshViewCommands(result);
+    });
+    test('frontend End during deferred Show has priority over every later retry', () => {
+        const result = execute({ stopAt: 2, viewCommandResult: () => 0 });
+        clean(result);
+        assert.deepEqual(result.fixture.commands.map(value => [value.sequence, value.command]), [[1, 1], [1, 3]]);
+        assert.equal(result.finished.values[24], 0);
+        assert.equal(result.finished.values[17], 1);
+        assert.equal(result.events.filter(value => value.event === 'frontend_runtime_command').length, 0);
+        freshViewCommands(result);
+    });
+    test('frontend invalid Show admission status requests Stop immediately without a retry', () => {
+        const result = execute({ viewCommandResult: () => 2 });
+        failedClean(result, /view command status unavailable/);
+        assert.deepEqual(result.fixture.commands.map(value => [value.sequence, value.command]), [[1, 1], [1, 3]]);
+        assert.deepEqual(result.fixture.trace.filter(value => value.kind === 'command').map(value => value.polls), [1, 1]);
+        assert.equal(result.finished.values[24], 0);
+        freshViewCommands(result);
+    });
+    test('frontend deferred Show never retries a cached publication after capture refuses freshness', () => {
+        const result = execute({ stopAt: 8, captureZeroAt: [2, 3],
+            viewCommandResult: ({ command, attempt }) => command === 1 && attempt === 1 ? 0 : 1 });
+        clean(result);
+        assert.deepEqual(result.fixture.commands.map(value => [value.sequence, value.command]), [[1, 1], [1, 1], [2, 3]]);
+        assert.deepEqual(result.fixture.trace.filter(value => value.kind === 'command').map(value => value.polls), [1, 4, 8]);
+        assert.deepEqual(result.fixture.trace.filter(value => value.kind === 'capture' && [2, 3].includes(value.polls))
+            .map(value => [value.polls, value.result]), [[2, 0], [3, 0]]);
+        assert.equal(result.finished.values[24], 1);
+        freshViewCommands(result);
+    });
     for (const errorKind of ['date', 'input', 'native', 'wait']) test('frontend ' + errorKind + ' failure keeps polling until actual retirement', () => {
         const result = execute({ errorKind });
         failedClean(result, new RegExp('owned ' + errorKind + ' failure'));
@@ -486,14 +620,205 @@ module.exports = function frontendRuntimeEntryTests({ test, runEntry }) {
         assert.equal(result.fixture.values[34], 0);
         assert.equal(result.fixture.values[41], 0);
     });
-    test('frontend full entry activates only after F9 release and uses no clock or transport route', () => {
+    test('frontend legacy direct entry never looks up or publishes the optional local-input group', () => {
+        const result = execute({ missingFunctions: ['DE_LocalInputRuntimeApiVersionV1', 'DE_LocalInputRuntimeStartV1',
+            'DE_LocalInputRuntimeCaptureV1', 'DE_LocalInputRuntimeReadV1'] });
+        clean(result);
+        assert.ok(!result.fixture.trace.some(value => value.kind.startsWith('local')));
+        assert.ok(!result.events.some(value => value.event === 'frontend_local_input_runtime_sample'));
+        assert.equal(result.finished.local_input, false);
+        assert.equal(result.finished.local_input_values, null);
+        assert.equal(result.finished.local_input_samples, 0);
+        assert.equal(result.finished.local_input_active_observed, false);
+        assert.equal(result.finished.local_input_cleanup_passed, true);
+    });
+    test('frontend opted-in client keeps local Core32 separate and retires active hidden input before Stop', () => {
+        const result = execute({ localInput: true, stopAt: 10,
+            keys: poll => [3, 4, 5, 7, 8].includes(poll) ? [17, 16, 120] : [] });
+        clean(result);
+        assert.deepEqual(result.fixture.commands.map(value => value.command), [1, 2, 1, 3]);
+        assert.equal(result.fixture.trace.filter(value => value.kind === 'localStart').length, 1);
+        const started = result.events.find(value => value.event === 'frontend_runtime_started');
+        assert.equal(started.local_input, true);
+        assert.equal(started.local_input_api, 1);
+        assert.equal(started.local_input_fields, 32);
+        const local = result.events.filter(value => value.event === 'frontend_local_input_runtime_sample');
+        assert.ok(local.some(value => value.values[1] === 3 && value.values[8] === 1 && value.values[15] === 1));
+        assert.ok(local.some(value => value.values[1] === 4 && value.values[8] === 0));
+        assert.ok(local.every(value => value.schema === 'mta_local_input_runtime_v1' && value.generation === 7 &&
+            value.values.length === 32 && value.values[2] === 77 && !value.network_active &&
+            !value.gameplay_ready && !value.full_mta_ready));
+        assert.equal(result.finished.local_input, true);
+        assert.equal(result.finished.local_input_active_observed, true);
+        assert.equal(result.finished.local_input_cleanup_passed, true);
+        assert.equal(result.finished.local_input_values[1], 1);
+        assert.ok([3, 4, 8, 9, 20].every(field => result.finished.local_input_values[field] === 0));
+        assert.equal(result.finished.local_input_values[5], 1);
+        assert.equal(result.finished.local_input_values[27], 1);
+        assert.equal(result.finished.local_input_values[18], 1);
+        assert.equal(result.finished.local_input_values[21], 1);
+        assert.ok(result.finished.local_input_samples >= local.length);
+        for (const read of result.fixture.trace.filter(value => value.kind === 'localRead')) {
+            const trace = result.fixture.trace;
+            assert.ok(trace.findIndex(value => value.kind === 'poll' && value.polls === read.polls) < trace.indexOf(read));
+            assert.ok(trace.findIndex(value => value.kind === 'localCapture' && value.polls === read.polls) < trace.indexOf(read));
+        }
+    });
+    test('frontend local-input opt-in does not invent active gameplay when only the menu was shown', () => {
+        const result = execute({ localInput: true });
+        clean(result);
+        assert.equal(result.finished.local_input_active_observed, false);
+        assert.equal(result.finished.local_input_cleanup_passed, true);
+        assert.ok(result.events.some(value => value.event === 'frontend_local_input_runtime_sample'));
+    });
+    test('frontend never-configured local input may retire Disabled without a synthetic neutral producer sample', () => {
+        const result = execute({ localInput: true, localNeverConfigured: true });
+        clean(result);
+        assert.equal(result.finished.local_input_values[3], 0);
+        assert.equal(result.finished.local_input_values[18], 0);
+        assert.equal(result.finished.local_input_cleanup_passed, true);
+    });
+    test('frontend local-input retirement preserves its successful native attempt and revoked historical token', () => {
+        const result = execute({ localInput: true });
+        clean(result);
+        const values = result.finished.local_input_values;
+        assert.equal(values[5], 1);
+        assert.equal(values[6], 701);
+        assert.equal(values[7], 0);
+        assert.equal(values[10], 1);
+        assert.ok(values[11] > 0);
+        assert.ok(values[27] > 0);
+        assert.equal(values[18], 1);
+        assert.equal(values[21], 1);
+        assert.ok([8, 9, 20].every(field => values[field] === 0));
+        assert.equal(result.finished.local_input_cleanup_passed, true);
+    });
+    test('frontend qualified provider Reset may retire an attempted local Begin without inventing a native token', () => {
+        const result = execute({ localInput: true, mutateLocalAt: 11, mutateLocal: values => {
+            Object.assign(values, { 5: 1, 6: 0, 7: 0, 10: 0, 11: 0, 18: 1, 21: 1, 27: 3 });
+        } });
+        clean(result);
+        const values = result.finished.local_input_values;
+        assert.equal(values[5], 1);
+        assert.equal(values[6], 0);
+        assert.equal(values[7], 0);
+        assert.equal(values[10], 0);
+        assert.equal(values[11], 0);
+        assert.equal(values[27], 3);
+        assert.equal(result.finished.local_input_cleanup_passed, true);
+    });
+    test('frontend local-input API mismatch rejects before starting either runtime variant', () => {
+        const result = execute({ localInput: true, localApiVersion: 2 });
+        assert.match(String(result.error), /local-input runtime API1/);
+        assert.equal(result.fixture.polls, 0);
+        assert.ok(!result.fixture.trace.some(value => value.kind === 'localStart'));
+        assert.equal(result.finished, undefined);
+    });
+    for (const name of ['DE_LocalInputRuntimeApiVersionV1', 'DE_LocalInputRuntimeStartV1',
+        'DE_LocalInputRuntimeCaptureV1', 'DE_LocalInputRuntimeReadV1'])
+        test('frontend local-input opt-in refuses missing optional export ' + name + ' before admission', () => {
+            const result = execute({ localInput: true, missingFunctions: [name] });
+            assert.ok(result.error);
+            assert.equal(result.fixture.polls, 0);
+            assert.ok(!result.fixture.trace.some(value => value.kind === 'localStart'));
+            assert.equal(result.finished, undefined);
+        });
+    test('frontend local-input failed Start does not fall back to the menu-only owner', () => {
+        const result = execute({ localInput: true, localStartResult: 0 });
+        assert.match(String(result.error), /could not start/);
+        assert.equal(result.fixture.trace.filter(value => value.kind === 'localStart').length, 1);
+        assert.equal(result.fixture.polls, 0);
+        assert.equal(result.finished, undefined);
+    });
+    for (const [name, mutate, pattern] of [
+        ['malformed unsigned word', values => { values[28] = -1; }, /local-input runtime report/],
+        ['unknown failure code', values => { values[22] = 12; }, /local-input runtime report/],
+        ['replaced Core owner', values => { values[2] = 78; }, /replaced its retained owner/],
+        ['unqualified active lease', values => { values[8] = 1; }, /unqualified active input/],
+        ['cleanup owner erased', values => { values[1] = 5; values[21] = 0; }, /pending cleanup owner/]
+    ]) test('frontend local-input ' + name + ' requests Stop and keeps polling until real retirement', () => {
+        const result = execute({ localInput: true, mutateLocalAt: 2, mutateLocal: mutate });
+        failedClean(result, pattern);
+        assert.ok(result.fixture.trace.some(value => value.kind === 'poll' && value.polls > 2));
+        assert.equal(result.finished.local_input_cleanup_passed, true);
+        assert.equal(result.finished.local_input_values[1], 1);
+        assert.deepEqual(result.fixture.commands.map(value => value.command), [1, 3]);
+    });
+    for (const [name, options, pattern] of [
+        ['invalid capture status', { localCaptureStatusAt: 2 }, /local-input capture status/],
+        ['capture exception', { localCaptureThrowAt: 2 }, /owned local capture failure/],
+        ['read exception', { localReadThrowAt: 2 }, /owned local read failure/]
+    ]) test('frontend local-input ' + name + ' does not unwind a live runtime owner', () => {
+        const result = execute({ localInput: true, ...options });
+        failedClean(result, pattern);
+        assert.ok(result.fixture.polls > 2);
+        assert.equal(result.finished.local_input_cleanup_passed, true);
+    });
+    test('frontend local-input transient capture refusal preserves the last valid copied cache', () => {
+        const result = execute({ localInput: true, localCaptureZeroAt: [2, 4, 6, 8] });
+        clean(result);
+        assert.ok(result.finished.local_input_samples > 0);
+        assert.ok(result.fixture.trace.filter(value => value.kind === 'localCapture').length > result.finished.local_input_samples);
+    });
+    test('frontend local-input owner must match the retained Core even on its first publication', () => {
+        const result = execute({ localInput: true, mutateLocalAt: 1, mutateLocal: values => { values[2] = 78; } });
+        failedClean(result, /replaced its retained owner/);
+        assert.deepEqual(result.fixture.commands.map(value => value.command), [3]);
+    });
+    for (const [name, mutate] of [
+        ['Suspended is not Disabled', values => { values[1] = 4; }],
+        ['configuration retained', values => { values[3] = 1; }],
+        ['enablement retained', values => { values[4] = 1; }],
+        ['attempted cleanup without End or Reset attempt', values => { values[27] = 0; }],
+        ['historical native token not revoked', values => { values[10] = 0; }],
+        ['historical native token lacks retirement reason', values => { values[11] = 0; }],
+        ['zero-token attempted cleanup without End or Reset attempt', values => {
+            Object.assign(values, { 6: 0, 7: 0, 10: 0, 11: 0, 27: 0 });
+        }],
+        ['native binding retained', values => { values[9] = 1; }],
+        ['cleanup still pending', values => { values[20] = 1; values[21] = 0; }],
+        ['cleanup incomplete', values => { values[21] = 0; }],
+        ['configured canonical frame not neutral', values => { values[18] = 0; }]
+    ]) test('frontend local-input terminal ' + name + ' cannot borrow clean Runtime416 unload flags', () => {
+        const result = execute({ localInput: true, mutateLocalAt: 11, mutateLocal: mutate });
+        assert.equal(result.finished?.passed, false);
+        assert.equal(result.finished.cleanup_passed, false);
+        assert.equal(result.finished.local_input_cleanup_passed, false);
+        assert.equal(result.finished.values[41], 1);
+        assert.ok(result.error);
+    });
+    test('frontend missing final local-input cache cannot reuse its previous Suspended sample', () => {
+        const result = execute({ localInput: true, localCaptureZeroAt: [11] });
+        assert.equal(result.finished?.passed, false);
+        assert.equal(result.finished.cleanup_passed, false);
+        assert.equal(result.finished.local_input_cleanup_passed, false);
+        assert.match(result.finished.error, /local-input terminal evidence unavailable/);
+        assert.ok(result.error);
+    });
+    test('frontend local retained cleanup keeps polling without publishing a final safe unload', () => {
+        const result = execute({ localInput: true, retainedCleanup: true, stopAt: 3, timeout: 30 });
+        assert.match(String(result.error), /Script execution timed out/);
+        assert.equal(result.finished, undefined);
+        assert.equal(result.fixture.values[1], 9);
+        assert.equal(result.fixture.localValues[1], 5);
+        assert.equal(result.fixture.localValues[20], 1);
+        assert.equal(result.fixture.localValues[21], 0);
+    });
+    test('frontend full entry activates local input only after F9 release and uses no clock or transport route', () => {
         const fixture = protocolFixture();
         const result = runEntry({ mtaCoreFrontendRuntime: true, functions: fixture.functions,
             keyFrames: [[17, 16, 120], ...Array.from({ length: 9 }, () => []), [17, 16, 35], []] });
         const finished = result.logs.find(value => value.event === 'frontend_runtime_finished');
         assert.equal(finished?.passed, true);
         assert.ok(!result.logs.some(value => value.event === 'adapter_failed'));
-        assert.equal(result.calls.filter(value => value[0] === 'DE_FrontendRuntimeStartV1').length, 1);
+        assert.equal(result.calls.filter(value => value[0] === 'DE_LocalInputRuntimeStartV1').length, 1);
+        assert.equal(result.calls.filter(value => value[0] === 'DE_FrontendRuntimeStartV1').length, 0);
+        assert.equal(result.calls.filter(value => value[0] === 'DE_LocalInputRuntimeApiVersionV1').length, 1);
+        assert.equal(finished.local_input, true);
+        assert.equal(finished.local_input_cleanup_passed, true);
+        assert.equal(finished.local_input_active_observed, false);
+        assert.equal(finished.local_input_values.length, 32);
+        assert.ok(result.logs.some(value => value.event === 'frontend_local_input_runtime_sample'));
         assert.ok(result.runtimeAccess.every(value => value.frame >= 1));
         assert.ok(!result.calls.some(value => /Clock|DE_ConnectLocal|DE_Controller|DE_CoreStartupBegin|CREATE_CHAR/.test(value[0])));
         assert.deepEqual(fixture.commands.map(value => value.command), [1, 3]);
@@ -516,6 +841,28 @@ module.exports = function frontendRuntimeEntryTests({ test, runEntry }) {
         const result = runEntry({ mtaCoreFrontendRuntime: true, functions: fixture.functions, keyFrames: [[17, 16, 120], []] });
         assert.equal(fixture.polls, 0);
         assert.ok(!result.calls.some(value => value[0] === 'DE_FrontendRuntimeStartV1'));
+        assert.ok(!result.calls.some(value => value[0] === 'DE_LocalInputRuntimeStartV1'));
         assert.match(result.logs.at(-1).error, /runtime API1/);
     });
+    test('frontend main runtime selection refuses incompatible local API without starting the menu-only variant', () => {
+        const fixture = protocolFixture({ localApiVersion: 2 });
+        const result = runEntry({ mtaCoreFrontendRuntime: true, functions: fixture.functions,
+            keyFrames: [[17, 16, 120], []] });
+        assert.equal(fixture.polls, 0);
+        assert.ok(!result.calls.some(value => /(?:Frontend|LocalInput)RuntimeStartV1/.test(value[0])));
+        assert.match(result.logs.at(-1).error, /local-input runtime API1/);
+        assert.ok(!result.logs.some(value => value.event === 'frontend_runtime_started'));
+    });
+    for (const missing of ['DE_LocalInputRuntimeApiVersionV1', 'DE_LocalInputRuntimeStartV1',
+        'DE_LocalInputRuntimeCaptureV1', 'DE_LocalInputRuntimeReadV1'])
+        test('frontend main runtime selection rejects absent local service ' + missing, () => {
+            const fixture = protocolFixture({ missingFunctions: [missing] });
+            const result = runEntry({ mtaCoreFrontendRuntime: true, functions: fixture.functions,
+                keyFrames: [[17, 16, 120], []] });
+            assert.equal(fixture.polls, 0);
+            assert.ok(!result.calls.some(value => /(?:Frontend|LocalInput)RuntimeStartV1/.test(value[0])));
+            assert.equal(result.logs.at(-1).event, 'adapter_failed');
+            assert.match(result.logs.at(-1).error, new RegExp(missing));
+            assert.ok(result.runtimeAccess.every(value => value.frame >= 1));
+        });
 };

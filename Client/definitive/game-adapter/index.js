@@ -252,7 +252,7 @@ function runAdapter() {
     if (bindRuntime() !== 1) throw new Error('CLEO runtime lifecycle binding failed');
     enterPhase('runtime_bound');
     if (MTA_CORE_FRONTEND_RUNTIME) {
-        runFrontendRuntime(bind, chordHeld, stopKey);
+        runFrontendRuntime(bind, chordHeld, stopKey, true);
         return;
     }
     if (MTA_CORE_CLOCK_SET_REFERENCE) {
@@ -1886,15 +1886,36 @@ function runAdapter() {
 
 // The script transports commands and copied evidence only. Core owns every
 // view and its native cleanup; a hidden view never implies a stopped session.
-function runFrontendRuntime(bind, chordHeld, stopKey) {
+function validateMtaLocalInputRuntimeSample(values) {
+    const flags = [3, 4, 5, 8, 9, 10, 17, 18, 19, 20, 21, 23, 26];
+    if (values.length !== 32 || values.some(value => !Number.isInteger(value) || value < 0 || value > 0xffffffff) ||
+        values[0] !== 1 || values[1] < 1 || values[1] > 6 || !values[2] || flags.some(field => values[field] > 1) ||
+        values[11] > 7 || ![0, 500].includes(values[12]) || values[22] > 11 || (values[20] && values[21]))
+        throw new Error('Invalid MTA local-input runtime report');
+    if (values[8] && (![3, 4, 5, 9, 17, 19, 23, 26].every(field => values[field] === 1) ||
+        values[10] || values[11] || !(values[6] || values[7]) || values[12] !== 500 || values[1] !== 3))
+        throw new Error('MTA local-input runtime claimed unqualified active input');
+    if (values[1] === 5 && (!values[20] || values[21]))
+        throw new Error('MTA local-input runtime lost its pending cleanup owner');
+    if (values[21] && ([8, 9, 20].some(field => values[field]) ||
+        (values[5] && (!values[18] || !values[27] || ((values[6] || values[7]) && (!values[10] || !values[11]))))))
+        throw new Error('MTA local-input runtime claimed cleanup before native retirement');
+    return values;
+}
+
+function runFrontendRuntime(bind, chordHeld, stopKey, localInput = false) {
     const version = bind('DE_FrontendRuntimeApiVersionV1', 'X64U32');
-    const start = bind('DE_FrontendRuntimeStartV1', 'X64U32');
+    const start = bind(localInput ? 'DE_LocalInputRuntimeStartV1' : 'DE_FrontendRuntimeStartV1', 'X64U32');
     const command = bind('DE_FrontendRuntimeCommandV1');
     const heartbeat = bind('DE_FrontendRuntimeHeartbeatV1');
     const poll = bind('DE_FrontendRuntimePollV1');
     const capture = bind('DE_FrontendRuntimeCaptureV1');
     const read = bind('DE_FrontendRuntimeReadV1', 'X64U32');
+    const localCapture = localInput ? bind('DE_LocalInputRuntimeCaptureV1') : null;
+    const localRead = localInput ? bind('DE_LocalInputRuntimeReadV1', 'X64U32') : null;
     if (version() !== 1) throw new Error('MTA frontend runtime API1 is required');
+    if (localInput && bind('DE_LocalInputRuntimeApiVersionV1', 'X64U32')() !== 1)
+        throw new Error('MTA local-input runtime API1 is required');
     const schema = 'mta_frontend_runtime_v1';
     const unsigned = values => values.every(value => Number.isInteger(value) && value >= 0 && value <= 0xffffffff);
     const range = (first, end) => Array.from({ length: end - first }, (_, index) => first + index);
@@ -1978,13 +1999,14 @@ function runFrontendRuntime(bind, chordHeld, stopKey) {
     };
     enterPhase('frontend_runtime');
     emit({ event: 'adapter_start', host: HOST, cleo: String(CLEO.version), mode: MODE, endpoint: null,
-        frontend_runtime: true, runtime_api: 1, adapter_abi: 6, network_active: false, gameplay_ready: false, full_mta_ready: false });
+        frontend_runtime: true, runtime_api: 1, adapter_abi: 6, local_input: localInput,
+        local_input_api: localInput ? 1 : 0, network_active: false, gameplay_ready: false, full_mta_ready: false });
     const generation = start();
     if (!Number.isInteger(generation) || generation < 1 || generation > 0xffffffff) throw new Error('MTA frontend runtime could not start');
     let latest = null, lastAt = null, nextEmitAt = 0, sequence = 0, pendingSequence = 0, pendingCommand = 0, iteration = 0, forceCapture = true;
-    let lastKeyMask = -1;
+    let lastKeyMask = -1, latestLocal = null, localSamples = 0, nextLocalEmitAt = 0, localActiveObserved = false, everLocalConfigured = false;
     let desiredVisible = true, toggleDown = false, stopRequested = false, stopAccepted = false, hostLost = false;
-    let sessionError = null, samples = 0, terminal = false;
+    let sessionError = null, samples = 0, terminal = false, deferredAction = 0, deferredAttempts = 0;
     const stop = reason => {
         stopRequested = true;
         if (stopAccepted || hostLost) return;
@@ -1999,6 +2021,7 @@ function runFrontendRuntime(bind, chordHeld, stopKey) {
         emit({ event: 'frontend_runtime_stop_requested', schema, generation, sequence, reason });
     };
     emit({ event: 'frontend_runtime_started', schema, generation, fields: 416, core_fields: 64, view_fields: 288,
+        local_input: localInput, local_input_api: localInput ? 1 : 0, local_input_fields: localInput ? 32 : 0,
         maximum_duration_ms: 0, display_duration_ms: 0, host_heartbeat_budget_ms: 1000,
         native_heartbeat_budget_ms: 500, cursor_heartbeat_budget_ms: 500, clock_started: false, network_active: false, full_mta_ready: false });
     while (true) {
@@ -2014,7 +2037,7 @@ function runFrontendRuntime(bind, chordHeld, stopKey) {
                 hostLost = true;
                 emit({ event: 'frontend_runtime_host_heartbeat_rejected', schema, generation });
             }
-            let sampled = false, transition = false;
+            let sampled = false, transition = false, localSampled = false;
             // Read terminal ownership before consulting Date or physical keys.
             // A bad script clock must not discard the final native retirement.
             if (terminal || forceCapture || iteration % 2 === 0) {
@@ -2036,10 +2059,29 @@ function runFrontendRuntime(bind, chordHeld, stopKey) {
                     if (pendingSequence && values[11] >= pendingSequence) { pendingSequence = 0; pendingCommand = 0; }
                     forceCapture = false; sampled = true;
                 } else if (terminal) throw new Error('Frontend runtime terminal evidence unavailable');
+                if (localInput) {
+                    const localCaptured = localCapture();
+                    if (localCaptured !== 0 && localCaptured !== 1) throw new Error('MTA local-input capture status unavailable');
+                    if (localCaptured) {
+                        const values = validateMtaLocalInputRuntimeSample(Array.from({ length: 32 }, (_, field) => localRead(field)));
+                        if ((latestLocal && values[2] !== latestLocal[2]) || (latest && latest[8] && values[2] !== latest[8]))
+                            throw new Error('MTA local-input runtime replaced its retained owner');
+                        localSampled = !latestLocal || [1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 15, 16, 17, 18, 20, 21, 22, 23, 24, 25, 26]
+                            .some(field => values[field] !== latestLocal[field]);
+                        latestLocal = values; ++localSamples;
+                        localActiveObserved = localActiveObserved || values[8] === 1;
+                        everLocalConfigured = everLocalConfigured || values[3] === 1;
+                    } else if (terminal) throw new Error('MTA local-input terminal evidence unavailable');
+                }
             }
             const at = Date.now();
             if (!Number.isSafeInteger(at) || at < 0 || (lastAt !== null && at < lastAt)) throw new Error('Invalid frontend runtime script clock');
             lastAt = at;
+            if (localInput && latestLocal && (localSampled || terminal || at >= nextLocalEmitAt)) {
+                emit({ event: 'frontend_local_input_runtime_sample', schema: 'mta_local_input_runtime_v1', generation,
+                    at_ms: at, values: latestLocal, network_active: false, gameplay_ready: false, full_mta_ready: false });
+                nextLocalEmitAt = at + 1000;
+            }
             if (sampled && (transition || terminal || at >= nextEmitAt)) {
                 emit({ event: 'frontend_runtime_sample', schema, generation, at_ms: at, values: latest,
                     desired_visible: desiredVisible, pending_sequence: pendingSequence, pending_command: pendingCommand,
@@ -2074,14 +2116,27 @@ function runFrontendRuntime(bind, chordHeld, stopKey) {
             }
             if (!stopRequested && latest && !pendingSequence && !latest[14] && [2, 4].includes(latest[1])) {
                 const action = latest[1] === 2 && desiredVisible ? 1 : latest[1] === 4 && !desiredVisible ? 2 : 0;
-                if (action) {
-                    if (sequence === 0xffffffff || command(generation, ++sequence, action) !== 1) throw new Error('Frontend runtime view command was rejected');
-                    // Do not issue another command from the same old capture.
-                    forceCapture = true; pendingSequence = sequence; pendingCommand = action;
-                    emit({ event: 'frontend_runtime_command', schema, generation, sequence, command: action });
-                    // Keep the copied publication immutable while awaiting its acknowledgement.
+                if (!action || action !== deferredAction) { deferredAction = action; deferredAttempts = 0; }
+                if (action && (!deferredAttempts || sampled)) {
+                    if (sequence === 0xffffffff) throw new Error('Frontend runtime command sequence exhausted');
+                    const nextSequence = sequence + 1;
+                    const admitted = command(generation, nextSequence, action);
+                    // The nonblocking native cache may briefly refuse admission
+                    // during publication. Keep intent and the unused sequence,
+                    // then require a fresh coherent capture before a bounded retry.
+                    forceCapture = true;
+                    if (admitted === 0) {
+                        if (++deferredAttempts >= 3) throw new Error('Frontend runtime view command was rejected');
+                    } else if (admitted !== 1) {
+                        throw new Error('Frontend runtime view command status unavailable');
+                    } else {
+                        sequence = nextSequence; pendingSequence = sequence; pendingCommand = action;
+                        deferredAction = 0; deferredAttempts = 0;
+                        emit({ event: 'frontend_runtime_command', schema, generation, sequence, command: action });
+                        // Keep the copied publication immutable while awaiting its acknowledgement.
+                    }
                 }
-            }
+            } else { deferredAction = 0; deferredAttempts = 0; }
         } catch (error) {
             sessionError = sessionError || String(error);
             try { stop('script_error'); } catch (_) { hostLost = true; }
@@ -2090,7 +2145,10 @@ function runFrontendRuntime(bind, chordHeld, stopKey) {
         try { wait(50); }
         catch (error) { sessionError = sessionError || String(error); try { stop('wait_error'); } catch (_) { hostLost = true; } }
     }
-    const cleanupPassed = latest !== null && [7, 8].includes(latest[1]) && latest[34] === 1 && !latest[33] &&
+    const localCleanupPassed = !localInput || (latestLocal !== null && latestLocal[1] === 1 &&
+        [3, 4, 8, 9, 20].every(field => latestLocal[field] === 0) && latestLocal[21] === 1 &&
+        (latestLocal[18] === 1 || !everLocalConfigured));
+    const cleanupPassed = localCleanupPassed && latest !== null && [7, 8].includes(latest[1]) && latest[34] === 1 && !latest[33] &&
         !latest[30] && !latest[31] && latest[39] === 1 && latest[40] === 1 && latest[41] === 1 &&
         retiredCore(latest) && retiredView(latest.slice(128));
     const passed = !sessionError && cleanupPassed && latest[1] === 7 && !latest[35] && !latest[36] && latest[37] === 1 &&
@@ -2098,6 +2156,8 @@ function runFrontendRuntime(bind, chordHeld, stopKey) {
     emit({ event: 'frontend_runtime_finished', schema, generation, at_ms: lastAt, values: latest, samples,
         passed, cleanup_passed: cleanupPassed, stop_requested: stopRequested, stop_accepted: stopAccepted,
         error: sessionError, host_heartbeat_rejected: hostLost, clock_started: false,
+        local_input: localInput, local_input_values: latestLocal, local_input_samples: localSamples,
+        local_input_active_observed: localActiveObserved, local_input_cleanup_passed: localCleanupPassed,
         view_workload_observed: latest !== null && latest[24] > 0, network_active: false, gameplay_ready: false, full_mta_ready: false });
     if (!passed) throw new Error('MTA frontend runtime ended without a verified clean requested stop');
 }

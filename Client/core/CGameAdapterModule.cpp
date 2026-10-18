@@ -54,7 +54,7 @@ void CGameAdapterModule::SetError(const char* error) noexcept
         // Native render and clock leases can retain allocator-owning peers.
         // Capacity is reserved before Begin; diagnostics must not grow it
         // until the provider acknowledges cleanup.
-        if ((m_renderObservationV6 || m_clockDiagnostics) && std::strlen(error) > m_error.capacity())
+        if ((m_renderObservationV6 || m_clockDiagnostics || m_localLeaseDiagnostics) && std::strlen(error) > m_error.capacity())
         {
             m_error.clear();
             return;
@@ -140,6 +140,19 @@ bool CGameAdapterModule::Start(CCoreInterface* owner, const std::wstring& absolu
     resolveClock(m_clockRenew, "RenewGameClockServiceV1");
     resolveClock(m_clockRead, "ReadGameClockServiceV1");
     resolveClock(m_clockEnd, "EndGameClockServiceV1");
+    resolveClock(m_localLeaseBegin, "BeginGameLocalInputLeaseV1");
+    resolveClock(m_localLeaseRenew, "RenewGameLocalInputLeaseV1");
+    resolveClock(m_localLeaseRead, "ReadGameLocalInputLeaseV1");
+    resolveClock(m_localLeaseEnd, "EndGameLocalInputLeaseV1");
+    if (!m_localLeaseBegin || !m_localLeaseRenew || !m_localLeaseRead || !m_localLeaseEnd)
+    {
+        // A partial optional group must not admit ownership that this consumer
+        // cannot renew, inspect and retire without another loader lookup.
+        m_localLeaseBegin = nullptr;
+        m_localLeaseRenew = nullptr;
+        m_localLeaseRead = nullptr;
+        m_localLeaseEnd = nullptr;
+    }
     m_hasRenderObservation = false;
     m_hasRenderObservationV2 = false;
     m_hasRenderObservationV3 = false;
@@ -197,7 +210,7 @@ bool CGameAdapterModule::RequireOwnerThread(const char* operation)
     }
     if (m_ownerThread != GetCurrentThreadId())
     {
-        if (m_renderObservationV6 || m_clockDiagnostics)
+        if (m_renderObservationV6 || m_clockDiagnostics || m_localLeaseDiagnostics)
             SetError("Game adapter callback requires its owning Core thread");
         else
             m_error = std::string(operation) + ": game adapter callback requires its owning Core thread";
@@ -213,7 +226,7 @@ bool CGameAdapterModule::RecordStatus(mta::game_de::Status status, const char* o
         m_error.clear();
         return true;
     }
-    if (m_renderObservationV6 || m_clockDiagnostics)
+    if (m_renderObservationV6 || m_clockDiagnostics || m_localLeaseDiagnostics)
     {
         // Stack formatting avoids even a temporary CRT allocation after a
         // provider failure has retained suspended peers for cleanup retry.
@@ -248,11 +261,21 @@ bool CGameAdapterModule::RequireClockRetired()
     return false;
 }
 
+bool CGameAdapterModule::RequireLocalInputRetired()
+{
+    if (!m_localLeaseAttemptPending)
+        return true;
+    SetError("End or reset the local input lease before starting another input or clock service");
+    return false;
+}
+
 bool CGameAdapterModule::Reset()
 {
     if (!RequireOwnerThread("Reset") || !EndNativeRenderObservation() || !RecordStatus(m_adapter->Reset(), "Reset"))
         return false;
     m_clockAttemptPending = false;
+    m_localLeaseAttemptPending = false;
+    m_localLeaseGeneration = 0;
     m_hasRenderObservation = false;
     m_hasRenderObservationV2 = false;
     m_hasRenderObservationV3 = false;
@@ -290,7 +313,8 @@ bool CGameAdapterModule::GetMtaInputState(mta::game_de::MtaInputState& state)
 
 bool CGameAdapterModule::BindNativeInput()
 {
-    return RequireOwnerThread("BindNativeInput") && RequireClockRetired() && RecordStatus(m_adapter->BindNativeInput(), "BindNativeInput");
+    return RequireOwnerThread("BindNativeInput") && RequireClockRetired() && RequireLocalInputRetired() &&
+           RecordStatus(m_adapter->BindNativeInput(), "BindNativeInput");
 }
 
 bool CGameAdapterModule::ReadNativeControllerState(std::uint32_t padIndex, mta::game_de::NativeControllerState& state)
@@ -305,7 +329,7 @@ bool CGameAdapterModule::ReadNativeDeviceState(mta::game_de::NativeDeviceState& 
 
 bool CGameAdapterModule::BeginNativeMovementTrial()
 {
-    return RequireOwnerThread("BeginNativeMovementTrial") && RequireClockRetired() &&
+    return RequireOwnerThread("BeginNativeMovementTrial") && RequireClockRetired() && RequireLocalInputRetired() &&
            RecordStatus(m_adapter->BeginNativeMovementTrial(), "BeginNativeMovementTrial");
 }
 
@@ -316,13 +340,14 @@ bool CGameAdapterModule::GetNativeMovementTrialState(mta::game_de::NativeMovemen
 
 bool CGameAdapterModule::EndNativeMovementTrial()
 {
-    return RequireOwnerThread("EndNativeMovementTrial") && RecordStatus(m_adapter->EndNativeMovementTrial(), "EndNativeMovementTrial");
+    return RequireOwnerThread("EndNativeMovementTrial") && RequireLocalInputRetired() &&
+           RecordStatus(m_adapter->EndNativeMovementTrial(), "EndNativeMovementTrial");
 }
 
 bool CGameAdapterModule::BeginFrontendInputLease(void* window, mta::game_de::FrontendInputLeaseStateV1& state)
 {
     using namespace mta::game_de;
-    if (!RequireOwnerThread("BeginFrontendInputLease") || !RequireClockRetired())
+    if (!RequireOwnerThread("BeginFrontendInputLease") || !RequireClockRetired() || !RequireLocalInputRetired())
         return false;
     const auto resolve = [&](auto& function, const char* name)
     {
@@ -369,9 +394,89 @@ bool CGameAdapterModule::GetNativeMovementEligibility(mta::game_de::NativeMoveme
     return RequireOwnerThread("GetNativeMovementEligibility") && RecordStatus(m_adapter->GetNativeMovementEligibility(state), "GetNativeMovementEligibility");
 }
 
+bool CGameAdapterModule::BeginLocalInputLease(void* window, mta::game_de::LocalInputLeaseStateV1& state)
+{
+    using namespace mta::game_de;
+    if (!RequireOwnerThread("BeginLocalInputLease") || !RequireClockRetired() || !RequireLocalInputRetired())
+        return false;
+    if (!m_localLeaseBegin || !m_localLeaseRenew || !m_localLeaseRead || !m_localLeaseEnd)
+    {
+        SetError("The adapter lacks the complete optional local input lease contract");
+        return false;
+    }
+    if (!m_localLeaseDiagnostics)
+    {
+        try
+        {
+            // Stop is noexcept and may need to retain a busy provider. Reserve
+            // before admission so its retry diagnostics need no new storage.
+            if (m_error.capacity() < 512)
+                m_error.reserve(512);
+        }
+        catch (...)
+        {
+            SetError("Cannot reserve local input cleanup diagnostic storage before Begin");
+            return false;
+        }
+        m_localLeaseDiagnostics = true;
+    }
+    LocalInputLeaseRequestV1 request;
+    request.window = window;
+    LocalInputLeaseStateV1 observed;
+    // Begin is neutral; later explicit Renew alone consumes MTA's staged
+    // canonical controller state. A refused Begin can still publish an owned
+    // token, so keep the module until End/Reset proves that attempt retired.
+    m_localLeaseAttemptPending = true;
+    m_localLeaseGeneration = 0;
+    const auto status = m_localLeaseBegin(LocalInputLeaseVersionV1, m_adapter, &request, &observed);
+    if (status == Status::InvalidArgument || status == Status::WrongThread || status == Status::NotInitialized)
+        m_localLeaseAttemptPending = false;
+    if (status == Status::Ok || observed.generation)
+    {
+        m_localLeaseGeneration = observed.generation;
+        state = observed;
+    }
+    if (status == Status::Ok && !m_localLeaseGeneration)
+    {
+        SetError("Local input Begin returned no owned generation; reset the adapter before another service");
+        return false;
+    }
+    return RecordStatus(status, "BeginLocalInputLease");
+}
+
+bool CGameAdapterModule::RenewLocalInputLease(std::uint64_t generation)
+{
+    using namespace mta::game_de;
+    if (!RequireOwnerThread("RenewLocalInputLease") || !RequireClockRetired() || !m_localLeaseRenew || !m_localLeaseAttemptPending || !generation ||
+        generation != m_localLeaseGeneration)
+        return false;
+    MtaInputState movement;
+    return GetMtaInputState(movement) && RecordStatus(m_localLeaseRenew(LocalInputLeaseVersionV1, m_adapter, generation, &movement), "RenewLocalInputLease");
+}
+
+bool CGameAdapterModule::ReadLocalInputLease(mta::game_de::LocalInputLeaseStateV1& state)
+{
+    if (!RequireOwnerThread("ReadLocalInputLease") || !RequireClockRetired() || !m_localLeaseRead)
+        return false;
+    mta::game_de::LocalInputLeaseStateV1 observed;
+    if (!RecordStatus(m_localLeaseRead(mta::game_de::LocalInputLeaseVersionV1, m_adapter, &observed), "ReadLocalInputLease"))
+        return false;
+    state = observed;
+    return true;
+}
+
+bool CGameAdapterModule::EndLocalInputLease(std::uint64_t generation)
+{
+    if (!RequireOwnerThread("EndLocalInputLease") || !m_localLeaseEnd || !generation || generation != m_localLeaseGeneration ||
+        !RecordStatus(m_localLeaseEnd(mta::game_de::LocalInputLeaseVersionV1, m_adapter, generation), "EndLocalInputLease"))
+        return false;
+    m_localLeaseAttemptPending = false;
+    return true;
+}
+
 bool CGameAdapterModule::BeginNativeClockService(const mta::game_de::ClockServiceRequestV1& request, mta::game_de::ClockServiceStateV1& state)
 {
-    if (!RequireOwnerThread("BeginNativeClockService") || !RequireClockRetired())
+    if (!RequireOwnerThread("BeginNativeClockService") || !RequireClockRetired() || !RequireLocalInputRetired())
         return false;
     if (m_renderObservation || m_renderObservationV2 || m_renderObservationV3 || m_renderObservationV4 || m_renderObservationV5 || m_renderObservationV6)
     {
@@ -1380,6 +1485,20 @@ void CGameAdapterModule::Stop() noexcept
         SetError("Game adapter teardown requires its owning Core thread; module retained");
         return;
     }
+    if (m_adapter && m_localLeaseAttemptPending)
+    {
+        if (m_localLeaseGeneration)
+        {
+            if (!EndLocalInputLease(m_localLeaseGeneration))
+                return;
+        }
+        else if (!Reset())
+        {
+            // An Unsupported Begin without a token cannot be certified by
+            // End(0). Only the provider's actual Reset can retire that debt.
+            return;
+        }
+    }
     if ((m_renderObservation || m_renderObservationV2 || m_renderObservationV3 || m_renderObservationV4 || m_renderObservationV5 || m_renderObservationV6) &&
         !EndNativeRenderObservation())
         return;
@@ -1406,6 +1525,13 @@ void CGameAdapterModule::Stop() noexcept
     m_frontendLeaseRenew = nullptr;
     m_frontendLeaseRead = nullptr;
     m_frontendLeaseEnd = nullptr;
+    m_localLeaseBegin = nullptr;
+    m_localLeaseRenew = nullptr;
+    m_localLeaseRead = nullptr;
+    m_localLeaseEnd = nullptr;
+    m_localLeaseAttemptPending = false;
+    m_localLeaseGeneration = 0;
+    m_localLeaseDiagnostics = false;
     m_clockBegin = nullptr;
     m_clockSubmit = nullptr;
     m_clockRenew = nullptr;

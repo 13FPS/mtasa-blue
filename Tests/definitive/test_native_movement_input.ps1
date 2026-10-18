@@ -49,6 +49,7 @@ if ($SavedNativeMovementDirectory) {
 $sourceNames = @('Client/game_de/NativeMovementInput.h','Client/game_de/NativeMovementInput.cpp',
     'Client/game_de/NativeServiceAdmission.h',
     'Client/game_de/FrontendInputLeasePolicy.h','Client/sdk/game/CGameFrontendInputLease.h',
+    'Client/game_de/LocalInputLeasePolicy.h','Client/sdk/game/CGameLocalInputLease.h',
     'Client/game_de/NativeInputRouting.h','Client/game_de/NativePadReader.h','Client/game_de/NativePadReader.cpp',
     'Client/game_de/NativeImageAccess.h','Client/game_de/NativeImageAccess.cpp',
     'Client/sdk/game/CGameAdapter.h','Shared/sdk/CControllerState.h','Shared/sdk/enums/PedState.h','Tests/definitive/NativeMovementInputTests.cpp',
@@ -59,28 +60,39 @@ $sourceHashes = @($sourceNames | ForEach-Object {
     $sourcePath = if ($savedSources.ContainsKey($_)) { $savedSources[$_] } else { Join-Path $taskRoot $_ }
     [ordered]@{ path=$_; sourcePath=$sourcePath; sha256=(Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash.ToLowerInvariant() }
 })
+$scratchParent = [IO.Path]::GetFullPath((Join-Path $taskRoot 'Build/tmp'))
+$scratchRoot = Join-Path $scratchParent ('native-local-input-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $scratchRoot | Out-Null
+$previousTemp = [Environment]::GetEnvironmentVariable('TEMP','Process')
+$previousTmp = [Environment]::GetEnvironmentVariable('TMP','Process')
+$scratchCleanup = [ordered]@{path=$scratchRoot;temporaryFilesInsideWorkspace=$true;removed=$false;environmentRestored=$false}
+try {
+[Environment]::SetEnvironmentVariable('TEMP',$scratchRoot,'Process')
+[Environment]::SetEnvironmentVariable('TMP',$scratchRoot,'Process')
 $environmentCommand = 'call "{0}" -no_logo -arch=x64 -host_arch=x64 >nul && set' -f $developerCommand
 $compilerEnvironment = & $env:ComSpec /d /s /c $environmentCommand
 if ($LASTEXITCODE -ne 0) { throw 'Compiler environment initialization failed.' }
 foreach ($entry in $compilerEnvironment) {
     if ($entry -match '^([^=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($Matches[1],$Matches[2],'Process') }
 }
+[Environment]::SetEnvironmentVariable('TEMP',$scratchRoot,'Process')
+[Environment]::SetEnvironmentVariable('TMP',$scratchRoot,'Process')
 $compiler = Join-Path $env:VCToolsInstallDir 'bin/Hostx64/x64/cl.exe'
 $common = @('/nologo','/std:c++17','/EHsc','/O2','/MD','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN',
     ('/I'+(Join-Path $taskRoot 'Shared/sdk')),('/I'+(Join-Path $taskRoot 'vendor/detours/4.0.1/src')))
 $detoursSources = @('detours.cpp','modules.cpp','disasm.cpp','image.cpp','creatwth.cpp') | ForEach-Object {
     Join-Path $taskRoot ('vendor/detours/4.0.1/src/'+$_)
 }
-$detoursArguments = $common + @('/w','/c') + $detoursSources + @('/Fo'+$outputRoot+[IO.Path]::DirectorySeparatorChar)
+$detoursArguments = $common + @('/w','/c') + $detoursSources + @('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar)
 $detoursOutput = @(& $compiler @detoursArguments 2>&1)
 $detoursExit = $LASTEXITCODE
 $detoursOutput | Set-Content -LiteralPath (Join-Path $outputRoot 'detours-compile.log') -Encoding utf8
 $executable = Join-Path $outputRoot 'native_movement_input_tests.exe'
-$objects = @('detours.obj','modules.obj','disasm.obj','image.obj','creatwth.obj') | ForEach-Object { Join-Path $outputRoot $_ }
+$objects = @('detours.obj','modules.obj','disasm.obj','image.obj','creatwth.obj') | ForEach-Object { Join-Path $scratchRoot $_ }
 $cacheArguments = if ($SavedNativeMovementDirectory) { @('/DMTA_NATIVE_ELIGIBILITY_SAVED_OBSERVER') } else { @('/DMTA_NATIVE_ELIGIBILITY_PUBLISHED_CACHE') }
 $arguments = $common + $cacheArguments + @('/W4','/WX',$testSource,
     (Join-Path $taskRoot 'Client/game_de/NativePadReader.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeImageAccess.cpp'),
-    ('/Fo'+$outputRoot+[IO.Path]::DirectorySeparatorChar),
+    ('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'compiler.pdb')),
     ('/Fe'+$executable),'/link','bcrypt.lib','user32.lib') + $objects
 $compilerOutput = @(& $compiler @arguments 2>&1)
 $compilerExit = $LASTEXITCODE
@@ -110,6 +122,27 @@ if ($detoursExit -eq 0 -and $compilerExit -eq 0) {
         $failedAssertion = $Matches[2]
     }
 }
+} finally {
+    [Environment]::SetEnvironmentVariable('TEMP',$previousTemp,'Process')
+    [Environment]::SetEnvironmentVariable('TMP',$previousTmp,'Process')
+    $scratchCleanup.environmentRestored = [Environment]::GetEnvironmentVariable('TEMP','Process') -ceq $previousTemp -and
+        [Environment]::GetEnvironmentVariable('TMP','Process') -ceq $previousTmp
+    # Remove only this run's exact absolute scratch directory after proving it
+    # remains a real child of Build/tmp. Logs, executable and receipts survive.
+    $resolvedScratch = (Resolve-Path -LiteralPath $scratchRoot).Path
+    $scratchItem = Get-Item -LiteralPath $resolvedScratch -Force
+    if (-not $resolvedScratch.StartsWith($scratchParent+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase) -or
+        $resolvedScratch -cne [IO.Path]::GetFullPath($scratchRoot) -or
+        ($scratchItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Refused cleanup outside owned Build/tmp scratch' }
+    $scratchAncestor = [IO.Path]::GetDirectoryName($resolvedScratch)
+    while ($scratchAncestor -and $scratchAncestor.Length -ge $scratchParent.Length) {
+        if ((Get-Item -LiteralPath $scratchAncestor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Refused linked scratch ancestry' }
+        $scratchAncestor = [IO.Path]::GetDirectoryName($scratchAncestor)
+    }
+    Remove-Item -LiteralPath $resolvedScratch -Recurse -Force
+    $scratchCleanup.removed = -not (Test-Path -LiteralPath $scratchRoot)
+    $scratchCleanup | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $outputRoot 'scratch-cleanup.json') -Encoding utf8
+}
 $unchanged = $true
 foreach ($entry in $sourceHashes) {
     if ((Get-FileHash -LiteralPath $entry.sourcePath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $entry.sha256) { $unchanged = $false }
@@ -120,12 +153,13 @@ foreach ($entry in $stagedSourceHashes) {
         (Get-FileHash -LiteralPath $entry.sourcePath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $entry.sha256) { $stagedUnchanged = $false }
 }
 $record = [ordered]@{ recordedAt=[DateTimeOffset]::Now.ToString('o'); directory=$outputRoot;architecture='x64';
-    success=($detoursExit -eq 0 -and $compilerExit -eq 0 -and $testExit -eq 0 -and $null -ne $testCount -and -not $testTimedOut -and $unchanged -and $stagedUnchanged);
+    success=($detoursExit -eq 0 -and $compilerExit -eq 0 -and $testExit -eq 0 -and $null -ne $testCount -and -not $testTimedOut -and $unchanged -and $stagedUnchanged -and $scratchCleanup.removed -and $scratchCleanup.environmentRestored);
     detoursCompilerExit=$detoursExit;compilerExit=$compilerExit;testExit=$testExit;testTimedOut=$testTimedOut;checks=$testCount;
     savedNativeMovementDirectory=$SavedNativeMovementDirectory;failedChecks=$failedChecks;failedAssertion=$failedAssertion;
     fixtureBuildDefines=$cacheArguments;
     sourceHashes=$sourceHashes;sourceUnchanged=$unchanged;executable=$executable;
     stagedSourceHashes=$stagedSourceHashes;stagedSourceUnchanged=$stagedUnchanged;
+    scratchCleanup=$scratchCleanup;localInputLeasePolicyAndProductionCallbackCovered=(-not [bool]$SavedNativeMovementDirectory);
     gameLaunched=$false;gameProcessAttached=$false;gameInputWritten=$false;gameHooksInstalled=$false;wrongExecutableBeginInstalledHooks=$false;
     syntheticOwnProcessPadWritten=$true;productionCallbackTested=$true;syntheticOwnProcessDetoursInstalled=$true;
     executableSha256=$(if (Test-Path -LiteralPath $executable) { (Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null });

@@ -88,6 +88,10 @@ def main():
         "DE_FrontendRuntimePollV1": (ctypes.c_int, []),
         "DE_FrontendRuntimeCaptureV1": (ctypes.c_int, []),
         "DE_FrontendRuntimeReadV1": (ctypes.c_uint32, [ctypes.c_uint32]),
+        "DE_LocalInputRuntimeApiVersionV1": (ctypes.c_uint32, []),
+        "DE_LocalInputRuntimeStartV1": (ctypes.c_uint32, []),
+        "DE_LocalInputRuntimeCaptureV1": (ctypes.c_int, []),
+        "DE_LocalInputRuntimeReadV1": (ctypes.c_uint32, [ctypes.c_uint32]),
     }
     for name, (result, arguments) in signatures.items():
         function = getattr(bridge, name)
@@ -113,6 +117,12 @@ def main():
     check(bridge.DE_FrontendRuntimeStartV1() == 0, "Wrong host cannot start a retained MTA runtime")
     check(bridge.DE_FrontendRuntimePollV1() == -1, "Wrong host has no retained worker completion")
     check(bridge.DE_FrontendRuntimeCaptureV1() == 0, "Wrong host cannot capture runtime ownership")
+    check(bridge.DE_LocalInputRuntimeApiVersionV1() == 1, "Local input uses an additive API1")
+    check(bridge.DE_LocalInputRuntimeStartV1() == 0, "Wrong host cannot start configured local input")
+    check(bridge.DE_LocalInputRuntimeCaptureV1() == 0, "Wrong host has no local-input owner snapshot")
+    for component in (*range(32), 32, 0xFFFFFFFF):
+        check(bridge.DE_LocalInputRuntimeReadV1(component) == 0,
+              "Wrong host cannot manufacture a local-input publication")
     for command in (0, 1, 2, 3, 0xFFFFFFFF):
         check(bridge.DE_FrontendRuntimeCommandV1(1, 1, command) == 0,
               "Wrong host cannot create a retained runtime command")
@@ -200,6 +210,10 @@ def main():
         check(bridge.DE_NativeDeviceRead(index) == 0, "Unbound or invalid device source must remain unavailable")
     bridge.DE_NativePadReset()
     bridge.DE_Disconnect()
+    check(bridge.DE_LocalInputRuntimeStartV1() == 0, "Cleanup cannot authorize local input")
+    check(bridge.DE_LocalInputRuntimeCaptureV1() == 0, "Cleanup cannot manufacture local-input evidence")
+    for component in (*range(32), 32, 0xFFFFFFFF):
+        check(bridge.DE_LocalInputRuntimeReadV1(component) == 0, "Cleanup cannot retain local-input evidence")
     check(bridge.DE_CoreRenderBeginV6(2) == 0, "Cleanup cannot authorize native dispatch")
     check(bridge.DE_CoreRenderCaptureV6() == 0, "Cleanup cannot manufacture native dispatch evidence")
     for component in (*range(136), 136, 0xFFFFFFFF):

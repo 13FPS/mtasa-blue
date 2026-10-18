@@ -31,6 +31,7 @@
     #include "DefinitiveFrontendStartup.h"
     #include "DefinitiveFrontendClockReference.h"
     #include "DefinitiveFrontendRuntime.h"
+    #include "DefinitiveLocalInputRuntime.h"
 #endif
 
 #define CORE_API extern "C" __declspec(dllexport)
@@ -309,6 +310,36 @@ CORE_API DefinitiveFrontendRuntime::Status MTA_ShutdownDEFrontendRuntime(void* h
 CORE_API DefinitiveFrontendRuntime::Status MTA_ReleaseDEFrontendRuntime(void* handle)
 {
     return DefinitiveFrontendRuntime::ReleaseOwner(handle);
+}
+
+CORE_API std::uint32_t MTA_DELocalInputRuntimeApiVersion()
+{
+    return DefinitiveLocalInputRuntime::ApiVersion;
+}
+
+CORE_API DefinitiveLocalInputRuntime::Status MTA_ConfigureDELocalInputRuntime(void* handle, const DefinitiveLocalInputRuntime::RequestV1* request)
+{
+    return DefinitiveLocalInputRuntime::ConfigureOwner(handle, request);
+}
+
+CORE_API DefinitiveLocalInputRuntime::Status MTA_PulseDELocalInputRuntime(void* handle)
+{
+    return DefinitiveLocalInputRuntime::PulseOwner(handle);
+}
+
+CORE_API DefinitiveLocalInputRuntime::Status MTA_ReadDELocalInputRuntime(void* handle, std::uint32_t* output, std::uint32_t count)
+{
+    return DefinitiveLocalInputRuntime::ReadOwner(handle, output, count);
+}
+
+CORE_API DefinitiveLocalInputRuntime::Status MTA_SuspendDELocalInputRuntime(void* handle)
+{
+    return DefinitiveLocalInputRuntime::SuspendOwner(handle);
+}
+
+CORE_API DefinitiveLocalInputRuntime::Status MTA_DisableDELocalInputRuntime(void* handle)
+{
+    return DefinitiveLocalInputRuntime::DisableOwner(handle);
 }
 #endif
 

@@ -24,6 +24,7 @@
 #include "../core/DefinitivePersistentFrontend.h"
 #include "../core/DefinitiveFrontendClockReference.h"
 #include "../core/DefinitiveFrontendRuntime.h"
+#include "../core/DefinitiveLocalInputRuntime.h"
 #include "FrontendRuntimeMailbox.h"
 #include "FrontendRuntimeCache.h"
 
@@ -84,7 +85,9 @@ namespace deonline
         std::uint32_t ReadPersistentFrontend(std::uint32_t field) const noexcept;
         bool          CapturePersistentFrontendLifecycle() noexcept;
         std::uint32_t ReadPersistentFrontendLifecycle(std::uint32_t field) const noexcept;
-        std::uint32_t BeginFrontendRuntime(const void* moduleAddress) noexcept;
+        std::uint32_t BeginFrontendRuntime(const void* moduleAddress, bool localInput = false) noexcept;
+        bool          CaptureLocalInputRuntime() noexcept;
+        std::uint32_t ReadLocalInputRuntime(std::uint32_t field) const noexcept;
         bool          CommandFrontendRuntime(std::uint32_t generation, std::uint32_t sequence, std::uint32_t command) noexcept;
         bool          HeartbeatFrontendRuntime(std::uint32_t generation) noexcept;
         int           PollFrontendRuntime() noexcept;
@@ -130,7 +133,8 @@ namespace deonline
                                         std::uint32_t configuredRenderRoute = 0, std::uint32_t configuredRenderApi = 1, bool configuredGuiStartup = false,
                                         bool configuredGuiSurface = false, bool configuredGuiFrontend = false, bool configuredGuiFrontendInput = false,
                                         bool configuredFrontendStartup = false, bool configuredPersistentFrontend = false, bool configuredClock = false,
-                                        bool configuredClockSet = false, bool configuredClockBeforeFrontend = false, bool configuredFrontendRuntime = false) noexcept;
+                                        bool configuredClockSet = false, bool configuredClockBeforeFrontend = false, bool configuredFrontendRuntime = false,
+                                        bool configuredLocalInputRuntime = false) noexcept;
         bool                      CopyClockSnapshot(DefinitiveClockReference::Snapshot& output) const noexcept;
         bool                      CopyClockSetSnapshot(DefinitiveClockSetReference::Snapshot& output) const noexcept;
         void                      WaitForClockRetirement() noexcept;
@@ -191,6 +195,9 @@ namespace deonline
         bool                                                                            persistentFrontendRequested = false;
         PersistentFrontendHostLease                                                     persistentHostLease;
         bool                                                                            frontendRuntimeRequested = false;
+        bool                                                                            localInputRuntimeRequested = false;
+        FrontendValueCache<DefinitiveLocalInputRuntime::Snapshot>                       localInputRuntimeCache;
+        DefinitiveLocalInputRuntime::Snapshot                                           capturedLocalInputRuntime{};
         FrontendRuntimeMailbox                                                          runtimeMailbox;
         PersistentFrontendHostLease                                                     runtimeHostLease;
         FrontendRuntimeCache                                                            runtimeCache;

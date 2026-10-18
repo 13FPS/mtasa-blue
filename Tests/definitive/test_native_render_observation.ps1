@@ -8,6 +8,7 @@ $taskRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
 $outputRoot = Join-Path $taskRoot ('Build/mta-native-render-observation/' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
 $sourceNames = @('Client/game_de/NativeRenderObservation.h','Client/game_de/NativeRenderObservation.cpp',
+    'Client/game_de/NativeServiceAdmission.h',
     'Client/game_de/premake5.lua','vendor/detours/premake5.lua',
     'Client/game_de/NativeD3D12OwnershipProbe.h','Client/game_de/NativeD3D12OwnershipProbe.cpp',
     'Client/game_de/NativeCustomPresentProbe.h','Client/game_de/NativeCustomPresentProbe.cpp',

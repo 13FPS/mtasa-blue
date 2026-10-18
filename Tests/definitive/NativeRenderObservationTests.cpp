@@ -279,9 +279,9 @@ namespace
             const auto generation = runtime.generation.load();
             runtime.hooked.store(true);
             NativeRenderObservation fresh;
-            Check(!fresh.End() && runtime.active.load() && runtime.hooked.load() && runtime.generation.load() == generation &&
+            Check(fresh.End() && runtime.active.load() && runtime.hooked.load() && runtime.generation.load() == generation &&
                       runtime.devicePhase.load() == DeviceCapturePhase::Armed,
-                  "generation-zero Native destructor/End cannot mutate another active observer; fresh V6 registry disposal skips its refusal");
+                  "generation-zero End succeeds without mutating another active observer; fresh V6 registry disposal remains ownerless");
             runtime.hooked.store(false);
         }
         Check(HookPresent(viewport.data(), 1) && runtime.devicePending.load(), "explicit clean callback commits one owned device with its accepted snapshot");

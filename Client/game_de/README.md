@@ -5,6 +5,40 @@ MTA Core owns its loading, initialization, pulse, reset, shutdown and release
 through `CGameAdapterModule` and the versioned SDK `game/CGameAdapter.h`.
 The module provides no separate transport or script-host lifecycle.
 
+The opt-in clock service implements the existing SDK `CClock` interface behind
+an optional, separately versioned adapter contract. Core queues clock commands;
+only the exact-image native continuation after clock progression adopts an
+engine thread and calls that interface. No partial `CGame` is returned and no
+gameplay capability is added. Ordinary module startup does not activate it.
+
+`CClockDE::Set` preserves classic behavior: hours 0–23, minutes 0–60, and the
+native last-minute-change timestamp. It does not call DE's script setter, which
+normalizes values and changes seconds, calendar fields and another flag.
+Freeze bypasses only the reviewed clock arithmetic; it leaves the surrounding
+frame and weather continuation intact. The logical five-byte branch uses an
+aligned atomic eight-byte change that preserves its three preceding bytes.
+Thread quiescence, original bytes, page protection and instruction-cache
+acknowledgements remain explicit cleanup obligations.
+
+This bounded service expires without a fresh producer heartbeat. Ending it
+restores captured displayed time and fractional-minute phase against the current
+native timer; it never rewinds that global timer or writes the engine's stored
+clock slot. Failed restoration, detachment or peer-thread resumption retains
+ownership for retry. `ResetTimeFrozen` itself retains the SDK meaning of
+unfreezing, separate from restoration of an experiment's captured state.
+Clock admission excludes native input and render service ownership across
+adapter instances; input and rendering can still coexist for MTA's frontend.
+Core reserves cleanup diagnostics before Begin and requires explicit End or
+Reset after any attempted admission before starting another native service.
+Native clock behavior in GTA has not been tested yet.
+
+Offline validation passes 626 clock checks using an owned Windows image and
+the production Detours callback, patch, memory and recovery paths. Input and
+render regressions pass, as do 1,737 x64 Core consumer checks, including retained
+cleanup without diagnostic allocations and older optional-module compatibility.
+Normal x64 Core/Game DE builds and classic x86 compile guards pass. These
+fixtures do not execute GTA's clock update or validate its live behavior.
+
 Optional native rendering diagnostics use the separate API1
 `game/CGameRenderObservation.h` factory. It supplies an owner-thread checked
 lease over `NativeRenderObservation`; allocating it performs no binding or

@@ -11,11 +11,13 @@
 #include <game/CGameRenderDeviceLease.h>
 #include <game/CGameRenderDeviceWindowLease.h>
 #include <game/CGameFrontendInputLease.h>
+#include <game/CGameClockService.h>
 #include "FrontendInputLeasePolicy.h"
 #include "ControllerSnapshot.h"
 #include "RemoteDataStorage.h"
 #include "NativePadReader.h"
 #include "NativeMovementInput.h"
+#include "NativeClockService.h"
 #include "NativeRenderObservation.h"
 
 #include <atomic>
@@ -66,6 +68,56 @@ namespace mta::game_de
                 Read,
                 End
             };
+            enum class ClockAction
+            {
+                Begin,
+                Submit,
+                Renew,
+                Read,
+                End
+            };
+            static Status ClockService(IGameAdapter* adapter, ClockAction action, const ClockServiceRequestV1* request, const ClockCommandV1* command,
+                                       std::uint64_t generation, ClockServiceStateV1* output) noexcept
+            {
+                // The same retained-adapter registry prevents optional service
+                // calls from borrowing an arbitrary or already released object.
+                if (!TryAcquireSRWLockShared(&frontendAdapterLock))
+                    return Status::Unsupported;
+                Status result = Status::InvalidArgument;
+                for (auto* current = frontendAdapters; current; current = current->nextFrontendAdapter)
+                {
+                    if (static_cast<IGameAdapter*>(current) != adapter)
+                        continue;
+                    result = current->Access();
+                    if (result != Status::Ok)
+                        break;
+                    bool completed = false;
+                    switch (action)
+                    {
+                        case ClockAction::Begin:
+                            if (current->nativeMovement.IsBound() || current->nativeClock.IsRetained())
+                                break;
+                            completed = current->nativeClock.Begin(*request, *output);
+                            break;
+                        case ClockAction::Submit:
+                            completed = current->nativeClock.Submit(*command);
+                            break;
+                        case ClockAction::Renew:
+                            completed = current->nativeClock.Renew(generation);
+                            break;
+                        case ClockAction::Read:
+                            completed = current->nativeClock.Read(*output);
+                            break;
+                        case ClockAction::End:
+                            completed = current->nativeClock.End(generation);
+                            break;
+                    }
+                    result = completed ? Status::Ok : Status::Unsupported;
+                    break;
+                }
+                ReleaseSRWLockShared(&frontendAdapterLock);
+                return result;
+            }
             static Status FrontendLease(IGameAdapter* adapter, FrontendLeaseAction action, const FrontendInputLeaseRequestV1* request, std::uint64_t generation,
                                         const MtaInputState* neutral, FrontendInputLeaseStateV1* output) noexcept
             {
@@ -83,7 +135,9 @@ namespace mta::game_de
                         break;
                     if (action == FrontendLeaseAction::Begin)
                     {
-                        if (!NativeMovementInput::ValidateFrontendLeaseRequest(*request))
+                        if (current->nativeClock.IsRetained())
+                            result = Status::Unsupported;
+                        else if (!NativeMovementInput::ValidateFrontendLeaseRequest(*request))
                             result = Status::InvalidArgument;
                         else if (!current->nativePad.IsBound() || !current->hasInputState ||
                                  !FrontendInputLeasePolicy::Neutral(current->inputStorage.ReadInput()))
@@ -142,7 +196,7 @@ namespace mta::game_de
                 const auto status = Access();
                 if (status != Status::Ok)
                     return status;
-                if (!EndMovement())
+                if (!nativeClock.End() || !EndMovement())
                     return Status::Unsupported;
                 Clear();
                 return Status::Ok;
@@ -153,7 +207,7 @@ namespace mta::game_de
                 const auto status = Access();
                 if (status != Status::Ok)
                     return status;
-                if (!EndMovement())
+                if (!nativeClock.End() || !EndMovement())
                     return Status::Unsupported;
                 Clear();
                 initialized = false;
@@ -164,7 +218,7 @@ namespace mta::game_de
             {
                 // A live detour still references this module's state. A caller
                 // cannot turn failed cleanup into a dangling callback by Release.
-                if ((ownerThread.load() && ownerThread.load() != GetCurrentThreadId()) || !EndMovement())
+                if ((ownerThread.load() && ownerThread.load() != GetCurrentThreadId()) || !nativeClock.End() || !EndMovement())
                     return;
                 delete this;
             }
@@ -324,6 +378,8 @@ namespace mta::game_de
                 const auto status = Access();
                 if (status != Status::Ok)
                     return status;
+                if (nativeClock.IsRetained())
+                    return Status::Unsupported;
                 if (!hasInputState)
                     return Status::NotInitialized;
                 if (!TrialFrame(inputFrame))
@@ -440,6 +496,7 @@ namespace mta::game_de
             std::atomic<std::uint64_t> capabilities{BaseCapabilities};
             NativePadReader            nativePad;
             NativeMovementInput        nativeMovement;
+            NativeClockService         nativeClock;
             GameAdapter*               nextFrontendAdapter = nullptr;
         };
 
@@ -988,6 +1045,47 @@ namespace mta::game_de
         if (version != FrontendInputLeaseVersionV1 || !adapter || !generation)
             return Status::InvalidArgument;
         return GameAdapter::FrontendLease(adapter, GameAdapter::FrontendLeaseAction::End, nullptr, generation, nullptr, nullptr);
+    }
+
+    extern "C" Status BeginGameClockServiceV1(std::uint32_t version, IGameAdapter* adapter, const ClockServiceRequestV1* request,
+                                              ClockServiceStateV1* output) noexcept
+    {
+        if (version != ClockServiceVersionV1 || !adapter || !request || !output || request->size != sizeof(*request) ||
+            request->version != ClockServiceVersionV1 || !request->maximumDurationMs || request->maximumDurationMs > ClockServiceMaximumDurationMsV1 ||
+            request->reserved[0] || request->reserved[1] || request->reserved[2])
+            return Status::InvalidArgument;
+        return GameAdapter::ClockService(adapter, GameAdapter::ClockAction::Begin, request, nullptr, 0, output);
+    }
+
+    extern "C" Status SubmitGameClockCommandV1(std::uint32_t version, IGameAdapter* adapter, const ClockCommandV1* command) noexcept
+    {
+        if (version != ClockServiceVersionV1 || !adapter || !command || command->size != sizeof(*command) || command->version != ClockServiceVersionV1 ||
+            !command->generation || !command->sequence || command->reserved ||
+            static_cast<std::uint32_t>(command->operation) > static_cast<std::uint32_t>(ClockOperation::ResetTimeFrozen) ||
+            (command->operation == ClockOperation::Set ? command->hour > 23 || command->minute > 60 : command->hour || command->minute))
+            return Status::InvalidArgument;
+        return GameAdapter::ClockService(adapter, GameAdapter::ClockAction::Submit, nullptr, command, 0, nullptr);
+    }
+
+    extern "C" Status RenewGameClockServiceV1(std::uint32_t version, IGameAdapter* adapter, std::uint64_t generation) noexcept
+    {
+        if (version != ClockServiceVersionV1 || !adapter || !generation)
+            return Status::InvalidArgument;
+        return GameAdapter::ClockService(adapter, GameAdapter::ClockAction::Renew, nullptr, nullptr, generation, nullptr);
+    }
+
+    extern "C" Status ReadGameClockServiceV1(std::uint32_t version, IGameAdapter* adapter, ClockServiceStateV1* output) noexcept
+    {
+        if (version != ClockServiceVersionV1 || !adapter || !output)
+            return Status::InvalidArgument;
+        return GameAdapter::ClockService(adapter, GameAdapter::ClockAction::Read, nullptr, nullptr, 0, output);
+    }
+
+    extern "C" Status EndGameClockServiceV1(std::uint32_t version, IGameAdapter* adapter, std::uint64_t generation) noexcept
+    {
+        if (version != ClockServiceVersionV1 || !adapter || !generation)
+            return Status::InvalidArgument;
+        return GameAdapter::ClockService(adapter, GameAdapter::ClockAction::End, nullptr, nullptr, generation, nullptr);
     }
 
     extern "C" IGameRenderObservation* CreateGameRenderObservation(std::uint32_t apiVersion, CCoreInterface* owner) noexcept

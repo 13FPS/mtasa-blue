@@ -5,6 +5,17 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+The DE clock service now implements MTA's existing five-method `CClock`
+interface behind an optional Core-owned adapter contract. Commands cross a
+mailbox to the exact-image native continuation after clock progression; Core
+does not write engine time from its worker thread. The bounded lease restores
+captured displayed time and fractional-minute phase without rewinding the
+native timer. Clock transactions exclude native input/render ownership and
+retain failed patch, protection, data or thread-resume cleanup for retry.
+This is one service toward the real `CGame` implementation. It does not expose
+a partial `CGame`, enable gameplay capabilities or establish live clock
+behavior; the clock service has not been tested in GTA yet.
+
 Visible GUI integration continues inside Core using the existing CGUI/CEGUI
 renderer. The new opt-in surface attaches an MTA-owned transparent child window
 to GTA's validated window and uses the retained D3D12 device with its own queue

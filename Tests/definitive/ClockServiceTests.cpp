@@ -1,0 +1,1081 @@
+/*****************************************************************************
+ * PROJECT: Multi Theft Auto
+ * LICENSE: See LICENSE in the repository root
+ * PURPOSE: Exercise the actual MTA clock interface and checked service boundary
+ *****************************************************************************/
+#include "../../Client/game_de/CClockDE.h"
+#include "../../Client/game_de/NativeServiceAdmission.h"
+#include <array>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <thread>
+#include <tlhelp32.h>
+#include <type_traits>
+#include <vector>
+
+namespace ClockTestFaults
+{
+    std::atomic<unsigned> partialDataWrites{0}, failFlushes{0}, protectionCountdown{0};
+    std::atomic<bool>     failEnumeration{false}, failProtectionRestores{false};
+    std::atomic<unsigned> failResumes{0};
+    std::atomic<DWORD>    resumeTarget{0};
+    std::uintptr_t        patchAddress = 0, dataAddress = 0;
+
+    BOOL WINAPI Write(HANDLE process, LPVOID address, LPCVOID bytes, SIZE_T size, SIZE_T* copied)
+    {
+        if (reinterpret_cast<std::uintptr_t>(address) == dataAddress && size == 4 && partialDataWrites.load())
+        {
+            partialDataWrites.fetch_sub(1);
+            SIZE_T     actual = 0;
+            const auto result = ::WriteProcessMemory(process, address, bytes, 2, &actual);
+            if (copied)
+                *copied = actual;
+            SetLastError(ERROR_PARTIAL_COPY);
+            return result;
+        }
+        return ::WriteProcessMemory(process, address, bytes, size, copied);
+    }
+    BOOL WINAPI Protect(LPVOID address, SIZE_T size, DWORD protection, PDWORD previous)
+    {
+        if (reinterpret_cast<std::uintptr_t>(address) == patchAddress && size == 8)
+        {
+            if (protection != PAGE_EXECUTE_READWRITE && failProtectionRestores.load())
+            {
+                SetLastError(ERROR_ACCESS_DENIED);
+                return FALSE;
+            }
+            auto remaining = protectionCountdown.load();
+            if (remaining && protectionCountdown.fetch_sub(1) == 1)
+            {
+                SetLastError(ERROR_ACCESS_DENIED);
+                return FALSE;
+            }
+        }
+        return ::VirtualProtect(address, size, protection, previous);
+    }
+    BOOL WINAPI Flush(HANDLE process, LPCVOID address, SIZE_T size)
+    {
+        if (reinterpret_cast<std::uintptr_t>(address) == patchAddress && size == 8 && failFlushes.load())
+        {
+            failFlushes.fetch_sub(1);
+            SetLastError(ERROR_ACCESS_DENIED);
+            return FALSE;
+        }
+        return ::FlushInstructionCache(process, address, size);
+    }
+    BOOL WINAPI Next(HANDLE snapshot, LPTHREADENTRY32 entry)
+    {
+        if (failEnumeration.exchange(false))
+        {
+            SetLastError(ERROR_ACCESS_DENIED);
+            return FALSE;
+        }
+        return ::Thread32Next(snapshot, entry);
+    }
+    DWORD WINAPI Resume(HANDLE thread)
+    {
+        if (GetThreadId(thread) == resumeTarget.load() && failResumes.load())
+        {
+            failResumes.fetch_sub(1);
+            SetLastError(ERROR_ACCESS_DENIED);
+            return static_cast<DWORD>(-1);
+        }
+        return ::ResumeThread(thread);
+    }
+}
+
+// Fault injection exists only in this ordinary test translation unit. The
+// shipping executable gate, actual native access and clock implementation are
+// unchanged; each wrapper otherwise calls the real Win32 operation.
+#define WriteProcessMemory    ClockTestFaults::Write
+#define VirtualProtect        ClockTestFaults::Protect
+#define FlushInstructionCache ClockTestFaults::Flush
+#define Thread32Next          ClockTestFaults::Next
+#define ResumeThread          ClockTestFaults::Resume
+#include "../../Client/game_de/NativeClockService.cpp"
+#undef ResumeThread
+#undef Thread32Next
+#undef FlushInstructionCache
+#undef VirtualProtect
+#undef WriteProcessMemory
+
+using namespace mta::game_de;
+
+namespace
+{
+    std::atomic<unsigned> checks{0};
+    void                  Check(bool condition, const char* why)
+    {
+        const auto count = checks.fetch_add(1) + 1;
+        if (!condition)
+        {
+            std::fprintf(stderr, "Clock service failed after %u checks: %s\n", count, why);
+            std::exit(1);
+        }
+        std::printf("Check %u: %s\n", count, why);
+    }
+
+    class ClockImageFixture
+    {
+    public:
+        static constexpr std::uint32_t TextRva = 0x1000000, TextSize = 0x300000, DataRva = 0x5200000, DataSize = 0x40000;
+        std::uintptr_t                 image = 0;
+        HANDLE                         file = INVALID_HANDLE_VALUE, mapping = nullptr;
+        void (*invoke)() = nullptr;
+
+        ~ClockImageFixture()
+        {
+            if (image)
+                UnmapViewOfFile(reinterpret_cast<void*>(image));
+            if (mapping)
+                CloseHandle(mapping);
+            if (file != INVALID_HANDLE_VALUE)
+                CloseHandle(file);
+        }
+        void Create(const std::filesystem::path& root)
+        {
+            const auto path = root / L"owned-clock-image.bin";
+            Check(!std::filesystem::exists(path), "owned native image evidence is created once without overwriting an earlier run");
+            std::vector<unsigned char> bytes(0x1000 + TextSize + DataSize, 0);
+            IMAGE_DOS_HEADER           dos{};
+            dos.e_magic = IMAGE_DOS_SIGNATURE;
+            dos.e_lfanew = 0x100;
+            std::memcpy(bytes.data(), &dos, sizeof(dos));
+            IMAGE_NT_HEADERS64 nt{};
+            nt.Signature = IMAGE_NT_SIGNATURE;
+            nt.FileHeader.Machine = IMAGE_FILE_MACHINE_AMD64;
+            nt.FileHeader.NumberOfSections = 5;
+            nt.FileHeader.SizeOfOptionalHeader = sizeof(IMAGE_OPTIONAL_HEADER64);
+            nt.FileHeader.Characteristics = IMAGE_FILE_EXECUTABLE_IMAGE | IMAGE_FILE_LARGE_ADDRESS_AWARE;
+            nt.OptionalHeader.Magic = IMAGE_NT_OPTIONAL_HDR64_MAGIC;
+            nt.OptionalHeader.ImageBase = UINT64_C(0x180000000);
+            nt.OptionalHeader.SectionAlignment = 0x1000;
+            nt.OptionalHeader.FileAlignment = 0x200;
+            nt.OptionalHeader.SizeOfHeaders = 0x1000;
+            nt.OptionalHeader.SizeOfCode = TextSize;
+            nt.OptionalHeader.SizeOfInitializedData = DataSize;
+            nt.OptionalHeader.BaseOfCode = TextRva;
+            nt.OptionalHeader.SizeOfImage = 0x5ca5000;
+            nt.OptionalHeader.Subsystem = IMAGE_SUBSYSTEM_WINDOWS_CUI;
+            nt.OptionalHeader.MajorOperatingSystemVersion = 6;
+            nt.OptionalHeader.MajorSubsystemVersion = 6;
+            nt.OptionalHeader.SizeOfStackReserve = nt.OptionalHeader.SizeOfHeapReserve = 0x100000;
+            nt.OptionalHeader.SizeOfStackCommit = nt.OptionalHeader.SizeOfHeapCommit = 0x1000;
+            nt.OptionalHeader.NumberOfRvaAndSizes = IMAGE_NUMBEROF_DIRECTORY_ENTRIES;
+            std::memcpy(bytes.data() + dos.e_lfanew, &nt, sizeof(nt));
+            std::array<IMAGE_SECTION_HEADER, 5> sections{};
+            // A Windows image section table must describe adjacent virtual
+            // ranges. Sparse zero-filled sections preserve the actual native
+            // RVAs without leaving loader-invalid gaps or a huge raw file.
+            const auto zeroSection = [&](std::size_t index, const char* name, std::uint32_t rva, std::uint32_t size)
+            {
+                std::memcpy(sections[index].Name, name, std::strlen(name));
+                sections[index].VirtualAddress = rva;
+                sections[index].Misc.VirtualSize = size;
+                sections[index].Characteristics = IMAGE_SCN_CNT_UNINITIALIZED_DATA | IMAGE_SCN_MEM_READ;
+            };
+            zeroSection(0, ".head", 0x1000, TextRva - 0x1000);
+            zeroSection(2, ".gap", TextRva + TextSize, DataRva - TextRva - TextSize);
+            zeroSection(4, ".tail", DataRva + DataSize, nt.OptionalHeader.SizeOfImage - DataRva - DataSize);
+            std::memcpy(sections[1].Name, ".text", 5);
+            sections[1].VirtualAddress = TextRva;
+            sections[1].Misc.VirtualSize = sections[1].SizeOfRawData = TextSize;
+            sections[1].PointerToRawData = 0x1000;
+            sections[1].Characteristics = IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE;
+            std::memcpy(sections[3].Name, ".data", 5);
+            sections[3].VirtualAddress = DataRva;
+            sections[3].Misc.VirtualSize = sections[3].SizeOfRawData = DataSize;
+            sections[3].PointerToRawData = 0x1000 + TextSize;
+            sections[3].Characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE;
+            std::memcpy(bytes.data() + dos.e_lfanew + sizeof(nt), sections.data(), sizeof(sections));
+            const auto code = [&](std::uintptr_t rva, const auto& data) { std::memcpy(bytes.data() + 0x1000 + rva - TextRva, data.data(), data.size()); };
+            code(NativeClockProfile::clockCodeRva, NativeClockProfile::clockCode);
+            code(NativeClockProfile::hookEntryRva, NativeClockProfile::hookEntry);
+            code(NativeClockProfile::hookTailRva, NativeClockProfile::hookTail);
+            code(NativeClockProfile::clockCallRva, NativeClockProfile::clockCall);
+            code(NativeClockProfile::frameCallRva, NativeClockProfile::frameCall);
+            code(NativeClockProfile::getterCaseRva, NativeClockProfile::getterCase);
+            // Preserve the independently pinned original prologue and supply
+            // only an owned return body. Its native clock update is not executed.
+            const std::array<unsigned char, 8> epilogue{0x48, 0x81, 0xc4, 0xd8, 0, 0, 0, 0xc3};
+            code(NativeClockProfile::hookTailRva + NativeClockProfile::hookTail.size(), epilogue);
+            const std::array<unsigned char, 5> callReturn{0x48, 0x83, 0xc4, 0x28, 0xc3};
+            code(NativeClockProfile::clockCallRva + NativeClockProfile::clockCall.size(), callReturn);
+            std::ofstream stream(path, std::ios::binary);
+            stream.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+            stream.close();
+            Check(stream.good(), "save the owned synthetic PE used by actual Windows SEC_IMAGE page validation");
+            file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            Check(file != INVALID_HANDLE_VALUE, "open only the task-owned synthetic native image");
+            mapping = CreateFileMappingW(file, nullptr, PAGE_READONLY | SEC_IMAGE, 0, 0, nullptr);
+            const auto mappingError = GetLastError();
+            std::printf("Owned image SEC_IMAGE mapping GetLastError=%lu\n", mappingError);
+            Check(mapping != nullptr, "create actual Windows image mapping without weakening shipping MEM_IMAGE checks");
+            image = reinterpret_cast<std::uintptr_t>(MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0));
+            Check(image != 0, "map the owned image with actual executable and writable native sections");
+            // The production executable records a non-page-aligned SizeOfImage.
+            // Keep the kernel mapping legal, then seed those exact observed
+            // metadata bytes inside this independently owned image fixture.
+            nt.OptionalHeader.SizeOfImage = 97141760;
+            Patch(static_cast<std::uintptr_t>(dos.e_lfanew), &nt, sizeof(nt));
+            std::array<unsigned char, 16> thunk{0x48, 0x83, 0xec, 0x28, 0x48, 0xb8};
+            const auto                    target = image + NativeClockProfile::clockCallRva;
+            std::memcpy(thunk.data() + 6, &target, sizeof(target));
+            thunk[14] = 0xff;
+            thunk[15] = 0xe0;
+            Patch(TextRva + 0x1000, thunk.data(), thunk.size());
+            invoke = reinterpret_cast<void (*)()>(image + TextRva + 0x1000);
+            ClockTestFaults::patchAddress = image + NativeClockProfile::patchRva - 3;
+            ClockTestFaults::dataAddress = image + 0x522bcf8;
+        }
+        void Patch(std::uintptr_t rva, const void* bytes, std::size_t length)
+        {
+            DWORD previous = 0, ignored = 0;
+            Check(::VirtualProtect(reinterpret_cast<void*>(image + rva), length, PAGE_EXECUTE_READWRITE, &previous) != FALSE,
+                  "temporarily admit writes to this owned image fixture range");
+            std::memcpy(reinterpret_cast<void*>(image + rva), bytes, length);
+            Check(::VirtualProtect(reinterpret_cast<void*>(image + rva), length, previous, &ignored) != FALSE &&
+                      ::FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(image + rva), length),
+                  "restore actual fixture protection and instruction-cache coherence");
+        }
+        template <typename T>
+        void Put(std::uintptr_t rva, const T& value)
+        {
+            SIZE_T written = 0;
+            Check(::WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(image + rva), &value, sizeof(value), &written) && written == sizeof(value),
+                  "write only a task-owned synthetic native data field");
+        }
+        void Seed()
+        {
+            Put(0x521c917, std::uint8_t{12});
+            Put(0x521c923, std::uint8_t{34});
+            Put(0x522bcf0, std::uint16_t{27});
+            Put(0x523a458, std::uint32_t{10000});
+            Put(0x522bcf8, std::uint32_t{9900});
+            Put(0x5227bac, std::uint32_t{1000});
+        }
+        template <typename T>
+        T Get(std::uintptr_t rva) const
+        {
+            T      value{};
+            SIZE_T copied = 0;
+            Check(ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(image + rva), &value, sizeof(value), &copied) && copied == sizeof(value),
+                  "read an actual owned native image field for independent verification");
+            return value;
+        }
+    };
+
+    // This receiver tests the real SDK implementation without pretending to be
+    // a CGame or shipping native binding. Native memory/hook behavior belongs to
+    // the separate production-runtime fixture below, not these receiver values.
+    class AccessFixture final : public NativeClockAccess
+    {
+    public:
+        std::atomic<DWORD>            owner{0};
+        ClockValues                   values{12, 34, 56, 0x12345678, 0x12345670, 1000};
+        ClockResult                   readResult = ClockResult::Ok, setResult = ClockResult::Ok;
+        ClockResult                   freezeResult = ClockResult::Ok, frozenResult = ClockResult::Ok;
+        bool                          frozen = false;
+        std::atomic<unsigned>         reads{0}, sets{0}, freezes{0};
+        mutable std::atomic<unsigned> frozenReads{0};
+        std::uint8_t                  lastHour = 0, lastMinute = 0;
+
+        ClockResult Owner() const noexcept
+        {
+            const auto thread = owner.load();
+            return !thread ? ClockResult::NotInitialized : thread != GetCurrentThreadId() ? ClockResult::WrongThread : ClockResult::Ok;
+        }
+        ClockResult Read(ClockValues& output) noexcept override
+        {
+            ++reads;
+            const auto result = Owner();
+            if (result != ClockResult::Ok)
+                return result;
+            output = values;
+            // Deliberately publish into the temporary even on a failed backend
+            // read. The actual CClockDE must preserve its caller's two outputs.
+            return readResult;
+        }
+        ClockResult Set(std::uint8_t hour, std::uint8_t minute) noexcept override
+        {
+            ++sets;
+            const auto result = Owner();
+            if (result != ClockResult::Ok)
+                return result;
+            if (setResult == ClockResult::Ok)
+            {
+                lastHour = hour;
+                lastMinute = minute;
+                values.hour = hour;
+                values.minute = minute;
+            }
+            return setResult;
+        }
+        ClockResult Freeze(bool value) noexcept override
+        {
+            ++freezes;
+            const auto result = Owner();
+            if (result != ClockResult::Ok)
+                return result;
+            if (freezeResult == ClockResult::Ok)
+                frozen = value;
+            return freezeResult;
+        }
+        ClockResult Frozen(bool& output) const noexcept override
+        {
+            ++frozenReads;
+            const auto result = Owner();
+            if (result != ClockResult::Ok)
+                return result;
+            output = frozen;
+            return frozenResult;
+        }
+    };
+
+    void ClockInterfaceContract()
+    {
+        static_assert(std::is_base_of_v<CClock, CClockDE> && !std::is_abstract_v<CClockDE>);
+        static_assert(!std::has_virtual_destructor_v<CClock>);
+        AccessFixture access;
+        CClockDE      clock(access);
+        CClock&       sdk = clock;
+        const CClock& constSdk = clock;
+        BYTE          hour = 0xa5, minute = 0x5a;
+        Check(clock.LastResult() == ClockResult::NotInitialized, "a new concrete MTA clock contains no fabricated native time");
+        sdk.Get(&hour, &minute);
+        Check(hour == 0xa5 && minute == 0x5a && clock.LastResult() == ClockResult::NotInitialized,
+              "unbound SDK Get preserves both caller outputs and records the backend refusal");
+        Check(!sdk.SetTimeFrozen(true) && clock.LastResult() == ClockResult::NotInitialized, "unbound SDK freeze never reports success");
+        access.owner = GetCurrentThreadId();
+        sdk.Get(&hour, &minute);
+        Check(hour == 12 && minute == 34 && clock.LastResult() == ClockResult::Ok,
+              "the existing CClock virtual interface reads a coherent successful native-access result");
+        BYTE alias = 0;
+        sdk.Get(&alias, &alias);
+        Check(alias == 12, "aliased Get outputs retain the existing classic minute-first publication order");
+        const auto readCalls = access.reads.load();
+        Check(clock.TryGet(nullptr, &minute) == ClockResult::InvalidArgument && clock.TryGet(&hour, nullptr) == ClockResult::InvalidArgument &&
+                  clock.TryGet(nullptr, nullptr) == ClockResult::InvalidArgument && hour == 12 && minute == 34 && access.reads.load() == readCalls,
+              "null output arguments refuse before native access without changing a valid output");
+        for (const auto value : {std::array<BYTE, 2>{0, 0}, std::array<BYTE, 2>{23, 59}, std::array<BYTE, 2>{23, 60}})
+        {
+            sdk.Set(value[0], value[1]);
+            Check(clock.LastResult() == ClockResult::Ok && access.lastHour == value[0] && access.lastMinute == value[1],
+                  "actual SDK Set delegates canonical times and classic minute 60 without normalization");
+        }
+        const auto setCalls = access.sets.load();
+        for (const auto value : {std::array<BYTE, 2>{24, 0}, std::array<BYTE, 2>{255, 0}, std::array<BYTE, 2>{0, 61}, std::array<BYTE, 2>{0, 255}})
+        {
+            sdk.Set(value[0], value[1]);
+            Check(clock.LastResult() == ClockResult::InvalidArgument && access.sets.load() == setCalls,
+                  "out-of-range legacy SDK times cannot reach native writes");
+        }
+        access.readResult = ClockResult::ReadFailure;
+        hour = 0xa5;
+        minute = 0x5a;
+        Check(clock.TryGet(&hour, &minute) == ClockResult::ReadFailure && hour == 0xa5 && minute == 0x5a,
+              "a failed backend read cannot partially publish or return an earlier cached time");
+        access.readResult = ClockResult::Ok;
+        access.values.hour = 6;
+        access.values.minute = 7;
+        sdk.Get(&hour, &minute);
+        Check(hour == 6 && minute == 7, "the next SDK Get reads the new backend values rather than a retained prior read");
+        access.setResult = ClockResult::WriteFailure;
+        sdk.Set(15, 16);
+        Check(clock.LastResult() == ClockResult::WriteFailure && access.values.hour == 6 && access.values.minute == 7,
+              "the void SDK Set retains a separately readable native write failure");
+        access.setResult = ClockResult::Ok;
+        Check(sdk.SetTimeFrozen(true) && constSdk.IsTimeFrozen() && clock.LastResult() == ClockResult::Ok,
+              "existing SDK freeze and const query delegate to the real checked backend boundary");
+        Check(sdk.SetTimeFrozen(true) && access.frozen, "repeated SDK freeze remains an idempotent backend request");
+        bool observed = false;
+        access.frozenResult = ClockResult::ReadFailure;
+        Check(clock.TryIsTimeFrozen(observed) == ClockResult::ReadFailure && !observed, "failed frozen-state reads preserve the caller's existing false value");
+        observed = true;
+        Check(clock.TryIsTimeFrozen(observed) == ClockResult::ReadFailure && observed, "failed frozen-state reads also preserve an existing true value");
+        Check(!constSdk.IsTimeFrozen() && clock.LastResult() == ClockResult::ReadFailure,
+              "the legacy bool query records errors and never reuses a cached successful frozen value");
+        access.frozenResult = ClockResult::Ok;
+        access.freezeResult = ClockResult::PatchFailure;
+        Check(!sdk.ResetTimeFrozen() && clock.LastResult() == ClockResult::PatchFailure && access.frozen,
+              "a failed native unfreeze cannot falsely complete the SDK reset");
+        access.freezeResult = ClockResult::Ok;
+        Check(sdk.ResetTimeFrozen() && !constSdk.IsTimeFrozen() && sdk.ResetTimeFrozen(),
+              "SDK ResetTimeFrozen means idempotent unfreeze rather than restoring an earlier cached state");
+        bool        foreignRejected = false;
+        std::thread foreign(
+            [&]
+            {
+                BYTE otherHour = 0xab, otherMinute = 0xcd;
+                bool otherFrozen = true;
+                foreignRejected = clock.TryGet(&otherHour, &otherMinute) == ClockResult::WrongThread && otherHour == 0xab && otherMinute == 0xcd &&
+                                  clock.TrySet(1, 2) == ClockResult::WrongThread && clock.TrySetTimeFrozen(true) == ClockResult::WrongThread &&
+                                  clock.TryIsTimeFrozen(otherFrozen) == ClockResult::WrongThread && otherFrozen &&
+                                  clock.TryResetTimeFrozen() == ClockResult::WrongThread;
+            });
+        foreign.join();
+        Check(foreignRejected && !access.frozen && access.values.hour == 6 && access.values.minute == 7,
+              "every checked SDK operation preserves the backend's adopted engine-thread policy");
+        Check(clock.LastResult() == ClockResult::WrongThread, "cross-thread diagnostic observation is atomic without sharing cached native fields");
+        Check(clock.TrySet(8, 9) == ClockResult::Ok && clock.TryGet(&hour, &minute) == ClockResult::Ok && hour == 8 && minute == 9,
+              "an unauthorized call does not revoke a later valid engine-owner operation");
+    }
+    ClockServiceStateV1 State(NativeClockService& service)
+    {
+        ClockServiceStateV1 state;
+        Check(service.Read(state), "read the production service's coherent published state");
+        return state;
+    }
+
+    void BeginOwned(NativeClockService& service, ClockImageFixture& fixture, bool adoptNow = true, bool attachNow = true)
+    {
+        ClockServiceStateV1 rejected;
+        Check(!service.Begin({}, rejected) && rejected.failure == ClockResult::UnsupportedBuild && !rejected.bound && !rejected.hooked &&
+                  !rejected.modulePinned && rejected.generation && !NativeServiceAdmission::IsClaimed(NativeServiceAdmission::Category::Clock),
+              "shipping Begin rejects this actual test executable before binding, hooks or module pinning");
+        fixture.Seed();
+        NativeServiceAdmission::Token claim;
+        Check(NativeServiceAdmission::TryAcquire(NativeServiceAdmission::Category::Clock, claim),
+              "the owned native image fixture holds the actual shared clock admission throughout setup and cleanup");
+        runtime.admissionSerial.store(claim.serial);
+        runtime.admissionGeneration.store(runtime.generation.load());
+        Check(!ReleaseAdmission(runtime.generation.load() - 1) && NativeServiceAdmission::IsClaimed(NativeServiceAdmission::Category::Clock),
+              "a stale native cleanup generation cannot release the current fixture's real process-wide clock claim");
+        // Whitebox admission replaces only the test-owned runtime's image after
+        // proving that public shipping admission refused it. All subsequent
+        // data/code validation, Detours and callback ownership remain real.
+        runtime.image = fixture.image;
+        runtime.failure.store(ClockResult::Ok);
+        runtime.stopping.store(false);
+        runtime.bound.store(true);
+        runtime.active.store(true);
+        runtime.started = GetTickCount64();
+        runtime.refreshed.store(runtime.started);
+        runtime.originalContinuation = reinterpret_cast<ContinuationFunction>(fixture.image + NativeClockProfile::hookEntryRva);
+        Check(CheckBinding(true), "exact owned MEM_IMAGE code, page and section pins validate before any native hook transaction");
+        if (!attachNow)
+            return;
+        Check(ChangeHooks(true), "actual Detours attaches after validated native ownership");
+        runtime.hooked.store(true);
+        if (!adoptNow)
+            return;
+        fixture.invoke();
+        const auto state = State(service);
+        Check(state.engineThread == GetCurrentThreadId() && state.producerThread == GetCurrentThreadId() && state.ready && state.active && !state.restored &&
+                  state.qualifiedCallbacks == 1 && state.callbacks == 1 && state.hour == 12 && state.minute == 34 && state.seconds == 27,
+              "the actual qualified native return address adopts the owner and captures fresh engine clock fields");
+    }
+
+    ClockCommandV1 Command(const ClockServiceStateV1& state, std::uint64_t sequence, ClockOperation operation = ClockOperation::Read)
+    {
+        ClockCommandV1 command;
+        command.generation = state.generation;
+        command.sequence = sequence;
+        command.operation = operation;
+        return command;
+    }
+
+    ClockServiceStateV1 Execute(NativeClockService& service, ClockImageFixture& fixture, ClockOperation operation, std::uint64_t sequence = 1)
+    {
+        const auto before = State(service);
+        Check(service.Submit(Command(before, sequence, operation)), "the producer queues one generation-bound production clock command");
+        fixture.invoke();
+        const auto after = State(service);
+        Check(after.lastCompletedSequence == sequence && !after.pendingSequence && !after.inFlight,
+              "actual callback completes the queued sequence and releases callback lifetime accounting");
+        return after;
+    }
+
+    void FinishOwned(NativeClockService& service, ClockImageFixture& fixture)
+    {
+        NativeServiceAdmission::Token refused;
+        Check(NativeServiceAdmission::IsClaimed(NativeServiceAdmission::Category::Clock) &&
+                  !NativeServiceAdmission::TryAcquire(NativeServiceAdmission::Category::Input, refused) &&
+                  !NativeServiceAdmission::TryAcquire(NativeServiceAdmission::Category::Render, refused),
+              "native setup or cleanup debt keeps the actual shared clock claim exclusive against input and renderer startup");
+        if (!runtime.stopping.load())
+            Check(!service.End() && service.IsRetained(), "End retains the real hook until native-owner restoration runs");
+        fixture.invoke();
+        Check(service.End() && !service.IsRetained(), "native restoration acknowledges before real Detours detach and owner release");
+        const auto state = State(service);
+        Check(state.restored && !state.ready && !state.bound && !state.hooked && !state.patchInstalled && !state.patchRecoveryPending &&
+                  !state.dataRecoveryPending && !state.retainedPeerThreads && !state.protectionRestorePending && !state.inFlight,
+              "completed cleanup has no native data, branch, protection, peer-handle or callback debt");
+        Check(CheckBinding(true), "exact original clock and continuation bytes survive complete cleanup");
+        Check(!NativeServiceAdmission::IsClaimed(NativeServiceAdmission::Category::Clock) && !runtime.admissionSerial.load() &&
+                  !runtime.admissionGeneration.load(),
+              "only confirmed native cleanup releases its exact shared service admission generation");
+    }
+
+    void NativeContractValidation()
+    {
+        ClockServiceRequestV1 request;
+        Check(NativeClockService::ValidateRequest(request), "default bounded native clock request is valid");
+        for (unsigned field = 0; field != 6; ++field)
+        {
+            auto invalid = request;
+            if (field == 0)
+                --invalid.size;
+            if (field == 1)
+                ++invalid.version;
+            if (field == 2)
+                invalid.maximumDurationMs = 0;
+            if (field == 3)
+                invalid.maximumDurationMs = ClockServiceMaximumDurationMsV1 + 1;
+            if (field == 4)
+                invalid.reserved[0] = 1;
+            if (field == 5)
+                invalid.reserved[2] = 1;
+            Check(!NativeClockService::ValidateRequest(invalid), "invalid request shape, lease duration or reserved data refuses admission");
+        }
+        ClockCommandV1 command;
+        command.generation = command.sequence = 1;
+        Check(NativeClockService::ValidateCommand(command), "canonical native read command is valid");
+        for (unsigned field = 0; field != 9; ++field)
+        {
+            auto invalid = command;
+            if (field == 0)
+                --invalid.size;
+            if (field == 1)
+                ++invalid.version;
+            if (field == 2)
+                invalid.generation = 0;
+            if (field == 3)
+                invalid.sequence = 0;
+            if (field == 4)
+                invalid.reserved = 1;
+            if (field == 5)
+                invalid.operation = static_cast<ClockOperation>(5);
+            if (field == 6)
+                invalid.hour = 1;
+            if (field == 7)
+            {
+                invalid.operation = ClockOperation::Set;
+                invalid.hour = 24;
+            }
+            if (field == 8)
+            {
+                invalid.operation = ClockOperation::Set;
+                invalid.minute = 61;
+            }
+            Check(!NativeClockService::ValidateCommand(invalid), "invalid command identity, operation or time cannot enter the native mailbox");
+        }
+    }
+
+    void NativeServiceAdmissionContract()
+    {
+        namespace Admission = NativeServiceAdmission;
+        using Admission::Category;
+        using Admission::Token;
+        Token input, render, clock, refused;
+        Check(!Admission::IsClaimed(Category::Input) && !Admission::IsClaimed(Category::Render) && !Admission::IsClaimed(Category::Clock),
+              "real shared native service admission starts without a retained service owner");
+        refused = {Category::Render, 987};
+        Check(!Admission::TryAcquire(Category::None, refused) && refused.category == Category::Render && refused.serial == 987 && !Admission::Release(refused),
+              "invalid admission preserves output and an unowned token cannot release any service category");
+        Check(Admission::TryAcquire(Category::Input, input) && Admission::TryAcquire(Category::Render, render) && input.serial != render.serial,
+              "the real shared helper admits frontend input and rendering together with independent ownership serials");
+        refused = {};
+        Check(!Admission::TryAcquire(Category::Clock, clock) && !Admission::TryAcquire(Category::Input, refused) && !refused && !Admission::Release(refused) &&
+                  Admission::IsClaimed(Category::Input) && Admission::IsClaimed(Category::Render),
+              "clock and duplicate input startup refuse without granting a token capable of releasing the active frontend owners");
+        Check(!Admission::Release({Category::Render, input.serial}) && Admission::IsClaimed(Category::Render),
+              "a token from one category cannot release another category's independently owned admission");
+        Check(Admission::Release(render) && !Admission::TryAcquire(Category::Clock, clock),
+              "releasing rendering alone cannot clear input's clock exclusion during retained input cleanup");
+        Check(Admission::Release(input) && Admission::TryAcquire(Category::Clock, clock),
+              "clock startup becomes available only after every conflicting frontend claim is explicitly released");
+        Check(!Admission::Release(input) && !Admission::Release(render) && Admission::IsClaimed(Category::Clock) &&
+                  !Admission::TryAcquire(Category::Input, refused) && !Admission::TryAcquire(Category::Render, refused),
+              "stale frontend cleanup cannot release a newer exclusive clock owner or admit another service");
+        // No success/failure guess releases a claim: callers keep the token
+        // throughout their explicit cleanup debt and release it only on proof.
+        Check(Admission::IsClaimed(Category::Clock) && !Admission::TryAcquire(Category::Clock, refused),
+              "a retained clock claim survives failed cleanup and duplicate startup until its exact owner explicitly releases it");
+        const auto oldClock = clock;
+        Check(Admission::Release(clock) && Admission::TryAcquire(Category::Clock, clock) && clock.serial != oldClock.serial && !Admission::Release(oldClock) &&
+                  Admission::IsClaimed(Category::Clock),
+              "a stale same-category token cannot release a later clock generation after admission reuse");
+        Check(Admission::Release(clock), "the exact current clock token releases its own admission once cleanup is confirmed");
+        Check(Admission::TryAcquire(Category::Input, input), "hold the real input service category before an actual native clock Begin");
+        NativeClockService  blockedClock;
+        ClockServiceStateV1 blockedState;
+        Check(!blockedClock.Begin({}, blockedState) && !runtime.hooked.load() && !Admission::IsClaimed(Category::Clock) &&
+                  Admission::IsClaimed(Category::Input) && blockedClock.End() && Admission::IsClaimed(Category::Input),
+              "actual native clock admission refuses an existing input owner and its failed-owner End cannot release that foreign claim");
+        Check(Admission::Release(input), "the actual input token remains releasable only by its original service owner");
+        for (unsigned round = 0; round != 4; ++round)
+        {
+            std::atomic<unsigned> ready{0}, completed{0};
+            std::atomic<bool>     start{false}, release{false}, inputWon{false}, clockWon{false}, inputReleased{false}, clockReleased{false};
+            const auto            compete = [&](Category category, std::atomic<bool>& won, std::atomic<bool>& released)
+            {
+                Token token;
+                ready.fetch_add(1);
+                while (!start.load())
+                    SwitchToThread();
+                const bool acquired = Admission::TryAcquire(category, token);
+                won.store(acquired);
+                completed.fetch_add(1);
+                while (!release.load())
+                    SwitchToThread();
+                released.store(acquired ? Admission::Release(token) : !Admission::Release(token));
+            };
+            std::thread inputThread([&] { compete(Category::Input, inputWon, inputReleased); });
+            std::thread clockThread([&] { compete(Category::Clock, clockWon, clockReleased); });
+            while (ready.load() != 2)
+                SwitchToThread();
+            start.store(true);
+            while (completed.load() != 2)
+                SwitchToThread();
+            Check(inputWon.load() != clockWon.load() && Admission::IsClaimed(Category::Input) == inputWon.load() &&
+                      Admission::IsClaimed(Category::Clock) == clockWon.load(),
+                  "synchronized competing input and clock startup admits exactly one owner while its token is retained");
+            release.store(true);
+            inputThread.join();
+            clockThread.join();
+            Check(inputReleased.load() && clockReleased.load() && !Admission::IsClaimed(Category::Input) && !Admission::IsClaimed(Category::Clock),
+                  "only the racing winner releases its actual claim while a failed contender cannot affect ownership");
+        }
+    }
+
+    void NativeReadSetAndRestoration(ClockImageFixture& fixture)
+    {
+        NativeClockService service;
+        BeginOwned(service, fixture);
+        auto state = State(service);
+        BYTE hour = 0xaa, minute = 0xbb;
+        Check(runtime.clock.TryGet(&hour, &minute) == ClockResult::WrongThread && hour == 0xaa && minute == 0xbb &&
+                  runtime.clock.TrySet(1, 2) == ClockResult::WrongThread && ChangeFreezePatch(false) == ClockResult::WrongThread,
+              "even the producer on the adopted OS thread cannot access native SDK values outside its callback scope");
+        ClockServiceStateV1 unchanged;
+        unchanged.hour = 99;
+        runtime.completionVersion.fetch_add(1);
+        const bool busyRead = service.Read(unchanged);
+        runtime.completionVersion.fetch_add(1);
+        Check(!busyRead && unchanged.hour == 99,
+              "an in-progress command publication fails boundedly without publishing a torn result or changing the caller's output");
+        auto command = Command(state, 1);
+        Check(service.Submit(command) && !service.Submit(Command(state, 2)), "an occupied production mailbox cannot silently overwrite a pending command");
+        fixture.invoke();
+        state = State(service);
+        Check(state.lastCommandResult == ClockResult::Ok && state.reads == 1 && state.lastCompletedSequence == 1 && !service.Submit(command),
+              "actual SDK Read completes once and rejects replayed sequence numbers");
+        command = Command(state, 2, ClockOperation::Set);
+        command.hour = 23;
+        command.minute = 60;
+        std::vector<unsigned char> before(ClockImageFixture::DataSize);
+        std::memcpy(before.data(), reinterpret_cast<const void*>(fixture.image + ClockImageFixture::DataRva), before.size());
+        Check(service.Submit(command), "classic-compatible minute 60 is accepted without DE script-setter normalization");
+        fixture.invoke();
+        state = State(service);
+        Check(state.lastCommandResult == ClockResult::Ok && state.sets == 1 && state.hour == 23 && state.minute == 60 && state.seconds == 27 &&
+                  state.nativeTimer == 10000 && state.lastMinuteChange == 10000,
+              "the actual SDK Set changes displayed time and minute timestamp while preserving seconds and native timer");
+        bool onlyClockFields = true;
+        for (std::size_t index = 0; index != before.size(); ++index)
+        {
+            const auto rva = ClockImageFixture::DataRva + index;
+            const bool owned = rva == hoursRva || rva == minutesRva || (rva >= lastChangeRva && rva < lastChangeRva + 4);
+            if (!owned && before[index] != *reinterpret_cast<const unsigned char*>(fixture.image + rva))
+                onlyClockFields = false;
+        }
+        Check(onlyClockFields, "independent whole-data-section comparison finds no timer, calendar, store-slot or unrelated writes");
+        state = Execute(service, fixture, ClockOperation::ResetTimeFrozen, 3);
+        Check(state.lastCommandResult == ClockResult::Ok && state.resets == 1 && !state.frozen && !state.patchInstalled,
+              "already-unfrozen SDK reset succeeds even when branch writes have not been independently admitted");
+        auto stale = Command(state, 4);
+        --stale.generation;
+        Check(!service.Submit(stale) && !service.Renew(state.generation + 1) && service.Renew(state.generation),
+              "stale generations cannot queue or renew another owner's native clock lifetime");
+        bool        foreignRefused = false;
+        std::thread foreign(
+            [&]
+            {
+                ClockServiceStateV1 unchanged;
+                unchanged.hour = 99;
+                foreignRefused = !service.Submit(Command(state, 4)) && !service.Renew(state.generation) && !service.Read(unchanged) && unchanged.hour == 99 &&
+                                 !service.End();
+            });
+        foreign.join();
+        Check(foreignRefused, "foreign producer calls cannot publish output, enqueue, renew or end the adopted owner's service");
+        fixture.Put(nativeTimerRva, std::uint32_t{15000});
+        FinishOwned(service, fixture);
+        Check(fixture.Get<std::uint8_t>(hoursRva) == 12 && fixture.Get<std::uint8_t>(minutesRva) == 34 && fixture.Get<std::uint16_t>(secondsRva) == 27 &&
+                  fixture.Get<std::uint32_t>(nativeTimerRva) == 15000 && fixture.Get<std::uint32_t>(lastChangeRva) == 14900,
+              "normal owner release restores captured display and fractional phase without rewinding the native game timer");
+    }
+
+    void NativeFailureAndLease(ClockImageFixture& fixture)
+    {
+        for (bool maximum : {false, true})
+        {
+            NativeClockService service;
+            BeginOwned(service, fixture);
+            const auto state = State(service);
+            if (maximum)
+                runtime.started = GetTickCount64() - ClockServiceMaximumDurationMsV1 - 1;
+            else
+                runtime.refreshed.store(GetTickCount64() - ClockServiceLeaseMsV1 - 1);
+            Check(!service.Renew(state.generation) && !runtime.active.load() && runtime.failure.load() == ClockResult::Expired,
+                  "elapsed renewable lease and maximum duration each stop rather than reviving an expired owner");
+            FinishOwned(service, fixture);
+        }
+        {
+            NativeClockService service;
+            BeginOwned(service, fixture);
+            auto modified = NativeClockProfile::getterCase;
+            modified[0] ^= 1;
+            fixture.Patch(NativeClockProfile::getterCaseRva, modified.data(), modified.size());
+            fixture.invoke();
+            const auto state = State(service);
+            Check(state.failure == ClockResult::BindingChanged && !state.active && !state.restored && state.restoreFailures && !service.End() &&
+                      service.IsRetained(),
+                  "changed native byte pins retain the hook and snapshot instead of claiming unverified restoration");
+            fixture.Patch(NativeClockProfile::getterCaseRva, NativeClockProfile::getterCase.data(), NativeClockProfile::getterCase.size());
+            FinishOwned(service, fixture);
+        }
+        {
+            NativeClockService service;
+            BeginOwned(service, fixture);
+            auto command = Command(State(service), 1, ClockOperation::Set);
+            command.hour = 20;
+            command.minute = 45;
+            Check(service.Submit(command), "queue the actual native write before injecting a later clock-field page failure");
+            DWORD protection = 0, ignored = 0;
+            Check(::VirtualProtect(reinterpret_cast<void*>(fixture.image + lastChangeRva), 4, PAGE_READONLY, &protection) != FALSE,
+                  "remove write permission only from the owned timestamp/seconds image page");
+            fixture.invoke();
+            auto state = State(service);
+            Check(state.failure == ClockResult::WriteFailure && state.dataRecoveryPending && !state.restored && state.restoreFailures &&
+                      fixture.Get<std::uint8_t>(hoursRva) == 12 && !service.End() && service.IsRetained(),
+                  "partial native Set and failed seconds restoration preserve explicit data recovery ownership");
+            Check(::VirtualProtect(reinterpret_cast<void*>(fixture.image + lastChangeRva), 4, protection, &ignored) != FALSE,
+                  "restore the owned data page so the actual native owner can retry its saved snapshot");
+            FinishOwned(service, fixture);
+        }
+        {
+            NativeClockService service;
+            BeginOwned(service, fixture);
+            ClockTestFaults::partialDataWrites.store(1);
+            const auto state = Execute(service, fixture, ClockOperation::Set);
+            Check(state.lastCommandResult == ClockResult::WriteFailure && state.failure == ClockResult::WriteFailure && state.restored &&
+                      !state.dataRecoveryPending && fixture.Get<std::uint32_t>(lastChangeRva) == 9900,
+                  "an actual short WriteProcessMemory data copy cannot report success and is restored by the saved native snapshot");
+            FinishOwned(service, fixture);
+        }
+        {
+            NativeClockService service;
+            BeginOwned(service, fixture);
+            ClockTestFaults::failEnumeration.store(true);
+            const auto state = Execute(service, fixture, ClockOperation::Set);
+            Check(state.lastCommandResult == ClockResult::Busy && state.failure == ClockResult::Busy && !state.sets && !state.retainedPeerThreads,
+                  "Thread32Next failure is rejected as incomplete enumeration instead of admitting an unparked native write");
+            FinishOwned(service, fixture);
+        }
+    }
+
+    void NativeCaptureAndWraparound(ClockImageFixture& fixture)
+    {
+        for (unsigned invalid = 0; invalid != 3; ++invalid)
+        {
+            NativeClockService service;
+            BeginOwned(service, fixture, false);
+            if (invalid == 0)
+                fixture.Put(minutesRva, std::uint8_t{60});
+            if (invalid == 1)
+                fixture.Put(secondsRva, std::uint16_t{61});
+            if (invalid == 2)
+                fixture.Put(lastChangeRva, std::uint32_t{8000});
+            fixture.invoke();
+            const auto state = State(service);
+            Check(state.failure == ClockResult::BindingChanged && !state.ready && state.restored && !state.sets && !state.dataRecoveryPending,
+                  "noncanonical initial minute, seconds or fractional phase refuses ownership before any native data writes");
+            FinishOwned(service, fixture);
+        }
+        NativeClockService service;
+        BeginOwned(service, fixture, false);
+        fixture.Put(nativeTimerRva, std::uint32_t{50});
+        fixture.Put(lastChangeRva, std::uint32_t{0xffffffce});
+        fixture.invoke();
+        Check(State(service).ready, "native DWORD timer wraparound retains a valid one-hundred-millisecond captured phase");
+        fixture.Put(nativeTimerRva, std::uint32_t{125});
+        FinishOwned(service, fixture);
+        Check(fixture.Get<std::uint32_t>(nativeTimerRva) == 125 && fixture.Get<std::uint32_t>(lastChangeRva) == 25,
+              "restore uses modular native timer arithmetic instead of rejecting or rewinding a wrapped timer");
+    }
+
+    void NativePeerResumeRecovery(ClockImageFixture& fixture)
+    {
+        NativeClockService service;
+        BeginOwned(service, fixture);
+        const auto stop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        Check(stop != nullptr, "create an owned disposable peer lifetime for real suspend/resume recovery");
+        std::atomic<DWORD> peerId{0};
+        std::thread        peer(
+            [&]
+            {
+                peerId.store(GetCurrentThreadId());
+                WaitForSingleObject(stop, INFINITE);
+            });
+        while (!peerId.load())
+            SwitchToThread();
+        const auto handle = OpenThread(THREAD_SUSPEND_RESUME | THREAD_QUERY_INFORMATION, FALSE, peerId.load());
+        Check(handle != nullptr, "observe only the disposable fixture peer's suspension count");
+        ClockTestFaults::resumeTarget.store(peerId.load());
+        ClockTestFaults::failResumes.store(64);
+        const auto state = Execute(service, fixture, ClockOperation::Set);
+        Check(state.failure == ClockResult::RestoreFailure && state.retainedPeerThreads == 1 && state.dataRecoveryPending && !state.restored &&
+                  !service.End() && service.IsRetained(),
+              "failed ResumeThread keeps the actual suspended handle and native snapshot owned across callback and End");
+        const auto count = ::SuspendThread(handle);
+        Check(count == 1 && ::ResumeThread(handle) == 2, "independent suspend-count probe proves the retained peer was not falsely acknowledged as running");
+        ClockTestFaults::failResumes.store(0);
+        fixture.invoke();
+        Check(!State(service).retainedPeerThreads && runtime.recoveryPeers.empty(),
+              "the next native callback retries and releases the exact retained peer handle");
+        SetEvent(stop);
+        peer.join();
+        CloseHandle(handle);
+        CloseHandle(stop);
+        FinishOwned(service, fixture);
+    }
+
+    void NativeEngineThreadHandoff(ClockImageFixture& fixture)
+    {
+        NativeClockService service;
+        BeginOwned(service, fixture, false);
+        const auto run = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        const auto done = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        Check(run && done, "create bounded handoff events for a distinct native engine fixture thread");
+        std::atomic<bool>  stop{false};
+        std::atomic<DWORD> engine{0};
+        std::thread        worker(
+            [&]
+            {
+                engine.store(GetCurrentThreadId());
+                while (WaitForSingleObject(run, 5000) == WAIT_OBJECT_0)
+                {
+                    if (stop.load())
+                        break;
+                    fixture.invoke();
+                    SetEvent(done);
+                }
+            });
+        const auto tick = [&]
+        {
+            Check(service.Renew(State(service).generation) && SetEvent(run) && WaitForSingleObject(done, 5000) == WAIT_OBJECT_0,
+                  "producer hands one real qualified callback to a separate engine thread within a bounded wait");
+        };
+        tick();
+        auto state = State(service);
+        Check(state.ready && state.engineThread == engine.load() && state.engineThread != state.producerThread,
+              "the first native callback adopts its actual thread rather than the producer constructor thread");
+        auto command = Command(state, 1, ClockOperation::Set);
+        command.hour = 18;
+        command.minute = 19;
+        Check(service.Submit(command), "the producer queues an actual SDK write for the distinct engine owner");
+        tick();
+        state = State(service);
+        Check(state.lastCompletedSequence == 1 && state.lastCommandResult == ClockResult::Ok && state.hour == 18 && state.minute == 19,
+              "the separate native owner consumes the mailbox and performs actual SDK data writes");
+        fixture.invoke();
+        state = State(service);
+        Check(state.failure == ClockResult::WrongThread && state.foreignCallbacks == 1 && !state.active && !state.restored,
+              "a later qualified callback on another thread stops safely without taking over the adopted native owner");
+        Check(!service.End() && service.IsRetained(), "producer End waits for separate engine-owner restoration");
+        Check(SetEvent(run) && WaitForSingleObject(done, 5000) == WAIT_OBJECT_0, "stopped owners still receive their final native restoration callback");
+        Check(service.End() && !service.IsRetained() && State(service).restored,
+              "producer detaches only after the separate native engine owner acknowledges restoration");
+        Check(!NativeServiceAdmission::IsClaimed(NativeServiceAdmission::Category::Clock),
+              "separate-thread cleanup releases its process-wide claim after native restoration and detachment");
+        stop.store(true);
+        SetEvent(run);
+        worker.join();
+        CloseHandle(run);
+        CloseHandle(done);
+        Check(CheckBinding(true), "separate-thread handoff leaves original native code bytes restored");
+    }
+
+    void NativeCommittedHookResumeRecovery(ClockImageFixture& fixture)
+    {
+        NativeClockService service;
+        BeginOwned(service, fixture, false, false);
+        const auto stop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        Check(stop != nullptr, "create a disposable parked peer for committed hook recovery");
+        std::atomic<DWORD> peerId{0};
+        std::thread        peer(
+            [&]
+            {
+                peerId.store(GetCurrentThreadId());
+                WaitForSingleObject(stop, INFINITE);
+            });
+        while (!peerId.load())
+            SwitchToThread();
+        ClockTestFaults::resumeTarget.store(peerId.load());
+        ClockTestFaults::failResumes.store(64);
+        const bool changed = ChangeHooks(true);
+        const auto state = State(service);
+        Check(!changed && state.hooked && state.retainedPeerThreads == 1 && service.IsRetained() &&
+                  NativeServiceAdmission::IsClaimed(NativeServiceAdmission::Category::Clock) &&
+                  !CheckCode(NativeClockProfile::hookEntryRva, NativeClockProfile::hookEntry),
+              "successful Detours commit followed by resume failure keeps the actual installed hook recorded and its suspended peer retained");
+        Check(!service.End() && service.IsRetained(), "End cannot acknowledge a committed hook while a real suspended peer remains owned");
+        ClockTestFaults::failResumes.store(0);
+        Check(service.End() && !service.IsRetained() && !State(service).hooked && CheckBinding(true) &&
+                  !NativeServiceAdmission::IsClaimed(NativeServiceAdmission::Category::Clock),
+              "retained peer recovery then detaches the truly committed hook instead of losing it behind a failed transaction result");
+        SetEvent(stop);
+        peer.join();
+        CloseHandle(stop);
+    }
+
+    void OriginalRaises()
+    {
+        RaiseException(0xe001c10c, 0, 0, nullptr);
+    }
+
+    bool InvokeOriginalException()
+    {
+        // Keep the SEH boundary in a normal compiler-owned frame: the synthetic
+        // native code deliberately has no invented unwind metadata.
+        __try
+        {
+            HookClockContinuation();
+        }
+        __except (GetExceptionCode() == 0xe001c10c ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
+        {
+            return true;
+        }
+        return false;
+    }
+
+    void NativeCallbackLifetime(ClockImageFixture& fixture)
+    {
+        {
+            NativeClockService service;
+            BeginOwned(service, fixture);
+            ++callbackDepth;
+            fixture.invoke();
+            --callbackDepth;
+            const auto state = State(service);
+            Check(state.failure == ClockResult::Busy && state.nestedCallbacks == 1 && !state.inFlight && !callbackDepth && !state.restored,
+                  "nested actual hook callbacks stop without consuming SDK work or losing outer lifetime accounting");
+            FinishOwned(service, fixture);
+        }
+        {
+            NativeClockService service;
+            BeginOwned(service, fixture);
+            const auto original = runtime.originalContinuation;
+            runtime.originalContinuation = &OriginalRaises;
+            const bool caught = InvokeOriginalException();
+            runtime.originalContinuation = original;
+            const auto state = State(service);
+            Check(caught && state.failure == ClockResult::OriginalException && !state.inFlight && !callbackDepth && !state.restored,
+                  "an original-continuation exception propagates while production finally releases callback debt and retains native restoration");
+            FinishOwned(service, fixture);
+        }
+    }
+
+    void NativePatchTransactions(ClockImageFixture& fixture)
+    {
+        if (!NativeClockProfile::clockBoundaryReviewed)
+        {
+            NativeClockService service;
+            BeginOwned(service, fixture);
+            const auto state = Execute(service, fixture, ClockOperation::Freeze);
+            Check(state.lastCommandResult == ClockResult::UnsupportedBuild && !state.patchInstalled && !state.patchRecoveryPending && state.restored,
+                  "an unreviewed branch boundary refuses actual freeze writes but still completes safe original-state cleanup");
+            FinishOwned(service, fixture);
+            std::puts("Native freeze patch capability: withheld by production review gate");
+            return;
+        }
+        {
+            NativeClockService service;
+            BeginOwned(service, fixture);
+            DWORD protection = 0, ignored = 0;
+            Check(::VirtualProtect(reinterpret_cast<void*>(ClockTestFaults::patchAddress), 8, PAGE_EXECUTE_READWRITE, &protection) != FALSE,
+                  "admit a direct atomic comparison test only on the owned code image");
+            const auto original = fixture.Get<LONG64>(NativeClockProfile::patchRva - 3);
+            Check(!ExchangeCode(original ^ 1, original ^ 2) && fixture.Get<LONG64>(NativeClockProfile::patchRva - 3) == original,
+                  "the real aligned atomic code store refuses a changed expected instruction without writing any bytes");
+            Check(::VirtualProtect(reinterpret_cast<void*>(ClockTestFaults::patchAddress), 8, protection, &ignored) != FALSE,
+                  "restore fixture code protection after comparison-refusal verification");
+            MEMORY_BASIC_INFORMATION before{}, after{};
+            VirtualQuery(reinterpret_cast<const void*>(ClockTestFaults::patchAddress), &before, sizeof(before));
+            auto state = Execute(service, fixture, ClockOperation::Freeze);
+            Check(state.lastCommandResult == ClockResult::Ok && state.frozen && state.patchInstalled && state.freezes == 1,
+                  "SDK freeze installs the reviewed branch through real quiescent protection/write/cache operations");
+            const auto frozen = fixture.Get<LONG64>(NativeClockProfile::patchRva - 3);
+            Check((frozen & 0xffffff) == (original & 0xffffff) && CheckBinding(),
+                  "independent native readback preserves the three neighboring instruction bytes and changes only the reviewed branch");
+            state = Execute(service, fixture, ClockOperation::Freeze, 2);
+            Check(state.lastCommandResult == ClockResult::Ok && state.frozen, "repeated actual SDK freeze is idempotent");
+            state = Execute(service, fixture, ClockOperation::Unfreeze, 3);
+            Check(state.lastCommandResult == ClockResult::Ok && !state.frozen && state.unfreezes == 1,
+                  "actual SDK unfreeze restores the original native branch");
+            VirtualQuery(reinterpret_cast<const void*>(ClockTestFaults::patchAddress), &after, sizeof(after));
+            Check(before.Protect == after.Protect, "successful branch transactions restore the actual original executable page protection");
+            FinishOwned(service, fixture);
+        }
+        for (unsigned fault = 0; fault != 3; ++fault)
+        {
+            NativeClockService service;
+            BeginOwned(service, fixture);
+            if (fault == 0)
+                ClockTestFaults::failFlushes.store(1);
+            if (fault == 1)
+                ClockTestFaults::protectionCountdown.store(1);
+            if (fault == 2)
+                ClockTestFaults::protectionCountdown.store(2);
+            const auto state = Execute(service, fixture, ClockOperation::Freeze);
+            Check(state.lastCommandResult == ClockResult::PatchFailure && state.failure == ClockResult::PatchFailure && !state.patchInstalled &&
+                      !state.patchRecoveryPending && !state.protectionRestorePending && state.restored,
+                  "cache failure and protection acquisition/restoration failures roll back before releasing the native owner");
+            FinishOwned(service, fixture);
+        }
+        for (bool protectionFailure : {false, true})
+        {
+            NativeClockService service;
+            BeginOwned(service, fixture);
+            if (protectionFailure)
+                ClockTestFaults::failProtectionRestores.store(true);
+            else
+                ClockTestFaults::failFlushes.store(100);
+            const auto state = Execute(service, fixture, ClockOperation::Freeze);
+            Check(state.lastCommandResult == ClockResult::PatchFailure && state.patchRecoveryPending && state.dataRecoveryPending && !state.restored &&
+                      state.restoreFailures && !service.End() && service.IsRetained() && (!protectionFailure || state.protectionRestorePending),
+                  "persistent cache or executable-protection restoration failure retains explicit branch, data and protection recovery ownership");
+            ClockTestFaults::failFlushes.store(0);
+            ClockTestFaults::failProtectionRestores.store(false);
+            FinishOwned(service, fixture);
+        }
+        std::puts("Native freeze patch capability: verified with production review gate");
+    }
+}
+
+int main(int argc, char** argv)
+{
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    Check(argc == 2 && std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
+          "durable fixture evidence is restricted to the explicit owned executable output directory");
+    ClockInterfaceContract();
+    NativeContractValidation();
+    NativeServiceAdmissionContract();
+    ClockImageFixture fixture;
+    fixture.Create(argv[1]);
+    NativeReadSetAndRestoration(fixture);
+    NativeFailureAndLease(fixture);
+    NativeCaptureAndWraparound(fixture);
+    NativePeerResumeRecovery(fixture);
+    NativeCommittedHookResumeRecovery(fixture);
+    NativeEngineThreadHandoff(fixture);
+    NativeCallbackLifetime(fixture);
+    NativePatchTransactions(fixture);
+    std::puts("Production native clock runtime fixture completed");
+    std::printf("Passed %u production clock service checks\n", checks.load());
+    return 0;
+}

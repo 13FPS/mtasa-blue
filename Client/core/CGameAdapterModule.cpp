@@ -51,10 +51,10 @@ void CGameAdapterModule::SetError(const char* error) noexcept
 {
     try
     {
-        // API6 may retain peers stopped inside their allocator. Its error
-        // capacity is reserved before Begin, so diagnostics must never grow it
-        // while that lease can still own suspended threads.
-        if (m_renderObservationV6 && std::strlen(error) > m_error.capacity())
+        // Native render and clock leases can retain allocator-owning peers.
+        // Capacity is reserved before Begin; diagnostics must not grow it
+        // until the provider acknowledges cleanup.
+        if ((m_renderObservationV6 || m_clockDiagnostics) && std::strlen(error) > m_error.capacity())
         {
             m_error.clear();
             return;
@@ -127,6 +127,19 @@ bool CGameAdapterModule::Start(CCoreInterface* owner, const std::wstring& absolu
     m_adapter = adapter;
     m_ownerThread = GetCurrentThreadId();
     m_ownerIdentity = owner;
+    // Resolve this complete optional group before any native callback can own
+    // a hook or suspend peers. Older adapters simply lack the new service.
+    const auto resolveClock = [&](auto& function, const char* name)
+    {
+        const auto entry = GetProcAddress(module, name);
+        static_assert(sizeof(function) == sizeof(entry));
+        std::memcpy(&function, &entry, sizeof(function));
+    };
+    resolveClock(m_clockBegin, "BeginGameClockServiceV1");
+    resolveClock(m_clockSubmit, "SubmitGameClockCommandV1");
+    resolveClock(m_clockRenew, "RenewGameClockServiceV1");
+    resolveClock(m_clockRead, "ReadGameClockServiceV1");
+    resolveClock(m_clockEnd, "EndGameClockServiceV1");
     m_hasRenderObservation = false;
     m_hasRenderObservationV2 = false;
     m_hasRenderObservationV3 = false;
@@ -169,6 +182,8 @@ std::wstring CGameAdapterModule::AdjacentModulePath(std::string& error)
 
 bool CGameAdapterModule::StartAdjacent(CCoreInterface* owner)
 {
+    if (!RequireClockRetired())
+        return false;
     const auto path = AdjacentModulePath(m_error);
     return !path.empty() && Start(owner, path);
 }
@@ -182,7 +197,7 @@ bool CGameAdapterModule::RequireOwnerThread(const char* operation)
     }
     if (m_ownerThread != GetCurrentThreadId())
     {
-        if (m_renderObservationV6)
+        if (m_renderObservationV6 || m_clockDiagnostics)
             SetError("Game adapter callback requires its owning Core thread");
         else
             m_error = std::string(operation) + ": game adapter callback requires its owning Core thread";
@@ -198,7 +213,7 @@ bool CGameAdapterModule::RecordStatus(mta::game_de::Status status, const char* o
         m_error.clear();
         return true;
     }
-    if (m_renderObservationV6)
+    if (m_renderObservationV6 || m_clockDiagnostics)
     {
         // Stack formatting avoids even a temporary CRT allocation after a
         // provider failure has retained suspended peers for cleanup retry.
@@ -225,10 +240,19 @@ bool CGameAdapterModule::Pulse()
     return RequireOwnerThread("Pulse") && RecordStatus(m_adapter->Pulse(), "Pulse");
 }
 
+bool CGameAdapterModule::RequireClockRetired()
+{
+    if (!m_clockAttemptPending)
+        return true;
+    SetError("End or reset the native clock attempt before starting another service");
+    return false;
+}
+
 bool CGameAdapterModule::Reset()
 {
     if (!RequireOwnerThread("Reset") || !EndNativeRenderObservation() || !RecordStatus(m_adapter->Reset(), "Reset"))
         return false;
+    m_clockAttemptPending = false;
     m_hasRenderObservation = false;
     m_hasRenderObservationV2 = false;
     m_hasRenderObservationV3 = false;
@@ -266,7 +290,7 @@ bool CGameAdapterModule::GetMtaInputState(mta::game_de::MtaInputState& state)
 
 bool CGameAdapterModule::BindNativeInput()
 {
-    return RequireOwnerThread("BindNativeInput") && RecordStatus(m_adapter->BindNativeInput(), "BindNativeInput");
+    return RequireOwnerThread("BindNativeInput") && RequireClockRetired() && RecordStatus(m_adapter->BindNativeInput(), "BindNativeInput");
 }
 
 bool CGameAdapterModule::ReadNativeControllerState(std::uint32_t padIndex, mta::game_de::NativeControllerState& state)
@@ -281,7 +305,8 @@ bool CGameAdapterModule::ReadNativeDeviceState(mta::game_de::NativeDeviceState& 
 
 bool CGameAdapterModule::BeginNativeMovementTrial()
 {
-    return RequireOwnerThread("BeginNativeMovementTrial") && RecordStatus(m_adapter->BeginNativeMovementTrial(), "BeginNativeMovementTrial");
+    return RequireOwnerThread("BeginNativeMovementTrial") && RequireClockRetired() &&
+           RecordStatus(m_adapter->BeginNativeMovementTrial(), "BeginNativeMovementTrial");
 }
 
 bool CGameAdapterModule::GetNativeMovementTrialState(mta::game_de::NativeMovementTrialState& state)
@@ -297,7 +322,7 @@ bool CGameAdapterModule::EndNativeMovementTrial()
 bool CGameAdapterModule::BeginFrontendInputLease(void* window, mta::game_de::FrontendInputLeaseStateV1& state)
 {
     using namespace mta::game_de;
-    if (!RequireOwnerThread("BeginFrontendInputLease"))
+    if (!RequireOwnerThread("BeginFrontendInputLease") || !RequireClockRetired())
         return false;
     const auto resolve = [&](auto& function, const char* name)
     {
@@ -344,6 +369,66 @@ bool CGameAdapterModule::GetNativeMovementEligibility(mta::game_de::NativeMoveme
     return RequireOwnerThread("GetNativeMovementEligibility") && RecordStatus(m_adapter->GetNativeMovementEligibility(state), "GetNativeMovementEligibility");
 }
 
+bool CGameAdapterModule::BeginNativeClockService(const mta::game_de::ClockServiceRequestV1& request, mta::game_de::ClockServiceStateV1& state)
+{
+    if (!RequireOwnerThread("BeginNativeClockService") || !RequireClockRetired())
+        return false;
+    if (m_renderObservation || m_renderObservationV2 || m_renderObservationV3 || m_renderObservationV4 || m_renderObservationV5 || m_renderObservationV6)
+    {
+        SetError("End the render observation before starting the native clock service");
+        return false;
+    }
+    if (!m_clockBegin || !m_clockSubmit || !m_clockRenew || !m_clockRead || !m_clockEnd)
+    {
+        SetError("The adapter lacks the complete optional native clock service contract");
+        return false;
+    }
+    if (!m_clockDiagnostics)
+    {
+        try
+        {
+            m_error.reserve(512);
+        }
+        catch (...)
+        {
+            SetError("Cannot reserve clock cleanup diagnostic storage before Begin");
+            return false;
+        }
+        m_clockDiagnostics = true;
+    }
+    // Failed admission can still own a committed hook or suspended peer.
+    // Only explicit cleanup success may authorize loader/allocator work again.
+    m_clockAttemptPending = true;
+    return RecordStatus(m_clockBegin(mta::game_de::ClockServiceVersionV1, m_adapter, &request, &state), "BeginNativeClockService");
+}
+
+bool CGameAdapterModule::SubmitNativeClockCommand(const mta::game_de::ClockCommandV1& command)
+{
+    return RequireOwnerThread("SubmitNativeClockCommand") && m_clockSubmit &&
+           RecordStatus(m_clockSubmit(mta::game_de::ClockServiceVersionV1, m_adapter, &command), "SubmitNativeClockCommand");
+}
+
+bool CGameAdapterModule::RenewNativeClockService(std::uint64_t generation)
+{
+    return RequireOwnerThread("RenewNativeClockService") && m_clockRenew &&
+           RecordStatus(m_clockRenew(mta::game_de::ClockServiceVersionV1, m_adapter, generation), "RenewNativeClockService");
+}
+
+bool CGameAdapterModule::ReadNativeClockService(mta::game_de::ClockServiceStateV1& state)
+{
+    return RequireOwnerThread("ReadNativeClockService") && m_clockRead &&
+           RecordStatus(m_clockRead(mta::game_de::ClockServiceVersionV1, m_adapter, &state), "ReadNativeClockService");
+}
+
+bool CGameAdapterModule::EndNativeClockService(std::uint64_t generation)
+{
+    if (!RequireOwnerThread("EndNativeClockService") || !m_clockEnd ||
+        !RecordStatus(m_clockEnd(mta::game_de::ClockServiceVersionV1, m_adapter, generation), "EndNativeClockService"))
+        return false;
+    m_clockAttemptPending = false;
+    return true;
+}
+
 bool CGameAdapterModule::BorrowGameInterface(CGame*& game)
 {
     if (!RequireOwnerThread("BorrowGameInterface"))
@@ -368,7 +453,7 @@ bool CGameAdapterModule::BorrowGameInterface(CGame*& game)
 
 bool CGameAdapterModule::BeginNativeRenderObservation()
 {
-    if (!RequireOwnerThread("BeginNativeRenderObservation"))
+    if (!RequireOwnerThread("BeginNativeRenderObservation") || !RequireClockRetired())
         return false;
     if (m_renderObservation || m_renderObservationV2 || m_renderObservationV3 || m_renderObservationV4 || m_renderObservationV5 || m_renderObservationV6)
     {
@@ -410,7 +495,7 @@ bool CGameAdapterModule::BeginNativeRenderObservation()
 bool CGameAdapterModule::BeginNativeRenderObservation(mta::game_de::RenderObservationRoute route)
 {
     using namespace mta::game_de;
-    if (!RequireOwnerThread("BeginNativeRenderObservationV2"))
+    if (!RequireOwnerThread("BeginNativeRenderObservationV2") || !RequireClockRetired())
         return false;
     if (route != RenderObservationRoute::D3D11 && route != RenderObservationRoute::D3D12)
     {
@@ -456,7 +541,7 @@ bool CGameAdapterModule::BeginNativeRenderObservation(mta::game_de::RenderObserv
 bool CGameAdapterModule::BeginNativeRenderOwnershipObservation(mta::game_de::RenderObservationRoute route)
 {
     using namespace mta::game_de;
-    if (!RequireOwnerThread("BeginNativeRenderObservationV3"))
+    if (!RequireOwnerThread("BeginNativeRenderObservationV3") || !RequireClockRetired())
         return false;
     if (route != RenderObservationRoute::D3D12)
     {
@@ -502,7 +587,7 @@ bool CGameAdapterModule::BeginNativeRenderOwnershipObservation(mta::game_de::Ren
 bool CGameAdapterModule::BeginNativeRenderClassificationObservation(mta::game_de::RenderObservationRoute route)
 {
     using namespace mta::game_de;
-    if (!RequireOwnerThread("BeginNativeRenderObservationV4"))
+    if (!RequireOwnerThread("BeginNativeRenderObservationV4") || !RequireClockRetired())
         return false;
     if (route != RenderObservationRoute::D3D12)
     {
@@ -550,7 +635,7 @@ bool CGameAdapterModule::BeginNativeRenderClassificationObservation(mta::game_de
 bool CGameAdapterModule::BeginNativeRenderFrameBoundaryObservation(mta::game_de::RenderObservationRoute route)
 {
     using namespace mta::game_de;
-    if (!RequireOwnerThread("BeginNativeRenderObservationV5"))
+    if (!RequireOwnerThread("BeginNativeRenderObservationV5") || !RequireClockRetired())
         return false;
     if (route != RenderObservationRoute::D3D12)
     {
@@ -618,7 +703,7 @@ bool CGameAdapterModule::BeginNativeRenderDeviceWindowObservation()
 bool CGameAdapterModule::StartNativeRenderDispatchObservation(mta::game_de::RenderObservationRoute route, bool captureDevice, bool captureWindow)
 {
     using namespace mta::game_de;
-    if (!RequireOwnerThread("BeginNativeRenderObservationV6"))
+    if (!RequireOwnerThread("BeginNativeRenderObservationV6") || !RequireClockRetired())
         return false;
     if (route != RenderObservationRoute::D3D12)
     {
@@ -1321,11 +1406,18 @@ void CGameAdapterModule::Stop() noexcept
     m_frontendLeaseRenew = nullptr;
     m_frontendLeaseRead = nullptr;
     m_frontendLeaseEnd = nullptr;
+    m_clockBegin = nullptr;
+    m_clockSubmit = nullptr;
+    m_clockRenew = nullptr;
+    m_clockRead = nullptr;
+    m_clockEnd = nullptr;
     m_renderEndpointReaderV2 = nullptr;
     m_renderSetupReaderV1 = nullptr;
     m_renderRootsReaderV1 = nullptr;
     m_hasSetupDiagnostic = false;
     m_hasRootsDiagnostic = false;
+    m_clockAttemptPending = false;
+    m_clockDiagnostics = false;
 }
 
 std::uint64_t CGameAdapterModule::GetCapabilities() const noexcept
@@ -1342,6 +1434,10 @@ bool CGameAdapterModule::IsGameplayReady() const noexcept
 
 std::string CGameAdapterModule::GameplayUnavailableReason() const
 {
+    // Returning a new explanation could allocate behind a suspended heap
+    // owner. Cleanup callers use the already reserved GetError storage instead.
+    if (m_clockAttemptPending)
+        return {};
     if (!m_adapter)
         return "Game DE adapter is not initialized";
     if (m_ownerThread != GetCurrentThreadId())

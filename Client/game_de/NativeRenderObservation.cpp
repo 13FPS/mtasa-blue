@@ -8,6 +8,7 @@
 #include "NativeD3D12OwnershipProbe.h"
 #include "NativeCustomPresentProbe.h"
 #include "NativeFrameBoundaryProbe.h"
+#include "NativeServiceAdmission.h"
 #include <array>
 #include <algorithm>
 #include <atomic>
@@ -24,6 +25,7 @@ namespace mta::game_de
     namespace
     {
         using Failure = NativeRenderObservationFailure;
+        namespace Admission = NativeServiceAdmission;
         using PresentFunction = bool (*)(void*, std::uint32_t);
         constexpr ULONGLONG                     maximumObservationMs = 30000;
         constexpr std::array<unsigned char, 32> executableHash = {0x63, 0xe6, 0x33, 0xbb, 0x51, 0xc3, 0x5f, 0xe3, 0x5c, 0xa9, 0x8f,
@@ -111,6 +113,7 @@ namespace mta::game_de
             std::atomic<bool>               apiBusy{false}, bound{false}, active{false}, hooked{false}, modulePinned{false};
             std::atomic<unsigned>           inFlight{0};
             std::atomic<std::uint64_t>      generation{0}, callbacks{0}, accepted{0}, rejected{0}, nested{0}, foreign{0}, missed{0};
+            std::atomic<std::uint64_t>      admissionGeneration{0}, admissionSerial{0};
             std::atomic<std::uint32_t>      failure{0};
             std::atomic<DWORD>              callbackThread{0};
             SRWLOCK                         snapshotLock = SRWLOCK_INIT;
@@ -140,7 +143,21 @@ namespace mta::game_de
         };
         // Failed teardown must retain its trampoline and callback storage.
         // Nothing in this process-lifetime state points at a released owner.
-        Runtime               runtime;
+        Runtime runtime;
+
+        bool ReleaseAdmission(std::uint64_t generation) noexcept
+        {
+            const auto owner = runtime.admissionGeneration.load();
+            if (!owner)
+                return true;
+            if (!generation || generation != runtime.generation.load() || generation != owner)
+                return false;
+            if (!Admission::Release({Admission::Category::Render, runtime.admissionSerial.load()}))
+                return false;
+            runtime.admissionSerial.store(0);
+            runtime.admissionGeneration.store(0);
+            return true;
+        }
         thread_local unsigned callbackDepth = 0;
 
         struct ApiOperation
@@ -1316,9 +1333,15 @@ namespace mta::game_de
             return false;
         ApiOperation operation;
         if (!operation.acquired || runtime.hooked.load() || NativeDispatchPatchPresent() || !runtime.retainedSuspensions.empty() || runtime.inFlight.load() ||
-            FrameBoundaryInFlight() || runtime.active.load() || runtime.devicePending.load() || runtime.deviceReleaseFault.load())
+            FrameBoundaryInFlight() || runtime.active.load() || runtime.devicePending.load() || runtime.deviceReleaseFault.load() ||
+            runtime.admissionSerial.load() || runtime.generation.load() == (std::numeric_limits<std::uint64_t>::max)())
+            return false;
+        Admission::Token claim;
+        if (!Admission::TryAcquire(Admission::Category::Render, claim))
             return false;
         generation = runtime.generation.fetch_add(1) + 1;
+        runtime.admissionSerial.store(claim.serial);
+        runtime.admissionGeneration.store(generation);
         finalState = {};
         runtime.setup = {};
         runtime.setupTracing = false;
@@ -1345,6 +1368,7 @@ namespace mta::game_de
         {
             Fail(Failure::UnsupportedRoute);
             ReadState(finalState);
+            ReleaseAdmission(generation);
             return false;
         }
 #endif
@@ -1354,18 +1378,21 @@ namespace mta::game_de
         {
             Fail(Failure::UnsupportedRoute);
             ReadState(finalState);
+            ReleaseAdmission(generation);
             return false;
         }
         if (!ExactExecutable())
         {
             Fail(Failure::UnsupportedBuild);
             ReadState(finalState);
+            ReleaseAdmission(generation);
             return false;
         }
         if (!CheckFingerprint(runtime.image, *runtime.route))
         {
             Fail(Failure::FingerprintMismatch);
             ReadState(finalState);
+            ReleaseAdmission(generation);
             return false;
         }
         HMODULE pinned = nullptr;
@@ -1373,6 +1400,7 @@ namespace mta::game_de
         {
             Fail(Failure::HookInstall);
             ReadState(finalState);
+            ReleaseAdmission(generation);
             return false;
         }
         runtime.modulePinned.store(true);
@@ -1404,11 +1432,13 @@ namespace mta::game_de
 
     bool NativeRenderObservation::End() noexcept
     {
+        if (!generation || generation != runtime.generation.load())
+            return true;
         ApiOperation operation;
         if (!operation.acquired)
             return false;
         if (!generation || generation != runtime.generation.load())
-            return !runtime.hooked.load() && !NativeDispatchPatchPresent() && runtime.retainedSuspensions.empty();
+            return true;
         runtime.active.store(false);
         runtime.devicePhase.store(DeviceCapturePhase::Stopped);
         StopFrameBoundaryAdmission();
@@ -1467,7 +1497,9 @@ namespace mta::game_de
         ReleaseFrameBoundaryDiagnosticModules();
         SetupCleanup(true);
         ReadState(finalState);
-        return true;
+        // Historical bound/modulePinned observations survive End. Only actual
+        // hook/relay/suspension/device ownership holds process admission.
+        return ReleaseAdmission(generation);
     }
 
     void NativeRenderObservation::ReadState(NativeRenderObservationState& state) const noexcept

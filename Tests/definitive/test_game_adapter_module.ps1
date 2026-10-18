@@ -21,6 +21,10 @@ $sourceNames = @('Client/sdk/game/CGameAdapter.h', 'Client/game_de/GameAdapter.c
     'Shared/sdk/SharedUtil.IntTypes.h', 'Shared/sdk/CVector.h', 'Shared/sdk/CVector4D.h',
     'Client/game_de/premake5.lua', 'vendor/detours/premake5.lua',
     'Client/game_de/NativePadReader.h', 'Client/game_de/NativePadReader.cpp',
+    'Client/game_de/NativeImageAccess.h', 'Client/game_de/NativeImageAccess.cpp',
+    'Client/game_de/CClockDE.h', 'Client/game_de/CClockDE.cpp', 'Client/sdk/game/CClock.h',
+    'Client/sdk/game/CGameClockService.h', 'Client/game_de/NativeClockService.h', 'Client/game_de/NativeClockService.cpp',
+    'Client/game_de/NativeClockProfile.h', 'Client/game_de/NativeServiceAdmission.h',
     'Client/game_de/NativeMovementInput.h', 'Client/game_de/NativeMovementInput.cpp', 'Client/game_de/NativeInputRouting.h',
     'Client/sdk/game/CGameRenderObservation.h', 'Client/sdk/game/CGameRenderEndpointDiagnostic.h', 'Client/sdk/game/CGameRenderSetupDiagnostic.h', 'Client/sdk/game/CGameRenderRootsDiagnostic.h', 'Client/sdk/game/CGameRenderDeviceLease.h', 'Client/sdk/game/CGameRenderDeviceWindowLease.h',
     'Client/game_de/NativeRenderObservation.h', 'Client/game_de/NativeRenderObservation.cpp',
@@ -75,6 +79,8 @@ if ($detoursCompilerExit -eq 0) {
 $moduleSource = Join-Path $taskRoot 'Client/game_de/GameAdapter.cpp'
 if ((Test-Path -LiteralPath $moduleSource) -and $detoursLibraryExit -eq 0) {
     $moduleArguments = $common + @('/LD','/DMTA_GAME_DE_EXPORTS', $moduleSource, (Join-Path $taskRoot 'Client/game_de/NativePadReader.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativeImageAccess.cpp'), (Join-Path $taskRoot 'Client/game_de/CClockDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativeClockService.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeMovementInput.cpp'), (Join-Path $taskRoot 'Client/game_de/NativeRenderObservation.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeD3D12OwnershipProbe.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeCustomPresentProbe.cpp'),

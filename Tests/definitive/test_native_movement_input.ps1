@@ -47,8 +47,10 @@ if ($SavedNativeMovementDirectory) {
     $testSource = Join-Path $fixtureRoot 'Tests/definitive/NativeMovementInputTests.cpp'
 }
 $sourceNames = @('Client/game_de/NativeMovementInput.h','Client/game_de/NativeMovementInput.cpp',
+    'Client/game_de/NativeServiceAdmission.h',
     'Client/game_de/FrontendInputLeasePolicy.h','Client/sdk/game/CGameFrontendInputLease.h',
     'Client/game_de/NativeInputRouting.h','Client/game_de/NativePadReader.h','Client/game_de/NativePadReader.cpp',
+    'Client/game_de/NativeImageAccess.h','Client/game_de/NativeImageAccess.cpp',
     'Client/sdk/game/CGameAdapter.h','Shared/sdk/CControllerState.h','Shared/sdk/enums/PedState.h','Tests/definitive/NativeMovementInputTests.cpp',
     'Tests/definitive/test_native_movement_input.ps1',
     'vendor/detours/4.0.1/src/detours.h','vendor/detours/4.0.1/src/detours.cpp','vendor/detours/4.0.1/src/modules.cpp',
@@ -77,7 +79,8 @@ $executable = Join-Path $outputRoot 'native_movement_input_tests.exe'
 $objects = @('detours.obj','modules.obj','disasm.obj','image.obj','creatwth.obj') | ForEach-Object { Join-Path $outputRoot $_ }
 $cacheArguments = if ($SavedNativeMovementDirectory) { @('/DMTA_NATIVE_ELIGIBILITY_SAVED_OBSERVER') } else { @('/DMTA_NATIVE_ELIGIBILITY_PUBLISHED_CACHE') }
 $arguments = $common + $cacheArguments + @('/W4','/WX',$testSource,
-    (Join-Path $taskRoot 'Client/game_de/NativePadReader.cpp'),('/Fo'+$outputRoot+[IO.Path]::DirectorySeparatorChar),
+    (Join-Path $taskRoot 'Client/game_de/NativePadReader.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeImageAccess.cpp'),
+    ('/Fo'+$outputRoot+[IO.Path]::DirectorySeparatorChar),
     ('/Fe'+$executable),'/link','bcrypt.lib','user32.lib') + $objects
 $compilerOutput = @(& $compiler @arguments 2>&1)
 $compilerExit = $LASTEXITCODE

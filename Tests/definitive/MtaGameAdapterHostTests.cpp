@@ -58,6 +58,14 @@ struct FixtureDeviceStats
     std::uint32_t order = 0, requestOrder = 0, beginOrder = 0, liveLeases = 0, control = 0;
 };
 
+struct FixtureClockStats
+{
+    std::uint32_t begins = 0, submits = 0, renewals = 0, reads = 0, ends = 0, shutdowns = 0, releases = 0;
+    // These gates model provider-owned cleanup only; no GTA memory or suspended
+    // process thread is needed to test the actual Core consumer's allocator.
+    std::uint32_t control = 0;
+};
+
 #if !defined(MTA_TEST_SHUTDOWN_FAILURE_MODULE)
 namespace
 {
@@ -123,6 +131,9 @@ void operator delete[](void* memory, std::size_t) noexcept
     #ifndef MTA_TEST_RENDER_V4
         #define MTA_TEST_RENDER_V4 0
     #endif
+    #ifndef MTA_TEST_CLOCK_MODE
+        #define MTA_TEST_CLOCK_MODE 0
+    #endif
 // This deliberately failing provider tests Core's DLL lifetime only. It is not
 // an engine writer, replacement Game DE implementation or gameplay fixture.
 namespace mta::game_de
@@ -142,6 +153,16 @@ namespace mta::game_de
         alignas(void*) unsigned char windowIdentity[sizeof(void*)]{};
         void (*v6OperationObserver)() noexcept = nullptr;
         alignas(void*) unsigned char facadeIdentity[sizeof(void*)]{};
+    #if MTA_TEST_CLOCK_MODE
+        FixtureClockStats*  clockFixtureStats = nullptr;
+        ClockServiceStateV1 fixtureClockState;
+        void (*clockOperationObserver)() noexcept = nullptr;
+        void ObserveClockOperation() noexcept
+        {
+            if (clockOperationObserver)
+                clockOperationObserver();
+        }
+    #endif
 
         class ShutdownFailureAdapter final : public IGameAdapter
         {
@@ -165,11 +186,24 @@ namespace mta::game_de
                     ++fixtureCounters[0];
                     fixtureCounters[11] = ++fixtureCounters[8];
                 }
+    #if MTA_TEST_CLOCK_MODE
+                if (clockFixtureStats)
+                    ++clockFixtureStats->shutdowns;
+                const bool retained = fixtureClockState.hooked || fixtureClockState.retainedPeerThreads ||
+                                      (MTA_TEST_CLOCK_MODE == 3 && clockFixtureStats && !(clockFixtureStats->control & 2));
+                ObserveClockOperation();
+                return retained ? Status::Unsupported : Status::Ok;
+    #else
                 return !MTA_TEST_RENDER_MODE && (MTA_TEST_FACADE_MODE == 0 || MTA_TEST_FACADE_MODE == 3) && shutdownCount == 1 ? Status::Unsupported
                                                                                                                                : Status::Ok;
+    #endif
             }
             void Release() noexcept override
             {
+    #if MTA_TEST_CLOCK_MODE
+                if (clockFixtureStats)
+                    ++clockFixtureStats->releases;
+    #endif
                 if (fixtureCounters)
                 {
                     ++fixtureCounters[1];
@@ -584,6 +618,79 @@ namespace mta::game_de
         fixtureCounters = counters;
     }
 
+    #if MTA_TEST_CLOCK_MODE
+    extern "C" __declspec(dllexport) void SetClockFixtureStats(FixtureClockStats* stats) noexcept
+    {
+        clockFixtureStats = stats;
+    }
+    extern "C" __declspec(dllexport) void SetClockFixtureOperationObserver(void (*observer)() noexcept) noexcept
+    {
+        clockOperationObserver = observer;
+    }
+    extern "C" Status BeginGameClockServiceV1(std::uint32_t version, IGameAdapter* adapter, const ClockServiceRequestV1* request,
+                                              ClockServiceStateV1* output) noexcept
+    {
+        if (version != ClockServiceVersionV1 || !adapter || !request || !output)
+            return Status::InvalidArgument;
+        if (clockFixtureStats)
+            ++clockFixtureStats->begins;
+        fixtureClockState = {};
+        fixtureClockState.generation = 17;
+        fixtureClockState.producerThread = GetCurrentThreadId();
+        fixtureClockState.bound = fixtureClockState.hooked = 1;
+        fixtureClockState.active = fixtureClockState.ready = MTA_TEST_CLOCK_MODE == 1 ? 0u : 1u;
+        fixtureClockState.stopping = fixtureClockState.retainedPeerThreads = MTA_TEST_CLOCK_MODE == 1 ? 1u : 0u;
+        fixtureClockState.failure = MTA_TEST_CLOCK_MODE == 1 ? ClockResult::RestoreFailure : ClockResult::Ok;
+        *output = fixtureClockState;
+        ObserveClockOperation();
+        return MTA_TEST_CLOCK_MODE == 1 ? Status::Unsupported : Status::Ok;
+    }
+    extern "C" Status SubmitGameClockCommandV1(std::uint32_t version, IGameAdapter* adapter, const ClockCommandV1* command) noexcept
+    {
+        if (version != ClockServiceVersionV1 || !adapter || !command)
+            return Status::InvalidArgument;
+        if (clockFixtureStats)
+            ++clockFixtureStats->submits;
+        ObserveClockOperation();
+        return Status::Unsupported;
+    }
+    extern "C" Status RenewGameClockServiceV1(std::uint32_t version, IGameAdapter* adapter, std::uint64_t generation) noexcept
+    {
+        if (version != ClockServiceVersionV1 || !adapter || generation != 17)
+            return Status::InvalidArgument;
+        if (clockFixtureStats)
+            ++clockFixtureStats->renewals;
+        ObserveClockOperation();
+        return Status::Unsupported;
+    }
+    extern "C" Status ReadGameClockServiceV1(std::uint32_t version, IGameAdapter* adapter, ClockServiceStateV1* output) noexcept
+    {
+        if (version != ClockServiceVersionV1 || !adapter || !output)
+            return Status::InvalidArgument;
+        if (clockFixtureStats)
+            ++clockFixtureStats->reads;
+        *output = fixtureClockState;
+        ObserveClockOperation();
+        return Status::Ok;
+    }
+        #if MTA_TEST_CLOCK_MODE != 4
+    extern "C" Status EndGameClockServiceV1(std::uint32_t version, IGameAdapter* adapter, std::uint64_t generation) noexcept
+    {
+        if (version != ClockServiceVersionV1 || !adapter || generation != 17)
+            return Status::InvalidArgument;
+        if (clockFixtureStats)
+            ++clockFixtureStats->ends;
+        const bool clean = clockFixtureStats && (clockFixtureStats->control & 1);
+        fixtureClockState.active = fixtureClockState.ready = 0;
+        fixtureClockState.stopping = 1;
+        fixtureClockState.hooked = fixtureClockState.retainedPeerThreads = clean ? 0u : 1u;
+        fixtureClockState.restored = clean ? 1u : 0u;
+        ObserveClockOperation();
+        return clean ? Status::Ok : Status::Unsupported;
+    }
+        #endif
+    #endif
+
     extern "C" IGameRenderObservation* CreateGameRenderObservation(std::uint32_t apiVersion, CCoreInterface* owner) noexcept
     {
         return MTA_TEST_RENDER_MODE && apiVersion == RenderObservationApiVersion && owner ? new (std::nothrow) RenderFixture : nullptr;
@@ -919,6 +1026,18 @@ namespace
             Check(host.GameplayUnavailableReason().find("EngineInputWrite") != std::string::npos, "full-game gate explains missing input write");
             Check(host.GameplayUnavailableReason().find("RemotePlayerContext") != std::string::npos, "full-game gate explains missing remote context");
             Check(host.Pulse(), "owning Core can pulse the initialized real module");
+            mta::game_de::ClockServiceRequestV1 clockRequest;
+            mta::game_de::ClockServiceStateV1   clockState;
+            clockState.hour = 99;
+            Check(!host.BeginNativeClockService(clockRequest, clockState), "Core clock consumer refuses this non-game executable");
+            Check(!clockState.bound && !clockState.hooked && !clockState.patchInstalled && !clockState.modulePinned,
+                  "Core receives failed clock admission without native patch or hook ownership");
+            Check(!host.IsGameplayReady(), "an optional clock contract does not remove the complete gameplay gate");
+            bool        otherClockRead = true;
+            std::thread clockThread([&] { otherClockRead = host.ReadNativeClockService(clockState); });
+            clockThread.join();
+            Check(!otherClockRead, "a foreign Core consumer thread cannot read or adopt the native clock owner");
+            Check(host.Reset(), "explicit reset retires the refused clock attempt before unrelated native service admission");
             for (const auto route : {mta::game_de::RenderObservationRoute::D3D11, mta::game_de::RenderObservationRoute::D3D12})
             {
                 Check(!host.BeginNativeRenderObservation(route), "actual optional route binding rejects this non-game host");
@@ -1129,11 +1248,131 @@ namespace
         Check(std::filesystem::path(path).filename() == L"game_de.dll", "adjacent module name remains fixed");
     }
 
+    void TestControlledClockProvider(CCoreInterface* owner, const std::wstring& path, unsigned mode)
+    {
+        using namespace mta::game_de;
+        CGameAdapterModule host;
+        Check(host.Start(owner, path), "Core loads a controlled optional clock provider without a CGame facade");
+        const auto module = GetModuleHandleW(path.c_str());
+        using Configure = void (*)(FixtureClockStats*) noexcept;
+        using Observe = void (*)(void (*)() noexcept) noexcept;
+        Configure configure = nullptr;
+        Observe   observe = nullptr;
+        auto      address = GetProcAddress(module, "SetClockFixtureStats");
+        std::memcpy(&configure, &address, sizeof(configure));
+        address = GetProcAddress(module, "SetClockFixtureOperationObserver");
+        std::memcpy(&observe, &address, sizeof(observe));
+        Check(configure && observe, "controlled clock provider exposes independent lifetime and post-operation allocation boundaries");
+        FixtureClockStats stats;
+        configure(&stats);
+        ClockServiceStateV1 state;
+        state.hour = 99;
+        if (mode == 4)
+        {
+            Check(!host.BeginNativeClockService({}, state) && state.hour == 99 && !stats.begins &&
+                      host.GetError().find("complete optional native clock") != std::string::npos,
+                  "a partial optional clock export group refuses before provider entry and preserves caller output");
+            host.Stop();
+            Check(!host.IsStarted() && !GetModuleHandleW(path.c_str()) && stats.shutdowns == 1 && stats.releases == 1,
+                  "an incomplete optional service leaves its historical ABI6 adapter usable and unloadable");
+            return;
+        }
+        observedCoreAllocations.store(0);
+        observe(&ArmCoreAllocationObservation);
+        const bool began = host.BeginNativeClockService({}, state);
+        observeCoreAllocations.store(false);
+        observe(nullptr);
+        Check(began == (mode != 1) && state.generation == 17 && stats.begins == 1,
+              "failed native clock Begin remains distinguishable while preserving its returned cleanup generation");
+        Check(!observedCoreAllocations.load(), "clock post-Begin status diagnostics allocate nothing after a provider can retain stopped heap peers");
+        observedCoreAllocations.store(0);
+        observeCoreAllocations.store(true);
+        const bool excluded = !host.BeginNativeClockService({}, state) && !host.BeginNativeRenderObservation() &&
+                              !host.BeginNativeRenderDispatchObservation(RenderObservationRoute::D3D12) && !host.BeginNativeMovementTrial() &&
+                              !host.StartAdjacent(owner) && host.GameplayUnavailableReason().empty();
+        observeCoreAllocations.store(false);
+        Check(excluded && stats.begins == 1 && !observedCoreAllocations.load(),
+              "an active or failed clock attempt excludes duplicate services and loader paths without allocating recovery diagnostics");
+        observedCoreAllocations.store(0);
+        observeCoreAllocations.store(true);
+        ClockCommandV1 command;
+        command.generation = 17;
+        command.sequence = 1;
+        const bool refused = !host.SubmitNativeClockCommand(command) && !host.RenewNativeClockService(17);
+        observeCoreAllocations.store(false);
+        Check(refused && stats.submits == 1 && stats.renewals == 1 && !observedCoreAllocations.load(),
+              "clock Submit and Renew failure formatting remain allocation-free during pending native ownership");
+        bool foreignRead = true;
+        observedCoreAllocations.store(0);
+        std::thread foreign(
+            [&]
+            {
+                ClockServiceStateV1 untouched;
+                untouched.hour = 99;
+                observeCoreAllocations.store(true);
+                foreignRead = host.ReadNativeClockService(untouched) || untouched.hour != 99;
+                observeCoreAllocations.store(false);
+            });
+        foreign.join();
+        Check(!foreignRead && !stats.reads && !observedCoreAllocations.load(),
+              "foreign-thread clock refusal preserves output and formats its error without consumer CRT requests");
+        observedCoreAllocations.store(0);
+        observe(&ArmCoreAllocationObservation);
+        const bool ended = host.EndNativeClockService(17);
+        observeCoreAllocations.store(false);
+        observe(nullptr);
+        Check(!ended && stats.ends == 1 && !observedCoreAllocations.load(),
+              "failed clock End retains its diagnostic guard without allocating after the provider's risky return");
+        Check(host.IsStarted() && GetModuleHandleW(path.c_str()) && !stats.releases,
+              "failed clock Begin or End cannot release the adapter or unload its callbacks");
+        observedCoreAllocations.store(0);
+        observe(&ArmCoreAllocationObservation);
+        host.Stop();
+        observeCoreAllocations.store(false);
+        observe(nullptr);
+        Check(host.IsStarted() && stats.shutdowns == 1 && !stats.releases && !observedCoreAllocations.load(),
+              "failed adapter Shutdown keeps clock ownership and formats retained cleanup without allocating");
+        stats.control = 1;
+        observedCoreAllocations.store(0);
+        observeCoreAllocations.store(true);
+        const bool cleaned = host.EndNativeClockService(17);
+        observeCoreAllocations.store(false);
+        Check(cleaned && stats.ends == 2 && !observedCoreAllocations.load() && host.ReadNativeClockService(state) && state.restored && !state.hooked &&
+                  !state.retainedPeerThreads,
+              "confirmed End retries release provider clock ownership while keeping allocation-safe diagnostics available");
+        if (mode == 3)
+        {
+            observedCoreAllocations.store(0);
+            observe(&ArmCoreAllocationObservation);
+            host.Stop();
+            observeCoreAllocations.store(false);
+            observe(nullptr);
+            Check(host.IsStarted() && stats.shutdowns == 2 && !stats.releases && !observedCoreAllocations.load(),
+                  "successful clock End does not discard the diagnostic guard before a later failed adapter Shutdown");
+            stats.control |= 2;
+        }
+        host.Stop();
+        Check(!host.IsStarted() && !GetModuleHandleW(path.c_str()) && stats.releases == 1 && !host.IsGameplayReady(),
+              "only confirmed cleanup releases the optional clock adapter and loaded module without granting gameplay readiness");
+        Check(host.Start(owner, path), "the actual same consumer can own a fresh provider after confirmed cleanup reset");
+        // The reloaded DLL has no clock attempt or configured state. Its clean
+        // Shutdown demonstrates that old pending/diagnostic flags did not block
+        // a new owner or carry stale cleanup across an unload boundary.
+        host.Stop();
+        Check(!host.IsStarted() && !GetModuleHandleW(path.c_str()), "confirmed Stop resets clock ownership for a later Core consumer lifetime");
+    }
+
     void TestFailedShutdownRetention(CCoreInterface* owner, const std::wstring& fixturePath)
     {
         Check(GetModuleHandleW(fixturePath.c_str()) == nullptr, "cleanup fixture begins unloaded");
         CGameAdapterModule host;
         Check(host.Start(owner, fixturePath), "load an explicit provider whose first Shutdown fails");
+        mta::game_de::ClockServiceRequestV1 clockRequest;
+        mta::game_de::ClockServiceStateV1   clockState;
+        clockState.hour = 99;
+        Check(!host.BeginNativeClockService(clockRequest, clockState) && clockState.hour == 99 &&
+                  host.GetError().find("complete optional native clock") != std::string::npos,
+              "older ABI6 providers remain usable and explicitly refuse the absent optional clock group");
         host.Stop();
         Check(host.IsStarted() && GetModuleHandleW(fixturePath.c_str()) != nullptr, "failed Shutdown retains both adapter and loaded callback code");
         Check(host.GetError().find("retained") != std::string::npos && host.GetError().find("Shutdown") != std::string::npos,
@@ -2651,7 +2890,7 @@ int wmain(int argc, wchar_t** argv)
 {
     try
     {
-        if (argc != 2 && argc != 3 && argc != 6 && argc != 11 && argc != 18 && argc != 26 && argc != 34 && argc != 42 && argc != 50)
+        if (argc != 2 && argc != 3 && argc != 6 && argc != 11 && argc != 18 && argc != 26 && argc != 34 && argc != 42 && argc != 50 && argc != 54)
             throw std::runtime_error("Pass the absolute path of the built Game DE module");
         const std::wstring modulePath = argv[1];
         // The adapter stores this identity but must never dereference it. This
@@ -2695,7 +2934,7 @@ int wmain(int argc, wchar_t** argv)
             for (unsigned mode = 1; mode <= 8; ++mode)
                 TestRenderProviderV5(owner, argv[mode + 33], mode);
         }
-        if (argc == 50)
+        if (argc >= 50)
         {
             TestMissingRenderV6(owner, argv[34]);
             for (unsigned mode = 1; mode <= 8; ++mode)
@@ -2707,6 +2946,9 @@ int wmain(int argc, wchar_t** argv)
             for (unsigned mode = 1; mode <= 8; ++mode)
                 TestDeviceWindowLeaseProvider(owner, argv[mode + 41], mode, argv[49]);
         }
+        if (argc == 54)
+            for (unsigned mode = 1; mode <= 4; ++mode)
+                TestControlledClockProvider(owner, argv[mode + 49], mode);
     #else
         CGameAdapterModule host;
         Check(!host.Start(owner, modulePath), "x86 must reject the x64 backend before loading it");

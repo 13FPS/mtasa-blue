@@ -8,6 +8,7 @@
 #include "NativeInputRouting.h"
 #include "NativePadReader.h"
 #include "FrontendInputLeasePolicy.h"
+#include "NativeServiceAdmission.h"
 
 #include <array>
 #include <atomic>
@@ -24,6 +25,7 @@ namespace mta::game_de
     namespace
     {
         using Failure = NativeMovementTrialFailure;
+        namespace Admission = NativeServiceAdmission;
         using ControlFunction = void (*)(void*);
         using MembershipFunction = bool (*)(void*, std::int32_t);
         using QueryFunction = std::int32_t (*)(void*, std::int32_t, float*);
@@ -72,6 +74,7 @@ namespace mta::game_de
             std::atomic<unsigned>      scopes{0}, inFlight{0};
             std::atomic<unsigned>      padAccess{0};
             std::atomic<std::uint64_t> generation{0};
+            std::atomic<std::uint64_t> admissionGeneration{0}, admissionSerial{0};
             DWORD                      producerThread = 0;
             std::atomic<DWORD>         engineThread{0};
             std::uintptr_t             image = 0, ped = 0, provider = 0;
@@ -100,6 +103,20 @@ namespace mta::game_de
         // outlive Core's owner, so this process lifetime state and the pinned
         // module retain every trampoline and restoration snapshot they need.
         Runtime runtime;
+
+        bool ReleaseAdmission(std::uint64_t generation) noexcept
+        {
+            const auto owner = runtime.admissionGeneration.load();
+            if (!owner)
+                return true;
+            if (!generation || generation != runtime.generation.load() || generation != owner)
+                return false;
+            if (!Admission::Release({Admission::Category::Input, runtime.admissionSerial.load()}))
+                return false;
+            runtime.admissionSerial.store(0);
+            runtime.admissionGeneration.store(0);
+            return true;
+        }
 
         struct Scope
         {
@@ -819,10 +836,16 @@ namespace mta::game_de
     {
         ApiOperation operation;
         if (!operation.acquired || runtime.hooked.load() || runtime.scopes.load() || runtime.inFlight.load() || runtime.active.load() ||
-            runtime.generation.load() == (std::numeric_limits<std::uint64_t>::max)())
+            runtime.transaction.Active() || runtime.admissionSerial.load() || runtime.generation.load() == (std::numeric_limits<std::uint64_t>::max)())
+            return false;
+        Admission::Token claim;
+        if (!Admission::TryAcquire(Admission::Category::Input, claim))
             return false;
         ClearCounters();
         generation = runtime.generation.fetch_add(1) + 1;
+        runtime.admissionSerial.store(claim.serial);
+        runtime.admissionGeneration.store(generation);
+        bool setupAttempted = false;
         runtime.bound.store(false);
         ClearEligibility();
         runtime.producerThread = GetCurrentThreadId();
@@ -871,6 +894,7 @@ namespace mta::game_de
             runtime.originalMembership = reinterpret_cast<MembershipFunction>(runtime.image + membershipRva);
             runtime.originalAvailability = reinterpret_cast<MembershipFunction>(runtime.image + availabilityRva);
             runtime.originalQuery = reinterpret_cast<QueryFunction>(runtime.image + queryRva);
+            setupAttempted = true;
             ready = ChangeHooks(true);
             if (!ready)
                 Fail(Failure::HookInstall);
@@ -900,6 +924,10 @@ namespace mta::game_de
             runtime.reader.Reset();
         ReadState(finalState);
         hasFinalState = true;
+        // A failed native transaction can retain code or recovery bytes. Only
+        // refusals before setup began are known safe to release without End.
+        if (!ready && !setupAttempted && !runtime.hooked.load() && !runtime.scopes.load() && !runtime.inFlight.load() && !runtime.transaction.Active())
+            ReleaseAdmission(generation);
         return ready;
     }
 
@@ -982,13 +1010,14 @@ namespace mta::game_de
 
     bool NativeMovementInput::End() noexcept
     {
+        if (!generation || generation != runtime.generation.load())
+            return true;
         ApiOperation operation;
         if (!operation.acquired)
             return false;
         if (!generation || generation != runtime.generation.load())
         {
-            const bool harmless = !runtime.hooked.load();
-            return harmless;
+            return true;
         }
         runtime.active.store(false);
         ClearEligibility();
@@ -1004,7 +1033,7 @@ namespace mta::game_de
         if (runtime.inFlight.load())
             return false;
         bool       pending = false;
-        const bool clean = (!runtime.hooked.load() && !runtime.scopes.load()) || ChangeHooks(false, &pending);
+        const bool clean = ((!runtime.hooked.load() && !runtime.scopes.load()) || ChangeHooks(false, &pending)) && !runtime.transaction.Active();
         if (clean)
         {
             runtime.hooked.store(false);
@@ -1015,7 +1044,7 @@ namespace mta::game_de
             Fail(Failure::HookRemove);
         ReadState(finalState);
         hasFinalState = true;
-        return clean;
+        return clean && ReleaseAdmission(generation);
     }
 
     bool NativeMovementInput::IsBound() const noexcept

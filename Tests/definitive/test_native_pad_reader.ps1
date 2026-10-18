@@ -15,6 +15,7 @@ $developerCommand = Join-Path $visualStudio 'Common7/Tools/VsDevCmd.bat'
 $outputRoot = Join-Path $taskRoot ('Build/mta-native-pad-reader/' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
 $sourceNames = @('Client/game_de/NativePadReader.h', 'Client/game_de/NativePadReader.cpp',
+    'Client/game_de/NativeImageAccess.h', 'Client/game_de/NativeImageAccess.cpp',
     'Client/sdk/game/CGameAdapter.h', 'Shared/sdk/CControllerActions.h', 'Shared/sdk/CControlStateSynthesis.h',
     'Shared/sdk/CControllerState.h', 'Tests/definitive/NativePadReaderTests.cpp', 'Tests/definitive/test_native_pad_reader.ps1')
 $sourceHashes = @($sourceNames | ForEach-Object {
@@ -40,6 +41,7 @@ foreach ($architecture in @('x86', 'x64')) {
         ('/I' + (Join-Path $taskRoot 'Shared/sdk')), (Join-Path $PSScriptRoot 'NativePadReaderTests.cpp'))
     $readerSource = Join-Path $taskRoot 'Client/game_de/NativePadReader.cpp'
     if (Test-Path -LiteralPath $readerSource) { $arguments += $readerSource }
+    $arguments += (Join-Path $taskRoot 'Client/game_de/NativeImageAccess.cpp')
     $arguments += @(('/Fo' + $outputDirectory + [IO.Path]::DirectorySeparatorChar), ('/Fe' + $executable), '/link', 'bcrypt.lib')
     $compilerOutput = @(& $compiler @arguments 2>&1)
     $compilerExit = $LASTEXITCODE

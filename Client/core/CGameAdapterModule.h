@@ -14,6 +14,7 @@
 #include <game/CGameRenderDeviceLease.h>
 #include <game/CGameRenderDeviceWindowLease.h>
 #include <game/CGameFrontendInputLease.h>
+#include <game/CGameClockService.h>
 #include <cstdint>
 #include <string>
 
@@ -44,6 +45,11 @@ public:
     bool                RenewFrontendInputLease(std::uint64_t generation);
     bool                ReadFrontendInputLease(mta::game_de::FrontendInputLeaseStateV1& state);
     bool                EndFrontendInputLease(std::uint64_t generation);
+    bool                BeginNativeClockService(const mta::game_de::ClockServiceRequestV1& request, mta::game_de::ClockServiceStateV1& state);
+    bool                SubmitNativeClockCommand(const mta::game_de::ClockCommandV1& command);
+    bool                RenewNativeClockService(std::uint64_t generation);
+    bool                ReadNativeClockService(mta::game_de::ClockServiceStateV1& state);
+    bool                EndNativeClockService(std::uint64_t generation);
     bool                GetNativeMovementEligibility(mta::game_de::NativeMovementEligibility& state);
     bool                BorrowGameInterface(CGame*& game);
     bool                BeginNativeRenderObservation();
@@ -78,6 +84,7 @@ public:
 
 private:
     bool RequireOwnerThread(const char* operation);
+    bool RequireClockRetired();
     bool StartNativeRenderDispatchObservation(mta::game_de::RenderObservationRoute route, bool captureDevice, bool captureWindow = false);
     bool RecordStatus(mta::game_de::Status status, const char* operation);
     void SetError(const char* error) noexcept;
@@ -92,6 +99,11 @@ private:
     decltype(&mta::game_de::RenewGameFrontendInputLeaseV1)      m_frontendLeaseRenew = nullptr;
     decltype(&mta::game_de::ReadGameFrontendInputLeaseV1)       m_frontendLeaseRead = nullptr;
     decltype(&mta::game_de::EndGameFrontendInputLeaseV1)        m_frontendLeaseEnd = nullptr;
+    decltype(&mta::game_de::BeginGameClockServiceV1)            m_clockBegin = nullptr;
+    decltype(&mta::game_de::SubmitGameClockCommandV1)           m_clockSubmit = nullptr;
+    decltype(&mta::game_de::RenewGameClockServiceV1)            m_clockRenew = nullptr;
+    decltype(&mta::game_de::ReadGameClockServiceV1)             m_clockRead = nullptr;
+    decltype(&mta::game_de::EndGameClockServiceV1)              m_clockEnd = nullptr;
     mta::game_de::IGameRenderObservation*                       m_renderObservation = nullptr;
     mta::game_de::IGameRenderObservationV2*                     m_renderObservationV2 = nullptr;
     mta::game_de::RenderObservationState                        m_lastRenderObservation;
@@ -124,5 +136,10 @@ private:
     mta::game_de::RenderObservationRoute                        m_renderRoute = mta::game_de::RenderObservationRoute::Unknown;
     CCoreInterface*                                             m_ownerIdentity = nullptr;
     std::uint32_t                                               m_ownerThread = 0;
-    std::string                                                 m_error;
+    // A failed Begin may retain a peer holding the allocator or loader lock.
+    // Keep diagnostics bounded until unload, and serialize other services
+    // until explicit End/Reset acknowledges clock cleanup.
+    bool        m_clockDiagnostics = false;
+    bool        m_clockAttemptPending = false;
+    std::string m_error;
 };

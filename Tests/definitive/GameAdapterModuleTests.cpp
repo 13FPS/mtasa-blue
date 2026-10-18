@@ -11,6 +11,7 @@
 #include <game/CGameRenderRootsDiagnostic.h>
 #include <game/CGameRenderDeviceLease.h>
 #include <game/CGameRenderDeviceWindowLease.h>
+#include <game/CGameClockService.h>
 
 #include <array>
 #include <algorithm>
@@ -420,6 +421,57 @@ namespace
               "reset clears native binding without publishing device state");
         Check(adapter.value->Shutdown() == Status::Ok && adapter.value->ReadNativeDeviceState(state) == Status::NotInitialized && state.sources == original,
               "shutdown prevents native device reads");
+    }
+
+    void TestClockServiceRejection()
+    {
+        OwnedAdapter          adapter;
+        OwnerIdentity         owner;
+        ClockServiceRequestV1 request;
+        ClockServiceStateV1   output;
+        output.hour = 99;
+        Check(BeginGameClockServiceV1(ClockServiceVersionV1, adapter.value, &request, &output) == Status::NotInitialized && output.hour == 99,
+              "clock admission requires the adapter's initialized MTA owner and preserves refused output");
+        Check(adapter.value->Initialize(owner.Get()) == Status::Ok, "initialize the native clock contract fixture");
+        Check(BeginGameClockServiceV1(0, adapter.value, &request, &output) == Status::InvalidArgument && output.hour == 99,
+              "clock contract version rejection precedes native setup");
+        Check(BeginGameClockServiceV1(ClockServiceVersionV1, nullptr, &request, &output) == Status::InvalidArgument,
+              "clock admission rejects a missing retained adapter");
+        request.reserved[2] = 1;
+        Check(BeginGameClockServiceV1(ClockServiceVersionV1, adapter.value, &request, &output) == Status::InvalidArgument && output.hour == 99,
+              "unknown clock request fields cannot admit a native hook");
+        request.reserved[2] = 0;
+        request.maximumDurationMs = ClockServiceMaximumDurationMsV1 + 1;
+        Check(BeginGameClockServiceV1(ClockServiceVersionV1, adapter.value, &request, &output) == Status::InvalidArgument,
+              "clock requests retain their absolute lifetime bound");
+        request.maximumDurationMs = ClockServiceMaximumDurationMsV1;
+        Status      foreign = Status::Ok;
+        std::thread other([&] { foreign = BeginGameClockServiceV1(ClockServiceVersionV1, adapter.value, &request, &output); });
+        other.join();
+        Check(foreign == Status::WrongThread && output.hour == 99, "another thread cannot adopt the clock producer or mutate output");
+        Check(BeginGameClockServiceV1(ClockServiceVersionV1, adapter.value, &request, &output) == Status::Unsupported,
+              "an ordinary test executable cannot admit the exact-image clock service");
+        Check(!output.bound && !output.hooked && !output.patchInstalled && !output.modulePinned,
+              "wrong-image clock refusal installs no hooks, patches or process pin");
+        Check(adapter.value->GetGameInterface() == nullptr && adapter.value->GetCapabilities() == implementedCapabilities,
+              "clock availability cannot advertise a full CGame or gameplay capabilities");
+        ClockCommandV1 command;
+        Check(SubmitGameClockCommandV1(ClockServiceVersionV1, adapter.value, &command) == Status::InvalidArgument,
+              "unowned zero-generation clock commands are invalid");
+        command.generation = command.sequence = 1;
+        command.operation = ClockOperation::Set;
+        command.hour = 24;
+        Check(SubmitGameClockCommandV1(ClockServiceVersionV1, adapter.value, &command) == Status::InvalidArgument,
+              "native clock commands reject invalid SDK hours");
+        command.hour = 23;
+        command.minute = 61;
+        Check(SubmitGameClockCommandV1(ClockServiceVersionV1, adapter.value, &command) == Status::InvalidArgument,
+              "minute values beyond the classic SDK range are invalid");
+        Check(RenewGameClockServiceV1(ClockServiceVersionV1, adapter.value, 0) == Status::InvalidArgument &&
+                  EndGameClockServiceV1(ClockServiceVersionV1, adapter.value, 0) == Status::InvalidArgument,
+              "public clock cleanup and renewal never treat zero as an owned token");
+        Check(adapter.value->Reset() == Status::Ok && adapter.value->Shutdown() == Status::Ok,
+              "rejected clock setup leaves the adapter's existing reset and shutdown usable");
     }
 
     void TestNativeMovementEligibilityRejection()
@@ -1303,6 +1355,7 @@ int main()
         TestNativeDeviceRejection();
         TestNativeMovementRejection();
         TestNativeMovementEligibilityRejection();
+        TestClockServiceRejection();
         // Exercise historical factory layouts after the additive lease has
         // completed, so API5 cannot silently replace their module contract.
         TestRenderObservationV5FactoryRejection();

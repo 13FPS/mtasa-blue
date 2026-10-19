@@ -8,6 +8,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <cstddef>
 #include <game/CSettings.h>
 #include <game/CWeather.h>
 #include <game/CColPoint.h>
@@ -1137,7 +1138,8 @@ int CLuaWorldDefs::RemoveWorldBuilding(lua_State* luaVM)
             CResource* pResource = pLuaMain->GetResource();
             if (pResource)
             {
-                uint uiAmount;
+                // Match the game SDK's count output on both pointer widths.
+                std::size_t uiAmount = 0;
                 CStaticFunctionDefinitions::RemoveWorldBuilding(static_cast<unsigned short>(iModelToRemove), fRadius, vecPosition.fX, vecPosition.fY,
                                                                 vecPosition.fZ, cInterior, uiAmount);
 
@@ -1162,7 +1164,7 @@ int CLuaWorldDefs::RestoreWorldBuildings(lua_State* luaVM)
         CResource* pResource = pLuaMain->GetResource();
         if (pResource)
         {
-            uint uiAmount;
+            std::size_t uiAmount = 0;
             CStaticFunctionDefinitions::RestoreWorldBuildings(uiAmount);
 
             lua_pushboolean(luaVM, true);
@@ -1194,7 +1196,7 @@ int CLuaWorldDefs::RestoreWorldBuilding(lua_State* luaVM)
             CResource* pResource = pLuaMain->GetResource();
             if (pResource)
             {
-                uint uiAmount;
+                std::size_t uiAmount = 0;
                 CStaticFunctionDefinitions::RestoreWorldBuilding(static_cast<unsigned short>(iModelToRestore), fRadius, vecPosition.fX, vecPosition.fY,
                                                                  vecPosition.fZ, cInterior, uiAmount);
 

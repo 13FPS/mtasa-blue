@@ -6936,20 +6936,22 @@ bool CStaticFunctionDefinitions::AreTrafficLightsLocked(bool& bLocked)
 }
 
 bool CStaticFunctionDefinitions::RemoveWorldBuilding(unsigned short usModelToRemove, float fRadius, float fX, float fY, float fZ, char cInterior,
-                                                     uint& uiOutAmount)
+                                                     std::size_t& uiOutAmount)
 {
+    // The SDK writes a size_t count. Preserve that width through the script
+    // boundary rather than alias a four-byte uint as an x64 output pointer.
     g_pGame->GetBuildingRemoval()->RemoveBuilding(usModelToRemove, fRadius, fX, fY, fZ, cInterior, &uiOutAmount);
     return true;
 }
 
-bool CStaticFunctionDefinitions::RestoreWorldBuildings(uint& uiOutAmount)
+bool CStaticFunctionDefinitions::RestoreWorldBuildings(std::size_t& uiOutAmount)
 {
     g_pGame->GetBuildingRemoval()->ClearRemovedBuildingLists(&uiOutAmount);
     return true;
 }
 
 bool CStaticFunctionDefinitions::RestoreWorldBuilding(unsigned short usModelToRestore, float fRadius, float fX, float fY, float fZ, char cInterior,
-                                                      uint& uiOutAmount)
+                                                      std::size_t& uiOutAmount)
 {
     return g_pGame->GetBuildingRemoval()->RestoreBuilding(usModelToRestore, fRadius, fX, fY, fZ, cInterior, &uiOutAmount);
 }

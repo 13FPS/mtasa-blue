@@ -110,7 +110,9 @@ bool CClientIMGManager::RestoreModel(unsigned int uiModel)
 
 size_t CClientIMGManager::CalculateLargestFile() const
 {
-    auto largest = m_GTALargestFileSizeBlocks;
+    // Archive getters use size_t; promote the classic default before comparing
+    // so the x64 build neither mixes std::max types nor narrows archive sizes.
+    size_t largest = m_GTALargestFileSizeBlocks;
 
     for (const auto img : m_List)
     {

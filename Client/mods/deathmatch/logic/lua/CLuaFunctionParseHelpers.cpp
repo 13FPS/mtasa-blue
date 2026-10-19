@@ -971,7 +971,8 @@ IMPLEMENT_ENUM_END("postfx-type")
 //
 CResource* UserDataCast(CResource* ptr, lua_State* luaState)
 {
-    return g_pClientGame->GetResourceManager()->GetResourceFromScriptID(reinterpret_cast<unsigned long>(ptr));
+    std::uint32_t uiScriptID;
+    return LuaUserDataToScriptID(ptr, uiScriptID) ? g_pClientGame->GetResourceManager()->GetResourceFromScriptID(uiScriptID) : nullptr;
 }
 
 //
@@ -979,7 +980,8 @@ CResource* UserDataCast(CResource* ptr, lua_State* luaState)
 //
 CXMLNode* UserDataCast(CXMLNode* ptr, lua_State* luaState)
 {
-    return g_pCore->GetXML()->GetNodeFromID(reinterpret_cast<unsigned long>(ptr));
+    std::uint32_t uiScriptID;
+    return LuaUserDataToScriptID(ptr, uiScriptID) ? g_pCore->GetXML()->GetNodeFromID(uiScriptID) : nullptr;
 }
 
 //
@@ -987,9 +989,13 @@ CXMLNode* UserDataCast(CXMLNode* ptr, lua_State* luaState)
 //
 CLuaTimer* UserDataCast(CLuaTimer* ptr, lua_State* luaState)
 {
+    std::uint32_t uiScriptID;
+    if (!LuaUserDataToScriptID(ptr, uiScriptID))
+        return nullptr;
+
     if (CLuaMain* luaMain = CLuaDefs::m_pLuaManager->GetVirtualMachine(luaState); luaMain)
     {
-        return luaMain->GetTimerManager()->GetTimerFromScriptID(reinterpret_cast<unsigned long>(ptr));
+        return luaMain->GetTimerManager()->GetTimerFromScriptID(uiScriptID);
     }
 
     return nullptr;
@@ -1000,7 +1006,7 @@ CLuaTimer* UserDataCast(CLuaTimer* ptr, lua_State* luaState)
 //
 CClientEntity* UserDataToElementCast(CClientEntity* ptr, SharedUtil::ClassId classId, lua_State* luaState)
 {
-    CClientEntity* element = CElementIDs::GetElement(TO_ELEMENTID(ptr));
+    CClientEntity* element = CElementIDs::GetElement(LuaUserDataToElementID(ptr));
 
     if (element == nullptr || element->IsBeingDeleted() || !element->IsA(classId))
         return nullptr;

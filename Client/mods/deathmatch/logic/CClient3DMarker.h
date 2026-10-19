@@ -28,6 +28,14 @@ public:
     CClient3DMarker(CClientMarker* pThis);
     ~CClient3DMarker();
 
+#if defined(_WIN64)
+    // A registered marker ID has one lifetime owner and must be returned once.
+    CClient3DMarker(const CClient3DMarker&) = delete;
+    CClient3DMarker& operator=(const CClient3DMarker&) = delete;
+    CClient3DMarker(CClient3DMarker&&) = delete;
+    CClient3DMarker& operator=(CClient3DMarker&&) = delete;
+#endif
+
     unsigned int GetMarkerType() const { return CClientMarkerCommon::CLASS_3DMARKER; };
 
     unsigned long Get3DMarkerType();

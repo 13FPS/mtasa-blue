@@ -16,14 +16,11 @@
 #include "../luadefs/CLuaDefs.h"
 // End of temporary
 
-// Prevent the warning issued when doing unsigned short -> void*
-#pragma warning(disable : 4312)
-
 CClientEntity* lua_toelement(lua_State* luaVM, int iArgument)
 {
     if (lua_type(luaVM, iArgument) == LUA_TLIGHTUSERDATA)
     {
-        ElementID      ID = TO_ELEMENTID(lua_touserdata(luaVM, iArgument));
+        ElementID      ID = LuaUserDataToElementID(lua_touserdata(luaVM, iArgument));
         CClientEntity* pEntity = CElementIDs::GetElement(ID);
         if (!pEntity || pEntity->IsBeingDeleted())
             return NULL;
@@ -31,7 +28,7 @@ CClientEntity* lua_toelement(lua_State* luaVM, int iArgument)
     }
     else if (lua_type(luaVM, iArgument) == LUA_TUSERDATA)
     {
-        ElementID      ID = TO_ELEMENTID(*((void**)lua_touserdata(luaVM, iArgument)));
+        ElementID      ID = LuaUserDataToElementID(*((void**)lua_touserdata(luaVM, iArgument)));
         CClientEntity* pEntity = CElementIDs::GetElement(ID);
         if (!pEntity || pEntity->IsBeingDeleted())
             return NULL;
@@ -59,7 +56,7 @@ void lua_pushelement(lua_State* luaVM, CClientEntity* pElement)
             if (pLuaMain->IsOOPEnabled())
                 szClass = CLuaClassDefs::GetEntityClass(pElement);
 
-            lua_pushobject(luaVM, szClass, (void*)reinterpret_cast<unsigned int*>(ID.Value()));
+            lua_pushobject(luaVM, szClass, LuaScriptIDToUserData(ID.Value()));
             return;
         }
     }
@@ -74,7 +71,7 @@ void lua_pushresource(lua_State* luaVM, CResource* pResource)
     if (pLuaMain->IsOOPEnabled())
         szClass = CLuaClassDefs::GetResourceClass(pResource);
 
-    lua_pushobject(luaVM, szClass, (void*)reinterpret_cast<unsigned int*>(pResource->GetScriptID()));
+    lua_pushobject(luaVM, szClass, LuaScriptIDToUserData(pResource->GetScriptID()));
 }
 
 void lua_pushtimer(lua_State* luaVM, CLuaTimer* pTimer)
@@ -84,7 +81,7 @@ void lua_pushtimer(lua_State* luaVM, CLuaTimer* pTimer)
     if (pLuaMain->IsOOPEnabled())
         szClass = CLuaClassDefs::GetTimerClass(pTimer);
 
-    lua_pushobject(luaVM, szClass, (void*)reinterpret_cast<unsigned int*>(pTimer->GetScriptID()));
+    lua_pushobject(luaVM, szClass, LuaScriptIDToUserData(pTimer->GetScriptID()));
 }
 
 void lua_pushxmlnode(lua_State* luaVM, CXMLNode* pElement)
@@ -94,7 +91,7 @@ void lua_pushxmlnode(lua_State* luaVM, CXMLNode* pElement)
     if (pLuaMain->IsOOPEnabled())
         szClass = CLuaClassDefs::GetXmlNodeClass(pElement);
 
-    lua_pushobject(luaVM, szClass, (void*)reinterpret_cast<unsigned int*>(pElement->GetID()));
+    lua_pushobject(luaVM, szClass, LuaScriptIDToUserData(pElement->GetID()));
 }
 
 void lua_pushuserdata(lua_State* luaVM, void* pData)

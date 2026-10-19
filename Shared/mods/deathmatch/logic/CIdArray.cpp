@@ -213,6 +213,8 @@ static const char* GetIdClassTypeName(EIdClassType eClass)
             return "Vector4";
         case EIdClassType::MATRIX:
             return "Matrix";
+        case EIdClassType::MARKER3D:
+            return "3D Marker";
         default:
             return "None";
     }

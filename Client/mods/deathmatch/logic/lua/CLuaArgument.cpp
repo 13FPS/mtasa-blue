@@ -26,9 +26,6 @@ extern CClientGame* g_pClientGame;
 
 using namespace std;
 
-// Prevent the warning issued when doing unsigned short -> void*
-#pragma warning(disable : 4312)
-
 CLuaArgument::CLuaArgument()
 {
     m_iType = LUA_TNIL;
@@ -357,7 +354,7 @@ void CLuaArgument::ReadScriptID(uint uiScriptID)
     m_strString = "";
     DeleteTableData();
     m_iType = LUA_TUSERDATA;
-    m_pUserData = reinterpret_cast<void*>(uiScriptID);
+    m_pUserData = LuaScriptIDToUserData(uiScriptID);
 }
 
 void CLuaArgument::ReadElement(CClientEntity* pElement)
@@ -367,7 +364,7 @@ void CLuaArgument::ReadElement(CClientEntity* pElement)
     if (pElement)
     {
         m_iType = LUA_TUSERDATA;
-        m_pUserData = (void*)reinterpret_cast<unsigned int*>(pElement->GetID().Value());
+        m_pUserData = LuaScriptIDToUserData(pElement->GetID().Value());
     }
     else
         m_iType = LUA_TNIL;
@@ -378,7 +375,7 @@ void CLuaArgument::ReadElementID(ElementID ID)
     m_strString = "";
     DeleteTableData();
     m_iType = LUA_TUSERDATA;
-    m_pUserData = (void*)reinterpret_cast<unsigned int*>(ID.Value());
+    m_pUserData = LuaScriptIDToUserData(ID.Value());
 }
 
 void CLuaArgument::ReadTable(CLuaArguments* table)
@@ -392,7 +389,7 @@ void CLuaArgument::ReadTable(CLuaArguments* table)
 
 CClientEntity* CLuaArgument::GetElement() const
 {
-    ElementID ID = TO_ELEMENTID(m_pUserData);
+    ElementID ID = LuaUserDataToElementID(m_pUserData);
     return CElementIDs::GetElement(ID);
 }
 
@@ -892,7 +889,9 @@ json_object* CLuaArgument::WriteToJSONObject(bool bSerialize, CFastHashMap<CLuaA
         case LUA_TLIGHTUSERDATA:
         {
             CClientEntity* pElement = GetElement();
-            CResource*     pResource = g_pClientGame->GetResourceManager()->GetResourceFromScriptID(reinterpret_cast<unsigned long>(GetUserData()));
+            std::uint32_t  uiScriptID;
+            CResource*     pResource =
+                LuaUserDataToScriptID(GetUserData(), uiScriptID) ? g_pClientGame->GetResourceManager()->GetResourceFromScriptID(uiScriptID) : nullptr;
 
             // Elements are dynamic, so storing them is potentially unsafe
             if (pElement && bSerialize)

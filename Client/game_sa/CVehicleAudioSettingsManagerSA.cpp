@@ -12,12 +12,38 @@
 #include "StdInc.h"
 #include "CGameSA.h"
 #include "CVehicleAudioSettingsManagerSA.h"
+#include "CVehicleSA.h"
 #include <array>
+#include <cstring>
 
 extern CGameSA* pGame;
 
 const auto (&ORIGINAL_AUDIO_SETTINGS)[VEHICLES_COUNT] = *reinterpret_cast<const tVehicleAudioSettings (*)[VEHICLES_COUNT]>(0x860AF0);
 tVehicleAudioSettings const* pNextVehicleAudioSettings = nullptr;
+
+namespace
+{
+    constexpr char RADIO_TYPE_RANDOM = 2;
+    constexpr char RADIO_NUM_RANDOM = 13;
+
+    tVehicleAudioSettings GetNormalizedAudioSettings(const CVehicleAudioSettingsEntry& settings)
+    {
+        auto normalizedSettings = static_cast<const CVehicleAudioSettingsEntrySA&>(settings).GetInterface();
+        if (normalizedSettings.m_nRadioType == RADIO_TYPE_RANDOM)
+            normalizedSettings.m_nRadioID = RADIO_NUM_RANDOM;
+
+        return normalizedSettings;
+    }
+
+    tVehicleAudioSettings GetNormalizedAudioSettings(const CAEVehicleAudioEntitySAInterface& audioInterface)
+    {
+        auto normalizedSettings = audioInterface.m_nSettings;
+        if (normalizedSettings.m_nRadioType == RADIO_TYPE_RANDOM)
+            normalizedSettings.m_nRadioID = RADIO_NUM_RANDOM;
+
+        return normalizedSettings;
+    }
+}
 
 CVehicleAudioSettingsManagerSA::CVehicleAudioSettingsManagerSA()
 {
@@ -58,6 +84,25 @@ void CVehicleAudioSettingsManagerSA::SetNextSettings(CVehicleAudioSettingsEntry 
 void CVehicleAudioSettingsManagerSA::SetNextSettings(uint32_t modelId) noexcept
 {
     pNextVehicleAudioSettings = &m_modelEntrys[GetVehicleModelAudioSettingsID(modelId)].GetInterface();
+}
+
+bool CVehicleAudioSettingsManagerSA::HasPendingSettingsChange(CVehicle* pVehicle, const CVehicleAudioSettingsEntry& settings) const noexcept
+{
+    // Keep the classic comparison beside the native layout it understands.
+    // An unavailable vehicle/audio interface still requires applying settings;
+    // shared client code must not infer equality from an unreadable backend.
+    auto* pVehicleSA = dynamic_cast<CVehicleSA*>(pVehicle);
+    if (!pVehicleSA)
+        return true;
+
+    auto* pVehicleAudioEntity = pVehicleSA->GetVehicleAudioEntity();
+    auto* pAudioInterface = pVehicleAudioEntity ? pVehicleAudioEntity->GetInterface() : nullptr;
+    if (!pAudioInterface)
+        return true;
+
+    const auto currentSettings = GetNormalizedAudioSettings(*pAudioInterface);
+    const auto desiredSettings = GetNormalizedAudioSettings(settings);
+    return std::memcmp(&currentSettings, &desiredSettings, sizeof(desiredSettings)) != 0;
 }
 
 void CVehicleAudioSettingsManagerSA::ResetModelSettings(uint32_t modelId) noexcept

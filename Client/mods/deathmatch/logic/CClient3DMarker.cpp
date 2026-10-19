@@ -9,6 +9,7 @@
  *****************************************************************************/
 
 #include <StdInc.h>
+#include "CIdArray.h"
 #include <game/C3DMarkers.h>
 #include <game/CVisibilityPlugins.h>
 
@@ -24,11 +25,22 @@ CClient3DMarker::CClient3DMarker(CClientMarker* pThis)
     m_fSize = 4.0f;
     m_dwType = static_cast<DWORD>(T3DMarkerType::MARKER3D_CYLINDER2);
     m_pMarker = NULL;
+#if defined(_WIN64)
+    // The native marker key stays 32-bit. Truncating an x64 object address can
+    // alias another live marker, so retain MTA's existing unique ID allocation
+    // for this object's lifetime, including stream-out and later stream-in.
+    static_assert(sizeof(SArrayId) == sizeof(m_ulIdentifier) && sizeof(m_ulIdentifier) == 4);
+    m_ulIdentifier = CIdArray::PopUniqueId(this, EIdClass::MARKER3D);
+#else
     m_ulIdentifier = (DWORD)this;
+#endif
 }
 
 CClient3DMarker::~CClient3DMarker()
 {
+#if defined(_WIN64)
+    CIdArray::PushUniqueId(this, EIdClass::MARKER3D, m_ulIdentifier);
+#endif
 }
 
 unsigned long CClient3DMarker::Get3DMarkerType()

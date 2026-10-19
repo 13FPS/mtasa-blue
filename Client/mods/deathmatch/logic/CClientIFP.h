@@ -13,6 +13,9 @@
 #include <bitset>
 #include "CClientEntity.h"
 #include "CFileReader.h"
+// CIFPAnimations owns hierarchy wrappers too; declare the real SDK interface
+// before that header rather than relying on a game_sa/PCH transitive include.
+#include <game/CAnimBlendHierarchy.h>
 #include "CIFPAnimations.h"
 #include <game/CAnimBlendSequence.h>
 

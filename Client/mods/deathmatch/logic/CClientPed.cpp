@@ -12,6 +12,7 @@
 #include <CPedPositionInterpolation.h>
 #include <game/CAEVehicleAudioEntity.h>
 #include <game/CAnimBlendAssocGroup.h>
+#include <game/CAnimBlendStaticAssociation.h>
 #include <game/CAnimManager.h>
 #include <game/CCam.h>
 #include <game/CCarEnterExit.h>

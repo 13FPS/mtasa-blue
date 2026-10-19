@@ -6,6 +6,30 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
+**The real Deathmatch client now compiles and links as Release/x64.** Generate
+with `--with-definitive-adapter --with-definitive-client` and build the existing
+`Client Deathmatch` target. Its output is `Bin/mods/deathmatch/x64/client.dll`;
+the DE mod loader selects this directory, keeping the classic module separate.
+Default and adapter-only solutions still exclude this unfinished client target.
+
+The port reuses MTA's Lua, microphone and SVG projects. Its four BASS import
+libraries must be AMD64 files in `vendor/bass/lib/x64`, with their matching DLLs
+beside the client output. The checked vendor packages are linked from the
+[official BASS page](https://www.un4seen.com/bass.html): BASS, BASS FX, BASSmix
+and TAGS. Their Windows archives contain `c/x64/*.lib` and `x64/*.dll` (the FX
+package uses `C/x64`). Existing x86 imports remain unchanged.
+
+Shared client code now asks the game SDK about pending vehicle audio settings;
+the classic backend owns its native comparison. The appended query requires
+matching client/backend builds. Marker IDs reuse MTA's existing 32-bit ID
+allocator on x64, and Lua handles retain their existing numeric ID format while
+rejecting wider pointer payloads. Native counts use the SDK's `size_t` type.
+
+The normal x64 client build, its `InitClient` export, the classic x86 audio
+translation unit and 29 x86/40 x64 Lua ID regression checks passed. This has not
+loaded the new client in GTA. The full DE game interface and x64 networking
+remain incomplete, so gameplay/full-startup gates and **EXPERIMENTAL** remain.
+
 **Startup module loading now reuses one architecture-aware MTA owner.**
 `CModuleLoader` and the existing deathmatch mod manager share exact-path module
 ownership. Incompatible PE architecture is rejected before module execution;

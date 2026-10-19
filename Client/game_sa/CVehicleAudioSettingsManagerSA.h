@@ -31,6 +31,7 @@ public:
 
     void SetNextSettings(CVehicleAudioSettingsEntry const* pSettings) noexcept override;
     void SetNextSettings(uint32_t modelId) noexcept override;
+    bool HasPendingSettingsChange(CVehicle* pVehicle, const CVehicleAudioSettingsEntry& settings) const noexcept override;
 
     static void StaticSetHooks() noexcept;
 

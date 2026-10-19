@@ -13,6 +13,7 @@
 #include <net/SyncStructures.h>
 #include <game/C3DMarkers.h>
 #include <game/CAnimBlendAssocGroup.h>
+#include <game/CAnimBlendStaticAssociation.h>
 #include <game/CAnimBlendAssociation.h>
 #include <game/CAnimBlendHierarchy.h>
 #include <game/CAnimManager.h>
@@ -40,6 +41,7 @@
 #include <windowsx.h>
 #include "CServerInfo.h"
 #include "CClientPed.h"
+#include <cstdint>
 
 SString StringZeroPadout(const SString& strInput, uint uiPadoutSize)
 {
@@ -4035,7 +4037,9 @@ bool CClientGame::AssocGroupCopyAnimationHandler(CAnimBlendAssociationSAInterfac
     bool          isCustomAnimationToPlay = false;
     CAnimManager* pAnimationManager = g_pGame->GetAnimManager();
 
-    if ((DWORD)pAnimAssocGroupInterface < 0x250)
+    // Test the complete address: truncating an x64 pointer to DWORD can make
+    // a valid association appear corrupt when only its low bits are small.
+    if (reinterpret_cast<std::uintptr_t>(pAnimAssocGroupInterface) < 0x250)
     {
         g_pCore->LogEvent(542, "AssocGroupCopyAnimationHandler", "Interface is corrupt",
                           SString("pAnimAssocGroupInterface = %p | AnimID = %d", pAnimAssocGroupInterface, animID), 542);
@@ -4043,7 +4047,7 @@ bool CClientGame::AssocGroupCopyAnimationHandler(CAnimBlendAssociationSAInterfac
 
     auto pAnimAssocGroup = pAnimationManager->GetAnimBlendAssocGroup(pAnimAssocGroupInterface);
 
-    if ((DWORD)pAnimAssocGroup->GetInterface() < 0x250)
+    if (reinterpret_cast<std::uintptr_t>(pAnimAssocGroup->GetInterface()) < 0x250)
     {
         g_pCore->LogEvent(543, "AssocGroupCopyAnimationHandler", "GetAnimBlendAssocGroup corrupted the interface",
                           SString("pAnimAssocGroupInterface = %p | AnimID = %d", pAnimAssocGroup->GetInterface(), animID), 543);

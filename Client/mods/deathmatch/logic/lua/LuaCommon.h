@@ -11,6 +11,10 @@
 
 #pragma once
 
+#include <Common.h>
+#include <cstdint>
+#include <limits>
+
 extern "C"
 {
 #include "lua.h"
@@ -20,7 +24,28 @@ extern "C"
 
 CLuaFunctionRef luaM_toref(lua_State* luaVM, int iArgument);
 
-#define TO_ELEMENTID(x) ((ElementID) reinterpret_cast<unsigned long>(x))
+// Script handles remain 32-bit IDs even when Lua stores them in pointer-sized userdata.
+// Reject wider native addresses before lookup so their low bits cannot alias an unrelated handle.
+inline bool LuaUserDataToScriptID(const void* pData, std::uint32_t& uiScriptID)
+{
+    const auto value = reinterpret_cast<std::uintptr_t>(pData);
+    if (value > (std::numeric_limits<std::uint32_t>::max)())
+        return false;
+
+    uiScriptID = static_cast<std::uint32_t>(value);
+    return true;
+}
+
+inline ElementID LuaUserDataToElementID(const void* pData)
+{
+    std::uint32_t uiScriptID;
+    return LuaUserDataToScriptID(pData, uiScriptID) ? ElementID(uiScriptID) : ElementID();
+}
+
+inline void* LuaScriptIDToUserData(std::uint32_t uiScriptID)
+{
+    return reinterpret_cast<void*>(static_cast<std::uintptr_t>(uiScriptID));
+}
 
 // Predeclarations of our classes
 class CClientColModel;

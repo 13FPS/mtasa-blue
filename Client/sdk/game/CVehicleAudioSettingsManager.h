@@ -13,6 +13,8 @@
 
 #include "CVehicleAudioSettingsEntry.h"
 
+class CVehicle;
+
 class CVehicleAudioSettingsManager
 {
 public:
@@ -23,4 +25,9 @@ public:
     virtual void ResetAudioSettingsData() noexcept = 0;
     virtual void SetNextSettings(CVehicleAudioSettingsEntry const* pSettings) noexcept = 0;
     virtual void SetNextSettings(uint32_t modelId) noexcept = 0;
+
+    // Native audio layouts and their normalization belong to the engine
+    // backend, so shared client logic can compare settings without SA headers.
+    // Append the query to preserve the existing manager method slots.
+    virtual bool HasPendingSettingsChange(CVehicle* pVehicle, const CVehicleAudioSettingsEntry& settings) const noexcept = 0;
 };

@@ -410,3 +410,6 @@ utils/DXFiles/
 !*.exe
 utils/vswhere.exe
 *.generated.h
+
+# User-owned network reverse engineering workspace
+/r-engineer/

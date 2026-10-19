@@ -21,53 +21,11 @@
 #include <game/CStreaming.h>
 #include <game/CVehicleAudioSettingsManager.h>
 #include <enums/VehicleType.h>
-#include <game_sa/CVehicleSA.h>
-#include <game_sa/CVehicleAudioSettingsEntrySA.h>
 
 using std::list;
 
 extern CClientGame*            g_pClientGame;
 std::set<const CClientEntity*> ms_AttachedVehiclesToIgnore;
-
-namespace
-{
-    constexpr char RADIO_TYPE_RANDOM = 2;
-    constexpr char RADIO_NUM_RANDOM = 13;
-
-    tVehicleAudioSettings GetNormalizedAudioSettings(const CVehicleAudioSettingsEntry& settings)
-    {
-        auto normalizedSettings = static_cast<const CVehicleAudioSettingsEntrySA&>(settings).GetInterface();
-        if (normalizedSettings.m_nRadioType == RADIO_TYPE_RANDOM)
-            normalizedSettings.m_nRadioID = RADIO_NUM_RANDOM;
-
-        return normalizedSettings;
-    }
-
-    tVehicleAudioSettings GetNormalizedAudioSettings(const CAEVehicleAudioEntitySAInterface& audioInterface)
-    {
-        auto normalizedSettings = audioInterface.m_nSettings;
-        if (normalizedSettings.m_nRadioType == RADIO_TYPE_RANDOM)
-            normalizedSettings.m_nRadioID = RADIO_NUM_RANDOM;
-
-        return normalizedSettings;
-    }
-
-    bool HasPendingAudioSettingsChange(CVehicle* pVehicle, const CVehicleAudioSettingsEntry& settings)
-    {
-        auto* pVehicleSA = dynamic_cast<CVehicleSA*>(pVehicle);
-        if (!pVehicleSA)
-            return true;
-
-        auto* pVehicleAudioEntity = pVehicleSA->GetVehicleAudioEntity();
-        auto* pAudioInterface = pVehicleAudioEntity ? pVehicleAudioEntity->GetInterface() : nullptr;
-        if (!pAudioInterface)
-            return true;
-
-        const auto currentSettings = GetNormalizedAudioSettings(*pAudioInterface);
-        const auto desiredSettings = GetNormalizedAudioSettings(settings);
-        return std::memcmp(&currentSettings, &desiredSettings, sizeof(desiredSettings)) != 0;
-    }
-}
 
 // To hide the ugly "pointer truncation from DWORD* to unsigned long warning
 #pragma warning(disable : 4311)
@@ -2010,9 +1968,9 @@ CClientVehicle* CClientVehicle::GetPreviousTrainCarriage()
         CVehicle* pPreviousTrainCarriage = m_pVehicle->GetPreviousTrainCarriage();
         if (pPreviousTrainCarriage)
         {
-            CPools*                    pPools = g_pGame->GetPools();
-            CEntitySAInterface*        pInterface = pPreviousTrainCarriage->GetInterface();
-            SClientEntity<CVehicleSA>* pVehicleClientEntity = pPools->GetVehicle((DWORD*)pInterface);
+            CPools*             pPools = g_pGame->GetPools();
+            CEntitySAInterface* pInterface = pPreviousTrainCarriage->GetInterface();
+            auto*               pVehicleClientEntity = pPools->GetVehicle((DWORD*)pInterface);
             if (pVehicleClientEntity && pVehicleClientEntity->pClientEntity)
             {
                 return reinterpret_cast<CClientVehicle*>(pVehicleClientEntity->pClientEntity);
@@ -2032,9 +1990,9 @@ CClientVehicle* CClientVehicle::GetNextTrainCarriage()
         CVehicle* pNextTrainCarriage = m_pVehicle->GetNextTrainCarriage();
         if (pNextTrainCarriage)
         {
-            CPools*                    pPools = g_pGame->GetPools();
-            CEntitySAInterface*        pInterface = pNextTrainCarriage->GetInterface();
-            SClientEntity<CVehicleSA>* pVehicleClientEntity = pPools->GetVehicle((DWORD*)pInterface);
+            CPools*             pPools = g_pGame->GetPools();
+            CEntitySAInterface* pInterface = pNextTrainCarriage->GetInterface();
+            auto*               pVehicleClientEntity = pPools->GetVehicle((DWORD*)pInterface);
             if (pVehicleClientEntity && pVehicleClientEntity->pClientEntity)
             {
                 return reinterpret_cast<CClientVehicle*>(pVehicleClientEntity->pClientEntity);
@@ -3251,8 +3209,8 @@ CClientVehicle* CClientVehicle::GetTowedVehicle()
         CVehicle* pGameVehicle = m_pVehicle->GetTowedVehicle();
         if (pGameVehicle)
         {
-            CPools*                    pPools = g_pGame->GetPools();
-            SClientEntity<CVehicleSA>* pVehicleEntity = pPools->GetVehicle((DWORD*)pGameVehicle->GetInterface());
+            CPools* pPools = g_pGame->GetPools();
+            auto*   pVehicleEntity = pPools->GetVehicle((DWORD*)pGameVehicle->GetInterface());
             if (pVehicleEntity && pVehicleEntity->pClientEntity)
             {
                 return reinterpret_cast<CClientVehicle*>(pVehicleEntity->pClientEntity);
@@ -3270,8 +3228,8 @@ CClientVehicle* CClientVehicle::GetRealTowedVehicle()
         CVehicle* pGameVehicle = m_pVehicle->GetTowedVehicle();
         if (pGameVehicle)
         {
-            CPools*                    pPools = g_pGame->GetPools();
-            SClientEntity<CVehicleSA>* pVehicleEntity = pPools->GetVehicle((DWORD*)pGameVehicle->GetInterface());
+            CPools* pPools = g_pGame->GetPools();
+            auto*   pVehicleEntity = pPools->GetVehicle((DWORD*)pGameVehicle->GetInterface());
             if (pVehicleEntity && pVehicleEntity->pClientEntity)
             {
                 return reinterpret_cast<CClientVehicle*>(pVehicleEntity->pClientEntity);
@@ -5311,10 +5269,11 @@ void CClientVehicle::ApplyAudioSettings()
         return;
 
     const auto& audioSettings = GetAudioSettings();
-    if (!HasPendingAudioSettingsChange(m_pVehicle, audioSettings))
+    auto*       pAudioSettingsManager = g_pGame->GetVehicleAudioSettingsManager();
+    if (!pAudioSettingsManager->HasPendingSettingsChange(m_pVehicle, audioSettings))
         return;
 
-    g_pGame->GetVehicleAudioSettingsManager()->SetNextSettings(&audioSettings);
+    pAudioSettingsManager->SetNextSettings(&audioSettings);
     m_pVehicle->ReinitAudio();
 }
 

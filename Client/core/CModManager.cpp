@@ -154,7 +154,13 @@ bool CModManager::TryStart()
         SetDllDirectory(CalcMTASAPath("mta"));
     }
 
+    // The DE client is built beside the classic module, so select its explicit
+    // directory before architecture admission instead of replacing the x86 DLL.
+#if defined(MTA_WITH_DEFINITIVE_ADAPTER) && defined(_WIN64)
+    const SString modulePath = CalcMTASAPath("mods\\deathmatch\\x64\\" CLIENT_DLL_NAME);
+#else
     const SString modulePath = CalcMTASAPath("mods\\deathmatch\\" CLIENT_DLL_NAME);
+#endif
 
     // Reuse Core's architecture admission and exact module ownership. Client
     // startup must not execute the x86 deathmatch DLL inside a DE x64 process.

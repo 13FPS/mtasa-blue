@@ -19,6 +19,8 @@
 #include <optional>
 #include <variant>
 #include <array>
+#include <cstddef>
+#include <type_traits>
 
 /*
     Basic Lua operations:
@@ -42,6 +44,14 @@ namespace lua
     inline void Push(lua_State* L, unsigned int value)
     {
         lua_pushnumber(L, value);
+    }
+    // Native SDK counts use size_t. Preserve Lua's existing numeric result on
+    // x64 without narrowing to unsigned int or duplicating that x86 overload.
+    template <typename T>
+        requires(std::is_same_v<T, std::size_t> && !std::is_same_v<T, unsigned int>)
+    inline void Push(lua_State* L, T value)
+    {
+        lua_pushnumber(L, static_cast<lua_Number>(value));
     }
     inline void Push(lua_State* L, float value)
     {

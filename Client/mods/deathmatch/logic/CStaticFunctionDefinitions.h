@@ -15,6 +15,7 @@ class CStaticFunctionDefinitions;
 
 #include <gui/CGUI.h>
 #include <gui/CGUIElement.h>
+#include <cstddef>
 
 #include "enums/HandlingProperty.h"
 #include "enums/WeaponProperty.h"
@@ -608,9 +609,9 @@ public:
     static bool          GetCloudsEnabled();
     static bool          GetTrafficLightState(unsigned char& ucState);
     static bool          AreTrafficLightsLocked(bool& bLocked);
-    static bool          RemoveWorldBuilding(unsigned short usModelToRemove, float fDistance, float fX, float fY, float fZ, char cInterior, uint& uiOutAmount);
-    static bool          RestoreWorldBuildings(uint& uiOutAmount);
-    static bool RestoreWorldBuilding(unsigned short usModelToRestore, float fDistance, float fX, float fY, float fZ, char cInterior, uint& uiOutAmount);
+    static bool RemoveWorldBuilding(unsigned short usModelToRemove, float fDistance, float fX, float fY, float fZ, char cInterior, std::size_t& uiOutAmount);
+    static bool RestoreWorldBuildings(std::size_t& uiOutAmount);
+    static bool RestoreWorldBuilding(unsigned short usModelToRestore, float fDistance, float fX, float fY, float fZ, char cInterior, std::size_t& uiOutAmount);
 
     static bool SetTime(unsigned char ucHour, unsigned char ucMin);
     static bool GetSkyGradient(unsigned char& ucTopRed, unsigned char& ucTopGreen, unsigned char& ucTopBlue, unsigned char& ucBottomRed,

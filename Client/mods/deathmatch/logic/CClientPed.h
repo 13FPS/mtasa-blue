@@ -21,6 +21,10 @@ class CClientPed;
 #include "CClientModel.h"
 #include <memory>
 
+// These public animation signatures need the SDK interfaces regardless of
+// which game backend or precompiled-header include order builds the client.
+#include <game/CAnimBlendAssociation.h>
+#include <game/CAnimBlendHierarchy.h>
 #include <game/CPad.h>
 #include <game/TaskTypes.h>
 

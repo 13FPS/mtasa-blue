@@ -33,6 +33,15 @@ newoption {
 	description = "Enable the MTA-owned DE adapter startup gate (DE gameplay remains unavailable)",
 }
 
+newoption {
+	trigger     = "with-definitive-client",
+	description = "Enable the unfinished real Deathmatch Release x64 port target (requires --with-definitive-adapter)",
+}
+
+if _OPTIONS["with-definitive-client"] and not _OPTIONS["with-definitive-adapter"] then
+	error("--with-definitive-client requires --with-definitive-adapter; the classic game backend cannot host the x64 client")
+end
+
 workspace "MTASA"
 	configurations {"Debug", "Release", "Nightly"}
 

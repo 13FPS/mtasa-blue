@@ -5,6 +5,21 @@ MTA Core owns its loading, initialization, pulse, reset, shutdown and release
 through `CGameAdapterModule` and the versioned SDK `game/CGameAdapter.h`.
 The module provides no separate transport or script-host lifecycle.
 
+The separate optional local-input lease reuses MTA's retained `CKeyBinds` and
+controller synthesis for six on-foot actions, with a 500 ms owner/generation
+and focus limit. The combined menu/input milestone passed in GTA on October 19
+using runtime `4ed8f898a` and capture tooling `2602e1375`: two views retired on
+the same Core owner, local input renewed between them and retired before the
+next view, and final Stop left native generation 4 retired with neutral input.
+Core, GUI, XML and pthread were absent from the final live module snapshot;
+the expected backend PIN and Bridge lifetime remain separate. The human report
+was "All checks worked"; physical keys, Quit clicks and appearance are human
+observations rather than machine proof. Raw logs, protocol results and separate
+shutdown evidence are referenced by
+`Build/definitive-recovery/current-actual-local-input-checkpoint.json`.
+This result adds no advertised gameplay capability or full `CGame`, and full
+client startup/networking remain incomplete under the **EXPERIMENTAL** notice.
+
 The opt-in clock service implements the existing SDK `CClock` interface behind
 an optional, separately versioned adapter contract. Core queues clock commands;
 only the exact-image native continuation after clock progression adopts an

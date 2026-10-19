@@ -18,8 +18,35 @@ reports unchanged. Its 500 ms owner/generation/focus lease permits only forward,
 backward, left, right, walk and sprint. Lost eligibility or focus suspends it;
 a later menu closure deliberately rearms through released keys and fresh
 eligibility. The original 35-second movement trial and neutral frontend lease
-retain their limits. The combined path still needs a GTA milestone test;
-gameplay, networking and full client startup remain incomplete.
+retain their limits. The combined input/menu milestone passed in GTA on
+October 19; gameplay, networking and full client startup remain incomplete.
+
+**The combined MTA input/menu path passed on runtime `4ed8f898a`, with capture
+tooling `2602e1375`.** Two actual menu views were acknowledged and retired
+within session generation 1, using the same Core owner thread 29920. Between
+views, the retained MTA bindings produced held actions and renewed local input.
+That input writer retired before the next visible view. Final runtime phase 7
+recorded native generation 4 retired with neutral input, and the live module
+snapshot contained no Core, GUI, XML or pthread. The expected backend module
+PIN and the Bridge's script lifetime are separate from active service ownership.
+
+The fourteen raw logs yielded 174 events, including 67 Runtime416 records and
+75 local-input32 records. The user's verbatim report, **"All checks worked"**,
+supports the requested Settings Apply-to-I, I movement/sprint, second menu,
+retained I binding, Cancel-to-O rejection and restored W/control checks.
+Machine records establish the service transitions and held input; they cannot
+identify physical keys, prove a Quit click or supply visual confirmation.
+
+Shutdown preserved all fourteen live log prefixes. Its fresh CLEO delta contains
+the actual `host shut down` event followed by `Exit`; the earlier parser falsely
+rejected that spelling. The original failed capture remains unchanged, and a
+separate saved-byte reanalysis records the corrected logged shutdown evidence.
+The OS exit code remains unknown. The actual protocol pass, human report and
+shutdown classification stay separate behind the workspace pointer
+`Build/definitive-recovery/current-actual-local-input-checkpoint.json`.
+Earlier failed trials remain unchanged, with their unresolved causes unproven.
+Adapter ABI6 and advertised capabilities are unchanged; no full `CGame` or
+MTA networking is enabled, and the root **EXPERIMENTAL** notice remains.
 
 Development now batches related wiring and checks it offline before a combined
 GTA test at an integration milestone. Individual source edits do not require
@@ -36,7 +63,7 @@ seven actual Core/GUI host cases, 180 worker cases, 1,454 script checks and
 2,463 Bridge checks. Native input tests passed 2,930 checks in an owned test
 process; the real module and x64 MTA consumer passed 1,763 and 1,782 checks.
 These are offline results. The combined menu, changed bindings and native
-movement path has not yet been tested in GTA.
+movement milestone has the separate October 19 GTA evidence above.
 
 **The retained frontend runtime candidate keeps real MTA services across menu reopenings.**
 `package.ps1 -Mode Smoke -MtaCoreFrontendRuntime` selects a separate 58-file
@@ -69,13 +96,14 @@ still refuse reacquisition.
 
 The follow-up GTA trial on `dcf4ee357` acknowledged and retired its first menu
 correctly, then stopped cleanly. No second Show command was recorded, so native
-re-entry remains untested. The user was unsure which reopening chord was used;
+re-entry was untested in that recording. The user was unsure which reopening chord was used;
 that recording contains no key-state evidence to resolve the cause. The script
 now rearms when F9 is released with modifiers held and preserves a newer reopen
 request while GUI closing finishes. Focus loss still hides the menu. A change
 log for only Ctrl, Shift and F9 distinguishes observed keys, debounce and queued
-intent without recording other keystrokes. A shorter two-menu GTA test remains
-required. Earlier cursor, Settings and clock
+intent without recording other keystrokes. The later combined two-menu milestone
+passed as recorded above; it does not establish that earlier trial's cause.
+Earlier cursor, Settings and clock
 results below remain separate evidence. Gameplay, networking and full client
 startup remain unavailable, and the root **EXPERIMENTAL** notice stays.
 
@@ -86,7 +114,7 @@ owned test process; and 2,386 Bridge checks in a rejected non-game host.
 The new package matrix passed 3,746 checks using one disposable game copy, and
 the preceding frontend ownership matrix passed all 1,175 checks again. These
 results verify service ownership and failure handling; live hide/show and
-Settings retention still need the user's GTA test.
+Settings retention have the separate October 19 combined result above.
 
 **Combined clock-to-menu cursor interaction passed in GTA on runtime `f731beec0`.**
 The user reported a free pointer, a successful Quit click and restored movement

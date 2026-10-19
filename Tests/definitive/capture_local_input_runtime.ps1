@@ -25,7 +25,7 @@ $logs=[Collections.Generic.List[object]]::new()
 $ready=$null;$readyPin=$null;$savedReady=$null;$baselineRecord=$null;$baselinePin=$null;$actualRecord=$null;$actualPin=$null
 $failure=$null;$rawCaptureComplete=$false;$captureComplete=$false;$protocolPassed=$false;$cleanupPassed=$false;$moduleCleanupPassed=$false
 $observedFiles=@();$observedSources=@();$observedProtected=@();$processBefore=$null;$processAfter=$null;$modulesBefore=@();$modulesAfter=@()
-$cohort=$null;$continuities=@();$verifierResult=$null;$verifierOutput=$null;$verifierExit=$null;$eventsPin=$null;$normalExitEvidenceVerified=$false
+$cohort=$null;$continuities=@();$verifierResult=$null;$verifierOutput=$null;$verifierExit=$null;$eventsPin=$null;$normalExitEvidenceVerified=$false;$cleoShutdownEvidence=$null
 $savedManifests=@();$currentHead=$null
 $trialDllNames=@('core.dll','game_de.dll','de_client_bridge.dll','cgui.dll','xmll.dll','pthread.dll')
 $expectedLogPaths=@('cleo_redux.log')+@('CEGUI.log','console.log','gui-console.log','gui-frontend-input.log','gui-frontend.log','gui-startup.log',
@@ -134,7 +134,8 @@ try {
         $suffix=Get-LirCleoDelta $cleo.saved.path $priorCleo.saved
         Check 'same-CLEO-cohort-at-shutdown' ($headers.Count -eq $actualRecord.cohort.headerCount -and $headers[-1].text -ceq $actualRecord.cohort.lastHeader -and
             $headers[-1].characterOffset -eq $actualRecord.cohort.lastHeaderCharacterOffset)
-        Check 'fresh-CLEO-shutdown-and-Exit' ($suffix -match '(?m)^\d{2}:\d{2}:\d{2} \[INFO\] .*host.shutdown' -and $suffix -match '(?m)^\d{2}:\d{2}:\d{2} \[INFO\] Exit\s*$')
+        $cleoShutdownEvidence=Get-LirCleoShutdownEvidence $suffix
+        Check 'fresh-CLEO-shutdown-and-Exit' $cleoShutdownEvidence.verified
         $cohort=$actualRecord.cohort;$normalExitEvidenceVerified=$true
     } else {
         $processBefore=RealProcess;$modulesBefore=@(TrialModules $processBefore)
@@ -208,7 +209,7 @@ $result=[ordered]@{
     processBefore=$processBefore;processAfter=$processAfter;modulesBefore=$modulesBefore;modulesAfter=$modulesAfter;cohort=$cohort;
     allSixTrialDllsAbsent=$(if($Mode -eq 'Shutdown'){$normalExitEvidenceVerified}elseif($processBefore -and $processAfter){$modulesBefore.Count -eq 0 -and $modulesAfter.Count -eq 0}else{$null});
     protocolPassed=$protocolPassed;cleanupPassed=$cleanupPassed;moduleCleanupPassed=$moduleCleanupPassed;verifierExit=$verifierExit;events=$eventsPin;verifierOutput=$verifierOutput;verifierResult=$verifierResult;
-    normalExitEvidenceVerified=$normalExitEvidenceVerified;machineExitCodeKnown=$false;machineExitCode=$null;
+    normalExitEvidenceVerified=$normalExitEvidenceVerified;cleoShutdownEvidence=$cleoShutdownEvidence;machineExitCodeKnown=$false;machineExitCode=$null;
     priorActualProtocolPassed=$(if($actualRecord){$actualRecord.protocolPassed}else{$null});priorActualCleanupPassed=$(if($actualRecord){$actualRecord.cleanupPassed}else{$null});
     priorActualSuccess=$(if($actualRecord){$actualRecord.success}else{$null});priorActualHumanReport=$(if($actualRecord){$actualRecord.humanReport}else{$null});
     shutdownDoesNotPromoteActualResult=$true;humanReport=$HumanReport;humanNormalExitReported=[bool]$HumanNormalExitReported;humanInteractionInferred=$false;combinedResultPassed=$null;

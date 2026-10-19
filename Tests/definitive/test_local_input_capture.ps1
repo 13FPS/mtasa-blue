@@ -71,6 +71,27 @@ try {
     $empty=Join-Path $sourceRoot 'empty.log';[IO.File]::WriteAllBytes($empty,[byte[]]::new(0));$emptyPin=Get-LirPin $empty
     Check ((Test-LirPrefix $cleoBaseline ([pscustomobject]$emptyPin)).preserved) 'zero-length prefix semantics are explicit'
 
+    $shutdown="12:00:02 [INFO] New event received: `"host shut down`"`r`n"
+    $exit="12:00:02 [INFO] Exit`r`n"
+    $shutdownEvidence=Get-LirCleoShutdownEvidence ($shutdown+$exit)
+    Check ($shutdownEvidence.verified -and $shutdownEvidence.shutdownPrecedesExit -and $shutdownEvidence.completeLineBoundary) 'real CLEO host shut down spelling and subsequent Exit are recognized'
+    Check ($shutdownEvidence.shutdownLine -ceq $shutdown.TrimEnd("`r","`n") -and $shutdownEvidence.exitLine -ceq $exit.TrimEnd("`r","`n")) 'shutdown classification retains the exact observed diagnostic lines'
+    Check (-not $shutdownEvidence.machineExitCodeKnown -and $null -eq $shutdownEvidence.machineExitCode) 'logged shutdown markers never invent an OS exit code'
+    Check ((Get-LirCleoShutdownEvidence (($shutdown+$exit).Replace("`r`n","`n"))).verified) 'shutdown recognition also supports complete LF lines'
+    Check (-not (Get-LirCleoShutdownEvidence $shutdown).verified) 'host shutdown alone does not prove a subsequent CLEO Exit'
+    Check (-not (Get-LirCleoShutdownEvidence $exit).verified) 'Exit alone does not prove a host shutdown event'
+    Check (-not (Get-LirCleoShutdownEvidence ($exit+$shutdown)).verified) 'a preceding Exit cannot satisfy ordered shutdown evidence'
+    Check (-not (Get-LirCleoShutdownEvidence ($shutdown+$exit.TrimEnd("`r","`n"))).verified) 'partial terminal shutdown lines are refused'
+    Check (-not (Get-LirCleoShutdownEvidence ($shutdown+$shutdown+$exit)).verified) 'ambiguous duplicate shutdown markers are refused'
+    Check (-not (Get-LirCleoShutdownEvidence ($shutdown+$exit+$exit)).verified) 'ambiguous duplicate Exit markers are refused'
+    Check (-not (Get-LirCleoShutdownEvidence ($shutdown.Replace('host shut down','host.shutdown')+$exit)).verified) 'a wildcard-like host.shutdown lookalike is not an actual CLEO shutdown line'
+    Check (-not (Get-LirCleoShutdownEvidence ((Wrapped ([ordered]@{message='host shut down'}))+$exit)).verified) 'script JSON mentioning shutdown cannot impersonate the plain host diagnostic'
+    [IO.File]::WriteAllBytes($cleoCurrent,(Bytes ($header+$first+$shutdown+$exit)))
+    $shutdownDelta=Get-LirCleoDelta $cleoCurrent ([pscustomobject]$cleoPin)
+    Check ((Get-LirCleoShutdownEvidence $shutdownDelta).verified) 'verified appended raw bytes can be replayed without changing a saved receipt or installed source pins'
+    $afterShutdownPin=Get-LirPin $cleoCurrent
+    Check (-not (Get-LirCleoShutdownEvidence (Get-LirCleoDelta $cleoCurrent ([pscustomobject]$afterShutdownPin))).verified) 'historical shutdown lines before the whole-byte baseline are excluded'
+
     $fakeRepository=Join-Path $scratchRoot 'synthetic-workspace';New-Item -ItemType Directory -Path $fakeRepository | Out-Null
     $freshOutput=New-LirOutputDirectory $fakeRepository 'Actual'
     Check ($freshOutput.StartsWith((Join-Path $fakeRepository 'Build/local-input-runtime-evidence')+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)) 'new output stays in the supplied workspace Build directory'
@@ -82,7 +103,7 @@ try {
 } catch { $failure=$_.Exception.Message }
 $record=[ordered]@{schema='mta_local_input_capture_offline_tests_v1';recordedAt=[DateTimeOffset]::Now.ToString('o');success=($null -eq $failure);checks=$checks;failure=$failure;
     directory=$directory;scratchDirectory=$scratchRoot;sourceHashes=$sourceHashes;syntheticFixturesOnly=$true;gameLaunched=$false;gameProcessEnumerated=$false;gameInput=$false;installedFilesChanged=$false;
-    scope='Raw bounded read/write, failed capture truthfulness, prefix replacement/refusal, wrapped CLEO parsing, fresh delta boundaries and output containment only. No game or machine lifecycle pass.'}
+    scope='Raw bounded read/write, failed capture truthfulness, prefix replacement/refusal, wrapped CLEO parsing, fresh delta boundaries, ordered plain shutdown-marker parsing and output containment only. No game or machine lifecycle pass.'}
 $pin=Write-LirJson $directory 'test-result.json' $record
 [ordered]@{success=$record.success;checks=$checks;result=$pin;failure=$failure}|ConvertTo-Json -Depth 4 -Compress
 if(-not $record.success){exit 1}

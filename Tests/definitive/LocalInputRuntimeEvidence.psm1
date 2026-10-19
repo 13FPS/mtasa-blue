@@ -127,4 +127,22 @@ function Get-LirCleoDelta([string]$CurrentPath, $PrefixPin) {
     [Text.UTF8Encoding]::new($false,$true).GetString($bytes,[int]$PrefixPin.bytes,$bytes.Length-[int]$PrefixPin.bytes)
 }
 
-Export-ModuleMember -Function Assert-LirNoLinks,Get-LirPin,Assert-LirPin,Write-LirBytes,Write-LirJson,Copy-LirPinnedMetadata,New-LirOutputDirectory,Save-LirRawLog,Test-LirPrefix,ConvertFrom-LirCleoEvents,Get-LirCleoHeaders,Get-LirCleoDelta
+function Get-LirCleoShutdownEvidence([string]$FreshDelta) {
+    # CLEO spells this event "host shut down", including the second space.
+    # Match its complete plain diagnostic lines, not a script's quoted text or
+    # a permissive host.shutdown wildcard, and require Exit to follow it. This
+    # classifies logged shutdown evidence; it never supplies a process exit code.
+    $shutdown=@([regex]::Matches($FreshDelta,'(?m)^\d{2}:\d{2}:\d{2} \[INFO\] New event received: "host shut down"\r?$'))
+    $exit=@([regex]::Matches($FreshDelta,'(?m)^\d{2}:\d{2}:\d{2} \[INFO\] Exit\r?$'))
+    $completeLines=-not $FreshDelta.Length -or $FreshDelta.EndsWith("`n",[StringComparison]::Ordinal)
+    $ordered=$shutdown.Count -eq 1 -and $exit.Count -eq 1 -and $shutdown[0].Index -lt $exit[0].Index
+    [ordered]@{
+        verified=($completeLines -and $ordered);completeLineBoundary=$completeLines;
+        shutdownMarkerCount=$shutdown.Count;exitMarkerCount=$exit.Count;shutdownPrecedesExit=$ordered;
+        shutdownLine=$(if($shutdown.Count -eq 1){$shutdown[0].Value.TrimEnd("`r")}else{$null});
+        exitLine=$(if($exit.Count -eq 1){$exit[0].Value.TrimEnd("`r")}else{$null});
+        machineExitCodeKnown=$false;machineExitCode=$null
+    }
+}
+
+Export-ModuleMember -Function Assert-LirNoLinks,Get-LirPin,Assert-LirPin,Write-LirBytes,Write-LirJson,Copy-LirPinnedMetadata,New-LirOutputDirectory,Save-LirRawLog,Test-LirPrefix,ConvertFrom-LirCleoEvents,Get-LirCleoHeaders,Get-LirCleoDelta,Get-LirCleoShutdownEvidence

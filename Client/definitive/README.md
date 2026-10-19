@@ -71,9 +71,12 @@ unchanged; full `CGame`, startup and multiplayer are still incomplete.
 Offline validation passed 849 clock/timing fixture checks, the normal
 Release/x64 backend build and 1,780 rebuilt-DLL factory-host checks. The shared
 enum relocation preserved its types and values under x86/x64 `/W4 /WX` checks.
-The passive 12-second capture tool compiled in preflight, but no game was opened;
-live native timing validation remains pending. This batch does not change the
-completed input/menu result below or the **EXPERIMENTAL** status.
+The passive 12-second capture then passed in GTA: 188 matching samples,
+717 frames and 11,485 native timer units of progress, with all eight code pins
+matching and no nonfinite, out-of-range clock or backward samples. An earlier
+paused/background attempt is preserved separately. This validates the observed
+native fields; it does not construct a `CGame` or prove full startup. The
+completed input/menu result below and **EXPERIMENTAL** status remain unchanged.
 
 **The current source connects the retained MTA bindings to local on-foot input.**
 The existing runtime selection now starts a separate renewable input service

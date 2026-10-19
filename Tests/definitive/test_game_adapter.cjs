@@ -1217,6 +1217,7 @@ async function main() {
             MTA_CORE_FRONTEND_RUNTIME: overrides.mtaCoreFrontendRuntime ?? false,
             MTA_CORE_CLOCK_REFERENCE: overrides.mtaCoreClockReference ?? false,
             MTA_CORE_CLOCK_SET_REFERENCE: overrides.mtaCoreClockSetReference ?? false,
+            MTA_CORE_APPLICATION_FRAME_REFERENCE: overrides.mtaCoreApplicationFrameReference ?? false,
             Date: { now: () => overrides.times ? overrides.times[frame] : frame * 50 },
             CLEO: { version: overrides.version || '1.5.1', apiVersion: overrides.definitions || '0.500', hostVersion: '1.0.113.49697469' },
             native: (name, ...args) => { record(name, ...args);
@@ -1330,6 +1331,72 @@ async function main() {
         const f = runClockEntry({}, { final, functions: { DE_CoreClockRead: field => refused[field] } });
         const done = f.logs.find(event => event.event === 'core_clock_reference_finished');
         assert.ok(done && done.cleanup_passed && !done.passed && !done.clock_writes);
+    });
+    const applicationFrameState = (changes = {}) => Object.assign(Array(128).fill(0), clockFinalState({
+        26: 2, 27: 0, 28: 0, 30: 0, 31: 0, 32: 0, 33: 0, 34: 0, 48: 0, 60: 0, 83: 0
+    }), {
+        96: 5, 97: 1, 98: 44, 100: 9, 101: 0x3c888889, 104: 44,
+        106: 44, 108: 44, 110: 44, 112: 44, 114: 44, 116: 44,
+        120: 63, 121: 3, 124: 1, ...changes
+    });
+    function runApplicationFrameEntry(changes = {}, options = {}) {
+        const frame = applicationFrameState(changes);
+        const final = options.final || [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5, 0, 0, 1, 0, 1, 0, 1, 0];
+        return runEntry({ mode: 'smoke', mtaCoreApplicationFrameReference: true,
+            keyFrames: [[], [], [17, 16, 120], [17, 16, 120], [], []], ...options,
+            functions: { DE_CoreApplicationFrameApiVersion: () => 1, DE_CoreApplicationFrameBegin: () => 1,
+                DE_CoreApplicationFrameCapture: () => 1, DE_CoreApplicationFrameRead: field => frame[field],
+                DE_CoreStartupPoll: () => 1, DE_CoreStartupCancel: () => 1,
+                DE_CoreStartupRead: field => final[field], ...(options.functions || {}) } });
+    }
+    test('application observation waits for F9/release and accepts a separate retired report without clock acknowledgements', () => {
+        const f = runApplicationFrameEntry();
+        const done = f.logs.find(event => event.event === 'core_application_frame_reference_finished');
+        assert.ok(done && done.passed && done.cleanup_passed && done.dictionary_verified && !done.clock_writes && !done.full_core_ready);
+        assert.ok(f.runtimeAccess.every(value => value.frame >= 4));
+        assert.ok(!f.calls.some(([name]) => /SET_TIME|SET_PLAYER|CREATE_CHAR|DE_Connect|DE_CoreClockBegin/.test(name)));
+        assert.equal(done.application_frame_state.length, 128);
+    });
+    test('application observation keeps dictionary absence and refused lookups separate from frame ownership success', () => {
+        for (const changes of [{ 108: 0, 110: 0, 114: 0, 116: 0, 120: 9, 124: 1 },
+            { 106: 0, 108: 0, 110: 0, 112: 0, 114: 0, 116: 0, 118: 88, 120: 0, 124: 0 }]) {
+            const f = runApplicationFrameEntry(changes);
+            const done = f.logs.find(event => event.event === 'core_application_frame_reference_finished');
+            assert.ok(done && done.passed && done.cleanup_passed);
+            assert.equal(done.dictionary_verified, changes[124] === 1);
+            assert.equal(done.lookup_mask, changes[120]);
+        }
+    });
+    test('application observation has no arming expiry and armed cancellation never loads the bridge', () => {
+        const cancelled = runApplicationFrameEntry({}, { keyFrames: [[], [], [17, 16, 35]], times: [0, 7200000, 14400000] });
+        assert.equal(cancelled.runtimeAccess.length, 0);
+        assert.ok(cancelled.logs.some(event => event.event === 'adapter_activation_cancelled'));
+    });
+    for (const options of [{ mtaCoreClockReference: true }, { mtaCoreClockSetReference: true }, { mtaCoreFrontendRuntime: true },
+        { mtaCorePersistentFrontend: true }, { mtaCoreGuiStartupReference: true }, { mtaNativeMovementTrial: true },
+        { mode: 'online' }, { mode: 'diagnostic' }]) test('application observation refuses combined mode ' + JSON.stringify(options), () => {
+            const f = runApplicationFrameEntry({}, { ...options, forbidRuntimeAccess: true });
+            assert.equal(f.runtimeAccess.length, 0);
+            assert.ok(f.logs.some(event => event.event === 'adapter_failed'));
+        });
+    for (const [label, changes] of [['peer debt', { 78: 1 }], ['live hook', { 19: 1 }], ['unexpected write', { 62: 1 }],
+        ['no frame progress', { 98: 0 }], ['full readiness', { 85: 1 }], ['dirty old reserved', { 95: 1 }], ['dirty new reserved', { 127: 1 }]])
+        test('application observation refuses ' + label, () => {
+            const f = runApplicationFrameEntry(changes);
+            assert.ok(!f.logs.some(event => event.event === 'core_application_frame_reference_finished' && event.passed));
+        });
+    test('application observation polls cleanup independently after a rejected publication', () => {
+        let polls = 0, cancels = 0;
+        const final = applicationFrameState();
+        const f = runApplicationFrameEntry({}, { functions: {
+            DE_CoreStartupPoll: () => ++polls >= 2 ? 1 : 0,
+            DE_CoreApplicationFrameRead: field => polls === 1 && field === 127 ? 1 : final[field],
+            DE_CoreStartupCancel: () => { ++cancels; return 1; }
+        } });
+        const done = f.logs.find(event => event.event === 'core_application_frame_reference_finished');
+        assert.ok(done && !done.passed && done.cleanup_passed && done.error && done.stop_requested);
+        assert.equal(polls, 2);
+        assert.equal(cancels, 1);
     });
     // The Set report has its own namespace and evidence. Its restored common
     // clock values deliberately differ from the initial producer Read, which

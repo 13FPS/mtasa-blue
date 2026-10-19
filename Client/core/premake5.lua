@@ -42,6 +42,10 @@ project "Client Core"
 		flags { "NoPCH" }
 	filter { "files:DefinitiveClockSetReference.cpp" }
 		flags { "NoPCH" }
+	-- Native frame observation shares only value records with the adapter; keep
+	-- this independently testable lifecycle outside the classic engine PCH.
+	filter { "files:DefinitiveApplicationFrameReference.cpp" }
+		flags { "NoPCH" }
 	-- This new translation unit is empty in classic builds. A per-file override
 	-- keeps its independent owned-host build free of classic PCH dependencies.
 	filter { "files:DefinitiveGuiStartup.cpp" }

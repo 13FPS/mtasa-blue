@@ -94,6 +94,10 @@ namespace DefinitiveInputReference
         // A clock mutation needs its own admission and proof; observing the
         // clock must never implicitly grant write ownership.
         bool clockSetReference = false;
+        // Application startup observation has no CClock command semantics.
+        // It shares this Core owner while keeping its report and admission
+        // distinct from clock, input and rendering workloads.
+        bool applicationFrameReference = false;
     };
 
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)

@@ -38,6 +38,7 @@
 #include "DefinitiveStartupState.h"
 #include "DefinitiveInputReference.h"
 #include "DefinitiveClockReference.h"
+#include "DefinitiveApplicationFrameReference.h"
 #include "DefinitiveClockSetReference.h"
 #include "DefinitiveMovementReference.h"
 #include "DefinitiveRenderReference.h"
@@ -3586,7 +3587,12 @@ CCore::CCore()
     #if defined(_WIN64)
         if (hasInputReference)
         {
-            if (inputReference.clockSetReference)
+            if (inputReference.applicationFrameReference)
+            {
+                clockEntered = true;
+                DefinitiveApplicationFrameReference::Run(m_DefinitiveAdapter, inputReference);
+            }
+            else if (inputReference.clockSetReference)
             {
                 clockEntered = true;
                 DefinitiveClockSetReference::Run(m_DefinitiveAdapter, inputReference);
@@ -3626,7 +3632,8 @@ CCore::CCore()
         // including failed teardown, rather than a potentially pinned DLL name.
         m_DefinitiveAdapter.Stop();
     #if defined(_WIN64)
-        if (hasInputReference && (inputReference.clockReference || inputReference.clockSetReference) && !clockEntered)
+        if (hasInputReference && (inputReference.clockReference || inputReference.clockSetReference || inputReference.applicationFrameReference) &&
+            !clockEntered)
         {
             // Binding can refuse before the clock workload begins. Keep this
             // Core owner alive until adapter retirement, then publish that
@@ -3636,7 +3643,9 @@ CCore::CCore()
                 Sleep(DefinitiveClockReference::CleanupBackoffMs);
                 m_DefinitiveAdapter.Stop();
             }
-            if (inputReference.clockSetReference)
+            if (inputReference.applicationFrameReference)
+                DefinitiveApplicationFrameReference::PublishNotEntered(inputReference, true);
+            else if (inputReference.clockSetReference)
                 DefinitiveClockSetReference::PublishNotEntered(inputReference, true);
             else
                 DefinitiveClockReference::PublishNotEntered(inputReference, true);

@@ -88,3 +88,7 @@ export const MTA_CORE_PERSISTENT_FRONTEND = false;
 // renewable local-input service; Show first retires that writer. This remains
 // separate from the incomplete CGame/network/full-client startup path.
 export const MTA_CORE_FRONTEND_RUNTIME = false;
+
+// Observe the actual MTA backend's application callback and startup UI map in
+// one bounded run. This is independent of clock commands and frontend input.
+export const MTA_CORE_APPLICATION_FRAME_REFERENCE = false;

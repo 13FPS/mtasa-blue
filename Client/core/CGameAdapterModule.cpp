@@ -140,6 +140,8 @@ bool CGameAdapterModule::Start(CCoreInterface* owner, const std::wstring& absolu
     resolveClock(m_clockRenew, "RenewGameClockServiceV1");
     resolveClock(m_clockRead, "ReadGameClockServiceV1");
     resolveClock(m_clockEnd, "EndGameClockServiceV1");
+    resolveClock(m_applicationFrameBegin, "BeginGameApplicationFrameObservationV1");
+    resolveClock(m_applicationFrameRead, "ReadGameApplicationFrameObservationV1");
     resolveClock(m_gameTimeRead, "ReadGameTimeStateV1");
     resolveClock(m_localLeaseBegin, "BeginGameLocalInputLeaseV1");
     resolveClock(m_localLeaseRenew, "RenewGameLocalInputLeaseV1");
@@ -506,6 +508,47 @@ bool CGameAdapterModule::BeginNativeClockService(const mta::game_de::ClockServic
     // Only explicit cleanup success may authorize loader/allocator work again.
     m_clockAttemptPending = true;
     return RecordStatus(m_clockBegin(mta::game_de::ClockServiceVersionV1, m_adapter, &request, &state), "BeginNativeClockService");
+}
+
+bool CGameAdapterModule::BeginNativeApplicationFrameObservation(const mta::game_de::ClockServiceRequestV1& request, mta::game_de::ClockServiceStateV1& state)
+{
+    if (!RequireOwnerThread("BeginNativeApplicationFrameObservation") || !RequireClockRetired() || !RequireLocalInputRetired())
+        return false;
+    if (m_renderObservation || m_renderObservationV2 || m_renderObservationV3 || m_renderObservationV4 || m_renderObservationV5 || m_renderObservationV6)
+    {
+        SetError("End render observation before starting native application observation");
+        return false;
+    }
+    if (!m_applicationFrameBegin || !m_applicationFrameRead || !m_clockRenew || !m_clockRead || !m_clockEnd)
+    {
+        SetError("The adapter lacks the complete optional application observation and retirement contract");
+        return false;
+    }
+    if (!m_clockDiagnostics)
+    {
+        try
+        {
+            m_error.reserve(512);
+        }
+        catch (...)
+        {
+            SetError("Cannot reserve application cleanup diagnostics before Begin");
+            return false;
+        }
+        m_clockDiagnostics = true;
+    }
+    // The observer shares the existing transaction owner. Even failed Begin
+    // can owe a committed hook/peer resume, so preserve the same cleanup gate.
+    m_clockAttemptPending = true;
+    return RecordStatus(m_applicationFrameBegin(mta::game_de::ApplicationFrameObservationVersionV1, m_adapter, &request, &state),
+                        "BeginNativeApplicationFrameObservation");
+}
+
+bool CGameAdapterModule::ReadNativeApplicationFrameObservation(std::uint64_t generation, mta::game_de::ApplicationFrameObservationStateV1& state)
+{
+    return RequireOwnerThread("ReadNativeApplicationFrameObservation") && m_applicationFrameRead &&
+           RecordStatus(m_applicationFrameRead(mta::game_de::ApplicationFrameObservationVersionV1, m_adapter, generation, &state),
+                        "ReadNativeApplicationFrameObservation");
 }
 
 bool CGameAdapterModule::SubmitNativeClockCommand(const mta::game_de::ClockCommandV1& command)
@@ -1569,6 +1612,8 @@ void CGameAdapterModule::Stop() noexcept
     m_clockRenew = nullptr;
     m_clockRead = nullptr;
     m_clockEnd = nullptr;
+    m_applicationFrameBegin = nullptr;
+    m_applicationFrameRead = nullptr;
     m_gameTimeRead = nullptr;
     m_renderEndpointReaderV2 = nullptr;
     m_renderSetupReaderV1 = nullptr;

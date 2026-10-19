@@ -43,6 +43,7 @@ namespace mta::game_de
         namespace TimingProfile = NativeGameTimingProfile;
         namespace PauseProfile = NativeGamePauseProfile;
         namespace FrameProfile = NativeApplicationFrameProfile;
+        namespace UiMapProfile = NativeUiClassMapProfile;
         using ContinuationFunction = void (*)();
         using ApplicationFrameFunction = FrameProfile::FrameFunction;
         constexpr std::size_t    imageSize = Profile::imageSize;
@@ -142,6 +143,8 @@ namespace mta::game_de
         thread_local unsigned      callbackDepth = 0;
         thread_local std::uint64_t timingCallbackGeneration = 0;
         thread_local bool          timingTimerScope = false;
+        thread_local std::uint64_t frameCallbackGeneration = 0;
+        thread_local void*         frameCallbackReceiver = nullptr;
         constexpr unsigned         timingScaleBit = 1, timingMinuteBit = 2, timingPauseBit = 4;
 
         bool ReleaseAdmission(std::uint64_t generation) noexcept
@@ -210,7 +213,7 @@ namespace mta::game_de
             return Image::ReadImage(runtime.image, runtime.image + rva, actual.data(), actual.size(), false, true) && actual == expected;
         }
 
-        bool CheckImage() noexcept
+        bool CheckImage(bool uiClassMap = false) noexcept
         {
             if (!runtime.image || runtime.image > (std::numeric_limits<std::uintptr_t>::max)() - imageSize)
                 return false;
@@ -252,6 +255,16 @@ namespace mta::game_de
                     if (!code)
                         return false;
                 }
+                if (uiClassMap)
+                    for (const auto& pin : UiMapProfile::pins)
+                    {
+                        bool present = false;
+                        for (std::size_t index = 0; index < nt.FileHeader.NumberOfSections; ++index)
+                            present |= Image::SectionContains(sections[index], pin.rva, pin.size, IMAGE_SCN_MEM_READ | (pin.code ? IMAGE_SCN_MEM_EXECUTE : 0),
+                                                              IMAGE_SCN_MEM_WRITE | (pin.code ? 0 : IMAGE_SCN_MEM_EXECUTE));
+                        if (!present)
+                            return false;
+                    }
                 for (std::size_t index = 0; index < nt.FileHeader.NumberOfSections; ++index)
                     if (Image::SectionContains(sections[index], FrameProfile::slotRva, sizeof(std::uintptr_t), IMAGE_SCN_MEM_READ,
                                                IMAGE_SCN_MEM_WRITE | IMAGE_SCN_MEM_EXECUTE))
@@ -274,11 +287,30 @@ namespace mta::game_de
                      contains(PauseProfile::gameplayTailRva, PauseProfile::gameplayTail.size(), true) && contains(PauseProfile::userPauseRva, 1, false)));
         }
 
-        bool CheckBinding(bool entryBeforeHook = false, bool allowRecoveryPatch = false) noexcept
+        bool UiMapPinPages(std::uintptr_t address, std::size_t bytes, bool code) noexcept
+        {
+            if (!Image::ImagePages(runtime.image, address, bytes, false, code))
+                return false;
+            const auto end = address + bytes;
+            while (address < end)
+            {
+                MEMORY_BASIC_INFORMATION region{};
+                const DWORD              expected = code ? PAGE_EXECUTE_READ : PAGE_READONLY;
+                if (VirtualQuery(reinterpret_cast<const void*>(address), &region, sizeof(region)) != sizeof(region) || (region.Protect & 0xff) != expected)
+                    return false;
+                const auto base = reinterpret_cast<std::uintptr_t>(region.BaseAddress);
+                if (region.RegionSize > (std::numeric_limits<std::uintptr_t>::max)() - base || base + region.RegionSize <= address)
+                    return false;
+                address = base + region.RegionSize < end ? base + region.RegionSize : end;
+            }
+            return true;
+        }
+
+        bool CheckBinding(bool entryBeforeHook = false, bool allowRecoveryPatch = false, bool uiClassMap = false) noexcept
         {
             if (runtime.frameMode)
             {
-                if (!CheckImage())
+                if (!CheckImage(uiClassMap))
                     return false;
                 for (const auto& pin : FrameProfile::pins)
                 {
@@ -292,8 +324,21 @@ namespace mta::game_de
                         return false;
                 }
                 std::uintptr_t target = 0;
-                return Image::ReadImage(runtime.image, runtime.image + FrameProfile::slotRva, &target, sizeof(target)) &&
-                       target == runtime.image + FrameProfile::entryRva;
+                if (!Image::ReadImage(runtime.image, runtime.image + FrameProfile::slotRva, &target, sizeof(target)) ||
+                    target != runtime.image + FrameProfile::entryRva)
+                    return false;
+                // Normal frame observations remain independent of dictionary
+                // support; only this requested lookup qualifies all its pins.
+                if (uiClassMap)
+                    for (const auto& pin : UiMapProfile::pins)
+                    {
+                        std::array<unsigned char, UiMapProfile::maximumPinBytes> actual{};
+                        if (pin.size > actual.size() || !UiMapPinPages(runtime.image + pin.rva, pin.size, pin.code) ||
+                            !Image::ReadImage(runtime.image, runtime.image + pin.rva, actual.data(), pin.size, false, pin.code) ||
+                            std::memcmp(actual.data(), pin.bytes, pin.size) != 0)
+                            return false;
+                    }
+                return true;
             }
             if (!CheckImage() || !CheckCode(Profile::hookTailRva, Profile::hookTail) || !CheckCode(Profile::clockCallRva, Profile::clockCall) ||
                 !CheckCode(Profile::frameCallRva, Profile::frameCall) || !CheckCode(Profile::getterCaseRva, Profile::getterCase) ||
@@ -1197,6 +1242,53 @@ namespace mta::game_de
                    vtable == runtime.image + FrameProfile::vtableRva && ReadValue(FrameProfile::rootRva, rootAfter) && rootAfter == root;
         }
 
+        bool UiMapHeapRead(std::uintptr_t address, void* output, std::size_t bytes) noexcept
+        {
+            if (!address || !bytes || bytes > (std::numeric_limits<std::uintptr_t>::max)() - address)
+                return false;
+            const auto end = address + bytes;
+            auto       at = address;
+            while (at < end)
+            {
+                MEMORY_BASIC_INFORMATION region{};
+                if (VirtualQuery(reinterpret_cast<const void*>(at), &region, sizeof(region)) != sizeof(region) || region.State != MEM_COMMIT ||
+                    (region.Type != MEM_PRIVATE && region.Type != MEM_MAPPED) || (region.Protect & (PAGE_GUARD | PAGE_NOACCESS)))
+                    return false;
+                const auto protection = region.Protect & 0xff;
+                if (protection != PAGE_READONLY && protection != PAGE_READWRITE && protection != PAGE_WRITECOPY)
+                    return false;
+                const auto base = reinterpret_cast<std::uintptr_t>(region.BaseAddress);
+                if (region.RegionSize > (std::numeric_limits<std::uintptr_t>::max)() - base || base + region.RegionSize <= at)
+                    return false;
+                at = base + region.RegionSize < end ? base + region.RegionSize : end;
+            }
+            SIZE_T copied = 0;
+            // The OS copy handles allocation/protection changes after the
+            // page observation. It does not retain a UObject or its children.
+            return ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(address), output, bytes, &copied) && copied == bytes;
+        }
+
+        void InvokeFrameHandler(void* receiver, float delta, std::uint32_t state)
+        {
+            const auto previousGeneration = frameCallbackGeneration;
+            const auto previousReceiver = frameCallbackReceiver;
+            frameCallbackGeneration = runtime.generation.load();
+            frameCallbackReceiver = receiver;
+            __try
+            {
+                runtime.frameHandler({runtime.generation.load(), state, delta}, runtime.frameContext);
+            }
+            __finally
+            {
+                // Retire observation scope even when a client raises SEH. The
+                // outer hook separately retains the original/trampoline owner.
+                if (AbnormalTermination())
+                    Stop(ClockResult::OriginalException);
+                frameCallbackGeneration = previousGeneration;
+                frameCallbackReceiver = previousReceiver;
+            }
+        }
+
         void FrameBody(void* receiver, float delta, void* returnAddress, bool receiverQualifiedBefore) noexcept
         {
             if (!runtime.frameMode || !runtime.frameHooked.load() ||
@@ -1240,7 +1332,7 @@ namespace mta::game_de
             {
                 try
                 {
-                    runtime.frameHandler({runtime.generation.load(), state, delta}, runtime.frameContext);
+                    InvokeFrameHandler(receiver, delta, state);
                 }
                 catch (...)
                 {
@@ -1256,8 +1348,12 @@ namespace mta::game_de
             const auto returnAddress = _ReturnAddress();
             const auto previousTimingGeneration = timingCallbackGeneration;
             const auto previousTimerScope = timingTimerScope;
+            const auto previousFrameGeneration = frameCallbackGeneration;
+            const auto previousFrameReceiver = frameCallbackReceiver;
             timingCallbackGeneration = 0;
             timingTimerScope = false;
+            frameCallbackGeneration = 0;
+            frameCallbackReceiver = nullptr;
             runtime.inFlight.fetch_add(1);
             runtime.counters.callbacks.fetch_add(1);
             ++callbackDepth;
@@ -1278,6 +1374,8 @@ namespace mta::game_de
                     Stop(ClockResult::OriginalException);
                 timingCallbackGeneration = previousTimingGeneration;
                 timingTimerScope = previousTimerScope;
+                frameCallbackGeneration = previousFrameGeneration;
+                frameCallbackReceiver = previousFrameReceiver;
                 --callbackDepth;
                 runtime.inFlight.fetch_sub(1);
             }
@@ -1444,6 +1542,30 @@ namespace mta::game_de
                                                     void* context) noexcept
     {
         return BeginOwner(request, state, false, nullptr, context, true, handler);
+    }
+
+    bool NativeClockService::ReadStartupUiClassMap(std::uint64_t requestedGeneration, NativeUiClassMapAccess::Key key,
+                                                   NativeUiClassMapAccess::Value& value) const noexcept
+    {
+        const auto qualified = [&]() noexcept
+        {
+            return generation && requestedGeneration == generation && generation == runtime.generation.load() && frameCallbackGeneration == generation &&
+                   frameCallbackReceiver && callbackDepth == 1 && runtime.frameMode && runtime.frameHooked.load() && runtime.bound.load() &&
+                   runtime.ready.load() && runtime.active.load() && !runtime.stopping.load() && !runtime.peersRetained.load() &&
+                   GetCurrentThreadId() == runtime.engineThread.load() && runtime.admissionGeneration.load() == generation && runtime.admissionSerial.load() &&
+                   Fresh();
+        };
+        if (!qualified() || !FrameReceiver(frameCallbackReceiver) || !CheckBinding(false, false, true))
+            return false;
+        const auto receiver = reinterpret_cast<std::uintptr_t>(frameCallbackReceiver);
+        if (UiMapProfile::ownerOffset > (std::numeric_limits<std::uintptr_t>::max)() - receiver)
+            return false;
+        NativeUiClassMapAccess::Value next{};
+        if (!NativeUiClassMapAccess(receiver + UiMapProfile::ownerOffset, &UiMapHeapRead).Lookup(key, next) || !qualified() ||
+            !FrameReceiver(frameCallbackReceiver) || !CheckBinding(false, false, true))
+            return false;
+        value = next;
+        return true;
     }
 
     bool NativeClockService::BeginOwner(const ClockServiceRequestV1& request, ClockServiceStateV1& state, bool timingMode, GameTimingHandler handler,

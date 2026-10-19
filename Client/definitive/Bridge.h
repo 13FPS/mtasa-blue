@@ -128,6 +128,13 @@ DE_BRIDGE_API int           DE_CoreClockSetBegin();
 DE_BRIDGE_API int           DE_CoreClockSetCapture();
 DE_BRIDGE_API std::uint32_t DE_CoreClockSetRead(std::uint32_t component);
 
+// Application-frame observation owns a separate API1 report; the historical
+// clock protocol retains its original read-only workload and field count.
+DE_BRIDGE_API std::uint32_t DE_CoreApplicationFrameApiVersion();
+DE_BRIDGE_API int           DE_CoreApplicationFrameBegin();
+DE_BRIDGE_API int           DE_CoreApplicationFrameCapture();
+DE_BRIDGE_API std::uint32_t DE_CoreApplicationFrameRead(std::uint32_t component);
+
 // Configured movement keeps the same actual Core owner through native teardown.
 // The producer's 96 values include eligibility, native restoration and real pin
 // ownership; a pinned backend is distinct from an active adapter or live hooks.

@@ -7,6 +7,7 @@
 
 #include "../sdk/game/CGameClockService.h"
 #include "NativeApplicationFrame.h"
+#include "NativeUiClassMapAccess.h"
 
 namespace mta::game_de
 {
@@ -36,6 +37,9 @@ namespace mta::game_de
         // a qualified frame was observed, never that CClock was captured.
         bool BeginApplicationFrames(const ClockServiceRequestV1& request, ClockServiceStateV1& state, ApplicationFrameHandler handler,
                                     void* context = nullptr) noexcept;
+        // Only the qualified post-original handler can observe this receiver's
+        // configured classes. Raw membership grants no UObject or startup authority.
+        bool ReadStartupUiClassMap(std::uint64_t generation, NativeUiClassMapAccess::Key key, NativeUiClassMapAccess::Value& value) const noexcept;
         bool Submit(const ClockCommandV1& command) noexcept;
         bool Renew(std::uint64_t generation) noexcept;
         bool Read(ClockServiceStateV1& state) noexcept;

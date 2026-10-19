@@ -12,6 +12,7 @@
 #include <game/CGameRenderDeviceLease.h>
 #include <game/CGameRenderDeviceWindowLease.h>
 #include <game/CGameClockService.h>
+#include <game/CGameApplicationFrameObservation.h>
 #include <game/CGameLocalInputLease.h>
 #include <game/CGameTimeService.h>
 
@@ -522,6 +523,132 @@ namespace
               "public clock cleanup and renewal never treat zero as an owned token");
         Check(adapter.value->Reset() == Status::Ok && adapter.value->Shutdown() == Status::Ok,
               "rejected clock setup leaves the adapter's existing reset and shutdown usable");
+    }
+
+    void TestApplicationFrameObservationRejection()
+    {
+        OwnedAdapter          adapter;
+        OwnerIdentity         owner;
+        ClockServiceRequestV1 request;
+        ClockServiceStateV1   ownership;
+        ownership.hour = 99;
+        const auto                         untouchedOwnership = ownership;
+        const auto                         ownershipUnchanged = [&] { return std::memcmp(&ownership, &untouchedOwnership, sizeof(ownership)) == 0; };
+        ApplicationFrameObservationStateV1 observation;
+        observation.frames = 0xa5a5;
+        const auto untouchedObservation = observation;
+        const auto observationUnchanged = [&] { return std::memcmp(&observation, &untouchedObservation, sizeof(observation)) == 0; };
+        Check(BeginGameApplicationFrameObservationV1(1, adapter.value, &request, &ownership) == Status::NotInitialized && ownershipUnchanged() &&
+                  ReadGameApplicationFrameObservationV1(1, adapter.value, 1, &observation) == Status::NotInitialized && observationUnchanged(),
+              "application observation requires the real initialized producer without changing either refused output");
+        Check(adapter.value->Initialize(owner.Get()) == Status::Ok, "initialize the actual application-observer factory object");
+        Check(BeginGameApplicationFrameObservationV1(0, adapter.value, &request, &ownership) == Status::InvalidArgument &&
+                  ReadGameApplicationFrameObservationV1(0, adapter.value, 1, &observation) == Status::InvalidArgument && ownershipUnchanged() &&
+                  observationUnchanged(),
+              "application observation version refusal preserves both value-only records");
+        Check(BeginGameApplicationFrameObservationV1(1, nullptr, &request, &ownership) == Status::InvalidArgument &&
+                  BeginGameApplicationFrameObservationV1(1, adapter.value, nullptr, &ownership) == Status::InvalidArgument &&
+                  BeginGameApplicationFrameObservationV1(1, adapter.value, &request, nullptr) == Status::InvalidArgument &&
+                  ReadGameApplicationFrameObservationV1(1, nullptr, 1, &observation) == Status::InvalidArgument &&
+                  ReadGameApplicationFrameObservationV1(1, adapter.value, 0, &observation) == Status::InvalidArgument &&
+                  ReadGameApplicationFrameObservationV1(1, adapter.value, 1, nullptr) == Status::InvalidArgument && ownershipUnchanged() &&
+                  observationUnchanged(),
+              "optional frame exports reject missing pointers and zero generations before native work");
+        auto* unknown = reinterpret_cast<IGameAdapter*>(std::uintptr_t{1});
+        Check(BeginGameApplicationFrameObservationV1(1, unknown, reinterpret_cast<const ClockServiceRequestV1*>(std::uintptr_t{1}),
+                                                     reinterpret_cast<ClockServiceStateV1*>(std::uintptr_t{1})) == Status::InvalidArgument &&
+                  ReadGameApplicationFrameObservationV1(1, unknown, 1, reinterpret_cast<ApplicationFrameObservationStateV1*>(std::uintptr_t{1})) ==
+                      Status::InvalidArgument,
+              "retained-registry identity is checked before touching another object's request or result pointers");
+        for (unsigned field = 0; field != 7; ++field)
+        {
+            auto invalid = request;
+            if (field == 0)
+                ++invalid.size;
+            if (field == 1)
+                ++invalid.version;
+            if (field == 2)
+                invalid.maximumDurationMs = 0;
+            if (field == 3)
+                invalid.maximumDurationMs = ClockServiceMaximumDurationMsV1 + 1;
+            if (field >= 4)
+                invalid.reserved[field - 4] = 1;
+            Check(BeginGameApplicationFrameObservationV1(1, adapter.value, &invalid, &ownership) == Status::InvalidArgument && ownershipUnchanged(),
+                  "invalid application-owner request widths, duration or reserved fields preserve the caller record");
+        }
+        for (unsigned field = 0; field != 6; ++field)
+        {
+            auto invalid = observation;
+            if (field == 0)
+                ++invalid.size;
+            if (field == 1)
+                ++invalid.version;
+            if (field >= 2)
+                invalid.reserved[field - 2] = 1;
+            const auto before = invalid;
+            Check(ReadGameApplicationFrameObservationV1(1, adapter.value, 1, &invalid) == Status::InvalidArgument &&
+                      std::memcmp(&before, &invalid, sizeof(invalid)) == 0,
+                  "frame snapshot size/version/reserved refusal occurs before replacing caller storage");
+        }
+        for (unsigned field = 0; field != 4; ++field)
+        {
+            auto invalid = ownership;
+            if (field == 0)
+                ++invalid.size;
+            if (field == 1)
+                ++invalid.version;
+            if (field >= 2)
+                invalid.reserved[field - 2] = 1;
+            const auto before = invalid;
+            Check(BeginGameApplicationFrameObservationV1(1, adapter.value, &request, &invalid) == Status::InvalidArgument &&
+                      std::memcmp(&before, &invalid, sizeof(invalid)) == 0,
+                  "application admission validates the existing ownership record shape before installing its mode");
+        }
+        Check(ReadGameApplicationFrameObservationV1(1, adapter.value, 1, &observation) == Status::NotInitialized && observationUnchanged(),
+              "an initialized adapter alone does not create a natural application observation");
+        Status      foreignBegin = Status::Ok, foreignRead = Status::Ok;
+        std::thread foreign(
+            [&]
+            {
+                foreignBegin = BeginGameApplicationFrameObservationV1(1, adapter.value, &request, &ownership);
+                foreignRead = ReadGameApplicationFrameObservationV1(1, adapter.value, 1, &observation);
+            });
+        foreign.join();
+        Check(foreignBegin == Status::WrongThread && foreignRead == Status::WrongThread && ownershipUnchanged() && observationUnchanged(),
+              "another thread cannot adopt the producer or read its application record");
+        Check(BeginGameApplicationFrameObservationV1(1, adapter.value, &request, &ownership) == Status::Unsupported && ownership.generation &&
+                  !ownership.bound && !ownership.hooked && !ownership.active && !ownership.ready && !ownership.modulePinned && !ownership.inFlight &&
+                  !ownership.patchInstalled && !ownership.retainedPeerThreads,
+              "the actual module refuses this non-GTA host without installing hooks while reporting its real cleanup generation");
+        const auto generation = ownership.generation;
+        Check(ReadGameApplicationFrameObservationV1(1, adapter.value, generation + 1, &observation) == Status::InvalidArgument && observationUnchanged(),
+              "a different requested generation cannot alias the retained frame record");
+        OwnedAdapter  other;
+        OwnerIdentity otherOwner;
+        Check(other.value->Initialize(otherOwner.Get()) == Status::Ok &&
+                  ReadGameApplicationFrameObservationV1(1, other.value, generation, &observation) == Status::NotInitialized && observationUnchanged(),
+              "a different real factory object cannot borrow another adapter's application observation");
+        Check(ReadGameApplicationFrameObservationV1(1, adapter.value, generation, &observation) == Status::Ok && observation.generation == generation &&
+                  !observation.frames && !observation.engineThread && !observation.nativeState && !observation.frontendFrames && !observation.playingFrames &&
+                  !observation.loadingLookups && !observation.loadingKeyPresent && !observation.loadingNonNull && !observation.simpleFadeLookups &&
+                  !observation.simpleFadeKeyPresent && !observation.simpleFadeNonNull && !observation.lookupFailures && !observation.lastLookupMask &&
+                  !observation.deltaBits,
+              "refused native setup publishes a coherent empty observation without inventing a callback, lookup or class");
+        Check(EndGameClockServiceV1(1, adapter.value, generation) == Status::Ok && ReadGameClockServiceV1(1, adapter.value, &ownership) == Status::Ok &&
+                  !ownership.bound && !ownership.hooked && !ownership.active && !ownership.inFlight && !ownership.retainedPeerThreads &&
+                  ReadGameApplicationFrameObservationV1(1, adapter.value, generation, &observation) == Status::Ok && !observation.frames,
+              "application mode uses the existing real clock owner retirement and retains its last value snapshot after End");
+        Check(BeginGameClockServiceV1(1, adapter.value, &request, &ownership) == Status::Unsupported,
+              "the historical clock entry remains a separate non-GTA-refused workload");
+        const auto afterFrame = observation;
+        Check(ReadGameApplicationFrameObservationV1(1, adapter.value, generation, &observation) == Status::NotInitialized &&
+                  std::memcmp(&afterFrame, &observation, sizeof(observation)) == 0 && adapter.value->GetCapabilities() == implementedCapabilities &&
+                  adapter.value->GetGameInterface() == nullptr,
+              "a clock-mode attempt cannot expose stale frame observations or promote the incomplete CGame capability");
+        Check(adapter.value->Reset() == Status::Ok && adapter.value->Shutdown() == Status::Ok &&
+                  ReadGameApplicationFrameObservationV1(1, adapter.value, generation, &observation) == Status::NotInitialized &&
+                  std::memcmp(&afterFrame, &observation, sizeof(observation)) == 0,
+              "ordinary adapter reset/shutdown preserve successful retirement and refuse later frame reads");
     }
 
     void TestLocalInputLeaseRejection()
@@ -1478,6 +1605,7 @@ int main()
         TestNativeMovementRejection();
         TestNativeMovementEligibilityRejection();
         TestClockServiceRejection();
+        TestApplicationFrameObservationRejection();
         TestGameTimeServiceRejection();
         TestLocalInputLeaseRejection();
         // Exercise historical factory layouts after the additive lease has

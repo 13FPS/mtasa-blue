@@ -32,6 +32,27 @@ namespace ClockTestFaults
     std::uintptr_t        timingWriteAddress = 0;
     std::atomic<DWORD>    resumeTarget{0};
     std::uintptr_t        patchAddress = 0, dataAddress = 0;
+    std::uintptr_t        uiReadAddress = 0, uiRootChangeAddress = 0;
+    std::atomic<bool>     failUiRead{false};
+
+    BOOL WINAPI Read(HANDLE process, LPCVOID address, LPVOID output, SIZE_T bytes, SIZE_T* copied)
+    {
+        if (reinterpret_cast<std::uintptr_t>(address) == uiReadAddress && failUiRead.exchange(false))
+        {
+            if (copied)
+                *copied = 0;
+            return FALSE;
+        }
+        const auto result = ::ReadProcessMemory(process, address, output, bytes, copied);
+        if (reinterpret_cast<std::uintptr_t>(address) == uiReadAddress && uiRootChangeAddress)
+        {
+            const std::uintptr_t absent = 0;
+            SIZE_T               written = 0;
+            ::WriteProcessMemory(process, reinterpret_cast<void*>(uiRootChangeAddress), &absent, sizeof(absent), &written);
+            uiRootChangeAddress = 0;
+        }
+        return result;
+    }
 
     BOOL WINAPI Write(HANDLE process, LPVOID address, LPCVOID bytes, SIZE_T size, SIZE_T* copied)
     {
@@ -131,6 +152,7 @@ namespace ClockTestFaults
 // shipping executable gate, actual native access and clock implementation are
 // unchanged; each wrapper otherwise calls the real Win32 operation.
 #define WriteProcessMemory    ClockTestFaults::Write
+#define ReadProcessMemory     ClockTestFaults::Read
 #define VirtualProtect        ClockTestFaults::Protect
 #define FlushInstructionCache ClockTestFaults::Flush
 #define Thread32Next          ClockTestFaults::Next
@@ -146,6 +168,7 @@ namespace ClockTestFaults
 #undef FlushInstructionCache
 #undef VirtualProtect
 #undef WriteProcessMemory
+#undef ReadProcessMemory
 
 namespace ClockReaderTestHost
 {
@@ -263,8 +286,11 @@ namespace
         void (*invokeAlternateTimer)() = nullptr;
         NativeApplicationFrameProfile::FrameFunction invokeFrame = nullptr, invokeLoadingFrame = nullptr;
         std::array<unsigned char, 0x300>             frameCaller{};
-        std::array<std::uintptr_t, 2>                frameOwner{};
-        std::uintptr_t                               frameReceiver = 0;
+        std::array<std::uintptr_t, (NativeUiClassMapProfile::ownerOffset + NativeUiClassMapProfile::headerBytes) / sizeof(std::uintptr_t)> frameOwner{};
+        std::array<unsigned char, NativeUiClassMapProfile::entryBytes * 2>                                                                 uiEntries{};
+        std::array<char16_t, NativeUiClassMapProfile::keyLoadingCount>    uiLoading{u'L', u'o', u'a', u'd', u'i', u'n', u'g', 0};
+        std::array<char16_t, NativeUiClassMapProfile::keySimpleFadeCount> uiSimpleFade{u'S', u'i', u'm', u'p', u'l', u'e', u'F', u'a', u'd', u'e', 0};
+        std::uintptr_t                                                    frameReceiver = 0;
 
         ~ClockImageFixture()
         {
@@ -508,6 +534,40 @@ namespace
             frameReceiver = reinterpret_cast<std::uintptr_t>(receiver);
             Put(NativeApplicationFrameProfile::rootRva, frameReceiver);
             std::memcpy(frameCaller.data() + 0x2c0, &frameReceiver, sizeof(frameReceiver));
+        }
+        void AdmitUiClassMapPins()
+        {
+            for (const auto& pin : NativeUiClassMapProfile::pins)
+            {
+                DWORD previous = 0, ignored = 0;
+                Check(::VirtualProtect(reinterpret_cast<void*>(image + pin.rva), pin.size, PAGE_READWRITE, &previous) != FALSE,
+                      "initialize only owned dictionary proof pages");
+                std::memcpy(reinterpret_cast<void*>(image + pin.rva), pin.bytes, pin.size);
+                Check(::VirtualProtect(reinterpret_cast<void*>(image + pin.rva), pin.size, pin.code ? PAGE_EXECUTE_READ : PAGE_READONLY, &ignored) != FALSE &&
+                          ::FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(image + pin.rva), pin.size),
+                      "restore dictionary proof code RX and immutable tables/literals RO");
+            }
+        }
+        void SeedUiClassMap()
+        {
+            namespace Ui = NativeUiClassMapProfile;
+            auto* map = reinterpret_cast<unsigned char*>(frameOwner.data()) + Ui::ownerOffset;
+            std::memset(map, 0, Ui::headerBytes);
+            uiEntries.fill(0);
+            const auto put = [](unsigned char* target, std::size_t offset, const auto& value) { std::memcpy(target + offset, &value, sizeof(value)); };
+            put(map, Ui::slotsOffset, reinterpret_cast<std::uintptr_t>(uiEntries.data()));
+            put(map, Ui::slotCountOffset, std::int32_t{2});
+            put(map, Ui::inlineHashOffset, std::int32_t{0});
+            put(map, Ui::hashSizeOffset, std::int32_t{1});
+            put(uiEntries.data(), Ui::keyDataOffset, reinterpret_cast<std::uintptr_t>(uiLoading.data()));
+            put(uiEntries.data(), Ui::keyCountOffset, static_cast<std::int32_t>(uiLoading.size()));
+            put(uiEntries.data(), Ui::valueOffset, std::uintptr_t{0x12345678});
+            put(uiEntries.data(), Ui::nextOffset, std::int32_t{1});
+            auto* fade = uiEntries.data() + Ui::entryBytes;
+            put(fade, Ui::keyDataOffset, reinterpret_cast<std::uintptr_t>(uiSimpleFade.data()));
+            put(fade, Ui::keyCountOffset, static_cast<std::int32_t>(uiSimpleFade.size()));
+            put(fade, Ui::valueOffset, std::uintptr_t{0x87654321});
+            put(fade, Ui::nextOffset, std::int32_t{-1});
         }
         void Patch(std::uintptr_t rva, const void* bytes, std::size_t length)
         {
@@ -1851,6 +1911,8 @@ namespace
         NativeApplicationFrame last;
         NativeClockService*    service = nullptr;
         bool                   endInHandler = false, endResult = true, throwInHandler = false;
+        unsigned               uiMode = 0;
+        ClockImageFixture*     fixture = nullptr;
     };
 
     ApplicationFrameFunction countedFrame = nullptr;
@@ -1859,12 +1921,23 @@ namespace
     float                    lastFrameDelta = 0;
     HANDLE                   frameOriginalEntered = nullptr, frameOriginalRelease = nullptr;
     ClockImageFixture*       mutateFrameRoot = nullptr;
+    NativeClockService*      originalUiService = nullptr;
+    unsigned                 originalUiRefusals = 0;
 
     void CountOriginalFrame(void* receiver, float delta)
     {
         ++originalFrameInvocations;
         lastFrameReceiver = receiver;
         lastFrameDelta = delta;
+        if (originalUiService)
+        {
+            NativeUiClassMapAccess::Value value{0xa5a5, true};
+            Check(!frameCallbackGeneration && !frameCallbackReceiver &&
+                      !originalUiService->ReadStartupUiClassMap(runtime.generation.load(), NativeUiClassMapAccess::Key::Loading, value) &&
+                      value.classAddress == 0xa5a5 && value.keyPresent,
+                  "even the engine owner cannot read the UI map during the original frame or an unqualified origin");
+            ++originalUiRefusals;
+        }
         if (frameOriginalEntered)
         {
             SetEvent(frameOriginalEntered);
@@ -1893,6 +1966,55 @@ namespace
                   ClockTestFaults::clockDataWrites.load() == beforeWrites && !runtime.captured.load() && !runtime.timingCaptured.load() &&
                   !runtime.timingDirty.load() && !runtime.patchInstalled.load(),
               "observer readiness cannot capture CClock, enqueue its writes or borrow any native timing/pause capability");
+        if (context.uiMode)
+        {
+            namespace Ui = NativeUiClassMapProfile;
+            using Key = NativeUiClassMapAccess::Key;
+            NativeUiClassMapAccess::Value value{0xa5a5, true};
+            Check(frameCallbackGeneration == frame.generation && frameCallbackReceiver == context.fixture->frameOwner.data(),
+                  "only the qualified post-original handler holds this receiver and generation for dictionary observations");
+            const bool observed = context.service->ReadStartupUiClassMap(frame.generation, Key::Loading, value);
+            if (context.uiMode == 1 || context.uiMode == 7 || context.uiMode == 8)
+            {
+                Check(observed && value.keyPresent && value.classAddress == 0x12345678,
+                      "the natural frame handler observes Loading as an opaque configured class without dereferencing it");
+                Check(context.service->ReadStartupUiClassMap(frame.generation, Key::SimpleFade, value) && value.keyPresent && value.classAddress == 0x87654321,
+                      "the qualified owner follows the same bounded dictionary chain for SimpleFade");
+                value = {0xa5a5, true};
+                Check(!context.service->ReadStartupUiClassMap(frame.generation + 1, Key::Loading, value) && value.classAddress == 0xa5a5 && value.keyPresent,
+                      "a stale requested generation cannot borrow the current frame scope or change output");
+                ++callbackDepth;
+                const bool nested = context.service->ReadStartupUiClassMap(frame.generation, Key::Loading, value);
+                --callbackDepth;
+                runtime.stopping.store(true);
+                const bool stopping = context.service->ReadStartupUiClassMap(frame.generation, Key::Loading, value);
+                runtime.stopping.store(false);
+                Check(!nested && !stopping && value.classAddress == 0xa5a5 && value.keyPresent,
+                      "nested or stopping callbacks preserve the caller value instead of admitting dictionary access");
+                const auto refreshed = runtime.refreshed.load();
+                runtime.refreshed.store(GetTickCount64() - ClockServiceLeaseMsV1 - 1);
+                const bool expired = context.service->ReadStartupUiClassMap(frame.generation, Key::Loading, value);
+                runtime.refreshed.store(refreshed);
+                Check(!expired && value.classAddress == 0xa5a5 && value.keyPresent,
+                      "an expired lease cannot borrow an already-entered handler's dictionary scope");
+                bool        foreign = true;
+                std::thread other([&] { foreign = context.service->ReadStartupUiClassMap(frame.generation, Key::Loading, value); });
+                other.join();
+                Check(!foreign && value.classAddress == 0xa5a5 && value.keyPresent, "another thread cannot borrow a live handler's receiver/generation scope");
+                NativeClockService unrelated;
+                Check(!unrelated.ReadStartupUiClassMap(frame.generation, Key::Loading, value) && value.classAddress == 0xa5a5 && value.keyPresent,
+                      "a separate service object cannot borrow the current owner's dictionary generation");
+                if (context.uiMode == 7)
+                    OriginalRaises();
+            }
+            else if (context.uiMode == 2)
+                Check(observed && !value.keyPresent && !value.classAddress, "a valid absent UI dictionary key is reported separately from read refusal");
+            else if (context.uiMode == 3)
+                Check(observed && value.keyPresent && !value.classAddress, "a matching key with null class identity remains distinct from absent membership");
+            else
+                Check(!observed && value.classAddress == 0xa5a5 && value.keyPresent,
+                      "failed OS reads, root movement or changed dictionary pins preserve the complete caller value");
+        }
         if (context.endInHandler)
             context.endResult = context.service->End();
         if (context.throwInHandler)
@@ -1925,6 +2047,7 @@ namespace
         fixture.SetFrameReceiver(fixture.frameOwner.data());
         fixture.Put(NativeApplicationFrameProfile::stateRva, std::uint32_t{7});
         context.service = &service;
+        originalUiService = context.uiMode ? &service : nullptr;
         originalFrameInvocations = 0;
         lastFrameReceiver = nullptr;
         lastFrameDelta = 0;
@@ -1945,8 +2068,10 @@ namespace
         Check(service.End() && !service.IsRetained() && !State(service).hooked && !runtime.frameHooked.load() && !runtime.hooked.load() &&
                   !runtime.timerHooked.load() && !runtime.frameHandler && !runtime.frameContext && !runtime.inFlight.load() && !runtime.captured.load() &&
                   !runtime.timingCaptured.load() && !runtime.timingDirty.load() && !runtime.timingRecovery.load() && !timingCallbackGeneration &&
-                  !timingTimerScope && !NativeServiceAdmission::IsClaimed(NativeServiceAdmission::Category::Clock) && CheckBinding(true),
+                  !timingTimerScope && !frameCallbackGeneration && !frameCallbackReceiver &&
+                  !NativeServiceAdmission::IsClaimed(NativeServiceAdmission::Category::Clock) && CheckBinding(true),
               "an observer retires without a future clock tick after actual hook detach, callback completion and admission release");
+        originalUiService = nullptr;
     }
 
     void FrameOriginalRaises(void* receiver, float delta)
@@ -1970,6 +2095,94 @@ namespace
             return true;
         }
         return false;
+    }
+
+    bool InvokeQualifiedHandlerException(void* receiver)
+    {
+        // Exercise the production handler's SEH cleanup using compiler-owned
+        // frames; the synthetic caller intentionally has no invented unwind data.
+        __try
+        {
+            FrameBody(receiver, 0.125f, reinterpret_cast<void*>(runtime.image + NativeApplicationFrameProfile::normalReturnRva), true);
+        }
+        __except (GetExceptionCode() == 0xe001c10c ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
+        {
+            return true;
+        }
+        return false;
+    }
+
+    void NativeStartupUiClassMapOwner(ClockImageFixture& fixture)
+    {
+        namespace Ui = NativeUiClassMapProfile;
+        using Key = NativeUiClassMapAccess::Key;
+        fixture.AdmitUiClassMapPins();
+        for (unsigned mode = 1; mode != 9; ++mode)
+        {
+            NativeClockService      service;
+            ApplicationFrameContext context;
+            context.uiMode = mode;
+            context.fixture = &fixture;
+            context.throwInHandler = mode == 8;
+            fixture.SeedUiClassMap();
+            BeginApplicationOwned(service, fixture, context);
+            NativeUiClassMapAccess::Value outside{0xa5a5, true};
+            Check(!service.ReadStartupUiClassMap(runtime.generation.load(), Key::Loading, outside) && outside.classAddress == 0xa5a5 && outside.keyPresent,
+                  "producer-side lookup before a frame is refused even with a bound observer and the current generation");
+            if (mode == 1)
+            {
+                const auto before = originalUiRefusals;
+                HookApplicationFrame(fixture.frameOwner.data(), 0.125f);
+                fixture.invokeLoadingFrame(fixture.frameOwner.data(), 0.125f);
+                Check(originalUiRefusals == before + 2 && !context.calls,
+                      "unknown/loading origins forward once but cannot create a UI dictionary handler scope");
+            }
+            auto* map = reinterpret_cast<unsigned char*>(fixture.frameOwner.data()) + Ui::ownerOffset;
+            if (mode == 2)
+            {
+                const std::int32_t missing = -1;
+                std::memcpy(map + Ui::inlineHashOffset, &missing, sizeof(missing));
+            }
+            if (mode == 3)
+            {
+                const std::uintptr_t absent = 0;
+                std::memcpy(fixture.uiEntries.data() + Ui::valueOffset, &absent, sizeof(absent));
+            }
+            ClockTestFaults::uiReadAddress = reinterpret_cast<std::uintptr_t>(map);
+            if (mode == 4)
+                ClockTestFaults::failUiRead.store(true);
+            if (mode == 5)
+                ClockTestFaults::uiRootChangeAddress = fixture.image + NativeApplicationFrameProfile::rootRva;
+            const auto& proof = Ui::pins[0];
+            const auto  changed = static_cast<unsigned char>(proof.bytes[0] ^ 1);
+            if (mode == 6)
+                fixture.Patch(proof.rva, &changed, sizeof(changed));
+            if (mode == 7)
+            {
+                ++callbackDepth;
+                runtime.inFlight.fetch_add(1);
+                const bool caught = InvokeQualifiedHandlerException(fixture.frameOwner.data());
+                runtime.inFlight.fetch_sub(1);
+                --callbackDepth;
+                Check(caught && !frameCallbackGeneration && !frameCallbackReceiver && State(service).failure == ClockResult::OriginalException,
+                      "handler SEH retires both UI scope fields before propagating through compiler-owned frames");
+            }
+            else
+                fixture.invokeFrame(fixture.frameOwner.data(), 0.125f);
+            if (mode == 8)
+                Check(State(service).failure == ClockResult::OriginalException && !runtime.active.load(),
+                      "C++ handler failures stop the owner after retiring the generation and receiver scope");
+            ClockTestFaults::uiReadAddress = ClockTestFaults::uiRootChangeAddress = 0;
+            ClockTestFaults::failUiRead.store(false);
+            if (mode == 6)
+                fixture.Patch(proof.rva, proof.bytes, proof.size);
+            fixture.SetFrameReceiver(fixture.frameOwner.data());
+            Check(context.calls == 1 && !frameCallbackGeneration && !frameCallbackReceiver &&
+                      !service.ReadStartupUiClassMap(runtime.generation.load(), Key::Loading, outside) && outside.classAddress == 0xa5a5 && outside.keyPresent,
+                  "normal/refused/exceptional handler completion cannot leak UI scope back to its producer");
+            FinishApplicationOwned(service);
+        }
+        std::puts("Production qualified startup UI dictionary fixture completed");
     }
 
     void NativeApplicationFrameOwner(ClockImageFixture& fixture)
@@ -2136,6 +2349,7 @@ namespace
             peer.join();
             CloseHandle(stop);
         }
+        NativeStartupUiClassMapOwner(fixture);
         std::puts("Production natural application-frame observer fixture completed");
     }
 

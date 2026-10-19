@@ -13,6 +13,7 @@
 #include <game/CGameFrontendInputLease.h>
 #include <game/CGameLocalInputLease.h>
 #include <game/CGameClockService.h>
+#include <game/CGameApplicationFrameObservation.h>
 #include <game/CGameTimeService.h>
 #include "FrontendInputLeasePolicy.h"
 #include "LocalInputLeasePolicy.h"
@@ -25,7 +26,10 @@
 #include "NativeRenderObservation.h"
 
 #include <atomic>
+#include <array>
 #include <cmath>
+#include <cstring>
+#include <limits>
 #include <new>
 #include <windows.h>
 
@@ -75,6 +79,7 @@ namespace mta::game_de
             enum class ClockAction
             {
                 Begin,
+                BeginApplicationObservation,
                 Submit,
                 Renew,
                 Read,
@@ -200,8 +205,33 @@ namespace mta::game_de
                         case ClockAction::Begin:
                             if (current->nativeMovement.IsBound() || current->nativeClock.IsRetained())
                                 break;
+                            current->applicationObservationMode.store(false);
                             completed = current->nativeClock.Begin(*request, *output);
                             break;
+                        case ClockAction::BeginApplicationObservation:
+                        {
+                            if (!NativeClockService::ValidateRequest(*request) || output->size != sizeof(*output) || output->version != ClockServiceVersionV1 ||
+                                output->reserved[0] || output->reserved[1])
+                            {
+                                result = Status::InvalidArgument;
+                                break;
+                            }
+                            if (current->nativeMovement.IsBound() || current->nativeClock.IsRetained())
+                                break;
+                            // Reset only after the prior callback/context is
+                            // retired. Failed admission may still retain this
+                            // exact object and its partially installed hook.
+                            current->ResetApplicationObservation(true);
+                            ClockServiceStateV1 next;
+                            completed = current->nativeClock.BeginApplicationFrames(*request, next, &ObserveApplicationFrame, current);
+                            if (next.generation)
+                            {
+                                std::uint64_t unbound = 0;
+                                current->applicationObservationGeneration.compare_exchange_strong(unbound, next.generation);
+                                *output = next;
+                            }
+                            break;
+                        }
                         case ClockAction::Submit:
                             completed = current->nativeClock.Submit(*command);
                             break;
@@ -215,7 +245,48 @@ namespace mta::game_de
                             completed = current->nativeClock.End(generation);
                             break;
                     }
-                    result = completed ? Status::Ok : Status::Unsupported;
+                    if (result != Status::InvalidArgument)
+                        result = completed ? Status::Ok : Status::Unsupported;
+                    break;
+                }
+                ReleaseSRWLockShared(&frontendAdapterLock);
+                return result;
+            }
+            static Status ReadApplicationObservation(IGameAdapter* adapter, std::uint64_t generation, ApplicationFrameObservationStateV1* output) noexcept
+            {
+                if (!TryAcquireSRWLockShared(&frontendAdapterLock))
+                    return Status::Unsupported;
+                Status result = Status::InvalidArgument;
+                for (auto* current = frontendAdapters; current; current = current->nextFrontendAdapter)
+                {
+                    if (static_cast<IGameAdapter*>(current) != adapter)
+                        continue;
+                    result = current->Access();
+                    if (result != Status::Ok)
+                        break;
+                    if (output->size != sizeof(*output) || output->version != ApplicationFrameObservationVersionV1 || output->reserved[0] ||
+                        output->reserved[1] || output->reserved[2] || output->reserved[3])
+                    {
+                        result = Status::InvalidArgument;
+                        break;
+                    }
+                    if (!current->applicationObservationMode.load() || !current->applicationObservationGeneration.load())
+                    {
+                        result = Status::NotInitialized;
+                        break;
+                    }
+                    if (generation != current->applicationObservationGeneration.load())
+                    {
+                        result = Status::InvalidArgument;
+                        break;
+                    }
+                    ApplicationFrameObservationStateV1 next;
+                    result = Status::Unsupported;
+                    if (current->CopyApplicationObservation(generation, next))
+                    {
+                        *output = next;
+                        result = Status::Ok;
+                    }
                     break;
                 }
                 ReleaseSRWLockShared(&frontendAdapterLock);
@@ -527,6 +598,125 @@ namespace mta::game_de
             }
 
         private:
+            static bool ValidApplicationObservation(const ApplicationFrameObservationStateV1& value) noexcept
+            {
+                constexpr auto maximumFrames = (std::numeric_limits<std::uint64_t>::max)() / 2;
+                const auto     mask = value.lastLookupMask;
+                float          delta = 0;
+                std::memcpy(&delta, &value.deltaBits, sizeof(delta));
+                if (value.size != sizeof(value) || value.version != ApplicationFrameObservationVersionV1 || !value.generation || value.reserved[0] ||
+                    value.reserved[1] || value.reserved[2] || value.reserved[3] || value.frames > maximumFrames || value.nativeState > 9 ||
+                    !std::isfinite(delta) || (mask & ~std::uint32_t{63}) || ((mask & LoadingPresent) && !(mask & LoadingObserved)) ||
+                    ((mask & LoadingNonNull) && !(mask & LoadingPresent)) || ((mask & SimpleFadePresent) && !(mask & SimpleFadeObserved)) ||
+                    ((mask & SimpleFadeNonNull) && !(mask & SimpleFadePresent)) || value.frontendFrames > value.frames ||
+                    value.playingFrames > value.frames - value.frontendFrames || value.loadingLookups > value.frames ||
+                    value.loadingKeyPresent > value.loadingLookups || value.loadingNonNull > value.loadingKeyPresent ||
+                    value.simpleFadeLookups > value.frames || value.simpleFadeKeyPresent > value.simpleFadeLookups ||
+                    value.simpleFadeNonNull > value.simpleFadeKeyPresent || ((mask & LoadingObserved) && !value.loadingLookups) ||
+                    ((mask & LoadingPresent) && !value.loadingKeyPresent) || ((mask & LoadingNonNull) && !value.loadingNonNull) ||
+                    ((mask & SimpleFadeObserved) && !value.simpleFadeLookups) || ((mask & SimpleFadePresent) && !value.simpleFadeKeyPresent) ||
+                    ((mask & SimpleFadeNonNull) && !value.simpleFadeNonNull) ||
+                    value.lookupFailures != 2 * value.frames - value.loadingLookups - value.simpleFadeLookups)
+                    return false;
+                return value.frames ? value.engineThread != 0 : !value.engineThread && !value.nativeState && !value.lastLookupMask && !value.deltaBits;
+            }
+
+            void PublishApplicationObservation() noexcept
+            {
+                std::array<std::uint64_t, sizeof(ApplicationFrameObservationStateV1) / sizeof(std::uint64_t)> words{};
+                std::memcpy(words.data(), &applicationObservation, sizeof(applicationObservation));
+                applicationObservationSequence.fetch_add(1);
+                for (std::size_t index = 0; index < words.size(); ++index)
+                    applicationObservationWords[index].store(words[index]);
+                applicationObservationSequence.fetch_add(1);
+            }
+
+            void ResetApplicationObservation(bool enabled) noexcept
+            {
+                applicationObservationMode.store(enabled);
+                applicationObservationGeneration.store(0);
+                applicationObservation = {};
+                PublishApplicationObservation();
+            }
+
+            bool CopyApplicationObservation(std::uint64_t generation, ApplicationFrameObservationStateV1& output) const noexcept
+            {
+                for (unsigned attempt = 0; attempt != 8; ++attempt)
+                {
+                    const auto before = applicationObservationSequence.load();
+                    if (before & 1)
+                        continue;
+                    std::array<std::uint64_t, sizeof(ApplicationFrameObservationStateV1) / sizeof(std::uint64_t)> words{};
+                    for (std::size_t index = 0; index < words.size(); ++index)
+                        words[index] = applicationObservationWords[index].load();
+                    if (before != applicationObservationSequence.load())
+                        continue;
+                    ApplicationFrameObservationStateV1 next;
+                    std::memcpy(&next, words.data(), sizeof(next));
+                    // Begin can be refused before the first natural frame. Its
+                    // real cleanup generation still owns an empty observation.
+                    if (!next.frames && !next.generation)
+                        next.generation = generation;
+                    if (!applicationObservationMode.load() || applicationObservationGeneration.load() != generation || next.generation != generation ||
+                        !ValidApplicationObservation(next))
+                        return false;
+                    output = next;
+                    return true;
+                }
+                return false;
+            }
+
+            static void ObserveApplicationFrame(const NativeApplicationFrame& frame, void* context) noexcept
+            {
+                auto& current = *static_cast<GameAdapter*>(context);
+                if (!current.applicationObservationMode.load() || !frame.generation || frame.nativeState > 9 || !std::isfinite(frame.deltaSeconds))
+                    return;
+                std::uint64_t unbound = 0;
+                current.applicationObservationGeneration.compare_exchange_strong(unbound, frame.generation);
+                if (current.applicationObservationGeneration.load() != frame.generation ||
+                    current.applicationObservation.frames == (std::numeric_limits<std::uint64_t>::max)() / 2)
+                    return;
+                // Only the qualified native handler writes this accumulator;
+                // producer reset requires complete callback retirement. The
+                // producer reads only the separately published atomic words.
+                auto& next = current.applicationObservation;
+                next.generation = frame.generation;
+                ++next.frames;
+                next.engineThread = GetCurrentThreadId();
+                next.nativeState = frame.nativeState;
+                next.frontendFrames += frame.nativeState == 7;
+                next.playingFrames += frame.nativeState == 9;
+                std::memcpy(&next.deltaBits, &frame.deltaSeconds, sizeof(next.deltaBits));
+                next.lastLookupMask = 0;
+                const auto lookup = [&](NativeUiClassMapAccess::Key key, std::uint64_t& observed, std::uint64_t& present, std::uint64_t& nonnull,
+                                        std::uint32_t observedBit, std::uint32_t presentBit, std::uint32_t nonnullBit)
+                {
+                    NativeUiClassMapAccess::Value value;
+                    if (!current.nativeClock.ReadStartupUiClassMap(frame.generation, key, value))
+                    {
+                        ++next.lookupFailures;
+                        return;
+                    }
+                    ++observed;
+                    next.lastLookupMask |= observedBit;
+                    if (value.keyPresent)
+                    {
+                        ++present;
+                        next.lastLookupMask |= presentBit;
+                    }
+                    if (value.keyPresent && value.classAddress)
+                    {
+                        ++nonnull;
+                        next.lastLookupMask |= nonnullBit;
+                    }
+                };
+                lookup(NativeUiClassMapAccess::Key::Loading, next.loadingLookups, next.loadingKeyPresent, next.loadingNonNull, LoadingObserved, LoadingPresent,
+                       LoadingNonNull);
+                lookup(NativeUiClassMapAccess::Key::SimpleFade, next.simpleFadeLookups, next.simpleFadeKeyPresent, next.simpleFadeNonNull, SimpleFadeObserved,
+                       SimpleFadePresent, SimpleFadeNonNull);
+                current.PublishApplicationObservation();
+            }
+
             static bool TrialFrame(const ControlActionFrame& frame) noexcept
             {
                 constexpr auto allowed = MtaInput::ActionBit(FORWARDS) | MtaInput::ActionBit(BACKWARDS) | MtaInput::ActionBit(LEFT) |
@@ -578,6 +768,7 @@ namespace mta::game_de
                 hasInputState = false;
                 nativePad.Reset();
                 nativeGameTime.Reset();
+                ResetApplicationObservation(false);
                 capabilities.store(BaseCapabilities);
             }
 
@@ -602,7 +793,13 @@ namespace mta::game_de
             NativeMovementInput        nativeMovement;
             NativeClockService         nativeClock;
             NativeGameTimeReader       nativeGameTime;
-            GameAdapter*               nextFrontendAdapter = nullptr;
+            // The hook retains this adapter until End retires it. Publications
+            // expose only counts/masks, never a borrowed UClass address.
+            std::atomic<bool>          applicationObservationMode{false};
+            std::atomic<std::uint64_t> applicationObservationGeneration{0}, applicationObservationSequence{0};
+            std::array<std::atomic<std::uint64_t>, sizeof(ApplicationFrameObservationStateV1) / sizeof(std::uint64_t)> applicationObservationWords{};
+            ApplicationFrameObservationStateV1                                                                         applicationObservation;
+            GameAdapter*                                                                                               nextFrontendAdapter = nullptr;
         };
 
         RenderObservationState CopyRenderObservation(const NativeRenderObservationState& native) noexcept
@@ -1189,6 +1386,22 @@ namespace mta::game_de
             request->reserved[0] || request->reserved[1] || request->reserved[2])
             return Status::InvalidArgument;
         return GameAdapter::ClockService(adapter, GameAdapter::ClockAction::Begin, request, nullptr, 0, output);
+    }
+
+    extern "C" Status BeginGameApplicationFrameObservationV1(std::uint32_t version, IGameAdapter* adapter, const ClockServiceRequestV1* request,
+                                                             ClockServiceStateV1* output) noexcept
+    {
+        if (version != ApplicationFrameObservationVersionV1 || !adapter || !request || !output)
+            return Status::InvalidArgument;
+        return GameAdapter::ClockService(adapter, GameAdapter::ClockAction::BeginApplicationObservation, request, nullptr, 0, output);
+    }
+
+    extern "C" Status ReadGameApplicationFrameObservationV1(std::uint32_t version, IGameAdapter* adapter, std::uint64_t generation,
+                                                            ApplicationFrameObservationStateV1* output) noexcept
+    {
+        if (version != ApplicationFrameObservationVersionV1 || !adapter || !generation || !output)
+            return Status::InvalidArgument;
+        return GameAdapter::ReadApplicationObservation(adapter, generation, output);
     }
 
     extern "C" Status SubmitGameClockCommandV1(std::uint32_t version, IGameAdapter* adapter, const ClockCommandV1* command) noexcept

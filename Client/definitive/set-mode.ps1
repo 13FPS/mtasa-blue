@@ -18,7 +18,7 @@ param(
     [switch]$MtaCoreRenderCustomPresentReference, [switch]$MtaCoreRenderFrameBoundaryReference, [switch]$MtaCoreRenderNativeDispatchReference,
     [switch]$MtaCoreGuiStartupReference, [switch]$MtaCoreGuiSurfaceReference, [switch]$MtaCoreGuiFrontendReference, [switch]$MtaCoreGuiFrontendInputReference, [switch]$MtaCoreGuiFrontendStartupReference, [switch]$MtaCorePersistentFrontend, [switch]$MtaCoreFrontendRuntime,
     [ValidateSet('D3D11', 'D3D12')][string]$MtaCoreRenderRoute = 'D3D11',
-    [switch]$MtaCoreClockReference, [switch]$MtaCoreClockSetReference,
+    [switch]$MtaCoreClockReference, [switch]$MtaCoreClockSetReference, [switch]$MtaCoreApplicationFrameReference,
     [string]$GameDirectory = 'C:\Program Files (x86)\Steam\steamapps\common\GTA San Andreas - The Definitive Edition\Gameface\Binaries\Win64'
 )
 
@@ -34,12 +34,13 @@ if ($MtaCoreFrontendRuntime -and ($Mode -ne 'Smoke' -or $runtimeConflicts.Count 
     throw 'MTA frontend runtime requires separate opt-in Smoke mode without other trials.'
 }
 $clockConflicts = @($PSBoundParameters.Keys | Where-Object {
-    $_ -match '^(Native|Matched|Lock|Mta)' -and $_ -notin @('MtaCoreClockReference', 'MtaCoreClockSetReference') -and
+    $_ -match '^(Native|Matched|Lock|Mta)' -and $_ -notin @('MtaCoreClockReference', 'MtaCoreClockSetReference', 'MtaCoreApplicationFrameReference') -and
         $PSBoundParameters[$_] -is [Management.Automation.SwitchParameter] -and $PSBoundParameters[$_].IsPresent
 })
-if (($MtaCoreClockReference -and $MtaCoreClockSetReference) -or
-    (($MtaCoreClockReference -or $MtaCoreClockSetReference) -and ($Mode -ne 'Smoke' -or $clockConflicts.Count -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute')))) {
-    throw 'MTA Core clock reference requires separate opt-in Smoke mode without other trials.'
+$clockSelections = @(@($MtaCoreClockReference, $MtaCoreClockSetReference, $MtaCoreApplicationFrameReference) | Where-Object IsPresent)
+if ($clockSelections.Count -gt 1 -or
+    (($MtaCoreClockReference -or $MtaCoreClockSetReference -or $MtaCoreApplicationFrameReference) -and ($Mode -ne 'Smoke' -or $clockConflicts.Count -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute')))) {
+    throw 'MTA Core clock/application observation requires separate opt-in Smoke mode without other trials.'
 }
 # Persistent input has independent host/native leases and must never inherit
 # one of the bounded diagnostic modes or a script player-control lease.
@@ -218,6 +219,22 @@ if ($configText -match 'export const MTA_CORE_CLOCK_REFERENCE = true;' -and $con
 if ($clockSetMarkers.Count -eq 1) {
     $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $clockSetPattern,
         "export const MTA_CORE_CLOCK_SET_REFERENCE = $($MtaCoreClockSetReference.IsPresent.ToString().ToLowerInvariant());"))
+}
+$applicationPattern = 'export const MTA_CORE_APPLICATION_FRAME_REFERENCE = (true|false);'
+$applicationMarkers = [regex]::Matches($configText, $applicationPattern)
+if ($applicationMarkers.Count -gt 1 -or [regex]::Matches($configText, 'export const MTA_CORE_APPLICATION_FRAME_REFERENCE\b').Count -ne $applicationMarkers.Count -or
+    ($MtaCoreApplicationFrameReference -and ($applicationMarkers.Count -ne 1 -or $installed.files.Count -ne 23))) {
+    throw 'Update the adapter before selecting the separate application-frame observation.'
+}
+if ($configText -match 'export const MTA_CORE_APPLICATION_FRAME_REFERENCE = true;' -and
+    ($configText -match 'export const MTA_CORE_CLOCK_REFERENCE = true;' -or $configText -match 'export const MTA_CORE_CLOCK_SET_REFERENCE = true;')) {
+    throw 'Installed configuration combines independent native observation modes.'
+}
+if ($applicationMarkers.Count -eq 1) {
+    # Ordinary changes revoke the optional observation, including on intact
+    # historical installations that do not yet carry this marker.
+    $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $applicationPattern,
+        "export const MTA_CORE_APPLICATION_FRAME_REFERENCE = $($MtaCoreApplicationFrameReference.IsPresent.ToString().ToLowerInvariant());"))
 }
 $coreInputPattern = 'export const MTA_CORE_INPUT_REFERENCE = (true|false);'
 $coreInputMatches = [regex]::Matches($configText, $coreInputPattern).Count

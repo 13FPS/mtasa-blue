@@ -16,6 +16,7 @@
 #include <game/CGameFrontendInputLease.h>
 #include <game/CGameLocalInputLease.h>
 #include <game/CGameClockService.h>
+#include <game/CGameApplicationFrameObservation.h>
 #include <game/CGameTimeService.h>
 #include <cstdint>
 #include <string>
@@ -56,6 +57,8 @@ public:
     bool                 RenewNativeClockService(std::uint64_t generation);
     bool                 ReadNativeClockService(mta::game_de::ClockServiceStateV1& state);
     bool                 EndNativeClockService(std::uint64_t generation);
+    bool                 BeginNativeApplicationFrameObservation(const mta::game_de::ClockServiceRequestV1& request, mta::game_de::ClockServiceStateV1& state);
+    bool                 ReadNativeApplicationFrameObservation(std::uint64_t generation, mta::game_de::ApplicationFrameObservationStateV1& state);
     bool                 HasGameTimeService() const noexcept;
     mta::game_de::Status ReadGameTimeState(mta::game_de::GameTimeStateV1& state) noexcept;
     bool                 GetNativeMovementEligibility(mta::game_de::NativeMovementEligibility& state);
@@ -104,52 +107,54 @@ private:
     mta::game_de::IGameAdapter* m_adapter = nullptr;
     // Resolve before native hook admission. Cleanup must never need loader
     // lookup while a retained peer might be suspended inside loader code.
-    decltype(&mta::game_de::BeginGameFrontendInputLeaseV1)      m_frontendLeaseBegin = nullptr;
-    decltype(&mta::game_de::RenewGameFrontendInputLeaseV1)      m_frontendLeaseRenew = nullptr;
-    decltype(&mta::game_de::ReadGameFrontendInputLeaseV1)       m_frontendLeaseRead = nullptr;
-    decltype(&mta::game_de::EndGameFrontendInputLeaseV1)        m_frontendLeaseEnd = nullptr;
-    decltype(&mta::game_de::BeginGameLocalInputLeaseV1)         m_localLeaseBegin = nullptr;
-    decltype(&mta::game_de::RenewGameLocalInputLeaseV1)         m_localLeaseRenew = nullptr;
-    decltype(&mta::game_de::ReadGameLocalInputLeaseV1)          m_localLeaseRead = nullptr;
-    decltype(&mta::game_de::EndGameLocalInputLeaseV1)           m_localLeaseEnd = nullptr;
-    decltype(&mta::game_de::BeginGameClockServiceV1)            m_clockBegin = nullptr;
-    decltype(&mta::game_de::SubmitGameClockCommandV1)           m_clockSubmit = nullptr;
-    decltype(&mta::game_de::RenewGameClockServiceV1)            m_clockRenew = nullptr;
-    decltype(&mta::game_de::ReadGameClockServiceV1)             m_clockRead = nullptr;
-    decltype(&mta::game_de::EndGameClockServiceV1)              m_clockEnd = nullptr;
-    decltype(&mta::game_de::ReadGameTimeStateV1)                m_gameTimeRead = nullptr;
-    mta::game_de::IGameRenderObservation*                       m_renderObservation = nullptr;
-    mta::game_de::IGameRenderObservationV2*                     m_renderObservationV2 = nullptr;
-    mta::game_de::RenderObservationState                        m_lastRenderObservation;
-    mta::game_de::RenderObservationStateV2                      m_lastRenderObservationV2;
-    bool                                                        m_hasRenderObservation = false;
-    bool                                                        m_hasRenderObservationV2 = false;
-    mta::game_de::IGameRenderObservationV3*                     m_renderObservationV3 = nullptr;
-    mta::game_de::RenderObservationStateV3                      m_lastRenderObservationV3;
-    bool                                                        m_hasRenderObservationV3 = false;
-    mta::game_de::IGameRenderObservationV4*                     m_renderObservationV4 = nullptr;
-    mta::game_de::RenderObservationStateV4                      m_lastRenderObservationV4;
-    bool                                                        m_hasRenderObservationV4 = false;
-    mta::game_de::IGameRenderObservationV5*                     m_renderObservationV5 = nullptr;
-    mta::game_de::RenderObservationStateV5                      m_lastRenderObservationV5;
-    bool                                                        m_hasRenderObservationV5 = false;
-    mta::game_de::IGameRenderObservationV6*                     m_renderObservationV6 = nullptr;
-    mta::game_de::TakeRenderDeviceLeaseV1                       m_renderDeviceTakeV1 = nullptr;
-    mta::game_de::TakeRenderDeviceWindowLeaseV2                 m_renderDeviceWindowTakeV2 = nullptr;
-    decltype(&mta::game_de::ReadGameRenderEndpointDiagnosticV2) m_renderEndpointReaderV2 = nullptr;
-    mta::game_de::RenderObservationStateV6                      m_lastRenderObservationV6;
-    bool                                                        m_hasRenderObservationV6 = false;
-    mta::game_de::RenderEndpointDiagnosticV1                    m_lastEndpointDiagnostic;
-    bool                                                        m_hasEndpointDiagnostic = false;
-    decltype(&mta::game_de::ReadGameRenderSetupDiagnosticV1)    m_renderSetupReaderV1 = nullptr;
-    mta::game_de::RenderSetupDiagnosticV1                       m_lastSetupDiagnostic;
-    bool                                                        m_hasSetupDiagnostic = false;
-    decltype(&mta::game_de::ReadGameRenderRootsDiagnosticV1)    m_renderRootsReaderV1 = nullptr;
-    mta::game_de::RenderRootsDiagnosticV1                       m_lastRootsDiagnostic;
-    bool                                                        m_hasRootsDiagnostic = false;
-    mta::game_de::RenderObservationRoute                        m_renderRoute = mta::game_de::RenderObservationRoute::Unknown;
-    CCoreInterface*                                             m_ownerIdentity = nullptr;
-    std::uint32_t                                               m_ownerThread = 0;
+    decltype(&mta::game_de::BeginGameFrontendInputLeaseV1)          m_frontendLeaseBegin = nullptr;
+    decltype(&mta::game_de::RenewGameFrontendInputLeaseV1)          m_frontendLeaseRenew = nullptr;
+    decltype(&mta::game_de::ReadGameFrontendInputLeaseV1)           m_frontendLeaseRead = nullptr;
+    decltype(&mta::game_de::EndGameFrontendInputLeaseV1)            m_frontendLeaseEnd = nullptr;
+    decltype(&mta::game_de::BeginGameLocalInputLeaseV1)             m_localLeaseBegin = nullptr;
+    decltype(&mta::game_de::RenewGameLocalInputLeaseV1)             m_localLeaseRenew = nullptr;
+    decltype(&mta::game_de::ReadGameLocalInputLeaseV1)              m_localLeaseRead = nullptr;
+    decltype(&mta::game_de::EndGameLocalInputLeaseV1)               m_localLeaseEnd = nullptr;
+    decltype(&mta::game_de::BeginGameClockServiceV1)                m_clockBegin = nullptr;
+    decltype(&mta::game_de::SubmitGameClockCommandV1)               m_clockSubmit = nullptr;
+    decltype(&mta::game_de::RenewGameClockServiceV1)                m_clockRenew = nullptr;
+    decltype(&mta::game_de::ReadGameClockServiceV1)                 m_clockRead = nullptr;
+    decltype(&mta::game_de::EndGameClockServiceV1)                  m_clockEnd = nullptr;
+    decltype(&mta::game_de::BeginGameApplicationFrameObservationV1) m_applicationFrameBegin = nullptr;
+    decltype(&mta::game_de::ReadGameApplicationFrameObservationV1)  m_applicationFrameRead = nullptr;
+    decltype(&mta::game_de::ReadGameTimeStateV1)                    m_gameTimeRead = nullptr;
+    mta::game_de::IGameRenderObservation*                           m_renderObservation = nullptr;
+    mta::game_de::IGameRenderObservationV2*                         m_renderObservationV2 = nullptr;
+    mta::game_de::RenderObservationState                            m_lastRenderObservation;
+    mta::game_de::RenderObservationStateV2                          m_lastRenderObservationV2;
+    bool                                                            m_hasRenderObservation = false;
+    bool                                                            m_hasRenderObservationV2 = false;
+    mta::game_de::IGameRenderObservationV3*                         m_renderObservationV3 = nullptr;
+    mta::game_de::RenderObservationStateV3                          m_lastRenderObservationV3;
+    bool                                                            m_hasRenderObservationV3 = false;
+    mta::game_de::IGameRenderObservationV4*                         m_renderObservationV4 = nullptr;
+    mta::game_de::RenderObservationStateV4                          m_lastRenderObservationV4;
+    bool                                                            m_hasRenderObservationV4 = false;
+    mta::game_de::IGameRenderObservationV5*                         m_renderObservationV5 = nullptr;
+    mta::game_de::RenderObservationStateV5                          m_lastRenderObservationV5;
+    bool                                                            m_hasRenderObservationV5 = false;
+    mta::game_de::IGameRenderObservationV6*                         m_renderObservationV6 = nullptr;
+    mta::game_de::TakeRenderDeviceLeaseV1                           m_renderDeviceTakeV1 = nullptr;
+    mta::game_de::TakeRenderDeviceWindowLeaseV2                     m_renderDeviceWindowTakeV2 = nullptr;
+    decltype(&mta::game_de::ReadGameRenderEndpointDiagnosticV2)     m_renderEndpointReaderV2 = nullptr;
+    mta::game_de::RenderObservationStateV6                          m_lastRenderObservationV6;
+    bool                                                            m_hasRenderObservationV6 = false;
+    mta::game_de::RenderEndpointDiagnosticV1                        m_lastEndpointDiagnostic;
+    bool                                                            m_hasEndpointDiagnostic = false;
+    decltype(&mta::game_de::ReadGameRenderSetupDiagnosticV1)        m_renderSetupReaderV1 = nullptr;
+    mta::game_de::RenderSetupDiagnosticV1                           m_lastSetupDiagnostic;
+    bool                                                            m_hasSetupDiagnostic = false;
+    decltype(&mta::game_de::ReadGameRenderRootsDiagnosticV1)        m_renderRootsReaderV1 = nullptr;
+    mta::game_de::RenderRootsDiagnosticV1                           m_lastRootsDiagnostic;
+    bool                                                            m_hasRootsDiagnostic = false;
+    mta::game_de::RenderObservationRoute                            m_renderRoute = mta::game_de::RenderObservationRoute::Unknown;
+    CCoreInterface*                                                 m_ownerIdentity = nullptr;
+    std::uint32_t                                                   m_ownerThread = 0;
     // A failed Begin may retain a peer holding the allocator or loader lock.
     // Keep diagnostics bounded until unload, and serialize other services
     // until explicit End/Reset acknowledges clock cleanup.

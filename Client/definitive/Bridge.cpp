@@ -336,6 +336,26 @@ std::uint32_t DE_CoreClockSetRead(std::uint32_t component)
     return ControllerAccessAllowed() ? coreStartup.ReadClockSet(component) : 0;
 }
 
+std::uint32_t DE_CoreApplicationFrameApiVersion()
+{
+    return DefinitiveApplicationFrameReference::ApiVersion;
+}
+
+int DE_CoreApplicationFrameBegin()
+{
+    return ControllerAccessAllowed() && !movementAdapter && !client && coreStartup.BeginApplicationFrameReference(&moduleAnchor) ? 1 : 0;
+}
+
+int DE_CoreApplicationFrameCapture()
+{
+    return ControllerAccessAllowed() && coreStartup.CaptureApplicationFrame() ? 1 : 0;
+}
+
+std::uint32_t DE_CoreApplicationFrameRead(std::uint32_t component)
+{
+    return ControllerAccessAllowed() ? coreStartup.ReadApplicationFrame(component) : 0;
+}
+
 int DE_CoreMovementBegin()
 {
     return ControllerAccessAllowed() && !movementAdapter && !client && coreStartup.BeginMovementReference(&moduleAnchor) ? 1 : 0;

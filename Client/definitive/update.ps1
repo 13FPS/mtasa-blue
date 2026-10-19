@@ -106,6 +106,22 @@ $actualPaths = @(Get-ChildItem -LiteralPath $sourceRoot -File -Recurse | ForEach
 if (@(Compare-Object $packagePaths $actualPaths).Count -ne 0) { throw 'Package has unrecorded or missing files.' }
 $configText = [IO.File]::ReadAllText((Join-Path $sourceRoot 'CLEO/de-online/config.mjs'))
 
+# A frame observation admits only its own native read-only owner. Preserve old
+# packages without this marker, but reject malformed opt-ins before any copy.
+$applicationFrameMarkers = [regex]::Matches($configText, 'export const MTA_CORE_APPLICATION_FRAME_REFERENCE = (true|false);')
+if ($applicationFrameMarkers.Count -gt 1 -or [regex]::Matches($configText, 'export const MTA_CORE_APPLICATION_FRAME_REFERENCE\b').Count -ne $applicationFrameMarkers.Count) {
+    throw 'Invalid MTA Core application-frame reference configuration marker.'
+}
+if ($applicationFrameMarkers.Count -eq 1 -and $applicationFrameMarkers[0].Groups[1].Value -eq 'true') {
+    # Include future opt-in names so a newer package cannot silently compose
+    # this observation with a second input, GUI, clock or lifecycle trial.
+    $applicationFrameConflicts = @([regex]::Matches($configText, 'export const ((?:GAIT_|INPUT_|MTA_)[A-Z0-9_]+) = true;') |
+        Where-Object {$_.Groups[1].Value -ne 'MTA_CORE_APPLICATION_FRAME_REFERENCE'})
+    if ($packagePaths.Count -ne 23 -or $guiCount -or $frontendCount -or $package.mode -ne 'Smoke' -or $applicationFrameConflicts.Count) {
+        throw 'MTA Core application-frame reference requires base ownership and separate opt-in Smoke mode.'
+    }
+}
+
 # The clock package has no GUI or input lease. Its marker is optional only for
 # intact historical packages, and cannot hide a second active trial.
 $clockMarkers = [regex]::Matches($configText, 'export const MTA_CORE_CLOCK_REFERENCE = (true|false);')

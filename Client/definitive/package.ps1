@@ -7,7 +7,7 @@ param([ValidateSet('Diagnostic', 'Smoke', 'Online')][string]$Mode = 'Smoke',
     [switch]$MtaNativePadReference, [switch]$MtaNativeMovementTrial, [switch]$MtaCoreStartupReference, [switch]$MtaCoreInputReference,
     [switch]$MtaCoreMovementReference, [switch]$MtaCoreRenderReference, [switch]$MtaCoreRenderGpuReference, [switch]$MtaCoreRenderCustomPresentReference, [switch]$MtaCoreRenderFrameBoundaryReference, [switch]$MtaCoreRenderNativeDispatchReference,
     [ValidateSet('D3D11', 'D3D12')][string]$MtaCoreRenderRoute = 'D3D11', [switch]$MtaCoreGuiStartupReference, [switch]$MtaCoreGuiSurfaceReference, [switch]$MtaCoreGuiFrontendReference, [switch]$MtaCoreGuiFrontendInputReference, [switch]$MtaCoreGuiFrontendStartupReference, [switch]$MtaCorePersistentFrontend, [switch]$MtaCoreFrontendRuntime,
-    [switch]$MtaCoreClockReference, [switch]$MtaCoreClockSetReference,
+    [switch]$MtaCoreClockReference, [switch]$MtaCoreClockSetReference, [switch]$MtaCoreApplicationFrameReference,
     [string]$OutputDirectory)
 
 $ErrorActionPreference = 'Stop'
@@ -24,12 +24,13 @@ if ($MtaCoreFrontendRuntime -and ($Mode -ne 'Smoke' -or $runtimeConflicts.Count 
 # Native clock ownership excludes other native service lifetimes. Reject a
 # mixed package before touching build outputs or downloading dependencies.
 $clockConflicts = @($PSBoundParameters.Keys | Where-Object {
-    $_ -match '^(Native|Matched|Lock|Mta)' -and $_ -notin @('MtaCoreClockReference', 'MtaCoreClockSetReference') -and
+    $_ -match '^(Native|Matched|Lock|Mta)' -and $_ -notin @('MtaCoreClockReference', 'MtaCoreClockSetReference', 'MtaCoreApplicationFrameReference') -and
         $PSBoundParameters[$_] -is [Management.Automation.SwitchParameter] -and $PSBoundParameters[$_].IsPresent
 })
-if (($MtaCoreClockReference -and $MtaCoreClockSetReference) -or
-    (($MtaCoreClockReference -or $MtaCoreClockSetReference) -and ($Mode -ne 'Smoke' -or $clockConflicts.Count -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute')))) {
-    throw 'MTA Core clock reference requires separate opt-in Smoke mode without other trials.'
+$clockSelections = @(@($MtaCoreClockReference, $MtaCoreClockSetReference, $MtaCoreApplicationFrameReference) | Where-Object IsPresent)
+if ($clockSelections.Count -gt 1 -or
+    (($MtaCoreClockReference -or $MtaCoreClockSetReference -or $MtaCoreApplicationFrameReference) -and ($Mode -ne 'Smoke' -or $clockConflicts.Count -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute')))) {
+    throw 'MTA Core clock/application observation requires separate opt-in Smoke mode without other trials.'
 }
 # Persistent input has independent host/native leases and must never inherit
 # one of the bounded diagnostic modes or a script player-control lease.
@@ -253,7 +254,7 @@ if ($MtaCoreGuiFrontendStartupReference) {
         if (-not $clockExports.Contains($name)) { throw "Completed Core clock provider lacks export: $name" }
     }
 }
-if ($MtaCoreClockReference -or $MtaCoreClockSetReference) {
+if ($MtaCoreClockReference -or $MtaCoreClockSetReference -or $MtaCoreApplicationFrameReference) {
     foreach ($provider in @(
         @{path=$bridgePath; names=@('DE_CoreClockApiVersion','DE_CoreClockBegin','DE_CoreClockCapture','DE_CoreClockRead','DE_CoreStartupPoll','DE_CoreStartupCancel','DE_CoreStartupRead')},
         @{path=$corePath; names=@('MTA_DEClockReferenceApiVersion','MTA_ConfigureDEClockReference')},
@@ -263,6 +264,16 @@ if ($MtaCoreClockReference -or $MtaCoreClockSetReference) {
         foreach ($name in $provider.names) {
             if (-not $exports.Contains($name)) { throw "Clock reference provider lacks export: $name" }
         }
+    }
+}
+if ($MtaCoreApplicationFrameReference) {
+    foreach ($provider in @(
+        @{path=$bridgePath; names=@('DE_CoreApplicationFrameApiVersion','DE_CoreApplicationFrameBegin','DE_CoreApplicationFrameCapture','DE_CoreApplicationFrameRead')},
+        @{path=$corePath; names=@('MTA_DEApplicationFrameReferenceApiVersion','MTA_ConfigureDEApplicationFrameReference')},
+        @{path=$gameDePath; names=@('BeginGameApplicationFrameObservationV1','ReadGameApplicationFrameObservationV1')}
+    )) {
+        $exports = Get-Amd64Exports $provider.path
+        foreach ($name in $provider.names) { if (-not $exports.Contains($name)) { throw "Application-frame provider lacks export: $name" } }
     }
 }
 if ($MtaCoreClockSetReference) {
@@ -523,6 +534,10 @@ $clockSetMarker = 'export const MTA_CORE_CLOCK_SET_REFERENCE = false;'
 if ([regex]::Matches($configText, [regex]::Escape($clockSetMarker)).Count -ne 1) { throw 'Expected disabled MTA Core clock Set reference in source configuration.' }
 $configText = $configText.Replace($clockSetMarker,
     "export const MTA_CORE_CLOCK_SET_REFERENCE = $($MtaCoreClockSetReference.IsPresent.ToString().ToLowerInvariant());")
+$applicationMarker = 'export const MTA_CORE_APPLICATION_FRAME_REFERENCE = false;'
+if ([regex]::Matches($configText, [regex]::Escape($applicationMarker)).Count -ne 1) { throw 'Expected disabled application-frame observation in source configuration.' }
+$configText = $configText.Replace($applicationMarker,
+    "export const MTA_CORE_APPLICATION_FRAME_REFERENCE = $($MtaCoreApplicationFrameReference.IsPresent.ToString().ToLowerInvariant());")
 $runtimeMarker = 'export const MTA_CORE_FRONTEND_RUNTIME = false;'
 if ([regex]::Matches($configText, [regex]::Escape($runtimeMarker)).Count -ne 1) { throw 'Expected disabled MTA frontend runtime in source configuration.' }
 $configText = $configText.Replace($runtimeMarker,

@@ -23,8 +23,8 @@ $sourceNames = @('Client/definitive/CoreStartupReference.h','Client/definitive/C
     'Client/definitive/FrontendRuntimeReport.h','Client/definitive/FrontendRuntimeMailbox.h','Client/definitive/FrontendRuntimeCache.h','Client/core/DefinitiveFrontendRuntime.h','Client/core/DefinitiveLocalInputRuntime.h','Client/definitive/coreconfig.xml',
     'Client/definitive/FrontendStartupReport.h','Client/definitive/PersistentFrontendHostLease.h','Client/core/DefinitivePersistentFrontend.h','Client/core/DefinitiveFrontendStartup.h','Client/core/DefinitiveGuiFrontendInputReference.h',
     'Client/core/DefinitiveFrontend.h','Client/core/DefinitiveFrontendClockReference.h','Client/core/DefinitiveGuiFrontendReference.h',
-    'Client/core/DefinitiveInputReference.h','Client/core/DefinitiveMovementReference.h','Client/core/DefinitiveClockReference.h','Client/core/DefinitiveClockSetReference.h','Client/core/DefinitiveRenderReference.h','Client/core/DefinitiveGuiStartupReference.h','Client/core/DefinitiveGuiSurfaceReference.h',
-    'Client/sdk/game/CGameClockService.h','Client/sdk/game/CGameAdapter.h','Shared/sdk/CControllerState.h','Shared/sdk/CControllerActions.h','Shared/sdk/CControlStateSynthesis.h',
+    'Client/core/DefinitiveInputReference.h','Client/core/DefinitiveMovementReference.h','Client/core/DefinitiveClockReference.h','Client/core/DefinitiveClockSetReference.h','Client/core/DefinitiveApplicationFrameReference.h','Client/core/DefinitiveRenderReference.h','Client/core/DefinitiveGuiStartupReference.h','Client/core/DefinitiveGuiSurfaceReference.h',
+    'Client/sdk/game/CGameClockService.h','Client/sdk/game/CGameApplicationFrameObservation.h','Client/sdk/game/CGameAdapter.h','Shared/sdk/CControllerState.h','Shared/sdk/CControllerActions.h','Shared/sdk/CControlStateSynthesis.h',
     'Tests/definitive/CoreStartupReferenceTests.cpp','Tests/definitive/CoreStartupFixture.cpp','Tests/definitive/test_core_startup_worker.ps1')
 $sourceHashes = [ordered]@{}
 foreach ($name in $sourceNames) {
@@ -86,6 +86,7 @@ try {
     $missingSurfaceFixture = Join-Path $fixtureDirectory 'CoreMissingSurfaceExport.dll'
     $missingClockFixture = Join-Path $fixtureDirectory 'CoreMissingClockExport.dll'
     $missingClockSetFixture = Join-Path $fixtureDirectory 'CoreMissingClockSetExport.dll'
+    $missingApplicationFrameFixture = Join-Path $fixtureDirectory 'CoreMissingApplicationFrameExport.dll'
     $missingFrontendClockFixture = Join-Path $fixtureDirectory 'CoreMissingFrontendClockExport.dll'
     $missingLocalRuntimeFixture = Join-Path $fixtureDirectory 'CoreMissingLocalRuntimeExport.dll'
     Compile 'fixture-normal' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $normalFixture @('/LD')
@@ -94,6 +95,7 @@ try {
     Compile 'fixture-missing-surface-export' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $missingSurfaceFixture @('/LD','/DCORE_FIXTURE_MISSING_SURFACE_EXPORT=1')
     Compile 'fixture-missing-clock-export' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $missingClockFixture @('/LD','/DCORE_FIXTURE_MISSING_CLOCK_EXPORT=1')
     Compile 'fixture-missing-clock-set-export' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $missingClockSetFixture @('/LD','/DCORE_FIXTURE_MISSING_CLOCK_SET_EXPORT=1')
+    Compile 'fixture-missing-application-frame-export' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $missingApplicationFrameFixture @('/LD','/DCORE_FIXTURE_MISSING_APPLICATION_FRAME_EXPORT=1')
     Compile 'fixture-missing-frontend-clock-export' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $missingFrontendClockFixture @('/LD','/DCORE_FIXTURE_MISSING_FRONTEND_CLOCK_EXPORT=1')
     Compile 'fixture-missing-local-runtime-export' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $missingLocalRuntimeFixture @('/LD','/DCORE_FIXTURE_MISSING_LOCAL_RUNTIME_EXPORT=1')
     $syntheticRoot = Join-Path $outputRoot 'synthetic-host'
@@ -132,6 +134,7 @@ try {
     $runs += Run-Host 'actual-persistent-core-wrong-image' $actualRoot @($actualRoot,'actual-persistent-frontend')
     $runs += Run-Host 'actual-clock-core-wrong-image' $actualRoot @($actualRoot,'actual-clock')
     $runs += Run-Host 'actual-clock-set-core-wrong-image' $actualRoot @($actualRoot,'actual-clock-set')
+    $runs += Run-Host 'actual-application-frame-core-wrong-image' $actualRoot @($actualRoot,'actual-application-frame')
     $runs += Run-Host 'actual-runtime-core-wrong-image' $actualRoot @($actualRoot,'actual-runtime')
     $runs += Run-Host 'actual-runtime-local-core-wrong-image' $actualRoot @($actualRoot,'actual-runtime-local')
     foreach ($mode in @('runtime-two-views','runtime-stop-hidden','runtime-stop-showing','runtime-stop-visible','runtime-host-expired',
@@ -179,6 +182,11 @@ try {
                         'clock-set-cache-contention','clock-set-returned-pending','clock-set-thrown-pending','clock-set-stale-terminal','clock-set-retained-terminal',
                         'clock-set-workload-incomplete','clock-set-readback-thrown-pending','clock-set-corrupt-workload','clock-set-not-entered',
                         'clock-set-reserved-terminal','clock-set-wrong-count',
+                        'application-frame','application-frame-cancel','application-frame-wrong-api','application-frame-config-refused',
+                        'application-frame-missing-export','application-frame-init-failed','application-frame-init-thrown',
+                        'application-frame-cache-contention','application-frame-returned-pending','application-frame-thrown-pending',
+                        'application-frame-stale-terminal','application-frame-retained-terminal','application-frame-workload-incomplete',
+                        'application-frame-readback-thrown-pending','application-frame-begin-refused','application-frame-not-entered','application-frame-wrong-count',
                         'frontend-clock','frontend-clock-cancel','frontend-clock-wrong-api','frontend-clock-refused',
                         'frontend-clock-workload-incomplete','frontend-clock-short-workload','frontend-clock-owner-corrupt',
                         'frontend-clock-returned-pending','frontend-clock-thrown-pending','frontend-clock-stale-terminal','frontend-clock-retained-terminal',
@@ -194,7 +202,7 @@ try {
         # or native methods. The controlled Core tests worker lifetime only.
         Copy-Item -LiteralPath $GameDeDll -Destination (Join-Path $movementRoot 'game_de.dll')
         if ((Hash (Join-Path $movementRoot 'game_de.dll')) -ne $ExpectedGameDeSha256.ToLowerInvariant()) { throw 'Movement PIN fixture backend hash differs.' }
-        $selectedFixture = if ($mode -eq 'gui-missing-export') { $missingGuiFixture } elseif ($mode -eq 'surface-missing-export') { $missingSurfaceFixture } elseif ($mode -eq 'clock-missing-export') { $missingClockFixture } elseif ($mode -eq 'clock-set-missing-export') { $missingClockSetFixture } elseif ($mode -eq 'frontend-clock-missing-export') { $missingFrontendClockFixture } else { $normalFixture }
+        $selectedFixture = if ($mode -eq 'gui-missing-export') { $missingGuiFixture } elseif ($mode -eq 'surface-missing-export') { $missingSurfaceFixture } elseif ($mode -eq 'clock-missing-export') { $missingClockFixture } elseif ($mode -eq 'clock-set-missing-export') { $missingClockSetFixture } elseif ($mode -eq 'application-frame-missing-export') { $missingApplicationFrameFixture } elseif ($mode -eq 'frontend-clock-missing-export') { $missingFrontendClockFixture } else { $normalFixture }
         $runs += Run-Host $mode $movementRoot @($movementRoot,$mode,$selectedFixture)
     }
 } catch { $failure = $_.Exception.Message }
@@ -202,7 +210,7 @@ $unchanged = $true
 foreach ($name in $sourceNames) { if ((Hash (Join-Path $repositoryRoot $name)) -ne $sourceHashes[$name]) { $unchanged=$false } }
 foreach ($artifact in $artifacts) { if ((Hash $artifact.source) -ne $artifact.sha256) { $unchanged=$false } }
 $record = [ordered]@{
-    recorded_at=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=($null -eq $failure -and $unchanged -and $runs.Count -eq 180);
+    recorded_at=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=($null -eq $failure -and $unchanged -and $runs.Count -eq 198);
     failure=$failure;source_hashes=$sourceHashes;sources_unchanged=$unchanged;compiles=$compiles;runs=$runs;normal_artifacts=$artifacts;
     historical_cases_expected=65;surface_cases_expected=24;completed_core_actual_cases_expected=1;persistent_core_actual_cases_expected=1;
     clock_controlled_cases_expected=14;clock_actual_preflight_cases_expected=1;historical_total_preserved=91;
@@ -210,9 +218,10 @@ $record = [ordered]@{
     completed_clock_controlled_cases_expected=25;completed_clock_actual_preflight_cases_expected=1;prior_total_preserved=125;
     runtime_controlled_cases_expected=20;runtime_actual_preflight_cases_expected=1;prior_runtime_total_preserved=151;
     local_runtime_controlled_cases_expected=7;local_runtime_actual_preflight_cases_expected=1;prior_local_runtime_total_preserved=172;
+    application_frame_controlled_cases_expected=17;application_frame_actual_preflight_cases_expected=1;prior_application_frame_total_preserved=180;
     fixture_executable_is_game=$false;game_launched=$false;game_memory_read=$false;game_process_attached=$false;game_files_changed=$false;
     synthetic_core_is_mta=$false;full_mta_boot_verified=$false;engine_input_write_verified=$false;
-    scope='Actual production async worker, controlled non-MTA loader-lock/read-only-clock/Set/completed-clock-before-view/runtime Show-Hide-Stop/local-input handoff fixtures, and normal Core exact-image rejection in owned nonclassic hosts. The separate local32 cache covers post-GUI configure, Busy suspension before Show, dominant Stop, focus suspension, export refusal and Disable before shutdown while preserving all172 earlier cases. Controlled local32 values are not a real native lease; no time write, GUI or GTA workload is admitted.'
+    scope='Actual production async worker, controlled non-MTA loader-lock/read-only-clock/Set/completed-clock-before-view/runtime Show-Hide-Stop/local-input/application-frame fixtures, and normal Core exact-image rejection in owned nonclassic hosts. Application128 covers coherent separate publication, cache-lock contention, cancellation, failed Begin reset, explicit non-entry, missing/refused exports, malformed width/version and pending/exception quarantine while preserving all180 prior cases. Controlled report values do not prove a real native lease or application callback; no time write, GUI or GTA workload is admitted.'
 }
 $resultPath = Join-Path $outputRoot 'test-result.json'
 $record | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $resultPath -Encoding utf8

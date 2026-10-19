@@ -15,6 +15,7 @@
 #include "../../Client/core/DefinitiveMovementReference.h"
 #include "../../Client/core/DefinitiveClockReference.h"
 #include "../../Client/core/DefinitiveClockSetReference.h"
+#include "../../Client/core/DefinitiveApplicationFrameReference.h"
 #include "../../Client/core/DefinitiveRenderReference.h"
 #include "../../Client/core/DefinitiveGuiStartupReference.h"
 #include "../../Client/core/DefinitiveGuiSurfaceReference.h"
@@ -33,6 +34,7 @@ namespace
     bool                                  mtaSet = false, gtaSet = false;
     DefinitiveInputReference::Request     inputRequest;
     bool                                  guiRequest = false, guiSurfaceRequest = false, clockRequest = false, clockSetRequest = false;
+    bool                                  applicationFrameRequest = false;
     DefinitiveFrontendStartup::Snapshot   frontendOwner{};
     HMODULE                               frontendBackend = nullptr;
     bool                                  frontendClockReturned = false, frontendOwnerReadThrew = false;
@@ -122,6 +124,132 @@ extern "C" __declspec(dllexport) std::uint32_t MTA_ConfigureDEClockSetReference(
     return 1;
 }
 #endif
+
+extern "C" __declspec(dllexport) std::uint32_t MTA_DEApplicationFrameReferenceApiVersion()
+{
+    Call(7);
+    return Setting(L"MTA_CORE_FIXTURE_APPLICATION_FRAME_MODE") == 2 ? 2u : DefinitiveApplicationFrameReference::ApiVersion;
+}
+
+#ifndef CORE_FIXTURE_MISSING_APPLICATION_FRAME_EXPORT
+extern "C"
+    __declspec(dllexport) std::uint32_t MTA_ConfigureDEApplicationFrameReference(std::uint32_t duration, DefinitiveInputReference::CancelCallback cancelled,
+                                                                                 DefinitiveInputReference::PublishCallback publish)
+{
+    Call(8);
+    if (duration != DefinitiveApplicationFrameReference::MaximumDurationMs || !cancelled || !publish ||
+        Setting(L"MTA_CORE_FIXTURE_APPLICATION_FRAME_MODE") == 3)
+        return 0;
+    inputRequest = {duration, cancelled, publish};
+    applicationFrameRequest = true;
+    return 1;
+}
+#endif
+
+void ControlledApplicationFrame()
+{
+    using namespace DefinitiveApplicationFrameReference;
+    const auto mode = Setting(L"MTA_CORE_FIXTURE_APPLICATION_FRAME_MODE");
+    Snapshot   sample{};
+    sample[Version] = ApiVersion;
+    if (mode == 14)
+    {
+        // A never-entered native scope authorizes unload, not a frame claim.
+        sample[Phase] = 2;
+        sample[Sequence] = sample[CleanupComplete] = sample[NotEntered] = sample[AdapterStopped] = 1;
+        sample[Reason] = static_cast<std::uint32_t>(StopReason::PreflightRejected);
+        Call(9);
+        inputRequest.publish(sample.data(), FieldCount);
+        return;
+    }
+    sample[Phase] = 1;
+    sample[BeginAttempted] = sample[NativeStateValid] = 1;
+    if (mode != 13)
+    {
+        sample[BeginSucceeded] = sample[ReadyObserved] = sample[ReadOnlyVerified] = 1;
+        sample[GenerationLow] = 17;
+        sample[EngineThread] = GetCurrentThreadId() + 1;
+        sample[ProducerThread] = GetCurrentThreadId();
+        sample[NativeBound] = sample[NativeHooked] = sample[NativeActive] = sample[NativeReady] = 1;
+        sample[CallbacksLow] = sample[QualifiedCallbacksLow] = 10;
+        sample[ObservationReads] = 3;
+        sample[ObservationValid] = sample[DictionaryVerified] = 1;
+        sample[ObservationProgressSamples] = 2;
+        sample[RawNativeState] = 9;
+        sample[FrontendFramesLow] = 40;
+        sample[LoadingLookupsLow] = sample[LoadingKeyPresentLow] = sample[LoadingNonNullLow] = 8;
+        sample[SimpleFadeLookupsLow] = sample[SimpleFadeKeyPresentLow] = sample[SimpleFadeNonNullLow] = 7;
+        sample[LastLookupMask] = 63;
+    }
+    else
+        sample[RefusedNoGeneration] = 1;
+    // PIN accounting exercises the actual bridge unload predicate without
+    // invoking the genuine backend's native factory from this owned host.
+    wchar_t path[32768]{};
+    GetModuleFileNameW(nullptr, path, 32768);
+    const auto backendPath = std::filesystem::path(path).parent_path() / L"game_de.dll";
+    const auto backend = LoadLibraryExW(backendPath.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+    HMODULE    retained = nullptr;
+    const auto factory = backend ? GetProcAddress(backend, "CreateGameAdapter") : nullptr;
+    sample[BackendPinnedExpected] =
+        factory && GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN, reinterpret_cast<LPCWSTR>(factory), &retained)
+            ? 1u
+            : 0u;
+    if (backend)
+        FreeLibrary(backend);
+    const auto emit = [&]
+    {
+        ++sample[Sequence];
+        if (mode != 13)
+        {
+            sample[FramesLow] = 100 + sample[Sequence];
+            sample[PlayingFramesLow] = 60 + sample[Sequence];
+        }
+        Call(9);
+        inputRequest.publish(sample.data(), mode == 16 ? FieldCount - 1 : FieldCount);
+    };
+    emit();
+    const auto release = Event(L"MTA_CORE_FIXTURE_INPUT_RELEASE", SYNCHRONIZE);
+    while (release && WaitForSingleObject(release, 5) == WAIT_TIMEOUT && !inputRequest.cancelled())
+        emit();
+    if (release)
+        CloseHandle(release);
+    sample[Phase] = 3;
+    sample[CleanupPending] = sample[RetainedPeerThreads] = sample[CleanupAttempts] = 1;
+    sample[NativeActive] = sample[NativeReady] = 0;
+    emit();
+    Call(21);
+    // Deliberate faulty providers return before retirement to prove that the
+    // real worker retains Core, TLS callbacks and its heap-backed paths.
+    if (mode == 7 || mode == 8 || mode == 12)
+        return;
+    const auto cleanup = Event(L"MTA_CORE_FIXTURE_MOVEMENT_RELEASE", SYNCHRONIZE);
+    while (cleanup && WaitForSingleObject(cleanup, 5) == WAIT_TIMEOUT)
+    {
+        ++sample[CleanupAttempts];
+        emit();
+    }
+    if (cleanup)
+        CloseHandle(cleanup);
+    sample[Phase] = 2;
+    sample[Reason] = static_cast<std::uint32_t>(inputRequest.cancelled() ? StopReason::Cancelled : mode == 13 ? StopReason::BeginError : StopReason::Completed);
+    sample[CleanupComplete] = 1;
+    sample[CleanupPending] = sample[NativeBound] = sample[NativeHooked] = sample[RetainedPeerThreads] = 0;
+    if (mode == 13)
+        sample[ResetSucceeded] = 1;
+    else
+    {
+        sample[EndSucceeded] = sample[NativeRestored] = sample[WorkloadComplete] = 1;
+        sample[ElapsedMs] = sample[WorkloadElapsedMs] = MaximumDurationMs;
+    }
+    if (mode == 11)
+        sample[WorkloadComplete] = 0;
+    if (mode == 9)
+        sample[Version] = ApiVersion + 1;
+    if (mode == 10)
+        sample[RetainedPeerThreads] = 1;
+    emit();
+}
 
 void ControlledClock(bool completedOwner = false)
 {
@@ -1459,7 +1587,8 @@ extern "C" __declspec(dllexport) std::uint32_t MTA_DEStartupApiVersion()
 extern "C" __declspec(dllexport) std::uint32_t MTA_ReadDEStartupState(std::uint32_t field)
 {
     Call(6);
-    if ((clockRequest && Setting(L"MTA_CORE_FIXTURE_CLOCK_MODE") == 12) || (clockSetRequest && Setting(L"MTA_CORE_FIXTURE_CLOCK_SET_MODE") == 12))
+    if ((clockRequest && Setting(L"MTA_CORE_FIXTURE_CLOCK_MODE") == 12) || (clockSetRequest && Setting(L"MTA_CORE_FIXTURE_CLOCK_SET_MODE") == 12) ||
+        (applicationFrameRequest && Setting(L"MTA_CORE_FIXTURE_APPLICATION_FRAME_MODE") == 12))
         throw std::runtime_error("controlled pending clock diagnostic exception");
     const std::array<std::uint32_t, 8> values{1, 5, 6, Setting(L"MTA_CORE_FIXTURE_BAD_STATE") ? 33u : 97u, 0, 0, 0, 1};
     return field < values.size() ? values[field] : 0xffffffffu;
@@ -1480,6 +1609,17 @@ extern "C" __declspec(dllexport) int InitializeCore()
     Call(3);
     if (Setting(L"MTA_CORE_FIXTURE_BAD_INITIALIZE"))
         return 0;
+    if (mtaSet && gtaSet && applicationFrameRequest)
+    {
+        ControlledApplicationFrame();
+        const auto mode = Setting(L"MTA_CORE_FIXTURE_APPLICATION_FRAME_MODE");
+        Call(24);
+        if (mode == 8 || mode == 12)
+            Call(25);
+        if (mode == 5 || mode == 8)
+            throw std::runtime_error("controlled application-frame Initialize exception");
+        return mode == 4 || mode == 7 ? 0 : 5;
+    }
     if (mtaSet && gtaSet && clockSetRequest)
     {
         ControlledClockSet();

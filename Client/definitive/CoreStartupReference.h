@@ -14,6 +14,7 @@
 #include "../core/DefinitiveMovementReference.h"
 #include "../core/DefinitiveClockReference.h"
 #include "../core/DefinitiveClockSetReference.h"
+#include "../core/DefinitiveApplicationFrameReference.h"
 #include "../core/DefinitiveRenderReference.h"
 #include "../core/DefinitiveGuiStartupReference.h"
 #include "../core/DefinitiveGuiSurfaceReference.h"
@@ -45,6 +46,9 @@ namespace deonline
         bool          BeginClockSetReference(const void* moduleAddress) noexcept;
         bool          CaptureClockSet() noexcept;
         std::uint32_t ReadClockSet(std::uint32_t field) const noexcept;
+        bool          BeginApplicationFrameReference(const void* moduleAddress) noexcept;
+        bool          CaptureApplicationFrame() noexcept;
+        std::uint32_t ReadApplicationFrame(std::uint32_t field) const noexcept;
         bool          BeginRenderReference(const void* moduleAddress) noexcept;
         bool          BeginRenderReferenceV2(const void* moduleAddress, std::uint32_t route) noexcept;
         bool          BeginRenderReferenceV3(const void* moduleAddress, std::uint32_t route) noexcept;
@@ -134,9 +138,10 @@ namespace deonline
                                         bool configuredGuiSurface = false, bool configuredGuiFrontend = false, bool configuredGuiFrontendInput = false,
                                         bool configuredFrontendStartup = false, bool configuredPersistentFrontend = false, bool configuredClock = false,
                                         bool configuredClockSet = false, bool configuredClockBeforeFrontend = false, bool configuredFrontendRuntime = false,
-                                        bool configuredLocalInputRuntime = false) noexcept;
+                                        bool configuredLocalInputRuntime = false, bool configuredApplicationFrame = false) noexcept;
         bool                      CopyClockSnapshot(DefinitiveClockReference::Snapshot& output) const noexcept;
         bool                      CopyClockSetSnapshot(DefinitiveClockSetReference::Snapshot& output) const noexcept;
+        bool                      CopyApplicationFrameSnapshot(DefinitiveApplicationFrameReference::Snapshot& output) const noexcept;
         void                      WaitForClockRetirement() noexcept;
         void                      PublishClockOwner(const DefinitiveFrontendStartup::Snapshot& report) noexcept;
         bool                      CaptureFrontendLifecycle() noexcept;
@@ -146,6 +151,7 @@ namespace deonline
         static void               PublishInput(const std::uint32_t* values, std::uint32_t count);
         static void               PublishClock(const std::uint32_t* values, std::uint32_t count);
         static void               PublishClockSet(const std::uint32_t* values, std::uint32_t count);
+        static void               PublishApplicationFrame(const std::uint32_t* values, std::uint32_t count);
         static bool               ControlInput(std::uint32_t action, std::uint32_t* values, std::uint32_t count);
 
         // Only Begin/Poll's owning thread touches the handle or input address.
@@ -181,31 +187,38 @@ namespace deonline
         std::atomic<std::uint32_t>                                                      clockSetSequence{0};
         std::atomic<bool>                                                               clockSetAvailable{false};
         DefinitiveClockSetReference::Snapshot                                           capturedClockSet{};
-        bool                                                                            renderRequested = false;
-        bool                                                                            guiRequested = false;
-        bool                                                                            guiAvailable = false;
-        DefinitiveGuiStartupReference::Snapshot                                         publishedGui{}, capturedGui{};
-        bool                                                                            guiSurfaceRequested = false, guiSurfaceAvailable = false;
-        DefinitiveGuiSurfaceReference::Snapshot                                         publishedGuiSurface{}, capturedGuiSurface{};
-        bool                                                                            guiFrontendRequested = false, guiFrontendAvailable = false;
-        DefinitiveGuiFrontendReference::Snapshot                                        publishedGuiFrontend{}, capturedGuiFrontend{};
-        bool                                                                            guiFrontendInputRequested = false, guiFrontendInputAvailable = false;
-        DefinitiveGuiFrontendInputReference::Snapshot                                   publishedGuiFrontendInput{}, capturedGuiFrontendInput{};
-        bool                                                                            frontendStartupRequested = false;
-        bool                                                                            persistentFrontendRequested = false;
-        PersistentFrontendHostLease                                                     persistentHostLease;
-        bool                                                                            frontendRuntimeRequested = false;
-        bool                                                                            localInputRuntimeRequested = false;
-        FrontendValueCache<DefinitiveLocalInputRuntime::Snapshot>                       localInputRuntimeCache;
-        DefinitiveLocalInputRuntime::Snapshot                                           capturedLocalInputRuntime{};
-        FrontendRuntimeMailbox                                                          runtimeMailbox;
-        PersistentFrontendHostLease                                                     runtimeHostLease;
-        FrontendRuntimeCache                                                            runtimeCache;
-        FrontendRuntimeReport::Snapshot                                                 runtimeReport{}, capturedRuntime{};
-        FrontendRuntimeMailbox::Request                                                 runtimeViewRequest{};
-        std::atomic<bool>                                                               runtimePublicationFault{false};
-        std::uint64_t                                                                   runtimeStartedAt = 0, runtimePublicationSequence = 0;
-        bool                                                                            runtimeViewAvailable = false;
+        // Application-frame observation has its own protocol and atomic copy
+        // path: native cleanup may retain a peer inside the historical cache.
+        bool                                                                                    applicationFrameRequested = false;
+        std::array<std::atomic<std::uint32_t>, DefinitiveApplicationFrameReference::FieldCount> publishedApplicationFrame{};
+        std::atomic<std::uint32_t>                                                              applicationFrameSequence{0};
+        std::atomic<bool>                                                                       applicationFrameAvailable{false};
+        DefinitiveApplicationFrameReference::Snapshot                                           capturedApplicationFrame{};
+        bool                                                                                    renderRequested = false;
+        bool                                                                                    guiRequested = false;
+        bool                                                                                    guiAvailable = false;
+        DefinitiveGuiStartupReference::Snapshot                                                 publishedGui{}, capturedGui{};
+        bool                                                                                    guiSurfaceRequested = false, guiSurfaceAvailable = false;
+        DefinitiveGuiSurfaceReference::Snapshot                                                 publishedGuiSurface{}, capturedGuiSurface{};
+        bool                                                                                    guiFrontendRequested = false, guiFrontendAvailable = false;
+        DefinitiveGuiFrontendReference::Snapshot                                                publishedGuiFrontend{}, capturedGuiFrontend{};
+        bool                                                      guiFrontendInputRequested = false, guiFrontendInputAvailable = false;
+        DefinitiveGuiFrontendInputReference::Snapshot             publishedGuiFrontendInput{}, capturedGuiFrontendInput{};
+        bool                                                      frontendStartupRequested = false;
+        bool                                                      persistentFrontendRequested = false;
+        PersistentFrontendHostLease                               persistentHostLease;
+        bool                                                      frontendRuntimeRequested = false;
+        bool                                                      localInputRuntimeRequested = false;
+        FrontendValueCache<DefinitiveLocalInputRuntime::Snapshot> localInputRuntimeCache;
+        DefinitiveLocalInputRuntime::Snapshot                     capturedLocalInputRuntime{};
+        FrontendRuntimeMailbox                                    runtimeMailbox;
+        PersistentFrontendHostLease                               runtimeHostLease;
+        FrontendRuntimeCache                                      runtimeCache;
+        FrontendRuntimeReport::Snapshot                           runtimeReport{}, capturedRuntime{};
+        FrontendRuntimeMailbox::Request                           runtimeViewRequest{};
+        std::atomic<bool>                                         runtimePublicationFault{false};
+        std::uint64_t                                             runtimeStartedAt = 0, runtimePublicationSequence = 0;
+        bool                                                      runtimeViewAvailable = false;
         // Persistent reports never enter the historical 256-field cache.
         std::array<std::atomic<std::uint32_t>, DefinitivePersistentFrontend::FieldCount> publishedPersistentFrontend{};
         std::atomic<std::uint32_t>                                                       persistentFrontendSequence{0};

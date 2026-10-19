@@ -1425,6 +1425,76 @@ async function main() {
         assert.ok(!f.calls.some(([name]) => /SET_TIME|SET_PLAYER|CREATE_CHAR|DE_Connect|DE_CoreClockBegin/.test(name)));
         assert.equal(done.startup_observation_state.length, 192);
     });
+    test('startup observation waits for explicit F9 and every modifier release without requiring a player', () => {
+        const f = runStartupObservationEntry({ 100: 7, 102: 44, 104: 0 }, {
+            keyFrames: [[], [], [17, 16, 120], [17], [16], [120], [], []],
+            natives: { IS_PLAYER_PLAYING: () => { throw new Error('Read-only frontend observation must not query player readiness'); } }
+        });
+        const done = f.logs.find(event => event.event === 'core_startup_observation_reference_finished');
+        assert.ok(done && done.passed && done.cleanup_passed);
+        assert.ok(f.runtimeAccess.length > 0 && f.runtimeAccess.every(value => value.frame >= 6));
+        assert.equal(f.logs.filter(event => event.event === 'adapter_activation_requested').length, 1);
+        assert.equal(f.logs.filter(event => event.event === 'adapter_activation_released').length, 1);
+        assert.ok(!f.calls.some(([name]) => name === 'IS_PLAYER_PLAYING' || /GET_PLAYER_CHAR|GET_CHAR|SET_|CREATE_|DE_Connect/.test(name)));
+    });
+    test('startup observation keeps no-player arming indefinite and End has priority over activation', () => {
+        const f = runStartupObservationEntry({}, {
+            keyFrames: [[], [], [17, 16, 120, 35]], times: [0, 3600000, 7200000], readyFrames: [false, false, false]
+        });
+        assert.equal(f.runtimeAccess.length, 0);
+        assert.ok(f.logs.some(event => event.event === 'adapter_activation_cancelled'));
+        assert.ok(!f.logs.some(event => event.event === 'adapter_activation_requested'));
+    });
+    test('startup observation permits End cancellation during no-player activation release before bridge access', () => {
+        const f = runStartupObservationEntry({}, {
+            keyFrames: [[17, 16, 120], [17, 16, 35]], readyFrames: [false, false]
+        });
+        assert.equal(f.runtimeAccess.length, 0);
+        assert.ok(f.logs.some(event => event.event === 'adapter_activation_requested'));
+        assert.ok(f.logs.some(event => event.event === 'adapter_activation_cancelled'));
+        assert.ok(!f.logs.some(event => event.event === 'adapter_activation_released'));
+    });
+    test('startup observation retains the release deadline when activation keys stay held without a player', () => {
+        const f = runStartupObservationEntry({}, {
+            keyFrames: [[17, 16, 120], [17, 16, 120]], times: [0, 10000], readyFrames: [false, false]
+        });
+        assert.equal(f.runtimeAccess.length, 0);
+        assert.ok(f.logs.some(event => event.event === 'adapter_activation_release_timeout'));
+        assert.ok(!f.logs.some(event => event.event === 'core_startup_observation_reference_started'));
+    });
+    test('startup observation polls the native owner to retirement without cancelling merely because no player exists', () => {
+        let polls = 0, cancels = 0;
+        const f = runStartupObservationEntry({ 100: 7, 102: 44, 104: 0 }, {
+            keyFrames: [[], [], [17, 16, 120], [17, 16, 120], [], [], [], []],
+            readyFrames: Array(8).fill(false),
+            functions: {
+                DE_CoreStartupPoll: () => ++polls >= 3 ? 1 : 0,
+                DE_CoreStartupCancel: () => { ++cancels; return 1; }
+            }
+        });
+        const done = f.logs.find(event => event.event === 'core_startup_observation_reference_finished');
+        assert.ok(done && done.passed && done.cleanup_passed && !done.stop_requested);
+        assert.equal(polls, 3);
+        assert.equal(cancels, 0);
+        assert.equal(f.waits.filter(value => value.milliseconds === 100).length, 2);
+        assert.ok(!f.calls.some(([name]) => name === 'IS_PLAYER_PLAYING'));
+    });
+    test('startup observation still requests End and waits for cleanup without a player', () => {
+        let polls = 0, cancels = 0;
+        const f = runStartupObservationEntry({}, {
+            keyFrames: [[], [], [17, 16, 120], [17, 16, 120], [], [17, 16, 35], [], []],
+            readyFrames: Array(8).fill(false),
+            functions: {
+                DE_CoreStartupPoll: () => ++polls >= 3 ? 1 : 0,
+                DE_CoreStartupCancel: () => { ++cancels; return 1; }
+            }
+        });
+        const done = f.logs.find(event => event.event === 'core_startup_observation_reference_finished');
+        assert.ok(done && !done.passed && done.cleanup_passed && done.stop_requested);
+        assert.equal(polls, 3);
+        assert.equal(cancels, 1);
+        assert.ok(!f.calls.some(([name]) => name === 'IS_PLAYER_PLAYING'));
+    });
     test('startup observation keeps dictionary absence and refused lookups separate from frame ownership success', () => {
         for (const changes of [{ 108: 0, 110: 0, 114: 0, 116: 0, 120: 9, 124: 1 },
             { 106: 0, 108: 0, 110: 0, 112: 0, 114: 0, 116: 0, 118: 88, 120: 0, 124: 0 }]) {
@@ -1535,6 +1605,47 @@ async function main() {
                 DE_CoreStartupPoll: () => 1, DE_CoreStartupCancel: () => 1,
                 DE_CoreStartupRead: field => final[field], ...(options.functions || {}) } });
     }
+    const playerGatedEntries = [
+        ['input reference', options => runEntry({ mode: 'smoke', inputReference: true, ...options })],
+        ['configured MTA input', options => runEntry({ mode: 'smoke', mtaCoreInputReference: true, ...options })],
+        ['application observer', options => runApplicationFrameEntry({}, options)],
+        ['clock Read', options => runClockEntry({}, options)],
+        ['clock Set', options => runClockSetEntry({}, options)]
+    ];
+    for (const [label, run] of playerGatedEntries) test(label + ' still refuses activation without a player', () => {
+        const f = run({ keyFrames: [[], [17, 16, 120], [], [17, 16, 35]], readyFrames: Array(4).fill(false) });
+        assert.equal(f.runtimeAccess.length, 0);
+        assert.ok(f.logs.some(event => event.event === 'adapter_activation_cancelled'));
+        assert.ok(!f.logs.some(event => event.event === 'adapter_activation_requested'));
+        assert.ok(f.calls.some(([name]) => name === 'IS_PLAYER_PLAYING'));
+    });
+    for (const [label, run] of playerGatedEntries.slice(1)) test(label + ' still rejects readiness loss while releasing activation', () => {
+        const f = run({ keyFrames: [[], [17, 16, 120], [], [17, 16, 35]], readyFrames: [false, true, false, false] });
+        assert.equal(f.runtimeAccess.length, 0);
+        assert.ok(f.logs.some(event => event.event === 'adapter_activation_requested'));
+        assert.ok(!f.logs.some(event => event.event === 'adapter_activation_released'));
+        assert.ok(f.logs.some(event => event.event === 'adapter_failed' && /Player readiness lost/.test(event.error)));
+    });
+    for (const [label, run, eventPrefix] of [
+        ['application observer', options => runApplicationFrameEntry({}, options), 'core_application_frame_reference'],
+        ['clock Read', options => runClockEntry({}, options), 'core_clock_reference'],
+        ['clock Set', options => runClockSetEntry({}, options), 'core_clock_set_reference']
+    ]) test(label + ' still cancels a running workload when player readiness is lost', () => {
+        let running = false, polls = 0, cancels = 0;
+        const f = run({
+            keyFrames: [[], [], [17, 16, 120], [17, 16, 120], [], [], []],
+            natives: { IS_PLAYER_PLAYING: () => !running },
+            observeLog: event => { if (event.event === eventPrefix + '_started') running = true; },
+            functions: {
+                DE_CoreStartupPoll: () => ++polls >= 2 ? 1 : 0,
+                DE_CoreStartupCancel: () => { ++cancels; return 1; }
+            }
+        });
+        const done = f.logs.find(event => event.event === eventPrefix + '_finished');
+        assert.ok(done && !done.passed && done.cleanup_passed && done.stop_requested);
+        assert.equal(polls, 2);
+        assert.equal(cancels, 1);
+    });
     const clockSetFinish = f => f.logs.find(event => event.event === 'core_clock_set_reference_finished');
     test('clock Set waits for F9 release and accepts one Set with subsequent Readback and provider retirement', () => {
         const f = runClockSetEntry(), done = clockSetFinish(f);

@@ -585,6 +585,8 @@ namespace
                 admit(pin.rva, pin.bytes, pin.size, pin.code ? PAGE_EXECUTE_READ : PAGE_READONLY);
             for (const auto& pin : NativeStartupWorldProfile::pins)
                 admit(pin.rva, pin.bytes, pin.size, pin.code ? PAGE_EXECUTE_READ : PAGE_READONLY);
+            for (const auto& pin : NativeStartupProvidersProfile::pins)
+                admit(pin.rva, pin.bytes, pin.size, pin.code ? PAGE_EXECUTE_READ : PAGE_READONLY);
             const auto getter = image + NativeStartupWorldProfile::getterRva;
             admit(NativeStartupWorldProfile::ownerGetWorldSlotRva, &getter, sizeof(getter), PAGE_READONLY);
             const std::uintptr_t absent = 0;
@@ -1957,6 +1959,10 @@ namespace
                       !originalUiService->ReadStartupUiClassMap(runtime.generation.load(), NativeUiClassMapAccess::Key::Loading, value) &&
                       value.classAddress == 0xa5a5 && value.keyPresent,
                   "even the engine owner cannot read the UI map during the original frame or an unqualified origin");
+            NativeStartupProvidersAccess::Value providers{0xa5, 0x5a, 0x33};
+            Check(!originalUiService->ReadStartupProviders(runtime.generation.load(), providers) && providers.controllerAddress == 0xa5 &&
+                      providers.viewportAddress == 0x5a && providers.managerAddress == 0x33,
+                  "the original frame and unqualified origins cannot borrow provider scope before the post-original admission");
             ++originalUiRefusals;
         }
         if (frameOriginalEntered)
@@ -1998,12 +2004,13 @@ namespace
                 // GTA process, UObject constructor, GC claim or native call.
                 namespace Owner = NativeStartupOwnerProfile;
                 namespace World = NativeStartupWorldProfile;
-                alignas(8) std::array<unsigned char, 0x40>        uiBase{}, gameBase{}, levelBase{}, uiClass{}, gameClass{}, levelClass{}, world{};
-                alignas(8) std::array<unsigned char, 0x2c8>       game{};
-                alignas(8) std::array<unsigned char, 0xd8>        level{};
-                std::array<std::uintptr_t, 3>                     uiChain{}, gameChain{}, levelChain{};
-                std::array<unsigned char, World::objectItemBytes> item{};
-                const auto                                        address = [](const auto& value) { return reinterpret_cast<std::uintptr_t>(value.data()); };
+                alignas(8) std::array<unsigned char, 0x40>            uiBase{}, gameBase{}, levelBase{}, uiClass{}, gameClass{}, levelClass{};
+                alignas(8) std::array<unsigned char, 0x1d0>           world{};
+                alignas(8) std::array<unsigned char, 0x2c8>           game{};
+                alignas(8) std::array<unsigned char, 0xd8>            level{};
+                std::array<std::uintptr_t, 3>                         uiChain{}, gameChain{}, levelChain{};
+                std::array<unsigned char, World::objectItemBytes * 2> item{};
+                const auto address = [](const auto& value) { return reinterpret_cast<std::uintptr_t>(value.data()); };
                 const auto put = [](auto& target, std::size_t offset, const auto& value) { std::memcpy(target.data() + offset, &value, sizeof(value)); };
                 const auto type = [&](auto& base, auto& candidate, auto& chain)
                 {
@@ -2036,6 +2043,91 @@ namespace
                 std::uint32_t facts = 0xa5, refused = 0x5a;
                 Check(context.service->ReadStartupPrerequisites(frame.generation, facts, refused) && facts == 63 && !refused,
                       "the actual native callback observes typed UI classes, enclosing owner and conservative world link without invoking providers");
+                {
+                    // The extra links belong to the same synthetic world and
+                    // registry as the existing owner fixture. A separate fake
+                    // reader could miss the actual native callback gate and
+                    // the world/owner bookends around the provider observation.
+                    namespace Providers = NativeStartupProvidersProfile;
+                    alignas(8) std::array<unsigned char, 0x40>  controller{}, controllerBase{}, controllerClass{}, viewportBase{}, viewportClass{};
+                    alignas(8) std::array<unsigned char, 0x788> engine{};
+                    alignas(8) std::array<unsigned char, 0x368> viewport{};
+                    alignas(8) std::array<unsigned char, 16>    manager{};
+                    std::array<std::uintptr_t, 3>               controllerChain{}, viewportChain{};
+                    std::array<unsigned char, 8>                firstController{};
+                    type(controllerBase, controllerClass, controllerChain);
+                    type(viewportBase, viewportClass, viewportChain);
+                    put(controller, Providers::objectClassOffset, address(controllerClass));
+                    put(viewport, Providers::objectClassOffset, address(viewportClass));
+                    put(viewport, Providers::viewportManagerOffset, address(manager));
+                    put(engine, Providers::engineViewportOffset, address(viewport));
+                    put(world, Providers::worldControllerDataOffset, address(firstController));
+                    put(world, Providers::worldControllerCountOffset, std::int32_t{1});
+                    put(firstController, Providers::weakIndexOffset, std::int32_t{1});
+                    put(firstController, Providers::weakSerialOffset, std::uint32_t{17});
+                    put(item, World::objectItemBytes, address(controller));
+                    put(item, World::objectItemBytes + Providers::itemFlagsOffset, std::uint32_t{0});
+                    put(item, World::objectItemBytes + Providers::itemSerialOffset, std::uint32_t{17});
+                    context.fixture->Put(World::objectCountRva, std::int32_t{2});
+                    context.fixture->Put(Providers::playerControllerClassCacheRva, address(controllerBase));
+                    context.fixture->Put(Providers::viewportClassCacheRva, address(viewportBase));
+                    context.fixture->Put(Providers::engineRva, address(engine));
+                    NativeStartupProvidersAccess::Value provider;
+                    const auto                          beforeProviderWrites = ClockTestFaults::clockDataWrites.load();
+                    Check(context.service->ReadStartupProviders(frame.generation, provider) && provider.controllerAddress == address(controller) &&
+                              provider.viewportAddress == address(viewport) && provider.managerAddress == address(manager),
+                          "the real frame owner observes a typed first controller and typed viewport with an already cached manager");
+                    provider = {0xa5, 0x5a, 0x33};
+                    const auto preserved = [&]() noexcept
+                    { return provider.controllerAddress == 0xa5 && provider.viewportAddress == 0x5a && provider.managerAddress == 0x33; };
+                    Check(!context.service->ReadStartupProviders(frame.generation + 1, provider) && preserved(),
+                          "another generation cannot borrow the provider graph or alter any caller output");
+                    bool        foreignProvider = true;
+                    std::thread foreign([&] { foreignProvider = context.service->ReadStartupProviders(frame.generation, provider); });
+                    foreign.join();
+                    Check(!foreignProvider && preserved(), "a foreign thread cannot reuse a live callback's provider scope");
+                    ++callbackDepth;
+                    const bool nestedProvider = context.service->ReadStartupProviders(frame.generation, provider);
+                    --callbackDepth;
+                    Check(!nestedProvider && preserved(), "nested scope refuses providers without replacing the actual outer owner's output");
+                    const auto priorStopping = runtime.stopping.exchange(true);
+                    const bool stoppingProvider = context.service->ReadStartupProviders(frame.generation, provider);
+                    runtime.stopping.store(priorStopping);
+                    Check(!stoppingProvider && preserved(), "stopping native ownership cannot publish previously observed provider pointers");
+                    put(viewport, Providers::viewportManagerOffset, std::uintptr_t{0});
+                    Check(!context.service->ReadStartupProviders(frame.generation, provider) && preserved(),
+                          "a missing manager refuses the provider observation instead of invoking native lazy initialization");
+                    put(viewport, Providers::viewportManagerOffset, address(manager));
+                    put(item, World::objectItemBytes + Providers::itemSerialOffset, std::uint32_t{18});
+                    Check(!context.service->ReadStartupProviders(frame.generation, provider) && preserved(),
+                          "a recycled weak controller serial refuses all output even when its registry index and pointer remain readable");
+                    put(item, World::objectItemBytes + Providers::itemSerialOffset, std::uint32_t{17});
+                    const auto& providerPin = Providers::pins[0];
+                    const auto  changedProviderPin = static_cast<unsigned char>(providerPin.bytes[0] ^ 1);
+                    context.fixture->Patch(providerPin.rva, &changedProviderPin, sizeof(changedProviderPin));
+                    Check(!context.service->ReadStartupProviders(frame.generation, provider) && preserved(),
+                          "a changed provider dataflow pin refuses the scoped read without publishing a partial provider record");
+                    context.fixture->Patch(providerPin.rva, providerPin.bytes, providerPin.size);
+                    ClockTestFaults::uiReadAddress = address(controller) + Providers::objectClassOffset;
+                    ClockTestFaults::uiRootChangeAddress = address(level) + World::levelWorldOffset;
+                    Check(!context.service->ReadStartupProviders(frame.generation, provider) && preserved(),
+                          "a world link moving during the provider probe cannot survive the real owner's final world bookend");
+                    ClockTestFaults::uiReadAddress = ClockTestFaults::uiRootChangeAddress = 0;
+                    put(level, World::levelWorldOffset, address(world));
+                    Check(context.service->ReadStartupProviders(frame.generation, provider) && provider.controllerAddress == address(controller) &&
+                              provider.viewportAddress == address(viewport) && provider.managerAddress == address(manager) &&
+                              ClockTestFaults::clockDataWrites.load() == beforeProviderWrites,
+                          "restored synthetic links recover read-only provider observations without any clock or provider initialization write");
+                    // Do not leave image caches, a registry item or the world
+                    // holding addresses into this nested fixture's stack.
+                    context.fixture->Put(Providers::playerControllerClassCacheRva, std::uintptr_t{0});
+                    context.fixture->Put(Providers::viewportClassCacheRva, std::uintptr_t{0});
+                    context.fixture->Put(Providers::engineRva, std::uintptr_t{0});
+                    context.fixture->Put(World::objectCountRva, std::int32_t{1});
+                    put(world, Providers::worldControllerDataOffset, std::uintptr_t{0});
+                    put(world, Providers::worldControllerCountOffset, std::int32_t{0});
+                    std::memset(item.data() + World::objectItemBytes, 0, World::objectItemBytes);
+                }
                 uiChain[1] = address(uiBase);
                 Check(context.service->ReadStartupPrerequisites(frame.generation, facts, refused) && facts == 53 && !refused,
                       "stable unrelated UI classes remain observed negatives rather than read refusals");
@@ -2075,6 +2167,10 @@ namespace
                 context.fixture->Put(Ui::uiTransitionClassCacheRva, std::uintptr_t{0});
                 context.fixture->Put(Owner::gameModeClassCacheRva, std::uintptr_t{0});
                 context.fixture->Put(World::levelClassCacheRva, std::uintptr_t{0});
+                context.fixture->Put(World::objectChunksRva, std::uintptr_t{0});
+                context.fixture->Put(World::objectCountRva, std::int32_t{0});
+                put(context.fixture->uiEntries, Ui::valueOffset, std::uintptr_t{0});
+                put(context.fixture->uiEntries, Ui::entryBytes + Ui::valueOffset, std::uintptr_t{0});
                 // Do not leave the fixture root pointing at expired local records.
                 const std::uintptr_t absent = 0;
                 std::memcpy(reinterpret_cast<unsigned char*>(root) + Owner::objectOuterOffset, &absent, sizeof(absent));
@@ -2287,6 +2383,11 @@ namespace
             Check(
                 !service.ReadStartupPrerequisites(runtime.generation.load(), startupFacts, startupRefusals) && startupFacts == 0xa5 && startupRefusals == 0x5a,
                 "producer-side startup reads preserve both outputs outside the natural frame callback");
+            NativeStartupProvidersAccess::Value providersOutside{0xa5, 0x5a, 0x33};
+            if (mode == 10)
+                Check(!service.ReadStartupProviders(runtime.generation.load(), providersOutside) && providersOutside.controllerAddress == 0xa5 &&
+                          providersOutside.viewportAddress == 0x5a && providersOutside.managerAddress == 0x33,
+                      "producer-side provider reads preserve all outputs before the actual native frame");
             if (mode == 1)
             {
                 const auto before = originalUiRefusals;
@@ -2338,6 +2439,10 @@ namespace
             Check(context.calls == 1 && !frameCallbackGeneration && !frameCallbackReceiver &&
                       !service.ReadStartupUiClassMap(runtime.generation.load(), Key::Loading, outside) && outside.classAddress == 0xa5a5 && outside.keyPresent,
                   "normal/refused/exceptional handler completion cannot leak UI scope back to its producer");
+            if (mode == 10)
+                Check(!service.ReadStartupProviders(runtime.generation.load(), providersOutside) && providersOutside.controllerAddress == 0xa5 &&
+                          providersOutside.viewportAddress == 0x5a && providersOutside.managerAddress == 0x33,
+                      "a completed callback cannot leak provider scope or expired local fixture addresses back to its producer");
             FinishApplicationOwned(service);
         }
         std::puts("Production qualified startup UI dictionary fixture completed");

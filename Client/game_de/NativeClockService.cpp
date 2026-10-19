@@ -373,7 +373,7 @@ namespace mta::game_de
             return NativeClockMemory::Read(runtime.image, output);
         }
 
-        bool CheckStartupBinding() noexcept
+        bool CheckStartupBinding(bool providers = false) noexcept
         {
             if (!CheckBinding(false, false, true))
                 return false;
@@ -397,7 +397,9 @@ namespace mta::game_de
                    pinsMatch(NativeStartupWorldProfile::pins, std::integral_constant<std::size_t, NativeStartupWorldProfile::maximumPinBytes>{}) &&
                    UiMapPinPages(runtime.image + NativeStartupWorldProfile::ownerGetWorldSlotRva, sizeof(getter), false) &&
                    Image::ReadImage(runtime.image, runtime.image + NativeStartupWorldProfile::ownerGetWorldSlotRva, &getter, sizeof(getter)) &&
-                   getter == runtime.image + NativeStartupWorldProfile::getterRva;
+                   getter == runtime.image + NativeStartupWorldProfile::getterRva &&
+                   (!providers ||
+                    pinsMatch(NativeStartupProvidersProfile::pins, std::integral_constant<std::size_t, NativeStartupProvidersProfile::maximumPinBytes>{}));
         }
 
         bool CheckTimingBinding() noexcept
@@ -1671,6 +1673,30 @@ namespace mta::game_de
         // snapshot or permission to enter StartGame, dispatch providers or GC.
         facts = nextFacts;
         refusals = nextRefusals;
+        return true;
+    }
+
+    bool NativeClockService::ReadStartupProviders(std::uint64_t requestedGeneration, NativeStartupProvidersAccess::Value& value) const noexcept
+    {
+        const auto qualified = [&]() noexcept { return requestedGeneration == generation && QualifiedApplicationFrame(generation); };
+        if (!qualified() || !FrameReceiver(frameCallbackReceiver) || !CheckStartupBinding(true))
+            return false;
+        const auto                          receiver = reinterpret_cast<std::uintptr_t>(frameCallbackReceiver);
+        NativeStartupOwnerAccess::Value     owner{}, ownerAfter{};
+        NativeStartupWorldAccess::Value     world{}, worldAfter{};
+        NativeStartupProvidersAccess::Value next{};
+        if (!NativeStartupOwnerAccess(runtime.image, &StartupGraphRead).Read(receiver, owner) ||
+            !NativeStartupWorldAccess(runtime.image, &StartupGraphRead).Read(owner.gameModeAddress, world) ||
+            !NativeStartupProvidersAccess(runtime.image, &StartupGraphRead).Read(world.worldAddress, next) ||
+            !NativeStartupOwnerAccess(runtime.image, &StartupGraphRead).Read(receiver, ownerAfter) || ownerAfter.gameModeAddress != owner.gameModeAddress ||
+            !NativeStartupWorldAccess(runtime.image, &StartupGraphRead).Read(ownerAfter.gameModeAddress, worldAfter) ||
+            worldAfter.outerAddress != world.outerAddress || worldAfter.levelAddress != world.levelAddress || worldAfter.worldAddress != world.worldAddress ||
+            !qualified() || !FrameReceiver(frameCallbackReceiver) || !CheckStartupBinding(true))
+            return false;
+        // Keep the provider graph tied to the world from this receiver, rather
+        // than allowing a producer or another frame to reuse a previous link.
+        // These observations are deliberately not exposed as StartGame success.
+        value = next;
         return true;
     }
 

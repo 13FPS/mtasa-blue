@@ -88,6 +88,22 @@ under `Build/definitive-recovery/current-actual-startup-observation-checkpoint.j
 These gameplay observations do not establish UObject lifetime, controller/UI
 provider readiness, frontend-state-7 readiness or permission to call `StartGame`.
 
+Controller/viewport provider reads now reuse that same native callback owner.
+The world's first controller entry is an eight-byte weak record: its registry
+index, serial and item flags must resolve before the declared controller class
+can be checked. The viewport is checked against its declared class, and its
+cached UI provider stays opaque. A missing cache never runs native allocation.
+Two matching paths and guarded read bookends reject moving dependencies without
+claiming GC lifetime. The internal `ReadStartupProviders` method also correlates
+the enclosing owner/world before and after those reads. This path has no new
+SDK export or separate diagnostic pipeline and is not yet live validated.
+
+Only the exclusive read-only startup observer may now arm and poll before CJ
+exists. Its previous player gate prevented frontend-state observation. Other
+trial modes retain their player checks. This permits diagnosis wherever the
+CLEO host is available; actual pre-player host/frame availability still needs
+validation, and no native startup operation is enabled.
+
 The separate optional local-input lease reuses MTA's retained `CKeyBinds` and
 controller synthesis for six on-foot actions, with a 500 ms owner/generation
 and focus limit. The combined menu/input milestone passed in GTA on October 19

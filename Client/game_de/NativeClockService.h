@@ -8,6 +8,7 @@
 #include "../sdk/game/CGameClockService.h"
 #include "NativeApplicationFrame.h"
 #include "NativeUiClassMapAccess.h"
+#include "NativeStartupProvidersAccess.h"
 
 namespace mta::game_de
 {
@@ -48,6 +49,10 @@ namespace mta::game_de
         // masks describe observations/refusals, never full startup admission.
         // A refused overall scope preserves both caller outputs.
         bool ReadStartupPrerequisites(std::uint64_t generation, std::uint32_t& facts, std::uint32_t& refusals) const noexcept;
+        // Provider links belong to this same natural-frame owner. Returning
+        // coherent pointers grants neither UObject lifetime nor call authority;
+        // a missing provider never invokes its allocating native initializer.
+        bool ReadStartupProviders(std::uint64_t generation, NativeStartupProvidersAccess::Value& value) const noexcept;
         bool Submit(const ClockCommandV1& command) noexcept;
         bool Renew(std::uint64_t generation) noexcept;
         bool Read(ClockServiceStateV1& state) noexcept;

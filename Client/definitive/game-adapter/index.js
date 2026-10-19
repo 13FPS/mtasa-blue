@@ -179,6 +179,10 @@ function runAdapter() {
         throw new Error('Native input reference requires SA Unreal API definitions 0.500 or newer');
 
     const stopKey = 'Ctrl+Shift+End';
+    // This separately validated read-only mode must also observe the native
+    // frontend before CJ exists. The backend still qualifies its exact image
+    // and natural callback; every other trial retains its player-readiness gate.
+    const playerRequiredForActivation = !MTA_CORE_STARTUP_OBSERVATION_REFERENCE;
     // Home opens the Rockstar console on the tested build and interrupts this
     // read-only observation, so the input reference needs its own shortcut.
     const activateKey = (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND || MTA_CORE_FRONTEND_RUNTIME || MTA_CORE_CLOCK_REFERENCE || MTA_CORE_CLOCK_SET_REFERENCE || MTA_CORE_APPLICATION_FRAME_REFERENCE || MTA_CORE_STARTUP_OBSERVATION_REFERENCE) ? 'Ctrl+Shift+F9' : 'Ctrl+Shift+Home';
@@ -204,7 +208,7 @@ function runAdapter() {
                         bridge_loaded: false, game_adapter_active: false, network_active: false });
                     return;
                 }
-                if (chordHeld([17, 16, (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND || MTA_CORE_FRONTEND_RUNTIME || MTA_CORE_CLOCK_REFERENCE || MTA_CORE_CLOCK_SET_REFERENCE || MTA_CORE_APPLICATION_FRAME_REFERENCE || MTA_CORE_STARTUP_OBSERVATION_REFERENCE) ? 120 : 36]) && native('IS_PLAYER_PLAYING', 0)) {
+                if (chordHeld([17, 16, (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND || MTA_CORE_FRONTEND_RUNTIME || MTA_CORE_CLOCK_REFERENCE || MTA_CORE_CLOCK_SET_REFERENCE || MTA_CORE_APPLICATION_FRAME_REFERENCE || MTA_CORE_STARTUP_OBSERVATION_REFERENCE) ? 120 : 36]) && (!playerRequiredForActivation || native('IS_PLAYER_PLAYING', 0))) {
                     emit({ event: 'adapter_activation_requested', mode: MODE, activate_key: activateKey });
                     break;
                 }
@@ -237,7 +241,7 @@ function runAdapter() {
                     bridge_loaded: false, game_adapter_active: false, network_active: false });
                 throw new Error('Native source activation release timed out');
             }
-            if (!native('IS_PLAYER_PLAYING', 0))
+            if (playerRequiredForActivation && !native('IS_PLAYER_PLAYING', 0))
                 throw new Error('Player readiness lost while waiting for native source activation release');
             const activationHeld = [17, 16, 120].map(key => native('IS_KEY_PRESSED', key));
             if (activationHeld.every(held => !held)) {
@@ -469,7 +473,9 @@ function runAdapter() {
                 const at = Date.now();
                 if (!Number.isSafeInteger(at) || at < lastAt) throw new Error('Invalid Core startup observation reference time');
                 lastAt = at;
-                if (!terminal && !stopRequested && (chordHeld([17, 16, 35]) || !native('IS_PLAYER_PLAYING', 0))) {
+                // No player is expected in a frontend observation. Native
+                // refusal/expiry still comes from the same worker owner.
+                if (!terminal && !stopRequested && chordHeld([17, 16, 35])) {
                     if (cancel() !== 1) throw new Error('MTA Core startup observation cancellation was rejected');
                     stopRequested = true;
                     emit({ event: 'core_startup_observation_reference_stop_requested', at_ms: at });

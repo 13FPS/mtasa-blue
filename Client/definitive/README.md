@@ -27,6 +27,8 @@ x64 downloads as server packages. No public x64 client network build was found
 in those channels. Full DE multiplayer needs an AMD64 client `netc.dll` matching
 this SDK; the server library cannot supply its client interface. Engine work
 can continue independently. The existing gameplay/full-startup gates remain.
+MTA's [official fork guidance](https://wiki.multitheftauto.com/wiki/Forks)
+confirms that `netc.dll`, `net.dll` and the anti-cheat components are closed-source.
 
 Offline checks passed for both x86/x64 loader owners and compatibility gates,
 2,937 native movement/pad checks, the normal Core build and both classic
@@ -58,6 +60,20 @@ This batch passed 807 native clock/time checks, 1,780 real adapter checks,
 across seven real Core/GUI host cases. The normal Core build passed its 69
 guards and both classic compile profiles; the rebuilt Bridge passed 2,463
 checks. No game installation was changed.
+
+**The next timing batch implements six actual SDK `CGame` getters.**
+`CGameTimingDE` supplies `GetSystemTime`, `GetSystemFrameCounter`, `GetTimeStep`,
+`GetOldTimeStep`, `GetTimeScale` and `GetMinuteDuration` through checked native
+timing reads. The class remains abstract and cannot be instantiated or exposed
+as a game interface. The adapter's readiness and advertised capabilities remain
+unchanged; full `CGame`, startup and multiplayer are still incomplete.
+
+Offline validation passed 849 clock/timing fixture checks, the normal
+Release/x64 backend build and 1,780 rebuilt-DLL factory-host checks. The shared
+enum relocation preserved its types and values under x86/x64 `/W4 /WX` checks.
+The passive 12-second capture tool compiled in preflight, but no game was opened;
+live native timing validation remains pending. This batch does not change the
+completed input/menu result below or the **EXPERIMENTAL** status.
 
 **The current source connects the retained MTA bindings to local on-foot input.**
 The existing runtime selection now starts a separate renewable input service

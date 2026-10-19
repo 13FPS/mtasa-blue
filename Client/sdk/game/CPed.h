@@ -15,6 +15,7 @@
 #include "CPedSound.h"
 #include "enums/PedState.h"
 #include "enums/PedMoveState.h"
+#include "enums/PedPieceTypes.h"
 
 // To avoid VS intellisense highlight errors
 #include <memory>
@@ -29,19 +30,6 @@ class CVehicle;
 class CWeapon;
 class CWeaponStat;
 class CProjectileSAInterface;
-
-enum ePedPieceTypes
-{
-    PED_PIECE_UNKNOWN = 0,
-
-    PED_PIECE_TORSO = 3,
-    PED_PIECE_ASS,
-    PED_PIECE_LEFT_ARM,
-    PED_PIECE_RIGHT_ARM,
-    PED_PIECE_LEFT_LEG,
-    PED_PIECE_RIGHT_LEG,
-    PED_PIECE_HEAD
-};
 
 enum eBone
 {

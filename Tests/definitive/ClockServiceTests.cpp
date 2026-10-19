@@ -4,6 +4,8 @@
  * PURPOSE: Exercise the actual MTA clock interface and checked service boundary
  *****************************************************************************/
 #include "../../Client/game_de/CClockDE.h"
+#include "../../Client/game_de/CGameTimingDE.h"
+#include "../../Client/game_de/NativeGameTimingProfile.h"
 #include "../../Client/game_de/NativeServiceAdmission.h"
 #include <array>
 #include <cstdio>
@@ -12,6 +14,8 @@
 #include <filesystem>
 #include <fstream>
 #include <intrin.h>
+#include <limits>
+#include <stdexcept>
 #include <thread>
 #include <tlhelp32.h>
 #include <type_traits>
@@ -120,6 +124,7 @@ namespace ClockReaderTestHost
 {
     std::uintptr_t        image = 0;
     std::atomic<unsigned> samples{0}, mismatchSample{0};
+    std::atomic<unsigned> timingSamples{0}, mismatchTimingSample{0};
 
     HMODULE WINAPI Module(LPCWSTR name)
     {
@@ -135,6 +140,22 @@ namespace mta::game_de::NativeImageAccess
         // the ordinary wrong-host test below still executes the shipping hash
         // gate. This does not admit this process as a supported GTA build.
         return ClockReaderTestHost::image != 0 || CheckExecutableBuild();
+    }
+
+    bool TimingReaderFixtureReadImage(std::uintptr_t image, std::uintptr_t address, void* destination, std::size_t bytes, bool writable = false,
+                                      bool executable = false) noexcept
+    {
+        if (!ReadImage(image, address, destination, bytes, writable, executable))
+            return false;
+        if (address == image + NativeGameTimingProfile::timeScaleRva && bytes == sizeof(float) &&
+            ClockReaderTestHost::timingSamples.fetch_add(1) + 1 == ClockReaderTestHost::mismatchTimingSample.load())
+        {
+            float value = 0;
+            std::memcpy(&value, destination, sizeof(value));
+            value += 1;
+            std::memcpy(destination, &value, sizeof(value));
+        }
+        return true;
     }
 }
 
@@ -164,6 +185,15 @@ namespace mta::game_de::GameTimeReaderFixtureMemory
 #undef NativeClockMemory
 #undef GetModuleHandleW
 #undef CheckExecutableBuild
+
+// Select only the owned image and one deterministic sample mismatch for the
+// timing prerequisite. All pin/page checks and real CGame method bodies remain
+// production code; no complete CGame implementation is fabricated for tests.
+#define GetModuleHandleW ClockReaderTestHost::Module
+#define ReadImage        TimingReaderFixtureReadImage
+#include "../../Client/game_de/NativeGameTimingReader.cpp"
+#undef ReadImage
+#undef GetModuleHandleW
 
 using namespace mta::game_de;
 
@@ -261,6 +291,12 @@ namespace
             code(NativeClockProfile::clockCallRva, NativeClockProfile::clockCall);
             code(NativeClockProfile::frameCallRva, NativeClockProfile::frameCall);
             code(NativeClockProfile::getterCaseRva, NativeClockProfile::getterCase);
+            code(NativeGameTimingProfile::initializeRva, NativeGameTimingProfile::initialize);
+            code(NativeGameTimingProfile::elapsedMultiplierRva, NativeGameTimingProfile::elapsedMultiplier);
+            code(NativeGameTimingProfile::stepUpdateRva, NativeGameTimingProfile::stepUpdate);
+            code(NativeGameTimingProfile::frameGetterRva, NativeGameTimingProfile::frameGetter);
+            code(NativeGameTimingProfile::stepConsumerRva, NativeGameTimingProfile::stepConsumer);
+            code(NativeGameTimingProfile::scriptScaleRva, NativeGameTimingProfile::scriptScale);
             // Preserve the independently pinned original prologue and supply
             // only an owned return body. Its native clock update is not executed.
             const std::array<unsigned char, 8> epilogue{0x48, 0x81, 0xc4, 0xd8, 0, 0, 0, 0xc3};
@@ -1245,6 +1281,106 @@ namespace
         std::puts("Production read-only game-time reader fixture completed");
     }
 
+    class TimingBaseProbe : public CGameTimingDE
+    {
+    public:
+        using CGameTimingDE::RequireTiming;
+    };
+    static_assert(std::is_abstract_v<TimingBaseProbe> && std::is_base_of_v<CGame, TimingBaseProbe>);
+
+    void NativeGameTimingPrerequisite(ClockImageFixture& fixture)
+    {
+        NativeGameTimingReader reader;
+        NativeGameTimingValues values;
+        std::memset(&values, 0x5a, sizeof(values));
+        const auto untouched = values;
+        const auto unchanged = [&] { return std::memcmp(&values, &untouched, sizeof(values)) == 0; };
+        const auto refusesGetter = [&]
+        {
+            try
+            {
+                TimingBaseProbe::RequireTiming(reader);
+                return false;
+            }
+            catch (const std::runtime_error& error)
+            {
+                return std::strstr(error.what(), "DE CGame timing unavailable") != nullptr;
+            }
+        };
+        Check(reader.Read(values) == Status::NotInitialized && unchanged() && !reader.IsBound() && refusesGetter(),
+              "the real CGame getter read boundary throws for unavailable timing instead of returning synthetic zero values");
+        Check(reader.Bind() == Status::Unsupported && !reader.IsBound(), "native CGame timing preserves the shipping wrong-executable refusal");
+        fixture.Seed();
+        fixture.Put(NativeGameTimingProfile::frameCounterRva, std::uint32_t{0xfffffffe});
+        fixture.Put(NativeGameTimingProfile::timeStepRva, 0.75f);
+        fixture.Put(NativeGameTimingProfile::oldTimeStepRva, 0.625f);
+        fixture.Put(NativeGameTimingProfile::timeScaleRva, 1.25f);
+        ClockReaderTestHost::image = fixture.image;
+        Check(reader.Bind() == Status::Ok && reader.IsBound(), "native timing binds genuine timer update/getter pins over the same owned native clock image");
+        const auto writes = ClockTestFaults::clockDataWrites.load(), patches = ClockTestFaults::clockCodeExchanges.load();
+        Check(reader.Read(values) == Status::Ok && values.clock.producerThread == GetCurrentThreadId() && values.clock.nativeTimer == 10000 &&
+                  values.clock.millisecondsPerGameMinute == 1000 && values.frameCounter == 0xfffffffe && values.timeStep == 0.75f &&
+                  values.oldTimeStep == 0.625f && values.timeScale == 1.25f,
+              "matching complete samples preserve native counter bits and all independently corroborated timing values");
+        fixture.Put(NativeGameTimingProfile::frameCounterRva, std::uint32_t{2});
+        fixture.Put(NativeGameTimingProfile::timeStepRva, 0.5f);
+        const auto fresh = TimingBaseProbe::RequireTiming(reader);
+        Check(fresh.frameCounter == 2 && fresh.timeStep == 0.5f,
+              "the actual CGame timing overrides' shared read path requests current native values instead of retaining a successful snapshot");
+        std::thread foreign(
+            [&]
+            {
+                NativeGameTimingValues output = untouched;
+                Check(reader.Bind() == Status::WrongThread && reader.Read(output) == Status::WrongThread &&
+                          std::memcmp(&output, &untouched, sizeof(output)) == 0 && refusesGetter(),
+                      "foreign-thread native timing calls preserve output and the CGame getter boundary refuses access");
+            });
+        foreign.join();
+        values = untouched;
+        ClockReaderTestHost::timingSamples.store(0);
+        ClockReaderTestHost::mismatchTimingSample.store(2);
+        Check(reader.Read(values) == Status::Unsupported && unchanged() && ClockReaderTestHost::timingSamples.load() == 2,
+              "a changed timing scalar between complete samples refuses the entire 64-byte native timing result");
+        ClockReaderTestHost::mismatchTimingSample.store(0);
+        for (const auto field : {NativeGameTimingProfile::timeStepRva, NativeGameTimingProfile::oldTimeStepRva, NativeGameTimingProfile::timeScaleRva})
+        {
+            fixture.Put(field, std::numeric_limits<float>::quiet_NaN());
+            values = untouched;
+            Check(reader.Read(values) == Status::Unsupported && unchanged() && refusesGetter(),
+                  "each nonfinite native timing scalar refuses publication and cannot be hidden by the SDK getter boundary");
+            fixture.Put(field, 1.0f);
+        }
+        fixture.Put(NativeGameTimingProfile::timeStepRva, 99.0f);
+        fixture.Put(NativeGameTimingProfile::oldTimeStepRva, -1.0f);
+        fixture.Put(NativeGameTimingProfile::timeScaleRva, -0.5f);
+        Check(reader.Read(values) == Status::Ok && values.timeStep == 99.0f && values.oldTimeStep == -1.0f && values.timeScale == -0.5f,
+              "finite native values are observed without inventing script-independent clamp or time-scale policies");
+        auto changed = NativeGameTimingProfile::frameGetter;
+        changed[0] ^= 1;
+        fixture.Patch(NativeGameTimingProfile::frameGetterRva, changed.data(), changed.size());
+        values = untouched;
+        Check(reader.Read(values) == Status::Unsupported && unchanged() && refusesGetter(),
+              "changed corroborating getter instructions revoke fresh timing reads after an earlier success");
+        fixture.Patch(NativeGameTimingProfile::frameGetterRva, NativeGameTimingProfile::frameGetter.data(), NativeGameTimingProfile::frameGetter.size());
+        DWORD previous = 0, ignored = 0;
+        Check(::VirtualProtect(reinterpret_cast<void*>(fixture.image + NativeGameTimingProfile::oldTimeStepRva), sizeof(float), PAGE_NOACCESS, &previous) !=
+                  FALSE,
+              "deny native timing data only in the independently owned fixture image");
+        values = untouched;
+        Check(reader.Read(values) == Status::Unsupported && unchanged() && refusesGetter(),
+              "a native timing page loss preserves output and never fabricates readable CGame state");
+        Check(::VirtualProtect(reinterpret_cast<void*>(fixture.image + NativeGameTimingProfile::oldTimeStepRva), sizeof(float), previous, &ignored) != FALSE,
+              "restore the fixture timing page after verified refusal");
+        Check(reader.Read(values) == Status::Ok && ClockTestFaults::clockDataWrites.load() == writes && ClockTestFaults::clockCodeExchanges.load() == patches,
+              "native CGame timing reads and failure recovery neither write time nor install or renew engine hooks");
+        reader.Reset();
+        values = untouched;
+        Check(!reader.IsBound() && reader.Read(values) == Status::NotInitialized && unchanged() && refusesGetter(),
+              "timing retirement clears the reader rather than keeping earlier values available to CGame getters");
+        ClockReaderTestHost::image = 0;
+        std::puts("Production CGame native timing prerequisite fixture completed");
+    }
+
     void NativePatchTransactions(ClockImageFixture& fixture)
     {
         if (!NativeClockProfile::clockBoundaryReviewed)
@@ -1333,6 +1469,7 @@ int main(int argc, char** argv)
     ClockImageFixture fixture;
     fixture.Create(argv[1]);
     NativeReadOnlyGameTimeReader(fixture);
+    NativeGameTimingPrerequisite(fixture);
     NativeReadSetAndRestoration(fixture);
     NativeCoherentCommandPublication(fixture);
     NativeReadOnlyRetirement(fixture);

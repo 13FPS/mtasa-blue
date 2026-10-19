@@ -17,6 +17,8 @@
 #include "Common.h"
 #include "CWeaponInfo.h"
 #include "enums/SystemState.h"
+#include "enums/EntityType.h"
+#include "enums/PedPieceTypes.h"
 
 class C3DMarkers;
 class CAEAudioHardware;
@@ -71,8 +73,6 @@ class CIplStore;
 class CBuildingRemoval;
 class CRenderer;
 class CVehicleAudioSettingsManager;
-enum eEntityType;
-enum ePedPieceTypes;
 
 typedef bool(PreWeaponFireHandler)(class CPlayerPed* pPlayer, bool bStopIfUsingBulletSync);
 typedef void(PostWeaponFireHandler)();

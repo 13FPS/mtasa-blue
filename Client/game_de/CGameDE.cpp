@@ -11,8 +11,8 @@
 namespace mta::game_de
 {
     CGameDE::CGameDE(const NativeGameTimingReader& reader, CClockDE& nativeClock, NativeGameTimingAccess& timingWriter,
-                     const NativeStreamingFileIdsReader& streamingReader) noexcept
-        : CGameTimingDE(reader, timingWriter), clock(nativeClock), streaming(streamingReader)
+                     const NativeStreamingFileIdsReader& streamingReader, const NativeGameStateReader& stateReader) noexcept
+        : CGameTimingDE(reader, timingWriter), clock(nativeClock), streaming(streamingReader), gameState(stateReader)
     {
     }
 
@@ -24,6 +24,18 @@ namespace mta::game_de
     CKeyGen* CGameDE::GetKeyGen() noexcept
     {
         return &keyGen;
+    }
+
+    SystemState::Enum CGameDE::GetSystemState()
+    {
+        SystemState::Enum state;
+        const auto        result = gameState.Read(state);
+        // DE startup indices are not a portable enum contract. Unknown early
+        // states must refuse rather than admit MTA's gameplay/loading paths
+        // using an unproved cast or an old snapshot from another native state.
+        if (result != Status::Ok)
+            throw std::runtime_error("DE CGame system state unavailable (status " + std::to_string(static_cast<std::uint32_t>(result)) + ")");
+        return state;
     }
 
     NativeStreamingFileIds CGameDE::RequireStreamingLayout() const

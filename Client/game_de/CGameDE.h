@@ -9,6 +9,7 @@
 #include "CClockDE.h"
 #include "CKeyGenDE.h"
 #include "NativeStreamingFileIdsReader.h"
+#include "NativeGameStateReader.h"
 
 namespace mta::game_de
 {
@@ -19,8 +20,9 @@ namespace mta::game_de
     class CGameDE : public CGameTimingDE
     {
     public:
-        CClock*  GetClock() noexcept override;
-        CKeyGen* GetKeyGen() noexcept override;
+        CClock*           GetClock() noexcept override;
+        CKeyGen*          GetKeyGen() noexcept override;
+        SystemState::Enum GetSystemState() override;
 
         uint32_t GetBaseIDforDFF() override;
         uint32_t GetBaseIDforTXD() override;
@@ -39,7 +41,7 @@ namespace mta::game_de
         // Borrowed services must outlive this object. Their qualification
         // and engine-thread rules stay with their existing native owners.
         CGameDE(const NativeGameTimingReader& reader, CClockDE& nativeClock, NativeGameTimingAccess& timingWriter,
-                const NativeStreamingFileIdsReader& streamingReader) noexcept;
+                const NativeStreamingFileIdsReader& streamingReader, const NativeGameStateReader& stateReader) noexcept;
 
     private:
         NativeStreamingFileIds RequireStreamingLayout() const;
@@ -47,6 +49,7 @@ namespace mta::game_de
         CClockDE&                           clock;
         CKeyGenDE                           keyGen;
         const NativeStreamingFileIdsReader& streaming;
+        const NativeGameStateReader&        gameState;
     };
     static_assert(std::is_abstract_v<CGameDE> && std::is_base_of_v<CGame, CGameDE>);
 }

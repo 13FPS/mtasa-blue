@@ -36,6 +36,13 @@ The reader pins the classifier, filename selector, initializer and actual stride
 before returning those operands. DE's 16-byte rows remain private; these getters
 do not expose or cast them as classic 20-byte `CStreamingInfo` structures.
 
+`CGameDE::GetSystemState` reads the native dispatcher and maps the four proved
+states to the existing SDK enum: frontend initialization, frontend, gameplay
+initialization and gameplay. Early native states 0–5 remain unproved and refuse
+explicitly, as do changed bindings or an unknown state. The reader grants no
+engine write authority; `StartGame`, `SetSystemState` and the distinct menu
+predicate remain unimplemented. This does not establish cold-start readiness.
+
 The separate optional local-input lease reuses MTA's retained `CKeyBinds` and
 controller synthesis for six on-foot actions, with a 500 ms owner/generation
 and focus limit. The combined menu/input milestone passed in GTA on October 19

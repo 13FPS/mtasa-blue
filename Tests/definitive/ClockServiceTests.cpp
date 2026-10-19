@@ -261,6 +261,10 @@ namespace
         void (*invoke)() = nullptr;
         void (*invokeTimer)() = nullptr;
         void (*invokeAlternateTimer)() = nullptr;
+        NativeApplicationFrameProfile::FrameFunction invokeFrame = nullptr, invokeLoadingFrame = nullptr;
+        std::array<unsigned char, 0x300>             frameCaller{};
+        std::array<std::uintptr_t, 2>                frameOwner{};
+        std::uintptr_t                               frameReceiver = 0;
 
         ~ClockImageFixture()
         {
@@ -283,7 +287,7 @@ namespace
             IMAGE_NT_HEADERS64 nt{};
             nt.Signature = IMAGE_NT_SIGNATURE;
             nt.FileHeader.Machine = IMAGE_FILE_MACHINE_AMD64;
-            nt.FileHeader.NumberOfSections = 5;
+            nt.FileHeader.NumberOfSections = 6;
             nt.FileHeader.SizeOfOptionalHeader = sizeof(IMAGE_OPTIONAL_HEADER64);
             nt.FileHeader.Characteristics = IMAGE_FILE_EXECUTABLE_IMAGE | IMAGE_FILE_LARGE_ADDRESS_AWARE;
             nt.OptionalHeader.Magic = IMAGE_NT_OPTIONAL_HDR64_MAGIC;
@@ -302,7 +306,7 @@ namespace
             nt.OptionalHeader.SizeOfStackCommit = nt.OptionalHeader.SizeOfHeapCommit = 0x1000;
             nt.OptionalHeader.NumberOfRvaAndSizes = IMAGE_NUMBEROF_DIRECTORY_ENTRIES;
             std::memcpy(bytes.data() + dos.e_lfanew, &nt, sizeof(nt));
-            std::array<IMAGE_SECTION_HEADER, 5> sections{};
+            std::array<IMAGE_SECTION_HEADER, 6> sections{};
             // A Windows image section table must describe adjacent virtual
             // ranges. Sparse zero-filled sections preserve the actual native
             // RVAs without leaving loader-invalid gaps or a huge raw file.
@@ -314,18 +318,25 @@ namespace
                 sections[index].Characteristics = IMAGE_SCN_CNT_UNINITIALIZED_DATA | IMAGE_SCN_MEM_READ;
             };
             zeroSection(0, ".head", 0x1000, TextRva - 0x1000);
-            zeroSection(2, ".gap", TextRva + TextSize, DataRva - TextRva - TextSize);
-            zeroSection(4, ".tail", DataRva + DataSize, nt.OptionalHeader.SizeOfImage - DataRva - DataSize);
+            zeroSection(2, ".late", TextRva + TextSize, 0x1400000 - TextRva - TextSize);
+            zeroSection(3, ".gap", 0x1400000, DataRva - 0x1400000);
+            zeroSection(5, ".tail", DataRva + DataSize, nt.OptionalHeader.SizeOfImage - DataRva - DataSize);
+            // Only bounded admitted pages gain executable/writable protection
+            // below. These virtual-section flags also describe the earlier
+            // application caller and later root/state fields to the real gate.
+            sections[0].Characteristics |= IMAGE_SCN_MEM_EXECUTE;
+            sections[2].Characteristics |= IMAGE_SCN_MEM_EXECUTE;
+            sections[5].Characteristics |= IMAGE_SCN_MEM_WRITE;
             std::memcpy(sections[1].Name, ".text", 5);
             sections[1].VirtualAddress = TextRva;
             sections[1].Misc.VirtualSize = sections[1].SizeOfRawData = TextSize;
             sections[1].PointerToRawData = 0x1000;
             sections[1].Characteristics = IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE;
-            std::memcpy(sections[3].Name, ".data", 5);
-            sections[3].VirtualAddress = DataRva;
-            sections[3].Misc.VirtualSize = sections[3].SizeOfRawData = DataSize;
-            sections[3].PointerToRawData = 0x1000 + TextSize;
-            sections[3].Characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE;
+            std::memcpy(sections[4].Name, ".data", 5);
+            sections[4].VirtualAddress = DataRva;
+            sections[4].Misc.VirtualSize = sections[4].SizeOfRawData = DataSize;
+            sections[4].PointerToRawData = 0x1000 + TextSize;
+            sections[4].Characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE;
             std::memcpy(bytes.data() + dos.e_lfanew + sizeof(nt), sections.data(), sizeof(sections));
             const auto code = [&](std::uintptr_t rva, const auto& data) { std::memcpy(bytes.data() + 0x1000 + rva - TextRva, data.data(), data.size()); };
             code(NativeClockProfile::clockCodeRva, NativeClockProfile::clockCode);
@@ -434,6 +445,69 @@ namespace
             admit(NativeGameFPSProfile::averageMsRva, values.data(), sizeof(values), PAGE_READWRITE);
             admit(NativeGameFPSProfile::previousSecondsRva, &previousSeconds, sizeof(previousSeconds), PAGE_READWRITE);
             admit(NativeGameFPSProfile::secondsPerCycleRva, &secondsPerCycle, sizeof(secondsPerCycle), PAGE_READWRITE);
+        }
+        void AdmitApplicationPins()
+        {
+            namespace Frame = NativeApplicationFrameProfile;
+            const auto admit = [&](std::uintptr_t rva, const void* bytes, std::size_t size, DWORD protection)
+            {
+                DWORD previous = 0, ignored = 0;
+                Check(::VirtualProtect(reinterpret_cast<void*>(image + rva), size, PAGE_READWRITE, &previous) != FALSE,
+                      "initialize only bounded owned SEC_IMAGE application fixture pages");
+                std::memcpy(reinterpret_cast<void*>(image + rva), bytes, size);
+                Check(::VirtualProtect(reinterpret_cast<void*>(image + rva), size, protection, &ignored) != FALSE &&
+                          ::FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(image + rva), size),
+                      "restore synthetic application code RX, vtable RO and state/root RW protections");
+            };
+            for (const auto& pin : Frame::pins)
+                admit(pin.rva, pin.bytes, pin.size, PAGE_EXECUTE_READ);
+            const auto entry = image + Frame::entryRva;
+            admit(Frame::slotRva, &entry, sizeof(entry), PAGE_READONLY);
+            const std::uint32_t state = 7;
+            admit(Frame::stateRva, &state, sizeof(state), PAGE_READWRITE);
+            admit(Frame::rootRva, &frameReceiver, sizeof(frameReceiver), PAGE_READWRITE);
+
+            // Retain every entry/tail pin and exercise the real Detours
+            // trampoline, but return before any native engine work. Synthetic
+            // callers deliberately have no invented exception-unwind metadata.
+            const std::array<unsigned char, 10> originalReturn{0x48, 0x81, 0xc4, 0xb8, 0, 0, 0, 0x5d, 0x5b, 0xc3};
+            Patch(Frame::tailRva + Frame::tail.size(), originalReturn.data(), originalReturn.size());
+            const std::array<unsigned char, 3> benignReturn{0x33, 0xc0, 0xc3};
+            constexpr std::uintptr_t           benignRva = TextRva + 0x1600;
+            Patch(benignRva, benignReturn.data(), benignReturn.size());
+            const auto benign = image + benignRva;
+            admit(Frame::vtableRva + 0x300, &benign, sizeof(benign), PAGE_READONLY);
+            admit(Frame::vtableRva + 0x388, &benign, sizeof(benign), PAGE_READONLY);
+            // The pinned caller's suffix is kept intact. Its ordinary helper
+            // targets become owned leaf returns, so the exact normal call can
+            // run without pretending to create a UE world or GUI.
+            for (const std::uintptr_t rva : {0xc227b0u, 0xb65960u, 0x3004080u})
+                admit(rva, benignReturn.data(), benignReturn.size(), PAGE_EXECUTE_READ);
+            std::vector<unsigned char> normal{0x53, 0x48, 0x83, 0xec, 0x50, 0x0f, 0x29, 0x74, 0x24, 0x40, 0x0f, 0x28, 0xf1, 0x48, 0xbb};
+            const auto                 append = [](std::vector<unsigned char>& code, std::uintptr_t value)
+            {
+                const auto* bytes = reinterpret_cast<const unsigned char*>(&value);
+                code.insert(code.end(), bytes, bytes + sizeof(value));
+            };
+            append(normal, reinterpret_cast<std::uintptr_t>(frameCaller.data()));
+            normal.insert(normal.end(), {0x48, 0x8b, 0x01, 0x49, 0xba});
+            append(normal, image + Frame::normalReturnRva - 6);
+            normal.insert(normal.end(), {0x41, 0xff, 0xe2});
+            Patch(TextRva + 0x1400, normal.data(), normal.size());
+            invokeFrame = reinterpret_cast<Frame::FrameFunction>(image + TextRva + 0x1400);
+            std::vector<unsigned char> loading{0x48, 0x83, 0xec, 0x28, 0x48, 0x8b, 0x01, 0x49, 0xba};
+            append(loading, image + Frame::excludedLoadingReturnRva - 6);
+            loading.insert(loading.end(), {0x41, 0xff, 0xe2});
+            Patch(TextRva + 0x1500, loading.data(), loading.size());
+            const std::array<unsigned char, 11> loadingCall{0xff, 0x90, 0xb0, 0x03, 0, 0, 0x48, 0x83, 0xc4, 0x28, 0xc3};
+            Patch(Frame::excludedLoadingReturnRva - 6, loadingCall.data(), loadingCall.size());
+            invokeLoadingFrame = reinterpret_cast<Frame::FrameFunction>(image + TextRva + 0x1500);
+        }
+        void SetFrameReceiver(void* receiver)
+        {
+            frameReceiver = reinterpret_cast<std::uintptr_t>(receiver);
+            Put(NativeApplicationFrameProfile::rootRva, frameReceiver);
+            std::memcpy(frameCaller.data() + 0x2c0, &frameReceiver, sizeof(frameReceiver));
         }
         void Patch(std::uintptr_t rva, const void* bytes, std::size_t length)
         {
@@ -1771,6 +1845,300 @@ namespace
         std::puts("Production pause-safe native timing owner fixture completed");
     }
 
+    struct ApplicationFrameContext
+    {
+        unsigned               calls = 0, originalCountAtLastHandler = 0;
+        NativeApplicationFrame last;
+        NativeClockService*    service = nullptr;
+        bool                   endInHandler = false, endResult = true, throwInHandler = false;
+    };
+
+    ApplicationFrameFunction countedFrame = nullptr;
+    unsigned                 originalFrameInvocations = 0;
+    void*                    lastFrameReceiver = nullptr;
+    float                    lastFrameDelta = 0;
+    HANDLE                   frameOriginalEntered = nullptr, frameOriginalRelease = nullptr;
+    ClockImageFixture*       mutateFrameRoot = nullptr;
+
+    void CountOriginalFrame(void* receiver, float delta)
+    {
+        ++originalFrameInvocations;
+        lastFrameReceiver = receiver;
+        lastFrameDelta = delta;
+        if (frameOriginalEntered)
+        {
+            SetEvent(frameOriginalEntered);
+            Check(WaitForSingleObject(frameOriginalRelease, 5000) == WAIT_OBJECT_0,
+                  "release the owned original application callback within a bounded fixture wait");
+        }
+        countedFrame(receiver, delta);
+        if (mutateFrameRoot)
+            mutateFrameRoot->Put(NativeApplicationFrameProfile::rootRva, std::uintptr_t{0});
+    }
+
+    void ObserveApplicationFrame(const NativeApplicationFrame& frame, void* opaque)
+    {
+        auto& context = *static_cast<ApplicationFrameContext*>(opaque);
+        ++context.calls;
+        context.originalCountAtLastHandler = originalFrameInvocations;
+        context.last = frame;
+        Check(callbackDepth == 1 && runtime.inFlight.load() == 1 && runtime.engineThread.load() == GetCurrentThreadId() &&
+                  frame.generation == runtime.generation.load() && !timingCallbackGeneration && !timingTimerScope,
+              "only an outermost real application callback observes raw state after original execution without timing-writer scope");
+        BYTE       hour = 0xa5, minute = 0x5a;
+        const auto beforeWrites = ClockTestFaults::clockDataWrites.load();
+        Check(runtime.clock.TryGet(&hour, &minute) == ClockResult::NotInitialized && hour == 0xa5 && minute == 0x5a &&
+                  runtime.clock.TrySet(1, 2) == ClockResult::NotInitialized && runtime.access.SetTimeScale(2) == ClockResult::NotInitialized &&
+                  runtime.access.SetMinuteDuration(2000) == ClockResult::NotInitialized && runtime.access.Pause(true) == ClockResult::NotInitialized &&
+                  ClockTestFaults::clockDataWrites.load() == beforeWrites && !runtime.captured.load() && !runtime.timingCaptured.load() &&
+                  !runtime.timingDirty.load() && !runtime.patchInstalled.load(),
+              "observer readiness cannot capture CClock, enqueue its writes or borrow any native timing/pause capability");
+        if (context.endInHandler)
+            context.endResult = context.service->End();
+        if (context.throwInHandler)
+            throw std::runtime_error("owned observer failure");
+    }
+
+    void BeginApplicationOwned(NativeClockService& service, ClockImageFixture& fixture, ApplicationFrameContext& context, bool attachNow = true)
+    {
+        ClockServiceStateV1 rejected;
+        Check(!service.BeginApplicationFrames({}, rejected, &ObserveApplicationFrame, &context) && rejected.failure == ClockResult::UnsupportedBuild &&
+                  !rejected.bound && !rejected.hooked && !rejected.modulePinned && rejected.generation &&
+                  !NativeServiceAdmission::IsClaimed(NativeServiceAdmission::Category::Clock),
+              "internal application Begin preserves the shipping wrong-executable refusal before any native hook or module pin");
+        NativeServiceAdmission::Token claim;
+        Check(NativeServiceAdmission::TryAcquire(NativeServiceAdmission::Category::Clock, claim),
+              "application fixture owns the same exclusive setup/cleanup admission as other native transactions");
+        runtime.admissionSerial.store(claim.serial);
+        runtime.admissionGeneration.store(runtime.generation.load());
+        runtime.image = fixture.image;
+        runtime.failure.store(ClockResult::Ok);
+        runtime.stopping.store(false);
+        runtime.bound.store(true);
+        runtime.active.store(true);
+        runtime.started = GetTickCount64();
+        runtime.refreshed.store(runtime.started);
+        runtime.frameHandler = &ObserveApplicationFrame;
+        runtime.frameContext = &context;
+        runtime.originalFrame = reinterpret_cast<ApplicationFrameFunction>(fixture.image + NativeApplicationFrameProfile::entryRva);
+        fixture.frameOwner[0] = fixture.image + NativeApplicationFrameProfile::vtableRva;
+        fixture.SetFrameReceiver(fixture.frameOwner.data());
+        fixture.Put(NativeApplicationFrameProfile::stateRva, std::uint32_t{7});
+        context.service = &service;
+        originalFrameInvocations = 0;
+        lastFrameReceiver = nullptr;
+        lastFrameDelta = 0;
+        Check(runtime.frameMode && !runtime.timingMode && !runtime.timerHooked.load() && !runtime.hooked.load() && !runtime.ready.load() &&
+                  !runtime.captured.load() && CheckBinding(true),
+              "application-only admission validates its own exact pins without installing clock/timer hooks or capturing CClock");
+        if (!attachNow)
+            return;
+        Check(ChangeHooks(true) && runtime.frameHooked.load() && !runtime.hooked.load() && !runtime.timerHooked.load(),
+              "real Detours installs only the native application entry for the observer mode");
+        countedFrame = runtime.originalFrame;
+        runtime.originalFrame = &CountOriginalFrame;
+    }
+
+    void FinishApplicationOwned(NativeClockService& service)
+    {
+        runtime.originalFrame = countedFrame;
+        Check(service.End() && !service.IsRetained() && !State(service).hooked && !runtime.frameHooked.load() && !runtime.hooked.load() &&
+                  !runtime.timerHooked.load() && !runtime.frameHandler && !runtime.frameContext && !runtime.inFlight.load() && !runtime.captured.load() &&
+                  !runtime.timingCaptured.load() && !runtime.timingDirty.load() && !runtime.timingRecovery.load() && !timingCallbackGeneration &&
+                  !timingTimerScope && !NativeServiceAdmission::IsClaimed(NativeServiceAdmission::Category::Clock) && CheckBinding(true),
+              "an observer retires without a future clock tick after actual hook detach, callback completion and admission release");
+    }
+
+    void FrameOriginalRaises(void* receiver, float delta)
+    {
+        ++originalFrameInvocations;
+        lastFrameReceiver = receiver;
+        lastFrameDelta = delta;
+        OriginalRaises();
+    }
+
+    bool InvokeFrameOriginalException(void* receiver)
+    {
+        // Deliberate exceptions cross compiler-owned frames only, as the
+        // synthetic native caller intentionally has no unwind registration.
+        __try
+        {
+            HookApplicationFrame(receiver, 0.125f);
+        }
+        __except (GetExceptionCode() == 0xe001c10c ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
+        {
+            return true;
+        }
+        return false;
+    }
+
+    void NativeApplicationFrameOwner(ClockImageFixture& fixture)
+    {
+        namespace Frame = NativeApplicationFrameProfile;
+        fixture.AdmitApplicationPins();
+        {
+            NativeClockService      service;
+            ApplicationFrameContext context;
+            const auto              unrelatedClockByte = static_cast<unsigned char>(NativeClockProfile::clockCode[0] ^ 1);
+            fixture.Patch(NativeClockProfile::clockCodeRva, &unrelatedClockByte, sizeof(unrelatedClockByte));
+            BeginApplicationOwned(service, fixture, context);
+            HookApplicationFrame(fixture.frameOwner.data(), 0.125f);
+            fixture.invokeLoadingFrame(fixture.frameOwner.data(), 0.25f);
+            Check(originalFrameInvocations == 2 && !context.calls && !runtime.engineThread.load() && !runtime.ready.load(),
+                  "unknown and actual excluded loading origins preserve original ABI calls exactly once without adopting the observer owner");
+            const auto writes = ClockTestFaults::clockDataWrites.load();
+            const auto exchanges = ClockTestFaults::clockCodeExchanges.load();
+            for (const std::uint32_t state : {7u, 9u})
+            {
+                fixture.Put(Frame::stateRva, state);
+                const float delta = state == 7 ? 0.03125f : -0.0f;
+                const auto  before = originalFrameInvocations;
+                fixture.invokeFrame(fixture.frameOwner.data(), delta);
+                Check(originalFrameInvocations == before + 1 && context.originalCountAtLastHandler == before + 1 &&
+                          lastFrameReceiver == fixture.frameOwner.data() && std::memcmp(&lastFrameDelta, &delta, sizeof(delta)) == 0 &&
+                          std::memcmp(&context.last.deltaSeconds, &delta, sizeof(delta)) == 0 && context.last.nativeState == state && State(service).ready &&
+                          runtime.restored.load() && !runtime.captured.load() && !runtime.timerReady.load(),
+                      "the exact pinned normal call preserves this and XMM1 bitwise and observes frontend/gameplay state only after its original once");
+            }
+            Check(context.calls == 2 && !service.Submit(Command(State(service), 1)) && !runtime.pendingSequence.load() && !runtime.hasPending &&
+                      ClockTestFaults::clockDataWrites.load() == writes && ClockTestFaults::clockCodeExchanges.load() == exchanges,
+                  "application observer dispatch never admits the public clock mailbox or changes native clock/timing data");
+            fixture.frameOwner[0] += sizeof(std::uintptr_t);
+            Check(!FrameReceiver(fixture.frameOwner.data()), "typed receiver qualification rejects another vtable without dereferencing any UObject child");
+            fixture.frameOwner[0] -= sizeof(std::uintptr_t);
+            FinishApplicationOwned(service);
+            fixture.Patch(NativeClockProfile::clockCodeRva, NativeClockProfile::clockCode.data(), NativeClockProfile::clockCode.size());
+        }
+        for (unsigned refusal = 0; refusal != 7; ++refusal)
+        {
+            NativeClockService      service;
+            ApplicationFrameContext context;
+            BeginApplicationOwned(service, fixture, context);
+            std::array<std::uintptr_t, 2> differentReceiver{fixture.frameOwner[0], 0};
+            void*                         receiver = fixture.frameOwner.data();
+            float                         delta = 0.0625f;
+            if (refusal == 0)
+                receiver = differentReceiver.data();
+            if (refusal == 1)
+                mutateFrameRoot = &fixture;
+            if (refusal == 2)
+                delta = (std::numeric_limits<float>::quiet_NaN)();
+            if (refusal == 3)
+                fixture.Put(Frame::stateRva, std::uint32_t{10});
+            if (refusal == 4)
+                runtime.refreshed.store(GetTickCount64() - ClockServiceLeaseMsV1 - 1);
+            if (refusal == 5)
+                ++callbackDepth;
+            const auto changed = static_cast<unsigned char>(Frame::rootPublication[0] ^ 1);
+            if (refusal == 6)
+                fixture.Patch(Frame::rootPublicationRva, &changed, sizeof(changed));
+            fixture.invokeFrame(receiver, delta);
+            if (refusal == 5)
+                --callbackDepth;
+            if (refusal == 6)
+                fixture.Patch(Frame::rootPublicationRva, Frame::rootPublication.data(), Frame::rootPublication.size());
+            mutateFrameRoot = nullptr;
+            fixture.SetFrameReceiver(fixture.frameOwner.data());
+            const auto failure = refusal == 4 ? ClockResult::Expired : refusal == 5 ? ClockResult::Busy : ClockResult::BindingChanged;
+            Check(originalFrameInvocations == 1 && !context.calls && !runtime.ready.load() && State(service).failure == failure && !runtime.inFlight.load() &&
+                      !callbackDepth && !timingCallbackGeneration && !timingTimerScope && !runtime.captured.load(),
+                  "receiver mismatch/bookend, nonfinite delta, invalid raw state, expired lease, nesting or changed exact pins refuse after original once");
+            FinishApplicationOwned(service);
+        }
+        {
+            NativeClockService      service;
+            ApplicationFrameContext context;
+            BeginApplicationOwned(service, fixture, context);
+            fixture.invokeFrame(fixture.frameOwner.data(), 0.125f);
+            std::thread foreign([&] { fixture.invokeFrame(fixture.frameOwner.data(), 0.25f); });
+            foreign.join();
+            Check(originalFrameInvocations == 2 && context.calls == 1 && State(service).failure == ClockResult::WrongThread &&
+                      State(service).foreignCallbacks == 1 && !runtime.inFlight.load(),
+                  "a foreign normal-origin callback preserves its original but cannot take over the established engine thread");
+            FinishApplicationOwned(service);
+        }
+        {
+            NativeClockService      service;
+            ApplicationFrameContext context;
+            context.endInHandler = true;
+            BeginApplicationOwned(service, fixture, context);
+            fixture.invokeFrame(fixture.frameOwner.data(), 0.125f);
+            Check(context.calls == 1 && !context.endResult && service.IsRetained() && runtime.frameHooked.load() && !runtime.inFlight.load(),
+                  "End inside an observer cannot discard its own live trampoline or handler context");
+            FinishApplicationOwned(service);
+        }
+        {
+            NativeClockService      service;
+            ApplicationFrameContext context;
+            context.throwInHandler = true;
+            BeginApplicationOwned(service, fixture, context);
+            fixture.invokeFrame(fixture.frameOwner.data(), 0.125f);
+            Check(context.calls == 1 && originalFrameInvocations == 1 && State(service).failure == ClockResult::OriginalException && !runtime.active.load() &&
+                      !runtime.inFlight.load() && !callbackDepth,
+                  "client observer exceptions stop dispatch without unwinding into the native caller or leaking callback accounting");
+            FinishApplicationOwned(service);
+        }
+        {
+            NativeClockService      service;
+            ApplicationFrameContext context;
+            BeginApplicationOwned(service, fixture, context);
+            runtime.originalFrame = &FrameOriginalRaises;
+            const bool caught = InvokeFrameOriginalException(fixture.frameOwner.data());
+            runtime.originalFrame = &CountOriginalFrame;
+            Check(caught && originalFrameInvocations == 1 && !context.calls && State(service).failure == ClockResult::OriginalException &&
+                      !runtime.inFlight.load() && !callbackDepth && !timingCallbackGeneration && !timingTimerScope && service.IsRetained(),
+                  "original native exceptions propagate through compiler-owned SEH while finally retains hook ownership and releases scopes");
+            FinishApplicationOwned(service);
+        }
+        {
+            NativeClockService      service;
+            ApplicationFrameContext context;
+            BeginApplicationOwned(service, fixture, context);
+            frameOriginalEntered = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+            frameOriginalRelease = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+            Check(frameOriginalEntered && frameOriginalRelease, "create bounded application in-flight lifetime events");
+            std::thread engine([&] { fixture.invokeFrame(fixture.frameOwner.data(), 0.125f); });
+            Check(WaitForSingleObject(frameOriginalEntered, 5000) == WAIT_OBJECT_0 && runtime.inFlight.load() == 1 && !service.End() && service.IsRetained() &&
+                      runtime.frameHooked.load() && runtime.frameHandler == &ObserveApplicationFrame,
+                  "producer End retains the actual trampoline/context while another thread is inside the original native application call");
+            SetEvent(frameOriginalRelease);
+            engine.join();
+            CloseHandle(frameOriginalEntered);
+            CloseHandle(frameOriginalRelease);
+            frameOriginalEntered = frameOriginalRelease = nullptr;
+            Check(!context.calls && !runtime.inFlight.load(), "a stopped in-flight original finishes once without dispatching late client observation");
+            FinishApplicationOwned(service);
+        }
+        {
+            NativeClockService      service;
+            ApplicationFrameContext context;
+            BeginApplicationOwned(service, fixture, context, false);
+            const auto stop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+            Check(stop != nullptr, "create the owned observer-transaction peer lifetime");
+            std::atomic<DWORD> peerId{0};
+            std::thread        peer(
+                [&]
+                {
+                    peerId.store(GetCurrentThreadId());
+                    WaitForSingleObject(stop, INFINITE);
+                });
+            while (!peerId.load())
+                SwitchToThread();
+            ClockTestFaults::resumeTarget.store(peerId.load());
+            ClockTestFaults::failResumes.store(64);
+            Check(!ChangeHooks(true) && runtime.frameHooked.load() && State(service).retainedPeerThreads == 1 && service.IsRetained() && !service.End() &&
+                      NativeServiceAdmission::IsClaimed(NativeServiceAdmission::Category::Clock),
+                  "committed application hook plus failed peer resume retains its actual hook and exclusive cleanup admission");
+            ClockTestFaults::failResumes.store(0);
+            countedFrame = runtime.originalFrame;
+            FinishApplicationOwned(service);
+            SetEvent(stop);
+            peer.join();
+            CloseHandle(stop);
+        }
+        std::puts("Production natural application-frame observer fixture completed");
+    }
+
     class TimingBaseProbe : public CGameTimingDE
     {
     public:
@@ -2088,6 +2456,7 @@ int main(int argc, char** argv)
     NativeEngineThreadHandoff(fixture);
     NativeCallbackLifetime(fixture);
     NativePatchTransactions(fixture);
+    NativeApplicationFrameOwner(fixture);
     std::puts("Production native clock runtime fixture completed");
     std::printf("Passed %u production clock service checks\n", checks.load());
     return 0;

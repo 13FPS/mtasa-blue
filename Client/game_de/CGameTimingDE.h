@@ -17,13 +17,14 @@ namespace mta::game_de
     // Implement the actual SDK methods now, while the compiler continues to
     // prohibit constructing/exporting an incomplete CGame. Remaining native
     // subsystems must supply their genuine overrides before this can be a game
-    // interface; neither an FPS estimate nor unavailable no-op setters belong
+    // interface; neither timing estimates nor unavailable no-op setters belong
     // in this base. GameAdapter::GetGameInterface therefore remains unchanged.
     class CGameTimingDE : public CGame
     {
     public:
         DWORD         GetSystemTime() override;
         int           GetSystemFrameCounter() const override;
+        float         GetFPS() override;
         float         GetTimeStep() override;
         float         GetOldTimeStep() override;
         float         GetTimeScale() override;
@@ -42,6 +43,7 @@ namespace mta::game_de
     protected:
         CGameTimingDE(const NativeGameTimingReader& reader, NativeGameTimingAccess& writer) noexcept : timing(reader), timingWriter(writer) {}
         static NativeGameTimingValues RequireTiming(const NativeGameTimingReader& reader);
+        static float                  RequireFPS(const NativeGameTimingReader& reader);
 
     private:
         const NativeGameTimingReader& timing;

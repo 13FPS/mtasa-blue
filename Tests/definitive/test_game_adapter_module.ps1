@@ -26,7 +26,7 @@ $sourceNames = @('Client/sdk/game/CGameAdapter.h', 'Client/game_de/GameAdapter.c
     'Client/game_de/CKeyGenDE.h', 'Client/game_de/CKeyGenDE.cpp', 'Client/sdk/game/CKeyGen.h',
     'Client/game_de/CGameDE.h', 'Client/game_de/CGameDE.cpp', 'Client/game_de/CGameTimingDE.h', 'Client/game_de/CGameTimingDE.cpp', 'Client/sdk/game/CGame.h',
     'Client/game_de/NativeGameTimingAccess.h', 'Client/game_de/NativeGameTimingReader.h', 'Client/game_de/NativeGameTimingReader.cpp',
-    'Client/game_de/NativeGameTimingProfile.h',
+    'Client/game_de/NativeGameTimingProfile.h', 'Client/game_de/NativeGameFPSProfile.h',
     'Client/sdk/game/CGameClockService.h', 'Client/sdk/game/CGameLocalInputLease.h', 'Client/game_de/LocalInputLeasePolicy.h',
     'Client/game_de/NativeClockService.h', 'Client/game_de/NativeClockService.cpp',
     'Client/sdk/game/CGameTimeService.h', 'Client/game_de/NativeGameTimeReader.h', 'Client/game_de/NativeGameTimeReader.cpp',

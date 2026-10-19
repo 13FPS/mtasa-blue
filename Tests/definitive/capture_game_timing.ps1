@@ -4,7 +4,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$WorkDirectory,
-    [ValidateRange(10,15)][int]$DurationSeconds=12
+    [ValidateRange(10,15)][int]$DurationSeconds=12,
+    [string]$NativeFPSProofPath
 )
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
@@ -35,6 +36,7 @@ $spans=@(@{name='timer-init';rva=0x1186860;bytes=0xbd},@{name='timer-update-suff
 $processHandle=[IntPtr]::Zero;$writer=$null;$failure=$null;$identity=$null;$pins=@();$accepted=0;$attempts=0;$misses=0
 $first=$null;$last=$null;$previous=$null;$frameProgress=[uint64]0;$timerProgress=[uint64]0;$outsideUpdateBounds=0;$nonfinite=0;$clockOutOfRange=0;$backward=0
 $floatRanges=@{};$scratchRemoved=$false;$diskAfter=$null
+$fpsProofSha=$null;$fpsSourceUpdates=0;$fpsReciprocalMismatches=0;$scratchFilesRemaining=0
 function Sha([string]$Path){(Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()}
 function Hex([byte[]]$Bytes){[Convert]::ToHexString($Bytes).ToLowerInvariant()}
 function Event($Value){$writer.WriteLine(($Value|ConvertTo-Json -Depth 8 -Compress));$writer.Flush()}
@@ -56,9 +58,33 @@ try {
         $o=$sectionStart+40*$i
         [pscustomobject]@{rva=[BitConverter]::ToUInt32($disk,$o+12);raw=[BitConverter]::ToUInt32($disk,$o+20);bytes=[BitConverter]::ToUInt32($disk,$o+16);flags=[BitConverter]::ToUInt32($disk,$o+36)}
     })
-    function DiskBytes([uint32]$Rva,[int]$Count){
+    if($NativeFPSProofPath){
+        # Extend the same passive reader with separately proved native FPS.
+        # Its platform clock may keep advancing while gameplay time is paused;
+        # those are distinct observations, not permission to resume the game.
+        $proof=Get-Content -LiteralPath $NativeFPSProofPath -Raw|ConvertFrom-Json -AsHashtable
+        if($proof.schema -cne 'mta_de_actual_native_fps_static_v1' -or -not $proof.success -or $proof.checks -lt 54 -or
+           $proof.image.sha256 -cne $expectedSha -or $proof.native_fps.rva -cne '0x57d7f64' -or
+           @($proof.assertions|Where-Object{-not $_.passed}).Count){throw 'Native FPS dataflow proof differs.'}
+        $fpsProofSha=Sha $NativeFPSProofPath
+        Copy-Item -LiteralPath $NativeFPSProofPath -Destination (Join-Path $output 'fps-static-evidence.json')
+        foreach($assertion in $proof.assertions){
+            if(-not $assertion.ContainsKey('bytes')){continue}
+            $code=$assertion.ContainsKey('instruction_rva')
+            $rva=[Convert]::ToUInt32($(if($code){$assertion.instruction_rva}else{$assertion.rva}).Substring(2),16)
+            $bytes=[Convert]::FromHexString($assertion.bytes)
+            if($bytes.Length -lt 1 -or $bytes.Length -gt 1024){throw 'Native FPS proof span exceeds passive limits.'}
+            $spans+=@(@{name=('fps-'+$assertion.name);rva=$rva;bytes=$bytes.Length;code=$code;proofHex=$assertion.bytes})
+        }
+        $label=[Text.Encoding]::Unicode.GetBytes("%5.2f FPS$([char]0)")
+        $spans+=@(@{name='fps-native-display-label';rva=0x49b4870;bytes=$label.Length;code=$false;proofHex=(Hex $label)})
+        $fields+=@(@{name='framesPerSecond';rva=0x57d7f64;bytes=4;type='f32'},
+            @{name='averageFrameMilliseconds';rva=0x57d7f60;bytes=4;type='f32'},
+            @{name='nativePlatformSeconds';rva=0x5725570;bytes=8;type='f64'})
+    }
+    function DiskBytes([uint32]$Rva,[int]$Count,[bool]$Code=$true){
         $section=@($sections|Where-Object{$Rva -ge $_.rva -and [uint64]$Rva+$Count -le [uint64]$_.rva+$_.bytes})
-        if($section.Count -ne 1 -or -not($section[0].flags -band 0x20000000)){throw 'Code pin is not wholly inside one executable file section.'}
+        if($section.Count -ne 1 -or $Code -ne [bool]($section[0].flags -band 0x20000000)){throw 'Pin section protection differs.'}
         $offset=[int]($Rva-$section[0].rva+$section[0].raw)
         ,$disk[$offset..($offset+$Count-1)]
     }
@@ -111,10 +137,12 @@ namespace MtaPassiveTiming {
        [BitConverter]::ToUInt32($liveHeader,$optional+56) -ne 97141760){throw 'Live PE identity differs.'}
     $identity=[ordered]@{pid=$candidates[0].Id;path=$path;sha256=$expectedSha;moduleBase=('0x{0:x}' -f $image);preferredImageBase=('0x{0:x}' -f [BitConverter]::ToUInt64($disk,$optional+24));imageBytes=$module.Size;processAccess='0x0410 QUERY_INFORMATION|VM_READ'}
     foreach($span in $spans){
-        $expected=Hex (DiskBytes $span.rva $span.bytes)
-        $actual=Hex ([MtaPassiveTiming.Reader]::Read($processHandle,$image,($image+$span.rva),$span.bytes,$true))
+        $code=-not $span.ContainsKey('code') -or $span.code
+        $expected=Hex (DiskBytes $span.rva $span.bytes $code)
+        if($span.ContainsKey('proofHex') -and $expected -cne $span.proofHex){throw 'FPS proof bytes differ from the owned executable.'}
+        $actual=Hex ([MtaPassiveTiming.Reader]::Read($processHandle,$image,($image+$span.rva),$span.bytes,$code))
         if($actual -cne $expected){throw "Live code pin differs: $($span.name)"}
-        $pins+=@([ordered]@{name=$span.name;rva=('0x{0:x}' -f $span.rva);bytes=$span.bytes;hex=$expected;matched=$true})
+        $pins+=@([ordered]@{name=$span.name;rva=('0x{0:x}' -f $span.rva);bytes=$span.bytes;code=$code;hex=$expected;matched=$true})
     }
     Event ([ordered]@{kind='begin';identity=$identity;durationSeconds=$DurationSeconds;staticEvidenceSha256=$evidenceSha;codePins=$pins})
     function RawFields {
@@ -141,10 +169,10 @@ namespace MtaPassiveTiming {
             $values=[ordered]@{}
             foreach($field in $fields){
                 $bytes=[Convert]::FromHexString($sample[$field.name])
-                $values[$field.name]=switch($field.type){'u8'{[uint32]$bytes[0]};'u16'{[uint32][BitConverter]::ToUInt16($bytes,0)};'u32'{[BitConverter]::ToUInt32($bytes,0)};'f32'{[double][BitConverter]::ToSingle($bytes,0)}}
+                $values[$field.name]=switch($field.type){'u8'{[uint32]$bytes[0]};'u16'{[uint32][BitConverter]::ToUInt16($bytes,0)};'u32'{[BitConverter]::ToUInt32($bytes,0)};'f32'{[double][BitConverter]::ToSingle($bytes,0)};'f64'{[BitConverter]::ToDouble($bytes,0)}}
             }
             $accepted++
-            foreach($name in @('timeStep','oldTimeStep','timeScale')){
+            foreach($name in @($fields|Where-Object{$_.type -in @('f32','f64')}|ForEach-Object{$_.name})){
                 $value=$values[$name]
                 if([double]::IsNaN($value) -or [double]::IsInfinity($value)){$nonfinite++}
                 elseif(-not $floatRanges.ContainsKey($name)){$floatRanges[$name]=[ordered]@{minimum=$value;maximum=$value}}
@@ -154,6 +182,16 @@ namespace MtaPassiveTiming {
             # restriction: other legitimate script paths may change raw steps.
             if($values.timeStep -lt [double][single]0.00001 -or $values.timeStep -gt 3 -or $values.oldTimeStep -lt [double][single]0.00001 -or $values.oldTimeStep -gt 3){$outsideUpdateBounds++}
             if($values.hour -gt 23 -or $values.minute -gt 60 -or $values.secondsRaw -gt 65535 -or $values.millisecondsPerGameMinute -lt 1 -or $values.millisecondsPerGameMinute -gt 3600000){$clockOutOfRange++}
+            if($NativeFPSProofPath){
+                # Compare native stored values only; the ratio is evidence of
+                # their relationship, never a replacement value returned as FPS.
+                if($values.framesPerSecond -lt 0 -or $values.averageFrameMilliseconds -le 0){$fpsReciprocalMismatches++}
+                else{
+                    $ratio=[double][single](1000.0/$values.averageFrameMilliseconds)
+                    if([Math]::Abs($values.framesPerSecond-$ratio) -gt [Math]::Max(0.0001,[Math]::Abs($ratio)*0.000001)){$fpsReciprocalMismatches++}
+                }
+                if($null -ne $previous -and $values.nativePlatformSeconds -gt $previous.nativePlatformSeconds){$fpsSourceUpdates++}
+            }
             if($null -ne $previous){
                 $df=([uint64]$values.frameCounter+4294967296-[uint64]$previous.frameCounter)%4294967296
                 $dt=([uint64]$values.nativeTimer+4294967296-[uint64]$previous.nativeTimer)%4294967296
@@ -167,24 +205,29 @@ namespace MtaPassiveTiming {
     # Confirm the same read-only handle still refers to the same image and no
     # qualified instruction span changed during the observational interval.
     if(-not ([MtaPassiveTiming.Reader]::ImagePath($processHandle)).Equals($expectedPath,[StringComparison]::OrdinalIgnoreCase)){throw 'Process identity changed during capture.'}
-    foreach($span in $spans){if((Hex ([MtaPassiveTiming.Reader]::Read($processHandle,$image,($image+$span.rva),$span.bytes,$true))) -cne (Hex (DiskBytes $span.rva $span.bytes))){throw "Code pin changed during capture: $($span.name)"}}
+    foreach($span in $spans){
+        $code=-not $span.ContainsKey('code') -or $span.code
+        if((Hex ([MtaPassiveTiming.Reader]::Read($processHandle,$image,($image+$span.rva),$span.bytes,$code))) -cne (Hex (DiskBytes $span.rva $span.bytes $code))){throw "Pin changed during capture: $($span.name)"}
+    }
     $diskAfter=Sha $expectedPath
     if($diskAfter -cne $expectedSha){throw 'Owned disk executable changed during capture.'}
-    if($accepted -lt 20 -or -not $frameProgress -or -not $timerProgress -or $nonfinite -or $clockOutOfRange -or $backward){throw 'Capture completed but native timing field validation did not pass; inspect raw evidence.'}
+    if($accepted -lt 20 -or -not $frameProgress -or (-not $NativeFPSProofPath -and -not $timerProgress) -or $nonfinite -or $clockOutOfRange -or $backward -or
+       ($NativeFPSProofPath -and (-not $fpsSourceUpdates -or $fpsReciprocalMismatches))){throw 'Capture completed but native timing field validation did not pass; inspect raw evidence.'}
 } catch {$failure=$_.Exception.Message} finally {
     if($writer){$writer.Dispose()}
     if($processHandle -ne [IntPtr]::Zero){[MtaPassiveTiming.Reader]::CloseHandle($processHandle)|Out-Null}
     $env:TEMP=$previousTemp;$env:TMP=$previousTmp
-    # Add-Type normally compiles in memory. Remove only this verified empty
-    # scratch folder; preserve any unexpected compiler files for diagnosis.
-    if([IO.Path]::GetFullPath($scratch).StartsWith((Join-Path $repository 'Build/tmp')+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase) -and
-       [IO.Directory]::Exists($scratch) -and @([IO.Directory]::EnumerateFileSystemEntries($scratch)).Count -eq 0){[IO.Directory]::Delete($scratch,$false);$scratchRemoved=$true}
+    # Add-Type normally leaves no files. An empty workspace directory is harmless;
+    # preserve unexpected compiler output as diagnostic evidence rather than
+    # deleting an unexamined path or retrying previously rejected folder cleanup.
+    $scratchFilesRemaining=@(Get-ChildItem -LiteralPath $scratch -Recurse -File).Count
 }
 $record=[ordered]@{schema='mta_de_passive_game_timing_capture_v1';recordedAt=[DateTimeOffset]::Now.ToString('o');success=($null -eq $failure);failure=$failure;
     directory=$output;tool=[ordered]@{path=$PSCommandPath;sha256=(Sha $PSCommandPath)};identity=$identity;durationSeconds=$DurationSeconds;staticEvidenceSha256=$evidenceSha;
     fields=$fields;codePins=$pins;attempts=$attempts;accepted=$accepted;matchingMisses=$misses;first=$first;last=$last;frameProgress=$frameProgress;timerProgress=$timerProgress;
     nonfiniteFloatSamples=$nonfinite;clockOutOfRangeSamples=$clockOutOfRange;backwardSamples=$backward;outsideNativeUpdateStepBounds=$outsideUpdateBounds;floatRanges=$floatRanges;
-    rawSamples=[ordered]@{path=(Join-Path $output 'raw-samples.jsonl');sha256=(Sha (Join-Path $output 'raw-samples.jsonl'));bytes=(Get-Item -LiteralPath (Join-Path $output 'raw-samples.jsonl')).Length};diskSha256After=$diskAfter;scratch=$scratch;scratchRemoved=$scratchRemoved;
+    rawSamples=[ordered]@{path=(Join-Path $output 'raw-samples.jsonl');sha256=(Sha (Join-Path $output 'raw-samples.jsonl'));bytes=(Get-Item -LiteralPath (Join-Path $output 'raw-samples.jsonl')).Length};diskSha256After=$diskAfter;scratch=$scratch;scratchRemoved=$scratchRemoved;scratchFilesRemaining=$scratchFilesRemaining;
+    nativeFPSProofSha256=$fpsProofSha;nativeFPSSourceUpdates=$fpsSourceUpdates;nativeFPSReciprocalMismatches=$fpsReciprocalMismatches;
     interpretation='Independent passive validation of identified live native fields. Matching copies and frame/timer bookends are bounded coherence checks, not an engine-thread atomicity guarantee or production CGame construction.';
     gameLaunched=$false;injected=$false;memoryWritten=$false;threadsSuspended=$false;processTerminated=$false;focusChanged=$false;installedFilesChanged=$false;productionCGameConstructed=$false}
 $record|ConvertTo-Json -Depth 9|Set-Content -LiteralPath (Join-Path $output 'capture-result.json') -Encoding utf8

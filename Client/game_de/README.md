@@ -6,7 +6,7 @@ through `CGameAdapterModule` and the versioned SDK `game/CGameAdapter.h`.
 The module provides no separate transport or script-host lifecycle.
 
 The actual SDK implementation is assembled in the still-abstract `CGameDE`:
-seven native timing getters, the existing owner's `CClockDE` and the complete
+eight native timing getters, the existing owner's `CClockDE` and the complete
 four-method `CKeyGenDE`. Native DE CRC evidence and an address-matched classic
 SDK reference establish the hash behavior; no game function or new library is
 needed for hashing. Missing game subsystems remain pure virtual methods, so
@@ -16,8 +16,9 @@ The three SDK scalar setters share the clock owner's internal timing access:
 `SetTimeScale`, `SetGameSpeed` and `SetMinuteDuration`. Originals are captured
 on the qualified native callback, and failed writes or rollback retain that
 owner. Timing restoration does not rewind the displayed clock or native timer.
-This adds no wire protocol or full-game capability. Pause and native FPS remain
-separate work.
+This adds no wire protocol or full-game capability. Pause remains separate work.
+`GetFPS` reads the independently proved native averaged-FPS float using a
+separate guarded reader method; existing timing values remain 64 bytes.
 
 The separate optional local-input lease reuses MTA's retained `CKeyBinds` and
 controller synthesis for six on-foot actions, with a 500 ms owner/generation

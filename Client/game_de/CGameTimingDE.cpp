@@ -49,6 +49,20 @@ namespace mta::game_de
         return result;
     }
 
+    float CGameTimingDE::RequireFPS(const NativeGameTimingReader& reader)
+    {
+        float      value = 0;
+        const auto result = reader.ReadFPS(value);
+        if (result != Status::Ok)
+            throw std::runtime_error("DE CGame FPS unavailable (status " + std::to_string(static_cast<std::uint32_t>(result)) + ")");
+        return value;
+    }
+
+    float CGameTimingDE::GetFPS()
+    {
+        return RequireFPS(timing);
+    }
+
     float CGameTimingDE::GetTimeStep()
     {
         return RequireTiming(timing).timeStep;

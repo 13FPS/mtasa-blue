@@ -7,7 +7,7 @@ experiment remains historical compatibility evidence.
 
 The real Deathmatch client now builds and links for Release/x64 using MTA's
 existing code. Engine work is assembling its actual `CGame` services:
-`CClockDE`, the complete four-method `CKeyGenDE`, seven native timing getters,
+`CClockDE`, the complete four-method `CKeyGenDE`, eight native timing getters,
 and scale/game-speed/minute-duration setters on the existing engine owner.
 `CGameDE` supplies real clock/keygen accessors but remains abstract until the
 other subsystems exist. The exported factory therefore still supplies no full

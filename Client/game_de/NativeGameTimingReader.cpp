@@ -5,6 +5,7 @@
  *****************************************************************************/
 #include "NativeGameTimingReader.h"
 #include "NativeGameTimingProfile.h"
+#include "NativeGameFPSProfile.h"
 #include "NativeClockProfile.h"
 #include "NativeImageAccess.h"
 
@@ -17,6 +18,7 @@ namespace mta::game_de
     namespace
     {
         namespace TimingProfile = NativeGameTimingProfile;
+        namespace FPSProfile = NativeGameFPSProfile;
         namespace TimingImage = NativeImageAccess;
 
         template <std::size_t Size>
@@ -59,6 +61,37 @@ namespace mta::game_de
             output = next;
             return true;
         }
+
+        template <typename T>
+        bool FPSConstant(std::uintptr_t image, std::uintptr_t rva, T expected) noexcept
+        {
+            T actual{};
+            return TimingImage::ReadImage(image, image + rva, &actual, sizeof(actual)) && std::memcmp(&actual, &expected, sizeof(actual)) == 0;
+        }
+
+        bool FPSBinding(std::uintptr_t image) noexcept
+        {
+            // The completed timing Bind owns the executable identity and thread.
+            // FPS has its own native producer/consumer proof, independent of the
+            // gameplay clock and its scaling. Recheck all new pins on each read
+            // so stale or modified code cannot lend meaning to an arbitrary float.
+            return TimingCode(image, FPSProfile::frequencyScaleRva, FPSProfile::frequencyScale) &&
+                   TimingCode(image, FPSProfile::computationRva, FPSProfile::computation) && TimingCode(image, FPSProfile::consumerRva, FPSProfile::consumer) &&
+                   FPSConstant(image, FPSProfile::previousWeightRva, FPSProfile::previousWeight) &&
+                   FPSConstant(image, FPSProfile::currentWeightRva, FPSProfile::currentWeight) &&
+                   FPSConstant(image, FPSProfile::fpsNumeratorRva, FPSProfile::fpsNumerator) &&
+                   FPSConstant(image, FPSProfile::millisecondsRva, FPSProfile::milliseconds) &&
+                   FPSConstant(image, FPSProfile::secondsOriginRva, FPSProfile::secondsOrigin) &&
+                   FPSConstant(image, FPSProfile::frequencyNumeratorRva, FPSProfile::frequencyNumerator) &&
+                   [&]
+            {
+                std::array<unsigned char, FPSProfile::label.size()> label{};
+                return TimingImage::ReadImage(image, image + FPSProfile::labelRva, label.data(), label.size()) && label == FPSProfile::label;
+            }() && TimingImage::ImagePages(image, image + FPSProfile::fpsRva, sizeof(float), true) &&
+                   TimingImage::ImagePages(image, image + FPSProfile::averageMsRva, sizeof(float), true) &&
+                   TimingImage::ImagePages(image, image + FPSProfile::previousSecondsRva, sizeof(double), true) &&
+                   TimingImage::ImagePages(image, image + FPSProfile::secondsPerCycleRva, sizeof(double), true);
+        }
     }
 
     Status NativeGameTimingReader::Bind() noexcept
@@ -95,6 +128,26 @@ namespace mta::game_de
             return Status::Unsupported;
         // No cached success is exposed on an overlapping update, changed pin,
         // invalid scalar or failed OS read. Each CGame getter requests anew.
+        output = second;
+        return Status::Ok;
+    }
+
+    Status NativeGameTimingReader::ReadFPS(float& output) const noexcept
+    {
+        const auto owner = ownerThread.load();
+        if (!owner || !imageAddress.load())
+            return Status::NotInitialized;
+        if (owner != GetCurrentThreadId())
+            return Status::WrongThread;
+        const auto image = imageAddress.load();
+        float      first = 0, second = 0;
+        if (!TimingBinding(image) || !FPSBinding(image) || !TimingImage::ReadImage(image, image + FPSProfile::fpsRva, &first, sizeof(first), true) ||
+            !TimingImage::ReadImage(image, image + FPSProfile::fpsRva, &second, sizeof(second), true) || !std::isfinite(first) || first < 0 ||
+            !std::isfinite(second) || second < 0 || std::memcmp(&first, &second, sizeof(first)) != 0 || !FPSBinding(image) || !TimingBinding(image))
+            return Status::Unsupported;
+        // Native division has no zero guard. Refuse invalid or overlapping
+        // samples, preserving the caller's value instead of computing an FPS
+        // estimate from the independently scaled/clamped gameplay timestep.
         output = second;
         return Status::Ok;
     }

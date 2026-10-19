@@ -85,9 +85,9 @@ across seven real Core/GUI host cases. The normal Core build passed its 69
 guards and both classic compile profiles; the rebuilt Bridge passed 2,463
 checks. No game installation was changed.
 
-**The timing backend implements seven actual SDK `CGame` getters.**
+**The timing backend implements eight actual SDK `CGame` getters.**
 `CGameTimingDE` supplies `GetSystemTime`, `GetSystemFrameCounter`, `GetTimeStep`,
-`GetOldTimeStep`, `GetTimeScale`, `GetGameSpeed` and `GetMinuteDuration` through checked native
+`GetOldTimeStep`, `GetTimeScale`, `GetGameSpeed`, `GetMinuteDuration` and `GetFPS` through checked native
 timing reads. The class remains abstract and cannot be instantiated or exposed
 as a game interface. The adapter's readiness and advertised capabilities remain
 unchanged; full `CGame`, startup and multiplayer are still incomplete.
@@ -117,12 +117,25 @@ same native clock owner's internal timing access. Only the qualified engine
 callback can capture an original scalar or write it; startup reader binding
 grants no write access. End restores owned scale/duration independently of
 displayed time, preserving natural clock progression for timing-only changes.
-The public clock protocol and adapter ABI are unchanged. `Pause` and native
-FPS still need their own implementation; no estimated FPS is returned.
+The public clock protocol and adapter ABI are unchanged. `Pause` still needs
+an engine owner that continues to run while the game is paused.
 
 This SDK batch passed 67 key-generation checks on each x86/x64 architecture,
 1,094 production clock/timing checks, the normal Release/x64 backend build and
 1,780 fresh factory-host checks. No GTA installation or running game changed.
+
+`GetFPS` reads DE's stored averaged FPS float, independently identified through
+the native wall-clock calculation and its named display consumer. Its separate
+reader checks pins, pages, thread ownership and two matching finite samples;
+it preserves output on refusal. Existing 64-byte timing values and public wire
+formats stay unchanged. A passive capture of the already-running GTA process
+accepted 187 samples and 186 platform-clock advances, with stored FPS between
+59.9874 and 60.0103 and no native FPS/average-time mismatches. Gameplay time was
+frozen while these native wall-clock values advanced. This validates the field
+observation, not construction or execution of a full `CGame` in GTA.
+The follow-up passed 1,212 clock/timing/FPS fixture checks, a rebuilt normal
+Release/x64 backend and all 1,780 fresh factory-host checks. The installed
+runtime remains unchanged; full MTA startup and gameplay are still incomplete.
 
 **The current source connects the retained MTA bindings to local on-foot input.**
 The existing runtime selection now starts a separate renewable input service

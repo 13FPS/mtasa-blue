@@ -6,6 +6,7 @@
 #include "../../Client/game_de/CClockDE.h"
 #include "../../Client/game_de/CGameTimingDE.h"
 #include "../../Client/game_de/NativeGameTimingProfile.h"
+#include "../../Client/game_de/NativeGameFPSProfile.h"
 #include "../../Client/game_de/NativeServiceAdmission.h"
 #include <array>
 #include <cstdio>
@@ -144,6 +145,7 @@ namespace ClockReaderTestHost
     std::uintptr_t        image = 0;
     std::atomic<unsigned> samples{0}, mismatchSample{0};
     std::atomic<unsigned> timingSamples{0}, mismatchTimingSample{0};
+    std::atomic<unsigned> fpsSamples{0}, mismatchFPSSample{0}, failFPSSample{0};
 
     HMODULE WINAPI Module(LPCWSTR name)
     {
@@ -166,6 +168,19 @@ namespace mta::game_de::NativeImageAccess
     {
         if (!ReadImage(image, address, destination, bytes, writable, executable))
             return false;
+        if (address == image + NativeGameFPSProfile::fpsRva && bytes == sizeof(float))
+        {
+            const auto sample = ClockReaderTestHost::fpsSamples.fetch_add(1) + 1;
+            if (sample == ClockReaderTestHost::failFPSSample.load())
+                return false;
+            if (sample == ClockReaderTestHost::mismatchFPSSample.load())
+            {
+                float value = 0;
+                std::memcpy(&value, destination, sizeof(value));
+                value += 1;
+                std::memcpy(destination, &value, sizeof(value));
+            }
+        }
         if (address == image + NativeGameTimingProfile::timeScaleRva && bytes == sizeof(float) &&
             ClockReaderTestHost::timingSamples.fetch_add(1) + 1 == ClockReaderTestHost::mismatchTimingSample.load())
         {
@@ -348,6 +363,41 @@ namespace
             invoke = reinterpret_cast<void (*)()>(image + TextRva + 0x1000);
             ClockTestFaults::patchAddress = image + NativeClockProfile::patchRva - 3;
             ClockTestFaults::dataAddress = image + 0x522bcf8;
+            AdmitFPSPins();
+        }
+        void AdmitFPSPins()
+        {
+            // FPS lives far from the compact clock sections. Populate only
+            // this owned SEC_IMAGE's zero-filled virtual pages, then mark its
+            // code RX, constants RO and data RW. This keeps MEM_IMAGE/page
+            // checks real without copying GTA or growing a huge sparse raw file.
+            const auto admit = [&](std::uintptr_t rva, const void* bytes, std::size_t length, DWORD protection)
+            {
+                DWORD previous = 0, ignored = 0;
+                Check(::VirtualProtect(reinterpret_cast<void*>(image + rva), length, PAGE_READWRITE, &previous) != FALSE,
+                      "admit only the synthetic SEC_IMAGE FPS fixture page for initialization");
+                std::memcpy(reinterpret_cast<void*>(image + rva), bytes, length);
+                Check(::VirtualProtect(reinterpret_cast<void*>(image + rva), length, protection, &ignored) != FALSE &&
+                          ::FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(image + rva), length),
+                      "set exact synthetic FPS code/data protections without executable writable pages");
+            };
+            const auto code = [&](std::uintptr_t rva, const auto& bytes) { admit(rva, bytes.data(), bytes.size(), PAGE_EXECUTE_READ); };
+            code(NativeGameFPSProfile::frequencyScaleRva, NativeGameFPSProfile::frequencyScale);
+            code(NativeGameFPSProfile::computationRva, NativeGameFPSProfile::computation);
+            code(NativeGameFPSProfile::consumerRva, NativeGameFPSProfile::consumer);
+            admit(NativeGameFPSProfile::labelRva, NativeGameFPSProfile::label.data(), NativeGameFPSProfile::label.size(), PAGE_READONLY);
+            const auto constant = [&](std::uintptr_t rva, const auto& value) { admit(rva, &value, sizeof(value), PAGE_READONLY); };
+            constant(NativeGameFPSProfile::previousWeightRva, NativeGameFPSProfile::previousWeight);
+            constant(NativeGameFPSProfile::currentWeightRva, NativeGameFPSProfile::currentWeight);
+            constant(NativeGameFPSProfile::fpsNumeratorRva, NativeGameFPSProfile::fpsNumerator);
+            constant(NativeGameFPSProfile::millisecondsRva, NativeGameFPSProfile::milliseconds);
+            constant(NativeGameFPSProfile::secondsOriginRva, NativeGameFPSProfile::secondsOrigin);
+            constant(NativeGameFPSProfile::frequencyNumeratorRva, NativeGameFPSProfile::frequencyNumerator);
+            const std::array<float, 2> values{16.0f, 62.5f};
+            const double               previousSeconds = 16777216.0, secondsPerCycle = 0.000001;
+            admit(NativeGameFPSProfile::averageMsRva, values.data(), sizeof(values), PAGE_READWRITE);
+            admit(NativeGameFPSProfile::previousSecondsRva, &previousSeconds, sizeof(previousSeconds), PAGE_READWRITE);
+            admit(NativeGameFPSProfile::secondsPerCycleRva, &secondsPerCycle, sizeof(secondsPerCycle), PAGE_READWRITE);
         }
         void Patch(std::uintptr_t rva, const void* bytes, std::size_t length)
         {
@@ -1499,6 +1549,7 @@ namespace
     class TimingBaseProbe : public CGameTimingDE
     {
     public:
+        using CGameTimingDE::RequireFPS;
         using CGameTimingDE::RequireTiming;
     };
     static_assert(std::is_abstract_v<TimingBaseProbe> && std::is_base_of_v<CGame, TimingBaseProbe>);
@@ -1596,6 +1647,120 @@ namespace
         std::puts("Production CGame native timing prerequisite fixture completed");
     }
 
+    void NativeStoredFPSReader(ClockImageFixture& fixture)
+    {
+        NativeGameTimingReader reader;
+        float                  value = 123.25f;
+        const auto             refusesGetter = [&]
+        {
+            try
+            {
+                TimingBaseProbe::RequireFPS(reader);
+                return false;
+            }
+            catch (const std::runtime_error& error)
+            {
+                return std::strstr(error.what(), "DE CGame FPS unavailable (status ") != nullptr;
+            }
+        };
+        const auto refused = [&](Status expected)
+        {
+            value = 123.25f;
+            return reader.ReadFPS(value) == expected && value == 123.25f;
+        };
+        Check(refused(Status::NotInitialized) && refusesGetter(), "unbound native FPS preserves output and the CGame getter explicitly refuses");
+        Check(reader.Bind() == Status::Unsupported && refused(Status::NotInitialized), "native FPS cannot bypass the shipping executable gate");
+        fixture.Seed();
+        ClockReaderTestHost::image = fixture.image;
+        Check(reader.Bind() == Status::Ok && reader.IsBound(), "FPS reuses the existing exact-image native timing binding and owner");
+        const auto writes = ClockTestFaults::clockDataWrites.load(), patches = ClockTestFaults::clockCodeExchanges.load();
+        ClockReaderTestHost::fpsSamples.store(0);
+        Check(reader.ReadFPS(value) == Status::Ok && value == 62.5f && ClockReaderTestHost::fpsSamples.load() == 2 &&
+                  TimingBaseProbe::RequireFPS(reader) == 62.5f,
+              "the real CGame FPS getter boundary reads matching native FPS floats without constructing a partial CGame");
+        fixture.Put(NativeGameFPSProfile::fpsRva, 37.25f);
+        fixture.Put(NativeGameTimingProfile::timeStepRva, 99.0f);
+        fixture.Put(NativeGameTimingProfile::timeScaleRva, -0.5f);
+        Check(reader.ReadFPS(value) == Status::Ok && value == 37.25f,
+              "FPS returns the fresh native field and cannot be replaced by a timestep or time-scale estimate");
+        fixture.Put(NativeGameFPSProfile::fpsRva, 0.0f);
+        Check(reader.ReadFPS(value) == Status::Ok && value == 0.0f, "a stored finite zero FPS remains a native value rather than an invented minimum");
+        fixture.Put(NativeGameFPSProfile::fpsRva, 62.5f);
+        std::thread foreign(
+            [&] { Check(refused(Status::WrongThread) && refusesGetter(), "foreign FPS reads preserve output and the actual getter refusal policy"); });
+        foreign.join();
+        ClockReaderTestHost::fpsSamples.store(0);
+        ClockReaderTestHost::mismatchFPSSample.store(2);
+        Check(refused(Status::Unsupported) && ClockReaderTestHost::fpsSamples.load() == 2,
+              "two unequal native FPS samples refuse publication rather than publishing a torn value");
+        ClockReaderTestHost::mismatchFPSSample.store(0);
+        for (unsigned failed = 1; failed <= 2; ++failed)
+        {
+            ClockReaderTestHost::fpsSamples.store(0);
+            ClockReaderTestHost::failFPSSample.store(failed);
+            Check(refused(Status::Unsupported), "failure of either native FPS read preserves the caller's output");
+        }
+        ClockReaderTestHost::failFPSSample.store(0);
+        for (const auto invalid :
+             {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity(), -1.0f})
+        {
+            fixture.Put(NativeGameFPSProfile::fpsRva, invalid);
+            Check(refused(Status::Unsupported) && refusesGetter(), "nonfinite or negative stored FPS is refused by both reader and CGame getter boundary");
+        }
+        fixture.Put(NativeGameFPSProfile::fpsRva, 62.5f);
+        const auto changedPin = [&](std::uintptr_t rva, const auto& original)
+        {
+            auto changed = original;
+            changed[0] ^= 1;
+            fixture.Patch(rva, changed.data(), changed.size());
+            Check(refused(Status::Unsupported) && refusesGetter(), "a changed FPS computation, scale or named consumer pin revokes an earlier successful read");
+            fixture.Patch(rva, original.data(), original.size());
+        };
+        changedPin(NativeGameFPSProfile::frequencyScaleRva, NativeGameFPSProfile::frequencyScale);
+        changedPin(NativeGameFPSProfile::computationRva, NativeGameFPSProfile::computation);
+        changedPin(NativeGameFPSProfile::consumerRva, NativeGameFPSProfile::consumer);
+        changedPin(NativeGameFPSProfile::labelRva, NativeGameFPSProfile::label);
+        const auto changedConstant = [&](std::uintptr_t rva, const auto& original)
+        {
+            auto changed = original + 1;
+            fixture.Patch(rva, &changed, sizeof(changed));
+            Check(refused(Status::Unsupported), "changing a native FPS arithmetic constant refuses the stored value's meaning");
+            fixture.Patch(rva, &original, sizeof(original));
+        };
+        changedConstant(NativeGameFPSProfile::previousWeightRva, NativeGameFPSProfile::previousWeight);
+        changedConstant(NativeGameFPSProfile::currentWeightRva, NativeGameFPSProfile::currentWeight);
+        changedConstant(NativeGameFPSProfile::fpsNumeratorRva, NativeGameFPSProfile::fpsNumerator);
+        changedConstant(NativeGameFPSProfile::millisecondsRva, NativeGameFPSProfile::milliseconds);
+        changedConstant(NativeGameFPSProfile::secondsOriginRva, NativeGameFPSProfile::secondsOrigin);
+        changedConstant(NativeGameFPSProfile::frequencyNumeratorRva, NativeGameFPSProfile::frequencyNumerator);
+        for (const auto protection : {PAGE_NOACCESS, PAGE_EXECUTE_READWRITE})
+        {
+            DWORD previous = 0, ignored = 0;
+            Check(::VirtualProtect(reinterpret_cast<void*>(fixture.image + NativeGameFPSProfile::fpsRva), sizeof(float), protection, &previous) != FALSE,
+                  "change only the owned fixture FPS data page's access policy");
+            Check(refused(Status::Unsupported) && refusesGetter(),
+                  "unreadable or executable native FPS data cannot satisfy writable non-executable qualification");
+            Check(::VirtualProtect(reinterpret_cast<void*>(fixture.image + NativeGameFPSProfile::fpsRva), sizeof(float), previous, &ignored) != FALSE,
+                  "restore the owned FPS data page after checked refusal");
+        }
+        DWORD previous = 0, ignored = 0;
+        Check(::VirtualProtect(reinterpret_cast<void*>(fixture.image + NativeGameFPSProfile::computationRva), NativeGameFPSProfile::computation.size(),
+                               PAGE_READWRITE, &previous) != FALSE,
+              "remove execute access only from the synthetic FPS computation page");
+        Check(refused(Status::Unsupported), "a readable matching computation pin still requires an executable native image page");
+        Check(::VirtualProtect(reinterpret_cast<void*>(fixture.image + NativeGameFPSProfile::computationRva), NativeGameFPSProfile::computation.size(),
+                               previous, &ignored) != FALSE,
+              "restore synthetic FPS code page execute access");
+        Check(reader.ReadFPS(value) == Status::Ok && value == 62.5f && ClockTestFaults::clockDataWrites.load() == writes &&
+                  ClockTestFaults::clockCodeExchanges.load() == patches,
+              "FPS failure recovery performs no engine writes, patch exchanges or lease operations");
+        reader.Reset();
+        Check(refused(Status::NotInitialized) && refusesGetter() && !reader.IsBound(),
+              "retired native FPS access does not retain an earlier successful sample");
+        ClockReaderTestHost::image = 0;
+        std::puts("Production native stored FPS reader fixture completed");
+    }
+
     void NativePatchTransactions(ClockImageFixture& fixture)
     {
         if (!NativeClockProfile::clockBoundaryReviewed)
@@ -1685,6 +1850,7 @@ int main(int argc, char** argv)
     fixture.Create(argv[1]);
     NativeReadOnlyGameTimeReader(fixture);
     NativeGameTimingPrerequisite(fixture);
+    NativeStoredFPSReader(fixture);
     NativeTimingWritesAndRestoration(fixture);
     NativeReadSetAndRestoration(fixture);
     NativeCoherentCommandPublication(fixture);

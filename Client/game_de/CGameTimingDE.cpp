@@ -106,4 +106,11 @@ namespace mta::game_de
         static_assert(sizeof(value) == sizeof(std::uint32_t));
         RequireTimingWrite(timingWriter.SetMinuteDuration(value), "SetMinuteDuration");
     }
+
+    void CGameTimingDE::Pause(bool value)
+    {
+        // The clock/weather callback stops while paused. Its native owner must
+        // also retain a timer callback that can unpause and retire this write.
+        RequireTimingWrite(timingWriter.Pause(value), "Pause");
+    }
 }

@@ -10,6 +10,7 @@
 #include "NativeClockMemory.h"
 #include "NativeGameTimingAccess.h"
 #include "NativeGameTimingProfile.h"
+#include "NativeGamePauseProfile.h"
 #include "NativeImageAccess.h"
 #include "NativeServiceAdmission.h"
 
@@ -39,6 +40,7 @@ namespace mta::game_de
         namespace Image = NativeImageAccess;
         namespace Admission = NativeServiceAdmission;
         namespace TimingProfile = NativeGameTimingProfile;
+        namespace PauseProfile = NativeGamePauseProfile;
         using ContinuationFunction = void (*)();
         constexpr std::size_t    imageSize = Profile::imageSize;
         constexpr std::uintptr_t hoursRva = Profile::hoursRva, minutesRva = Profile::minutesRva, secondsRva = Profile::secondsRva;
@@ -57,6 +59,7 @@ namespace mta::game_de
             ClockResult Frozen(bool& frozen) const noexcept override;
             ClockResult SetTimeScale(float value) noexcept override;
             ClockResult SetMinuteDuration(std::uint32_t value) noexcept override;
+            ClockResult Pause(bool value) noexcept override;
         };
 
         struct Counters
@@ -93,6 +96,11 @@ namespace mta::game_de
             std::atomic<std::uint64_t> timingGeneration{0};
             float                      originalTimeScale = 0;
             std::uint32_t              originalMinuteDuration = 0;
+            std::uint8_t               originalUserPause = 0;
+            bool                       timingMode = false;
+            std::atomic<bool>          timerHooked{false}, timerReady{false};
+            GameTimingHandler          timingHandler = nullptr;
+            void*                      timingContext = nullptr;
             std::atomic<unsigned>      inFlight{0};
             std::atomic<std::uint32_t> retainedPeerThreads{0};
             std::atomic<DWORD>         engineThread{0};
@@ -110,6 +118,7 @@ namespace mta::game_de
             ClockValues                original, observed;
             ClockPublication           publishedClock;
             ContinuationFunction       originalContinuation = nullptr;
+            ContinuationFunction       originalTimer = nullptr;
             DWORD                      patchProtection = 0;
             std::atomic<bool>          protectionPending{false};
             std::vector<PeerThread>    recoveryPeers;
@@ -124,7 +133,8 @@ namespace mta::game_de
         Runtime                    runtime;
         thread_local unsigned      callbackDepth = 0;
         thread_local std::uint64_t timingCallbackGeneration = 0;
-        constexpr unsigned         timingScaleBit = 1, timingMinuteBit = 2;
+        thread_local bool          timingTimerScope = false;
+        constexpr unsigned         timingScaleBit = 1, timingMinuteBit = 2, timingPauseBit = 4;
 
         bool ReleaseAdmission(std::uint64_t generation) noexcept
         {
@@ -226,7 +236,16 @@ namespace mta::game_de
                    contains(Profile::hookTailRva, Profile::hookTail.size(), true) && contains(Profile::clockCallRva, Profile::clockCall.size(), true) &&
                    contains(Profile::frameCallRva, Profile::frameCall.size(), true) && contains(Profile::getterCaseRva, Profile::getterCase.size(), true) &&
                    contains(hoursRva, 1, false) && contains(minutesRva, 1, false) && contains(secondsRva, 2, false) && contains(lastChangeRva, 4, false) &&
-                   contains(nativeTimerRva, 4, false) && contains(minuteDurationRva, 4, false);
+                   contains(nativeTimerRva, 4, false) && contains(minuteDurationRva, 4, false) &&
+                   (!runtime.timingMode ||
+                    (contains(PauseProfile::entryRva, PauseProfile::entry.size(), true) && contains(PauseProfile::tailRva, PauseProfile::tail.size(), true) &&
+                     contains(PauseProfile::pauseReadsRva, PauseProfile::pauseReads.size(), true) &&
+                     contains(PauseProfile::pauseBranchRva, PauseProfile::pauseBranch.size(), true) &&
+                     contains(PauseProfile::frameRva, PauseProfile::frame.size(), true) &&
+                     contains(PauseProfile::returnRva, PauseProfile::returnCode.size(), true) &&
+                     contains(PauseProfile::normalCallRva, PauseProfile::normalCall.size(), true) &&
+                     contains(PauseProfile::alternateCallRva, PauseProfile::alternateCall.size(), true) &&
+                     contains(PauseProfile::gameplayTailRva, PauseProfile::gameplayTail.size(), true) && contains(PauseProfile::userPauseRva, 1, false)));
         }
 
         bool CheckBinding(bool entryBeforeHook = false, bool allowRecoveryPatch = false) noexcept
@@ -234,6 +253,14 @@ namespace mta::game_de
             if (!CheckImage() || !CheckCode(Profile::hookTailRva, Profile::hookTail) || !CheckCode(Profile::clockCallRva, Profile::clockCall) ||
                 !CheckCode(Profile::frameCallRva, Profile::frameCall) || !CheckCode(Profile::getterCaseRva, Profile::getterCase) ||
                 (entryBeforeHook && !CheckCode(Profile::hookEntryRva, Profile::hookEntry)))
+                return false;
+            if (runtime.timingMode &&
+                ((!runtime.timerHooked.load() && !CheckCode(PauseProfile::entryRva, PauseProfile::entry)) ||
+                 !CheckCode(PauseProfile::tailRva, PauseProfile::tail) || !CheckCode(PauseProfile::pauseReadsRva, PauseProfile::pauseReads) ||
+                 !CheckCode(PauseProfile::pauseBranchRva, PauseProfile::pauseBranch) || !CheckCode(PauseProfile::frameRva, PauseProfile::frame) ||
+                 !CheckCode(PauseProfile::returnRva, PauseProfile::returnCode) || !CheckCode(PauseProfile::normalCallRva, PauseProfile::normalCall) ||
+                 !CheckCode(PauseProfile::alternateCallRva, PauseProfile::alternateCall) ||
+                 !CheckCode(PauseProfile::gameplayTailRva, PauseProfile::gameplayTail)))
                 return false;
             std::array<unsigned char, Profile::clockCode.size()> actual{};
             if (!Image::ReadImage(runtime.image, runtime.image + Profile::clockCodeRva, actual.data(), actual.size(), false, true))
@@ -277,7 +304,14 @@ namespace mta::game_de
 
         ClockResult CheckTimingOwner() noexcept
         {
-            const auto owner = CheckOwner();
+            const auto owner = timingTimerScope && runtime.timingMode && runtime.timerHooked.load() && runtime.timerReady.load()
+                                   ? (!runtime.bound.load()                                           ? ClockResult::NotInitialized
+                                      : GetCurrentThreadId() != runtime.engineThread.load()           ? ClockResult::WrongThread
+                                      : !runtime.active.load() || runtime.stopping.load() || !Fresh() ? ClockResult::Expired
+                                      : runtime.patchRecovery.load()                                  ? ClockResult::PatchFailure
+                                      : CheckBinding()                                                ? ClockResult::Ok
+                                                                                                      : ClockResult::BindingChanged)
+                                   : CheckOwner();
             if (owner != ClockResult::Ok)
                 return owner;
             if (callbackDepth != 1)
@@ -647,6 +681,8 @@ namespace mta::game_de
         {
             if constexpr (std::is_same_v<T, float>)
                 return std::isfinite(value);
+            else if constexpr (std::is_same_v<T, std::uint8_t>)
+                return value <= 1;
             else
                 return value && value <= 3600000;
         }
@@ -694,6 +730,7 @@ namespace mta::game_de
             // Neither a later call nor End may discard this original value.
             runtime.timingDirty.fetch_or(bit);
             runtime.timingRecovery.fetch_or(bit);
+            runtime.restored.store(false);
             const bool written = WriteValue(rva, value) && TimingReadback(rva, value);
             const bool released = peers.Release();
             if (!written || !released)
@@ -716,6 +753,15 @@ namespace mta::game_de
             return SetTimingValue(minuteDurationRva, value, timingMinuteBit, runtime.originalMinuteDuration);
         }
 
+        ClockResult NativeAccess::Pause(bool value) noexcept
+        {
+            // Legacy clock ownership has no callback once user pause skips the
+            // weather continuation. It therefore cannot acquire pause debt.
+            if (!runtime.timingMode || !runtime.timerHooked.load() || !runtime.timerReady.load())
+                return ClockResult::NotInitialized;
+            return SetTimingValue(PauseProfile::userPauseRva, static_cast<std::uint8_t>(value), timingPauseBit, runtime.originalUserPause);
+        }
+
         bool RestoreOriginal() noexcept
         {
             runtime.counters.restoreAttempts.fetch_add(1);
@@ -730,14 +776,16 @@ namespace mta::game_de
             if (clean && !clockChanged && !timingChanged)
             {
                 ClockValues current;
-                if (RawRead(current))
+                if (!runtime.captured.load() || RawRead(current))
                 {
                     // A captured read owns lifetime, not time. Retire it using
                     // current verified values so a read-only reference never
                     // rewinds the game clock or writes a restoration snapshot.
-                    runtime.observed = current;
+                    if (runtime.captured.load())
+                        runtime.observed = current;
                     runtime.restored.store(true);
                     runtime.ready.store(false);
+                    runtime.timerReady.store(false);
                     return true;
                 }
                 runtime.counters.restoreFailures.fetch_add(1);
@@ -775,14 +823,21 @@ namespace mta::game_de
                 runtime.timingRecovery.fetch_or(timingChanged);
                 clean = WriteValue(minuteDurationRva, runtime.originalMinuteDuration) && TimingReadback(minuteDurationRva, runtime.originalMinuteDuration);
             }
+            if (clean && (timingChanged & timingPauseBit))
+            {
+                runtime.timingRecovery.fetch_or(timingChanged);
+                clean =
+                    WriteValue(PauseProfile::userPauseRva, runtime.originalUserPause) && TimingReadback(PauseProfile::userPauseRva, runtime.originalUserPause);
+            }
             ClockValues observed;
-            if (clean)
+            if (clean && runtime.captured.load())
                 clean = RawRead(observed) && (!clockChanged || (observed.hour == runtime.original.hour && observed.minute == runtime.original.minute &&
                                                                 observed.seconds == runtime.original.seconds && observed.lastMinuteChange == rebased));
             clean = peers.Release() && clean;
             if (clean)
             {
-                runtime.observed = observed;
+                if (runtime.captured.load())
+                    runtime.observed = observed;
                 runtime.dataRecovery.store(false);
                 runtime.timingDirty.store(0);
                 runtime.timingRecovery.store(0);
@@ -790,6 +845,7 @@ namespace mta::game_de
                 runtime.timingGeneration.store(0);
                 runtime.restored.store(true);
                 runtime.ready.store(false);
+                runtime.timerReady.store(false);
                 return true;
             }
             runtime.counters.restoreFailures.fetch_add(1);
@@ -937,7 +993,7 @@ namespace mta::game_de
             {
                 if (runtime.captured.load() && !runtime.restored.load())
                     RestoreOriginal();
-                else if (!runtime.captured.load())
+                else if (!runtime.captured.load() && !runtime.timingDirty.load() && !runtime.timingRecovery.load())
                     runtime.restored.store(true);
             }
             if (runtime.peersRetained.load() && !RetryPeerHoldsBounded())
@@ -949,7 +1005,9 @@ namespace mta::game_de
         {
             const auto returnAddress = _ReturnAddress();
             const auto previousTimingGeneration = timingCallbackGeneration;
+            const auto previousTimerScope = timingTimerScope;
             timingCallbackGeneration = 0;
+            timingTimerScope = false;
             runtime.inFlight.fetch_add(1);
             runtime.counters.callbacks.fetch_add(1);
             ++callbackDepth;
@@ -968,6 +1026,100 @@ namespace mta::game_de
                 if (AbnormalTermination())
                     Stop(ClockResult::OriginalException);
                 timingCallbackGeneration = previousTimingGeneration;
+                timingTimerScope = previousTimerScope;
+                --callbackDepth;
+                runtime.inFlight.fetch_sub(1);
+            }
+        }
+
+        void TimerBody(void* returnAddress)
+        {
+            const auto origin = reinterpret_cast<std::uintptr_t>(returnAddress);
+            if (!runtime.timingMode || !runtime.timerHooked.load() ||
+                (origin != runtime.image + PauseProfile::normalReturnRva && origin != runtime.image + PauseProfile::alternateReturnRva))
+                return;
+            runtime.counters.qualified.fetch_add(1);
+            const auto current = GetCurrentThreadId();
+            DWORD      owner = runtime.engineThread.load();
+            if (!owner && runtime.active.load())
+            {
+                runtime.engineThread.compare_exchange_strong(owner, current);
+                owner = runtime.engineThread.load();
+            }
+            if (!owner || owner != current)
+            {
+                if (owner)
+                {
+                    runtime.counters.foreign.fetch_add(1);
+                    Stop(ClockResult::WrongThread);
+                }
+                return;
+            }
+            if (callbackDepth != 1)
+            {
+                runtime.counters.nested.fetch_add(1);
+                Stop(ClockResult::Busy);
+                return;
+            }
+            if (runtime.peersRetained.load() && !RetryPeerHoldsBounded())
+                return;
+            if (runtime.active.load() && !Fresh())
+                Stop(ClockResult::Expired);
+            if (!CheckBinding(false, true))
+                Stop(ClockResult::BindingChanged);
+            else
+            {
+                // This is a real paused-frame owner, not a clock observation.
+                // It neither captures CClock values nor admits its mailbox.
+                timingTimerScope = true;
+                timingCallbackGeneration = runtime.generation.load();
+                if (runtime.active.load())
+                    runtime.timerReady.store(true);
+                if (runtime.active.load() && runtime.timerReady.load() && runtime.timingHandler)
+                    runtime.timingHandler(runtime.access, runtime.timingContext);
+                if (runtime.stopping.load())
+                {
+                    if ((runtime.captured.load() && !runtime.restored.load()) || runtime.timingDirty.load() || runtime.timingRecovery.load())
+                        RestoreOriginal();
+                    else
+                    {
+                        runtime.restored.store(true);
+                        runtime.timerReady.store(false);
+                    }
+                }
+            }
+            if (runtime.peersRetained.load() && !RetryPeerHoldsBounded())
+                return;
+            Publish();
+        }
+
+        void HookTimerUpdate()
+        {
+            const auto returnAddress = _ReturnAddress();
+            const auto previousTimingGeneration = timingCallbackGeneration;
+            const auto previousTimerScope = timingTimerScope;
+            timingCallbackGeneration = 0;
+            timingTimerScope = false;
+            runtime.inFlight.fetch_add(1);
+            runtime.counters.callbacks.fetch_add(1);
+            ++callbackDepth;
+            __try
+            {
+                // Every origin retains its original native update before any
+                // client work. Only proven gameplay returns gain write scope.
+                // Existing peer-resume debt must retire before native code can
+                // need a parked producer's locks, as for the clock hook.
+                if (runtime.peersRetained.load() && !RetryPeerHoldsBounded())
+                    return;
+                runtime.originalTimer();
+                TimerBody(returnAddress);
+            }
+            __finally
+            {
+                if (AbnormalTermination())
+                    Stop(ClockResult::OriginalException);
+                timingCallbackGeneration = previousTimingGeneration;
+                timingTimerScope = previousTimerScope;
                 --callbackDepth;
                 runtime.inFlight.fetch_sub(1);
             }
@@ -994,6 +1146,9 @@ namespace mta::game_de
                 if (ready)
                     ready = (install ? DetourAttach : DetourDetach)(reinterpret_cast<PVOID*>(&runtime.originalContinuation),
                                                                     reinterpret_cast<PVOID>(&HookClockContinuation)) == NO_ERROR;
+                if (ready && runtime.timingMode)
+                    ready = (install ? DetourAttach : DetourDetach)(reinterpret_cast<PVOID*>(&runtime.originalTimer),
+                                                                    reinterpret_cast<PVOID>(&HookTimerUpdate)) == NO_ERROR;
                 if (ready)
                 {
                     ready = DetourTransactionCommit() == NO_ERROR;
@@ -1002,7 +1157,10 @@ namespace mta::game_de
                     // Failed ResumeThread must not hide a live installed hook
                     // (or misreport a successfully detached hook as retained).
                     if (ready)
+                    {
                         runtime.hooked.store(install);
+                        runtime.timerHooked.store(install && runtime.timingMode);
+                    }
                 }
             }
             if (transaction)
@@ -1063,7 +1221,7 @@ namespace mta::game_de
             next.producerThread = runtime.producerThread;
             next.engineThread = runtime.engineThread.load();
             next.bound = runtime.bound.load();
-            next.hooked = runtime.hooked.load();
+            next.hooked = runtime.hooked.load() || runtime.timerHooked.load();
             next.active = runtime.active.load();
             next.ready = runtime.ready.load() && !runtime.timingRecovery.load();
             next.stopping = runtime.stopping.load();
@@ -1111,11 +1269,23 @@ namespace mta::game_de
 
     bool NativeClockService::Begin(const ClockServiceRequestV1& request, ClockServiceStateV1& state) noexcept
     {
+        return BeginOwner(request, state, false, nullptr, nullptr);
+    }
+
+    bool NativeClockService::BeginGameTiming(const ClockServiceRequestV1& request, ClockServiceStateV1& state, GameTimingHandler handler,
+                                             void* context) noexcept
+    {
+        return BeginOwner(request, state, true, handler, context);
+    }
+
+    bool NativeClockService::BeginOwner(const ClockServiceRequestV1& request, ClockServiceStateV1& state, bool timingMode, GameTimingHandler handler,
+                                        void* context) noexcept
+    {
         ApiOperation operation;
-        if (!operation.acquired || !ValidateRequest(request) || runtime.hooked.load() || runtime.inFlight.load() || runtime.captured.load() ||
-            runtime.patchInstalled.load() || runtime.patchRecovery.load() || runtime.protectionPending.load() || runtime.dataRecovery.load() ||
-            runtime.timingDirty.load() || runtime.timingRecovery.load() || runtime.peersRetained.load() || runtime.admissionSerial.load() ||
-            runtime.generation.load() == (std::numeric_limits<std::uint64_t>::max)())
+        if (!operation.acquired || !ValidateRequest(request) || runtime.hooked.load() || runtime.timerHooked.load() || runtime.inFlight.load() ||
+            runtime.captured.load() || runtime.patchInstalled.load() || runtime.patchRecovery.load() || runtime.protectionPending.load() ||
+            runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() || runtime.peersRetained.load() ||
+            runtime.admissionSerial.load() || runtime.generation.load() == (std::numeric_limits<std::uint64_t>::max)())
             return false;
         Admission::Token claim;
         if (!Admission::TryAcquire(Admission::Category::Clock, claim))
@@ -1162,6 +1332,11 @@ namespace mta::game_de
         runtime.timingGeneration.store(0);
         runtime.originalTimeScale = 0;
         runtime.originalMinuteDuration = 0;
+        runtime.originalUserPause = 0;
+        runtime.timingMode = timingMode;
+        runtime.timerReady.store(false);
+        runtime.timingHandler = handler;
+        runtime.timingContext = context;
         bool valid = Image::CheckExecutableBuild() && CheckBinding(true);
         if (!valid)
             Stop(ClockResult::UnsupportedBuild);
@@ -1177,6 +1352,7 @@ namespace mta::game_de
         if (valid)
         {
             runtime.originalContinuation = reinterpret_cast<ContinuationFunction>(runtime.image + Profile::hookEntryRva);
+            runtime.originalTimer = timingMode ? reinterpret_cast<ContinuationFunction>(runtime.image + PauseProfile::entryRva) : nullptr;
             valid = ChangeHooks(true);
             if (valid)
             {
@@ -1199,10 +1375,16 @@ namespace mta::game_de
         state = finalState;
         // Refused setup relinquishes admission only when every possible
         // native obligation is absent. Partial setup retains it until End.
-        if (!valid && !runtime.hooked.load() && !runtime.inFlight.load() && !runtime.captured.load() && !runtime.patchInstalled.load() &&
-            !runtime.patchRecovery.load() && !runtime.protectionPending.load() && !runtime.dataRecovery.load() && !runtime.peersRetained.load() &&
-            !runtime.timingDirty.load() && !runtime.timingRecovery.load() && !runtime.peerBusy.load())
-            ReleaseAdmission(generation);
+        if (!valid && !runtime.hooked.load() && !runtime.timerHooked.load() && !runtime.inFlight.load() && !runtime.captured.load() &&
+            !runtime.patchInstalled.load() && !runtime.patchRecovery.load() && !runtime.protectionPending.load() && !runtime.dataRecovery.load() &&
+            !runtime.peersRetained.load() && !runtime.timingDirty.load() && !runtime.timingRecovery.load() && !runtime.peerBusy.load())
+        {
+            if (ReleaseAdmission(generation))
+            {
+                runtime.timingHandler = nullptr;
+                runtime.timingContext = nullptr;
+            }
+        }
         return valid;
     }
 
@@ -1304,13 +1486,16 @@ namespace mta::game_de
             runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() || runtime.inFlight.load() ||
             runtime.peersRetained.load() || runtime.protectionPending.load())
             return false;
-        const bool clean = !runtime.hooked.load() || ChangeHooks(false);
+        const bool clean = (!runtime.hooked.load() && !runtime.timerHooked.load()) || ChangeHooks(false);
         if (clean)
         {
             runtime.hooked.store(false);
             runtime.bound.store(false);
             runtime.ready.store(false);
+            runtime.timerReady.store(false);
             runtime.captured.store(false);
+            runtime.timingHandler = nullptr;
+            runtime.timingContext = nullptr;
         }
         ReadState(finalState);
         hasFinalState = true;
@@ -1320,8 +1505,8 @@ namespace mta::game_de
     bool NativeClockService::IsRetained() const noexcept
     {
         return generation && generation == runtime.generation.load() &&
-               (runtime.hooked.load() || runtime.inFlight.load() || (runtime.captured.load() && !runtime.restored.load()) || runtime.patchInstalled.load() ||
-                runtime.patchRecovery.load() || runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() ||
-                runtime.peersRetained.load() || runtime.protectionPending.load() || runtime.admissionSerial.load());
+               (runtime.hooked.load() || runtime.timerHooked.load() || runtime.inFlight.load() || (runtime.captured.load() && !runtime.restored.load()) ||
+                runtime.patchInstalled.load() || runtime.patchRecovery.load() || runtime.dataRecovery.load() || runtime.timingDirty.load() ||
+                runtime.timingRecovery.load() || runtime.peersRetained.load() || runtime.protectionPending.load() || runtime.admissionSerial.load());
     }
 }

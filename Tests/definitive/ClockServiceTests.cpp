@@ -36,7 +36,7 @@ namespace ClockTestFaults
     BOOL WINAPI Write(HANDLE process, LPVOID address, LPCVOID bytes, SIZE_T size, SIZE_T* copied)
     {
         clockDataWrites.fetch_add(1);
-        if (reinterpret_cast<std::uintptr_t>(address) == timingWriteAddress && size == 4)
+        if (reinterpret_cast<std::uintptr_t>(address) == timingWriteAddress && (size == 4 || size == 1))
         {
             timingDataWrites.fetch_add(1);
             if (failTimingWrites.load())
@@ -50,6 +50,13 @@ namespace ClockTestFaults
             if (partialTimingWrites.load())
             {
                 partialTimingWrites.fetch_sub(1);
+                if (size == 1)
+                {
+                    if (copied)
+                        *copied = 0;
+                    SetLastError(ERROR_PARTIAL_COPY);
+                    return FALSE;
+                }
                 return ::WriteProcessMemory(process, address, bytes, 2, copied);
             }
         }
@@ -252,6 +259,8 @@ namespace
         std::uintptr_t                 image = 0;
         HANDLE                         file = INVALID_HANDLE_VALUE, mapping = nullptr;
         void (*invoke)() = nullptr;
+        void (*invokeTimer)() = nullptr;
+        void (*invokeAlternateTimer)() = nullptr;
 
         ~ClockImageFixture()
         {
@@ -331,12 +340,29 @@ namespace
             code(NativeGameTimingProfile::frameGetterRva, NativeGameTimingProfile::frameGetter);
             code(NativeGameTimingProfile::stepConsumerRva, NativeGameTimingProfile::stepConsumer);
             code(NativeGameTimingProfile::scriptScaleRva, NativeGameTimingProfile::scriptScale);
+            code(NativeGamePauseProfile::entryRva, NativeGamePauseProfile::entry);
+            code(NativeGamePauseProfile::tailRva, NativeGamePauseProfile::tail);
+            code(NativeGamePauseProfile::pauseReadsRva, NativeGamePauseProfile::pauseReads);
+            code(NativeGamePauseProfile::pauseBranchRva, NativeGamePauseProfile::pauseBranch);
+            code(NativeGamePauseProfile::frameRva, NativeGamePauseProfile::frame);
+            code(NativeGamePauseProfile::returnRva, NativeGamePauseProfile::returnCode);
+            code(NativeGamePauseProfile::normalCallRva, NativeGamePauseProfile::normalCall);
+            code(NativeGamePauseProfile::alternateCallRva, NativeGamePauseProfile::alternateCall);
+            code(NativeGamePauseProfile::gameplayTailRva, NativeGamePauseProfile::gameplayTail);
             // Preserve the independently pinned original prologue and supply
             // only an owned return body. Its native clock update is not executed.
             const std::array<unsigned char, 8> epilogue{0x48, 0x81, 0xc4, 0xd8, 0, 0, 0, 0xc3};
             code(NativeClockProfile::hookTailRva + NativeClockProfile::hookTail.size(), epilogue);
             const std::array<unsigned char, 5> callReturn{0x48, 0x83, 0xc4, 0x28, 0xc3};
             code(NativeClockProfile::clockCallRva + NativeClockProfile::clockCall.size(), callReturn);
+            code(NativeGamePauseProfile::normalReturnRva, callReturn);
+            code(0x129702a, callReturn);
+            // Reproduce the independently admitted alternate tail-call origin
+            // in this owned image. No native state dispatcher is executed.
+            std::array<unsigned char, 5> timerTail{0xe9};
+            const auto                   timerDisplacement = static_cast<std::int32_t>(NativeGamePauseProfile::entryRva - 0x1209e10 - timerTail.size());
+            std::memcpy(timerTail.data() + 1, &timerDisplacement, sizeof(timerDisplacement));
+            code(0x1209e10, timerTail);
             std::ofstream stream(path, std::ios::binary);
             stream.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
             stream.close();
@@ -361,6 +387,16 @@ namespace
             thunk[15] = 0xe0;
             Patch(TextRva + 0x1000, thunk.data(), thunk.size());
             invoke = reinterpret_cast<void (*)()>(image + TextRva + 0x1000);
+            const auto timerThunk = [&](std::uintptr_t rva, std::uintptr_t call)
+            {
+                auto       timerCode = thunk;
+                const auto destination = image + call;
+                std::memcpy(timerCode.data() + 6, &destination, sizeof(destination));
+                Patch(rva, timerCode.data(), timerCode.size());
+                return reinterpret_cast<void (*)()>(image + rva);
+            };
+            invokeTimer = timerThunk(TextRva + 0x1100, NativeGamePauseProfile::normalCallRva);
+            invokeAlternateTimer = timerThunk(TextRva + 0x1200, NativeGamePauseProfile::alternateCallRva);
             ClockTestFaults::patchAddress = image + NativeClockProfile::patchRva - 3;
             ClockTestFaults::dataAddress = image + 0x522bcf8;
             AdmitFPSPins();
@@ -425,6 +461,7 @@ namespace
             Put(0x522bcf8, std::uint32_t{9900});
             Put(0x5227bac, std::uint32_t{1000});
             Put(NativeGameTimingProfile::timeScaleRva, 1.0f);
+            Put(NativeGamePauseProfile::userPauseRva, std::uint8_t{0});
         }
         template <typename T>
         T Get(std::uintptr_t rva) const
@@ -599,11 +636,13 @@ namespace
         return state;
     }
 
-    void BeginOwned(NativeClockService& service, ClockImageFixture& fixture, bool adoptNow = true, bool attachNow = true)
+    void BeginOwned(NativeClockService& service, ClockImageFixture& fixture, bool adoptNow = true, bool attachNow = true, bool timingMode = false,
+                    GameTimingHandler handler = nullptr, void* context = nullptr)
     {
         ClockServiceStateV1 rejected;
-        Check(!service.Begin({}, rejected) && rejected.failure == ClockResult::UnsupportedBuild && !rejected.bound && !rejected.hooked &&
-                  !rejected.modulePinned && rejected.generation && !NativeServiceAdmission::IsClaimed(NativeServiceAdmission::Category::Clock),
+        const bool          shippingAdmitted = timingMode ? service.BeginGameTiming({}, rejected, handler, context) : service.Begin({}, rejected);
+        Check(!shippingAdmitted && rejected.failure == ClockResult::UnsupportedBuild && !rejected.bound && !rejected.hooked && !rejected.modulePinned &&
+                  rejected.generation && !NativeServiceAdmission::IsClaimed(NativeServiceAdmission::Category::Clock),
               "shipping Begin rejects this actual test executable before binding, hooks or module pinning");
         fixture.Seed();
         NativeServiceAdmission::Token claim;
@@ -625,6 +664,9 @@ namespace
         runtime.started = GetTickCount64();
         runtime.refreshed.store(runtime.started);
         runtime.originalContinuation = reinterpret_cast<ContinuationFunction>(fixture.image + NativeClockProfile::hookEntryRva);
+        runtime.originalTimer = timingMode ? reinterpret_cast<ContinuationFunction>(fixture.image + NativeGamePauseProfile::entryRva) : nullptr;
+        runtime.timingHandler = handler;
+        runtime.timingContext = context;
         Check(CheckBinding(true), "exact owned MEM_IMAGE code, page and section pins validate before any native hook transaction");
         if (!attachNow)
             return;
@@ -1546,6 +1588,189 @@ namespace
         std::puts("Production native CGame timing writer fixture completed");
     }
 
+    struct PauseHandlerContext
+    {
+        unsigned    calls = 0, operation = 0;
+        bool        paused = false;
+        ClockResult result = ClockResult::NotInitialized;
+    };
+
+    void PauseHandler(NativeGameTimingAccess& access, void* opaque)
+    {
+        auto& context = *static_cast<PauseHandlerContext*>(opaque);
+        ++context.calls;
+        Check(callbackDepth == 1 && timingTimerScope && timingCallbackGeneration == runtime.generation.load() && runtime.timerReady.load() &&
+                  runtime.engineThread.load() == GetCurrentThreadId(),
+              "the real post-original timer handler receives only a qualified same-generation native owner");
+        if (context.operation == 1)
+            context.result = access.Pause(context.paused);
+        else if (context.operation == 2)
+            context.result = access.SetTimeScale(1.5f);
+        else if (context.operation == 3)
+            context.result = access.SetMinuteDuration(2000);
+    }
+
+    ContinuationFunction countedTimer = nullptr;
+    unsigned             originalTimerInvocations = 0;
+    void                 CountOriginalTimer()
+    {
+        ++originalTimerInvocations;
+        countedTimer();
+    }
+
+    bool InvokeTimerOriginalException()
+    {
+        // The deliberate native exception crosses compiler-owned frames only;
+        // no fabricated unwind metadata is assigned to synthetic game callers.
+        __try
+        {
+            HookTimerUpdate();
+        }
+        __except (GetExceptionCode() == 0xe001c10c ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
+        {
+            return true;
+        }
+        return false;
+    }
+
+    void FinishTimingOwned(NativeClockService& service, ClockImageFixture& fixture)
+    {
+        const auto handler = runtime.timingHandler;
+        const auto context = runtime.timingContext;
+        Check(!service.End() && service.IsRetained() && runtime.timerHooked.load() && runtime.timingHandler == handler && runtime.timingContext == context,
+              "End retains both actual hooks, callback context and pause originals while native cleanup is pending");
+        fixture.invokeTimer();
+        Check(service.End() && !service.IsRetained() && !runtime.timerHooked.load() && !runtime.hooked.load() && !runtime.timerReady.load() &&
+                  !runtime.timingHandler && !runtime.timingContext && !runtime.inFlight.load() && !runtime.timingDirty.load() &&
+                  !runtime.timingRecovery.load() && !runtime.timingCaptured.load() && !runtime.timingGeneration.load() && !timingCallbackGeneration &&
+                  !timingTimerScope && !NativeServiceAdmission::IsClaimed(NativeServiceAdmission::Category::Clock) && CheckBinding(true),
+              "the pause-safe native callback restores all debt before both real Detours hooks and handler context retire");
+    }
+
+    void NativePauseSafeTimingOwner(ClockImageFixture& fixture)
+    {
+        {
+            NativeClockService service;
+            BeginOwned(service, fixture);
+            Check(runtime.access.Pause(true) == ClockResult::NotInitialized && !runtime.timingDirty.load() && !runtime.timerHooked.load(),
+                  "legacy V1 clock-only admission cannot acquire pause debt without its recovery callback");
+            FinishOwned(service, fixture);
+        }
+        for (bool initialPause : {false, true})
+        {
+            NativeClockService  service;
+            PauseHandlerContext context;
+            context.operation = 1;
+            context.paused = !initialPause;
+            BeginOwned(service, fixture, false, true, true, &PauseHandler, &context);
+            fixture.Put(NativeGamePauseProfile::userPauseRva, static_cast<std::uint8_t>(initialPause));
+            countedTimer = runtime.originalTimer;
+            runtime.originalTimer = &CountOriginalTimer;
+            originalTimerInvocations = 0;
+            HookTimerUpdate();
+            Check(originalTimerInvocations == 1 && !context.calls && !runtime.engineThread.load() && !runtime.timerReady.load(),
+                  "unknown-origin timer invocations still execute their original update once without adopting or dispatching client work");
+            fixture.invokeTimer();
+            Check(originalTimerInvocations == 2 && context.calls == 1 && context.result == ClockResult::Ok && runtime.timerReady.load() &&
+                      !runtime.captured.load() && !State(service).ready && runtime.originalUserPause == static_cast<std::uint8_t>(initialPause) &&
+                      fixture.Get<std::uint8_t>(NativeGamePauseProfile::userPauseRva) == static_cast<std::uint8_t>(!initialPause),
+                  "a real normal-origin timer callback can change either initially paused or unpaused state without inventing clock readiness");
+            Check(!service.Submit(Command(State(service), 1)) && !runtime.pendingSequence.load(),
+                  "timer ownership alone does not admit CClock mailbox commands before its real postclock capture");
+            context.operation = 0;
+            fixture.invokeAlternateTimer();
+            Check(originalTimerInvocations == 3 && context.calls == 2 && !runtime.captured.load(),
+                  "the independently proved alternate gameplay tail return dispatches the same owner without losing its original update");
+            context.operation = 1;
+            context.paused = initialPause;
+            fixture.invokeTimer();
+            Check(
+                context.result == ClockResult::Ok && fixture.Get<std::uint8_t>(NativeGamePauseProfile::userPauseRva) == static_cast<std::uint8_t>(initialPause),
+                "the actual native handler can reverse pause without waiting for the skipped weather continuation");
+            context.paused = !initialPause;
+            fixture.invokeTimer();
+            context.operation = 2;
+            fixture.invokeTimer();
+            Check(context.result == ClockResult::Ok, "paused timer scope shares the actual time-scale writer without clock-ready masquerading");
+            context.operation = 3;
+            fixture.invokeTimer();
+            Check(context.result == ClockResult::Ok && runtime.timingDirty.load() == (timingPauseBit | timingScaleBit | timingMinuteBit) &&
+                      !runtime.timingRecovery.load() && !runtime.nativeTouched.load() && !runtime.captured.load(),
+                  "pause, scale and duration share one restoration owner while genuine CClock state remains uncaptured");
+            runtime.originalTimer = countedTimer;
+            fixture.Put(NativeClockProfile::hoursRva, std::uint8_t{14});
+            fixture.Put(NativeClockProfile::minutesRva, std::uint8_t{45});
+            fixture.Put(NativeClockProfile::secondsRva, std::uint16_t{10});
+            fixture.Put(NativeClockProfile::nativeTimerRva, std::uint32_t{20000});
+            fixture.Put(NativeClockProfile::lastChangeRva, std::uint32_t{19950});
+            const auto calls = context.calls;
+            FinishTimingOwned(service, fixture);
+            Check(context.calls == calls && fixture.Get<std::uint8_t>(NativeGamePauseProfile::userPauseRva) == static_cast<std::uint8_t>(initialPause) &&
+                      fixture.Get<float>(NativeGameTimingProfile::timeScaleRva) == 1 &&
+                      fixture.Get<std::uint32_t>(NativeClockProfile::minuteDurationRva) == 1000 &&
+                      fixture.Get<std::uint8_t>(NativeClockProfile::hoursRva) == 14 && fixture.Get<std::uint8_t>(NativeClockProfile::minutesRva) == 45 &&
+                      fixture.Get<std::uint16_t>(NativeClockProfile::secondsRva) == 10 &&
+                      fixture.Get<std::uint32_t>(NativeClockProfile::nativeTimerRva) == 20000 &&
+                      fixture.Get<std::uint32_t>(NativeClockProfile::lastChangeRva) == 19950,
+                  "stopped handlers never run again and timer-only cleanup restores original pause/timing without rewinding naturally progressed clock fields");
+        }
+        for (unsigned failure = 0; failure != 4; ++failure)
+        {
+            NativeClockService  service;
+            PauseHandlerContext context;
+            context.operation = 1;
+            context.paused = true;
+            BeginOwned(service, fixture, false, true, true, &PauseHandler, &context);
+            fixture.invokeTimer();
+            const auto calls = context.calls;
+            if (failure == 0)
+            {
+                ClockTestFaults::timingWriteAddress = fixture.image + NativeGamePauseProfile::userPauseRva;
+                ClockTestFaults::failTimingWrites.store(100);
+                Check(!service.End(), "pause rollback first waits for the same actual native owner");
+                fixture.invokeTimer();
+                Check(!State(service).restored && State(service).dataRecoveryPending && runtime.timingRecovery.load() && service.IsRetained(),
+                      "a real failed pause-byte rollback retains both hooks and context rather than reporting a restored runtime");
+                ClockTestFaults::failTimingWrites.store(0);
+                ClockTestFaults::timingWriteAddress = 0;
+            }
+            if (failure == 1)
+            {
+                runtime.refreshed.store(GetTickCount64() - ClockServiceLeaseMsV1 - 1);
+                fixture.invokeTimer();
+                Check(State(service).failure == ClockResult::Expired && !runtime.timingDirty.load() && context.calls == calls,
+                      "an expired paused owner restores from the live timer callback without dispatching further client work");
+            }
+            if (failure == 2)
+            {
+                std::thread foreign([&] { fixture.invokeAlternateTimer(); });
+                foreign.join();
+                Check(State(service).failure == ClockResult::WrongThread && context.calls == calls && runtime.timingDirty.load(),
+                      "a foreign natural timer origin cannot take over the existing engine owner or discard its pause snapshot");
+            }
+            if (failure == 3)
+            {
+                const auto original = runtime.originalTimer;
+                runtime.originalTimer = &OriginalRaises;
+                const bool caught = InvokeTimerOriginalException();
+                runtime.originalTimer = original;
+                Check(caught && State(service).failure == ClockResult::OriginalException && !runtime.inFlight.load() && !callbackDepth &&
+                          !timingCallbackGeneration && !timingTimerScope && runtime.timingDirty.load() && context.calls == calls,
+                      "native timer exceptions propagate while actual hook finally releases callback scope and retains pause recovery");
+            }
+            if (!runtime.timingDirty.load())
+            {
+                Check(service.End() && !service.IsRetained() && !runtime.timingHandler && !runtime.timingContext,
+                      "a lease-stop callback that already restored pause can retire both hooks without another mutation");
+            }
+            else
+                FinishTimingOwned(service, fixture);
+            Check(fixture.Get<std::uint8_t>(NativeGamePauseProfile::userPauseRva) == 0 && context.calls == calls,
+                  "all failed or stopped pause owners preserve the original byte and never resume handler dispatch");
+        }
+        std::puts("Production pause-safe native timing owner fixture completed");
+    }
+
     class TimingBaseProbe : public CGameTimingDE
     {
     public:
@@ -1852,6 +2077,7 @@ int main(int argc, char** argv)
     NativeGameTimingPrerequisite(fixture);
     NativeStoredFPSReader(fixture);
     NativeTimingWritesAndRestoration(fixture);
+    NativePauseSafeTimingOwner(fixture);
     NativeReadSetAndRestoration(fixture);
     NativeCoherentCommandPublication(fixture);
     NativeReadOnlyRetirement(fixture);

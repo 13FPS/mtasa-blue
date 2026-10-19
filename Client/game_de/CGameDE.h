@@ -8,6 +8,7 @@
 #include "CGameTimingDE.h"
 #include "CClockDE.h"
 #include "CKeyGenDE.h"
+#include "NativeStreamingFileIdsReader.h"
 
 namespace mta::game_de
 {
@@ -21,17 +22,31 @@ namespace mta::game_de
         CClock*  GetClock() noexcept override;
         CKeyGen* GetKeyGen() noexcept override;
 
+        uint32_t GetBaseIDforDFF() override;
+        uint32_t GetBaseIDforTXD() override;
+        uint32_t GetBaseIDforCOL() override;
+        uint32_t GetBaseIDforIPL() override;
+        uint32_t GetBaseIDforDAT() override;
+        uint32_t GetBaseIDforIFP() override;
+        uint32_t GetBaseIDforRRR() override;
+        uint32_t GetBaseIDforSCM() override;
+        uint32_t GetCountOfAllFileIDs() override;
+
         CGameDE(const CGameDE&) = delete;
         CGameDE& operator=(const CGameDE&) = delete;
 
     protected:
-        // Both borrowed services must outlive this object. Their qualification
+        // Borrowed services must outlive this object. Their qualification
         // and engine-thread rules stay with their existing native owners.
-        CGameDE(const NativeGameTimingReader& reader, CClockDE& nativeClock, NativeGameTimingAccess& timingWriter) noexcept;
+        CGameDE(const NativeGameTimingReader& reader, CClockDE& nativeClock, NativeGameTimingAccess& timingWriter,
+                const NativeStreamingFileIdsReader& streamingReader) noexcept;
 
     private:
-        CClockDE& clock;
-        CKeyGenDE keyGen;
+        NativeStreamingFileIds RequireStreamingLayout() const;
+
+        CClockDE&                           clock;
+        CKeyGenDE                           keyGen;
+        const NativeStreamingFileIdsReader& streaming;
     };
     static_assert(std::is_abstract_v<CGameDE> && std::is_base_of_v<CGame, CGameDE>);
 }

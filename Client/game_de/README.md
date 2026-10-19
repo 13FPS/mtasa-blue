@@ -16,9 +16,25 @@ The three SDK scalar setters share the clock owner's internal timing access:
 `SetTimeScale`, `SetGameSpeed` and `SetMinuteDuration`. Originals are captured
 on the qualified native callback, and failed writes or rollback retain that
 owner. Timing restoration does not rewind the displayed clock or native timer.
-This adds no wire protocol or full-game capability. Pause remains separate work.
+The internal timing mode additionally implements SDK `Pause` on the same owner.
+It attaches the native timer and clock continuations together; only two proved
+gameplay origins admit client timing writes, after the original timer returns.
+This callback remains available when pause skips clock/weather progression, so
+an initially paused game can be unpaused and original pause state can be restored.
+Clock readiness and clock commands still require the clock continuation. Failed
+restoration or detachment retains both hooks and the handler's lifetime. The
+exported V1 clock service remains clock-only; live pause behavior is untested.
+This adds no wire protocol or full-game capability.
 `GetFPS` reads the independently proved native averaged-FPS float using a
 separate guarded reader method; existing timing values remain 64 bytes.
+
+Nine existing `CGame` streaming-ID methods read the checked native category
+operands: DFF 0, TXD 20000, COL 25000, IPL 25255, DAT 25511, IFP 25575,
+RRR 25755 and SCM 26230. `GetCountOfAllFileIDs` includes all 26316 native rows,
+including the four list sentinels, matching the SDK's array-count meaning.
+The reader pins the classifier, filename selector, initializer and actual stride
+before returning those operands. DE's 16-byte rows remain private; these getters
+do not expose or cast them as classic 20-byte `CStreamingInfo` structures.
 
 The separate optional local-input lease reuses MTA's retained `CKeyBinds` and
 controller synthesis for six on-foot actions, with a 500 ms owner/generation

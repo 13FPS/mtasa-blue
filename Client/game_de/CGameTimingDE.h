@@ -33,6 +33,7 @@ namespace mta::game_de
         void          SetTimeScale(float value) override;
         void          SetGameSpeed(float value) override;
         void          SetMinuteDuration(unsigned long value) override;
+        void          Pause(bool value) override;
 
         // The SDK declares these defaults outside this module. Keep them pure
         // until a real DE weapon subsystem exists instead of linking classic

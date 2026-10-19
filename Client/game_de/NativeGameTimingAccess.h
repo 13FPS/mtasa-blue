@@ -18,6 +18,7 @@ namespace mta::game_de
     public:
         virtual ClockResult SetTimeScale(float value) noexcept = 0;
         virtual ClockResult SetMinuteDuration(std::uint32_t value) noexcept = 0;
+        virtual ClockResult Pause(bool value) noexcept = 0;
 
     protected:
         ~NativeGameTimingAccess() = default;

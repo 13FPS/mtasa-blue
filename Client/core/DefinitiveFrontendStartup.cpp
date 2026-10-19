@@ -10,6 +10,7 @@
 #include "DefinitivePersistentFrontend.h"
 #include "DefinitiveFrontendRuntime.h"
 #include "DefinitiveLocalInputRuntime.h"
+#include "DefinitiveStartupGameTime.h"
 
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
 
@@ -163,6 +164,37 @@ namespace DefinitiveFrontendStartup
             }
             // Adapter capabilities and a running frontend are diagnostic facts;
             // neither authorizes the missing CGame/network/multiplayer startup.
+            return result;
+        }
+
+        DefinitiveStartupGameTime::Snapshot ReadGameTime() noexcept
+        {
+            namespace Time = DefinitiveStartupGameTime;
+            Time::Snapshot result{};
+            result[Time::Version] = Time::ApiVersion;
+            result[Time::OwnerThread] = owner;
+            result[Time::CoreRetained] = core != nullptr;
+            result[Time::BackendStarted] = core && core->m_DefinitiveAdapter.IsStarted();
+            result[Time::NativeStatus] = static_cast<std::uint32_t>(mta::game_de::Status::NotInitialized);
+            // Use the same completed Core and adapter as GUI/input startup.
+            // Reads neither reset those services nor acquire a clock-write
+            // lease. A stopping owner must not reach back into its backend.
+            if (state[Phase] != 2 || runtimeStopping || runtimeStopped || !result[Time::BackendStarted])
+                return result;
+            mta::game_de::GameTimeStateV1 native;
+            const auto                    status = core->m_DefinitiveAdapter.ReadGameTimeState(native);
+            result[Time::NativeStatus] = static_cast<std::uint32_t>(status);
+            if (status == mta::game_de::Status::Ok)
+            {
+                result[Time::SampleAvailable] = 1;
+                result[Time::NativeProducerThread] = native.producerThread;
+                result[Time::Hour] = native.hour;
+                result[Time::Minute] = native.minute;
+                result[Time::SecondsRaw] = native.seconds;
+                result[Time::NativeTimer] = native.nativeTimer;
+                result[Time::LastMinuteChange] = native.lastMinuteChange;
+                result[Time::MillisecondsPerGameMinute] = native.millisecondsPerGameMinute;
+            }
             return result;
         }
 
@@ -635,6 +667,19 @@ namespace DefinitiveFrontendStartup
         }
     }
 
+    Status ReadGameTimeOwner(void* handle, std::uint32_t* output, std::uint32_t count) noexcept
+    {
+        Operation  operation;
+        const auto status = operation.Validate(handle);
+        if (status != Status::Ok)
+            return status;
+        if (!output || count != DefinitiveStartupGameTime::FieldCount)
+            return Status::InvalidArgument;
+        const auto snapshot = activeStartup->ReadGameTime();
+        std::copy(snapshot.begin(), snapshot.end(), output);
+        return Status::Ok;
+    }
+
     Status ShutdownOwner(void* handle) noexcept
     {
         Operation  operation;
@@ -878,6 +923,14 @@ namespace DefinitiveLocalInputRuntime
     Status DisableOwner(void* handle) noexcept
     {
         return DefinitiveFrontendStartup::StopLocalOwner(handle, true);
+    }
+}
+
+namespace DefinitiveStartupGameTime
+{
+    Status ReadOwner(void* handle, std::uint32_t* output, std::uint32_t count) noexcept
+    {
+        return DefinitiveFrontendStartup::ReadGameTimeOwner(handle, output, count);
     }
 }
 

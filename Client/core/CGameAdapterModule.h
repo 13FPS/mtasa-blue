@@ -16,6 +16,7 @@
 #include <game/CGameFrontendInputLease.h>
 #include <game/CGameLocalInputLease.h>
 #include <game/CGameClockService.h>
+#include <game/CGameTimeService.h>
 #include <cstdint>
 #include <string>
 
@@ -27,47 +28,49 @@ public:
     CGameAdapterModule(const CGameAdapterModule&) = delete;
     CGameAdapterModule& operator=(const CGameAdapterModule&) = delete;
 
-    bool                Start(CCoreInterface* owner, const std::wstring& absoluteModulePath);
-    bool                StartAdjacent(CCoreInterface* owner);
-    static std::wstring AdjacentModulePath(std::string& error);
-    bool                Pulse();
-    bool                Reset();
-    bool                PublishLocalObservation(const mta::game_de::LocalObservation& observation);
-    bool                GetLocalObservation(mta::game_de::LocalObservation& observation);
-    bool                SubmitControlActions(const mta::game_de::ControlActionFrame& frame);
-    bool                GetMtaInputState(mta::game_de::MtaInputState& state);
-    bool                BindNativeInput();
-    bool                ReadNativeControllerState(std::uint32_t padIndex, mta::game_de::NativeControllerState& state);
-    bool                ReadNativeDeviceState(mta::game_de::NativeDeviceState& state);
-    bool                BeginNativeMovementTrial();
-    bool                GetNativeMovementTrialState(mta::game_de::NativeMovementTrialState& state);
-    bool                EndNativeMovementTrial();
-    bool                BeginFrontendInputLease(void* window, mta::game_de::FrontendInputLeaseStateV1& state);
-    bool                RenewFrontendInputLease(std::uint64_t generation);
-    bool                ReadFrontendInputLease(mta::game_de::FrontendInputLeaseStateV1& state);
-    bool                EndFrontendInputLease(std::uint64_t generation);
-    bool                BeginLocalInputLease(void* window, mta::game_de::LocalInputLeaseStateV1& state);
-    bool                RenewLocalInputLease(std::uint64_t generation);
-    bool                ReadLocalInputLease(mta::game_de::LocalInputLeaseStateV1& state);
-    bool                EndLocalInputLease(std::uint64_t generation);
-    bool                BeginNativeClockService(const mta::game_de::ClockServiceRequestV1& request, mta::game_de::ClockServiceStateV1& state);
-    bool                SubmitNativeClockCommand(const mta::game_de::ClockCommandV1& command);
-    bool                RenewNativeClockService(std::uint64_t generation);
-    bool                ReadNativeClockService(mta::game_de::ClockServiceStateV1& state);
-    bool                EndNativeClockService(std::uint64_t generation);
-    bool                GetNativeMovementEligibility(mta::game_de::NativeMovementEligibility& state);
-    bool                BorrowGameInterface(CGame*& game);
-    bool                BeginNativeRenderObservation();
-    bool                BeginNativeRenderObservation(mta::game_de::RenderObservationRoute route);
-    bool                GetNativeRenderObservationState(mta::game_de::RenderObservationState& state);
-    bool                GetNativeRenderObservationState(mta::game_de::RenderObservationStateV2& state);
-    bool                BeginNativeRenderOwnershipObservation(mta::game_de::RenderObservationRoute route);
-    bool                GetNativeRenderObservationState(mta::game_de::RenderObservationStateV3& state);
-    bool                BeginNativeRenderClassificationObservation(mta::game_de::RenderObservationRoute route);
-    bool                GetNativeRenderObservationState(mta::game_de::RenderObservationStateV4& state);
-    bool                BeginNativeRenderFrameBoundaryObservation(mta::game_de::RenderObservationRoute route);
-    bool                GetNativeRenderObservationState(mta::game_de::RenderObservationStateV5& state);
-    bool                BeginNativeRenderDispatchObservation(mta::game_de::RenderObservationRoute route);
+    bool                 Start(CCoreInterface* owner, const std::wstring& absoluteModulePath);
+    bool                 StartAdjacent(CCoreInterface* owner);
+    static std::wstring  AdjacentModulePath(std::string& error);
+    bool                 Pulse();
+    bool                 Reset();
+    bool                 PublishLocalObservation(const mta::game_de::LocalObservation& observation);
+    bool                 GetLocalObservation(mta::game_de::LocalObservation& observation);
+    bool                 SubmitControlActions(const mta::game_de::ControlActionFrame& frame);
+    bool                 GetMtaInputState(mta::game_de::MtaInputState& state);
+    bool                 BindNativeInput();
+    bool                 ReadNativeControllerState(std::uint32_t padIndex, mta::game_de::NativeControllerState& state);
+    bool                 ReadNativeDeviceState(mta::game_de::NativeDeviceState& state);
+    bool                 BeginNativeMovementTrial();
+    bool                 GetNativeMovementTrialState(mta::game_de::NativeMovementTrialState& state);
+    bool                 EndNativeMovementTrial();
+    bool                 BeginFrontendInputLease(void* window, mta::game_de::FrontendInputLeaseStateV1& state);
+    bool                 RenewFrontendInputLease(std::uint64_t generation);
+    bool                 ReadFrontendInputLease(mta::game_de::FrontendInputLeaseStateV1& state);
+    bool                 EndFrontendInputLease(std::uint64_t generation);
+    bool                 BeginLocalInputLease(void* window, mta::game_de::LocalInputLeaseStateV1& state);
+    bool                 RenewLocalInputLease(std::uint64_t generation);
+    bool                 ReadLocalInputLease(mta::game_de::LocalInputLeaseStateV1& state);
+    bool                 EndLocalInputLease(std::uint64_t generation);
+    bool                 BeginNativeClockService(const mta::game_de::ClockServiceRequestV1& request, mta::game_de::ClockServiceStateV1& state);
+    bool                 SubmitNativeClockCommand(const mta::game_de::ClockCommandV1& command);
+    bool                 RenewNativeClockService(std::uint64_t generation);
+    bool                 ReadNativeClockService(mta::game_de::ClockServiceStateV1& state);
+    bool                 EndNativeClockService(std::uint64_t generation);
+    bool                 HasGameTimeService() const noexcept;
+    mta::game_de::Status ReadGameTimeState(mta::game_de::GameTimeStateV1& state) noexcept;
+    bool                 GetNativeMovementEligibility(mta::game_de::NativeMovementEligibility& state);
+    bool                 BorrowGameInterface(CGame*& game);
+    bool                 BeginNativeRenderObservation();
+    bool                 BeginNativeRenderObservation(mta::game_de::RenderObservationRoute route);
+    bool                 GetNativeRenderObservationState(mta::game_de::RenderObservationState& state);
+    bool                 GetNativeRenderObservationState(mta::game_de::RenderObservationStateV2& state);
+    bool                 BeginNativeRenderOwnershipObservation(mta::game_de::RenderObservationRoute route);
+    bool                 GetNativeRenderObservationState(mta::game_de::RenderObservationStateV3& state);
+    bool                 BeginNativeRenderClassificationObservation(mta::game_de::RenderObservationRoute route);
+    bool                 GetNativeRenderObservationState(mta::game_de::RenderObservationStateV4& state);
+    bool                 BeginNativeRenderFrameBoundaryObservation(mta::game_de::RenderObservationRoute route);
+    bool                 GetNativeRenderObservationState(mta::game_de::RenderObservationStateV5& state);
+    bool                 BeginNativeRenderDispatchObservation(mta::game_de::RenderObservationRoute route);
     // The device handoff is a separate request. Historical API6 callers keep
     // their callback-local references and never acquire an owned device here.
     bool BeginNativeRenderDeviceObservation();
@@ -114,6 +117,7 @@ private:
     decltype(&mta::game_de::RenewGameClockServiceV1)            m_clockRenew = nullptr;
     decltype(&mta::game_de::ReadGameClockServiceV1)             m_clockRead = nullptr;
     decltype(&mta::game_de::EndGameClockServiceV1)              m_clockEnd = nullptr;
+    decltype(&mta::game_de::ReadGameTimeStateV1)                m_gameTimeRead = nullptr;
     mta::game_de::IGameRenderObservation*                       m_renderObservation = nullptr;
     mta::game_de::IGameRenderObservationV2*                     m_renderObservationV2 = nullptr;
     mta::game_de::RenderObservationState                        m_lastRenderObservation;

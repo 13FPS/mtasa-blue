@@ -13,6 +13,7 @@
 #include <game/CGameFrontendInputLease.h>
 #include <game/CGameLocalInputLease.h>
 #include <game/CGameClockService.h>
+#include <game/CGameTimeService.h>
 #include "FrontendInputLeasePolicy.h"
 #include "LocalInputLeasePolicy.h"
 #include "ControllerSnapshot.h"
@@ -20,6 +21,7 @@
 #include "NativePadReader.h"
 #include "NativeMovementInput.h"
 #include "NativeClockService.h"
+#include "NativeGameTimeReader.h"
 #include "NativeRenderObservation.h"
 
 #include <atomic>
@@ -85,6 +87,43 @@ namespace mta::game_de
                 Read,
                 End
             };
+            static Status ReadGameTime(IGameAdapter* adapter, GameTimeStateV1* output) noexcept
+            {
+                // Time observations share the retained adapter's identity and
+                // producer thread, but need no input/clock write admission. A
+                // suspended peer must never make this periodic read block on
+                // the registry or accidentally extend a native writer lease.
+                if (!TryAcquireSRWLockShared(&frontendAdapterLock))
+                    return Status::Unsupported;
+                Status result = Status::InvalidArgument;
+                for (auto* current = frontendAdapters; current; current = current->nextFrontendAdapter)
+                {
+                    if (static_cast<IGameAdapter*>(current) != adapter)
+                        continue;
+                    result = current->Access();
+                    if (result != Status::Ok)
+                        break;
+                    if (output->size != sizeof(*output) || output->version != GameTimeServiceVersionV1 || output->reserved[0] || output->reserved[1] ||
+                        output->reserved[2])
+                    {
+                        result = Status::InvalidArgument;
+                        break;
+                    }
+                    if (!current->nativeGameTime.IsBound())
+                    {
+                        result = current->nativeGameTime.Bind();
+                        if (result != Status::Ok)
+                            break;
+                    }
+                    GameTimeStateV1 next;
+                    result = current->nativeGameTime.Read(next);
+                    if (result == Status::Ok)
+                        *output = next;
+                    break;
+                }
+                ReleaseSRWLockShared(&frontendAdapterLock);
+                return result;
+            }
             static Status LocalLease(IGameAdapter* adapter, LocalLeaseAction action, const LocalInputLeaseRequestV1* request, std::uint64_t generation,
                                      const MtaInputState* movement, LocalInputLeaseStateV1* output) noexcept
             {
@@ -538,6 +577,7 @@ namespace mta::game_de
                 inputFrame = ControlActionFrame();
                 hasInputState = false;
                 nativePad.Reset();
+                nativeGameTime.Reset();
                 capabilities.store(BaseCapabilities);
             }
 
@@ -561,6 +601,7 @@ namespace mta::game_de
             NativePadReader            nativePad;
             NativeMovementInput        nativeMovement;
             NativeClockService         nativeClock;
+            NativeGameTimeReader       nativeGameTime;
             GameAdapter*               nextFrontendAdapter = nullptr;
         };
 
@@ -1172,6 +1213,15 @@ namespace mta::game_de
         if (version != ClockServiceVersionV1 || !adapter || !output)
             return Status::InvalidArgument;
         return GameAdapter::ClockService(adapter, GameAdapter::ClockAction::Read, nullptr, nullptr, 0, output);
+    }
+
+    extern "C" Status ReadGameTimeStateV1(std::uint32_t version, IGameAdapter* adapter, GameTimeStateV1* output) noexcept
+    {
+        if (version != GameTimeServiceVersionV1 || !adapter || !output)
+            return Status::InvalidArgument;
+        // Validate the adapter identity before inspecting either its state or
+        // the caller's versioned output record. No failed read publishes bytes.
+        return GameAdapter::ReadGameTime(adapter, output);
     }
 
     extern "C" Status EndGameClockServiceV1(std::uint32_t version, IGameAdapter* adapter, std::uint64_t generation) noexcept

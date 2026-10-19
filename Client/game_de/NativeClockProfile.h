@@ -6,10 +6,17 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 
 namespace mta::game_de::NativeClockProfile
 {
+    // All time consumers use the addresses established by the same native
+    // clock/getter instructions. A read-only startup consumer must not grow a
+    // separate set of guessed CGame timer offsets.
+    inline constexpr std::size_t    imageSize = 97141760;
+    inline constexpr std::uintptr_t hoursRva = 0x521c917, minutesRva = 0x521c923, secondsRva = 0x522bcf0;
+    inline constexpr std::uintptr_t lastChangeRva = 0x522bcf8, nativeTimerRva = 0x523a458, minuteDurationRva = 0x5227bac;
     // These byte pins establish native clock ownership independently of classic
     // x86 offsets. Only the reviewed five-byte branch may differ while frozen.
     inline constexpr std::uintptr_t                 clockCodeRva = 0x1147bec;

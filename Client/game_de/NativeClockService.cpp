@@ -7,6 +7,7 @@
 #include "NativeClockService.h"
 #include "CClockDE.h"
 #include "NativeClockProfile.h"
+#include "NativeClockMemory.h"
 #include "NativeImageAccess.h"
 #include "NativeServiceAdmission.h"
 
@@ -34,9 +35,10 @@ namespace mta::game_de
         namespace Image = NativeImageAccess;
         namespace Admission = NativeServiceAdmission;
         using ContinuationFunction = void (*)();
-        constexpr std::size_t    imageSize = 97141760;
-        constexpr std::uintptr_t hoursRva = 0x521c917, minutesRva = 0x521c923, secondsRva = 0x522bcf0;
-        constexpr std::uintptr_t lastChangeRva = 0x522bcf8, nativeTimerRva = 0x523a458, minuteDurationRva = 0x5227bac;
+        constexpr std::size_t    imageSize = Profile::imageSize;
+        constexpr std::uintptr_t hoursRva = Profile::hoursRva, minutesRva = Profile::minutesRva, secondsRva = Profile::secondsRva;
+        constexpr std::uintptr_t lastChangeRva = Profile::lastChangeRva, nativeTimerRva = Profile::nativeTimerRva,
+                                 minuteDurationRva = Profile::minuteDurationRva;
         constexpr std::uintptr_t atomicPatchRva = Profile::patchRva & ~std::uintptr_t{7};
         constexpr std::size_t    atomicPatchOffset = Profile::patchRva - atomicPatchRva;
         static_assert(atomicPatchOffset + Profile::originalPatch.size() <= sizeof(LONG64));
@@ -232,15 +234,7 @@ namespace mta::game_de
 
         bool RawRead(ClockValues& output) noexcept
         {
-            ClockValues   value;
-            std::uint32_t after = 0;
-            if (!ReadValue(nativeTimerRva, value.nativeTimer) || !ReadValue(hoursRva, value.hour) || !ReadValue(minutesRva, value.minute) ||
-                !ReadValue(secondsRva, value.seconds) || !ReadValue(lastChangeRva, value.lastMinuteChange) ||
-                !ReadValue(minuteDurationRva, value.millisecondsPerGameMinute) || !ReadValue(nativeTimerRva, after) || value.nativeTimer != after ||
-                value.hour > 23 || value.minute > 60 || !value.millisecondsPerGameMinute || value.millisecondsPerGameMinute > 3600000)
-                return false;
-            output = value;
-            return true;
+            return NativeClockMemory::Read(runtime.image, output);
         }
 
         ClockResult CheckOwner() noexcept

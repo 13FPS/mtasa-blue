@@ -36,6 +36,8 @@
 #include "../../Client/core/DefinitiveFrontendClockReference.h"
 #include "../../Client/core/DefinitiveFrontendRuntime.h"
 #include "../../Client/core/DefinitiveLocalInputRuntime.h"
+#include "../../Client/core/DefinitiveStartupGameTime.h"
+#include <game/CGameTimeService.h>
 
 using Microsoft::WRL::ComPtr;
 namespace Frontend = DefinitiveFrontend;
@@ -47,6 +49,7 @@ namespace ClockReference = DefinitiveClockReference;
 namespace FrontendClock = DefinitiveFrontendClockReference;
 namespace Runtime = DefinitiveFrontendRuntime;
 namespace LocalInput = DefinitiveLocalInputRuntime;
+namespace GameTime = DefinitiveStartupGameTime;
 using mta::gui::GuiD3D12Status;
 static_assert(Frontend::ApiVersion == 1 && Frontend::FieldCount == 32);
 static_assert(Startup::ApiVersion == 1 && Startup::FieldCount == 32);
@@ -56,6 +59,7 @@ static_assert(ClockReference::ApiVersion == 1 && ClockReference::FieldCount == 9
 static_assert(FrontendClock::ApiVersion == 1 && Startup::FieldCount == 32);
 static_assert(Runtime::ApiVersion == 1 && Runtime::FieldCount == 64 && Runtime::StartupFieldCount == 32);
 static_assert(LocalInput::ApiVersion == 1 && LocalInput::FieldCount == 32 && sizeof(LocalInput::RequestV1) == 24);
+static_assert(GameTime::ApiVersion == 1 && GameTime::FieldCount == 16);
 
 namespace
 {
@@ -169,6 +173,7 @@ namespace
         LocalInput::Read                     readLocal = nullptr;
         LocalInput::Suspend                  suspendLocal = nullptr;
         LocalInput::Disable                  disableLocal = nullptr;
+        GameTime::Read                       readGameTime = nullptr;
         HWND                                 localWindow = nullptr;
         bool                                 runtimeOwner = false;
         Frontend::Create                     create = nullptr;
@@ -761,6 +766,69 @@ namespace
               "Runtime64 preserves exact Startup32 and exposes a separate frontend-only session identity");
         return state;
     }
+    void GameTimeArguments(Owned& owned)
+    {
+        GameTime::Snapshot sentinel;
+        sentinel.fill(0x73614825);
+        const auto unchanged = sentinel;
+        for (const auto count : {0u, 15u, 17u})
+            Check(owned.readGameTime(owned.startup, sentinel.data(), count) == Frontend::Status::InvalidArgument && sentinel == unchanged,
+                  "time16 read rejects a foreign field count without modifying caller bytes");
+        Check(owned.readGameTime(owned.startup, nullptr, GameTime::FieldCount) == Frontend::Status::InvalidArgument &&
+                  owned.readGameTime(nullptr, sentinel.data(), GameTime::FieldCount) == Frontend::Status::InvalidArgument && sentinel == unchanged &&
+                  owned.readGameTime(reinterpret_cast<void*>(std::uintptr_t{1}), sentinel.data(), GameTime::FieldCount) == Frontend::Status::InvalidArgument &&
+                  sentinel == unchanged,
+              "time16 read rejects missing output and unknown completed owner identities");
+        bool        foreign = false;
+        std::thread other(
+            [&]
+            {
+                auto output = unchanged;
+                foreign = owned.readGameTime(owned.startup, output.data(), GameTime::FieldCount) == Frontend::Status::WrongThread && output == unchanged;
+            });
+        other.join();
+        Check(foreign, "time16 foreign thread cannot read native time or replace caller output");
+    }
+
+    void GameTimeUnavailable(Owned& owned, mta::game_de::Status nativeStatus)
+    {
+        const auto           before = StartupState(owned);
+        const auto           beforeRuntime = owned.runtimeOwner ? RuntimeState(owned) : Runtime::Snapshot{};
+        const auto           beforeView = owned.frontend ? owned.State() : Frontend::Snapshot{};
+        LocalInput::Snapshot beforeLocal{};
+        if (owned.runtimeOwner)
+            Check(owned.readLocal(owned.startup, beforeLocal.data(), LocalInput::FieldCount) == Frontend::Status::Ok,
+                  "capture local32 before optional time read");
+        GameTime::Snapshot output;
+        // Poison every word on each call: unavailable native reads must write
+        // an explicit empty sample rather than leave caller bytes or stale time.
+        output.fill(0x61247853);
+        Check(owned.readGameTime(owned.startup, output.data(), GameTime::FieldCount) == Frontend::Status::Ok && output[GameTime::Version] == 1 &&
+                  output[GameTime::OwnerThread] == GetCurrentThreadId() && output[GameTime::CoreRetained] == 1 &&
+                  output[GameTime::BackendStarted] == before[Startup::BackendStarted] && !output[GameTime::SampleAvailable] &&
+                  output[GameTime::NativeStatus] == static_cast<std::uint32_t>(nativeStatus) &&
+                  std::all_of(output.begin() + GameTime::NativeProducerThread, output.end(), [](auto value) { return value == 0; }),
+              "time16 uses the retained Core owner and reports unavailable native evidence with all sample and reserved fields zero");
+        Check(
+            StartupState(owned) == before && (!owned.runtimeOwner || RuntimeState(owned) == beforeRuntime) && (!owned.frontend || owned.State() == beforeView),
+            "explicit native time read leaves Startup32 Runtime64 GUI32 ownership and gameplay capabilities unchanged");
+        if (owned.runtimeOwner)
+        {
+            LocalInput::Snapshot afterLocal{};
+            Check(owned.readLocal(owned.startup, afterLocal.data(), LocalInput::FieldCount) == Frontend::Status::Ok && afterLocal == beforeLocal,
+                  "read-only native time neither admits nor retires the same configured local-input owner");
+        }
+    }
+
+    void GameTimeStale(Owned& owned, void* stale)
+    {
+        GameTime::Snapshot output;
+        output.fill(0x52813746);
+        const auto unchanged = output;
+        Check(owned.readGameTime(stale, output.data(), GameTime::FieldCount) == Frontend::Status::InvalidArgument && output == unchanged,
+              "released completed Core identity cannot publish a cached native time sample");
+    }
+
     std::uint64_t RuntimePair(const Runtime::Snapshot& state, Runtime::Field field)
     {
         return std::uint64_t{state[field]} | (std::uint64_t{state[field + 1]} << 32);
@@ -890,6 +958,8 @@ namespace
         owned.startup = owned.beginRuntime(1);
         Check(owned.startup != nullptr, "runtime publishes the same completed Core owner even on partial preparation failure");
         const auto initial = RuntimeState(owned);
+        GameTimeArguments(owned);
+        GameTimeUnavailable(owned, initial[Startup::Phase] == 2 ? mta::game_de::Status::Unsupported : mta::game_de::Status::NotInitialized);
         const auto localState = [&]
         {
             LocalInput::Snapshot values{};
@@ -1113,6 +1183,7 @@ namespace
                 owned.observed->ResetSettingsObservation();
                 owned.frontend = owned.create(Frontend::ApiVersion, owned.gui);
                 Check(owned.frontend && owned.State()[Frontend::Phase] == 2, "runtime creates a fresh actual GUI view on its existing Core");
+                GameTimeUnavailable(owned, mta::game_de::Status::Unsupported);
                 auto visible = RuntimeState(owned);
                 Check(visible[Runtime::RuntimePhase] == static_cast<std::uint32_t>(Runtime::Phase::Visible) && visible[Runtime::ViewBorrowed] &&
                           visible[Runtime::ViewsAttached] == view && visible[Runtime::ViewsRetired] == view - 1 &&
@@ -1188,6 +1259,7 @@ namespace
         Check(owned.shutdownRuntime(owned.startup) == Frontend::Status::Ok && owned.shutdownRuntime(owned.startup) == Frontend::Status::Ok,
               "runtime final shutdown retires actual manager then CVars/XML before backend, idempotently");
         runtimeTerminal = RuntimeState(owned);
+        GameTimeUnavailable(owned, mta::game_de::Status::NotInitialized);
         startup = StartupState(owned);
         Check(runtimeTerminal[Runtime::RuntimePhase] == static_cast<std::uint32_t>(Runtime::Phase::Stopped) && runtimeTerminal[Runtime::CleanupComplete] &&
                   !runtimeTerminal[Runtime::CleanupPending] && !runtimeTerminal[Runtime::ServicesRetained] && !runtimeTerminal[Runtime::XmlRetained] &&
@@ -1209,6 +1281,7 @@ namespace
         const auto stale = owned.startup;
         Check(owned.releaseRuntime(owned.startup) == Frontend::Status::Ok, "release stopped actual runtime Core once all borrowed owners retired");
         owned.startup = nullptr;
+        GameTimeStale(owned, stale);
         Check(owned.readRuntime(stale, sentinel.data(), 64) == Frontend::Status::InvalidArgument && sentinel == unchanged &&
                   owned.releaseRuntime(stale) == Frontend::Status::InvalidArgument,
               "stale runtime identity preserves output and cannot release another Core");
@@ -1286,6 +1359,9 @@ int wmain(int argc, wchar_t** argv)
         owned.shutdownStartup = Export<Startup::Shutdown>(owned.core, "MTA_ShutdownDEFrontendStartup");
         owned.releaseStartup = Export<Startup::Release>(owned.core, "MTA_ReleaseDEFrontendStartup");
         owned.runView = Export<Startup::RunView>(owned.core, "MTA_RunDEFrontendStartupView");
+        Check(Export<std::uint32_t (*)()>(owned.core, "MTA_DEStartupGameTimeApiVersion")() == GameTime::ApiVersion,
+              "normal Core exposes additive native time16 without changing startup runtime or GUI protocols");
+        owned.readGameTime = Export<GameTime::Read>(owned.core, "MTA_ReadDEStartupGameTimeV1");
         Check(Export<std::uint32_t (*)()>(owned.core, "MTA_DEFrontendClockReferenceApiVersion")() == FrontendClock::ApiVersion,
               "normal Core exposes additive completed-owner clock API1 without widening Startup32 or Read96");
         owned.runClock = Export<FrontendClock::Run>(owned.core, "MTA_RunDEFrontendClockReference");
@@ -1324,6 +1400,8 @@ int wmain(int argc, wchar_t** argv)
         owned.startup = owned.beginStartup(Startup::ApiVersion);
         Check(owned.startup != nullptr, "allocated startup publishes completed Core ownership even if backend preparation fails");
         auto startup = StartupState(owned);
+        GameTimeArguments(owned);
+        GameTimeUnavailable(owned, startup[Startup::Phase] == 2 ? mta::game_de::Status::Unsupported : mta::game_de::Status::NotInitialized);
         PersistentArgumentChecks(owned);
         ClockArgumentChecks(owned);
         const auto persistentRequest = PersistentRequest();
@@ -1480,6 +1558,7 @@ int wmain(int argc, wchar_t** argv)
             owned.observed->ResetSettingsObservation();
             owned.frontend = owned.create(Frontend::ApiVersion, owned.gui);
             Check(owned.frontend != nullptr, "actual borrowed frontend publishes a handle even on XML startup failure");
+            GameTimeUnavailable(owned, mta::game_de::Status::Unsupported);
             state = owned.State();
             startup = StartupState(owned);
             Check(startup[Startup::FrontendRetained] && startup[Startup::FrontendPhase] == state[Frontend::Phase] && startup[Startup::CoreRetained] &&
@@ -1586,6 +1665,7 @@ int wmain(int argc, wchar_t** argv)
         Check(owned.shutdownStartup(owned.startup) == Frontend::Status::Ok,
               "explicit startup shutdown retires the actual backend once no frontend borrows Core");
         startup = StartupState(owned);
+        GameTimeUnavailable(owned, mta::game_de::Status::NotInitialized);
         Check(startup[Startup::Phase] == 4 && startup[Startup::CoreRetained] && !startup[Startup::BackendStarted] && startup[Startup::CleanupComplete] &&
                   !startup[Startup::CleanupPending] && !startup[Startup::ReleaseFault],
               "stopped completed Core is retained for final read and explicit release");
@@ -1601,6 +1681,7 @@ int wmain(int argc, wchar_t** argv)
         const auto staleStartup = owned.startup;
         Check(owned.releaseStartup(owned.startup) == Frontend::Status::Ok, "release the completed stopped Core owner");
         owned.startup = nullptr;
+        GameTimeStale(owned, staleStartup);
         Check(owned.readStartup(staleStartup, sentinel.data(), 32) == Frontend::Status::InvalidArgument && sentinel == unchanged,
               "released completed Core handle cannot access freed singleton state");
         Check(owned.runPersistent(staleStartup, &persistentRequest) == Frontend::Status::InvalidArgument && !cancelCalls && !publishCalls && !heartbeatCalls,

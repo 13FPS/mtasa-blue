@@ -25,7 +25,8 @@ $sourceNames = @('Client/sdk/game/CGameAdapter.h', 'Client/game_de/GameAdapter.c
     'Client/game_de/CClockDE.h', 'Client/game_de/CClockDE.cpp', 'Client/sdk/game/CClock.h',
     'Client/sdk/game/CGameClockService.h', 'Client/sdk/game/CGameLocalInputLease.h', 'Client/game_de/LocalInputLeasePolicy.h',
     'Client/game_de/NativeClockService.h', 'Client/game_de/NativeClockService.cpp',
-    'Client/game_de/NativeClockProfile.h', 'Client/game_de/NativeServiceAdmission.h',
+    'Client/sdk/game/CGameTimeService.h', 'Client/game_de/NativeGameTimeReader.h', 'Client/game_de/NativeGameTimeReader.cpp',
+    'Client/game_de/NativeClockProfile.h', 'Client/game_de/NativeClockMemory.h', 'Client/game_de/NativeServiceAdmission.h',
     'Client/game_de/NativeMovementInput.h', 'Client/game_de/NativeMovementInput.cpp', 'Client/game_de/NativeInputRouting.h',
     'Client/sdk/game/CGameRenderObservation.h', 'Client/sdk/game/CGameRenderEndpointDiagnostic.h', 'Client/sdk/game/CGameRenderSetupDiagnostic.h', 'Client/sdk/game/CGameRenderRootsDiagnostic.h', 'Client/sdk/game/CGameRenderDeviceLease.h', 'Client/sdk/game/CGameRenderDeviceWindowLease.h',
     'Client/game_de/NativeRenderObservation.h', 'Client/game_de/NativeRenderObservation.cpp',
@@ -81,7 +82,7 @@ $moduleSource = Join-Path $taskRoot 'Client/game_de/GameAdapter.cpp'
 if ((Test-Path -LiteralPath $moduleSource) -and $detoursLibraryExit -eq 0) {
     $moduleArguments = $common + @('/LD','/DMTA_GAME_DE_EXPORTS', $moduleSource, (Join-Path $taskRoot 'Client/game_de/NativePadReader.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeImageAccess.cpp'), (Join-Path $taskRoot 'Client/game_de/CClockDE.cpp'),
-        (Join-Path $taskRoot 'Client/game_de/NativeClockService.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativeClockService.cpp'), (Join-Path $taskRoot 'Client/game_de/NativeGameTimeReader.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeMovementInput.cpp'), (Join-Path $taskRoot 'Client/game_de/NativeRenderObservation.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeD3D12OwnershipProbe.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeCustomPresentProbe.cpp'),

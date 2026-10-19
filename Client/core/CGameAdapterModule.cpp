@@ -140,6 +140,7 @@ bool CGameAdapterModule::Start(CCoreInterface* owner, const std::wstring& absolu
     resolveClock(m_clockRenew, "RenewGameClockServiceV1");
     resolveClock(m_clockRead, "ReadGameClockServiceV1");
     resolveClock(m_clockEnd, "EndGameClockServiceV1");
+    resolveClock(m_gameTimeRead, "ReadGameTimeStateV1");
     resolveClock(m_localLeaseBegin, "BeginGameLocalInputLeaseV1");
     resolveClock(m_localLeaseRenew, "RenewGameLocalInputLeaseV1");
     resolveClock(m_localLeaseRead, "ReadGameLocalInputLeaseV1");
@@ -532,6 +533,37 @@ bool CGameAdapterModule::EndNativeClockService(std::uint64_t generation)
         return false;
     m_clockAttemptPending = false;
     return true;
+}
+
+bool CGameAdapterModule::HasGameTimeService() const noexcept
+{
+    return m_adapter && m_gameTimeRead && m_ownerThread == GetCurrentThreadId();
+}
+
+mta::game_de::Status CGameAdapterModule::ReadGameTimeState(mta::game_de::GameTimeStateV1& state) noexcept
+{
+    using namespace mta::game_de;
+    // A read-only startup consumer must coexist with retained input/render
+    // ownership. It neither retires those services nor allocates diagnostics
+    // when an older provider or the current executable has no native clock.
+    if (!m_adapter)
+        return Status::NotInitialized;
+    if (m_ownerThread != GetCurrentThreadId())
+        return Status::WrongThread;
+    if (!m_gameTimeRead)
+        return Status::Unsupported;
+    GameTimeStateV1 next;
+    const auto      status = m_gameTimeRead(GameTimeServiceVersionV1, m_adapter, &next);
+    if (status != Status::Ok)
+        return status;
+    // Validate source widths rather than a guessed wall-clock representation:
+    // the legacy engine permits minute 60 and stores raw seconds as uint16.
+    if (next.size != sizeof(next) || next.version != GameTimeServiceVersionV1 || next.producerThread != m_ownerThread || next.hour > 23 || next.minute > 60 ||
+        next.seconds > 65535 || !next.millisecondsPerGameMinute || next.millisecondsPerGameMinute > 3600000 || next.reserved[0] || next.reserved[1] ||
+        next.reserved[2])
+        return Status::Unsupported;
+    state = next;
+    return Status::Ok;
 }
 
 bool CGameAdapterModule::BorrowGameInterface(CGame*& game)
@@ -1537,6 +1569,7 @@ void CGameAdapterModule::Stop() noexcept
     m_clockRenew = nullptr;
     m_clockRead = nullptr;
     m_clockEnd = nullptr;
+    m_gameTimeRead = nullptr;
     m_renderEndpointReaderV2 = nullptr;
     m_renderSetupReaderV1 = nullptr;
     m_renderRootsReaderV1 = nullptr;

@@ -32,6 +32,7 @@
     #include "DefinitiveFrontendClockReference.h"
     #include "DefinitiveFrontendRuntime.h"
     #include "DefinitiveLocalInputRuntime.h"
+    #include "DefinitiveStartupGameTime.h"
 #endif
 
 #define CORE_API extern "C" __declspec(dllexport)
@@ -233,6 +234,16 @@ CORE_API DefinitiveFrontendStartup::Status MTA_BindDEFrontendStartupInput(void* 
 CORE_API DefinitiveFrontendStartup::Status MTA_ReadDEFrontendStartup(void* handle, std::uint32_t* output, std::uint32_t count)
 {
     return DefinitiveFrontendStartup::ReadOwner(handle, output, count);
+}
+
+CORE_API std::uint32_t MTA_DEStartupGameTimeApiVersion()
+{
+    return DefinitiveStartupGameTime::ApiVersion;
+}
+
+CORE_API DefinitiveStartupGameTime::Status MTA_ReadDEStartupGameTimeV1(void* handle, std::uint32_t* output, std::uint32_t count)
+{
+    return DefinitiveStartupGameTime::ReadOwner(handle, output, count);
 }
 
 CORE_API DefinitiveFrontendStartup::Status MTA_ShutdownDEFrontendStartup(void* handle)

@@ -116,6 +116,55 @@ namespace ClockTestFaults
 #undef VirtualProtect
 #undef WriteProcessMemory
 
+namespace ClockReaderTestHost
+{
+    std::uintptr_t        image = 0;
+    std::atomic<unsigned> samples{0}, mismatchSample{0};
+
+    HMODULE WINAPI Module(LPCWSTR name)
+    {
+        return !name && image ? reinterpret_cast<HMODULE>(image) : ::GetModuleHandleW(name);
+    }
+}
+
+namespace mta::game_de::NativeImageAccess
+{
+    bool ClockReaderFixtureExecutable() noexcept
+    {
+        // A positive reader fixture selects only its owned SEC_IMAGE mapping;
+        // the ordinary wrong-host test below still executes the shipping hash
+        // gate. This does not admit this process as a supported GTA build.
+        return ClockReaderTestHost::image != 0 || CheckExecutableBuild();
+    }
+}
+
+namespace mta::game_de::GameTimeReaderFixtureMemory
+{
+    bool Read(std::uintptr_t image, ClockValues& output) noexcept
+    {
+        if (!NativeClockMemory::Read(image, output))
+            return false;
+        if (ClockReaderTestHost::samples.fetch_add(1) + 1 == ClockReaderTestHost::mismatchSample.load())
+            ++output.seconds;
+        return true;
+    }
+    bool Equal(const ClockValues& first, const ClockValues& second) noexcept
+    {
+        return NativeClockMemory::Equal(first, second);
+    }
+}
+
+// These test-TU-only wrappers select the same owned native image used by the
+// clock fixture and introduce a deterministic mismatch between complete reads.
+// Shipping code keeps the real exact-executable gate and raw shared primitive.
+#define CheckExecutableBuild ClockReaderFixtureExecutable
+#define GetModuleHandleW     ClockReaderTestHost::Module
+#define NativeClockMemory    GameTimeReaderFixtureMemory
+#include "../../Client/game_de/NativeGameTimeReader.cpp"
+#undef NativeClockMemory
+#undef GetModuleHandleW
+#undef CheckExecutableBuild
+
 using namespace mta::game_de;
 
 namespace
@@ -1102,6 +1151,100 @@ namespace
         }
     }
 
+    void NativeReadOnlyGameTimeReader(ClockImageFixture& fixture)
+    {
+        NativeGameTimeReader reader;
+        GameTimeStateV1      state;
+        std::memset(&state, 0x5a, sizeof(state));
+        const auto untouched = state;
+        const auto unchanged = [&] { return std::memcmp(&state, &untouched, sizeof(state)) == 0; };
+        Check(reader.Read(state) == Status::NotInitialized && unchanged() && !reader.IsBound(),
+              "an unbound read-only game-time service preserves every caller output byte");
+        Check(reader.Bind() == Status::Unsupported && !reader.IsBound(), "the shipping game-time executable hash refuses this ordinary host");
+        fixture.Seed();
+        ClockReaderTestHost::image = fixture.image;
+        Check(reader.Bind() == Status::Ok && reader.IsBound(), "the production reader admits the exact code, metadata and pages of its owned image fixture");
+        const auto writesBefore = ClockTestFaults::clockDataWrites.load(), patchesBefore = ClockTestFaults::clockCodeExchanges.load();
+        Check(reader.Read(state) == Status::Ok && state.size == sizeof(GameTimeStateV1) && state.version == GameTimeServiceVersionV1 &&
+                  state.producerThread == GetCurrentThreadId() && state.hour == 12 && state.minute == 34 && state.seconds == 27 && state.nativeTimer == 10000 &&
+                  state.lastMinuteChange == 9900 && state.millisecondsPerGameMinute == 1000 && !state.reserved[0] && !state.reserved[1] && !state.reserved[2],
+              "two matching complete native reads publish the real timer, clock and minute duration without synthesized time");
+        std::thread foreign(
+            [&]
+            {
+                GameTimeStateV1 output = untouched;
+                Check(
+                    reader.Bind() == Status::WrongThread && reader.Read(output) == Status::WrongThread && std::memcmp(&output, &untouched, sizeof(output)) == 0,
+                    "a foreign caller cannot steal reader ownership or publish a native sample");
+            });
+        foreign.join();
+        state = untouched;
+        ClockReaderTestHost::samples.store(0);
+        ClockReaderTestHost::mismatchSample.store(2);
+        Check(reader.Read(state) == Status::Unsupported && unchanged() && ClockReaderTestHost::samples.load() == 2,
+              "a mismatch between complete native samples refuses publication without retries or a cached success");
+        ClockReaderTestHost::mismatchSample.store(0);
+        for (unsigned field = 0; field != 4; ++field)
+        {
+            fixture.Seed();
+            if (field == 0)
+                fixture.Put(NativeClockProfile::hoursRva, std::uint8_t{24});
+            if (field == 1)
+                fixture.Put(NativeClockProfile::minutesRva, std::uint8_t{61});
+            if (field == 2)
+                fixture.Put(NativeClockProfile::minuteDurationRva, std::uint32_t{0});
+            if (field == 3)
+                fixture.Put(NativeClockProfile::minuteDurationRva, std::uint32_t{3600001});
+            state = untouched;
+            Check(reader.Read(state) == Status::Unsupported && unchanged(), "invalid native clock fields cannot escape as a successful game-time sample");
+        }
+        fixture.Seed();
+        fixture.Put(NativeClockProfile::minutesRva, std::uint8_t{60});
+        fixture.Put(NativeClockProfile::secondsRva, std::uint16_t{65535});
+        Check(reader.Read(state) == Status::Ok && state.minute == 60 && state.seconds == 65535,
+              "raw native seconds and the existing SDK minute-60 boundary are preserved instead of inventing normalized time");
+        fixture.Seed();
+        auto changed = NativeClockProfile::getterCase;
+        changed[0] ^= 1;
+        fixture.Patch(NativeClockProfile::getterCaseRva, changed.data(), changed.size());
+        state = untouched;
+        Check(reader.Read(state) == Status::Unsupported && unchanged(), "changed live getter instructions invalidate an already bound reader");
+        fixture.Patch(NativeClockProfile::getterCaseRva, NativeClockProfile::getterCase.data(), NativeClockProfile::getterCase.size());
+        DWORD originalProtection = 0, ignored = 0;
+        Check(::VirtualProtect(reinterpret_cast<void*>(fixture.image + NativeClockProfile::nativeTimerRva), sizeof(std::uint32_t), PAGE_NOACCESS,
+                               &originalProtection) != FALSE,
+              "deny native timer pages only inside the independently owned image");
+        state = untouched;
+        Check(reader.Read(state) == Status::Unsupported && unchanged(), "lost native page access refuses a fresh read while preserving output");
+        Check(::VirtualProtect(reinterpret_cast<void*>(fixture.image + NativeClockProfile::nativeTimerRva), sizeof(std::uint32_t), originalProtection,
+                               &ignored) != FALSE,
+              "restore the owned native timer page after its read-only refusal test");
+        Check(reader.Read(state) == Status::Ok && ClockTestFaults::clockDataWrites.load() == writesBefore &&
+                  ClockTestFaults::clockCodeExchanges.load() == patchesBefore,
+              "successful and failed game-time reads perform no clock writes, branch patches or hook ownership changes");
+
+        NativeClockService service;
+        BeginOwned(service, fixture);
+        Check(reader.Read(state) == Status::Ok,
+              "read-only game time coexists with the qualified clock continuation hook while its observed calculation span remains original");
+        if (NativeClockProfile::clockBoundaryReviewed)
+        {
+            const auto frozen = Execute(service, fixture, ClockOperation::Freeze);
+            Check(frozen.lastCommandResult == ClockResult::Ok && frozen.patchInstalled, "install only the existing clock owner's reviewed freeze branch");
+            state = untouched;
+            Check(reader.Read(state) == Status::Unsupported && unchanged(),
+                  "read-only time refuses an altered calculation span without claiming or changing the clock writer's ownership");
+        }
+        FinishOwned(service, fixture);
+        Check(reader.Read(state) == Status::Ok, "clock-owner retirement restores the original reader binding without a new time trial");
+        reader.Reset();
+        state = untouched;
+        Check(!reader.IsBound() && reader.Read(state) == Status::NotInitialized && unchanged(),
+              "reader reset discards only its local binding and does not return the earlier native sample");
+        ClockReaderTestHost::image = 0;
+        std::puts("Production read-only game-time reader fixture completed");
+    }
+
     void NativePatchTransactions(ClockImageFixture& fixture)
     {
         if (!NativeClockProfile::clockBoundaryReviewed)
@@ -1189,6 +1332,7 @@ int main(int argc, char** argv)
     NativeServiceAdmissionContract();
     ClockImageFixture fixture;
     fixture.Create(argv[1]);
+    NativeReadOnlyGameTimeReader(fixture);
     NativeReadSetAndRestoration(fixture);
     NativeCoherentCommandPublication(fixture);
     NativeReadOnlyRetirement(fixture);

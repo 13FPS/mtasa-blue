@@ -13,6 +13,7 @@
 #include <game/CGameRenderDeviceWindowLease.h>
 #include <game/CGameClockService.h>
 #include <game/CGameLocalInputLease.h>
+#include <game/CGameTimeService.h>
 
 #include <array>
 #include <algorithm>
@@ -422,6 +423,54 @@ namespace
               "reset clears native binding without publishing device state");
         Check(adapter.value->Shutdown() == Status::Ok && adapter.value->ReadNativeDeviceState(state) == Status::NotInitialized && state.sources == original,
               "shutdown prevents native device reads");
+    }
+
+    void TestGameTimeServiceRejection()
+    {
+        OwnedAdapter    adapter;
+        OwnerIdentity   owner;
+        GameTimeStateV1 output;
+        output.hour = 99;
+        const auto unchanged = [&] { return output.hour == 99 && output.producerThread == 0 && output.millisecondsPerGameMinute == 0; };
+        Check(ReadGameTimeStateV1(1, adapter.value, &output) == Status::NotInitialized && unchanged(),
+              "read-only time requires initialization and preserves absent native evidence");
+        Check(adapter.value->Initialize(owner.Get()) == Status::Ok, "initialize actual read-only time owner");
+        Check(ReadGameTimeStateV1(0, adapter.value, &output) == Status::InvalidArgument && unchanged(), "read-only time API is exact");
+        Check(ReadGameTimeStateV1(1, nullptr, &output) == Status::InvalidArgument &&
+                  ReadGameTimeStateV1(1, adapter.value, nullptr) == Status::InvalidArgument && unchanged(),
+              "read-only time rejects null arguments without producing a sample");
+        auto* unknown = reinterpret_cast<IGameAdapter*>(std::uintptr_t{1});
+        Check(ReadGameTimeStateV1(1, unknown, &output) == Status::InvalidArgument && unchanged(), "read-only time rejects unowned adapter identities");
+        --output.size;
+        Check(ReadGameTimeStateV1(1, adapter.value, &output) == Status::InvalidArgument && unchanged(), "read-only time output size is exact");
+        ++output.size;
+        output.version = 0;
+        Check(ReadGameTimeStateV1(1, adapter.value, &output) == Status::InvalidArgument && unchanged(), "read-only time output version is exact");
+        output.version = 1;
+        for (auto& word : output.reserved)
+        {
+            word = 1;
+            Check(ReadGameTimeStateV1(1, adapter.value, &output) == Status::InvalidArgument && unchanged(), "read-only time reserved words are rejected");
+            word = 0;
+        }
+        Status      foreign = Status::Ok;
+        std::thread other([&] { foreign = ReadGameTimeStateV1(1, adapter.value, &output); });
+        other.join();
+        Check(foreign == Status::WrongThread && unchanged(), "read-only time cannot migrate the initialized native owner");
+        Check(ReadGameTimeStateV1(1, adapter.value, &output) == Status::Unsupported && unchanged(), "read-only time refuses this non-game executable");
+        ControlActionFrame frame;
+        frame.heldActions = MtaInput::ActionBit(FORWARDS);
+        Check(adapter.value->SubmitControlActions(frame) == Status::Ok, "stage existing MTA input beside the optional time reader");
+        MtaInputState before, after;
+        Check(adapter.value->GetMtaInputState(before) == Status::Ok && ReadGameTimeStateV1(1, adapter.value, &output) == Status::Unsupported &&
+                  adapter.value->GetMtaInputState(after) == Status::Ok && std::memcmp(&before, &after, sizeof(before)) == 0 && unchanged(),
+              "a refused read-only startup read neither resets nor replaces staged MTA input");
+        Check(adapter.value->GetCapabilities() == implementedCapabilities && adapter.value->GetGameInterface() == nullptr,
+              "optional read-only time does not promote the incomplete CGame interface");
+        Check(adapter.value->Reset() == Status::Ok && ReadGameTimeStateV1(1, adapter.value, &output) == Status::Unsupported && unchanged(),
+              "reset permits a fresh read attempt without publishing cached time");
+        Check(adapter.value->Shutdown() == Status::Ok && ReadGameTimeStateV1(1, adapter.value, &output) == Status::NotInitialized && unchanged(),
+              "read-only time follows actual adapter shutdown");
     }
 
     void TestClockServiceRejection()
@@ -1381,6 +1430,8 @@ int main()
     static_assert(AdapterAbiVersion == 6 && AdapterControllerMask == 0xfffff);
     static_assert(sizeof(LocalInputLeaseRequestV1) == 120 && sizeof(LocalInputLeaseStateV1) == 64);
     static_assert(LocalInputLeaseVersionV1 == 1 && LocalInputLeaseLifetimeMsV1 == 500);
+    static_assert(sizeof(GameTimeStateV1) == 48 && GameTimeServiceVersionV1 == 1);
+    static_assert(std::is_nothrow_invocable_r_v<Status, decltype(ReadGameTimeStateV1), std::uint32_t, IGameAdapter*, GameTimeStateV1*>);
     static_assert(std::is_nothrow_invocable_r_v<Status, decltype(BeginGameLocalInputLeaseV1), std::uint32_t, IGameAdapter*, const LocalInputLeaseRequestV1*,
                                                 LocalInputLeaseStateV1*>);
     static_assert(
@@ -1427,6 +1478,7 @@ int main()
         TestNativeMovementRejection();
         TestNativeMovementEligibilityRejection();
         TestClockServiceRejection();
+        TestGameTimeServiceRejection();
         TestLocalInputLeaseRejection();
         // Exercise historical factory layouts after the additive lease has
         // completed, so API5 cannot silently replace their module contract.

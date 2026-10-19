@@ -6,6 +6,33 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
+**The next startup foundation adds read-only native game time through MTA's
+existing adapter owner.** The optional `ReadGameTimeStateV1` service supplies
+the native timer, hour/minute/raw seconds, last minute change and minute duration
+from the already identified exact-image clock fields. It installs no hook and
+does not acquire or renew an input, rendering or clock-write lease. The shared
+raw clock reader also backs the existing `CClockDE` service.
+
+The retained Core exposes fresh explicit reads with
+`MTA_ReadDEStartupGameTimeV1`; its separate 16-word result leaves existing
+startup, GUI and input protocols unchanged. A refused sample is marked
+unavailable with zero native fields. Core neither substitutes wall time nor
+reuses an earlier successful sample. Two matching complete native samples
+provide sampled consistency, not an atomic engine-thread snapshot. Changed
+clock calculation bytes, including the freeze patch, refuse a read.
+
+This is a prerequisite for native `CGame` time consumers. It does not expose
+a partial `CGame`, promote gameplay capabilities or bypass full startup's
+remaining engine/network requirements. The installed combined input/menu
+runtime and its October 19 GTA result below remain unchanged; this new service
+has separate offline verification and has not been tested in GTA.
+
+This batch passed 807 native clock/time checks, 1,780 real adapter checks,
+1,812 x64 consumer checks plus the x86 refusal checks, and 2,686 assertions
+across seven real Core/GUI host cases. The normal Core build passed its 69
+guards and both classic compile profiles; the rebuilt Bridge passed 2,463
+checks. No game installation was changed.
+
 **The current source connects the retained MTA bindings to local on-foot input.**
 The existing runtime selection now starts a separate renewable input service
 after the menu closes. It uses the same `CKeyBinds` manager and controller

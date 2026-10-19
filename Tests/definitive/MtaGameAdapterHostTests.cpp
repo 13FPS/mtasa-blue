@@ -144,6 +144,9 @@ void operator delete[](void* memory, std::size_t) noexcept
     #ifndef MTA_TEST_LOCAL_INPUT_MODE
         #define MTA_TEST_LOCAL_INPUT_MODE 0
     #endif
+    #ifndef MTA_TEST_GAME_TIME_MODE
+        #define MTA_TEST_GAME_TIME_MODE 0
+    #endif
 // This deliberately failing provider tests Core's DLL lifetime only. It is not
 // an engine writer, replacement Game DE implementation or gameplay fixture.
 namespace mta::game_de
@@ -163,6 +166,9 @@ namespace mta::game_de
         alignas(void*) unsigned char windowIdentity[sizeof(void*)]{};
         void (*v6OperationObserver)() noexcept = nullptr;
         alignas(void*) unsigned char facadeIdentity[sizeof(void*)]{};
+    #if MTA_TEST_GAME_TIME_MODE || MTA_TEST_CLOCK_MODE || MTA_TEST_LOCAL_INPUT_MODE
+        std::uint32_t* gameTimeControl = nullptr;
+    #endif
     #if MTA_TEST_LOCAL_INPUT_MODE
         FixtureLocalInputStats*    localFixtureStats = nullptr;
         LocalInputLeaseStateV1     fixtureLocalState;
@@ -202,6 +208,11 @@ namespace mta::game_de
                 fixtureLocalState.active = fixtureLocalState.bound = 0;
                 fixtureLocalUnknownDebt = fixtureLocalHasInput = false;
                 return Status::Ok;
+    #elif MTA_TEST_GAME_TIME_MODE
+                // This read-only fixture owns no native lease to retire. Keep
+                // the unrelated shutdown-failure provider's Reset refusal out
+                // of the optional reader's normal ABI6 lifecycle.
+                return Status::Ok;
     #else
                 return MTA_TEST_RENDER_MODE ? Status::Ok : Status::Unsupported;
     #endif
@@ -225,6 +236,8 @@ namespace mta::game_de
                                       (MTA_TEST_CLOCK_MODE == 3 && clockFixtureStats && !(clockFixtureStats->control & 2));
                 ObserveClockOperation();
                 return retained ? Status::Unsupported : Status::Ok;
+    #elif MTA_TEST_GAME_TIME_MODE
+                return Status::Ok;
     #else
                 return !MTA_TEST_RENDER_MODE && (MTA_TEST_FACADE_MODE == 0 || MTA_TEST_FACADE_MODE == 3) && shutdownCount == 1 ? Status::Unsupported
                                                                                                                                : Status::Ok;
@@ -680,6 +693,69 @@ namespace mta::game_de
         fixtureCounters = counters;
     }
 
+    #if MTA_TEST_GAME_TIME_MODE || MTA_TEST_CLOCK_MODE || MTA_TEST_LOCAL_INPUT_MODE
+    extern "C" __declspec(dllexport) void SetGameTimeFixtureControl(std::uint32_t* control) noexcept
+    {
+        gameTimeControl = control;
+    }
+    extern "C" Status ReadGameTimeStateV1(std::uint32_t version, IGameAdapter* adapter, GameTimeStateV1* output) noexcept
+    {
+        if (version != GameTimeServiceVersionV1 || !adapter || !output)
+            return Status::InvalidArgument;
+        // Deliberately controlled values test the actual Core wrapper; no
+        // fixture claims these values came from GTA or installs a time hook.
+        GameTimeStateV1 next;
+        next.producerThread = GetCurrentThreadId();
+        next.hour = 23;
+        next.minute = 60;
+        next.seconds = 65535;
+        next.nativeTimer = 1000;
+        next.lastMinuteChange = 900;
+        next.millisecondsPerGameMinute = 3600000;
+        const auto mode = gameTimeControl ? gameTimeControl[0] : 0;
+        if (gameTimeControl)
+            ++gameTimeControl[1];
+        switch (mode)
+        {
+            case 1:
+                --next.size;
+                break;
+            case 2:
+                ++next.version;
+                break;
+            case 3:
+                ++next.producerThread;
+                break;
+            case 4:
+                next.hour = 24;
+                break;
+            case 5:
+                next.minute = 61;
+                break;
+            case 6:
+                next.seconds = 65536;
+                break;
+            case 7:
+                next.millisecondsPerGameMinute = 0;
+                break;
+            case 8:
+                ++next.millisecondsPerGameMinute;
+                break;
+            case 9:
+                next.reserved[0] = 1;
+                break;
+            case 10:
+                next.reserved[1] = 1;
+                break;
+            case 11:
+                next.reserved[2] = 1;
+                break;
+        }
+        *output = next;
+        return mode == 12 ? Status::Unsupported : Status::Ok;
+    }
+    #endif
+
     #if MTA_TEST_CLOCK_MODE
     extern "C" __declspec(dllexport) void SetClockFixtureStats(FixtureClockStats* stats) noexcept
     {
@@ -1107,6 +1183,10 @@ namespace
         Check(!host.Start(owner, missingFactory), "a real DLL without the adapter factory cannot initialize");
         Check(host.GetError().find("CreateGameAdapter") != std::string::npos && !host.IsStarted(), "missing-factory rejection reports its ABI boundary");
         Check(!host.Pulse() && !host.Reset(), "an uninitialized consumer cannot invoke adapter callbacks");
+        mta::game_de::GameTimeStateV1 time;
+        time.hour = 99;
+        Check(!host.HasGameTimeService() && host.ReadGameTimeState(time) == mta::game_de::Status::NotInitialized && time.hour == 99,
+              "uninitialized time consumer preserves output and optional availability");
         mta::game_de::MtaInputState input;
         input.current.ButtonCross = 19;
         Check(!host.SubmitControlActions({}) && !host.GetMtaInputState(input) && input.current.ButtonCross == 19,
@@ -1154,6 +1234,21 @@ namespace
             Check(host.GameplayUnavailableReason().find("EngineInputWrite") != std::string::npos, "full-game gate explains missing input write");
             Check(host.GameplayUnavailableReason().find("RemotePlayerContext") != std::string::npos, "full-game gate explains missing remote context");
             Check(host.Pulse(), "owning Core can pulse the initialized real module");
+            mta::game_de::GameTimeStateV1 time;
+            time.hour = 99;
+            Check(host.HasGameTimeService() && host.ReadGameTimeState(time) == mta::game_de::Status::Unsupported && time.hour == 99,
+                  "actual optional read-only time export refuses this non-game host without a fabricated sample");
+            mta::game_de::Status otherTimeRead = mta::game_de::Status::Ok;
+            bool                 otherTimeAvailable = true;
+            std::thread          timeThread(
+                [&]
+                {
+                    otherTimeAvailable = host.HasGameTimeService();
+                    otherTimeRead = host.ReadGameTimeState(time);
+                });
+            timeThread.join();
+            Check(!otherTimeAvailable && otherTimeRead == mta::game_de::Status::WrongThread && time.hour == 99,
+                  "actual time consumer rejects a foreign caller without altering output");
             mta::game_de::ClockServiceRequestV1 clockRequest;
             mta::game_de::ClockServiceStateV1   clockState;
             clockState.hour = 99;
@@ -1423,6 +1518,9 @@ namespace
             return;
         }
         Check(state.generation == 31 && state.producerThread == GetCurrentThreadId(), "Begin retains a real provider cleanup token even on refusal");
+        GameTimeStateV1 gameTime;
+        Check(host.HasGameTimeService() && host.ReadGameTimeState(gameTime) == Status::Ok && gameTime.hour == 23 && !stats.ends && !stats.resets,
+              "read-only startup time coexists with owned local input and never retires its lease");
         Check(!host.BeginLocalInputLease(reinterpret_cast<void*>(static_cast<std::uintptr_t>(1)), state) && stats.begins == 1,
               "pending local ownership refuses duplicate Begin before provider entry");
         ClockServiceStateV1 clock;
@@ -1501,6 +1599,13 @@ namespace
         Check(began == (mode != 1) && state.generation == 17 && stats.begins == 1,
               "failed native clock Begin remains distinguishable while preserving its returned cleanup generation");
         Check(!observedCoreAllocations.load(), "clock post-Begin status diagnostics allocate nothing after a provider can retain stopped heap peers");
+        GameTimeStateV1 gameTime;
+        observedCoreAllocations.store(0);
+        observeCoreAllocations.store(true);
+        const auto timeStatus = host.ReadGameTimeState(gameTime);
+        observeCoreAllocations.store(false);
+        Check(host.HasGameTimeService() && timeStatus == Status::Ok && gameTime.hour == 23 && !stats.ends && !observedCoreAllocations.load(),
+              "read-only startup time coexists with pending clock ownership without retirement or consumer allocation");
         observedCoreAllocations.store(0);
         observeCoreAllocations.store(true);
         LocalInputLeaseStateV1 localInputState;
@@ -1581,11 +1686,61 @@ namespace
         Check(!host.IsStarted() && !GetModuleHandleW(path.c_str()), "confirmed Stop resets clock ownership for a later Core consumer lifetime");
     }
 
+    void TestControlledGameTimeProvider(CCoreInterface* owner, const std::wstring& fixturePath)
+    {
+        using namespace mta::game_de;
+        CGameAdapterModule host;
+        Check(host.Start(owner, fixturePath) && host.HasGameTimeService(), "own an explicitly selected optional read-only time provider");
+        using Configure = void (*)(std::uint32_t*) noexcept;
+        Configure  configure = nullptr;
+        const auto entry = GetProcAddress(GetModuleHandleW(fixturePath.c_str()), "SetGameTimeFixtureControl");
+        static_assert(sizeof(configure) == sizeof(entry));
+        std::memcpy(&configure, &entry, sizeof(configure));
+        Check(configure != nullptr, "controlled reader exposes counters independent of its samples");
+        std::uint32_t control[2]{};
+        configure(control);
+        GameTimeStateV1 output;
+        Check(host.ReadGameTimeState(output) == Status::Ok && output.hour == 23 && output.minute == 60 && output.seconds == 65535 &&
+                  output.producerThread == GetCurrentThreadId() && output.nativeTimer == 1000 && output.lastMinuteChange == 900 &&
+                  output.millisecondsPerGameMinute == 3600000 && control[1] == 1,
+              "consumer preserves source-width time values and the actual provider owner");
+        const auto original = output;
+        for (std::uint32_t mode = 1; mode <= 12; ++mode)
+        {
+            control[0] = mode;
+            Check(host.ReadGameTimeState(output) == Status::Unsupported && std::memcmp(&output, &original, sizeof(output)) == 0,
+                  "malformed or refused provider samples never replace the last caller-owned value");
+        }
+        control[0] = 0;
+        const auto  reads = control[1];
+        Status      foreign = Status::Ok;
+        std::thread other([&] { foreign = host.ReadGameTimeState(output); });
+        other.join();
+        Check(foreign == Status::WrongThread && control[1] == reads && std::memcmp(&output, &original, sizeof(output)) == 0,
+              "foreign consumer read never enters the provider or overwrites caller output");
+        observedCoreAllocations.store(0);
+        ArmCoreAllocationObservation();
+        const auto readStatus = host.ReadGameTimeState(output);
+        observeCoreAllocations.store(false);
+        Check(readStatus == Status::Ok && !observedCoreAllocations.load(), "read-only time polling allocates no Core diagnostics");
+        Check(!host.GetCapabilities() && !host.IsGameplayReady() && host.Pulse(), "optional time does not fabricate a full CGame or alter the ABI6 lifecycle");
+        Check(host.Reset() && host.ReadGameTimeState(output) == Status::Ok, "read-only time needs no ownership retirement around reset");
+        host.Stop();
+        Check(!host.IsStarted() && !host.HasGameTimeService() && !GetModuleHandleW(fixturePath.c_str()),
+              "safe Stop unloads and clears the optional time reader");
+        output.hour = 99;
+        Check(host.ReadGameTimeState(output) == Status::NotInitialized && output.hour == 99, "stopped time reader preserves caller output");
+    }
+
     void TestFailedShutdownRetention(CCoreInterface* owner, const std::wstring& fixturePath)
     {
         Check(GetModuleHandleW(fixturePath.c_str()) == nullptr, "cleanup fixture begins unloaded");
         CGameAdapterModule host;
         Check(host.Start(owner, fixturePath), "load an explicit provider whose first Shutdown fails");
+        mta::game_de::GameTimeStateV1 time;
+        time.hour = 99;
+        Check(!host.HasGameTimeService() && host.ReadGameTimeState(time) == mta::game_de::Status::Unsupported && time.hour == 99 && host.Pulse(),
+              "a legacy provider without optional time remains usable and preserves absent reader output");
         mta::game_de::ClockServiceRequestV1 clockRequest;
         mta::game_de::ClockServiceStateV1   clockState;
         clockState.hour = 99;
@@ -3109,7 +3264,8 @@ int wmain(int argc, wchar_t** argv)
 {
     try
     {
-        if (argc != 2 && argc != 3 && argc != 6 && argc != 11 && argc != 18 && argc != 26 && argc != 34 && argc != 42 && argc != 50 && argc != 54 && argc != 58)
+        if (argc != 2 && argc != 3 && argc != 6 && argc != 11 && argc != 18 && argc != 26 && argc != 34 && argc != 42 && argc != 50 && argc != 54 &&
+            argc != 58 && argc != 59)
             throw std::runtime_error("Pass the absolute path of the built Game DE module");
         const std::wstring modulePath = argv[1];
         // The adapter stores this identity but must never dereference it. This
@@ -3168,9 +3324,11 @@ int wmain(int argc, wchar_t** argv)
         if (argc >= 54)
             for (unsigned mode = 1; mode <= 4; ++mode)
                 TestControlledClockProvider(owner, argv[mode + 49], mode);
-        if (argc == 58)
+        if (argc >= 58)
             for (unsigned mode = 1; mode <= 4; ++mode)
                 TestControlledLocalInputProvider(owner, argv[mode + 53], mode);
+        if (argc == 59)
+            TestControlledGameTimeProvider(owner, argv[58]);
     #else
         CGameAdapterModule host;
         Check(!host.Start(owner, modulePath), "x86 must reject the x64 backend before loading it");

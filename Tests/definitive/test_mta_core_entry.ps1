@@ -36,6 +36,7 @@ $sourceNames=@('Tests/definitive/MtaCoreEntryTests.cpp','Tests/definitive/test_m
     'Client/game_de/NativeImageAccess.cpp','Client/game_de/NativeImageAccess.h',
     'Client/game_de/CClockDE.cpp','Client/game_de/CClockDE.h','Client/sdk/game/CClock.h',
     'Client/game_de/NativeClockService.cpp','Client/game_de/NativeClockService.h','Client/sdk/game/CGameClockService.h',
+    'Client/game_de/NativeGameTimeReader.cpp','Client/game_de/NativeGameTimeReader.h','Client/sdk/game/CGameTimeService.h','Client/game_de/NativeClockMemory.h',
     'Client/game_de/NativeClockProfile.h','Client/game_de/NativeServiceAdmission.h',
     'Client/game_de/NativeMovementInput.cpp','Client/game_de/NativeMovementInput.h','Client/game_de/NativeInputRouting.h',
     'Client/game_de/NativeRenderObservation.cpp','Client/game_de/NativeRenderObservation.h','Client/sdk/game/CGameRenderObservation.h',

@@ -11,9 +11,14 @@ its hooks and unloaded Core normally. A combined startup observer now reuses
 that same MTA worker and native lease for declared UI-class relations, the
 enclosing game-mode/interface correlation and a conservative world link. Its
 256-byte SDK record and 192-word report distinguish missing prerequisites,
-wrong types and refused reads. These new observations still need a live trial;
-they do not establish UObject lifetime, cold frontend readiness or permission
-to call native startup methods. Existing networking remains MTA's responsibility.
+wrong types and refused reads. Runtime `a089e0c7b` passed the combined gameplay
+trial: all 65 frames confirmed both UI types and the owner/world links, with no
+refused observations and complete native/Core cleanup. All 14 saved logs and
+normal shutdown are pinned by
+`Build/definitive-recovery/current-actual-startup-observation-checkpoint.json`.
+This does not establish UObject lifetime, controller/UI provider readiness,
+cold frontend readiness or permission to call native startup methods. Existing
+networking remains MTA's responsibility.
 
 The real Deathmatch client now builds and links for Release/x64 using MTA's
 existing code. Engine work is assembling its actual `CGame` services:

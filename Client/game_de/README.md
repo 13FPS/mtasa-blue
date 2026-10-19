@@ -76,8 +76,17 @@ correlates its interface back-reference, then conservatively observes its world
 link. Missing caches, a wrong type and a refused read remain distinct results.
 No native class initializer, getter, provider or `StartGame` method is called.
 The observer has its own package flag and cannot combine with clock writes,
-input or rendering. Offline checks qualify the wiring and refusal paths; live
-type/world observations and frontend-state-7 readiness remain unverified.
+input or rendering.
+
+The combined October 19 gameplay trial passed on runtime `a089e0c7b`: all 65
+natural frames observed both compatible UI class relations, the correlated
+game-mode owner and its conservative world link. No scope or per-probe reads
+were refused. Core/XML/pthread retired, the expected backend/Bridge process
+lifetime remained, all 14 log prefixes survived, and normal shutdown was
+acknowledged. The user reported normal GTA continuation. Evidence is retained
+under `Build/definitive-recovery/current-actual-startup-observation-checkpoint.json`.
+These gameplay observations do not establish UObject lifetime, controller/UI
+provider readiness, frontend-state-7 readiness or permission to call `StartGame`.
 
 The separate optional local-input lease reuses MTA's retained `CKeyBinds` and
 controller synthesis for six on-foot actions, with a 500 ms owner/generation

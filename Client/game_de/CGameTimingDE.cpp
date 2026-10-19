@@ -11,6 +11,19 @@
 
 namespace mta::game_de
 {
+    namespace
+    {
+        void RequireTimingWrite(ClockResult result, const char* operation)
+        {
+            // CGame's void setters cannot return a native refusal. Match the
+            // getters' explicit failure policy so a caller cannot mistake an
+            // unqualified producer thread for an applied engine mutation.
+            if (result != ClockResult::Ok)
+                throw std::runtime_error(std::string("DE CGame ") + operation + " unavailable (status " + std::to_string(static_cast<std::uint32_t>(result)) +
+                                         ")");
+        }
+    }
+
     NativeGameTimingValues CGameTimingDE::RequireTiming(const NativeGameTimingReader& reader)
     {
         NativeGameTimingValues values;
@@ -51,8 +64,32 @@ namespace mta::game_de
         return RequireTiming(timing).timeScale;
     }
 
+    float CGameTimingDE::GetGameSpeed()
+    {
+        // MTA's two SDK names read the same native time-scale scalar. Keep
+        // their freshness and refusal behavior identical through one path.
+        return GetTimeScale();
+    }
+
     unsigned long CGameTimingDE::GetMinuteDuration()
     {
         return RequireTiming(timing).clock.millisecondsPerGameMinute;
+    }
+
+    void CGameTimingDE::SetTimeScale(float value)
+    {
+        RequireTimingWrite(timingWriter.SetTimeScale(value), "SetTimeScale");
+    }
+
+    void CGameTimingDE::SetGameSpeed(float value)
+    {
+        // Both names address the same native scale, just as their SDK getters.
+        SetTimeScale(value);
+    }
+
+    void CGameTimingDE::SetMinuteDuration(unsigned long value)
+    {
+        static_assert(sizeof(value) == sizeof(std::uint32_t));
+        RequireTimingWrite(timingWriter.SetMinuteDuration(value), "SetMinuteDuration");
     }
 }

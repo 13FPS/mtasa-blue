@@ -7,8 +7,10 @@
 
 #include <windows.h>
 #include <cstdint>
+#include <type_traits>
 #include <game/CGame.h>
 #include "NativeGameTimingReader.h"
+#include "NativeGameTimingAccess.h"
 
 namespace mta::game_de
 {
@@ -25,7 +27,11 @@ namespace mta::game_de
         float         GetTimeStep() override;
         float         GetOldTimeStep() override;
         float         GetTimeScale() override;
+        float         GetGameSpeed() override;
         unsigned long GetMinuteDuration() override;
+        void          SetTimeScale(float value) override;
+        void          SetGameSpeed(float value) override;
+        void          SetMinuteDuration(unsigned long value) override;
 
         // The SDK declares these defaults outside this module. Keep them pure
         // until a real DE weapon subsystem exists instead of linking classic
@@ -34,11 +40,12 @@ namespace mta::game_de
         bool GetJetpackWeaponEnabled(eWeaponType weaponType) override = 0;
 
     protected:
-        explicit CGameTimingDE(const NativeGameTimingReader& reader) noexcept : timing(reader) {}
+        CGameTimingDE(const NativeGameTimingReader& reader, NativeGameTimingAccess& writer) noexcept : timing(reader), timingWriter(writer) {}
         static NativeGameTimingValues RequireTiming(const NativeGameTimingReader& reader);
 
     private:
         const NativeGameTimingReader& timing;
+        NativeGameTimingAccess&       timingWriter;
     };
     static_assert(std::is_abstract_v<CGameTimingDE> && std::is_base_of_v<CGame, CGameTimingDE>);
 }

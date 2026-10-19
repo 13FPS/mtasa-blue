@@ -27,12 +27,31 @@ namespace ClockTestFaults
     std::atomic<bool>     failEnumeration{false}, failProtectionRestores{false};
     std::atomic<unsigned> failResumes{0};
     std::atomic<unsigned> clockDataWrites{0}, clockCodeExchanges{0};
+    std::atomic<unsigned> partialTimingWrites{0}, failTimingWrites{0}, timingDataWrites{0};
+    std::uintptr_t        timingWriteAddress = 0;
     std::atomic<DWORD>    resumeTarget{0};
     std::uintptr_t        patchAddress = 0, dataAddress = 0;
 
     BOOL WINAPI Write(HANDLE process, LPVOID address, LPCVOID bytes, SIZE_T size, SIZE_T* copied)
     {
         clockDataWrites.fetch_add(1);
+        if (reinterpret_cast<std::uintptr_t>(address) == timingWriteAddress && size == 4)
+        {
+            timingDataWrites.fetch_add(1);
+            if (failTimingWrites.load())
+            {
+                failTimingWrites.fetch_sub(1);
+                if (copied)
+                    *copied = 0;
+                SetLastError(ERROR_ACCESS_DENIED);
+                return FALSE;
+            }
+            if (partialTimingWrites.load())
+            {
+                partialTimingWrites.fetch_sub(1);
+                return ::WriteProcessMemory(process, address, bytes, 2, copied);
+            }
+        }
         if (reinterpret_cast<std::uintptr_t>(address) == dataAddress && size == 4 && partialDataWrites.load())
         {
             partialDataWrites.fetch_sub(1);
@@ -355,6 +374,7 @@ namespace
             Put(0x523a458, std::uint32_t{10000});
             Put(0x522bcf8, std::uint32_t{9900});
             Put(0x5227bac, std::uint32_t{1000});
+            Put(NativeGameTimingProfile::timeScaleRva, 1.0f);
         }
         template <typename T>
         T Get(std::uintptr_t rva) const
@@ -602,7 +622,8 @@ namespace
         Check(service.End() && !service.IsRetained(), "native restoration acknowledges before real Detours detach and owner release");
         const auto state = State(service);
         Check(state.restored && !state.ready && !state.bound && !state.hooked && !state.patchInstalled && !state.patchRecoveryPending &&
-                  !state.dataRecoveryPending && !state.retainedPeerThreads && !state.protectionRestorePending && !state.inFlight,
+                  !state.dataRecoveryPending && !runtime.timingDirty.load() && !runtime.timingRecovery.load() && !runtime.timingCaptured.load() &&
+                  !runtime.timingGeneration.load() && !state.retainedPeerThreads && !state.protectionRestorePending && !state.inFlight,
               "completed cleanup has no native data, branch, protection, peer-handle or callback debt");
         Check(CheckBinding(true), "exact original clock and continuation bytes survive complete cleanup");
         Check(!NativeServiceAdmission::IsClaimed(NativeServiceAdmission::Category::Clock) && !runtime.admissionSerial.load() &&
@@ -1281,6 +1302,200 @@ namespace
         std::puts("Production read-only game-time reader fixture completed");
     }
 
+    struct TimingInvocation
+    {
+        bool                 minute = false;
+        float                scale = 0;
+        std::uint32_t        duration = 0;
+        unsigned             refusal = 0;
+        ClockResult          result = ClockResult::NotInitialized;
+        ContinuationFunction original = nullptr;
+    } timingInvocation;
+
+    void TimingContinuation()
+    {
+        // The real qualified hook has already adopted its owner. This test
+        // replaces only the owned fixture's original continuation, just as the
+        // existing exception fixture does; production gets no test command path.
+        const auto priorGeneration = timingCallbackGeneration;
+        const auto priorAdmission = runtime.admissionGeneration.load();
+        if (timingInvocation.refusal == 1)
+            timingCallbackGeneration = priorGeneration + 1;
+        if (timingInvocation.refusal == 2)
+            runtime.admissionGeneration.store(priorAdmission + 1);
+        if (timingInvocation.refusal == 3)
+            ++callbackDepth;
+        NativeGameTimingAccess& access = runtime.access;
+        timingInvocation.result = timingInvocation.minute ? access.SetMinuteDuration(timingInvocation.duration) : access.SetTimeScale(timingInvocation.scale);
+        if (timingInvocation.refusal == 3)
+            --callbackDepth;
+        runtime.admissionGeneration.store(priorAdmission);
+        timingCallbackGeneration = priorGeneration;
+        timingInvocation.original();
+    }
+
+    ClockResult InvokeTiming(ClockImageFixture& fixture, bool minute, float scale, std::uint32_t duration, unsigned refusal = 0)
+    {
+        timingInvocation = {minute, scale, duration, refusal, ClockResult::NotInitialized, runtime.originalContinuation};
+        runtime.originalContinuation = &TimingContinuation;
+        fixture.invoke();
+        runtime.originalContinuation = timingInvocation.original;
+        Check(!runtime.inFlight.load() && !callbackDepth && !timingCallbackGeneration,
+              "the actual hook finally retires the qualified timing generation and callback scope");
+        return timingInvocation.result;
+    }
+
+    void NativeTimingWritesAndRestoration(ClockImageFixture& fixture)
+    {
+        {
+            NativeClockService service;
+            BeginOwned(service, fixture);
+            NativeGameTimingAccess& access = runtime.access;
+            const auto              beforeWrites = ClockTestFaults::clockDataWrites.load();
+            Check(access.SetTimeScale(2.0f) == ClockResult::WrongThread && access.SetMinuteDuration(2000) == ClockResult::WrongThread &&
+                      ClockTestFaults::clockDataWrites.load() == beforeWrites && !runtime.timingCaptured.load(),
+                  "matching the adopted OS thread outside its natural callback does not grant timing write authority");
+            std::thread foreign(
+                [&]
+                {
+                    Check(access.SetTimeScale(2.0f) == ClockResult::WrongThread && access.SetMinuteDuration(2000) == ClockResult::WrongThread,
+                          "a foreign producer cannot invoke the actual timing writer");
+                });
+            foreign.join();
+            for (unsigned refusal = 1; refusal <= 3; ++refusal)
+                Check(InvokeTiming(fixture, false, 2.0f, 0, refusal) == (refusal == 3 ? ClockResult::WrongThread : ClockResult::OwnerConflict) &&
+                          !runtime.timingCaptured.load() && !runtime.timingDirty.load() && ClockTestFaults::clockDataWrites.load() == beforeWrites,
+                      "stale callback generations, mismatched admission tokens and nested scopes cannot capture or write timing values");
+            Check(runtime.active.load(), "unauthorized timing calls leave the actual current engine owner active");
+            for (float invalid : {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity()})
+                Check(InvokeTiming(fixture, false, invalid, 0) == ClockResult::InvalidArgument && !runtime.timingCaptured.load(),
+                      "nonfinite scale values refuse without acquiring a native restoration snapshot");
+            for (std::uint32_t invalid : {0u, 3600001u})
+                Check(InvokeTiming(fixture, true, 0, invalid) == ClockResult::InvalidArgument && !runtime.timingCaptured.load(),
+                      "minute-duration writes preserve the existing checked native reader domain");
+            ClockTestFaults::failEnumeration.store(true);
+            Check(InvokeTiming(fixture, false, 2.0f, 0) == ClockResult::Busy && !runtime.timingDirty.load() &&
+                      ClockTestFaults::clockDataWrites.load() == beforeWrites,
+                  "a refused peer transaction performs no timing write or dirty capture");
+            Check(InvokeTiming(fixture, false, -0.5f, 0) == ClockResult::Ok && fixture.Get<float>(NativeGameTimingProfile::timeScaleRva) == -0.5f &&
+                      runtime.originalTimeScale == 1.0f && runtime.timingDirty.load() == timingScaleBit && !runtime.timingRecovery.load() &&
+                      !runtime.nativeTouched.load(),
+                  "the real native writer preserves finite signed scale semantics and keeps successful ownership distinct from failed-write recovery");
+            Check(InvokeTiming(fixture, false, 0.0f, 0) == ClockResult::Ok && fixture.Get<float>(NativeGameTimingProfile::timeScaleRva) == 0 &&
+                      runtime.originalTimeScale == 1.0f,
+                  "repeated native scale writes retain the first original instead of recapturing an already mutated scalar");
+            Check(InvokeTiming(fixture, true, 0, 2500) == ClockResult::Ok && fixture.Get<std::uint32_t>(NativeClockProfile::minuteDurationRva) == 2500 &&
+                      runtime.originalMinuteDuration == 1000 && runtime.timingDirty.load() == (timingScaleBit | timingMinuteBit) &&
+                      !runtime.timingRecovery.load(),
+                  "minute duration uses the same real native owner while retaining its own original value");
+            const auto mutated = State(service);
+            Check(mutated.active && mutated.ready && !mutated.restored && mutated.dataRecoveryPending && !runtime.dataRecovery.load(),
+                  "unchanged V1 diagnostics aggregate successful timing restoration debt without pretending the displayed clock was mutated");
+
+            fixture.Put(NativeClockProfile::hoursRva, std::uint8_t{13});
+            fixture.Put(NativeClockProfile::minutesRva, std::uint8_t{40});
+            fixture.Put(NativeClockProfile::secondsRva, std::uint16_t{31});
+            fixture.Put(NativeClockProfile::nativeTimerRva, std::uint32_t{10800});
+            fixture.Put(NativeClockProfile::lastChangeRva, std::uint32_t{10500});
+            std::vector<unsigned char> expected(ClockImageFixture::DataSize);
+            std::memcpy(expected.data(), reinterpret_cast<const void*>(fixture.image + ClockImageFixture::DataRva), expected.size());
+            const float         originalScale = 1;
+            const std::uint32_t originalDuration = 1000;
+            std::memcpy(expected.data() + NativeGameTimingProfile::timeScaleRva - ClockImageFixture::DataRva, &originalScale, sizeof(originalScale));
+            std::memcpy(expected.data() + NativeClockProfile::minuteDurationRva - ClockImageFixture::DataRva, &originalDuration, sizeof(originalDuration));
+            const auto endWrites = ClockTestFaults::clockDataWrites.load();
+            const auto endPatches = ClockTestFaults::clockCodeExchanges.load();
+            Check(!service.End() && service.IsRetained() && State(service).dataRecoveryPending,
+                  "producer End retains timing originals and cannot restore them from the caller's thread");
+            FinishOwned(service, fixture);
+            Check(std::memcmp(expected.data(), reinterpret_cast<const void*>(fixture.image + ClockImageFixture::DataRva), expected.size()) == 0 &&
+                      ClockTestFaults::clockDataWrites.load() == endWrites + 2 && ClockTestFaults::clockCodeExchanges.load() == endPatches,
+                  "timing-only native retirement restores exactly scale and duration while preserving progressed H/M/S, last-minute change and global timer");
+        }
+        for (bool minute : {false, true})
+        {
+            NativeClockService service;
+            BeginOwned(service, fixture);
+            const auto target = minute ? NativeClockProfile::minuteDurationRva : NativeGameTimingProfile::timeScaleRva;
+            const auto bit = minute ? timingMinuteBit : timingScaleBit;
+            ClockTestFaults::timingWriteAddress = fixture.image + target;
+            ClockTestFaults::partialTimingWrites.store(1);
+            Check(InvokeTiming(fixture, minute, 1.2345f, 4321) == ClockResult::WriteFailure && runtime.timingDirty.load() == bit &&
+                      runtime.timingRecovery.load() == bit && (runtime.timingCaptured.load() & bit) && !runtime.active.load() && !runtime.nativeTouched.load(),
+                  "a partial real timing write retains its original before reporting failure and does not claim a CClock time mutation");
+            const auto failed = State(service);
+            Check(failed.failure == ClockResult::WriteFailure && failed.dataRecoveryPending && !failed.ready && !failed.restored && !service.End() &&
+                      service.IsRetained(),
+                  "V1 cleanup/readiness and producer End cannot hide an unconfirmed native timing write");
+            ClockTestFaults::failTimingWrites.store(100);
+            fixture.invoke();
+            const auto pending = State(service);
+            Check(pending.restoreFailures && pending.dataRecoveryPending && !pending.restored && runtime.timingRecovery.load() == bit && !service.End() &&
+                      service.IsRetained(),
+                  "a real native timing rollback failure keeps the same hook, snapshot and admission owner for retry");
+            ClockTestFaults::failTimingWrites.store(0);
+            FinishOwned(service, fixture);
+            Check(minute ? fixture.Get<std::uint32_t>(target) == 1000 : fixture.Get<float>(target) == 1.0f,
+                  "a later qualified callback restores the actual first timing value before native ownership retires");
+            ClockTestFaults::timingWriteAddress = 0;
+        }
+        {
+            NativeClockService service;
+            BeginOwned(service, fixture);
+            Check(InvokeTiming(fixture, false, 1.5f, 0) == ClockResult::Ok && InvokeTiming(fixture, true, 0, 2000) == ClockResult::Ok,
+                  "one existing native owner can own both timing scalars before a real SDK clock command");
+            auto command = Command(State(service), 1, ClockOperation::Set);
+            command.hour = 18;
+            command.minute = 25;
+            Check(service.Submit(command), "mixed timing ownership keeps the existing CClock mailbox usable without extending its protocol");
+            fixture.invoke();
+            Check(State(service).lastCommandResult == ClockResult::Ok && runtime.nativeTouched.load() && runtime.timingDirty.load(),
+                  "a real SDK CClock mutation keeps separate timing and displayed-clock restoration obligations");
+            fixture.Put(NativeClockProfile::nativeTimerRva, std::uint32_t{10800});
+            FinishOwned(service, fixture);
+            Check(fixture.Get<std::uint8_t>(NativeClockProfile::hoursRva) == 12 && fixture.Get<std::uint8_t>(NativeClockProfile::minutesRva) == 34 &&
+                      fixture.Get<std::uint16_t>(NativeClockProfile::secondsRva) == 27 &&
+                      fixture.Get<std::uint32_t>(NativeClockProfile::lastChangeRva) == 10700 &&
+                      fixture.Get<std::uint32_t>(NativeClockProfile::nativeTimerRva) == 10800 &&
+                      fixture.Get<float>(NativeGameTimingProfile::timeScaleRva) == 1.0f &&
+                      fixture.Get<std::uint32_t>(NativeClockProfile::minuteDurationRva) == 1000,
+                  "mixed retirement restores original timing scalars and preserves the real CClock fractional-minute rebase without rewinding global time");
+        }
+        {
+            NativeClockService service;
+            BeginOwned(service, fixture);
+            auto changed = NativeGameTimingProfile::elapsedMultiplier;
+            changed[0] ^= 1;
+            fixture.Patch(NativeGameTimingProfile::elapsedMultiplierRva, changed.data(), changed.size());
+            const auto writes = ClockTestFaults::clockDataWrites.load();
+            Check(InvokeTiming(fixture, false, 2.0f, 0) == ClockResult::BindingChanged && !runtime.timingCaptured.load() && !runtime.timingDirty.load() &&
+                      ClockTestFaults::clockDataWrites.load() == writes,
+                  "changed native timing dataflow refuses mutation before capturing a value or writing memory");
+            fixture.Patch(NativeGameTimingProfile::elapsedMultiplierRva, NativeGameTimingProfile::elapsedMultiplier.data(),
+                          NativeGameTimingProfile::elapsedMultiplier.size());
+            FinishOwned(service, fixture);
+        }
+        {
+            NativeClockService service;
+            BeginOwned(service, fixture);
+            fixture.Put(NativeGameTimingProfile::timeScaleRva, -0.0f);
+            Check(InvokeTiming(fixture, false, 1.5f, 0) == ClockResult::Ok,
+                  "the native writer captures the actual original scalar immediately before the first owned write");
+            auto changed = NativeGameTimingProfile::scriptScale;
+            changed[0] ^= 1;
+            fixture.Patch(NativeGameTimingProfile::scriptScaleRva, changed.data(), changed.size());
+            Check(!service.End(), "changed timing pins cannot retire a dirty writer from the producer thread");
+            fixture.invoke();
+            Check(!State(service).restored && State(service).dataRecoveryPending && !service.End() && service.IsRetained(),
+                  "a changed corroborating timing binding withholds native rollback and retains the same generation owner");
+            fixture.Patch(NativeGameTimingProfile::scriptScaleRva, NativeGameTimingProfile::scriptScale.data(), NativeGameTimingProfile::scriptScale.size());
+            FinishOwned(service, fixture);
+            const auto restored = fixture.Get<float>(NativeGameTimingProfile::timeScaleRva);
+            Check(restored == 0 && std::signbit(restored), "confirmed native restoration preserves original signed-zero bits");
+        }
+        std::puts("Production native CGame timing writer fixture completed");
+    }
+
     class TimingBaseProbe : public CGameTimingDE
     {
     public:
@@ -1470,6 +1685,7 @@ int main(int argc, char** argv)
     fixture.Create(argv[1]);
     NativeReadOnlyGameTimeReader(fixture);
     NativeGameTimingPrerequisite(fixture);
+    NativeTimingWritesAndRestoration(fixture);
     NativeReadSetAndRestoration(fixture);
     NativeCoherentCommandPublication(fixture);
     NativeReadOnlyRetirement(fixture);

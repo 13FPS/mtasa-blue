@@ -5,6 +5,14 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+The real Deathmatch client now builds and links for Release/x64 using MTA's
+existing code. Engine work is assembling its actual `CGame` services:
+`CClockDE`, the complete four-method `CKeyGenDE`, seven native timing getters,
+and scale/game-speed/minute-duration setters on the existing engine owner.
+`CGameDE` supplies real clock/keygen accessors but remains abstract until the
+other subsystems exist. The exported factory therefore still supplies no full
+game interface, and client startup/networking remain incomplete.
+
 The DE clock service now implements MTA's existing five-method `CClock`
 interface behind an optional Core-owned adapter contract. Commands cross a
 mailbox to the exact-image native continuation after clock progression; Core

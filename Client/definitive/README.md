@@ -85,9 +85,9 @@ across seven real Core/GUI host cases. The normal Core build passed its 69
 guards and both classic compile profiles; the rebuilt Bridge passed 2,463
 checks. No game installation was changed.
 
-**The next timing batch implements six actual SDK `CGame` getters.**
+**The timing backend implements seven actual SDK `CGame` getters.**
 `CGameTimingDE` supplies `GetSystemTime`, `GetSystemFrameCounter`, `GetTimeStep`,
-`GetOldTimeStep`, `GetTimeScale` and `GetMinuteDuration` through checked native
+`GetOldTimeStep`, `GetTimeScale`, `GetGameSpeed` and `GetMinuteDuration` through checked native
 timing reads. The class remains abstract and cannot be instantiated or exposed
 as a game interface. The adapter's readiness and advertised capabilities remain
 unchanged; full `CGame`, startup and multiplayer are still incomplete.
@@ -101,6 +101,28 @@ matching and no nonfinite, out-of-range clock or backward samples. An earlier
 paused/background attempt is preserved separately. This validates the observed
 native fields; it does not construct a `CGame` or prove full startup. The
 completed input/menu result below and **EXPERIMENTAL** status remain unchanged.
+
+`CKeyGenDE` implements the existing four-method MTA hashing interface without
+calling game routines. The DE image independently supplies the raw CRC table,
+seed, string loop and CRT uppercase behavior. Sized-input and append contracts
+are corroborated by the address-matched
+[classic implementation reference](https://github.com/gta-reversed/gta-reversed/blob/a235da5fa39161d997a7099ed7275a22545cada1/source/game_sa/Core/KeyGen.h).
+The implementation generates its own polynomial table; it adds no vendor library.
+The still-abstract `CGameDE` assembles this service and the existing owner's
+`CClockDE` behind the real `GetKeyGen` and `GetClock` SDK methods. It does not
+create a second clock owner or return an incomplete object from the factory.
+
+`SetTimeScale`, its `SetGameSpeed` alias and `SetMinuteDuration` delegate to the
+same native clock owner's internal timing access. Only the qualified engine
+callback can capture an original scalar or write it; startup reader binding
+grants no write access. End restores owned scale/duration independently of
+displayed time, preserving natural clock progression for timing-only changes.
+The public clock protocol and adapter ABI are unchanged. `Pause` and native
+FPS still need their own implementation; no estimated FPS is returned.
+
+This SDK batch passed 67 key-generation checks on each x86/x64 architecture,
+1,094 production clock/timing checks, the normal Release/x64 backend build and
+1,780 fresh factory-host checks. No GTA installation or running game changed.
 
 **The current source connects the retained MTA bindings to local on-foot input.**
 The existing runtime selection now starts a separate renewable input service

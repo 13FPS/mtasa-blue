@@ -98,6 +98,10 @@ namespace DefinitiveInputReference
         // It shares this Core owner while keeping its report and admission
         // distinct from clock, input and rendering workloads.
         bool applicationFrameReference = false;
+        // Typed startup prerequisites share the same native frame lease, but
+        // require a separate report so opaque dictionary reads cannot imply
+        // that the world or a native startup provider is ready.
+        bool startupObservation = false;
     };
 
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)

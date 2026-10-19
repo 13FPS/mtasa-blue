@@ -46,6 +46,10 @@ project "Client Core"
 	-- this independently testable lifecycle outside the classic engine PCH.
 	filter { "files:DefinitiveApplicationFrameReference.cpp" }
 		flags { "NoPCH" }
+	-- The extended startup observer reuses that value-only lifecycle and must
+	-- remain independently buildable without a classic game/PCH dependency.
+	filter { "files:DefinitiveStartupObservationReference.cpp" }
+		flags { "NoPCH" }
 	-- This new translation unit is empty in classic builds. A per-file override
 	-- keeps its independent owned-host build free of classic PCH dependencies.
 	filter { "files:DefinitiveGuiStartup.cpp" }

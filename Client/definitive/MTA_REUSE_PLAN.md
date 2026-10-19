@@ -5,6 +5,16 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+The October 19 application-frame trial observed 277 natural gameplay frames
+and both configured UI dictionary entries without engine writes, then retired
+its hooks and unloaded Core normally. A combined startup observer now reuses
+that same MTA worker and native lease for declared UI-class relations, the
+enclosing game-mode/interface correlation and a conservative world link. Its
+256-byte SDK record and 192-word report distinguish missing prerequisites,
+wrong types and refused reads. These new observations still need a live trial;
+they do not establish UObject lifetime, cold frontend readiness or permission
+to call native startup methods. Existing networking remains MTA's responsibility.
+
 The real Deathmatch client now builds and links for Release/x64 using MTA's
 existing code. Engine work is assembling its actual `CGame` services:
 `CClockDE`, the complete four-method `CKeyGenDE`, eight native timing getters,

@@ -15,6 +15,7 @@
 #include "../core/DefinitiveClockReference.h"
 #include "../core/DefinitiveClockSetReference.h"
 #include "../core/DefinitiveApplicationFrameReference.h"
+#include "../core/DefinitiveStartupObservationReference.h"
 #include "../core/DefinitiveRenderReference.h"
 #include "../core/DefinitiveGuiStartupReference.h"
 #include "../core/DefinitiveGuiSurfaceReference.h"
@@ -49,6 +50,9 @@ namespace deonline
         bool          BeginApplicationFrameReference(const void* moduleAddress) noexcept;
         bool          CaptureApplicationFrame() noexcept;
         std::uint32_t ReadApplicationFrame(std::uint32_t field) const noexcept;
+        bool          BeginStartupObservationReference(const void* moduleAddress) noexcept;
+        bool          CaptureStartupObservation() noexcept;
+        std::uint32_t ReadStartupObservation(std::uint32_t field) const noexcept;
         bool          BeginRenderReference(const void* moduleAddress) noexcept;
         bool          BeginRenderReferenceV2(const void* moduleAddress, std::uint32_t route) noexcept;
         bool          BeginRenderReferenceV3(const void* moduleAddress, std::uint32_t route) noexcept;
@@ -138,10 +142,11 @@ namespace deonline
                                         bool configuredGuiSurface = false, bool configuredGuiFrontend = false, bool configuredGuiFrontendInput = false,
                                         bool configuredFrontendStartup = false, bool configuredPersistentFrontend = false, bool configuredClock = false,
                                         bool configuredClockSet = false, bool configuredClockBeforeFrontend = false, bool configuredFrontendRuntime = false,
-                                        bool configuredLocalInputRuntime = false, bool configuredApplicationFrame = false) noexcept;
+                                        bool configuredLocalInputRuntime = false, bool configuredApplicationFrame = false, bool configuredStartupObservation = false) noexcept;
         bool                      CopyClockSnapshot(DefinitiveClockReference::Snapshot& output) const noexcept;
         bool                      CopyClockSetSnapshot(DefinitiveClockSetReference::Snapshot& output) const noexcept;
         bool                      CopyApplicationFrameSnapshot(DefinitiveApplicationFrameReference::Snapshot& output) const noexcept;
+        bool                      CopyStartupObservationSnapshot(DefinitiveStartupObservationReference::Snapshot& output) const noexcept;
         void                      WaitForClockRetirement() noexcept;
         void                      PublishClockOwner(const DefinitiveFrontendStartup::Snapshot& report) noexcept;
         bool                      CaptureFrontendLifecycle() noexcept;
@@ -152,6 +157,7 @@ namespace deonline
         static void               PublishClock(const std::uint32_t* values, std::uint32_t count);
         static void               PublishClockSet(const std::uint32_t* values, std::uint32_t count);
         static void               PublishApplicationFrame(const std::uint32_t* values, std::uint32_t count);
+        static void               PublishStartupObservation(const std::uint32_t* values, std::uint32_t count);
         static bool               ControlInput(std::uint32_t action, std::uint32_t* values, std::uint32_t count);
 
         // Only Begin/Poll's owning thread touches the handle or input address.
@@ -194,14 +200,21 @@ namespace deonline
         std::atomic<std::uint32_t>                                                              applicationFrameSequence{0};
         std::atomic<bool>                                                                       applicationFrameAvailable{false};
         DefinitiveApplicationFrameReference::Snapshot                                           capturedApplicationFrame{};
-        bool                                                                                    renderRequested = false;
-        bool                                                                                    guiRequested = false;
-        bool                                                                                    guiAvailable = false;
-        DefinitiveGuiStartupReference::Snapshot                                                 publishedGui{}, capturedGui{};
-        bool                                                                                    guiSurfaceRequested = false, guiSurfaceAvailable = false;
-        DefinitiveGuiSurfaceReference::Snapshot                                                 publishedGuiSurface{}, capturedGuiSurface{};
-        bool                                                                                    guiFrontendRequested = false, guiFrontendAvailable = false;
-        DefinitiveGuiFrontendReference::Snapshot                                                publishedGuiFrontend{}, capturedGuiFrontend{};
+        // Startup metadata remains a distinct report so older frame observers
+        // cannot silently claim the additional ownership/type diagnostics.
+        bool                                                                                      startupObservationRequested = false;
+        std::array<std::atomic<std::uint32_t>, DefinitiveStartupObservationReference::FieldCount> publishedStartupObservation{};
+        std::atomic<std::uint32_t>                                                                startupObservationSequence{0};
+        std::atomic<bool>                                                                         startupObservationAvailable{false};
+        DefinitiveStartupObservationReference::Snapshot                                           capturedStartupObservation{};
+        bool                                                                                      renderRequested = false;
+        bool                                                                                      guiRequested = false;
+        bool                                                                                      guiAvailable = false;
+        DefinitiveGuiStartupReference::Snapshot                                                   publishedGui{}, capturedGui{};
+        bool                                                                                      guiSurfaceRequested = false, guiSurfaceAvailable = false;
+        DefinitiveGuiSurfaceReference::Snapshot                                                   publishedGuiSurface{}, capturedGuiSurface{};
+        bool                                                                                      guiFrontendRequested = false, guiFrontendAvailable = false;
+        DefinitiveGuiFrontendReference::Snapshot                                                  publishedGuiFrontend{}, capturedGuiFrontend{};
         bool                                                      guiFrontendInputRequested = false, guiFrontendInputAvailable = false;
         DefinitiveGuiFrontendInputReference::Snapshot             publishedGuiFrontendInput{}, capturedGuiFrontendInput{};
         bool                                                      frontendStartupRequested = false;

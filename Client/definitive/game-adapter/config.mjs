@@ -92,3 +92,7 @@ export const MTA_CORE_FRONTEND_RUNTIME = false;
 // Observe the actual MTA backend's application callback and startup UI map in
 // one bounded run. This is independent of clock commands and frontend input.
 export const MTA_CORE_APPLICATION_FRAME_REFERENCE = false;
+
+// Observe startup metadata and owner/world links on the same native frame owner.
+// These read-only facts do not authorize native startup or lifecycle calls.
+export const MTA_CORE_STARTUP_OBSERVATION_REFERENCE = false;

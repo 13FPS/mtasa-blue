@@ -44,6 +44,10 @@ namespace mta::game_de
         // rather than treating a nonnull configured value as a usable type.
         // Missing classes/caches or refused observations preserve the output.
         bool ReadStartupUiTransitionClass(std::uint64_t generation, NativeUiClassMapAccess::Key key, bool& compatible) const noexcept;
+        // Collect read-only type/owner/world facts on this same callback. The
+        // masks describe observations/refusals, never full startup admission.
+        // A refused overall scope preserves both caller outputs.
+        bool ReadStartupPrerequisites(std::uint64_t generation, std::uint32_t& facts, std::uint32_t& refusals) const noexcept;
         bool Submit(const ClockCommandV1& command) noexcept;
         bool Renew(std::uint64_t generation) noexcept;
         bool Read(ClockServiceStateV1& state) noexcept;

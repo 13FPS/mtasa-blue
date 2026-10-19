@@ -67,6 +67,18 @@ inheritance, UObject lifetime, frontend-state-7 readiness or permission to call
 `StartGame`. The evidence is retained under
 `Build/definitive-recovery/current-actual-application-observation-checkpoint.json`.
 
+The optional startup-prerequisite observer extends that transaction with a
+separate 256-byte SDK record and 192-word Core report. The existing frame record
+and worker retain their ownership and cleanup semantics. On the same qualified
+post-original callback, it checks the configured UI classes against cached
+`UITransitionScreen` metadata, finds the enclosing declared game-mode class and
+correlates its interface back-reference, then conservatively observes its world
+link. Missing caches, a wrong type and a refused read remain distinct results.
+No native class initializer, getter, provider or `StartGame` method is called.
+The observer has its own package flag and cannot combine with clock writes,
+input or rendering. Offline checks qualify the wiring and refusal paths; live
+type/world observations and frontend-state-7 readiness remain unverified.
+
 The separate optional local-input lease reuses MTA's retained `CKeyBinds` and
 controller synthesis for six on-foot actions, with a 500 ms owner/generation
 and focus limit. The combined menu/input milestone passed in GTA on October 19

@@ -14,6 +14,7 @@
 #include <game/CGameLocalInputLease.h>
 #include <game/CGameClockService.h>
 #include <game/CGameApplicationFrameObservation.h>
+#include <game/CGameStartupObservation.h>
 #include <game/CGameTimeService.h>
 #include "FrontendInputLeasePolicy.h"
 #include "LocalInputLeasePolicy.h"
@@ -80,6 +81,7 @@ namespace mta::game_de
             {
                 Begin,
                 BeginApplicationObservation,
+                BeginStartupObservation,
                 Submit,
                 Renew,
                 Read,
@@ -206,9 +208,11 @@ namespace mta::game_de
                             if (current->nativeMovement.IsBound() || current->nativeClock.IsRetained())
                                 break;
                             current->applicationObservationMode.store(false);
+                            current->startupObservationMode.store(false);
                             completed = current->nativeClock.Begin(*request, *output);
                             break;
                         case ClockAction::BeginApplicationObservation:
+                        case ClockAction::BeginStartupObservation:
                         {
                             if (!NativeClockService::ValidateRequest(*request) || output->size != sizeof(*output) || output->version != ClockServiceVersionV1 ||
                                 output->reserved[0] || output->reserved[1])
@@ -221,7 +225,8 @@ namespace mta::game_de
                             // Reset only after the prior callback/context is
                             // retired. Failed admission may still retain this
                             // exact object and its partially installed hook.
-                            current->ResetApplicationObservation(true);
+                            current->ResetApplicationObservation(action == ClockAction::BeginApplicationObservation);
+                            current->ResetStartupObservation(action == ClockAction::BeginStartupObservation);
                             ClockServiceStateV1 next;
                             completed = current->nativeClock.BeginApplicationFrames(*request, next, &ObserveApplicationFrame, current);
                             if (next.generation)
@@ -283,6 +288,45 @@ namespace mta::game_de
                     ApplicationFrameObservationStateV1 next;
                     result = Status::Unsupported;
                     if (current->CopyApplicationObservation(generation, next))
+                    {
+                        *output = next;
+                        result = Status::Ok;
+                    }
+                    break;
+                }
+                ReleaseSRWLockShared(&frontendAdapterLock);
+                return result;
+            }
+            static Status ReadStartupObservation(IGameAdapter* adapter, std::uint64_t generation, StartupObservationStateV1* output) noexcept
+            {
+                if (!TryAcquireSRWLockShared(&frontendAdapterLock))
+                    return Status::Unsupported;
+                Status result = Status::InvalidArgument;
+                for (auto* current = frontendAdapters; current; current = current->nextFrontendAdapter)
+                {
+                    if (static_cast<IGameAdapter*>(current) != adapter)
+                        continue;
+                    result = current->Access();
+                    if (result != Status::Ok)
+                        break;
+                    if (!ValidStartupHeader(*output))
+                    {
+                        result = Status::InvalidArgument;
+                        break;
+                    }
+                    if (!current->startupObservationMode.load() || !current->applicationObservationGeneration.load())
+                    {
+                        result = Status::NotInitialized;
+                        break;
+                    }
+                    if (generation != current->applicationObservationGeneration.load())
+                    {
+                        result = Status::InvalidArgument;
+                        break;
+                    }
+                    StartupObservationStateV1 next;
+                    result = Status::Unsupported;
+                    if (current->CopyStartupObservation(generation, next))
                     {
                         *output = next;
                         result = Status::Ok;
@@ -598,6 +642,20 @@ namespace mta::game_de
             }
 
         private:
+            static bool ValidStartupHeader(const StartupObservationStateV1& value) noexcept
+            {
+                if (value.size != sizeof(value) || value.version != StartupObservationVersionV1 || value.frame.size != sizeof(value.frame) ||
+                    value.frame.version != ApplicationFrameObservationVersionV1)
+                    return false;
+                for (const auto reserved : value.reserved)
+                    if (reserved)
+                        return false;
+                for (const auto reserved : value.frame.reserved)
+                    if (reserved)
+                        return false;
+                return true;
+            }
+
             static bool ValidApplicationObservation(const ApplicationFrameObservationStateV1& value) noexcept
             {
                 constexpr auto maximumFrames = (std::numeric_limits<std::uint64_t>::max)() / 2;
@@ -621,6 +679,49 @@ namespace mta::game_de
                 return value.frames ? value.engineThread != 0 : !value.engineThread && !value.nativeState && !value.lastLookupMask && !value.deltaBits;
             }
 
+            static bool ValidStartupObservation(const StartupObservationStateV1& value) noexcept
+            {
+                const auto facts = value.lastFacts, refusals = value.lastRefusals;
+                if (!ValidStartupHeader(value) || !value.generation || value.generation != value.frame.generation ||
+                    !ValidApplicationObservation(value.frame) || value.observations != value.frame.frames || value.refusedObservations > value.observations ||
+                    (facts & ~std::uint32_t{63}) || (refusals & ~std::uint32_t{15}) ||
+                    ((facts & StartupLoadingTypeMatches) && !(facts & StartupLoadingTypeObserved)) ||
+                    ((facts & StartupSimpleFadeTypeMatches) && !(facts & StartupSimpleFadeTypeObserved)) ||
+                    ((facts & StartupWorldLinkObserved) && !(facts & StartupGameModeOwnerObserved)) ||
+                    ((facts & StartupLoadingTypeObserved) && (refusals & StartupLoadingTypeRefused)) ||
+                    ((facts & StartupSimpleFadeTypeObserved) && (refusals & StartupSimpleFadeTypeRefused)) ||
+                    ((facts & StartupGameModeOwnerObserved) && (refusals & StartupGameModeOwnerRefused)) ||
+                    ((facts & StartupWorldLinkObserved) && (refusals & StartupWorldLinkRefused)))
+                    return false;
+                if (facts || refusals)
+                {
+                    // A completed native scope accounts for all four probes,
+                    // whether each was observed or refused. Whole-scope refusal
+                    // instead clears both masks and increments its own count.
+                    if (!(facts & StartupLoadingTypeObserved) && !(refusals & StartupLoadingTypeRefused))
+                        return false;
+                    if (!(facts & StartupSimpleFadeTypeObserved) && !(refusals & StartupSimpleFadeTypeRefused))
+                        return false;
+                    if (!(facts & StartupGameModeOwnerObserved) && !(refusals & StartupGameModeOwnerRefused))
+                        return false;
+                    if (!(facts & StartupWorldLinkObserved) && !(refusals & StartupWorldLinkRefused))
+                        return false;
+                }
+                else if (value.observations && !value.refusedObservations)
+                    return false;
+                const auto accepted = value.observations - value.refusedObservations;
+                if (value.loadingTypeObserved > accepted || value.simpleFadeTypeObserved > accepted || value.ownerObserved > accepted ||
+                    value.worldObserved > accepted || value.loadingCompatible > value.loadingTypeObserved ||
+                    value.simpleFadeCompatible > value.simpleFadeTypeObserved || value.worldObserved > value.ownerObserved ||
+                    ((facts & StartupLoadingTypeObserved) && !value.loadingTypeObserved) || ((facts & StartupLoadingTypeMatches) && !value.loadingCompatible) ||
+                    ((facts & StartupSimpleFadeTypeObserved) && !value.simpleFadeTypeObserved) ||
+                    ((facts & StartupSimpleFadeTypeMatches) && !value.simpleFadeCompatible) ||
+                    ((facts & StartupGameModeOwnerObserved) && !value.ownerObserved) || ((facts & StartupWorldLinkObserved) && !value.worldObserved) ||
+                    ((facts || refusals) && !accepted))
+                    return false;
+                return true;
+            }
+
             void PublishApplicationObservation() noexcept
             {
                 std::array<std::uint64_t, sizeof(ApplicationFrameObservationStateV1) / sizeof(std::uint64_t)> words{};
@@ -637,6 +738,23 @@ namespace mta::game_de
                 applicationObservationGeneration.store(0);
                 applicationObservation = {};
                 PublishApplicationObservation();
+            }
+
+            void PublishStartupObservation() noexcept
+            {
+                std::array<std::uint64_t, sizeof(StartupObservationStateV1) / sizeof(std::uint64_t)> words{};
+                std::memcpy(words.data(), &startupObservation, sizeof(startupObservation));
+                startupObservationSequence.fetch_add(1);
+                for (std::size_t index = 0; index < words.size(); ++index)
+                    startupObservationWords[index].store(words[index]);
+                startupObservationSequence.fetch_add(1);
+            }
+
+            void ResetStartupObservation(bool enabled) noexcept
+            {
+                startupObservationMode.store(enabled);
+                startupObservation = {};
+                PublishStartupObservation();
             }
 
             bool CopyApplicationObservation(std::uint64_t generation, ApplicationFrameObservationStateV1& output) const noexcept
@@ -666,10 +784,42 @@ namespace mta::game_de
                 return false;
             }
 
+            bool CopyStartupObservation(std::uint64_t generation, StartupObservationStateV1& output) const noexcept
+            {
+                for (unsigned attempt = 0; attempt != 8; ++attempt)
+                {
+                    const auto before = startupObservationSequence.load();
+                    if (before & 1)
+                        continue;
+                    std::array<std::uint64_t, sizeof(StartupObservationStateV1) / sizeof(std::uint64_t)> words{};
+                    for (std::size_t index = 0; index < words.size(); ++index)
+                        words[index] = startupObservationWords[index].load();
+                    if (before != startupObservationSequence.load())
+                        continue;
+                    StartupObservationStateV1 next;
+                    std::memcpy(&next, words.data(), sizeof(next));
+                    // Refused setup can own a cleanup generation without any
+                    // qualified callback. Preserve that empty, typed record.
+                    if (!next.observations && !next.generation)
+                    {
+                        next.generation = generation;
+                        if (!next.frame.frames && !next.frame.generation)
+                            next.frame.generation = generation;
+                    }
+                    if (!startupObservationMode.load() || applicationObservationGeneration.load() != generation || next.generation != generation ||
+                        !ValidStartupObservation(next))
+                        return false;
+                    output = next;
+                    return true;
+                }
+                return false;
+            }
+
             static void ObserveApplicationFrame(const NativeApplicationFrame& frame, void* context) noexcept
             {
                 auto& current = *static_cast<GameAdapter*>(context);
-                if (!current.applicationObservationMode.load() || !frame.generation || frame.nativeState > 9 || !std::isfinite(frame.deltaSeconds))
+                if ((!current.applicationObservationMode.load() && !current.startupObservationMode.load()) || !frame.generation || frame.nativeState > 9 ||
+                    !std::isfinite(frame.deltaSeconds))
                     return;
                 std::uint64_t unbound = 0;
                 current.applicationObservationGeneration.compare_exchange_strong(unbound, frame.generation);
@@ -714,7 +864,34 @@ namespace mta::game_de
                        LoadingNonNull);
                 lookup(NativeUiClassMapAccess::Key::SimpleFade, next.simpleFadeLookups, next.simpleFadeKeyPresent, next.simpleFadeNonNull, SimpleFadeObserved,
                        SimpleFadePresent, SimpleFadeNonNull);
-                current.PublishApplicationObservation();
+                if (current.startupObservationMode.load())
+                {
+                    auto& startup = current.startupObservation;
+                    startup.generation = frame.generation;
+                    startup.frame = next;
+                    ++startup.observations;
+                    startup.lastFacts = startup.lastRefusals = 0;
+                    std::uint32_t facts = 0, refusals = 0;
+                    if (!current.nativeClock.ReadStartupPrerequisites(frame.generation, facts, refusals))
+                        ++startup.refusedObservations;
+                    else
+                    {
+                        startup.loadingTypeObserved += !!(facts & StartupLoadingTypeObserved);
+                        startup.loadingCompatible += !!(facts & StartupLoadingTypeMatches);
+                        startup.simpleFadeTypeObserved += !!(facts & StartupSimpleFadeTypeObserved);
+                        startup.simpleFadeCompatible += !!(facts & StartupSimpleFadeTypeMatches);
+                        startup.ownerObserved += !!(facts & StartupGameModeOwnerObserved);
+                        startup.worldObserved += !!(facts & StartupWorldLinkObserved);
+                        startup.lastFacts = facts;
+                        startup.lastRefusals = refusals;
+                    }
+                    // The engine callback publishes only value counts/masks.
+                    // Producer reads never lock it or invoke a Core callback;
+                    // native type and map probes remain independent facts.
+                    current.PublishStartupObservation();
+                }
+                else
+                    current.PublishApplicationObservation();
             }
 
             static bool TrialFrame(const ControlActionFrame& frame) noexcept
@@ -769,6 +946,7 @@ namespace mta::game_de
                 nativePad.Reset();
                 nativeGameTime.Reset();
                 ResetApplicationObservation(false);
+                ResetStartupObservation(false);
                 capabilities.store(BaseCapabilities);
             }
 
@@ -799,6 +977,10 @@ namespace mta::game_de
             std::atomic<std::uint64_t> applicationObservationGeneration{0}, applicationObservationSequence{0};
             std::array<std::atomic<std::uint64_t>, sizeof(ApplicationFrameObservationStateV1) / sizeof(std::uint64_t)> applicationObservationWords{};
             ApplicationFrameObservationStateV1                                                                         applicationObservation;
+            std::atomic<bool>                                                                                          startupObservationMode{false};
+            std::atomic<std::uint64_t>                                                                                 startupObservationSequence{0};
+            std::array<std::atomic<std::uint64_t>, sizeof(StartupObservationStateV1) / sizeof(std::uint64_t)>          startupObservationWords{};
+            StartupObservationStateV1                                                                                  startupObservation;
             GameAdapter*                                                                                               nextFrontendAdapter = nullptr;
         };
 
@@ -1402,6 +1584,22 @@ namespace mta::game_de
         if (version != ApplicationFrameObservationVersionV1 || !adapter || !generation || !output)
             return Status::InvalidArgument;
         return GameAdapter::ReadApplicationObservation(adapter, generation, output);
+    }
+
+    extern "C" Status BeginGameStartupObservationV1(std::uint32_t version, IGameAdapter* adapter, const ClockServiceRequestV1* request,
+                                                    ClockServiceStateV1* output) noexcept
+    {
+        if (version != StartupObservationVersionV1 || !adapter || !request || !output)
+            return Status::InvalidArgument;
+        return GameAdapter::ClockService(adapter, GameAdapter::ClockAction::BeginStartupObservation, request, nullptr, 0, output);
+    }
+
+    extern "C" Status ReadGameStartupObservationV1(std::uint32_t version, IGameAdapter* adapter, std::uint64_t generation,
+                                                   StartupObservationStateV1* output) noexcept
+    {
+        if (version != StartupObservationVersionV1 || !adapter || !generation || !output)
+            return Status::InvalidArgument;
+        return GameAdapter::ReadStartupObservation(adapter, generation, output);
     }
 
     extern "C" Status SubmitGameClockCommandV1(std::uint32_t version, IGameAdapter* adapter, const ClockCommandV1* command) noexcept

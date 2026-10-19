@@ -17,6 +17,7 @@
 #include <game/CGameLocalInputLease.h>
 #include <game/CGameClockService.h>
 #include <game/CGameApplicationFrameObservation.h>
+#include <game/CGameStartupObservation.h>
 #include <game/CGameTimeService.h>
 #include <cstdint>
 #include <string>
@@ -59,6 +60,8 @@ public:
     bool                 EndNativeClockService(std::uint64_t generation);
     bool                 BeginNativeApplicationFrameObservation(const mta::game_de::ClockServiceRequestV1& request, mta::game_de::ClockServiceStateV1& state);
     bool                 ReadNativeApplicationFrameObservation(std::uint64_t generation, mta::game_de::ApplicationFrameObservationStateV1& state);
+    bool                 BeginNativeStartupObservation(const mta::game_de::ClockServiceRequestV1& request, mta::game_de::ClockServiceStateV1& state);
+    bool                 ReadNativeStartupObservation(std::uint64_t generation, mta::game_de::StartupObservationStateV1& state);
     bool                 HasGameTimeService() const noexcept;
     mta::game_de::Status ReadGameTimeState(mta::game_de::GameTimeStateV1& state) noexcept;
     bool                 GetNativeMovementEligibility(mta::game_de::NativeMovementEligibility& state);
@@ -122,6 +125,8 @@ private:
     decltype(&mta::game_de::EndGameClockServiceV1)                  m_clockEnd = nullptr;
     decltype(&mta::game_de::BeginGameApplicationFrameObservationV1) m_applicationFrameBegin = nullptr;
     decltype(&mta::game_de::ReadGameApplicationFrameObservationV1)  m_applicationFrameRead = nullptr;
+    decltype(&mta::game_de::BeginGameStartupObservationV1)          m_startupObservationBegin = nullptr;
+    decltype(&mta::game_de::ReadGameStartupObservationV1)           m_startupObservationRead = nullptr;
     decltype(&mta::game_de::ReadGameTimeStateV1)                    m_gameTimeRead = nullptr;
     mta::game_de::IGameRenderObservation*                           m_renderObservation = nullptr;
     mta::game_de::IGameRenderObservationV2*                         m_renderObservationV2 = nullptr;

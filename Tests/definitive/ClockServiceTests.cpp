@@ -569,6 +569,27 @@ namespace
             put(fade, Ui::valueOffset, std::uintptr_t{0x87654321});
             put(fade, Ui::nextOffset, std::int32_t{-1});
         }
+        void AdmitStartupPins()
+        {
+            const auto admit = [&](std::uintptr_t rva, const void* bytes, std::size_t count, DWORD protection)
+            {
+                DWORD previous = 0, ignored = 0;
+                Check(::VirtualProtect(reinterpret_cast<void*>(image + rva), count, PAGE_READWRITE, &previous) != FALSE,
+                      "populate only the owned synthetic startup profile pages");
+                std::memcpy(reinterpret_cast<void*>(image + rva), bytes, count);
+                Check(::VirtualProtect(reinterpret_cast<void*>(image + rva), count, protection, &ignored) != FALSE &&
+                          ::FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(image + rva), count),
+                      "restore synthetic startup code RX and immutable pins/getter slot RO");
+            };
+            for (const auto& pin : NativeStartupOwnerProfile::pins)
+                admit(pin.rva, pin.bytes, pin.size, pin.code ? PAGE_EXECUTE_READ : PAGE_READONLY);
+            for (const auto& pin : NativeStartupWorldProfile::pins)
+                admit(pin.rva, pin.bytes, pin.size, pin.code ? PAGE_EXECUTE_READ : PAGE_READONLY);
+            const auto getter = image + NativeStartupWorldProfile::getterRva;
+            admit(NativeStartupWorldProfile::ownerGetWorldSlotRva, &getter, sizeof(getter), PAGE_READONLY);
+            const std::uintptr_t absent = 0;
+            admit(NativeStartupWorldProfile::objectChunksRva, &absent, sizeof(absent), PAGE_READWRITE);
+        }
         void Patch(std::uintptr_t rva, const void* bytes, std::size_t length)
         {
             DWORD previous = 0, ignored = 0;
@@ -1970,6 +1991,95 @@ namespace
         {
             namespace Ui = NativeUiClassMapProfile;
             using Key = NativeUiClassMapAccess::Key;
+            if (context.uiMode == 10)
+            {
+                // Each object and registry item is owned synthetic memory. The
+                // test exercises real callback/page/profile guards without a
+                // GTA process, UObject constructor, GC claim or native call.
+                namespace Owner = NativeStartupOwnerProfile;
+                namespace World = NativeStartupWorldProfile;
+                alignas(8) std::array<unsigned char, 0x40>        uiBase{}, gameBase{}, levelBase{}, uiClass{}, gameClass{}, levelClass{}, world{};
+                alignas(8) std::array<unsigned char, 0x2c8>       game{};
+                alignas(8) std::array<unsigned char, 0xd8>        level{};
+                std::array<std::uintptr_t, 3>                     uiChain{}, gameChain{}, levelChain{};
+                std::array<unsigned char, World::objectItemBytes> item{};
+                const auto                                        address = [](const auto& value) { return reinterpret_cast<std::uintptr_t>(value.data()); };
+                const auto put = [](auto& target, std::size_t offset, const auto& value) { std::memcpy(target.data() + offset, &value, sizeof(value)); };
+                const auto type = [&](auto& base, auto& candidate, auto& chain)
+                {
+                    put(base, Ui::classChainIndexOffset, std::int32_t{1});
+                    chain[1] = address(base) + Ui::classChainOffset;
+                    put(candidate, Ui::classChainOffset, address(chain));
+                    put(candidate, Ui::classChainIndexOffset, std::int32_t{2});
+                };
+                type(uiBase, uiClass, uiChain);
+                type(gameBase, gameClass, gameChain);
+                type(levelBase, levelClass, levelChain);
+                const auto root = reinterpret_cast<std::uintptr_t>(context.fixture->frameOwner.data());
+                const auto gameAddress = address(game), levelAddress = address(level);
+                std::memcpy(reinterpret_cast<unsigned char*>(root) + Owner::objectOuterOffset, &gameAddress, sizeof(gameAddress));
+                put(game, 0, context.fixture->image + Owner::gameModeVtableRva);
+                put(game, Owner::objectClassOffset, address(gameClass));
+                put(game, Owner::objectOuterOffset, levelAddress);
+                put(game, Owner::gameModeInterfaceOffset, root);
+                put(level, World::objectClassOffset, address(levelClass));
+                put(level, World::levelWorldOffset, address(world));
+                put(item, World::itemObjectOffset, levelAddress);
+                std::array<std::uintptr_t, 1> chunks{address(item)};
+                context.fixture->Put(Ui::uiTransitionClassCacheRva, address(uiBase));
+                context.fixture->Put(Owner::gameModeClassCacheRva, address(gameBase));
+                context.fixture->Put(World::levelClassCacheRva, address(levelBase));
+                context.fixture->Put(World::objectChunksRva, address(chunks));
+                context.fixture->Put(World::objectCountRva, std::int32_t{1});
+                put(context.fixture->uiEntries, Ui::valueOffset, address(uiClass));
+                put(context.fixture->uiEntries, Ui::entryBytes + Ui::valueOffset, address(uiClass));
+                std::uint32_t facts = 0xa5, refused = 0x5a;
+                Check(context.service->ReadStartupPrerequisites(frame.generation, facts, refused) && facts == 63 && !refused,
+                      "the actual native callback observes typed UI classes, enclosing owner and conservative world link without invoking providers");
+                uiChain[1] = address(uiBase);
+                Check(context.service->ReadStartupPrerequisites(frame.generation, facts, refused) && facts == 53 && !refused,
+                      "stable unrelated UI classes remain observed negatives rather than read refusals");
+                uiChain[1] = address(uiBase) + Ui::classChainOffset;
+                put(level, World::levelWorldOffset, std::uintptr_t{0});
+                Check(context.service->ReadStartupPrerequisites(frame.generation, facts, refused) && facts == 31 && refused == StartupWorldLinkRefused,
+                      "a missing world preserves independent UI and owner observations while refusing only the world prerequisite");
+                put(level, World::levelWorldOffset, address(world));
+                put(game, Owner::gameModeInterfaceOffset, std::uintptr_t{0});
+                Check(context.service->ReadStartupPrerequisites(frame.generation, facts, refused) && facts == 15 && refused == 12,
+                      "a broken enclosing-owner correlation refuses both owner-dependent probes without hiding independent UI facts");
+                put(game, Owner::gameModeInterfaceOffset, root);
+                context.fixture->Put(Ui::uiTransitionClassCacheRva, std::uintptr_t{0});
+                Check(context.service->ReadStartupPrerequisites(frame.generation, facts, refused) && facts == 48 && refused == 3,
+                      "a missing UI class cache is a refusal and cannot run native StaticClass initialization");
+                context.fixture->Put(Ui::uiTransitionClassCacheRva, address(uiBase));
+                facts = 0xa5;
+                refused = 0x5a;
+                Check(!context.service->ReadStartupPrerequisites(frame.generation + 1, facts, refused) && facts == 0xa5 && refused == 0x5a,
+                      "a different generation cannot borrow startup observations or modify either caller output");
+                bool        foreign = true;
+                std::thread other([&] { foreign = context.service->ReadStartupPrerequisites(frame.generation, facts, refused); });
+                other.join();
+                Check(!foreign && facts == 0xa5 && refused == 0x5a, "a foreign thread cannot borrow the native startup callback scope");
+                const auto& pin = Owner::pins[0];
+                const auto  changed = static_cast<unsigned char>(pin.bytes[0] ^ 1);
+                context.fixture->Patch(pin.rva, &changed, sizeof(changed));
+                Check(!context.service->ReadStartupPrerequisites(frame.generation, facts, refused) && facts == 0xa5 && refused == 0x5a,
+                      "changed owner proof refuses the whole sample before publishing partial facts");
+                context.fixture->Patch(pin.rva, pin.bytes, pin.size);
+                ClockTestFaults::uiReadAddress = reinterpret_cast<std::uintptr_t>(context.fixture->frameOwner.data()) + Ui::ownerOffset;
+                ClockTestFaults::uiRootChangeAddress = context.fixture->image + NativeApplicationFrameProfile::rootRva;
+                Check(!context.service->ReadStartupPrerequisites(frame.generation, facts, refused) && facts == 0xa5 && refused == 0x5a,
+                      "root movement during an independent child probe cannot publish a mixed startup sample");
+                ClockTestFaults::uiReadAddress = ClockTestFaults::uiRootChangeAddress = 0;
+                context.fixture->SetFrameReceiver(context.fixture->frameOwner.data());
+                context.fixture->Put(Ui::uiTransitionClassCacheRva, std::uintptr_t{0});
+                context.fixture->Put(Owner::gameModeClassCacheRva, std::uintptr_t{0});
+                context.fixture->Put(World::levelClassCacheRva, std::uintptr_t{0});
+                // Do not leave the fixture root pointing at expired local records.
+                const std::uintptr_t absent = 0;
+                std::memcpy(reinterpret_cast<unsigned char*>(root) + Owner::objectOuterOffset, &absent, sizeof(absent));
+                return;
+            }
             if (context.uiMode == 9)
             {
                 // The image and these class records belong only to this host.
@@ -2157,7 +2267,8 @@ namespace
         namespace Ui = NativeUiClassMapProfile;
         using Key = NativeUiClassMapAccess::Key;
         fixture.AdmitUiClassMapPins();
-        for (unsigned mode = 1; mode != 10; ++mode)
+        fixture.AdmitStartupPins();
+        for (unsigned mode = 1; mode != 11; ++mode)
         {
             NativeClockService      service;
             ApplicationFrameContext context;
@@ -2172,6 +2283,10 @@ namespace
             bool typeOutside = true;
             Check(!service.ReadStartupUiTransitionClass(runtime.generation.load(), Key::Loading, typeOutside) && typeOutside,
                   "producer-side class typing cannot acquire an engine callback scope");
+            std::uint32_t startupFacts = 0xa5, startupRefusals = 0x5a;
+            Check(
+                !service.ReadStartupPrerequisites(runtime.generation.load(), startupFacts, startupRefusals) && startupFacts == 0xa5 && startupRefusals == 0x5a,
+                "producer-side startup reads preserve both outputs outside the natural frame callback");
             if (mode == 1)
             {
                 const auto before = originalUiRefusals;

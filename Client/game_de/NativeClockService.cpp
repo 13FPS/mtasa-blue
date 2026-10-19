@@ -13,6 +13,9 @@
 #include "NativeGamePauseProfile.h"
 #include "NativeApplicationFrameProfile.h"
 #include "NativeClassChainAccess.h"
+#include "NativeStartupOwnerAccess.h"
+#include "NativeStartupWorldAccess.h"
+#include <game/CGameStartupObservation.h>
 #include "NativeImageAccess.h"
 #include "NativeServiceAdmission.h"
 
@@ -368,6 +371,33 @@ namespace mta::game_de
         bool RawRead(ClockValues& output) noexcept
         {
             return NativeClockMemory::Read(runtime.image, output);
+        }
+
+        bool CheckStartupBinding() noexcept
+        {
+            if (!CheckBinding(false, false, true))
+                return false;
+            // A class-cache address is meaningful only with the native code
+            // that registers and consumes it. Observe those dataflows without
+            // calling a lazy initializer or accepting a changed getter.
+            const auto pinsMatch = [](const auto& pins, auto capacity) noexcept
+            {
+                for (const auto& pin : pins)
+                {
+                    std::array<unsigned char, decltype(capacity)::value> actual{};
+                    if (pin.size > actual.size() || !UiMapPinPages(runtime.image + pin.rva, pin.size, pin.code) ||
+                        !Image::ReadImage(runtime.image, runtime.image + pin.rva, actual.data(), pin.size, false, pin.code) ||
+                        std::memcmp(actual.data(), pin.bytes, pin.size) != 0)
+                        return false;
+                }
+                return true;
+            };
+            std::uintptr_t getter = 0;
+            return pinsMatch(NativeStartupOwnerProfile::pins, std::integral_constant<std::size_t, NativeStartupOwnerProfile::maximumPinBytes>{}) &&
+                   pinsMatch(NativeStartupWorldProfile::pins, std::integral_constant<std::size_t, NativeStartupWorldProfile::maximumPinBytes>{}) &&
+                   UiMapPinPages(runtime.image + NativeStartupWorldProfile::ownerGetWorldSlotRva, sizeof(getter), false) &&
+                   Image::ReadImage(runtime.image, runtime.image + NativeStartupWorldProfile::ownerGetWorldSlotRva, &getter, sizeof(getter)) &&
+                   getter == runtime.image + NativeStartupWorldProfile::getterRva;
         }
 
         bool CheckTimingBinding() noexcept
@@ -1278,6 +1308,16 @@ namespace mta::game_de
             return ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(address), output, bytes, &copied) && copied == bytes;
         }
 
+        bool StartupGraphRead(std::uintptr_t address, void* output, std::size_t bytes) noexcept
+        {
+            // Cached classes, registry roots and vtables belong to this exact
+            // image; UObject fields belong to readable non-executable heaps.
+            // Neither route grants retention or permits a native method call.
+            if (address >= runtime.image && address - runtime.image < imageSize)
+                return Image::ReadImage(runtime.image, address, output, bytes);
+            return UiMapHeapRead(address, output, bytes);
+        }
+
         void InvokeFrameHandler(void* receiver, float delta, std::uint32_t state)
         {
             const auto previousGeneration = frameCallbackGeneration;
@@ -1589,6 +1629,48 @@ namespace mta::game_de
         // No StaticClass call or widget creation occurs here. The caller gets
         // only a coherent relation; UObject lifetime remains a separate duty.
         compatible = next;
+        return true;
+    }
+
+    bool NativeClockService::ReadStartupPrerequisites(std::uint64_t requestedGeneration, std::uint32_t& facts, std::uint32_t& refusals) const noexcept
+    {
+        const auto qualified = [&]() noexcept { return requestedGeneration == generation && QualifiedApplicationFrame(generation); };
+        if (!qualified() || !FrameReceiver(frameCallbackReceiver) || !CheckStartupBinding())
+            return false;
+        const auto    receiver = reinterpret_cast<std::uintptr_t>(frameCallbackReceiver);
+        std::uint32_t nextFacts = 0, nextRefusals = 0;
+        bool          compatible = false;
+        if (ReadStartupUiTransitionClass(requestedGeneration, NativeUiClassMapAccess::Key::Loading, compatible))
+            nextFacts |= StartupLoadingTypeObserved | (compatible ? StartupLoadingTypeMatches : 0u);
+        else
+            nextRefusals |= StartupLoadingTypeRefused;
+        if (ReadStartupUiTransitionClass(requestedGeneration, NativeUiClassMapAccess::Key::SimpleFade, compatible))
+            nextFacts |= StartupSimpleFadeTypeObserved | (compatible ? StartupSimpleFadeTypeMatches : 0u);
+        else
+            nextRefusals |= StartupSimpleFadeTypeRefused;
+
+        NativeStartupOwnerAccess::Value owner{}, ownerAfter{};
+        if (NativeStartupOwnerAccess(runtime.image, &StartupGraphRead).Read(receiver, owner))
+        {
+            nextFacts |= StartupGameModeOwnerObserved;
+            NativeStartupWorldAccess::Value world{};
+            if (NativeStartupWorldAccess(runtime.image, &StartupGraphRead).Read(owner.gameModeAddress, world))
+                nextFacts |= StartupWorldLinkObserved;
+            else
+                nextRefusals |= StartupWorldLinkRefused;
+            // The world probe must still refer to the observed enclosing
+            // owner. A moving path is a refused sample, never a mixed record.
+            if (!NativeStartupOwnerAccess(runtime.image, &StartupGraphRead).Read(receiver, ownerAfter) || ownerAfter.gameModeAddress != owner.gameModeAddress)
+                return false;
+        }
+        else
+            nextRefusals |= StartupGameModeOwnerRefused | StartupWorldLinkRefused;
+        if (!qualified() || !FrameReceiver(frameCallbackReceiver) || !CheckStartupBinding())
+            return false;
+        // These are independently guarded observations, not an atomic world
+        // snapshot or permission to enter StartGame, dispatch providers or GC.
+        facts = nextFacts;
+        refusals = nextRefusals;
         return true;
     }
 

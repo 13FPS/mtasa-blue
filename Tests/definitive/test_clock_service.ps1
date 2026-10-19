@@ -61,6 +61,8 @@ try {
         'Client/game_de/NativeGamePauseProfile.h',
         'Client/game_de/NativeApplicationFrame.h','Client/game_de/NativeApplicationFrameProfile.h',
         'Client/game_de/NativeUiClassMapAccess.h','Client/game_de/NativeUiClassMapProfile.h','Client/game_de/NativeClassChainAccess.h',
+        'Client/game_de/NativeStartupOwnerAccess.h','Client/game_de/NativeStartupOwnerProfile.h',
+        'Client/game_de/NativeStartupWorldAccess.h','Client/game_de/NativeStartupWorldProfile.h','Client/sdk/game/CGameStartupObservation.h',
         'Client/game_de/CGameTimingDE.h','Client/game_de/CGameTimingDE.cpp','Client/sdk/game/CGame.h','Client/sdk/game/CWeaponInfo.h',
         'Client/sdk/game/Common.h','Shared/sdk/SString.h','Shared/sdk/SharedUtil.IntTypes.h','Shared/sdk/enums/SystemState.h',
         'Shared/sdk/enums/EntityType.h','Shared/sdk/enums/PedPieceTypes.h',

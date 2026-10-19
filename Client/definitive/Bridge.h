@@ -135,6 +135,13 @@ DE_BRIDGE_API int           DE_CoreApplicationFrameBegin();
 DE_BRIDGE_API int           DE_CoreApplicationFrameCapture();
 DE_BRIDGE_API std::uint32_t DE_CoreApplicationFrameRead(std::uint32_t component);
 
+// The composite startup observations have their own 192-word API1 report.
+// Frame API1 remains128 words and grants no startup readiness claim.
+DE_BRIDGE_API std::uint32_t DE_CoreStartupObservationApiVersion();
+DE_BRIDGE_API int           DE_CoreStartupObservationBegin();
+DE_BRIDGE_API int           DE_CoreStartupObservationCapture();
+DE_BRIDGE_API std::uint32_t DE_CoreStartupObservationRead(std::uint32_t component);
+
 // Configured movement keeps the same actual Core owner through native teardown.
 // The producer's 96 values include eligibility, native restoration and real pin
 // ownership; a pinned backend is distinct from an active adapter or live hooks.

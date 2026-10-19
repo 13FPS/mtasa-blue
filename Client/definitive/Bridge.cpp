@@ -356,6 +356,26 @@ std::uint32_t DE_CoreApplicationFrameRead(std::uint32_t component)
     return ControllerAccessAllowed() ? coreStartup.ReadApplicationFrame(component) : 0;
 }
 
+std::uint32_t DE_CoreStartupObservationApiVersion()
+{
+    return DefinitiveStartupObservationReference::ApiVersion;
+}
+
+int DE_CoreStartupObservationBegin()
+{
+    return ControllerAccessAllowed() && !movementAdapter && !client && coreStartup.BeginStartupObservationReference(&moduleAnchor) ? 1 : 0;
+}
+
+int DE_CoreStartupObservationCapture()
+{
+    return ControllerAccessAllowed() && coreStartup.CaptureStartupObservation() ? 1 : 0;
+}
+
+std::uint32_t DE_CoreStartupObservationRead(std::uint32_t component)
+{
+    return ControllerAccessAllowed() ? coreStartup.ReadStartupObservation(component) : 0;
+}
+
 int DE_CoreMovementBegin()
 {
     return ControllerAccessAllowed() && !movementAdapter && !client && coreStartup.BeginMovementReference(&moduleAnchor) ? 1 : 0;

@@ -39,6 +39,7 @@
 #include "DefinitiveInputReference.h"
 #include "DefinitiveClockReference.h"
 #include "DefinitiveApplicationFrameReference.h"
+#include "DefinitiveStartupObservationReference.h"
 #include "DefinitiveClockSetReference.h"
 #include "DefinitiveMovementReference.h"
 #include "DefinitiveRenderReference.h"
@@ -3587,7 +3588,12 @@ CCore::CCore()
     #if defined(_WIN64)
         if (hasInputReference)
         {
-            if (inputReference.applicationFrameReference)
+            if (inputReference.startupObservation)
+            {
+                clockEntered = true;
+                DefinitiveStartupObservationReference::Run(m_DefinitiveAdapter, inputReference);
+            }
+            else if (inputReference.applicationFrameReference)
             {
                 clockEntered = true;
                 DefinitiveApplicationFrameReference::Run(m_DefinitiveAdapter, inputReference);
@@ -3632,7 +3638,9 @@ CCore::CCore()
         // including failed teardown, rather than a potentially pinned DLL name.
         m_DefinitiveAdapter.Stop();
     #if defined(_WIN64)
-        if (hasInputReference && (inputReference.clockReference || inputReference.clockSetReference || inputReference.applicationFrameReference) &&
+        if (hasInputReference &&
+            (inputReference.clockReference || inputReference.clockSetReference || inputReference.applicationFrameReference ||
+             inputReference.startupObservation) &&
             !clockEntered)
         {
             // Binding can refuse before the clock workload begins. Keep this
@@ -3643,7 +3651,9 @@ CCore::CCore()
                 Sleep(DefinitiveClockReference::CleanupBackoffMs);
                 m_DefinitiveAdapter.Stop();
             }
-            if (inputReference.applicationFrameReference)
+            if (inputReference.startupObservation)
+                DefinitiveStartupObservationReference::PublishNotEntered(inputReference, true);
+            else if (inputReference.applicationFrameReference)
                 DefinitiveApplicationFrameReference::PublishNotEntered(inputReference, true);
             else if (inputReference.clockSetReference)
                 DefinitiveClockSetReference::PublishNotEntered(inputReference, true);

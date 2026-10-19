@@ -17,13 +17,24 @@
 #include "../../Client/core/DefinitiveInputReference.h"
 #include "../../Client/core/DefinitiveRenderReference.h"
 #include "../../Client/core/DefinitiveGuiFrontendInputReference.h"
+#include "../../Client/core/DefinitiveStartupObservationReference.h"
 
 namespace
 {
-    int          checks = 0;
-    unsigned int inputPublications = 0;
-    unsigned int controlCalls = 0;
-    bool         ControlLease(std::uint32_t, std::uint32_t*, std::uint32_t)
+    int                                             checks = 0;
+    unsigned int                                    inputPublications = 0;
+    unsigned int                                    controlCalls = 0;
+    unsigned int                                    startupPublications = 0;
+    DefinitiveStartupObservationReference::Snapshot startupReport{};
+    void                                            PublishStartup(const std::uint32_t* values, std::uint32_t count)
+    {
+        if (values && count == startupReport.size())
+        {
+            ++startupPublications;
+            std::memcpy(startupReport.data(), values, sizeof(startupReport));
+        }
+    }
+    bool ControlLease(std::uint32_t, std::uint32_t*, std::uint32_t)
     {
         ++controlCalls;
         return false;
@@ -105,6 +116,12 @@ int wmain(int argc, wchar_t** argv)
         const auto inputVersion = Resolve<std::uint32_t (*)()>(core, "MTA_DEInputReferenceApiVersion");
         using ConfigureInput = std::uint32_t (*)(std::uint32_t, DefinitiveInputReference::CancelCallback, DefinitiveInputReference::PublishCallback);
         const auto configureInput = Resolve<ConfigureInput>(core, "MTA_ConfigureDEInputReference");
+        const auto startupObservationVersion = Resolve<std::uint32_t (*)()>(core, "MTA_DEStartupObservationReferenceApiVersion");
+        const auto configureStartupObservation = Resolve<ConfigureInput>(core, "MTA_ConfigureDEStartupObservationReference");
+        Check(startupObservationVersion() == 1 && DefinitiveStartupObservationReference::FieldCount == 192 &&
+                  configureStartupObservation(0, CancelInput, PublishStartup) == 0 && configureStartupObservation(10001, CancelInput, PublishStartup) == 0 &&
+                  configureStartupObservation(1, nullptr, PublishStartup) == 0 && configureStartupObservation(1, CancelInput, nullptr) == 0,
+              "startup observation requires its distinct version, duration and copied-report callbacks");
         const auto frontendVersion = Resolve<std::uint32_t (*)()>(core, "MTA_DEGuiFrontendReferenceApiVersion");
         using ConfigureFrontend = std::uint32_t (*)(std::uint32_t, std::uint32_t, DefinitiveInputReference::CancelCallback,
                                                     DefinitiveInputReference::PublishCallback, DefinitiveGuiFrontendReference::ControlCallback);
@@ -338,6 +355,20 @@ int wmain(int argc, wchar_t** argv)
         NoClassicRendererModules();
         // A diagnostic reader cannot accidentally become a cross-thread Core
         // control channel or erase the completed owner-thread failure snapshot.
+        // Exercise this new dispatch in the actual Core, including preflight
+        // cleanup. The named fixture must never pass the real executable gate.
+        Check(configureStartupObservation(1, CancelInput, PublishStartup) == 1 && configureStartupObservation(1, CancelInput, PublishStartup) == 0 &&
+                  configureInput(1, CancelInput, PublishInput) == 0,
+              "a startup observer retains one Core owner and excludes conflicting diagnostic requests");
+        const int startupObservationResult = initialize();
+        Check(startupObservationResult == 5 && startupPublications == 1 && DefinitiveStartupObservationReference::Retired(startupReport) &&
+                  !DefinitiveStartupObservationReference::Completed(startupReport) && startupReport[DefinitiveStartupObservationReference::NotEntered] == 1 &&
+                  !startupReport[DefinitiveStartupObservationReference::StartupReads] && !inputPublications && !controlCalls &&
+                  !GetModuleHandleW(L"game_de.dll") && !GetModuleHandleW(L"cgui.dll"),
+              "wrong-image startup observation publishes distinct not-entered retirement without pretending to observe native prerequisites");
+        CheckStartup(readStartup, 5, 3, 33);
+        NoGameModules();
+        NoClassicRendererModules();
         std::array<unsigned int, 8> foreign{};
         std::thread                 reader(
             [&]
@@ -358,9 +389,10 @@ int wmain(int argc, wchar_t** argv)
             "{\"success\":true,\"checks\":%d,\"initialize_results\":[%d,%d,%d,%d],\"continued_after_free_library\":true,\"backend_unloaded_after_each_"
             "failure\":true,\"classic_modules_unloaded\":true,\"legacy_renderer_modules_unloaded\":true,\"startup_diagnostics_verified\":true,\"api3_"
             "initialize_result\":%d,\"api4_initialize_result\":%d,\"api5_initialize_result\":%d,\"api6_initialize_result\":%d,\"api13_initialize_result\":%d,"
-            "\"api14_initialize_result\":%d}"
+            "\"api14_initialize_result\":%d,\"startup_observation_initialize_result\":%d}"
             "\n",
-            checks, results[0], results[1], results[2], results[3], api3Result, api4Result, api5Result, api6Result, api13Result, api14Result);
+            checks, results[0], results[1], results[2], results[3], api3Result, api4Result, api5Result, api6Result, api13Result, api14Result,
+            startupObservationResult);
         return 0;
     }
     catch (const std::exception& error)

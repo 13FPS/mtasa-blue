@@ -63,6 +63,8 @@ static_assert(DefinitiveClockSetReference::ApiVersion == 1 && DefinitiveClockSet
 static_assert(DefinitiveClockSetReference::InitialReadAcknowledged == 88 && DefinitiveClockSetReference::ProviderCapturedSnapshotNotCompared == 121);
 static_assert(DefinitiveApplicationFrameReference::ApiVersion == 1 && DefinitiveApplicationFrameReference::FieldCount == 128);
 static_assert(DefinitiveApplicationFrameReference::ObservationReads == 96 && DefinitiveApplicationFrameReference::DictionaryVerified == 124);
+static_assert(DefinitiveStartupObservationReference::ApiVersion == 1 && DefinitiveStartupObservationReference::FieldCount == 192);
+static_assert(DefinitiveStartupObservationReference::StartupReads == 128 && DefinitiveStartupObservationReference::InvalidStartupSamples == 149);
 
 namespace deonline
 {
@@ -101,6 +103,10 @@ namespace deonline
         static bool ConflictingApplicationFrameStart(CoreStartupReference& worker, const void* address) noexcept
         {
             return worker.Start(address, true, false, false, 0, 1, false, false, false, false, false, false, true, false, false, false, false, true);
+        }
+        static bool ConflictingStartupObservationStart(CoreStartupReference& worker, const void* address) noexcept
+        {
+            return worker.Start(address, true, false, false, 0, 1, false, false, false, false, false, false, false, false, false, false, false, true, true);
         }
     };
 }
@@ -193,7 +199,7 @@ namespace
                  {L"MTA_CORE_FIXTURE_DELAY_MS", L"MTA_CORE_FIXTURE_BAD_VERSION", L"MTA_CORE_FIXTURE_BAD_STATE", L"MTA_CORE_FIXTURE_BAD_INITIALIZE",
                   L"MTA_CORE_FIXTURE_FAIL_ATTACH", L"MTA_CORE_FIXTURE_INPUT_MODE", L"MTA_CORE_FIXTURE_RENDER_MODE", L"MTA_CORE_FIXTURE_GUI_MODE",
                   L"MTA_CORE_FIXTURE_SURFACE_MODE", L"MTA_CORE_FIXTURE_CLOCK_MODE", L"MTA_CORE_FIXTURE_FRONTEND_CLOCK_MODE", L"MTA_CORE_FIXTURE_RUNTIME_MODE",
-                  L"MTA_CORE_FIXTURE_LOCAL_RUNTIME_MODE", L"MTA_CORE_FIXTURE_APPLICATION_FRAME_MODE"})
+                  L"MTA_CORE_FIXTURE_LOCAL_RUNTIME_MODE", L"MTA_CORE_FIXTURE_APPLICATION_FRAME_MODE", L"MTA_CORE_FIXTURE_STARTUP_OBSERVATION_MODE"})
                 Set(name, L"0");
         }
         ~Fixture()
@@ -1313,6 +1319,197 @@ namespace
         Check(worker.Read(17) == (scenario == 0 || scenario == 6 ? 1u : 0u), "only a successful advancing application workload promotes final startup success");
     }
 
+    void TestStartupObservationWorker(deonline::CoreStartupReference& worker, const std::filesystem::path& root, const std::wstring& mode,
+                                      const std::filesystem::path& coreFixture)
+    {
+        namespace Startup = DefinitiveStartupObservationReference;
+        using namespace DefinitiveStartupObservationReference;
+        const unsigned          scenario = mode == L"startup-observation-cancel"                    ? 1u
+                                           : mode == L"startup-observation-wrong-api"               ? 2u
+                                           : mode == L"startup-observation-config-refused"          ? 3u
+                                           : mode == L"startup-observation-init-failed"             ? 4u
+                                           : mode == L"startup-observation-init-thrown"             ? 5u
+                                           : mode == L"startup-observation-cache-contention"        ? 6u
+                                           : mode == L"startup-observation-returned-pending"        ? 7u
+                                           : mode == L"startup-observation-thrown-pending"          ? 8u
+                                           : mode == L"startup-observation-stale-terminal"          ? 9u
+                                           : mode == L"startup-observation-retained-terminal"       ? 10u
+                                           : mode == L"startup-observation-workload-incomplete"     ? 11u
+                                           : mode == L"startup-observation-readback-thrown-pending" ? 12u
+                                           : mode == L"startup-observation-begin-refused"           ? 13u
+                                           : mode == L"startup-observation-not-entered"             ? 14u
+                                           : mode == L"startup-observation-wrong-count"             ? 16u
+                                           : mode == L"startup-observation-corrupt-startup"         ? 17u
+                                           : mode == L"startup-observation-reserved-startup"        ? 18u
+                                                                                                    : 0u;
+        Fixture                 fixture(600 + scenario);
+        WorkerDeleteObservation deleteObservation;
+        CopyCore(coreFixture, root);
+        Set(L"MTA_CORE_FIXTURE_STARTUP_OBSERVATION_MODE", std::to_wstring(scenario));
+        Check(!worker.CaptureStartupObservation() && !worker.ReadStartupObservation(Version), "application cache begins unavailable");
+        Check(!deonline::CoreStartupReferenceTestAccess::ConflictingStartupObservationStart(worker, &anchor),
+              "actual Start rejects a mixed clock and startup-observation owner");
+        Check(Fast([&] { return worker.BeginStartupObservationReference(&anchor); }), "application observation queues on the actual worker");
+        Check(WaitForSingleObject(fixture.entered, 5000) == WAIT_OBJECT_0, "application fixture loader entered on the worker");
+        if (scenario == 8 || scenario == 12)
+            deleteObservation.Arm(fixture.counters);
+        Check(!worker.Begin(&anchor) && !worker.BeginInputReference(&anchor) && !worker.BeginClockReference(&anchor) &&
+                  !worker.BeginClockSetReference(&anchor) && !worker.BeginStartupObservationReference(&anchor),
+              "application ownership excludes replacement workers and historical clock protocols");
+        SetEvent(fixture.release);
+        if (scenario == 2 || scenario == 3 || mode == L"startup-observation-missing-export")
+        {
+            Wait(worker);
+            Check(worker.Read(16) == (scenario == 3 ? 14u : 13u) && !worker.CaptureStartupObservation() && !worker.ReadStartupObservation(Version) &&
+                      !fixture.counters[9] && !fixture.counters[2] && fixture.counters[1] == fixture.counters[0],
+                  "missing, mismatched and refused application exports unload unused Core without manufacturing reports");
+            return;
+        }
+        const auto deadline = GetTickCount64() + 10000;
+        if (scenario == 14)
+        {
+            Wait(worker);
+            Check(worker.CaptureStartupObservation(), "non-entry application report survives unused Core unload");
+            Startup::Snapshot sample{};
+            for (std::uint32_t field = 0; field != Startup::FieldCount; ++field)
+                sample[field] = worker.ReadStartupObservation(field);
+            Check(Retired(sample) && !Completed(sample) && sample[NotEntered] && sample[AdapterStopped] && !sample[BeginAttempted] && !sample[FramesLow] &&
+                      !sample[NativeRestored] && !sample[BackendPinnedExpected] && !worker.Read(17) && worker.Read(13) == 1 && !worker.Read(15) &&
+                      !fixture.counters[2] && fixture.counters[1] == fixture.counters[0],
+                  "preflight refusal proves only non-entry cleanup, never application frames or native restoration");
+            return;
+        }
+        if (scenario == 16)
+        {
+            SetEvent(fixture.inputRelease);
+            SetEvent(fixture.movementRelease);
+            while (!fixture.counters[24] && GetTickCount64() < deadline)
+                Sleep(5);
+            Check(fixture.counters[24], "wrong-width application provider actually returned from Initialize");
+            const auto until = GetTickCount64() + 100;
+            while (GetTickCount64() < until)
+            {
+                Check(Fast([&] { return worker.Poll(); }) == 0 && worker.IsPending() && GetModuleHandleW(L"core.dll") && !fixture.counters[1] &&
+                          !worker.CaptureStartupObservation() && !worker.CaptureClock() && !worker.ReadStartupObservation(Version) &&
+                          !worker.BeginStartupObservationReference(&anchor),
+                      "wrong-width application reports cannot populate caches or authorize unload");
+                Sleep(5);
+            }
+            return;
+        }
+        while (!Fast([&] { return worker.CaptureStartupObservation(); }))
+        {
+            Check(worker.Poll() == 0 && GetTickCount64() < deadline, "application provider failed to publish a coherent atomic report");
+            Sleep(5);
+        }
+        Check(worker.ReadStartupObservation(Version) == Startup::ApiVersion && worker.ReadStartupObservation(Phase) == 1 &&
+                  worker.ReadStartupObservation(BackendPinnedExpected) == 1 && !worker.ReadStartupObservation(ReadSubmitted) &&
+                  !worker.ReadStartupObservation(ReadAcknowledged) && !worker.ReadStartupObservation(SetsLow) && !worker.ReadStartupObservation(FreezesLow) &&
+                  !worker.ReadStartupObservation(UnfreezesLow) && !worker.ReadStartupObservation(ResetsLow),
+              "application report preserves independent PIN and read-only ownership without clock command acknowledgements");
+        if (scenario == 13)
+            Check(worker.ReadStartupObservation(RefusedNoGeneration) == 1 && !worker.ReadStartupObservation(GenerationLow) &&
+                      !worker.ReadStartupObservation(BeginSucceeded) && !worker.ReadStartupObservation(FramesLow),
+                  "failed Begin retains a no-generation cleanup obligation without inventing application work");
+        else
+            Check(worker.ReadStartupObservation(ObservationValid) == 1 && worker.ReadStartupObservation(DictionaryVerified) == 1 &&
+                      worker.ReadStartupObservation(FramesLow) ==
+                          worker.ReadStartupObservation(FrontendFramesLow) + worker.ReadStartupObservation(PlayingFramesLow) &&
+                      worker.ReadStartupObservation(LoadingLookupsLow) == 8 && worker.ReadStartupObservation(SimpleFadeLookupsLow) == 7,
+                  "separate application and dictionary words remain coherent across scalar reads");
+        if (scenario != 13)
+            Check(worker.ReadStartupObservation(StartupStateValid) == 1 && worker.ReadStartupObservation(StartupReads) == 3 &&
+                      worker.ReadStartupObservation(ObservationsLow) == worker.ReadStartupObservation(FramesLow) &&
+                      worker.ReadStartupObservation(LastFacts) == 63 && !worker.ReadStartupObservation(LastRefusals),
+                  "startup192 retains coherent metadata/owner/world counters independently from frame128");
+        Check(!worker.CaptureApplicationFrame() && !worker.ReadApplicationFrame(DefinitiveApplicationFrameReference::Version) && !worker.CaptureClock() &&
+                  !worker.ReadClock(DefinitiveClockReference::Version) && !worker.CaptureClockSet() && !worker.CaptureInput() && !worker.CaptureMovement() &&
+                  !worker.CaptureRenderV6() && !worker.ReadStartupObservation(Startup::FieldCount),
+              "startup192 never substitutes for an old96 clock or historical input cache");
+        bool        foreignRefused = false;
+        std::thread foreign(
+            [&]
+            {
+                foreignRefused = !worker.CaptureStartupObservation() && !worker.ReadStartupObservation(Version) &&
+                                 !worker.BeginStartupObservationReference(&anchor) && worker.Poll() == -1;
+            });
+        foreign.join();
+        Check(foreignRefused, "foreign script callers cannot capture or replace the application's worker");
+        if (scenario == 1)
+            Check(Fast([&] { return worker.Cancel(); }), "application cancellation requests cleanup without granting unload");
+        if (scenario == 6)
+            AcquireSRWLockShared(&deonline::CoreStartupReferenceTestAccess::InputLock(worker));
+        SetEvent(fixture.inputRelease);
+        bool sawPending = false;
+        while (GetTickCount64() < deadline && worker.Poll() == 0)
+        {
+            if (worker.CaptureStartupObservation() && worker.ReadStartupObservation(Phase) == 3 && fixture.counters[21])
+            {
+                sawPending = true;
+                break;
+            }
+            Sleep(5);
+        }
+        if (scenario == 6)
+        {
+            const bool progressed = ContendedClockProgress([&] { return worker.CaptureStartupObservation(); },
+                                                           [&](auto field) { return worker.ReadStartupObservation(field); }, fixture.counters);
+            ReleaseSRWLockShared(&deonline::CoreStartupReferenceTestAccess::InputLock(worker));
+            Check(progressed, "application publication and capture progress while the actual historical cache lock remains held");
+        }
+        Check(sawPending && GetModuleHandleW(L"core.dll") && !fixture.counters[1] && worker.ReadStartupObservation(CleanupPending) == 1,
+              "pending application cleanup retains Core and its sole coherent restoration report");
+        SetEvent(fixture.movementRelease);
+        const bool quarantined = (scenario >= 7 && scenario <= 10) || scenario == 12;
+        if (quarantined)
+        {
+            while (!fixture.counters[24] && GetTickCount64() < deadline)
+                Sleep(5);
+            const auto until = GetTickCount64() + 100;
+            while (GetTickCount64() < until)
+            {
+                Check(Fast([&] { return worker.Poll(); }) == 0 && worker.IsPending() && GetModuleHandleW(L"core.dll") && !fixture.counters[1],
+                      "faulty application returns and terminal reports cannot release a retained Core or its worker");
+                Sleep(5);
+            }
+            Check(fixture.counters[24] && worker.CaptureStartupObservation(), "application provider actually returned or threw before quarantine");
+            if (scenario == 8 || scenario == 12)
+                Check(fixture.counters[25] && !fixture.counters[26], "application exception quarantines before worker heap ownership unwinds");
+            if (scenario == 12)
+                Check(fixture.counters[6] == 1, "application pending exception occurs in first diagnostic readback");
+            Startup::Snapshot sample{};
+            for (std::uint32_t field = 0; field != Startup::FieldCount; ++field)
+                sample[field] = worker.ReadStartupObservation(field);
+            Check(!Retired(sample) && !worker.BeginStartupObservationReference(&anchor), "stale or pending application proof refuses retirement");
+            // Each deliberately faulty provider remains quarantined until this
+            // disposable non-game host exits; no live callback is force-unloaded.
+            return;
+        }
+        Wait(worker);
+        Check(worker.ReadStartupObservation(Phase) == 3, "worker completion cannot mutate an already captured application report");
+        Check(worker.CaptureStartupObservation(), "final application report remains available after actual Core unload");
+        Startup::Snapshot sample{};
+        for (std::uint32_t field = 0; field != Startup::FieldCount; ++field)
+            sample[field] = worker.ReadStartupObservation(field);
+        Check(Retired(sample) && !sample[ReadSubmitted] && !sample[ReadAcknowledged] && !sample[SetsLow] && !sample[FreezesLow] && !sample[UnfreezesLow] &&
+                  !sample[ResetsLow] && !sample[FullMtaReady],
+              "application retirement preserves separate read-only and readiness semantics");
+        if (scenario == 13)
+            Check(sample[RefusedNoGeneration] && sample[ResetSucceeded] && !sample[EndSucceeded] && !Completed(sample),
+                  "failed Begin permits unload only after explicit reset proof, without promoting workload success");
+        Check(worker.Read(13) == 1 && worker.Read(15) == 1 &&
+                  worker.Read(16) == (scenario == 1   ? 12u
+                                      : scenario == 4 ? 7u
+                                      : scenario == 5 ? 11u
+                                                      : 0u) &&
+                  !fixture.counters[2] && fixture.counters[1] == fixture.counters[0],
+              "application errors, cancellation and exceptions unload only on the owning worker after retirement");
+        if (scenario == 17 || scenario == 18)
+            Check(Retired(sample) && !Completed(sample) && !worker.Read(17),
+                  "malformed extended facts or reserved startup words cannot borrow a valid retired frame128 workload");
+        Check(worker.Read(17) == (scenario == 0 || scenario == 6 ? 1u : 0u), "only a successful advancing application workload promotes final startup success");
+    }
+
     void TestGuiWorker(deonline::CoreStartupReference& worker, const std::filesystem::path& root, const std::wstring& mode,
                        const std::filesystem::path& coreFixture)
     {
@@ -1624,6 +1821,11 @@ int wmain(int argc, wchar_t** argv)
         {
             Check(argc == 4, "completed clock worker fixture requires its controlled Core DLL");
             TestFrontendClockWorker(worker, root, argv[2], argv[3]);
+        }
+        else if (std::wstring(argv[2]).find(L"startup-observation") == 0)
+        {
+            Check(argc == 4, "startup observation fixture requires a controlled Core provider");
+            TestStartupObservationWorker(worker, root, argv[2], argv[3]);
         }
         else if (std::wstring(argv[2]).find(L"application-frame") == 0)
         {
@@ -2114,6 +2316,23 @@ int wmain(int argc, wchar_t** argv)
             Check(!worker.CapturePersistentFrontend() && !worker.CapturePersistentFrontendLifecycle() && !worker.ReadPersistentFrontend(0) &&
                       !worker.ReadPersistentFrontendLifecycle(0) && !GetModuleHandleW(L"game_de.dll"),
                   "ordinary retry retires its actual backend and cannot expose predecessor persistent evidence");
+        }
+        else if (std::wstring(argv[2]) == L"actual-startup-observation")
+        {
+            namespace Startup = DefinitiveStartupObservationReference;
+            using namespace DefinitiveStartupObservationReference;
+            Check(Fast([&] { return worker.BeginStartupObservationReference(&anchor); }), "actual Core accepts the separate application worker protocol");
+            Wait(worker);
+            Check(worker.CaptureStartupObservation(), "actual Core publishes application non-entry cleanup before unloading");
+            Startup::Snapshot sample{};
+            for (std::uint32_t field = 0; field != Startup::FieldCount; ++field)
+                sample[field] = worker.ReadStartupObservation(field);
+            Check(Retired(sample) && !Completed(sample) && sample[NotEntered] && sample[AdapterStopped] && !sample[BeginAttempted] && !sample[FramesLow] &&
+                      !sample[FramesHigh] && !sample[ObservationValid] && !sample[NativeRestored] && !sample[BackendPinnedExpected] && !sample[FullMtaReady] &&
+                      !worker.CaptureClock() && !worker.CaptureClockSet(),
+                  "actual wrong-image refusal preserves startup192 isolation without inventing a native callback");
+            Check(worker.Read(13) == 1 && !worker.Read(15) && !worker.Read(17),
+                  "actual application preflight unloads Core and dependencies without claiming game workload success");
         }
         else if (std::wstring(argv[2]) == L"actual-application-frame")
         {

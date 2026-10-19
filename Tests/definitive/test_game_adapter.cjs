@@ -1218,6 +1218,7 @@ async function main() {
             MTA_CORE_CLOCK_REFERENCE: overrides.mtaCoreClockReference ?? false,
             MTA_CORE_CLOCK_SET_REFERENCE: overrides.mtaCoreClockSetReference ?? false,
             MTA_CORE_APPLICATION_FRAME_REFERENCE: overrides.mtaCoreApplicationFrameReference ?? false,
+            MTA_CORE_STARTUP_OBSERVATION_REFERENCE: overrides.mtaCoreStartupObservationReference ?? false,
             Date: { now: () => overrides.times ? overrides.times[frame] : frame * 50 },
             CLEO: { version: overrides.version || '1.5.1', apiVersion: overrides.definitions || '0.500', hostVersion: '1.0.113.49697469' },
             native: (name, ...args) => { record(name, ...args);
@@ -1397,6 +1398,119 @@ async function main() {
         assert.ok(done && !done.passed && done.cleanup_passed && done.error && done.stop_requested);
         assert.equal(polls, 2);
         assert.equal(cancels, 1);
+    });
+    const startupObservationState = (changes = {}) => Object.assign(Array(192).fill(0), clockFinalState({
+        26: 2, 27: 0, 28: 0, 30: 0, 31: 0, 32: 0, 33: 0, 34: 0, 48: 0, 60: 0, 83: 0
+    }), {
+        96: 5, 97: 1, 98: 44, 100: 9, 101: 0x3c888889, 104: 44,
+        106: 44, 108: 44, 110: 44, 112: 44, 114: 44, 116: 44,
+        120: 63, 121: 3, 124: 1,
+        128: 5, 129: 1, 130: 44, 134: 44, 136: 44, 138: 44, 140: 44, 142: 44, 144: 44, 146: 63, ...changes
+    });
+    function runStartupObservationEntry(changes = {}, options = {}) {
+        const frame = startupObservationState(changes);
+        const final = options.final || [1, 5, 6, 97, 0, 0, 0, 1, 3, 4, 5, 0, 0, 1, 0, 1, 0, 1, 0];
+        return runEntry({ mode: 'smoke', mtaCoreStartupObservationReference: true,
+            keyFrames: [[], [], [17, 16, 120], [17, 16, 120], [], []], ...options,
+            functions: { DE_CoreStartupObservationApiVersion: () => 1, DE_CoreStartupObservationBegin: () => 1,
+                DE_CoreStartupObservationCapture: () => 1, DE_CoreStartupObservationRead: field => frame[field],
+                DE_CoreStartupPoll: () => 1, DE_CoreStartupCancel: () => 1,
+                DE_CoreStartupRead: field => final[field], ...(options.functions || {}) } });
+    }
+    test('startup observation waits for F9/release and accepts a separate retired report without clock acknowledgements', () => {
+        const f = runStartupObservationEntry();
+        const done = f.logs.find(event => event.event === 'core_startup_observation_reference_finished');
+        assert.ok(done && done.passed && done.cleanup_passed && done.dictionary_verified && !done.clock_writes && !done.full_core_ready);
+        assert.ok(f.runtimeAccess.every(value => value.frame >= 4));
+        assert.ok(!f.calls.some(([name]) => /SET_TIME|SET_PLAYER|CREATE_CHAR|DE_Connect|DE_CoreClockBegin/.test(name)));
+        assert.equal(done.startup_observation_state.length, 192);
+    });
+    test('startup observation keeps dictionary absence and refused lookups separate from frame ownership success', () => {
+        for (const changes of [{ 108: 0, 110: 0, 114: 0, 116: 0, 120: 9, 124: 1 },
+            { 106: 0, 108: 0, 110: 0, 112: 0, 114: 0, 116: 0, 118: 88, 120: 0, 124: 0 }]) {
+            const f = runStartupObservationEntry(changes);
+            const done = f.logs.find(event => event.event === 'core_startup_observation_reference_finished');
+            assert.ok(done && done.passed && done.cleanup_passed);
+            assert.equal(done.dictionary_verified, changes[124] === 1);
+            assert.equal(done.lookup_mask, changes[120]);
+        }
+    });
+    test('startup observation has no arming expiry and armed cancellation never loads the bridge', () => {
+        const cancelled = runStartupObservationEntry({}, { keyFrames: [[], [], [17, 16, 35]], times: [0, 7200000, 14400000] });
+        assert.equal(cancelled.runtimeAccess.length, 0);
+        assert.ok(cancelled.logs.some(event => event.event === 'adapter_activation_cancelled'));
+    });
+    for (const options of [{ mtaCoreApplicationFrameReference: true }, { mtaCoreClockReference: true }, { mtaCoreClockSetReference: true }, { mtaCoreFrontendRuntime: true },
+        { mtaCorePersistentFrontend: true }, { mtaCoreGuiStartupReference: true }, { mtaNativeMovementTrial: true },
+        { mode: 'online' }, { mode: 'diagnostic' }]) test('startup observation refuses combined mode ' + JSON.stringify(options), () => {
+            const f = runStartupObservationEntry({}, { ...options, forbidRuntimeAccess: true });
+            assert.equal(f.runtimeAccess.length, 0);
+            assert.ok(f.logs.some(event => event.event === 'adapter_failed'));
+        });
+    for (const [label, changes] of [['peer debt', { 78: 1 }], ['live hook', { 19: 1 }], ['unexpected write', { 62: 1 }],
+        ['no frame progress', { 98: 0 }], ['full readiness', { 85: 1 }], ['dirty old reserved', { 95: 1 }], ['dirty new reserved', { 127: 1 }]])
+        test('startup observation refuses ' + label, () => {
+            const f = runStartupObservationEntry(changes);
+            assert.ok(!f.logs.some(event => event.event === 'core_startup_observation_reference_finished' && event.passed));
+        });
+    test('startup observation polls cleanup independently after a rejected publication', () => {
+        let polls = 0, cancels = 0;
+        const final = startupObservationState();
+        const f = runStartupObservationEntry({}, { functions: {
+            DE_CoreStartupPoll: () => ++polls >= 2 ? 1 : 0,
+            DE_CoreStartupObservationRead: field => polls === 1 && field === 127 ? 1 : final[field],
+            DE_CoreStartupCancel: () => { ++cancels; return 1; }
+        } });
+        const done = f.logs.find(event => event.event === 'core_startup_observation_reference_finished');
+        assert.ok(done && !done.passed && done.cleanup_passed && done.error && done.stop_requested);
+        assert.equal(polls, 2);
+        assert.equal(cancels, 1);
+    });
+    test('startup observation keeps wrong types, individual refusals and whole-scope refusal independent of workload success', () => {
+        for (const changes of [
+            { 136: 0, 140: 0, 146: 53 },
+            { 134: 0, 136: 0, 138: 0, 140: 0, 146: 48, 147: 3 },
+            { 132: 44, 134: 0, 136: 0, 138: 0, 140: 0, 142: 0, 144: 0, 146: 0 }
+        ]) {
+            const f = runStartupObservationEntry(changes);
+            const done = f.logs.find(event => event.event === 'core_startup_observation_reference_finished');
+            assert.ok(done && done.passed && done.cleanup_passed && done.startup_verified && !done.full_core_ready);
+            assert.equal(done.startup_facts, changes[146]);
+            assert.equal(done.startup_refusals, changes[147] || 0);
+        }
+    });
+    for (const [label, changes] of [
+        ['no valid startup record', { 129: 0 }], ['not enough startup reads', { 128: 1 }],
+        ['failed startup read', { 148: 1 }], ['invalid startup record', { 149: 1 }],
+        ['unknown startup fact', { 146: 64 }], ['unknown startup refusal', { 147: 16 }],
+        ['more observations than frames', { 130: 45 }], ['refusals exceed observations', { 132: 45 }],
+        ['observed metadata exceeds successful scopes', { 132: 1 }], ['type matches exceed observations', { 136: 45 }],
+        ['world count exceeds owner', { 144: 45 }], ['matches without observed type', { 146: 62 }],
+        ['observed and refused type', { 147: 1 }], ['incomplete latest probe facts', { 146: 15 }],
+        ['dirty startup reserved field', { 191: 1 }]
+    ]) test('startup observation refuses ' + label, () => {
+        const f = runStartupObservationEntry(changes);
+        assert.ok(!f.logs.some(event => event.event === 'core_startup_observation_reference_finished' && event.passed));
+    });
+    test('startup observation compares uint64 values without rounding the high words', () => {
+        const changes = {};
+        for (const field of [98, 104, 106, 108, 110, 112, 114, 116, 130, 134, 136, 138, 140, 142, 144]) {
+            changes[field] = 0xfffffffd;
+            changes[field + 1] = 0x80000000;
+        }
+        const f = runStartupObservationEntry(changes);
+        assert.ok(f.logs.some(event => event.event === 'core_startup_observation_reference_finished' && event.passed));
+        const invalid = runStartupObservationEntry({ ...changes, 136: 0xfffffffe });
+        assert.ok(!invalid.logs.some(event => event.event === 'core_startup_observation_reference_finished' && event.passed));
+    });
+    test('startup observation validates optional API before admitting its worker', () => {
+        let begins = 0;
+        const f = runStartupObservationEntry({}, { functions: {
+            DE_CoreStartupObservationApiVersion: () => 2,
+            DE_CoreStartupObservationBegin: () => ++begins
+        } });
+        assert.equal(begins, 0);
+        assert.ok(!f.logs.some(event => event.event === 'core_startup_observation_reference_finished'));
     });
     // The Set report has its own namespace and evidence. Its restored common
     // clock values deliberately differ from the initial producer Read, which

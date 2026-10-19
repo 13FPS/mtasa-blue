@@ -1,9 +1,10 @@
 #!/usr/bin/env pwsh
 #requires -Version 7.0
-# Exercise the app-frame opt-in using one ordinary, never-executed game copy.
+# Exercise either read-only frame observer using one never-executed game copy.
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][string]$ApplicationFramePackageDirectory,
+    [Parameter(Mandatory)][Alias('ObservationPackageDirectory')][string]$ApplicationFramePackageDirectory,
+    [ValidateSet('ApplicationFrame','Startup')][string]$ObservationMode = 'ApplicationFrame',
     [Parameter(Mandatory)][string]$PlainPackageDirectory,
     [string]$PersistentPackageDirectory,
     [Parameter(Mandatory)][string]$GameExecutable
@@ -12,16 +13,22 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $repositoryRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
 $id = (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N')
-$outputRoot = Join-Path $repositoryRoot ('Build/mta-application-frame-package/' + $id)
+$isStartup = $ObservationMode -eq 'Startup'
+$modeSlug = if ($isStartup) { 'startup-observation' } else { 'application-frame' }
+$outputRoot = Join-Path $repositoryRoot ('Build/mta-' + $modeSlug + '-package/' + $id)
 $scratchParent = [IO.Path]::GetFullPath((Join-Path $repositoryRoot 'Build/tmp'))
-$scratchRoot = [IO.Path]::GetFullPath((Join-Path $scratchParent ('application-frame-package-' + $id)))
+$scratchRoot = [IO.Path]::GetFullPath((Join-Path $scratchParent ($modeSlug + '-package-' + $id)))
 $fakeGame = Join-Path $scratchRoot 'owned-fake-game'
 $fixtureRoot = Join-Path $scratchRoot 'package-fixtures'
 $privateSource = Join-Path $scratchRoot 'provider-source'
 $utf8 = [Text.UTF8Encoding]::new($false)
 $knownGameHash = '63e633bb51c35fe35ca98f503b62e7ddb8403abe4c9d501cfa9162892453846f'
-$marker = 'MTA_CORE_APPLICATION_FRAME_REFERENCE'
-$markerPattern = 'export const MTA_CORE_APPLICATION_FRAME_REFERENCE = (true|false);'
+$marker = if ($isStartup) { 'MTA_CORE_STARTUP_OBSERVATION_REFERENCE' } else { 'MTA_CORE_APPLICATION_FRAME_REFERENCE' }
+$observationSwitch = if ($isStartup) { '-MtaCoreStartupObservationReference' } else { '-MtaCoreApplicationFrameReference' }
+$otherMarker = if ($isStartup) { 'MTA_CORE_APPLICATION_FRAME_REFERENCE' } else { 'MTA_CORE_STARTUP_OBSERVATION_REFERENCE' }
+$otherSwitch = if ($isStartup) { 'MtaCoreApplicationFrameReference' } else { 'MtaCoreStartupObservationReference' }
+$providerLabel = if ($isStartup) { 'Startup observation' } else { 'Application-frame' }
+$markerPattern = 'export const ' + $marker + ' = (true|false);'
 $checks = [Collections.Generic.List[object]]::new()
 $runs = [Collections.Generic.List[object]]::new()
 $backups = [Collections.Generic.List[object]]::new()
@@ -296,7 +303,7 @@ function Transition([string]$Name,$Selection) {
     $backups.Add([ordered]@{name=$Name;directory=$backup;originalManifestSha256=$priorManifestHash;orderedChanges=$changes;savedOriginals=$savedOriginals})
 }
 function App-On([string]$Name) {
-    Run $Name $setMode @('-GameDirectory',$fakeGame,'-Mode','Smoke','-MtaCoreApplicationFrameReference') $true | Out-Null
+    Run $Name $setMode @('-GameDirectory',$fakeGame,'-Mode','Smoke',$observationSwitch) $true | Out-Null
     Installed $application.manifest $Name | Out-Null
     Exclusive $Name $marker
 }
@@ -359,6 +366,11 @@ try {
         @{name='core';package='CLEO/de-online/core.dll';source='Bin/mta/x64/core.dll';exports=@('MTA_DEApplicationFrameReferenceApiVersion','MTA_ConfigureDEApplicationFrameReference')},
         @{name='backend';package='CLEO/de-online/game_de.dll';source='Bin/mta/game_de.dll';exports=@('BeginGameApplicationFrameObservationV1','ReadGameApplicationFrameObservationV1')}
     )
+    if ($isStartup) {
+        $providers[0].exports = @('DE_CoreStartupObservationApiVersion','DE_CoreStartupObservationBegin','DE_CoreStartupObservationCapture','DE_CoreStartupObservationRead')
+        $providers[1].exports = @('MTA_DEStartupObservationReferenceApiVersion','MTA_ConfigureDEStartupObservationReference')
+        $providers[2].exports = @('BeginGameStartupObservationV1','ReadGameStartupObservationV1')
+    }
     foreach ($provider in $providers) {
         $source = Join-Path (Join-Path $application.root 'Win64') $provider.package
         $provider['path'] = Owned (Join-Path $privateSource $provider.source)
@@ -381,8 +393,8 @@ try {
             try {
                 [IO.File]::WriteAllBytes($provider.path,$bytes)
                 $before = Tree $fakeGame
-                $run = Run $caseName $privatePackage @('-Mode','Smoke','-MtaCoreApplicationFrameReference','-OutputDirectory',$privateOutput) $false
-                Check ($caseName+':exact-export-refusal') ([IO.File]::ReadAllText($run.stderr).Contains('Application-frame provider lacks export: '+$name))
+                $run = Run $caseName $privatePackage @('-Mode','Smoke',$observationSwitch,'-OutputDirectory',$privateOutput) $false
+                Check ($caseName+':exact-export-refusal') ([IO.File]::ReadAllText($run.stderr).Contains(($providerLabel+' provider lacks export: ')+$name))
                 Check ($caseName+':no-package-staged') (-not (Test-Path -LiteralPath $privateOutput))
                 Check ($caseName+':game-tree-unchanged') ($before.canonical -ceq (Tree $fakeGame).canonical)
             } finally { [IO.File]::WriteAllBytes($provider.path,$original) }
@@ -397,17 +409,18 @@ try {
         $caseName = 'forwarded-range-'+$provider.name
         try {
             [IO.File]::WriteAllBytes($provider.path,$bytes)
-            $run = Run $caseName $privatePackage @('-Mode','Smoke','-MtaCoreApplicationFrameReference','-OutputDirectory',$privateOutput) $false
-            Check ($caseName+':exact-export-refusal') ([IO.File]::ReadAllText($run.stderr).Contains('Application-frame provider lacks export: '+$name))
+            $run = Run $caseName $privatePackage @('-Mode','Smoke',$observationSwitch,'-OutputDirectory',$privateOutput) $false
+            Check ($caseName+':exact-export-refusal') ([IO.File]::ReadAllText($run.stderr).Contains(($providerLabel+' provider lacks export: ')+$name))
             Check ($caseName+':no-package-staged') (-not (Test-Path -LiteralPath $privateOutput))
         } finally { [IO.File]::WriteAllBytes($provider.path,$original) }
         Check ($caseName+':provider-restored') ((Sha $provider.path) -ceq $provider.sha256)
     }
 
     $badConfigs = [ordered]@{
-        'duplicate-app' = {param($text) $text + [Environment]::NewLine + 'export const MTA_CORE_APPLICATION_FRAME_REFERENCE = true;' + [Environment]::NewLine}
-        'nonboolean-app' = {param($text) $text.Replace('export const MTA_CORE_APPLICATION_FRAME_REFERENCE = true;','export const MTA_CORE_APPLICATION_FRAME_REFERENCE = 1;')}
-        'string-app' = {param($text) $text.Replace('export const MTA_CORE_APPLICATION_FRAME_REFERENCE = true;','export const MTA_CORE_APPLICATION_FRAME_REFERENCE = "true";')}
+        'duplicate-app' = {param($text) $text + [Environment]::NewLine + ('export const '+$marker+' = true;') + [Environment]::NewLine}
+        'nonboolean-app' = {param($text) $text.Replace(('export const '+$marker+' = true;'),('export const '+$marker+' = 1;'))}
+        'string-app' = {param($text) $text.Replace(('export const '+$marker+' = true;'),('export const '+$marker+' = "true";'))}
+        'mutable-app' = {param($text) $text.Replace(('export const '+$marker+' = true;'),('export let '+$marker+' = true;'))}
         'mixed-clock-read' = {param($text) Change-Flag $text 'MTA_CORE_CLOCK_REFERENCE'}
         'mixed-clock-set' = {param($text) Change-Flag $text 'MTA_CORE_CLOCK_SET_REFERENCE'}
         'mixed-input' = {param($text) Change-Flag $text 'MTA_CORE_INPUT_REFERENCE'}
@@ -415,6 +428,9 @@ try {
         'mixed-frontend' = {param($text) Change-Flag $text 'MTA_CORE_FRONTEND_RUNTIME'}
         'mixed-gait' = {param($text) Change-Flag $text 'GAIT_REFERENCE'}
         'mixed-future' = {param($text) $text + [Environment]::NewLine + 'export const MTA_FUTURE_UNREVIEWED_REFERENCE = true;' + [Environment]::NewLine}
+    }
+    if ($appText.Contains('export const '+$otherMarker+' = false;')) {
+        $badConfigs['mixed-other-observer'] = {param($text) Change-Flag $text $otherMarker}
     }
     foreach ($name in $badConfigs.Keys) {
         $variant = Variant ('install-'+$name) $application $badConfigs[$name]
@@ -442,27 +458,32 @@ try {
         Exclusive ('switch-'+$selection.switch) $selection.marker
         App-On ('app-after-'+$selection.switch)
     }
-    foreach ($conflict in @('MtaCoreClockReference','MtaCoreClockSetReference','MtaCoreInputReference','MtaCoreFrontendRuntime','NativeGaitReference')) {
-        Refuse ('mode-conflict-'+$conflict) $setMode @('-GameDirectory',$fakeGame,'-Mode','Smoke','-MtaCoreApplicationFrameReference',('-'+$conflict))
+    if ($appText.Contains('export const '+$otherMarker+' = false;')) {
+        Run ('switch-'+$otherSwitch) $setMode @('-GameDirectory',$fakeGame,'-Mode','Smoke',('-'+$otherSwitch)) $true | Out-Null
+        Exclusive ('switch-'+$otherSwitch) $otherMarker
+        App-On ('app-after-'+$otherSwitch)
+    }
+    foreach ($conflict in @('MtaCoreClockReference','MtaCoreClockSetReference','MtaCoreInputReference','MtaCoreFrontendRuntime','NativeGaitReference',$otherSwitch)) {
+        Refuse ('mode-conflict-'+$conflict) $setMode @('-GameDirectory',$fakeGame,'-Mode','Smoke',$observationSwitch,('-'+$conflict))
         $out = Owned (Join-Path $scratchRoot ('Build-conflict-'+$conflict))
-        Run ('package-conflict-'+$conflict) $packageScript @('-Mode','Smoke','-MtaCoreApplicationFrameReference',('-'+$conflict),'-OutputDirectory',$out) $false | Out-Null
+        Run ('package-conflict-'+$conflict) $packageScript @('-Mode','Smoke',$observationSwitch,('-'+$conflict),'-OutputDirectory',$out) $false | Out-Null
         Check ('package-conflict-no-output-'+$conflict) (-not (Test-Path -LiteralPath $out))
     }
     foreach ($mode in @('Diagnostic','Online')) {
-        Refuse ('app-refuses-'+$mode) $setMode @('-GameDirectory',$fakeGame,'-Mode',$mode,'-MtaCoreApplicationFrameReference')
-        Run ('package-refuses-'+$mode) $packageScript @('-Mode',$mode,'-MtaCoreApplicationFrameReference','-OutputDirectory',$privateOutput) $false | Out-Null
+        Refuse ('app-refuses-'+$mode) $setMode @('-GameDirectory',$fakeGame,'-Mode',$mode,$observationSwitch)
+        Run ('package-refuses-'+$mode) $packageScript @('-Mode',$mode,$observationSwitch,'-OutputDirectory',$privateOutput) $false | Out-Null
         Check ('package-refuses-'+$mode+':no-output') (-not (Test-Path -LiteralPath $privateOutput))
     }
-    Refuse 'mode-explicit-render-route' $setMode @('-GameDirectory',$fakeGame,'-Mode','Smoke','-MtaCoreApplicationFrameReference','-MtaCoreRenderRoute','D3D12')
-    Run 'package-explicit-render-route' $packageScript @('-Mode','Smoke','-MtaCoreApplicationFrameReference','-MtaCoreRenderRoute','D3D12','-OutputDirectory',$privateOutput) $false | Out-Null
+    Refuse 'mode-explicit-render-route' $setMode @('-GameDirectory',$fakeGame,'-Mode','Smoke',$observationSwitch,'-MtaCoreRenderRoute','D3D12')
+    Run 'package-explicit-render-route' $packageScript @('-Mode','Smoke',$observationSwitch,'-MtaCoreRenderRoute','D3D12','-OutputDirectory',$privateOutput) $false | Out-Null
     Check 'package-explicit-render-route:no-output' (-not (Test-Path -LiteralPath $privateOutput))
 
     $configBytes = [IO.File]::ReadAllBytes($installedConfig)
     $manifestBytes = [IO.File]::ReadAllBytes($installedManifest)
-    foreach ($name in @('duplicate-app','nonboolean-app','string-app','mixed-clock-read','mixed-clock-set')) {
+    foreach ($name in $badConfigs.Keys) {
         try {
             Mutate-InstalledConfig (& $badConfigs[$name] ([Text.Encoding]::UTF8.GetString($configBytes)))
-            Refuse ('installed-explicit-'+$name) $setMode @('-GameDirectory',$fakeGame,'-Mode','Smoke','-MtaCoreApplicationFrameReference')
+            Refuse ('installed-explicit-'+$name) $setMode @('-GameDirectory',$fakeGame,'-Mode','Smoke',$observationSwitch)
             Refuse ('installed-ordinary-'+$name) $setMode @('-GameDirectory',$fakeGame,'-Mode','Smoke')
         } finally {
             [IO.File]::WriteAllBytes($installedConfig,$configBytes)
@@ -473,42 +494,42 @@ try {
         $manifest = Get-Content -LiteralPath $installedManifest -Raw | ConvertFrom-Json
         $manifest.files[0].destination = Join-Path $scratchRoot 'outside-game.txt'
         Save $installedManifest $manifest
-        Refuse 'unsafe-installed-destination-mode' $setMode @('-GameDirectory',$fakeGame,'-Mode','Smoke','-MtaCoreApplicationFrameReference')
+        Refuse 'unsafe-installed-destination-mode' $setMode @('-GameDirectory',$fakeGame,'-Mode','Smoke',$observationSwitch)
         Refuse 'unsafe-installed-destination-update' $update @('-PackageDirectory',$application.root,'-GameDirectory',$fakeGame)
     } finally { [IO.File]::WriteAllBytes($installedManifest,$manifestBytes) }
     $ownedConfig = Join-Path $fakeGame 'CLEO/de-online/mta/config/coreconfig.xml'
     $ownedConfigBytes = [IO.File]::ReadAllBytes($ownedConfig)
     try {
         [IO.File]::AppendAllText($ownedConfig,[Environment]::NewLine+'<!-- fixture edited owned bytes -->',$utf8)
-        Refuse 'edited-owned-config-mode' $setMode @('-GameDirectory',$fakeGame,'-Mode','Smoke','-MtaCoreApplicationFrameReference')
+        Refuse 'edited-owned-config-mode' $setMode @('-GameDirectory',$fakeGame,'-Mode','Smoke',$observationSwitch)
         Refuse 'edited-owned-config-uninstall' $uninstall @('-GameDirectory',$fakeGame)
     } finally { [IO.File]::WriteAllBytes($ownedConfig,$ownedConfigBytes) }
 
     $normalizedPlain = Variant 'plain-current' $plain {param($text)
-        if ([regex]::Matches($text,'export const MTA_CORE_APPLICATION_FRAME_REFERENCE =').Count -eq 0) {
-            $text + [Environment]::NewLine + 'export const MTA_CORE_APPLICATION_FRAME_REFERENCE = false;' + [Environment]::NewLine
+        if ([regex]::Matches($text,('export const '+$marker+' =')).Count -eq 0) {
+            $text + [Environment]::NewLine + ('export const '+$marker+' = false;') + [Environment]::NewLine
         } else { $text }
     }
     Transition 'application-to-plain' $normalizedPlain
     Exclusive 'application-to-plain'
     $historical = Variant 'plain-historical' $plain {param($text)
-        [regex]::Replace($text,'(?m)^export const MTA_CORE_APPLICATION_FRAME_REFERENCE = (true|false);\r?\n?','')
+        [regex]::Replace($text,('(?m)^export const '+$marker+' = (true|false);\r?\n?'),'')
     }
     Transition 'plain-to-historical' $historical
     Run 'historical-ordinary-mode' $setMode @('-GameDirectory',$fakeGame,'-Mode','Smoke') $true | Out-Null
     Exclusive 'historical-ordinary-mode' '' $true
-    Check 'historical-marker-stays-absent' ([regex]::Matches([IO.File]::ReadAllText($installedConfig),'export const MTA_CORE_APPLICATION_FRAME_REFERENCE =').Count -eq 0)
-    Refuse 'historical-explicit-app-refused' $setMode @('-GameDirectory',$fakeGame,'-Mode','Smoke','-MtaCoreApplicationFrameReference')
+    Check 'historical-marker-stays-absent' ([regex]::Matches([IO.File]::ReadAllText($installedConfig),('export const '+$marker+' =')).Count -eq 0)
+    Refuse 'historical-explicit-app-refused' $setMode @('-GameDirectory',$fakeGame,'-Mode','Smoke',$observationSwitch)
     Transition 'historical-to-application' $application
     Exclusive 'historical-to-application' $marker
     if ($null -ne $persistent) {
         Transition 'application-to-persistent' $persistent
-        Refuse 'persistent58-cannot-arm-app' $setMode @('-GameDirectory',$fakeGame,'-Mode','Smoke','-MtaCoreApplicationFrameReference')
+        Refuse 'persistent58-cannot-arm-app' $setMode @('-GameDirectory',$fakeGame,'-Mode','Smoke',$observationSwitch)
         $wrongCount = Variant 'app-marker-on58' $persistent {param($text)
             $text = [regex]::Replace($text,'export const ((?:GAIT_|INPUT_|MTA_)[A-Z0-9_]+) = true;','export const $1 = false;')
-            if ([regex]::Matches($text,'export const MTA_CORE_APPLICATION_FRAME_REFERENCE =').Count -eq 0) {
-                $text + [Environment]::NewLine + 'export const MTA_CORE_APPLICATION_FRAME_REFERENCE = true;' + [Environment]::NewLine
-            } else { $text.Replace('export const MTA_CORE_APPLICATION_FRAME_REFERENCE = false;','export const MTA_CORE_APPLICATION_FRAME_REFERENCE = true;') }
+            if ([regex]::Matches($text,('export const '+$marker+' =')).Count -eq 0) {
+                $text + [Environment]::NewLine + ('export const '+$marker+' = true;') + [Environment]::NewLine
+            } else { $text.Replace(('export const '+$marker+' = false;'),('export const '+$marker+' = true;')) }
         }
         Refuse 'update-app-requires23' $update @('-PackageDirectory',$wrongCount.root,'-GameDirectory',$fakeGame)
         Transition 'persistent-to-application' $application
@@ -550,13 +571,13 @@ finally {
     [Environment]::SetEnvironmentVariable('TEMP',$savedTemp,'Process')
     [Environment]::SetEnvironmentVariable('TMP',$savedTmp,'Process')
     $success = $null -eq $failure -and $sourcesUnchanged -and $scratchRemoved
-    $receipt = [ordered]@{schema='mta_application_frame_package_ownership_tests_v1';success=$success;failure=$failure;
+    $receipt = [ordered]@{schema=('mta_'+$modeSlug.Replace('-','_')+'_package_ownership_tests_v1');observationMode=$ObservationMode;success=$success;failure=$failure;
         repositoryRoot=$repositoryRoot;outputDirectory=$outputRoot;scratchDirectory=$scratchRoot;scratchRemoved=$scratchRemoved;
         sourceGame=$GameExecutable;sourceGameSha256=$knownGameHash;gameCopiesCreated=$gameCopiesCreated;copyMethod='ordinary-file-copy-no-hardlinks';
         sourcesUnchanged=$sourcesUnchanged;sourcePins=$sourcePins;inputPackages=$inputPins;checks=$checks;runs=$runs;backups=$backups;
         gameExecuted=$false;providersLoaded=$false;liveGameModified=$false;fullMtaReady=$false}
     Save (Join-Path $outputRoot 'result.json') $receipt
-    Write-Host ('Application-frame package regression result: ' + (Join-Path $outputRoot 'result.json'))
+    Write-Host ($providerLabel + ' package regression result: ' + (Join-Path $outputRoot 'result.json'))
 }
-if (-not $success) { throw ('Application-frame package regression failed: ' + $failure) }
-Write-Host ('Passed ' + $checks.Count + ' application-frame package checks')
+if (-not $success) { throw ($providerLabel + ' package regression failed: ' + $failure) }
+Write-Host ('Passed ' + $checks.Count + ' ' + $modeSlug + ' package checks')

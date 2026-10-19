@@ -22,6 +22,7 @@
 #include "DefinitiveMovementReference.h"
 #include "DefinitiveClockReference.h"
 #include "DefinitiveApplicationFrameReference.h"
+#include "DefinitiveStartupObservationReference.h"
 #include "DefinitiveClockSetReference.h"
 #include "DefinitiveRenderReference.h"
 #include "DefinitiveGuiStartupReference.h"
@@ -69,20 +70,22 @@ namespace DefinitiveInputReference
 
     bool Configure(const Request& request) noexcept
     {
-        const auto maximum = request.applicationFrameReference ? DefinitiveApplicationFrameReference::MaximumDurationMs
-                             : request.clockSetReference       ? DefinitiveClockSetReference::MaximumDurationMs
-                             : request.clockReference          ? DefinitiveClockReference::MaximumDurationMs
-                             : request.guiFrontendInput        ? DefinitiveGuiFrontendInputReference::MaximumDurationMs
-                             : request.guiFrontend             ? DefinitiveGuiFrontendReference::MaximumDurationMs
-                             : request.guiSurface              ? DefinitiveGuiSurfaceReference::MaximumDurationMs
-                             : request.guiStartup              ? DefinitiveGuiStartupReference::MaximumDurationMs
-                             : request.renderObservation       ? DefinitiveRenderReference::MaximumDurationMs
-                             : request.nativeMovement          ? DefinitiveMovementReference::MaximumDurationMs
-                                                               : MaximumDurationMs;
-        if ((request.applicationFrameReference && (request.clockReference || request.clockSetReference)) ||
+        const auto maximum = request.startupObservation          ? DefinitiveStartupObservationReference::MaximumDurationMs
+                             : request.applicationFrameReference ? DefinitiveApplicationFrameReference::MaximumDurationMs
+                             : request.clockSetReference         ? DefinitiveClockSetReference::MaximumDurationMs
+                             : request.clockReference            ? DefinitiveClockReference::MaximumDurationMs
+                             : request.guiFrontendInput          ? DefinitiveGuiFrontendInputReference::MaximumDurationMs
+                             : request.guiFrontend               ? DefinitiveGuiFrontendReference::MaximumDurationMs
+                             : request.guiSurface                ? DefinitiveGuiSurfaceReference::MaximumDurationMs
+                             : request.guiStartup                ? DefinitiveGuiStartupReference::MaximumDurationMs
+                             : request.renderObservation         ? DefinitiveRenderReference::MaximumDurationMs
+                             : request.nativeMovement            ? DefinitiveMovementReference::MaximumDurationMs
+                                                                 : MaximumDurationMs;
+        if ((request.startupObservation && (request.applicationFrameReference || request.clockReference || request.clockSetReference)) ||
+            (request.applicationFrameReference && (request.clockReference || request.clockSetReference)) ||
             (request.clockReference && request.clockSetReference) ||
             (request.clockSetReference && request.durationMs < DefinitiveClockSetReference::MinimumDurationMs) ||
-            ((request.clockReference || request.clockSetReference || request.applicationFrameReference) &&
+            ((request.clockReference || request.clockSetReference || request.applicationFrameReference || request.startupObservation) &&
              (request.guiFrontendInput || request.guiFrontend || request.guiSurface || request.guiStartup || request.nativeMovement ||
               request.renderObservation || request.renderRoute || request.renderApiVersion != 1 || request.controlLease)) ||
             (request.guiFrontendInput && (request.guiFrontend || request.guiSurface || request.guiStartup || request.nativeMovement ||
@@ -452,6 +455,19 @@ CORE_API std::uint32_t MTA_DEClockSetReferenceApiVersion()
 CORE_API std::uint32_t MTA_DEApplicationFrameReferenceApiVersion()
 {
     return DefinitiveApplicationFrameReference::ApiVersion;
+}
+
+CORE_API std::uint32_t MTA_DEStartupObservationReferenceApiVersion()
+{
+    return DefinitiveStartupObservationReference::ApiVersion;
+}
+
+CORE_API std::uint32_t MTA_ConfigureDEStartupObservationReference(std::uint32_t durationMs, DefinitiveInputReference::CancelCallback cancel,
+                                                                  DefinitiveInputReference::PublishCallback publish)
+{
+    DefinitiveInputReference::Request request{durationMs, cancel, publish};
+    request.startupObservation = true;
+    return g_isDefinitiveProcessCandidate && DefinitiveInputReference::Configure(request) ? 1u : 0u;
 }
 
 CORE_API std::uint32_t MTA_ConfigureDEApplicationFrameReference(std::uint32_t durationMs, DefinitiveInputReference::CancelCallback cancel,

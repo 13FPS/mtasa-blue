@@ -26,6 +26,7 @@ if ($NonClassicLayout) {
 }
 $sourceNames=@('Tests/definitive/MtaCoreEntryTests.cpp','Tests/definitive/test_mta_core_entry.ps1',
     'Client/core/DefinitiveClockReference.h','Client/core/DefinitiveClockReference.cpp',
+    'Client/core/DefinitiveStartupObservationReference.h','Client/core/DefinitiveStartupObservationReference.cpp','Client/sdk/game/CGameStartupObservation.h',
     'Client/core/DefinitiveClockSetReference.h','Client/core/DefinitiveClockSetReference.cpp',
     'Client/core/DefinitiveFrontendClockReference.h',
     'Client/core/DefinitiveGuiFrontendReference.h','Client/core/DefinitiveGuiFrontendInputReference.h',
@@ -156,6 +157,7 @@ foreach ($entry in $environment) { if ($entry -match '^([^=]+)=(.*)$') { [Enviro
 $compiler=Join-Path $env:VCToolsInstallDir 'bin/Hostx64/x64/cl.exe'
 $hostPath=Join-Path $outputRoot 'SanAndreas.exe'
 $compilerArguments=@('/nologo','/std:c++17','/EHsc','/W4','/WX','/MT','/O2','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN',
+    ('/I'+(Join-Path $taskRoot 'Client/sdk')),('/I'+(Join-Path $taskRoot 'Shared/sdk')),
     (Join-Path $PSScriptRoot 'MtaCoreEntryTests.cpp'),('/Fo'+$outputRoot+[IO.Path]::DirectorySeparatorChar),('/Fe'+$hostPath))
 $compilerOutput=@(& $compiler @compilerArguments 2>&1)
 $compilerExit=$LASTEXITCODE
@@ -185,7 +187,7 @@ foreach ($name in $sourceNames) {
 # guard. Core14 adds one explicit request to the seven prior image rejections;
 # its actual result and exact total must agree, rather than accepting an extra
 # log entry as proof of the new request's ownership.
-$success=$compilerExit -eq 0 -and $hostExit -eq 0 -and $null -ne $hostResult -and $hostResult.success -and $hostResult.api4_initialize_result -eq 5 -and $hostResult.api5_initialize_result -eq 5 -and $hostResult.api6_initialize_result -eq 5 -and $hostResult.api13_initialize_result -eq 5 -and $hostResult.api14_initialize_result -eq 5 -and $bindingRejections -eq 8 -and $sourcesUnchanged
+$success=$compilerExit -eq 0 -and $hostExit -eq 0 -and $null -ne $hostResult -and $hostResult.success -and $hostResult.api4_initialize_result -eq 5 -and $hostResult.api5_initialize_result -eq 5 -and $hostResult.api6_initialize_result -eq 5 -and $hostResult.api13_initialize_result -eq 5 -and $hostResult.api14_initialize_result -eq 5 -and $hostResult.startup_observation_initialize_result -eq 5 -and $bindingRejections -eq 9 -and $sourcesUnchanged
 $record=[ordered]@{recorded_at=[DateTimeOffset]::Now.ToString('o');success=$success;directory=$outputRoot;
     scope='Actual supplied Core/Game DE DLL entry point in a separate non-game host named SanAndreas.exe';
     compiler_exit=$compilerExit;host_exit=$hostExit;host_result=$hostResult;failure=$failure;host_sha256=$hostHash;nonclassic_layout=$NonClassicLayout.IsPresent;

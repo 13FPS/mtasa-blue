@@ -13,6 +13,7 @@
 #include <game/CGameRenderDeviceWindowLease.h>
 #include <game/CGameClockService.h>
 #include <game/CGameApplicationFrameObservation.h>
+#include <game/CGameStartupObservation.h>
 #include <game/CGameLocalInputLease.h>
 #include <game/CGameTimeService.h>
 
@@ -649,6 +650,163 @@ namespace
                   ReadGameApplicationFrameObservationV1(1, adapter.value, generation, &observation) == Status::NotInitialized &&
                   std::memcmp(&afterFrame, &observation, sizeof(observation)) == 0,
               "ordinary adapter reset/shutdown preserve successful retirement and refuse later frame reads");
+    }
+
+    void TestStartupObservationRejection()
+    {
+        OwnedAdapter          adapter;
+        OwnerIdentity         owner;
+        ClockServiceRequestV1 request;
+        ClockServiceStateV1   ownership;
+        ownership.hour = 99;
+        StartupObservationStateV1 observation;
+        observation.observations = 0xa5a5;
+        observation.frame.frames = 0x5a5a;
+        const auto untouchedOwnership = ownership;
+        const auto untouchedObservation = observation;
+        const auto ownershipUnchanged = [&] { return std::memcmp(&ownership, &untouchedOwnership, sizeof(ownership)) == 0; };
+        const auto observationUnchanged = [&] { return std::memcmp(&observation, &untouchedObservation, sizeof(observation)) == 0; };
+        Check(BeginGameStartupObservationV1(1, adapter.value, &request, &ownership) == Status::NotInitialized && ownershipUnchanged() &&
+                  ReadGameStartupObservationV1(1, adapter.value, 1, &observation) == Status::NotInitialized && observationUnchanged(),
+              "startup observations require the retained initialized producer without changing refused output");
+        Check(adapter.value->Initialize(owner.Get()) == Status::Ok, "initialize the real startup observation factory object");
+        Check(BeginGameStartupObservationV1(0, adapter.value, &request, &ownership) == Status::InvalidArgument &&
+                  ReadGameStartupObservationV1(0, adapter.value, 1, &observation) == Status::InvalidArgument && ownershipUnchanged() && observationUnchanged(),
+              "the optional startup API has an exact independent version");
+        Check(BeginGameStartupObservationV1(1, nullptr, &request, &ownership) == Status::InvalidArgument &&
+                  BeginGameStartupObservationV1(1, adapter.value, nullptr, &ownership) == Status::InvalidArgument &&
+                  BeginGameStartupObservationV1(1, adapter.value, &request, nullptr) == Status::InvalidArgument &&
+                  ReadGameStartupObservationV1(1, nullptr, 1, &observation) == Status::InvalidArgument &&
+                  ReadGameStartupObservationV1(1, adapter.value, 0, &observation) == Status::InvalidArgument &&
+                  ReadGameStartupObservationV1(1, adapter.value, 1, nullptr) == Status::InvalidArgument && ownershipUnchanged() && observationUnchanged(),
+              "missing pointers and zero cleanup tokens refuse before native setup");
+        auto* unknown = reinterpret_cast<IGameAdapter*>(std::uintptr_t{1});
+        Check(BeginGameStartupObservationV1(1, unknown, reinterpret_cast<const ClockServiceRequestV1*>(std::uintptr_t{1}),
+                                            reinterpret_cast<ClockServiceStateV1*>(std::uintptr_t{1})) == Status::InvalidArgument &&
+                  ReadGameStartupObservationV1(1, unknown, 1, reinterpret_cast<StartupObservationStateV1*>(std::uintptr_t{1})) == Status::InvalidArgument,
+              "registry identity is checked before borrowing another object's request or output pointer");
+        for (unsigned field = 0; field != 7; ++field)
+        {
+            auto invalid = request;
+            if (field == 0)
+                ++invalid.size;
+            if (field == 1)
+                ++invalid.version;
+            if (field == 2)
+                invalid.maximumDurationMs = 0;
+            if (field == 3)
+                invalid.maximumDurationMs = ClockServiceMaximumDurationMsV1 + 1;
+            if (field >= 4)
+                invalid.reserved[field - 4] = 1;
+            Check(BeginGameStartupObservationV1(1, adapter.value, &invalid, &ownership) == Status::InvalidArgument && ownershipUnchanged(),
+                  "malformed startup lease requests never install an observation mode");
+        }
+        for (unsigned field = 0; field != 18; ++field)
+        {
+            auto invalid = observation;
+            if (field == 0)
+                ++invalid.size;
+            if (field == 1)
+                ++invalid.version;
+            if (field >= 2 && field < 12)
+                invalid.reserved[field - 2] = 1;
+            if (field == 12)
+                ++invalid.frame.size;
+            if (field == 13)
+                ++invalid.frame.version;
+            if (field >= 14)
+                invalid.frame.reserved[field - 14] = 1;
+            const auto before = invalid;
+            Check(
+                ReadGameStartupObservationV1(1, adapter.value, 1, &invalid) == Status::InvalidArgument && std::memcmp(&before, &invalid, sizeof(invalid)) == 0,
+                "both startup and embedded frame headers/reserved fields are strict and preserve output");
+        }
+        for (unsigned field = 0; field != 4; ++field)
+        {
+            auto invalid = ownership;
+            if (field == 0)
+                ++invalid.size;
+            if (field == 1)
+                ++invalid.version;
+            if (field >= 2)
+                invalid.reserved[field - 2] = 1;
+            const auto before = invalid;
+            Check(BeginGameStartupObservationV1(1, adapter.value, &request, &invalid) == Status::InvalidArgument &&
+                      std::memcmp(&before, &invalid, sizeof(invalid)) == 0,
+                  "startup admission validates its existing clock ownership record before changing modes");
+        }
+        Check(ReadGameStartupObservationV1(1, adapter.value, 1, &observation) == Status::NotInitialized && observationUnchanged(),
+              "initialization alone does not create any startup observations");
+        Status      foreignBegin = Status::Ok, foreignRead = Status::Ok;
+        std::thread foreign(
+            [&]
+            {
+                foreignBegin = BeginGameStartupObservationV1(1, adapter.value, &request, &ownership);
+                foreignRead = ReadGameStartupObservationV1(1, adapter.value, 1, &observation);
+            });
+        foreign.join();
+        Check(foreignBegin == Status::WrongThread && foreignRead == Status::WrongThread && ownershipUnchanged() && observationUnchanged(),
+              "the startup optional exports retain the adapter's actual producer thread");
+        Check(BeginGameStartupObservationV1(1, adapter.value, &request, &ownership) == Status::Unsupported && ownership.generation && !ownership.bound &&
+                  !ownership.hooked && !ownership.active && !ownership.ready && !ownership.modulePinned && !ownership.inFlight && !ownership.patchInstalled &&
+                  !ownership.retainedPeerThreads,
+              "the real module rejects a non-GTA host without hooks while preserving its actual cleanup generation");
+        const auto generation = ownership.generation;
+        Check(ReadGameStartupObservationV1(1, adapter.value, generation + 1, &observation) == Status::InvalidArgument && observationUnchanged(),
+              "startup reads cannot borrow a different lease generation");
+        OwnedAdapter  other;
+        OwnerIdentity otherOwner;
+        Check(other.value->Initialize(otherOwner.Get()) == Status::Ok &&
+                  ReadGameStartupObservationV1(1, other.value, generation, &observation) == Status::NotInitialized && observationUnchanged(),
+              "a distinct initialized factory object cannot borrow the startup record");
+        StartupObservationStateV1 empty;
+        empty.generation = empty.frame.generation = generation;
+        Check(ReadGameStartupObservationV1(1, adapter.value, generation, &observation) == Status::Ok && std::memcmp(&empty, &observation, sizeof(empty)) == 0,
+              "failed native admission exposes a coherent empty record without inventing type, owner, world or callbacks");
+        auto invalidRequest = request;
+        invalidRequest.reserved[0] = 1;
+        Check(BeginGameStartupObservationV1(1, adapter.value, &invalidRequest, &ownership) == Status::InvalidArgument &&
+                  BeginGameApplicationFrameObservationV1(1, adapter.value, &invalidRequest, &ownership) == Status::InvalidArgument &&
+                  ReadGameStartupObservationV1(1, adapter.value, generation, &observation) == Status::Ok &&
+                  std::memcmp(&empty, &observation, sizeof(empty)) == 0,
+              "failed preflight for either observation API does not discard the prior cleanup context or publication");
+        ApplicationFrameObservationStateV1 oldObservation;
+        oldObservation.frames = 123;
+        Check(ReadGameApplicationFrameObservationV1(1, adapter.value, generation, &oldObservation) == Status::NotInitialized && oldObservation.frames == 123,
+              "historical application-frame reads do not alias the new startup mode");
+        Check(EndGameClockServiceV1(1, adapter.value, generation) == Status::Ok && EndGameClockServiceV1(1, adapter.value, generation) == Status::Ok &&
+                  ReadGameClockServiceV1(1, adapter.value, &ownership) == Status::Ok && !ownership.bound && !ownership.hooked && !ownership.active &&
+                  !ownership.inFlight && !ownership.retainedPeerThreads &&
+                  ReadGameStartupObservationV1(1, adapter.value, generation, &observation) == Status::Ok &&
+                  std::memcmp(&empty, &observation, sizeof(empty)) == 0,
+              "existing lease retirement is idempotent and preserves the final startup value snapshot");
+        Check(BeginGameApplicationFrameObservationV1(1, adapter.value, &request, &ownership) == Status::Unsupported && ownership.generation &&
+                  ownership.generation != generation && ReadGameStartupObservationV1(1, adapter.value, generation, &observation) == Status::NotInitialized &&
+                  std::memcmp(&empty, &observation, sizeof(empty)) == 0,
+              "starting the historical observation mode revokes the new mode rather than reinterpreting its record");
+        const auto oldGeneration = ownership.generation;
+        Check(ReadGameApplicationFrameObservationV1(1, adapter.value, oldGeneration, &oldObservation) == Status::Ok && !oldObservation.frames,
+              "the historical frame API remains independently readable");
+        Check(BeginGameStartupObservationV1(1, adapter.value, &invalidRequest, &ownership) == Status::InvalidArgument &&
+                  ReadGameApplicationFrameObservationV1(1, adapter.value, oldGeneration, &oldObservation) == Status::Ok && !oldObservation.frames,
+              "malformed startup preflight also leaves the historical mode intact");
+        Check(EndGameClockServiceV1(1, adapter.value, oldGeneration) == Status::Ok &&
+                  BeginGameStartupObservationV1(1, adapter.value, &request, &ownership) == Status::Unsupported && ownership.generation != oldGeneration &&
+                  ReadGameApplicationFrameObservationV1(1, adapter.value, oldGeneration, &oldObservation) == Status::NotInitialized,
+              "a new startup generation owns its own mode after historical retirement");
+        const auto nextGeneration = ownership.generation;
+        Check(ReadGameStartupObservationV1(1, adapter.value, generation, &observation) == Status::InvalidArgument &&
+                  EndGameClockServiceV1(1, adapter.value, nextGeneration) == Status::Ok &&
+                  BeginGameClockServiceV1(1, adapter.value, &request, &ownership) == Status::Unsupported &&
+                  ReadGameStartupObservationV1(1, adapter.value, nextGeneration, &observation) == Status::NotInitialized,
+              "renewed startup generations cannot alias old tokens and ordinary clock mode revokes startup reads");
+        Check(adapter.value->GetCapabilities() == implementedCapabilities && !adapter.value->GetGameInterface(),
+              "readonly startup observations advertise no complete CGame or gameplay capability");
+        const auto beforeReset = observation;
+        Check(adapter.value->Reset() == Status::Ok && adapter.value->Shutdown() == Status::Ok &&
+                  ReadGameStartupObservationV1(1, adapter.value, nextGeneration, &observation) == Status::NotInitialized &&
+                  std::memcmp(&beforeReset, &observation, sizeof(observation)) == 0,
+              "ordinary adapter reset and shutdown retire the same context and preserve refused output");
     }
 
     void TestLocalInputLeaseRejection()
@@ -1558,6 +1716,12 @@ int main()
     static_assert(sizeof(LocalInputLeaseRequestV1) == 120 && sizeof(LocalInputLeaseStateV1) == 64);
     static_assert(LocalInputLeaseVersionV1 == 1 && LocalInputLeaseLifetimeMsV1 == 500);
     static_assert(sizeof(GameTimeStateV1) == 48 && GameTimeServiceVersionV1 == 1);
+    static_assert(sizeof(StartupObservationStateV1) == 256 && offsetof(StartupObservationStateV1, frame) == 16 &&
+                  offsetof(StartupObservationStateV1, observations) == 144 && StartupObservationVersionV1 == 1);
+    static_assert(std::is_nothrow_invocable_r_v<Status, decltype(BeginGameStartupObservationV1), std::uint32_t, IGameAdapter*, const ClockServiceRequestV1*,
+                                                ClockServiceStateV1*>);
+    static_assert(
+        std::is_nothrow_invocable_r_v<Status, decltype(ReadGameStartupObservationV1), std::uint32_t, IGameAdapter*, std::uint64_t, StartupObservationStateV1*>);
     static_assert(std::is_nothrow_invocable_r_v<Status, decltype(ReadGameTimeStateV1), std::uint32_t, IGameAdapter*, GameTimeStateV1*>);
     static_assert(std::is_nothrow_invocable_r_v<Status, decltype(BeginGameLocalInputLeaseV1), std::uint32_t, IGameAdapter*, const LocalInputLeaseRequestV1*,
                                                 LocalInputLeaseStateV1*>);
@@ -1606,6 +1770,7 @@ int main()
         TestNativeMovementEligibilityRejection();
         TestClockServiceRejection();
         TestApplicationFrameObservationRejection();
+        TestStartupObservationRejection();
         TestGameTimeServiceRejection();
         TestLocalInputLeaseRejection();
         // Exercise historical factory layouts after the additive lease has

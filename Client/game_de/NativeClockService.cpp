@@ -12,6 +12,7 @@
 #include "NativeGameTimingProfile.h"
 #include "NativeGamePauseProfile.h"
 #include "NativeApplicationFrameProfile.h"
+#include "NativeClassChainAccess.h"
 #include "NativeImageAccess.h"
 #include "NativeServiceAdmission.h"
 
@@ -1242,6 +1243,15 @@ namespace mta::game_de
                    vtable == runtime.image + FrameProfile::vtableRva && ReadValue(FrameProfile::rootRva, rootAfter) && rootAfter == root;
         }
 
+        bool QualifiedApplicationFrame(std::uint64_t expectedGeneration) noexcept
+        {
+            return expectedGeneration && expectedGeneration == runtime.generation.load() && frameCallbackGeneration == expectedGeneration &&
+                   frameCallbackReceiver && callbackDepth == 1 && runtime.frameMode && runtime.frameHooked.load() && runtime.bound.load() &&
+                   runtime.ready.load() && runtime.active.load() && !runtime.stopping.load() && !runtime.peersRetained.load() &&
+                   GetCurrentThreadId() == runtime.engineThread.load() && runtime.admissionGeneration.load() == expectedGeneration &&
+                   runtime.admissionSerial.load() && Fresh();
+        }
+
         bool UiMapHeapRead(std::uintptr_t address, void* output, std::size_t bytes) noexcept
         {
             if (!address || !bytes || bytes > (std::numeric_limits<std::uintptr_t>::max)() - address)
@@ -1547,14 +1557,7 @@ namespace mta::game_de
     bool NativeClockService::ReadStartupUiClassMap(std::uint64_t requestedGeneration, NativeUiClassMapAccess::Key key,
                                                    NativeUiClassMapAccess::Value& value) const noexcept
     {
-        const auto qualified = [&]() noexcept
-        {
-            return generation && requestedGeneration == generation && generation == runtime.generation.load() && frameCallbackGeneration == generation &&
-                   frameCallbackReceiver && callbackDepth == 1 && runtime.frameMode && runtime.frameHooked.load() && runtime.bound.load() &&
-                   runtime.ready.load() && runtime.active.load() && !runtime.stopping.load() && !runtime.peersRetained.load() &&
-                   GetCurrentThreadId() == runtime.engineThread.load() && runtime.admissionGeneration.load() == generation && runtime.admissionSerial.load() &&
-                   Fresh();
-        };
+        const auto qualified = [&]() noexcept { return requestedGeneration == generation && QualifiedApplicationFrame(generation); };
         if (!qualified() || !FrameReceiver(frameCallbackReceiver) || !CheckBinding(false, false, true))
             return false;
         const auto receiver = reinterpret_cast<std::uintptr_t>(frameCallbackReceiver);
@@ -1565,6 +1568,27 @@ namespace mta::game_de
             !FrameReceiver(frameCallbackReceiver) || !CheckBinding(false, false, true))
             return false;
         value = next;
+        return true;
+    }
+
+    bool NativeClockService::ReadStartupUiTransitionClass(std::uint64_t requestedGeneration, NativeUiClassMapAccess::Key key, bool& compatible) const noexcept
+    {
+        NativeUiClassMapAccess::Value first{}, second{};
+        std::uintptr_t                baseBefore = 0, baseAfter = 0;
+        bool                          next = false;
+        // Each map observation independently qualifies this exact receiver's
+        // post-original callback scope. A producer, nested call or old owner
+        // cannot turn an earlier opaque class address into startup authority.
+        if (!ReadStartupUiClassMap(requestedGeneration, key, first) || !first.keyPresent || !first.classAddress ||
+            !Image::ReadImage(runtime.image, runtime.image + UiMapProfile::uiTransitionClassCacheRva, &baseBefore, sizeof(baseBefore)) || !baseBefore ||
+            !NativeClassChainAccess(&UiMapHeapRead).IsChildOf(first.classAddress, baseBefore, next) ||
+            !ReadStartupUiClassMap(requestedGeneration, key, second) || !second.keyPresent || second.classAddress != first.classAddress ||
+            !Image::ReadImage(runtime.image, runtime.image + UiMapProfile::uiTransitionClassCacheRva, &baseAfter, sizeof(baseAfter)) ||
+            baseAfter != baseBefore || requestedGeneration != generation || !QualifiedApplicationFrame(generation))
+            return false;
+        // No StaticClass call or widget creation occurs here. The caller gets
+        // only a coherent relation; UObject lifetime remains a separate duty.
+        compatible = next;
         return true;
     }
 

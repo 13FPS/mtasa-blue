@@ -40,6 +40,10 @@ namespace mta::game_de
         // Only the qualified post-original handler can observe this receiver's
         // configured classes. Raw membership grants no UObject or startup authority.
         bool ReadStartupUiClassMap(std::uint64_t generation, NativeUiClassMapAccess::Key key, NativeUiClassMapAccess::Value& value) const noexcept;
+        // Future transition startup also needs the native UClass relation,
+        // rather than treating a nonnull configured value as a usable type.
+        // Missing classes/caches or refused observations preserve the output.
+        bool ReadStartupUiTransitionClass(std::uint64_t generation, NativeUiClassMapAccess::Key key, bool& compatible) const noexcept;
         bool Submit(const ClockCommandV1& command) noexcept;
         bool Renew(std::uint64_t generation) noexcept;
         bool Read(ClockServiceStateV1& state) noexcept;

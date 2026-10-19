@@ -1970,6 +1970,46 @@ namespace
         {
             namespace Ui = NativeUiClassMapProfile;
             using Key = NativeUiClassMapAccess::Key;
+            if (context.uiMode == 9)
+            {
+                // The image and these class records belong only to this host.
+                // Exercise the production callback gate as well as native
+                // embedded-chain tokens without constructing any UObject.
+                alignas(8) std::array<unsigned char, 0x40> base{}, candidate{};
+                std::array<std::uintptr_t, 3>              chain{};
+                const auto put = [](unsigned char* target, std::size_t offset, const auto& field) { std::memcpy(target + offset, &field, sizeof(field)); };
+                const auto baseAddress = reinterpret_cast<std::uintptr_t>(base.data());
+                const auto candidateAddress = reinterpret_cast<std::uintptr_t>(candidate.data());
+                chain[1] = baseAddress + Ui::classChainOffset;
+                put(base.data(), Ui::classChainIndexOffset, std::int32_t{1});
+                put(candidate.data(), Ui::classChainOffset, reinterpret_cast<std::uintptr_t>(chain.data()));
+                put(candidate.data(), Ui::classChainIndexOffset, std::int32_t{2});
+                put(context.fixture->uiEntries.data(), Ui::valueOffset, candidateAddress);
+                put(context.fixture->uiEntries.data() + Ui::entryBytes, Ui::valueOffset, candidateAddress);
+                bool compatible = true;
+                context.fixture->Put(Ui::uiTransitionClassCacheRva, std::uintptr_t{0});
+                Check(!context.service->ReadStartupUiTransitionClass(frame.generation, Key::Loading, compatible) && compatible,
+                      "an uninitialized class cache cannot call StaticClass or invent a negative type result");
+                context.fixture->Put(Ui::uiTransitionClassCacheRva, baseAddress);
+                Check(context.service->ReadStartupUiTransitionClass(frame.generation, Key::Loading, compatible) && compatible &&
+                          context.service->ReadStartupUiTransitionClass(frame.generation, Key::SimpleFade, compatible) && compatible,
+                      "both configured classes use the actual native embedded base-chain relation on the qualified callback");
+                Check(!context.service->ReadStartupUiTransitionClass(frame.generation + 1, Key::Loading, compatible) && compatible,
+                      "type observations cannot borrow a different generation");
+                bool        foreign = true;
+                std::thread other([&] { foreign = context.service->ReadStartupUiTransitionClass(frame.generation, Key::Loading, compatible); });
+                other.join();
+                Check(!foreign && compatible, "type observations cannot borrow the frame scope from another thread");
+                chain[1] = baseAddress;
+                Check(context.service->ReadStartupUiTransitionClass(frame.generation, Key::Loading, compatible) && !compatible,
+                      "a stable unrelated class is distinct from a failed observation and never matches the class pointer itself");
+                compatible = true;
+                put(context.fixture->uiEntries.data(), Ui::valueOffset, std::uintptr_t{0});
+                Check(!context.service->ReadStartupUiTransitionClass(frame.generation, Key::Loading, compatible) && compatible,
+                      "a present dictionary key with no class preserves type output instead of becoming a negative relation");
+                context.fixture->Put(Ui::uiTransitionClassCacheRva, std::uintptr_t{0});
+                return;
+            }
             NativeUiClassMapAccess::Value value{0xa5a5, true};
             Check(frameCallbackGeneration == frame.generation && frameCallbackReceiver == context.fixture->frameOwner.data(),
                   "only the qualified post-original handler holds this receiver and generation for dictionary observations");
@@ -2117,7 +2157,7 @@ namespace
         namespace Ui = NativeUiClassMapProfile;
         using Key = NativeUiClassMapAccess::Key;
         fixture.AdmitUiClassMapPins();
-        for (unsigned mode = 1; mode != 9; ++mode)
+        for (unsigned mode = 1; mode != 10; ++mode)
         {
             NativeClockService      service;
             ApplicationFrameContext context;
@@ -2129,6 +2169,9 @@ namespace
             NativeUiClassMapAccess::Value outside{0xa5a5, true};
             Check(!service.ReadStartupUiClassMap(runtime.generation.load(), Key::Loading, outside) && outside.classAddress == 0xa5a5 && outside.keyPresent,
                   "producer-side lookup before a frame is refused even with a bound observer and the current generation");
+            bool typeOutside = true;
+            Check(!service.ReadStartupUiTransitionClass(runtime.generation.load(), Key::Loading, typeOutside) && typeOutside,
+                  "producer-side class typing cannot acquire an engine callback scope");
             if (mode == 1)
             {
                 const auto before = originalUiRefusals;

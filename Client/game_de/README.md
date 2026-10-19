@@ -52,6 +52,21 @@ does not contribute to the menu predicate. Unknown owners or failed reads
 refuse explicitly. These snapshots grant read ownership, not an engine lock,
 GC lifetime pin or lifecycle-write authority.
 
+The separate application-frame observation reuses the retained native owner
+without installing clock/timer hooks or admitting clock commands. Its handler
+runs after the original function, only for the verified normal invocation;
+the loading-loop origin remains excluded. Core consumes a separate 128-word
+value report through the existing worker and cleanup path.
+
+The October 19 gameplay trial passed with 277 observed frames in native state 9.
+Both `Loading` and `SimpleFade` lookups found nonnull configured classes on all
+277 frames, with no lookup failures or clock/input writes. Hooks and held-thread
+debt retired, Core/XML/pthread unloaded, and normal shutdown was acknowledged.
+This establishes opaque dictionary membership during gameplay, not class
+inheritance, UObject lifetime, frontend-state-7 readiness or permission to call
+`StartGame`. The evidence is retained under
+`Build/definitive-recovery/current-actual-application-observation-checkpoint.json`.
+
 The separate optional local-input lease reuses MTA's retained `CKeyBinds` and
 controller synthesis for six on-foot actions, with a 500 ms owner/generation
 and focus limit. The combined menu/input milestone passed in GTA on October 19

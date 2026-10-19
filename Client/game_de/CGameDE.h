@@ -23,6 +23,7 @@ namespace mta::game_de
         CClock*           GetClock() noexcept override;
         CKeyGen*          GetKeyGen() noexcept override;
         SystemState::Enum GetSystemState() override;
+        bool              IsAtMenu() override;
 
         uint32_t GetBaseIDforDFF() override;
         uint32_t GetBaseIDforTXD() override;

@@ -52,7 +52,7 @@ function RunOwned([string]$Executable,[string[]]$Arguments,[string]$Directory,[s
 
 try {
     $sourceNames = @('Client/game_de/NativeGameStateReader.h','Client/game_de/NativeGameStateReader.cpp',
-        'Client/game_de/NativeGameStateProfile.h','Client/game_de/NativeImageAccess.h','Client/game_de/NativeImageAccess.cpp',
+        'Client/game_de/NativeGameStateProfile.h','Client/game_de/NativeFrontendMenuProfile.h','Client/game_de/NativeImageAccess.h','Client/game_de/NativeImageAccess.cpp',
         'Client/sdk/game/CGameAdapter.h','Shared/sdk/CControllerState.h','Shared/sdk/CControllerActions.h',
         'Shared/sdk/CControlStateSynthesis.h','Shared/sdk/enums/SystemState.h','Tests/definitive/GameStateTests.cpp','Tests/definitive/test_game_state.ps1')
     $record.sourceHashes = @($sourceNames | ForEach-Object { [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))} })

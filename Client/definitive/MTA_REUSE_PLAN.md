@@ -17,6 +17,9 @@ streaming paths have not yet been exercised through a live full `CGame`.
 `GetSystemState` separately maps the proved native frontend/loading/gameplay
 states through a checked reader. Early native states 0–5 and lifecycle writes
 remain unsupported; native indices are never blindly cast into the SDK enum.
+`IsAtMenu` observes both the typed SA menu-widget owner and legacy frontend
+screens. It keeps their read qualification separate from native lifecycle calls;
+no widget is dereferenced and matching snapshots do not claim an engine lock.
 `CGameDE` supplies real clock/keygen accessors but remains abstract until the
 other subsystems exist. The exported factory therefore still supplies no full
 game interface, and client startup/networking remain incomplete.

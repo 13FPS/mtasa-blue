@@ -40,8 +40,17 @@ do not expose or cast them as classic 20-byte `CStreamingInfo` structures.
 states to the existing SDK enum: frontend initialization, frontend, gameplay
 initialization and gameplay. Early native states 0–5 remain unproved and refuse
 explicitly, as do changed bindings or an unknown state. The reader grants no
-engine write authority; `StartGame`, `SetSystemState` and the distinct menu
-predicate remain unimplemented. This does not establish cold-start readiness.
+engine write authority; `StartGame` and `SetSystemState` remain unimplemented.
+This does not establish cold-start readiness.
+
+`IsAtMenu` separately observes the real SA interface's managed menu widget and
+the legacy frontend screen count/pending slot. The concrete owner type, native
+pause-menu creation/resume paths, page policies and ASLR-relative pointers are
+checked before two matching snapshots can publish a result. Screen pointers
+remain opaque; no native function is called. The separate intro-movie widget
+does not contribute to the menu predicate. Unknown owners or failed reads
+refuse explicitly. These snapshots grant read ownership, not an engine lock,
+GC lifetime pin or lifecycle-write authority.
 
 The separate optional local-input lease reuses MTA's retained `CKeyBinds` and
 controller synthesis for six on-foot actions, with a 500 ms owner/generation

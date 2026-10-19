@@ -28,7 +28,7 @@ $sourceNames = @('Client/sdk/game/CGameAdapter.h', 'Client/game_de/GameAdapter.c
     'Client/game_de/NativeGameTimingAccess.h', 'Client/game_de/NativeGameTimingReader.h', 'Client/game_de/NativeGameTimingReader.cpp',
     'Client/game_de/NativeGameTimingProfile.h', 'Client/game_de/NativeGameFPSProfile.h', 'Client/game_de/NativeGamePauseProfile.h',
     'Client/game_de/NativeStreamingFileIdsProfile.h', 'Client/game_de/NativeStreamingFileIdsReader.h', 'Client/game_de/NativeStreamingFileIdsReader.cpp',
-    'Client/game_de/NativeGameStateProfile.h', 'Client/game_de/NativeGameStateReader.h', 'Client/game_de/NativeGameStateReader.cpp',
+    'Client/game_de/NativeGameStateProfile.h', 'Client/game_de/NativeFrontendMenuProfile.h', 'Client/game_de/NativeGameStateReader.h', 'Client/game_de/NativeGameStateReader.cpp',
     'Client/sdk/game/CGameClockService.h', 'Client/sdk/game/CGameLocalInputLease.h', 'Client/game_de/LocalInputLeasePolicy.h',
     'Client/game_de/NativeClockService.h', 'Client/game_de/NativeClockService.cpp',
     'Client/sdk/game/CGameTimeService.h', 'Client/game_de/NativeGameTimeReader.h', 'Client/game_de/NativeGameTimeReader.cpp',

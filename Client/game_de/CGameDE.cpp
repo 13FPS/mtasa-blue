@@ -38,6 +38,18 @@ namespace mta::game_de
         return state;
     }
 
+    bool CGameDE::IsAtMenu()
+    {
+        bool       visible;
+        const auto result = gameState.ReadMenu(visible);
+        // DE pause menus have a managed widget owner as well as the legacy
+        // frontend stack. An unavailable owner cannot silently admit MTA's
+        // gameplay or chat paths by returning a guessed false menu state.
+        if (result != Status::Ok)
+            throw std::runtime_error("DE CGame menu state unavailable (status " + std::to_string(static_cast<std::uint32_t>(result)) + ")");
+        return visible;
+    }
+
     NativeStreamingFileIds CGameDE::RequireStreamingLayout() const
     {
         NativeStreamingFileIds ids;

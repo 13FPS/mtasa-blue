@@ -16,6 +16,7 @@ namespace mta::game_de
     public:
         Status Bind() noexcept;
         Status Read(SystemState::Enum& output) const noexcept;
+        Status ReadMenu(bool& output) const noexcept;
         void   Reset() noexcept;
         bool   IsBound() const noexcept;
 

@@ -13,6 +13,8 @@
 
 #include <windows.h>
 #include <string>
+#include <SString.h>
+#include "StartupModule.h"
 
 class CModuleLoader
 {
@@ -26,11 +28,13 @@ public:
 
     bool           IsOk() const { return m_bStatus; }
     const SString& GetLastErrorMessage() const;
+    DWORD          GetLastErrorCode() const noexcept { return m_module.Error(); }
+    WORD           GetImageMachine() const noexcept { return m_module.Machine(); }
 
     PVOID GetFunctionPointer(const std::string& FunctionName);
 
 private:
-    HMODULE m_hLoadedModule;
-    bool    m_bStatus;
-    SString m_strLastError;
+    MtaStartup::Module m_module;
+    bool               m_bStatus;
+    SString            m_strLastError;
 };

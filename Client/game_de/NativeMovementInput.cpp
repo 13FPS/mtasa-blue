@@ -7,6 +7,7 @@
 #include "NativeMovementInput.h"
 #include "NativeInputRouting.h"
 #include "NativePadReader.h"
+#include "NativePadStateAccess.h"
 #include "FrontendInputLeasePolicy.h"
 #include "LocalInputLeasePolicy.h"
 #include "NativeServiceAdmission.h"
@@ -236,15 +237,16 @@ namespace mta::game_de
             return Read(address, &result, sizeof(result));
         }
 
+        NativePadStateAccess PadState() noexcept
+        {
+            // All native identity, scope and thread admission stays at the
+            // callsite. Reuse only the verified current/previous storage access.
+            return {runtime.image + padRva + NativePadCurrentOffset, Pages};
+        }
+
         bool WritePad(const NativeInputRouting::PadStateBytes& bytes) noexcept
         {
-            const auto address = runtime.image + padRva + NativePadCurrentOffset;
-            SIZE_T     copied = 0;
-            // Only these two adjacent controller blocks are owned. Mouse data,
-            // native physical sources and their pending edge queues stay outside
-            // the write range, even when a trial or restoration fails.
-            return Pages(address, bytes.size(), true) &&
-                   WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(address), bytes.data(), bytes.size(), &copied) && copied == bytes.size();
+            return PadState().Write(bytes);
         }
 
         bool ReadContext(std::int32_t& index, std::uintptr_t& alternate) noexcept
@@ -438,9 +440,7 @@ namespace mta::game_de
             scope.routed = false;
             if (!runtime.transaction.Active())
                 return true;
-            NativeInputRouting::PadStateBytes original{}, observed{};
-            if (!runtime.transaction.RestoreBytes(original) || !WritePad(original) ||
-                !Read(runtime.image + padRva + NativePadCurrentOffset, observed.data(), observed.size()) || !runtime.transaction.ConfirmRestored(observed))
+            if (!PadState().Restore(runtime.transaction))
             {
                 runtime.counters.restoreFailures.fetch_add(1);
                 Fail(Failure::RestoreFailure);
@@ -492,7 +492,7 @@ namespace mta::game_de
                 Fail(Failure::NestedCallback);
                 return false;
             }
-            NativeInputRouting::PadStateBytes physical{}, replacement{};
+            NativeInputRouting::PadStateBytes replacement{};
             scope.generation = runtime.generation.load();
             if (scope.consumedGeneration != scope.generation)
             {
@@ -500,9 +500,7 @@ namespace mta::game_de
                 scope.consumed = scope.frame.previous;
             }
             scope.frame.previous = scope.consumed;
-            if (!ReadContext(scope.providerIndex, scope.alternate) ||
-                !Read(runtime.image + padRva + NativePadCurrentOffset, physical.data(), physical.size()) ||
-                !runtime.transaction.Prepare(physical, scope.frame, replacement))
+            if (!ReadContext(scope.providerIndex, scope.alternate) || !PadState().Prepare(runtime.transaction, scope.frame, replacement))
             {
                 runtime.scopes.store(0);
                 runtime.padAccess.store(0);

@@ -14,6 +14,7 @@
 #include <core/CModManagerInterface.h>
 #include <core/CClientBase.h>
 #include "CSingleton.h"
+#include "CModuleLoader.h"
 
 using HISTANCE = struct HINSTANCE__*;
 using HMODULE = HISTANCE;
@@ -26,7 +27,7 @@ public:
     void RequestLoad(const char* arguments) override;
     void RequestUnload() override;
 
-    bool         IsLoaded() const override { return m_library != nullptr; }
+    bool         IsLoaded() const override { return m_module.IsOk(); }
     CClientBase* GetClient() override { return m_client; }
 
     bool TriggerCommand(const char* commandName, size_t commandNameLength, const void* userdata, size_t userdataSize) const override;
@@ -53,8 +54,8 @@ private:
         PendingStart,
     };
 
-    State        m_state{};
-    HMODULE      m_library{};
-    CClientBase* m_client{};
-    std::string  m_arguments;
+    State         m_state{};
+    CModuleLoader m_module;
+    CClientBase*  m_client{};
+    std::string   m_arguments;
 };

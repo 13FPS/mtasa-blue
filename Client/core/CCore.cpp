@@ -53,6 +53,7 @@
 #include "DefinitiveFrontendBindings.h"
 #include "DefinitivePersistentFrontend.h"
 #include "FrontendCursorLeaseOwner.h"
+#include "NetworkModuleStartup.h"
 #include <type_traits>
 
 using SharedUtil::CalcMTASAPath;
@@ -4582,9 +4583,9 @@ void LoadModule(CModuleLoader& m_Loader, const SString& strName, const SString& 
 #else
     SString strModuleFileName = strModuleName + ".dll";
 #endif
-    m_Loader.LoadModule(CalcMTASAPath(PathJoin("mta", strModuleFileName)));
-
-    if (m_Loader.IsOk() == false)
+    // A refused replacement may leave an earlier module safely owned. Its
+    // IsOk state cannot establish that the requested startup module loaded.
+    if (!m_Loader.LoadModule(CalcMTASAPath(PathJoin("mta", strModuleFileName))))
     {
         SString strMessage("Error loading '%s' module!\n%s", *strName, *m_Loader.GetLastErrorMessage());
         SString strType = "module-not-loadable&name=" + strModuleName;
@@ -4598,7 +4599,9 @@ void LoadModule(CModuleLoader& m_Loader, const SString& strName, const SString& 
             strMessage += strD3dModuleFilename;
             strType += "&d3d9=1";
         }
+        SetCurrentDirectory(strSavedCwd);
         BrowseToSolution(strType, ASK_GO_ONLINE | EXIT_GAME_FIRST, strMessage);
+        throw std::runtime_error("Required startup module could not be loaded");
     }
     // Restore current directory
     SetCurrentDirectory(strSavedCwd);
@@ -4744,22 +4747,25 @@ void CCore::DestroyGUI()
 
 void CCore::CreateNetwork()
 {
-    m_pNet = CreateModule<CNet>(m_NetModule, "Network", "netc", "InitNetInterface", this);
-
-    // Network module compatibility check
-    typedef unsigned long (*PFNCHECKCOMPATIBILITY)(unsigned long, unsigned long*);
-    PFNCHECKCOMPATIBILITY pfnCheckCompatibility = static_cast<PFNCHECKCOMPATIBILITY>(m_NetModule.GetFunctionPointer("CheckCompatibility"));
-    if (!pfnCheckCompatibility || !pfnCheckCompatibility(MTA_DM_CLIENT_NET_MODULE_VERSION, NULL))
+    if (m_pNet)
+        return;
+    LoadModule(m_NetModule, "Network", "netc");
+    const auto check = reinterpret_cast<NetworkModuleStartup::CheckCompatibility>(m_NetModule.GetFunctionPointer("CheckCompatibility"));
+    const auto admitted = NetworkModuleStartup::Run(check, MTA_DM_CLIENT_NET_MODULE_VERSION,
+                                                    [&] { m_pNet = InitModule<CNet>(m_NetModule, "Network", "InitNetInterface", this); });
+    if (admitted.failure != NetworkModuleStartup::Failure::None)
     {
-        // net.dll doesn't like our version number
-        ulong ulNetModuleVersion = 0;
-        pfnCheckCompatibility(1, &ulNetModuleVersion);
-        SString strMessage("Network module not compatible! (Expected 0x%x, got 0x%x)", MTA_DM_CLIENT_NET_MODULE_VERSION, ulNetModuleVersion);
+        SString strMessage = "Network module is missing CheckCompatibility!";
+        if (admitted.failure == NetworkModuleStartup::Failure::VersionMismatch)
+            strMessage.Format("Network module not compatible! (Expected 0x%x, got 0x%x)", MTA_DM_CLIENT_NET_MODULE_VERSION, admitted.moduleVersion);
 #if !defined(MTA_DM_PUBLIC_CONNECTIONS)
         strMessage += "\n\n(Devs: Update source and run win-install-data.bat)";
 #endif
         BrowseToSolution("netc-not-compatible", ASK_GO_ONLINE | TERMINATE_PROCESS, strMessage);
+        return;
     }
+    if (!m_pNet)
+        throw std::runtime_error("Network module initializer returned no interface");
 
     // Set mta version for report log here
     SetApplicationSetting("mta-version-ext", SString("%d.%d.%d-%d.%05d.%d.%03d", MTASA_VERSION_MAJOR, MTASA_VERSION_MINOR, MTASA_VERSION_MAINTENANCE,

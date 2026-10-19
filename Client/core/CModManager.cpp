@@ -125,7 +125,7 @@ void CModManager::Unload()
 bool CModManager::Start()
 {
     dassert(m_state == State::PendingStart);
-    dassert(m_library == nullptr);
+    dassert(!m_module.IsOk());
     dassert(m_client == nullptr);
 
     if (IsLoaded())
@@ -156,40 +156,20 @@ bool CModManager::TryStart()
 
     const SString modulePath = CalcMTASAPath("mods\\deathmatch\\" CLIENT_DLL_NAME);
 
-    // Load the library and use the supplied path as an extra place to search for dependencies.
-    HMODULE library = LoadLibraryEx(modulePath.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
-
-    if (library == nullptr)
+    // Reuse Core's architecture admission and exact module ownership. Client
+    // startup must not execute the x86 deathmatch DLL inside a DE x64 process.
+    if (!m_module.LoadModule(modulePath))
     {
-        const DWORD errorCode = GetLastError();
-        char*       buffer = nullptr;
-
-        DWORD size = FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_IGNORE_INSERTS, nullptr, errorCode,
-                                   MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), reinterpret_cast<LPSTR>(&buffer), 0, nullptr);
-
-        if (buffer != nullptr && size > 0)
-        {
-            std::string message{buffer, size};
-            size_t      length = message.find_last_not_of("\t\n\v\f\r ");
-
-            LocalFree(buffer);
-
-            if (length == std::string::npos)
-                return false;
-
-            message.resize(length + 1);
-            CCore::GetSingleton().GetConsole()->Printf("Unable to load deathmatch's DLL (reason: %s)", message.c_str());
-        }
-
+        CCore::GetSingleton().GetConsole()->Printf("Unable to load deathmatch's DLL (reason: %s)", *m_module.GetLastErrorMessage());
         return false;
     }
 
     using InitClientFn = CClientBase*(__cdecl*)();
-    InitClientFn initClient = nullptr;
-    if (!SharedUtil::TryGetProcAddress(library, "InitClient", initClient))
+    const auto initClient = reinterpret_cast<InitClientFn>(m_module.GetFunctionPointer("InitClient"));
+    if (!initClient)
     {
         CCore::GetSingleton().GetConsole()->Printf("Unable to initialize deathmatch's DLL (missing init)");
-        FreeLibrary(library);
+        m_module.UnloadModule();
         return false;
     }
 
@@ -198,12 +178,11 @@ bool CModManager::TryStart()
     if (client == nullptr || client->ClientInitialize(m_arguments.c_str(), CCore::GetSingletonPtr()) != 0)
     {
         CCore::GetSingleton().GetConsole()->Printf("Unable to initialize deathmatch's DLL (unable to init, bad version?)");
-        FreeLibrary(library);
+        m_module.UnloadModule();
         return false;
     }
 
     m_client = client;
-    m_library = library;
 
     // HACK: make the console input active if its visible
     if (CLocalGUI::GetSingleton().IsConsoleVisible())
@@ -218,8 +197,9 @@ bool CModManager::TryStart()
 void CModManager::Stop()
 {
     dassert(m_state != State::Idle);
-    dassert(m_library != nullptr);
-    dassert(m_client != nullptr);
+    dassert(m_module.IsOk());
+    // A previous unload refusal can retain the DLL after ClientShutdown.
+    // Retrying retirement must not require calling the client a second time.
 
     CMessageLoopHook::GetSingleton().SetRefreshMsgQueueEnabled(false);
     {
@@ -246,8 +226,7 @@ void CModManager::TryStop()
     CGraphics::GetSingleton().GetScreenGrabber()->ClearScreenShotQueue();
 
     // Free the Client DLL
-    FreeLibrary(m_library);
-    m_library = {};
+    m_module.UnloadModule();
 
     // Call the on mod unload func
     CCore::GetSingletonPtr()->OnModUnload();

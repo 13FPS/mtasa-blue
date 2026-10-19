@@ -27,7 +27,7 @@ $sourceNames = @('Client/sdk/game/CGameAdapter.h', 'Client/game_de/GameAdapter.c
     'Client/game_de/NativeClockService.h', 'Client/game_de/NativeClockService.cpp',
     'Client/sdk/game/CGameTimeService.h', 'Client/game_de/NativeGameTimeReader.h', 'Client/game_de/NativeGameTimeReader.cpp',
     'Client/game_de/NativeClockProfile.h', 'Client/game_de/NativeClockMemory.h', 'Client/game_de/NativeServiceAdmission.h',
-    'Client/game_de/NativeMovementInput.h', 'Client/game_de/NativeMovementInput.cpp', 'Client/game_de/NativeInputRouting.h',
+    'Client/game_de/NativeMovementInput.h', 'Client/game_de/NativeMovementInput.cpp', 'Client/game_de/NativeInputRouting.h', 'Client/game_de/NativePadStateAccess.h',
     'Client/sdk/game/CGameRenderObservation.h', 'Client/sdk/game/CGameRenderEndpointDiagnostic.h', 'Client/sdk/game/CGameRenderSetupDiagnostic.h', 'Client/sdk/game/CGameRenderRootsDiagnostic.h', 'Client/sdk/game/CGameRenderDeviceLease.h', 'Client/sdk/game/CGameRenderDeviceWindowLease.h',
     'Client/game_de/NativeRenderObservation.h', 'Client/game_de/NativeRenderObservation.cpp',
     'Client/game_de/NativeD3D12OwnershipProbe.h', 'Client/game_de/NativeD3D12OwnershipProbe.cpp',

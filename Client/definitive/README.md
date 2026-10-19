@@ -6,6 +6,32 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
+**Startup module loading now reuses one architecture-aware MTA owner.**
+`CModuleLoader` and the existing deathmatch mod manager share exact-path module
+ownership. Incompatible PE architecture is rejected before module execution;
+replacement and unload refusals retain the existing owner. Core checks the
+requested load's result rather than mistaking a retained earlier module for it.
+Network compatibility is checked before `InitNetInterface`; a missing export
+cannot become a null function call. The saved official x86 module's version
+comparison and version-query paths were checked statically without loading it.
+
+The verified current/previous pad span also has a reusable checked native
+access class, immediately used by the existing movement path. Its transaction
+retains the original snapshot after a failed restore and requires matching
+readback before retirement. This does not expose an incomplete `CPad`.
+
+The checked [official installer](https://github.com/multitheftauto/mtasa-blue/blob/master/utils/buildactions/install_data.lua)
+provides an x64 server `net.dll`, while its client `netc.dll` is x86. The
+[nightly index](https://nightly.multitheftauto.com/) likewise labels its Windows
+x64 downloads as server packages. No public x64 client network build was found
+in those channels. Full DE multiplayer needs an AMD64 client `netc.dll` matching
+this SDK; the server library cannot supply its client interface. Engine work
+can continue independently. The existing gameplay/full-startup gates remain.
+
+Offline checks passed for both x86/x64 loader owners and compatibility gates,
+2,937 native movement/pad checks, the normal Core build and both classic
+compile profiles, and all seven Core/GUI host cases. No GTA installation changed.
+
 **The next startup foundation adds read-only native game time through MTA's
 existing adapter owner.** The optional `ReadGameTimeStateV1` service supplies
 the native timer, hour/minute/raw seconds, last minute change and minute duration

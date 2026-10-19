@@ -32,7 +32,7 @@ if ($SavedNativeMovementDirectory) {
         $savedSources[$key] = $savedPath
     }
     foreach ($key in @('Client/game_de/NativeMovementInput.cpp','Client/game_de/NativeMovementInput.h',
-        'Client/game_de/NativeInputRouting.h','Client/game_de/NativePadReader.h','Client/sdk/game/CGameAdapter.h',
+        'Client/game_de/NativeInputRouting.h','Client/game_de/NativePadStateAccess.h','Client/game_de/NativePadReader.h','Client/sdk/game/CGameAdapter.h',
         'Tests/definitive/NativeMovementInputTests.cpp')) {
         $source = if ($savedSources.ContainsKey($key)) { $savedSources[$key] } else { Join-Path $taskRoot $key }
         $destination = Join-Path $fixtureRoot $key
@@ -50,7 +50,7 @@ $sourceNames = @('Client/game_de/NativeMovementInput.h','Client/game_de/NativeMo
     'Client/game_de/NativeServiceAdmission.h',
     'Client/game_de/FrontendInputLeasePolicy.h','Client/sdk/game/CGameFrontendInputLease.h',
     'Client/game_de/LocalInputLeasePolicy.h','Client/sdk/game/CGameLocalInputLease.h',
-    'Client/game_de/NativeInputRouting.h','Client/game_de/NativePadReader.h','Client/game_de/NativePadReader.cpp',
+    'Client/game_de/NativeInputRouting.h','Client/game_de/NativePadStateAccess.h','Client/game_de/NativePadReader.h','Client/game_de/NativePadReader.cpp',
     'Client/game_de/NativeImageAccess.h','Client/game_de/NativeImageAccess.cpp',
     'Client/sdk/game/CGameAdapter.h','Shared/sdk/CControllerState.h','Shared/sdk/enums/PedState.h','Tests/definitive/NativeMovementInputTests.cpp',
     'Tests/definitive/test_native_movement_input.ps1',

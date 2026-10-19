@@ -53,6 +53,7 @@ namespace
     #undef GetForegroundWindow
     #undef GetTickCount64
 #endif
+#include "../../Client/game_de/NativePadStateAccess.h"
 #include <cstdio>
 #include <cstdlib>
 #include <thread>
@@ -90,6 +91,48 @@ namespace
         NativeInputRouting::PadStateBytes bytes{};
         Check(Read(runtime.image + padRva + NativePadCurrentOffset, bytes.data(), bytes.size()), "fixture pad read");
         return bytes;
+    }
+
+    bool ReadOnlyPadPages(std::uintptr_t address, std::size_t bytes, bool writable, bool executable) noexcept
+    {
+        return !writable && Pages(address, bytes, false, executable);
+    }
+
+    void PadStateAccessContract()
+    {
+        struct OwnedPad
+        {
+            std::byte                   before = std::byte{0x3a};
+            NativePadStateAccess::Bytes states;
+            std::byte                   after = std::byte{0x7c};
+        } owned;
+        for (std::size_t index = 0; index < owned.states.size(); ++index)
+            owned.states[index] = static_cast<std::byte>(index + 1);
+        const auto                  original = owned.states;
+        NativePadStateAccess        access(reinterpret_cast<std::uintptr_t>(owned.states.data()), Pages);
+        NativePadStateAccess        refused(reinterpret_cast<std::uintptr_t>(owned.states.data()), nullptr);
+        NativePadStateAccess        readOnly(reinterpret_cast<std::uintptr_t>(owned.states.data()), ReadOnlyPadPages);
+        NativePadStateAccess::Bytes observed{}, replacement{};
+        observed.fill(std::byte{0x55});
+        const auto unchanged = observed;
+        Check(!refused.Read(observed) && observed == unchanged && !refused.Write(original),
+              "unqualified native pad access cannot read, alter output or write either state");
+        Check(access.Read(observed) && observed == original, "reusable pad state access reads exactly the verified current and previous blocks");
+        NativeInputRouting::PadTransaction transaction;
+        MtaInputState                      input;
+        input.current.LeftStickY = -128;
+        input.current.ButtonCross = 255;
+        Check(access.Prepare(transaction, input, replacement) && transaction.Active(),
+              "pad state preparation retains the actual physical snapshot before any engine write");
+        Check(access.Write(replacement) && owned.states == replacement && owned.before == std::byte{0x3a} && owned.after == std::byte{0x7c},
+              "scoped replacement changes exactly 96 bytes and preserves both enclosing pad canaries");
+        owned.states[13] = std::byte{0x49};
+        Check(!readOnly.Restore(transaction) && transaction.Active(),
+              "failed native restoration retains the original physical snapshot for the same owner's retry");
+        Check(access.Restore(transaction) && !transaction.Active() && owned.states == original && owned.before == std::byte{0x3a} &&
+                  owned.after == std::byte{0x7c},
+              "restoration reads back all original state bytes after a mutated native consumer and failed first attempt");
+        Check(!access.Restore(transaction) && owned.states == original, "an already retired pad transaction cannot rewrite a stale physical snapshot");
     }
 
     bool OriginalMembership(void*, std::int32_t)
@@ -748,6 +791,7 @@ namespace
 
 int main()
 {
+    PadStateAccessContract();
 #if defined(MTA_NATIVE_ELIGIBILITY_PUBLISHED_CACHE)
     CheckLocalInputPolicy();
 #endif

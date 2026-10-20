@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #pragma once
+#include <CAsyncLoadingPolicy.h>
 #include <game/CGame.h>
 #include <game/RenderWare.h>
 #include "CFxManagerSA.h"
@@ -375,22 +376,20 @@ private:
     CControllerConfigManager* m_pControllerConfigManager;
     CIplStore*                m_pIplStore;
 
-    eGameVersion m_eGameVersion;
-    bool         m_bAsyncScriptEnabled;
-    bool         m_bAsyncScriptForced;
-    bool         m_bASyncLoadingSuspended;
-    int          m_iCheckStatus;
-    bool         m_bUnderworldWarp;
-    bool         m_isCoronaZTestEnabled{true};
-    bool         m_isTunnelWeatherBlendEnabled{true};
-    bool         m_areWaterCreaturesEnabled{true};
-    bool         m_isBurnFlippedCarsEnabled{true};
-    bool         m_isFireballDestructEnabled{true};
-    bool         m_isRoadSignsTextEnabled{true};
-    bool         m_isGameWorldRemoved{false};
-    bool         m_isExtendedWaterCannonsEnabled{false};
-    bool         m_isIgnoreFireStateEnabled{false};
-    bool         m_isVehicleBurnExplosionsEnabled{true};
+    eGameVersion                 m_eGameVersion;
+    MtaGame::CAsyncLoadingPolicy m_asyncLoading;
+    int                          m_iCheckStatus;
+    bool                         m_bUnderworldWarp;
+    bool                         m_isCoronaZTestEnabled{true};
+    bool                         m_isTunnelWeatherBlendEnabled{true};
+    bool                         m_areWaterCreaturesEnabled{true};
+    bool                         m_isBurnFlippedCarsEnabled{true};
+    bool                         m_isFireballDestructEnabled{true};
+    bool                         m_isRoadSignsTextEnabled{true};
+    bool                         m_isGameWorldRemoved{false};
+    bool                         m_isExtendedWaterCannonsEnabled{false};
+    bool                         m_isIgnoreFireStateEnabled{false};
+    bool                         m_isVehicleBurnExplosionsEnabled{true};
 
     static unsigned int& ClumpOffset;
 
@@ -398,6 +397,5 @@ private:
 
     SFixedArray<bool, WEAPONTYPE_LAST_WEAPONTYPE> m_JetpackWeapons;
 
-    CPed*      m_pPedContext;
-    CTickCount m_llASyncLoadingAutoUnsuspendTime;
+    CPed* m_pPedContext;
 };

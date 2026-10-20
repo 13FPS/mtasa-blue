@@ -26,6 +26,23 @@ namespace mta::game_de
         return &keyGen;
     }
 
+    void CGameDE::SetAsyncLoadingFromScript(bool enabled, bool forced)
+    {
+        asyncLoading.SetScriptOverride(enabled, forced);
+    }
+
+    void CGameDE::SuspendASyncLoading(bool suspended, uint autoUnsuspendDelay)
+    {
+        // This is the same MTA scheduling policy used by the classic backend;
+        // it does not fabricate native streaming requests or CStreamingInfo.
+        asyncLoading.Suspend(suspended, autoUnsuspendDelay);
+    }
+
+    bool CGameDE::IsASyncLoadingEnabled(bool ignoreSuspend)
+    {
+        return asyncLoading.IsEnabled(ignoreSuspend);
+    }
+
     SystemState::Enum CGameDE::GetSystemState()
     {
         SystemState::Enum state;

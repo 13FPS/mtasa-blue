@@ -24,6 +24,7 @@ $sourceNames = @('Client/sdk/game/CGameAdapter.h', 'Client/game_de/GameAdapter.c
     'Client/game_de/NativeImageAccess.h', 'Client/game_de/NativeImageAccess.cpp',
     'Client/game_de/CClockDE.h', 'Client/game_de/CClockDE.cpp', 'Client/sdk/game/CClock.h',
     'Client/game_de/CKeyGenDE.h', 'Client/game_de/CKeyGenDE.cpp', 'Client/sdk/game/CKeyGen.h',
+    'Shared/sdk/CAsyncLoadingPolicy.h', 'Client/game_de/CAsyncLoadingDE.h', 'Client/game_de/CAsyncLoadingDE.cpp',
     'Client/game_de/CGameDE.h', 'Client/game_de/CGameDE.cpp', 'Client/game_de/CGameTimingDE.h', 'Client/game_de/CGameTimingDE.cpp', 'Client/sdk/game/CGame.h',
     'Client/game_de/NativeGameTimingAccess.h', 'Client/game_de/NativeGameTimingReader.h', 'Client/game_de/NativeGameTimingReader.cpp',
     'Client/game_de/NativeGameTimingProfile.h', 'Client/game_de/NativeGameFPSProfile.h', 'Client/game_de/NativeGamePauseProfile.h',
@@ -93,7 +94,7 @@ $moduleSource = Join-Path $taskRoot 'Client/game_de/GameAdapter.cpp'
 if ((Test-Path -LiteralPath $moduleSource) -and $detoursLibraryExit -eq 0) {
     $moduleArguments = $common + @('/LD','/DMTA_GAME_DE_EXPORTS', $moduleSource, (Join-Path $taskRoot 'Client/game_de/NativePadReader.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeImageAccess.cpp'), (Join-Path $taskRoot 'Client/game_de/CClockDE.cpp'),
-        (Join-Path $taskRoot 'Client/game_de/CKeyGenDE.cpp'), (Join-Path $taskRoot 'Client/game_de/CGameDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CKeyGenDE.cpp'), (Join-Path $taskRoot 'Client/game_de/CAsyncLoadingDE.cpp'), (Join-Path $taskRoot 'Client/game_de/CGameDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGameTimingDE.cpp'), (Join-Path $taskRoot 'Client/game_de/NativeGameTimingReader.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeStreamingFileIdsReader.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeGameStateReader.cpp'),

@@ -8,6 +8,7 @@
 #include "CGameTimingDE.h"
 #include "CClockDE.h"
 #include "CKeyGenDE.h"
+#include "CAsyncLoadingDE.h"
 #include "NativeStreamingFileIdsReader.h"
 #include "NativeGameStateReader.h"
 
@@ -24,6 +25,10 @@ namespace mta::game_de
         CKeyGen*          GetKeyGen() noexcept override;
         SystemState::Enum GetSystemState() override;
         bool              IsAtMenu() override;
+
+        void SetAsyncLoadingFromScript(bool enabled, bool forced) override;
+        void SuspendASyncLoading(bool suspended, uint autoUnsuspendDelay = 0) override;
+        bool IsASyncLoadingEnabled(bool ignoreSuspend = false) override;
 
         uint32_t GetBaseIDforDFF() override;
         uint32_t GetBaseIDforTXD() override;
@@ -49,6 +54,7 @@ namespace mta::game_de
 
         CClockDE&                           clock;
         CKeyGenDE                           keyGen;
+        CAsyncLoadingDE                     asyncLoading;
         const NativeStreamingFileIdsReader& streaming;
         const NativeGameStateReader&        gameState;
     };

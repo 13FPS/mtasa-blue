@@ -79,9 +79,6 @@ CGameSA::CGameSA()
         // Find the game version and initialize m_eGameVersion so GetGameVersion() will return the correct value
         FindGameVersion();
 
-        m_bAsyncScriptEnabled = false;
-        m_bAsyncScriptForced = false;
-        m_bASyncLoadingSuspended = false;
         m_iCheckStatus = 0;
 
         const unsigned int modelInfoMax = GetCountOfAllFileIDs();
@@ -960,38 +957,22 @@ bool CGameSA::VerifySADataFileNames()
 
 void CGameSA::SetAsyncLoadingFromScript(bool bScriptEnabled, bool bScriptForced)
 {
-    m_bAsyncScriptEnabled = bScriptEnabled;
-    m_bAsyncScriptForced = bScriptForced;
+    m_asyncLoading.SetScriptOverride(bScriptEnabled, bScriptForced);
 }
 
 void CGameSA::SuspendASyncLoading(bool bSuspend, uint uiAutoUnsuspendDelay)
 {
-    m_bASyncLoadingSuspended = bSuspend;
-    // Setup auto unsuspend time if required
+    // Keep the existing clock domain and CTickCount addition in the backend;
+    // only the MTA-owned enable/suspend decision is shared with DE.
     if (uiAutoUnsuspendDelay && bSuspend)
-        m_llASyncLoadingAutoUnsuspendTime = CTickCount::Now() + CTickCount((long long)uiAutoUnsuspendDelay);
+        m_asyncLoading.Suspend(true, (CTickCount::Now() + CTickCount(static_cast<long long>(uiAutoUnsuspendDelay))).ToLongLong());
     else
-        m_llASyncLoadingAutoUnsuspendTime = CTickCount();
+        m_asyncLoading.Suspend(bSuspend);
 }
 
 bool CGameSA::IsASyncLoadingEnabled(bool bIgnoreSuspend)
 {
-    // Process auto unsuspend time if set
-    if (m_llASyncLoadingAutoUnsuspendTime.ToLongLong() != 0)
-    {
-        if (CTickCount::Now() > m_llASyncLoadingAutoUnsuspendTime)
-        {
-            m_llASyncLoadingAutoUnsuspendTime = CTickCount();
-            m_bASyncLoadingSuspended = false;
-        }
-    }
-
-    if (m_bASyncLoadingSuspended && !bIgnoreSuspend)
-        return false;
-
-    if (m_bAsyncScriptForced)
-        return m_bAsyncScriptEnabled;
-    return true;
+    return m_asyncLoading.IsEnabled(bIgnoreSuspend, m_asyncLoading.HasAutoUnsuspendDeadline() ? CTickCount::Now().ToLongLong() : 0);
 }
 
 void CGameSA::SetupSpecialCharacters()

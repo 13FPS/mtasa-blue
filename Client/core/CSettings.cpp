@@ -3447,6 +3447,63 @@ void CSettings::UpdateChatColorPreview(eChatColorType eType)
 }
 
 // Saves the keybinds
+bool CSettings::StageFrontendBindingEdits(CKeyBinds& target)
+{
+    if (!IsFrontendBindings() || m_bCaptureKey || !m_pBindsList)
+        return false;
+    // GUI rows still borrow the current manager. Apply to an XML-cloned actual
+    // manager by control identity, never by writing those borrowed bind pointers.
+    std::vector<SBindableGTAControl*> seen;
+    for (int row = 0; row < m_pBindsList->GetRowCount(); ++row)
+    {
+        const auto           type = static_cast<KeyBindType>(reinterpret_cast<std::intptr_t>(m_pBindsList->GetItemData(row, m_hBind)));
+        SBindableGTAControl* control = nullptr;
+        if (type == KeyBindType::GTA_CONTROL)
+        {
+            auto* bind = static_cast<CGTAControlBind*>(m_pBindsList->GetItemData(row, m_hPriKey));
+            control = bind ? bind->control : nullptr;
+        }
+        else if (type == KeyBindType::UNDEFINED)
+            control = static_cast<SBindableGTAControl*>(m_pBindsList->GetItemData(row, m_hPriKey));
+        else
+            continue;
+        // Section headings have no bind data and use the default row type.
+        if (!control && type == KeyBindType::UNDEFINED)
+            continue;
+        if (!IsFrontendControl(control) || std::find(seen.begin(), seen.end(), control) != seen.end())
+            return false;
+        seen.push_back(control);
+        // Replace only the records actually represented by editable cells.
+        // Extra configured alternates beyond the grid's slots stay intact.
+        const auto remove = [&](int column)
+        {
+            auto* bind = static_cast<CGTAControlBind*>(m_pBindsList->GetItemData(row, column));
+            if (bind && bind->boundKey)
+                target.RemoveGTAControl(bind->boundKey->szKey, control->szControl);
+        };
+        if (type == KeyBindType::GTA_CONTROL)
+        {
+            remove(m_hPriKey);
+            for (int alternate = 0; alternate < SecKeyNum; ++alternate)
+                remove(m_hSecKeys[alternate]);
+        }
+        const auto add = [&](int column)
+        {
+            const std::string key = m_pBindsList->GetItemText(row, column);
+            if (key.empty() || key == CORE_SETTINGS_NO_KEY)
+                return true;
+            const auto* bound = target.GetBindableFromKey(key.c_str());
+            return bound && (target.GTAControlExists(bound, control) || target.AddGTAControl(bound, control));
+        };
+        if (!add(m_hPriKey))
+            return false;
+        for (int alternate = 0; alternate < SecKeyNum; ++alternate)
+            if (!add(m_hSecKeys[alternate]))
+                return false;
+    }
+    return seen.size() == 6;
+}
+
 void CSettings::ProcessKeyBinds()
 {
     CKeyBindsInterface* pKeyBinds = CCore::GetSingleton().GetKeyBinds();
@@ -3779,7 +3836,12 @@ void CSettings::Initialize()
     // Add the rows
     CKeyBinds* pKeyBinds = reinterpret_cast<CKeyBinds*>(CCore::GetSingleton().GetKeyBinds());
     iRowGame = m_pBindsList->AddRow();
-    m_pBindsList->SetItemText(iRowGame, m_hBind, IsFrontendBindings() ? _("MTA MOVEMENT BINDS (SESSION ONLY)") : _("GTA GAME CONTROLS"), false, true);
+    const char* controlHeading = IsFrontendBindings() ? _("MTA MOVEMENT BINDS (SESSION ONLY)") : _("GTA GAME CONTROLS");
+#if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
+    if (IsFrontendBindings() && CCore::GetSingleton().IsFrontendBindingPersistenceEnabled())
+        controlHeading = _("MTA MOVEMENT BINDS");
+#endif
+    m_pBindsList->SetItemText(iRowGame, m_hBind, controlHeading, false, true);
     if (!IsFrontendBindings())
     {
         m_pBindsList->SetItemText(m_pBindsList->AddRow(), m_hBind, CORE_SETTINGS_HEADER_SPACER, false, true);
@@ -4002,6 +4064,10 @@ void CSettings::SetVisible(bool bVisible)
     // Load the config file if the dialog is shown
     if (bVisible)
     {
+#if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
+        if (IsFrontendBindings())
+            m_pButtonOK->SetText(CCore::GetSingleton().IsFrontendBindingPersistenceEnabled() ? _("Apply") : _("Apply (session only)"));
+#endif
 #ifdef MTA_DEBUG
         if ((GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0)
             CreateGUI();  // Recreate GUI (for adjusting layout with edit and continue)
@@ -4039,9 +4105,22 @@ bool CSettings::OnOKButtonClick(CGUIElement* pElement)
     {
         if (m_bCaptureKey)
             return true;
-        // Grid text stages edits until Apply; the actual MTA control manager
-        // receives them here. Its XML and native GTA controls stay unchanged.
-        ProcessKeyBinds();
+        // Only the explicit retained-owner opt-in writes the small generated
+        // movement file. It stages a separate manager so a failed file commit
+        // cannot partially apply edits or close the user's settings window.
+#if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
+        auto& core = CCore::GetSingleton();
+        if (core.IsFrontendBindingPersistenceEnabled())
+        {
+            if (!core.ApplyFrontendBindingEdits(*this))
+            {
+                core.ShowMessageBox(_("Error"), _("Could not save your movement bindings. Your previous bindings are unchanged."), MB_BUTTON_OK | MB_ICON_INFO);
+                return true;
+            }
+        }
+        else
+#endif
+            ProcessKeyBinds();
         SetVisible(false);
         pMainMenu->m_bIsInSubWindow = false;
         return true;
@@ -4491,8 +4570,8 @@ bool CSettings::OnTabChanged(CGUIElement* pElement)
 
 void CSettings::SaveData()
 {
-    // Frontend Apply is deliberately session-only. The ordinary save path also
-    // updates engine, audio, browser and application preferences we do not own.
+    // Frontend Apply has its own narrowly scoped movement-file transaction.
+    // The ordinary save path also updates unrelated game/application settings.
     if (IsFrontendBindings())
         return;
     std::string    strVar;

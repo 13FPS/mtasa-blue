@@ -18,6 +18,7 @@ class CSettings;
 #include "CCore.h"
 
 struct SBindableGTAControl;
+class CKeyBinds;
 
 #define SKINS_PATH        "skins/*"
 #define CHAT_PRESETS_PATH "mta/config/chatboxpresets.xml"
@@ -397,6 +398,7 @@ protected:
     bool OnVideoDefaultClick(CGUIElement* pElement);
     bool OnBindsListClick(CGUIElement* pElement);
     bool OnOKButtonClick(CGUIElement* pElement);
+    bool StageFrontendBindingEdits(CKeyBinds& target);
     bool OnNickButtonClick(CGUIElement* pElement);
     bool OnCancelButtonClick(CGUIElement* pElement);
     bool OnFieldOfViewChanged(CGUIElement* pElement);

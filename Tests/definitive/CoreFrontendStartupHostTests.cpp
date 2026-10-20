@@ -32,6 +32,7 @@
 #include "../../Client/core/DefinitivePersistentFrontend.h"
 #include "../../Client/core/DefinitiveFrontendConsole.h"
 #include "../../Client/core/DefinitiveFrontendBindings.h"
+#include "../../Client/core/DefinitiveFrontendBindingPersistence.h"
 #include "../../Client/core/DefinitiveClockReference.h"
 #include "../../Client/core/DefinitiveFrontendClockReference.h"
 #include "../../Client/core/DefinitiveFrontendRuntime.h"
@@ -45,6 +46,7 @@ namespace Startup = DefinitiveFrontendStartup;
 namespace Persistent = DefinitivePersistentFrontend;
 namespace Console = DefinitiveFrontendConsole;
 namespace Bindings = DefinitiveFrontendBindings;
+namespace BindingPersistence = DefinitiveFrontendBindingPersistence;
 namespace ClockReference = DefinitiveClockReference;
 namespace FrontendClock = DefinitiveFrontendClockReference;
 namespace Runtime = DefinitiveFrontendRuntime;
@@ -55,6 +57,7 @@ static_assert(Frontend::ApiVersion == 1 && Frontend::FieldCount == 32);
 static_assert(Startup::ApiVersion == 1 && Startup::FieldCount == 32);
 static_assert(Persistent::ApiVersion == 1 && Persistent::FieldCount == 288);
 static_assert(Console::ApiVersion == 1 && Console::FieldCount == 32 && Bindings::ApiVersion == 1 && Bindings::FieldCount == 32);
+static_assert(BindingPersistence::ApiVersion == 1);
 static_assert(ClockReference::ApiVersion == 1 && ClockReference::FieldCount == 96);
 static_assert(FrontendClock::ApiVersion == 1 && Startup::FieldCount == 32);
 static_assert(Runtime::ApiVersion == 1 && Runtime::FieldCount == 64 && Runtime::StartupFieldCount == 32);
@@ -70,6 +73,8 @@ namespace
     bool                     clockPublicationShapeValid = true, clockAdmissionVerified = false, clockWrongImageRefusalVerified = false;
     bool                     runtimeCase = false, runtimeRetentionVerified = false, runtimeFailureCleanupVerified = false;
     bool                     localInputAdmissionVerified = false, localInputWrongImageVerified = false;
+    bool                     bindingPersistenceVerified = false, bindingPersistenceRestartVerified = false;
+    bool                     bindingPersistenceSaveFailureVerified = false, bindingPersistenceAdmissionVerified = false;
     Runtime::Snapshot        runtimeTerminal{};
     ClockReference::Snapshot clockSnapshot{};
     bool                     CancelClock()
@@ -492,6 +497,10 @@ namespace
                << ",\"runtimeFailureCleanupVerified\":" << (runtimeFailureCleanupVerified ? "true" : "false")
                << ",\"localInputApiVersion\":1,\"localInputFields\":32,\"localInputAdmissionVerified\":" << (localInputAdmissionVerified ? "true" : "false")
                << ",\"localInputWrongImageVerified\":" << (localInputWrongImageVerified ? "true" : "false") << ",\"localInputNativeMovementVerified\":false"
+               << ",\"bindingPersistenceVerified\":" << (bindingPersistenceVerified ? "true" : "false")
+               << ",\"bindingPersistenceRestartVerified\":" << (bindingPersistenceRestartVerified ? "true" : "false")
+               << ",\"bindingPersistenceSaveFailureVerified\":" << (bindingPersistenceSaveFailureVerified ? "true" : "false")
+               << ",\"bindingPersistenceAdmissionVerified\":" << (bindingPersistenceAdmissionVerified ? "true" : "false")
                << ",\"runtimeNativeViewVerified\":false,\"runtimeTerminal\":[";
         for (std::size_t index = 0; index < runtimeTerminal.size(); ++index)
             result << (index ? "," : "") << runtimeTerminal[index];
@@ -833,16 +842,16 @@ namespace
     {
         return std::uint64_t{state[field]} | (std::uint64_t{state[field + 1]} << 32);
     }
-    void RuntimeHidden(const Runtime::Snapshot& state, unsigned views)
+    void RuntimeHidden(const Runtime::Snapshot& state, unsigned views, bool writable = false)
     {
         Check(state[Startup::Phase] == 2 && state[Startup::CoreRetained] && state[Startup::BackendStarted] && !state[Startup::FrontendRetained] &&
                   !state[Startup::GuiBorrowed] && !state[Startup::ServicesRetained] && state[Startup::LastViewCleanupComplete] &&
                   state[Runtime::RuntimePhase] == static_cast<std::uint32_t>(Runtime::Phase::Hidden) && state[Runtime::ServicesInitialized] &&
                   state[Runtime::ServicesRetained] && state[Runtime::XmlRetained] && state[Runtime::ConfigRetained] && state[Runtime::CVarsLoaded] &&
-                  state[Runtime::BindingsRetained] && state[Runtime::BindingManagerCreations] == 1 && state[Runtime::ConfigurationLoads] == 1 &&
-                  state[Runtime::BindingLoads] == 1 && state[Runtime::ViewsAttached] == views && state[Runtime::ViewsRetired] == views &&
-                  !state[Runtime::ViewBorrowed] && state[Runtime::HiddenNeutralVerified] && state[Runtime::ConfigurationReadOnly] &&
-                  !state[Runtime::CleanupPending] && !state[Runtime::CleanupComplete],
+                  state[Runtime::BindingsRetained] && state[Runtime::BindingManagerCreations] == (writable ? 2u : 1u) &&
+                  state[Runtime::ConfigurationLoads] == 1 && state[Runtime::BindingLoads] == (writable ? 2u : 1u) && state[Runtime::ViewsAttached] == views &&
+                  state[Runtime::ViewsRetired] == views && !state[Runtime::ViewBorrowed] && state[Runtime::HiddenNeutralVerified] &&
+                  state[Runtime::ConfigurationReadOnly] == !writable && !state[Runtime::CleanupPending] && !state[Runtime::CleanupComplete],
               "hidden runtime retains exactly one real XML/CVars/bindings owner with neutral view aliases");
     }
 
@@ -936,8 +945,12 @@ namespace
         return identity;
     }
 
-    void RuntimeSessionCase(Owned& owned, const std::filesystem::path& root, const std::wstring& mode, Startup::Snapshot& startup, Frontend::Snapshot& frontend)
+#include "CoreFrontendBindingPersistenceHost.h"
+
+    void RuntimeSessionCase(Owned& owned, const std::filesystem::path& root, const std::wstring& mode, Startup::Snapshot& startup, Frontend::Snapshot& frontend,
+                            bool persistenceRestart = false)
     {
+        const bool persistence = mode == L"runtime-persistence";
         runtimeCase = true;
         owned.runtimeOwner = true;
         Check(Export<std::uint32_t (*)()>(owned.core, "MTA_DEFrontendRuntimeApiVersion")() == 1,
@@ -1056,7 +1069,7 @@ namespace
               "old mutating owner APIs cannot bypass runtime service ownership or inject a clock prelude");
         Check(!cancelCalls && !publishCalls && !heartbeatCalls && !clockCancelCalls && !clockPublishCalls,
               "runtime mode refusals invoke no native or clock callbacks");
-        if (mode != L"runtime")
+        if (mode != L"runtime" && !persistence)
         {
             Check(initial[Startup::Phase] == 5 && initial[Startup::CoreRetained] &&
                       initial[Runtime::RuntimePhase] == static_cast<std::uint32_t>(Runtime::Phase::Failed) && !initial[Runtime::ViewBorrowed] &&
@@ -1206,8 +1219,19 @@ namespace
                 } while (GetTickCount64() < settleUntil);
                 Check(owned.State()[Frontend::MenuVisible] && !owned.State()[Frontend::MenuFading],
                       "fresh runtime menu completes its actual fade before Settings interaction");
+                if (persistence && view == 1 && !persistenceRestart)
+                {
+                    const auto path = BindingFixturePath(root).wstring();
+                    Check(Export<BindingPersistence::EnableAtPath>(owned.core, "MTA_EnableDEFrontendBindingPersistenceAtPathV1")(
+                              owned.frontend, 1, path.data(), static_cast<std::uint32_t>(path.size())) == Frontend::Status::Busy &&
+                              !std::filesystem::exists(path),
+                          "durable admission requires the existing configured Bindings producer before choosing a file");
+                }
                 ConsoleAndBindings(owned);
-                identity = RuntimeSettings(owned, view == 2, identity);
+                if (persistence)
+                    BindingPersistenceSettings(owned, root, view, persistenceRestart);
+                else
+                    identity = RuntimeSettings(owned, view == 2, identity);
                 Save(root / (view == 1 ? L"runtime-first-view.bmp" : L"runtime-second-view.bmp"), Raster(owned));
                 Check(owned.shutdown(owned.frontend) == Frontend::Status::Ok, "runtime hide retires actual widgets and their active settings capture");
                 frontend = owned.State();
@@ -1227,8 +1251,15 @@ namespace
                 const auto previous = output;
                 Check(owned.read(stale, output.data(), 32) == Frontend::Status::InvalidArgument && output == previous,
                       "retired runtime view cannot expose freed widgets or service aliases");
+                if (persistence)
+                {
+                    const auto path = BindingFixturePath(root).wstring();
+                    Check(Export<BindingPersistence::EnableAtPath>(owned.core, "MTA_EnableDEFrontendBindingPersistenceAtPathV1")(
+                              stale, 1, path.data(), static_cast<std::uint32_t>(path.size())) == Frontend::Status::InvalidArgument,
+                          "retired frontend identity cannot reload or select a durable file");
+                }
                 const auto hidden = RuntimeState(owned);
-                RuntimeHidden(hidden, view);
+                RuntimeHidden(hidden, view, persistence);
                 Check(RuntimePair(hidden, Runtime::SessionGenerationLow) == session && GetModuleHandleW(L"xmll.dll") && configBytes() == originalConfig,
                       "hidden runtime preserves same XML owner, configuration bytes and Core session identity");
                 const auto pulses = hidden[Startup::Pulses];
@@ -1243,8 +1274,8 @@ namespace
                     Check(disabled[LocalInput::Phase] == static_cast<std::uint32_t>(LocalInput::State::Disabled) && !disabled[LocalInput::Configured] &&
                               !disabled[LocalInput::Enabled] && !disabled[LocalInput::BindingsBorrowed] && !disabled[LocalInput::NativeAttempted] &&
                               !disabled[LocalInput::CleanupPending] && disabled[LocalInput::CleanupComplete] && disabled[LocalInput::CanonicalNeutral] &&
-                              RuntimeState(owned)[Runtime::BindingManagerCreations] == 1 && RuntimeState(owned)[Runtime::ConfigurationLoads] == 1 &&
-                              RuntimeState(owned)[Runtime::BindingLoads] == 1,
+                              RuntimeState(owned)[Runtime::BindingManagerCreations] == (persistence ? 2u : 1u) &&
+                              RuntimeState(owned)[Runtime::ConfigurationLoads] == 1 && RuntimeState(owned)[Runtime::BindingLoads] == (persistence ? 2u : 1u),
                           "disabled local producer leaves no native debt and retains one actual manager/configuration for the second I/CancelO view");
                     Check(owned.suspendLocal(owned.startup) == Frontend::Status::Ok && localState() == disabled,
                           "Suspend after Disable remains idempotently Disabled with unchanged qualified neutral values");
@@ -1331,7 +1362,7 @@ int wmain(int argc, wchar_t** argv)
         const std::filesystem::path root(argv[1]);
         const std::wstring          mode(argv[2]);
         Check(root.is_absolute() && (mode == L"normal" || mode == L"gated" || mode == L"frontend-failure" || mode == L"backend-failure" || mode == L"runtime" ||
-                                     mode == L"runtime-frontend-failure" || mode == L"runtime-backend-failure"),
+                                     mode == L"runtime-persistence" || mode == L"runtime-frontend-failure" || mode == L"runtime-backend-failure"),
               "explicit completed-Core lifecycle case selected");
         Check(!std::filesystem::exists(root / L"server"), "owned frontend has no local-server startup assets");
         Owned owned;
@@ -1385,6 +1416,16 @@ int wmain(int argc, wchar_t** argv)
             Startup::Snapshot  startup{};
             Frontend::Snapshot frontend{};
             RuntimeSessionCase(owned, root, mode, startup, frontend);
+            if (mode == L"runtime-persistence")
+            {
+                const auto saved = ReadBindingFixture(BindingFixturePath(root));
+                Check(owned.localWindow && DestroyWindow(owned.localWindow), "retire the first owned local HWND before creating a fresh Core runtime");
+                owned.localWindow = nullptr;
+                owned.observed.reset();
+                RuntimeSessionCase(owned, root, mode, startup, frontend, true);
+                Check(bindingPersistenceRestartVerified && ReadBindingFixture(BindingFixturePath(root)) == saved,
+                      "a newly constructed Core reloads all six disk bindings without rewriting their generated document");
+            }
             bool legacyUnchanged = true;
             for (std::uint32_t index = 0; index < legacy.size(); ++index)
                 legacyUnchanged = legacyUnchanged && readLegacy(index) == legacy[index];
@@ -1601,6 +1642,8 @@ int wmain(int argc, wchar_t** argv)
                 Click(owned, 840, 644);
                 Check(!owned.State()[Frontend::CreditsVisible], "existing credits OK callback closes its real window");
                 ConsoleAndBindings(owned);
+                if (mode == L"normal")
+                    BindingPersistenceNonRuntime(owned, root);
                 SessionBindingsSettings(owned, root, mode == L"gated");
                 if (mode == L"gated")
                 {

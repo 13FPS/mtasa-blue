@@ -53,6 +53,7 @@
 #include "DefinitiveGuiFrontendReference.h"
 #include "DefinitiveGuiFrontendInputReference.h"
 #include "DefinitiveFrontendBindings.h"
+#include "DefinitiveFrontendBindingPersistence.h"
 #include "DefinitivePersistentFrontend.h"
 #include "FrontendCursorLeaseOwner.h"
 #include "NetworkModuleStartup.h"
@@ -1990,6 +1991,9 @@ struct CCore::FrontendRuntimeResources
     DefinitiveFrontendRuntime::Snapshot snapshot{};
     bool                                cvarsLoaded = false;
     bool                                cvarsAttempted = false;
+    fs::path                            bindingPersistencePath;
+    bool                                bindingPersistenceEnabled = false;
+    bool                                bindingCommitActive = false;
 };
 
 struct CCore::LocalInputRuntimeResources
@@ -2014,6 +2018,206 @@ struct CCore::FrontendResources
     bool                                 runtimeBorrowed = false;
     bool                                 menuInputRequested = false, consoleInputRequested = false, consoleEnabled = false;
 };
+
+namespace
+{
+    // This generated file contains only the six controls owned by the retained
+    // frontend. Base commands, other controls and application CVars remain in
+    // the ordinary package configuration and are never written through here.
+    constexpr const char* frontendMovementControls[] = {"forwards", "backwards", "left", "right", "sprint", "walk"};
+    bool                  PersistedFrontendControl(const std::string& name)
+    {
+        return std::any_of(std::begin(frontendMovementControls), std::end(frontendMovementControls), [&](const char* value) { return name == value; });
+    }
+    struct FrontendBindingDocument
+    {
+        CXML&     factory;
+        CXMLFile* file = nullptr;
+        explicit FrontendBindingDocument(CXML& xml, const char* path = nullptr, bool readOnly = false)
+            : factory(xml), file(xml.CreateXML(path, false, readOnly))
+        {
+        }
+        ~FrontendBindingDocument()
+        {
+            if (file)
+                factory.DeleteXML(file);
+        }
+        FrontendBindingDocument(const FrontendBindingDocument&) = delete;
+        FrontendBindingDocument& operator=(const FrontendBindingDocument&) = delete;
+    };
+    bool FrontendBindingPath(const fs::path& requested, const fs::path& baseConfig, fs::path& output)
+    {
+        if (!requested.is_absolute() || requested.native().size() > 32767)
+            return false;
+        const auto path = requested.lexically_normal();
+        if (_wcsicmp(path.filename().c_str(), L"keybinds.xml") || _wcsicmp(path.parent_path().filename().c_str(), L"definitive") ||
+            _wcsicmp(path.c_str(), baseConfig.lexically_normal().c_str()) == 0)
+            return false;
+        // Resolve spelling before checking every ancestor. Junctions/symlinks
+        // cannot redirect this small user file into the owned base document.
+        for (auto current = path; !current.empty();)
+        {
+            const auto attributes = GetFileAttributesW(current.c_str());
+            if (attributes != INVALID_FILE_ATTRIBUTES)
+            {
+                if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) || (current == path && (attributes & FILE_ATTRIBUTE_DIRECTORY)))
+                    return false;
+            }
+            else if (GetLastError() != ERROR_FILE_NOT_FOUND && GetLastError() != ERROR_PATH_NOT_FOUND)
+                return false;
+            const auto parent = current.parent_path();
+            if (parent == current)
+                break;
+            current = parent;
+        }
+        std::error_code error;
+        if (fs::exists(path, error))
+        {
+            if (error || !fs::is_regular_file(path, error) || error)
+                return false;
+            const bool same = fs::equivalent(path, baseConfig, error);
+            if (error || same)
+                return false;  // Also refuse a hard-link alias of owned config.
+        }
+        else if (error)
+            return false;
+        output = path;
+        return true;
+    }
+    bool FrontendMovementDocument(CXMLNode* root, CKeyBinds& tables)
+    {
+        if (!root || root->GetTagName() != "definitive_keybinds" || root->GetAttributes().Count() != 1 || root->GetAttributeValue("version") != "1" ||
+            root->GetSubNodeCount() != 1)
+            return false;
+        auto* binds = root->GetSubNode(0);
+        if (!binds || binds->GetTagName() != CONFIG_NODE_KEYBINDS || binds->GetAttributes().Count() || binds->GetSubNodeCount() > 1024)
+            return false;
+        std::vector<std::pair<std::string, std::string>> seen;
+        for (unsigned index = 0; index < binds->GetSubNodeCount(); ++index)
+        {
+            auto* node = binds->GetSubNode(index);
+            if (!node || node->GetTagName() != "bind" || node->GetSubNodeCount() || node->GetAttributes().Count() != 2)
+                return false;
+            const std::string control = node->GetAttributeValue("control"), key = node->GetAttributeValue("key");
+            const auto        item = std::make_pair(control, key);
+            if (!PersistedFrontendControl(control) || !tables.GetBindableFromKey(key.c_str()) || std::find(seen.begin(), seen.end(), item) != seen.end())
+                return false;
+            seen.push_back(item);
+        }
+        return true;
+    }
+    void RemoveFrontendMovement(CKeyBinds& target)
+    {
+        for (auto it = target.begin(); it != target.end();)
+        {
+            auto current = it++;
+            if ((*current)->type == KeyBindType::GTA_CONTROL && PersistedFrontendControl(static_cast<CGTAControlBind*>(current->get())->control->szControl))
+                target.Remove(current);
+        }
+    }
+    std::unique_ptr<CKeyBinds> CopyFrontendBindings(CXML& xml, CCore& owner, CKeyBinds& source)
+    {
+        if (source.Count(KeyBindType::FUNCTION) || source.Count(KeyBindType::CONTROL_FUNCTION))
+            return {};
+        FrontendBindingDocument document(xml);
+        auto*                   root = document.file ? document.file->CreateRootNode(CONFIG_NODE_KEYBINDS) : nullptr;
+        auto                    copy = std::make_unique<CKeyBinds>(&owner);
+        if (!root || !source.SaveToXML(root) || !copy->LoadConfiguredBindsFromXML(root) || copy->Count() != source.Count())
+            return {};
+        return copy;
+    }
+    bool ReadFrontendMovementFile(CXML& xml, const fs::path& path, CKeyBinds& target, bool& present)
+    {
+        std::error_code error;
+        present = fs::exists(path, error);
+        if (error)
+            return false;
+        if (!present)
+            return true;
+        const auto size = fs::file_size(path, error);
+        if (error || !size || size > 1024 * 1024)
+            return false;
+        const auto              filename = ToUTF8(path.wstring());
+        FrontendBindingDocument document(xml, filename.c_str(), true);
+        auto*                   root = document.file && document.file->Parse() ? document.file->GetRootNode() : nullptr;
+        if (!FrontendMovementDocument(root, target))
+            return false;
+        RemoveFrontendMovement(target);
+        return target.LoadConfiguredBindsFromXML(root->GetSubNode(0));
+    }
+    bool WriteFrontendMovementFile(CXML& xml, const fs::path& destination, const fs::path& baseConfig, CKeyBinds& source)
+    {
+        fs::path qualified;
+        if (!FrontendBindingPath(destination, baseConfig, qualified) || qualified != destination)
+            return false;
+        // Refuse replacing unrelated/malformed bytes even if somebody changed
+        // the destination after opt-in. Validation touches a disposable manager.
+        auto validation = std::make_unique<CKeyBinds>(nullptr);
+        bool present = false;
+        if (!ReadFrontendMovementFile(xml, destination, *validation, present))
+            return false;
+        std::error_code error;
+        fs::create_directories(destination.parent_path(), error);
+        if (error || !FrontendBindingPath(destination, baseConfig, qualified))
+            return false;
+        struct Temporary
+        {
+            fs::path path;
+            ~Temporary()
+            {
+                if (!path.empty())
+                    DeleteFileW(path.c_str());
+            }
+        } temporary;
+        for (unsigned attempt = 0; attempt != 16; ++attempt)
+        {
+            temporary.path = destination;
+            temporary.path += L".new-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64_()) + L"-" + std::to_wstring(attempt);
+            const auto handle = CreateFileW(temporary.path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (handle != INVALID_HANDLE_VALUE)
+            {
+                CloseHandle(handle);
+                break;
+            }
+            temporary.path.clear();
+        }
+        if (temporary.path.empty())
+            return false;
+        const auto filename = ToUTF8(temporary.path.wstring());
+        {
+            FrontendBindingDocument document(xml, filename.c_str());
+            auto*                   root = document.file ? document.file->CreateRootNode("definitive_keybinds") : nullptr;
+            auto*                   version = root ? root->GetAttributes().Create("version") : nullptr;
+            auto*                   binds = root ? root->CreateSubNode(CONFIG_NODE_KEYBINDS) : nullptr;
+            if (!version || !binds)
+                return false;
+            version->SetValue("1");
+            if (!source.SaveToXML(binds))
+                return false;
+            for (unsigned index = 0; index < binds->GetSubNodeCount();)
+            {
+                auto* node = binds->GetSubNode(index);
+                if (!node || !PersistedFrontendControl(node->GetAttributeValue("control")))
+                    binds->DeleteSubNode(node);
+                else
+                    ++index;
+            }
+            if (!FrontendMovementDocument(root, source) || !document.file->Write())
+                return false;
+        }
+        const auto handle = CreateFileW(temporary.path.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (handle == INVALID_HANDLE_VALUE)
+            return false;
+        const bool flushed = FlushFileBuffers(handle) != FALSE;
+        CloseHandle(handle);
+        // Same-directory rename is the commit point. Nothing has changed the
+        // retained manager or old file if staging, flush or replacement fails.
+        if (!flushed || !MoveFileExW(temporary.path.c_str(), destination.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+            return false;
+        temporary.path.clear();
+        return true;
+    }
+}
 
 bool CCore::FlushFrontendRuntimeBindings() noexcept
 {
@@ -2447,6 +2651,7 @@ DefinitiveFrontendRuntime::Snapshot CCore::ReadFrontendRuntimeServices() const n
     }
     const auto& resources = *m_frontendRuntimeResources;
     auto        state = resources.snapshot;
+    state[ConfigurationReadOnly] = resources.bindingPersistenceEnabled ? 0u : 1u;
     state[XmlRetained] = resources.xml.module || resources.xml.xml;
     state[ConfigRetained] = resources.xml.file != nullptr;
     state[CVarsLoaded] = resources.cvarsLoaded;
@@ -2488,6 +2693,7 @@ DefinitiveFrontend::Status CCore::StopFrontendRuntimeServices() noexcept
                 throw std::runtime_error("Runtime bindings retained nonneutral input");
             state[HiddenNeutralVerified] = 1;
             resources.bindings.reset();
+            resources.bindingPersistenceEnabled = false;
         }
         // CVars borrow XML nodes. They are invalidated only after the actual
         // binding manager is gone, and before its factory/document is closed.
@@ -2800,7 +3006,8 @@ namespace DefinitiveFrontend
         {
             return core->ReadFrontendConsoleText(field, output, capacity, required);
         }
-        Status                               EnableBindings() { return core->EnableFrontendBindings(); }
+        Status EnableBindings() { return core->EnableFrontendBindings(); }
+        Status EnableBindingPersistence(const wchar_t* path, std::uint32_t chars) { return core->EnableFrontendBindingPersistence(path, chars); }
         DefinitiveFrontendBindings::Snapshot ReadBindings() { return core->ReadFrontendBindings(); }
         Status                               ProduceNeutral(mta::game_de::MtaInputState& output) { return core->ProduceFrontendNeutralInput(output); }
         Status                               Retire()
@@ -3046,6 +3253,128 @@ extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_ReadDEFrontendBi
     }
 }
 
+extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_EnableDEFrontendBindingPersistenceAtPathV1(void* handle, std::uint32_t version,
+                                                                                                           const wchar_t* path, std::uint32_t chars)
+{
+    using namespace DefinitiveFrontend;
+    FrontendOperation operation;
+    const auto        status = operation.Validate(handle);
+    if (status != Status::Ok)
+        return status;
+    if (version != DefinitiveFrontendBindingPersistence::ApiVersion || !path || !chars || chars > 32767 || std::find(path, path + chars, L'\0') != path + chars)
+        return Status::InvalidArgument;
+    try
+    {
+        return activeFrontend->EnableBindingPersistence(path, chars);
+    }
+    catch (...)
+    {
+        return Status::Failed;
+    }
+}
+
+extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_EnableDEFrontendBindingPersistenceV1(void* handle, std::uint32_t version)
+{
+    using namespace DefinitiveFrontend;
+    FrontendOperation operation;
+    const auto        status = operation.Validate(handle);
+    if (status != Status::Ok)
+        return status;
+    if (version != DefinitiveFrontendBindingPersistence::ApiVersion)
+        return Status::InvalidArgument;
+    try
+    {
+        return activeFrontend->EnableBindingPersistence(nullptr, 0);
+    }
+    catch (...)
+    {
+        return Status::Failed;
+    }
+}
+
+DefinitiveFrontend::Status CCore::EnableFrontendBindingPersistence(const wchar_t* path, std::uint32_t chars)
+{
+    using Status = DefinitiveFrontend::Status;
+    if (GetCurrentThreadId() != m_frontendCoreOwnerThread)
+        return Status::WrongThread;
+    if (!m_frontendResources || !m_frontendResources->runtimeBorrowed || !m_frontendResources->bindingsEnabled || !m_frontendRuntimeResources ||
+        m_frontendResources->snapshot[DefinitiveFrontend::Phase] != 2 || !m_pXML || m_pKeyBinds != m_frontendRuntimeResources->bindings.get())
+        return Status::Busy;
+    auto& runtime = *m_frontendRuntimeResources;
+    auto* settings = m_pLocalGUI && m_pLocalGUI->GetMainMenu() ? m_pLocalGUI->GetMainMenu()->GetSettingsWindow() : nullptr;
+    if (runtime.bindingCommitActive || !LocalInputAllowsFrontend() || (settings && (settings->IsVisible() || settings->IsCapturingKey())))
+        return Status::Busy;
+    const auto requested =
+        path ? fs::path(std::wstring(path, chars)) : fs::path(FromUTF8(SharedUtil::PathJoin(SharedUtil::GetMTADataPath(), "definitive/keybinds.xml")));
+    fs::path qualified;
+    if (!FrontendBindingPath(requested, g_mtaDirectory / MTA_CONFIG_PATH, qualified))
+        return Status::InvalidArgument;
+    if (runtime.bindingPersistenceEnabled)
+        return _wcsicmp(runtime.bindingPersistencePath.c_str(), qualified.c_str()) == 0 ? Status::Ok : Status::Busy;
+    auto staged = CopyFrontendBindings(*m_pXML, *this, *runtime.bindings);
+    bool present = false;
+    if (!staged || !ReadFrontendMovementFile(*m_pXML, qualified, *staged, present))
+        return Status::Failed;
+    if (present)
+    {
+        if (runtime.snapshot[DefinitiveFrontendRuntime::BindingManagerCreations] == UINT32_MAX ||
+            runtime.snapshot[DefinitiveFrontendRuntime::BindingLoads] == UINT32_MAX)
+            return Status::Failed;
+        runtime.bindings.swap(staged);
+        m_pKeyBinds = runtime.bindings.get();
+        ++runtime.snapshot[DefinitiveFrontendRuntime::BindingManagerCreations];
+        ++runtime.snapshot[DefinitiveFrontendRuntime::BindingLoads];
+    }
+    // Set the path before committing enablement; allocation failure must leave
+    // this owner's mode/session manager unchanged. No file is created on opt-in.
+    runtime.bindingPersistencePath.swap(qualified);
+    runtime.bindingPersistenceEnabled = true;
+    return Status::Ok;
+}
+
+bool CCore::IsFrontendBindingPersistenceEnabled() const noexcept
+{
+    return GetCurrentThreadId() == m_frontendCoreOwnerThread && m_frontendRuntimeResources && m_frontendRuntimeResources->bindingPersistenceEnabled;
+}
+
+bool CCore::ApplyFrontendBindingEdits(CSettings& settings) noexcept
+{
+    if (!IsFrontendBindingPersistenceEnabled() || !m_frontendResources || !m_frontendResources->runtimeBorrowed || !m_frontendResources->bindingsEnabled ||
+        m_frontendResources->snapshot[DefinitiveFrontend::Phase] != 2 || !m_pXML || !m_pKeyBinds || !m_pLocalGUI || !m_pLocalGUI->GetMainMenu() ||
+        m_pLocalGUI->GetMainMenu()->GetSettingsWindow() != &settings || !settings.IsFrontendBindings() || settings.IsCapturingKey() ||
+        !LocalInputAllowsFrontend())
+        return false;
+    auto& runtime = *m_frontendRuntimeResources;
+    if (runtime.bindingCommitActive || m_pKeyBinds != runtime.bindings.get() ||
+        runtime.snapshot[DefinitiveFrontendRuntime::BindingManagerCreations] == UINT32_MAX ||
+        runtime.snapshot[DefinitiveFrontendRuntime::BindingLoads] == UINT32_MAX)
+        return false;
+    struct CommitGuard
+    {
+        bool& active;
+        explicit CommitGuard(bool& value) : active(value) { active = true; }
+        ~CommitGuard() { active = false; }
+    } guard(runtime.bindingCommitActive);
+    try
+    {
+        auto staged = CopyFrontendBindings(*m_pXML, *this, *runtime.bindings);
+        if (!staged || !settings.StageFrontendBindingEdits(*staged) ||
+            !WriteFrontendMovementFile(*m_pXML, runtime.bindingPersistencePath, g_mtaDirectory / MTA_CONFIG_PATH, *staged))
+            return false;
+        // All allocation, XML and file I/O precedes this noexcept ownership
+        // swap. Failed saves retain the original manager and its GUI records.
+        runtime.bindings.swap(staged);
+        m_pKeyBinds = runtime.bindings.get();
+        ++runtime.snapshot[DefinitiveFrontendRuntime::BindingManagerCreations];
+        ++runtime.snapshot[DefinitiveFrontendRuntime::BindingLoads];
+        return true;
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
+
 extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_ProduceDEFrontendNeutralInput(void* handle, mta::game_de::MtaInputState* output,
                                                                                               std::uint32_t bytes)
 {
@@ -3132,6 +3461,7 @@ DefinitiveFrontendBindings::Snapshot CCore::ReadFrontendBindings()
         return {};
     const auto& resources = *m_frontendResources;
     auto        state = resources.bindingsSnapshot;
+    state[ConfigurationReadOnly] = IsFrontendBindingPersistenceEnabled() ? 0u : 1u;
     state[BindingsRetained] = m_pKeyBinds != nullptr;
     state[InputSuppressed] = resources.snapshot[DefinitiveFrontend::InputRequested];
     state[NetworkStarted] = m_pNet != nullptr;
@@ -3390,6 +3720,9 @@ DefinitiveFrontend::Snapshot CCore::ReadFrontend() const
         return {};
     const auto& resources = *m_frontendResources;
     auto        state = resources.snapshot;
+    // Old sessions keep their original read-only promise. A consumer which
+    // explicitly enabled persistence must see truthful writable configuration.
+    state[ConfigurationReadOnly] = IsFrontendBindingPersistenceEnabled() ? 0u : 1u;
     if (m_pLocalGUI && m_pLocalGUI->GetMainMenu())
     {
         auto* menu = m_pLocalGUI->GetMainMenu();

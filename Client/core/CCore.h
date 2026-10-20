@@ -12,6 +12,7 @@
 class CCore;
 class CDiscordRichPresence;
 class CDiscordInterface;
+class CSettings;
 
 #pragma once
 
@@ -313,6 +314,13 @@ public:
 
     void OnPostColorFilterRender() override;
 
+#if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
+    // Settings queries the retained owner dynamically; diagnostic/session-only
+    // views must never acquire persistence merely by constructing the same UI.
+    bool IsFrontendBindingPersistenceEnabled() const noexcept;
+    bool ApplyFrontendBindingEdits(CSettings& settings) noexcept;
+#endif
+
 private:
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
     friend struct DefinitiveFrontend::Controller;
@@ -351,6 +359,7 @@ private:
     DefinitiveFrontend::Status ProcessFrontendConsoleMessage(std::uint32_t message, std::uintptr_t wparam, std::intptr_t lparam, std::uint32_t& handled);
     DefinitiveFrontend::Status ReadFrontendConsoleText(std::uint32_t field, char* output, std::uint32_t capacity, std::uint32_t& required);
     DefinitiveFrontend::Status EnableFrontendBindings();
+    DefinitiveFrontend::Status EnableFrontendBindingPersistence(const wchar_t* path, std::uint32_t chars);
     DefinitiveFrontendBindings::Snapshot  ReadFrontendBindings();
     DefinitiveFrontend::Status            ProduceFrontendNeutralInput(mta::game_de::MtaInputState& output, bool cleanup = false);
     DefinitiveFrontend::Status            EnableFrontendRuntimeServices() noexcept;

@@ -12,6 +12,12 @@ SDK reference establish the hash behavior; no game function or new library is
 needed for hashing. Missing game subsystems remain pure virtual methods, so
 the factory cannot return an incomplete `CGame` as a playable backend.
 
+`SetAsyncLoadingFromScript`, `SuspendASyncLoading` and `IsASyncLoadingEnabled`
+now use the same MTA-owned loading policy as the classic backend. DE uses a
+monotonic elapsed-time clock for temporary suspension, so pausing native game
+time cannot prevent automatic resumption. This implements scheduling policy;
+it does not reuse classic streaming rows or invent native model operations.
+
 The three SDK scalar setters share the clock owner's internal timing access:
 `SetTimeScale`, `SetGameSpeed` and `SetMinuteDuration`. Originals are captured
 on the qualified native callback, and failed writes or rollback retain that

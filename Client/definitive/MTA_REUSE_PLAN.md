@@ -51,6 +51,26 @@ no widget is dereferenced and matching snapshots do not claim an engine lock.
 other subsystems exist. The exported factory therefore still supplies no full
 game interface, and client startup/networking remain incomplete.
 
+The existing asynchronous model-loading policy is now shared by classic and
+DE through `Shared/sdk/CAsyncLoadingPolicy.h`. DE's three actual `CGame`
+methods reuse MTA's script override, temporary suspension and strict deadline
+rules; their timer remains independent of paused game time. These methods
+control MTA scheduling, not native streaming rows or model-request lifetime.
+The policy and DE clock wrapper passed 65 checks on each of x86 and x64, and
+the changed classic `CGameSA` translation unit compiled from the normal project.
+
+Retained frontend owners also have an explicit movement-binding persistence
+opt-in. `MTA_EnableDEFrontendBindingPersistenceV1` uses MTA's user-data directory;
+the `AtPathV1` variant supports an explicitly owned host path. Both reuse the
+existing frontend handle, owner-thread admission, XML factory and `CKeyBinds`.
+Only the six supported movement controls are written to
+`definitive/keybinds.xml`; the installed `coreconfig.xml` stays unchanged.
+Settings stages a separate manager, commits the generated file atomically,
+then swaps in the staged manager. A failed save leaves the prior file and
+bindings active, and Cancel discards edits. Existing diagnostic/session APIs
+remain session-only unless their retained owner explicitly opts in. This
+feature does not start GTA, networking or a second configuration lifecycle.
+
 The DE clock service now implements MTA's existing five-method `CClock`
 interface behind an optional Core-owned adapter contract. Commands cross a
 mailbox to the exact-image native continuation after clock progression; Core

@@ -59,6 +59,20 @@ launcher preflight and loader switch now admit native startup and those assets,
 including INI/configuration agreement. This is package/launcher admission; it
 neither replaces the real network module nor opens a full-client launch path.
 
+The next startup batch adds explicit `--de-launch` to that same MTA launcher.
+Preparation checks the registered Steam library, app 1547000, exact installed
+native package and ownership receipt before MTA's existing shell helper can
+request Steam startup. Preparation is independently testable without dispatch.
+The request result deliberately remains separate from in-game Core readiness.
+
+Native view admission now reuses the backend's checked game-state reader and
+the same local-identity predicate used for movement. Known frontend/loading
+or qualified ineligible states retain hidden Core without creating a view or
+arming initial local input. Another explicit F9 can retry after context changes;
+missing evidence and mutated owner reports still fail. No playerless GUI or
+complete `CGame` is fabricated. The combined launcher/early-F9 live check is
+pending; the earlier successful native startup result remains unchanged.
+
 The real Deathmatch client now builds and links for Release/x64 using MTA's
 existing code. Engine work is assembling its actual `CGame` services:
 `CClockDE`, the complete four-method `CKeyGenDE`, eight native timing getters,

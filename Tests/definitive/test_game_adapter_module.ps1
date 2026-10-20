@@ -3,11 +3,25 @@
 # Build the actual x64 game-module DLL and exercise its exported factory. These
 # checks validate MTA ownership/storage without loading a game or rebuilding CLEO.
 [CmdletBinding()]
-param()
+param(
+    [string]$GameDeDll,
+    [string]$ExpectedGameDeSha256,
+    [switch]$FrontendAdmissionOnly
+)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $taskRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
+$reuseModule = [bool]$GameDeDll
+if ($reuseModule -ne [bool]$ExpectedGameDeSha256) { throw 'GameDeDll and ExpectedGameDeSha256 must be supplied together.' }
+if ($FrontendAdmissionOnly -and -not $reuseModule) { throw 'The focused admission checks reuse a pinned normal-built backend.' }
+if ($reuseModule) {
+    $GameDeDll = (Resolve-Path -LiteralPath $GameDeDll).Path
+    if ($ExpectedGameDeSha256 -notmatch '^[0-9a-fA-F]{64}$' -or
+        (Get-FileHash -LiteralPath $GameDeDll -Algorithm SHA256).Hash -ne $ExpectedGameDeSha256) {
+        throw 'The supplied normal backend differs from its required SHA256.'
+    }
+}
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
 $visualStudio = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
 if (-not $visualStudio) { throw 'Visual Studio x64 tools are required.' }
@@ -37,7 +51,7 @@ $sourceNames = @('Client/sdk/game/CGameAdapter.h', 'Client/game_de/GameAdapter.c
     'Client/game_de/NativeUiClassMapAccess.h', 'Client/game_de/NativeUiClassMapProfile.h',
     'Client/game_de/NativeClassChainAccess.h', 'Client/game_de/NativeStartupWorldProfile.h', 'Client/game_de/NativeStartupWorldAccess.h',
     'Client/game_de/NativeStartupProvidersAccess.h','Client/game_de/NativeStartupProvidersProfile.h',
-    'Client/sdk/game/CGameTimeService.h', 'Client/game_de/NativeGameTimeReader.h', 'Client/game_de/NativeGameTimeReader.cpp',
+    'Client/sdk/game/CGameTimeService.h', 'Client/sdk/game/CGameFrontendAdmission.h', 'Client/game_de/NativeGameTimeReader.h', 'Client/game_de/NativeGameTimeReader.cpp',
     'Client/game_de/NativeClockProfile.h', 'Client/game_de/NativeClockMemory.h', 'Client/game_de/NativeServiceAdmission.h',
     'Client/game_de/NativeMovementInput.h', 'Client/game_de/NativeMovementInput.cpp', 'Client/game_de/NativeInputRouting.h', 'Client/game_de/NativePadStateAccess.h',
     'Client/sdk/game/CGameRenderObservation.h', 'Client/sdk/game/CGameRenderEndpointDiagnostic.h', 'Client/sdk/game/CGameRenderSetupDiagnostic.h', 'Client/sdk/game/CGameRenderRootsDiagnostic.h', 'Client/sdk/game/CGameRenderDeviceLease.h', 'Client/sdk/game/CGameRenderDeviceWindowLease.h',
@@ -70,9 +84,33 @@ $library = Join-Path $outputRoot 'game_de.lib'
 $common = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/MD','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN','/DDETOURS_MTA_VM_TRANSACTION_NODES',
     ('/I' + (Join-Path $taskRoot 'Shared/sdk')), ('/I' + (Join-Path $taskRoot 'Client/sdk')))
 $moduleExit = $null
+$detoursCompilerExit = $null
+$detoursLibraryExit = $null
 $detoursDirectory = Join-Path $outputRoot 'detours'
-New-Item -ItemType Directory -Path $detoursDirectory | Out-Null
 $detoursLibrary = Join-Path $detoursDirectory 'detours.lib'
+if ($reuseModule) {
+    Copy-Item -LiteralPath $GameDeDll -Destination $module
+    # Reconstruct only the import library from the pinned DLL's real exports.
+    # The normal backend is not recompiled for this focused consumer check.
+    $dumpbin = Join-Path $env:VCToolsInstallDir 'bin/Hostx64/x64/dumpbin.exe'
+    $exports = @(& $dumpbin /nologo /exports $module 2>&1)
+    if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the supplied normal backend exports.' }
+    $exports | Set-Content -LiteralPath (Join-Path $outputRoot 'module-exports.log') -Encoding utf8
+    # Normal MSVC DLLs can print an undecorated alias after the export name.
+    # Accept that presentation without treating the alias as another export.
+    $names = @($exports | ForEach-Object { if ($_ -match '^\s+\d+\s+[0-9A-F]+\s+[0-9A-F]+\s+(\S+)(?:\s+=\s+\S+)?\s*$') { $Matches[1] } })
+    if ('CreateGameAdapter' -notin $names -or 'ReadGameFrontendAdmissionV1' -notin $names) {
+        throw 'The supplied backend lacks the actual factory or admission export.'
+    }
+    $definition = Join-Path $outputRoot 'game_de.def'
+    @('LIBRARY game_de.dll','EXPORTS') + $names | Set-Content -LiteralPath $definition -Encoding ascii
+    $librarian = Join-Path $env:VCToolsInstallDir 'bin/Hostx64/x64/lib.exe'
+    $importOutput = @(& $librarian /nologo /machine:x64 ('/def:' + $definition) ('/out:' + $library) 2>&1)
+    $moduleExit = $LASTEXITCODE
+    $importOutput | Set-Content -LiteralPath (Join-Path $outputRoot 'import-library.log') -Encoding utf8
+}
+else {
+New-Item -ItemType Directory -Path $detoursDirectory | Out-Null
 # Compile the repository's actual vendor sources separately, so vendor warning
 # policy never weakens /W4 /WX for the adapter that owns the native lifetime.
 $detoursSources = @('creatwth.cpp', 'detours.cpp', 'image.cpp', 'modules.cpp', 'disolx86.cpp', 'disolx64.cpp', 'disasm.cpp') |
@@ -108,6 +146,7 @@ if ((Test-Path -LiteralPath $moduleSource) -and $detoursLibraryExit -eq 0) {
     $moduleExit = $LASTEXITCODE
     $moduleOutput | Set-Content -LiteralPath (Join-Path $outputRoot 'module-compile.log') -Encoding utf8
 }
+}
 # Before implementation exists this same test links against the declared SDK
 # factory alone, capturing the causal missing-symbol red instead of a fake DLL.
 $executable = Join-Path $outputRoot 'game_adapter_module_tests.exe'
@@ -120,7 +159,9 @@ $compilerOutput | Set-Content -LiteralPath (Join-Path $outputRoot 'compile.log')
 $testExit = $null
 $testCount = $null
 if ($compilerExit -eq 0 -and $moduleExit -eq 0) {
-    $testOutput = @(& $executable 2>&1)
+    $testArguments = @()
+    if ($FrontendAdmissionOnly) { $testArguments += '--frontend-admission-only' }
+    $testOutput = @(& $executable @testArguments 2>&1)
     $testExit = $LASTEXITCODE
     $testOutput | Set-Content -LiteralPath (Join-Path $outputRoot 'test.log') -Encoding utf8
     if (($testOutput -join "`n") -match 'Passed (\d+) MTA Game DE adapter checks') { $testCount = [int]$Matches[1] }
@@ -133,9 +174,16 @@ foreach ($entry in $sourceHashes) {
         $sourceUnchanged = $false
     }
 }
+$normalBackendUnchanged = -not $reuseModule -or
+    ((Get-FileHash -LiteralPath $GameDeDll -Algorithm SHA256).Hash -eq $ExpectedGameDeSha256 -and
+     (Get-FileHash -LiteralPath $module -Algorithm SHA256).Hash -eq $ExpectedGameDeSha256)
 $record = [ordered]@{ recordedAt=[DateTimeOffset]::Now.ToString('o'); directory=$outputRoot;
-    success=($moduleExit -eq 0 -and $compilerExit -eq 0 -and $testExit -eq 0 -and $null -ne $testCount -and $sourceUnchanged);
-    sourceHashes=$sourceHashes; sourceUnchanged=$sourceUnchanged; architecture='x64'; moduleCompilerExit=$moduleExit;
+    success=($moduleExit -eq 0 -and $compilerExit -eq 0 -and $testExit -eq 0 -and $null -ne $testCount -and $sourceUnchanged -and $normalBackendUnchanged);
+    sourceHashes=$sourceHashes; sourceUnchanged=$sourceUnchanged; architecture='x64'; moduleCompilerExit=$(if ($reuseModule) { $null } else { $moduleExit });
+    normalBackendReused=$reuseModule; normalBackendSource=$(if ($reuseModule) { $GameDeDll } else { $null });
+    expectedNormalBackendSha256=$(if ($reuseModule) { $ExpectedGameDeSha256.ToLowerInvariant() } else { $null });
+    normalBackendUnchanged=$normalBackendUnchanged;
+    frontendAdmissionOnly=[bool]$FrontendAdmissionOnly;
     detoursCompilerExit=$detoursCompilerExit; detoursLibraryExit=$detoursLibraryExit; detoursLibrary=$detoursLibrary;
     detoursLibrarySha256=$(if (Test-Path -LiteralPath $detoursLibrary) { (Get-FileHash -LiteralPath $detoursLibrary -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null });
     compilerExit=$compilerExit; testExit=$testExit; checks=$testCount; module=$module;

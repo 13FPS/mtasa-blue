@@ -42,6 +42,7 @@ namespace
     bool                                  frontendClockReturned = false, frontendOwnerReadThrew = false;
     DefinitiveFrontendRuntime::Snapshot   runtimeOwner{};
     bool                                  runtimeViewActive = false;
+    unsigned                              runtimeViewCalls = 0;
     DefinitiveLocalInputRuntime::Snapshot localRuntime{};
 
     DWORD Setting(const wchar_t* name)
@@ -496,6 +497,7 @@ extern "C" __declspec(dllexport) void* MTA_BeginDEFrontendRuntime(std::uint32_t 
     if (version != 1 || !mtaSet || !gtaSet)
         return nullptr;
     runtimeOwner = {};
+    runtimeViewCalls = 0;
     runtimeOwner[S::Version] = runtimeOwner[C::RuntimeVersion] = 1;
     runtimeOwner[S::Phase] = runtimeOwner[C::RuntimePhase] = 2;
     runtimeOwner[S::OwnerThread] = runtimeOwner[C::OwnerThread] = GetCurrentThreadId();
@@ -728,6 +730,33 @@ extern "C"
     if (handle != &runtimeOwner || !request || !request->cancelled || !request->publish || !request->heartbeat ||
         request->generation != runtimeOwner[C::ViewGenerationLow] + 1)
         return DefinitiveFrontend::Status::InvalidArgument;
+    const auto admission = Setting(L"MTA_CORE_FIXTURE_VIEW_ADMISSION_MODE");
+    if (admission && ++runtimeViewCalls == 1)
+    {
+        // Model the production preflight boundary, before it borrows GUI or
+        // input and before any native view exists. The deliberately malformed
+        // cases prove that Stopped alone never authorizes a retry or teardown.
+        runtimeOwner[S::ExactImageBound] = 1;
+        runtimeOwner[S::CapabilitiesLow] |= 64;
+        if (admission == 3)
+            ++runtimeOwner[C::ViewGenerationLow];
+        if (admission == 6)
+            runtimeOwner[S::CapabilitiesLow] |= 128;
+        if (admission == 4)
+        {
+            P::Snapshot malformed{};
+            malformed[0] = malformed[P::PersistentVersion] = 1;
+            malformed[P::SessionGenerationLow] = static_cast<std::uint32_t>(request->generation) + 1;
+            Call(50);
+            request->publish(malformed.data(), P::FieldCount);
+        }
+        if (admission == 5)
+        {
+            runtimeOwner[S::LastFailure] = static_cast<std::uint32_t>(S::Failure::ViewAdmission);
+            return DefinitiveFrontend::Status::Failed;
+        }
+        return DefinitiveFrontend::Status::Stopped;
+    }
     if (mode == 9)
     {
         runtimeOwner[S::LastFailure] = static_cast<std::uint32_t>(S::Failure::InputBind);

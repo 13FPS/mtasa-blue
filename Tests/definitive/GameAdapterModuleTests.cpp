@@ -16,6 +16,7 @@
 #include <game/CGameStartupObservation.h>
 #include <game/CGameLocalInputLease.h>
 #include <game/CGameTimeService.h>
+#include <game/CGameFrontendAdmission.h>
 
 #include <array>
 #include <algorithm>
@@ -473,6 +474,58 @@ namespace
               "reset permits a fresh read attempt without publishing cached time");
         Check(adapter.value->Shutdown() == Status::Ok && ReadGameTimeStateV1(1, adapter.value, &output) == Status::NotInitialized && unchanged(),
               "read-only time follows actual adapter shutdown");
+    }
+
+    void TestFrontendAdmissionRejection()
+    {
+        OwnedAdapter             adapter;
+        OwnerIdentity            owner;
+        FrontendAdmissionStateV1 output;
+        output.admission = 99;
+        const auto refused = [&](Status expected, const char* why)
+        {
+            const auto before = output;
+            Check(ReadGameFrontendAdmissionV1(1, adapter.value, &output) == expected && std::memcmp(&before, &output, sizeof(output)) == 0, why);
+        };
+        refused(Status::NotInitialized, "frontend admission requires an initialized actual owner and preserves missing evidence");
+        Check(adapter.value->Initialize(owner.Get()) == Status::Ok, "initialize actual optional frontend admission owner");
+        const auto unchanged = output;
+        Check(ReadGameFrontendAdmissionV1(0, adapter.value, &output) == Status::InvalidArgument &&
+                  ReadGameFrontendAdmissionV1(1, nullptr, &output) == Status::InvalidArgument &&
+                  ReadGameFrontendAdmissionV1(1, adapter.value, nullptr) == Status::InvalidArgument &&
+                  ReadGameFrontendAdmissionV1(1, reinterpret_cast<IGameAdapter*>(std::uintptr_t{1}), &output) == Status::InvalidArgument &&
+                  std::memcmp(&unchanged, &output, sizeof(output)) == 0,
+              "frontend admission validates API and retained identity before accessing native state");
+        --output.size;
+        refused(Status::InvalidArgument, "frontend admission requires its exact record size");
+        ++output.size;
+        output.version = 0;
+        refused(Status::InvalidArgument, "frontend admission requires its exact record version");
+        output.version = 1;
+        output.reserved = 1;
+        refused(Status::InvalidArgument, "frontend admission rejects reserved input without replacing caller values");
+        output.reserved = 0;
+        Status      foreign = Status::Ok;
+        std::thread other([&] { foreign = ReadGameFrontendAdmissionV1(1, adapter.value, &output); });
+        other.join();
+        Check(foreign == Status::WrongThread && std::memcmp(&unchanged, &output, sizeof(output)) == 0,
+              "frontend admission never migrates the owning native read thread");
+        refused(Status::Unsupported, "an unqualified executable cannot be reported as a safe frontend deferral");
+        ControlActionFrame frame;
+        frame.heldActions = MtaInput::ActionBit(FORWARDS);
+        Check(adapter.value->SubmitControlActions(frame) == Status::Ok, "stage canonical input alongside the read-only admission query");
+        MtaInputState before, after;
+        Check(adapter.value->GetMtaInputState(before) == Status::Ok, "observe staged input before refused frontend query");
+        refused(Status::Unsupported, "repeated refusal never fabricates a cached frontend context");
+        NativeMovementTrialState movement;
+        Check(adapter.value->GetMtaInputState(after) == Status::Ok && std::memcmp(&before, &after, sizeof(before)) == 0 &&
+                  adapter.value->GetNativeMovementTrialState(movement) == Status::Ok && !movement.bound && !movement.active && !movement.callbackCount &&
+                  !movement.scopedSteps && adapter.value->GetCapabilities() == implementedCapabilities && adapter.value->GetGameInterface() == nullptr,
+              "frontend qualification neither changes canonical input, creates native hooks nor advertises full CGame");
+        Check(adapter.value->Reset() == Status::Ok, "retire ordinary observations after a frontend query refusal");
+        refused(Status::Unsupported, "reset permits a fresh frontend query without stale native facts");
+        Check(adapter.value->Shutdown() == Status::Ok, "shutdown the actual frontend query owner");
+        refused(Status::NotInitialized, "frontend qualification follows the actual adapter shutdown");
     }
 
     void TestClockServiceRejection()
@@ -1702,7 +1755,7 @@ namespace
     }
 }
 
-int main()
+int main(int argc, char** argv)
 {
     static_assert(sizeof(RenderDeviceLeaseV1) == 48 && offsetof(RenderDeviceLeaseV1, device) == 8 && offsetof(RenderDeviceLeaseV1, generation) == 16);
     static_assert(std::is_nothrow_invocable_r_v<Status, decltype(RequestGameRenderDeviceLeaseV1), std::uint32_t, IGameRenderObservationV6*>);
@@ -1716,6 +1769,8 @@ int main()
     static_assert(sizeof(LocalInputLeaseRequestV1) == 120 && sizeof(LocalInputLeaseStateV1) == 64);
     static_assert(LocalInputLeaseVersionV1 == 1 && LocalInputLeaseLifetimeMsV1 == 500);
     static_assert(sizeof(GameTimeStateV1) == 48 && GameTimeServiceVersionV1 == 1);
+    static_assert(sizeof(FrontendAdmissionStateV1) == 32 && FrontendAdmissionVersionV1 == 1);
+    static_assert(std::is_nothrow_invocable_r_v<Status, decltype(ReadGameFrontendAdmissionV1), std::uint32_t, IGameAdapter*, FrontendAdmissionStateV1*>);
     static_assert(sizeof(StartupObservationStateV1) == 256 && offsetof(StartupObservationStateV1, frame) == 16 &&
                   offsetof(StartupObservationStateV1, observations) == 144 && StartupObservationVersionV1 == 1);
     static_assert(std::is_nothrow_invocable_r_v<Status, decltype(BeginGameStartupObservationV1), std::uint32_t, IGameAdapter*, const ClockServiceRequestV1*,
@@ -1759,6 +1814,13 @@ int main()
                                                 RenderEndpointDiagnosticV1*>);
     try
     {
+        if (argc == 2 && std::string(argv[1]) == "--frontend-admission-only")
+        {
+            TestFrontendAdmissionRejection();
+            std::cout << "Passed " << checks << " MTA Game DE adapter checks\n";
+            return 0;
+        }
+        Check(argc == 1, "unknown adapter test selection is rejected");
         TestFactoryAndLifecycle();
         TestCoverageAndIsolation();
         TestInvalidObservations();
@@ -1772,6 +1834,7 @@ int main()
         TestApplicationFrameObservationRejection();
         TestStartupObservationRejection();
         TestGameTimeServiceRejection();
+        TestFrontendAdmissionRejection();
         TestLocalInputLeaseRejection();
         // Exercise historical factory layouts after the additive lease has
         // completed, so API5 cannot silently replace their module contract.

@@ -16,6 +16,7 @@
 #include <game/CGameApplicationFrameObservation.h>
 #include <game/CGameStartupObservation.h>
 #include <game/CGameTimeService.h>
+#include <game/CGameFrontendAdmission.h>
 #include "FrontendInputLeasePolicy.h"
 #include "LocalInputLeasePolicy.h"
 #include "ControllerSnapshot.h"
@@ -24,6 +25,7 @@
 #include "NativeMovementInput.h"
 #include "NativeClockService.h"
 #include "NativeGameTimeReader.h"
+#include "NativeGameStateReader.h"
 #include "NativeRenderObservation.h"
 
 #include <atomic>
@@ -126,6 +128,68 @@ namespace mta::game_de
                     result = current->nativeGameTime.Read(next);
                     if (result == Status::Ok)
                         *output = next;
+                    break;
+                }
+                ReleaseSRWLockShared(&frontendAdapterLock);
+                return result;
+            }
+            static Status ReadFrontendAdmission(IGameAdapter* adapter, FrontendAdmissionStateV1* output) noexcept
+            {
+                if (!TryAcquireSRWLockShared(&frontendAdapterLock))
+                    return Status::Unsupported;
+                Status result = Status::InvalidArgument;
+                for (auto* current = frontendAdapters; current; current = current->nextFrontendAdapter)
+                {
+                    if (static_cast<IGameAdapter*>(current) != adapter)
+                        continue;
+                    result = current->Access();
+                    if (result != Status::Ok)
+                        break;
+                    if (output->size != sizeof(*output) || output->version != FrontendAdmissionVersionV1 || output->reserved)
+                    {
+                        result = Status::InvalidArgument;
+                        break;
+                    }
+                    if (!current->nativeGameState.IsBound())
+                    {
+                        result = current->nativeGameState.Bind();
+                        if (result != Status::Ok)
+                            break;
+                    }
+                    SystemState::Enum state;
+                    result = current->nativeGameState.Read(state);
+                    if (result != Status::Ok)
+                        break;
+                    FrontendAdmissionStateV1 next;
+                    next.producerThread = GetCurrentThreadId();
+                    next.systemState = static_cast<std::uint32_t>(state);
+                    if (state == SystemState::GS_INIT_FRONTEND || state == SystemState::GS_FRONTEND || state == SystemState::GS_INIT_PLAYING_GAME)
+                        next.admission = static_cast<std::uint32_t>(FrontendAdmission::Deferred);
+                    else if (state == SystemState::GS_PLAYING_GAME && current->nativePad.IsBound())
+                    {
+                        NativeMovementEligibility eligibility;
+                        // The same reviewed identity and movement predicate
+                        // remains authoritative for both admission and writes.
+                        // Incomplete observations must not become a safe retry.
+                        if (!current->nativeMovement.ReadEligibility(eligibility) || eligibility.knownMask != NativeMovementEligibilityMask ||
+                            (eligibility.flags & ~NativeMovementEligibilityMask) ||
+                            !(eligibility.flags & static_cast<std::uint32_t>(NativeMovementEligibilityFlag::LocalIdentity)) ||
+                            eligibility.eligible != (eligibility.flags == eligibility.knownMask))
+                        {
+                            result = Status::Unsupported;
+                            break;
+                        }
+                        next.contextKnownMask = eligibility.knownMask;
+                        next.contextFlags = eligibility.flags;
+                        next.admission = static_cast<std::uint32_t>(eligibility.eligible ? FrontendAdmission::EligibleLocal : FrontendAdmission::Deferred);
+                    }
+                    else
+                    {
+                        result = Status::Unsupported;
+                        break;
+                    }
+                    *output = next;
+                    result = Status::Ok;
                     break;
                 }
                 ReleaseSRWLockShared(&frontendAdapterLock);
@@ -945,6 +1009,7 @@ namespace mta::game_de
                 hasInputState = false;
                 nativePad.Reset();
                 nativeGameTime.Reset();
+                nativeGameState.Reset();
                 ResetApplicationObservation(false);
                 ResetStartupObservation(false);
                 capabilities.store(BaseCapabilities);
@@ -971,6 +1036,7 @@ namespace mta::game_de
             NativeMovementInput        nativeMovement;
             NativeClockService         nativeClock;
             NativeGameTimeReader       nativeGameTime;
+            NativeGameStateReader      nativeGameState;
             // The hook retains this adapter until End retires it. Publications
             // expose only counts/masks, never a borrowed UClass address.
             std::atomic<bool>          applicationObservationMode{false};
@@ -1528,6 +1594,13 @@ namespace mta::game_de
         if (version != LocalInputLeaseVersionV1 || !adapter || !generation)
             return Status::InvalidArgument;
         return GameAdapter::LocalLease(adapter, GameAdapter::LocalLeaseAction::End, nullptr, generation, nullptr, nullptr);
+    }
+
+    extern "C" Status ReadGameFrontendAdmissionV1(std::uint32_t version, IGameAdapter* adapter, FrontendAdmissionStateV1* output) noexcept
+    {
+        if (version != FrontendAdmissionVersionV1 || !adapter || !output)
+            return Status::InvalidArgument;
+        return GameAdapter::ReadFrontendAdmission(adapter, output);
     }
 
     extern "C" Status BeginGameFrontendInputLeaseV1(std::uint32_t version, IGameAdapter* adapter, const FrontendInputLeaseRequestV1* request,

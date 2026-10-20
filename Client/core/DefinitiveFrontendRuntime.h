@@ -81,6 +81,9 @@ namespace DefinitiveFrontendRuntime
     using Begin = void* (*)(std::uint32_t);
     using Read = Status (*)(void*, std::uint32_t*, std::uint32_t);
     using Pulse = Status (*)(void*);
+    // Stopped with no publication and an unchanged, completely hidden owner
+    // also denotes a qualified context deferral before a view is attached.
+    // It consumes no Core view generation and requires a fresh explicit Show.
     using RunView = Status (*)(void*, const DefinitivePersistentFrontend::RequestV1*);
     using Shutdown = Status (*)(void*);
     using Release = Status (*)(void*);

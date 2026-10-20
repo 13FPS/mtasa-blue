@@ -8,8 +8,8 @@ project "DE Preflight Loader"
 	warnings "Extra"
 	fatalwarnings { "All" }
 	includedirs { "../../../vendor" }
-	files { "Loader.cpp", "Preflight.h", "StrictJson.c", "premake5.lua" }
-	links { "json-c", "bcrypt", "shell32" }
+	files { "Loader.cpp", "Preflight.h", "SteamInstall.h", "StrictJson.c", "premake5.lua" }
+	links { "json-c", "bcrypt", "shell32", "advapi32" }
 	if not _OPTIONS["with-definitive-adapter"] then
 		flags { "ExcludeFromBuild" }
 	end

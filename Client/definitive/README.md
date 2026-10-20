@@ -6,6 +6,19 @@ is a compatibility test harness; its custom transport is not the target MTA
 network implementation. Further work starts from the existing client/game
 interfaces and synchronization code.
 
+The experimental x64 MTA launcher now offers explicit `--de-launch` startup
+through Steam after checking the native package, installation ownership and
+registered app/library. Its existing `--de-preflight` remains read-only; see
+the [launcher contract](../launch/DefinitivePreflight/README.md). A launch
+request is not proof that the full MTA client has started.
+
+The retained Core also checks native menu eligibility before creating a GUI
+or borrowing input. Known frontend/loading states and fully identified but
+ineligible local players defer that view request, leaving Core hidden for a
+later explicit F9. Unknown evidence remains an error. The first deferred view
+cannot arm MTA movement. These changes have offline verification; launcher
+dispatch and early-F9 recovery still require the combined GTA check.
+
 **The real Deathmatch client now compiles and links as Release/x64.** Generate
 with `--with-definitive-adapter --with-definitive-client` and build the existing
 `Client Deathmatch` target. Its output is `Bin/mods/deathmatch/x64/client.dll`;

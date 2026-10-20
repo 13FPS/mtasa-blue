@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <utility>
 #include <windows.h>
+#include <enums/SystemState.h>
 
 namespace
 {
@@ -145,6 +146,7 @@ bool CGameAdapterModule::Start(CCoreInterface* owner, const std::wstring& absolu
     resolveClock(m_startupObservationBegin, "BeginGameStartupObservationV1");
     resolveClock(m_startupObservationRead, "ReadGameStartupObservationV1");
     resolveClock(m_gameTimeRead, "ReadGameTimeStateV1");
+    resolveClock(m_frontendAdmissionRead, "ReadGameFrontendAdmissionV1");
     resolveClock(m_localLeaseBegin, "BeginGameLocalInputLeaseV1");
     resolveClock(m_localLeaseRenew, "RenewGameLocalInputLeaseV1");
     resolveClock(m_localLeaseRead, "ReadGameLocalInputLeaseV1");
@@ -645,6 +647,36 @@ mta::game_de::Status CGameAdapterModule::ReadGameTimeState(mta::game_de::GameTim
     if (next.size != sizeof(next) || next.version != GameTimeServiceVersionV1 || next.producerThread != m_ownerThread || next.hour > 23 || next.minute > 60 ||
         next.seconds > 65535 || !next.millisecondsPerGameMinute || next.millisecondsPerGameMinute > 3600000 || next.reserved[0] || next.reserved[1] ||
         next.reserved[2])
+        return Status::Unsupported;
+    state = next;
+    return Status::Ok;
+}
+
+mta::game_de::Status CGameAdapterModule::ReadFrontendAdmission(mta::game_de::FrontendAdmissionStateV1& state) noexcept
+{
+    using namespace mta::game_de;
+    if (!m_adapter)
+        return Status::NotInitialized;
+    if (m_ownerThread != GetCurrentThreadId())
+        return Status::WrongThread;
+    if (!m_frontendAdmissionRead)
+        return Status::Unsupported;
+    FrontendAdmissionStateV1 next;
+    const auto               status = m_frontendAdmissionRead(FrontendAdmissionVersionV1, m_adapter, &next);
+    if (status != Status::Ok)
+        return status;
+    const bool playing = next.systemState == SystemState::GS_PLAYING_GAME;
+    const bool frontend = next.systemState == SystemState::GS_INIT_FRONTEND || next.systemState == SystemState::GS_FRONTEND ||
+                          next.systemState == SystemState::GS_INIT_PLAYING_GAME;
+    const bool eligible = next.admission == static_cast<std::uint32_t>(FrontendAdmission::EligibleLocal);
+    const bool deferred = next.admission == static_cast<std::uint32_t>(FrontendAdmission::Deferred);
+    // Missing/partial profile evidence never inherits the nonterminal meaning
+    // of an observed frontend or a completely qualified ineligible identity.
+    if (next.size != sizeof(next) || next.version != FrontendAdmissionVersionV1 || next.producerThread != m_ownerThread || next.reserved ||
+        (!eligible && !deferred) || (!playing && !frontend) || (frontend && (!deferred || next.contextKnownMask || next.contextFlags)) ||
+        (playing && (next.contextKnownMask != NativeMovementEligibilityMask || (next.contextFlags & ~NativeMovementEligibilityMask) ||
+                     !(next.contextFlags & static_cast<std::uint32_t>(NativeMovementEligibilityFlag::LocalIdentity)) ||
+                     eligible != (next.contextFlags == next.contextKnownMask))))
         return Status::Unsupported;
     state = next;
     return Status::Ok;
@@ -1658,6 +1690,7 @@ void CGameAdapterModule::Stop() noexcept
     m_startupObservationBegin = nullptr;
     m_startupObservationRead = nullptr;
     m_gameTimeRead = nullptr;
+    m_frontendAdmissionRead = nullptr;
     m_renderEndpointReaderV2 = nullptr;
     m_renderSetupReaderV1 = nullptr;
     m_renderRootsReaderV1 = nullptr;

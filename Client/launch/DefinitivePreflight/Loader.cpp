@@ -6,7 +6,9 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include "Preflight.h"
+#include "SteamInstall.h"
 #include <bcrypt.h>
+#include <tlhelp32.h>
 #include <json-c/json_object.h>
 #include <json-c/json_object_iterator.h>
 #include <json-c/json_tokener.h>
@@ -263,16 +265,18 @@ namespace
     struct Request
     {
         fs::path game, bundle, manifest;
+        bool     launch = false;
     };
 
-    Request Parse()
+    Request Parse(bool launch = false)
     {
         int  count = 0;
         auto arguments = CommandLineToArgvW(GetCommandLineW(), &count);
         Require(arguments != nullptr, "command_line_invalid");
         const auto release = std::unique_ptr<wchar_t*, decltype(&LocalFree)>(arguments, &LocalFree);
-        Require(count == 8 && std::wstring_view(arguments[1]) == L"--de-preflight", "preflight_arguments_required");
-        Request                     request;
+        Require(count == 8 && std::wstring_view(arguments[1]) == (launch ? L"--de-launch" : L"--de-preflight"), "preflight_arguments_required");
+        Request request;
+        request.launch = launch;
         std::set<std::wstring_view> seen;
         for (int index = 2; index < count; index += 2)
         {
@@ -294,6 +298,96 @@ namespace
         return request;
     }
 
+    std::unique_ptr<json_object, decltype(&json_object_put)> Json(const FileResult& file)
+    {
+        const auto tokener = std::unique_ptr<json_tokener, decltype(&json_tokener_free)>(json_tokener_new_ex(16), &json_tokener_free);
+        Require(tokener != nullptr, "json_parser_unavailable");
+        json_tokener_set_flags(tokener.get(), JSON_TOKENER_STRICT | JSON_TOKENER_VALIDATE_UTF8);
+        auto object = std::unique_ptr<json_object, decltype(&json_object_put)>(
+            json_tokener_parse_ex(tokener.get(), reinterpret_cast<const char*>(file.prefix.data()), static_cast<int>(file.prefix.size())), &json_object_put);
+        Require(object && json_tokener_get_error(tokener.get()) == json_tokener_success && json_tokener_get_parse_end(tokener.get()) == file.prefix.size(),
+                "manifest_json_invalid");
+        return object;
+    }
+
+    void InstalledOwnership(const Request& request, json_object* packageFiles, std::string_view mode)
+    {
+        Require(DefinitivePreflight::SteamInstall::SamePath(request.bundle, request.game.parent_path()), "installed_bundle_required");
+        const auto receipt = Json(ReadFile(request.bundle / L"de-online-install-manifest.json", 65536, true));
+        Keys(receipt.get(), {"packageId", "formatVersion", "mode", "gameDirectory", "gameSha256", "files"});
+        Require(json_object_object_length(receipt.get()) == 6 && String(Field(receipt.get(), "packageId", json_type_string)) == "de-online-prototype" &&
+                    json_object_get_int64(Field(receipt.get(), "formatVersion", json_type_int)) == 1 &&
+                    String(Field(receipt.get(), "gameSha256", json_type_string)) == KnownGameHash &&
+                    String(Field(receipt.get(), "mode", json_type_string)) == mode &&
+                    DefinitivePreflight::SteamInstall::SamePath(
+                        DefinitivePreflight::SteamInstall::Utf8Path(String(Field(receipt.get(), "gameDirectory", json_type_string))), request.bundle),
+                "installed_manifest_identity_invalid");
+        const auto files = Field(receipt.get(), "files", json_type_array);
+        Require(json_object_array_length(files) == json_object_array_length(packageFiles), "installed_owned_group_mismatch");
+        std::set<std::string_view> seen;
+        for (std::size_t index = 0; index < json_object_array_length(files); ++index)
+        {
+            const auto entry = json_object_array_get_idx(files, index);
+            Keys(entry, {"path", "destination", "sha256"});
+            Require(json_object_object_length(entry) == 3, "installed_manifest_entry_invalid");
+            const auto path = String(Field(entry, "path", json_type_string));
+            Require(seen.insert(path).second, "installed_owned_path_mismatch");
+            json_object* expected = nullptr;
+            for (std::size_t candidate = 0; candidate < json_object_array_length(packageFiles); ++candidate)
+            {
+                const auto item = json_object_array_get_idx(packageFiles, candidate);
+                if (String(Field(item, "path", json_type_string)) == path)
+                    expected = item;
+            }
+            Require(expected && String(Field(entry, "sha256", json_type_string)) == String(Field(expected, "sha256", json_type_string)) &&
+                        DefinitivePreflight::SteamInstall::SamePath(
+                            DefinitivePreflight::SteamInstall::Utf8Path(String(Field(entry, "destination", json_type_string))),
+                            request.bundle / fs::path(std::string(path))),
+                    "installed_owned_path_mismatch");
+        }
+    }
+
+    void SteamRegistration(const Request& request)
+    {
+        namespace Steam = DefinitivePreflight::SteamInstall;
+        const auto win64 = request.game.parent_path();
+        const auto binaries = win64.parent_path();
+        const auto gameface = binaries.parent_path();
+        const auto install = gameface.parent_path();
+        const auto common = install.parent_path();
+        const auto steamapps = common.parent_path();
+        Require(Steam::SamePath(win64.filename(), L"Win64") && Steam::SamePath(binaries.filename(), L"Binaries") &&
+                    Steam::SamePath(gameface.filename(), L"Gameface") && Steam::SamePath(common.filename(), L"common") &&
+                    Steam::SamePath(steamapps.filename(), L"steamapps"),
+                "steam_install_layout_invalid");
+        std::array<wchar_t, 32768> steamPath{};
+        DWORD                      bytes = static_cast<DWORD>(sizeof(steamPath));
+        Require(RegGetValueW(HKEY_CURRENT_USER, L"Software\\Valve\\Steam", L"SteamPath", RRF_RT_REG_SZ, nullptr, steamPath.data(), &bytes) == ERROR_SUCCESS &&
+                    bytes >= sizeof(wchar_t) && steamPath.back() == L'\0',
+                "steam_registration_unavailable");
+        const fs::path steamRoot(steamPath.data());
+        Require(steamRoot.is_absolute(), "steam_path_invalid");
+        const auto libraryFile = ReadFile(steamRoot / L"steamapps" / L"libraryfolders.vdf", 1024 * 1024, true);
+        const auto appFile = ReadFile(steamapps / L"appmanifest_1547000.acf", 65536, true);
+        Steam::ValidateRegistration(steamapps.parent_path(), install.filename(),
+                                    {reinterpret_cast<const char*>(libraryFile.prefix.data()), libraryFile.prefix.size()},
+                                    {reinterpret_cast<const char*>(appFile.prefix.data()), appFile.prefix.size()});
+    }
+
+    void GameNotRunning()
+    {
+        Handle snapshot{CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)};
+        Require(snapshot.value != INVALID_HANDLE_VALUE, "process_snapshot_failed");
+        PROCESSENTRY32W entry{};
+        entry.dwSize = sizeof(entry);
+        Require(Process32FirstW(snapshot.value, &entry) != FALSE, "process_snapshot_failed");
+        do
+        {
+            Require(_wcsicmp(entry.szExeFile, L"SanAndreas.exe") != 0, "game_already_running");
+        } while (Process32NextW(snapshot.value, &entry));
+        Require(GetLastError() == ERROR_NO_MORE_FILES, "process_snapshot_failed");
+    }
+
     unsigned int Validate(const Request& request)
     {
         NoLinks(request.bundle);
@@ -302,14 +396,7 @@ namespace
         Pe64(game.prefix, game.size, false);
         Require(game.sha256 == KnownGameHash, "game_fingerprint_unsupported");
         const auto manifest = ReadFile(request.manifest, 65536, true);
-        const auto tokener = std::unique_ptr<json_tokener, decltype(&json_tokener_free)>(json_tokener_new_ex(16), &json_tokener_free);
-        Require(tokener != nullptr, "json_parser_unavailable");
-        json_tokener_set_flags(tokener.get(), JSON_TOKENER_STRICT | JSON_TOKENER_VALIDATE_UTF8);
-        const auto object = std::unique_ptr<json_object, decltype(&json_object_put)>(
-            json_tokener_parse_ex(tokener.get(), reinterpret_cast<const char*>(manifest.prefix.data()), static_cast<int>(manifest.prefix.size())),
-            &json_object_put);
-        Require(object && json_tokener_get_error(tokener.get()) == json_tokener_success && json_tokener_get_parse_end(tokener.get()) == manifest.prefix.size(),
-                "manifest_json_invalid");
+        const auto object = Json(manifest);
         Keys(object.get(), {"packageId", "formatVersion", "mode", "gameSha256", "gameFixedVersion", "apiCommit", "dependencies", "files"});
         Require(json_object_object_length(object.get()) == 8 && String(Field(object.get(), "packageId", json_type_string)) == "de-online-prototype" &&
                     json_object_get_int64(Field(object.get(), "formatVersion", json_type_int)) == 1 &&
@@ -452,6 +539,7 @@ namespace
         const bool runtime = flag("MTA_CORE_FRONTEND_RUNTIME", false);
         const bool bindingPersistence = flag("MTA_CORE_FRONTEND_BINDING_PERSISTENCE", false);
         const bool nativeHost = flag("MTA_CORE_FRONTEND_NATIVE_HOST", nativeCount != 0);
+        Require(!request.launch || nativeHost, "enabled_native_frontend_required");
         Require(!bindingPersistence || runtime, "gui_mode_conflict");
         Require(!nativeHost || (nativeCount == NativeFrontendPaths.size() && runtime && mode == "Smoke"), "native_frontend_configuration_invalid");
         if (nativeCount)
@@ -474,8 +562,41 @@ namespace
                                     "MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE"})
                 Require(!flag(name, false), "gui_mode_conflict");
         }
+        if (request.launch)
+        {
+            // A Steam request must inspect the installed native owner, not a
+            // valid staging package whose files Steam would never execute.
+            InstalledOwnership(request, files, mode);
+            SteamRegistration(request);
+            GameNotRunning();
+        }
         return static_cast<unsigned int>(seen.size());
     }
+}
+
+extern "C" __declspec(dllexport) int DE_PrepareHostLaunchV1(DefinitivePreflight::HostLaunchResultV1* result)
+{
+    if (!result || result->size != sizeof(*result) || result->version != 1)
+        return 4;
+    *result = {};
+    try
+    {
+        Require(!GetModuleHandleW(L"core.dll") && !GetModuleHandleW(L"game_de.dll") && !GetModuleHandleW(L"xmll.dll"), "unexpected_engine_module");
+        result->verifiedFiles = Validate(Parse(true));
+        Require(!GetModuleHandleW(L"core.dll") && !GetModuleHandleW(L"game_de.dll") && !GetModuleHandleW(L"xmll.dll"), "unexpected_engine_module");
+        strcpy_s(result->status, "host_launch_prepared");
+        return 0;
+    }
+    catch (const std::runtime_error& error)
+    {
+        result->verifiedFiles = 0;
+        strcpy_s(result->status, sizeof(result->status), std::strlen(error.what()) < sizeof(result->status) ? error.what() : "preflight_exception");
+    }
+    catch (...)
+    {
+        strcpy_s(result->status, "preflight_exception");
+    }
+    return 4;
 }
 
 extern "C" __declspec(dllexport) int DoWinMain(HINSTANCE, HINSTANCE, LPSTR, int)

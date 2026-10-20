@@ -400,6 +400,20 @@ namespace DefinitiveFrontendStartup
             if (localStopped != Status::Ok)
                 return localStopped;
             core->m_frontendStartupAccepting = core->LocalInputAllowsFrontend();
+            // A main menu, loading transition or known ineligible local ped
+            // cannot borrow the gameplay input scope. Refuse before rendering,
+            // GUI callbacks or view counters exist, while retaining the real
+            // hidden Core for a later explicit request in a qualified context.
+            if (Bind() != Status::Ok)
+                return Status::Failed;
+            mta::game_de::FrontendAdmissionStateV1 admission;
+            if (core->m_DefinitiveAdapter.ReadFrontendAdmission(admission) != mta::game_de::Status::Ok)
+            {
+                state[LastFailure] = static_cast<std::uint32_t>(Failure::ViewAdmission);
+                return Status::Failed;
+            }
+            if (admission.admission == static_cast<std::uint32_t>(mta::game_de::FrontendAdmission::Deferred))
+                return Status::Stopped;
             const auto status = RunPersistent(request);
             if (status == Status::Busy)
                 runtimeStopping = true;

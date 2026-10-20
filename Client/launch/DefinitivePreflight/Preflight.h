@@ -10,11 +10,13 @@
 #include <shellapi.h>
 #include <cstdio>
 #include <cstring>
+#include <cstdint>
 #include <string_view>
 
 namespace DefinitivePreflight
 {
-    inline bool Requested() noexcept
+    inline constexpr char SteamLaunchUri[] = "steam://run/1547000";
+    inline bool           HasArgument(std::wstring_view argument) noexcept
     {
         int  count = 0;
         auto arguments = CommandLineToArgvW(GetCommandLineW(), &count);
@@ -22,12 +24,36 @@ namespace DefinitivePreflight
             return false;
         bool requested = false;
         for (int index = 1; index < count; ++index)
-            requested = requested || std::wstring_view(arguments[index]) == L"--de-preflight";
+            requested = requested || std::wstring_view(arguments[index]) == argument;
         LocalFree(arguments);
         return requested;
     }
 
-    inline int Status(const char* status, int result, DWORD error = 0, unsigned int verifiedFiles = 0) noexcept
+    inline bool LaunchRequested() noexcept
+    {
+        return HasArgument(L"--de-launch");
+    }
+    inline bool Requested() noexcept
+    {
+        return HasArgument(L"--de-preflight") || LaunchRequested();
+    }
+
+    // The external launcher owns dispatch. Keeping its preparation result value
+    // only prevents a validator or a successful shell call from claiming that
+    // GTA, Core, rendering or multiplayer has actually started.
+    struct HostLaunchResultV1
+    {
+        std::uint32_t size = sizeof(HostLaunchResultV1);
+        std::uint32_t version = 1;
+        std::uint32_t verifiedFiles = 0;
+        std::uint32_t win32Error = 0;
+        char          status[96]{};
+    };
+    static_assert(sizeof(HostLaunchResultV1) == 112);
+    using PrepareHostLaunchV1 = int (*)(HostLaunchResultV1*);
+
+    inline int Status(const char* status, int result, DWORD error = 0, unsigned int verifiedFiles = 0, bool hostLaunchReady = false,
+                      bool hostLaunchRequested = false) noexcept
     {
         // A valid offline preflight must never be mistaken for an implemented
         // launch path, loaded Core, or a playable MTA client.
@@ -42,10 +68,12 @@ namespace DefinitivePreflight
             status = "preflight_exception";
         char      output[512]{};
         const int length = _snprintf_s(output, sizeof(output), _TRUNCATE,
-                                       "{\"status\":\"%s\",\"preflightValid\":%s,\"launchReady\":false,\"fullMtaReady\":false,"
+                                       "{\"status\":\"%s\",\"preflightValid\":%s,\"launchReady\":false,\"hostLaunchReady\":%s,"
+                                       "\"hostLaunchRequested\":%s,\"fullMtaReady\":false,"
                                        "\"gameLaunched\":false,\"coreLoaded\":false,\"installationWrites\":false,"
                                        "\"verifiedFiles\":%u,\"win32Error\":%lu}\n",
-                                       status, result == 0 ? "true" : "false", verifiedFiles, error);
+                                       status, result == 0 || hostLaunchReady ? "true" : "false", hostLaunchReady ? "true" : "false",
+                                       hostLaunchRequested ? "true" : "false", verifiedFiles, error);
         if (length > 0 && static_cast<std::size_t>(length) < sizeof(output))
         {
             DWORD written = 0;

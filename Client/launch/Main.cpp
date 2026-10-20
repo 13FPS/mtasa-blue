@@ -288,6 +288,40 @@ namespace mta::launcher
         }
     }
 
+#if defined(MTA_DE_LAUNCHER_PREFLIGHT) && defined(_WIN64)
+    int ExecuteDefinitiveHostLaunch(HMODULE module)
+    {
+        const auto entry = GetProcAddress(module, "DE_PrepareHostLaunchV1");
+        MODULEINFO info{};
+        if (!entry || !GetModuleInformation(GetCurrentProcess(), module, &info, sizeof(info)))
+            return DefinitivePreflight::Status("host_launch_export_invalid", 3);
+        const auto address = reinterpret_cast<std::uintptr_t>(entry);
+        const auto base = reinterpret_cast<std::uintptr_t>(info.lpBaseOfDll);
+        if (address < base || address - base >= info.SizeOfImage)
+            return DefinitivePreflight::Status("host_launch_export_invalid", 3);
+        const auto                              prepare = std::bit_cast<DefinitivePreflight::PrepareHostLaunchV1>(entry);
+        DefinitivePreflight::HostLaunchResultV1 result;
+        const int                               code = prepare(&result);
+        if (result.size != sizeof(result) || result.version != 1 || result.status[sizeof(result.status) - 1] != '\0')
+            return DefinitivePreflight::Status("host_launch_result_invalid", 3);
+        if (code != 0)
+            return DefinitivePreflight::Status(result.status, 4, result.win32Error);
+        if ((result.verifiedFiles != 60 && result.verifiedFiles != 64) || std::strcmp(result.status, "host_launch_prepared") != 0)
+            return DefinitivePreflight::Status("host_launch_result_invalid", 3);
+
+        const auto com = InitializeCOM();
+        if (!com)
+            return DefinitivePreflight::Status("host_launch_com_failed", 5, static_cast<DWORD>(com.error()), result.verifiedFiles, true);
+        const auto cleanup = make_scope_exit([] { CoUninitialize(); });
+        // Reuse MTA's shell dispatch and Steam's authenticated launch route.
+        // The URI is fixed: validated input paths never become shell commands,
+        // and request acceptance does not prove GTA or MTA startup succeeded.
+        if (!ShellExecuteNonBlocking("open", DefinitivePreflight::SteamLaunchUri))
+            return DefinitivePreflight::Status("host_launch_request_failed", 5, 0, result.verifiedFiles, true);
+        return DefinitivePreflight::Status("host_launch_requested", 0, 0, result.verifiedFiles, true, true);
+    }
+#endif
+
     // Path validation
     [[nodiscard]] constexpr bool ValidatePathSafety(std::string_view path) noexcept
     {
@@ -331,8 +365,8 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
     if (DefinitivePreflight::Requested())
     {
 #if defined(MTA_DE_LAUNCHER_PREFLIGHT) && defined(_WIN64)
-        // Use the actual launcher dispatch without entering classic install,
-        // localization, patching, networking, or process creation paths.
+        // Explicit DE selection reuses the actual launcher dispatch while
+        // keeping classic installation, patching and loader paths separate.
         SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
         std::array<wchar_t, 32768> executable{};
         const DWORD                length = GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
@@ -344,6 +378,8 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
         if (!loaded)
             return DefinitivePreflight::Status("preflight_loader_load_failed", 2, GetLastError());
         const auto unload = make_scope_exit([module = loaded.value()] { FreeLibrary(module); });
+        if (DefinitivePreflight::LaunchRequested())
+            return ExecuteDefinitiveHostLaunch(loaded.value());
         const auto result = ExecuteDoWinMain(loaded.value(), hInstance, hPrevInstance, lpCmdLine, nCmdShow, true);
         return result ? result.value() : DefinitivePreflight::Status("preflight_loader_export_failed", 3);
 #else
@@ -351,8 +387,8 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 #endif
     }
 #if defined(MTA_DE_LAUNCHER_PREFLIGHT)
-    // The x64 target has no implicit launch behavior until a real DE startup
-    // integration exists. This is an engineering CLI, not a finished client UI.
+    // The x64 target requires an explicit engineering selection; it must not
+    // start Steam merely because the experimental launcher was double-clicked.
     return DefinitivePreflight::Status("explicit_de_preflight_required", 1);
 #endif
 

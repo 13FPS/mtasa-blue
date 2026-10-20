@@ -19,6 +19,7 @@
 #include <game/CGameApplicationFrameObservation.h>
 #include <game/CGameStartupObservation.h>
 #include <game/CGameTimeService.h>
+#include <game/CGameFrontendAdmission.h>
 #include <cstdint>
 #include <string>
 
@@ -64,6 +65,7 @@ public:
     bool                 ReadNativeStartupObservation(std::uint64_t generation, mta::game_de::StartupObservationStateV1& state);
     bool                 HasGameTimeService() const noexcept;
     mta::game_de::Status ReadGameTimeState(mta::game_de::GameTimeStateV1& state) noexcept;
+    mta::game_de::Status ReadFrontendAdmission(mta::game_de::FrontendAdmissionStateV1& state) noexcept;
     bool                 GetNativeMovementEligibility(mta::game_de::NativeMovementEligibility& state);
     bool                 BorrowGameInterface(CGame*& game);
     bool                 BeginNativeRenderObservation();
@@ -128,6 +130,7 @@ private:
     decltype(&mta::game_de::BeginGameStartupObservationV1)          m_startupObservationBegin = nullptr;
     decltype(&mta::game_de::ReadGameStartupObservationV1)           m_startupObservationRead = nullptr;
     decltype(&mta::game_de::ReadGameTimeStateV1)                    m_gameTimeRead = nullptr;
+    decltype(&mta::game_de::ReadGameFrontendAdmissionV1)            m_frontendAdmissionRead = nullptr;
     mta::game_de::IGameRenderObservation*                           m_renderObservation = nullptr;
     mta::game_de::IGameRenderObservationV2*                         m_renderObservationV2 = nullptr;
     mta::game_de::RenderObservationState                            m_lastRenderObservation;

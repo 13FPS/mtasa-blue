@@ -5,6 +5,7 @@
 
 #include "CoreStartupReference.h"
 #include "../core/DefinitiveFrontend.h"
+#include "../sdk/game/CGameAdapter.h"
 #include <algorithm>
 #include <filesystem>
 #include <process.h>
@@ -1617,8 +1618,9 @@ namespace deonline
                     request.cancelled = RuntimeViewCancelled;
                     request.publish = PublishRuntimeView;
                     request.heartbeat = RuntimeHostFresh;
-                    Status viewStatus = Status::Busy;
-                    bool   threw = false;
+                    Status     viewStatus = Status::Busy;
+                    bool       threw = false;
+                    const auto viewCoreBefore = lastCore;
                     try
                     {
                         viewStatus = view(handle, &request);
@@ -1628,6 +1630,71 @@ namespace deonline
                         threw = true;
                     }
                     runtimeReport[R::LastViewStatus] = static_cast<std::uint32_t>(viewStatus);
+                    if (!runtimeViewAvailable && !runtimePublicationFault.load() && !threw && (viewStatus == Status::Stopped || viewStatus == Status::Failed))
+                    {
+                        // A preflight refusal owns no GUI/native view. Only
+                        // checked binding may change the exact hidden snapshot;
+                        // a status word alone cannot certify that no owner was
+                        // created. Partial publication or mutation stays retained.
+                        const auto preflightUnchanged = [&](bool admissionFailure) noexcept
+                        {
+                            if (!hidden(lastCore) || lastCore[S::ExactImageBound] != 1 ||
+                                lastCore[S::CapabilitiesLow] !=
+                                    (viewCoreBefore[S::CapabilitiesLow] | static_cast<std::uint32_t>(mta::game_de::NativePadBindingCapabilities)) ||
+                                lastCore[S::CapabilitiesHigh] != viewCoreBefore[S::CapabilitiesHigh])
+                                return false;
+                            for (std::size_t index = 0; index < lastCore.size(); ++index)
+                            {
+                                if (index == S::ExactImageBound || index == S::CapabilitiesLow)
+                                    continue;
+                                if (index == S::LastFailure && admissionFailure)
+                                {
+                                    if (lastCore[index] != static_cast<std::uint32_t>(S::Failure::ViewAdmission))
+                                        return false;
+                                }
+                                else if (lastCore[index] != viewCoreBefore[index])
+                                    return false;
+                            }
+                            return true;
+                        };
+                        if (viewStatus == Status::Stopped)
+                        {
+                            if (!sampleCore(R::CoreStage::AfterHide) || !preflightUnchanged(false))
+                                retain();
+                            runtimeReport[R::LastViewCleanupComplete] = 1;
+                            runtimeReport[R::CleanupPending] = 0;
+                            runtimeReport[R::ViewGenerationLow] = lastCore[C::ViewGenerationLow];
+                            runtimeReport[R::ViewGenerationHigh] = lastCore[C::ViewGenerationHigh];
+                            runtimeReport[R::WorkerPhase] = static_cast<std::uint32_t>(R::Phase::Hidden);
+                            acknowledge(pending, R::Acknowledgement::Failed);
+                            // A first refused Show must not arm local movement
+                            // before any menu has been admitted. Resume only a
+                            // service already borrowed by an earlier real view.
+                            if (localInputRuntimeRequested && localConfigured && runtimeMailbox.Pending().command != R::Command::Stop && !configureLocal())
+                            {
+                                fail(R::Failure::CoreState);
+                                break;
+                            }
+                            // Do not turn a contextual refusal into polling or
+                            // an automatic retry. Only a fresh explicit command
+                            // may enter the qualified view after context changes.
+                            PublishRuntime();
+                            continue;
+                        }
+                        // Unknown native evidence fails startup, but its same
+                        // exact preflight contract still permits honest teardown.
+                        // InputBind retains its existing separate refusal path.
+                        if (!sampleCore(R::CoreStage::AfterHide))
+                            retain();
+                        if (lastCore[S::LastFailure] == static_cast<std::uint32_t>(S::Failure::ViewAdmission))
+                        {
+                            if (!preflightUnchanged(true))
+                                retain();
+                            fail(R::Failure::View);
+                            runtimeReport[R::LastViewCleanupComplete] = 1;
+                            break;
+                        }
+                    }
                     // Failed/no-publication is admitted only for the concrete
                     // unchanged hidden InputBind refusal. Every other missing
                     // or nonretired report retains the native owner first.

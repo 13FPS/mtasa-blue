@@ -202,7 +202,7 @@ namespace
                   L"MTA_CORE_FIXTURE_FAIL_ATTACH", L"MTA_CORE_FIXTURE_INPUT_MODE", L"MTA_CORE_FIXTURE_RENDER_MODE", L"MTA_CORE_FIXTURE_GUI_MODE",
                   L"MTA_CORE_FIXTURE_SURFACE_MODE", L"MTA_CORE_FIXTURE_CLOCK_MODE", L"MTA_CORE_FIXTURE_FRONTEND_CLOCK_MODE", L"MTA_CORE_FIXTURE_RUNTIME_MODE",
                   L"MTA_CORE_FIXTURE_LOCAL_RUNTIME_MODE", L"MTA_CORE_FIXTURE_APPLICATION_FRAME_MODE", L"MTA_CORE_FIXTURE_STARTUP_OBSERVATION_MODE",
-                  L"MTA_CORE_FIXTURE_BINDING_PERSISTENCE_MODE"})
+                  L"MTA_CORE_FIXTURE_BINDING_PERSISTENCE_MODE", L"MTA_CORE_FIXTURE_VIEW_ADMISSION_MODE"})
                 Set(name, L"0");
         }
         ~Fixture()
@@ -490,6 +490,151 @@ namespace
             Check(!worker.Read(field), "runtime never reinterprets Common19");
         Check(!worker.ReadFrontendRuntime(R::FieldCount) && !worker.CapturePersistentFrontend() && !worker.CaptureGuiFrontendStartupClockV2(),
               "runtime keeps every old cache separate");
+    }
+
+    void TestFrontendAdmissionWorker(deonline::CoreStartupReference& worker, const std::filesystem::path& root, const std::wstring& mode,
+                                     const std::filesystem::path& fixturePath)
+    {
+        namespace R = deonline::FrontendRuntimeReport;
+        namespace C = DefinitiveFrontendRuntime;
+        namespace S = DefinitiveFrontendStartup;
+        namespace L = DefinitiveLocalInputRuntime;
+        const std::array<const wchar_t*, 6> modes{L"frontend-admission-retry",     L"frontend-admission-stop",   L"frontend-admission-mutated",
+                                                  L"frontend-admission-published", L"frontend-admission-failed", L"frontend-admission-capabilities"};
+        const auto                          found = std::find(modes.begin(), modes.end(), mode);
+        Check(found != modes.end(), "known frontend admission fixture mode");
+        const auto scenario = static_cast<unsigned>(found - modes.begin()) + 1;
+        Fixture    fixture(950 + scenario);
+        Set(L"MTA_CORE_FIXTURE_VIEW_ADMISSION_MODE", std::to_wstring(scenario));
+        if (scenario == 2)
+            Set(L"MTA_CORE_FIXTURE_LOCAL_RUNTIME_MODE", L"1");
+        CopyCore(fixturePath, root);
+        SetEvent(fixture.release);
+        const auto generation = Fast([&] { return worker.BeginFrontendRuntime(&anchor, scenario == 2); });
+        Check(generation != 0, "admission uses the existing retained runtime owner");
+        const auto deadline = GetTickCount64() + 12000;
+        const auto read = [&](std::uint32_t field) { return worker.ReadFrontendRuntime(field); };
+        const auto core = [&](std::uint32_t field) { return read(R::CoreOffset + field); };
+        const auto capture = [&] { return Fast([&] { return worker.CaptureFrontendRuntime(); }); };
+        const auto wait = [&](const auto& predicate)
+        {
+            while (!capture() || !predicate())
+            {
+                worker.HeartbeatFrontendRuntime(generation);
+                Check(GetTickCount64() < deadline, "frontend admission did not reach its controlled boundary");
+                Sleep(5);
+            }
+        };
+        const auto command = [&](std::uint32_t sequence, R::Command action) { AdmitRuntimeCommand(worker, generation, sequence, action); };
+        wait([&] { return read(R::WorkerPhase) == static_cast<std::uint32_t>(R::Phase::Hidden); });
+        C::Snapshot initial{};
+        for (std::uint32_t field = 0; field < C::FieldCount; ++field)
+            initial[field] = core(field);
+        L::Snapshot initialLocal{};
+        if (scenario == 2)
+        {
+            Check(worker.CaptureLocalInputRuntime(), "capture the absent local-input owner before any admitted view");
+            for (std::uint32_t field = 0; field < L::FieldCount; ++field)
+                initialLocal[field] = worker.ReadLocalInputRuntime(field);
+            Check(initialLocal[L::Phase] == static_cast<std::uint32_t>(L::State::Disabled) && !initialLocal[L::Configured] && !initialLocal[L::Enabled] &&
+                      !initialLocal[L::NativeAttempted] && !initialLocal[L::NativeActive] && !initialLocal[L::NativeBound] &&
+                      !initialLocal[L::BindingsBorrowed] && !initialLocal[L::CanonicalNeutral] && initialLocal[L::CleanupComplete] == 1 &&
+                      !fixture.counters[54] && !fixture.counters[55] && !fixture.counters[58],
+                  "requested local input remains genuinely absent and cannot arm before the first qualified native view");
+        }
+        command(1, R::Command::Show);
+        if (scenario == 3 || scenario == 4 || scenario == 6)
+        {
+            wait([&] { return read(R::WorkerPhase) == static_cast<std::uint32_t>(R::Phase::RetainedCleanup); });
+            Check(worker.PollFrontendRuntime() == 0 && worker.IsPending() && read(R::CoreOwnerRetained) == 1 && GetModuleHandleW(L"core.dll") &&
+                      fixture.counters[47] == 1 && !fixture.counters[48] && !fixture.counters[49] && !fixture.counters[1] && !read(R::ShowAcknowledgements) &&
+                      !read(R::ViewsRetired),
+                  "a mutated or published Stopped result retains uncertain ownership instead of admitting retry or unloading code");
+            if (scenario == 3)
+                Check(core(C::ViewGenerationLow) == 1 && !fixture.counters[50], "generation mutation is rejected even without a publication");
+            else if (scenario == 4)
+                Check(fixture.counters[50] == 1 && !read(R::ViewSamples), "rejected callback counts as publication rather than a safe preflight defer");
+            else
+                Check(core(S::CapabilitiesLow) == (initial[S::CapabilitiesLow] | 64u | 128u) && !fixture.counters[50],
+                      "only exact-image input binding may evolve during defer; arbitrary native capabilities retain the uncertain owner");
+            return;
+        }
+        if (scenario != 5)
+        {
+            wait([&] { return read(R::WorkerPhase) == static_cast<std::uint32_t>(R::Phase::Hidden) && read(R::AcknowledgedSequence) == 1; });
+            Check(read(R::AcknowledgedCommand) == static_cast<std::uint32_t>(R::Command::Show) &&
+                      read(R::AcknowledgementCode) == static_cast<std::uint32_t>(R::Acknowledgement::Failed) && !read(R::LastFailure) &&
+                      read(R::LastViewStatus) == static_cast<std::uint32_t>(DefinitiveFrontend::Status::Stopped) && read(R::LastViewCleanupComplete) == 1 &&
+                      !read(R::ShowAcknowledgements) && !read(R::ViewsRetired) && !read(R::ViewSamples) && !read(R::OutstandingSequence) &&
+                      !read(R::OutstandingCommand) && !read(R::CleanupPending),
+                  "known preflight refusal consumes only the failed Show acknowledgement and preserves a healthy hidden runtime");
+            Check(core(S::ExactImageBound) == 1 && core(S::CapabilitiesLow) == (initial[S::CapabilitiesLow] | 64u),
+                  "preflight may qualify only the existing exact-image input reader capability without borrowing a native view");
+            for (std::uint32_t field = 0; field < C::FieldCount; ++field)
+                if (field != S::Pulses && field != S::ExactImageBound && field != S::CapabilitiesLow)
+                    Check(core(field) == initial[field], "deferred Show cannot mutate retained resources, errors, bindings or native view counters");
+            // Keep the owner alive without submitting another command. A
+            // deferred activation must wait for a later physical F9 action,
+            // rather than secretly retrying during the frame/heartbeat loop.
+            const auto until = GetTickCount64() + 250;
+            while (GetTickCount64() < until)
+            {
+                worker.HeartbeatFrontendRuntime(generation);
+                if (capture())
+                {
+                    Check(read(R::WorkerPhase) == static_cast<std::uint32_t>(R::Phase::Hidden) && !read(R::LastFailure) && read(R::AcknowledgedSequence) == 1 &&
+                              fixture.counters[47] == 1 && !fixture.counters[50] && !fixture.counters[48],
+                          "deferred Show performs no automatic retries, publications or shutdown while the same hidden owner is pulsed");
+                    if (scenario == 2)
+                    {
+                        Check(worker.CaptureLocalInputRuntime() && !fixture.counters[54] && !fixture.counters[55] && !fixture.counters[58],
+                              "deferred first Show cannot configure or pulse local movement while awaiting a later physical activation");
+                        for (std::uint32_t field = 0; field < L::FieldCount; ++field)
+                            Check(worker.ReadLocalInputRuntime(field) == initialLocal[field],
+                                  "safe reads and suspension preserve every absent local-input word without inventing native or canonical history");
+                    }
+                }
+                Sleep(5);
+            }
+            if (scenario == 1)
+            {
+                command(2, R::Command::Show);
+                wait([&] { return read(R::WorkerPhase) == static_cast<std::uint32_t>(R::Phase::Visible) && read(R::AcknowledgedSequence) == 2; });
+                Check(read(R::ShowAcknowledgements) == 1 && read(R::AcknowledgementCode) == static_cast<std::uint32_t>(R::Acknowledgement::Completed) &&
+                          read(R::ViewGenerationLow) == 1 && !read(R::ViewGenerationHigh) && fixture.counters[44] == 1 && fixture.counters[47] == 2,
+                      "a later explicit Show reuses the genuine retained owner and first native generation after a nonterminal refusal");
+                command(3, R::Command::Hide);
+                wait([&] { return read(R::WorkerPhase) == static_cast<std::uint32_t>(R::Phase::Hidden) && read(R::AcknowledgedSequence) == 3; });
+                Check(read(R::ViewsRetired) == 1 && core(C::ViewsAttached) == 1 && core(C::ViewsRetired) == 1 && core(C::ViewGenerationLow) == 1 &&
+                          core(C::ConfigurationLoads) == 1 && core(C::BindingManagerCreations) == 1 && core(C::BindingLoads) == 1,
+                      "the first actual view retires normally without reconstructing configuration or losing its retained bindings");
+                command(4, R::Command::Stop);
+            }
+            else
+                command(2, R::Command::Stop);
+        }
+        while (worker.PollFrontendRuntime() == 0)
+        {
+            worker.HeartbeatFrontendRuntime(generation);
+            Check(GetTickCount64() < deadline, "admission cleanup exceeded the controlled fixture budget");
+            Sleep(5);
+        }
+        Check(capture() && read(R::CleanupComplete) == 1 && !read(R::CleanupPending) && read(R::CoreStoppedVerified) == 1 &&
+                  read(R::CoreReleasedVerified) == 1 && read(R::CoreUnloadedVerified) == 1 && !read(R::CoreLoaded) && !read(R::CoreOwnerRetained) &&
+                  fixture.counters[44] == 1 && fixture.counters[48] == 1 && fixture.counters[49] == 1 && !fixture.counters[52] && !fixture.counters[2] &&
+                  fixture.counters[1] == fixture.counters[0],
+              "deferred Stop or genuine admission failure completes same-owner shutdown, release and unload");
+        if (scenario == 5)
+            Check(read(R::WorkerPhase) == static_cast<std::uint32_t>(R::Phase::Failed) &&
+                      read(R::LastFailure) == static_cast<std::uint32_t>(R::Failure::View) &&
+                      core(S::LastFailure) == static_cast<std::uint32_t>(S::Failure::ViewAdmission) && !read(R::ShowAcknowledgements) &&
+                      !read(R::ViewsRetired) && !read(R::ViewSamples) && fixture.counters[47] == 1,
+                  "an actual native admission read or profile failure is terminal rather than a known-context defer");
+        else
+            Check(read(R::WorkerPhase) == static_cast<std::uint32_t>(R::Phase::Stopped) && !read(R::LastFailure) &&
+                      read(R::AcknowledgementCode) == static_cast<std::uint32_t>(R::Acknowledgement::Completed) &&
+                      read(R::AcknowledgedSequence) == (scenario == 1 ? 4u : 2u) && fixture.counters[47] == (scenario == 1 ? 2 : 1),
+                  "explicit Stop remains clean after either a deferred-only session or a subsequent successful view");
     }
 
     void TestLocalRuntimeWorker(deonline::CoreStartupReference& worker, const std::filesystem::path& root, const std::wstring& mode,
@@ -2033,6 +2178,11 @@ int wmain(int argc, wchar_t** argv)
         {
             Check(argc == 4, "native host fixture requires its controlled Core DLL");
             TestNativeFrontendHost(worker, root, argv[2], argv[3]);
+        }
+        else if (std::wstring(argv[2]).find(L"frontend-admission-") == 0)
+        {
+            Check(argc == 4, "frontend admission fixture requires its controlled Core DLL");
+            TestFrontendAdmissionWorker(worker, root, argv[2], argv[3]);
         }
         else if (std::wstring(argv[2]).find(L"binding-runtime-") == 0)
         {

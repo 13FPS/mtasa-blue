@@ -101,8 +101,14 @@ SDK export or separate diagnostic pipeline and is not yet live validated.
 Only the exclusive read-only startup observer may now arm and poll before CJ
 exists. Its previous player gate prevented frontend-state observation. Other
 trial modes retain their player checks. This permits diagnosis wherever the
-CLEO host is available; actual pre-player host/frame availability still needs
-validation, and no native startup operation is enabled.
+CLEO host is available. The October 20 native-main-menu attempt confirmed JS
+entry and arming, but its post-chord log stayed byte-identical and Core never
+started. Script resumption and key delivery remain separate unproved host
+boundaries; no native frame test ran. All fourteen logs and normal shutdown
+are saved in `Build/definitive-recovery/current-startup-observation-frontend-attempt.json`.
+Frame yields and bounded chord-only activation receipts now avoid relying on
+advancing game time in this exclusive observer. That change still needs a
+live check; no native startup operation is enabled.
 
 The separate optional local-input lease reuses MTA's retained `CKeyBinds` and
 controller synthesis for six on-foot actions, with a 500 ms owner/generation

@@ -187,6 +187,32 @@ function runAdapter() {
     // read-only observation, so the input reference needs its own shortcut.
     const activateKey = (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND || MTA_CORE_FRONTEND_RUNTIME || MTA_CORE_CLOCK_REFERENCE || MTA_CORE_CLOCK_SET_REFERENCE || MTA_CORE_APPLICATION_FRAME_REFERENCE || MTA_CORE_STARTUP_OBSERVATION_REFERENCE) ? 'Ctrl+Shift+F9' : 'Ctrl+Shift+Home';
     const chordHeld = keys => keys.every(key => native('IS_KEY_PRESSED', key));
+    // A positive game-time wait may not resume at the native frontend. This
+    // read-only mode yields a frame instead; receipts distinguish resumed
+    // script ticks from chord delivery without claiming that cause is proved.
+    let startupActivationAt = null, startupActivationLoggedAt = null, startupActivationTicks = 0;
+    let startupActivationHeld = null, startupActivationChanges = 0;
+    const startupActivationKeys = stage => {
+        const at = Date.now();
+        if (!Number.isSafeInteger(at) || at < 0 || startupActivationAt !== null && at < startupActivationAt)
+            throw new Error('Invalid startup observation activation clock');
+        startupActivationAt = at;
+        // Bits 0..3 are Ctrl, Shift, F9 and End only. Coalesce changes under
+        // one shared arming/release rate limit, including unchanged heartbeats.
+        const held = [17, 16, 120, 35].reduce((mask, key, bit) =>
+            mask | (native('IS_KEY_PRESSED', key) ? 1 << bit : 0), 0);
+        if (startupActivationHeld !== null) startupActivationChanges |= startupActivationHeld ^ held;
+        startupActivationHeld = held;
+        if (!Number.isSafeInteger(++startupActivationTicks))
+            throw new Error('Invalid startup observation activation tick count');
+        if (startupActivationLoggedAt === null || at - startupActivationLoggedAt >= 1000) {
+            emit({ event: 'adapter_startup_observation_activation_tick', schema: 'adapter_startup_observation_activation_v1',
+                stage, at_ms: at, ticks: startupActivationTicks, held_mask: held, changed_mask: startupActivationChanges });
+            startupActivationLoggedAt = at;
+            startupActivationChanges = 0;
+        }
+        return held;
+    };
     if (MODE === 'online' || GAIT_REFERENCE || INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND || MTA_CORE_FRONTEND_RUNTIME || MTA_CORE_CLOCK_REFERENCE || MTA_CORE_CLOCK_SET_REFERENCE || MTA_CORE_APPLICATION_FRAME_REFERENCE || MTA_CORE_STARTUP_OBSERVATION_REFERENCE) {
         if (MODE === 'online' && !['manual', 'automatic'].includes(ONLINE_ACTIVATION))
             throw new Error('Unknown online activation mode');
@@ -203,16 +229,17 @@ function runAdapter() {
             while (true) {
                 // Stop takes priority if both chords are held. Read held keys
                 // together on every tick rather than accumulating presses.
-                if (chordHeld([17, 16, 35])) {
+                const startupKeys = MTA_CORE_STARTUP_OBSERVATION_REFERENCE ? startupActivationKeys('arming') : null;
+                if (startupKeys !== null ? (startupKeys & 11) === 11 : chordHeld([17, 16, 35])) {
                     emit({ event: 'adapter_activation_cancelled', reason: stopKey, mode: MODE,
                         bridge_loaded: false, game_adapter_active: false, network_active: false });
                     return;
                 }
-                if (chordHeld([17, 16, (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND || MTA_CORE_FRONTEND_RUNTIME || MTA_CORE_CLOCK_REFERENCE || MTA_CORE_CLOCK_SET_REFERENCE || MTA_CORE_APPLICATION_FRAME_REFERENCE || MTA_CORE_STARTUP_OBSERVATION_REFERENCE) ? 120 : 36]) && (!playerRequiredForActivation || native('IS_PLAYER_PLAYING', 0))) {
+                if ((startupKeys !== null ? (startupKeys & 7) === 7 : chordHeld([17, 16, (INPUT_REFERENCE || MTA_NATIVE_PAD_REFERENCE || MTA_NATIVE_MOVEMENT_TRIAL || MTA_CORE_STARTUP_REFERENCE || MTA_CORE_INPUT_REFERENCE || MTA_CORE_MOVEMENT_REFERENCE || MTA_CORE_RENDER_REFERENCE || MTA_CORE_GUI_STARTUP_REFERENCE || MTA_CORE_GUI_SURFACE_REFERENCE || MTA_CORE_GUI_FRONTEND_REFERENCE || MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE || MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE || MTA_CORE_PERSISTENT_FRONTEND || MTA_CORE_FRONTEND_RUNTIME || MTA_CORE_CLOCK_REFERENCE || MTA_CORE_CLOCK_SET_REFERENCE || MTA_CORE_APPLICATION_FRAME_REFERENCE || MTA_CORE_STARTUP_OBSERVATION_REFERENCE) ? 120 : 36])) && (!playerRequiredForActivation || native('IS_PLAYER_PLAYING', 0))) {
                     emit({ event: 'adapter_activation_requested', mode: MODE, activate_key: activateKey });
                     break;
                 }
-                wait(50);
+                wait(MTA_CORE_STARTUP_OBSERVATION_REFERENCE ? 0 : 50);
             }
         }
     }
@@ -226,12 +253,13 @@ function runAdapter() {
             throw new Error('Invalid native source activation release clock');
         let lastReleaseAt = releaseStartedAt;
         while (true) {
-            if (chordHeld([17, 16, 35])) {
+            const startupKeys = MTA_CORE_STARTUP_OBSERVATION_REFERENCE ? startupActivationKeys('release') : null;
+            if (startupKeys !== null ? (startupKeys & 11) === 11 : chordHeld([17, 16, 35])) {
                 emit({ event: 'adapter_activation_cancelled', reason: stopKey, mode: MODE,
                     bridge_loaded: false, game_adapter_active: false, network_active: false });
                 return;
             }
-            const now = Date.now();
+            const now = startupKeys !== null ? startupActivationAt : Date.now();
             if (!Number.isSafeInteger(now) || now < lastReleaseAt)
                 throw new Error('Invalid native source activation release clock');
             lastReleaseAt = now;
@@ -243,14 +271,15 @@ function runAdapter() {
             }
             if (playerRequiredForActivation && !native('IS_PLAYER_PLAYING', 0))
                 throw new Error('Player readiness lost while waiting for native source activation release');
-            const activationHeld = [17, 16, 120].map(key => native('IS_KEY_PRESSED', key));
-            if (activationHeld.every(held => !held)) {
+            const activationReleased = startupKeys !== null ? (startupKeys & 7) === 0
+                : [17, 16, 120].map(key => native('IS_KEY_PRESSED', key)).every(held => !held);
+            if (activationReleased) {
                 emit({ event: 'adapter_activation_released', mode: MODE, activate_key: activateKey,
                     at_ms: now, release_wait_ms: now - releaseStartedAt,
                     bridge_loaded: false, game_adapter_active: false, network_active: false });
                 break;
             }
-            wait(50);
+            wait(MTA_CORE_STARTUP_OBSERVATION_REFERENCE ? 0 : 50);
         }
     }
     if (!Memory.Fn || typeof DataView !== 'function')
@@ -490,7 +519,7 @@ function runAdapter() {
             if (terminal) break;
             // Cleanup may outlive its diagnostic deadline. Yielding keeps
             // CLEO responsive while the same Core/native owner retries it.
-            try { wait(100); }
+            try { wait(0); }
             catch (error) {
                 trialError = trialError || String(error);
                 try { cancel(); stopRequested = true; } catch (_) {}

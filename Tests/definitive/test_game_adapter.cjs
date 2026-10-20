@@ -1425,6 +1425,76 @@ async function main() {
         assert.ok(!f.calls.some(([name]) => /SET_TIME|SET_PLAYER|CREATE_CHAR|DE_Connect|DE_CoreClockBegin/.test(name)));
         assert.equal(done.startup_observation_state.length, 192);
     });
+    const startupActivationTicks = f => f.logs.filter(event => event.event === 'adapter_startup_observation_activation_tick');
+    test('startup observation bounds chord-only tick receipts while coalescing changes and proving unchanged ticks', () => {
+        const f = runStartupObservationEntry({}, {
+            keyFrames: [[], [17], [], [16], [17, 16], [], [120], [], [], [17, 16, 35]],
+            times: [0, 10, 999, 1000, 1010, 1500, 1999, 2000, 3000, 3010]
+        });
+        const receipts = startupActivationTicks(f);
+        assert.deepEqual(receipts.map(value => value.at_ms), [0, 1000, 2000, 3000]);
+        assert.deepEqual(receipts.map(value => value.ticks), [1, 4, 8, 9]);
+        assert.deepEqual(receipts.map(value => [value.held_mask, value.changed_mask]), [[0, 0], [2, 3], [0, 7], [0, 0]]);
+        for (const receipt of receipts) {
+            assert.deepEqual(Object.keys(receipt).sort(), ['at_ms', 'changed_mask', 'event', 'held_mask', 'schema', 'stage', 'ticks']);
+            assert.equal(receipt.schema, 'adapter_startup_observation_activation_v1');
+            assert.equal(receipt.stage, 'arming');
+        }
+        assert.deepEqual([...new Set(f.calls.filter(([name]) => name === 'IS_KEY_PRESSED').map(([, key]) => key))], [17, 16, 120, 35]);
+        assert.ok(f.waits.length > receipts.length && f.waits.every(value => value.milliseconds === 0));
+        assert.ok(f.logs.some(value => value.event === 'adapter_activation_cancelled'));
+        assert.equal(f.runtimeAccess.length, 0);
+    });
+    test('startup observation shares one receipt limit across arming and every modifier release', () => {
+        const f = runStartupObservationEntry({}, {
+            keyFrames: [[], [17, 16, 120], [17], [16], [120], [120], [], []],
+            times: [0, 100, 999, 1000, 1001, 1999, 2000, 2050]
+        });
+        const receipts = startupActivationTicks(f);
+        assert.deepEqual(receipts.map(value => [value.at_ms, value.stage, value.held_mask]),
+            [[0, 'arming', 0], [1000, 'release', 2], [2000, 'release', 0]]);
+        assert.deepEqual(receipts.map(value => value.changed_mask), [0, 7, 6]);
+        assert.ok(f.runtimeAccess.length > 0 && f.runtimeAccess.every(value => value.frame >= 6));
+        assert.ok(f.waits.every(value => value.milliseconds === 0));
+        assert.ok(f.logs.some(value => value.event === 'core_startup_observation_reference_finished' && value.passed));
+    });
+    for (const at of [NaN, Infinity, -1, Number.MAX_SAFE_INTEGER + 1])
+        test('startup observation refuses invalid arming wall time ' + String(at) + ' before key or bridge access', () => {
+            const f = runStartupObservationEntry({}, { times: [at] });
+            assert.equal(f.calls.length, 0);
+            assert.equal(f.runtimeAccess.length, 0);
+            assert.equal(startupActivationTicks(f).length, 0);
+            assert.ok(f.logs.some(value => value.event === 'adapter_failed' && /activation clock/.test(value.error)));
+        });
+    test('startup observation rejects a backwards receipt clock across arming and release', () => {
+        const f = runStartupObservationEntry({}, { keyFrames: [[17, 16, 120], [17]], times: [1000, 999] });
+        assert.equal(f.runtimeAccess.length, 0);
+        assert.equal(startupActivationTicks(f).length, 1);
+        assert.ok(f.logs.some(value => value.event === 'adapter_activation_requested'));
+        assert.ok(f.logs.some(value => value.event === 'adapter_failed' && /activation clock/.test(value.error)));
+        assert.ok(!f.logs.some(value => value.event === 'adapter_activation_released'));
+    });
+    test('startup observation key read failure cannot admit the bridge or fabricate a receipt', () => {
+        const f = runStartupObservationEntry({}, { natives: { IS_KEY_PRESSED: () => { throw new Error('key source unavailable'); } } });
+        assert.equal(f.runtimeAccess.length, 0);
+        assert.equal(startupActivationTicks(f).length, 0);
+        assert.ok(f.logs.some(value => value.event === 'adapter_failed' && /key source unavailable/.test(value.error)));
+    });
+    test('startup observation frame-yield failure still cancels and polls the existing worker through cleanup', () => {
+        let polls = 0, cancels = 0;
+        const f = runStartupObservationEntry({}, {
+            keyFrames: [[17, 16, 120], []],
+            functions: {
+                DE_CoreStartupPoll: () => ++polls >= 2 ? 1 : 0,
+                DE_CoreStartupCancel: () => { ++cancels; return 1; }
+            }
+        });
+        const done = f.logs.find(value => value.event === 'core_startup_observation_reference_finished');
+        assert.ok(done && !done.passed && done.cleanup_passed && done.stop_requested && /final key frame/.test(done.error));
+        assert.equal(polls, 2);
+        assert.equal(cancels, 1);
+        assert.ok(f.waits.every(value => value.milliseconds === 0));
+    });
     test('startup observation waits for explicit F9 and every modifier release without requiring a player', () => {
         const f = runStartupObservationEntry({ 100: 7, 102: 44, 104: 0 }, {
             keyFrames: [[], [], [17, 16, 120], [17], [16], [120], [], []],
@@ -1476,7 +1546,9 @@ async function main() {
         assert.ok(done && done.passed && done.cleanup_passed && !done.stop_requested);
         assert.equal(polls, 3);
         assert.equal(cancels, 0);
-        assert.equal(f.waits.filter(value => value.milliseconds === 100).length, 2);
+        // This includes idle arming, held-modifier release and both worker
+        // polls, so a paused game timer cannot be reintroduced at one boundary.
+        assert.deepEqual(f.waits.map(value => value.milliseconds), [0, 0, 0, 0, 0, 0]);
         assert.ok(!f.calls.some(([name]) => name === 'IS_PLAYER_PLAYING'));
     });
     test('startup observation still requests End and waits for cleanup without a player', () => {
@@ -1618,6 +1690,8 @@ async function main() {
         assert.ok(f.logs.some(event => event.event === 'adapter_activation_cancelled'));
         assert.ok(!f.logs.some(event => event.event === 'adapter_activation_requested'));
         assert.ok(f.calls.some(([name]) => name === 'IS_PLAYER_PLAYING'));
+        assert.ok(f.waits.length > 0 && f.waits.every(value => value.milliseconds === 50));
+        assert.equal(startupActivationTicks(f).length, 0);
     });
     for (const [label, run] of playerGatedEntries.slice(1)) test(label + ' still rejects readiness loss while releasing activation', () => {
         const f = run({ keyFrames: [[], [17, 16, 120], [], [17, 16, 35]], readyFrames: [false, true, false, false] });
@@ -1645,6 +1719,8 @@ async function main() {
         assert.ok(done && !done.passed && done.cleanup_passed && done.stop_requested);
         assert.equal(polls, 2);
         assert.equal(cancels, 1);
+        assert.deepEqual(f.waits.map(value => value.milliseconds), [50, 50, 50, 50, 100]);
+        assert.equal(startupActivationTicks(f).length, 0);
     });
     const clockSetFinish = f => f.logs.find(event => event.event === 'core_clock_set_reference_finished');
     test('clock Set waits for F9 release and accepts one Set with subsequent Readback and provider retirement', () => {

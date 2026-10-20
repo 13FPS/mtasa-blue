@@ -20,6 +20,18 @@ This does not establish UObject lifetime, controller/UI provider readiness,
 cold frontend readiness or permission to call native startup methods. Existing
 networking remains MTA's responsibility.
 
+The October 20 native-main-menu attempt with runtime `6f2d628ff` reached JS
+entry and arming before CJ existed, but the activation chord produced no new
+log event and never loaded Core or the Bridge. The user reported normal GTA
+continuation. All fourteen raw logs, unchanged installed hashes and normal
+shutdown are preserved separately in
+`Build/definitive-recovery/current-startup-observation-frontend-attempt.json`.
+This was an unstarted workload, not a failed native-frame observation. It does
+not replace the successful gameplay certificate above. Startup observation
+now uses frame yields and bounded chord-only receipts to distinguish script
+resumption from key delivery at the frontend; the same MTA worker, native lease
+and 192-word report remain in use. This scheduling change awaits a live check.
+
 The real Deathmatch client now builds and links for Release/x64 using MTA's
 existing code. Engine work is assembling its actual `CGame` services:
 `CClockDE`, the complete four-method `CKeyGenDE`, eight native timing getters,

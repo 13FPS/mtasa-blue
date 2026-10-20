@@ -57,6 +57,30 @@ test('copied verifier qualifies two real acknowledged views, held renewable loca
     assert.equal(result.summary.terminalNativeAttempted, 1);
     assert.equal(result.summary.fullMtaReady, false);
 });
+test('copied verifier reconstructs saved-binding validator scope across reload and Apply', () => {
+    const run = execute({ localInput: true, bindingPersistence: true, stopAt: 14,
+        keys: poll => [3, 4, 9, 10].includes(poll) ? [17, 16, 120] : [],
+        bindingCount: poll => poll >= 6 ? 3 : 2,
+        mutateLocalEvery: (values, { polls, phase, viewGeneration }) => {
+            if (phase === 2 && polls === 6) values[15] = 2;
+            if (phase === 4 && viewGeneration === 2)
+                Object.assign(values, { 5: 1, 6: 701, 10: 1, 11: 5, 13: 8, 27: 1 });
+        }
+    });
+    assert.equal(run.error, null);
+    const result = verifyEvents(copy(run.events));
+    assert.equal(result.protocolPassed, true, result.protocolErrors.join('; '));
+    assert.equal(result.cleanupPassed, true, result.cleanupErrors.join('; '));
+    assert.equal(result.summary.bindingPersistence, true);
+    const missingSelection = copy(run.events);
+    delete missingSelection.find(event => event.event === 'frontend_runtime_started').binding_persistence;
+    assert.equal(verifyEvents(missingSelection).protocolPassed, false);
+});
+test('copied verifier rejects malformed saved-binding selection without changing terminal cleanup', () => {
+    const events = copy(validEvents);
+    events.find(event => event.event === 'frontend_runtime_started').binding_persistence = 'true';
+    rejectedWorkload(events);
+});
 test('separate caches do not turn an Active event before observed Hidden into a simultaneous-view assertion', () => {
     const result = verifyEvents(validEvents);
     assert.equal(result.protocolPassed, true);

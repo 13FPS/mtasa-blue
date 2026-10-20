@@ -148,11 +148,12 @@ namespace deonline
                                      bool configuredGuiSurface, bool configuredGuiFrontend, bool configuredGuiFrontendInput, bool configuredFrontendStartup,
                                      bool configuredPersistentFrontend, bool configuredClock, bool configuredClockSet, bool configuredClockBeforeFrontend,
                                      bool configuredFrontendRuntime, bool configuredLocalInputRuntime, bool configuredApplicationFrame,
-                                     bool configuredStartupObservation) noexcept
+                                     bool configuredStartupObservation, bool configuredBindingPersistence) noexcept
     {
         DWORD      expected = 0;
         const auto current = GetCurrentThreadId();
-        if ((configuredLocalInputRuntime && !configuredFrontendRuntime) || (configuredClockBeforeFrontend && !configuredFrontendStartup) ||
+        if (((configuredLocalInputRuntime || configuredBindingPersistence) && !configuredFrontendRuntime) ||
+            (configuredClockBeforeFrontend && !configuredFrontendStartup) ||
             (static_cast<unsigned>(configuredMovement) + static_cast<unsigned>(configuredRender) + static_cast<unsigned>(configuredGuiStartup) +
                  static_cast<unsigned>(configuredGuiSurface) + static_cast<unsigned>(configuredGuiFrontend) +
                  static_cast<unsigned>(configuredGuiFrontendInput) + static_cast<unsigned>(configuredFrontendStartup) +
@@ -175,6 +176,7 @@ namespace deonline
         }
         frontendRuntimeRequested = configuredFrontendRuntime;
         localInputRuntimeRequested = configuredLocalInputRuntime;
+        bindingPersistenceRequested = configuredBindingPersistence;
         localInputRuntimeCache.Reset();
         capturedLocalInputRuntime = {};
         runtimeCache.Reset();
@@ -833,9 +835,10 @@ namespace deonline
         return Start(moduleAddress, true, false, false, 0, 1, false, false, false, false, false, true) ? persistentHostLease.Generation() : 0;
     }
 
-    std::uint32_t CoreStartupReference::BeginFrontendRuntime(const void* moduleAddress, bool localInput) noexcept
+    std::uint32_t CoreStartupReference::BeginFrontendRuntime(const void* moduleAddress, bool localInput, bool bindingPersistence) noexcept
     {
-        return Start(moduleAddress, true, false, false, 0, 1, false, false, false, false, false, false, false, false, false, true, localInput)
+        return Start(moduleAddress, true, false, false, 0, 1, false, false, false, false, false, false, false, false, false, true, localInput, false, false,
+                     bindingPersistence)
                    ? runtimeMailbox.Generation()
                    : 0;
     }
@@ -1274,6 +1277,8 @@ namespace deonline
         const auto view = reinterpret_cast<C::RunView>(GetProcAddress(core, "MTA_RunDEFrontendRuntimeView"));
         const auto shutdown = reinterpret_cast<C::Shutdown>(GetProcAddress(core, "MTA_ShutdownDEFrontendRuntime"));
         const auto release = reinterpret_cast<C::Release>(GetProcAddress(core, "MTA_ReleaseDEFrontendRuntime"));
+        const auto enableBindingPersistence =
+            reinterpret_cast<C::EnableBindingPersistence>(GetProcAddress(core, "MTA_EnableDEFrontendRuntimeBindingPersistenceV1"));
         const auto localVersion = reinterpret_cast<Version>(GetProcAddress(core, "MTA_DELocalInputRuntimeApiVersion"));
         const auto localConfigure = reinterpret_cast<L::Configure>(GetProcAddress(core, "MTA_ConfigureDELocalInputRuntime"));
         const auto localPulse = reinterpret_cast<L::Pulse>(GetProcAddress(core, "MTA_PulseDELocalInputRuntime"));
@@ -1289,6 +1294,8 @@ namespace deonline
         L::Snapshot   lastLocal{};
         HWND          localWindow = nullptr;
         bool          localConfigured = false;
+        bool          bindingPersistenceEnabled = false;
+        std::uint32_t bindingLoadsHighWater = 1;
         std::uint64_t coreGeneration = 0;
         const auto    fail = [&](R::Failure failure, R::StopReason reason = R::StopReason::ViewFault) noexcept
         {
@@ -1324,14 +1331,25 @@ namespace deonline
         };
         const auto hidden = [&](const C::Snapshot& sample) noexcept
         {
-            return coreShape(sample) && sample[S::Phase] == 2 && sample[S::CoreRetained] == 1 && sample[S::BackendStarted] == 1 &&
-                   std::all_of(sample.begin() + S::FrontendRetained, sample.begin() + S::CleanupComplete + 1, [](auto value) { return value == 0; }) &&
-                   !sample[S::ReleaseFault] && sample[S::LastViewCleanupComplete] == 1 &&
-                   sample[C::RuntimePhase] == static_cast<std::uint32_t>(C::Phase::Hidden) && sample[C::ServicesInitialized] == 1 &&
-                   sample[C::ServicesRetained] == 1 && sample[C::XmlRetained] == 1 && sample[C::ConfigRetained] == 1 && sample[C::CVarsLoaded] == 1 &&
-                   sample[C::BindingsRetained] == 1 && sample[C::BindingManagerCreations] == 1 && sample[C::ConfigurationLoads] == 1 &&
-                   sample[C::BindingLoads] == 1 && sample[C::ViewsAttached] == sample[C::ViewsRetired] && !sample[C::ViewBorrowed] &&
-                   sample[C::HiddenNeutralVerified] == 1 && sample[C::ConfigurationReadOnly] == 1 && !sample[C::CleanupPending] && !sample[C::CleanupComplete];
+            const auto bindingLoads = sample[C::BindingLoads];
+            // A saved file and each successful Apply replace the genuine MTA
+            // manager. Its load counters may grow, but an unrelated config
+            // reload or a counter rollback cannot certify retained ownership.
+            if (sample[C::BindingManagerCreations] != bindingLoads || sample[C::ConfigurationLoads] != 1 ||
+                (bindingPersistenceEnabled ? bindingLoads < bindingLoadsHighWater : bindingLoads != 1))
+                return false;
+            const bool valid =
+                coreShape(sample) && sample[S::Phase] == 2 && sample[S::CoreRetained] == 1 && sample[S::BackendStarted] == 1 &&
+                std::all_of(sample.begin() + S::FrontendRetained, sample.begin() + S::CleanupComplete + 1, [](auto value) { return value == 0; }) &&
+                !sample[S::ReleaseFault] && sample[S::LastViewCleanupComplete] == 1 &&
+                sample[C::RuntimePhase] == static_cast<std::uint32_t>(C::Phase::Hidden) && sample[C::ServicesInitialized] == 1 &&
+                sample[C::ServicesRetained] == 1 && sample[C::XmlRetained] == 1 && sample[C::ConfigRetained] == 1 && sample[C::CVarsLoaded] == 1 &&
+                sample[C::BindingsRetained] == 1 && sample[C::ViewsAttached] == sample[C::ViewsRetired] && !sample[C::ViewBorrowed] &&
+                sample[C::HiddenNeutralVerified] == 1 && sample[C::ConfigurationReadOnly] == (bindingPersistenceEnabled ? 0u : 1u) &&
+                !sample[C::CleanupPending] && !sample[C::CleanupComplete];
+            if (valid)
+                bindingLoadsHighWater = bindingLoads;
+            return valid;
         };
         const auto stopped = [&](const C::Snapshot& sample) noexcept
         {
@@ -1493,6 +1511,12 @@ namespace deonline
                 inputOwner = nullptr;
                 return;
             }
+            if (bindingPersistenceRequested && !enableBindingPersistence)
+            {
+                fail(R::Failure::Exports, R::StopReason::LoaderFault);
+                inputOwner = nullptr;
+                return;
+            }
             setMta(mtaDirectory.c_str(), mtaDirectory.size());
             setGta(gtaDirectory.c_str(), gtaDirectory.size());
             try
@@ -1518,6 +1542,24 @@ namespace deonline
             }
             if (!hidden(lastCore) || !sampleLocal())
                 fail(R::Failure::CoreState);
+            if (!runtimeReport[R::LastFailure] && bindingPersistenceRequested)
+            {
+                // Opt in on this retained owner before any view or configured
+                // input borrows its bindings. Refusal must retire the owner;
+                // silently reverting to session-only edits would lose Apply.
+                Status enabled = Status::Failed;
+                try
+                {
+                    enabled = enableBindingPersistence(handle, C::ApiVersion);
+                }
+                catch (...)
+                {
+                    fail(R::Failure::CoreState);
+                }
+                bindingPersistenceEnabled = enabled == Status::Ok;
+                if (!bindingPersistenceEnabled || !sampleCore(R::CoreStage::Initial) || !hidden(lastCore))
+                    fail(R::Failure::CoreState);
+            }
             runtimeReport[R::LastViewCleanupComplete] = 1;
             runtimeReport[R::WorkerPhase] = static_cast<std::uint32_t>(R::Phase::Hidden);
             PublishRuntime();

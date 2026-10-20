@@ -199,8 +199,13 @@ if ($frontendStartupMarkers.Count -eq 1 -and $frontendStartupMarkers[0].Groups[1
 # Runtime configuration cannot turn any historical native trial into a session.
 $runtimeMarkers = [regex]::Matches($configText, 'export const MTA_CORE_FRONTEND_RUNTIME = (true|false);')
 if ($runtimeMarkers.Count -gt 1 -or [regex]::Matches($configText, 'export const MTA_CORE_FRONTEND_RUNTIME\b').Count -ne $runtimeMarkers.Count) { throw 'Invalid MTA frontend runtime configuration marker.' }
+$bindingPersistenceMarkers = [regex]::Matches($configText, 'export const MTA_CORE_FRONTEND_BINDING_PERSISTENCE = (true|false);')
+if ($bindingPersistenceMarkers.Count -gt 1 -or
+    [regex]::Matches($configText, 'export const MTA_CORE_FRONTEND_BINDING_PERSISTENCE\b').Count -ne $bindingPersistenceMarkers.Count) { throw 'Invalid saved MTA movement bindings configuration marker.' }
+if ($bindingPersistenceMarkers.Count -eq 1 -and $bindingPersistenceMarkers[0].Groups[1].Value -eq 'true' -and
+    ($runtimeMarkers.Count -ne 1 -or $runtimeMarkers[0].Groups[1].Value -ne 'true')) { throw 'Saved MTA movement bindings require the retained frontend runtime.' }
 if ($runtimeMarkers.Count -eq 1 -and $runtimeMarkers[0].Groups[1].Value -eq 'true') {
-    $runtimeConflicts = @([regex]::Matches($configText, 'export const ((?:GAIT_|INPUT_|MTA_)[A-Z0-9_]+) = true;') | Where-Object {$_.Groups[1].Value -ne 'MTA_CORE_FRONTEND_RUNTIME'})
+    $runtimeConflicts = @([regex]::Matches($configText, 'export const ((?:GAIT_|INPUT_|MTA_)[A-Z0-9_]+) = true;') | Where-Object {$_.Groups[1].Value -notin @('MTA_CORE_FRONTEND_RUNTIME','MTA_CORE_FRONTEND_BINDING_PERSISTENCE')})
     if ($frontendCount -ne 22 -or $guiCount -ne 13 -or $packagePaths.Count -ne 58 -or $package.mode -ne 'Smoke' -or $runtimeConflicts.Count) {
         throw 'MTA frontend runtime requires complete frontend ownership and separate opt-in Smoke mode.'
     }

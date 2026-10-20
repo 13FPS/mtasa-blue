@@ -199,7 +199,8 @@ namespace
                  {L"MTA_CORE_FIXTURE_DELAY_MS", L"MTA_CORE_FIXTURE_BAD_VERSION", L"MTA_CORE_FIXTURE_BAD_STATE", L"MTA_CORE_FIXTURE_BAD_INITIALIZE",
                   L"MTA_CORE_FIXTURE_FAIL_ATTACH", L"MTA_CORE_FIXTURE_INPUT_MODE", L"MTA_CORE_FIXTURE_RENDER_MODE", L"MTA_CORE_FIXTURE_GUI_MODE",
                   L"MTA_CORE_FIXTURE_SURFACE_MODE", L"MTA_CORE_FIXTURE_CLOCK_MODE", L"MTA_CORE_FIXTURE_FRONTEND_CLOCK_MODE", L"MTA_CORE_FIXTURE_RUNTIME_MODE",
-                  L"MTA_CORE_FIXTURE_LOCAL_RUNTIME_MODE", L"MTA_CORE_FIXTURE_APPLICATION_FRAME_MODE", L"MTA_CORE_FIXTURE_STARTUP_OBSERVATION_MODE"})
+                  L"MTA_CORE_FIXTURE_LOCAL_RUNTIME_MODE", L"MTA_CORE_FIXTURE_APPLICATION_FRAME_MODE", L"MTA_CORE_FIXTURE_STARTUP_OBSERVATION_MODE",
+                  L"MTA_CORE_FIXTURE_BINDING_PERSISTENCE_MODE"})
                 Set(name, L"0");
         }
         ~Fixture()
@@ -626,6 +627,94 @@ namespace
         Check(!worker.ReadLocalInputRuntime(L::FieldCount), "unknown local32 fields stay neutral");
         for (std::uint32_t field = 0; field < 19; ++field)
             Check(!worker.Read(field), "local service does not reinterpret Common19 or Runtime416");
+    }
+
+    void TestBindingPersistenceWorker(deonline::CoreStartupReference& worker, const std::filesystem::path& root, const std::wstring& mode,
+                                      const std::filesystem::path& fixturePath)
+    {
+        namespace R = deonline::FrontendRuntimeReport;
+        namespace C = DefinitiveFrontendRuntime;
+        const std::array<const wchar_t*, 8> modes{L"binding-runtime-default",         L"binding-runtime-enabled",        L"binding-runtime-saved",
+                                                  L"binding-runtime-refused",         L"binding-runtime-wrong-readonly", L"binding-runtime-incoherent-loads",
+                                                  L"binding-runtime-regressed-loads", L"binding-runtime-missing-export"};
+        const auto                          found = std::find(modes.begin(), modes.end(), mode);
+        Check(found != modes.end(), "known binding persistence worker case");
+        const auto scenario = static_cast<unsigned>(found - modes.begin());
+        Fixture    fixture(700 + scenario);
+        Set(L"MTA_CORE_FIXTURE_BINDING_PERSISTENCE_MODE", std::to_wstring(scenario));
+        const bool localInput = scenario == 1 || scenario == 2;
+        if (localInput)
+            Set(L"MTA_CORE_FIXTURE_LOCAL_RUNTIME_MODE", L"1");
+        CopyCore(fixturePath, root);
+        SetEvent(fixture.release);
+        const auto generation = Fast([&] { return worker.BeginFrontendRuntime(&anchor, localInput, scenario != 0); });
+        Check(generation != 0, "persistence reuses the existing retained runtime generation");
+        const auto deadline = GetTickCount64() + 14000;
+        const auto read = [&](std::uint32_t field) { return worker.ReadFrontendRuntime(field); };
+        const auto core = [&](C::Field field) { return read(R::CoreOffset + field); };
+        const auto capture = [&] { return Fast([&] { return worker.CaptureFrontendRuntime(); }); };
+        const auto wait = [&](const auto& predicate)
+        {
+            while (!capture() || !predicate())
+            {
+                worker.HeartbeatFrontendRuntime(generation);
+                Check(worker.PollFrontendRuntime() == 0 && GetTickCount64() < deadline, "persistence worker did not reach its owned handoff state");
+                Sleep(5);
+            }
+        };
+        if (scenario == 3 || scenario == 4 || scenario == 5 || scenario == 7)
+        {
+            Wait(worker);
+            Check(capture() && read(R::LastFailure) == static_cast<std::uint32_t>(scenario == 7 ? R::Failure::Exports : R::Failure::CoreState) &&
+                      !fixture.counters[47] && !fixture.counters[54],
+                  "missing, refused or inconsistent persistence cannot enter a GUI or native input");
+            if (scenario == 7)
+                Check(!fixture.counters[44] && !fixture.counters[61] && !read(R::CoreOwnerRetained),
+                      "missing opt-in export refuses before constructing a Core owner");
+            else
+                Check(fixture.counters[61] == 1 && fixture.counters[44] == 1 && fixture.counters[48] == 1 && fixture.counters[49] == 1 &&
+                          read(R::CoreStoppedVerified) == 1 && read(R::CoreReleasedVerified) == 1 && read(R::CoreUnloadedVerified) == 1,
+                      "persistence refusal retires the exact owner instead of silently falling back");
+        }
+        else
+        {
+            wait([&] { return read(R::WorkerPhase) == static_cast<std::uint32_t>(R::Phase::Hidden); });
+            const auto initialLoads = scenario == 2 || scenario == 6 ? 2u : 1u;
+            Check(core(C::ConfigurationReadOnly) == (scenario == 0 ? 1u : 0u) && core(C::BindingManagerCreations) == initialLoads &&
+                      core(C::BindingLoads) == initialLoads && core(C::ConfigurationLoads) == 1 && fixture.counters[61] == (scenario == 0 ? 0 : 1),
+                  "old defaults remain session-only while explicit opt-in accepts a saved MTA manager");
+            const auto command = [&](std::uint32_t sequence, R::Command action) { AdmitRuntimeCommand(worker, generation, sequence, action); };
+            for (std::uint32_t view = 0; view < (scenario == 6 ? 1u : 2u); ++view)
+            {
+                command(view * 2 + 1, R::Command::Show);
+                wait([&] { return read(R::WorkerPhase) == static_cast<std::uint32_t>(R::Phase::Visible); });
+                command(view * 2 + 2, R::Command::Hide);
+                if (scenario == 6)
+                    break;
+                wait([&] { return read(R::AcknowledgedSequence) == view * 2 + 2 && read(R::WorkerPhase) == static_cast<std::uint32_t>(R::Phase::Hidden); });
+                const auto expectedLoads = initialLoads + (scenario == 0 ? 0u : view + 1);
+                Check(core(C::BindingManagerCreations) == expectedLoads && core(C::BindingLoads) == expectedLoads && core(C::ConfigurationLoads) == 1 &&
+                          fixture.counters[61] == (scenario == 0 ? 0 : 1),
+                      "view Apply and reopening retain coherent manager counts without re-enabling persistence");
+            }
+            if (scenario != 6)
+                command(5, R::Command::Stop);
+            while (worker.PollFrontendRuntime() == 0)
+            {
+                worker.HeartbeatFrontendRuntime(generation);
+                Check(GetTickCount64() < deadline, "persistence worker final cleanup exceeded the fixture budget");
+                Sleep(5);
+            }
+            Check(capture() && read(R::LastFailure) == (scenario == 6 ? static_cast<std::uint32_t>(R::Failure::CoreState) : 0u) &&
+                      read(R::CoreStoppedVerified) == 1 && read(R::CoreReleasedVerified) == 1 && read(R::CoreUnloadedVerified) == 1 &&
+                      read(R::CleanupComplete) == 1 && !read(R::CleanupPending),
+                  "coherent persistence and rejected count rollback both finish through genuine owner retirement");
+            if (localInput)
+                Check(fixture.counters[54] == 2 && fixture.counters[58] >= 1 && !fixture.counters[59],
+                      "loaded and edited bindings share the existing local-input handoff across both menus");
+        }
+        Check(!fixture.counters[62] && !fixture.counters[52] && !fixture.counters[2] && !GetModuleHandleW(L"core.dll"),
+              "persistence admission stays on the worker before views/input and leaves no Core module");
     }
 
     struct WorkerDeleteObservation
@@ -1807,7 +1896,12 @@ int wmain(int argc, wchar_t** argv)
         Check(!worker.Begin(nullptr), "null anchor must be rejected");
         for (unsigned field = 0; field < 20; ++field)
             Check(worker.Read(field) == 0, "idle cache must be neutral");
-        if (std::wstring(argv[2]).find(L"local-runtime-") == 0)
+        if (std::wstring(argv[2]).find(L"binding-runtime-") == 0)
+        {
+            Check(argc == 4, "binding runtime fixture requires its controlled Core DLL");
+            TestBindingPersistenceWorker(worker, root, argv[2], argv[3]);
+        }
+        else if (std::wstring(argv[2]).find(L"local-runtime-") == 0)
         {
             Check(argc == 4, "local runtime fixture requires its controlled Core DLL");
             TestLocalRuntimeWorker(worker, root, argv[2], argv[3]);

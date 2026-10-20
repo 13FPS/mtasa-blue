@@ -38,6 +38,9 @@ DE_BRIDGE_API std::uint32_t DE_FrontendRuntimeReadV1(std::uint32_t field);
 // Hide. Its separate32-word record never changes the frontend416 ABI.
 DE_BRIDGE_API std::uint32_t DE_LocalInputRuntimeApiVersionV1();
 DE_BRIDGE_API std::uint32_t DE_LocalInputRuntimeStartV1();
+// Persistent Apply is independently selected; historical starts keep their
+// session-only configuration contract and require no persistence Core export.
+DE_BRIDGE_API std::uint32_t DE_LocalInputRuntimeStartPersistentV1();
 DE_BRIDGE_API int           DE_LocalInputRuntimeCaptureV1();
 DE_BRIDGE_API std::uint32_t DE_LocalInputRuntimeReadV1(std::uint32_t field);
 // These guards keep the experimental CLEO adapter tied to the executable tested

@@ -84,6 +84,10 @@ namespace DefinitiveFrontendRuntime
     using RunView = Status (*)(void*, const DefinitivePersistentFrontend::RequestV1*);
     using Shutdown = Status (*)(void*);
     using Release = Status (*)(void*);
+    // The worker may explicitly load durable movement binds before its first
+    // view/input borrower. Legacy Runtime Begin remains configuration-read-only.
+    using EnableBindingPersistence = Status (*)(void*, std::uint32_t);
+    using EnableBindingPersistenceAtPath = Status (*)(void*, std::uint32_t, const wchar_t*, std::uint32_t);
 
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
     void*  BeginOwner() noexcept;
@@ -92,5 +96,7 @@ namespace DefinitiveFrontendRuntime
     Status RunViewOwner(void* handle, const DefinitivePersistentFrontend::RequestV1* request) noexcept;
     Status ShutdownOwner(void* handle) noexcept;
     Status ReleaseOwner(void* handle) noexcept;
+    Status EnableBindingPersistenceOwner(void* handle, std::uint32_t version) noexcept;
+    Status EnableBindingPersistenceAtPathOwner(void* handle, std::uint32_t version, const wchar_t* path, std::uint32_t chars) noexcept;
 #endif
 }

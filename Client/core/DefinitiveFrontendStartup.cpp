@@ -9,6 +9,7 @@
 #include "DefinitiveFrontendClockReference.h"
 #include "DefinitivePersistentFrontend.h"
 #include "DefinitiveFrontendRuntime.h"
+#include "DefinitiveFrontendBindingPersistence.h"
 #include "DefinitiveLocalInputRuntime.h"
 #include "DefinitiveStartupGameTime.h"
 
@@ -448,6 +449,29 @@ namespace DefinitiveFrontendStartup
             return configured;
         }
 
+        Status EnableBindingPersistence(const wchar_t* path, std::uint32_t chars) noexcept
+        {
+            const auto admitted = CheckLocalAdmission();
+            if (admitted != Status::Ok)
+                return admitted;
+            if (!core->LocalInputAllowsFrontend())
+                return Status::Busy;
+            // Reuse the existing owner operation lock and borrowing gate. XML
+            // loading can replace the retained manager only before a GUI/input
+            // borrower is admitted; it does not create another service owner.
+            core->m_frontendStartupAccepting = false;
+            Status result = Status::Failed;
+            try
+            {
+                result = core->EnableFrontendRuntimeBindingPersistence(path, chars);
+            }
+            catch (...)
+            {
+            }
+            RefreshLocalBorrowGate();
+            return result;
+        }
+
         Status PulseLocal() noexcept
         {
             namespace Local = DefinitiveLocalInputRuntime;
@@ -872,6 +896,18 @@ namespace DefinitiveFrontendStartup
         return activeStartup->ConfigureLocal(*request);
     }
 
+    Status EnableRuntimeBindingPersistenceOwner(void* handle, std::uint32_t version, const wchar_t* path, std::uint32_t chars, bool explicitPath) noexcept
+    {
+        Operation  operation;
+        const auto status = operation.Validate(handle);
+        if (status != Status::Ok)
+            return status;
+        if (version != DefinitiveFrontendBindingPersistence::ApiVersion ||
+            (explicitPath && (!path || !chars || chars > 32767 || std::find(path, path + chars, L'\0') != path + chars)))
+            return Status::InvalidArgument;
+        return activeStartup->EnableBindingPersistence(path, chars);
+    }
+
     Status PulseLocalOwner(void* handle) noexcept
     {
         Operation  operation;
@@ -959,6 +995,14 @@ namespace DefinitiveFrontendRuntime
     Status ReleaseOwner(void* handle) noexcept
     {
         return DefinitiveFrontendStartup::ReleaseRuntimeOwner(handle);
+    }
+    Status EnableBindingPersistenceOwner(void* handle, std::uint32_t version) noexcept
+    {
+        return DefinitiveFrontendStartup::EnableRuntimeBindingPersistenceOwner(handle, version, nullptr, 0, false);
+    }
+    Status EnableBindingPersistenceAtPathOwner(void* handle, std::uint32_t version, const wchar_t* path, std::uint32_t chars) noexcept
+    {
+        return DefinitiveFrontendStartup::EnableRuntimeBindingPersistenceOwner(handle, version, path, chars, true);
     }
 }
 

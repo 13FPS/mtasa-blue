@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { MODE, ONLINE_ACTIVATION, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE, MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE, MTA_CORE_RENDER_ROUTE, MTA_CORE_RENDER_GPU_REFERENCE, MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE, MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE, MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE, MTA_CORE_GUI_STARTUP_REFERENCE, MTA_CORE_GUI_SURFACE_REFERENCE, MTA_CORE_GUI_FRONTEND_REFERENCE, MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE, MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE, MTA_CORE_PERSISTENT_FRONTEND, MTA_CORE_FRONTEND_RUNTIME, MTA_CORE_CLOCK_REFERENCE, MTA_CORE_CLOCK_SET_REFERENCE, MTA_CORE_APPLICATION_FRAME_REFERENCE, MTA_CORE_STARTUP_OBSERVATION_REFERENCE } from './config.mjs';
+import { MODE, ONLINE_ACTIVATION, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE, MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE, MTA_CORE_RENDER_ROUTE, MTA_CORE_RENDER_GPU_REFERENCE, MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE, MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE, MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE, MTA_CORE_GUI_STARTUP_REFERENCE, MTA_CORE_GUI_SURFACE_REFERENCE, MTA_CORE_GUI_FRONTEND_REFERENCE, MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE, MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE, MTA_CORE_PERSISTENT_FRONTEND, MTA_CORE_FRONTEND_RUNTIME, MTA_CORE_FRONTEND_BINDING_PERSISTENCE, MTA_CORE_CLOCK_REFERENCE, MTA_CORE_CLOCK_SET_REFERENCE, MTA_CORE_APPLICATION_FRAME_REFERENCE, MTA_CORE_STARTUP_OBSERVATION_REFERENCE } from './config.mjs';
 import { AdapterController, NativeGaitReferenceController, NativeInputReferenceController, PlayerControlLease } from './controller.mjs';
 import { MtaNativePadReferenceController } from './native-pad-reference.mjs';
 import { MtaNativeMovementTrialController } from './native-movement-trial.mjs';
@@ -37,6 +37,9 @@ function runAdapter() {
             MTA_CORE_PERSISTENT_FRONTEND, MTA_CORE_FRONTEND_RUNTIME, MTA_CORE_CLOCK_REFERENCE,
             MTA_CORE_CLOCK_SET_REFERENCE, MTA_CORE_STARTUP_OBSERVATION_REFERENCE].some(Boolean))))
         throw new Error('MTA application-frame observation requires separate opt-in Smoke mode');
+    if (typeof MTA_CORE_FRONTEND_BINDING_PERSISTENCE !== 'boolean' ||
+        (MTA_CORE_FRONTEND_BINDING_PERSISTENCE && !MTA_CORE_FRONTEND_RUNTIME))
+        throw new Error('Saved MTA movement bindings require the retained frontend runtime');
     // This session selection owns Core/configuration across independently
     // retired views. It must never inherit another native trial's lifetime.
     if (typeof MTA_CORE_FRONTEND_RUNTIME !== 'boolean' ||
@@ -309,7 +312,7 @@ function runAdapter() {
     if (bindRuntime() !== 1) throw new Error('CLEO runtime lifecycle binding failed');
     enterPhase('runtime_bound');
     if (MTA_CORE_FRONTEND_RUNTIME) {
-        runFrontendRuntime(bind, chordHeld, stopKey, true);
+        runFrontendRuntime(bind, chordHeld, stopKey, true, MTA_CORE_FRONTEND_BINDING_PERSISTENCE);
         return;
     }
     if (MTA_CORE_CLOCK_SET_REFERENCE) {
@@ -2186,9 +2189,11 @@ function validateMtaLocalInputRuntimeSample(values) {
     return values;
 }
 
-function runFrontendRuntime(bind, chordHeld, stopKey, localInput = false) {
+function runFrontendRuntime(bind, chordHeld, stopKey, localInput = false, bindingPersistence = false) {
+    if (bindingPersistence && !localInput) throw new Error('Saved bindings require the configured local-input runtime');
     const version = bind('DE_FrontendRuntimeApiVersionV1', 'X64U32');
-    const start = bind(localInput ? 'DE_LocalInputRuntimeStartV1' : 'DE_FrontendRuntimeStartV1', 'X64U32');
+    const start = bind(bindingPersistence ? 'DE_LocalInputRuntimeStartPersistentV1' :
+        localInput ? 'DE_LocalInputRuntimeStartV1' : 'DE_FrontendRuntimeStartV1', 'X64U32');
     const command = bind('DE_FrontendRuntimeCommandV1');
     const heartbeat = bind('DE_FrontendRuntimeHeartbeatV1');
     const poll = bind('DE_FrontendRuntimePollV1');
@@ -2259,9 +2264,10 @@ function runFrontendRuntime(bind, chordHeld, stopKey, localInput = false) {
             throw new Error('Invalid frontend runtime view sample');
         if (values[1] === 2) {
             if (![1, 3].includes(values[26]) || core[1] !== 2 || core[33] !== 2 ||
-                [3, 4, 5, 23, 37, 38, 39, 40, 41, 42, 51, 55].some(field => core[field] !== 1) ||
+                [3, 4, 5, 23, 37, 38, 39, 40, 41, 42, 51].some(field => core[field] !== 1) ||
                 [8, 9, 10, 11, 12, 13, 14, 15, 50, 56, 57].some(field => core[field]) ||
-                core[43] !== 1 || core[44] !== 1 || core[45] !== 1 || core[46] !== core[47] ||
+                core[55] !== (bindingPersistence ? 0 : 1) || core[44] !== 1 ||
+                core[43] < 1 || core[43] !== core[45] || (!bindingPersistence && core[43] !== 1) || core[46] !== core[47] ||
                 core[48] !== values[20] || core[49] !== values[21] || core[47] !== values[23] ||
                 !values[30] || !values[31] || values[33] || !values[44] || !retiredView(view))
                 throw new Error('Frontend runtime claimed Hidden before view retirement');
@@ -2282,7 +2288,7 @@ function runFrontendRuntime(bind, chordHeld, stopKey, localInput = false) {
     };
     enterPhase('frontend_runtime');
     emit({ event: 'adapter_start', host: HOST, cleo: String(CLEO.version), mode: MODE, endpoint: null,
-        frontend_runtime: true, runtime_api: 1, adapter_abi: 6, local_input: localInput,
+        frontend_runtime: true, runtime_api: 1, adapter_abi: 6, local_input: localInput, binding_persistence: bindingPersistence,
         local_input_api: localInput ? 1 : 0, network_active: false, gameplay_ready: false, full_mta_ready: false });
     const generation = start();
     if (!Number.isInteger(generation) || generation < 1 || generation > 0xffffffff) throw new Error('MTA frontend runtime could not start');
@@ -2304,7 +2310,8 @@ function runFrontendRuntime(bind, chordHeld, stopKey, localInput = false) {
         emit({ event: 'frontend_runtime_stop_requested', schema, generation, sequence, reason });
     };
     emit({ event: 'frontend_runtime_started', schema, generation, fields: 416, core_fields: 64, view_fields: 288,
-        local_input: localInput, local_input_api: localInput ? 1 : 0, local_input_fields: localInput ? 32 : 0,
+        local_input: localInput, binding_persistence: bindingPersistence,
+        local_input_api: localInput ? 1 : 0, local_input_fields: localInput ? 32 : 0,
         maximum_duration_ms: 0, display_duration_ms: 0, host_heartbeat_budget_ms: 1000,
         native_heartbeat_budget_ms: 500, cursor_heartbeat_budget_ms: 500, clock_started: false, network_active: false, full_mta_ready: false });
     while (true) {

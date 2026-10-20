@@ -207,7 +207,18 @@ view; Ctrl+Shift+End stops the retained runtime.
 One completed Core/backend owns the actual XML, CVars and configured `CKeyBinds`
 manager. Settings Apply changes these session bindings, so a fresh GUI can
 borrow them again after the old GUI is released. Cancel discards staged edits;
-configuration files are not saved. Each visible view still owns its native
+configuration files are not saved by default. Adding
+`-MtaCoreFrontendBindingPersistence` to `package.ps1` or `set-mode.ps1` explicitly
+enables saved movement bindings for this runtime. The retained Core loads them
+before its first GUI or gameplay-input borrower; Settings Apply atomically saves
+the six supported controls in MTA's user-data `definitive/keybinds.xml`. A later
+launch with the same option reloads that file. Cancel and a failed save preserve
+the previous bindings. Ordinary mode changes clear this option, and older
+packages need updating before they can select it. The installed
+`mta/config/coreconfig.xml` remains unchanged. This integration has offline
+coverage; cross-launch behavior in GTA still needs a combined live check.
+
+Each visible view still owns its native
 input, cursor and rendering leases. Hidden acknowledgement requires their
 retirement and neutral key history; final Stop releases the session services
 before the backend/Core. Cleanup debt retains its owners rather than unloading

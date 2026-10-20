@@ -646,6 +646,11 @@ std::uint32_t DE_LocalInputRuntimeStartV1()
 {
     return ControllerAccessAllowed() && !movementAdapter && !client ? coreStartup.BeginFrontendRuntime(&moduleAnchor, true) : 0;
 }
+
+std::uint32_t DE_LocalInputRuntimeStartPersistentV1()
+{
+    return ControllerAccessAllowed() && !movementAdapter && !client ? coreStartup.BeginFrontendRuntime(&moduleAnchor, true, true) : 0;
+}
 int DE_LocalInputRuntimeCaptureV1()
 {
     return ControllerAccessAllowed() && coreStartup.CaptureLocalInputRuntime() ? 1 : 0;

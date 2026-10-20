@@ -72,13 +72,106 @@ void BindingPersistenceNonRuntime(Owned& owned, const std::filesystem::path& roo
           "ordinary frontend refuses persistence before selecting or writing any user or fixture file");
 }
 
+void BindingPersistenceHistoricalOwner(Owned& owned, const std::filesystem::path& root)
+{
+    const auto enable = Export<Runtime::EnableBindingPersistence>(owned.core, "MTA_EnableDEFrontendRuntimeBindingPersistenceV1");
+    const auto atPath = Export<Runtime::EnableBindingPersistenceAtPath>(owned.core, "MTA_EnableDEFrontendRuntimeBindingPersistenceAtPathV1");
+    const auto path = BindingFixturePath(root).wstring();
+    owned.startup = owned.beginStartup(Startup::ApiVersion);
+    Check(owned.startup != nullptr, "create one real historical Core owner for the focused nonruntime admission check");
+    const auto before = StartupState(owned);
+    Check(enable(owned.startup, Runtime::ApiVersion) == Frontend::Status::InvalidArgument &&
+              atPath(owned.startup, Runtime::ApiVersion, path.data(), static_cast<std::uint32_t>(path.size())) == Frontend::Status::InvalidArgument &&
+              StartupState(owned) == before && !std::filesystem::exists(path),
+          "runtime persistence refuses a real nonruntime startup handle without changing its Core or creating a file");
+    Check(owned.shutdownStartup(owned.startup) == Frontend::Status::Ok && owned.releaseStartup(owned.startup) == Frontend::Status::Ok,
+          "retire the historical admission owner before constructing the actual durable runtime");
+    owned.startup = nullptr;
+}
+
+void BindingPersistenceOwner(Owned& owned, const std::filesystem::path& root, bool restarted)
+{
+    const auto enable = Export<Runtime::EnableBindingPersistence>(owned.core, "MTA_EnableDEFrontendRuntimeBindingPersistenceV1");
+    const auto atPath = Export<Runtime::EnableBindingPersistenceAtPath>(owned.core, "MTA_EnableDEFrontendRuntimeBindingPersistenceAtPathV1");
+    const auto file = BindingFixturePath(root);
+    const auto path = file.wstring();
+    const auto call = [&](void* handle, const std::filesystem::path& selected, std::uint32_t version = Runtime::ApiVersion)
+    {
+        const auto wide = selected.wstring();
+        return atPath(handle, version, wide.data(), static_cast<std::uint32_t>(wide.size()));
+    };
+    const auto before = RuntimeState(owned);
+    Check(!owned.frontend && before[Runtime::RuntimePhase] == static_cast<std::uint32_t>(Runtime::Phase::Hidden) && before[Runtime::ConfigurationReadOnly] &&
+              !before[Runtime::ViewsAttached] && before[Runtime::BindCount] == 8,
+          "actual hidden runtime owns its configured bindings before any GUI view or local producer borrows them");
+    if (!restarted)
+    {
+        Check(!std::filesystem::exists(file), "default hidden owner has not created a durable binding file");
+        const auto unknown = reinterpret_cast<void*>(std::uintptr_t{1});
+        Check(enable(nullptr, 1) == Frontend::Status::InvalidArgument && enable(unknown, 1) == Frontend::Status::InvalidArgument &&
+                  enable(owned.startup, 0) == Frontend::Status::InvalidArgument && enable(owned.startup, 2) == Frontend::Status::InvalidArgument &&
+                  call(nullptr, file) == Frontend::Status::InvalidArgument && call(unknown, file) == Frontend::Status::InvalidArgument &&
+                  call(owned.startup, file, 0) == Frontend::Status::InvalidArgument && call(owned.startup, file, 2) == Frontend::Status::InvalidArgument,
+              "hidden-owner persistence rejects null unknown and foreign-version identities");
+        Check(atPath(owned.startup, 1, nullptr, 0) == Frontend::Status::InvalidArgument &&
+                  atPath(owned.startup, 1, path.data(), 0) == Frontend::Status::InvalidArgument &&
+                  call(owned.startup, L"definitive/keybinds.xml") == Frontend::Status::InvalidArgument &&
+                  call(owned.startup, root / L"binding-fixture/definitive/other.xml") == Frontend::Status::InvalidArgument &&
+                  call(owned.startup, root / L"binding-fixture/other/keybinds.xml") == Frontend::Status::InvalidArgument &&
+                  call(owned.startup, root / L"mta/config/coreconfig.xml") == Frontend::Status::InvalidArgument,
+              "hidden-owner persistence refuses malformed nonabsolute and non-dedicated configuration paths");
+        bool        foreign = false;
+        std::thread other(
+            [&] { foreign = call(owned.startup, file) == Frontend::Status::WrongThread && enable(owned.startup, 1) == Frontend::Status::WrongThread; });
+        other.join();
+        Check(foreign && RuntimeState(owned) == before && !std::filesystem::exists(file),
+              "foreign owner persistence calls preserve the hidden manager and create no file");
+        const auto invalid = root / L"invalid-binding-fixture/definitive/keybinds.xml";
+        for (const auto& bytes : {std::string("<definitive_keybinds"),
+                                  std::string("<definitive_keybinds version=\"1\"><binds><bind key=\"x\" control=\"fire\"/></binds></definitive_keybinds>"),
+                                  std::string("<definitive_keybinds version=\"2\"><binds/></definitive_keybinds>")})
+        {
+            WriteBindingFixture(invalid, bytes);
+            Check(call(owned.startup, invalid) == Frontend::Status::Failed && ReadBindingFixture(invalid) == bytes && RuntimeState(owned) == before,
+                  "malformed unknown-control and unknown-schema XML leave the hidden manager and existing file unchanged");
+        }
+        bindingPersistenceAdmissionVerified = true;
+    }
+    std::filesystem::create_directories(file.parent_path());
+    const auto saved = restarted ? ReadBindingFixture(file) : std::string{};
+    Check(call(owned.startup, file) == Frontend::Status::Ok, "hidden runtime opts into the owned movement file before its first GUI view");
+    const auto enabled = RuntimeState(owned);
+    Check(enabled[Runtime::ConfigurationReadOnly] == 0 && !enabled[Runtime::ViewBorrowed] && !enabled[Runtime::ViewsAttached] &&
+              enabled[Runtime::BindingManagerCreations] == (restarted ? 2u : 1u) && enabled[Runtime::BindingLoads] == (restarted ? 2u : 1u) &&
+              enabled[Runtime::BindCount] == before[Runtime::BindCount],
+          "existing disk bindings commit to the hidden actual manager before local-input configuration can borrow it");
+    Check(call(owned.startup, file) == Frontend::Status::Ok && RuntimeState(owned) == enabled &&
+              call(owned.startup, root / L"other-binding-fixture/definitive/keybinds.xml") == Frontend::Status::Busy && RuntimeState(owned) == enabled,
+          "hidden owner keeps its selected file idempotently and refuses a second destination without reloading its manager");
+    Check(restarted ? ReadBindingFixture(file) == saved : !std::filesystem::exists(file),
+          "hidden opt-in reloads existing disk state without rewriting it and never creates an absent file");
+}
+
+void BindingPersistenceOwnerRefused(Owned& owned, const std::filesystem::path& root, Frontend::Status expected, const char* why)
+{
+    const auto enable = Export<Runtime::EnableBindingPersistence>(owned.core, "MTA_EnableDEFrontendRuntimeBindingPersistenceV1");
+    const auto atPath = Export<Runtime::EnableBindingPersistenceAtPath>(owned.core, "MTA_EnableDEFrontendRuntimeBindingPersistenceAtPathV1");
+    const auto path = BindingFixturePath(root).wstring();
+    const auto before = RuntimeState(owned);
+    Check(enable(owned.startup, Runtime::ApiVersion) == expected &&
+              atPath(owned.startup, Runtime::ApiVersion, path.data(), static_cast<std::uint32_t>(path.size())) == expected && RuntimeState(owned) == before,
+          why);
+    if (owned.frontend)
+        Check(enable(owned.frontend, Runtime::ApiVersion) == Frontend::Status::InvalidArgument &&
+                  atPath(owned.frontend, Runtime::ApiVersion, path.data(), static_cast<std::uint32_t>(path.size())) == Frontend::Status::InvalidArgument,
+              "runtime owner API refuses an actual frontend view handle");
+}
+
 void BindingPersistenceSettings(Owned& owned, const std::filesystem::path& root, unsigned view, bool restarted)
 {
-    const auto enable = Export<BindingPersistence::Enable>(owned.core, "MTA_EnableDEFrontendBindingPersistenceV1");
     const auto atPath = Export<BindingPersistence::EnableAtPath>(owned.core, "MTA_EnableDEFrontendBindingPersistenceAtPathV1");
     const auto readBindings = Export<Bindings::Read>(owned.core, "MTA_ReadDEFrontendBindings");
     const auto file = BindingFixturePath(root);
-    const auto path = file.wstring();
     const auto call = [&](void* handle, const std::filesystem::path& selected, std::uint32_t version = BindingPersistence::ApiVersion)
     {
         const auto wide = selected.wstring();
@@ -92,48 +185,13 @@ void BindingPersistenceSettings(Owned& owned, const std::filesystem::path& root,
         return values;
     };
     const auto before = state();
-    if (view == 1 && !restarted)
-    {
-        Check(before[Bindings::ConfigurationReadOnly] && RuntimeState(owned)[Runtime::ConfigurationReadOnly] && !std::filesystem::exists(file),
-              "runtime remains read-only by default and has not created a binding file");
-        const auto unknown = reinterpret_cast<void*>(std::uintptr_t{1});
-        Check(enable(nullptr, 1) == Frontend::Status::InvalidArgument && enable(unknown, 1) == Frontend::Status::InvalidArgument &&
-                  enable(owned.frontend, 0) == Frontend::Status::InvalidArgument && enable(owned.frontend, 2) == Frontend::Status::InvalidArgument &&
-                  call(nullptr, file) == Frontend::Status::InvalidArgument && call(unknown, file) == Frontend::Status::InvalidArgument &&
-                  call(owned.startup, file) == Frontend::Status::InvalidArgument && call(owned.frontend, file, 0) == Frontend::Status::InvalidArgument &&
-                  call(owned.frontend, file, 2) == Frontend::Status::InvalidArgument,
-              "optional persistence rejects null unknown runtime-owner and foreign-version identities");
-        Check(atPath(owned.frontend, 1, nullptr, 0) == Frontend::Status::InvalidArgument &&
-                  atPath(owned.frontend, 1, path.data(), 0) == Frontend::Status::InvalidArgument &&
-                  call(owned.frontend, L"definitive/keybinds.xml") == Frontend::Status::InvalidArgument &&
-                  call(owned.frontend, root / L"binding-fixture/definitive/other.xml") == Frontend::Status::InvalidArgument &&
-                  call(owned.frontend, root / L"binding-fixture/other/keybinds.xml") == Frontend::Status::InvalidArgument &&
-                  call(owned.frontend, root / L"mta/config/coreconfig.xml") == Frontend::Status::InvalidArgument,
-              "explicit persistence refuses malformed nonabsolute and non-dedicated configuration paths");
-        bool        foreign = false;
-        std::thread other(
-            [&] { foreign = call(owned.frontend, file) == Frontend::Status::WrongThread && enable(owned.frontend, 1) == Frontend::Status::WrongThread; });
-        other.join();
-        Check(foreign && state() == before && !std::filesystem::exists(file),
-              "foreign persistence calls preserve the real manager diagnostics and create no file");
-        const auto invalid = root / L"invalid-binding-fixture/definitive/keybinds.xml";
-        for (const auto& bytes : {std::string("<definitive_keybinds"),
-                                  std::string("<definitive_keybinds version=\"1\"><binds><bind key=\"x\" control=\"fire\"/></binds></definitive_keybinds>"),
-                                  std::string("<definitive_keybinds version=\"2\"><binds/></definitive_keybinds>")})
-        {
-            WriteBindingFixture(invalid, bytes);
-            Check(call(owned.frontend, invalid) == Frontend::Status::Failed && ReadBindingFixture(invalid) == bytes && state() == before,
-                  "malformed unknown-control and unknown-schema XML fail without changing disk or the configured manager");
-        }
-        bindingPersistenceAdmissionVerified = true;
-    }
     std::filesystem::create_directories(file.parent_path());
     Check(call(owned.frontend, file) == Frontend::Status::Ok && call(owned.frontend, file) == Frontend::Status::Ok,
-          "explicit opt-in selects the owned movement path idempotently before Settings opens");
+          "fresh view reuses the hidden owner's selected movement path idempotently before Settings opens");
     Check(call(owned.frontend, root / L"other-binding-fixture/definitive/keybinds.xml") == Frontend::Status::Busy &&
               !state()[Bindings::ConfigurationReadOnly] && !RuntimeState(owned)[Runtime::ConfigurationReadOnly] &&
               !owned.State()[Frontend::ConfigurationReadOnly],
-          "explicit opt-in alone changes frontend bindings and runtime read-only diagnostics while refusing a second destination");
+          "fresh view inherits the owner's writable diagnostics while refusing a second destination");
     if (view == 1 && !restarted)
         Check(!std::filesystem::exists(file), "opting in alone does not create the durable file before Apply");
 

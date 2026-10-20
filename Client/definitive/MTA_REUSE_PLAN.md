@@ -70,6 +70,13 @@ then swaps in the staged manager. A failed save leaves the prior file and
 bindings active, and Cancel discards edits. Existing diagnostic/session APIs
 remain session-only unless their retained owner explicitly opts in. This
 feature does not start GTA, networking or a second configuration lifecycle.
+The retained runtime now exposes the matching owner-level
+`MTA_EnableDEFrontendRuntimeBindingPersistenceV1` / `AtPathV1` calls so the worker
+can load bindings while hidden, before GUI or local input borrows them. The
+additive Bridge start `DE_LocalInputRuntimeStartPersistentV1` and package option
+`-MtaCoreFrontendRuntime -MtaCoreFrontendBindingPersistence` select that path.
+Legacy starts preserve session-only semantics. Missing or refused persistence
+APIs stop and clean up the requested runtime instead of quietly losing Apply.
 
 The DE clock service now implements MTA's existing five-method `CClock`
 interface behind an optional Core-owned adapter contract. Commands cross a

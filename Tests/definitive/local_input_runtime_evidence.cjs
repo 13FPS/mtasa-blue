@@ -20,8 +20,10 @@ const localSource = indexSource.slice(localStart, runtimeStart);
 const runtimeValidatorsSource = indexSource.slice(validatorsStart, validatorsEnd);
 // Execute only the schema helpers. Loading this module never enters the script,
 // resolves a DLL, samples a physical key or accesses an installed game.
-const validators = vm.runInNewContext(localSource + '\n(() => {\n' + runtimeValidatorsSource +
-    '\nreturn { local: validateMtaLocalInputRuntimeSample, runtime: validate, retiredCore, retiredView };\n})()',
+// The production validator closes over this explicit launch choice. Recreate
+// that same scope per recording so saved bindings cannot weaken legacy claims.
+const createValidators = vm.runInNewContext(localSource + '\n(bindingPersistence => {\n' + runtimeValidatorsSource +
+    '\nreturn { local: validateMtaLocalInputRuntimeSample, runtime: validate, retiredCore, retiredView };\n})',
     Object.create(null), { timeout: 1000 });
 const validatorSource = Object.freeze({ path: indexPath, bytes: indexBytes.length, sha256: sha256(indexBytes),
     localValidatorSha256: sha256(localSource), runtimeValidatorsSha256: sha256(runtimeValidatorsSource) });
@@ -77,6 +79,11 @@ function verifyEvents(events, options = {}) {
     if (starts.length !== 1) protocolError('Expected exactly one runtime started event');
     if (finishes.length !== 1) protocolError('Expected exactly one runtime finished event');
     const start = starts.length === 1 ? starts[0] : null, ended = finishes.length === 1 ? finishes[0] : null;
+    const bindingPersistence = start?.value.binding_persistence === true;
+    const validators = createValidators(bindingPersistence);
+    if (start && Object.hasOwn(start.value, 'binding_persistence') && typeof start.value.binding_persistence !== 'boolean')
+        protocolError('Runtime start has a malformed saved-binding selection');
+    summary.bindingPersistence = bindingPersistence;
     const generation = start?.value.generation;
     summary.generation = unsigned(generation) && generation !== 0 ? generation : null;
     if (!start || start.value.schema !== runtimeSchema || !summary.generation || start.value.fields !== 416 ||

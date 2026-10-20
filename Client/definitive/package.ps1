@@ -7,6 +7,7 @@ param([ValidateSet('Diagnostic', 'Smoke', 'Online')][string]$Mode = 'Smoke',
     [switch]$MtaNativePadReference, [switch]$MtaNativeMovementTrial, [switch]$MtaCoreStartupReference, [switch]$MtaCoreInputReference,
     [switch]$MtaCoreMovementReference, [switch]$MtaCoreRenderReference, [switch]$MtaCoreRenderGpuReference, [switch]$MtaCoreRenderCustomPresentReference, [switch]$MtaCoreRenderFrameBoundaryReference, [switch]$MtaCoreRenderNativeDispatchReference,
     [ValidateSet('D3D11', 'D3D12')][string]$MtaCoreRenderRoute = 'D3D11', [switch]$MtaCoreGuiStartupReference, [switch]$MtaCoreGuiSurfaceReference, [switch]$MtaCoreGuiFrontendReference, [switch]$MtaCoreGuiFrontendInputReference, [switch]$MtaCoreGuiFrontendStartupReference, [switch]$MtaCorePersistentFrontend, [switch]$MtaCoreFrontendRuntime,
+    [switch]$MtaCoreFrontendBindingPersistence,
     [switch]$MtaCoreClockReference, [switch]$MtaCoreClockSetReference, [switch]$MtaCoreApplicationFrameReference, [switch]$MtaCoreStartupObservationReference,
     [string]$OutputDirectory)
 
@@ -15,11 +16,14 @@ Set-StrictMode -Version Latest
 # Runtime owns one completed Core across views. Its selection must never inherit
 # another native lifetime merely because those packages share frontend assets.
 $runtimeConflicts = @($PSBoundParameters.Keys | Where-Object {
-    $_ -match '^(Native|Matched|Lock|Mta)' -and $_ -ne 'MtaCoreFrontendRuntime' -and
+    $_ -match '^(Native|Matched|Lock|Mta)' -and $_ -notin @('MtaCoreFrontendRuntime','MtaCoreFrontendBindingPersistence') -and
     $PSBoundParameters[$_] -is [Management.Automation.SwitchParameter] -and $PSBoundParameters[$_].IsPresent
 })
 if ($MtaCoreFrontendRuntime -and ($Mode -ne 'Smoke' -or $runtimeConflicts.Count -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
     throw 'MTA frontend runtime requires separate opt-in Smoke mode without other trials.'
+}
+if ($MtaCoreFrontendBindingPersistence -and -not $MtaCoreFrontendRuntime) {
+    throw 'Saved MTA movement bindings require MtaCoreFrontendRuntime.'
 }
 # Native clock ownership excludes other native service lifetimes. Reject a
 # mixed package before touching build outputs or downloading dependencies.
@@ -324,6 +328,17 @@ if ($MtaCoreFrontendRuntime) {
     }
 }
 $guiSources = @()
+if ($MtaCoreFrontendBindingPersistence) {
+    # Refuse an older Core/Bridge before staging a config that promises durable
+    # Apply. An unavailable save service must never silently become session-only.
+    foreach ($pair in @(
+        @{path=$bridgePath; names=@('DE_LocalInputRuntimeStartPersistentV1')},
+        @{path=$corePath; names=@('MTA_EnableDEFrontendRuntimeBindingPersistenceV1')}
+    )) {
+        $exports = Get-Amd64Exports $pair.path
+        foreach ($name in $pair.names) { if (-not $exports.Contains($name)) { throw "Required saved-binding export missing: $name" } }
+    }
+}
 if ($MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference -or $MtaCoreGuiFrontendReference -or $MtaCoreGuiFrontendInputReference -or $MtaCoreGuiFrontendStartupReference -or $MtaCorePersistentFrontend -or $MtaCoreFrontendRuntime) {
     $guiSources += @{ source=(Join-Path $repositoryRoot 'Bin/mta/x64/cgui.dll'); path='cgui.dll' }
     foreach ($name in @('sans.ttf', 'saheader.ttf', 'sagothic.ttf', 'Imageset.xsd', 'GUIScheme.xsd', 'Font.xsd', 'Falagard.xsd')) {
@@ -556,6 +571,10 @@ $runtimeMarker = 'export const MTA_CORE_FRONTEND_RUNTIME = false;'
 if ([regex]::Matches($configText, [regex]::Escape($runtimeMarker)).Count -ne 1) { throw 'Expected disabled MTA frontend runtime in source configuration.' }
 $configText = $configText.Replace($runtimeMarker,
     "export const MTA_CORE_FRONTEND_RUNTIME = $($MtaCoreFrontendRuntime.IsPresent.ToString().ToLowerInvariant());")
+$bindingPersistenceMarker = 'export const MTA_CORE_FRONTEND_BINDING_PERSISTENCE = false;'
+if ([regex]::Matches($configText, [regex]::Escape($bindingPersistenceMarker)).Count -ne 1) { throw 'Expected disabled saved movement bindings in source configuration.' }
+$configText = $configText.Replace($bindingPersistenceMarker,
+    "export const MTA_CORE_FRONTEND_BINDING_PERSISTENCE = $($MtaCoreFrontendBindingPersistence.IsPresent.ToString().ToLowerInvariant());")
 $persistentMarker = 'export const MTA_CORE_PERSISTENT_FRONTEND = false;'
 if ([regex]::Matches($configText, [regex]::Escape($persistentMarker)).Count -ne 1) { throw 'Expected disabled persistent frontend in source configuration.' }
 $configText = $configText.Replace($persistentMarker,

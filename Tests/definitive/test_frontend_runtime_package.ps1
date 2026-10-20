@@ -6,7 +6,9 @@ param(
     [Parameter(Mandatory)][string]$RuntimePackageDirectory,
     [Parameter(Mandatory)][string]$PlainPackageDirectory,
     [string]$LegacyFrontendPackageDirectory,
-    [Parameter(Mandatory)][string]$GameExecutable
+    [string]$BindingPersistencePackageDirectory,
+    [Parameter(Mandatory)][string]$GameExecutable,
+    [switch]$BindingPersistenceOnly
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -300,7 +302,7 @@ function Selection([string]$Directory) {
 }
 function Flags-Switches([string]$Script) {
     @((Get-Command -Name $Script).Parameters.Values | Where-Object {
-        $_.Name -match '^(Native|Matched|Lock|Mta)' -and $_.Name -ne 'MtaCoreFrontendRuntime' -and
+        $_.Name -match '^(Native|Matched|Lock|Mta)' -and $_.Name -notin @('MtaCoreFrontendRuntime','MtaCoreFrontendBindingPersistence') -and
         $_.ParameterType -eq [Management.Automation.SwitchParameter]
     } | ForEach-Object Name | Sort-Object)
 }
@@ -373,7 +375,8 @@ try {
     Check 'runtime-is-only-enabled-trial' ($trueFlags.Count -eq 1 -and $trueFlags[0].Groups[1].Value -ceq 'MTA_CORE_FRONTEND_RUNTIME')
     Check 'plain-has-no-enabled-trial' ([regex]::Matches($plainText,'export const ((?:GAIT_|INPUT_|MTA_)[A-Z0-9_]+) = true;').Count -eq 0)
     Check 'plain-runtime-marker-explicit-false' ([regex]::Matches($plainText,'export const MTA_CORE_FRONTEND_RUNTIME = false;').Count -eq 1)
-    $oldMarkers=@([regex]::Matches($runtimeText,'export const ((?:GAIT_|INPUT_|MTA_)[A-Z0-9_]+) = false;') | ForEach-Object {$_.Groups[1].Value})
+    $oldMarkers=@([regex]::Matches($runtimeText,'export const ((?:GAIT_|INPUT_|MTA_)[A-Z0-9_]+) = false;') |
+        ForEach-Object {$_.Groups[1].Value} | Where-Object {$_ -cne 'MTA_CORE_FRONTEND_BINDING_PERSISTENCE'})
     Check 'coverage-includes-persistent-clock-Read-clock-Set-and-old-input' ('MTA_CORE_PERSISTENT_FRONTEND' -cin $oldMarkers -and 'MTA_CORE_CLOCK_REFERENCE' -cin $oldMarkers -and 'MTA_CORE_CLOCK_SET_REFERENCE' -cin $oldMarkers -and 'MTA_CORE_INPUT_REFERENCE' -cin $oldMarkers)
     Check 'old-trial-marker-list-is-unique' ($oldMarkers.Count -eq @($oldMarkers|Select-Object -Unique).Count)
     $stagedScript=Join-Path $runtime.root 'Win64/CLEO/de-online/index.js'
@@ -398,6 +401,68 @@ try {
         nonboolean={param($text)$text.Replace('export const MTA_CORE_FRONTEND_RUNTIME = true;','export const MTA_CORE_FRONTEND_RUNTIME = 1;')}
         malformed={param($text)$text.Replace('export const MTA_CORE_FRONTEND_RUNTIME = true;','export const MTA_CORE_FRONTEND_RUNTIME = "true";')}
     }
+    if ($BindingPersistenceOnly) {
+        # Reuse the existing owned package/transition helpers for the new
+        # additive option instead of repeating every unchanged legacy trial.
+        $disabled = 'export const MTA_CORE_FRONTEND_BINDING_PERSISTENCE = false;'
+        $enabled = 'export const MTA_CORE_FRONTEND_BINDING_PERSISTENCE = true;'
+        Check 'saved-binding-source-default-disabled' ($runtimeText.Contains($disabled))
+        # Variant deliberately reuses one mutable fixture directory. Positive
+        # saved transitions need their own immutable packaged input so later
+        # malformed variants cannot replace the source they are meant to admit.
+        if (-not $BindingPersistencePackageDirectory) { throw 'Focused saved-binding checks require their actual opt-in package.' }
+        $savedInput = Package-Info $BindingPersistencePackageDirectory 58 'saved-binding-package'
+        $savedPackage = $savedInput.root
+        $savedSelection = Selection $savedPackage
+        Check 'saved-package-optin-enabled' ([IO.File]::ReadAllText((Join-Path $savedPackage 'Win64/CLEO/de-online/config.mjs')).Contains($enabled))
+        foreach ($provider in @(
+            @{relative='CLEO/de-online/core.dll';name='MTA_EnableDEFrontendRuntimeBindingPersistenceV1'},
+            @{relative='CLEO/de-online/de_client_bridge.dll';name='DE_LocalInputRuntimeStartPersistentV1'})) {
+            $exports = Get-Amd64Exports (Join-Path $runtime.root ('Win64/'+$provider.relative))
+            Check ('static-saved-binding-export:'+ $provider.name) $exports.Contains($provider.name)
+        }
+        $invalidSavedChanges = [ordered]@{
+            duplicate={param($text)$text+[Environment]::NewLine+$enabled+[Environment]::NewLine}.GetNewClosure()
+            nonboolean={param($text)$text.Replace($disabled,'export const MTA_CORE_FRONTEND_BINDING_PERSISTENCE = 1;')}.GetNewClosure()
+            standalone={param($text)$text.Replace($disabled,$enabled).Replace('export const MTA_CORE_FRONTEND_RUNTIME = true;','export const MTA_CORE_FRONTEND_RUNTIME = false;')}.GetNewClosure()
+        }
+        Fresh-Game
+        foreach ($name in $invalidSavedChanges.Keys) {
+            $variant = Variant ('invalid-saved-'+$name) $runtime.root $invalidSavedChanges[$name]
+            Unchanged-Run ('install-refuses-saved-'+$name) $install @('-Mode','Smoke','-PackageDirectory',$variant,'-GameDirectory',$fakeGame) $false
+        }
+        Run 'install-saved-bindings58' $install @('-Mode','Smoke','-PackageDirectory',$savedPackage,'-GameDirectory',$fakeGame) $true | Out-Null
+        Installed 58 $savedSelection.manifest 'saved-initial58' | Out-Null
+        $loaderHash=Sha (Join-Path $fakeGame 'version.dll')
+        $manifestPath=Join-Path $fakeGame 'de-online-install-manifest.json'
+        $unowned=Join-Path $fakeGame 'CLEO/user-kept.txt'
+        [IO.File]::WriteAllText($unowned,'User binding data remains independent of the owned installation.',$utf8)
+        $unownedHash=Sha $unowned
+        foreach ($name in $invalidSavedChanges.Keys) {
+            $variant = Variant ('invalid-saved-'+$name) $runtime.root $invalidSavedChanges[$name]
+            Unchanged-Run ('update-refuses-saved-'+$name) $update @('-PackageDirectory',$variant,'-GameDirectory',$fakeGame) $false
+        }
+        Unchanged-Run 'saved-mode-WhatIf-no-writes' $setMode @('-Mode','Smoke','-MtaCoreFrontendRuntime','-MtaCoreFrontendBindingPersistence','-GameDirectory',$fakeGame,'-WhatIf') $true
+        Run 'ordinary-mode-clears-saved-binding-optin' $setMode @('-Mode','Smoke','-GameDirectory',$fakeGame) $true | Out-Null
+        Check 'ordinary-mode-saved-marker-cleared' ([IO.File]::ReadAllText((Join-Path $fakeGame 'CLEO/de-online/config.mjs')).Contains($disabled))
+        Run 'explicit-session-runtime-remains-unsaved' $setMode @('-Mode','Smoke','-MtaCoreFrontendRuntime','-GameDirectory',$fakeGame) $true | Out-Null
+        Check 'session-runtime-saved-marker-still-cleared' ([IO.File]::ReadAllText((Join-Path $fakeGame 'CLEO/de-online/config.mjs')).Contains($disabled))
+        Run 'explicit-saved-binding-runtime' $setMode @('-Mode','Smoke','-MtaCoreFrontendRuntime','-MtaCoreFrontendBindingPersistence','-GameDirectory',$fakeGame) $true | Out-Null
+        Check 'explicit-saved-marker-enabled' ([IO.File]::ReadAllText((Join-Path $fakeGame 'CLEO/de-online/config.mjs')).Contains($enabled))
+        Unchanged-Run 'saved-mode-standalone-refused' $setMode @('-Mode','Smoke','-MtaCoreFrontendBindingPersistence','-GameDirectory',$fakeGame) $false
+        $rejectedOutput=Join-Path $scratchRoot 'must-not-stage-saved-package'
+        Unchanged-Run 'saved-package-standalone-refused-before-staging' $package @('-Mode','Smoke','-MtaCoreFrontendBindingPersistence','-OutputDirectory',$rejectedOutput) $false
+        Check 'standalone-saved-package-no-staging' (-not(Test-Path -LiteralPath $rejectedOutput))
+        $historical=Variant 'historical58-no-saved-marker' $runtime.root {param($text)[regex]::Replace($text,'(?m)^export const MTA_CORE_FRONTEND_BINDING_PERSISTENCE = false;\r?\n?','')}
+        Transition 'saved58-to-historical58-no-saved-marker' (Selection $historical)
+        Run 'historical-session-runtime-compatible' $setMode @('-Mode','Smoke','-MtaCoreFrontendRuntime','-GameDirectory',$fakeGame) $true | Out-Null
+        Unchanged-Run 'historical-saved-enable-requires-update' $setMode @('-Mode','Smoke','-MtaCoreFrontendRuntime','-MtaCoreFrontendBindingPersistence','-GameDirectory',$fakeGame) $false
+        Transition 'historical58-to-saved58' $savedSelection
+        Rollback-Update 'saved58-downgrade-refusal-restores-owned-files' $plain
+        Transition 'saved58-to-plain23' $plain
+        Check 'downgrade-saved-marker-disabled' ([IO.File]::ReadAllText((Join-Path $fakeGame 'CLEO/de-online/config.mjs')).Contains($disabled))
+        Transition 'plain23-to-saved58' $savedSelection
+    } else {
     Fresh-Game
     foreach($name in $variantChanges.Keys) {
         $variant=Variant ('invalid-'+$name) $runtime.root $variantChanges[$name]
@@ -521,6 +586,7 @@ try {
     Unchanged-Run 'runtime-refuses-historical23-until-update' $setMode @('-Mode','Smoke','-MtaCoreFrontendRuntime','-GameDirectory',$fakeGame) $false
     Transition 'historical23-to-runtime58' $runtime
     Marker $true 'final-runtime-enabled'
+    }
     Check 'loader-preserved-through-all-updates' ((Sha (Join-Path $fakeGame 'version.dll')) -ceq $loaderHash)
     Check 'unowned-preserved-through-all-updates' ((Sha $unowned) -ceq $unownedHash)
     Check 'one-game-copy-still-exact' ((Sha (Join-Path $fakeGame 'SanAndreas.exe')) -ceq $knownGameHash)
@@ -559,6 +625,7 @@ $record=[ordered]@{
     copiedGameExecutable=$GameExecutable;sourceGameSha256=$knownGameHash;fakeExecutableExecuted=$false
     liveInstallationChanged=$false;liveGameLaunched=$false;nativeClockWritten=$false;fullMtaReady=$false;gameCopiesCreated=$gameCopiesCreated;configurationHistoricalMarkerFixturesOnly=$true
     scope='Actual install/update/set-mode/uninstall validation against one owned Build/tmp game copy. No game, DLL, GUI, native hook or network is executed.'
+    bindingPersistenceOnly=$BindingPersistenceOnly.IsPresent
 }
 $resultPath=Join-Path $outputRoot 'test-result.json'
 Save $resultPath $record

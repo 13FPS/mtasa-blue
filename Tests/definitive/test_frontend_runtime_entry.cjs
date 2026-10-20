@@ -64,9 +64,11 @@ function protocolFixture(options = {}) {
             16: stopped ? 0 : lastCoreGeneration ? 97 : 33, 22: lastCoreGeneration, 23: 1,
             32: 1, 33: stopped ? 5 : 2, 34: 77, 35: 901, 36: 1, 37: 1,
             38: stopped ? 0 : 1, 39: stopped ? 0 : 1, 40: stopped ? 0 : 1,
-            41: stopped ? 0 : 1, 42: stopped ? 0 : 1, 43: 1, 44: 1, 45: 1,
+            41: stopped ? 0 : 1, 42: stopped ? 0 : 1,
+            43: options.bindingCount?.(polls) ?? (options.bindingPersistence ? 2 : 1), 44: 1,
+            45: options.bindingCount?.(polls) ?? (options.bindingPersistence ? 2 : 1),
             46: lastCoreGeneration, 47: lastCoreRetired, 48: lastCoreGeneration,
-            51: 1, 52: 3, 54: stopped ? 0 : 6, 55: 1, 57: stopped ? 1 : 0 });
+            51: 1, 52: 3, 54: stopped ? 0 : 6, 55: options.bindingPersistence ? 0 : 1, 57: stopped ? 1 : 0 });
         return result;
     };
     const publish = () => {
@@ -124,6 +126,10 @@ function protocolFixture(options = {}) {
         DE_LocalInputRuntimeApiVersionV1: () => options.localApiVersion ?? 1,
         DE_LocalInputRuntimeStartV1: () => {
             trace.push({ kind: 'localStart', polls });
+            return options.localStartResult ?? generation;
+        },
+        DE_LocalInputRuntimeStartPersistentV1: () => {
+            trace.push({ kind: 'persistentLocalStart', polls });
             return options.localStartResult ?? generation;
         },
         DE_LocalInputRuntimeCaptureV1: () => {
@@ -261,7 +267,7 @@ function execute(options = {}) {
     };
     try {
         vm.runInNewContext(runtimeSource() + '\nrunFrontendRuntime(__bind, __chord, "Ctrl+Shift+End", ' +
-            JSON.stringify(options.localInput ?? false) + ');', context,
+            JSON.stringify(options.localInput ?? false) + ', ' + JSON.stringify(options.bindingPersistence ?? false) + ');', context,
             { timeout: options.timeout ?? 1000 });
     } catch (caught) { error = caught; }
     return { fixture, events, waits, error, lastDate,
@@ -296,6 +302,36 @@ module.exports = function frontendRuntimeEntryTests({ test, runEntry }) {
                 'view retry at poll ' + call.polls + ' follows its own successful fresh capture');
         }
     };
+    test('saved movement binding option refuses a standalone or malformed launch selection', () => {
+        for (const value of [true, 'true', 1]) {
+            const result = runEntry({ mtaCoreFrontendBindingPersistence: value });
+            assert.ok(result.logs.some(event => event.event === 'adapter_failed' && /Saved MTA movement bindings/.test(event.error)));
+            assert.ok(!result.logs.some(event => event.event === 'frontend_runtime_started'));
+        }
+    });
+    test('saved bindings use their additive start export and accept reload plus later Apply history', () => {
+        const result = execute({ localInput: true, bindingPersistence: true, stopAt: 10,
+            keys: poll => [3, 4, 5, 7, 8].includes(poll) ? [17, 16, 120] : [],
+            bindingCount: poll => poll >= 6 ? 3 : 2 });
+        clean(result);
+        assert.equal(result.fixture.trace.filter(event => event.kind === 'persistentLocalStart').length, 1);
+        assert.ok(!result.fixture.trace.some(event => event.kind === 'localStart'));
+        assert.equal(result.finished.values[107], 3);
+        assert.equal(result.finished.values[109], 3);
+        assert.ok(result.events.filter(event => event.event === 'frontend_runtime_sample' && event.values[1] === 2)
+            .every(event => event.values[119] === 0));
+        assert.equal(result.events.find(event => event.event === 'frontend_runtime_started').binding_persistence, true);
+    });
+    test('saved binding startup cannot silently fall back to an older session-only Bridge', () => {
+        const result = execute({ localInput: true, bindingPersistence: true,
+            missingFunctions: ['DE_LocalInputRuntimeStartPersistentV1'] });
+        assert.match(String(result.error), /DE_LocalInputRuntimeStartPersistentV1/);
+        assert.ok(!result.fixture.trace.some(event => event.kind === 'localStart'));
+    });
+    test('session-only runtime still rejects a false durable configuration claim', () => {
+        const result = execute({ mutateAt: 1, mutate: values => { values[119] = 0; } });
+        failedClean(result, /Hidden before view retirement/);
+    });
     test('frontend Runtime416 retains one Core/session through debounced hide and fresh show', () => {
         const result = execute({ stopAt: 10, keys: poll => [3, 4, 5, 7, 8].includes(poll) ? [17, 16, 120] : [] });
         clean(result);

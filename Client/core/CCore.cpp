@@ -3304,6 +3304,33 @@ DefinitiveFrontend::Status CCore::EnableFrontendBindingPersistence(const wchar_t
     auto* settings = m_pLocalGUI && m_pLocalGUI->GetMainMenu() ? m_pLocalGUI->GetMainMenu()->GetSettingsWindow() : nullptr;
     if (runtime.bindingCommitActive || !LocalInputAllowsFrontend() || (settings && (settings->IsVisible() || settings->IsCapturingKey())))
         return Status::Busy;
+    return LoadFrontendBindingPersistence(path, chars);
+}
+
+DefinitiveFrontend::Status CCore::EnableFrontendRuntimeBindingPersistence(const wchar_t* path, std::uint32_t chars)
+{
+    using Status = DefinitiveFrontend::Status;
+    namespace Runtime = DefinitiveFrontendRuntime;
+    if (GetCurrentThreadId() != m_frontendCoreOwnerThread)
+        return Status::WrongThread;
+    if (!m_frontendRuntimeResources || !m_frontendStartupOwned)
+        return Status::Stopped;
+    const auto& runtime = *m_frontendRuntimeResources;
+    if (runtime.snapshot[Runtime::CleanupComplete])
+        return Status::Stopped;
+    // Hidden services own their XML and binds without publishing GUI aliases.
+    // Refuse a stopped-but-unreleased view as well as active input borrowing.
+    if (!runtime.snapshot[Runtime::ServicesInitialized] || runtime.snapshot[Runtime::RuntimePhase] != static_cast<std::uint32_t>(Runtime::Phase::Hidden) ||
+        runtime.snapshot[Runtime::CleanupPending] || !runtime.xml.xml || !runtime.bindings || runtime.bindingCommitActive || m_frontendResources || m_pXML ||
+        m_pConfigFile || m_pKeyBinds || !LocalInputAllowsFrontend())
+        return Status::Busy;
+    return LoadFrontendBindingPersistence(path, chars);
+}
+
+DefinitiveFrontend::Status CCore::LoadFrontendBindingPersistence(const wchar_t* path, std::uint32_t chars)
+{
+    using Status = DefinitiveFrontend::Status;
+    auto&      runtime = *m_frontendRuntimeResources;
     const auto requested =
         path ? fs::path(std::wstring(path, chars)) : fs::path(FromUTF8(SharedUtil::PathJoin(SharedUtil::GetMTADataPath(), "definitive/keybinds.xml")));
     fs::path qualified;
@@ -3311,9 +3338,9 @@ DefinitiveFrontend::Status CCore::EnableFrontendBindingPersistence(const wchar_t
         return Status::InvalidArgument;
     if (runtime.bindingPersistenceEnabled)
         return _wcsicmp(runtime.bindingPersistencePath.c_str(), qualified.c_str()) == 0 ? Status::Ok : Status::Busy;
-    auto staged = CopyFrontendBindings(*m_pXML, *this, *runtime.bindings);
+    auto staged = CopyFrontendBindings(*runtime.xml.xml, *this, *runtime.bindings);
     bool present = false;
-    if (!staged || !ReadFrontendMovementFile(*m_pXML, qualified, *staged, present))
+    if (!staged || !ReadFrontendMovementFile(*runtime.xml.xml, qualified, *staged, present))
         return Status::Failed;
     if (present)
     {
@@ -3321,7 +3348,8 @@ DefinitiveFrontend::Status CCore::EnableFrontendBindingPersistence(const wchar_t
             runtime.snapshot[DefinitiveFrontendRuntime::BindingLoads] == UINT32_MAX)
             return Status::Failed;
         runtime.bindings.swap(staged);
-        m_pKeyBinds = runtime.bindings.get();
+        if (m_frontendResources && m_frontendResources->runtimeBorrowed)
+            m_pKeyBinds = runtime.bindings.get();
         ++runtime.snapshot[DefinitiveFrontendRuntime::BindingManagerCreations];
         ++runtime.snapshot[DefinitiveFrontendRuntime::BindingLoads];
     }

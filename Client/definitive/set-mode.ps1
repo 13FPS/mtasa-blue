@@ -18,6 +18,7 @@ param(
     [switch]$MtaCoreRenderCustomPresentReference, [switch]$MtaCoreRenderFrameBoundaryReference, [switch]$MtaCoreRenderNativeDispatchReference,
     [switch]$MtaCoreGuiStartupReference, [switch]$MtaCoreGuiSurfaceReference, [switch]$MtaCoreGuiFrontendReference, [switch]$MtaCoreGuiFrontendInputReference, [switch]$MtaCoreGuiFrontendStartupReference, [switch]$MtaCorePersistentFrontend, [switch]$MtaCoreFrontendRuntime,
     [ValidateSet('D3D11', 'D3D12')][string]$MtaCoreRenderRoute = 'D3D11',
+    [switch]$MtaCoreFrontendBindingPersistence,
     [switch]$MtaCoreClockReference, [switch]$MtaCoreClockSetReference, [switch]$MtaCoreApplicationFrameReference, [switch]$MtaCoreStartupObservationReference,
     [string]$GameDirectory = 'C:\Program Files (x86)\Steam\steamapps\common\GTA San Andreas - The Definitive Edition\Gameface\Binaries\Win64'
 )
@@ -27,11 +28,14 @@ Set-StrictMode -Version Latest
 # Runtime owns one completed Core across views. Its selection must never inherit
 # another native lifetime merely because those packages share frontend assets.
 $runtimeConflicts = @($PSBoundParameters.Keys | Where-Object {
-    $_ -match '^(Native|Matched|Lock|Mta)' -and $_ -ne 'MtaCoreFrontendRuntime' -and
+    $_ -match '^(Native|Matched|Lock|Mta)' -and $_ -notin @('MtaCoreFrontendRuntime','MtaCoreFrontendBindingPersistence') -and
     $PSBoundParameters[$_] -is [Management.Automation.SwitchParameter] -and $PSBoundParameters[$_].IsPresent
 })
 if ($MtaCoreFrontendRuntime -and ($Mode -ne 'Smoke' -or $runtimeConflicts.Count -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
     throw 'MTA frontend runtime requires separate opt-in Smoke mode without other trials.'
+}
+if ($MtaCoreFrontendBindingPersistence -and -not $MtaCoreFrontendRuntime) {
+    throw 'Saved MTA movement bindings require MtaCoreFrontendRuntime.'
 }
 $clockConflicts = @($PSBoundParameters.Keys | Where-Object {
     $_ -match '^(Native|Matched|Lock|Mta)' -and $_ -notin @('MtaCoreClockReference', 'MtaCoreClockSetReference', 'MtaCoreApplicationFrameReference', 'MtaCoreStartupObservationReference') -and
@@ -445,6 +449,15 @@ if ($runtimeMatches -eq 1) {
         "export const MTA_CORE_FRONTEND_RUNTIME = $($MtaCoreFrontendRuntime.IsPresent.ToString().ToLowerInvariant());"))
 }
 $persistentPattern = 'export const MTA_CORE_PERSISTENT_FRONTEND = (true|false);'
+$bindingPersistencePattern = 'export const MTA_CORE_FRONTEND_BINDING_PERSISTENCE = (true|false);'
+$bindingPersistenceMatches = [regex]::Matches($configText, $bindingPersistencePattern).Count
+if ($bindingPersistenceMatches -gt 1 -or
+    [regex]::Matches($configText, 'export const MTA_CORE_FRONTEND_BINDING_PERSISTENCE\b').Count -ne $bindingPersistenceMatches -or
+    ($MtaCoreFrontendBindingPersistence -and $bindingPersistenceMatches -ne 1)) { throw 'Update the adapter before selecting saved MTA movement bindings.' }
+if ($bindingPersistenceMatches -eq 1) {
+    $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $bindingPersistencePattern,
+        "export const MTA_CORE_FRONTEND_BINDING_PERSISTENCE = $($MtaCoreFrontendBindingPersistence.IsPresent.ToString().ToLowerInvariant());"))
+}
 $persistentMatches = [regex]::Matches($configText, $persistentPattern).Count
 if ($persistentMatches -gt 1 -or [regex]::Matches($configText, 'export const MTA_CORE_PERSISTENT_FRONTEND\b').Count -ne $persistentMatches -or ($MtaCorePersistentFrontend -and $persistentMatches -ne 1)) { throw 'Update the adapter before selecting persistent MTA frontend.' }
 if ($persistentMatches -eq 1) {
@@ -484,7 +497,8 @@ try {
     throw $failure
 }
 if ($MtaCoreFrontendRuntime) {
-    Write-Host 'Installed adapter mode: Smoke, retained MTA frontend runtime. Ctrl+Shift+F9 toggles views after release; Quit/Escape hides, Ctrl+Shift+End stops. Applied bindings survive hide/show for this session.'
+    $bindingLifetime = if ($MtaCoreFrontendBindingPersistence) { 'Applied movement bindings are saved for later launches.' } else { 'Applied bindings survive hide/show for this session.' }
+    Write-Host ('Installed adapter mode: Smoke, retained MTA frontend runtime. Ctrl+Shift+F9 toggles views after release; Quit/Escape hides, Ctrl+Shift+End stops. ' + $bindingLifetime)
 } elseif ($MtaCorePersistentFrontend) {
     Write-Host 'Installed adapter mode: Smoke, renewable MTA frontend. Ctrl+Shift+F9 starts after release; Quit/Escape/End closes it. Focus loss or heartbeat expiry requests cleanup.'
 } elseif ($MtaCoreGuiFrontendStartupReference) {

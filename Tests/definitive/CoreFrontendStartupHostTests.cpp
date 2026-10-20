@@ -1132,6 +1132,8 @@ namespace
                 return std::string(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
             };
             const auto originalConfig = configBytes();
+            if (persistence)
+                BindingPersistenceOwner(owned, root, persistenceRestart);
             owned.create = Export<Frontend::Create>(owned.core, "MTA_CreateDEFrontendSession");
             owned.pulse = Export<Frontend::Pulse>(owned.core, "MTA_PulseDEFrontendSession");
             owned.read = Export<Frontend::Read>(owned.core, "MTA_ReadDEFrontendSession");
@@ -1173,6 +1175,9 @@ namespace
                       arming[LocalInput::CleanupComplete] && !arming[LocalInput::NativeAttempted] && !arming[LocalInput::NativeActive] &&
                       !arming[LocalInput::NativeBound] && arming[LocalInput::NativeLifetimeMs] == 500,
                   "configuration verifies actual canonical neutral history without native Begin or a replacement binding manager");
+            if (persistence)
+                BindingPersistenceOwnerRefused(owned, root, Frontend::Status::Busy,
+                                               "armed local input excludes owner persistence reload while borrowing the selected actual manager");
             const auto beforeLocalBorrow = RuntimeState(owned);
             Check(!owned.create(Frontend::ApiVersion, owned.gui) && RuntimeState(owned) == beforeLocalBorrow && localState() == arming,
                   "enabled local owner excludes a direct GUI borrower before allocating or changing either owner");
@@ -1202,6 +1207,8 @@ namespace
                           visible[Runtime::ViewsAttached] == view && visible[Runtime::ViewsRetired] == view - 1 &&
                           RuntimePair(visible, Runtime::ViewGenerationLow) == view && RuntimePair(visible, Runtime::SessionGenerationLow) == session,
                       "fresh CPU view borrows the same runtime with one actual view generation");
+                if (persistence)
+                    BindingPersistenceOwnerRefused(owned, root, Frontend::Status::Busy, "visible actual GUI borrower excludes owner persistence changes");
                 Check(owned.shutdownRuntime(owned.startup) == Frontend::Status::Busy && owned.releaseRuntime(owned.startup) == Frontend::Status::Busy,
                       "runtime refuses service and backend destruction behind a live GUI borrower");
                 const auto beforeLocalBusy = localState();
@@ -1209,24 +1216,18 @@ namespace
                           owned.pulseLocal(owned.startup) == Frontend::Status::Busy && owned.suspendLocal(owned.startup) == Frontend::Status::Busy &&
                           owned.disableLocal(owned.startup) == Frontend::Status::Busy && localState() == beforeLocalBusy,
                       "live actual GUI borrower excludes local configuration polling and binding-history cleanup");
-                // Exercise the real fade to completion before clicking the
-                // existing menu; a fixed short frame count is scheduler-dependent.
-                const auto settleUntil = GetTickCount64() + 750;
+                // MTA advances this fade per frame. Slow WARP frames can leave
+                // a fixed wall-clock delay short of the actual ready state.
+                const auto settleUntil = GetTickCount64() + 5000;
                 do
                 {
                     Frame(owned, 4, 4);
-                    Sleep(15);
+                    if (owned.State()[Frontend::MenuVisible] && !owned.State()[Frontend::MenuFading])
+                        break;
+                    Sleep(1);
                 } while (GetTickCount64() < settleUntil);
                 Check(owned.State()[Frontend::MenuVisible] && !owned.State()[Frontend::MenuFading],
                       "fresh runtime menu completes its actual fade before Settings interaction");
-                if (persistence && view == 1 && !persistenceRestart)
-                {
-                    const auto path = BindingFixturePath(root).wstring();
-                    Check(Export<BindingPersistence::EnableAtPath>(owned.core, "MTA_EnableDEFrontendBindingPersistenceAtPathV1")(
-                              owned.frontend, 1, path.data(), static_cast<std::uint32_t>(path.size())) == Frontend::Status::Busy &&
-                              !std::filesystem::exists(path),
-                          "durable admission requires the existing configured Bindings producer before choosing a file");
-                }
                 ConsoleAndBindings(owned);
                 if (persistence)
                     BindingPersistenceSettings(owned, root, view, persistenceRestart);
@@ -1243,6 +1244,8 @@ namespace
                       "old stopped-view fields retain their zero-alias meaning while session objects remain parked");
                 Check(owned.shutdownRuntime(owned.startup) == Frontend::Status::Busy && owned.releaseRuntime(owned.startup) == Frontend::Status::Busy,
                       "stopped but unreleased GUI still excludes runtime final retirement");
+                if (persistence)
+                    BindingPersistenceOwnerRefused(owned, root, Frontend::Status::Busy, "stopped but unreleased view still excludes owner persistence reload");
                 const auto stale = owned.frontend;
                 Check(owned.release(owned.frontend) == Frontend::Status::Ok, "actual GUI Release completes a runtime view without retiring session services");
                 owned.frontend = nullptr;
@@ -1301,6 +1304,9 @@ namespace
         Check(owned.pulseRuntime(owned.startup) == Frontend::Status::Stopped && owned.runRuntimeView(owned.startup, &request) == Frontend::Status::Stopped &&
                   !cancelCalls && !publishCalls && !heartbeatCalls,
               "stopped runtime cannot reopen a native view or renew a host lease");
+        if (persistence)
+            BindingPersistenceOwnerRefused(owned, root, Frontend::Status::Stopped,
+                                           "stopped actual runtime cannot opt in or reload a binding file after service retirement");
         const auto stoppedLocal = localState();
         Check(!stoppedLocal[LocalInput::Configured] && !stoppedLocal[LocalInput::Enabled] && !stoppedLocal[LocalInput::BindingsBorrowed] &&
                   !stoppedLocal[LocalInput::NativeActive] && !stoppedLocal[LocalInput::NativeBound] && !stoppedLocal[LocalInput::CleanupPending] &&
@@ -1316,6 +1322,15 @@ namespace
         Check(owned.readRuntime(stale, sentinel.data(), 64) == Frontend::Status::InvalidArgument && sentinel == unchanged &&
                   owned.releaseRuntime(stale) == Frontend::Status::InvalidArgument,
               "stale runtime identity preserves output and cannot release another Core");
+        if (persistence)
+        {
+            const auto path = BindingFixturePath(root).wstring();
+            Check(Export<Runtime::EnableBindingPersistence>(owned.core, "MTA_EnableDEFrontendRuntimeBindingPersistenceV1")(stale, 1) ==
+                          Frontend::Status::InvalidArgument &&
+                      Export<Runtime::EnableBindingPersistenceAtPath>(owned.core, "MTA_EnableDEFrontendRuntimeBindingPersistenceAtPathV1")(
+                          stale, 1, path.data(), static_cast<std::uint32_t>(path.size())) == Frontend::Status::InvalidArgument,
+                  "released runtime handle cannot select or reload durable bindings");
+        }
         Check(owned.readLocal(stale, localSentinel.data(), 32) == Frontend::Status::InvalidArgument && localSentinel == localUnchanged &&
                   owned.suspendLocal(stale) == Frontend::Status::InvalidArgument && owned.disableLocal(stale) == Frontend::Status::InvalidArgument,
               "stale local input identity preserves output and cannot retire another completed Core");
@@ -1415,6 +1430,8 @@ int wmain(int argc, wchar_t** argv)
         {
             Startup::Snapshot  startup{};
             Frontend::Snapshot frontend{};
+            if (mode == L"runtime-persistence")
+                BindingPersistenceHistoricalOwner(owned, root);
             RuntimeSessionCase(owned, root, mode, startup, frontend);
             if (mode == L"runtime-persistence")
             {

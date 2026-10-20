@@ -329,6 +329,17 @@ CORE_API DefinitiveFrontendRuntime::Status MTA_ReleaseDEFrontendRuntime(void* ha
     return DefinitiveFrontendRuntime::ReleaseOwner(handle);
 }
 
+CORE_API DefinitiveFrontendRuntime::Status MTA_EnableDEFrontendRuntimeBindingPersistenceV1(void* handle, std::uint32_t version)
+{
+    return DefinitiveFrontendRuntime::EnableBindingPersistenceOwner(handle, version);
+}
+
+CORE_API DefinitiveFrontendRuntime::Status MTA_EnableDEFrontendRuntimeBindingPersistenceAtPathV1(void* handle, std::uint32_t version, const wchar_t* path,
+                                                                                                 std::uint32_t chars)
+{
+    return DefinitiveFrontendRuntime::EnableBindingPersistenceAtPathOwner(handle, version, path, chars);
+}
+
 CORE_API std::uint32_t MTA_DELocalInputRuntimeApiVersion()
 {
     return DefinitiveLocalInputRuntime::ApiVersion;

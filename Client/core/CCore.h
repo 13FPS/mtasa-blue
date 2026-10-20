@@ -360,6 +360,8 @@ private:
     DefinitiveFrontend::Status ReadFrontendConsoleText(std::uint32_t field, char* output, std::uint32_t capacity, std::uint32_t& required);
     DefinitiveFrontend::Status EnableFrontendBindings();
     DefinitiveFrontend::Status EnableFrontendBindingPersistence(const wchar_t* path, std::uint32_t chars);
+    DefinitiveFrontend::Status EnableFrontendRuntimeBindingPersistence(const wchar_t* path, std::uint32_t chars);
+    DefinitiveFrontend::Status LoadFrontendBindingPersistence(const wchar_t* path, std::uint32_t chars);
     DefinitiveFrontendBindings::Snapshot  ReadFrontendBindings();
     DefinitiveFrontend::Status            ProduceFrontendNeutralInput(mta::game_de::MtaInputState& output, bool cleanup = false);
     DefinitiveFrontend::Status            EnableFrontendRuntimeServices() noexcept;

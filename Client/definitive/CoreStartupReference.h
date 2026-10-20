@@ -93,7 +93,7 @@ namespace deonline
         std::uint32_t ReadPersistentFrontend(std::uint32_t field) const noexcept;
         bool          CapturePersistentFrontendLifecycle() noexcept;
         std::uint32_t ReadPersistentFrontendLifecycle(std::uint32_t field) const noexcept;
-        std::uint32_t BeginFrontendRuntime(const void* moduleAddress, bool localInput = false) noexcept;
+        std::uint32_t BeginFrontendRuntime(const void* moduleAddress, bool localInput = false, bool bindingPersistence = false) noexcept;
         bool          CaptureLocalInputRuntime() noexcept;
         std::uint32_t ReadLocalInputRuntime(std::uint32_t field) const noexcept;
         bool          CommandFrontendRuntime(std::uint32_t generation, std::uint32_t sequence, std::uint32_t command) noexcept;
@@ -142,7 +142,8 @@ namespace deonline
                                         bool configuredGuiSurface = false, bool configuredGuiFrontend = false, bool configuredGuiFrontendInput = false,
                                         bool configuredFrontendStartup = false, bool configuredPersistentFrontend = false, bool configuredClock = false,
                                         bool configuredClockSet = false, bool configuredClockBeforeFrontend = false, bool configuredFrontendRuntime = false,
-                                        bool configuredLocalInputRuntime = false, bool configuredApplicationFrame = false, bool configuredStartupObservation = false) noexcept;
+                                        bool configuredLocalInputRuntime = false, bool configuredApplicationFrame = false, bool configuredStartupObservation = false,
+                                        bool configuredBindingPersistence = false) noexcept;
         bool                      CopyClockSnapshot(DefinitiveClockReference::Snapshot& output) const noexcept;
         bool                      CopyClockSetSnapshot(DefinitiveClockSetReference::Snapshot& output) const noexcept;
         bool                      CopyApplicationFrameSnapshot(DefinitiveApplicationFrameReference::Snapshot& output) const noexcept;
@@ -222,6 +223,7 @@ namespace deonline
         PersistentFrontendHostLease                               persistentHostLease;
         bool                                                      frontendRuntimeRequested = false;
         bool                                                      localInputRuntimeRequested = false;
+        bool                                                      bindingPersistenceRequested = false;
         FrontendValueCache<DefinitiveLocalInputRuntime::Snapshot> localInputRuntimeCache;
         DefinitiveLocalInputRuntime::Snapshot                     capturedLocalInputRuntime{};
         FrontendRuntimeMailbox                                    runtimeMailbox;

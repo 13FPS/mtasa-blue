@@ -11,7 +11,8 @@ param(
     [Parameter(Mandatory)][ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ExpectedGameDeSha256,
     [Parameter(Mandatory)][ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ExpectedPthreadSha256,
     [string]$XmllDll = (Join-Path $PSScriptRoot '../../Bin/server/x64/xmll.dll'),
-    [ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ExpectedXmllSha256 = '80c521b1cac98ed5263ab500510853dd06e6572870350caf6957c78e9c3d7349'
+    [ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ExpectedXmllSha256 = '80c521b1cac98ed5263ab500510853dd06e6572870350caf6957c78e9c3d7349',
+    [switch]$BindingPersistenceOnly
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -90,7 +91,9 @@ try {
     $missingStartupObservationFixture = Join-Path $fixtureDirectory 'CoreMissingStartupObservationExport.dll'
     $missingFrontendClockFixture = Join-Path $fixtureDirectory 'CoreMissingFrontendClockExport.dll'
     $missingLocalRuntimeFixture = Join-Path $fixtureDirectory 'CoreMissingLocalRuntimeExport.dll'
+    $missingBindingPersistenceFixture = Join-Path $fixtureDirectory 'CoreMissingBindingPersistenceExport.dll'
     Compile 'fixture-normal' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $normalFixture @('/LD')
+    if (-not $BindingPersistenceOnly) {
     Compile 'fixture-missing-export' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $missingFixture @('/LD','/DCORE_FIXTURE_MISSING_EXPORT=1')
     Compile 'fixture-missing-gui-export' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $missingGuiFixture @('/LD','/DCORE_FIXTURE_MISSING_GUI_EXPORT=1')
     Compile 'fixture-missing-surface-export' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $missingSurfaceFixture @('/LD','/DCORE_FIXTURE_MISSING_SURFACE_EXPORT=1')
@@ -100,12 +103,15 @@ try {
     Compile 'fixture-missing-startup-observation-export' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $missingStartupObservationFixture @('/LD','/DCORE_FIXTURE_MISSING_STARTUP_OBSERVATION_EXPORT=1')
     Compile 'fixture-missing-frontend-clock-export' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $missingFrontendClockFixture @('/LD','/DCORE_FIXTURE_MISSING_FRONTEND_CLOCK_EXPORT=1')
     Compile 'fixture-missing-local-runtime-export' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $missingLocalRuntimeFixture @('/LD','/DCORE_FIXTURE_MISSING_LOCAL_RUNTIME_EXPORT=1')
+    }
+    Compile 'fixture-missing-binding-persistence-export' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $missingBindingPersistenceFixture @('/LD','/DCORE_FIXTURE_MISSING_BINDING_PERSISTENCE_EXPORT=1')
     $syntheticRoot = Join-Path $outputRoot 'synthetic-host'
     $hostPath = Join-Path $syntheticRoot 'SanAndreas.exe'
     # Local input selection observes the foreground root HWND in the production
     # worker. Link its actual Win32 imports explicitly in this owned host too.
     Compile 'production-worker-host' @((Join-Path $PSScriptRoot 'CoreStartupReferenceTests.cpp'),(Join-Path $repositoryRoot 'Client/definitive/CoreStartupReference.cpp')) $hostPath @('/DMTA_TEST_CORE_STARTUP_ACCESS=1','user32.lib')
     if ((Hash $hostPath) -eq '63e633bb51c35fe35ca98f503b62e7ddb8403abe4c9d501cfa9162892453846f') { throw 'Owned host unexpectedly matches the real game image.' }
+    if (-not $BindingPersistenceOnly) {
     $runs += Run-Host 'controlled-loader' $syntheticRoot @($syntheticRoot,'synthetic',$normalFixture,$missingFixture)
     $actualRoot = Join-Path $outputRoot 'actual-host/CLEO/de-online'
     New-Item -ItemType Directory -Path (Join-Path $actualRoot 'mta/logs') -Force | Out-Null
@@ -214,12 +220,25 @@ try {
         $selectedFixture = if ($mode -eq 'gui-missing-export') { $missingGuiFixture } elseif ($mode -eq 'surface-missing-export') { $missingSurfaceFixture } elseif ($mode -eq 'clock-missing-export') { $missingClockFixture } elseif ($mode -eq 'clock-set-missing-export') { $missingClockSetFixture } elseif ($mode -eq 'application-frame-missing-export') { $missingApplicationFrameFixture } elseif ($mode -eq 'startup-observation-missing-export') { $missingStartupObservationFixture } elseif ($mode -eq 'frontend-clock-missing-export') { $missingFrontendClockFixture } else { $normalFixture }
         $runs += Run-Host $mode $movementRoot @($movementRoot,$mode,$selectedFixture)
     }
+    }
+    foreach ($mode in @('binding-runtime-default','binding-runtime-enabled','binding-runtime-saved','binding-runtime-refused',
+        'binding-runtime-wrong-readonly','binding-runtime-incoherent-loads','binding-runtime-regressed-loads','binding-runtime-missing-export')) {
+        $bindingRuntimeRoot = Join-Path $outputRoot ($mode + '-host')
+        New-Item -ItemType Directory -Path $bindingRuntimeRoot -Force | Out-Null
+        Copy-Item -LiteralPath $hostPath -Destination (Join-Path $bindingRuntimeRoot 'SanAndreas.exe')
+        Copy-Item -LiteralPath $GameDeDll -Destination (Join-Path $bindingRuntimeRoot 'game_de.dll')
+        if ((Hash (Join-Path $bindingRuntimeRoot 'game_de.dll')) -ne $ExpectedGameDeSha256.ToLowerInvariant()) { throw 'Binding runtime fixture backend hash differs.' }
+        # The legacy start deliberately receives a Core lacking the optional
+        # export, proving old session-only admission does not depend on opt-in.
+        $selectedBindingFixture = if ($mode -in @('binding-runtime-default','binding-runtime-missing-export')) { $missingBindingPersistenceFixture } else { $normalFixture }
+        $runs += Run-Host $mode $bindingRuntimeRoot @($bindingRuntimeRoot,$mode,$selectedBindingFixture)
+    }
 } catch { $failure = $_.Exception.Message }
 $unchanged = $true
 foreach ($name in $sourceNames) { if ((Hash (Join-Path $repositoryRoot $name)) -ne $sourceHashes[$name]) { $unchanged=$false } }
 foreach ($artifact in $artifacts) { if ((Hash $artifact.source) -ne $artifact.sha256) { $unchanged=$false } }
 $record = [ordered]@{
-    recorded_at=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=($null -eq $failure -and $unchanged -and $runs.Count -eq 218);
+    recorded_at=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=($null -eq $failure -and $unchanged -and $runs.Count -eq $(if ($BindingPersistenceOnly) { 8 } else { 226 }));
     failure=$failure;source_hashes=$sourceHashes;sources_unchanged=$unchanged;compiles=$compiles;runs=$runs;normal_artifacts=$artifacts;
     historical_cases_expected=65;surface_cases_expected=24;completed_core_actual_cases_expected=1;persistent_core_actual_cases_expected=1;
     clock_controlled_cases_expected=14;clock_actual_preflight_cases_expected=1;historical_total_preserved=91;
@@ -229,9 +248,10 @@ $record = [ordered]@{
     local_runtime_controlled_cases_expected=7;local_runtime_actual_preflight_cases_expected=1;prior_local_runtime_total_preserved=172;
     application_frame_controlled_cases_expected=17;application_frame_actual_preflight_cases_expected=1;prior_application_frame_total_preserved=180;
     startup_observation_controlled_cases_expected=19;startup_observation_actual_preflight_cases_expected=1;prior_startup_observation_total_preserved=198;
+    binding_persistence_controlled_cases_expected=8;binding_persistence_only=[bool]$BindingPersistenceOnly;prior_binding_persistence_total_preserved=218;
     fixture_executable_is_game=$false;game_launched=$false;game_memory_read=$false;game_process_attached=$false;game_files_changed=$false;
     synthetic_core_is_mta=$false;full_mta_boot_verified=$false;engine_input_write_verified=$false;
-    scope='Actual production async worker, controlled loader/runtime/frame and startup192 fixtures, plus normal Core exact-image refusal in owned hosts. Startup192 covers independent publication/cache contention, cancellation, failed Begin/reset, missing/refused exports, malformed width/version/extended schema/reserved words and retained exception cleanup while preserving all198 prior cases. Controlled values do not prove real native callbacks, metadata or startup readiness; no GTA workload is admitted.'
+    scope='Actual production async worker in controlled owned hosts. Binding persistence cases cover explicit owner opt-in before views/input, optional-export compatibility, saved-manager and Apply count growth, rejected refusal/read-only mismatch/incoherent loads/rollback, and owner retirement. The full selection also preserves all218 prior loader/runtime/frame/startup cases and normal Core wrong-image guards. Controlled values do not prove native callbacks or startup readiness; no GTA workload is admitted.'
 }
 $resultPath = Join-Path $outputRoot 'test-result.json'
 $record | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $resultPath -Encoding utf8

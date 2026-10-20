@@ -536,6 +536,29 @@ extern "C" __declspec(dllexport) DefinitiveFrontendRuntime::Status MTA_PulseDEFr
     return DefinitiveFrontend::Status::Ok;
 }
 
+#ifndef CORE_FIXTURE_MISSING_BINDING_PERSISTENCE_EXPORT
+extern "C" __declspec(dllexport) DefinitiveFrontendRuntime::Status MTA_EnableDEFrontendRuntimeBindingPersistenceV1(void* handle, std::uint32_t version)
+{
+    namespace C = DefinitiveFrontendRuntime;
+    Call(61);
+    if (handle != &runtimeOwner || version != C::ApiVersion || runtimeViewActive || runtimeOwner[C::ViewsAttached] ||
+        localRuntime[DefinitiveLocalInputRuntime::Configured])
+    {
+        Call(62);
+        return DefinitiveFrontend::Status::InvalidArgument;
+    }
+    const auto mode = Setting(L"MTA_CORE_FIXTURE_BINDING_PERSISTENCE_MODE");
+    if (mode == 3)
+        return DefinitiveFrontend::Status::Failed;
+    runtimeOwner[C::ConfigurationReadOnly] = mode == 4 ? 1u : 0u;
+    if (mode == 2 || mode == 6)
+        runtimeOwner[C::BindingManagerCreations] = runtimeOwner[C::BindingLoads] = 2;
+    if (mode == 5)
+        runtimeOwner[C::BindingManagerCreations] = 2;
+    return DefinitiveFrontend::Status::Ok;
+}
+#endif
+
 namespace
 {
     void LocalRetired(bool disabled)
@@ -845,6 +868,16 @@ extern "C"
     runtimeOwner[C::HiddenNeutralVerified] = runtimeOwner[S::LastViewCleanupComplete] = 1;
     ++runtimeOwner[C::ViewsRetired];
     ++runtimeOwner[S::Pulses];
+    if (Setting(L"MTA_CORE_FIXTURE_BINDING_PERSISTENCE_MODE") == 6)
+        runtimeOwner[C::BindingManagerCreations] = runtimeOwner[C::BindingLoads] = 1;
+    else if (!runtimeOwner[C::ConfigurationReadOnly])
+    {
+        // Controlled Apply substitutes the retained manager exactly as the
+        // genuine Core does, so the worker must accept coherent growth after
+        // both views rather than pinning historical counters to one.
+        ++runtimeOwner[C::BindingManagerCreations];
+        ++runtimeOwner[C::BindingLoads];
+    }
     return reason == P::Stop::Fault ? DefinitiveFrontend::Status::Failed : DefinitiveFrontend::Status::Stopped;
 }
 extern "C" __declspec(dllexport) DefinitiveFrontendRuntime::Status MTA_ShutdownDEFrontendRuntime(void* handle)

@@ -2,7 +2,7 @@
 #requires -Version 7.0
 # Every mutation targets disposable fixtures; the actual GTA installation is never used.
 [CmdletBinding()]
-param()
+param([switch]$FrontendAdmissionOnly)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $repositoryRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
@@ -88,6 +88,56 @@ export const INPUT_REFERENCE = false;
     return $root
 }
 
+function New-FrontendFixture([int]$Count) {
+    $root = New-Fixture -PadModule
+    $extraPaths = @('CLEO/de-online/native-movement-trial.mjs','CLEO/de-online/game_de.dll',
+        'CLEO/de-online/core.dll','CLEO/de-online/pthread.dll','CLEO/de-online/xmll.dll','CLEO/de-online/mta/config/coreconfig.xml')
+    if($Count -ge 36){$extraPaths += @('CLEO/de-online/cgui.dll',
+        'CLEO/de-online/mta/cgui/sans.ttf','CLEO/de-online/mta/cgui/saheader.ttf','CLEO/de-online/mta/cgui/sagothic.ttf',
+        'CLEO/de-online/mta/cgui/Imageset.xsd','CLEO/de-online/mta/cgui/GUIScheme.xsd','CLEO/de-online/mta/cgui/Font.xsd',
+        'CLEO/de-online/mta/cgui/Falagard.xsd','CLEO/de-online/mta/cgui/unifont.ttf',
+        'CLEO/de-online/skins/Default/CGUI.xml','CLEO/de-online/skins/Default/CGUI.is.xml',
+        'CLEO/de-online/skins/Default/CGUI.lnf.xml','CLEO/de-online/skins/Default/CGUI.png')}
+    if($Count -ge 58){$extraPaths += @(
+        'CLEO/de-online/mta/cgui/images/background.png','CLEO/de-online/mta/cgui/images/background_logo.png',
+        'CLEO/de-online/mta/cgui/images/mta_filler.png','CLEO/de-online/mta/cgui/images/version.png',
+        'CLEO/de-online/mta/cgui/images/the_language_icon.png',
+        'CLEO/de-online/mta/cgui/images/serverbrowser/locked.png','CLEO/de-online/mta/cgui/images/serverbrowser/search-servers.png',
+        'CLEO/de-online/mta/cgui/images/serverbrowser/search-players.png','CLEO/de-online/mta/cgui/images/serverbrowser/refresh.png',
+        'CLEO/de-online/mta/cgui/images/serverbrowser/favorite.png','CLEO/de-online/mta/cgui/images/serverbrowser/connect.png',
+        'CLEO/de-online/mta/cgui/images/serverbrowser/info.png','CLEO/de-online/mta/cgui/images/serverbrowser/search.png',
+        'CLEO/de-online/mta/cgui/images/serverbrowser/trashcan.png',
+        'CLEO/de-online/mta/locale/en_US/menu_disconnect.png','CLEO/de-online/mta/locale/en_US/menu_quick_connect.png',
+        'CLEO/de-online/mta/locale/en_US/menu_browse_servers.png','CLEO/de-online/mta/locale/en_US/menu_settings.png',
+        'CLEO/de-online/mta/locale/en_US/menu_about.png','CLEO/de-online/mta/locale/en_US/menu_quit.png',
+        'CLEO/de-online/mta/locale/en_US/latest_news.png','CLEO/de-online/mta/locale/en_US/client.pot')}
+    if($Count -in @(60,64)){$extraPaths += @('MtaDefinitive.asi','MtaDefinitive.ini')}
+    if($Count -in @(62,64)){$extraPaths += @('CLEO/de-online/mta/cgui/images/question.png','CLEO/de-online/mta/cgui/images/info.png',
+        'CLEO/de-online/mta/cgui/images/warning.png','CLEO/de-online/mta/cgui/images/error.png')}
+    Edit-Manifest $root {
+        param($manifest)
+        foreach($relative in $extraPaths){
+            $destination = [IO.Path]::GetFullPath((Join-Path $root $relative))
+            [IO.Directory]::CreateDirectory((Split-Path $destination -Parent)) | Out-Null
+            [IO.File]::WriteAllText($destination,"Non-executable fixture bytes: $relative`n")
+            $manifest.files += [pscustomobject]@{path=$relative;destination=$destination;sha256=(Hash $destination).ToLowerInvariant()}
+        }
+        $native = $Count -in @(60,64)
+        $config = "export const MODE = 'smoke';`nexport const MTA_CORE_FRONTEND_RUNTIME = $($native.ToString().ToLowerInvariant());`n" +
+            "export const MTA_CORE_FRONTEND_NATIVE_HOST = $($native.ToString().ToLowerInvariant());`nexport const MTA_CORE_FRONTEND_BINDING_PERSISTENCE = false;`n"
+        $configPath = Join-Path $root 'CLEO/de-online/config.mjs'
+        [IO.File]::WriteAllText($configPath,$config)
+        if($native){[IO.File]::WriteAllText((Join-Path $root 'MtaDefinitive.ini'),"[MTA]`nEnabled=1`nLocalInput=1`nBindingPersistence=0`n")}
+        foreach($path in @('CLEO/de-online/config.mjs','MtaDefinitive.ini')){
+            foreach($entry in @($manifest.files | Where-Object path -eq $path)){$entry.sha256=(Hash $entry.destination).ToLowerInvariant()}
+        }
+        $manifest | Add-Member -NotePropertyName mode -NotePropertyValue 'Smoke'
+        Assert ($manifest.files.Count -eq $Count) 'Frontend fixture does not contain its declared complete group.'
+    }
+    return $root
+}
+
+if(-not $FrontendAdmissionOnly){
 Case 'Removal validation preserves both legacy 16-file and new 17-file installations' {
     foreach ($pad in @($false, $true)) {
         $root = New-Fixture -PadModule:$pad
@@ -297,6 +347,53 @@ if ($link) {
         Must-Fail { Loader $root Disable } 'linked path'
         Assert (Test-Path -LiteralPath (Join-Path $root 'version.dll')) 'Linked ancestor refusal mutated loader.'
     }
+}
+}
+Case 'Loader bypass and restore admit every complete frontend ownership generation' {
+    foreach($count in @(23,36,58,60,62,64)){
+        $root = New-FrontendFixture $count
+        $manifestPath = Join-Path $root 'de-online-install-manifest.json';$before = Hash $manifestPath
+        Assert ((Loader $root Status).verifiedFiles -eq $count) 'Complete startup generation was refused.'
+        Assert ((Loader $root Disable -WhatIf).state -eq 'Enabled') 'WhatIf disabled a complete startup generation.'
+        Assert ((Loader $root Disable).state -eq 'Disabled') 'Complete startup generation did not disable.'
+        Assert ((Loader $root Status).verifiedFiles -eq $count) 'Disabled startup generation failed validation.'
+        Assert ((Loader $root Enable).state -eq 'Enabled') 'Complete startup generation did not restore.'
+        Assert ((Hash $manifestPath) -eq $before) 'Loader toggle changed the owned manifest.'
+    }
+}
+Case 'Partial native and dialog groups refuse loader changes before rename' {
+    foreach($missingPath in @('MtaDefinitive.ini','CLEO/de-online/mta/cgui/images/question.png')){
+        $root = New-FrontendFixture 64
+        Edit-Manifest $root {param($m) $m.files=@($m.files | Where-Object path -ne $missingPath)}
+        Must-Fail {Loader $root Disable} 'Incomplete'
+        Assert (Test-Path -LiteralPath (Join-Path $root 'version.dll')) 'Incomplete group renamed the loader.'
+    }
+}
+Case 'Rehashed mismatching native INI and script selection refuse loader restore' {
+    $root = New-FrontendFixture 64;Loader $root Disable | Out-Null
+    $ini = Join-Path $root 'MtaDefinitive.ini'
+    [IO.File]::WriteAllText($ini,"[MTA]`nEnabled=0`nLocalInput=1`nBindingPersistence=0`n")
+    Edit-Manifest $root {param($m) ($m.files | Where-Object path -eq 'MtaDefinitive.ini').sha256=(Hash $ini).ToLowerInvariant()}
+    Must-Fail {Loader $root Enable} 'INI does not match'
+    Assert (Test-Path -LiteralPath (Join-Path $root 'version.dll.de-online-disabled')) 'Incoherent native entry restored the loader.'
+}
+Case 'A deliberately disarmed complete native entry remains recoverable' {
+    $root = New-FrontendFixture 64
+    $ini = Join-Path $root 'MtaDefinitive.ini';$config = Join-Path $root 'CLEO/de-online/config.mjs'
+    [IO.File]::WriteAllText($ini,"[MTA]`nEnabled=0`nLocalInput=1`nBindingPersistence=0`n")
+    [IO.File]::WriteAllText($config,[IO.File]::ReadAllText($config).Replace('MTA_CORE_FRONTEND_NATIVE_HOST = true;','MTA_CORE_FRONTEND_NATIVE_HOST = false;'))
+    Edit-Manifest $root {
+        param($m)
+        foreach($path in @('MtaDefinitive.ini','CLEO/de-online/config.mjs')){($m.files | Where-Object path -eq $path).sha256=(Hash (Join-Path $root $path)).ToLowerInvariant()}
+    }
+    Assert ((Loader $root Disable).state -eq 'Disabled') 'Coherent disarmed entry failed bypass.'
+    Assert ((Loader $root Enable).state -eq 'Enabled') 'Coherent disarmed entry failed restoration.'
+}
+Case 'An edited message-box asset still refuses loader mutation' {
+    $root = New-FrontendFixture 64
+    [IO.File]::WriteAllText((Join-Path $root 'CLEO/de-online/mta/cgui/images/warning.png'),'User edit')
+    Must-Fail {Loader $root Disable} 'modified'
+    Assert (Test-Path -LiteralPath (Join-Path $root 'version.dll')) 'Edited dialog asset renamed loader.'
 }
 $summary = [ordered]@{ passed = $script:passed; skipped = $script:skipped; fixtureDirectory = $fixtureRoot; realGameUsed = $false }
 [IO.File]::WriteAllText((Join-Path $fixtureRoot 'result.json'), ($summary | ConvertTo-Json))

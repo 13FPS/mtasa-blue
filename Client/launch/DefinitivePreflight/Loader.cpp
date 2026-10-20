@@ -102,6 +102,9 @@ namespace
                                                              "CLEO/de-online/mta/locale/en_US/menu_quit.png",
                                                              "CLEO/de-online/mta/locale/en_US/latest_news.png",
                                                              "CLEO/de-online/mta/locale/en_US/client.pot"};
+    constexpr std::array<std::string_view, 2>  NativeFrontendPaths{"MtaDefinitive.asi", "MtaDefinitive.ini"};
+    constexpr std::array<std::string_view, 4>  MessageBoxPaths{"CLEO/de-online/mta/cgui/images/question.png", "CLEO/de-online/mta/cgui/images/info.png",
+                                                              "CLEO/de-online/mta/cgui/images/warning.png", "CLEO/de-online/mta/cgui/images/error.png"};
 
     void Require(bool valid, const char* reason)
     {
@@ -332,13 +335,38 @@ namespace
         }
         const auto files = Field(object.get(), "files", json_type_array);
         const auto fileCount = json_object_array_length(files);
-        Require(fileCount == 23 || fileCount == 36 || fileCount == 58, "exact_owned_group_count_required");
+        Require(fileCount == 23 || fileCount == 36 || fileCount == 58 || fileCount == 60 || fileCount == 62 || fileCount == 64,
+                "exact_owned_group_count_required");
+        const auto groupCount = [&](const auto& paths)
+        {
+            std::size_t count = 0;
+            for (std::size_t index = 0; index < fileCount; ++index)
+            {
+                const auto relative = String(Field(json_object_array_get_idx(files, index), "path", json_type_string));
+                count += std::find(paths.begin(), paths.end(), relative) != paths.end();
+            }
+            return count;
+        };
+        const auto nativeCount = groupCount(NativeFrontendPaths);
+        const auto messageBoxCount = groupCount(MessageBoxPaths);
+        const bool hasFrontend = fileCount >= 58;
+        // Native startup and genuine MTA dialogs add independent complete groups.
+        // Their file counts cannot stand in for one another or relax ownership.
+        Require((nativeCount == 0 || nativeCount == NativeFrontendPaths.size()) && (messageBoxCount == 0 || messageBoxCount == MessageBoxPaths.size()) &&
+                    (!(nativeCount || messageBoxCount) || hasFrontend),
+                "exact_owned_group_count_required");
         std::vector<std::string_view> ownedPaths(OwnedPaths.begin(), OwnedPaths.end());
         if (fileCount >= 36)
             ownedPaths.insert(ownedPaths.end(), GuiPaths.begin(), GuiPaths.end());
-        if (fileCount == 58)
+        if (hasFrontend)
             ownedPaths.insert(ownedPaths.end(), FrontendPaths.begin(), FrontendPaths.end());
+        if (nativeCount)
+            ownedPaths.insert(ownedPaths.end(), NativeFrontendPaths.begin(), NativeFrontendPaths.end());
+        if (messageBoxCount)
+            ownedPaths.insert(ownedPaths.end(), MessageBoxPaths.begin(), MessageBoxPaths.end());
+        Require(fileCount == ownedPaths.size(), "exact_owned_group_count_required");
         std::string                configuration;
+        std::string                nativeIni;
         std::set<std::string_view> seen;
         std::uint64_t              total = 0;
         for (std::size_t index = 0; index < ownedPaths.size(); ++index)
@@ -358,7 +386,7 @@ namespace
             const auto path = request.bundle / fs::path(std::string(relative));
             // MODE coherence must inspect the whole configuration, including
             // any appended assignment beyond the retained header-sized buffer.
-            const auto file = ReadFile(path, relative == "CLEO/de-online/config.mjs" ? 65536 : 64 * 1024 * 1024);
+            const auto file = ReadFile(path, relative == "CLEO/de-online/config.mjs" ? 65536 : relative == "MtaDefinitive.ini" ? 1024 : 64 * 1024 * 1024);
             total += file.size;
             Require(total <= 256 * 1024 * 1024 && file.sha256 == expected, "owned_file_hash_mismatch");
             const auto extension = path.extension().wstring();
@@ -374,34 +402,70 @@ namespace
                             configuration.find("export const MODE =", first + 1) == std::string_view::npos,
                         "manifest_config_mode_mismatch");
             }
+            if (relative == "MtaDefinitive.ini")
+            {
+                nativeIni.assign(reinterpret_cast<const char*>(file.prefix.data()), file.prefix.size());
+                // Match the shared package contract while allowing Windows line
+                // endings; extra sections or duplicate settings remain refused.
+                for (auto position = nativeIni.find("\r\n"); position != std::string::npos; position = nativeIni.find("\r\n", position))
+                    nativeIni.erase(position, 1);
+            }
         }
         // Owning menu assets cannot arm interactive engine controls. Require one
         // explicit marker and the whole group before accepting a GUI opt-in.
         const auto flag = [&](std::string_view name, bool required)
         {
             const auto prefix = std::string("export const ") + std::string(name) + " = ";
+            const auto declaration = std::string("export const ") + std::string(name);
+            const auto declarationPosition = [&]()
+            {
+                auto position = configuration.find(declaration);
+                while (position != std::string::npos)
+                {
+                    const auto after = position + declaration.size();
+                    if (after == configuration.size() ||
+                        !((configuration[after] >= 'A' && configuration[after] <= 'Z') || (configuration[after] >= 'a' && configuration[after] <= 'z') ||
+                          (configuration[after] >= '0' && configuration[after] <= '9') || configuration[after] == '_'))
+                        return position;
+                    position = configuration.find(declaration, after);
+                }
+                return std::string::npos;
+            }();
             const auto position = configuration.find(prefix);
             Require(position != std::string::npos || !required, "gui_configuration_marker_invalid");
+            Require(declarationPosition == position, "gui_configuration_marker_invalid");
             if (position == std::string::npos)
                 return false;
-            Require(configuration.find(prefix, position + 1) == std::string::npos, "gui_configuration_marker_invalid");
+            Require(configuration.find(declaration, position + declaration.size()) == std::string::npos, "gui_configuration_marker_invalid");
             const auto value = std::string_view(configuration).substr(position + prefix.size());
             Require(value.starts_with("true;") || value.starts_with("false;"), "gui_configuration_marker_invalid");
             return value.starts_with("true;");
         };
         const bool startup = flag("MTA_CORE_GUI_STARTUP_REFERENCE", fileCount >= 36);
         const bool surface = flag("MTA_CORE_GUI_SURFACE_REFERENCE", false);
-        const bool frontend = flag("MTA_CORE_GUI_FRONTEND_REFERENCE", fileCount == 58);
+        const bool frontend = flag("MTA_CORE_GUI_FRONTEND_REFERENCE", hasFrontend);
         // The Core-owned scoped input trial shares the real frontend assets,
         // but cannot inherit the older script-owned player-control lease.
         const bool frontendInput = flag("MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE", false);
         const bool frontendStartup = flag("MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE", false);
         const bool persistentFrontend = flag("MTA_CORE_PERSISTENT_FRONTEND", false);
-        if (startup || surface || frontend || frontendInput || frontendStartup || persistentFrontend)
+        const bool runtime = flag("MTA_CORE_FRONTEND_RUNTIME", false);
+        const bool bindingPersistence = flag("MTA_CORE_FRONTEND_BINDING_PERSISTENCE", false);
+        const bool nativeHost = flag("MTA_CORE_FRONTEND_NATIVE_HOST", nativeCount != 0);
+        Require(!bindingPersistence || runtime, "gui_mode_conflict");
+        Require(!nativeHost || (nativeCount == NativeFrontendPaths.size() && runtime && mode == "Smoke"), "native_frontend_configuration_invalid");
+        if (nativeCount)
         {
-            Require(mode == "Smoke" && fileCount >= 36 && (!(frontend || frontendInput || frontendStartup || persistentFrontend) || fileCount == 58) &&
+            const auto expectedIni =
+                std::string("[MTA]\nEnabled=") + (nativeHost ? "1" : "0") + "\nLocalInput=1\nBindingPersistence=" + (bindingPersistence ? "1" : "0") + "\n";
+            Require(nativeIni == expectedIni, "native_frontend_configuration_invalid");
+        }
+        if (startup || surface || frontend || frontendInput || frontendStartup || persistentFrontend || runtime)
+        {
+            Require(mode == "Smoke" && fileCount >= 36 && (!(frontend || frontendInput || frontendStartup || persistentFrontend || runtime) || hasFrontend) &&
                         static_cast<unsigned>(startup) + static_cast<unsigned>(surface) + static_cast<unsigned>(frontend) +
-                                static_cast<unsigned>(frontendInput) + static_cast<unsigned>(frontendStartup) + static_cast<unsigned>(persistentFrontend) ==
+                                static_cast<unsigned>(frontendInput) + static_cast<unsigned>(frontendStartup) + static_cast<unsigned>(persistentFrontend) +
+                                static_cast<unsigned>(runtime) ==
                             1,
                     "gui_mode_conflict");
             for (const auto name : {"GAIT_REFERENCE", "GAIT_RATE", "GAIT_ROOT_LOCK", "INPUT_REFERENCE", "MTA_NATIVE_PAD_REFERENCE", "MTA_NATIVE_MOVEMENT_TRIAL",

@@ -33,15 +33,31 @@ resumption from key delivery at the frontend; the same MTA worker, native lease
 and 192-word report remain in use. This scheduling change awaits a live check.
 
 The native frontend entry now offers a path independent of that CLEO scheduling
-boundary. Its explicit 60-file package starts the existing retained Core worker
+boundary. Its explicit native package starts the existing retained Core worker
 hidden from the pinned loader's `InitializeASI` callback, claims the same single
 controller and uses the same mailbox, heartbeat and cleanup. A native thread
 reads foreground activation chords; CLEO returns without claiming another owner.
 The real Core retains localization, local command and console log services across
-hidden periods, using shared normal-startup construction and rollback. Native
-view gates, full `CGame` and network readiness remain separate. This is code and
-offline integration progress, not a replacement for the saved gameplay evidence
-or a claim that the new native main-menu launch has run in GTA.
+hidden periods, using shared normal-startup construction and rollback.
+
+The combined October 20 GTA check on `f556dd92f` passed: hidden Core was ready
+32 ms after the native controller started, before CLEO resumed; the first Show
+command arrived 111.688 s after startup. Two actual menu views produced 179 and
+298 presents and retired with restored input scopes and detached cursor hooks.
+The user confirmed I movement/sprinting, I retained on reopening and ordinary
+W/camera restoration after End. All 15 run logs and normal shutdown are saved
+against the 14 existing-log baseline. The native-main-menu location is human
+reported, rather than proved by these logs. The existing missing
+`cgui/images/question.png` error reproduced. Expected process pinning can keep
+`game_de.dll` mapped after its callbacks end. Native view gates still apply;
+visible playerless GUI, full `CGame`, client and network readiness remain open.
+
+The following offline update packages the four existing MTA message-box icons
+as a complete optional group, producing 62-file frontends and 64-file native
+packages while retaining historical ownership layouts. MTA's normal x64
+launcher preflight and loader switch now admit native startup and those assets,
+including INI/configuration agreement. This is package/launcher admission; it
+neither replaces the real network module nor opens a full-client launch path.
 
 The real Deathmatch client now builds and links for Release/x64 using MTA's
 existing code. Engine work is assembling its actual `CGame` services:

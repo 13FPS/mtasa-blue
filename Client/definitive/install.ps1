@@ -92,11 +92,13 @@ $frontendPaths = @(
     'CLEO/de-online/mta/locale/en_US/client.pot')
 $guiCount = @($relativePaths | Where-Object { $_ -in $guiPaths }).Count
 $frontendCount = @($relativePaths | Where-Object { $_ -in $frontendPaths }).Count
+$messageBoxCount = Get-MtaFrontendMessageBoxFileCount $relativePaths $frontendCount
 $nativeCount = Get-MtaNativeFrontendFileCount $relativePaths $frontendCount
 if ($frontendCount -ne 0 -and ($frontendCount -ne 22 -or $guiCount -ne 13)) { throw 'Incomplete MTA Core GUI frontend package ownership.' }
 if ($guiCount -ne 0 -and $guiCount -ne $guiPaths.Count) { throw 'Incomplete MTA Core GUI startup package ownership.' }
 if ($guiCount) { $allowedPaths += $guiPaths }
 if ($frontendCount) { $allowedPaths += $frontendPaths }
+if ($messageBoxCount) { $allowedPaths += Get-MtaFrontendMessageBoxPaths }
 if ($nativeCount) { $allowedPaths += @('MtaDefinitive.asi','MtaDefinitive.ini') }
 if ($relativePaths.Count -ne $allowedPaths.Count -or @($relativePaths | Select-Object -Unique).Count -ne $allowedPaths.Count -or
     @(Compare-Object $allowedPaths $relativePaths).Count -ne 0) {
@@ -213,7 +215,7 @@ if ($bindingPersistenceMarkers.Count -eq 1 -and $bindingPersistenceMarkers[0].Gr
     ($runtimeMarkers.Count -ne 1 -or $runtimeMarkers[0].Groups[1].Value -ne 'true')) { throw 'Saved MTA movement bindings require the retained frontend runtime.' }
 if ($runtimeMarkers.Count -eq 1 -and $runtimeMarkers[0].Groups[1].Value -eq 'true') {
     $runtimeConflicts = @([regex]::Matches($configText, 'export const ((?:GAIT_|INPUT_|MTA_)[A-Z0-9_]+) = true;') | Where-Object {$_.Groups[1].Value -notin @('MTA_CORE_FRONTEND_RUNTIME','MTA_CORE_FRONTEND_BINDING_PERSISTENCE','MTA_CORE_FRONTEND_NATIVE_HOST')})
-    if ($frontendCount -ne 22 -or $guiCount -ne 13 -or $relativePaths.Count -ne (58+$nativeCount) -or $Mode -ne 'Smoke' -or $runtimeConflicts.Count) {
+    if ($frontendCount -ne 22 -or $guiCount -ne 13 -or $relativePaths.Count -ne (58+$nativeCount+$messageBoxCount) -or $Mode -ne 'Smoke' -or $runtimeConflicts.Count) {
         throw 'MTA frontend runtime requires complete frontend ownership and separate opt-in Smoke mode.'
     }
 }
@@ -221,7 +223,7 @@ if ($runtimeMarkers.Count -eq 1 -and $runtimeMarkers[0].Groups[1].Value -eq 'tru
 $persistentMarkers = [regex]::Matches($configText, 'export const MTA_CORE_PERSISTENT_FRONTEND = (true|false);')
 if ($persistentMarkers.Count -gt 1 -or [regex]::Matches($configText, 'export const MTA_CORE_PERSISTENT_FRONTEND\b').Count -ne $persistentMarkers.Count) { throw 'Invalid persistent frontend configuration marker.' }
 if ($persistentMarkers.Count -eq 1 -and $persistentMarkers[0].Groups[1].Value -eq 'true') {
-    if ($frontendCount -ne 22 -or $guiCount -ne 13 -or $relativePaths.Count -ne 58 -or $Mode -ne 'Smoke' -or $configText -match 'export const (GAIT_REFERENCE|GAIT_RATE|GAIT_ROOT_LOCK|INPUT_REFERENCE|MTA_NATIVE_PAD_REFERENCE|MTA_NATIVE_MOVEMENT_TRIAL|MTA_CORE_STARTUP_REFERENCE|MTA_CORE_INPUT_REFERENCE|MTA_CORE_MOVEMENT_REFERENCE|MTA_CORE_RENDER_REFERENCE|MTA_CORE_RENDER_GPU_REFERENCE|MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE|MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE|MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE|MTA_CORE_GUI_STARTUP_REFERENCE|MTA_CORE_GUI_SURFACE_REFERENCE|MTA_CORE_GUI_FRONTEND_REFERENCE|MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE|MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE) = true;') {
+    if ($frontendCount -ne 22 -or $guiCount -ne 13 -or $relativePaths.Count -ne (58+$messageBoxCount) -or $Mode -ne 'Smoke' -or $configText -match 'export const (GAIT_REFERENCE|GAIT_RATE|GAIT_ROOT_LOCK|INPUT_REFERENCE|MTA_NATIVE_PAD_REFERENCE|MTA_NATIVE_MOVEMENT_TRIAL|MTA_CORE_STARTUP_REFERENCE|MTA_CORE_INPUT_REFERENCE|MTA_CORE_MOVEMENT_REFERENCE|MTA_CORE_RENDER_REFERENCE|MTA_CORE_RENDER_GPU_REFERENCE|MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE|MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE|MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE|MTA_CORE_GUI_STARTUP_REFERENCE|MTA_CORE_GUI_SURFACE_REFERENCE|MTA_CORE_GUI_FRONTEND_REFERENCE|MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE|MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE) = true;') {
         throw 'Persistent MTA frontend requires complete frontend ownership and separate opt-in Smoke mode.'
     }
 }

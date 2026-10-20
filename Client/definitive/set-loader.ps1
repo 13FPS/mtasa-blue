@@ -9,6 +9,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'NativeFrontendPackage.ps1')
 $allowedPaths = @(
     'version.dll', 'cleo_redux64.asi', 'CLEO/CLEO_PLUGINS/dylib64.cleo', 'CLEO/CLEO_PLUGINS/Input64.cleo',
     'CLEO/.config/cleo.ini', 'CLEO/.config/sa_unreal.json', 'CLEO/.config/unknown_x64.json',
@@ -116,8 +117,12 @@ $guiCount = @($relativePaths | Where-Object { $_ -cin $guiPaths }).Count
 $frontendCount = @($relativePaths | Where-Object { $_ -cin $frontendPaths }).Count
 if ($guiCount -and ($guiCount -ne 13 -or $allowedPaths.Count -ne 23)) { throw 'Incomplete MTA Core GUI startup package ownership.' }
 if ($frontendCount -and ($frontendCount -ne 22 -or $guiCount -ne 13)) { throw 'Incomplete MTA Core GUI frontend package ownership.' }
+$nativeCount = Get-MtaNativeFrontendFileCount $relativePaths $frontendCount
+$messageBoxCount = Get-MtaFrontendMessageBoxFileCount $relativePaths $frontendCount
 if ($guiCount) { $allowedPaths += $guiPaths }
 if ($frontendCount) { $allowedPaths += $frontendPaths }
+if ($nativeCount) { $allowedPaths += @('MtaDefinitive.asi','MtaDefinitive.ini') }
+if ($messageBoxCount) { $allowedPaths += @(Get-MtaFrontendMessageBoxPaths) }
 $uniquePaths = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 foreach ($relative in $relativePaths) {
     if ($relative -cnotin $allowedPaths -or -not $uniquePaths.Add($relative)) {
@@ -148,6 +153,13 @@ foreach ($entry in $installed.files) {
         throw "Installed file was modified; loader was not changed: $actualPath"
     }
 }
+# A loader bypass must not re-enable a native entry whose INI disagrees with
+# the owned runtime selection. Validate only after every byte/path is verified,
+# and preserve historical installs which predate the optional native markers.
+$configuration = [IO.File]::ReadAllText((Join-Path $gameRoot 'CLEO/de-online/config.mjs'))
+$nativeIni = if ($nativeCount) { [IO.File]::ReadAllText((Join-Path $gameRoot 'MtaDefinitive.ini')) } else { '' }
+$installedMode = if ($installed.PSObject.Properties['mode']) { [string]$installed.mode } else { '' }
+Assert-MtaNativeFrontendConfig $configuration $nativeCount $nativeIni $installedMode
 
 $result = [ordered]@{
     action = $Action; state = $state; verifiedFiles = $allowedPaths.Count; gameDirectory = $gameRoot

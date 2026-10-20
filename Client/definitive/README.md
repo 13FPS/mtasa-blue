@@ -196,11 +196,11 @@ process; the real module and x64 MTA consumer passed 1,763 and 1,782 checks.
 These are offline results. The combined menu, changed bindings and native
 movement milestone has the separate October 19 GTA evidence above.
 
-**The retained frontend runtime candidate keeps real MTA services across menu reopenings.**
+**The retained frontend runtime keeps real MTA services across menu reopenings.**
 An additional `-MtaCoreFrontendNativeHost` selection starts that same Core owner
 through the pinned ASI loader's `InitializeASI` entry, independently of CLEO
 script resumption. It requires `-MtaCoreFrontendRuntime` and adds only the owned
-`MtaDefinitive.asi` / `MtaDefinitive.ini` pair (60 files total). Core starts hidden;
+`MtaDefinitive.asi` / `MtaDefinitive.ini` pair (64 files total with the four MTA dialog icons). Core starts hidden;
 there is no automatic menu, movement or network connection. With GTA focused,
 hold Ctrl+Shift+F9 for three seconds and release every key to show/hide a view;
 Ctrl+Shift+End stops the runtime. Existing native view eligibility still applies,
@@ -209,9 +209,28 @@ complete `CGame` startup. Native lifecycle transitions go to
 `CLEO/de-online/mta/logs/nativefrontend.log`. The script yields controller
 ownership in this selection. Ordinary mode changes disarm the owned INI, and
 updates can remove the complete pair while preserving user binding data.
-This new entry requires a future combined live check; full MTA remains experimental.
+The October 20 combined GTA check passed on `f556dd92f`. Hidden Core was ready
+32 ms after native controller startup; the first Show command arrived 111.688 s
+after startup. Core initialized before the CLEO script resumed. Two genuine
+menu views produced 179 and 298 presents, then closed with input scopes fully
+restored and cursor hooks detached. The user confirmed Apply to I, movement and
+sprinting with I, retained I on reopening, and ordinary W/camera control after
+End. All 15 run logs and normal shutdown are saved against the 14 existing-log
+baseline. GTA's native-main-menu location is the user's report; these records
+do not establish a visible playerless GUI, full client startup or networking.
+The baseline's missing `cgui/images/question.png` error reproduced. The
+backend `game_de.dll` may remain mapped through its expected process pin after
+its callbacks end. Full MTA remains experimental.
 
-`package.ps1 -Mode Smoke -MtaCoreFrontendRuntime` selects a separate 58-file
+The following offline packaging update ships MTA's existing `question`, `info`,
+`warning` and `error` PNGs as one complete optional group. It addresses the
+missing-icon path without changing GUI code. New frontend/native packages own
+62/64 files; historical 23/36/58/60 packages remain accepted. The existing MTA
+launcher preflight and loader switch validate these complete groups and native
+INI/configuration agreement. This adds package admission, not a full-client
+launch path or a new GTA visual result.
+
+`package.ps1 -Mode Smoke -MtaCoreFrontendRuntime` selects a separate 62-file
 package; the flag defaults to false and excludes every other trial. After the
 initial three-second Ctrl+Shift+F9 activation and key release, the existing
 MTA menu opens without a display timer or a clock-test prelude. Later presses

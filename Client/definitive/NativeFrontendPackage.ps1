@@ -1,6 +1,22 @@
 # This file is part of Multi Theft Auto. See LICENSE in the repository root.
 # Share the native entry's complete ownership/configuration contract across
 # staging, installation, updates and mode changes; partial startup must refuse.
+function Get-MtaFrontendMessageBoxPaths {
+    return @('CLEO/de-online/mta/cgui/images/question.png',
+        'CLEO/de-online/mta/cgui/images/info.png',
+        'CLEO/de-online/mta/cgui/images/warning.png',
+        'CLEO/de-online/mta/cgui/images/error.png')
+}
+
+function Get-MtaFrontendMessageBoxFileCount([string[]]$Paths, [int]$FrontendCount) {
+    # Existing MTA dialogs load these four icons independently of the skin.
+    # Keep their complete additive group optional so intact historical frontend
+    # packages remain removable and can be upgraded without claiming user files.
+    $count = @($Paths | Where-Object { $_ -in (Get-MtaFrontendMessageBoxPaths) }).Count
+    if ($count -notin @(0,4) -or ($count -and $FrontendCount -ne 22)) { throw 'Incomplete MTA frontend message-box asset ownership.' }
+    return $count
+}
+
 function Get-MtaNativeFrontendFileCount([string[]]$Paths, [int]$FrontendCount) {
     $count = @($Paths | Where-Object { $_ -in @('MtaDefinitive.asi','MtaDefinitive.ini') }).Count
     if ($count -notin @(0,2) -or ($count -and $FrontendCount -ne 22)) { throw 'Incomplete native MTA frontend startup ownership.' }

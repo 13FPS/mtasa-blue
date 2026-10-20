@@ -8,8 +8,12 @@ param(
     [string]$PackageDirectory,
     [string]$GuiPackageDirectory,
     [string]$FrontendPackageDirectory,
+    [string]$NativeFrontendPackageDirectory,
+    [string]$MessageBoxFrontendPackageDirectory,
+    [string]$NativeMessageBoxFrontendPackageDirectory,
     [string]$LauncherExe,
-    [string]$PreflightDll
+    [string]$PreflightDll,
+    [switch]$AdmissionOnly
 )
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
@@ -26,10 +30,12 @@ $manifestSource=Join-Path $packageSource 'manifest.json'
 $sourceManifestSha=Sha $manifestSource
 $sourcePackage=Get-Content -LiteralPath $manifestSource -Raw | ConvertFrom-Json
 if($sourcePackage.files.Count -ne 23){throw 'Fixture requires the complete owned 23-file package.'}
-$output=Join-Path $root ('Build/mta-de-launcher-preflight/'+(Get-Date -Format 'yyyyMMdd-HHmmss')+'-'+[guid]::NewGuid().ToString('N'))
+$runId=(Get-Date -Format 'yyyyMMdd-HHmmss')+'-'+[guid]::NewGuid().ToString('N')
+$output=Join-Path $root ('Build/mta-de-launcher-preflight/'+$runId)
 $hostRoot=Join-Path $output 'MTA fixture with spaces Ã©'
 $bundle=Join-Path $output 'owned bundle with spaces Ã©'
-$gameCopy=Join-Path $output 'hashed game copy/SanAndreas.exe'
+$admissionScratch=if($AdmissionOnly){Join-Path $root ('Build/tmp/de-launcher-admission-'+$runId)}else{$null}
+$gameCopy=if($AdmissionOnly){Join-Path $admissionScratch 'SanAndreas.exe'}else{Join-Path $output 'hashed game copy/SanAndreas.exe'}
 $manifest=Join-Path $output 'owned-package-manifest.json'
 New-Item -ItemType Directory -Path (Join-Path $hostRoot 'mta'),$bundle,(Split-Path $gameCopy -Parent) | Out-Null
 $utf8=[Text.UTF8Encoding]::new($false)
@@ -87,6 +93,7 @@ function Invoke-Case([string]$name,[string[]]$arguments,[int]$exit,[string]$stat
 }
 $arguments=@('--de-preflight','--game-exe',$gameCopy,'--bundle',$bundle,'--manifest',$manifest)
 Invoke-Case 'valid-unicode-space-paths' $arguments 0 'preflight_valid'
+if(-not $AdmissionOnly){
 Invoke-Case 'no-implicit-launch' @() 1 'explicit_de_preflight_required'
 Invoke-Case 'missing-cli-arguments' @('--de-preflight') 4 'preflight_arguments_required'
 Invoke-Case 'relative-game-path' @('--de-preflight','--game-exe','SanAndreas.exe','--bundle',$bundle,'--manifest',$manifest) 4 'normalized_absolute_paths_required'
@@ -167,10 +174,14 @@ Copy-Item -LiteralPath $fixtureDlls.x86 -Destination $nativePath -Force
 Manifest-Case 'rehash-cannot-hide-wrong-native-architecture' {param($r) ($r.files|Where-Object path -eq 'CLEO/de-online/core.dll').sha256=Sha $nativePath} 'amd64_pe32plus_required'
 [IO.File]::WriteAllBytes($nativePath,$nativeBytes)
 Invoke-Case 'restored-valid-bundle' $arguments 0 'preflight_valid'
+}
 
 # Extra owned GUI groups retain the same no-load/no-launch preflight boundary.
 $extraPackages=[Collections.Generic.List[object]]::new()
-foreach($spec in @(@{name='gui36';path=$GuiPackageDirectory;count=36},@{name='frontend58';path=$FrontendPackageDirectory;count=58})){
+foreach($spec in @(@{name='gui36';path=$GuiPackageDirectory;count=36},@{name='frontend58';path=$FrontendPackageDirectory;count=58},
+                  @{name='native60';path=$NativeFrontendPackageDirectory;count=60},
+                  @{name='message-box62';path=$MessageBoxFrontendPackageDirectory;count=62},
+                  @{name='native-message-box64';path=$NativeMessageBoxFrontendPackageDirectory;count=64})){
     if(-not $spec.path){continue}
     $source=(Resolve-Path -LiteralPath $spec.path).Path
     $inputManifest=Join-Path $source 'manifest.json'
@@ -190,7 +201,7 @@ foreach($spec in @(@{name='gui36';path=$GuiPackageDirectory;count=36},@{name='fr
     [IO.File]::WriteAllText($extraManifest,$extraText,$utf8)
     $extraArguments=@('--de-preflight','--game-exe',$gameCopy,'--bundle',$extraBundle,'--manifest',$extraManifest)
     Invoke-Case ($spec.name+'-valid-complete-group') $extraArguments 0 'preflight_valid' $hostRoot $spec.count
-    $groupMember=if($spec.count -eq 58){'CLEO/de-online/mta/locale/en_US/client.pot'}else{'CLEO/de-online/mta/cgui/unifont.ttf'}
+    $groupMember=if($spec.count -ge 58){'CLEO/de-online/mta/locale/en_US/client.pot'}else{'CLEO/de-online/mta/cgui/unifont.ttf'}
     $bad=$extraText|ConvertFrom-Json;$bad.files=@($bad.files|Where-Object path -ne $groupMember)
     [IO.File]::WriteAllText($extraManifest,($bad|ConvertTo-Json -Depth 12),$utf8)
     Invoke-Case ($spec.name+'-partial-group-manifest') $extraArguments 4 'exact_owned_group_count_required'
@@ -203,7 +214,7 @@ foreach($spec in @(@{name='gui36';path=$GuiPackageDirectory;count=36},@{name='fr
     [IO.File]::WriteAllText($extraManifest,($bad|ConvertTo-Json -Depth 12),$utf8)
     Invoke-Case ($spec.name+'-unknown-complete-count-path') $extraArguments 4 'owned_path_not_allowed_or_duplicate'
     [IO.File]::WriteAllText($extraManifest,$extraText,$utf8)
-    if($spec.count -eq 58){
+    if($spec.count -ge 58){
         $extraConfig=Join-Path $extraBundle 'CLEO/de-online/config.mjs';$extraBytes=[IO.File]::ReadAllBytes($extraConfig)
         foreach($change in @(@{name='duplicate-marker';suffix="`nexport const MTA_CORE_GUI_FRONTEND_REFERENCE = false;`n";status='gui_configuration_marker_invalid'},
                             @{name='forged-other-trial';suffix='';status='gui_mode_conflict'})){
@@ -212,10 +223,61 @@ foreach($spec in @(@{name='gui36';path=$GuiPackageDirectory;count=36},@{name='fr
             [IO.File]::WriteAllText($extraConfig,$text,$utf8)
             $bad=$extraText|ConvertFrom-Json;($bad.files|Where-Object path -eq 'CLEO/de-online/config.mjs').sha256=Sha $extraConfig
             [IO.File]::WriteAllText($extraManifest,($bad|ConvertTo-Json -Depth 12),$utf8)
-            Invoke-Case ('frontend58-'+$change.name) $extraArguments 4 $change.status
+            Invoke-Case ($spec.name+'-'+$change.name) $extraArguments 4 $change.status
         }
         [IO.File]::WriteAllBytes($extraConfig,$extraBytes);[IO.File]::WriteAllText($extraManifest,$extraText,$utf8)
-        Invoke-Case 'frontend58-restored-complete-group' $extraArguments 0 'preflight_valid' $hostRoot 58
+        Invoke-Case ($spec.name+'-restored-complete-group') $extraArguments 0 'preflight_valid' $hostRoot $spec.count
+    }
+    if($spec.count -in @(60,64)){
+        $extraConfig=Join-Path $extraBundle 'CLEO/de-online/config.mjs';$extraBytes=[IO.File]::ReadAllBytes($extraConfig)
+        $iniPath=Join-Path $extraBundle 'MtaDefinitive.ini';$iniBytes=[IO.File]::ReadAllBytes($iniPath)
+        Check ($utf8.GetString($extraBytes).Contains('export const MTA_CORE_FRONTEND_NATIVE_HOST = true;')) 'Native admission fixture must be an explicitly armed package.'
+        # Rehash deliberately incoherent owned bytes: admission must inspect the
+        # startup policy as well as hashes before loading any executable module.
+        foreach($change in @('ini-mismatch','duplicate-native-marker','malformed-native-marker','native-without-runtime')){
+            [IO.File]::WriteAllBytes($extraConfig,$extraBytes);[IO.File]::WriteAllBytes($iniPath,$iniBytes)
+            $text=$utf8.GetString($extraBytes)
+            $status='native_frontend_configuration_invalid'
+            switch($change){
+                'ini-mismatch' {[IO.File]::WriteAllText($iniPath,"[MTA]`nEnabled=0`nLocalInput=1`nBindingPersistence=0`n",$utf8)}
+                'duplicate-native-marker' {$text+="`nexport const MTA_CORE_FRONTEND_NATIVE_HOST = false;`n";$status='gui_configuration_marker_invalid'}
+                'malformed-native-marker' {$text=$text.Replace('export const MTA_CORE_FRONTEND_NATIVE_HOST = true;','export const MTA_CORE_FRONTEND_NATIVE_HOST = 1;');$status='gui_configuration_marker_invalid'}
+                'native-without-runtime' {$text=$text.Replace('export const MTA_CORE_FRONTEND_RUNTIME = true;','export const MTA_CORE_FRONTEND_RUNTIME = false;')}
+            }
+            [IO.File]::WriteAllText($extraConfig,$text,$utf8)
+            $bad=$extraText|ConvertFrom-Json
+            foreach($path in @('CLEO/de-online/config.mjs','MtaDefinitive.ini')){($bad.files|Where-Object path -eq $path).sha256=Sha (Join-Path $extraBundle $path)}
+            [IO.File]::WriteAllText($extraManifest,($bad|ConvertTo-Json -Depth 12),$utf8)
+            # A persistence marker also refuses a missing runtime. The earlier
+            # conflict is equally conclusive, so use its deterministic status.
+            if($change -eq 'native-without-runtime' -and $text.Contains('export const MTA_CORE_FRONTEND_BINDING_PERSISTENCE = true;')){$status='gui_mode_conflict'}
+            Invoke-Case ($spec.name+'-'+$change) $extraArguments 4 $status
+        }
+        [IO.File]::WriteAllBytes($extraConfig,$extraBytes);[IO.File]::WriteAllBytes($iniPath,$iniBytes)
+        [IO.File]::WriteAllText($extraManifest,$extraText,$utf8)
+        $bad=$extraText|ConvertFrom-Json;($bad.files|Where-Object path -eq 'MtaDefinitive.ini').path='unowned.ini'
+        [IO.File]::WriteAllText($extraManifest,($bad|ConvertTo-Json -Depth 12),$utf8)
+        Invoke-Case ($spec.name+'-partial-native-group-same-count') $extraArguments 4 'exact_owned_group_count_required'
+        [IO.File]::WriteAllText($extraManifest,$extraText,$utf8)
+        # Native files can remain owned while an ordinary mode disarms the ASI.
+        $text=$utf8.GetString($extraBytes).Replace("export const MODE = 'smoke';","export const MODE = 'diagnostic';").
+            Replace('export const MTA_CORE_FRONTEND_NATIVE_HOST = true;','export const MTA_CORE_FRONTEND_NATIVE_HOST = false;').
+            Replace('export const MTA_CORE_FRONTEND_RUNTIME = true;','export const MTA_CORE_FRONTEND_RUNTIME = false;').
+            Replace('export const MTA_CORE_FRONTEND_BINDING_PERSISTENCE = true;','export const MTA_CORE_FRONTEND_BINDING_PERSISTENCE = false;')
+        [IO.File]::WriteAllText($extraConfig,$text,$utf8)
+        [IO.File]::WriteAllText($iniPath,"[MTA]`nEnabled=0`nLocalInput=1`nBindingPersistence=0`n",$utf8)
+        $bad=$extraText|ConvertFrom-Json;$bad.mode='Diagnostic'
+        foreach($path in @('CLEO/de-online/config.mjs','MtaDefinitive.ini')){($bad.files|Where-Object path -eq $path).sha256=Sha (Join-Path $extraBundle $path)}
+        [IO.File]::WriteAllText($extraManifest,($bad|ConvertTo-Json -Depth 12),$utf8)
+        Invoke-Case ($spec.name+'-disarmed-native-entry') $extraArguments 0 'preflight_valid' $hostRoot $spec.count
+        [IO.File]::WriteAllBytes($extraConfig,$extraBytes);[IO.File]::WriteAllBytes($iniPath,$iniBytes)
+        [IO.File]::WriteAllText($extraManifest,$extraText,$utf8)
+    }
+    if($spec.count -in @(62,64)){
+        $bad=$extraText|ConvertFrom-Json;($bad.files|Where-Object path -eq 'CLEO/de-online/mta/cgui/images/question.png').path='CLEO/de-online/mta/cgui/images/other.png'
+        [IO.File]::WriteAllText($extraManifest,($bad|ConvertTo-Json -Depth 12),$utf8)
+        Invoke-Case ($spec.name+'-partial-dialog-group-same-count') $extraArguments 4 'exact_owned_group_count_required'
+        [IO.File]::WriteAllText($extraManifest,$extraText,$utf8)
     }
     $extraPackages.Add(@{source=$source;manifest_sha256=$inputHash;files=$parsed.files;owned_count=$spec.count})
 }
@@ -227,8 +289,28 @@ foreach($entry in $sourcePackage.files){Check ((Sha (Join-Path $packageSource ('
 Check ((Sha $manifestSource) -ceq $sourceManifestSha) 'Input manifest changed.'
 Check ((Sha $gameSource) -ceq $knownGame) 'Input game executable changed.'
 foreach($name in $sourceHashes.Keys){Check ((Sha (Join-Path $root $name)) -ceq $sourceHashes[$name]) 'Fixture source changed during execution.'}
+$admissionCopyRemoved=$false
+if($AdmissionOnly){
+    # The large game copy is disposable input, while manifests and results are
+    # durable evidence. Remove only this run's never-executed copy on success;
+    # failed runs retain their isolated scratch for diagnosis.
+    $scratchPrefix=[IO.Path]::GetFullPath((Join-Path $root 'Build/tmp'))+[IO.Path]::DirectorySeparatorChar
+    $scratchRoot=[IO.Path]::GetFullPath($admissionScratch)
+    $copyPath=[IO.Path]::GetFullPath($gameCopy)
+    Check ($scratchRoot.StartsWith($scratchPrefix,[StringComparison]::OrdinalIgnoreCase) -and
+        [IO.Path]::GetFileName($scratchRoot) -ceq ('de-launcher-admission-'+$runId) -and
+        $copyPath -ceq (Join-Path $scratchRoot 'SanAndreas.exe')) 'Admission copy cleanup escaped its owned workspace scratch.'
+    for($ancestor=$copyPath;$ancestor;$ancestor=[IO.Path]::GetDirectoryName($ancestor)){
+        Check (-not ((Get-Item -LiteralPath $ancestor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) 'Admission copy cleanup refused a linked ancestor.'
+    }
+    Check ((Sha $copyPath) -ceq $knownGame) 'Admission copy changed before cleanup.'
+    Remove-Item -LiteralPath $copyPath -Force -ErrorAction Stop
+    Check (@(Get-ChildItem -LiteralPath $scratchRoot -Force).Count -eq 0) 'Admission scratch contains unexpected files; its directory was retained.'
+    Remove-Item -LiteralPath $scratchRoot -Force -ErrorAction Stop
+    $admissionCopyRemoved=$true
+}
 $artifacts=@(@{path=(Resolve-Path -LiteralPath $LauncherExe).Path;sha256=(Sha $LauncherExe);architecture='AMD64'},@{path=(Resolve-Path -LiteralPath $PreflightDll).Path;sha256=(Sha $PreflightDll);architecture='AMD64'})
-$result=[ordered]@{success=$true;created_at=[DateTimeOffset]::Now.ToString('o');directory=$output;checks=$checks;case_count=$cases.Count;cases=$cases;source_hashes=$sourceHashes;source_unchanged=$true;artifacts=$artifacts;package_manifest_sha256=$sourceManifestSha;package_hashes=$packageHashes;extra_packages=$extraPackages;game_executable_sha256=$knownGame;game_executable_executed=$false;game_files_changed=$false;game_launched=$false;process_injection=$false;core_loaded=$false;launchReady=$false;fullMtaReady=$false;scope='Actual normal x64 MTA launcher dispatch and read-only DE bundle preflight in owned copies; no new game startup path'}
+$result=[ordered]@{success=$true;created_at=[DateTimeOffset]::Now.ToString('o');directory=$output;checks=$checks;case_count=$cases.Count;cases=$cases;source_hashes=$sourceHashes;source_unchanged=$true;artifacts=$artifacts;package_manifest_sha256=$sourceManifestSha;package_hashes=$packageHashes;extra_packages=$extraPackages;game_executable_sha256=$knownGame;game_executable_executed=$false;game_copy_removed=$admissionCopyRemoved;admission_scratch_directory=$admissionScratch;game_files_changed=$false;game_launched=$false;process_injection=$false;core_loaded=$false;launchReady=$false;fullMtaReady=$false;scope='Actual normal x64 MTA launcher dispatch and read-only DE bundle preflight in owned copies; no new game startup path'}
 $target=Join-Path $output 'test-result.json'
 $result|ConvertTo-Json -Depth 14|Set-Content -LiteralPath $target -Encoding utf8
 @{success=$true;path=$target;sha256=(Sha $target);checks=$checks;cases=$cases.Count;launcher_sha256=(Sha $LauncherExe);loader_sha256=(Sha $PreflightDll)}|ConvertTo-Json -Compress

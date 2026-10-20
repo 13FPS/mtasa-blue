@@ -367,6 +367,12 @@ if ($MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference -or $MtaCoreGuiF
     if ((Get-FileHash -LiteralPath $unifont.source -Algorithm SHA256).Hash.ToLowerInvariant() -ne '6b18fdcf0f61f3df2e61db9737af6de9f37048ec93083621d41504ebf8cb18f4') { throw 'Pinned GUI Unifont hash mismatch.' }
 }
 if ($MtaCoreGuiFrontendReference -or $MtaCoreGuiFrontendInputReference -or $MtaCoreGuiFrontendStartupReference -or $MtaCorePersistentFrontend -or $MtaCoreFrontendRuntime) {
+    # Use the original message-box assets with MTA's existing dialog code; a
+    # complete separate group preserves the historical 22-file frontend group.
+    foreach ($relative in (Get-MtaFrontendMessageBoxPaths)) {
+        $name = [IO.Path]::GetFileName($relative)
+        $guiSources += @{ source=(Join-Path $repositoryRoot ('Shared/data/MTA San Andreas/MTA/cgui/images/' + $name)); path=$relative.Substring('CLEO/de-online/'.Length) }
+    }
     $guiSources += @{ source=(Join-Path $repositoryRoot 'Shared/data/MTA San Andreas/MTA/cgui/images/background.png'); path='mta/cgui/images/background.png' }
     $guiSources += @{ source=(Join-Path $repositoryRoot 'Shared/data/MTA San Andreas/MTA/cgui/images/background_logo.png'); path='mta/cgui/images/background_logo.png' }
     $guiSources += @{ source=(Join-Path $repositoryRoot 'Shared/data/MTA San Andreas/MTA/cgui/images/mta_filler.png'); path='mta/cgui/images/mta_filler.png' }
@@ -634,7 +640,7 @@ $files = @(Get-ChildItem -LiteralPath $stagingWin64 -File -Recurse | Sort-Object
         sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     }
 })
-if ($files.Count -ne $(if ($MtaCoreFrontendNativeHost) { 60 } elseif ($MtaCoreGuiFrontendReference -or $MtaCoreGuiFrontendInputReference -or $MtaCoreGuiFrontendStartupReference -or $MtaCorePersistentFrontend -or $MtaCoreFrontendRuntime) { 58 } elseif ($MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference) { 36 } else { 23 })) { throw 'Unexpected package ownership count.' }
+if ($files.Count -ne $(if ($MtaCoreFrontendNativeHost) { 64 } elseif ($MtaCoreGuiFrontendReference -or $MtaCoreGuiFrontendInputReference -or $MtaCoreGuiFrontendStartupReference -or $MtaCorePersistentFrontend -or $MtaCoreFrontendRuntime) { 62 } elseif ($MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference) { 36 } else { 23 })) { throw 'Unexpected package ownership count.' }
 $manifest = [ordered]@{
     packageId = 'de-online-prototype'
     formatVersion = 1

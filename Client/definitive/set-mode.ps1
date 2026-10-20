@@ -423,6 +423,9 @@ if ($MtaCoreGuiFrontendReference -or $MtaCoreGuiFrontendInputReference -or $MtaC
         'CLEO/de-online/mta/locale/en_US/latest_news.png',
         'CLEO/de-online/mta/locale/en_US/client.pot')
     if (@($installed.files | Where-Object { $_.path -in $frontendPaths }).Count -ne 22) { throw 'Update the adapter before selecting MTA Core GUI frontend: complete owned frontend assets are missing.' }
+    # Message-box icons are additive assets, not a mode or a capability. Keep
+    # older complete frontends usable while validating any newer owned group.
+    $null = Get-MtaFrontendMessageBoxFileCount @($installed.files.path) 22
 }
 # Ordinary switches revoke the opt-in while retaining owned assets for cleanup.
 if ($frontendMatches -eq 1) {

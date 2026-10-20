@@ -10,7 +10,8 @@ param(
     [string]$NativeRuntimePackageDirectory,
     [Parameter(Mandatory)][string]$GameExecutable,
     [switch]$BindingPersistenceOnly,
-    [switch]$NativeHostOnly
+    [switch]$NativeHostOnly,
+    [switch]$MessageBoxAssetsOnly
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -35,6 +36,7 @@ $fakeRemoved = $false
 $gameCopiesCreated = 0
 $nativeSavedData = $null
 $nativeSavedDataHash = $null
+$messageBoxPaths = @('question','info','warning','error') | ForEach-Object { 'CLEO/de-online/mta/cgui/images/'+$_+'.png' }
 New-Item -ItemType Directory -Path $outputRoot,$fixtureRoot -Force | Out-Null
 $savedTemp = [Environment]::GetEnvironmentVariable('TEMP','Process')
 $savedTmp = [Environment]::GetEnvironmentVariable('TMP','Process')
@@ -147,7 +149,7 @@ function Installed([int]$Count,$Package,[string]$Name) {
     $manifest
 }
 function Variant([string]$Name,[string]$Source,[scriptblock]$Change) {
-    # Reuse at most one fixture per 23/58/60-file group. Only configs
+    # Reuse at most one fixture per owned file-count group. Only configs
     # and manifests vary; a matrix case must never duplicate the 89 MB game.
     $count=@((Get-Content -LiteralPath (Join-Path $Source 'manifest.json') -Raw | ConvertFrom-Json).files).Count
     $target=Assert-Owned (Join-Path $fixtureRoot ('shared-'+$count))
@@ -249,7 +251,7 @@ function Get-Amd64Exports([string]$Path) {
 
 function Transition([string]$Name,$Selection) {
     $priorCount = @((Get-Content -Raw -LiteralPath (Join-Path $fakeGame 'de-online-install-manifest.json') | ConvertFrom-Json).files).Count
-    Check ($Name+':known-owned-group-size') ($priorCount -in @(23,58,60))
+    Check ($Name+':known-owned-group-size') ($priorCount -in @(23,58,60,62,64))
     $prior = Installed $priorCount $null ($Name+'-before')
     $priorManifest = Sha (Join-Path $fakeGame 'de-online-install-manifest.json')
     $changes = @()
@@ -280,12 +282,14 @@ function Transition([string]$Name,$Selection) {
     $removed = @($prior.files | Where-Object {$_.path -notin $installed.files.path})
     $added = @($installed.files | Where-Object {$_.path -notin $prior.files.path})
     $nativePaths = @('MtaDefinitive.asi','MtaDefinitive.ini')
-    $removedGui = @($removed | Where-Object {$_.path -notin $nativePaths})
-    $addedGui = @($added | Where-Object {$_.path -notin $nativePaths})
+    $removedGui = @($removed | Where-Object {$_.path -notin $nativePaths -and $_.path -notin $messageBoxPaths})
+    $addedGui = @($added | Where-Object {$_.path -notin $nativePaths -and $_.path -notin $messageBoxPaths})
     Check ($Name+':complete-GUI-group-transition') (($removedGui.Count -eq 0 -and $addedGui.Count -eq 35) -or
         ($removedGui.Count -eq 35 -and $addedGui.Count -eq 0) -or ($removedGui.Count -eq 0 -and $addedGui.Count -eq 0))
     Check ($Name+':complete-native-entry-group-transition') (@($removed | Where-Object {$_.path -in $nativePaths}).Count -in @(0,2) -and
         @($added | Where-Object {$_.path -in $nativePaths}).Count -in @(0,2))
+    Check ($Name+':complete-message-box-group-transition') (@($removed | Where-Object {$_.path -in $messageBoxPaths}).Count -in @(0,4) -and
+        @($added | Where-Object {$_.path -in $messageBoxPaths}).Count -in @(0,4))
     foreach ($row in @($removedGui)+@($addedGui)) {
         Check ($Name+':GUI-owned-path:'+ $row.path) ($row.path -match '^CLEO/de-online/(cgui\.dll|mta/cgui/|skins/Default/|mta/locale/en_US/)')
     }
@@ -295,7 +299,7 @@ function Transition([string]$Name,$Selection) {
     }
     Check ($Name+':loader-preserved') ((Sha (Join-Path $fakeGame 'version.dll')) -ceq $loaderHash)
     Check ($Name+':unowned-preserved') ((Sha $unowned) -ceq $unownedHash)
-    if ($NativeHostOnly) { Check ($Name+':saved-data-preserved') ((Sha $nativeSavedData) -ceq $nativeSavedDataHash) }
+    if ($NativeHostOnly -or $MessageBoxAssetsOnly) { Check ($Name+':saved-data-preserved') ((Sha $nativeSavedData) -ceq $nativeSavedDataHash) }
     Check ($Name+':game-preserved') ((Sha (Join-Path $fakeGame 'SanAndreas.exe')) -ceq $knownGameHash)
     $backups.Add([ordered]@{name=$Name;directory=$backup;originalManifestSha256=$priorManifest;orderedChanges=$changes;
         savedOriginals=$savedOriginals;removedPaths=@($removed | ForEach-Object path);addedPaths=@($added | ForEach-Object path)})
@@ -348,7 +352,7 @@ function Rollback-Update([string]$Name,$Selection) {
     }
     $previousBackups=@(Backup-Directories)
     # Use the same real replacement refusal as the existing ownership matrix.
-    # A downgrade removes all 35 GUI assets before replacing this config, so
+    # A downgrade removes the GUI, optional icons and native entry before this config, so
     # exact-tree recovery proves the removed group was restored without a seam.
     $held=[IO.File]::Open((Join-Path $fakeGame 'CLEO/de-online/config.mjs'),[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
     try { Unchanged-Run $Name $update @('-PackageDirectory',$Selection.root,'-GameDirectory',$fakeGame) $false 1 }
@@ -368,7 +372,7 @@ function Rollback-Update([string]$Name,$Selection) {
 }
 function Native-Variant([string]$Name,[string]$Source,[scriptblock]$Change) {
     $target = Variant $Name $Source {param($text)$text}
-    # One shared60 fixture is reset from its immutable input for every case.
+    # One shared native fixture is reset from its immutable input for every case.
     # Restoring the two small native files also repairs earlier partial groups.
     foreach ($relative in @('MtaDefinitive.asi','MtaDefinitive.ini')) {
         $destination = Assert-Owned (Join-Path $target ('Win64/'+$relative))
@@ -392,7 +396,38 @@ function Native-State([string]$Name,[bool]$Runtime,[bool]$Enabled,[bool]$Persist
     }
     $expected = "[MTA]`nEnabled=$([int]$Enabled)`nLocalInput=1`nBindingPersistence=$([int]$Persistent)`n"
     Check ($Name+':INI-and-marker-agree') ([IO.File]::ReadAllText((Join-Path $fakeGame 'MtaDefinitive.ini')).Replace("`r`n","`n") -ceq $expected)
-    Installed 60 $null ($Name+'-owned60') | Out-Null
+    $count=@((Get-Content -LiteralPath (Join-Path $fakeGame 'de-online-install-manifest.json') -Raw | ConvertFrom-Json).files).Count
+    Check ($Name+':complete-native-ownership') ($count -in @(60,64))
+    Installed $count $null ($Name+'-owned'+$count) | Out-Null
+}
+function Legacy-MessageBoxPackage([string]$Name,$Source,[int]$Count) {
+    # Keep these positive inputs immutable. Malformed variants reuse a different
+    # directory, so a later partial group cannot silently replace the legacy input.
+    $target=Assert-Owned (Join-Path $fixtureRoot $Name)
+    New-Item -ItemType Directory -Path $target | Out-Null
+    Copy-Item -LiteralPath (Join-Path $Source.root 'Win64') -Destination $target -Recurse
+    $manifest=Get-Content -LiteralPath (Join-Path $Source.root 'manifest.json') -Raw | ConvertFrom-Json
+    foreach($relative in $messageBoxPaths) { Remove-Item -LiteralPath (Assert-Owned (Join-Path $target ('Win64/'+$relative))) }
+    $manifest.files=@($manifest.files | Where-Object {$_.path -notin $messageBoxPaths})
+    Save (Join-Path $target 'manifest.json') $manifest
+    Package-Info $target $Count $Name
+}
+function Partial-MessageBoxPackage([string]$Name,$Source,[int]$Keep) {
+    $target=Variant $Name $Source.root {param($text)$text}
+    # Reset every optional icon from the immutable real package before reducing
+    # the next case. This prevents partial fixtures from contaminating one another.
+    foreach($relative in $messageBoxPaths) {
+        $destination=Assert-Owned (Join-Path $target ('Win64/'+$relative))
+        [IO.File]::Copy((Join-Path $Source.root ('Win64/'+$relative)),$destination,$true)
+    }
+    $manifest=Get-Content -LiteralPath (Join-Path $Source.root 'manifest.json') -Raw | ConvertFrom-Json
+    foreach($relative in @($messageBoxPaths | Select-Object -Skip $Keep)) {
+        Remove-Item -LiteralPath (Assert-Owned (Join-Path $target ('Win64/'+$relative)))
+        $manifest.files=@($manifest.files | Where-Object path -CNE $relative)
+    }
+    Save (Join-Path $target 'manifest.json') $manifest
+    Save (Join-Path $outputRoot ($Name+'-manifest.json')) $manifest
+    $target
 }
 try {
     foreach($name in @('Client/definitive/install.ps1','Client/definitive/update.ps1','Client/definitive/uninstall.ps1',
@@ -401,12 +436,18 @@ try {
         $sourcePins[$name]=Sha (Join-Path $repositoryRoot $name)
     }
     $GameExecutable=(Resolve-Path -LiteralPath $GameExecutable).Path
-    if ($NativeHostOnly -and $BindingPersistenceOnly) { throw 'Choose either focused native-host or saved-binding ownership coverage.' }
+    if (@(@($NativeHostOnly,$BindingPersistenceOnly,$MessageBoxAssetsOnly) | Where-Object {$_}).Count -gt 1) { throw 'Choose one focused package ownership selector.' }
     Check 'known-source-executable' ((Sha $GameExecutable) -ceq $knownGameHash)
-    $runtime=Package-Info $RuntimePackageDirectory 58 'runtime-package'
+    $runtimeCount=@((Get-Content -LiteralPath (Join-Path $RuntimePackageDirectory 'manifest.json') -Raw | ConvertFrom-Json).files).Count
+    Check 'known-session-runtime-package-size' ($runtimeCount -in @(58,62))
+    $runtime=Package-Info $RuntimePackageDirectory $runtimeCount 'runtime-package'
     $plain=Package-Info $PlainPackageDirectory 23 'plain-package'
     $legacy=$null
-    if($LegacyFrontendPackageDirectory){$legacy=Package-Info $LegacyFrontendPackageDirectory 58 'legacy-frontend-package'}
+    if($LegacyFrontendPackageDirectory){
+        $legacyCount=@((Get-Content -LiteralPath (Join-Path $LegacyFrontendPackageDirectory 'manifest.json') -Raw | ConvertFrom-Json).files).Count
+        Check 'known-legacy-frontend-package-size' ($legacyCount -in @(58,62))
+        $legacy=Package-Info $LegacyFrontendPackageDirectory $legacyCount 'legacy-frontend-package'
+    }
     foreach($path in @('version.dll','CLEO/de-online/core.dll','CLEO/de-online/game_de.dll','CLEO/de-online/de_client_bridge.dll','CLEO/de-online/pthread.dll','CLEO/de-online/index.js')) {
         $hashes=@(@($runtime,$plain) | ForEach-Object {@($_.manifest.files | Where-Object path -CEQ $path)[0].sha256})
         Check ('same-reviewed-payload:'+ $path) (@($hashes | Select-Object -Unique).Count -eq 1)
@@ -443,9 +484,98 @@ try {
         nonboolean={param($text)$text.Replace('export const MTA_CORE_FRONTEND_RUNTIME = true;','export const MTA_CORE_FRONTEND_RUNTIME = 1;')}
         malformed={param($text)$text.Replace('export const MTA_CORE_FRONTEND_RUNTIME = true;','export const MTA_CORE_FRONTEND_RUNTIME = "true";')}
     }
-    if ($NativeHostOnly) {
-        if (-not $NativeRuntimePackageDirectory) { throw 'Focused native-host checks require their actual60-file package.' }
-        $native = Package-Info $NativeRuntimePackageDirectory 60 'native-runtime-package'
+    if ($MessageBoxAssetsOnly) {
+        if (-not $NativeRuntimePackageDirectory) { throw 'Focused message-box checks require their actual64-file native package.' }
+        Check 'message-box-runtime-package-has62-files' ($runtimeCount -eq 62)
+        $native=Package-Info $NativeRuntimePackageDirectory 64 'message-box-native-package'
+        foreach($selection in @($runtime,$native)) {
+            Check ('message-box-complete-four-asset-input:'+ $selection.manifest.files.Count) (@($selection.manifest.files | Where-Object {$_.path -in $messageBoxPaths}).Count -eq 4)
+            foreach($relative in $messageBoxPaths) {
+                $nativeIcon=@($native.manifest.files | Where-Object path -CEQ $relative)[0]
+                $runtimeIcon=@($runtime.manifest.files | Where-Object path -CEQ $relative)[0]
+                Check ('message-box-same-reviewed-icon:'+ $selection.manifest.files.Count+':'+$relative) ($nativeIcon.sha256 -ceq $runtimeIcon.sha256)
+            }
+        }
+        $nativeText=[IO.File]::ReadAllText((Join-Path $native.root 'Win64/CLEO/de-online/config.mjs'))
+        $nativePersistent=[regex]::Matches($nativeText,'export const MTA_CORE_FRONTEND_BINDING_PERSISTENCE = true;').Count -eq 1
+        $legacyRuntime=Legacy-MessageBoxPackage 'immutable-legacy-runtime58' $runtime 58
+        $legacyNative=Legacy-MessageBoxPackage 'immutable-legacy-native60' $native 60
+        $withoutFrontend=Variant 'message-box-without-frontend27' $plain.root {param($text)$text}
+        $withoutFrontendManifest=Get-Content -LiteralPath (Join-Path $plain.root 'manifest.json') -Raw | ConvertFrom-Json
+        foreach($relative in $messageBoxPaths) {
+            $destination=Assert-Owned (Join-Path $withoutFrontend ('Win64/'+$relative))
+            New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($destination)) -Force | Out-Null
+            [IO.File]::Copy((Join-Path $native.root ('Win64/'+$relative)),$destination,$true)
+            $withoutFrontendManifest.files+=@($native.manifest.files | Where-Object path -CEQ $relative)[0]
+        }
+        Save (Join-Path $withoutFrontend 'manifest.json') $withoutFrontendManifest
+        Save (Join-Path $outputRoot 'message-box-without-frontend27-manifest.json') $withoutFrontendManifest
+        Fresh-Game
+        Unchanged-Run 'message-box-icons-without-frontend-install-refused' $install @('-Mode','Smoke','-PackageDirectory',$withoutFrontend,'-GameDirectory',$fakeGame) $false
+        foreach($selection in @($runtime,$native)) {
+            foreach($keep in @(1,2,3)) {
+                $name='message-box-partial-'+$selection.manifest.files.Count+'-keep'+$keep
+                $variant=Partial-MessageBoxPackage $name $selection $keep
+                Unchanged-Run ($name+'-install-refused') $install @('-Mode','Smoke','-PackageDirectory',$variant,'-GameDirectory',$fakeGame) $false
+            }
+        }
+        Unchanged-Run 'message-box-native64-install-WhatIf-no-writes' $install @('-Mode','Smoke','-PackageDirectory',$native.root,'-GameDirectory',$fakeGame,'-WhatIf') $true
+        Run 'message-box-install-native64' $install @('-Mode','Smoke','-PackageDirectory',$native.root,'-GameDirectory',$fakeGame) $true | Out-Null
+        Installed 64 $native.manifest 'message-box-initial64' | Out-Null
+        Native-State 'message-box-native64-selection' $true $true $nativePersistent
+        $loaderHash=Sha (Join-Path $fakeGame 'version.dll')
+        $manifestPath=Join-Path $fakeGame 'de-online-install-manifest.json'
+        $unowned=Join-Path $fakeGame 'CLEO/user-kept.txt'
+        [IO.File]::WriteAllText($unowned,'Unowned content survives optional MTA message-box assets.',$utf8)
+        $unownedHash=Sha $unowned
+        $nativeSavedData=Join-Path $fakeGame 'CLEO/de-online/mta/config/user-saved-movement-bindings.xml'
+        [IO.File]::WriteAllText($nativeSavedData,'<definitive_keybinds version="1"><keybinds /></definitive_keybinds>',$utf8)
+        $nativeSavedDataHash=Sha $nativeSavedData
+        Unchanged-Run 'message-box-icons-without-frontend-update-refused' $update @('-PackageDirectory',$withoutFrontend,'-GameDirectory',$fakeGame) $false
+        foreach($selection in @($runtime,$native)) {
+            foreach($keep in @(1,2,3)) {
+                $name='message-box-partial-'+$selection.manifest.files.Count+'-keep'+$keep
+                $variant=Partial-MessageBoxPackage $name $selection $keep
+                Unchanged-Run ($name+'-update-refused') $update @('-PackageDirectory',$variant,'-GameDirectory',$fakeGame) $false
+            }
+        }
+        Unchanged-Run 'message-box-native64-mode-WhatIf-no-writes' $setMode @('-Mode','Smoke','-GameDirectory',$fakeGame,'-WhatIf') $true
+        foreach($mode in @('Smoke','Diagnostic','Online')) {
+            Run ('message-box-native64-ordinary-'+$mode) $setMode @('-Mode',$mode,'-GameDirectory',$fakeGame) $true | Out-Null
+            All-Off ('message-box-native64-ordinary-'+$mode)
+            $ini=[IO.File]::ReadAllText((Join-Path $fakeGame 'MtaDefinitive.ini')).Replace("`r`n","`n")
+            Check ('message-box-native64-'+$mode+':disarmed-INI') ($ini -ceq "[MTA]`nEnabled=0`nLocalInput=1`nBindingPersistence=0`n")
+            $arguments=@('-Mode','Smoke','-MtaCoreFrontendRuntime','-MtaCoreFrontendNativeHost','-GameDirectory',$fakeGame)
+            if($nativePersistent) { $arguments+='-MtaCoreFrontendBindingPersistence' }
+            Run ('message-box-native64-restore-after-'+$mode) $setMode $arguments $true | Out-Null
+            Native-State ('message-box-native64-after-'+$mode) $true $true $nativePersistent
+        }
+        Rollback-Update 'message-box-native64-to-plain23-locked-config-restores-all-groups' $plain
+        Transition 'message-box-native64-to-legacy60' $legacyNative
+        foreach($relative in $messageBoxPaths) {
+            $collision=Assert-Owned (Join-Path $fakeGame $relative)
+            [IO.File]::WriteAllText($collision,'Unowned icon must never be overwritten or adopted.',$utf8)
+            $collisionHash=Sha $collision
+            Unchanged-Run ('message-box-upgrade-refuses-unowned-'+[IO.Path]::GetFileName($relative)) $update @('-PackageDirectory',$native.root,'-GameDirectory',$fakeGame) $false
+            Check ('message-box-collision-preserved:'+ $relative) ((Sha $collision) -ceq $collisionHash)
+            Remove-Item -LiteralPath $collision
+        }
+        Unchanged-Run 'message-box-legacy60-to-native64-update-WhatIf-no-writes' $update @('-PackageDirectory',$native.root,'-GameDirectory',$fakeGame,'-WhatIf') $true
+        Transition 'message-box-legacy60-to-native64' $native
+        Transition 'message-box-native64-to-plain23' $plain
+        Transition 'message-box-plain23-to-native64' $native
+        Transition 'message-box-native64-to-runtime62' $runtime
+        Rollback-Update 'message-box-runtime62-to-plain23-locked-config-restores-GUI-and-icons' $plain
+        Transition 'message-box-runtime62-to-legacy58' $legacyRuntime
+        Transition 'message-box-legacy58-to-runtime62' $runtime
+        Transition 'message-box-runtime62-to-native64' $native
+        Native-State 'message-box-final-native64' $true $true $nativePersistent
+        Unchanged-Run 'message-box-native64-uninstall-WhatIf-no-writes' $uninstall @('-GameDirectory',$fakeGame,'-WhatIf') $true
+    } elseif ($NativeHostOnly) {
+        if (-not $NativeRuntimePackageDirectory) { throw 'Focused native-host checks require their actual native package.' }
+        $nativeCount=@((Get-Content -LiteralPath (Join-Path $NativeRuntimePackageDirectory 'manifest.json') -Raw | ConvertFrom-Json).files).Count
+        Check 'known-native-runtime-package-size' ($nativeCount -in @(60,64))
+        $native = Package-Info $NativeRuntimePackageDirectory $nativeCount 'native-runtime-package'
         $nativeText = [IO.File]::ReadAllText((Join-Path $native.root 'Win64/CLEO/de-online/config.mjs'))
         $nativePersistent = [regex]::Matches($nativeText,'export const MTA_CORE_FRONTEND_BINDING_PERSISTENCE = true;').Count -eq 1
         $nativeTrueFlags = @([regex]::Matches($nativeText,'export const ((?:GAIT_|INPUT_|MTA_)[A-Z0-9_]+) = true;') | ForEach-Object {$_.Groups[1].Value})
@@ -509,7 +639,7 @@ try {
         Unchanged-Run 'install-refuses-native-marker-without-entry' $install @('-Mode','Smoke','-PackageDirectory',$standalone,'-GameDirectory',$fakeGame) $false
         Unchanged-Run 'native-install-WhatIf-no-writes' $install @('-Mode','Smoke','-PackageDirectory',$native.root,'-GameDirectory',$fakeGame,'-WhatIf') $true
         Run 'install-native-runtime60' $install @('-Mode','Smoke','-PackageDirectory',$native.root,'-GameDirectory',$fakeGame) $true | Out-Null
-        Installed 60 $native.manifest 'native-initial60' | Out-Null
+        Installed $nativeCount $native.manifest ('native-initial'+$nativeCount) | Out-Null
         Native-State 'native-initial-selection' $true $true $nativePersistent
         $loaderHash=Sha (Join-Path $fakeGame 'version.dll')
         $manifestPath=Join-Path $fakeGame 'de-online-install-manifest.json'
@@ -578,7 +708,9 @@ try {
         # saved transitions need their own immutable packaged input so later
         # malformed variants cannot replace the source they are meant to admit.
         if (-not $BindingPersistencePackageDirectory) { throw 'Focused saved-binding checks require their actual opt-in package.' }
-        $savedInput = Package-Info $BindingPersistencePackageDirectory 58 'saved-binding-package'
+        $savedCount=@((Get-Content -LiteralPath (Join-Path $BindingPersistencePackageDirectory 'manifest.json') -Raw | ConvertFrom-Json).files).Count
+        Check 'known-saved-binding-package-size' ($savedCount -in @(58,62))
+        $savedInput = Package-Info $BindingPersistencePackageDirectory $savedCount 'saved-binding-package'
         $savedPackage = $savedInput.root
         $savedSelection = Selection $savedPackage
         Check 'saved-package-optin-enabled' ([IO.File]::ReadAllText((Join-Path $savedPackage 'Win64/CLEO/de-online/config.mjs')).Contains($enabled))
@@ -599,7 +731,7 @@ try {
             Unchanged-Run ('install-refuses-saved-'+$name) $install @('-Mode','Smoke','-PackageDirectory',$variant,'-GameDirectory',$fakeGame) $false
         }
         Run 'install-saved-bindings58' $install @('-Mode','Smoke','-PackageDirectory',$savedPackage,'-GameDirectory',$fakeGame) $true | Out-Null
-        Installed 58 $savedSelection.manifest 'saved-initial58' | Out-Null
+        Installed $savedCount $savedSelection.manifest ('saved-initial'+$savedCount) | Out-Null
         $loaderHash=Sha (Join-Path $fakeGame 'version.dll')
         $manifestPath=Join-Path $fakeGame 'de-online-install-manifest.json'
         $unowned=Join-Path $fakeGame 'CLEO/user-kept.txt'
@@ -689,7 +821,7 @@ try {
         Run ('explicit-runtime-after-'+$mode) $setMode @('-Mode','Smoke','-MtaCoreFrontendRuntime','-GameDirectory',$fakeGame) $true | Out-Null
         Marker $true ('explicit-runtime-after-'+$mode)
     }
-    Installed 58 $null 'runtime-after-mode-changes' | Out-Null
+    Installed $runtimeCount $null 'runtime-after-mode-changes' | Out-Null
     $modeSwitches=Flags-Switches $setMode
     $packageSwitches=Flags-Switches $package
     Check 'set-mode-switch-coverage-includes-all-service-kinds' ('MtaCorePersistentFrontend' -cin $modeSwitches -and 'MtaCoreClockReference' -cin $modeSwitches -and 'MtaCoreClockSetReference' -cin $modeSwitches -and 'NativeGaitReference' -cin $modeSwitches)
@@ -763,10 +895,13 @@ try {
     Run 'final-uninstall-removes-only-owned-files' $uninstall @('-GameDirectory',$fakeGame) $true | Out-Null
     Check 'uninstall-kept-game' ((Sha (Join-Path $fakeGame 'SanAndreas.exe')) -ceq $knownGameHash)
     Check 'uninstall-kept-unowned-sentinel' ((Sha $unowned) -ceq $unownedHash)
-    if ($NativeHostOnly) {
+    if ($NativeHostOnly -or $MessageBoxAssetsOnly) {
         Check 'native-uninstall-kept-unowned-saved-binding-data' ((Sha $nativeSavedData) -ceq $nativeSavedDataHash)
         Check 'native-uninstall-retired-ASI-and-INI' (-not(Test-Path -LiteralPath (Join-Path $fakeGame 'MtaDefinitive.asi')) -and
             -not(Test-Path -LiteralPath (Join-Path $fakeGame 'MtaDefinitive.ini')))
+    }
+    if ($MessageBoxAssetsOnly) {
+        foreach($relative in $messageBoxPaths) { Check ('message-box-uninstall-retired-owned-icon:'+ $relative) (-not(Test-Path -LiteralPath (Join-Path $fakeGame $relative))) }
     }
     Check 'uninstall-retired-owned-manifest-and-loader' (-not (Test-Path -LiteralPath $manifestPath) -and -not (Test-Path -LiteralPath (Join-Path $fakeGame 'version.dll')))
     Save (Join-Path $outputRoot 'final-uninstalled-tree.json') (Tree $fakeGame).rows
@@ -799,6 +934,7 @@ $record=[ordered]@{
     scope='Actual install/update/set-mode/uninstall validation against one owned Build/tmp game copy. No game, DLL, GUI, native hook or network is executed.'
     bindingPersistenceOnly=$BindingPersistenceOnly.IsPresent
     nativeHostOnly=$NativeHostOnly.IsPresent
+    messageBoxAssetsOnly=$MessageBoxAssetsOnly.IsPresent
 }
 $resultPath=Join-Path $outputRoot 'test-result.json'
 Save $resultPath $record

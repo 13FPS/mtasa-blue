@@ -104,6 +104,7 @@ $frontendPaths = @(
     'CLEO/de-online/mta/locale/en_US/client.pot')
 $guiCount = @($relativePaths | Where-Object { $_ -in $guiPaths }).Count
 $frontendCount = @($relativePaths | Where-Object { $_ -in $frontendPaths }).Count
+$messageBoxCount = Get-MtaFrontendMessageBoxFileCount $relativePaths $frontendCount
 $nativeCount = Get-MtaNativeFrontendFileCount $relativePaths $frontendCount
 if ($frontendCount -ne 0 -and ($frontendCount -ne 22 -or $guiCount -ne 13)) { throw 'Incomplete MTA Core GUI frontend package ownership.' }
 # Older manifests remain removable, but GUI ownership is one complete group
@@ -111,6 +112,7 @@ if ($frontendCount -ne 0 -and ($frontendCount -ne 22 -or $guiCount -ne 13)) { th
 if ($guiCount -and ($guiCount -ne $guiPaths.Count -or $allowedPaths.Count -ne 23)) { throw 'Incomplete MTA Core GUI startup package ownership.' }
 if ($guiCount) { $allowedPaths += $guiPaths }
 if ($frontendCount) { $allowedPaths += $frontendPaths }
+if ($messageBoxCount) { $allowedPaths += Get-MtaFrontendMessageBoxPaths }
 if ($nativeCount) { $allowedPaths += @('MtaDefinitive.asi','MtaDefinitive.ini') }
 if ($relativePaths.Count -ne $allowedPaths.Count -or @($relativePaths | Select-Object -Unique).Count -ne $allowedPaths.Count -or
     @(Compare-Object $allowedPaths $relativePaths).Count -ne 0) {

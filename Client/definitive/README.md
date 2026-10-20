@@ -70,9 +70,29 @@ The internal, still-abstract `CPadStateDE` now implements the existing SDK's
 current/previous getters, independent setters and state-only `Clear` through
 that checked access. MTA shifts history explicitly before frame processing;
 writing current input therefore never shifts or replays previous input. These
-operations borrow the existing synchronous engine scope. Whole-pad replay,
-updater suppression, horn history and rumble remain unimplemented, and no
-`GetPad` or complete game-interface factory publishes this partial class.
+operations borrow the existing synchronous engine scope. The separate abstract
+`CPadControlDE` adds the real SDK's `IsEnabled` and `Disable` through a borrowed
+`NativePadUpdateControl` owner. It controls the global native input producer;
+it does not substitute a per-player disable flag or clear controller state.
+
+The updater owner requires the exact executable identity, code pins and chained
+unwind profile before installing its Detours hook. Producer-thread and generation
+checks govern control requests. Cleanup retains ownership until active callbacks
+and parked peers retire, the hook detaches and original entry bytes match. A
+foreign patch is preserved, and an abandoned owner retains explicit recovery.
+
+The existing frontend input lease starts this owner in **enabled passthrough**:
+DE continues updating physical sources and camera input while MTA's existing
+scoped movement route owns menu controls. Lease shutdown retires movement before
+detaching the updater; pending cleanup prevents adapter release. The best-effort
+`mta-pad-updater.log` beside the backend records generation, forwarding/suppression,
+entry ownership and cleanup counters after peers are released.
+
+Whole-pad `Store`/`Restore`, horn history, last-touched time and rumble still need
+qualified implementations. No `GetPad` or complete game-interface factory
+publishes either partial class. The integrated updater path awaits GTA validation;
+full `CGame`, native remote-player contexts and x64 client networking remain
+unfinished, and **EXPERIMENTAL** stays in place.
 
 Shared joystick code delegates the native vibration preference to
 `CGameSettings::SetVibrationEnabled`. The classic backend owns its native field;

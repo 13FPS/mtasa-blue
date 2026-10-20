@@ -23,6 +23,7 @@
 #include "RemoteDataStorage.h"
 #include "NativePadReader.h"
 #include "NativeMovementInput.h"
+#include "NativePadUpdateControl.h"
 #include "NativeClockService.h"
 #include "NativeGameTimeReader.h"
 #include "NativeGameStateReader.h"
@@ -426,19 +427,36 @@ namespace mta::game_de
                             result = Status::NotInitialized;
                         else
                         {
-                            const bool                started = current->nativeMovement.BeginFrontendLease(*request);
-                            FrontendInputLeaseStateV1 state;
-                            // A valid native attempt may own partial hooks even
-                            // on refusal. Publish its token for explicit End.
-                            if (current->nativeMovement.ReadFrontendLease(state))
-                                *output = state;
-                            result = started ? Status::Ok : Status::Unsupported;
+                            // Frontend ownership exercises the real global
+                            // updater in passthrough mode. DE still supplies
+                            // physical source queues and camera processing;
+                            // disabling that updater would starve those paths.
+                            if (!current->nativePadUpdate.Begin())
+                                result = Status::Unsupported;
+                            else
+                            {
+                                const bool                started = current->nativeMovement.BeginFrontendLease(*request);
+                                FrontendInputLeaseStateV1 state;
+                                // Publish only an actual movement lease token.
+                                // Partial updater ownership stays on this
+                                // adapter for Shutdown/Release cleanup even if
+                                // no movement lease could be admitted.
+                                if (current->nativeMovement.ReadFrontendLease(state))
+                                    *output = state;
+                                result = started ? Status::Ok : Status::Unsupported;
+                            }
                         }
                     }
                     else if (action == FrontendLeaseAction::Renew)
                         result = current->nativeMovement.RenewFrontendLease(generation, *neutral) ? Status::Ok : Status::Unsupported;
                     else if (action == FrontendLeaseAction::End)
-                        result = current->nativeMovement.EndFrontendLease(generation) ? Status::Ok : Status::Unsupported;
+                    {
+                        // Validate/retire the movement generation first. A
+                        // pending updater End must keep this adapter retained;
+                        // the retired movement generation accepts that retry.
+                        const bool ended = current->nativeMovement.EndFrontendLease(generation);
+                        result = ended && current->nativePadUpdate.End() ? Status::Ok : Status::Unsupported;
+                    }
                     else
                     {
                         FrontendInputLeaseStateV1 state;
@@ -985,7 +1003,9 @@ namespace mta::game_de
             {
                 const bool ended = nativeMovement.End();
                 RefreshMovementCapability();
-                return ended;
+                // Native movement must restore its scopes before the shared
+                // updater is detached. Pending cleanup prevents adapter release.
+                return ended && nativePadUpdate.End();
             }
 
             Status Access() const noexcept
@@ -1034,6 +1054,7 @@ namespace mta::game_de
             std::atomic<std::uint64_t> capabilities{BaseCapabilities};
             NativePadReader            nativePad;
             NativeMovementInput        nativeMovement;
+            NativePadUpdateControl     nativePadUpdate;
             NativeClockService         nativeClock;
             NativeGameTimeReader       nativeGameTime;
             NativeGameStateReader      nativeGameState;

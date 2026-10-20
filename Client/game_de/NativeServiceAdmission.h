@@ -16,7 +16,8 @@ namespace mta::game_de::NativeServiceAdmission
         None = 0,
         Input = 1,
         Render = 2,
-        Clock = 4
+        Clock = 4,
+        PadUpdate = 8
     };
 
     struct Token
@@ -30,11 +31,15 @@ namespace mta::game_de::NativeServiceAdmission
     {
         inline std::atomic<std::uint32_t> mask{0};
         inline std::atomic<std::uint64_t> nextSerial{0};
-        inline std::atomic<std::uint64_t> owners[3] = {0, 0, 0};
+        inline std::atomic<std::uint64_t> owners[4] = {0, 0, 0, 0};
 
         inline unsigned Index(Category category) noexcept
         {
-            return category == Category::Input ? 0 : category == Category::Render ? 1 : category == Category::Clock ? 2 : 3;
+            return category == Category::Input       ? 0
+                   : category == Category::Render    ? 1
+                   : category == Category::Clock     ? 2
+                   : category == Category::PadUpdate ? 3
+                                                     : 4;
         }
     }
 
@@ -44,7 +49,7 @@ namespace mta::game_de::NativeServiceAdmission
     inline bool TryAcquire(Category category, Token& output) noexcept
     {
         const auto index = Detail::Index(category);
-        if (index == 3)
+        if (index == 4)
             return false;
         auto serial = Detail::nextSerial.load();
         bool numbered = false;
@@ -62,7 +67,9 @@ namespace mta::game_de::NativeServiceAdmission
         if (!numbered)
             return false;
         const auto bit = static_cast<std::uint32_t>(category);
-        const auto conflicts = category == Category::Clock ? 7u : bit | static_cast<std::uint32_t>(Category::Clock);
+        // Global pad production and local scoped input/rendering coexist.
+        // Clock's raw transactions must exclude every suspension owner.
+        const auto conflicts = category == Category::Clock ? 15u : bit | static_cast<std::uint32_t>(Category::Clock);
         auto       observed = Detail::mask.load();
         for (unsigned attempt = 0; attempt != 16; ++attempt)
         {
@@ -81,7 +88,7 @@ namespace mta::game_de::NativeServiceAdmission
     inline bool Release(Token token) noexcept
     {
         const auto index = Detail::Index(token.category);
-        if (!token.serial || index == 3)
+        if (!token.serial || index == 4)
             return false;
         auto expected = token.serial;
         if (!Detail::owners[index].compare_exchange_strong(expected, 0))
@@ -92,6 +99,6 @@ namespace mta::game_de::NativeServiceAdmission
 
     inline bool IsClaimed(Category category) noexcept
     {
-        return Detail::Index(category) != 3 && (Detail::mask.load() & static_cast<std::uint32_t>(category)) != 0;
+        return Detail::Index(category) != 4 && (Detail::mask.load() & static_cast<std::uint32_t>(category)) != 0;
     }
 }

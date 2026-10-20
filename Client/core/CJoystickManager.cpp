@@ -11,6 +11,7 @@
 
 #include "StdInc.h"
 #include <game/CPad.h>
+#include <game/CSettings.h>
 #include "XInput.h"
 #include <dinputd.h>
 #include <atomic>
@@ -297,7 +298,7 @@ private:
     void      ApplyAxisResponse(float& fResult, int iSaturation);
     void      ApplyVibration();
     void      StopVibration();
-    void      SyncGtaVibrationPref();
+    bool      SyncGtaVibrationPref();
     void      ReleaseDirectInputDevice();
     void      ApplyControllerSelection(bool bReleaseCurrent);
     void      RefreshDirectInputDeviceList();
@@ -1552,8 +1553,7 @@ void CJoystickManager::SetVibrationEnabled(bool bEnabled)
     m_bVibrationEnabled = bEnabled;
     CVARS_SET("controller_vibration", bEnabled);
     m_SettingsRevision++;
-    SyncGtaVibrationPref();
-    if (!bEnabled)
+    if (!SyncGtaVibrationPref() || !bEnabled)
         StopVibration();
 }
 
@@ -1983,14 +1983,13 @@ void CJoystickManager::StopVibration()
     m_bVibrationWasActive = false;
 }
 
-void CJoystickManager::SyncGtaVibrationPref()
+bool CJoystickManager::SyncGtaVibrationPref()
 {
-    // CPad::StartShake (0x53F920) returns immediately unless this frontend pref is set.
-    // PC SA never exposes it, so our checkbox has to drive it or rumble never starts.
-    if (!g_pCore->GetGame())
-        return;
-
-    *reinterpret_cast<bool*>(0xBA6748 + 0x20) = m_bVibrationEnabled;
+    // Core must not write a classic frontend address when another engine owns
+    // the game. Refusal also keeps its unqualified pad shake fields untouched.
+    auto* const pGame = g_pCore->GetGame();
+    auto* const pSettings = pGame ? pGame->GetSettings() : nullptr;
+    return pSettings && pSettings->SetVibrationEnabled(m_bVibrationEnabled);
 }
 
 void CJoystickManager::ApplyVibration()
@@ -2006,29 +2005,27 @@ void CJoystickManager::ApplyVibration()
     XINPUT_VIBRATION vibration{};
     bool             bShouldRumble = false;
 
-    CGame* pGame = g_pCore->GetGame();
-    if (pGame && pGame->GetSystemState() == SystemState::GS_PLAYING_GAME)
-        SyncGtaVibrationPref();
+    CGame* const pGame = g_pCore->GetGame();
+    const bool   bBackendVibrationReady = pGame && pGame->GetSystemState() == SystemState::GS_PLAYING_GAME && SyncGtaVibrationPref();
 
-    if (m_bVibrationEnabled && m_bXInputDeviceAttached && IsJoypadConnected())
+    // Preserve the existing XInput stop below when a backend refuses support;
+    // neither native pad reads nor duration writes are valid in that case.
+    if (bBackendVibrationReady && m_bVibrationEnabled && m_bXInputDeviceAttached && IsJoypadConnected())
     {
-        if (pGame && pGame->GetSystemState() == SystemState::GS_PLAYING_GAME)
+        if (CPad* pPad = pGame->GetPad())
         {
-            if (CPad* pPad = pGame->GetPad())
+            short         iShakeDur = pPad->GetShakeDur();
+            unsigned char ucShakeFreq = pPad->GetShakeFreq();
+            if (iShakeDur > 0)
             {
-                short         iShakeDur = pPad->GetShakeDur();
-                unsigned char ucShakeFreq = pPad->GetShakeFreq();
-                if (iShakeDur > 0)
+                short iRemaining = static_cast<short>(std::max(0, static_cast<int>(iShakeDur) - std::max(iElapsedMs, 1)));
+                pPad->SetShakeDur(iRemaining);
+                if (iRemaining > 0 && ucShakeFreq > 0)
                 {
-                    short iRemaining = static_cast<short>(std::max(0, static_cast<int>(iShakeDur) - std::max(iElapsedMs, 1)));
-                    pPad->SetShakeDur(iRemaining);
-                    if (iRemaining > 0 && ucShakeFreq > 0)
-                    {
-                        WORD wSpeed = static_cast<WORD>(ucShakeFreq * 257);
-                        vibration.wLeftMotorSpeed = wSpeed;
-                        vibration.wRightMotorSpeed = wSpeed;
-                        bShouldRumble = true;
-                    }
+                    WORD wSpeed = static_cast<WORD>(ucShakeFreq * 257);
+                    vibration.wLeftMotorSpeed = wSpeed;
+                    vibration.wRightMotorSpeed = wSpeed;
+                    bShouldRumble = true;
                 }
             }
         }

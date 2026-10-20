@@ -127,6 +127,14 @@ void CSettingsSA::SetWideScreenEnabled(bool bEnabled)
     m_pInterface->bUseWideScreen = bEnabled;
 }
 
+bool CSettingsSA::SetVibrationEnabled(bool bEnabled)
+{
+    // PC SA does not expose this menu preference, but StartShake consumes it.
+    // The classic backend owns its qualified layout and accepts the request.
+    m_pInterface->bVibrationEnabled = bEnabled;
+    return true;
+}
+
 unsigned int CSettingsSA::GetNumVideoModes()
 {
     // RwEngineGetNumVideoModes

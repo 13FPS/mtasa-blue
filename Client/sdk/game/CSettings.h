@@ -178,4 +178,8 @@ public:
     virtual void SetCoronaReflectionsControlledByScript(bool bViaScript) = 0;
 
     virtual void Save() = 0;
+
+    // Native shake production depends on a backend-owned preference. An
+    // unqualified backend must refuse it before Core touches its pad state.
+    virtual bool SetVibrationEnabled(bool) { return false; }
 };

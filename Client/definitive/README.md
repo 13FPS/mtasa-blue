@@ -66,6 +66,21 @@ access class, immediately used by the existing movement path. Its transaction
 retains the original snapshot after a failed restore and requires matching
 readback before retirement. This does not expose an incomplete `CPad`.
 
+The internal, still-abstract `CPadStateDE` now implements the existing SDK's
+current/previous getters, independent setters and state-only `Clear` through
+that checked access. MTA shifts history explicitly before frame processing;
+writing current input therefore never shifts or replays previous input. These
+operations borrow the existing synchronous engine scope. Whole-pad replay,
+updater suppression, horn history and rumble remain unimplemented, and no
+`GetPad` or complete game-interface factory publishes this partial class.
+
+Shared joystick code delegates the native vibration preference to
+`CGameSettings::SetVibrationEnabled`. The classic backend owns its native field;
+other backends refuse by default, so Core never reads or ticks their
+unqualified shake fields. This appended SDK method requires matching Core and
+game-backend builds. It does not enable DE rumble or broaden the existing
+movement-only native input profile.
+
 The checked [official installer](https://github.com/multitheftauto/mtasa-blue/blob/master/utils/buildactions/install_data.lua)
 provides an x64 server `net.dll`, while its client `netc.dll` is x86. The
 [nightly index](https://nightly.multitheftauto.com/) likewise labels its Windows

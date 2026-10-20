@@ -14,6 +14,7 @@
 // R* have this info inside CMenuManager but I can't believe that makes much sense
 
 #include <game/CSettings.h>
+#include <cstddef>
 
 #define CLASS_CMenuManager 0xBA6748
 
@@ -44,7 +45,9 @@ struct CSettingsSAInterface  // see code around 0x57CE9A for where these are
 {
     BYTE  pad1[4];
     float fStatsScrollSpeed;  // 0x4
-    BYTE  pad2[0x34];
+    BYTE  pad2[0x18];
+    bool  bVibrationEnabled;  // 0x20, checked by CPad::StartShake
+    BYTE  pad2b[0x1B];
     DWORD dwBrightness;
     float fDrawDistance;
     bool  bSubtitles;  // 0x44
@@ -77,6 +80,14 @@ struct CSettingsSAInterface  // see code around 0x57CE9A for where these are
     DWORD dwVideoMode;      // 0xD4
     DWORD dwPrevVideoMode;  // 0xD8
 };
+
+// Naming the existing shake preference must not move the surrounding native
+// settings. Core can now request it without knowing the classic menu layout.
+static_assert(offsetof(CSettingsSAInterface, bVibrationEnabled) == 0x20);
+static_assert(offsetof(CSettingsSAInterface, dwBrightness) == 0x3C);
+static_assert(offsetof(CSettingsSAInterface, bUseWideScreen) == 0x4B);
+static_assert(offsetof(CSettingsSAInterface, dwPrevVideoMode) == 0xD8);
+static_assert(sizeof(CSettingsSAInterface) == 0xDC);
 
 class CSettingsSA : public CGameSettings
 {
@@ -180,6 +191,7 @@ public:
     void SetCoronaReflectionsControlledByScript(bool bViaScript);
 
     void Save();
+    bool SetVibrationEnabled(bool bEnabled) override;
 
     void  SetPedsLODDistance(float fPedsLODDistance, bool bFromScript);
     void  ResetPedsLODDistance(bool bForceDefault = false);

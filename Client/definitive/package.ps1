@@ -7,16 +7,17 @@ param([ValidateSet('Diagnostic', 'Smoke', 'Online')][string]$Mode = 'Smoke',
     [switch]$MtaNativePadReference, [switch]$MtaNativeMovementTrial, [switch]$MtaCoreStartupReference, [switch]$MtaCoreInputReference,
     [switch]$MtaCoreMovementReference, [switch]$MtaCoreRenderReference, [switch]$MtaCoreRenderGpuReference, [switch]$MtaCoreRenderCustomPresentReference, [switch]$MtaCoreRenderFrameBoundaryReference, [switch]$MtaCoreRenderNativeDispatchReference,
     [ValidateSet('D3D11', 'D3D12')][string]$MtaCoreRenderRoute = 'D3D11', [switch]$MtaCoreGuiStartupReference, [switch]$MtaCoreGuiSurfaceReference, [switch]$MtaCoreGuiFrontendReference, [switch]$MtaCoreGuiFrontendInputReference, [switch]$MtaCoreGuiFrontendStartupReference, [switch]$MtaCorePersistentFrontend, [switch]$MtaCoreFrontendRuntime,
-    [switch]$MtaCoreFrontendBindingPersistence,
+    [switch]$MtaCoreFrontendBindingPersistence, [switch]$MtaCoreFrontendNativeHost,
     [switch]$MtaCoreClockReference, [switch]$MtaCoreClockSetReference, [switch]$MtaCoreApplicationFrameReference, [switch]$MtaCoreStartupObservationReference,
     [string]$OutputDirectory)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'NativeFrontendPackage.ps1')
 # Runtime owns one completed Core across views. Its selection must never inherit
 # another native lifetime merely because those packages share frontend assets.
 $runtimeConflicts = @($PSBoundParameters.Keys | Where-Object {
-    $_ -match '^(Native|Matched|Lock|Mta)' -and $_ -notin @('MtaCoreFrontendRuntime','MtaCoreFrontendBindingPersistence') -and
+    $_ -match '^(Native|Matched|Lock|Mta)' -and $_ -notin @('MtaCoreFrontendRuntime','MtaCoreFrontendBindingPersistence','MtaCoreFrontendNativeHost') -and
     $PSBoundParameters[$_] -is [Management.Automation.SwitchParameter] -and $PSBoundParameters[$_].IsPresent
 })
 if ($MtaCoreFrontendRuntime -and ($Mode -ne 'Smoke' -or $runtimeConflicts.Count -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
@@ -25,6 +26,7 @@ if ($MtaCoreFrontendRuntime -and ($Mode -ne 'Smoke' -or $runtimeConflicts.Count 
 if ($MtaCoreFrontendBindingPersistence -and -not $MtaCoreFrontendRuntime) {
     throw 'Saved MTA movement bindings require MtaCoreFrontendRuntime.'
 }
+if ($MtaCoreFrontendNativeHost -and -not $MtaCoreFrontendRuntime) { throw 'Native MTA startup requires MtaCoreFrontendRuntime.' }
 # Native clock ownership excludes other native service lifetimes. Reject a
 # mixed package before touching build outputs or downloading dependencies.
 $clockConflicts = @($PSBoundParameters.Keys | Where-Object {
@@ -328,6 +330,15 @@ if ($MtaCoreFrontendRuntime) {
     }
 }
 $guiSources = @()
+if ($MtaCoreFrontendNativeHost) {
+    $nativeAsiPath = Join-Path $repositoryRoot 'Build/definitive-online/MtaDefinitive.asi'
+    $exports = Get-Amd64Exports $nativeAsiPath
+    if (-not $exports.Contains('InitializeASI')) { throw 'Native MTA entry lacks InitializeASI.' }
+    $exports = Get-Amd64Exports $bridgePath
+    foreach ($name in @('DE_NativeFrontendStartV1','DE_NativeFrontendStopV1','DE_NativeFrontendReadV1')) {
+        if (-not $exports.Contains($name)) { throw "Native MTA startup export missing: $name" }
+    }
+}
 if ($MtaCoreFrontendBindingPersistence) {
     # Refuse an older Core/Bridge before staging a config that promises durable
     # Apply. An unavailable save service must never silently become session-only.
@@ -571,6 +582,10 @@ $runtimeMarker = 'export const MTA_CORE_FRONTEND_RUNTIME = false;'
 if ([regex]::Matches($configText, [regex]::Escape($runtimeMarker)).Count -ne 1) { throw 'Expected disabled MTA frontend runtime in source configuration.' }
 $configText = $configText.Replace($runtimeMarker,
     "export const MTA_CORE_FRONTEND_RUNTIME = $($MtaCoreFrontendRuntime.IsPresent.ToString().ToLowerInvariant());")
+$nativeHostMarker = 'export const MTA_CORE_FRONTEND_NATIVE_HOST = false;'
+if ([regex]::Matches($configText, [regex]::Escape($nativeHostMarker)).Count -ne 1) { throw 'Expected disabled native frontend host in source configuration.' }
+$configText = $configText.Replace($nativeHostMarker,
+    "export const MTA_CORE_FRONTEND_NATIVE_HOST = $($MtaCoreFrontendNativeHost.IsPresent.ToString().ToLowerInvariant());")
 $bindingPersistenceMarker = 'export const MTA_CORE_FRONTEND_BINDING_PERSISTENCE = false;'
 if ([regex]::Matches($configText, [regex]::Escape($bindingPersistenceMarker)).Count -ne 1) { throw 'Expected disabled saved movement bindings in source configuration.' }
 $configText = $configText.Replace($bindingPersistenceMarker,
@@ -584,6 +599,10 @@ if ([regex]::Matches($configText, [regex]::Escape($frontendStartupMarker)).Count
 $configText = $configText.Replace($frontendStartupMarker,
     "export const MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE = $($MtaCoreGuiFrontendStartupReference.IsPresent.ToString().ToLowerInvariant());")
 [IO.File]::WriteAllText($configPath, $configText, $utf8)
+if ($MtaCoreFrontendNativeHost) {
+    [IO.File]::Copy($nativeAsiPath, (Join-Path $stagingRoot 'Win64/MtaDefinitive.asi'), $false)
+    [IO.File]::WriteAllText((Join-Path $stagingRoot 'Win64/MtaDefinitive.ini'), (New-MtaNativeFrontendIni $true $MtaCoreFrontendBindingPersistence.IsPresent), $utf8)
+}
 foreach ($name in @('sa_unreal.json', 'unknown_x64.json')) {
     [IO.File]::Copy($downloads[$name], (Join-Path $configDirectory $name), $false)
 }
@@ -615,7 +634,7 @@ $files = @(Get-ChildItem -LiteralPath $stagingWin64 -File -Recurse | Sort-Object
         sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     }
 })
-if ($files.Count -ne $(if ($MtaCoreGuiFrontendReference -or $MtaCoreGuiFrontendInputReference -or $MtaCoreGuiFrontendStartupReference -or $MtaCorePersistentFrontend -or $MtaCoreFrontendRuntime) { 58 } elseif ($MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference) { 36 } else { 23 })) { throw 'Unexpected package ownership count.' }
+if ($files.Count -ne $(if ($MtaCoreFrontendNativeHost) { 60 } elseif ($MtaCoreGuiFrontendReference -or $MtaCoreGuiFrontendInputReference -or $MtaCoreGuiFrontendStartupReference -or $MtaCorePersistentFrontend -or $MtaCoreFrontendRuntime) { 58 } elseif ($MtaCoreGuiStartupReference -or $MtaCoreGuiSurfaceReference) { 36 } else { 23 })) { throw 'Unexpected package ownership count.' }
 $manifest = [ordered]@{
     packageId = 'de-online-prototype'
     formatVersion = 1

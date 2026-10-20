@@ -39,8 +39,12 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Transport compilation failed.' }
     & $compilerPath @commonArguments (Join-Path $PSScriptRoot 'Probe.cpp') TransportClient.obj /Fede_client_probe.exe /link ws2_32.lib
     if ($LASTEXITCODE -ne 0) { throw 'Client probe compilation failed.' }
-    & $compilerPath @commonArguments ('/I' + (Join-Path $repositoryRoot 'Client/sdk')) /DDE_BRIDGE_EXPORTS /LD (Join-Path $PSScriptRoot 'Bridge.cpp') (Join-Path $PSScriptRoot 'CoreStartupReference.cpp') (Join-Path $PSScriptRoot 'BuildGuard.cpp') (Join-Path $repositoryRoot 'Client/game_de/NativePadReader.cpp') (Join-Path $repositoryRoot 'Client/game_de/NativeImageAccess.cpp') (Join-Path $repositoryRoot 'Client/core/CGameAdapterModule.cpp') TransportClient.obj /Fede_client_bridge.dll /link ws2_32.lib bcrypt.lib user32.lib
+    & $compilerPath @commonArguments ('/I' + (Join-Path $repositoryRoot 'Client/sdk')) /DDE_BRIDGE_EXPORTS /LD (Join-Path $PSScriptRoot 'Bridge.cpp') (Join-Path $PSScriptRoot 'CoreStartupReference.cpp') (Join-Path $PSScriptRoot 'NativeFrontendHost.cpp') (Join-Path $PSScriptRoot 'BuildGuard.cpp') (Join-Path $repositoryRoot 'Client/game_de/NativePadReader.cpp') (Join-Path $repositoryRoot 'Client/game_de/NativeImageAccess.cpp') (Join-Path $repositoryRoot 'Client/core/CGameAdapterModule.cpp') TransportClient.obj /Fede_client_bridge.dll /link ws2_32.lib bcrypt.lib user32.lib
     if ($LASTEXITCODE -ne 0) { throw 'Client bridge compilation failed.' }
+    # UAL invokes InitializeASI after loading this separate entry. The ASI only
+    # starts the existing controller/worker; no Core work belongs in DllMain.
+    & $compilerPath @commonArguments /LD (Join-Path $PSScriptRoot 'NativeFrontendASI.cpp') /FeMtaDefinitive.asi /link user32.lib
+    if ($LASTEXITCODE -ne 0) { throw 'Native MTA ASI entry compilation failed.' }
     # Export inspection executes no bridge/Core code. Old scalar exports remain
     # unchanged; these distinct names advertise only the completed-Core route.
     $dumpbinPath = Join-Path $env:VCToolsInstallDir 'bin/Hostx64/x64/dumpbin.exe'
@@ -58,9 +62,11 @@ try {
         'DE_CoreGuiFrontendStartupReadClockV2','DE_CoreGuiFrontendStartupCaptureClockOwnerV2','DE_CoreGuiFrontendStartupReadClockOwnerV2',
         'DE_FrontendRuntimeApiVersionV1','DE_FrontendRuntimeStartV1','DE_FrontendRuntimeCommandV1','DE_FrontendRuntimeHeartbeatV1',
         'DE_FrontendRuntimePollV1','DE_FrontendRuntimeCaptureV1','DE_FrontendRuntimeReadV1',
-        'DE_LocalInputRuntimeStartPersistentV1')) {
+        'DE_LocalInputRuntimeStartPersistentV1','DE_NativeFrontendStartV1','DE_NativeFrontendStopV1','DE_NativeFrontendReadV1')) {
         if (-not @($bridgeExports | Where-Object { $_ -match ('\s' + [regex]::Escape($name) + '\s*$') }).Count) { throw "Client bridge export missing: $name" }
     }
+    $asiExports = & $dumpbinPath /nologo /exports MtaDefinitive.asi
+    if ($LASTEXITCODE -ne 0 -or -not @($asiExports | Where-Object { $_ -match '\sInitializeASI\s*$' }).Count) { throw 'Native MTA ASI export inspection failed.' }
     & $compilerPath @commonArguments (Join-Path $repositoryRoot 'Tests/definitive/ProtocolTests.cpp') /Fede_protocol_tests.exe
     if ($LASTEXITCODE -ne 0) { throw 'Protocol test compilation failed.' }
     & ./de_protocol_tests.exe

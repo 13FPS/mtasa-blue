@@ -5,6 +5,7 @@
 
 #include "Bridge.h"
 #include <array>
+#include <atomic>
 #include <windows.h>
 #include <bcrypt.h>
 
@@ -61,13 +62,17 @@ int DE_CheckGameBuild()
 {
     // The process executable does not change across script resets. Cache this
     // read-only startup check so binding does not hash it twice on the game thread.
-    static int verified = -1;
-    if (verified >= 0)
-        return verified;
+    static std::atomic<int> verified{-1};
+    const auto              cached = verified.load(std::memory_order_acquire);
+    if (cached >= 0)
+        return cached;
     std::array<wchar_t, 32768> path;
     const auto                 length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
     if (!length || length >= path.size())
         return 0;
-    verified = DE_CheckExecutableBuild(path.data());
-    return verified;
+    const auto result = DE_CheckExecutableBuild(path.data());
+    // ASI startup and a legacy script may query the read-only guard together;
+    // publishing the cache must not race either controller's admission check.
+    verified.store(result, std::memory_order_release);
+    return result;
 }

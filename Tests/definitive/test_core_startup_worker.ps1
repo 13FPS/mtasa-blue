@@ -12,15 +12,19 @@ param(
     [Parameter(Mandatory)][ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ExpectedPthreadSha256,
     [string]$XmllDll = (Join-Path $PSScriptRoot '../../Bin/server/x64/xmll.dll'),
     [ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ExpectedXmllSha256 = '80c521b1cac98ed5263ab500510853dd06e6572870350caf6957c78e9c3d7349',
-    [switch]$BindingPersistenceOnly
+    [switch]$BindingPersistenceOnly,
+    [switch]$NativeHostOnly
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+if ($BindingPersistenceOnly -and $NativeHostOnly) { throw 'Choose one focused worker suite.' }
+$runHistorical = -not ($BindingPersistenceOnly -or $NativeHostOnly)
 $repositoryRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
 $outputRoot = Join-Path $repositoryRoot ('Build/mta-core-startup-worker/' + (Get-Date -Format yyyyMMdd-HHmmss) + '-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
 function Hash([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 $sourceNames = @('Client/definitive/CoreStartupReference.h','Client/definitive/CoreStartupReference.cpp','Client/definitive/FrontendControlMailbox.h',
+    'Client/definitive/NativeFrontendHost.h','Client/definitive/NativeFrontendHost.cpp','Client/definitive/NativeFrontendActivation.h',
     'Client/definitive/FrontendRuntimeReport.h','Client/definitive/FrontendRuntimeMailbox.h','Client/definitive/FrontendRuntimeCache.h','Client/core/DefinitiveFrontendRuntime.h','Client/core/DefinitiveLocalInputRuntime.h','Client/definitive/coreconfig.xml',
     'Client/definitive/FrontendStartupReport.h','Client/definitive/PersistentFrontendHostLease.h','Client/core/DefinitivePersistentFrontend.h','Client/core/DefinitiveFrontendStartup.h','Client/core/DefinitiveGuiFrontendInputReference.h',
     'Client/core/DefinitiveFrontend.h','Client/core/DefinitiveFrontendClockReference.h','Client/core/DefinitiveGuiFrontendReference.h',
@@ -93,7 +97,7 @@ try {
     $missingLocalRuntimeFixture = Join-Path $fixtureDirectory 'CoreMissingLocalRuntimeExport.dll'
     $missingBindingPersistenceFixture = Join-Path $fixtureDirectory 'CoreMissingBindingPersistenceExport.dll'
     Compile 'fixture-normal' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $normalFixture @('/LD')
-    if (-not $BindingPersistenceOnly) {
+    if ($runHistorical) {
     Compile 'fixture-missing-export' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $missingFixture @('/LD','/DCORE_FIXTURE_MISSING_EXPORT=1')
     Compile 'fixture-missing-gui-export' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $missingGuiFixture @('/LD','/DCORE_FIXTURE_MISSING_GUI_EXPORT=1')
     Compile 'fixture-missing-surface-export' @((Join-Path $PSScriptRoot 'CoreStartupFixture.cpp')) $missingSurfaceFixture @('/LD','/DCORE_FIXTURE_MISSING_SURFACE_EXPORT=1')
@@ -109,9 +113,10 @@ try {
     $hostPath = Join-Path $syntheticRoot 'SanAndreas.exe'
     # Local input selection observes the foreground root HWND in the production
     # worker. Link its actual Win32 imports explicitly in this owned host too.
-    Compile 'production-worker-host' @((Join-Path $PSScriptRoot 'CoreStartupReferenceTests.cpp'),(Join-Path $repositoryRoot 'Client/definitive/CoreStartupReference.cpp')) $hostPath @('/DMTA_TEST_CORE_STARTUP_ACCESS=1','user32.lib')
+    Compile 'production-worker-host' @((Join-Path $PSScriptRoot 'CoreStartupReferenceTests.cpp'),(Join-Path $repositoryRoot 'Client/definitive/CoreStartupReference.cpp'),
+        (Join-Path $repositoryRoot 'Client/definitive/NativeFrontendHost.cpp')) $hostPath @('/DMTA_TEST_CORE_STARTUP_ACCESS=1','user32.lib')
     if ((Hash $hostPath) -eq '63e633bb51c35fe35ca98f503b62e7ddb8403abe4c9d501cfa9162892453846f') { throw 'Owned host unexpectedly matches the real game image.' }
-    if (-not $BindingPersistenceOnly) {
+    if ($runHistorical) {
     $runs += Run-Host 'controlled-loader' $syntheticRoot @($syntheticRoot,'synthetic',$normalFixture,$missingFixture)
     $actualRoot = Join-Path $outputRoot 'actual-host/CLEO/de-online'
     New-Item -ItemType Directory -Path (Join-Path $actualRoot 'mta/logs') -Force | Out-Null
@@ -221,6 +226,7 @@ try {
         $runs += Run-Host $mode $movementRoot @($movementRoot,$mode,$selectedFixture)
     }
     }
+    if (-not $NativeHostOnly) {
     foreach ($mode in @('binding-runtime-default','binding-runtime-enabled','binding-runtime-saved','binding-runtime-refused',
         'binding-runtime-wrong-readonly','binding-runtime-incoherent-loads','binding-runtime-regressed-loads','binding-runtime-missing-export')) {
         $bindingRuntimeRoot = Join-Path $outputRoot ($mode + '-host')
@@ -233,12 +239,25 @@ try {
         $selectedBindingFixture = if ($mode -in @('binding-runtime-default','binding-runtime-missing-export')) { $missingBindingPersistenceFixture } else { $normalFixture }
         $runs += Run-Host $mode $bindingRuntimeRoot @($bindingRuntimeRoot,$mode,$selectedBindingFixture)
     }
+    }
+    if (-not $BindingPersistenceOnly) {
+    foreach ($mode in @('native-host-activation','native-host-default','native-host-persistent','native-host-local-persistent',
+        'native-host-missing-export','native-host-refused','native-host-stop-loading')) {
+        $nativeRoot = Join-Path $outputRoot ($mode + '-host')
+        New-Item -ItemType Directory -Path $nativeRoot -Force | Out-Null
+        Copy-Item -LiteralPath $hostPath -Destination (Join-Path $nativeRoot 'SanAndreas.exe')
+        Copy-Item -LiteralPath $GameDeDll -Destination (Join-Path $nativeRoot 'game_de.dll')
+        if ((Hash (Join-Path $nativeRoot 'game_de.dll')) -ne $ExpectedGameDeSha256.ToLowerInvariant()) { throw 'Native host fixture backend hash differs.' }
+        $selectedNativeFixture = if ($mode -eq 'native-host-missing-export') { $missingBindingPersistenceFixture } else { $normalFixture }
+        $runs += Run-Host $mode $nativeRoot @($nativeRoot,$mode,$selectedNativeFixture)
+    }
+    }
 } catch { $failure = $_.Exception.Message }
 $unchanged = $true
 foreach ($name in $sourceNames) { if ((Hash (Join-Path $repositoryRoot $name)) -ne $sourceHashes[$name]) { $unchanged=$false } }
 foreach ($artifact in $artifacts) { if ((Hash $artifact.source) -ne $artifact.sha256) { $unchanged=$false } }
 $record = [ordered]@{
-    recorded_at=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=($null -eq $failure -and $unchanged -and $runs.Count -eq $(if ($BindingPersistenceOnly) { 8 } else { 226 }));
+    recorded_at=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=($null -eq $failure -and $unchanged -and $runs.Count -eq $(if ($BindingPersistenceOnly) { 8 } elseif ($NativeHostOnly) { 7 } else { 233 }));
     failure=$failure;source_hashes=$sourceHashes;sources_unchanged=$unchanged;compiles=$compiles;runs=$runs;normal_artifacts=$artifacts;
     historical_cases_expected=65;surface_cases_expected=24;completed_core_actual_cases_expected=1;persistent_core_actual_cases_expected=1;
     clock_controlled_cases_expected=14;clock_actual_preflight_cases_expected=1;historical_total_preserved=91;
@@ -249,9 +268,10 @@ $record = [ordered]@{
     application_frame_controlled_cases_expected=17;application_frame_actual_preflight_cases_expected=1;prior_application_frame_total_preserved=180;
     startup_observation_controlled_cases_expected=19;startup_observation_actual_preflight_cases_expected=1;prior_startup_observation_total_preserved=198;
     binding_persistence_controlled_cases_expected=8;binding_persistence_only=[bool]$BindingPersistenceOnly;prior_binding_persistence_total_preserved=218;
+    native_host_controlled_cases_expected=7;native_host_only=[bool]$NativeHostOnly;prior_native_host_total_preserved=226;
     fixture_executable_is_game=$false;game_launched=$false;game_memory_read=$false;game_process_attached=$false;game_files_changed=$false;
     synthetic_core_is_mta=$false;full_mta_boot_verified=$false;engine_input_write_verified=$false;
-    scope='Actual production async worker in controlled owned hosts. Binding persistence cases cover explicit owner opt-in before views/input, optional-export compatibility, saved-manager and Apply count growth, rejected refusal/read-only mismatch/incoherent loads/rollback, and owner retirement. The full selection also preserves all218 prior loader/runtime/frame/startup cases and normal Core wrong-image guards. Controlled values do not prove native callbacks or startup readiness; no GTA workload is admitted.'
+    scope='Actual production async worker and native controller in owned hosts. Native cases cover script-independent hidden Core startup, shared worker ownership, durable bindings, missing/refused exports, stop during loading, coherent value-only publication and final cleanup; the exact native key policy is checked separately. Binding persistence covers owner opt-in before views/input, optional-export compatibility, saved/Apply counter growth and rejected inconsistency/rollback. Full selection preserves all218 prior loader/runtime/frame/startup cases and normal Core wrong-image guards. Controlled values do not prove native game callbacks or full startup; no GTA workload is admitted.'
 }
 $resultPath = Join-Path $outputRoot 'test-result.json'
 $record | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $resultPath -Encoding utf8

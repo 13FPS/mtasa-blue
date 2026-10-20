@@ -21,6 +21,7 @@
 #include <stdexcept>
 #include <cstring>
 #include <memory>
+#include <utility>
 #include "Userenv.h"  // This will enable SharedUtil::ExpandEnvString
 #define ALLOC_STATS_MODULE_NAME "core"
 #include "SharedUtil.hpp"
@@ -1983,17 +1984,120 @@ static HMODULE WINAPI SkipDirectPlay_LoadLibraryA(LPCSTR fileName)
     return Win32LoadLibraryA(fileName);
 }
 
+namespace
+{
+    void DestroyCoreInteractionCommands(CCommands*& commands)
+    {
+        SAFE_DELETE(commands);
+    }
+    void DestroyCoreInteractionLocalization(CLocalization*& localization, CLocalization* previous)
+    {
+        if (localization && g_pLocalization == localization)
+            g_pLocalization = previous;
+        SAFE_DELETE(localization);
+    }
+    void DestroyCoreInteractionLogger(CConsoleLogger*& logger)
+    {
+        SAFE_DELETE(logger);
+    }
+
+    // These are the real Core interaction services, independent of CGame/netc
+    // and of any particular GUI. Normal startup and retained DE startup share
+    // their construction and partial-construction rollback instead of growing
+    // separate implementations of localization, logging and command ownership.
+    struct CoreInteractionServices
+    {
+        CoreInteractionServices() = default;
+        CoreInteractionServices(const CoreInteractionServices&) = delete;
+        CoreInteractionServices& operator=(const CoreInteractionServices&) = delete;
+        CLocalization*           localization = nullptr;
+        CConsoleLogger*          logger = nullptr;
+        CCommands*               commands = nullptr;
+        CLocalization*           previousLocalization = g_pLocalization;
+        ~CoreInteractionServices()
+        {
+            DestroyCoreInteractionCommands(commands);
+            DestroyCoreInteractionLocalization(localization, previousLocalization);
+            DestroyCoreInteractionLogger(logger);
+        }
+        void DetachLocalization() const noexcept
+        {
+            if (localization && g_pLocalization == localization)
+                g_pLocalization = previousLocalization;
+        }
+        void TransferTo(CLocalization*& outputLocalization, CConsoleLogger*& outputLogger, CCommands*& outputCommands) noexcept
+        {
+            outputLocalization = std::exchange(localization, nullptr);
+            outputLogger = std::exchange(logger, nullptr);
+            outputCommands = std::exchange(commands, nullptr);
+        }
+        bool Retained() const noexcept { return localization || logger || commands; }
+    };
+
+    SString SelectCoreInteractionLocale(const SString& locale, const SString& localeRoot)
+    {
+        SString selected = locale;
+        if (selected.empty() && (!CClientVariables::GetSingletonPtr() || !CClientVariables::GetSingleton().Get("locale", selected)))
+            selected = "en_US";
+        auto language = tinygettext::Language::from_name(selected);
+        if (!language)
+        {
+            selected = "en_US";
+            language = tinygettext::Language::from_name(selected);
+        }
+
+        // A missing catalog makes this bundled DictionaryManager cache its
+        // inline empty_dict in a map whose destructor deletes every entry.
+        // Discover file-backed languages before any dictionary lookup, using
+        // the same regional matching as get_dictionary rather than probing an
+        // unsupported locale and trying to recover after corrupting ownership.
+        tinygettext::DictionaryManager catalogs;
+        catalogs.add_directory(localeRoot.empty() ? CalcMTASAPath(MTA_LOCALE_DIR) : localeRoot);
+        const auto available = catalogs.get_languages("client");
+        const auto hasCatalog = [&](const tinygettext::Language& requested)
+        {
+            return std::any_of(available.begin(), available.end(),
+                               [&](const auto& candidate) { return candidate && tinygettext::Language::match(requested, candidate) > 0; });
+        };
+        if (!hasCatalog(language))
+        {
+            // Keep a genuinely shipped configured language, including its
+            // regional fallback. English is required only when that selection
+            // is unavailable; a missing fallback refuses before construction.
+            selected = "en_US";
+            if (!hasCatalog(tinygettext::Language::from_name(selected)))
+                throw std::runtime_error("Core localization assets are missing");
+        }
+        return selected;
+    }
+
+    std::unique_ptr<CoreInteractionServices> CreateCoreInteractionServices(CCommands::Policy policy, const SString& locale = "", const SString& localeRoot = "",
+                                                                           bool persistLocale = true, bool requireDictionary = false)
+    {
+        auto       services = std::make_unique<CoreInteractionServices>();
+        const auto selected = requireDictionary ? SelectCoreInteractionLocale(locale, localeRoot) : locale;
+        services->localization = new CLocalization(selected, localeRoot, persistLocale);
+        g_pLocalization = services->localization;
+        if (requireDictionary && services->localization->GetLanguageDirectory().empty())
+            throw std::runtime_error("Core localization catalog could not be loaded");
+        services->logger = new CConsoleLogger;
+        services->commands = new CCommands(policy);
+        return services;
+    }
+}
+
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
 struct CCore::FrontendRuntimeResources
 {
-    InputReferenceXml                   xml;
-    std::unique_ptr<CKeyBinds>          bindings;
-    DefinitiveFrontendRuntime::Snapshot snapshot{};
-    bool                                cvarsLoaded = false;
-    bool                                cvarsAttempted = false;
-    fs::path                            bindingPersistencePath;
-    bool                                bindingPersistenceEnabled = false;
-    bool                                bindingCommitActive = false;
+    InputReferenceXml                        xml;
+    std::unique_ptr<CKeyBinds>               bindings;
+    DefinitiveFrontendRuntime::Snapshot      snapshot{};
+    bool                                     cvarsLoaded = false;
+    bool                                     cvarsAttempted = false;
+    fs::path                                 bindingPersistencePath;
+    bool                                     bindingPersistenceEnabled = false;
+    bool                                     bindingCommitActive = false;
+    std::unique_ptr<CoreInteractionServices> interaction;
 };
 
 struct CCore::LocalInputRuntimeResources
@@ -2017,6 +2121,7 @@ struct CCore::FrontendResources
     bool                                 bindingsEnabled = false;
     bool                                 runtimeBorrowed = false;
     bool                                 menuInputRequested = false, consoleInputRequested = false, consoleEnabled = false;
+    std::uint32_t                        consoleExecutedBase = 0, consoleRejectedBase = 0;
 };
 
 namespace
@@ -2594,7 +2699,11 @@ DefinitiveFrontend::Status CCore::EnableFrontendRuntimeServices() noexcept
         if (!m_ClientVariables.Load())
             throw std::runtime_error("Runtime CVars could not be loaded");
         resources.cvarsLoaded = true;
-        m_ClientVariables.Set("locale", std::string("en_US"));
+        const auto localeRoot = ToUTF8((g_mtaDirectory / L"MTA/locale").wstring());
+        resources.interaction = CreateCoreInteractionServices(CCommands::Policy::FrontendLocal, "", localeRoot, false, true);
+        // Hidden Core owns the objects, but it does not install view/global
+        // aliases or publish a command target before the GUI borrower exists.
+        resources.interaction->DetachLocalization();
         resources.bindings = std::make_unique<CKeyBinds>(this);
         ++state[BindingManagerCreations];
         auto* root = m_pConfigFile->GetRootNode();
@@ -2656,7 +2765,8 @@ DefinitiveFrontendRuntime::Snapshot CCore::ReadFrontendRuntimeServices() const n
     state[ConfigRetained] = resources.xml.file != nullptr;
     state[CVarsLoaded] = resources.cvarsLoaded;
     state[BindingsRetained] = resources.bindings != nullptr;
-    state[ServicesRetained] = state[XmlRetained] || state[ConfigRetained] || state[CVarsLoaded] || state[BindingsRetained];
+    state[ServicesRetained] = state[XmlRetained] || state[ConfigRetained] || state[CVarsLoaded] || state[BindingsRetained] ||
+                              (resources.interaction && resources.interaction->Retained());
     state[ViewBorrowed] = m_frontendResources != nullptr;
     state[CleanupPending] = state[CleanupPending] || (m_frontendResources && m_frontendResources->snapshot[DefinitiveFrontend::CleanupPending]);
     const auto revision = static_cast<std::uint64_t>(static_cast<std::uint32_t>(const_cast<CClientVariables&>(m_ClientVariables).GetRevision()));
@@ -2677,7 +2787,7 @@ DefinitiveFrontend::Status CCore::StopFrontendRuntimeServices() noexcept
         return localStopped;
     if (!m_frontendRuntimeResources)
         return Status::Ok;
-    if (m_frontendResources || m_pGUI || m_pLocalGUI || m_pXML || m_pConfigFile || m_pKeyBinds)
+    if (m_frontendResources || m_pGUI || m_pLocalGUI || m_pXML || m_pConfigFile || m_pKeyBinds || m_pLocalization || m_pCommands || m_pConsoleLogger)
         return Status::Busy;
     auto& resources = *m_frontendRuntimeResources;
     auto& state = resources.snapshot;
@@ -2687,6 +2797,8 @@ DefinitiveFrontend::Status CCore::StopFrontendRuntimeServices() noexcept
     state[RuntimePhase] = static_cast<std::uint32_t>(Phase::Stopping);
     try
     {
+        if (resources.interaction)
+            DestroyCoreInteractionCommands(resources.interaction->commands);
         if (resources.bindings)
         {
             if (!FlushFrontendRuntimeBindings())
@@ -2707,6 +2819,9 @@ DefinitiveFrontend::Status CCore::StopFrontendRuntimeServices() noexcept
         // unloading fails. The old short-lived reference uses its old policy.
         if (!resources.xml.Close(true))
             throw std::runtime_error("Runtime XML owner retained its module");
+        // The shared owner keeps logging alive through configuration cleanup.
+        // Its remaining dictionary/logger die only at actual runtime shutdown.
+        resources.interaction.reset();
         state[CleanupPending] = 0;
         state[CleanupComplete] = 1;
         state[RuntimePhase] = static_cast<std::uint32_t>(Phase::Stopped);
@@ -2891,6 +3006,12 @@ bool CCore::StartFrontend(CGUI* borrowedGui)
             m_pXML = m_frontendRuntimeResources->xml.xml;
             m_pConfigFile = m_frontendRuntimeResources->xml.file;
             m_pKeyBinds = m_frontendRuntimeResources->bindings.get();
+            const auto* services = m_frontendRuntimeResources->interaction.get();
+            if (!services || !services->localization || !services->commands || !services->logger)
+                throw std::runtime_error("Runtime interaction services are unavailable");
+            m_pLocalization = services->localization;
+            m_pCommands = services->commands;
+            m_pConsoleLogger = services->logger;
         }
         else
         {
@@ -2902,16 +3023,19 @@ bool CCore::StartFrontend(CGUI* borrowedGui)
             if (!m_ClientVariables.Load())
                 throw std::runtime_error("Frontend CVars could not be loaded");
             m_ClientVariables.Set("locale", std::string("en_US"));
+            const auto localeRoot = ToUTF8((g_mtaDirectory / L"MTA/locale").wstring());
+            auto       services = CreateCoreInteractionServices(CCommands::Policy::FrontendLocal, "en_US", localeRoot, false, true);
+            services->TransferTo(m_pLocalization, m_pConsoleLogger, m_pCommands);
         }
         state.snapshot[XmlLoaded] = state.snapshot[ConfigLoaded] = 1;
-        const auto localeRoot = ToUTF8((g_mtaDirectory / L"MTA/locale").wstring());
-        m_pLocalization = new CLocalization("en_US", localeRoot, false);
         g_pLocalization = m_pLocalization;
         if (m_pLocalization->GetLanguageDirectory().empty())
             throw std::runtime_error("Frontend localization assets are missing");
         state.snapshot[LocalizationLoaded] = 1;
-        m_pConsoleLogger = new CConsoleLogger;
-        m_pCommands = new CCommands(CCommands::Policy::FrontendLocal);
+        // A retained command manager keeps lifetime counters, while old console
+        // snapshots remain scoped to this new view's actual command activity.
+        state.consoleExecutedBase = m_pCommands->GetFrontendExecuted();
+        state.consoleRejectedBase = m_pCommands->GetFrontendRejected();
         if (FrontendBackgroundServices::AcquireUpdater(this) != FrontendBackgroundServices::Status::Ok)
             throw std::runtime_error("Frontend updater ownership is unavailable");
         state.updaterAcquired = true;
@@ -3568,6 +3692,8 @@ DefinitiveFrontend::Status CCore::EnableFrontendConsole()
     {
         // Register only ordinary handlers whose dependencies already exist.
         // The normal ver/time/bind/network commands require later startup.
+        if (m_pCommands->GetFrontendExecuted() == UINT32_MAX || m_pCommands->GetFrontendRejected() == UINT32_MAX)
+            throw std::runtime_error("Frontend command counters are exhausted");
         m_pCommands->DeleteAll();
         m_pCommands->Add("help", _("this help screen"), CCommandFuncs::Help);
         m_pCommands->Add("clear", _("clears the console"), CCommandFuncs::Clear);
@@ -3631,9 +3757,9 @@ DefinitiveFrontendConsole::Snapshot CCore::ReadFrontendConsole()
     }
     if (resources.consoleEnabled && m_pCommands)
     {
-        state[CommandsExecuted] = m_pCommands->GetFrontendExecuted();
-        state[CommandsRejected] = m_pCommands->GetFrontendRejected();
-        state[LastCommand] = m_pCommands->GetFrontendLastCommand();
+        state[CommandsExecuted] = m_pCommands->GetFrontendExecuted() - resources.consoleExecutedBase;
+        state[CommandsRejected] = m_pCommands->GetFrontendRejected() - resources.consoleRejectedBase;
+        state[LastCommand] = state[CommandsExecuted] || state[CommandsRejected] ? m_pCommands->GetFrontendLastCommand() : 0u;
     }
     return state;
 }
@@ -3861,13 +3987,25 @@ DefinitiveFrontend::Status CCore::StopFrontend()
                 throw std::runtime_error("Frontend updater did not quiesce");
             resources.updaterAcquired = false;
         }
-        DestroyFrontendCommands();
+        if (resources.runtimeBorrowed)
+        {
+            // Clear this view's GUI command routes without destroying the real
+            // Core manager. Fresh views register their own Help/Clear routes.
+            if (m_pCommands)
+                m_pCommands->DeleteAll();
+            m_pCommands = nullptr;
+        }
+        else
+            DestroyFrontendCommands();
         resources.consoleSnapshot[DefinitiveFrontendConsole::CommandsRegistered] = 0;
         resources.consoleSnapshot[DefinitiveFrontendConsole::CommandsRetained] = 0;
         resources.consoleSnapshot[DefinitiveFrontendConsole::CommandPolicyActive] = 0;
         if (g_pLocalization == m_pLocalization)
             g_pLocalization = resources.previousLocalization;
-        SAFE_DELETE(m_pLocalization);
+        if (resources.runtimeBorrowed)
+            m_pLocalization = nullptr;
+        else
+            DestroyCoreInteractionLocalization(m_pLocalization, resources.previousLocalization);
         // Runtime CVars still borrow the parked session document. Only legacy
         // per-view configuration is unloaded here; final runtime Stop owns
         // the actual manager, its CVars nodes, then the XML factory lifetime.
@@ -3878,7 +4016,10 @@ DefinitiveFrontend::Status CCore::StopFrontend()
         m_pKeyBinds = nullptr;
         if (!resources.runtimeBorrowed && !resources.xml.Close())
             throw std::runtime_error("Frontend XML owner retained its module");
-        DestroyFrontendLogger();
+        if (resources.runtimeBorrowed)
+            m_pConsoleLogger = nullptr;
+        else
+            DestroyFrontendLogger();
         m_pGUI = nullptr;
         state[MenuVisible] = state[MenuFading] = state[CreditsVisible] = 0;
         state[CleanupPending] = 0;
@@ -4220,10 +4361,9 @@ CCore::~CCore()
 
 void CCore::InitializeFrontendInfrastructure()
 {
-    // Keep the real Core configuration and interaction services separate from
-    // classic GUI, renderer and hook creation. A future DE frontend can reuse
-    // this boundary without claiming that its CGame or multiplayer is ready;
-    // current DE startup still rejects before entering it.
+    // Classic startup owns its ordinary configuration policy; localization,
+    // logging and commands use the same interaction-service construction and
+    // rollback as retained DE Core without sharing game/renderer assumptions.
     if (m_pXML || m_pConfigFile || m_pKeyBinds || m_XMLModule.IsOk() || m_pLocalization || m_pConsoleLogger || m_pCommands)
         throw std::logic_error("Core frontend infrastructure is already initialized");
 
@@ -4241,10 +4381,8 @@ void CCore::InitializeFrontendInfrastructure()
 
         CreateXML();
         ApplyCoreInitSettings();
-        m_pLocalization = new CLocalization;
-        g_pLocalization = m_pLocalization;
-        m_pConsoleLogger = new CConsoleLogger;
-        m_pCommands = new CCommands;
+        auto services = CreateCoreInteractionServices(CCommands::Policy::Classic);
+        services->TransferTo(m_pLocalization, m_pConsoleLogger, m_pCommands);
     }
     catch (...)
     {
@@ -4264,7 +4402,7 @@ void CCore::InitializeFrontendInfrastructure()
 
 void CCore::DestroyFrontendCommands()
 {
-    SAFE_DELETE(m_pCommands);
+    DestroyCoreInteractionCommands(m_pCommands);
 }
 
 void CCore::DestroyFrontendConfiguration(bool saveConfig)
@@ -4273,15 +4411,13 @@ void CCore::DestroyFrontendConfiguration(bool saveConfig)
     // keybind destruction. Preserve that order so its existing save path can
     // still use keybinds, updater and server cache; partial startup skips it.
     ReleaseXML(saveConfig);
-    if (g_pLocalization == m_pLocalization)
-        g_pLocalization = nullptr;
-    SAFE_DELETE(m_pLocalization);
+    DestroyCoreInteractionLocalization(m_pLocalization, nullptr);
 }
 
 void CCore::DestroyFrontendLogger()
 {
     // Keep logging available to the other frontend owners during teardown.
-    SAFE_DELETE(m_pConsoleLogger);
+    DestroyCoreInteractionLogger(m_pConsoleLogger);
 }
 
 eCoreVersion CCore::GetVersion()

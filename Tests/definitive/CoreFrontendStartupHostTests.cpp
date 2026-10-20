@@ -26,6 +26,7 @@
 #include <gui/CGUI.h>
 #include <gui/CGUID3D12.h>
 #include <core/CKeyBindsInterface.h>
+#include <core/CLocalizationInterface.h>
 #include "ObservedFrontendGui.h"
 #include "../../Client/core/DefinitiveFrontend.h"
 #include "../../Client/core/DefinitiveFrontendStartup.h"
@@ -775,6 +776,32 @@ namespace
               "Runtime64 preserves exact Startup32 and exposes a separate frontend-only session identity");
         return state;
     }
+    void RuntimeLoggerRetained(const std::filesystem::path& root, bool retained)
+    {
+        const auto path = root / L"mta/logs/console.log";
+        Check(std::filesystem::is_regular_file(path), "actual runtime creates Core's ordinary console logger before a GUI view");
+        // Exclusive read sharing conflicts with the real logger's open writer.
+        // This reads no bytes and changes nothing; final shutdown must make
+        // that same owned file available after closing its actual stream.
+        const auto handle = CreateFileW(path.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        const auto error = GetLastError();
+        if (handle != INVALID_HANDLE_VALUE)
+            CloseHandle(handle);
+        Check(retained ? handle == INVALID_HANDLE_VALUE && error == ERROR_SHARING_VIOLATION : handle != INVALID_HANDLE_VALUE,
+              retained ? "same real console log remains owned across hidden runtime/view retirement"
+                       : "final runtime shutdown releases its real console log owner");
+    }
+    CLocalizationInterface* RuntimeLocalization(Owned& owned, CLocalizationInterface* previous)
+    {
+        // Existing MTA export returns the active interface without allocation.
+        // Never call it while hidden, where global localization is detached.
+        const auto get = Export<CLocalizationInterface*(__cdecl*)(SString)>(owned.core, "L10n_CreateLocalization");
+        auto*      localization = get(SString{});
+        Check(localization && (!previous || localization == previous) && localization->GetLanguageCode() == "en_US" &&
+                  !localization->GetLanguageDirectory().empty(),
+              "fresh views borrow the same actual configured-locale fallback interface instead of reconstructing localization");
+        return localization;
+    }
     void GameTimeArguments(Owned& owned)
     {
         GameTime::Snapshot sentinel;
@@ -951,6 +978,7 @@ namespace
                             bool persistenceRestart = false)
     {
         const bool persistence = mode == L"runtime-persistence";
+        const bool interaction = mode == L"runtime-interaction";
         runtimeCase = true;
         owned.runtimeOwner = true;
         Check(Export<std::uint32_t (*)()>(owned.core, "MTA_DEFrontendRuntimeApiVersion")() == 1,
@@ -1069,7 +1097,7 @@ namespace
               "old mutating owner APIs cannot bypass runtime service ownership or inject a clock prelude");
         Check(!cancelCalls && !publishCalls && !heartbeatCalls && !clockCancelCalls && !clockPublishCalls,
               "runtime mode refusals invoke no native or clock callbacks");
-        if (mode != L"runtime" && !persistence)
+        if (mode != L"runtime" && !persistence && !interaction)
         {
             Check(initial[Startup::Phase] == 5 && initial[Startup::CoreRetained] &&
                       initial[Runtime::RuntimePhase] == static_cast<std::uint32_t>(Runtime::Phase::Failed) && !initial[Runtime::ViewBorrowed] &&
@@ -1078,12 +1106,18 @@ namespace
             Check(owned.runRuntimeView(owned.startup, &request) == Frontend::Status::Failed && !cancelCalls && !publishCalls && !heartbeatCalls,
                   "failed runtime cannot admit native work or GUI ownership");
             runtimeFailureCleanupVerified = true;
+            if (mode == L"runtime-locale-failure")
+                Check(!std::filesystem::exists(root / L"mta/logs/console.log"),
+                      "missing real dictionary assets refuse hidden startup before localization or later interaction services are constructed");
         }
         else
         {
             RuntimeHidden(initial, 0);
-            const auto session = RuntimePair(initial, Runtime::SessionGenerationLow);
-            const auto malformed = [&](Persistent::RequestV1 value)
+            if (interaction)
+                RuntimeLoggerRetained(root, true);
+            CLocalizationInterface* interactionLocalization = nullptr;
+            const auto              session = RuntimePair(initial, Runtime::SessionGenerationLow);
+            const auto              malformed = [&](Persistent::RequestV1 value)
             {
                 const auto before = RuntimeState(owned);
                 Check(owned.runRuntimeView(owned.startup, &value) == Frontend::Status::InvalidArgument && RuntimeState(owned) == before && !cancelCalls &&
@@ -1229,6 +1263,8 @@ namespace
                 Check(owned.State()[Frontend::MenuVisible] && !owned.State()[Frontend::MenuFading],
                       "fresh runtime menu completes its actual fade before Settings interaction");
                 ConsoleAndBindings(owned);
+                if (interaction)
+                    interactionLocalization = RuntimeLocalization(owned, interactionLocalization);
                 if (persistence)
                     BindingPersistenceSettings(owned, root, view, persistenceRestart);
                 else
@@ -1263,6 +1299,8 @@ namespace
                 }
                 const auto hidden = RuntimeState(owned);
                 RuntimeHidden(hidden, view, persistence);
+                if (interaction)
+                    RuntimeLoggerRetained(root, true);
                 Check(RuntimePair(hidden, Runtime::SessionGenerationLow) == session && GetModuleHandleW(L"xmll.dll") && configBytes() == originalConfig,
                       "hidden runtime preserves same XML owner, configuration bytes and Core session identity");
                 const auto pulses = hidden[Startup::Pulses];
@@ -1293,6 +1331,8 @@ namespace
         Check(owned.shutdownRuntime(owned.startup) == Frontend::Status::Ok && owned.shutdownRuntime(owned.startup) == Frontend::Status::Ok,
               "runtime final shutdown retires actual manager then CVars/XML before backend, idempotently");
         runtimeTerminal = RuntimeState(owned);
+        if (interaction)
+            RuntimeLoggerRetained(root, false);
         GameTimeUnavailable(owned, mta::game_de::Status::NotInitialized);
         startup = StartupState(owned);
         Check(runtimeTerminal[Runtime::RuntimePhase] == static_cast<std::uint32_t>(Runtime::Phase::Stopped) && runtimeTerminal[Runtime::CleanupComplete] &&
@@ -1377,7 +1417,8 @@ int wmain(int argc, wchar_t** argv)
         const std::filesystem::path root(argv[1]);
         const std::wstring          mode(argv[2]);
         Check(root.is_absolute() && (mode == L"normal" || mode == L"gated" || mode == L"frontend-failure" || mode == L"backend-failure" || mode == L"runtime" ||
-                                     mode == L"runtime-persistence" || mode == L"runtime-frontend-failure" || mode == L"runtime-backend-failure"),
+                                     mode == L"runtime-persistence" || mode == L"runtime-frontend-failure" || mode == L"runtime-backend-failure" ||
+                                     mode == L"runtime-interaction" || mode == L"runtime-locale-failure"),
               "explicit completed-Core lifecycle case selected");
         Check(!std::filesystem::exists(root / L"server"), "owned frontend has no local-server startup assets");
         Owned owned;

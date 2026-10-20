@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { MODE, ONLINE_ACTIVATION, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE, MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE, MTA_CORE_RENDER_ROUTE, MTA_CORE_RENDER_GPU_REFERENCE, MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE, MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE, MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE, MTA_CORE_GUI_STARTUP_REFERENCE, MTA_CORE_GUI_SURFACE_REFERENCE, MTA_CORE_GUI_FRONTEND_REFERENCE, MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE, MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE, MTA_CORE_PERSISTENT_FRONTEND, MTA_CORE_FRONTEND_RUNTIME, MTA_CORE_FRONTEND_BINDING_PERSISTENCE, MTA_CORE_CLOCK_REFERENCE, MTA_CORE_CLOCK_SET_REFERENCE, MTA_CORE_APPLICATION_FRAME_REFERENCE, MTA_CORE_STARTUP_OBSERVATION_REFERENCE } from './config.mjs';
+import { MODE, ONLINE_ACTIVATION, GAIT_REFERENCE, GAIT_RATE, GAIT_ROOT_LOCK, INPUT_REFERENCE, MTA_NATIVE_PAD_REFERENCE, MTA_NATIVE_MOVEMENT_TRIAL, MTA_CORE_STARTUP_REFERENCE, MTA_CORE_INPUT_REFERENCE, MTA_CORE_MOVEMENT_REFERENCE, MTA_CORE_RENDER_REFERENCE, MTA_CORE_RENDER_ROUTE, MTA_CORE_RENDER_GPU_REFERENCE, MTA_CORE_RENDER_CUSTOM_PRESENT_REFERENCE, MTA_CORE_RENDER_FRAME_BOUNDARY_REFERENCE, MTA_CORE_RENDER_NATIVE_DISPATCH_REFERENCE, MTA_CORE_GUI_STARTUP_REFERENCE, MTA_CORE_GUI_SURFACE_REFERENCE, MTA_CORE_GUI_FRONTEND_REFERENCE, MTA_CORE_GUI_FRONTEND_INPUT_REFERENCE, MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE, MTA_CORE_PERSISTENT_FRONTEND, MTA_CORE_FRONTEND_RUNTIME, MTA_CORE_FRONTEND_NATIVE_HOST, MTA_CORE_FRONTEND_BINDING_PERSISTENCE, MTA_CORE_CLOCK_REFERENCE, MTA_CORE_CLOCK_SET_REFERENCE, MTA_CORE_APPLICATION_FRAME_REFERENCE, MTA_CORE_STARTUP_OBSERVATION_REFERENCE } from './config.mjs';
 import { AdapterController, NativeGaitReferenceController, NativeInputReferenceController, PlayerControlLease } from './controller.mjs';
 import { MtaNativePadReferenceController } from './native-pad-reference.mjs';
 import { MtaNativeMovementTrialController } from './native-movement-trial.mjs';
@@ -40,6 +40,8 @@ function runAdapter() {
     if (typeof MTA_CORE_FRONTEND_BINDING_PERSISTENCE !== 'boolean' ||
         (MTA_CORE_FRONTEND_BINDING_PERSISTENCE && !MTA_CORE_FRONTEND_RUNTIME))
         throw new Error('Saved MTA movement bindings require the retained frontend runtime');
+    if (typeof MTA_CORE_FRONTEND_NATIVE_HOST !== 'boolean' || (MTA_CORE_FRONTEND_NATIVE_HOST && !MTA_CORE_FRONTEND_RUNTIME))
+        throw new Error('Native MTA startup requires the retained frontend runtime');
     // This session selection owns Core/configuration across independently
     // retired views. It must never inherit another native trial's lifetime.
     if (typeof MTA_CORE_FRONTEND_RUNTIME !== 'boolean' ||
@@ -166,6 +168,13 @@ function runAdapter() {
     if (typeof GAIT_ROOT_LOCK !== 'boolean' || (GAIT_ROOT_LOCK && MODE !== 'online'))
         throw new Error('Animation root lock requires opt-in Online mode');
     if (HOST !== 'sa_unreal') throw new Error('This adapter requires the San Andreas Definitive Edition host');
+    if (MTA_CORE_FRONTEND_NATIVE_HOST) {
+        // InitializeASI owns the controller and existing Core worker. Even a
+        // delayed CLEO resumption must never start a competing script owner.
+        emit({ event: 'adapter_native_frontend_host_selected', mode: MODE,
+            binding_persistence: MTA_CORE_FRONTEND_BINDING_PERSISTENCE, network_active: false, full_mta_ready: false });
+        return;
+    }
     const runtimeVersion = String(CLEO.version).split(/[.-]/).map(Number);
     if (runtimeVersion.length < 3 || !runtimeVersion.slice(0, 3).every(value => Number.isInteger(value) && value >= 0) || runtimeVersion[0] < 1 ||
         (runtimeVersion[0] === 1 && (runtimeVersion[1] < 5 || (runtimeVersion[1] === 5 && runtimeVersion[2] < 1))))

@@ -197,6 +197,20 @@ These are offline results. The combined menu, changed bindings and native
 movement milestone has the separate October 19 GTA evidence above.
 
 **The retained frontend runtime candidate keeps real MTA services across menu reopenings.**
+An additional `-MtaCoreFrontendNativeHost` selection starts that same Core owner
+through the pinned ASI loader's `InitializeASI` entry, independently of CLEO
+script resumption. It requires `-MtaCoreFrontendRuntime` and adds only the owned
+`MtaDefinitive.asi` / `MtaDefinitive.ini` pair (60 files total). Core starts hidden;
+there is no automatic menu, movement or network connection. With GTA focused,
+hold Ctrl+Shift+F9 for three seconds and release every key to show/hide a view;
+Ctrl+Shift+End stops the runtime. Existing native view eligibility still applies,
+so hidden Core startup does not establish a playerless main-menu renderer or
+complete `CGame` startup. Native lifecycle transitions go to
+`CLEO/de-online/mta/logs/nativefrontend.log`. The script yields controller
+ownership in this selection. Ordinary mode changes disarm the owned INI, and
+updates can remove the complete pair while preserving user binding data.
+This new entry requires a future combined live check; full MTA remains experimental.
+
 `package.ps1 -Mode Smoke -MtaCoreFrontendRuntime` selects a separate 58-file
 package; the flag defaults to false and excludes every other trial. After the
 initial three-second Ctrl+Shift+F9 activation and key release, the existing
@@ -205,7 +219,12 @@ of Ctrl+Shift+F9 hide/show the menu. Menu Quit, Escape or focus loss hides the
 view; Ctrl+Shift+End stops the retained runtime.
 
 One completed Core/backend owns the actual XML, CVars and configured `CKeyBinds`
-manager. Settings Apply changes these session bindings, so a fresh GUI can
+manager, together with MTA's real localization, command manager and console
+logger. These services are initialized while hidden and retained between views;
+configured locales use MTA's existing English fallback when their assets are not
+shipped. Normal classic startup shares their construction and rollback. Each
+view borrows the retained services and keeps its own console counters and routes.
+Settings Apply changes these session bindings, so a fresh GUI can
 borrow them again after the old GUI is released. Cancel discards staged edits;
 configuration files are not saved by default. Adding
 `-MtaCoreFrontendBindingPersistence` to `package.ps1` or `set-mode.ps1` explicitly

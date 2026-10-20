@@ -23,6 +23,11 @@ class Player(ctypes.Structure):
                 ("z", ctypes.c_float), ("heading", ctypes.c_float)]
 
 
+class NativeFrontendRequest(ctypes.Structure):
+    _fields_ = [("size", ctypes.c_uint32), ("version", ctypes.c_uint32),
+                ("flags", ctypes.c_uint32), ("reserved", ctypes.c_uint32)]
+
+
 class NativeIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -51,6 +56,12 @@ class NativeIntegrationTests(unittest.TestCase):
         cls.bridge.DE_BindRuntime.restype = ctypes.c_int
         cls.bridge.DE_ConnectLocal.argtypes = [ctypes.c_uint32]
         cls.bridge.DE_ConnectLocal.restype = ctypes.c_int
+        cls.bridge.DE_NativeFrontendStartV1.argtypes = [ctypes.POINTER(NativeFrontendRequest)]
+        cls.bridge.DE_NativeFrontendStartV1.restype = ctypes.c_int
+        cls.bridge.DE_NativeFrontendReadV1.argtypes = [ctypes.POINTER(ctypes.c_uint32), ctypes.c_uint32]
+        cls.bridge.DE_NativeFrontendReadV1.restype = ctypes.c_int
+        cls.bridge.DE_ControllerBegin.argtypes = []
+        cls.bridge.DE_ControllerBegin.restype = ctypes.c_int
 
     def setUp(self):
         self.server = subprocess.Popen([sys.executable, str(SERVER), "--host", "127.0.0.1", "--port", "0"],
@@ -109,6 +120,33 @@ class NativeIntegrationTests(unittest.TestCase):
         self.assertEqual(self.bridge.DE_ApiVersion(), 2)
         self.assertEqual(self.bridge.DE_Connect(b"127.0.0.1", self.port, 0), 0)
         self.assertEqual(self.bridge.DE_Connect(b"127.0.0.1", self.port, 12345), 1)
+        # Standalone transport retains its historical unbound entry, without
+        # manufacturing CLEO/game ownership or allowing another controller to
+        # replace its client while the loopback exchange is in flight.
+        request = NativeFrontendRequest(ctypes.sizeof(NativeFrontendRequest), 1, 0, 0)
+        native = (ctypes.c_uint32 * 32)()
+        self.assertEqual(self.bridge.DE_BindRuntime(), 0)
+        self.assertEqual(self.bridge.DE_ControllerBegin(), 0)
+        self.assertEqual(self.bridge.DE_ConnectLocal(1), 0)
+        self.assertEqual(self.bridge.DE_NativeFrontendStartV1(ctypes.byref(request)), 0)
+        self.assertEqual(self.bridge.DE_NativeFrontendReadV1(native, 32), 1)
+        self.assertEqual((native[0], native[1], native[2]), (1, 0, 0))
+        foreign_results = []
+
+        def try_foreign_transport():
+            foreign_results.extend((
+                self.bridge.DE_Connect(b"127.0.0.1", self.port, 67890),
+                self.bridge.DE_Pump(), self.bridge.DE_SubmitTransform(1, 2, 3, 4),
+                self.bridge.DE_LocalPlayerId(), self.bridge.DE_PlayerCount(),
+                self.bridge.DE_ReadPlayerComponent(0, 0), self.bridge.DE_ReadPlayers(None, 0)))
+            self.bridge.DE_Disconnect()
+
+        foreign = threading.Thread(target=try_foreign_transport)
+        foreign.start()
+        foreign.join(timeout=5)
+        self.assertFalse(foreign.is_alive(), "Foreign transport calls must refuse promptly")
+        self.assertEqual(foreign_results, [0] * 7)
+        self.assertEqual(self.bridge.DE_Pump(), 1, "Foreign Disconnect must preserve the owning client's connection")
         peer = self.probe(2, seconds=2)
         try:
             states = (Player * 16)()
@@ -150,6 +188,8 @@ class NativeIntegrationTests(unittest.TestCase):
             self.bridge.DE_Disconnect()
             self.assertEqual(self.bridge.DE_LocalPlayerId(), 0)
             self.assertEqual(self.bridge.DE_Pump(), 0)
+            self.assertEqual(self.bridge.DE_NativeFrontendStartV1(ctypes.byref(request)), 0,
+                             "Disconnect must retain transport ownership rather than exposing an admission race")
         finally:
             if peer.poll() is None:
                 peer.kill()

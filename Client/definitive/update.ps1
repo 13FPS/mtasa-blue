@@ -8,6 +8,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'NativeFrontendPackage.ps1')
 function Assert-NoLinks([string]$Path) {
     $candidate = [IO.Path]::GetFullPath($Path)
     while ($candidate) {
@@ -65,19 +66,22 @@ $frontendPaths = @(
     'CLEO/de-online/mta/locale/en_US/client.pot')
 $guiCount = @($packagePaths | Where-Object { $_ -in $guiPaths }).Count
 $frontendCount = @($packagePaths | Where-Object { $_ -in $frontendPaths }).Count
+$nativePaths = @('MtaDefinitive.asi','MtaDefinitive.ini')
+$nativeCount = Get-MtaNativeFrontendFileCount $packagePaths $frontendCount
 if ($frontendCount -ne 0 -and ($frontendCount -ne 22 -or $guiCount -ne 13)) { throw 'Incomplete MTA Core GUI frontend package ownership.' }
 if ($guiCount -ne 0 -and $guiCount -ne 13) { throw 'Incomplete MTA Core GUI startup package ownership.' }
 $removedPaths = @($installedPaths | Where-Object { $_ -notin $packagePaths })
 if (@($packagePaths | Select-Object -Unique).Count -ne $packagePaths.Count -or
-    @($removedPaths | Where-Object { $_ -notin ($guiPaths + $frontendPaths) }).Count -ne 0 -or
+    @($removedPaths | Where-Object { $_ -notin ($guiPaths + $frontendPaths + $nativePaths) }).Count -ne 0 -or
     @($removedPaths | Where-Object { $_ -in $guiPaths }).Count -notin @(0, 13) -or
-    @($removedPaths | Where-Object { $_ -in $frontendPaths }).Count -notin @(0, 22)) { throw 'Package owned paths differ.' }
+    @($removedPaths | Where-Object { $_ -in $frontendPaths }).Count -notin @(0, 22) -or
+    @($removedPaths | Where-Object { $_ -in $nativePaths }).Count -notin @(0, 2)) { throw 'Package owned paths differ.' }
 $addedPaths = @($packagePaths | Where-Object { $_ -notin $installedPaths })
 # Admit only the named MTA probe/backend files from the newer package. All
 # additions are checked for existing user bytes before any update is applied.
 $allowedAdditions = @('CLEO/de-online/native-pad-reference.mjs', 'CLEO/de-online/native-movement-trial.mjs', 'CLEO/de-online/game_de.dll',
     'CLEO/de-online/core.dll', 'CLEO/de-online/pthread.dll',
-    'CLEO/de-online/xmll.dll', 'CLEO/de-online/mta/config/coreconfig.xml') + $guiPaths + $frontendPaths
+    'CLEO/de-online/xmll.dll', 'CLEO/de-online/mta/config/coreconfig.xml') + $guiPaths + $frontendPaths + $nativePaths
 if (@($addedPaths | Where-Object { $_ -notin $allowedAdditions }).Count -ne 0) {
     throw 'Unsupported additive package path.'
 }
@@ -100,11 +104,14 @@ $hasBindConfig = $packagePaths -contains 'CLEO/de-online/mta/config/coreconfig.x
 if ($hasXml -ne $hasBindConfig -or ($hasXml -and -not $hasCore)) {
     throw 'Incomplete MTA Core configured input package ownership.'
 }
-if ($guiCount -and ($packagePaths.Count -ne $(if ($frontendCount) { 58 } else { 36 }) -or -not $hasXml)) { throw 'Incomplete MTA Core GUI startup package ownership.' }
+if ($guiCount -and ($packagePaths.Count -ne $(if ($frontendCount) { 58+$nativeCount } else { 36 }) -or -not $hasXml)) { throw 'Incomplete MTA Core GUI startup package ownership.' }
 $sourceRoot = Join-Path $packageRoot 'Win64'
 $actualPaths = @(Get-ChildItem -LiteralPath $sourceRoot -File -Recurse | ForEach-Object { [IO.Path]::GetRelativePath($sourceRoot, $_.FullName).Replace('\', '/') })
 if (@(Compare-Object $packagePaths $actualPaths).Count -ne 0) { throw 'Package has unrecorded or missing files.' }
 $configText = [IO.File]::ReadAllText((Join-Path $sourceRoot 'CLEO/de-online/config.mjs'))
+$nativeIniText = ''
+if ($nativeCount) { $nativeIniPath=Join-Path $sourceRoot 'MtaDefinitive.ini'; Assert-NoLinks $nativeIniPath; $nativeIniText=[IO.File]::ReadAllText($nativeIniPath) }
+Assert-MtaNativeFrontendConfig $configText $nativeCount $nativeIniText $package.mode
 
 # A startup metadata observation admits only its own native read-only owner. Preserve old
 # packages without this marker, but reject malformed opt-ins before any copy.
@@ -205,8 +212,8 @@ if ($bindingPersistenceMarkers.Count -gt 1 -or
 if ($bindingPersistenceMarkers.Count -eq 1 -and $bindingPersistenceMarkers[0].Groups[1].Value -eq 'true' -and
     ($runtimeMarkers.Count -ne 1 -or $runtimeMarkers[0].Groups[1].Value -ne 'true')) { throw 'Saved MTA movement bindings require the retained frontend runtime.' }
 if ($runtimeMarkers.Count -eq 1 -and $runtimeMarkers[0].Groups[1].Value -eq 'true') {
-    $runtimeConflicts = @([regex]::Matches($configText, 'export const ((?:GAIT_|INPUT_|MTA_)[A-Z0-9_]+) = true;') | Where-Object {$_.Groups[1].Value -notin @('MTA_CORE_FRONTEND_RUNTIME','MTA_CORE_FRONTEND_BINDING_PERSISTENCE')})
-    if ($frontendCount -ne 22 -or $guiCount -ne 13 -or $packagePaths.Count -ne 58 -or $package.mode -ne 'Smoke' -or $runtimeConflicts.Count) {
+    $runtimeConflicts = @([regex]::Matches($configText, 'export const ((?:GAIT_|INPUT_|MTA_)[A-Z0-9_]+) = true;') | Where-Object {$_.Groups[1].Value -notin @('MTA_CORE_FRONTEND_RUNTIME','MTA_CORE_FRONTEND_BINDING_PERSISTENCE','MTA_CORE_FRONTEND_NATIVE_HOST')})
+    if ($frontendCount -ne 22 -or $guiCount -ne 13 -or $packagePaths.Count -ne (58+$nativeCount) -or $package.mode -ne 'Smoke' -or $runtimeConflicts.Count) {
         throw 'MTA frontend runtime requires complete frontend ownership and separate opt-in Smoke mode.'
     }
 }

@@ -89,6 +89,10 @@ export const MTA_CORE_PERSISTENT_FRONTEND = false;
 // separate from the incomplete CGame/network/full-client startup path.
 export const MTA_CORE_FRONTEND_RUNTIME = false;
 
+// The native ASI entry owns this same runtime before CLEO resumes at the main
+// menu. In this selection the script yields ownership without arming a worker.
+export const MTA_CORE_FRONTEND_NATIVE_HOST = false;
+
 // Apply saves only MTA's six movement controls in the user's definitive data
 // folder. Keep this additive choice explicit so existing diagnostic sessions
 // retain their original session-only configuration contract.

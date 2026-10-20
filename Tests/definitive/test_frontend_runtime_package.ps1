@@ -7,8 +7,10 @@ param(
     [Parameter(Mandatory)][string]$PlainPackageDirectory,
     [string]$LegacyFrontendPackageDirectory,
     [string]$BindingPersistencePackageDirectory,
+    [string]$NativeRuntimePackageDirectory,
     [Parameter(Mandatory)][string]$GameExecutable,
-    [switch]$BindingPersistenceOnly
+    [switch]$BindingPersistenceOnly,
+    [switch]$NativeHostOnly
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -31,6 +33,8 @@ $failure = $null
 $sourcesUnchanged = $false
 $fakeRemoved = $false
 $gameCopiesCreated = 0
+$nativeSavedData = $null
+$nativeSavedDataHash = $null
 New-Item -ItemType Directory -Path $outputRoot,$fixtureRoot -Force | Out-Null
 $savedTemp = [Environment]::GetEnvironmentVariable('TEMP','Process')
 $savedTmp = [Environment]::GetEnvironmentVariable('TMP','Process')
@@ -143,7 +147,7 @@ function Installed([int]$Count,$Package,[string]$Name) {
     $manifest
 }
 function Variant([string]$Name,[string]$Source,[scriptblock]$Change) {
-    # Reuse at most one 58-file and one 23-file package fixture. Only configs
+    # Reuse at most one fixture per 23/58/60-file group. Only configs
     # and manifests vary; a matrix case must never duplicate the 89 MB game.
     $count=@((Get-Content -LiteralPath (Join-Path $Source 'manifest.json') -Raw | ConvertFrom-Json).files).Count
     $target=Assert-Owned (Join-Path $fixtureRoot ('shared-'+$count))
@@ -244,7 +248,9 @@ function Get-Amd64Exports([string]$Path) {
 }
 
 function Transition([string]$Name,$Selection) {
-    $prior = Installed $(if ((Get-Content -Raw -LiteralPath (Join-Path $fakeGame 'de-online-install-manifest.json') | ConvertFrom-Json).files.Count -eq 58) {58} else {23}) $null ($Name+'-before')
+    $priorCount = @((Get-Content -Raw -LiteralPath (Join-Path $fakeGame 'de-online-install-manifest.json') | ConvertFrom-Json).files).Count
+    Check ($Name+':known-owned-group-size') ($priorCount -in @(23,58,60))
+    $prior = Installed $priorCount $null ($Name+'-before')
     $priorManifest = Sha (Join-Path $fakeGame 'de-online-install-manifest.json')
     $changes = @()
     foreach ($old in $prior.files) {
@@ -273,8 +279,14 @@ function Transition([string]$Name,$Selection) {
     Check ($Name+':exact-backup-file-count') (@(Get-ChildItem -LiteralPath $backup -File -Recurse).Count -eq $savedOriginals.Count+1)
     $removed = @($prior.files | Where-Object {$_.path -notin $installed.files.path})
     $added = @($installed.files | Where-Object {$_.path -notin $prior.files.path})
-    Check ($Name+':complete-GUI-group-transition') (($removed.Count -eq 0 -and $added.Count -eq 35) -or ($removed.Count -eq 35 -and $added.Count -eq 0) -or ($removed.Count -eq 0 -and $added.Count -eq 0 -and $prior.files.Count -eq $installed.files.Count))
-    foreach ($row in @($removed)+@($added)) {
+    $nativePaths = @('MtaDefinitive.asi','MtaDefinitive.ini')
+    $removedGui = @($removed | Where-Object {$_.path -notin $nativePaths})
+    $addedGui = @($added | Where-Object {$_.path -notin $nativePaths})
+    Check ($Name+':complete-GUI-group-transition') (($removedGui.Count -eq 0 -and $addedGui.Count -eq 35) -or
+        ($removedGui.Count -eq 35 -and $addedGui.Count -eq 0) -or ($removedGui.Count -eq 0 -and $addedGui.Count -eq 0))
+    Check ($Name+':complete-native-entry-group-transition') (@($removed | Where-Object {$_.path -in $nativePaths}).Count -in @(0,2) -and
+        @($added | Where-Object {$_.path -in $nativePaths}).Count -in @(0,2))
+    foreach ($row in @($removedGui)+@($addedGui)) {
         Check ($Name+':GUI-owned-path:'+ $row.path) ($row.path -match '^CLEO/de-online/(cgui\.dll|mta/cgui/|skins/Default/|mta/locale/en_US/)')
     }
     foreach ($row in $removed) { Check ($Name+':removed:'+ $row.path) (-not (Test-Path -LiteralPath $row.destination)) }
@@ -283,6 +295,7 @@ function Transition([string]$Name,$Selection) {
     }
     Check ($Name+':loader-preserved') ((Sha (Join-Path $fakeGame 'version.dll')) -ceq $loaderHash)
     Check ($Name+':unowned-preserved') ((Sha $unowned) -ceq $unownedHash)
+    if ($NativeHostOnly) { Check ($Name+':saved-data-preserved') ((Sha $nativeSavedData) -ceq $nativeSavedDataHash) }
     Check ($Name+':game-preserved') ((Sha (Join-Path $fakeGame 'SanAndreas.exe')) -ceq $knownGameHash)
     $backups.Add([ordered]@{name=$Name;directory=$backup;originalManifestSha256=$priorManifest;orderedChanges=$changes;
         savedOriginals=$savedOriginals;removedPaths=@($removed | ForEach-Object path);addedPaths=@($added | ForEach-Object path)})
@@ -302,7 +315,7 @@ function Selection([string]$Directory) {
 }
 function Flags-Switches([string]$Script) {
     @((Get-Command -Name $Script).Parameters.Values | Where-Object {
-        $_.Name -match '^(Native|Matched|Lock|Mta)' -and $_.Name -notin @('MtaCoreFrontendRuntime','MtaCoreFrontendBindingPersistence') -and
+        $_.Name -match '^(Native|Matched|Lock|Mta)' -and $_.Name -notin @('MtaCoreFrontendRuntime','MtaCoreFrontendBindingPersistence','MtaCoreFrontendNativeHost') -and
         $_.ParameterType -eq [Management.Automation.SwitchParameter]
     } | ForEach-Object Name | Sort-Object)
 }
@@ -353,13 +366,42 @@ function Rollback-Update([string]$Name,$Selection) {
     Check ($Name+':exact-backup-files') (@(Get-ChildItem -LiteralPath $backup -File -Recurse).Count -eq $originalCount+1)
     $backups.Add([ordered]@{name=$Name;rollbackObserved=$true;directory=$backup;originalManifestSha256=$manifestHash;files=(Tree $backup).rows})
 }
+function Native-Variant([string]$Name,[string]$Source,[scriptblock]$Change) {
+    $target = Variant $Name $Source {param($text)$text}
+    # One shared60 fixture is reset from its immutable input for every case.
+    # Restoring the two small native files also repairs earlier partial groups.
+    foreach ($relative in @('MtaDefinitive.asi','MtaDefinitive.ini')) {
+        $destination = Assert-Owned (Join-Path $target ('Win64/'+$relative))
+        [IO.File]::Copy((Join-Path $Source ('Win64/'+$relative)),$destination,$true)
+    }
+    $manifest = Get-Content -LiteralPath (Join-Path $Source 'manifest.json') -Raw | ConvertFrom-Json
+    & $Change $target $manifest
+    foreach ($entry in $manifest.files) { $entry.sha256 = Sha (Join-Path $target ('Win64/'+$entry.path)) }
+    Save (Join-Path $target 'manifest.json') $manifest
+    Save (Join-Path $outputRoot ($Name+'-manifest.json')) $manifest
+    $ini = Join-Path $target 'Win64/MtaDefinitive.ini'
+    if (Test-Path -LiteralPath $ini) { [IO.File]::Copy($ini,(Join-Path $outputRoot ($Name+'-MtaDefinitive.ini')),$true) }
+    [IO.File]::Copy((Join-Path $target 'Win64/CLEO/de-online/config.mjs'),(Join-Path $outputRoot ($Name+'-config.mjs')),$true)
+    $target
+}
+function Native-State([string]$Name,[bool]$Runtime,[bool]$Enabled,[bool]$Persistent) {
+    $text = [IO.File]::ReadAllText((Join-Path $fakeGame 'CLEO/de-online/config.mjs'))
+    foreach ($pair in @(@('MTA_CORE_FRONTEND_RUNTIME',$Runtime),@('MTA_CORE_FRONTEND_NATIVE_HOST',$Enabled),@('MTA_CORE_FRONTEND_BINDING_PERSISTENCE',$Persistent))) {
+        $marker = [regex]::Matches($text,('export const '+$pair[0]+' = (true|false);'))
+        Check ($Name+':marker:'+ $pair[0]) ($marker.Count -eq 1 -and $marker[0].Groups[1].Value -ceq $pair[1].ToString().ToLowerInvariant())
+    }
+    $expected = "[MTA]`nEnabled=$([int]$Enabled)`nLocalInput=1`nBindingPersistence=$([int]$Persistent)`n"
+    Check ($Name+':INI-and-marker-agree') ([IO.File]::ReadAllText((Join-Path $fakeGame 'MtaDefinitive.ini')).Replace("`r`n","`n") -ceq $expected)
+    Installed 60 $null ($Name+'-owned60') | Out-Null
+}
 try {
     foreach($name in @('Client/definitive/install.ps1','Client/definitive/update.ps1','Client/definitive/uninstall.ps1',
-        'Client/definitive/set-mode.ps1','Client/definitive/package.ps1','Client/definitive/game-adapter/index.js',
+        'Client/definitive/set-mode.ps1','Client/definitive/package.ps1','Client/definitive/NativeFrontendPackage.ps1','Client/definitive/game-adapter/index.js',
         'Client/definitive/game-adapter/config.mjs','Tests/definitive/test_frontend_runtime_package.ps1')) {
         $sourcePins[$name]=Sha (Join-Path $repositoryRoot $name)
     }
     $GameExecutable=(Resolve-Path -LiteralPath $GameExecutable).Path
+    if ($NativeHostOnly -and $BindingPersistenceOnly) { throw 'Choose either focused native-host or saved-binding ownership coverage.' }
     Check 'known-source-executable' ((Sha $GameExecutable) -ceq $knownGameHash)
     $runtime=Package-Info $RuntimePackageDirectory 58 'runtime-package'
     $plain=Package-Info $PlainPackageDirectory 23 'plain-package'
@@ -376,7 +418,7 @@ try {
     Check 'plain-has-no-enabled-trial' ([regex]::Matches($plainText,'export const ((?:GAIT_|INPUT_|MTA_)[A-Z0-9_]+) = true;').Count -eq 0)
     Check 'plain-runtime-marker-explicit-false' ([regex]::Matches($plainText,'export const MTA_CORE_FRONTEND_RUNTIME = false;').Count -eq 1)
     $oldMarkers=@([regex]::Matches($runtimeText,'export const ((?:GAIT_|INPUT_|MTA_)[A-Z0-9_]+) = false;') |
-        ForEach-Object {$_.Groups[1].Value} | Where-Object {$_ -cne 'MTA_CORE_FRONTEND_BINDING_PERSISTENCE'})
+        ForEach-Object {$_.Groups[1].Value} | Where-Object {$_ -notin @('MTA_CORE_FRONTEND_BINDING_PERSISTENCE','MTA_CORE_FRONTEND_NATIVE_HOST')})
     Check 'coverage-includes-persistent-clock-Read-clock-Set-and-old-input' ('MTA_CORE_PERSISTENT_FRONTEND' -cin $oldMarkers -and 'MTA_CORE_CLOCK_REFERENCE' -cin $oldMarkers -and 'MTA_CORE_CLOCK_SET_REFERENCE' -cin $oldMarkers -and 'MTA_CORE_INPUT_REFERENCE' -cin $oldMarkers)
     Check 'old-trial-marker-list-is-unique' ($oldMarkers.Count -eq @($oldMarkers|Select-Object -Unique).Count)
     $stagedScript=Join-Path $runtime.root 'Win64/CLEO/de-online/index.js'
@@ -401,7 +443,132 @@ try {
         nonboolean={param($text)$text.Replace('export const MTA_CORE_FRONTEND_RUNTIME = true;','export const MTA_CORE_FRONTEND_RUNTIME = 1;')}
         malformed={param($text)$text.Replace('export const MTA_CORE_FRONTEND_RUNTIME = true;','export const MTA_CORE_FRONTEND_RUNTIME = "true";')}
     }
-    if ($BindingPersistenceOnly) {
+    if ($NativeHostOnly) {
+        if (-not $NativeRuntimePackageDirectory) { throw 'Focused native-host checks require their actual60-file package.' }
+        $native = Package-Info $NativeRuntimePackageDirectory 60 'native-runtime-package'
+        $nativeText = [IO.File]::ReadAllText((Join-Path $native.root 'Win64/CLEO/de-online/config.mjs'))
+        $nativePersistent = [regex]::Matches($nativeText,'export const MTA_CORE_FRONTEND_BINDING_PERSISTENCE = true;').Count -eq 1
+        $nativeTrueFlags = @([regex]::Matches($nativeText,'export const ((?:GAIT_|INPUT_|MTA_)[A-Z0-9_]+) = true;') | ForEach-Object {$_.Groups[1].Value})
+        $expectedFlags = @('MTA_CORE_FRONTEND_RUNTIME','MTA_CORE_FRONTEND_NATIVE_HOST')
+        if ($nativePersistent) { $expectedFlags += 'MTA_CORE_FRONTEND_BINDING_PERSISTENCE' }
+        Check 'native-package-only-explicit-runtime-options' (@(Compare-Object $nativeTrueFlags $expectedFlags).Count -eq 0)
+        Check 'native-package-complete-entry-group' (@($native.manifest.files | Where-Object {$_.path -in @('MtaDefinitive.asi','MtaDefinitive.ini')}).Count -eq 2)
+        Check 'session-runtime-default-native-host-disabled' ([regex]::Matches($runtimeText,'export const MTA_CORE_FRONTEND_NATIVE_HOST = false;').Count -eq 1)
+        foreach ($path in @('version.dll','CLEO/de-online/core.dll','CLEO/de-online/game_de.dll','CLEO/de-online/de_client_bridge.dll','CLEO/de-online/pthread.dll','CLEO/de-online/index.js')) {
+            Check ('native-package-same-reviewed-payload:'+ $path) (@($native.manifest.files | Where-Object path -CEQ $path)[0].sha256 -ceq
+                @($runtime.manifest.files | Where-Object path -CEQ $path)[0].sha256)
+        }
+        $nativeIni = "[MTA]`nEnabled=1`nLocalInput=1`nBindingPersistence=$([int]$nativePersistent)`n"
+        Check 'native-package-exact-owned-INI' ([IO.File]::ReadAllText((Join-Path $native.root 'Win64/MtaDefinitive.ini')).Replace("`r`n","`n") -ceq $nativeIni)
+        $nativeChanges = [ordered]@{
+            duplicate_marker = {param($root,$manifest)
+                $path=Join-Path $root 'Win64/CLEO/de-online/config.mjs'
+                [IO.File]::AppendAllText($path,"`nexport const MTA_CORE_FRONTEND_NATIVE_HOST = true;`n",$utf8)
+            }
+            nonboolean_marker = {param($root,$manifest)
+                $path=Join-Path $root 'Win64/CLEO/de-online/config.mjs'
+                [IO.File]::WriteAllText($path,[IO.File]::ReadAllText($path).Replace('export const MTA_CORE_FRONTEND_NATIVE_HOST = true;','export const MTA_CORE_FRONTEND_NATIVE_HOST = 1;'),$utf8)
+            }
+            missing_marker = {param($root,$manifest)
+                $path=Join-Path $root 'Win64/CLEO/de-online/config.mjs'
+                [IO.File]::WriteAllText($path,[regex]::Replace([IO.File]::ReadAllText($path),'(?m)^export const MTA_CORE_FRONTEND_NATIVE_HOST = true;\r?\n?',''),$utf8)
+            }
+            without_runtime = {param($root,$manifest)
+                $path=Join-Path $root 'Win64/CLEO/de-online/config.mjs'
+                [IO.File]::WriteAllText($path,[IO.File]::ReadAllText($path).Replace('export const MTA_CORE_FRONTEND_RUNTIME = true;','export const MTA_CORE_FRONTEND_RUNTIME = false;'),$utf8)
+            }
+            disabled_ini = {param($root,$manifest)
+                $path=Join-Path $root 'Win64/MtaDefinitive.ini'
+                [IO.File]::WriteAllText($path,[IO.File]::ReadAllText($path).Replace('Enabled=1','Enabled=0'),$utf8)
+            }
+            mismatched_persistence = {param($root,$manifest)
+                $path=Join-Path $root 'Win64/MtaDefinitive.ini'
+                $text=[IO.File]::ReadAllText($path)
+                $replacement=if($text.Contains('BindingPersistence=1')){'BindingPersistence=0'}else{'BindingPersistence=1'}
+                [IO.File]::WriteAllText($path,[regex]::Replace($text,'BindingPersistence=[01]',$replacement),$utf8)
+            }
+            disabled_local_input = {param($root,$manifest)
+                $path=Join-Path $root 'Win64/MtaDefinitive.ini'
+                [IO.File]::WriteAllText($path,[IO.File]::ReadAllText($path).Replace('LocalInput=1','LocalInput=0'),$utf8)
+            }
+            missing_asi = {param($root,$manifest)
+                Remove-Item -LiteralPath (Assert-Owned (Join-Path $root 'Win64/MtaDefinitive.asi'))
+                $manifest.files=@($manifest.files | Where-Object path -CNE 'MtaDefinitive.asi')
+            }
+            missing_ini = {param($root,$manifest)
+                Remove-Item -LiteralPath (Assert-Owned (Join-Path $root 'Win64/MtaDefinitive.ini'))
+                $manifest.files=@($manifest.files | Where-Object path -CNE 'MtaDefinitive.ini')
+            }
+        }
+        Fresh-Game
+        foreach ($name in $nativeChanges.Keys) {
+            $variant=Native-Variant ('invalid-native-'+$name) $native.root $nativeChanges[$name]
+            Unchanged-Run ('install-refuses-native-'+$name) $install @('-Mode','Smoke','-PackageDirectory',$variant,'-GameDirectory',$fakeGame) $false
+        }
+        $standalone=Variant 'session58-native-marker-without-entry' $runtime.root {param($text)$text.Replace('export const MTA_CORE_FRONTEND_NATIVE_HOST = false;','export const MTA_CORE_FRONTEND_NATIVE_HOST = true;')}
+        Unchanged-Run 'install-refuses-native-marker-without-entry' $install @('-Mode','Smoke','-PackageDirectory',$standalone,'-GameDirectory',$fakeGame) $false
+        Unchanged-Run 'native-install-WhatIf-no-writes' $install @('-Mode','Smoke','-PackageDirectory',$native.root,'-GameDirectory',$fakeGame,'-WhatIf') $true
+        Run 'install-native-runtime60' $install @('-Mode','Smoke','-PackageDirectory',$native.root,'-GameDirectory',$fakeGame) $true | Out-Null
+        Installed 60 $native.manifest 'native-initial60' | Out-Null
+        Native-State 'native-initial-selection' $true $true $nativePersistent
+        $loaderHash=Sha (Join-Path $fakeGame 'version.dll')
+        $manifestPath=Join-Path $fakeGame 'de-online-install-manifest.json'
+        $unowned=Join-Path $fakeGame 'CLEO/user-kept.txt'
+        [IO.File]::WriteAllText($unowned,'Unowned player content survives native entry changes.',$utf8)
+        $unownedHash=Sha $unowned
+        $nativeSavedData=Join-Path $fakeGame 'CLEO/de-online/mta/config/user-saved-movement-bindings.xml'
+        [IO.File]::WriteAllText($nativeSavedData,'<definitive_keybinds version="1"><keybinds /></definitive_keybinds>',$utf8)
+        $nativeSavedDataHash=Sha $nativeSavedData
+        foreach ($name in $nativeChanges.Keys) {
+            $variant=Native-Variant ('invalid-native-'+$name) $native.root $nativeChanges[$name]
+            Unchanged-Run ('update-refuses-native-'+$name) $update @('-PackageDirectory',$variant,'-GameDirectory',$fakeGame) $false
+        }
+        Unchanged-Run 'update-refuses-native-marker-without-entry' $update @('-PackageDirectory',$standalone,'-GameDirectory',$fakeGame) $false
+        Unchanged-Run 'native-mode-standalone-flag-refused' $setMode @('-Mode','Smoke','-MtaCoreFrontendNativeHost','-GameDirectory',$fakeGame) $false
+        $rejectedOutput=Join-Path $scratchRoot 'must-not-stage-native-package'
+        Unchanged-Run 'native-package-standalone-flag-refused-before-staging' $package @('-Mode','Smoke','-MtaCoreFrontendNativeHost','-OutputDirectory',$rejectedOutput) $false
+        Check 'native-standalone-package-does-not-stage' (-not(Test-Path -LiteralPath $rejectedOutput))
+        Unchanged-Run 'native-mode-WhatIf-no-writes' $setMode @('-Mode','Smoke','-GameDirectory',$fakeGame,'-WhatIf') $true
+        foreach ($relative in @('de-online-install-manifest.json','MtaDefinitive.ini')) {
+            $label=if($relative -ceq 'MtaDefinitive.ini'){'INI'}else{'manifest'}
+            $held=[IO.File]::Open((Join-Path $fakeGame $relative),[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+            try { Unchanged-Run ('native-mode-locked-'+$label+'-restores-all-bytes') $setMode @('-Mode','Smoke','-GameDirectory',$fakeGame) $false }
+            finally { $held.Dispose() }
+        }
+        foreach ($mode in @('Smoke','Diagnostic','Online')) {
+            Run ('native-ordinary-'+$mode+'-disarms-entry') $setMode @('-Mode',$mode,'-GameDirectory',$fakeGame) $true | Out-Null
+            All-Off ('native-ordinary-'+$mode)
+            $ini=[IO.File]::ReadAllText((Join-Path $fakeGame 'MtaDefinitive.ini')).Replace("`r`n","`n")
+            Check ('native-ordinary-'+$mode+':entry-disarmed') ($ini -ceq "[MTA]`nEnabled=0`nLocalInput=1`nBindingPersistence=0`n")
+            Run ('native-explicit-session-after-'+$mode) $setMode @('-Mode','Smoke','-MtaCoreFrontendRuntime','-MtaCoreFrontendNativeHost','-GameDirectory',$fakeGame) $true | Out-Null
+            Native-State ('native-session-after-'+$mode) $true $true $false
+        }
+        Run 'native-explicit-persistent-runtime' $setMode @('-Mode','Smoke','-MtaCoreFrontendRuntime','-MtaCoreFrontendNativeHost','-MtaCoreFrontendBindingPersistence','-GameDirectory',$fakeGame) $true | Out-Null
+        Native-State 'native-persistent-enabled' $true $true $true
+        Rollback-Update 'native60-to-plain23-locked-config-restores-both-groups' $plain
+        Transition 'native60-to-session58' $runtime
+        Check 'native60-to58-removes-complete-entry-group' (-not(Test-Path -LiteralPath (Join-Path $fakeGame 'MtaDefinitive.asi')) -and
+            -not(Test-Path -LiteralPath (Join-Path $fakeGame 'MtaDefinitive.ini')))
+        Unchanged-Run 'session58-native-mode-requires-owned-entry-group' $setMode @('-Mode','Smoke','-MtaCoreFrontendRuntime','-MtaCoreFrontendNativeHost','-GameDirectory',$fakeGame) $false
+        foreach ($relative in @('MtaDefinitive.asi','MtaDefinitive.ini')) {
+            $collision=Assert-Owned (Join-Path $fakeGame $relative)
+            [IO.File]::WriteAllText($collision,'Unowned root entry must never be adopted or overwritten.',$utf8)
+            $collisionHash=Sha $collision
+            Unchanged-Run ('native-upgrade-refuses-unowned-'+$relative) $update @('-PackageDirectory',$native.root,'-GameDirectory',$fakeGame) $false
+            Check ('native-upgrade-keeps-unowned:'+ $relative) ((Sha $collision) -ceq $collisionHash)
+            Remove-Item -LiteralPath $collision
+        }
+        Unchanged-Run 'native-upgrade-WhatIf-no-writes' $update @('-PackageDirectory',$native.root,'-GameDirectory',$fakeGame,'-WhatIf') $true
+        Transition 'session58-to-native60' $native
+        Native-State 'native-readded-after58' $true $true $nativePersistent
+        Transition 'native60-to-plain23' $plain
+        Check 'native60-to23-removes-complete-entry-and-GUI-groups' (-not(Test-Path -LiteralPath (Join-Path $fakeGame 'MtaDefinitive.asi')) -and
+            -not(Test-Path -LiteralPath (Join-Path $fakeGame 'MtaDefinitive.ini')) -and
+            -not(Test-Path -LiteralPath (Join-Path $fakeGame 'CLEO/de-online/cgui.dll')))
+        Transition 'plain23-to-native60' $native
+        Native-State 'native-final60' $true $true $nativePersistent
+        Unchanged-Run 'native-uninstall-WhatIf-no-writes' $uninstall @('-GameDirectory',$fakeGame,'-WhatIf') $true
+    } elseif ($BindingPersistenceOnly) {
         # Reuse the existing owned package/transition helpers for the new
         # additive option instead of repeating every unchanged legacy trial.
         $disabled = 'export const MTA_CORE_FRONTEND_BINDING_PERSISTENCE = false;'
@@ -596,6 +763,11 @@ try {
     Run 'final-uninstall-removes-only-owned-files' $uninstall @('-GameDirectory',$fakeGame) $true | Out-Null
     Check 'uninstall-kept-game' ((Sha (Join-Path $fakeGame 'SanAndreas.exe')) -ceq $knownGameHash)
     Check 'uninstall-kept-unowned-sentinel' ((Sha $unowned) -ceq $unownedHash)
+    if ($NativeHostOnly) {
+        Check 'native-uninstall-kept-unowned-saved-binding-data' ((Sha $nativeSavedData) -ceq $nativeSavedDataHash)
+        Check 'native-uninstall-retired-ASI-and-INI' (-not(Test-Path -LiteralPath (Join-Path $fakeGame 'MtaDefinitive.asi')) -and
+            -not(Test-Path -LiteralPath (Join-Path $fakeGame 'MtaDefinitive.ini')))
+    }
     Check 'uninstall-retired-owned-manifest-and-loader' (-not (Test-Path -LiteralPath $manifestPath) -and -not (Test-Path -LiteralPath (Join-Path $fakeGame 'version.dll')))
     Save (Join-Path $outputRoot 'final-uninstalled-tree.json') (Tree $fakeGame).rows
     $sourcesUnchanged=$true
@@ -626,6 +798,7 @@ $record=[ordered]@{
     liveInstallationChanged=$false;liveGameLaunched=$false;nativeClockWritten=$false;fullMtaReady=$false;gameCopiesCreated=$gameCopiesCreated;configurationHistoricalMarkerFixturesOnly=$true
     scope='Actual install/update/set-mode/uninstall validation against one owned Build/tmp game copy. No game, DLL, GUI, native hook or network is executed.'
     bindingPersistenceOnly=$BindingPersistenceOnly.IsPresent
+    nativeHostOnly=$NativeHostOnly.IsPresent
 }
 $resultPath=Join-Path $outputRoot 'test-result.json'
 Save $resultPath $record

@@ -32,6 +32,17 @@ now uses frame yields and bounded chord-only receipts to distinguish script
 resumption from key delivery at the frontend; the same MTA worker, native lease
 and 192-word report remain in use. This scheduling change awaits a live check.
 
+The native frontend entry now offers a path independent of that CLEO scheduling
+boundary. Its explicit 60-file package starts the existing retained Core worker
+hidden from the pinned loader's `InitializeASI` callback, claims the same single
+controller and uses the same mailbox, heartbeat and cleanup. A native thread
+reads foreground activation chords; CLEO returns without claiming another owner.
+The real Core retains localization, local command and console log services across
+hidden periods, using shared normal-startup construction and rollback. Native
+view gates, full `CGame` and network readiness remain separate. This is code and
+offline integration progress, not a replacement for the saved gameplay evidence
+or a claim that the new native main-menu launch has run in GTA.
+
 The real Deathmatch client now builds and links for Release/x64 using MTA's
 existing code. Engine work is assembling its actual `CGame` services:
 `CClockDE`, the complete four-method `CKeyGenDE`, eight native timing getters,

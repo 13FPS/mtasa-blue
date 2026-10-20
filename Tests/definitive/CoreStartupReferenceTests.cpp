@@ -4,6 +4,8 @@
  *****************************************************************************/
 
 #include "../../Client/definitive/CoreStartupReference.h"
+#include "../../Client/definitive/NativeFrontendHost.h"
+#include "../../Client/definitive/NativeFrontendActivation.h"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -715,6 +717,127 @@ namespace
         }
         Check(!fixture.counters[62] && !fixture.counters[52] && !fixture.counters[2] && !GetModuleHandleW(L"core.dll"),
               "persistence admission stays on the worker before views/input and leaves no Core module");
+    }
+
+    void TestNativeActivation()
+    {
+        using A = deonline::NativeFrontendActivation;
+        A activation;
+        Check(activation.Update(true, 7, 0) == A::Action::None && activation.Update(true, 7, 4000) == A::Action::None,
+              "startup-held native keys do not activate before a neutral foreground boundary");
+        Check(activation.Update(true, 0, 4001) == A::Action::None && activation.Update(true, 7, 4002) == A::Action::None &&
+                  activation.Update(true, 7, 7001) == A::Action::None && activation.Update(true, 7, 7002) == A::Action::None,
+              "native F9 requires a full three seconds and waits for release");
+        Check(activation.Update(true, 4, 7003) == A::Action::None && activation.Update(true, 0, 7004) == A::Action::Toggle &&
+                  activation.Update(true, 0, 7005) == A::Action::None,
+              "release ordering admits exactly one native toggle");
+        Check(activation.Update(true, 7, 8000) == A::Action::None && activation.Update(true, 0, 9000) == A::Action::None,
+              "a short native chord cannot open the menu");
+        activation.Update(true, 7, 10000);
+        activation.Update(true, 7, 13000);
+        Check(activation.Update(false, 0, 13001) == A::Action::None && activation.Update(true, 0, 13002) == A::Action::None,
+              "focus loss discards a qualified but unreleased native chord");
+        activation.Update(true, 7, 14000);
+        activation.Update(true, 7, 17000);
+        Check(activation.Update(true, 0, 16000) == A::Action::None && activation.Update(true, 0, 17001) == A::Action::None,
+              "a backwards native activation clock rearms at neutral rather than firing");
+        activation.Update(true, 15, 18000);
+        Check(activation.Update(true, 15, 20999) == A::Action::None && activation.Update(true, 15, 21000) == A::Action::Stop &&
+                  activation.Update(true, 0, 21001) == A::Action::None,
+              "native End takes priority over F9 and stops once after three seconds");
+    }
+
+    void TestNativeFrontendHost(deonline::CoreStartupReference& worker, const std::filesystem::path& root, const std::wstring& mode,
+                                const std::filesystem::path& fixturePath)
+    {
+        namespace N = deonline::NativeFrontendHostProtocol;
+        namespace R = deonline::FrontendRuntimeReport;
+        if (mode == L"native-host-activation")
+        {
+            TestNativeActivation();
+            return;
+        }
+        const std::array<const wchar_t*, 6> modes{L"native-host-default",        L"native-host-persistent", L"native-host-local-persistent",
+                                                  L"native-host-missing-export", L"native-host-refused",    L"native-host-stop-loading"};
+        const auto                          found = std::find(modes.begin(), modes.end(), mode);
+        Check(found != modes.end(), "known native controller fixture mode");
+        const auto scenario = static_cast<unsigned>(found - modes.begin());
+        Fixture    fixture(800 + scenario);
+        if (scenario == 1 || scenario == 2)
+            Set(L"MTA_CORE_FIXTURE_BINDING_PERSISTENCE_MODE", L"2");
+        if (scenario == 2)
+            Set(L"MTA_CORE_FIXTURE_LOCAL_RUNTIME_MODE", L"1");
+        if (scenario == 4)
+            Set(L"MTA_CORE_FIXTURE_BINDING_PERSISTENCE_MODE", L"3");
+        if (scenario == 5)
+            Set(L"MTA_CORE_FIXTURE_DELAY_MS", L"2000");
+        CopyCore(fixturePath, root);
+        SetEvent(fixture.release);
+        static std::atomic<DWORD>           nativeOwner{0};
+        static deonline::NativeFrontendHost host(worker, nativeOwner);
+        N::Snapshot                         sample{};
+        Check(host.Read(sample.data(), N::FieldCount) && sample[N::Version] == 1 && sample[N::HostPhase] == static_cast<std::uint32_t>(N::Phase::Off) &&
+                  !host.Read(nullptr, N::FieldCount) && !host.Read(sample.data(), N::FieldCount - 1) && !host.Stop(),
+              "native host has a bounded coherent read API before startup");
+        N::RequestV1 request;
+        request.flags = scenario >= 1 && scenario <= 4 ? N::BindingPersistence : 0u;
+        if (scenario == 2)
+            request.flags |= N::LocalInput;
+        auto invalid = request;
+        invalid.flags = 4;
+        Check(!host.Start(nullptr, request) && !host.Start(&anchor, invalid), "invalid native startup requests create no controller thread");
+        Check(Fast([&] { return host.Start(&anchor, request); }) && !host.Start(&anchor, request),
+              "native startup is nonblocking and admits exactly one controller for the process");
+        const auto deadline = GetTickCount64() + 15000;
+        const auto wait = [&](const auto& predicate)
+        {
+            while (!host.Read(sample.data(), N::FieldCount) || !predicate())
+            {
+                Check(GetTickCount64() < deadline, "native host did not reach its owned lifecycle boundary");
+                Sleep(5);
+            }
+        };
+        const auto terminal = [&]
+        {
+            return sample[N::HostPhase] == static_cast<std::uint32_t>(N::Phase::Stopped) ||
+                   sample[N::HostPhase] == static_cast<std::uint32_t>(N::Phase::Failed);
+        };
+        if (scenario == 3 || scenario == 4)
+        {
+            wait(terminal);
+            Check(sample[N::HostPhase] == static_cast<std::uint32_t>(N::Phase::Failed) &&
+                      sample[N::WorkerFailure] == static_cast<std::uint32_t>(scenario == 3 ? R::Failure::Exports : R::Failure::CoreState) &&
+                      !sample[N::CoreRetained] && sample[N::CleanupComplete] == 1 && !fixture.counters[47],
+                  "native boot refuses missing or invalid persistence explicitly without GUI admission or a reload loop");
+        }
+        else
+        {
+            if (scenario == 5)
+                wait([&] { return sample[N::RuntimeGeneration] != 0; });
+            else
+            {
+                wait([&] { return sample[N::HostPhase] == static_cast<std::uint32_t>(N::Phase::Running); });
+                Check(sample[N::WorkerPhase] == static_cast<std::uint32_t>(R::Phase::Hidden) && sample[N::CoreRetained] == 1 &&
+                          sample[N::ConfigurationReadOnly] == (scenario == 0 ? 1u : 0u) && sample[N::BindingManagerCreations] == (scenario == 0 ? 1u : 2u) &&
+                          sample[N::BindingLoads] == sample[N::BindingManagerCreations] && sample[N::ConfigurationLoads] == 1 && fixture.counters[44] == 1 &&
+                          !fixture.counters[47] && !fixture.counters[54] && !fixture.counters[55],
+                      "native boot reaches real retained hidden Core without a script tick, native view or configured input");
+            }
+            Check(Fast([&] { return host.Stop(); }), "foreign Stop requests native retirement without joining the controller or Core worker");
+            wait(terminal);
+            Check(sample[N::HostPhase] == static_cast<std::uint32_t>(N::Phase::Stopped) && sample[N::StopRequested] == 1 && !sample[N::WorkerFailure] &&
+                      sample[N::CleanupComplete] == 1 && sample[N::CoreStoppedVerified] == 1 && sample[N::CoreReleasedVerified] == 1 &&
+                      sample[N::CoreUnloadedVerified] == 1 && !sample[N::CleanupPending] && !sample[N::CoreRetained],
+                  "native Stop waits for copied worker/Core retirement proof before publishing completion");
+            Check(fixture.counters[44] == 1 && fixture.counters[48] == 1 && fixture.counters[49] == 1 && !fixture.counters[47] && !fixture.counters[54],
+                  "native controller reuses one original Core owner and never reloads or invents a view");
+        }
+        Check(nativeOwner.load() == sample[N::OwnerThread] && nativeOwner.load() != GetCurrentThreadId() &&
+                  nativeOwner.load() != static_cast<DWORD>(fixture.counters[0]) && sample[N::ControllerPinned] == 1 && !sample[N::NetworkStarted] &&
+                  !sample[N::GameplayReady] && !sample[N::FullMtaReady] && !host.Start(&anchor, request),
+              "the native controller and existing Core worker keep separate owning threads without claiming full MTA readiness");
+        Check(!GetModuleHandleW(L"core.dll") && !fixture.counters[2] && !fixture.counters[52] && !fixture.counters[62],
+              "native shutdown leaves no Core, cross-thread API calls or GUI/input overlap");
     }
 
     struct WorkerDeleteObservation
@@ -1893,10 +2016,25 @@ int wmain(int argc, wchar_t** argv)
         // a worker is still finishing its controlled loader cleanup.
         static deonline::CoreStartupReference worker;
         Check(worker.Poll() == -1 && !worker.Cancel() && !worker.IsPending(), "fresh worker is idle");
-        Check(!worker.Begin(nullptr), "null anchor must be rejected");
+        const bool nativeHost = std::wstring(argv[2]).find(L"native-host-") == 0;
+        if (nativeHost)
+        {
+            // The historical Begin negative reserves its caller's thread even
+            // when rejecting a null anchor. Keep that isolated from the cold
+            // worker whose first owner must be the native controller itself.
+            deonline::CoreStartupReference nullAnchorWorker;
+            Check(!nullAnchorWorker.Begin(nullptr), "null anchor must be rejected");
+        }
+        else
+            Check(!worker.Begin(nullptr), "null anchor must be rejected");
         for (unsigned field = 0; field < 20; ++field)
             Check(worker.Read(field) == 0, "idle cache must be neutral");
-        if (std::wstring(argv[2]).find(L"binding-runtime-") == 0)
+        if (nativeHost)
+        {
+            Check(argc == 4, "native host fixture requires its controlled Core DLL");
+            TestNativeFrontendHost(worker, root, argv[2], argv[3]);
+        }
+        else if (std::wstring(argv[2]).find(L"binding-runtime-") == 0)
         {
             Check(argc == 4, "binding runtime fixture requires its controlled Core DLL");
             TestBindingPersistenceWorker(worker, root, argv[2], argv[3]);

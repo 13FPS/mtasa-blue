@@ -9,6 +9,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'NativeFrontendPackage.ps1')
 $allowedPaths = @(
     'version.dll', 'cleo_redux64.asi', 'CLEO/CLEO_PLUGINS/dylib64.cleo', 'CLEO/CLEO_PLUGINS/Input64.cleo',
     'CLEO/.config/cleo.ini', 'CLEO/.config/sa_unreal.json', 'CLEO/.config/unknown_x64.json',
@@ -103,12 +104,14 @@ $frontendPaths = @(
     'CLEO/de-online/mta/locale/en_US/client.pot')
 $guiCount = @($relativePaths | Where-Object { $_ -in $guiPaths }).Count
 $frontendCount = @($relativePaths | Where-Object { $_ -in $frontendPaths }).Count
+$nativeCount = Get-MtaNativeFrontendFileCount $relativePaths $frontendCount
 if ($frontendCount -ne 0 -and ($frontendCount -ne 22 -or $guiCount -ne 13)) { throw 'Incomplete MTA Core GUI frontend package ownership.' }
 # Older manifests remain removable, but GUI ownership is one complete group
 # attached to the current 23-file backend, never a partial asset collection.
 if ($guiCount -and ($guiCount -ne $guiPaths.Count -or $allowedPaths.Count -ne 23)) { throw 'Incomplete MTA Core GUI startup package ownership.' }
 if ($guiCount) { $allowedPaths += $guiPaths }
 if ($frontendCount) { $allowedPaths += $frontendPaths }
+if ($nativeCount) { $allowedPaths += @('MtaDefinitive.asi','MtaDefinitive.ini') }
 if ($relativePaths.Count -ne $allowedPaths.Count -or @($relativePaths | Select-Object -Unique).Count -ne $allowedPaths.Count -or
     @(Compare-Object $allowedPaths $relativePaths).Count -ne 0) {
     throw 'Installation manifest does not contain exactly the known owned files.'

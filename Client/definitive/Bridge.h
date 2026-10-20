@@ -6,6 +6,7 @@
 #pragma once
 
 #include <cstdint>
+#include "NativeFrontendHost.h"
 
 #ifdef DE_BRIDGE_EXPORTS
     #define DE_BRIDGE_API extern "C" __declspec(dllexport)
@@ -43,6 +44,11 @@ DE_BRIDGE_API std::uint32_t DE_LocalInputRuntimeStartV1();
 DE_BRIDGE_API std::uint32_t DE_LocalInputRuntimeStartPersistentV1();
 DE_BRIDGE_API int           DE_LocalInputRuntimeCaptureV1();
 DE_BRIDGE_API std::uint32_t DE_LocalInputRuntimeReadV1(std::uint32_t field);
+// ASI startup owns the existing worker from its dedicated native controller.
+// Reads copy one coherent Native32; Stop requests retirement without joining.
+DE_BRIDGE_API int DE_NativeFrontendStartV1(const deonline::NativeFrontendHostProtocol::RequestV1* request);
+DE_BRIDGE_API int DE_NativeFrontendStopV1();
+DE_BRIDGE_API int DE_NativeFrontendReadV1(std::uint32_t* output, std::uint32_t count);
 // These guards keep the experimental CLEO adapter tied to the executable tested
 // here. Matching its hash is a prerequisite, not proof that game natives work.
 DE_BRIDGE_API int  DE_CheckExecutableBuild(const wchar_t* path);

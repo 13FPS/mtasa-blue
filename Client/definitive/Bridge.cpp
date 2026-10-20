@@ -23,8 +23,16 @@ namespace
     // Explicit ownership keeps Winsock setup/shutdown out of DLL static constructors
     // and destructors, which execute under the Windows loader lock. The host must
     // disconnect before unloading the DLL, and call the ABI from one owning thread.
-    deonline::TransportClient*             client = nullptr;
-    bool                                   runtimeBound = false;
+    deonline::TransportClient* client = nullptr;
+    std::atomic<bool>          runtimeBound{false};
+    enum class ControllerKind : unsigned
+    {
+        None,
+        Script,
+        Native,
+        Transport
+    };
+    std::atomic<ControllerKind>            controllerKind{ControllerKind::None};
     int                                    moduleAnchor = 0;
     std::atomic<DWORD>                     controllerThread{0};
     deonline::ControllerSnapshot           controllerSnapshot;
@@ -38,6 +46,7 @@ namespace
     mta::game_de::NativeMovementTrialState movementState;
     bool                                   movementSnapshot = false;
     deonline::CoreStartupReference         coreStartup;
+    deonline::NativeFrontendHost           nativeFrontend(coreStartup, controllerThread);
 
     void ClearNativePad()
     {
@@ -52,7 +61,30 @@ namespace
     {
         // Reject foreign callers before touching snapshot storage or the legacy
         // runtime flag. Transport retains its existing single-thread contract.
-        return controllerThread.load(std::memory_order_acquire) == GetCurrentThreadId() && runtimeBound;
+        return controllerKind.load(std::memory_order_acquire) == ControllerKind::Script &&
+               controllerThread.load(std::memory_order_acquire) == GetCurrentThreadId() && runtimeBound.load(std::memory_order_acquire);
+    }
+
+    bool TransportAccessAllowed()
+    {
+        const auto kind = controllerKind.load(std::memory_order_acquire);
+        return (kind == ControllerKind::Transport || kind == ControllerKind::Script) &&
+               controllerThread.load(std::memory_order_acquire) == GetCurrentThreadId() &&
+               (kind == ControllerKind::Transport || runtimeBound.load(std::memory_order_acquire));
+    }
+
+    bool ClaimTransport()
+    {
+        if (TransportAccessAllowed())
+            return true;
+        auto expected = ControllerKind::None;
+        if (!controllerKind.compare_exchange_strong(expected, ControllerKind::Transport))
+            return false;
+        // The standalone synthetic peer predates CLEO lifecycle binding. Keep
+        // that transport-only entry, while reserving its thread for the entire
+        // process so Disconnect/reconnect cannot race native Core admission.
+        controllerThread.store(GetCurrentThreadId(), std::memory_order_release);
+        return true;
     }
 
     float FloatFromBits(std::uint32_t bits)
@@ -71,13 +103,19 @@ std::uint32_t DE_ApiVersion()
 
 int DE_BindRuntime()
 {
-    if (runtimeBound)
-        return 1;
-    if (!DE_CheckGameBuild())
+    auto expected = ControllerKind::None;
+    if (!controllerKind.compare_exchange_strong(expected, ControllerKind::Script))
+        return ControllerAccessAllowed() ? 1 : 0;
+    const auto refused = []
+    {
+        controllerKind.store(ControllerKind::None, std::memory_order_release);
         return 0;
+    };
+    if (!DE_CheckGameBuild())
+        return refused();
     const auto runtime = GetModuleHandleW(L"cleo_redux64.asi");
     if (!runtime)
-        return 0;
+        return refused();
     // Resolve the documented public SDK without depending on private runtime
     // implementation code. No script context or game pointer is retained.
     using GetHostId = int (*)();
@@ -87,24 +125,54 @@ int DE_BindRuntime()
     const auto sdk = reinterpret_cast<GetSDKVersion>(GetProcAddress(runtime, "GetSDKVersion"));
     const auto onInit = reinterpret_cast<OnRuntimeInit>(GetProcAddress(runtime, "OnRuntimeInit"));
     if (!host || !sdk || !onInit || host() != 8 || sdk() < 4)
-        return 0;
+        return refused();
     HMODULE self = nullptr;
     // CLEO has no callback-unregister API. Pinning prevents a stale callback if
     // a script is reloaded/unloaded; Windows reclaims this module at process exit.
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN, reinterpret_cast<LPCWSTR>(&moduleAnchor), &self))
-        return 0;
+        return refused();
     onInit(DE_Disconnect);
-    runtimeBound = true;
     controllerThread.store(GetCurrentThreadId(), std::memory_order_release);
+    runtimeBound.store(true, std::memory_order_release);
     return 1;
+}
+
+int DE_NativeFrontendStartV1(const deonline::NativeFrontendHostProtocol::RequestV1* request)
+{
+    namespace N = deonline::NativeFrontendHostProtocol;
+    if (!request || request->size != sizeof(*request) || request->version != N::ApiVersion || request->reserved || (request->flags & ~N::SupportedFlags))
+        return 0;
+    auto expected = ControllerKind::None;
+    if (!controllerKind.compare_exchange_strong(expected, ControllerKind::Native))
+        return 0;
+    // Claim the one controller before build verification or owner access. A
+    // script must never reset shared snapshots or cancel this native worker.
+    if (!DE_CheckGameBuild() || !nativeFrontend.Start(&moduleAnchor, *request))
+    {
+        controllerKind.store(ControllerKind::None, std::memory_order_release);
+        return 0;
+    }
+    return 1;
+}
+
+int DE_NativeFrontendStopV1()
+{
+    return controllerKind.load(std::memory_order_acquire) == ControllerKind::Native && nativeFrontend.Stop() ? 1 : 0;
+}
+
+int DE_NativeFrontendReadV1(std::uint32_t* output, std::uint32_t count)
+{
+    return nativeFrontend.Read(output, count) ? 1 : 0;
 }
 
 int DE_ConnectLocal(std::uint32_t nonce)
 {
-    return runtimeBound ? DE_Connect("127.0.0.1", 22040, nonce) : 0;
+    return ControllerAccessAllowed() ? DE_Connect("127.0.0.1", 22040, nonce) : 0;
 }
 int DE_Connect(const char* host, std::uint16_t port, std::uint64_t nonce)
 {
+    if (!ClaimTransport())
+        return 0;
     DE_Disconnect();
     try
     {
@@ -121,6 +189,8 @@ int DE_Connect(const char* host, std::uint16_t port, std::uint64_t nonce)
 }
 void DE_Disconnect()
 {
+    if (!TransportAccessAllowed())
+        return;
     // A runtime restart can request cancellation, but only the worker may
     // release its Core handle; never wait for the loader on a CLEO callback.
     coreStartup.Cancel();
@@ -730,6 +800,8 @@ int DE_CoreGuiFrontendControlFocused()
 
 int DE_Pump()
 {
+    if (!TransportAccessAllowed())
+        return 0;
     try
     {
         return client && client->Pump() ? 1 : 0;
@@ -741,6 +813,8 @@ int DE_Pump()
 }
 int DE_SubmitTransform(float x, float y, float z, float heading)
 {
+    if (!TransportAccessAllowed())
+        return 0;
     try
     {
         return client && client->Submit({CVector(x, y, z), heading}) ? 1 : 0;
@@ -757,12 +831,12 @@ int DE_SubmitTransformBits(std::uint32_t x, std::uint32_t y, std::uint32_t z, st
 }
 std::uint32_t DE_LocalPlayerId()
 {
-    return client ? client->PlayerId() : 0;
+    return TransportAccessAllowed() && client ? client->PlayerId() : 0;
 }
 
 std::uint32_t DE_ReadPlayers(DEPlayerState* output, std::uint32_t capacity)
 {
-    if (!client || (!output && capacity))
+    if (!TransportAccessAllowed() || !client || (!output && capacity))
         return 0;
     const auto count = static_cast<std::uint32_t>(client->Players().size());
     for (std::uint32_t index = 0; index < std::min(count, capacity); ++index)
@@ -775,12 +849,12 @@ std::uint32_t DE_ReadPlayers(DEPlayerState* output, std::uint32_t capacity)
 
 std::uint32_t DE_PlayerCount()
 {
-    return client ? static_cast<std::uint32_t>(client->Players().size()) : 0;
+    return TransportAccessAllowed() && client ? static_cast<std::uint32_t>(client->Players().size()) : 0;
 }
 
 std::uint32_t DE_ReadPlayerComponent(std::uint32_t index, std::uint32_t component)
 {
-    if (!client || index >= client->Players().size() || component > 4)
+    if (!TransportAccessAllowed() || !client || index >= client->Players().size() || component > 4)
         return 0;
     const auto& player = client->Players()[index];
     if (!component)

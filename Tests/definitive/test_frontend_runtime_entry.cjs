@@ -275,6 +275,22 @@ function execute(options = {}) {
 }
 
 module.exports = function frontendRuntimeEntryTests({ test, runEntry }) {
+    test('native startup selection leaves the controller entirely with the ASI entry', () => {
+        const result = runEntry({ mtaCoreFrontendRuntime: true, mtaCoreFrontendNativeHost: true,
+            mtaCoreFrontendBindingPersistence: true, keyFrames: [[17, 16, 120], []] });
+        assert.equal(result.runtimeAccess.length, 0);
+        assert.equal(result.calls.length, 0);
+        assert.equal(result.waits.length, 0);
+        assert.equal(result.logs.at(-1).event, 'adapter_native_frontend_host_selected');
+        assert.equal(result.logs.at(-1).binding_persistence, true);
+    });
+    for (const options of [{ mtaCoreFrontendNativeHost: true }, { mtaCoreFrontendNativeHost: 'true' },
+        { mode: 'online', mtaCoreFrontendRuntime: true, mtaCoreFrontendNativeHost: true }])
+        test('native startup rejects malformed or conflicting selection ' + JSON.stringify(options), () => {
+            const result = runEntry(options);
+            assert.equal(result.runtimeAccess.length, 0);
+            assert.ok(result.logs.some(event => event.event === 'adapter_failed'));
+        });
     const clean = result => {
         assert.equal(result.error, null);
         assert.equal(result.finished?.passed, true);

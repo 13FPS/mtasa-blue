@@ -18,17 +18,18 @@ param(
     [switch]$MtaCoreRenderCustomPresentReference, [switch]$MtaCoreRenderFrameBoundaryReference, [switch]$MtaCoreRenderNativeDispatchReference,
     [switch]$MtaCoreGuiStartupReference, [switch]$MtaCoreGuiSurfaceReference, [switch]$MtaCoreGuiFrontendReference, [switch]$MtaCoreGuiFrontendInputReference, [switch]$MtaCoreGuiFrontendStartupReference, [switch]$MtaCorePersistentFrontend, [switch]$MtaCoreFrontendRuntime,
     [ValidateSet('D3D11', 'D3D12')][string]$MtaCoreRenderRoute = 'D3D11',
-    [switch]$MtaCoreFrontendBindingPersistence,
+    [switch]$MtaCoreFrontendBindingPersistence, [switch]$MtaCoreFrontendNativeHost,
     [switch]$MtaCoreClockReference, [switch]$MtaCoreClockSetReference, [switch]$MtaCoreApplicationFrameReference, [switch]$MtaCoreStartupObservationReference,
     [string]$GameDirectory = 'C:\Program Files (x86)\Steam\steamapps\common\GTA San Andreas - The Definitive Edition\Gameface\Binaries\Win64'
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'NativeFrontendPackage.ps1')
 # Runtime owns one completed Core across views. Its selection must never inherit
 # another native lifetime merely because those packages share frontend assets.
 $runtimeConflicts = @($PSBoundParameters.Keys | Where-Object {
-    $_ -match '^(Native|Matched|Lock|Mta)' -and $_ -notin @('MtaCoreFrontendRuntime','MtaCoreFrontendBindingPersistence') -and
+    $_ -match '^(Native|Matched|Lock|Mta)' -and $_ -notin @('MtaCoreFrontendRuntime','MtaCoreFrontendBindingPersistence','MtaCoreFrontendNativeHost') -and
     $PSBoundParameters[$_] -is [Management.Automation.SwitchParameter] -and $PSBoundParameters[$_].IsPresent
 })
 if ($MtaCoreFrontendRuntime -and ($Mode -ne 'Smoke' -or $runtimeConflicts.Count -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
@@ -37,6 +38,7 @@ if ($MtaCoreFrontendRuntime -and ($Mode -ne 'Smoke' -or $runtimeConflicts.Count 
 if ($MtaCoreFrontendBindingPersistence -and -not $MtaCoreFrontendRuntime) {
     throw 'Saved MTA movement bindings require MtaCoreFrontendRuntime.'
 }
+if ($MtaCoreFrontendNativeHost -and -not $MtaCoreFrontendRuntime) { throw 'Native MTA startup requires MtaCoreFrontendRuntime.' }
 $clockConflicts = @($PSBoundParameters.Keys | Where-Object {
     $_ -match '^(Native|Matched|Lock|Mta)' -and $_ -notin @('MtaCoreClockReference', 'MtaCoreClockSetReference', 'MtaCoreApplicationFrameReference', 'MtaCoreStartupObservationReference') -and
         $PSBoundParameters[$_] -is [Management.Automation.SwitchParameter] -and $PSBoundParameters[$_].IsPresent
@@ -126,6 +128,10 @@ if ((Get-FileHash -LiteralPath (Join-Path $gameRoot 'SanAndreas.exe') -Algorithm
 }
 $utf8 = [Text.UTF8Encoding]::new($false)
 $configText = $utf8.GetString($originalConfig)
+$nativeCount = Get-MtaNativeFrontendFileCount @($installed.files.path) 22
+$nativeIniPath = Join-Path $gameRoot 'MtaDefinitive.ini'
+$originalNativeIni = if ($nativeCount) { [IO.File]::ReadAllBytes($nativeIniPath) } else { $null }
+Assert-MtaNativeFrontendConfig $configText $nativeCount $(if($nativeCount){$utf8.GetString($originalNativeIni)}else{''}) $installed.mode
 $modePattern = "export const MODE = '(diagnostic|smoke|online)';"
 if ([regex]::Matches($configText, $modePattern).Count -ne 1) { throw 'Unexpected mode configuration.' }
 $newConfig = $utf8.GetBytes([regex]::Replace($configText, $modePattern, "export const MODE = '$($Mode.ToLowerInvariant())';"))
@@ -449,6 +455,15 @@ if ($runtimeMatches -eq 1) {
         "export const MTA_CORE_FRONTEND_RUNTIME = $($MtaCoreFrontendRuntime.IsPresent.ToString().ToLowerInvariant());"))
 }
 $persistentPattern = 'export const MTA_CORE_PERSISTENT_FRONTEND = (true|false);'
+$nativeHostPattern = 'export const MTA_CORE_FRONTEND_NATIVE_HOST = (true|false);'
+$nativeHostMatches = [regex]::Matches($configText, $nativeHostPattern).Count
+if ($nativeHostMatches -gt 1 -or
+    [regex]::Matches($configText, 'export const MTA_CORE_FRONTEND_NATIVE_HOST\b').Count -ne $nativeHostMatches -or
+    ($MtaCoreFrontendNativeHost -and ($nativeHostMatches -ne 1 -or $nativeCount -ne 2))) { throw 'Update the adapter before selecting native MTA startup.' }
+if ($nativeHostMatches -eq 1) {
+    $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $nativeHostPattern,
+        "export const MTA_CORE_FRONTEND_NATIVE_HOST = $($MtaCoreFrontendNativeHost.IsPresent.ToString().ToLowerInvariant());"))
+}
 $bindingPersistencePattern = 'export const MTA_CORE_FRONTEND_BINDING_PERSISTENCE = (true|false);'
 $bindingPersistenceMatches = [regex]::Matches($configText, $bindingPersistencePattern).Count
 if ($bindingPersistenceMatches -gt 1 -or
@@ -467,6 +482,14 @@ if ($persistentMatches -eq 1) {
 $configEntry = @($installed.files | Where-Object { $_.path -eq 'CLEO/de-online/config.mjs' })
 if ($configEntry.Count -ne 1) { throw 'Missing owned configuration record.' }
 $configEntry[0].sha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($newConfig)).ToLowerInvariant()
+$newNativeIni = $null
+if ($nativeCount) {
+    $newNativeIni = $utf8.GetBytes((New-MtaNativeFrontendIni $MtaCoreFrontendNativeHost.IsPresent $MtaCoreFrontendBindingPersistence.IsPresent))
+    $nativeIniEntry = @($installed.files | Where-Object { $_.path -eq 'MtaDefinitive.ini' })
+    if ($nativeIniEntry.Count -ne 1) { throw 'Missing owned native startup configuration record.' }
+    $nativeIniEntry[0].sha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($newNativeIni)).ToLowerInvariant()
+}
+Assert-MtaNativeFrontendConfig ($utf8.GetString($newConfig)) $nativeCount $(if($nativeCount){$utf8.GetString($newNativeIni)}else{''}) $Mode
 $installed.mode = $Mode
 $newManifest = $utf8.GetBytes(($installed | ConvertTo-Json -Depth 6) + "`n")
 if (-not $PSCmdlet.ShouldProcess($configPath, "Set the installed adapter mode to $Mode")) { return }
@@ -489,16 +512,19 @@ function Write-AtomicFile([string]$Path, [byte[]]$Bytes) {
 
 try {
     Write-AtomicFile $configPath $newConfig
+    if ($nativeCount) { Write-AtomicFile $nativeIniPath $newNativeIni }
     Write-AtomicFile $manifestPath $newManifest
 } catch {
     $failure = $_
     Write-AtomicFile $configPath $originalConfig
+    if ($nativeCount) { Write-AtomicFile $nativeIniPath $originalNativeIni }
     Write-AtomicFile $manifestPath $originalManifest
     throw $failure
 }
 if ($MtaCoreFrontendRuntime) {
     $bindingLifetime = if ($MtaCoreFrontendBindingPersistence) { 'Applied movement bindings are saved for later launches.' } else { 'Applied bindings survive hide/show for this session.' }
-    Write-Host ('Installed adapter mode: Smoke, retained MTA frontend runtime. Ctrl+Shift+F9 toggles views after release; Quit/Escape hides, Ctrl+Shift+End stops. ' + $bindingLifetime)
+    $entryChoice = if ($MtaCoreFrontendNativeHost) { 'Native entry starts Core hidden on the next launch; hold Ctrl+Shift+F9 for three seconds and release to show/hide.' } else { 'Ctrl+Shift+F9 toggles views after release.' }
+    Write-Host ('Installed adapter mode: Smoke, retained MTA frontend runtime. ' + $entryChoice + ' Quit/Escape hides, Ctrl+Shift+End stops. ' + $bindingLifetime)
 } elseif ($MtaCorePersistentFrontend) {
     Write-Host 'Installed adapter mode: Smoke, renewable MTA frontend. Ctrl+Shift+F9 starts after release; Quit/Escape/End closes it. Focus loss or heartbeat expiry requests cleanup.'
 } elseif ($MtaCoreGuiFrontendStartupReference) {

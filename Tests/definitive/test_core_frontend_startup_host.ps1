@@ -9,10 +9,12 @@ param(
     [Parameter(Mandatory)][string]$XmllDll,
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedXmllSha256,
     [string]$Unifont='Build/gui-asset-cache/unifont-16.0.04.ttf',
-    [switch]$BindingPersistenceOnly
+    [switch]$BindingPersistenceOnly,
+    [switch]$InteractionServicesOnly
 )
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
+if ($BindingPersistenceOnly -and $InteractionServicesOnly) { throw 'Choose one focused actual-host case group.' }
 if ([IntPtr]::Size -ne 8) { throw 'The owned frontend requires native x64 PowerShell.' }
 $taskRoot=(Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
 $outputRoot=Join-Path $taskRoot ('Build/mta-core-frontend-startup-host/'+(Get-Date -Format 'yyyyMMdd-HHmmss')+'-'+[guid]::NewGuid().ToString('N'))
@@ -33,7 +35,7 @@ $sourceNames=@('Tests/definitive/CoreFrontendStartupHostTests.cpp','Tests/defini
     'Client/core/DefinitivePersistentFrontend.h','Client/core/DefinitiveFrontendConsole.h','Client/core/DefinitiveFrontendBindings.h','Client/core/DefinitiveFrontendBindingPersistence.h','Client/core/DefinitiveFrontendClockReference.h','Client/core/DefinitiveClockReference.h','Client/core/DefinitiveClockReference.cpp',
     'Client/sdk/game/CGameClockService.h','Client/core/DefinitiveFrontendStartup.cpp','Client/core/Core.cpp','Client/core/CGameAdapterModule.cpp','Client/core/CGameAdapterModule.h',
     'Client/core/CCore.cpp','Client/core/CCore.h','Client/core/CGUI.cpp','Client/core/CGUI.h','Client/core/CMainMenu.cpp','Client/core/CMainMenu.h',
-    'Client/core/CSettings.cpp','Client/core/CSettings.h','Client/sdk/core/CKeyBindsInterface.h','vendor/ksignals/ksignals.h',
+    'Client/core/CSettings.cpp','Client/core/CSettings.h','Client/sdk/core/CKeyBindsInterface.h','Client/sdk/core/CLocalizationInterface.h','vendor/ksignals/ksignals.h',
     'Client/core/CCredits.cpp','Client/core/CQuestionBox.cpp','Client/core/CNewsBrowser.cpp','Client/core/CLocalization.cpp','Client/core/CClientVariables.cpp',
     'Client/core/CVersionUpdater.cpp','Client/core/CVersionUpdater.h','Client/core/ServerBrowser/CServerCache.cpp','Client/core/ServerBrowser/CServerCache.h',
     'Client/definitive/coreconfig.xml','Client/gui/Main.cpp','Client/gui/CGUI_Impl.cpp','Client/gui/D3D12GuiRenderer.cpp')
@@ -41,7 +43,7 @@ $sourceNames+=@(Get-ChildItem -LiteralPath (Join-Path $taskRoot 'Client/sdk/gui'
 $certificates=@();$selectedArtifacts=@();$sourceHashes=@();$artifacts=@();$assets=@();$windowsFonts=@();$systemDlls=@();$runs=@()
 $compileExit=$null;$testExit=$null;$testCount=0;$timedOut=$false;$failure=$null;$compilerRecord=$null
 $sourceUnchanged=$true;$artifactsUnchanged=$true;$assetsUnchanged=$true;$certificatesUnchanged=$true;$platformUnchanged=$true
-$caseNames=@(if($BindingPersistenceOnly){'runtime-persistence'}else{'normal','gated','frontend-failure','backend-failure','runtime','runtime-frontend-failure','runtime-backend-failure','runtime-persistence'})
+$caseNames=@(if($BindingPersistenceOnly){'runtime-persistence'}elseif($InteractionServicesOnly){'runtime-interaction','runtime-locale-failure'}else{'normal','gated','frontend-failure','backend-failure','runtime','runtime-frontend-failure','runtime-backend-failure','runtime-persistence','runtime-interaction','runtime-locale-failure'})
 try {
     # Both DLLs are normal build artifacts with complete current declared input
     # certificates. This rejects an old GUI/consumer pairing before execution.
@@ -161,6 +163,7 @@ try {
             $artifacts+=@([ordered]@{source=$entry.source;staged=$staged;sha256=$entry.sha256;bytes=$entry.bytes;certificate=$entry.certificate;case=$case})
         }
         foreach ($entry in $assetSpecs) {
+            if ($case -eq 'runtime-locale-failure' -and $entry.path -eq 'mta/locale/en_US/client.pot') { continue }
             $staged=Join-Path $assetRoot $entry.path
             [IO.Directory]::CreateDirectory((Split-Path -Path $staged -Parent)) | Out-Null
             $assetSource=$entry.source
@@ -169,6 +172,14 @@ try {
                 # observable without modifying the pinned repository asset.
                 $assetSource=Join-Path $caseRoot 'persistence-baseconfig.xml'
                 $fixture=(Get-Content -LiteralPath $entry.source -Raw).Replace('</binds>',"    <bind key=`"x`" control=`"fire`" />`n        <bind key=`"y`" command=`"host_preserve`" arguments=`"fixture`" state=`"down`" />`n    </binds>")
+                [IO.File]::WriteAllText($assetSource,$fixture,[Text.UTF8Encoding]::new($false))
+            }
+            if($case -in @('runtime-interaction','runtime-locale-failure') -and $entry.path -eq 'mta/config/coreconfig.xml') {
+                # A real configured but unshipped locale must use MTA's English
+                # fallback. Removing that actual dictionary tests shared startup
+                # rollback before any GUI, logger or command borrower exists.
+                $assetSource=Join-Path $caseRoot 'interaction-baseconfig.xml'
+                $fixture=(Get-Content -LiteralPath $entry.source -Raw).Replace('</mainconfig>',"    <settings><locale>de_DE</locale></settings>`n</mainconfig>")
                 [IO.File]::WriteAllText($assetSource,$fixture,[Text.UTF8Encoding]::new($false))
             }
             Copy-Item -LiteralPath $assetSource -Destination $staged
@@ -196,7 +207,7 @@ try {
             # successful legacy GUI case cannot stand in for that ownership.
             $hostResult=Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json -DateKind String
             $runtimeCase=$case.StartsWith('runtime',[StringComparison]::Ordinal)
-            $successfulRuntime=$case -in @('runtime','runtime-persistence')
+            $successfulRuntime=$case -in @('runtime','runtime-persistence','runtime-interaction')
             if ($hostResult.success -ne $true -or $hostResult.checks -ne $count -or
                 $hostResult.completedOwnerClockApiVersion -ne 1 -or $hostResult.completedOwnerClockFields -ne 96 -or
                 $hostResult.completedOwnerClockAdmissionVerified -ne (-not $runtimeCase) -or $hostResult.completedOwnerClockNativeWorkloadVerified -ne $false -or
@@ -257,7 +268,7 @@ try {
         $assetsUnchanged -and $certificatesUnchanged -and $platformUnchanged
     $legacySuiteSuccess=$success -and -not $BindingPersistenceOnly
     $receipt=[ordered]@{schema='mta_owned_frontend_startup_host_tests_v1';recordedAt=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=$success;
-        focusedBindingPersistenceOnly=[bool]$BindingPersistenceOnly;selectedCases=$caseNames;
+        focusedBindingPersistenceOnly=[bool]$BindingPersistenceOnly;focusedInteractionServicesOnly=[bool]$InteractionServicesOnly;selectedCases=$caseNames;
         failure=$failure;compileExit=$compileExit;testExit=$testExit;checks=$testCount;timedOut=$timedOut;cases=$runs;
         sourceHashes=$sourceHashes;sourceUnchanged=$sourceUnchanged;sourceSnapshotScope='Fixture plus complete current declared Core and GUI normal-build inputs; a declared superset, not an independently recovered compiler-read trace.';
         normalBuildCertificates=$certificates;certificatesUnchanged=$certificatesUnchanged;artifacts=$artifacts;artifactsUnchanged=$artifactsUnchanged;

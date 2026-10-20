@@ -1215,6 +1215,7 @@ async function main() {
             MTA_CORE_GUI_FRONTEND_STARTUP_REFERENCE: overrides.mtaCoreGuiFrontendStartupReference ?? false,
             MTA_CORE_PERSISTENT_FRONTEND: overrides.mtaCorePersistentFrontend ?? false,
             MTA_CORE_FRONTEND_RUNTIME: overrides.mtaCoreFrontendRuntime ?? false,
+            MTA_CORE_FRONTEND_NATIVE_HOST: overrides.mtaCoreFrontendNativeHost ?? false,
             MTA_CORE_FRONTEND_BINDING_PERSISTENCE: overrides.mtaCoreFrontendBindingPersistence ?? false,
             MTA_CORE_CLOCK_REFERENCE: overrides.mtaCoreClockReference ?? false,
             MTA_CORE_CLOCK_SET_REFERENCE: overrides.mtaCoreClockSetReference ?? false,

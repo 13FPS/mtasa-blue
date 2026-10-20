@@ -16,8 +16,13 @@ The retained Core also checks native menu eligibility before creating a GUI
 or borrowing input. Known frontend/loading states and fully identified but
 ineligible local players defer that view request, leaving Core hidden for a
 later explicit F9. Unknown evidence remains an error. The first deferred view
-cannot arm MTA movement. These changes have offline verification; launcher
-dispatch and early-F9 recovery still require the combined GTA check.
+cannot arm MTA movement. The October 20 GTA check on `8697e3f13` confirmed
+Steam launch through MTA, hidden Core readiness in 47 ms, early-view deferral,
+and a later explicit on-foot menu with 65 frames/presents. All 205 input scopes
+restored, the cursor hook detached, Core/GUI/XML/pthread unloaded, and GTA
+exited normally. The user reported every combined check worked; the logs
+contain one actual menu view, so reopening remains unconfirmed for this run.
+Full engine and network startup remain incomplete.
 
 **The real Deathmatch client now compiles and links as Release/x64.** Generate
 with `--with-definitive-adapter --with-definitive-client` and build the existing

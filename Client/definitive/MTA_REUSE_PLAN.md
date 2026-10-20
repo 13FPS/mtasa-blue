@@ -70,8 +70,16 @@ the same local-identity predicate used for movement. Known frontend/loading
 or qualified ineligible states retain hidden Core without creating a view or
 arming initial local input. Another explicit F9 can retry after context changes;
 missing evidence and mutated owner reports still fail. No playerless GUI or
-complete `CGame` is fabricated. The combined launcher/early-F9 live check is
-pending; the earlier successful native startup result remains unchanged.
+complete `CGame` is fabricated. The October 20 check on `8697e3f13` confirmed
+actual MTA-to-Steam launch, hidden Core ready in 47 ms, a nonterminal first
+Show and a later explicit GUI view with 65 frames/presents. That view restored
+205/205 input scopes with zero failures and detached the cursor hook after
+suppressing 197 engine warps. End unloaded Core/GUI/XML/pthread, and GTA exited
+normally. The user reported all combined steps worked, but this session logged
+two Show commands and only one actual GUI view; a separate reopening is not
+claimed. The earlier two-view result remains separate. Raw logs, offsets,
+current-PID/module evidence and normal shutdown are pinned by
+`Build/definitive-recovery/current-actual-steam-startup-checkpoint.json`.
 
 The real Deathmatch client now builds and links for Release/x64 using MTA's
 existing code. Engine work is assembling its actual `CGame` services:

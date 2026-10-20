@@ -289,9 +289,9 @@ namespace mta::launcher
     }
 
 #if defined(MTA_DE_LAUNCHER_PREFLIGHT) && defined(_WIN64)
-    int ExecuteDefinitiveHostLaunch(HMODULE module)
+    int ExecuteDefinitiveHostLaunch(HMODULE module, bool installed)
     {
-        const auto entry = GetProcAddress(module, "DE_PrepareHostLaunchV1");
+        const auto entry = GetProcAddress(module, installed ? "DE_PrepareInstalledHostLaunchV1" : "DE_PrepareHostLaunchV1");
         MODULEINFO info{};
         if (!entry || !GetModuleInformation(GetCurrentProcess(), module, &info, sizeof(info)))
             return DefinitivePreflight::Status("host_launch_export_invalid", 3);
@@ -378,8 +378,8 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
         if (!loaded)
             return DefinitivePreflight::Status("preflight_loader_load_failed", 2, GetLastError());
         const auto unload = make_scope_exit([module = loaded.value()] { FreeLibrary(module); });
-        if (DefinitivePreflight::LaunchRequested())
-            return ExecuteDefinitiveHostLaunch(loaded.value());
+        if (DefinitivePreflight::LaunchRequested() || DefinitivePreflight::InstalledLaunchRequested())
+            return ExecuteDefinitiveHostLaunch(loaded.value(), DefinitivePreflight::InstalledLaunchRequested());
         const auto result = ExecuteDoWinMain(loaded.value(), hInstance, hPrevInstance, lpCmdLine, nCmdShow, true);
         return result ? result.value() : DefinitivePreflight::Status("preflight_loader_export_failed", 3);
 #else

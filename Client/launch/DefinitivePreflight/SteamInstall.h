@@ -152,11 +152,11 @@ namespace DefinitivePreflight::SteamInstall
         }
     };
 
-    inline void ValidateRegistration(const fs::path& libraryRoot, const fs::path& installName, std::string_view librariesText, std::string_view appText)
+    inline fs::path FindRegisteredLibrary(std::string_view librariesText)
     {
         const auto   libraries = Parser(librariesText).Parse("libraryfolders");
         unsigned int matchingApps = 0;
-        bool         selected = false;
+        fs::path     selected;
         for (const auto& [index, library] : libraries.children)
         {
             Require(!index.empty() && std::all_of(index.begin(), index.end(), [](char c) { return c >= '0' && c <= '9'; }), "steam_manifest_invalid");
@@ -167,12 +167,35 @@ namespace DefinitivePreflight::SteamInstall
             {
                 Require(!apps.children.at(AppId).object, "steam_manifest_invalid");
                 ++matchingApps;
-                selected = SamePath(path, libraryRoot);
+                selected = path;
             }
         }
         // A copied appmanifest in a staging directory is not enough: Steam must
         // register this app in exactly the library whose files were inspected.
-        Require(matchingApps == 1 && selected, "steam_library_not_registered");
+        Require(matchingApps == 1, "steam_library_not_registered");
+        return selected.lexically_normal();
+    }
+
+    inline fs::path ResolveGameDirectory(const fs::path& libraryRoot, std::string_view appText)
+    {
+        Require(libraryRoot.is_absolute() && libraryRoot == libraryRoot.lexically_normal(), "steam_path_invalid");
+        const auto app = Parser(appText).Parse("AppState");
+        Require(app.Child("appid", false).text == AppId && app.Child("StateFlags", false).text == "4", "steam_app_install_mismatch");
+        const auto& name = app.Child("installdir", false).text;
+        Require(!name.empty(), "steam_install_name_invalid");
+        const auto install = Utf8Path(name);
+        // Steam discovery supplies a directory name, never a path or Windows
+        // alias. Refuse traversal, ADS and trailing-dot/space aliases before
+        // joining registered metadata to an executable path.
+        Require(!install.is_absolute() && !install.has_root_path() && install == install.filename() && name != "." && name != ".." &&
+                    name.find_first_of("<>:\"/\\|?*") == std::string::npos && name.back() != '.' && name.back() != ' ',
+                "steam_install_name_invalid");
+        return libraryRoot / L"steamapps" / L"common" / install / L"Gameface" / L"Binaries" / L"Win64";
+    }
+
+    inline void ValidateRegistration(const fs::path& libraryRoot, const fs::path& installName, std::string_view librariesText, std::string_view appText)
+    {
+        Require(SamePath(FindRegisteredLibrary(librariesText), libraryRoot), "steam_library_not_registered");
         const auto app = Parser(appText).Parse("AppState");
         Require(app.Child("appid", false).text == AppId && app.Child("StateFlags", false).text == "4" &&
                     SamePath(Utf8Path(app.Child("installdir", false).text), installName),

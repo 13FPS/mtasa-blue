@@ -81,6 +81,16 @@ claimed. The earlier two-view result remains separate. Raw logs, offsets,
 current-PID/module evidence and normal shutdown are pinned by
 `Build/definitive-recovery/current-actual-steam-startup-checkpoint.json`.
 
+The standalone launcher also offers `--de-launch-installed`: Steam registration
+and the appmanifest locate the game, and its adjacent native ownership receipt
+provides the files to validate. It shares the existing game/PE/hash/config/INI
+policy without constructing package provenance or requiring workspace paths.
+The normal launcher build and both preparation modes passed 22 process cases,
+15 VDF parser checks and 25 discovery/layout checks. Positive installed checks
+call only the new preparation export; this selector has not dispatched Steam
+in the offline batch. Core, backend, Bridge, GUI and all 64 installed files are
+reused unchanged from the live-tested candidate.
+
 The real Deathmatch client now builds and links for Release/x64 using MTA's
 existing code. Engine work is assembling its actual `CGame` services:
 `CClockDE`, the complete four-method `CKeyGenDE`, eight native timing getters,

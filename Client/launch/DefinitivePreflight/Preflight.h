@@ -33,9 +33,13 @@ namespace DefinitivePreflight
     {
         return HasArgument(L"--de-launch");
     }
+    inline bool InstalledLaunchRequested() noexcept
+    {
+        return HasArgument(L"--de-launch-installed");
+    }
     inline bool Requested() noexcept
     {
-        return HasArgument(L"--de-preflight") || LaunchRequested();
+        return HasArgument(L"--de-preflight") || LaunchRequested() || InstalledLaunchRequested();
     }
 
     // The external launcher owns dispatch. Keeping its preparation result value

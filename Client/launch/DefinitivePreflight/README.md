@@ -59,6 +59,32 @@ in-game startup result. Exit 5 means preparation passed but COM or shell
 dispatch failed. No direct game execution, injection, network client or
 installation writes are performed.
 
+The installed client also supports an explicit selection with no workspace
+package paths:
+
+```powershell
+& './Bin/mta-launcher/x64/Multi Theft Auto.exe' --de-launch-installed
+```
+
+This reads the current user's registered Steam root and its library list,
+requires exactly one library registering app 1547000, and resolves the game's
+directory from that library's installed appmanifest. The `installdir` value
+must be one safe directory name. The adjacent
+`de-online-install-manifest.json` must then describe exactly the native
+60/64-file owner, with matching game identity, absolute destinations, file
+hashes, AMD64 modules and the same enabled native runtime configuration/INI
+policy used by the explicit path route. The receipt is installation ownership
+evidence, not a package provenance signature or proof of complete gameplay.
+No workspace package manifest is synthesized or required.
+
+Extra arguments and mixed DE selections are refused before discovery.
+`--de-launch` retains its required three path arguments; the new selection
+does not provide fallback behavior for an incomplete old invocation. The
+installed selection uses the same fixed Steam request and honest readiness
+fields. Its `DE_PrepareInstalledHostLaunchV1` export returns the same value-only
+112-byte preparation result without dispatching Steam, allowing read-only
+offline validation of the real registered installation.
+
 Focused verification lives in `Tests/definitive/test_de_launcher_preflight.ps1`.
 The normal launcher/validator check passes 25 cases and 254 assertions, with
 17 build-policy guards preserving classic Win32 and default x64 exclusion.

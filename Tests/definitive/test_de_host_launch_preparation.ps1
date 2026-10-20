@@ -7,7 +7,8 @@ param(
     [Parameter(Mandatory)][string]$GameExe,
     [Parameter(Mandatory)][string]$PackageDirectory,
     [string]$LauncherExe,
-    [string]$PreflightDll
+    [string]$PreflightDll,
+    [switch]$InstalledLaunchOnly
 )
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
@@ -33,32 +34,36 @@ $fixtureManifest=Join-Path $scratch 'package.json'
 $fixtureReceipt=Join-Path $fixture 'de-online-install-manifest.json'
 $utf8=[Text.UTF8Encoding]::new($false)
 [IO.Directory]::CreateDirectory((Join-Path $hostRoot 'mta'))|Out-Null
-[IO.Directory]::CreateDirectory($fixture)|Out-Null
+if(-not $InstalledLaunchOnly){[IO.Directory]::CreateDirectory($fixture)|Out-Null}
 [IO.Directory]::CreateDirectory((Join-Path $scratch 'compiler'))|Out-Null
 # A coherent copied appmanifest is still insufficient to authorize Steam
 # dispatch. Supply this owned metadata so the negative case reaches the real
 # registered-library check instead of failing earlier on a missing file.
 $fixtureAppManifest=Join-Path $scratch 'Steam library/steamapps/appmanifest_1547000.acf'
-[IO.File]::WriteAllText($fixtureAppManifest,'"AppState" { "appid" "1547000" "StateFlags" "4" "installdir" "Owned GTA DE" }'+"`n",$utf8)
+if(-not $InstalledLaunchOnly){[IO.File]::WriteAllText($fixtureAppManifest,'"AppState" { "appid" "1547000" "StateFlags" "4" "installdir" "Owned GTA DE" }'+"`n",$utf8)}
 $inputHashes=[ordered]@{}
 foreach($path in @($game,(Join-Path $installed 'de-online-install-manifest.json'),$packageManifest,$LauncherExe,$PreflightDll)){$inputHashes[$path]=Sha $path}
 foreach($entry in $packageRecord.files){
     $source=Join-Path $package ('Win64/'+$entry.path)
     if((Sha $source) -ne $entry.sha256 -or (Sha (Join-Path $installed $entry.path)) -ne $entry.sha256){throw 'Positive read-only preparation requires the package to match the actual installed native owner.'}
     $inputHashes[(Join-Path $installed $entry.path)]=$entry.sha256
-    $destination=Join-Path $fixture $entry.path
-    [IO.Directory]::CreateDirectory((Split-Path $destination))|Out-Null
-    Copy-Item -LiteralPath $source -Destination $destination
+    if(-not $InstalledLaunchOnly){
+        $destination=Join-Path $fixture $entry.path
+        [IO.Directory]::CreateDirectory((Split-Path $destination))|Out-Null
+        Copy-Item -LiteralPath $source -Destination $destination
+    }
 }
-Copy-Item -LiteralPath $game -Destination (Join-Path $fixture 'SanAndreas.exe')
+if(-not $InstalledLaunchOnly){Copy-Item -LiteralPath $game -Destination (Join-Path $fixture 'SanAndreas.exe')}
 Copy-Item -LiteralPath $LauncherExe -Destination (Join-Path $hostRoot 'Multi Theft Auto.exe')
 Copy-Item -LiteralPath $PreflightDll -Destination (Join-Path $hostRoot 'mta/de_preflight.dll')
+if(-not $InstalledLaunchOnly){
 [IO.File]::WriteAllText($fixtureManifest,$packageText,$utf8)
 $receipt=[ordered]@{packageId='de-online-prototype';formatVersion=1;mode=$packageRecord.mode;gameDirectory=$fixture;gameSha256=$packageRecord.gameSha256;files=@(
     foreach($entry in $packageRecord.files){[ordered]@{path=$entry.path;destination=(Join-Path $fixture $entry.path);sha256=$entry.sha256}}
 )}
 $receiptText=($receipt|ConvertTo-Json -Depth 12)+"`n"
 [IO.File]::WriteAllText($fixtureReceipt,$receiptText,$utf8)
+}
 $checks=0
 $cases=[Collections.Generic.List[object]]::new()
 function Check([bool]$condition,[string]$label){$script:checks++;if(-not $condition){throw $label}}
@@ -102,14 +107,32 @@ try{
     $hostExecutable=Join-Path $hostRoot 'PrepareHost.exe'
     & $compiler /nologo /std:c++20 /EHsc /utf-8 /MT /O2 /W4 /WX (Join-Path $PSScriptRoot 'DeHostLaunchPreparationTests.cpp') ("/Fo"+(Join-Path $scratch 'compiler/host.obj')) ("/Fe"+$hostExecutable) /link /NOLOGO shell32.lib 2>&1 | Set-Content -LiteralPath (Join-Path $output 'host-build.log') -Encoding utf8
     if($LASTEXITCODE -ne 0){throw 'Host preparation fixture compilation failed.'}
+    $parserRecord=[pscustomobject]@{parserChecks=0}
+    if(-not $InstalledLaunchOnly){
     $parser=& $hostExecutable --steam-parser-tests
     [IO.File]::WriteAllText((Join-Path $output 'steam-parser-tests.json'),($parser -join "`n")+"`n",$utf8)
     if($LASTEXITCODE -ne 0){throw 'Pure Steam locator checks failed.'}
     $parserRecord=$parser|ConvertFrom-Json
     Check ($parserRecord.success -and $parserRecord.parserChecks -ge 15 -and -not $parserRecord.hostLaunchRequested -and -not $parserRecord.gameLaunched) 'Pure Steam parser check record is incomplete.'
+    }
+    $discovery=& $hostExecutable --installed-steam-discovery-tests
+    [IO.File]::WriteAllText((Join-Path $output 'installed-steam-discovery-tests.json'),($discovery -join "`n")+"`n",$utf8)
+    if($LASTEXITCODE -ne 0){throw 'Pure installed Steam discovery checks failed.'}
+    $discoveryRecord=$discovery|ConvertFrom-Json
+    Check ($discoveryRecord.success -and $discoveryRecord.discoveryChecks -ge 25 -and -not $discoveryRecord.hostLaunchRequested -and -not $discoveryRecord.gameLaunched -and -not $discoveryRecord.registryWrites) 'Installed discovery check record is incomplete.'
     $realArguments=@('--de-launch','--game-exe',$game,'--bundle',$installed,'--manifest',$packageManifest)
-    Invoke-Case 'actual-closed-installation-prepared-without-dispatch' $hostExecutable $realArguments 0 'host_launch_prepared' $true
     $launcher=Join-Path $hostRoot 'Multi Theft Auto.exe'
+    Invoke-Case 'installed-closed-registration-prepared-without-dispatch' $hostExecutable @('--de-launch-installed') 0 'host_launch_prepared' $true
+    # Every actual launcher invocation deliberately violates the strict
+    # no-argument route. A successful shell dispatch is never part of this
+    # suite, even when the real registered installation is valid and closed.
+    Invoke-Case 'installed-launcher-mixed-explicit-selection' $launcher @('--de-launch-installed','--de-launch') 4 'preflight_arguments_required'
+    Invoke-Case 'installed-launcher-mixed-preflight-selection' $launcher @('--de-launch-installed','--de-preflight') 4 'preflight_arguments_required'
+    Invoke-Case 'installed-launcher-extra-game-path' $launcher @('--de-launch-installed','--game-exe',$game) 4 'preflight_arguments_required'
+    Invoke-Case 'installed-launcher-duplicate-selection' $launcher @('--de-launch-installed','--de-launch-installed') 4 'preflight_arguments_required'
+    Invoke-Case 'installed-launcher-unrecognized-extra-argument' $launcher @('--de-launch-installed','unexpected') 4 'preflight_arguments_required'
+    if(-not $InstalledLaunchOnly){
+    Invoke-Case 'actual-closed-installation-prepared-without-dispatch' $hostExecutable $realArguments 0 'host_launch_prepared' $true
     Invoke-Case 'actual-launcher-missing-arguments' $launcher @('--de-launch') 4 'preflight_arguments_required'
     Invoke-Case 'actual-launcher-mixed-selection-refused' $launcher (@('--de-preflight')+$realArguments) 4 'preflight_arguments_required'
     $fixtureArguments=@('--de-launch','--game-exe',(Join-Path $fixture 'SanAndreas.exe'),'--bundle',$fixture,'--manifest',$fixtureManifest)
@@ -137,16 +160,21 @@ try{
     [IO.File]::WriteAllText($fixtureManifest,($disarmed|ConvertTo-Json -Depth 12)+"`n",$utf8)
     Invoke-Case 'owned-but-disarmed-native-host' $launcher $fixtureArguments 4 'enabled_native_frontend_required'
     [IO.File]::WriteAllText($config,$configText,$utf8);[IO.File]::WriteAllText($ini,$iniText,$utf8);[IO.File]::WriteAllText($fixtureManifest,$packageText,$utf8)
+    }
     $holdPath=Join-Path $hostRoot 'SanAndreas.exe'
     Copy-Item -LiteralPath $hostExecutable -Destination $holdPath
     $hold=Start-Process -FilePath $holdPath -ArgumentList '--hold' -PassThru -WindowStyle Hidden
-    Invoke-Case 'already-running-name-refused-without-touching-game' $launcher $realArguments 4 'game_already_running'
+    if(-not $InstalledLaunchOnly){Invoke-Case 'already-running-name-refused-without-touching-game' $launcher $realArguments 4 'game_already_running'}
+    Invoke-Case 'installed-running-name-refused-without-touching-game' $hostExecutable @('--de-launch-installed') 4 'game_already_running'
     $hold.Kill();$hold.WaitForExit();$hold.Dispose();$hold=$null
-    Invoke-Case 'actual-install-still-prepares-without-dispatch' $hostExecutable $realArguments 0 'host_launch_prepared' $true
+    if(-not $InstalledLaunchOnly){Invoke-Case 'actual-install-still-prepares-without-dispatch' $hostExecutable $realArguments 0 'host_launch_prepared' $true}
+    Invoke-Case 'installed-registration-still-prepares-without-dispatch' $hostExecutable @('--de-launch-installed') 0 'host_launch_prepared' $true
+    Check ($cases.Count -eq $(if($InstalledLaunchOnly){8}else{22})) 'The selected preparation-only case group is incomplete.'
     foreach($name in $inputHashes.Keys){Check ((Sha $name) -eq $inputHashes[$name]) 'Actual game/package/launcher input changed during preparation-only checks.'}
     foreach($name in $sourceHashes.Keys){Check ((Sha (Join-Path $root $name)) -eq $sourceHashes[$name]) 'Preparation source changed during focused validation.'}
     $receiptPath=Join-Path $output 'test-result.json'
-    $finalRecord=[ordered]@{success=$true;checks=$checks;cases=$cases;parserChecks=$parserRecord.parserChecks;hostLaunchRequested=$false;gameLaunched=$false;
+    $finalRecord=[ordered]@{success=$true;checks=$checks;cases=$cases;parserChecks=$parserRecord.parserChecks;installedDiscoveryChecks=$discoveryRecord.discoveryChecks;installedLaunchOnly=[bool]$InstalledLaunchOnly;hostLaunchRequested=$false;gameLaunched=$false;registryWrites=$false;
+        scope='Actual registered installation preparation through DE_PrepareInstalledHostLaunchV1 only, strict actual-launcher argument refusals, process-name refusal and pure Steam app/library/layout validation. No positive actual launcher invocation, ShellExecute, GTA workload, native modules, registry write or installation mutation. Focused selection preserves the prior fourteen explicit preparation cases and fifteen parser checks without repeating them.';
         sources=$sourceHashes;inputs=$inputHashes;host=[ordered]@{path=$hostExecutable;sha256=(Sha $hostExecutable)};scratch=$scratch;scratch_cleaned=$true}
 }finally{
     if($hold -and -not $hold.HasExited){$hold.Kill();$hold.WaitForExit();$hold.Dispose()}
@@ -162,4 +190,4 @@ try{
     }
 }
 [IO.File]::WriteAllText($receiptPath,($finalRecord|ConvertTo-Json -Depth 20)+"`n",$utf8)
-@{success=$true;path=$receiptPath;sha256=(Sha $receiptPath);checks=$checks;cases=$cases.Count;parserChecks=$parserRecord.parserChecks}|ConvertTo-Json -Compress
+@{success=$true;path=$receiptPath;sha256=(Sha $receiptPath);checks=$checks;cases=$cases.Count;parserChecks=$parserRecord.parserChecks;installedDiscoveryChecks=$discoveryRecord.discoveryChecks;installedLaunchOnly=[bool]$InstalledLaunchOnly}|ConvertTo-Json -Compress

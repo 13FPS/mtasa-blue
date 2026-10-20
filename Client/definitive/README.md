@@ -11,6 +11,10 @@ through Steam after checking the native package, installation ownership and
 registered app/library. Its existing `--de-preflight` remains read-only; see
 the [launcher contract](../launch/DefinitivePreflight/README.md). A launch
 request is not proof that the full MTA client has started.
+`--de-launch-installed` now finds the registered Steam installation and checks
+its installed ownership receipt directly, without workspace manifest arguments.
+Its preparation path is verified offline against the real closed installation;
+the earlier explicit-path launcher route supplied the live result below.
 
 The retained Core also checks native menu eligibility before creating a GUI
 or borrowing input. Known frontend/loading states and fully identified but

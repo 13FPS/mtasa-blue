@@ -20,7 +20,7 @@ $record = [ordered]@{
     schema='mta_game_policy_de_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     generatedFixture=$null;result=$null;failure=$null;scratchDirectory=$scratchRoot;scratchRemoved=$false;
-    scope='Actual CGameDE SDK diagnostic reference, lazy ped context, typed registration and shared jetpack permissions; state write forwarding/refusal and wrong-executable filename refusal. Remaining test-only SDK overrides reject all use. No native game code executes; filename Bind attempts only the real ordinary-host rejection.';
+    scope='Actual CGameDE SDK diagnostic reference, lazy ped context, typed registration and shared jetpack permissions; state write forwarding/refusal, exact19 logical cheat-name forwarding with14 owner-backed reads/five explicit unavailable results, unchangedfour native setters, and wrong-executable filename refusal. Remaining test-only SDK overrides reject all use. No native game code executes; filename Bind attempts only the real ordinary-host rejection.';
     nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;installationChanged=$false;
     completeCGameReady=$false;fullMtaReady=$false;nativeWeaponHookDispatchReady=$false
 }
@@ -97,7 +97,7 @@ try {
         'Client/game_de/NativeWeaponInfoWriteProfile.h','Client/game_de/CWeatherScalarsDE.h','Client/game_de/NativeWeatherScalarProfile.h',
         'Client/game_de/NativeImageAccess.h','Client/game_de/NativeClockMemory.h',
         'Client/game_de/CWeatherTransitionDE.h','Client/sdk/game/CWeather.h',
-        'Client/game_de/NativeCheatProfile.h','Client/game_de/NativeCheatFlagAccess.h',
+        'Client/game_de/NativeCheatProfile.h','Client/game_de/NativeCheatFlagAccess.h','Client/sdk/game/CWorldCheatPolicy.h',
         'Client/game_de/NativeClockProfile.h','Client/game_de/NativeGameTimingProfile.h','Client/game_de/NativeGameFPSProfile.h',
         'Client/game_de/NativeStreamingFileIdsProfile.h','Client/game_de/NativeGameStateProfile.h','Client/game_de/NativeFrontendMenuProfile.h',
         'Shared/sdk/CAsyncLoadingPolicy.h','Shared/sdk/CJetpackWeaponPolicy.h','Client/sdk/game/CGame.h','Client/sdk/game/CPools.h','Client/sdk/game/Common.h',

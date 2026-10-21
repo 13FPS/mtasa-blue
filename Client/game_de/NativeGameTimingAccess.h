@@ -43,6 +43,9 @@ namespace mta::game_de
         // native owner. A timing-only implementation must refuse them without
         // publishing a cached value or pretending to reset the native registry.
         virtual ClockResult ReadCheatFlag(NativeCheatProfile::Flag, bool&) noexcept { return ClockResult::NotInitialized; }
+        // Shared names/permissions do not manufacture native bindings. The
+        // same engine owner qualifies each admitted read, or explicitly refuses.
+        virtual ClockResult ReadWorldCheat(MtaGame::CWorldCheatPolicy::Id, bool&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult SetCheatFlag(NativeCheatProfile::Flag, bool) noexcept { return ClockResult::NotInitialized; }
         // Shared MTA lookup can publish only a genuine bank wrapper qualified
         // by this native owner, never a partial provider or a cached fake row.

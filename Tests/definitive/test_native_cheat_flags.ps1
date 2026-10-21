@@ -38,7 +38,7 @@ function RunOwned([string]$exe,[string[]]$arguments,[string]$directory,[string]$
 }
 try{
     $names=@('Client/game_de/NativeCheatProfile.h','Client/game_de/NativeCheatProfile.cpp','Client/game_de/NativeCheatFlagAccess.h',
-        'Client/game_de/NativeImageAccess.h','Client/game_de/NativeImageAccess.cpp',
+        'Client/game_de/NativeImageAccess.h','Client/game_de/NativeImageAccess.cpp','Client/sdk/game/CWorldCheatPolicy.h',
         'Tests/definitive/NativeCheatFlagTests.cpp','Tests/definitive/test_native_cheat_flags.ps1',
         'Build/definitive-recovery/mta-startup-services-batch-20261021/cheats-proof/four-cheat-flags-qualification.json')
     $record.sources=@($names|ForEach-Object{[ordered]@{path=$_;sha256=(Sha (Join-Path $root $_))}})

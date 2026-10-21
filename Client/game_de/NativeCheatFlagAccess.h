@@ -42,6 +42,24 @@ namespace mta::game_de
             return true;
         }
 
+        bool ReadWorld(MtaGame::CWorldCheatPolicy::Id id, bool& output) const noexcept
+        {
+            const auto*   member = NativeCheatProfile::FindRead(id);
+            unsigned char value = 0;
+            SIZE_T        copied = 0;
+            if (!member || !binding.image || binding.image > (std::numeric_limits<std::uintptr_t>::max)() - NativeCheatProfile::ImageSize ||
+                binding.flags != binding.image + NativeCheatProfile::FlagsRva || member->nativeIndex >= NativeCheatProfile::NativeFlagCount)
+                return false;
+            const auto target = binding.flags + member->nativeIndex;
+            if (!pages || !pages(target, 1, false, false) ||
+                !ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(target), &value, 1, &copied) || copied != 1)
+                return false;
+            // Classic IsCheatEnabled observes the actual raw byte !=0. The
+            // strict binary read/CAS used by the four setters stays unchanged.
+            output = value != 0;
+            return true;
+        }
+
         WriteResult WriteIf(Flag flag, bool expected, bool replacement) const noexcept
         {
             std::uintptr_t target = 0;

@@ -86,6 +86,7 @@ namespace mta::game_de
             ClockResult Pause(bool value) noexcept override;
             ClockResult SetSystemState(SystemState::Enum value) noexcept override;
             ClockResult ReadCheatFlag(NativeCheatProfile::Flag flag, bool& output) noexcept override;
+            ClockResult ReadWorldCheat(MtaGame::CWorldCheatPolicy::Id id, bool& output) noexcept override;
             ClockResult SetCheatFlag(NativeCheatProfile::Flag flag, bool value) noexcept override;
             ClockResult ReadForced(std::uint16_t& output) noexcept override;
             ClockResult SetTypes(std::uint8_t primary, std::uint8_t secondary) noexcept override;
@@ -1349,6 +1350,33 @@ namespace mta::game_de
             if (!NativeCheatFlagAccess(binding, &OwnedFieldPages).Read(flag, next))
                 return ClockResult::ReadFailure;
             if (!NativeCheatProfile::Revalidate(binding))
+                return ClockResult::BindingChanged;
+            const auto confirmedOwner = CheckTimingOwner();
+            if (confirmedOwner != ClockResult::Ok)
+                return confirmedOwner;
+            output = next;
+            return ClockResult::Ok;
+        }
+
+        ClockResult NativeAccess::ReadWorldCheat(MtaGame::CWorldCheatPolicy::Id id, bool& output) noexcept
+        {
+            if (!MtaGame::CWorldCheatPolicy::Get(id))
+                return ClockResult::InvalidArgument;
+            if (!NativeCheatProfile::FindRead(id))
+                return ClockResult::UnsupportedBuild;
+            const auto owner = CheckTimingOwner();
+            if (owner != ClockResult::Ok)
+                return owner;
+            // CheckTimingOwner also verifies the full stock/owned-frozen
+            // clock body. Fasterclock's member load pin ends before that exact
+            // owner's patch, so it never needs an arbitrary masked code check.
+            const NativeCheatProfile::Binding binding{runtime.image, runtime.image + NativeCheatProfile::FlagsRva};
+            if (!NativeCheatProfile::RevalidateRead(binding, id))
+                return ClockResult::BindingChanged;
+            bool next = false;
+            if (!NativeCheatFlagAccess(binding, &OwnedFieldPages).ReadWorld(id, next))
+                return ClockResult::ReadFailure;
+            if (!NativeCheatProfile::RevalidateRead(binding, id))
                 return ClockResult::BindingChanged;
             const auto confirmedOwner = CheckTimingOwner();
             if (confirmedOwner != ClockResult::Ok)

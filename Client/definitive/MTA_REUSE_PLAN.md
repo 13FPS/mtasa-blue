@@ -90,6 +90,15 @@ prevent treating this pooled constant as a mutable world-gravity property.
 `SetGravity` remains pure until those consumers and override lifetime are
 qualified independently.
 
+MTA's nineteen world-cheat names and four set permissions now share one SDK
+policy with the classic backend. The DE reader supplies fourteen independently
+qualified native flags through the existing callback owner, preserving the
+classic nonzero-byte read contract. Writes remain limited to the original four
+properties. Five native identities remain unresolved, so full `ResetCheats`
+and `PerformChecks` remain pure. The native all-cheats initializer also changes
+time scale and weather; it cannot replace MTA's registered-row reset. Faster
+clock reads reuse the clock owner's exact stock or owned freeze identity.
+
 Rain's shared runtime now retains its own near RX leaf, separate RW descriptor
 and exact direct-writer/entry journals. Loads advance the real synchronous
 archive through a temporary value, while saves retain native Rain reads. Stack

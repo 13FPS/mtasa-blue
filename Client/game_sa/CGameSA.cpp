@@ -33,6 +33,7 @@
 #include "CFxSA.h"
 #include "CFxSystemSA.h"
 #include "CGameSA.h"
+#include <game/CWorldCheatPolicy.h>
 #include "CGaragesSA.h"
 #include "CHandlingManagerSA.h"
 #include "CHudSA.h"
@@ -185,28 +186,33 @@ CGameSA::CGameSA()
 
         m_pPlayerInfo = new CPlayerInfoSA((CPlayerInfoSAInterface*)CLASS_CPlayerInfo);
 
-        // Init cheat name => address map
-        m_Cheats[CHEAT_HOVERINGCARS] = new SCheatSA((BYTE*)VAR_HoveringCarsEnabled);
-        m_Cheats[CHEAT_FLYINGCARS] = new SCheatSA((BYTE*)VAR_FlyingCarsEnabled);
-        m_Cheats[CHEAT_EXTRABUNNYHOP] = new SCheatSA((BYTE*)VAR_ExtraBunnyhopEnabled);
-        m_Cheats[CHEAT_EXTRAJUMP] = new SCheatSA((BYTE*)VAR_ExtraJumpEnabled);
-
-        // New cheats for Anticheat
-        m_Cheats[CHEAT_TANKMODE] = new SCheatSA((BYTE*)VAR_TankModeEnabled, false);
-        m_Cheats[CHEAT_NORELOAD] = new SCheatSA((BYTE*)VAR_NoReloadEnabled, false);
-        m_Cheats[CHEAT_PERFECTHANDLING] = new SCheatSA((BYTE*)VAR_PerfectHandling, false);
-        m_Cheats[CHEAT_ALLCARSHAVENITRO] = new SCheatSA((BYTE*)VAR_AllCarsHaveNitro, false);
-        m_Cheats[CHEAT_BOATSCANFLY] = new SCheatSA((BYTE*)VAR_BoatsCanFly, false);
-        m_Cheats[CHEAT_INFINITEOXYGEN] = new SCheatSA((BYTE*)VAR_InfiniteOxygen, false);
-        m_Cheats[CHEAT_WALKUNDERWATER] = new SCheatSA((BYTE*)VAR_WalkUnderwater, false);
-        m_Cheats[CHEAT_FASTERCLOCK] = new SCheatSA((BYTE*)VAR_FasterClock, false);
-        m_Cheats[CHEAT_FASTERGAMEPLAY] = new SCheatSA((BYTE*)VAR_FasterGameplay, false);
-        m_Cheats[CHEAT_SLOWERGAMEPLAY] = new SCheatSA((BYTE*)VAR_SlowerGameplay, false);
-        m_Cheats[CHEAT_ALWAYSMIDNIGHT] = new SCheatSA((BYTE*)VAR_AlwaysMidnight, false);
-        m_Cheats[CHEAT_FULLWEAPONAIMING] = new SCheatSA((BYTE*)VAR_FullWeaponAiming, false);
-        m_Cheats[CHEAT_INFINITEHEALTH] = new SCheatSA((BYTE*)VAR_InfiniteHealth, false);
-        m_Cheats[CHEAT_NEVERWANTED] = new SCheatSA((BYTE*)VAR_NeverWanted, false);
-        m_Cheats[CHEAT_HEALTARMORMONEY] = new SCheatSA((BYTE*)VAR_HealthArmorMoney, false);
+        // Reuse MTA's names/permissions while these exact classic addresses
+        // and SCheatSA's enabled-state behavior stay owned by this backend.
+        using CheatPolicy = MtaGame::CWorldCheatPolicy;
+        const auto registerCheat = [&](CheatPolicy::Id id, BYTE* address)
+        {
+            const auto& member = *CheatPolicy::Get(id);
+            m_Cheats[member.name] = new SCheatSA(address, member.canBeSet);
+        };
+        registerCheat(CheatPolicy::Id::HoverCars, (BYTE*)VAR_HoveringCarsEnabled);
+        registerCheat(CheatPolicy::Id::AirCars, (BYTE*)VAR_FlyingCarsEnabled);
+        registerCheat(CheatPolicy::Id::ExtraBunny, (BYTE*)VAR_ExtraBunnyhopEnabled);
+        registerCheat(CheatPolicy::Id::ExtraJump, (BYTE*)VAR_ExtraJumpEnabled);
+        registerCheat(CheatPolicy::Id::TankMode, (BYTE*)VAR_TankModeEnabled);
+        registerCheat(CheatPolicy::Id::NoReload, (BYTE*)VAR_NoReloadEnabled);
+        registerCheat(CheatPolicy::Id::PerfectHandling, (BYTE*)VAR_PerfectHandling);
+        registerCheat(CheatPolicy::Id::AllCarsHaveNitro, (BYTE*)VAR_AllCarsHaveNitro);
+        registerCheat(CheatPolicy::Id::AirBoats, (BYTE*)VAR_BoatsCanFly);
+        registerCheat(CheatPolicy::Id::InfiniteOxygen, (BYTE*)VAR_InfiniteOxygen);
+        registerCheat(CheatPolicy::Id::WalkUnderwater, (BYTE*)VAR_WalkUnderwater);
+        registerCheat(CheatPolicy::Id::FasterClock, (BYTE*)VAR_FasterClock);
+        registerCheat(CheatPolicy::Id::FasterGameplay, (BYTE*)VAR_FasterGameplay);
+        registerCheat(CheatPolicy::Id::SlowerGameplay, (BYTE*)VAR_SlowerGameplay);
+        registerCheat(CheatPolicy::Id::AlwaysMidnight, (BYTE*)VAR_AlwaysMidnight);
+        registerCheat(CheatPolicy::Id::FullWeaponAiming, (BYTE*)VAR_FullWeaponAiming);
+        registerCheat(CheatPolicy::Id::InfiniteHealth, (BYTE*)VAR_InfiniteHealth);
+        registerCheat(CheatPolicy::Id::NeverWanted, (BYTE*)VAR_NeverWanted);
+        registerCheat(CheatPolicy::Id::HealthArmorMoney, (BYTE*)VAR_HealthArmorMoney);
 
         // Change pool sizes here
         m_Pools->SetPoolCapacity(TASK_POOL, 5000);                                     // Default is 500
@@ -552,7 +558,11 @@ void CGameSA::SetMinuteDuration(unsigned long ulTime)
 
 bool CGameSA::IsCheatEnabled(const char* szCheatName)
 {
-    std::map<std::string, SCheatSA*>::iterator it = m_Cheats.find(szCheatName);
+    MtaGame::CWorldCheatPolicy::Id id;
+    if (!MtaGame::CWorldCheatPolicy::Find(szCheatName, id))
+        return false;
+    const auto&                                member = *MtaGame::CWorldCheatPolicy::Get(id);
+    std::map<std::string, SCheatSA*>::iterator it = m_Cheats.find(member.name);
     if (it == m_Cheats.end())
         return false;
     return *(it->second->m_byAddress) != 0;
@@ -560,7 +570,11 @@ bool CGameSA::IsCheatEnabled(const char* szCheatName)
 
 bool CGameSA::SetCheatEnabled(const char* szCheatName, bool bEnable)
 {
-    std::map<std::string, SCheatSA*>::iterator it = m_Cheats.find(szCheatName);
+    MtaGame::CWorldCheatPolicy::Id id;
+    if (!MtaGame::CWorldCheatPolicy::Find(szCheatName, id))
+        return false;
+    const auto&                                member = *MtaGame::CWorldCheatPolicy::Get(id);
+    std::map<std::string, SCheatSA*>::iterator it = m_Cheats.find(member.name);
     if (it == m_Cheats.end())
         return false;
     if (!it->second->m_bCanBeSet)

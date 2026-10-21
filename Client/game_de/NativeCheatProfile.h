@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include "../sdk/game/CWorldCheatPolicy.h"
 
 namespace mta::game_de::NativeCheatProfile
 {
@@ -48,6 +49,27 @@ namespace mta::game_de::NativeCheatProfile
     {
         std::uintptr_t image = 0, flags = 0;
     };
+
+    // Logical SDK identity is independent from native registration ordinal.
+    // These read-only descriptors do not enlarge the four writable properties.
+    struct ReadMember
+    {
+        MtaGame::CWorldCheatPolicy::Id id;
+        std::uint32_t                  nativeIndex;
+        std::uintptr_t                 actionRva;
+        Pin                            consumer;
+    };
+    struct ReadRegistration
+    {
+        MtaGame::CWorldCheatPolicy::Id id;
+        Registration                   native;
+    };
+    extern const std::array<ReadMember, 14>       ReadMembers;
+    extern const std::array<ReadRegistration, 30> ReadRegistrations;
+    const ReadMember*                             FindRead(MtaGame::CWorldCheatPolicy::Id id) noexcept;
+    // A checked borrowed profile is not engine thread/generation authority.
+    // Reads preserve classic raw-nonzero semantics; writes stay strict binary.
+    bool RevalidateRead(const Binding& binding, MtaGame::CWorldCheatPolicy::Id id) noexcept;
 
     bool Find(const char* sdkName, Flag& output) noexcept;
     bool Qualify(Binding& output) noexcept;

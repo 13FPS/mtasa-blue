@@ -191,18 +191,21 @@ namespace mta::game_de
 
     bool CGameDE::IsCheatEnabled(const char* name)
     {
-        NativeCheatProfile::Flag flag;
-        if (!NativeCheatProfile::Find(name, flag))
+        MtaGame::CWorldCheatPolicy::Id id;
+        if (!MtaGame::CWorldCheatPolicy::Find(name, id))
             return false;
         bool enabled = false;
-        RequireNativeWrite(NativeWrites().ReadCheatFlag(flag, enabled), "IsCheatEnabled");
+        // A known but unqualified registry row must refuse explicitly, never
+        // look like a successfully observed disabled native cheat.
+        RequireNativeWrite(NativeWrites().ReadWorldCheat(id, enabled), "IsCheatEnabled");
         return enabled;
     }
 
     bool CGameDE::SetCheatEnabled(const char* name, bool enabled)
     {
-        NativeCheatProfile::Flag flag;
-        if (!NativeCheatProfile::Find(name, flag))
+        MtaGame::CWorldCheatPolicy::Id id;
+        NativeCheatProfile::Flag       flag;
+        if (!MtaGame::CWorldCheatPolicy::Find(name, id) || !MtaGame::CWorldCheatPolicy::Get(id)->canBeSet || !NativeCheatProfile::Find(name, flag))
             return false;
         // These four properties are the existing MTA settable registry. The
         // native command dispatcher also performs unrelated actions, so the

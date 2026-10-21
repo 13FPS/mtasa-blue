@@ -141,17 +141,18 @@ namespace ClockStartGameOwnerTest
 
 namespace ClockTestFaults
 {
-    std::atomic<unsigned>         partialDataWrites{0}, failFlushes{0}, protectionCountdown{0};
-    std::atomic<bool>             failEnumeration{false}, failProtectionRestores{false};
-    std::atomic<unsigned>         failResumes{0};
-    std::atomic<unsigned>         clockDataWrites{0}, clockCodeExchanges{0};
-    std::atomic<unsigned>         partialTimingWrites{0}, failTimingWrites{0}, timingDataWrites{0};
-    std::uintptr_t                timingWriteAddress = 0;
-    std::atomic<DWORD>            resumeTarget{0};
-    std::uintptr_t                patchAddress = 0, dataAddress = 0;
-    std::uintptr_t                uiReadAddress = 0, uiRootChangeAddress = 0;
-    std::atomic<bool>             failUiRead{false};
-    std::uintptr_t                cheatWriteAddress = 0;
+    std::atomic<unsigned> partialDataWrites{0}, failFlushes{0}, protectionCountdown{0};
+    std::atomic<bool>     failEnumeration{false}, failProtectionRestores{false};
+    std::atomic<unsigned> failResumes{0};
+    std::atomic<unsigned> clockDataWrites{0}, clockCodeExchanges{0};
+    std::atomic<unsigned> partialTimingWrites{0}, failTimingWrites{0}, timingDataWrites{0};
+    std::uintptr_t        timingWriteAddress = 0;
+    std::atomic<DWORD>    resumeTarget{0};
+    std::uintptr_t        patchAddress = 0, dataAddress = 0;
+    std::uintptr_t        uiReadAddress = 0, uiRootChangeAddress = 0;
+    std::atomic<bool>     failUiRead{false};
+    std::uintptr_t        cheatWriteAddress = 0;
+    void (*cheatAfterRead)() = nullptr;
     std::atomic<bool>             advanceCheatBeforeAtomic{false}, failCheatReadback{false}, failNextCheatRead{false};
     std::uintptr_t                weatherFailAddress = 0, weatherRollbackAddress = 0;
     std::atomic<bool>             failWeatherPair{false};
@@ -194,6 +195,12 @@ namespace ClockTestFaults
         {
             const auto after = scalarAfterRead;
             scalarAfterRead = nullptr;
+            after();
+        }
+        if (result && reinterpret_cast<std::uintptr_t>(address) == cheatWriteAddress && bytes == 1 && cheatAfterRead)
+        {
+            const auto after = cheatAfterRead;
+            cheatAfterRead = nullptr;
             after();
         }
         if (reinterpret_cast<std::uintptr_t>(address) == uiReadAddress && uiRootChangeAddress)
@@ -5155,6 +5162,7 @@ namespace
 
 #include "NativeWeaponStatSdkTests.inl"
 #include "NativeWeatherRainOwnerTests.inl"
+#include "NativeWorldCheatOwnerTests.inl"
 
 int main(int argc, char** argv)
 {
@@ -5173,6 +5181,7 @@ int main(int argc, char** argv)
     NativePauseSafeTimingOwner(fixture);
     NativeSystemStateOwnedWrites(fixture);
     NativeCheatFlagOwnedAccess(fixture);
+    NativeWorldCheatRegistryOwner(fixture);
     NativeWeatherOwnedTransactions(fixture);
     NativeWeatherScalarOwnedReads(fixture);
     NativeWeaponOwnedWrites(fixture);

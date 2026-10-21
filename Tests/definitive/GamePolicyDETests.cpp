@@ -6,6 +6,7 @@
 #include "../../Client/game_de/CGameDE.h"
 #include <SharedUtil.Defines.h>
 #include <game/CPools.h>
+#include <game/CWorldCheatPolicy.h>
 
 #include <array>
 #include <cstdio>
@@ -68,6 +69,14 @@ namespace
         mta::game_de::ClockResult Frozen(bool&) const noexcept override { fixture::Unqualified(); }
     };
 
+    class LegacyTimingAccess final : public mta::game_de::NativeGameTimingAccess
+    {
+    public:
+        mta::game_de::ClockResult SetTimeScale(float) noexcept override { fixture::Unqualified(); }
+        mta::game_de::ClockResult SetMinuteDuration(std::uint32_t) noexcept override { fixture::Unqualified(); }
+        mta::game_de::ClockResult Pause(bool) noexcept override { fixture::Unqualified(); }
+    };
+
     class UnusedTimingAccess final : public mta::game_de::NativeGameTimingAccess
     {
     public:
@@ -119,7 +128,19 @@ namespace
             requestedState = value;
             return stateResult;
         }
-        mta::game_de::ClockResult ReadCheatFlag(mta::game_de::NativeCheatProfile::Flag flag, bool& output) noexcept override
+        mta::game_de::ClockResult ReadWorldCheat(MtaGame::CWorldCheatPolicy::Id id, bool& output) noexcept override
+        {
+            ++worldCheatReads;
+            requestedWorldCheat = id;
+            if (worldCheatResult == mta::game_de::ClockResult::Ok)
+                output = worldCheatValue;
+            return worldCheatResult;
+        }
+        unsigned                       worldCheatReads = 0;
+        bool                           worldCheatValue = false;
+        MtaGame::CWorldCheatPolicy::Id requestedWorldCheat = MtaGame::CWorldCheatPolicy::Id::Count;
+        mta::game_de::ClockResult      worldCheatResult = mta::game_de::ClockResult::NotInitialized;
+        mta::game_de::ClockResult      ReadCheatFlag(mta::game_de::NativeCheatProfile::Flag flag, bool& output) noexcept override
         {
             ++cheatReads;
             requestedFlag = flag;
@@ -314,31 +335,74 @@ int main()
     Refuses([&] { game.SetSystemState(SystemState::GS_INIT_PLAYING_GAME); }, "a competing native state transition remains an explicit SDK refusal");
     Check(timing.stateWrites == 3, "SDK does not retry a refused state write over native progress");
     Refuses([&] { game.VerifySADataFileNames(); }, "SDK filename verification refuses the ordinary test executable instead of declaring its data valid");
-    for (const auto* name : std::array<const char*, 7>{nullptr, "", "Hovercars", "hovercars ", "tankmode", "noreload", "healtharmormoney"})
+    LegacyTimingAccess legacyTiming;
+    for (bool sentinel : {false, true})
     {
-        Check(!game.IsCheatEnabled(name), "unqualified registry names follow MTA's unknown-name false result");
-        Check(!game.SetCheatEnabled(name, true), "unsupported native actions never reach the four world-property writes");
+        bool output = sentinel;
+        Check(legacyTiming.ReadWorldCheat(MtaGame::CWorldCheatPolicy::Id::TankMode, output) == mta::game_de::ClockResult::NotInitialized && output == sentinel,
+              "older timing owners explicitly refuse the added logical read without changing caller output");
     }
-    Check(timing.cheatReads == 0 && timing.cheatWrites == 0, "unknown names never ask the native owner for access");
+    for (const auto* name : std::array<const char*, 8>{nullptr, "", "Hovercars", "hovercars ", "RIPAZHA", "walk_underwater", "neverWanted", "KANGAROO"})
+    {
+        Check(!game.IsCheatEnabled(name), "unknown and noncanonical names preserve MTA's false result");
+        Check(!game.SetCheatEnabled(name, true), "unknown/native command aliases never reach world-property writes");
+    }
+    Check(timing.worldCheatReads == 0 && timing.cheatReads == 0 && timing.cheatWrites == 0,
+          "unknown names never ask either native access interface for a binding");
+    constexpr std::array<bool, 19> availableWorldCheats = {true,  true, true,  true,  true, true,  true, true, true, true,
+                                                           false, true, false, false, true, false, true, true, false};
+    for (std::size_t index = 0; index != MtaGame::CWorldCheatPolicy::Members.size(); ++index)
+    {
+        const auto& member = MtaGame::CWorldCheatPolicy::Members[index];
+        timing.worldCheatResult = mta::game_de::ClockResult::NotInitialized;
+        auto reads = timing.worldCheatReads;
+        Refuses([&] { game.IsCheatEnabled(member.name); }, "every known logical name requires its actual existing owner even before binding");
+        Check(timing.worldCheatReads == reads + 1 && timing.requestedWorldCheat == member.id,
+              "known names forward the exact shared logical identity once instead of becoming unknown-name false");
+        timing.worldCheatResult = mta::game_de::ClockResult::UnsupportedBuild;
+        reads = timing.worldCheatReads;
+        Refuses([&] { game.IsCheatEnabled(member.name); }, "known unavailable native binding is an explicit SDK refusal rather than disabled success");
+        Check(timing.worldCheatReads == reads + 1, "unavailable native rows are not retried or guessed from a previous read");
+        if (availableWorldCheats[index])
+        {
+            timing.worldCheatResult = mta::game_de::ClockResult::Ok;
+            timing.worldCheatValue = true;
+            reads = timing.worldCheatReads;
+            Check(game.IsCheatEnabled(member.name) && timing.worldCheatReads == reads + 1 && timing.requestedWorldCheat == member.id,
+                  "each qualified logical SDK getter returns the actual owner-provided enabled result");
+            timing.worldCheatValue = false;
+            Check(!game.IsCheatEnabled(member.name) && timing.worldCheatReads == reads + 2,
+                  "disabled native result is freshly read without a cached enabled value");
+            timing.worldCheatResult = mta::game_de::ClockResult::OwnerConflict;
+            Refuses([&] { game.IsCheatEnabled(member.name); }, "lost owner after a successful read cannot fall back to cached native state");
+            Check(timing.worldCheatReads == reads + 3, "read refusal forwards exactly once without a native retry");
+        }
+        if (!member.canBeSet)
+        {
+            timing.cheatResult = mta::game_de::ClockResult::Ok;
+            const auto writes = timing.cheatWrites;
+            reads = timing.worldCheatReads;
+            Check(!game.SetCheatEnabled(member.name, true) && !game.SetCheatEnabled(member.name, false) && timing.cheatWrites == writes &&
+                      timing.worldCheatReads == reads,
+                  "all fifteen read-only logical names retain their existing SDK write prohibition");
+        }
+    }
+    Check(timing.cheatReads == 0, "expanded logical SDK reads never fall back to the legacy four-flag interface");
     for (std::size_t index = 0; index < mta::game_de::NativeCheatProfile::Members.size(); ++index)
     {
         const auto* name = mta::game_de::NativeCheatProfile::Members[index].sdkName;
         const auto  flag = static_cast<mta::game_de::NativeCheatProfile::Flag>(index);
         timing.cheatResult = mta::game_de::ClockResult::NotInitialized;
-        Refuses([&] { game.IsCheatEnabled(name); }, "known native property read requires the existing admitted owner");
-        Refuses([&] { game.SetCheatEnabled(name, true); }, "known property setter cannot report success without a native write");
+        Refuses([&] { game.SetCheatEnabled(name, true); }, "existing four-property setter requires the admitted native write owner");
         timing.cheatResult = mta::game_de::ClockResult::Ok;
-        timing.cheatValue = true;
-        Check(game.IsCheatEnabled(name) && timing.requestedFlag == flag, "SDK property lookup reads the exact native flag identity");
-        timing.cheatValue = false;
-        Check(!game.IsCheatEnabled(name), "SDK returns the actual owner's disabled flag");
         Check(game.SetCheatEnabled(name, true) && timing.requestedFlag == flag && timing.requestedEnabled,
-              "SDK forwards each canonical MTA enable request to its native owner");
-        Check(game.SetCheatEnabled(name, false) && timing.requestedFlag == flag && !timing.requestedEnabled, "SDK forwards each canonical MTA disable request");
+              "the four settable names preserve their existing exact native Flag enable route");
+        Check(game.SetCheatEnabled(name, false) && timing.requestedFlag == flag && !timing.requestedEnabled,
+              "the four settable names preserve their existing exact native Flag disable route");
         timing.cheatResult = mta::game_de::ClockResult::Busy;
         const auto before = timing.cheatWrites;
-        Refuses([&] { game.SetCheatEnabled(name, true); }, "intervening native changes remain explicit SDK refusals");
-        Check(timing.cheatWrites == before + 1, "SDK never retries over a competing native property change");
+        Refuses([&] { game.SetCheatEnabled(name, true); }, "intervening native changes remain explicit SDK setter refusals");
+        Check(timing.cheatWrites == before + 1, "SDK setter never retries over a competing native property change");
     }
     // Only compare this fixture identity; the owner fixture separately exercises
     // the bank's actual polymorphic objects against its qualified native image.

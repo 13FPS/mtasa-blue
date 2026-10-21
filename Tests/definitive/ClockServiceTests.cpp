@@ -23,6 +23,9 @@
 #include "../../Client/game_de/NativePedTeleportProfile.h"
 #include "../../Client/game_de/NativePedVelocityMemory.h"
 #include "../../Client/game_de/NativePedVelocityProfile.h"
+#include "../../Client/game_de/NativePedReferenceMemory.h"
+#include "../../Client/game_de/NativePedReferenceProfile.h"
+#include "../../Client/game_de/NativePedReferenceController.h"
 #include "../../Client/game_de/NativePlayerInfoMemory.h"
 #include "../../Client/game_de/NativePlayerInfoProfile.h"
 #include "../../Client/game_de/NativePlayerInfoExtraProfile.h"
@@ -109,6 +112,75 @@ namespace ClockStatsOwnerTest
     }
 }
 
+namespace ClockPedReferenceOwnerTest
+{
+    using Memory = mta::game_de::NativePedReferenceMemory;
+    unsigned                  registers = 0, unregisters = 0;
+    std::uintptr_t            image = 0, entry = 0, cell = 0, node = 0;
+    bool                      forced = false, partialUnlink = false;
+    mta::game_de::ClockResult unregisterResult = mta::game_de::ClockResult::Ok;
+    template <class T>
+    T Get(std::uintptr_t at)
+    {
+        T value{};
+        std::memcpy(&value, reinterpret_cast<void*>(at), sizeof(value));
+        return value;
+    }
+    template <class T>
+    void Put(std::uintptr_t at, const T& value)
+    {
+        std::memcpy(reinterpret_cast<void*>(at), &value, sizeof(value));
+    }
+    mta::game_de::ClockResult Register(Memory::RegisterFunction function, void* target, void** word, bool force, std::uint32_t&) noexcept
+    {
+        namespace P = mta::game_de::NativePedReferenceProfile;
+        ++registers;
+        entry = reinterpret_cast<std::uintptr_t>(function) - image;
+        const auto ped = reinterpret_cast<std::uintptr_t>(target);
+        cell = reinterpret_cast<std::uintptr_t>(word);
+        forced = force;
+        node = Get<std::uintptr_t>(image + P::FreeHeadRva);
+        if (node)
+        {
+            Put(image + P::FreeHeadRva, Get<std::uintptr_t>(node));
+            Put(node, Get<std::uintptr_t>(ped + P::EntityHeadOffset));
+            Put(node + 8, cell);
+            Put(ped + P::EntityHeadOffset, node);
+        }
+        // The real registrar consumes a preassigned stable word; it does not
+        // assign that word and can return without allocating a native node.
+        return mta::game_de::ClockResult::Ok;
+    }
+    mta::game_de::ClockResult Unregister(Memory::UnregisterFunction function, void* target, void** word, std::uint32_t& exception) noexcept
+    {
+        namespace P = mta::game_de::NativePedReferenceProfile;
+        ++unregisters;
+        entry = reinterpret_cast<std::uintptr_t>(function) - image;
+        cell = reinterpret_cast<std::uintptr_t>(word);
+        auto link = reinterpret_cast<std::uintptr_t>(target) + P::EntityHeadOffset;
+        auto current = Get<std::uintptr_t>(link);
+        for (std::size_t i = 0; current && i < P::ReferenceCount; ++i)
+        {
+            if (Get<std::uintptr_t>(current + 8) == cell)
+            {
+                node = current;
+                Put(link, Get<std::uintptr_t>(current));
+                Put(current, Get<std::uintptr_t>(image + P::FreeHeadRva));
+                Put(image + P::FreeHeadRva, current);
+                if (!partialUnlink)
+                    Put(current + 8, std::uintptr_t{0});
+                break;
+            }
+            link = current;
+            current = Get<std::uintptr_t>(current);
+        }
+        // Schedule only an entered final-call fault. Production bank scans,
+        // allocation ownership and the real callback recovery grant remain.
+        if (unregisterResult != mta::game_de::ClockResult::Ok)
+            exception = EXCEPTION_ACCESS_VIOLATION;
+        return unregisterResult;
+    }
+}
 namespace ClockPedVelocityOwnerTest
 {
     unsigned    stores = 0, failAt = 0;
@@ -803,6 +875,11 @@ namespace mta::game_de::NativeImageAccess
 #define InterlockedCompareExchange ClockPedVelocityOwnerTest::Exchange
 #include "../../Client/game_de/NativePedVelocityMemory.cpp"
 #pragma pop_macro("InterlockedCompareExchange")
+#define MTA_DE_PED_REFERENCE_REGISTER_INVOKE   ClockPedReferenceOwnerTest::Register
+#define MTA_DE_PED_REFERENCE_UNREGISTER_INVOKE ClockPedReferenceOwnerTest::Unregister
+#include "../../Client/game_de/NativePedReferenceMemory.cpp"
+#undef MTA_DE_PED_REFERENCE_UNREGISTER_INVOKE
+#undef MTA_DE_PED_REFERENCE_REGISTER_INVOKE
 #undef GetModuleHandleW
 
 namespace mta::game_de::GameTimeReaderFixtureMemory
@@ -5451,6 +5528,7 @@ namespace
 #include "NativeRopesOwnerTests.inl"
 #include "NativePedTeleportOwnerTests.inl"
 #include "NativePedVelocityOwnerTests.inl"
+#include "NativePedReferenceOwnerTests.inl"
 #include "NativeWorldCheatOwnerTests.inl"
 
 int main(int argc, char** argv)
@@ -5484,6 +5562,7 @@ int main(int argc, char** argv)
     NativeRopesOwnedSdk(fixture);
     NativePedTeleportOwnedSdk(fixture);
     NativePedVelocityOwnedSdk(fixture);
+    NativePedReferenceOwnedSdk(fixture);
     NativeReadSetAndRestoration(fixture);
     NativeCoherentCommandPublication(fixture);
     NativeReadOnlyRetirement(fixture);

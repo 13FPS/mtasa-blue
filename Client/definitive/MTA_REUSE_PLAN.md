@@ -127,6 +127,22 @@ shared without a layout change. Native creation and deletion remain with the
 classic caller. This policy does not publish a DE pool or fabricate wrappers
 whose lifetime cannot yet be maintained across callbacks.
 
+The existing callback owner now retains native ped reference cells behind
+versioned CPU tokens. Registration supplies a stable pointer word to the real
+native weak-reference list and verifies the resulting node before publishing
+a token. Every later borrow checks that exact cell address, native list and
+occupied ped identity again; the seven-bit pool generation alone supplies no
+lifetime guarantee. Native destruction or bank reset invalidates borrowing
+without turning an old handle into authority to repair a recycled ped.
+
+Release consumes the token before cleanup. End retires a bounded number of
+cells per natural callback and keeps hooks, admission and module ownership
+while any native node still names their storage. An entered unlink failure
+cannot be replayed; storage is released only after a fresh complete-bank check
+proves the cell address absent under the same qualified owner generation.
+This internal ownership path reuses MTA's pool slot policy and prepares the
+wrapper lifetime boundary; it does not publish a partial `CPed` or `CPools`.
+
 Classic pool templates and the DE ped reader also share MTA's slot bounds
 policy. Free-slot selection retains the classic cursor/probe order and does
 not reserve a row or change its generation. Native allocation remains with

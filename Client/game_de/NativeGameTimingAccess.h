@@ -19,6 +19,7 @@
 #include "NativePedTransformReader.h"
 #include "NativePedTeleportAccess.h"
 #include "NativePedVelocityAccess.h"
+#include "NativePedReferenceToken.h"
 #include "NativePlayerInfoAccess.h"
 #include "NativeWantedAccess.h"
 #include "NativeRopesAccess.h"
@@ -81,6 +82,12 @@ namespace mta::game_de
         virtual ClockResult ReadPedTransform(std::uint32_t, NativePedTransformReader::Value&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult RecheckPedTransform(const NativePedTransformReader::Value&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult BorrowPedPosition(std::uint32_t, CVector*&) noexcept { return ClockResult::NotInitialized; }
+        // Stable native reference storage belongs to this runtime. Tokens
+        // select a versioned cell; they never replace callback admission or
+        // publish an incomplete SDK ped/pool object.
+        virtual ClockResult AcquirePedReference(std::uint32_t, NativePedReferenceToken&) noexcept { return ClockResult::NotInitialized; }
+        virtual ClockResult ResolvePedReference(const NativePedReferenceToken&, NativePedPoolReader::Value&) noexcept { return ClockResult::NotInitialized; }
+        virtual ClockResult ReleasePedReference(const NativePedReferenceToken&) noexcept { return ClockResult::NotInitialized; }
         // The real request belongs to a distinct admitted normal-frame scope;
         // a gameplay timer or earlier observation never grants lifecycle calls.
         virtual ClockResult StartGame() noexcept { return ClockResult::NotInitialized; }

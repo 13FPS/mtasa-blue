@@ -15,7 +15,7 @@ $previousTmp = $env:TMP
 $record = [ordered]@{schema='mta_clock_service_tests_v1';directory=$outputRoot;architecture='x64';success=$false;
     compileRuns=@();testRun=$null;checks=0;failure=$null;sourceHashes=@();sourcesUnchanged=$true;
     existingSdkClockImplementationTested=$false;productionNativeCallbackTested=$false;wrongExecutableRefusalVerified=$false;
-    productionFreezePatchTested=$false;readOnlyGameTimeReaderTested=$false;nativeCGameTimingPrerequisiteTested=$false;nativeCGameTimingWriterTested=$false;nativeStoredFPSReaderTested=$false;nativePauseSafeOwnerTested=$false;nativeApplicationFrameObserverTested=$false;nativeSystemStateOwnerTested=$false;nativeCheatFlagOwnerTested=$false;nativeWorldCheatRegistryTested=$false;nativeWeatherOwnerTested=$false;nativeWeatherScalarOwnerTested=$false;nativeTypedWeaponWriteOwnerTested=$false;nativeWeaponVectorAndBankOwnerTested=$false;nativeWeatherOverrideOwnerTested=$false;nativeWeatherPlacementOwnerTested=$false;nativeStatsSdkOwnerTested=$false;nativeWeaponStatSdkOwnerTested=$false;nativeStartGameOwnerTested=$false;nativeStartupCompletionOwnerTested=$false;nativeRainOwnerTested=$false;nativePedPoolOwnerTested=$false;nativePedTeleportOwnerTested=$false;nativePedVelocityOwnerTested=$false;nativePlayerInfoWantedOwnerTested=$false;nativeRopesOwnerTested=$false;executionArtifacts=@();
+    productionFreezePatchTested=$false;readOnlyGameTimeReaderTested=$false;nativeCGameTimingPrerequisiteTested=$false;nativeCGameTimingWriterTested=$false;nativeStoredFPSReaderTested=$false;nativePauseSafeOwnerTested=$false;nativeApplicationFrameObserverTested=$false;nativeSystemStateOwnerTested=$false;nativeCheatFlagOwnerTested=$false;nativeWorldCheatRegistryTested=$false;nativeWeatherOwnerTested=$false;nativeWeatherScalarOwnerTested=$false;nativeTypedWeaponWriteOwnerTested=$false;nativeWeaponVectorAndBankOwnerTested=$false;nativeWeatherOverrideOwnerTested=$false;nativeWeatherPlacementOwnerTested=$false;nativeStatsSdkOwnerTested=$false;nativeWeaponStatSdkOwnerTested=$false;nativeStartGameOwnerTested=$false;nativeStartupCompletionOwnerTested=$false;nativeRainOwnerTested=$false;nativePedPoolOwnerTested=$false;nativePedTeleportOwnerTested=$false;nativePedVelocityOwnerTested=$false;nativePedReferenceOwnerTested=$false;nativePlayerInfoWantedOwnerTested=$false;nativeRopesOwnerTested=$false;executionArtifacts=@();
     gameLaunched=$false;gameAttached=$false;gameClockWritten=$false;gameHooksInstalled=$false;fullMtaReady=$false}
 function Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 function RunBounded([string]$Executable,[string[]]$Arguments,[string]$Name,[int]$DeadlineMs) {
@@ -94,6 +94,8 @@ try {
         'Client/game_de/NativePedVelocityAccess.h','Client/game_de/NativePedVelocityMemory.h','Client/game_de/NativePedVelocityMemory.cpp','Client/game_de/NativePedVelocityProfile.h',
         'Client/sdk/game/CPoolSlotPolicy.h','Tests/definitive/NativePedVelocityOwnerTests.inl',
         'Tests/definitive/NativePedTeleportOwnerTests.inl',
+        'Client/game_de/NativePedReferenceAccess.h','Client/game_de/NativePedReferenceMemory.h','Client/game_de/NativePedReferenceMemory.cpp','Client/game_de/NativePedReferenceProfile.h',
+        'Client/game_de/NativePedReferenceToken.h','Client/game_de/NativePedReferenceController.h','Client/game_de/NativePedReferenceController.cpp','Tests/definitive/NativePedReferenceOwnerTests.inl',
         'Client/game_de/NativeStatsReader.h','Client/game_de/NativeStatsReader.cpp','Client/game_de/NativeStatsProfile.h',
         'Client/game_de/NativeStatsWriteAccess.h','Client/game_de/NativeStatsWriteCalls.h','Client/game_de/NativeStatsWriteCalls.cpp',
         'Client/game_de/NativeStatsWriteProfile.h','Client/game_de/CStatsReadDE.h','Client/game_de/CStatsReadDE.cpp',
@@ -174,6 +176,7 @@ try {
         (Join-Path $taskRoot 'Client/game_de/NativeWeatherOverrideAtomic.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeWeatherOverrideOwner.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeWeatherOverrideWin32.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeWeatherOverridePlacement.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeWeatherOverrideSlot.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeWeatherRainBridge.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeWeatherRainBorrowGuard.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeWeatherRainLeaf.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativePedReferenceController.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeImageAccess.cpp')) +
         $runtimeDependencies + @(('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'fixture.pdb')),('/Fe'+$executable),'/link','bcrypt.lib','user32.lib') + $objects
     [ordered]@{compiler=$record.compiler;detoursArguments=$detoursArguments;arguments=$arguments} | ConvertTo-Json -Depth 5 |
@@ -235,6 +238,8 @@ try {
     if (-not $record.nativePedTeleportOwnerTested) { throw 'Actual native ped Teleport callback owner fixture did not complete.' }
     $record['nativePedVelocityOwnerTested'] = $text.Contains('Production native ped velocity callback owner fixture completed')
     if (-not $record.nativePedVelocityOwnerTested) { throw 'Actual native ped velocity callback owner fixture did not complete.' }
+    $record['nativePedReferenceOwnerTested'] = $text.Contains('Production native ped reference callback owner fixture completed')
+    if (-not $record.nativePedReferenceOwnerTested) { throw 'Actual native ped reference callback owner fixture did not complete.' }
     $record.nativeRainOwnerTested = $text.Contains('Production native complete Rain weather SDK owner fixture completed')
     if (-not $record.nativeRainOwnerTested) { throw 'Actual complete Rain weather SDK owner fixture did not complete.' }
     $record.nativeStartupCompletionOwnerTested = $text.Contains('Production native asynchronous startup completion owner fixture completed')

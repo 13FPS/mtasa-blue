@@ -30,6 +30,7 @@
 #include "CRopesDE.h"
 #include "NativePedTeleportMemory.h"
 #include "NativePedVelocityMemory.h"
+#include "NativePedReferenceController.h"
 #include "NativeStartGameCalls.h"
 #include "NativeUObjectMembershipAccess.h"
 #include "NativeUObjectMembershipProfile.h"
@@ -110,6 +111,9 @@ namespace mta::game_de
             ClockResult TeleportPed(std::uint32_t, const CVector&) noexcept override;
             ClockResult ReadPedVelocity(std::uint32_t, NativePedVelocityKind, CVector&) noexcept override;
             ClockResult SetPedVelocity(std::uint32_t, NativePedVelocityKind, const CVector&) noexcept override;
+            ClockResult AcquirePedReference(std::uint32_t, NativePedReferenceToken&) noexcept override;
+            ClockResult ResolvePedReference(const NativePedReferenceToken&, NativePedPoolReader::Value&) noexcept override;
+            ClockResult ReleasePedReference(const NativePedReferenceToken&) noexcept override;
             ClockResult SetWeaponFloat(std::size_t slot, NativeWeaponFloatField field, float value) noexcept override;
             ClockResult SetWeaponShort(std::size_t slot, NativeWeaponShortField field, std::int16_t value) noexcept override;
             ClockResult SetWeaponDword(std::size_t slot, NativeWeaponDwordField field, std::uint32_t value) noexcept override;
@@ -249,6 +253,11 @@ namespace mta::game_de
             // Static world ropes share this owner but consume no local player.
             NativeRopesMemory ropesMemory;
             std::uint64_t     ropesGeneration = 0;
+            // Native destructors write through these stable cells. Keep their
+            // controller and callback generation until every exact cell
+            // address has disappeared from the native reference bank.
+            NativePedReferenceController pedReferences;
+            std::atomic<std::uint64_t>   referenceGeneration{0};
             // Only a failed partial XYZ intent owns rollback components. Full
             // vectors persist, and later native edits retire only the precise
             // superseded component rather than permitting a whole-row rewind.
@@ -2077,6 +2086,82 @@ namespace mta::game_de
             return true;
         }
 
+        ClockResult CheckPedReferenceRecoveryOwner() noexcept
+        {
+            const auto generation = runtime.generation.load();
+            // Expiry and End revoke borrowing, not our obligation to retire
+            // native-visible storage on this same admitted engine callback.
+            if (callbackDepth != 1 || GetCurrentThreadId() != runtime.engineThread.load() || !timingCallbackGeneration ||
+                timingCallbackGeneration != generation || runtime.referenceGeneration.load() != generation ||
+                runtime.admissionGeneration.load() != generation || !runtime.admissionSerial.load())
+                return ClockResult::OwnerConflict;
+            return CheckBinding(false, true) && CheckTimingBinding() ? ClockResult::Ok : ClockResult::BindingChanged;
+        }
+
+        NativePedReferenceMemory PedReferenceMemory() noexcept
+        {
+            return NativePedReferenceMemory({runtime.image}, &CheckTimingOwner, &CheckPedReferenceRecoveryOwner, runtime.generation.load());
+        }
+
+        ClockResult NativeAccess::AcquirePedReference(std::uint32_t handle, NativePedReferenceToken& output) noexcept
+        {
+            const auto owner = CheckTimingOwner();
+            if (owner != ClockResult::Ok)
+                return owner;
+            const auto generation = runtime.generation.load();
+            const auto retainedGeneration = runtime.referenceGeneration.load();
+            if (retainedGeneration && retainedGeneration != generation)
+                return ClockResult::OwnerConflict;
+            runtime.referenceGeneration.store(generation);
+            NativePedReferenceMemory::Receipt receipt;
+            const auto                        result = runtime.pedReferences.Acquire(PedReferenceMemory(), generation, handle, output, &receipt);
+            if (runtime.pedReferences.IsRetained())
+                runtime.restored.store(false);
+            else
+                runtime.referenceGeneration.store(0);
+            if ((receipt.entered && result != ClockResult::Ok) || runtime.pedReferences.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            return result;
+        }
+
+        ClockResult NativeAccess::ResolvePedReference(const NativePedReferenceToken& token, NativePedPoolReader::Value& output) noexcept
+        {
+            const auto owner = CheckTimingOwner();
+            if (owner != ClockResult::Ok)
+                return owner;
+            // Ordinary native destruction invalidates this borrow. It does
+            // not stop unrelated services or make the old handle a repair key.
+            return runtime.pedReferences.Resolve(PedReferenceMemory(), runtime.generation.load(), token, output);
+        }
+
+        ClockResult NativeAccess::ReleasePedReference(const NativePedReferenceToken& token) noexcept
+        {
+            const auto owner = CheckPedReferenceRecoveryOwner();
+            if (owner != ClockResult::Ok)
+                return owner;
+            NativePedReferenceMemory::Receipt receipt;
+            const auto                        result = runtime.pedReferences.Release(PedReferenceMemory(), runtime.generation.load(), token, &receipt);
+            if (!runtime.pedReferences.IsRetained())
+                runtime.referenceGeneration.store(0);
+            if ((receipt.entered && result != ClockResult::Ok) || runtime.pedReferences.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            return result;
+        }
+
+        bool RestorePedReferences() noexcept
+        {
+            if (!runtime.pedReferences.IsRetained())
+                return true;
+            if (CheckPedReferenceRecoveryOwner() != ClockResult::Ok)
+                return false;
+            NativePedReferenceController::RetireProgress progress;
+            const auto                                   result = runtime.pedReferences.Retire(PedReferenceMemory(), runtime.generation.load(), 32, progress);
+            if (runtime.pedReferences.IsRetained())
+                return false;
+            runtime.referenceGeneration.store(0);
+            return result == ClockResult::Ok;
+        }
+
         ClockResult NativeAccess::ResolvePedPoolHandle(std::uint32_t handle, NativePedPoolReader::Value& output) noexcept
         {
             // Begin already owns exact executable admission. The reader keeps
@@ -2269,6 +2354,10 @@ namespace mta::game_de
                 clean = RecoverWeather();
             if (clean && (runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load()))
                 clean = RecoverWeaponVector();
+            // Unlink may execute native code and VM release. Complete this
+            // bounded work before parking peers for clock patch restoration.
+            if (clean && runtime.pedReferences.IsRetained())
+                clean = RestorePedReferences();
             if (clean && !clockChanged && !timingChanged)
             {
                 ClockValues current;
@@ -2488,11 +2577,12 @@ namespace mta::game_de
             if (runtime.stopping.load())
             {
                 if ((runtime.captured.load() && !runtime.restored.load()) || runtime.weatherRecovery.load() || runtime.weatherGeneration.load() ||
-                    runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load() || WeatherOverrideRetained())
+                    runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load() || WeatherOverrideRetained() ||
+                    runtime.pedReferences.IsRetained())
                     RestoreOriginal();
                 else if (!runtime.captured.load() && !runtime.timingDirty.load() && !runtime.timingRecovery.load() && !runtime.weatherRecovery.load() &&
                          !runtime.weatherGeneration.load() && !runtime.weaponVectorRecovery.load() && !runtime.weaponVectorGeneration.load() &&
-                         !WeatherOverrideRetained())
+                         !WeatherOverrideRetained() && !runtime.pedReferences.IsRetained())
                     runtime.restored.store(true);
             }
             if (runtime.peersRetained.load() && !RetryPeerHoldsBounded())
@@ -2580,7 +2670,7 @@ namespace mta::game_de
                 {
                     if ((runtime.captured.load() && !runtime.restored.load()) || runtime.timingDirty.load() || runtime.timingRecovery.load() ||
                         runtime.weatherRecovery.load() || runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() ||
-                        runtime.weaponVectorGeneration.load() || WeatherOverrideRetained())
+                        runtime.weaponVectorGeneration.load() || WeatherOverrideRetained() || runtime.pedReferences.IsRetained())
                         RestoreOriginal();
                     else
                     {
@@ -3133,7 +3223,7 @@ namespace mta::game_de
                     (runtime.inFlight.load() || !runtime.restored.load() || runtime.patchInstalled.load() || runtime.patchRecovery.load() ||
                      runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() || runtime.weatherRecovery.load() ||
                      runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load() ||
-                     WeatherOverrideRetained() || runtime.peersRetained.load() || runtime.protectionPending.load()))
+                     WeatherOverrideRetained() || runtime.pedReferences.IsRetained() || runtime.peersRetained.load() || runtime.protectionPending.load()))
                     ready = false;
                 if (ready && !runtime.frameMode)
                     ready = (install ? DetourAttach : DetourDetach)(reinterpret_cast<PVOID*>(&runtime.originalContinuation),
@@ -3220,12 +3310,13 @@ namespace mta::game_de
             next.hooked = runtime.hooked.load() || runtime.timerHooked.load() || runtime.frameHooked.load();
             next.active = runtime.active.load();
             next.ready = runtime.ready.load() && !runtime.timingRecovery.load() && !runtime.weatherRecovery.load() && !runtime.weatherGeneration.load() &&
-                         !runtime.weaponVectorRecovery.load() && !runtime.weaponVectorGeneration.load() && !WeatherOverridePending();
+                         !runtime.weaponVectorRecovery.load() && !runtime.weaponVectorGeneration.load() && !WeatherOverridePending() &&
+                         !runtime.pedReferences.RecoveryPending();
             next.stopping = runtime.stopping.load();
             next.restored = runtime.restored.load() && !runtime.timingDirty.load() && !runtime.timingRecovery.load() && !runtime.weatherRecovery.load() &&
                             !runtime.weatherSuperseded.load() && !runtime.weatherGeneration.load() && !runtime.weaponVectorRecovery.load() &&
                             !runtime.weaponVectorGeneration.load() && !runtime.weaponVectorSuperseded.load() && !WeatherOverrideRetained() &&
-                            !runtime.weatherOverrideSuperseded.load();
+                            !runtime.weatherOverrideSuperseded.load() && !runtime.pedReferences.IsRetained();
             next.frozen = runtime.patchInstalled.load();
             next.modulePinned = runtime.modulePinned.load();
             next.failure = runtime.failure.load();
@@ -3248,7 +3339,8 @@ namespace mta::game_de
             next.patchRecoveryPending = runtime.patchRecovery.load();
             next.dataRecoveryPending = runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() ||
                                        runtime.weatherRecovery.load() || runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() ||
-                                       runtime.weaponVectorGeneration.load() || WeatherOverridePending();
+                                       runtime.weaponVectorGeneration.load() || WeatherOverridePending() || runtime.pedReferences.RecoveryPending() ||
+                                       (runtime.stopping.load() && runtime.pedReferences.IsRetained());
             next.protectionRestorePending = runtime.protectionPending.load();
             state = next;
             return true;
@@ -3323,8 +3415,8 @@ namespace mta::game_de
             runtime.inFlight.load() || runtime.captured.load() || runtime.patchInstalled.load() || runtime.patchRecovery.load() ||
             runtime.protectionPending.load() || runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() ||
             runtime.weatherRecovery.load() || runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() ||
-            runtime.weaponVectorGeneration.load() || WeatherOverrideRetained() || runtime.peersRetained.load() || runtime.admissionSerial.load() ||
-            runtime.generation.load() == (std::numeric_limits<std::uint64_t>::max)())
+            runtime.weaponVectorGeneration.load() || WeatherOverrideRetained() || runtime.pedReferences.IsRetained() || runtime.peersRetained.load() ||
+            runtime.admissionSerial.load() || runtime.generation.load() == (std::numeric_limits<std::uint64_t>::max)())
             return false;
         Admission::Token claim;
         if (!Admission::TryAcquire(Admission::Category::Clock, claim))
@@ -3446,7 +3538,7 @@ namespace mta::game_de
             !runtime.captured.load() && !runtime.patchInstalled.load() && !runtime.patchRecovery.load() && !runtime.protectionPending.load() &&
             !runtime.dataRecovery.load() && !runtime.peersRetained.load() && !runtime.timingDirty.load() && !runtime.timingRecovery.load() &&
             !runtime.weatherRecovery.load() && !runtime.weatherGeneration.load() && !runtime.weaponVectorRecovery.load() &&
-            !runtime.weaponVectorGeneration.load() && !WeatherOverrideRetained() && !runtime.peerBusy.load())
+            !runtime.weaponVectorGeneration.load() && !WeatherOverrideRetained() && !runtime.pedReferences.IsRetained() && !runtime.peerBusy.load())
         {
             if (ReleaseAdmission(generation))
             {
@@ -3559,7 +3651,7 @@ namespace mta::game_de
         if ((runtime.captured.load() && !runtime.restored.load()) || runtime.patchInstalled.load() || runtime.patchRecovery.load() ||
             runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() || runtime.weatherRecovery.load() ||
             runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load() || WeatherOverrideRetained() ||
-            runtime.inFlight.load() || runtime.peersRetained.load() || runtime.protectionPending.load())
+            runtime.pedReferences.IsRetained() || runtime.inFlight.load() || runtime.peersRetained.load() || runtime.protectionPending.load())
             return false;
         const bool clean = (!runtime.hooked.load() && !runtime.timerHooked.load() && !runtime.frameHooked.load()) || ChangeHooks(false);
         if (clean)
@@ -3586,6 +3678,7 @@ namespace mta::game_de
             runtime.playerInfoGeneration = 0;
             runtime.ropesMemory.Reset();
             runtime.ropesGeneration = 0;
+            runtime.referenceGeneration.store(0);
             runtime.weatherOverrideGeneration.store(0);
         }
         ReadState(finalState);
@@ -3600,6 +3693,6 @@ namespace mta::game_de
                 (runtime.captured.load() && !runtime.restored.load()) || runtime.patchInstalled.load() || runtime.patchRecovery.load() ||
                 runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() || runtime.weatherRecovery.load() ||
                 runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load() || WeatherOverrideRetained() ||
-                runtime.peersRetained.load() || runtime.protectionPending.load() || runtime.admissionSerial.load());
+                runtime.pedReferences.IsRetained() || runtime.peersRetained.load() || runtime.protectionPending.load() || runtime.admissionSerial.load());
     }
 }

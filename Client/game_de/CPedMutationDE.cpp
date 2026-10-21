@@ -9,6 +9,17 @@
 
 namespace mta::game_de
 {
+    void* CPedMutationDE::GetStoredPointer()
+    {
+        return storedPointer;
+    }
+    void CPedMutationDE::SetStoredPointer(void* pointer)
+    {
+        // CClientPed::_CreateLocalModel associates its client identity here.
+        // Preserve this ordinary SDK bookkeeping even when native borrowing
+        // is refused; it neither registers nor mutates an engine entity.
+        storedPointer = pointer;
+    }
     void CPedMutationDE::Require(ClockResult result, const char* operation)
     {
         if (result != ClockResult::Ok)

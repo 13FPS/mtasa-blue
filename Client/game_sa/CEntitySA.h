@@ -12,6 +12,7 @@
 #pragma once
 
 #include <game/CEntity.h>
+#include <game/CEntityPhysicsState.h>
 #include "CPlaceableSA.h"
 #include <CMatrix.h>
 #include <CVector2D.h>
@@ -321,8 +322,8 @@ public:
     virtual void OnChangingPosition(const CVector& vecNewPosition) {}
 
 private:
-    void*   m_pStoredPointer;
-    CVector m_LastGoodPosition;
+    void*                        m_pStoredPointer;
+    MtaGame::CEntityPhysicsState m_PhysicsState;
 };
 
 //
@@ -331,13 +332,10 @@ private:
 
 inline bool IsValidPosition(const CVector& vec)
 {
-    if (vec.fX < -16000 || vec.fX > 16000 || std::isnan(vec.fX) || vec.fY < -16000 || vec.fY > 16000 || std::isnan(vec.fY) || vec.fZ < -5000 ||
-        vec.fZ > 100000 || std::isnan(vec.fZ))
-        return false;
-    return true;
+    return MtaGame::CEntityPhysicsState::IsValidPosition(vec);
 }
 
 inline bool IsValidMatrix(const CMatrix& mat)
 {
-    return IsValidPosition(mat.vPos) && IsValidPosition(mat.vFront);
+    return MtaGame::CEntityPhysicsState::IsValidMatrix(mat);
 }

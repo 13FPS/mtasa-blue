@@ -120,6 +120,9 @@ namespace mta::game_de
             ClockResult SetPedVital(const NativePedReferenceToken&, NativePedVitalField, float) noexcept override;
             ClockResult ReadPedMetadata(const NativePedReferenceToken&, NativePedMetadata&) noexcept override;
             ClockResult SetReferencedPedVelocity(const NativePedReferenceToken&, NativePedVelocityKind, const CVector&) noexcept override;
+            ClockResult ReadReferencedPedTransform(const NativePedReferenceToken&, NativePedTransformReader::Value&) noexcept override;
+            ClockResult BorrowReferencedPedPosition(const NativePedReferenceToken&, CVector*&) noexcept override;
+            ClockResult ReadReferencedPedVelocity(const NativePedReferenceToken&, NativePedVelocityKind, CVector&) noexcept override;
             ClockResult SetWeaponFloat(std::size_t slot, NativeWeaponFloatField field, float value) noexcept override;
             ClockResult SetWeaponShort(std::size_t slot, NativeWeaponShortField field, std::int16_t value) noexcept override;
             ClockResult SetWeaponDword(std::size_t slot, NativeWeaponDwordField field, std::uint32_t value) noexcept override;
@@ -2324,6 +2327,71 @@ namespace mta::game_de
             if (result != ClockResult::Ok)
                 Stop(result);
             return result;
+        }
+
+        ClockResult NativeAccess::ReadReferencedPedTransform(const NativePedReferenceToken& token, NativePedTransformReader::Value& output) noexcept
+        {
+            NativePedPoolReader::Value before, after;
+            auto                       result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedTransformReader::Value next;
+            result = ReadPedTransform(before.handle, next);
+            if (result != ClockResult::Ok)
+                return result;
+            result = ResolvePedReference(token, after);
+            if (result != ClockResult::Ok)
+                return result;
+            if (after.nativePed != before.nativePed || after.handle != before.handle || next.ped.nativePed != before.nativePed ||
+                next.ped.handle != before.handle)
+                return ClockResult::OwnerConflict;
+            // Commit only after the registered lifetime survived the whole raw
+            // observation. No last-good cache or native repair is inferred here.
+            output = next;
+            return ClockResult::Ok;
+        }
+
+        ClockResult NativeAccess::BorrowReferencedPedPosition(const NativePedReferenceToken& token, CVector*& output) noexcept
+        {
+            NativePedPoolReader::Value before, after;
+            auto                       result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            CVector* next = nullptr;
+            result = BorrowPedPosition(before.handle, next);
+            if (result != ClockResult::Ok)
+                return result;
+            result = ResolvePedReference(token, after);
+            if (result != ClockResult::Ok)
+                return result;
+            if (after.nativePed != before.nativePed || after.handle != before.handle)
+                return ClockResult::OwnerConflict;
+            // Preserve the actual native vector address required by CEntity.
+            // This is only a current-callback borrow, never a pointer lease for
+            // another frame or permission to write through an SDK observation.
+            output = next;
+            return ClockResult::Ok;
+        }
+
+        ClockResult NativeAccess::ReadReferencedPedVelocity(const NativePedReferenceToken& token, NativePedVelocityKind kind, CVector& output) noexcept
+        {
+            NativePedPoolReader::Value before, after;
+            auto                       result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            CVector next;
+            result = ReadPedVelocity(before.handle, kind, next);
+            if (result != ClockResult::Ok)
+                return result;
+            result = ResolvePedReference(token, after);
+            if (result != ClockResult::Ok)
+                return result;
+            if (after.nativePed != before.nativePed || after.handle != before.handle)
+                return ClockResult::OwnerConflict;
+            // Keep NaNs and signed zero intact for MTA's shared validation and
+            // repair policy instead of normalising invalid native state here.
+            std::memcpy(&output, &next, sizeof(next));
+            return ClockResult::Ok;
         }
 
         ClockResult RequireWeatherOverrideOwner() noexcept

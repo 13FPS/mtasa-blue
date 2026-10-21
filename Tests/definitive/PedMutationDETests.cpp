@@ -162,10 +162,29 @@ int main()
     Owner         owner;
     MetadataOwner metadata;
     MutationOwner mutation;
+    int           clientIdentity = 0x1234, replacementIdentity = 0x5678;
     {
         fixture::PedMutationFixture instance(owner, metadata, mutation, token);
         CPed&                       ped = instance;
         const CPed&                 constant = instance;
+        CEntity&                    clientEntity = instance;
+        Check(clientEntity.GetStoredPointer() == nullptr, "actual inherited SDK client association starts null without native access");
+        clientEntity.SetStoredPointer(&clientIdentity);
+        Check(clientEntity.GetStoredPointer() == &clientIdentity && !owner.reads && !owner.writes && !metadata.reads && !mutation.writes,
+              "MTA local-model startup can store and retrieve its exact client identity without an engine lease");
+        {
+            fixture::PedMutationFixture second(owner, metadata, mutation, original);
+            Check(second.GetStoredPointer() == nullptr, "another SDK instance has an independent empty client association");
+            second.SetStoredPointer(&replacementIdentity);
+            Check(second.GetStoredPointer() == &replacementIdentity && clientEntity.GetStoredPointer() == &clientIdentity,
+                  "per-instance stored client identities neither share storage nor replace each other");
+            second.SetStoredPointer(nullptr);
+            Check(second.GetStoredPointer() == nullptr && clientEntity.GetStoredPointer() == &clientIdentity,
+                  "null explicitly clears only the selected SDK association");
+        }
+        clientEntity.SetStoredPointer(&replacementIdentity);
+        Check(clientEntity.GetStoredPointer() == &replacementIdentity, "client reassociation stores the replacement opaque identity exactly");
+        clientEntity.SetStoredPointer(&clientIdentity);
         // The layer copies only CPU token identity. Mutating the caller's
         // original metadata must not redirect the already-bound SDK instance.
         token.version = 7;
@@ -268,7 +287,15 @@ int main()
             Check(owner.writes == writes + 1 && owner.bits == 0x7fc01234, "failed armour intent preserves argument and is not replayed");
         }
         owner.result = ClockResult::Ok;
+        const auto storedReads = owner.reads, storedWrites = owner.writes, storedMetadata = metadata.reads, storedMutation = mutation.writes;
+        Check(clientEntity.GetStoredPointer() == &clientIdentity, "native setter refusals do not discard independent MTA client bookkeeping");
+        clientEntity.SetStoredPointer(nullptr);
+        Check(clientEntity.GetStoredPointer() == nullptr && owner.reads == storedReads && owner.writes == storedWrites && metadata.reads == storedMetadata &&
+                  mutation.writes == storedMutation,
+              "clearing client association invokes no native or typed owner after a refused native operation");
+        clientEntity.SetStoredPointer(&clientIdentity);
     }
+    Check(clientIdentity == 0x1234 && replacementIdentity == 0x5678, "SDK destruction never dereferences, deletes or rewrites client pointees");
     const auto reads = owner.reads, writes = owner.writes, metadataReads = metadata.reads, mutationWrites = mutation.writes;
     {
         fixture::PedMutationFixture unused(owner, metadata, mutation, original);
@@ -291,5 +318,6 @@ int main()
     Check(unavailable.TrySetMoveSpeed(zero) == ClockResult::NotInitialized, "default explicit Try path refuses without fabricating native readiness");
     CVector angular(1, 2, 3);
     Refuses([&] { unavailable.SetTurnSpeed(&angular); }, "default angular owner refuses explicitly");
+    std::puts("Production MTA ped stored pointer SDK fixture completed");
     std::printf("Passed %u actual CPed mutation SDK checks (%zu-bit)\n", checks, sizeof(void*) * 8);
 }

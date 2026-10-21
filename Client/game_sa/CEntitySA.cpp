@@ -143,7 +143,7 @@ void CEntitySA::SetPosition(float fX, float fY, float fZ)
         vecPos->fX = fX;
         vecPos->fY = fY;
         vecPos->fZ = fZ;
-        m_LastGoodPosition = *vecPos;
+        m_PhysicsState.RememberPosition(*vecPos);
     }
 
     WORD wModelID = GetModelIndex();
@@ -273,14 +273,11 @@ void CEntitySA::SetPosition(CVector* vecPosition)
 
 void CEntitySA::RestoreLastGoodPhysicsState()
 {
-    // Validate m_LastGoodPosition
-    if (!IsValidPosition(m_LastGoodPosition))
-        m_LastGoodPosition = CVector(6000, (float)(rand() % 2000), 1000);
-
-    CMatrix matrix;
-    matrix.vPos = m_LastGoodPosition;
+    // Shared CPU policy preserves the original lazy random draw and identity
+    // repair matrix; native placement/RW/world effects still belong here.
+    CMatrix matrix = m_PhysicsState.PrepareRepair([] { return rand(); });
     SetMatrix(&matrix);
-    SetPosition(&m_LastGoodPosition);
+    SetPosition(&m_PhysicsState.LastGoodPosition());
 }
 
 //
@@ -288,14 +285,7 @@ void CEntitySA::RestoreLastGoodPhysicsState()
 //
 CVector* CEntitySA::GetPosition()
 {
-    CVector* pPosition = GetPositionInternal();
-    if (!IsValidPosition(*pPosition))
-    {
-        RestoreLastGoodPhysicsState();
-        pPosition = GetPositionInternal();
-    }
-    m_LastGoodPosition = *pPosition;
-    return pPosition;
+    return m_PhysicsState.GetPosition([this] { return GetPositionInternal(); }, [this] { RestoreLastGoodPhysicsState(); });
 }
 
 CVector* CEntitySA::GetPositionInternal()
@@ -311,17 +301,7 @@ CVector* CEntitySA::GetPositionInternal()
 //
 CMatrix* CEntitySA::GetMatrix(CMatrix* matrix)
 {
-    CMatrix* pMatrix = GetMatrixInternal(matrix);
-    if (pMatrix)
-    {
-        if (!IsValidMatrix(*pMatrix))
-        {
-            RestoreLastGoodPhysicsState();
-            pMatrix = GetMatrixInternal(matrix);
-        }
-        m_LastGoodPosition = pMatrix->vPos;
-    }
-    return pMatrix;
+    return m_PhysicsState.GetMatrix(matrix, [this](CMatrix* output) { return GetMatrixInternal(output); }, [this] { RestoreLastGoodPhysicsState(); });
 }
 
 CMatrix* CEntitySA::GetMatrixInternal(CMatrix* matrix)
@@ -352,7 +332,7 @@ void CEntitySA::SetMatrix(CMatrix* matrix)
         MemCpyFast(&m_pInterface->matrix->vRight, &matrix->vRight, sizeof(CVector));
 
         m_pInterface->m_transform.m_translate = matrix->vPos;
-        m_LastGoodPosition = matrix->vPos;
+        m_PhysicsState.RememberPosition(matrix->vPos);
 
         /*
         WORD wModelID = GetModelIndex();

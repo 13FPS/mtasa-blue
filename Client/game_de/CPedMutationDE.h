@@ -16,8 +16,10 @@ namespace mta::game_de
     class CPedMutationDE : public CPedMetadataDE
     {
     public:
-        void SetMoveSpeed(const CVector& velocity) noexcept override;
-        void SetTurnSpeed(CVector* velocity) override;
+        void  SetMoveSpeed(const CVector& velocity) noexcept override;
+        void  SetTurnSpeed(CVector* velocity) override;
+        void* GetStoredPointer() override;
+        void  SetStoredPointer(void* pointer) override;
 
         ClockResult TrySetMoveSpeed(const CVector& velocity) noexcept;
         ClockResult LastMoveSpeedResult() const noexcept { return moveSpeedResult.load(); }
@@ -35,6 +37,10 @@ namespace mta::game_de
         // destruction neither acquire a reference nor retire native storage.
         NativePedMutationAccess& mutation;
         std::atomic<ClockResult> moveSpeedResult{ClockResult::NotInitialized};
+        // This is MTA's client association, not a native object pointer or
+        // reference lease. The caller retains its pointee's lifetime exactly
+        // as in CEntitySA; destruction never dereferences or deletes it.
+        void* storedPointer = nullptr;
     };
     static_assert(std::is_abstract_v<CPedMutationDE> && std::is_base_of_v<CPed, CPedMutationDE>);
 }

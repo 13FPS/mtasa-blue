@@ -175,8 +175,20 @@ The abstract `CPedMutationDE` layer adds the existing raw `SetMoveSpeed` and
 `SetTurnSpeed` SDK methods through that same registered token. Successful
 components persist if a later reference acknowledgement fails; the owner stops
 without replaying the request. The noexcept move-speed setter records its
-result explicitly. Velocity getters and placement methods remain pure while
-their classic bad-physics repair and teleport wrapper behavior are incomplete.
+result explicitly. Its stored-client-pointer methods preserve the existing
+`CClientPed::_CreateLocalModel` association as per-instance CPU bookkeeping;
+they neither acquire an engine lease nor take ownership of the client object.
+
+Position, matrix and raw velocity observations also resolve the retained token
+before and after the existing native readers. Refused or lost lifetimes preserve
+caller outputs; a position borrow keeps the actual native vector address only
+within that admitted callback. MTA's exact bounds, remembered position, lazy
+fallback selection and single repair/re-read ordering now live in the shared
+`CEntityPhysicsState`, consumed by the actual classic entity/physical getters.
+The DE getter layer uses this same policy with a mandatory pure native repair
+hook. Complete placement, world/actor refresh and collision reset must be
+qualified before a concrete ped can supply that hook. Placement setters and
+the classic teleport wrapper remain incomplete; no ped factory is published.
 
 Classic pool templates and the DE ped reader also share MTA's slot bounds
 policy. Free-slot selection retains the classic cursor/probe order and does

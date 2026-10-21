@@ -65,24 +65,14 @@ void CPhysicalSA::RestoreLastGoodPhysicsState()
 
 CVector* CPhysicalSA::GetMoveSpeed(CVector* vecMoveSpeed)
 {
-    GetMoveSpeedInternal(vecMoveSpeed);
-    if (!IsValidPosition(*vecMoveSpeed))
-    {
-        RestoreLastGoodPhysicsState();
-        GetMoveSpeedInternal(vecMoveSpeed);
-    }
-    return vecMoveSpeed;
+    return MtaGame::CEntityPhysicsState::GetVelocity(
+        vecMoveSpeed, [this](CVector* output) { GetMoveSpeedInternal(output); }, [this] { RestoreLastGoodPhysicsState(); });
 }
 
 CVector* CPhysicalSA::GetTurnSpeed(CVector* vecTurnSpeed)
 {
-    GetTurnSpeedInternal(vecTurnSpeed);
-    if (!IsValidPosition(*vecTurnSpeed))
-    {
-        RestoreLastGoodPhysicsState();
-        GetTurnSpeedInternal(vecTurnSpeed);
-    }
-    return vecTurnSpeed;
+    return MtaGame::CEntityPhysicsState::GetVelocity(
+        vecTurnSpeed, [this](CVector* output) { GetTurnSpeedInternal(output); }, [this] { RestoreLastGoodPhysicsState(); });
 }
 
 CVector* CPhysicalSA::GetMoveSpeedInternal(CVector* vecMoveSpeed)

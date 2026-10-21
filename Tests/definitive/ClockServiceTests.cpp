@@ -23,6 +23,7 @@
 #include "../../Client/game_de/NativePedTeleportProfile.h"
 #include "../../Client/game_de/NativePedVelocityMemory.h"
 #include "../../Client/game_de/NativePedVelocityProfile.h"
+#include "../../Client/game_de/NativePedObservationAccess.h"
 #include "../../Client/game_de/NativePedReferenceMemory.h"
 #include "../../Client/game_de/NativePedReferenceProfile.h"
 #include "../../Client/game_de/NativePedReferenceController.h"
@@ -205,6 +206,26 @@ namespace ClockPedVitalsOwnerTest
             std::memcpy(reinterpret_cast<void*>(flag), &different, sizeof(different));
         }
         return observed;
+    }
+}
+namespace ClockPedObservationOwnerTest
+{
+    std::uintptr_t address = 0, cell = 0;
+    bool           clearOnRead = false;
+    unsigned       invalidations = 0;
+    BOOL WINAPI    Read(HANDLE process, LPCVOID source, LPVOID destination, SIZE_T bytes, SIZE_T* copied)
+    {
+        const auto result = ::ReadProcessMemory(process, source, destination, bytes, copied);
+        if (result && clearOnRead && reinterpret_cast<std::uintptr_t>(source) == address && bytes == sizeof(CVector))
+        {
+            clearOnRead = false;
+            const std::uintptr_t zero = 0;
+            // The raw reader still has a valid pool row. Only its independently
+            // registered weak word is invalidated after a successful OS copy.
+            std::memcpy(reinterpret_cast<void*>(cell), &zero, sizeof(zero));
+            ++invalidations;
+        }
+        return result;
     }
 }
 namespace ClockPedVelocityOwnerTest
@@ -907,7 +928,10 @@ namespace mta::game_de::NativeImageAccess
     #undef InterlockedCompareExchange
 #endif
 #define InterlockedCompareExchange ClockPedVelocityOwnerTest::Exchange
+#pragma push_macro("ReadProcessMemory")
+#define ReadProcessMemory ClockPedObservationOwnerTest::Read
 #include "../../Client/game_de/NativePedVelocityMemory.cpp"
+#pragma pop_macro("ReadProcessMemory")
 #pragma pop_macro("InterlockedCompareExchange")
 #define MTA_DE_PED_REFERENCE_REGISTER_INVOKE   ClockPedReferenceOwnerTest::Register
 #define MTA_DE_PED_REFERENCE_UNREGISTER_INVOKE ClockPedReferenceOwnerTest::Unregister
@@ -5574,6 +5598,7 @@ namespace
 #include "NativePedMutationOwnerTests.inl"
 #include "NativePedVitalsOwnerTests.inl"
 #include "NativePedMetadataOwnerTests.inl"
+#include "NativePedObservationOwnerTests.inl"
 #include "NativeWorldCheatOwnerTests.inl"
 
 int main(int argc, char** argv)
@@ -5611,6 +5636,7 @@ int main(int argc, char** argv)
     NativePedMutationOwnedSdk(fixture);
     NativePedVitalsOwnedSdk(fixture);
     NativePedMetadataOwnedSdk(fixture);
+    NativePedObservationOwnedSdk(fixture);
     NativeReadSetAndRestoration(fixture);
     NativeCoherentCommandPublication(fixture);
     NativeReadOnlyRetirement(fixture);

@@ -52,6 +52,7 @@ function RunOwned([string]$Executable,[string[]]$Arguments,[string]$Directory,[s
 
 try {
     $sourceNames = @('Client/game_de/NativeGameStateReader.h','Client/game_de/NativeGameStateReader.cpp',
+        'Client/game_de/NativeGameStateMemory.h','Client/game_de/NativeGameStateMemory.cpp',
         'Client/game_de/NativeGameStateProfile.h','Client/game_de/NativeFrontendMenuProfile.h','Client/game_de/NativeFrontendMenuProfile.h','Client/game_de/NativeImageAccess.h','Client/game_de/NativeImageAccess.cpp',
         'Client/sdk/game/CGameAdapter.h','Shared/sdk/CControllerState.h','Shared/sdk/CControllerActions.h',
         'Shared/sdk/CControlStateSynthesis.h','Shared/sdk/enums/SystemState.h','Tests/definitive/MenuStateTests.cpp','Tests/definitive/test_menu_state.ps1')

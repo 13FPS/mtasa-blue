@@ -7,6 +7,7 @@
 #include "../../Client/game_de/CGameTimingDE.h"
 #include "../../Client/game_de/NativeGameTimingProfile.h"
 #include "../../Client/game_de/NativeGameFPSProfile.h"
+#include "../../Client/game_de/NativeGameStateProfile.h"
 #include "../../Client/game_de/NativeServiceAdmission.h"
 #include <array>
 #include <cstdio>
@@ -176,6 +177,7 @@ namespace ClockReaderTestHost
     std::atomic<unsigned> samples{0}, mismatchSample{0};
     std::atomic<unsigned> timingSamples{0}, mismatchTimingSample{0};
     std::atomic<unsigned> fpsSamples{0}, mismatchFPSSample{0}, failFPSSample{0};
+    std::atomic<unsigned> systemStateSamples{0}, transitionSystemStateSample{0};
 
     HMODULE WINAPI Module(LPCWSTR name)
     {
@@ -221,7 +223,33 @@ namespace mta::game_de::NativeImageAccess
         }
         return true;
     }
+
+    bool SystemStateFixtureReadImage(std::uintptr_t image, std::uintptr_t address, void* destination, std::size_t bytes, bool writable = false,
+                                     bool executable = false) noexcept
+    {
+        if (!ReadImage(image, address, destination, bytes, writable, executable))
+            return false;
+        if (address == image + NativeGameStateProfile::stateRva && bytes == sizeof(std::uint32_t) &&
+            ClockReaderTestHost::systemStateSamples.fetch_add(1) + 1 == ClockReaderTestHost::transitionSystemStateSample.load())
+        {
+            // Advance the real owned DWORD after the last successful sample.
+            // The actual production CAS must preserve it and report Busy.
+            const std::uint32_t advanced = 9;
+            SIZE_T              written = 0;
+            if (!::WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(address), &advanced, sizeof(advanced), &written) ||
+                written != sizeof(advanced))
+                std::abort();
+            ClockReaderTestHost::transitionSystemStateSample.store(0);
+        }
+        return true;
+    }
 }
+
+// Only the OS read boundary can schedule an owned-image transition here. Both
+// native ownership checks and the four-byte atomic replacement stay unchanged.
+#define ReadImage SystemStateFixtureReadImage
+#include "../../Client/game_de/NativeGameStateMemory.cpp"
+#undef ReadImage
 
 namespace mta::game_de::GameTimeReaderFixtureMemory
 {
@@ -471,6 +499,19 @@ namespace
             admit(NativeGameFPSProfile::averageMsRva, values.data(), sizeof(values), PAGE_READWRITE);
             admit(NativeGameFPSProfile::previousSecondsRva, &previousSeconds, sizeof(previousSeconds), PAGE_READWRITE);
             admit(NativeGameFPSProfile::secondsPerCycleRva, &secondsPerCycle, sizeof(secondsPerCycle), PAGE_READWRITE);
+        }
+        void AdmitSystemStatePins()
+        {
+            for (const auto& pin : NativeGameStateProfile::pins)
+            {
+                DWORD previous = 0, ignored = 0;
+                Check(::VirtualProtect(reinterpret_cast<void*>(image + pin.rva), pin.size, PAGE_READWRITE, &previous) != FALSE,
+                      "populate only owned native state-dispatch fixture pins");
+                std::memcpy(reinterpret_cast<void*>(image + pin.rva), pin.bytes, pin.size);
+                Check(::VirtualProtect(reinterpret_cast<void*>(image + pin.rva), pin.size, pin.code ? PAGE_EXECUTE_READ : PAGE_READONLY, &ignored) != FALSE &&
+                          ::FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(image + pin.rva), pin.size),
+                      "native state pins use actual RX or immutable RO image pages");
+            }
         }
         void AdmitApplicationPins()
         {
@@ -1928,6 +1969,138 @@ namespace
         std::puts("Production pause-safe native timing owner fixture completed");
     }
 
+    struct SystemStateContext
+    {
+        unsigned          calls = 0, refusal = 0;
+        SystemState::Enum requested = SystemState::GS_INIT_PLAYING_GAME;
+        ClockResult       result = ClockResult::NotInitialized;
+    };
+
+    void SystemStateHandler(NativeGameTimingAccess& access, void* opaque)
+    {
+        auto& context = *static_cast<SystemStateContext*>(opaque);
+        ++context.calls;
+        Check(callbackDepth == 1 && timingTimerScope && timingCallbackGeneration == runtime.generation.load() && runtime.timerReady.load() &&
+                  runtime.engineThread.load() == GetCurrentThreadId(),
+              "system-state writes are requested from the actual admitted post-original timing handler");
+        const auto generation = timingCallbackGeneration;
+        const auto admission = runtime.admissionGeneration.load();
+        const auto refreshed = runtime.refreshed.load();
+        if (context.refusal == 1)
+            timingCallbackGeneration = generation + 1;
+        if (context.refusal == 2)
+            runtime.admissionGeneration.store(admission + 1);
+        if (context.refusal == 3)
+            ++callbackDepth;
+        if (context.refusal == 4)
+            runtime.refreshed.store(GetTickCount64() - ClockServiceLeaseMsV1 - 1);
+        context.result = access.SetSystemState(context.requested);
+        runtime.refreshed.store(refreshed);
+        if (context.refusal == 3)
+            --callbackDepth;
+        runtime.admissionGeneration.store(admission);
+        timingCallbackGeneration = generation;
+    }
+
+    void NativeSystemStateOwnedWrites(ClockImageFixture& fixture)
+    {
+        namespace StateProfile = NativeGameStateProfile;
+        // This earlier timer fixture has a small synthetic alternate-origin
+        // tail at the dispatcher entry. Preserve it while the independent state
+        // cohort seeds every real profile pin, then return it to later tests.
+        std::array<std::array<unsigned char, 94>, StateProfile::pins.size()> originals{};
+        for (std::size_t index = 0; index < originals.size(); ++index)
+            originals[index] = fixture.Get<std::array<unsigned char, 94>>(StateProfile::pins[index].rva);
+        fixture.AdmitSystemStatePins();
+        DWORD priorStateProtection = 0, ignored = 0;
+        Check(::VirtualProtect(reinterpret_cast<void*>(fixture.image + StateProfile::stateRva), sizeof(std::uint32_t), PAGE_READWRITE, &priorStateProtection) !=
+                  FALSE,
+              "the native state cohort admits only its actual owned DWORD page");
+        fixture.Put(StateProfile::stateRva, std::uint32_t{9});
+        NativeClockService service;
+        SystemStateContext context;
+        BeginOwned(service, fixture, false, true, true, &SystemStateHandler, &context);
+        fixture.invokeTimer();
+        Check(context.calls == 1 && context.result == ClockResult::Ok && fixture.Get<std::uint32_t>(StateProfile::stateRva) == 8 && !runtime.captured.load() &&
+                  !runtime.timingCaptured.load() && !runtime.timingDirty.load() && !runtime.timingRecovery.load(),
+              "the real timer owner accepts a system-state request without capturing temporary clock or timing restoration debt");
+        Check(runtime.access.SetSystemState(SystemState::GS_FRONTEND) != ClockResult::Ok && fixture.Get<std::uint32_t>(StateProfile::stateRva) == 8,
+              "a producer on the adopted OS thread cannot borrow system-state write authority outside its natural handler");
+        bool        foreignRefused = false;
+        std::thread foreign([&] { foreignRefused = runtime.access.SetSystemState(SystemState::GS_FRONTEND) != ClockResult::Ok; });
+        foreign.join();
+        Check(foreignRefused && fixture.Get<std::uint32_t>(StateProfile::stateRva) == 8,
+              "a foreign producer cannot change the dispatcher through the active native owner");
+        for (const auto target : {SystemState::GS_INIT_FRONTEND, SystemState::GS_FRONTEND, SystemState::GS_INIT_PLAYING_GAME, SystemState::GS_PLAYING_GAME})
+        {
+            context.requested = target;
+            fixture.invokeTimer();
+            std::uint32_t encoded = 0;
+            Check(NativeGameStateMemory::Encode(target, encoded) && context.result == ClockResult::Ok &&
+                      fixture.Get<std::uint32_t>(StateProfile::stateRva) == encoded,
+                  "each established SDK state reaches the checked native DWORD through the real timing access implementation");
+        }
+        context.requested = SystemState::GS_INIT_PLAYING_GAME;
+        fixture.invokeTimer();
+        for (const auto invalid : {SystemState::GS_START_UP, SystemState::GS_INIT_LOGO_MPEG, SystemState::GS_LOGO_MPEG, SystemState::GS_INIT_INTRO_MPEG,
+                                   SystemState::GS_INTRO_MPEG, SystemState::GS_INIT_ONCE})
+        {
+            context.requested = invalid;
+            fixture.invokeTimer();
+            Check(context.result == ClockResult::InvalidArgument && fixture.Get<std::uint32_t>(StateProfile::stateRva) == 8,
+                  "unproved early SDK states refuse before any native system-state write");
+        }
+        context.requested = SystemState::GS_FRONTEND;
+        for (unsigned refusal = 1; refusal <= 4; ++refusal)
+        {
+            context.refusal = refusal;
+            fixture.invokeTimer();
+            const auto expected = refusal <= 2 ? ClockResult::OwnerConflict : refusal == 3 ? ClockResult::WrongThread : ClockResult::Expired;
+            Check(context.result == expected && fixture.Get<std::uint32_t>(StateProfile::stateRva) == 8,
+                  "stale generations, wrong admission, nested callbacks and expiry cannot borrow a system-state write");
+        }
+        context.refusal = 0;
+        auto changed = StateProfile::frontend_texture_label;
+        changed[0] ^= 1;
+        fixture.Patch(StateProfile::frontend_texture_labelRva, changed.data(), changed.size());
+        fixture.invokeTimer();
+        Check(context.result == ClockResult::BindingChanged && fixture.Get<std::uint32_t>(StateProfile::stateRva) == 8,
+              "system-state writes independently require their complete semantic profile on the admitted timing owner");
+        fixture.Patch(StateProfile::frontend_texture_labelRva, StateProfile::frontend_texture_label.data(), StateProfile::frontend_texture_label.size());
+        fixture.Put(StateProfile::stateRva, std::uint32_t{0});
+        fixture.invokeTimer();
+        Check(context.result == ClockResult::BindingChanged && fixture.Get<std::uint32_t>(StateProfile::stateRva) == 0,
+              "an unproved current native state cannot be overwritten by a known target");
+        fixture.Put(StateProfile::stateRva, std::uint32_t{7});
+        ClockReaderTestHost::systemStateSamples.store(0);
+        ClockReaderTestHost::transitionSystemStateSample.store(2);
+        context.requested = SystemState::GS_INIT_PLAYING_GAME;
+        fixture.invokeTimer();
+        Check(context.result == ClockResult::Busy && !ClockReaderTestHost::transitionSystemStateSample.load() &&
+                  fixture.Get<std::uint32_t>(StateProfile::stateRva) == 9,
+              "a native advance after the owned read is preserved by the real CAS and reported as Busy through timing access");
+        fixture.invokeTimer();
+        Check(context.result == ClockResult::Ok && fixture.Get<std::uint32_t>(StateProfile::stateRva) == 8,
+              "a subsequent natural callback can submit fresh persistent state intent after a refused stale request");
+        const auto calls = context.calls;
+        if (!service.End())
+        {
+            fixture.invokeTimer();
+            Check(service.End(), "state-owner retirement can finish on its existing native callback");
+        }
+        Check(!service.IsRetained() && !runtime.hooked.load() && !runtime.timerHooked.load() && !runtime.timingHandler && !runtime.timingContext &&
+                  context.calls == calls && fixture.Get<std::uint32_t>(StateProfile::stateRva) == 8 &&
+                  runtime.access.SetSystemState(SystemState::GS_FRONTEND) == ClockResult::NotInitialized && !runtime.timingDirty.load() &&
+                  !runtime.timingRecovery.load() && !NativeServiceAdmission::IsClaimed(NativeServiceAdmission::Category::Clock),
+              "End retires the actual owner and hooks without restoring an old system state over persistent dispatcher intent");
+        fixture.Put(StateProfile::stateRva, std::uint32_t{9});
+        for (std::size_t index = 0; index < originals.size(); ++index)
+            fixture.Patch(StateProfile::pins[index].rva, originals[index].data(), StateProfile::pins[index].size);
+        Check(::VirtualProtect(reinterpret_cast<void*>(fixture.image + StateProfile::stateRva), sizeof(std::uint32_t), priorStateProtection, &ignored) != FALSE,
+              "restore only the owned fixture's previous state-page protection for later cohorts");
+        std::puts("Production native CGame system-state owner fixture completed");
+    }
+
     struct ApplicationFrameContext
     {
         unsigned               calls = 0, originalCountAtLastHandler = 0;
@@ -2923,6 +3096,7 @@ int main(int argc, char** argv)
     NativeStoredFPSReader(fixture);
     NativeTimingWritesAndRestoration(fixture);
     NativePauseSafeTimingOwner(fixture);
+    NativeSystemStateOwnedWrites(fixture);
     NativeReadSetAndRestoration(fixture);
     NativeCoherentCommandPublication(fixture);
     NativeReadOnlyRetirement(fixture);

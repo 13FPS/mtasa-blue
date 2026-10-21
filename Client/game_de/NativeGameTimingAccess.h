@@ -6,6 +6,7 @@
 #pragma once
 
 #include <game/CGameClockService.h>
+#include <enums/SystemState.h>
 #include <cstdint>
 
 namespace mta::game_de
@@ -19,6 +20,10 @@ namespace mta::game_de
         virtual ClockResult SetTimeScale(float value) noexcept = 0;
         virtual ClockResult SetMinuteDuration(std::uint32_t value) noexcept = 0;
         virtual ClockResult Pause(bool value) noexcept = 0;
+        // Startup state shares the same natural engine callback admission.
+        // Older timing-only owners explicitly refuse this additional write;
+        // recognizing a state value never grants an engine transition lease.
+        virtual ClockResult SetSystemState(SystemState::Enum) noexcept { return ClockResult::NotInitialized; }
 
     protected:
         ~NativeGameTimingAccess() = default;

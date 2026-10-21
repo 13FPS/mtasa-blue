@@ -5,6 +5,11 @@
  *****************************************************************************/
 #include "CGameDE.h"
 
+// Pool SDK headers use the shared vector constants normally supplied by the
+// classic PCH; the DE backend must provide that dependency explicitly.
+#include <SharedUtil.Defines.h>
+#include <game/CPools.h>
+
 #include <stdexcept>
 #include <string>
 
@@ -43,6 +48,59 @@ namespace mta::game_de
         return asyncLoading.IsEnabled(ignoreSuspend);
     }
 
+    int& CGameDE::GetCheckStatus()
+    {
+        // MTA owns this diagnostic slot independently of the engine's startup
+        // state. Returning the actual slot preserves the SDK reference contract.
+        return checkStatus;
+    }
+
+    void CGameDE::OnPedContextChange(CPed* context)
+    {
+        pedContext = context;
+    }
+
+    CPed* CGameDE::GetPedContext()
+    {
+        if (!pedContext)
+        {
+            // Preserve MTA's lazy local-player fallback through its real pool
+            // interface. A raw DE actor pointer is not an SDK CPed instance.
+            auto* pools = GetPools();
+            if (!pools)
+                throw std::runtime_error("DE CGame ped context requires an available pool service");
+            pedContext = pools->GetPedFromRef(DWORD{1});
+        }
+        return pedContext;
+    }
+
+    void CGameDE::SetPreWeaponFireHandler(PreWeaponFireHandler* handler)
+    {
+        preWeaponFireHandler = handler;
+    }
+
+    void CGameDE::SetPostWeaponFireHandler(PostWeaponFireHandler* handler)
+    {
+        postWeaponFireHandler = handler;
+    }
+
+    void CGameDE::SetTaskSimpleBeHitHandler(TaskSimpleBeHitHandler* handler)
+    {
+        taskSimpleBeHitHandler = handler;
+    }
+
+    void CGameDE::SetJetpackWeaponEnabled(eWeaponType weaponType, bool enabled)
+    {
+        // Reuse MTA's policy table while DE's actual native jetpack consumer
+        // remains unimplemented. This setter does not claim native effects.
+        jetpackWeapons.Set(static_cast<int>(weaponType), enabled);
+    }
+
+    bool CGameDE::GetJetpackWeaponEnabled(eWeaponType weaponType)
+    {
+        return jetpackWeapons.Get(static_cast<int>(weaponType));
+    }
+
     SystemState::Enum CGameDE::GetSystemState()
     {
         SystemState::Enum state;
@@ -65,6 +123,28 @@ namespace mta::game_de
         if (result != Status::Ok)
             throw std::runtime_error("DE CGame menu state unavailable (status " + std::to_string(static_cast<std::uint32_t>(result)) + ")");
         return visible;
+    }
+
+    void CGameDE::SetSystemState(SystemState::Enum state)
+    {
+        // Use the same native generation and engine-thread owner as timing.
+        // A scalar dispatcher request does not perform the additional native
+        // frontend teardown and loading operations required by StartGame.
+        RequireNativeWrite(NativeWrites().SetSystemState(state), "SetSystemState");
+    }
+
+    bool CGameDE::VerifySADataFileNames()
+    {
+        // Like the classic SDK method, compare the names the native loaders
+        // actually consume. Filesystem existence cannot detect redirected
+        // operands and checking a nearby unused literal would miss that edit.
+        auto result = dataFileNames.IsBound() ? Status::Ok : dataFileNames.Bind();
+        bool verified = false;
+        if (result == Status::Ok)
+            result = dataFileNames.Read(verified);
+        if (result != Status::Ok)
+            throw std::runtime_error("DE CGame data filenames unavailable (status " + std::to_string(static_cast<std::uint32_t>(result)) + ")");
+        return verified;
     }
 
     NativeStreamingFileIds CGameDE::RequireStreamingLayout() const

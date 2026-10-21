@@ -11,6 +11,7 @@
 
 #pragma once
 #include <CAsyncLoadingPolicy.h>
+#include <CJetpackWeaponPolicy.h>
 #include <game/CGame.h>
 #include <game/RenderWare.h>
 #include "CFxManagerSA.h"
@@ -395,7 +396,12 @@ private:
 
     std::map<std::string, SCheatSA*> m_Cheats;
 
-    SFixedArray<bool, WEAPONTYPE_LAST_WEAPONTYPE> m_JetpackWeapons;
+    using JetpackWeaponPolicy = MtaGame::CJetpackWeaponPolicy<WEAPONTYPE_LAST_WEAPONTYPE, WEAPONTYPE_BRASSKNUCKLE>;
+    // The shared policy initializes previously indeterminate permissions without
+    // changing this classic object's storage footprint or member alignment.
+    static_assert(sizeof(JetpackWeaponPolicy) == sizeof(SFixedArray<bool, WEAPONTYPE_LAST_WEAPONTYPE>));
+    static_assert(alignof(JetpackWeaponPolicy) == alignof(SFixedArray<bool, WEAPONTYPE_LAST_WEAPONTYPE>));
+    JetpackWeaponPolicy m_JetpackWeapons;
 
     CPed* m_pPedContext;
 };

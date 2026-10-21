@@ -11,6 +11,8 @@
 #include "CAsyncLoadingDE.h"
 #include "NativeStreamingFileIdsReader.h"
 #include "NativeGameStateReader.h"
+#include "NativeDataFileNamesReader.h"
+#include <CJetpackWeaponPolicy.h>
 
 namespace mta::game_de
 {
@@ -24,11 +26,24 @@ namespace mta::game_de
         CClock*           GetClock() noexcept override;
         CKeyGen*          GetKeyGen() noexcept override;
         SystemState::Enum GetSystemState() override;
+        void              SetSystemState(SystemState::Enum state) override;
         bool              IsAtMenu() override;
+        bool              VerifySADataFileNames() override;
 
         void SetAsyncLoadingFromScript(bool enabled, bool forced) override;
         void SuspendASyncLoading(bool suspended, uint autoUnsuspendDelay = 0) override;
         bool IsASyncLoadingEnabled(bool ignoreSuspend = false) override;
+
+        int&  GetCheckStatus() override;
+        void  OnPedContextChange(CPed* context) override;
+        CPed* GetPedContext() override;
+
+        void SetPreWeaponFireHandler(PreWeaponFireHandler* handler) override;
+        void SetPostWeaponFireHandler(PostWeaponFireHandler* handler) override;
+        void SetTaskSimpleBeHitHandler(TaskSimpleBeHitHandler* handler) override;
+
+        void SetJetpackWeaponEnabled(eWeaponType weaponType, bool enabled) override;
+        bool GetJetpackWeaponEnabled(eWeaponType weaponType) override;
 
         uint32_t GetBaseIDforDFF() override;
         uint32_t GetBaseIDforTXD() override;
@@ -49,14 +64,28 @@ namespace mta::game_de
         CGameDE(const NativeGameTimingReader& reader, CClockDE& nativeClock, NativeGameTimingAccess& timingWriter,
                 const NativeStreamingFileIdsReader& streamingReader, const NativeGameStateReader& stateReader) noexcept;
 
+        // Registration is SDK bookkeeping only. A future qualified DE hook
+        // must read these borrowed handlers rather than installing a second
+        // registration store or assuming that registration enabled dispatch.
+        PreWeaponFireHandler*   GetPreWeaponFireHandler() const noexcept { return preWeaponFireHandler; }
+        PostWeaponFireHandler*  GetPostWeaponFireHandler() const noexcept { return postWeaponFireHandler; }
+        TaskSimpleBeHitHandler* GetTaskSimpleBeHitHandler() const noexcept { return taskSimpleBeHitHandler; }
+
     private:
         NativeStreamingFileIds RequireStreamingLayout() const;
 
-        CClockDE&                           clock;
-        CKeyGenDE                           keyGen;
-        CAsyncLoadingDE                     asyncLoading;
-        const NativeStreamingFileIdsReader& streaming;
-        const NativeGameStateReader&        gameState;
+        CClockDE&                                                                          clock;
+        CKeyGenDE                                                                          keyGen;
+        CAsyncLoadingDE                                                                    asyncLoading;
+        const NativeStreamingFileIdsReader&                                                streaming;
+        const NativeGameStateReader&                                                       gameState;
+        NativeDataFileNamesReader                                                          dataFileNames;
+        int                                                                                checkStatus = 0;
+        CPed*                                                                              pedContext = nullptr;
+        PreWeaponFireHandler*                                                              preWeaponFireHandler = nullptr;
+        PostWeaponFireHandler*                                                             postWeaponFireHandler = nullptr;
+        TaskSimpleBeHitHandler*                                                            taskSimpleBeHitHandler = nullptr;
+        MtaGame::CJetpackWeaponPolicy<WEAPONTYPE_LAST_WEAPONTYPE, WEAPONTYPE_BRASSKNUCKLE> jetpackWeapons;
     };
     static_assert(std::is_abstract_v<CGameDE> && std::is_base_of_v<CGame, CGameDE>);
 }

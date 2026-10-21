@@ -35,9 +35,9 @@ namespace mta::game_de
         void          SetMinuteDuration(unsigned long value) override;
         void          Pause(bool value) override;
 
-        // The SDK declares these defaults outside this module. Keep them pure
-        // until a real DE weapon subsystem exists instead of linking classic
-        // definitions or silently inheriting an unavailable implementation.
+        // The SDK defaults are defined outside this module. Keep this timing
+        // base abstract; CGameDE supplies MTA's shared CPU permission policy
+        // without linking classic definitions or claiming native jetpack hooks.
         void SetJetpackWeaponEnabled(eWeaponType weaponType, bool enabled) override = 0;
         bool GetJetpackWeaponEnabled(eWeaponType weaponType) override = 0;
 
@@ -45,6 +45,8 @@ namespace mta::game_de
         CGameTimingDE(const NativeGameTimingReader& reader, NativeGameTimingAccess& writer) noexcept : timing(reader), timingWriter(writer) {}
         static NativeGameTimingValues RequireTiming(const NativeGameTimingReader& reader);
         static float                  RequireFPS(const NativeGameTimingReader& reader);
+        static void                   RequireNativeWrite(ClockResult result, const char* operation);
+        NativeGameTimingAccess&       NativeWrites() noexcept { return timingWriter; }
 
     private:
         const NativeGameTimingReader& timing;

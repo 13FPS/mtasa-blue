@@ -15,7 +15,7 @@ $previousTmp = $env:TMP
 $record = [ordered]@{schema='mta_clock_service_tests_v1';directory=$outputRoot;architecture='x64';success=$false;
     compileRuns=@();testRun=$null;checks=0;failure=$null;sourceHashes=@();sourcesUnchanged=$true;
     existingSdkClockImplementationTested=$false;productionNativeCallbackTested=$false;wrongExecutableRefusalVerified=$false;
-    productionFreezePatchTested=$false;readOnlyGameTimeReaderTested=$false;nativeCGameTimingPrerequisiteTested=$false;nativeCGameTimingWriterTested=$false;nativeStoredFPSReaderTested=$false;nativePauseSafeOwnerTested=$false;nativeApplicationFrameObserverTested=$false;executionArtifacts=@();
+    productionFreezePatchTested=$false;readOnlyGameTimeReaderTested=$false;nativeCGameTimingPrerequisiteTested=$false;nativeCGameTimingWriterTested=$false;nativeStoredFPSReaderTested=$false;nativePauseSafeOwnerTested=$false;nativeApplicationFrameObserverTested=$false;nativeSystemStateOwnerTested=$false;executionArtifacts=@();
     gameLaunched=$false;gameAttached=$false;gameClockWritten=$false;gameHooksInstalled=$false;fullMtaReady=$false}
 function Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 function RunBounded([string]$Executable,[string[]]$Arguments,[string]$Name,[int]$DeadlineMs) {
@@ -57,6 +57,7 @@ try {
         'Client/game_de/NativeGameTimeReader.h','Client/game_de/NativeGameTimeReader.cpp','Client/sdk/game/CGameTimeService.h',
         'Client/game_de/NativeGameTimingReader.h','Client/game_de/NativeGameTimingReader.cpp','Client/game_de/NativeGameTimingProfile.h',
         'Client/game_de/NativeGameFPSProfile.h',
+        'Client/game_de/NativeGameStateMemory.h','Client/game_de/NativeGameStateMemory.cpp','Client/game_de/NativeGameStateProfile.h',
         'Client/game_de/NativeGameTimingAccess.h',
         'Client/game_de/NativeGamePauseProfile.h',
         'Client/game_de/NativeApplicationFrame.h','Client/game_de/NativeApplicationFrameProfile.h',
@@ -98,7 +99,10 @@ try {
     $executable = Join-Path $outputRoot 'clock_service_tests.exe'
     $runtimeDependencies = @($nativeFiles | Where-Object { $_.Extension -eq '.cpp' -and $_.Name -ne 'NativeClockService.cpp' } | ForEach-Object FullName)
     # The fixture includes the exact production runtime translation unit, like
-    # the native movement tests. Its shipping executable gate stays unchanged.
+    # the native movement tests. It also includes the actual shared state-memory
+    # CPP once so its guarded OS-read boundary can schedule a deterministic
+    # owned-image transition; no native ownership check is substituted.
+    # Its shipping executable gate stays unchanged.
     $arguments = $common + @('/W4','/WX',(Join-Path $PSScriptRoot 'ClockServiceTests.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CClockDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CGameTimingDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeImageAccess.cpp')) +
@@ -126,6 +130,8 @@ try {
     if (-not $record.nativeCGameTimingWriterTested) { throw 'Actual native CGame timing writer fixture did not complete.' }
     $record.nativePauseSafeOwnerTested = $text.Contains('Production pause-safe native timing owner fixture completed')
     if (-not $record.nativePauseSafeOwnerTested) { throw 'Actual pause-safe native timing owner fixture did not complete.' }
+    $record.nativeSystemStateOwnerTested = $text.Contains('Production native CGame system-state owner fixture completed')
+    if (-not $record.nativeSystemStateOwnerTested) { throw 'Actual native CGame system-state owner fixture did not complete.' }
     $record.nativeApplicationFrameObserverTested = $text.Contains('Production natural application-frame observer fixture completed')
     if (-not $record.nativeApplicationFrameObserverTested) { throw 'Actual application-frame observer fixture did not complete.' }
     $record.nativeFixtureScope = 'Owned SEC_IMAGE with exact native pins and actual Detours, callback, native memory, protection and peer operations. This does not admit the test executable as GTA or execute the game clock update.'

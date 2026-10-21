@@ -23,6 +23,8 @@ namespace GameStateTestHost
     std::uintptr_t    image = 0;
     std::atomic<bool> failStateRead{false};
     std::atomic<bool> transitionAfterRead{false};
+    std::atomic<bool> removeWriteBeforeAtomic{false};
+    DWORD             atomicOldProtection = 0;
 
     HMODULE WINAPI Module(LPCWSTR name)
     {
@@ -57,6 +59,15 @@ namespace GameStateTestHost
         }
         return result;
     }
+
+    LONG Atomic(volatile LONG* destination, LONG value, LONG expected)
+    {
+        if (removeWriteBeforeAtomic.exchange(false) && !VirtualProtect(const_cast<LONG*>(destination), sizeof(LONG), PAGE_READONLY, &atomicOldProtection))
+            std::abort();
+        // Use the real aligned atomic instruction after changing the owned
+        // page. Its access violation must be caught by production's SEH guard.
+        return InterlockedCompareExchange(destination, value, expected);
+    }
 }
 
 #define ReadProcessMemory GameStateTestHost::Read
@@ -73,6 +84,11 @@ namespace mta::game_de::NativeImageAccess
 }
 #define CheckExecutableBuild GameStateFixtureExecutable
 #define GetModuleHandleW     GameStateTestHost::Module
+#pragma push_macro("InterlockedCompareExchange")
+#undef InterlockedCompareExchange
+#define InterlockedCompareExchange GameStateTestHost::Atomic
+#include "../../Client/game_de/NativeGameStateMemory.cpp"
+#pragma pop_macro("InterlockedCompareExchange")
 #include "../../Client/game_de/NativeGameStateReader.cpp"
 #undef GetModuleHandleW
 #undef CheckExecutableBuild
@@ -256,6 +272,69 @@ int wmain(int argc, wchar_t** argv)
                                                       SystemState::GS_PLAYING_GAME};
     for (std::uint32_t state = 0; state != 10; ++state)
     {
+        auto          semantic = canary;
+        std::uint32_t encoded = 0xfacecafe;
+        Check(state < 6 ? !NativeGameStateMemory::Decode(state, semantic) && semantic == canary
+                        : NativeGameStateMemory::Decode(state, semantic) && semantic == mapped[state - 6],
+              "the shared decoder publishes only independently proved state meanings");
+        Check(state < 6 ? !NativeGameStateMemory::Encode(static_cast<SystemState::Enum>(state), encoded) && encoded == 0xfacecafe
+                        : NativeGameStateMemory::Encode(mapped[state - 6], encoded) && encoded == state,
+              "the explicit SDK inverse preserves output for every unproved early state");
+    }
+    for (const auto invalid : {10u, 0x80000000u, (std::numeric_limits<std::uint32_t>::max)()})
+    {
+        auto          semantic = canary;
+        std::uint32_t encoded = 0xfacecafe;
+        Check(!NativeGameStateMemory::Decode(invalid, semantic) && semantic == canary &&
+                  !NativeGameStateMemory::Encode(static_cast<SystemState::Enum>(invalid), encoded) && encoded == 0xfacecafe,
+              "out-of-range SDK/native inputs preserve codec outputs");
+    }
+    // This owned SEC_IMAGE models only DWORD storage, not native startup. The
+    // surrounding canaries detect a write widened to adjacent native globals.
+    constexpr std::array<unsigned char, 4> before = {0x19, 0x63, 0xa7, 0xe1}, after = {0x21, 0x75, 0xb9, 0xf3};
+    fixture.Patch(P::stateRva - before.size(), before.data(), before.size());
+    fixture.Patch(P::stateRva + sizeof(std::uint32_t), after.data(), after.size());
+    for (std::uint32_t expected = 6; expected != 10; ++expected)
+        for (std::uint32_t target = 6; target != 10; ++target)
+        {
+            fixture.State(expected);
+            std::uint32_t observed = 0;
+            Check(NativeGameStateMemory::Read(fixture.image, observed) && observed == expected, "the shared raw reader uses the actual qualified native DWORD");
+            Check(NativeGameStateMemory::CompareExchange(fixture.image, expected, target) == NativeGameStateMemory::StoreResult::Applied &&
+                      NativeGameStateMemory::Read(fixture.image, observed) && observed == target &&
+                      std::memcmp(reinterpret_cast<const void*>(fixture.image + P::stateRva - before.size()), before.data(), before.size()) == 0 &&
+                      std::memcmp(reinterpret_cast<const void*>(fixture.image + P::stateRva + sizeof(std::uint32_t)), after.data(), after.size()) == 0,
+                  "each supported pair atomically replaces exactly four bytes without touching adjacent native storage");
+        }
+    fixture.State(9);
+    Check(NativeGameStateMemory::CompareExchange(fixture.image, 7, 8) == NativeGameStateMemory::StoreResult::ValueChanged,
+          "a native advance after the caller's snapshot is preserved instead of overwritten");
+    std::uint32_t native = 0;
+    Check(NativeGameStateMemory::Read(fixture.image, native) && native == 9, "a rejected comparison leaves the new native state intact");
+    for (const auto invalid : {0u, 5u, 10u, (std::numeric_limits<std::uint32_t>::max)()})
+    {
+        Check(NativeGameStateMemory::CompareExchange(fixture.image, invalid, 8) == NativeGameStateMemory::StoreResult::Unsupported &&
+                  NativeGameStateMemory::CompareExchange(fixture.image, 9, invalid) == NativeGameStateMemory::StoreResult::Unsupported &&
+                  NativeGameStateMemory::Read(fixture.image, native) && native == 9,
+              "invalid expected or desired states cannot trigger a write");
+    }
+    native = 0xfacecafe;
+    Check(!NativeGameStateMemory::Read(0, native) && native == 0xfacecafe &&
+              NativeGameStateMemory::CompareExchange(0, 7, 8) == NativeGameStateMemory::StoreResult::Unsupported &&
+              NativeGameStateMemory::CompareExchange((std::numeric_limits<std::uintptr_t>::max)(), 7, 8) == NativeGameStateMemory::StoreResult::Unsupported,
+          "missing and overflowing images refuse before scalar access and preserve outputs");
+    fixture.State(7);
+    GameStateTestHost::removeWriteBeforeAtomic.store(true);
+    Check(NativeGameStateMemory::CompareExchange(fixture.image, 7, 8) == NativeGameStateMemory::StoreResult::Unsupported &&
+              !GameStateTestHost::removeWriteBeforeAtomic.load(),
+          "a protection change after admission refuses inside the actual atomic write guard");
+    DWORD ignoredAtomic = 0;
+    Check(VirtualProtect(reinterpret_cast<void*>(fixture.image + P::stateRva), sizeof(std::uint32_t), GameStateTestHost::atomicOldProtection, &ignoredAtomic) !=
+                  FALSE &&
+              NativeGameStateMemory::Read(fixture.image, native) && native == 7,
+          "the interrupted atomic write leaves the full original DWORD intact");
+    for (std::uint32_t state = 0; state != 10; ++state)
+    {
         fixture.State(state);
         output = canary;
         const auto result = reader.Read(output);
@@ -289,6 +368,8 @@ int wmain(int argc, wchar_t** argv)
         output = canary;
         Check(reader.Read(output) == Status::Unsupported && output == canary,
               "changing any required dispatch, semantic anchor or resource label refuses publication");
+        Check(NativeGameStateMemory::CompareExchange(fixture.image, 6, 8) == NativeGameStateMemory::StoreResult::Unsupported,
+              "the writer refuses every changed required native pin before an atomic write");
         fixture.Patch(pin.rva, &original, 1);
         Check(reader.Read(output) == Status::Ok && output == SystemState::GS_INIT_FRONTEND,
               "restored pins permit a new native read without rebinding to cached state");
@@ -300,6 +381,8 @@ int wmain(int argc, wchar_t** argv)
               "change only the task-owned native state page");
         output = canary;
         Check(reader.Read(output) == Status::Unsupported && output == canary, "native state must remain readable, writable and non-executable");
+        Check(NativeGameStateMemory::CompareExchange(fixture.image, 6, 8) == NativeGameStateMemory::StoreResult::Unsupported,
+              "the write requires the same readable writable non-executable state page as reads");
         Check(VirtualProtect(reinterpret_cast<void*>(fixture.image + P::stateRva), sizeof(std::uint32_t), previous, &ignored) != FALSE,
               "restore task-owned data-page classification");
     }

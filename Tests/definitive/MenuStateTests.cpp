@@ -136,6 +136,7 @@ namespace mta::game_de::NativeImageAccess
 #define CheckExecutableBuild MenuStateFixtureExecutable
 #define GetModuleHandleW     MenuStateTestHost::Module
 #define ReadProcessMemory    MenuStateTestHost::Read
+#include "../../Client/game_de/NativeGameStateMemory.cpp"
 #include "../../Client/game_de/NativeGameStateReader.cpp"
 #undef ReadProcessMemory
 #undef GetModuleHandleW

@@ -9,6 +9,7 @@
 #include "NativeClockProfile.h"
 #include "NativeClockMemory.h"
 #include "NativeGameTimingAccess.h"
+#include "NativeGameStateMemory.h"
 #include "NativeGameTimingProfile.h"
 #include "NativeGamePauseProfile.h"
 #include "NativeApplicationFrameProfile.h"
@@ -68,6 +69,7 @@ namespace mta::game_de
             ClockResult SetTimeScale(float value) noexcept override;
             ClockResult SetMinuteDuration(std::uint32_t value) noexcept override;
             ClockResult Pause(bool value) noexcept override;
+            ClockResult SetSystemState(SystemState::Enum value) noexcept override;
         };
 
         struct Counters
@@ -889,6 +891,37 @@ namespace mta::game_de
             if (!runtime.timingMode || !runtime.timerHooked.load() || !runtime.timerReady.load())
                 return ClockResult::NotInitialized;
             return SetTimingValue(PauseProfile::userPauseRva, static_cast<std::uint8_t>(value), timingPauseBit, runtime.originalUserPause);
+        }
+
+        ClockResult NativeAccess::SetSystemState(SystemState::Enum value) noexcept
+        {
+            std::uint32_t target = 0;
+            if (!NativeGameStateMemory::Encode(value, target))
+                return ClockResult::InvalidArgument;
+            const auto owner = CheckTimingOwner();
+            if (owner != ClockResult::Ok)
+                return owner;
+            std::uint32_t current = 0;
+            if (!NativeGameStateMemory::Read(runtime.image, current))
+                return ClockResult::BindingChanged;
+            // Borrow the existing generation, engine thread and natural-frame
+            // scope again after qualification. A producer thread or a retired
+            // handler cannot turn a known dispatcher value into write authority.
+            const auto confirmedOwner = CheckTimingOwner();
+            if (confirmedOwner != ClockResult::Ok)
+                return confirmedOwner;
+            switch (NativeGameStateMemory::CompareExchange(runtime.image, current, target))
+            {
+                case NativeGameStateMemory::StoreResult::Applied:
+                    // State changes are persistent requests to the dispatcher.
+                    // Rewinding them on End would overwrite native progression;
+                    // this operation does not perform StartGame's menu teardown.
+                    return ClockResult::Ok;
+                case NativeGameStateMemory::StoreResult::ValueChanged:
+                    return ClockResult::Busy;
+                default:
+                    return ClockResult::WriteFailure;
+            }
         }
 
         bool RestoreOriginal() noexcept

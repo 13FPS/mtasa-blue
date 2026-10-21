@@ -652,19 +652,12 @@ bool CGameSA::IsUnderWorldWarpEnabled()
 
 bool CGameSA::GetJetpackWeaponEnabled(eWeaponType weaponType)
 {
-    if (weaponType >= WEAPONTYPE_BRASSKNUCKLE && weaponType < WEAPONTYPE_LAST_WEAPONTYPE)
-    {
-        return m_JetpackWeapons[weaponType];
-    }
-    return false;
+    return m_JetpackWeapons.Get(static_cast<int>(weaponType));
 }
 
 void CGameSA::SetJetpackWeaponEnabled(eWeaponType weaponType, bool bEnabled)
 {
-    if (weaponType >= WEAPONTYPE_BRASSKNUCKLE && weaponType < WEAPONTYPE_LAST_WEAPONTYPE)
-    {
-        m_JetpackWeapons[weaponType] = bEnabled;
-    }
+    m_JetpackWeapons.Set(static_cast<int>(weaponType), bEnabled);
 }
 
 void CGameSA::SetVehicleSunGlareEnabled(bool bEnabled)

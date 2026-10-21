@@ -45,9 +45,29 @@ do not expose or cast them as classic 20-byte `CStreamingInfo` structures.
 `CGameDE::GetSystemState` reads the native dispatcher and maps the four proved
 states to the existing SDK enum: frontend initialization, frontend, gameplay
 initialization and gameplay. Early native states 0–5 remain unproved and refuse
-explicitly, as do changed bindings or an unknown state. The reader grants no
-engine write authority; `StartGame` and `SetSystemState` remain unimplemented.
-This does not establish cold-start readiness.
+explicitly, as do changed bindings or an unknown state. The same profile and
+codec serve `SetSystemState` through the existing timing owner's natural engine
+callback. Generation, thread, expiry and native binding checks precede an exact
+four-byte compare/exchange, so an intervening engine transition is preserved.
+This persistent request is not rewound at cleanup. `StartGame` still needs its
+separate managed-menu and native loading transaction; assigning state 8 alone
+does not establish cold-start readiness.
+
+`VerifySADataFileNames` checks the twelve names consumed by the native loaders,
+including decoded operand relationships and embedded path chunks. A changed name
+returns false; an unavailable or changed binding refuses explicitly. It neither
+opens game files nor validates their contents. The internal reader checks two
+fresh samples and keeps its owning thread; unrelated matching strings cannot
+stand in for the loader operands.
+
+MTA's existing per-game diagnostic reference, lazy ped context and three typed
+handler registrations also live in `CGameDE`. A missing local context resolves
+through the actual virtual pool service and reference 1; registrations alone do
+not install or dispatch engine hooks. Both game backends share the jetpack weapon
+permission policy. Its storage starts disabled, fixing the classic table's
+uninitialized pre-configuration values while preserving its size and alignment.
+Map/reset packets continue to select the allowed weapons. The game class remains
+abstract while the remaining native providers are unfinished.
 
 `IsAtMenu` separately observes the real SA interface's managed menu widget and
 the legacy frontend screen count/pending slot. The concrete owner type, native

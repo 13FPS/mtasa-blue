@@ -13,7 +13,10 @@
 #include "NativeWeaponInfoWriteAccess.h"
 #include "NativeWeaponInfoVectorAccess.h"
 #include "NativeWeatherOverrideAccess.h"
+#include "NativeStatsWriteAccess.h"
 #include <cstdint>
+
+class CStats;
 
 namespace mta::game_de
 {
@@ -24,7 +27,8 @@ namespace mta::game_de
                                    public NativeWeatherScalarAccess,
                                    public NativeWeaponInfoWriteAccess,
                                    public NativeWeaponInfoVectorAccess,
-                                   public NativeWeatherOverrideAccess
+                                   public NativeWeatherOverrideAccess,
+                                   public NativeStatsWriteAccess
     {
     public:
         virtual ClockResult SetTimeScale(float value) noexcept = 0;
@@ -42,6 +46,9 @@ namespace mta::game_de
         // Shared MTA lookup can publish only a genuine bank wrapper qualified
         // by this native owner, never a partial provider or a cached fake row.
         virtual ClockResult GetWeaponInfoSlot(std::size_t, CWeaponInfo*&) noexcept { return ClockResult::NotInitialized; }
+        // A complete SDK object borrows the independently qualified native
+        // reader and this callback owner; publication grants no later lease.
+        virtual ClockResult GetStats(CStats*&) noexcept { return ClockResult::NotInitialized; }
 
     protected:
         ~NativeGameTimingAccess() = default;

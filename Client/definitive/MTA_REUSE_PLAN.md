@@ -25,8 +25,14 @@ MTA's Set/Reset behavior. Reset restores native progression without rewinding an
 accepted value. Other scalar overrides explicitly refuse where complete atomic
 writer coverage is unproved; Rain's serializer also requires direction-sensitive
 handling. The weather SDK therefore remains partial. Separately, actual `CStats`
-reads now use the qualified DE float/integer banks and weapon-skill classifier;
-its mutations still require the genuine native reaction transactions.
+reads now use the qualified DE float/integer banks and weapon-skill classifier.
+The complete four-method `CStatsDE` also delegates Set/Modify to the qualified
+native reaction transactions through this same runtime. `CGameDE::GetStats`
+publishes its stable SDK object; writes require actual playing state, loaded
+player identity and the native setter's additional script prerequisite. An
+entered failure preserves any native effects and stops the lease without
+replaying the transaction or restoring a guessed bank snapshot. These native
+calls are implemented and checked offline; live validation remains separate.
 
 The October 19 application-frame trial observed 277 natural gameplay frames
 and both configured UI dictionary entries without engine writes, then retired

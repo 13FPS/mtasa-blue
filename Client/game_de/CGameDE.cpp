@@ -41,6 +41,18 @@ namespace mta::game_de
         return &keyGen;
     }
 
+    CStats* CGameDE::GetStats()
+    {
+        // The runtime owns a complete SDK stats object and its native reader.
+        // Publish only that qualified borrowed object, never a copied bank or
+        // an incomplete read-only slice masquerading as a writable service.
+        CStats* output = nullptr;
+        RequireNativeWrite(NativeWrites().GetStats(output), "GetStats");
+        if (!output)
+            RequireNativeWrite(ClockResult::NotInitialized, "GetStats");
+        return output;
+    }
+
     void CGameDE::SetAsyncLoadingFromScript(bool enabled, bool forced)
     {
         asyncLoading.SetScriptOverride(enabled, forced);

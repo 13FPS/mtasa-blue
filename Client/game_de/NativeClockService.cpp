@@ -18,6 +18,8 @@
 #include "NativeWeaponInfoWriteMemory.h"
 #include "NativeWeaponInfoVectorMemory.h"
 #include "CWeaponInfoBankDE.h"
+#include "NativeStatsWriteCalls.h"
+#include "CStatsDE.h"
 #include "NativeGameTimingProfile.h"
 #include "NativeGamePauseProfile.h"
 #include "NativeApplicationFrameProfile.h"
@@ -95,6 +97,9 @@ namespace mta::game_de
             ClockResult GetWeaponInfoSlot(std::size_t slot, CWeaponInfo*& output) noexcept override;
             ClockResult SetWeatherScalarOverride(NativeWeatherScalarProfile::Field field, float value) noexcept override;
             ClockResult ResetWeatherScalarOverride(NativeWeatherScalarProfile::Field field) noexcept override;
+            ClockResult GetStats(CStats*& output) noexcept override;
+            ClockResult SetStatValue(unsigned short index, float value) noexcept override;
+            ClockResult ModifyStat(unsigned short index, float value) noexcept override;
         };
 
         struct Counters
@@ -172,6 +177,11 @@ namespace mta::game_de
             // intents need no original-row cache or End-time row restoration.
             NativeWeaponInfoReader weaponWriterReader;
             std::uint64_t          weaponWriterGeneration = 0;
+            // Stats reactions are genuine native function transactions. The
+            // reader binds once per generation, but never grants call scope or
+            // supplies a bank snapshot to replay/rewind after native effects.
+            NativeStatsReader statsReader;
+            std::uint64_t     statsGeneration = 0;
             // Only a failed partial XYZ intent owns rollback components. Full
             // vectors persist, and later native edits retire only the precise
             // superseded component rather than permitting a whole-row rewind.
@@ -220,6 +230,7 @@ namespace mta::game_de
             NativeAccess                                    access;
             CClockDE                                        clock{access};
             CWeaponInfoBankDE                               weaponBank{weaponWriterReader, access, access};
+            CStatsDE                                        stats{statsReader, access};
             Counters                                        counters;
             // Destroy the hold before the shared peer recovery vector/gates.
             // Its normal lifetime is explicitly retired by Reset/End.
@@ -1313,6 +1324,91 @@ namespace mta::game_de
                 runtime.weaponWriterGeneration = generation;
             }
             return CheckTimingOwner();
+        }
+
+        ClockResult RequireStatsReader() noexcept
+        {
+            auto owner = CheckTimingOwner();
+            if (owner != ClockResult::Ok)
+                return owner;
+            const auto generation = runtime.generation.load();
+            if (runtime.statsGeneration && runtime.statsGeneration != generation)
+                return ClockResult::OwnerConflict;
+            if (!runtime.statsGeneration)
+            {
+                runtime.statsReader.Reset();
+                const auto bound = runtime.statsReader.Bind();
+                if (bound != Status::Ok)
+                    return bound == Status::WrongThread ? ClockResult::WrongThread : ClockResult::BindingChanged;
+                owner = CheckTimingOwner();
+                if (owner != ClockResult::Ok)
+                {
+                    runtime.statsReader.Reset();
+                    return owner;
+                }
+                runtime.statsGeneration = generation;
+            }
+            return CheckTimingOwner();
+        }
+
+        ClockResult CheckStatsOwner() noexcept
+        {
+            const auto owner = CheckTimingOwner();
+            if (owner != ClockResult::Ok)
+                return owner;
+            std::uint32_t state = 0;
+            if (!NativeGameStateMemory::Read(runtime.image, state))
+                return ClockResult::BindingChanged;
+            // The native reaction routines assume a loaded world. State9 is a
+            // necessary bookend only; Apply independently qualifies the real
+            // local-player identity and any required active-script input.
+            if (state != 9)
+                return ClockResult::NotInitialized;
+            return CheckTimingOwner();
+        }
+
+        ClockResult NativeAccess::GetStats(CStats*& output) noexcept
+        {
+            const auto owner = RequireStatsReader();
+            if (owner != ClockResult::Ok)
+                return owner;
+            float      observed = 0;
+            const auto read = runtime.statsReader.Read(0, observed);
+            if (read != Status::Ok)
+                return read == Status::WrongThread ? ClockResult::WrongThread : ClockResult::BindingChanged;
+            const auto confirmed = CheckTimingOwner();
+            if (confirmed != ClockResult::Ok)
+                return confirmed;
+            output = &runtime.stats;
+            return ClockResult::Ok;
+        }
+
+        ClockResult ApplyStat(NativeStatsWriteCalls::Operation operation, unsigned short index, float value) noexcept
+        {
+            auto owner = CheckStatsOwner();
+            if (owner != ClockResult::Ok)
+                return owner;
+            owner = RequireStatsReader();
+            if (owner != ClockResult::Ok)
+                return owner;
+            NativeStatsWriteCalls::Receipt receipt;
+            const auto result = NativeStatsWriteCalls::Apply(runtime.statsReader, runtime.image, operation, index, value, &CheckStatsOwner, &receipt);
+            // A thrown reaction or failed post-call bookend may follow genuine
+            // native effects. Stop this lease rather than retrying the intent
+            // or treating an original bank copy as restoration authority.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+
+        ClockResult NativeAccess::SetStatValue(unsigned short index, float value) noexcept
+        {
+            return ApplyStat(NativeStatsWriteCalls::Operation::Set, index, value);
+        }
+
+        ClockResult NativeAccess::ModifyStat(unsigned short index, float value) noexcept
+        {
+            return ApplyStat(NativeStatsWriteCalls::Operation::Modify, index, value);
         }
 
         ClockResult NativeAccess::SetWeaponFloat(std::size_t slot, NativeWeaponFloatField field, float value) noexcept
@@ -2428,6 +2524,8 @@ namespace mta::game_de
         runtime.weatherSuperseded.store(false);
         runtime.weaponWriterReader.Reset();
         runtime.weaponWriterGeneration = 0;
+        runtime.statsReader.Reset();
+        runtime.statsGeneration = 0;
         runtime.weaponVectorJournal = {};
         runtime.weaponVectorSlot = 0;
         runtime.weaponVectorRecovery.store(false);
@@ -2616,6 +2714,8 @@ namespace mta::game_de
             runtime.frameContext = nullptr;
             runtime.weaponWriterReader.Reset();
             runtime.weaponWriterGeneration = 0;
+            runtime.statsReader.Reset();
+            runtime.statsGeneration = 0;
             runtime.weatherOverrideGeneration.store(0);
         }
         ReadState(finalState);

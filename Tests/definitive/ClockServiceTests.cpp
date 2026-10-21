@@ -17,6 +17,9 @@
 #include "../../Client/game_de/NativeWeaponInfoProfile.h"
 #include "../../Client/game_de/NativeWeaponInfoWriteProfile.h"
 #include "../../Client/game_de/NativeWeaponInfoVectorProfile.h"
+#include "../../Client/game_de/NativeStatsWriteCalls.h"
+#include "../../Client/game_de/NativeStatsWriteProfile.h"
+#include "../../Client/game_de/CStatsDE.h"
 #include "../../Client/game_de/NativeServiceAdmission.h"
 #include <array>
 #include <cstdio>
@@ -31,6 +34,47 @@
 #include <tlhelp32.h>
 #include <type_traits>
 #include <vector>
+
+namespace ClockStatsOwnerTest
+{
+    unsigned                  calls = 0;
+    std::uintptr_t            image = 0, entry = 0;
+    std::uint32_t             index = 0;
+    float                     amount = 0;
+    bool                      effect = false;
+    mta::game_de::ClockResult result = mta::game_de::ClockResult::Ok;
+    void (*after)() = nullptr;
+    mta::game_de::ClockResult Invoke(mta::game_de::NativeStatsWriteCalls::NativeFunction function, std::uint32_t promotedIndex, float passedAmount,
+                                     std::uint32_t& exception) noexcept
+    {
+        ++calls;
+        entry = reinterpret_cast<std::uintptr_t>(function) - image;
+        index = promotedIndex;
+        amount = passedAmount;
+        if (effect)
+        {
+            // Only the final native-call boundary is substituted. A deliberately
+            // different resulting value stands for an accepted native reaction;
+            // owner cleanup must not replay or snapshot-rewind that effect.
+            const float value = passedAmount + 10.0f;
+            SIZE_T      written = 0;
+            if (!::WriteProcessMemory(GetCurrentProcess(),
+                                      reinterpret_cast<void*>(image + mta::game_de::NativeStatsProfile::FloatBankRva + promotedIndex * sizeof(float)), &value,
+                                      sizeof(value), &written) ||
+                written != sizeof(value))
+                std::abort();
+        }
+        if (after)
+        {
+            const auto next = after;
+            after = nullptr;
+            next();
+        }
+        if (result != mta::game_de::ClockResult::Ok)
+            exception = EXCEPTION_ACCESS_VIOLATION;
+        return result;
+    }
+}
 
 namespace ClockTestFaults
 {
@@ -423,6 +467,23 @@ namespace mta::game_de::NativeImageAccess
 #undef GetModuleHandleW
 #undef CheckExecutableBuild
 
+// The actual stat reader and call primitive select only this owned SEC_IMAGE.
+// All callback/generation, code, loaded-player and post-call bookends remain
+// production code. The final typed call observes ABI routing without executing
+// any GTA instruction or substituting CheckTimingOwner.
+#define CheckExecutableBuild ClockReaderFixtureExecutable
+#define GetModuleHandleW     ClockReaderTestHost::Module
+#define Profile              ClockStatsReaderProfile
+#define Binding              ClockStatsReaderBinding
+#include "../../Client/game_de/NativeStatsReader.cpp"
+#undef Binding
+#undef Profile
+#define MTA_DE_STATS_NATIVE_INVOKE ClockStatsOwnerTest::Invoke
+#include "../../Client/game_de/NativeStatsWriteCalls.cpp"
+#undef MTA_DE_STATS_NATIVE_INVOKE
+#undef GetModuleHandleW
+#undef CheckExecutableBuild
+
 namespace mta::game_de::GameTimeReaderFixtureMemory
 {
     bool Read(std::uintptr_t image, ClockValues& output) noexcept
@@ -491,6 +552,9 @@ namespace
         std::array<char16_t, NativeUiClassMapProfile::keyLoadingCount>    uiLoading{u'L', u'o', u'a', u'd', u'i', u'n', u'g', 0};
         std::array<char16_t, NativeUiClassMapProfile::keySimpleFadeCount> uiSimpleFade{u'S', u'i', u'm', u'p', u'l', u'e', u'F', u'a', u'd', u'e', 0};
         std::uintptr_t                                                    frameReceiver = 0;
+        alignas(std::uintptr_t) std::array<unsigned char, 0xb00> statsPed{};
+        alignas(std::uintptr_t) std::array<unsigned char, 0x3c8> statsData{};
+        alignas(std::uintptr_t) std::array<unsigned char, 0x20> statsScript{};
 
         ~ClockImageFixture()
         {
@@ -785,6 +849,51 @@ namespace
                           ::FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(image + pin.rva), pin.size),
                       "native state pins use actual RX or immutable RO image pages");
             }
+        }
+        void AdmitStatsPins()
+        {
+            namespace Stats = NativeStatsProfile;
+            namespace Writes = NativeStatsWriteProfile;
+            const auto admit = [&](std::uintptr_t rva, const void* bytes, std::size_t size, DWORD protection)
+            {
+                DWORD prior = 0, ignored = 0;
+                Check(::VirtualProtect(reinterpret_cast<void*>(image + rva), size, PAGE_READWRITE, &prior) != FALSE,
+                      "populate only bounded native stats proof pages in the owned image");
+                std::memcpy(reinterpret_cast<void*>(image + rva), bytes, size);
+                Check(::VirtualProtect(reinterpret_cast<void*>(image + rva), size, protection, &ignored) != FALSE &&
+                          ::FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(image + rva), size),
+                      "restore actual stats instruction RX, mission-name RO and bank/player-global RW pages");
+            };
+            for (const auto& pin : Stats::Code)
+                admit(pin.rva, pin.bytes.data(), pin.size, PAGE_EXECUTE_READ);
+            for (const auto& pin : Writes::Code)
+                admit(pin.rva, pin.bytes.data(), pin.size, PAGE_EXECUTE_READ);
+            admit(Writes::MissionGuardRva, Writes::MissionGuard.data(), Writes::MissionGuard.size(), PAGE_READONLY);
+            const std::array<float, Stats::FloatCount>                 floats{};
+            const std::array<std::int32_t, Stats::IntegerStorageCount> integers{};
+            admit(Stats::FloatBankRva, floats.data(), sizeof(floats), PAGE_READWRITE);
+            admit(Stats::IntegerBankRva, integers.data(), sizeof(integers), PAGE_READWRITE);
+            const auto store = [](unsigned char* bytes, std::size_t offset, const auto& value) { std::memcpy(bytes + offset, &value, sizeof(value)); };
+            statsPed.fill(0);
+            statsData.fill(0);
+            statsScript.fill(0);
+            store(statsPed.data(), 0, image + Writes::PlayerVtableRva);
+            store(statsPed.data(), 0x5f0, image + Writes::PlayerInfoRva);
+            store(statsPed.data(), 0x76c, 100.0f);
+            store(statsPed.data(), 0x7e0, std::int32_t{0});
+            store(statsPed.data(), 0xa10, static_cast<unsigned char>(0));
+            const std::array<unsigned char, 7> scriptName{'f', 'r', 'e', 'e', 'r', 'o', 0};
+            std::memcpy(statsScript.data() + 0x10, scriptName.data(), scriptName.size());
+            const auto          ped = reinterpret_cast<std::uintptr_t>(statsPed.data());
+            const auto          data = reinterpret_cast<std::uintptr_t>(statsData.data());
+            const auto          script = reinterpret_cast<std::uintptr_t>(statsScript.data());
+            const auto          control = image + Writes::PlayerControlRva;
+            const unsigned char selector = 0;
+            admit(Writes::PlayerRootRva, &ped, sizeof(ped), PAGE_READWRITE);
+            admit(Writes::PlayerInfoRva, &data, sizeof(data), PAGE_READWRITE);
+            admit(Writes::PlayerIndexRva, &selector, sizeof(selector), PAGE_READWRITE);
+            admit(Writes::ScriptRootRva, &script, sizeof(script), PAGE_READWRITE);
+            admit(Writes::PlayerVtableRva + 0x50, &control, sizeof(control), PAGE_READONLY);
         }
         void AdmitWeaponPins()
         {
@@ -3456,6 +3565,246 @@ namespace
         std::puts("Production native weapon vector and actual80-wrapper bank owner fixture completed");
     }
 
+    struct StatsOwnerContext
+    {
+        unsigned       calls = 0, operation = 0, refusal = 0;
+        unsigned short index = 0;
+        float          value = 2.5f, observed = -1;
+        CStats*        sdk = nullptr;
+        ClockResult    result = ClockResult::NotInitialized;
+        bool           threw = false;
+    };
+
+    void StatsOwnerHandler(NativeGameTimingAccess& access, void* opaque)
+    {
+        auto& context = *static_cast<StatsOwnerContext*>(opaque);
+        ++context.calls;
+        Check(callbackDepth == 1 && timingTimerScope && timingCallbackGeneration == runtime.generation.load() &&
+                  runtime.engineThread.load() == GetCurrentThreadId(),
+              "actual complete CStats publication and mutations enter the existing natural engine callback");
+        const auto generation = timingCallbackGeneration;
+        const auto admission = runtime.admissionGeneration.load();
+        const auto refreshed = runtime.refreshed.load();
+        if (context.refusal == 1)
+            timingCallbackGeneration = generation + 1;
+        if (context.refusal == 2)
+            runtime.admissionGeneration.store(admission + 1);
+        if (context.refusal == 3)
+            ++callbackDepth;
+        if (context.refusal == 4)
+            runtime.refreshed.store(GetTickCount64() - ClockServiceLeaseMsV1 - 1);
+        context.threw = false;
+        try
+        {
+            if (context.operation == 0)
+                context.result = access.GetStats(context.sdk);
+            if (context.operation == 1)
+            {
+                context.sdk->SetStatValue(context.index, context.value);
+                context.result = ClockResult::Ok;
+            }
+            if (context.operation == 2)
+            {
+                context.sdk->ModifyStat(context.index, context.value);
+                context.result = ClockResult::Ok;
+            }
+            if (context.operation == 3)
+                context.result = access.SetStatValue(context.index, context.value);
+            if (context.operation == 4)
+                context.result = access.ModifyStat(context.index, context.value);
+            if (context.operation == 5)
+            {
+                context.observed = context.sdk->GetStatValue(context.index);
+                Check(context.sdk->GetSkillStatIndex(WEAPONTYPE_PISTOL) == 69,
+                      "the complete Runtime CStats object uses the actual native weapon skill classifier");
+                context.result = ClockResult::Ok;
+            }
+        }
+        catch (const std::runtime_error&)
+        {
+            context.threw = true;
+        }
+        runtime.refreshed.store(refreshed);
+        if (context.refusal == 3)
+            --callbackDepth;
+        runtime.admissionGeneration.store(admission);
+        timingCallbackGeneration = generation;
+    }
+
+    void NativeStatsOwnedSdk(ClockImageFixture& fixture)
+    {
+        namespace Stats = NativeStatsProfile;
+        namespace Writes = NativeStatsWriteProfile;
+        namespace StateProfile = NativeGameStateProfile;
+        NativeStatsReader wrongHost;
+        Check(wrongHost.Bind() == Status::Unsupported && !wrongHost.IsBound(),
+              "the actual stats reader retains shipping wrong-executable refusal before the owned image is selected");
+        std::array<std::array<unsigned char, 94>, StateProfile::pins.size()> statePins{};
+        for (std::size_t index = 0; index < statePins.size(); ++index)
+            statePins[index] = fixture.Get<std::array<unsigned char, 94>>(StateProfile::pins[index].rva);
+        fixture.AdmitSystemStatePins();
+        fixture.AdmitStatsPins();
+        DWORD priorStateProtection = 0, ignored = 0;
+        Check(::VirtualProtect(reinterpret_cast<void*>(fixture.image + StateProfile::stateRva), sizeof(std::uint32_t), PAGE_READWRITE, &priorStateProtection) !=
+                  FALSE,
+              "admit only the owned native playing-state DWORD for stat-call bookends");
+        const auto oldState = fixture.Get<std::uint32_t>(StateProfile::stateRva);
+        ClockReaderTestHost::image = ClockStatsOwnerTest::image = fixture.image;
+        ClockStatsOwnerTest::calls = 0;
+        ClockStatsOwnerTest::effect = false;
+        ClockStatsOwnerTest::result = ClockResult::Ok;
+        CStats* sentinel = reinterpret_cast<CStats*>(std::uintptr_t{1});
+        Check(runtime.access.GetStats(sentinel) == ClockResult::NotInitialized && sentinel == reinterpret_cast<CStats*>(std::uintptr_t{1}) &&
+                  runtime.access.SetStatValue(0, 1) == ClockResult::NotInitialized && !ClockStatsOwnerTest::calls,
+              "unbound stats publication and mutation preserve output and never reach the native-call boundary");
+        const auto retire = [&](NativeClockService& service)
+        {
+            if (!service.End())
+            {
+                fixture.invokeTimer();
+                Check(service.End(), "stat effects need no bank rollback before the actual callback and hooks retire");
+            }
+            Check(!service.IsRetained() && !runtime.statsReader.IsBound() && !runtime.statsGeneration && !runtime.timingHandler && !runtime.timingContext &&
+                      !NativeServiceAdmission::IsClaimed(NativeServiceAdmission::Category::Clock),
+                  "stats retirement discards borrowed reader scope only after the actual owner and hooks retire");
+        };
+        {
+            fixture.Put(StateProfile::stateRva, std::uint32_t{9});
+            NativeClockService service;
+            StatsOwnerContext  context;
+            BeginOwned(service, fixture, false, true, true, &StatsOwnerHandler, &context);
+            const auto invoke = [&]
+            {
+                Check(service.Renew(runtime.generation.load()), "renew the current stats owner between distinct natural callbacks");
+                fixture.invokeTimer();
+            };
+            invoke();
+            Check(context.result == ClockResult::Ok && context.sdk == &runtime.stats && runtime.statsReader.IsBound() &&
+                      runtime.statsGeneration == runtime.generation.load(),
+                  "same-callback publication returns the complete actual Runtime CStats object with its qualified reader");
+            auto* const stable = context.sdk;
+            invoke();
+            Check(context.sdk == stable, "subsequent admitted callbacks publish the same complete stats object without rebinding its reader");
+            for (unsigned step = 0; step < 3; ++step)
+            {
+                const auto operation = step ? 2u : 1u;
+                context.operation = operation;
+                context.value = std::array<float, 3>{2.5f, 3.5f, -4.5f}[step];
+                const auto calls = ClockStatsOwnerTest::calls;
+                invoke();
+                const auto expectedEntry = operation == 1 ? Writes::SetRva : context.value < 0 ? Writes::DecrementRva : Writes::IncrementRva;
+                Check(!context.threw && context.result == ClockResult::Ok && ClockStatsOwnerTest::calls == calls + 1 &&
+                          ClockStatsOwnerTest::entry == expectedEntry && ClockStatsOwnerTest::index == context.index &&
+                          ClockStatsOwnerTest::amount == std::fabs(context.value),
+                      "actual CStats setters route Set and signed Modify through the exact typed native entry with promoted index and XMM1 amount");
+            }
+            context.operation = 5;
+            invoke();
+            Check(context.result == ClockResult::Ok && context.observed == 0,
+                  "actual CStats GetStatValue remains independent from accepted native no-op mutation returns");
+            context.operation = 3;
+            const auto calls = ClockStatsOwnerTest::calls;
+            Check(runtime.access.SetStatValue(0, 1) != ClockResult::Ok && runtime.access.ModifyStat(0, 1) != ClockResult::Ok &&
+                      ClockStatsOwnerTest::calls == calls,
+                  "producer calls on the adopted OS thread cannot reuse an earlier stats callback lease");
+            bool        foreignRefused = false;
+            std::thread foreign([&] { foreignRefused = runtime.access.SetStatValue(0, 1) != ClockResult::Ok; });
+            foreign.join();
+            Check(foreignRefused && ClockStatsOwnerTest::calls == calls, "a foreign thread cannot invoke native stat reactions through a retained SDK owner");
+            for (unsigned refusal = 1; refusal <= 4; ++refusal)
+            {
+                context.refusal = refusal;
+                invoke();
+                const auto expected = refusal <= 2 ? ClockResult::OwnerConflict : refusal == 3 ? ClockResult::WrongThread : ClockResult::Expired;
+                Check(context.result == expected && ClockStatsOwnerTest::calls == calls,
+                      "stale generation, admission, nested callback and expired scopes refuse before native stat entry");
+            }
+            context.refusal = 0;
+            const auto generation = runtime.statsGeneration;
+            runtime.statsGeneration = generation + 1;
+            invoke();
+            Check(context.result == ClockResult::OwnerConflict && ClockStatsOwnerTest::calls == calls,
+                  "a cached stats reader from another generation never grants native mutation authority");
+            runtime.statsGeneration = generation;
+            for (const std::uint32_t state : {6u, 7u, 8u, 0u})
+            {
+                fixture.Put(StateProfile::stateRva, state);
+                invoke();
+                Check(context.result != ClockResult::Ok && ClockStatsOwnerTest::calls == calls,
+                      "native stat reactions require qualified live playing9 rather than a merely writable startup enum");
+            }
+            fixture.Put(StateProfile::stateRva, std::uint32_t{9});
+            fixture.Put(Writes::PlayerRootRva, std::uintptr_t{0});
+            invoke();
+            Check(context.result == ClockResult::NotInitialized && ClockStatsOwnerTest::calls == calls && !runtime.stopping.load(),
+                  "state9 without the actual loaded local-player identity refuses without pretending native effects occurred");
+            fixture.Put(Writes::PlayerRootRva, reinterpret_cast<std::uintptr_t>(fixture.statsPed.data()));
+            context.index = 82;
+            invoke();
+            Check(context.result == ClockResult::InvalidArgument && ClockStatsOwnerTest::calls == calls,
+                  "the SDK stat gap refuses through the real owner and primitive before any native function entry");
+            context.index = 64;
+            invoke();
+            Check(context.result == ClockResult::Ok && ClockStatsOwnerTest::calls == calls + 1 && ClockStatsOwnerTest::entry == Writes::SetRva &&
+                      ClockStatsOwnerTest::index == 64,
+                  "special stat64 uses the qualified loaded script input and accepts an intentional native no-op");
+            context.index = 0;
+            ClockStatsOwnerTest::effect = true;
+            context.value = 7.5f;
+            invoke();
+            Check(context.result == ClockResult::Ok && fixture.Get<float>(Stats::FloatBankRva) == 17.5f && !runtime.timingDirty.load() &&
+                      !runtime.timingRecovery.load() && !runtime.captured.load(),
+                  "a returned native reaction accepts its own resulting value without capturing a bank or clock restoration snapshot");
+            retire(service);
+            Check(fixture.Get<float>(Stats::FloatBankRva) == 17.5f, "End preserves successfully accepted native stat effects instead of rewinding the bank");
+        }
+        for (unsigned failure = 0; failure < 3; ++failure)
+        {
+            fixture.Put(StateProfile::stateRva, std::uint32_t{9});
+            NativeClockService service;
+            StatsOwnerContext  context;
+            context.operation = 3;
+            context.value = 11.5f + static_cast<float>(failure);
+            ClockStatsOwnerTest::effect = true;
+            ClockStatsOwnerTest::result = failure == 0 ? ClockResult::OriginalException : ClockResult::Ok;
+            if (failure == 1)
+                ClockStatsOwnerTest::after = [] { runtime.admissionGeneration.fetch_add(1); };
+            if (failure == 2)
+                ClockStatsOwnerTest::after = []
+                {
+                    const std::uint32_t state = 8;
+                    SIZE_T              copied = 0;
+                    if (!::WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(runtime.image + NativeGameStateProfile::stateRva), &state,
+                                              sizeof(state), &copied) ||
+                        copied != sizeof(state))
+                        std::abort();
+                };
+            BeginOwned(service, fixture, false, true, true, &StatsOwnerHandler, &context);
+            const auto calls = ClockStatsOwnerTest::calls;
+            fixture.invokeTimer();
+            const auto expected = failure == 0 ? ClockResult::OriginalException : failure == 1 ? ClockResult::OwnerConflict : ClockResult::NotInitialized;
+            Check(context.result == expected && ClockStatsOwnerTest::calls == calls + 1 && runtime.stopping.load() &&
+                      fixture.Get<float>(Stats::FloatBankRva) == context.value + 10.0f,
+                  "native exception or failed post-call owner/state bookend stops the lease after preserving already-entered effects");
+            Check(runtime.access.SetStatValue(0, context.value) != ClockResult::Ok && ClockStatsOwnerTest::calls == calls + 1,
+                  "a failed entered stat transaction is never automatically replayed through the stopped native owner");
+            retire(service);
+            Check(fixture.Get<float>(Stats::FloatBankRva) == context.value + 10.0f &&
+                      fixture.Get<std::uint32_t>(StateProfile::stateRva) == (failure == 2 ? 8u : 9u),
+                  "retirement preserves native stat and dispatcher advances after an entered failure");
+        }
+        ClockStatsOwnerTest::effect = false;
+        ClockStatsOwnerTest::result = ClockResult::Ok;
+        ClockStatsOwnerTest::after = nullptr;
+        fixture.Put(StateProfile::stateRva, oldState);
+        for (std::size_t index = 0; index < statePins.size(); ++index)
+            fixture.Patch(StateProfile::pins[index].rva, statePins[index].data(), StateProfile::pins[index].size);
+        Check(::VirtualProtect(reinterpret_cast<void*>(fixture.image + StateProfile::stateRva), sizeof(std::uint32_t), priorStateProtection, &ignored) != FALSE,
+              "restore the earlier owned alternate timer/state fixture pins and protection without changing native production profiles");
+        ClockReaderTestHost::image = ClockStatsOwnerTest::image = 0;
+        std::puts("Production native complete CStats SDK owner fixture completed");
+    }
+
     class ClockWeatherOverridesDE final : public CWeatherOverridesDE
     {
     public:
@@ -4658,6 +5007,7 @@ int main(int argc, char** argv)
     NativeWeaponOwnedWrites(fixture);
     NativeWeaponVectorAndBankOwner(fixture);
     NativeWeatherOverrideOwnedSdk(fixture);
+    NativeStatsOwnedSdk(fixture);
     NativeReadSetAndRestoration(fixture);
     NativeCoherentCommandPublication(fixture);
     NativeReadOnlyRetirement(fixture);

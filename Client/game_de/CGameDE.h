@@ -24,6 +24,7 @@ namespace mta::game_de
     {
     public:
         CClock*           GetClock() noexcept override;
+        CStats*           GetStats() override;
         CKeyGen*          GetKeyGen() noexcept override;
         SystemState::Enum GetSystemState() override;
         void              SetSystemState(SystemState::Enum state) override;

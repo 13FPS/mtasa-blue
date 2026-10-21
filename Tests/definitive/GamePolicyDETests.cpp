@@ -74,6 +74,16 @@ namespace
         mta::game_de::ClockResult SetTimeScale(float) noexcept override { fixture::Unqualified(); }
         mta::game_de::ClockResult SetMinuteDuration(std::uint32_t) noexcept override { fixture::Unqualified(); }
         mta::game_de::ClockResult Pause(bool) noexcept override { fixture::Unqualified(); }
+        mta::game_de::ClockResult GetStats(CStats*& output) noexcept override
+        {
+            ++statsReads;
+            if (statsResult == mta::game_de::ClockResult::Ok)
+                output = statsPointer;
+            return statsResult;
+        }
+        unsigned                  statsReads = 0;
+        CStats*                   statsPointer = nullptr;
+        mta::game_de::ClockResult statsResult = mta::game_de::ClockResult::NotInitialized;
         mta::game_de::ClockResult GetWeaponInfoSlot(std::size_t slot, CWeaponInfo*& output) noexcept override
         {
             ++weaponReads;
@@ -331,6 +341,18 @@ int main()
     timing.weaponResult = mta::game_de::ClockResult::Ok;
     timing.weaponResultPointer = nullptr;
     Refuses([&] { game.GetWeaponInfo(WEAPONTYPE_PISTOL); }, "accepted weapon selection cannot publish an empty wrapper registry");
+    unsigned char statsIdentity = 0;
+    timing.statsPointer = reinterpret_cast<CStats*>(&statsIdentity);
+    Refuses([&] { game.GetStats(); }, "actual stats SDK publication requires the existing admitted native owner");
+    Check(timing.statsReads == 1, "stats lookup forwards once and preserves an explicit unavailable result");
+    timing.statsResult = mta::game_de::ClockResult::Ok;
+    Check(game.GetStats() == timing.statsPointer && timing.statsReads == 2, "actual CGame returns the exact borrowed SDK stats identity");
+    timing.statsResult = mta::game_de::ClockResult::Busy;
+    Refuses([&] { game.GetStats(); }, "competing native stats ownership remains an explicit SDK refusal");
+    Check(timing.statsReads == 3, "SDK publication does not retry over competing stats ownership");
+    timing.statsResult = mta::game_de::ClockResult::Ok;
+    timing.statsPointer = nullptr;
+    Refuses([&] { game.GetStats(); }, "a successful owner result cannot publish a missing actual stats service");
     Check(!reader.IsBound() && !streaming.IsBound() && !state.IsBound(), "CPU SDK policies require no native service binding");
 
     std::printf("Passed %u actual CGameDE CPU SDK policy checks (%zu-bit)\n", checks, sizeof(void*) * 8);

@@ -16,12 +16,16 @@
 #include "NativeStatsWriteAccess.h"
 #include "NativeStartupCompletionAccess.h"
 #include "NativePedPoolReader.h"
+#include "NativePedTransformReader.h"
+#include "NativePedTeleportAccess.h"
 #include "NativePlayerInfoAccess.h"
 #include "NativeWantedAccess.h"
+#include "NativeRopesAccess.h"
 #include <cstdint>
 
 class CStats;
 class CPlayerInfo;
+class CRopes;
 
 namespace mta::game_de
 {
@@ -35,7 +39,9 @@ namespace mta::game_de
                                    public NativeWeatherOverrideAccess,
                                    public NativeStatsWriteAccess,
                                    public NativePlayerInfoAccess,
-                                   public NativeWantedAccess
+                                   public NativeWantedAccess,
+                                   public NativeRopesAccess,
+                                   public NativePedTeleportAccess
     {
     public:
         virtual ClockResult SetTimeScale(float value) noexcept = 0;
@@ -60,6 +66,7 @@ namespace mta::game_de
         // reader and this callback owner; publication grants no later lease.
         virtual ClockResult GetStats(CStats*&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult GetPlayerInfo(CPlayerInfo*&) noexcept { return ClockResult::NotInitialized; }
+        virtual ClockResult GetRopes(CRopes*&) noexcept { return ClockResult::NotInitialized; }
         // Publish the complete runtime-owned SDK service only after its native
         // owner qualifies it. A borrowed object never grants a later callback.
         virtual ClockResult GetWeather(CWeather*&) noexcept { return ClockResult::NotInitialized; }
@@ -67,6 +74,11 @@ namespace mta::game_de
         // These immediate facts are not SDK CPed wrappers or a pool lease.
         virtual ClockResult ResolvePedPoolHandle(std::uint32_t, NativePedPoolReader::Value&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult RecheckPedPoolHandle(const NativePedPoolReader::Value&) noexcept { return ClockResult::NotInitialized; }
+        // These are immediate facts and real vector borrows through the same
+        // callback. Neither an SDK entity nor a persistent wrapper is created.
+        virtual ClockResult ReadPedTransform(std::uint32_t, NativePedTransformReader::Value&) noexcept { return ClockResult::NotInitialized; }
+        virtual ClockResult RecheckPedTransform(const NativePedTransformReader::Value&) noexcept { return ClockResult::NotInitialized; }
+        virtual ClockResult BorrowPedPosition(std::uint32_t, CVector*&) noexcept { return ClockResult::NotInitialized; }
         // The real request belongs to a distinct admitted normal-frame scope;
         // a gameplay timer or earlier observation never grants lifecycle calls.
         virtual ClockResult StartGame() noexcept { return ClockResult::NotInitialized; }

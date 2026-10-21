@@ -12,6 +12,7 @@
 #pragma once
 
 #include "Common.h"
+#include "CPoolClientEntity.h"
 #include "CBuildingsPool.h"
 #include "CDummyPool.h"
 #include "CTxdPool.h"
@@ -54,13 +55,6 @@ enum ePools
     ENV_MAP_ATOMIC_POOL,
     SPEC_MAP_MATERIAL_POOL,
     MAX_POOLS
-};
-
-template <class T>
-struct SClientEntity
-{
-    T*             pEntity;
-    CClientEntity* pClientEntity;
 };
 
 class CPools

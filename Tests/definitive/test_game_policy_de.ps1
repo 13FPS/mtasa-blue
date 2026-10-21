@@ -91,7 +91,9 @@ try {
         'Client/game_de/CKeyGenDE.h','Client/game_de/CAsyncLoadingDE.h','Client/game_de/NativeGravityReadAccess.h','Client/game_de/NativeGravityReadProfile.h','Client/game_de/NativeGravityReadAccess.cpp','Client/game_de/NativeGameTimingReader.h',
         'Client/game_de/NativeGameTimeReader.h','Client/game_de/NativeStreamingFileIdsReader.h','Client/game_de/NativeGameStateReader.h',
         'Client/game_de/NativeGameStateMemory.h','Client/game_de/NativeDataFileNamesReader.h','Client/game_de/NativeDataFileNamesProfile.h','Shared/sdk/SharedUtil.Defines.h',
-        'Client/game_de/NativeGameTimingAccess.h','Client/game_de/NativePlayerInfoAccess.h','Client/game_de/NativeWantedAccess.h','Client/game_de/NativeWeaponInfoVectorAccess.h','Client/game_de/NativeWeaponInfoWriteAccess.h',
+        'Client/game_de/NativeGameTimingAccess.h','Client/game_de/NativeRopesAccess.h','Client/sdk/game/CRopes.h','Client/game_de/NativePlayerInfoAccess.h','Client/game_de/NativeWantedAccess.h','Client/game_de/NativeWeaponInfoVectorAccess.h','Client/game_de/NativeWeaponInfoWriteAccess.h',
+        'Client/game_de/NativePedTransformReader.h','Client/game_de/NativePedPoolReader.h',
+        'Client/game_de/NativePedTeleportAccess.h',
         'Client/game_de/NativeStartupCompletionAccess.h','Client/game_de/NativeStartupCompletionProfile.h',
         'Client/game_de/NativeStatsWriteAccess.h','Client/sdk/game/CStats.h','Client/game_de/NativeWeatherOverrideAccess.h',
         'Client/game_de/NativeWeaponInfoWriteProfile.h','Client/game_de/CWeatherScalarsDE.h','Client/game_de/NativeWeatherScalarProfile.h',
@@ -113,7 +115,7 @@ try {
             ForEach-Object { $_.Groups['name'].Value })
     }
     $testedMethods = @('GetCheckStatus','OnPedContextChange','GetPedContext','SetPreWeaponFireHandler','SetPostWeaponFireHandler','SetTaskSimpleBeHitHandler',
-        'SetJetpackWeaponEnabled','GetJetpackWeaponEnabled','SetSystemState','VerifySADataFileNames','IsCheatEnabled','SetCheatEnabled','GetWeaponInfo','GetStats','StartGame')
+        'SetJetpackWeaponEnabled','GetJetpackWeaponEnabled','SetSystemState','VerifySADataFileNames','IsCheatEnabled','SetCheatEnabled','GetWeaponInfo','GetStats','GetRopes','StartGame')
     foreach ($method in $testedMethods) { if ($provided -notcontains $method) { throw "Production SDK override is missing: $method" } }
     $gameMethods = @(InterfaceMethods 'Client/sdk/game/CGame.h' | Where-Object { $_.name -ne 'GetPools' -and $provided -notcontains $_.name })
     $poolMethods = @(InterfaceMethods 'Client/sdk/game/CPools.h' | Where-Object { $_.name -ne 'GetPedFromRef' })

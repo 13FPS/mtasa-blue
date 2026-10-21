@@ -110,6 +110,16 @@ namespace
         unsigned                  playerInfoReads = 0;
         CPlayerInfo*              playerInfoPointer = nullptr;
         mta::game_de::ClockResult playerInfoResult = mta::game_de::ClockResult::NotInitialized;
+        mta::game_de::ClockResult GetRopes(CRopes*& output) noexcept override
+        {
+            ++ropesReads;
+            if (ropesResult == mta::game_de::ClockResult::Ok)
+                output = ropesPointer;
+            return ropesResult;
+        }
+        unsigned                  ropesReads = 0;
+        CRopes*                   ropesPointer = nullptr;
+        mta::game_de::ClockResult ropesResult = mta::game_de::ClockResult::NotInitialized;
         mta::game_de::ClockResult GetWeather(CWeather*& output) noexcept override
         {
             ++weatherReads;
@@ -463,6 +473,22 @@ int main()
     Check(legacyPlayerInfo.GetPlayerInfo(defaultPlayerInfo) == mta::game_de::ClockResult::NotInitialized &&
               defaultPlayerInfo == reinterpret_cast<CPlayerInfo*>(&playerInfoIdentity),
           "legacy owners refuse default player-info borrowing without overwriting output");
+    unsigned char ropesIdentity = 0;
+    timing.ropesPointer = reinterpret_cast<CRopes*>(&ropesIdentity);
+    Refuses([&] { game.GetRopes(); }, "actual rope SDK publication requires the same admitted native owner");
+    Check(timing.ropesReads == 1, "CGame forwards unavailable rope publication exactly once");
+    timing.ropesResult = mta::game_de::ClockResult::Ok;
+    Check(game.GetRopes() == timing.ropesPointer && timing.ropesReads == 2, "actual CGame returns the exact borrowed complete CRopes identity");
+    timing.ropesResult = mta::game_de::ClockResult::Busy;
+    Refuses([&] { game.GetRopes(); }, "competing native rope ownership is an explicit SDK refusal");
+    Check(timing.ropesReads == 3, "SDK rope accessor never retries a competing owner");
+    timing.ropesResult = mta::game_de::ClockResult::Ok;
+    timing.ropesPointer = nullptr;
+    Refuses([&] { game.GetRopes(); }, "successful null output cannot substitute for the complete rope SDK service");
+    LegacyTimingAccess legacyRopes;
+    auto*              defaultRopes = reinterpret_cast<CRopes*>(&ropesIdentity);
+    Check(legacyRopes.GetRopes(defaultRopes) == mta::game_de::ClockResult::NotInitialized && defaultRopes == reinterpret_cast<CRopes*>(&ropesIdentity),
+          "legacy timing-only owners refuse default rope publication without altering output");
     unsigned char weatherIdentity = 0;
     timing.weatherPointer = reinterpret_cast<CWeather*>(&weatherIdentity);
     Refuses([&] { game.GetWeather(); }, "actual weather SDK publication requires the existing admitted native owner");

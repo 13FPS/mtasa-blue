@@ -11,6 +11,7 @@
 #pragma once
 
 #include <game/CPools.h>
+#include <game/CPedRegistryPolicy.h>
 #include "CPedSA.h"
 #include "CVehicleSA.h"
 #include "CObjectSA.h"
@@ -95,7 +96,7 @@ public:
     int  GetPoolCapacity(ePools pool);
     void SetPoolCapacity(ePools pool, int iValue);
 
-    void ResetPedPoolCount() { m_pedPool.ulCount = 0; }
+    void ResetPedPoolCount() { MtaGame::CPedRegistryPolicy::ResetCount(m_pedPool.ulCount); }
     void InvalidateLocalPlayerClientEntity();
 
     CBuildingsPool&         GetBuildingsPool() noexcept override { return m_BuildingsPool; };

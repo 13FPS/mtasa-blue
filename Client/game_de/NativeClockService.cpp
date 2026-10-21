@@ -26,6 +26,9 @@
 #include "NativeWantedMemory.h"
 #include "CWantedDE.h"
 #include "CPlayerInfoDE.h"
+#include "NativeRopesMemory.h"
+#include "CRopesDE.h"
+#include "NativePedTeleportMemory.h"
 #include "NativeStartGameCalls.h"
 #include "NativeUObjectMembershipAccess.h"
 #include "NativeUObjectMembershipProfile.h"
@@ -100,6 +103,10 @@ namespace mta::game_de
             ClockResult GetWeather(CWeather*& output) noexcept override;
             ClockResult ResolvePedPoolHandle(std::uint32_t, NativePedPoolReader::Value&) noexcept override;
             ClockResult RecheckPedPoolHandle(const NativePedPoolReader::Value&) noexcept override;
+            ClockResult ReadPedTransform(std::uint32_t, NativePedTransformReader::Value&) noexcept override;
+            ClockResult RecheckPedTransform(const NativePedTransformReader::Value&) noexcept override;
+            ClockResult BorrowPedPosition(std::uint32_t, CVector*&) noexcept override;
+            ClockResult TeleportPed(std::uint32_t, const CVector&) noexcept override;
             ClockResult SetWeaponFloat(std::size_t slot, NativeWeaponFloatField field, float value) noexcept override;
             ClockResult SetWeaponShort(std::size_t slot, NativeWeaponShortField field, std::int16_t value) noexcept override;
             ClockResult SetWeaponDword(std::size_t slot, NativeWeaponDwordField field, std::uint32_t value) noexcept override;
@@ -111,6 +118,9 @@ namespace mta::game_de
             ClockResult SetWeatherScalarOverride(NativeWeatherScalarProfile::Field field, float value) noexcept override;
             ClockResult ResetWeatherScalarOverride(NativeWeatherScalarProfile::Field field) noexcept override;
             ClockResult GetStats(CStats*& output) noexcept override;
+            ClockResult GetRopes(CRopes*& output) noexcept override;
+            ClockResult CreateSwatRope(const CVector& position, std::uint32_t duration, std::int32_t& output) noexcept override;
+            ClockResult RemoveEntityRope(std::uintptr_t key) noexcept override;
             ClockResult GetPlayerInfo(CPlayerInfo*& output) noexcept override;
             ClockResult ReadPlayerFloat(NativePlayerInfoFloatField field, float& output) noexcept override;
             ClockResult ReadPlayerDword(NativePlayerInfoDwordField field, std::uint32_t& output) noexcept override;
@@ -233,6 +243,9 @@ namespace mta::game_de
             NativePlayerInfoMemory playerInfo;
             std::uint64_t          playerInfoGeneration = 0;
             NativeWantedMemory     wantedMemory{playerInfo};
+            // Static world ropes share this owner but consume no local player.
+            NativeRopesMemory ropesMemory;
+            std::uint64_t     ropesGeneration = 0;
             // Only a failed partial XYZ intent owns rollback components. Full
             // vectors persist, and later native edits retire only the precise
             // superseded component rather than permitting a whole-row rewind.
@@ -292,6 +305,7 @@ namespace mta::game_de
             CStatsDE                      stats{statsReader, access};
             CWantedDE                     wanted{access};
             CPlayerInfoDE                 playerInfoSdk{access};
+            CRopesDE                      ropesSdk{access};
             CWeatherOverridesDE           weatherSdk{access, access, access};
             Counters                      counters;
             // Destroy the hold before the shared peer recovery vector/gates.
@@ -1674,6 +1688,71 @@ namespace mta::game_de
             return CheckTimingOwner();
         }
 
+        ClockResult RequireRopes() noexcept
+        {
+            // Native rope rows belong to the loaded world. Reuse real state9
+            // and callback admission without manufacturing a CJ dependency.
+            auto owner = CheckStatsOwner();
+            if (owner != ClockResult::Ok)
+                return owner;
+            const auto generation = runtime.generation.load();
+            if (runtime.ropesGeneration && runtime.ropesGeneration != generation)
+                return ClockResult::OwnerConflict;
+            if (!runtime.ropesGeneration)
+            {
+                runtime.ropesMemory.Reset();
+                const auto bound = runtime.ropesMemory.Bind();
+                if (bound != ClockResult::Ok)
+                    return bound;
+                owner = CheckStatsOwner();
+                if (owner != ClockResult::Ok)
+                {
+                    runtime.ropesMemory.Reset();
+                    return owner;
+                }
+                runtime.ropesGeneration = generation;
+            }
+            return CheckStatsOwner();
+        }
+        ClockResult NativeAccess::GetRopes(CRopes*& output) noexcept
+        {
+            auto result = RequireRopes();
+            if (result != ClockResult::Ok)
+                return result;
+            result = runtime.ropesMemory.Qualify(&CheckStatsOwner);
+            if (result != ClockResult::Ok)
+                return result;
+            result = CheckStatsOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            output = &runtime.ropesSdk;
+            return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::CreateSwatRope(const CVector& position, std::uint32_t duration, std::int32_t& output) noexcept
+        {
+            const auto owner = RequireRopes();
+            if (owner != ClockResult::Ok)
+                return owner;
+            NativeRopesMemory::Receipt receipt;
+            const auto                 result = runtime.ropesMemory.Create(position, duration, output, &CheckStatsOwner, &receipt);
+            // A row may have changed before a later refusal/counter conflict.
+            // Retire this lease honestly; never replay or undo native actions.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+        ClockResult NativeAccess::RemoveEntityRope(std::uintptr_t key) noexcept
+        {
+            const auto owner = RequireRopes();
+            if (owner != ClockResult::Ok)
+                return owner;
+            NativeRopesMemory::Receipt receipt;
+            const auto                 result = runtime.ropesMemory.Remove(key, &CheckStatsOwner, &receipt);
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+
         ClockResult CheckPlayerInfoOwner() noexcept
         {
             // Share the real callback + native PLAYING9 bookend already used
@@ -2006,6 +2085,34 @@ namespace mta::game_de
         ClockResult NativeAccess::RecheckPedPoolHandle(const NativePedPoolReader::Value& previous) noexcept
         {
             return NativePedPoolReader({runtime.image}, &CheckTimingOwner).Recheck(previous);
+        }
+        ClockResult NativeAccess::ReadPedTransform(std::uint32_t handle, NativePedTransformReader::Value& output) noexcept
+        {
+            // Transform identity must be checked in the same native callback
+            // as the pool slot; a prior observation cannot grant a new lease.
+            return NativePedTransformReader({runtime.image}, &CheckTimingOwner).Read(handle, output);
+        }
+        ClockResult NativeAccess::RecheckPedTransform(const NativePedTransformReader::Value& previous) noexcept
+        {
+            return NativePedTransformReader({runtime.image}, &CheckTimingOwner).Recheck(previous);
+        }
+        ClockResult NativeAccess::BorrowPedPosition(std::uint32_t handle, CVector*& output) noexcept
+        {
+            return NativePedTransformReader({runtime.image}, &CheckTimingOwner).BorrowPosition(handle, output);
+        }
+        ClockResult NativeAccess::TeleportPed(std::uint32_t handle, const CVector& destination) noexcept
+        {
+            const auto admitted = CheckTimingOwner();
+            if (admitted != ClockResult::Ok)
+                return admitted;
+            NativePedTeleportMemory::Receipt receipt;
+            const auto                       result = NativePedTeleportMemory({runtime.image}, &CheckTimingOwner).Apply(handle, destination, &receipt);
+            // A task, world-list or placement effect may already exist even if
+            // the native call faults or its acknowledgement becomes unreadable.
+            // End retires this owner's hooks; it never replays/rewinds the ped.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
         }
 
         ClockResult RequireWeatherOverrideOwner() noexcept
@@ -3250,6 +3357,8 @@ namespace mta::game_de
         runtime.statsGeneration = 0;
         runtime.playerInfo.Reset();
         runtime.playerInfoGeneration = 0;
+        runtime.ropesMemory.Reset();
+        runtime.ropesGeneration = 0;
         runtime.weaponVectorJournal = {};
         runtime.weaponVectorSlot = 0;
         runtime.weaponVectorRecovery.store(false);
@@ -3454,6 +3563,8 @@ namespace mta::game_de
             runtime.statsGeneration = 0;
             runtime.playerInfo.Reset();
             runtime.playerInfoGeneration = 0;
+            runtime.ropesMemory.Reset();
+            runtime.ropesGeneration = 0;
             runtime.weatherOverrideGeneration.store(0);
         }
         ReadState(finalState);

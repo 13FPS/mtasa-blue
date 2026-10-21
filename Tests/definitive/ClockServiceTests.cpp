@@ -17,6 +17,10 @@
 #include "../../Client/game_de/NativeWeatherOverridePlacement.h"
 #include "../../Client/game_de/NativeWeatherRainProfile.h"
 #include "../../Client/game_de/NativePedPoolReader.h"
+#include "../../Client/game_de/NativePedTransformReader.h"
+#include "../../Client/game_de/NativePedTransformProfile.h"
+#include "../../Client/game_de/NativePedTeleportMemory.h"
+#include "../../Client/game_de/NativePedTeleportProfile.h"
 #include "../../Client/game_de/NativePlayerInfoMemory.h"
 #include "../../Client/game_de/NativePlayerInfoProfile.h"
 #include "../../Client/game_de/NativePlayerInfoExtraProfile.h"
@@ -24,6 +28,11 @@
 #include "../../Client/game_de/NativeWantedMemory.h"
 #include "../../Client/game_de/NativeWantedProfile.h"
 #include "../../Client/game_de/CWantedDE.h"
+#include "../../Client/game_de/NativeRopesMemory.h"
+#include "../../Client/game_de/NativeRopesProfile.h"
+#include "../../Client/game_de/CRopesDE.h"
+#include <SharedUtil.Defines.h>
+#include <CVector.h>
 #include "../../Client/game_de/CWeatherOverridesDE.h"
 #include "../../Client/game_de/NativeWeaponInfoProfile.h"
 #include "../../Client/game_de/NativeWeaponInfoWriteProfile.h"
@@ -91,6 +100,121 @@ namespace ClockStatsOwnerTest
             const auto next = after;
             after = nullptr;
             next();
+        }
+        if (result != mta::game_de::ClockResult::Ok)
+            exception = EXCEPTION_ACCESS_VIOLATION;
+        return result;
+    }
+}
+
+namespace ClockPedTeleportOwnerTest
+{
+    using Memory = mta::game_de::NativePedTeleportMemory;
+    unsigned                  calls = 0;
+    std::uintptr_t            image = 0, entry = 0, receiver = 0;
+    CVector                   requested;
+    bool                      argument = false, effect = true;
+    mta::game_de::ClockResult result = mta::game_de::ClockResult::Ok;
+    void (*after)() = nullptr;
+    mta::game_de::ClockResult Invoke(Memory::NativeFunction function, void* ped, const CVector* position, bool reset, std::uint32_t& exception) noexcept
+    {
+        ++calls;
+        entry = reinterpret_cast<std::uintptr_t>(function) - image;
+        receiver = reinterpret_cast<std::uintptr_t>(ped);
+        requested = *position;
+        argument = reset;
+        if (effect)
+        {
+            std::uintptr_t matrix = 0;
+            SIZE_T         copied = 0;
+            if (!::ReadProcessMemory(GetCurrentProcess(), static_cast<unsigned char*>(ped) + mta::game_de::NativePedTransformProfile::MatrixPointerOffset,
+                                     &matrix, sizeof(matrix), &copied) ||
+                copied != sizeof(matrix))
+                std::abort();
+            const auto address = matrix ? matrix + mta::game_de::NativePedTransformProfile::MatrixPositionOffset
+                                        : receiver + mta::game_de::NativePedTransformProfile::InlinePositionOffset;
+            // This single visible effect distinguishes accepted native intent
+            // from cleanup. It does not emulate task/list callbacks or claim
+            // that their actual in-game reactions were executed by this test.
+            const CVector zero(0, 0, 0);
+            if (!::WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(address), position, sizeof(*position), &copied) ||
+                copied != sizeof(*position) ||
+                !::WriteProcessMemory(GetCurrentProcess(), static_cast<unsigned char*>(ped) + mta::game_de::NativePedTransformProfile::VelocityOffset, &zero,
+                                      sizeof(zero), &copied) ||
+                copied != sizeof(zero))
+                std::abort();
+        }
+        if (after)
+        {
+            const auto action = after;
+            after = nullptr;
+            action();
+        }
+        if (result != mta::game_de::ClockResult::Ok)
+            exception = EXCEPTION_ACCESS_VIOLATION;
+        return result;
+    }
+}
+
+namespace ClockRopesOwnerTest
+{
+    using Memory = mta::game_de::NativeRopesMemory;
+    std::uintptr_t            image = 0, entry = 0, identity = 0, row = 0;
+    std::uint32_t             duration = 0;
+    unsigned                  creates = 0, removes = 0;
+    std::int32_t              nativeResult = 1;
+    bool                      effect = true;
+    mta::game_de::ClockResult result = mta::game_de::ClockResult::Ok;
+    void (*after)() = nullptr;
+    void Write(std::uintptr_t address, const void* value, std::size_t bytes)
+    {
+        SIZE_T copied = 0;
+        if (!::WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(address), value, bytes, &copied) || copied != bytes)
+            std::abort();
+    }
+    mta::game_de::ClockResult Create(Memory::CreateFunction function, std::uintptr_t key, const Memory::Vector12&, std::uint32_t timeout, std::int32_t& output,
+                                     std::uint32_t& exception) noexcept
+    {
+        ++creates;
+        entry = reinterpret_cast<std::uintptr_t>(function) - image;
+        identity = key;
+        duration = timeout;
+        output = nativeResult;
+        if (effect)
+        {
+            const auto          address = image + mta::game_de::NativeRopesProfile::TableRva;
+            const unsigned char type = 8;
+            Write(address + mta::game_de::NativeRopesProfile::IdentityOffset, &key, sizeof(key));
+            Write(address + mta::game_de::NativeRopesProfile::TypeOffset, &type, sizeof(type));
+        }
+        if (after)
+        {
+            const auto action = after;
+            after = nullptr;
+            action();
+        }
+        if (result != mta::game_de::ClockResult::Ok)
+            exception = EXCEPTION_ACCESS_VIOLATION;
+        return result;
+    }
+    mta::game_de::ClockResult Remove(Memory::RemoveFunction function, void* object, std::uint32_t& exception) noexcept
+    {
+        ++removes;
+        entry = reinterpret_cast<std::uintptr_t>(function) - image;
+        row = reinterpret_cast<std::uintptr_t>(object);
+        if (effect)
+        {
+            const unsigned char  type = 0;
+            const std::uintptr_t zero = 0;
+            Write(row + mta::game_de::NativeRopesProfile::TypeOffset, &type, sizeof(type));
+            Write(row + mta::game_de::NativeRopesProfile::HookOffset, &zero, sizeof(zero));
+            Write(row + mta::game_de::NativeRopesProfile::PickedUpOffset, &zero, sizeof(zero));
+        }
+        if (after)
+        {
+            const auto action = after;
+            after = nullptr;
+            action();
         }
         if (result != mta::game_de::ClockResult::Ok)
             exception = EXCEPTION_ACCESS_VIOLATION;
@@ -636,10 +760,26 @@ namespace mta::game_de::NativeImageAccess
 #undef GetModuleHandleW
 #undef CheckExecutableBuild
 
+// The rope transaction keeps its true image/reference/pool checks and the
+// real retained owner. Only the final native action boundaries are observed.
+#define CheckExecutableBuild       ClockReaderFixtureExecutable
+#define GetModuleHandleW           ClockReaderTestHost::Module
+#define MTA_DE_ROPES_CREATE_INVOKE ClockRopesOwnerTest::Create
+#define MTA_DE_ROPES_REMOVE_INVOKE ClockRopesOwnerTest::Remove
+#include "../../Client/game_de/NativeRopesMemory.cpp"
+#undef MTA_DE_ROPES_REMOVE_INVOKE
+#undef MTA_DE_ROPES_CREATE_INVOKE
+#undef GetModuleHandleW
+#undef CheckExecutableBuild
+
 // The actual resolver keeps its checked OS image/bank reads and the Runtime's
 // real callback check. Only the current module selection admits owned bytes.
 #define GetModuleHandleW ClockReaderTestHost::Module
 #include "../../Client/game_de/NativePedPoolReader.cpp"
+#include "../../Client/game_de/NativePedTransformReader.cpp"
+#define MTA_DE_PED_TELEPORT_NATIVE_INVOKE ClockPedTeleportOwnerTest::Invoke
+#include "../../Client/game_de/NativePedTeleportMemory.cpp"
+#undef MTA_DE_PED_TELEPORT_NATIVE_INVOKE
 #undef GetModuleHandleW
 
 namespace mta::game_de::GameTimeReaderFixtureMemory
@@ -735,7 +875,7 @@ namespace
             IMAGE_NT_HEADERS64 nt{};
             nt.Signature = IMAGE_NT_SIGNATURE;
             nt.FileHeader.Machine = IMAGE_FILE_MACHINE_AMD64;
-            nt.FileHeader.NumberOfSections = 12;
+            nt.FileHeader.NumberOfSections = 18;
             nt.FileHeader.SizeOfOptionalHeader = sizeof(IMAGE_OPTIONAL_HEADER64);
             nt.FileHeader.Characteristics = IMAGE_FILE_EXECUTABLE_IMAGE | IMAGE_FILE_LARGE_ADDRESS_AWARE;
             nt.OptionalHeader.Magic = IMAGE_NT_OPTIONAL_HDR64_MAGIC;
@@ -754,7 +894,7 @@ namespace
             nt.OptionalHeader.SizeOfStackCommit = nt.OptionalHeader.SizeOfHeapCommit = 0x1000;
             nt.OptionalHeader.NumberOfRvaAndSizes = IMAGE_NUMBEROF_DIRECTORY_ENTRIES;
             std::memcpy(bytes.data() + dos.e_lfanew, &nt, sizeof(nt));
-            std::array<IMAGE_SECTION_HEADER, 12> sections{};
+            std::array<IMAGE_SECTION_HEADER, 18> sections{};
             // A Windows image section table must describe adjacent virtual
             // ranges. Sparse zero-filled sections preserve the actual native
             // RVAs without leaving loader-invalid gaps or a huge raw file.
@@ -778,33 +918,47 @@ namespace
             // an otherwise read-only PE section, and surrounding SDK literals
             // must retain their non-executable section contract.
             constexpr std::uint32_t mathPageRva = 0x3e98000;
-            zeroSection(3, ".gap", 0x1400000, mathPageRva - 0x1400000);
-            zeroSection(4, ".math", mathPageRva, 0x1000);
-            zeroSection(5, ".gapM", mathPageRva + 0x1000, animationPageRva - mathPageRva - 0x1000);
-            zeroSection(6, ".anims", animationPageRva, 0x1000);
-            zeroSection(7, ".gap2", animationPageRva + 0x1000, cheatPageRva - animationPageRva - 0x1000);
-            zeroSection(8, ".cheats", cheatPageRva, 0x1000);
-            zeroSection(9, ".gap3", cheatPageRva + 0x1000, DataRva - cheatPageRva - 0x1000);
-            zeroSection(11, ".tail", DataRva + DataSize, nt.OptionalHeader.SizeOfImage - DataRva - DataSize);
+            // The Teleport prerequisite reuses real UObject membership and
+            // logical-world profiles whose instructions lie in three later
+            // native ranges. Model just those pages as code; surrounding SDK
+            // literals/banks keep their established immutable section policy.
+            zeroSection(3, ".gap", 0x1400000, 0x1ca8000 - 0x1400000);
+            zeroSection(4, ".obj", 0x1ca8000, 0x1000);
+            zeroSection(5, ".gapO", 0x1ca9000, 0x2fa9000 - 0x1ca9000);
+            // The 171-byte native Level initializer crosses into 2faa000.
+            zeroSection(6, ".level", 0x2fa9000, 0x2000);
+            zeroSection(7, ".gapL", 0x2fab000, 0x3002000 - 0x2fab000);
+            zeroSection(8, ".actor", 0x3002000, 0x1000);
+            zeroSection(9, ".gapA", 0x3003000, mathPageRva - 0x3003000);
+            zeroSection(10, ".math", mathPageRva, 0x1000);
+            zeroSection(11, ".gapM", mathPageRva + 0x1000, animationPageRva - mathPageRva - 0x1000);
+            zeroSection(12, ".anims", animationPageRva, 0x1000);
+            zeroSection(13, ".gap2", animationPageRva + 0x1000, cheatPageRva - animationPageRva - 0x1000);
+            zeroSection(14, ".cheats", cheatPageRva, 0x1000);
+            zeroSection(15, ".gap3", cheatPageRva + 0x1000, DataRva - cheatPageRva - 0x1000);
+            zeroSection(17, ".tail", DataRva + DataSize, nt.OptionalHeader.SizeOfImage - DataRva - DataSize);
             // Only bounded admitted pages gain executable/writable protection
             // below. These virtual-section flags also describe the earlier
             // application caller and later root/state fields to the real gate.
             sections[0].Characteristics |= IMAGE_SCN_MEM_EXECUTE;
             sections[2].Characteristics |= IMAGE_SCN_MEM_EXECUTE;
             sections[4].Characteristics |= IMAGE_SCN_MEM_EXECUTE;
-            sections[6].Characteristics |= IMAGE_SCN_MEM_WRITE;
-            sections[8].Characteristics |= IMAGE_SCN_MEM_WRITE;
-            sections[11].Characteristics |= IMAGE_SCN_MEM_WRITE;
+            sections[6].Characteristics |= IMAGE_SCN_MEM_EXECUTE;
+            sections[8].Characteristics |= IMAGE_SCN_MEM_EXECUTE;
+            sections[10].Characteristics |= IMAGE_SCN_MEM_EXECUTE;
+            sections[12].Characteristics |= IMAGE_SCN_MEM_WRITE;
+            sections[14].Characteristics |= IMAGE_SCN_MEM_WRITE;
+            sections[17].Characteristics |= IMAGE_SCN_MEM_WRITE;
             std::memcpy(sections[1].Name, ".text", 5);
             sections[1].VirtualAddress = TextRva;
             sections[1].Misc.VirtualSize = sections[1].SizeOfRawData = TextSize;
             sections[1].PointerToRawData = 0x1000;
             sections[1].Characteristics = IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE;
-            std::memcpy(sections[10].Name, ".data", 5);
-            sections[10].VirtualAddress = DataRva;
-            sections[10].Misc.VirtualSize = sections[10].SizeOfRawData = DataSize;
-            sections[10].PointerToRawData = 0x1000 + TextSize;
-            sections[10].Characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE;
+            std::memcpy(sections[16].Name, ".data", 5);
+            sections[16].VirtualAddress = DataRva;
+            sections[16].Misc.VirtualSize = sections[16].SizeOfRawData = DataSize;
+            sections[16].PointerToRawData = 0x1000 + TextSize;
+            sections[16].Characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE;
             std::memcpy(bytes.data() + dos.e_lfanew + sizeof(nt), sections.data(), sizeof(sections));
             const auto code = [&](std::uintptr_t rva, const auto& data) { std::memcpy(bytes.data() + 0x1000 + rva - TextRva, data.data(), data.size()); };
             code(NativeClockProfile::clockCodeRva, NativeClockProfile::clockCode);
@@ -5258,6 +5412,8 @@ namespace
 #include "NativeWeatherRainOwnerTests.inl"
 #include "NativePedPoolOwnerTests.inl"
 #include "NativePlayerInfoWantedOwnerTests.inl"
+#include "NativeRopesOwnerTests.inl"
+#include "NativePedTeleportOwnerTests.inl"
 #include "NativeWorldCheatOwnerTests.inl"
 
 int main(int argc, char** argv)
@@ -5288,6 +5444,8 @@ int main(int argc, char** argv)
     NativeStatsOwnedSdk(fixture);
     NativePedPoolOwnedReads(fixture);
     NativePlayerInfoWantedOwnedSdk(fixture);
+    NativeRopesOwnedSdk(fixture);
+    NativePedTeleportOwnedSdk(fixture);
     NativeReadSetAndRestoration(fixture);
     NativeCoherentCommandPublication(fixture);
     NativeReadOnlyRetirement(fixture);

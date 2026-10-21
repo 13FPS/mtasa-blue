@@ -105,10 +105,15 @@ $sourceNames = @('Client/sdk/game/CGameAdapter.h', 'Client/game_de/GameAdapter.c
     'Client/definitive/MtaControllerSnapshot.h', 'Shared/sdk/CControllerState.h', 'Shared/sdk/enums/PedState.h',
     'Shared/sdk/CControllerActions.h', 'Shared/sdk/CControlStateSynthesis.h',
     'Client/game_de/NativePedPoolProfile.h','Client/game_de/NativePedPoolReader.h','Client/game_de/NativePedPoolReader.cpp',
+    'Client/game_de/NativePedTransformProfile.h','Client/game_de/NativePedTransformReader.h','Client/game_de/NativePedTransformReader.cpp',
+    'Client/game_de/NativePedTeleportAccess.h','Client/game_de/NativePedTeleportProfile.h','Client/game_de/NativePedTeleportMemory.h','Client/game_de/NativePedTeleportMemory.cpp',
     'Client/game_de/NativePlayerInfoProfile.h','Client/game_de/NativePlayerInfoExtraProfile.h','Client/game_de/NativePlayerInfoAccess.h','Client/game_de/NativePlayerInfoMemory.h','Client/game_de/NativePlayerInfoMemory.cpp',
     'Client/game_de/CPlayerInfoDE.h','Client/game_de/CPlayerInfoDE.cpp','Client/sdk/game/CPlayerInfo.h',
     'Client/game_de/NativeWantedProfile.h','Client/game_de/NativeWantedAccess.h','Client/game_de/NativeWantedMemory.h','Client/game_de/NativeWantedMemory.cpp',
     'Client/game_de/CWantedDE.h','Client/game_de/CWantedDE.cpp','Client/sdk/game/CWanted.h',
+    'Client/game_de/CRopesDE.h','Client/game_de/CRopesDE.cpp','Client/sdk/game/CRopes.h',
+    'Client/game_de/NativeRopesAccess.h','Client/game_de/NativeRopesProfile.h','Client/game_de/NativeRopesMemory.h','Client/game_de/NativeRopesMemory.cpp',
+    'Client/sdk/game/CPools.h','Client/sdk/game/CPoolClientEntity.h','Client/sdk/game/CPedRegistryPolicy.h',
     'Tests/definitive/GameAdapterModuleTests.cpp', 'Tests/definitive/test_game_adapter_module.ps1')
 $detoursSourceRoot = Join-Path $taskRoot 'vendor/detours/4.0.1/src'
 $sourceNames += @(Get-ChildItem -LiteralPath $detoursSourceRoot -File | ForEach-Object {
@@ -181,6 +186,9 @@ if ((Test-Path -LiteralPath $moduleSource) -and $detoursLibraryExit -eq 0) {
     $moduleArguments = $common + @('/LD','/DMTA_GAME_DE_EXPORTS', $moduleSource, (Join-Path $taskRoot 'Client/game_de/NativePadReader.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeImageAccess.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedPoolReader.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativePedTransformReader.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativePedTeleportMemory.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativeRopesMemory.cpp'),(Join-Path $taskRoot 'Client/game_de/CRopesDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePlayerInfoMemory.cpp'),(Join-Path $taskRoot 'Client/game_de/CPlayerInfoDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeWantedMemory.cpp'),(Join-Path $taskRoot 'Client/game_de/CWantedDE.cpp'), (Join-Path $taskRoot 'Client/game_de/CClockDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CKeyGenDE.cpp'), (Join-Path $taskRoot 'Client/game_de/CAsyncLoadingDE.cpp'), (Join-Path $taskRoot 'Client/game_de/CGameDE.cpp'),

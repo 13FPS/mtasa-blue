@@ -119,6 +119,40 @@ pointer lifetime, SDK ped wrapper, pool registration or full `CPools` service.
 `GetPools`, `InitLocalPlayer`, the complete `CGame` factory and x64 networking
 remain prerequisites for full MTA startup.
 
+Classic `CPoolsSA` now consumes a shared MTA ped-registry policy for slot
+registration, lookup, client reassociation and count maintenance. It preserves
+replacement/count behavior, native resolver ordering, count-only reset and
+clear-before-destruction ordering. The original `SClientEntity` declaration is
+shared without a layout change. Native creation and deletion remain with the
+classic caller. This policy does not publish a DE pool or fabricate wrappers
+whose lifetime cannot yet be maintained across callbacks.
+
+The same native callback owner supplies immediate ped position, matrix and raw
+velocity observations. Position borrows preserve the actual inline or owned
+matrix vector address, with fresh pool-generation and matrix-owner checks.
+Script velocity scaling and vehicle-coordinate substitution are not applied
+to the entity itself. A borrow ends before another native operation can replace
+or recycle placement. The native teleport operation changes world links and
+velocities; it does not stand in for ordinary SDK `SetPosition`.
+
+A distinct native teleport transaction is also implemented for the qualified
+matrix-backed ped subset. It checks the actual GameThread, loaded world,
+ped/matrix/intelligence identities and the native skeletal actor/component
+ownership before entering the genuine ped teleport function once. Native task,
+world-list and velocity effects belong to that operation. An entered failure
+stops the existing owner and preserves those effects; it never replays the
+intent or restores a guessed entity snapshot. This primitive publishes no
+partial `CPed` object and does not complete the remaining entity SDK methods.
+
+The complete two-method `CRopesDE` service reuses MTA's `CRopes` interface and
+the existing native callback owner. Creation calls the genuine DE rope
+registration path with the requested duration and native ID/counter semantics;
+the native full-table return does not certify that a rope was created. Removal
+treats the SDK entity argument as an opaque identity key and checks the actual
+selected row's registered native references. Entered failures preserve effects
+and stop the owner without replay or broad rollback. These services are checked
+offline; live validation and complete game/pool startup remain separate.
+
 Rain's shared runtime now retains its own near RX leaf, separate RW descriptor
 and exact direct-writer/entry journals. Loads advance the real synchronous
 archive through a temporary value, while saves retain native Rain reads. Stack

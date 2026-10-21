@@ -53,6 +53,17 @@ namespace mta::game_de
         return output;
     }
 
+    CRopes* CGameDE::GetRopes()
+    {
+        // Publish only the complete object owned by this same callback runtime.
+        // Its identity is stable, but every action requires a fresh native scope.
+        CRopes* output = nullptr;
+        RequireNativeWrite(NativeWrites().GetRopes(output), "GetRopes");
+        if (!output)
+            RequireNativeWrite(ClockResult::NotInitialized, "GetRopes");
+        return output;
+    }
+
     CPlayerInfo* CGameDE::GetPlayerInfo()
     {
         // The callback runtime owns the complete SDK service and its Wanted

@@ -417,25 +417,19 @@ inline bool CPoolsSA::AddPedToPool(CClientPed* pClientPed, CPedSA* pPed)
     {
         return false;
     }
-    else
+    DWORD dwElementIndexInPool = GetPedPoolIndex((std::uint8_t*)pInterface);
+    if (dwElementIndexInPool >= MAX_PEDS)
     {
-        DWORD dwElementIndexInPool = GetPedPoolIndex((std::uint8_t*)pInterface);
-        if (dwElementIndexInPool >= MAX_PEDS)
-        {
-            return false;
-        }
-
-        m_pedPool.arrayOfClientEntities[dwElementIndexInPool] = {pPed, (CClientEntity*)pClientPed};
-        ++m_pedPool.ulCount;
+        return false;
     }
 
-    return true;
+    return MtaGame::CPedRegistryPolicy::Register(m_pedPool.arrayOfClientEntities, m_pedPool.ulCount, dwElementIndexInPool, pPed, (CClientEntity*)pClientPed);
 }
 
 CPed* CPoolsSA::AddPed(CClientPed* pClientPed, unsigned int nModelIndex)
 {
     CPedSA* pPed = NULL;
-    if (m_pedPool.ulCount < MAX_PEDS)
+    if (MtaGame::CPedRegistryPolicy::MayCreate(m_pedPool.ulCount, MAX_PEDS))
     {
         pPed = new CPlayerPedSA(nModelIndex);
         if (!AddPedToPool(pClientPed, pPed))
@@ -451,7 +445,7 @@ CPed* CPoolsSA::AddPed(CClientPed* pClientPed, DWORD* pGameInterface)
 {
     CPedSA* pPed = NULL;
 
-    if (m_pedPool.ulCount < MAX_PEDS)
+    if (MtaGame::CPedRegistryPolicy::MayCreate(m_pedPool.ulCount, MAX_PEDS))
     {
         CPlayerPedSAInterface* pInterface = reinterpret_cast<CPlayerPedSAInterface*>(pGameInterface);
         if (pInterface)
@@ -461,12 +455,9 @@ CPed* CPoolsSA::AddPed(CClientPed* pClientPed, DWORD* pGameInterface)
 
             if (dwElementIndexInPool < MAX_PEDS)
             {
-                SClientEntity<CPedSA>* pPedEntity = &m_pedPool.arrayOfClientEntities[dwElementIndexInPool];
-                if (pPedEntity && pPedEntity->pEntity)
-                {
-                    m_pedPool.arrayOfClientEntities[dwElementIndexInPool] = {pPedEntity->pEntity, (CClientEntity*)pClientPed};
-                }
-                else
+                // Preserve the existing nullptr return for reassociation;
+                // only the native-construction branch returns a new ped.
+                if (!MtaGame::CPedRegistryPolicy::AssociateIfPresent(m_pedPool.arrayOfClientEntities, dwElementIndexInPool, (CClientEntity*)pClientPed))
                 {
                     // Create it
                     pPed = new CPlayerPedSA(pInterface);
@@ -501,8 +492,7 @@ void CPoolsSA::RemovePed(CPed* pPed, bool bDelete)
             return;
         }
 
-        CPedSA* pPed = m_pedPool.arrayOfClientEntities[dwElementIndexInPool].pEntity;
-        m_pedPool.arrayOfClientEntities[dwElementIndexInPool] = {nullptr, nullptr};
+        CPedSA* pPed = MtaGame::CPedRegistryPolicy::Clear(m_pedPool.arrayOfClientEntities, dwElementIndexInPool);
 
         // Delete the element from memory
         switch (pPed->GetType())
@@ -523,7 +513,7 @@ void CPoolsSA::RemovePed(CPed* pPed, bool bDelete)
         }
 
         // Decrease the count of elements in the pool
-        --m_pedPool.ulCount;
+        MtaGame::CPedRegistryPolicy::FinishRemoval(m_pedPool.ulCount);
 
         bIsDeletingPedAlready = false;
     }
@@ -542,11 +532,7 @@ SClientEntity<CPedSA>* CPoolsSA::GetPed(DWORD* pGameInterface)
         if (dwElementIndexInPool < MAX_PEDS)
         {
             // Return only if MTA has an entity for this slot
-            SClientEntity<CPedSA>* pSlot = &m_pedPool.arrayOfClientEntities[dwElementIndexInPool];
-            if (!pSlot->pEntity)
-                return nullptr;
-
-            return pSlot;
+            return MtaGame::CPedRegistryPolicy::Find(m_pedPool.arrayOfClientEntities, dwElementIndexInPool);
         }
     }
     return nullptr;
@@ -554,18 +540,8 @@ SClientEntity<CPedSA>* CPoolsSA::GetPed(DWORD* pGameInterface)
 
 CPed* CPoolsSA::GetPedFromRef(DWORD dwGameRef)
 {
-    CPedSAInterface* pInterface = GetPedInterface(dwGameRef);
-    if (pInterface)
-    {
-        // Extract the element index from the handle
-        DWORD   dwElementIndexInPool = dwGameRef >> 8;
-        CPedSA* pPed = m_pedPool.arrayOfClientEntities[dwElementIndexInPool].pEntity;
-        if (pPed)
-        {
-            return pPed;
-        }
-    }
-    return NULL;
+    return MtaGame::CPedRegistryPolicy::FindFromRef(m_pedPool.arrayOfClientEntities, dwGameRef,
+                                                    [this](std::uint32_t handle) { return GetPedInterface(handle); });
 }
 
 CPedSAInterface* CPoolsSA::GetPedInterface(DWORD dwGameRef)
@@ -1172,5 +1148,5 @@ int CPoolsSA::GetNumberOfUsedSpaces(ePools pool)
 
 void CPoolsSA::InvalidateLocalPlayerClientEntity()
 {
-    m_pedPool.arrayOfClientEntities[0] = {m_pedPool.arrayOfClientEntities[0].pEntity, nullptr};
+    MtaGame::CPedRegistryPolicy::InvalidateLocalClient(m_pedPool.arrayOfClientEntities);
 }

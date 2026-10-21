@@ -32,6 +32,7 @@
 #include "NativePedVelocityMemory.h"
 #include "NativePedReferenceController.h"
 #include "NativePedVitalsMemory.h"
+#include "NativePedMetadataMemory.h"
 #include "NativeStartGameCalls.h"
 #include "NativeUObjectMembershipAccess.h"
 #include "NativeUObjectMembershipProfile.h"
@@ -117,6 +118,7 @@ namespace mta::game_de
             ClockResult ReleasePedReference(const NativePedReferenceToken&) noexcept override;
             ClockResult ReadPedVital(const NativePedReferenceToken&, NativePedVitalField, float&) noexcept override;
             ClockResult SetPedVital(const NativePedReferenceToken&, NativePedVitalField, float) noexcept override;
+            ClockResult ReadPedMetadata(const NativePedReferenceToken&, NativePedMetadata&) noexcept override;
             ClockResult SetWeaponFloat(std::size_t slot, NativeWeaponFloatField field, float value) noexcept override;
             ClockResult SetWeaponShort(std::size_t slot, NativeWeaponShortField field, std::int16_t value) noexcept override;
             ClockResult SetWeaponDword(std::size_t slot, NativeWeaponDwordField field, std::uint32_t value) noexcept override;
@@ -2186,6 +2188,31 @@ namespace mta::game_de
             // Publish raw CPed float bits only after the exact registered cell
             // survives the complete read. No arithmetic quiets or clamps them.
             std::memcpy(&output, &next, sizeof(next));
+            return ClockResult::Ok;
+        }
+
+        ClockResult NativeAccess::ReadPedMetadata(const NativePedReferenceToken& token, NativePedMetadata& output) noexcept
+        {
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedPoolReader::Value before, after;
+            result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedMetadata next;
+            result = NativePedMetadataMemory({runtime.image}, &CheckTimingOwner).Read(before, next);
+            if (result != ClockResult::Ok)
+                return result;
+            result = ResolvePedReference(token, after);
+            if (result != ClockResult::Ok)
+                return result;
+            if (after.nativePed != before.nativePed || after.handle != before.handle)
+                return ClockResult::OwnerConflict;
+            // A model word is raw SDK identity, including FFFF. Only publish
+            // the pair after its registered ped survives both observations;
+            // this getter neither resolves a model object nor repairs a ped.
+            output = next;
             return ClockResult::Ok;
         }
 

@@ -34,6 +34,9 @@ namespace mta::game_de
 
     protected:
         CPedVitalsDE(NativePedVitalsAccess& access, const NativePedReferenceToken& token) noexcept : native(access), reference(token) {}
+        // Additional qualified SDK slices share this one immutable CPU token;
+        // borrowing it adds no native pointer or reference-retirement claim.
+        const NativePedReferenceToken& ReferenceToken() const noexcept { return reference; }
 
     private:
         static void Require(ClockResult, const char* operation);

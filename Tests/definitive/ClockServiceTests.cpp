@@ -28,6 +28,8 @@
 #include "../../Client/game_de/NativePedReferenceController.h"
 #include "../../Client/game_de/NativePedVitalsMemory.h"
 #include "../../Client/game_de/NativePedVitalsProfile.h"
+#include "../../Client/game_de/NativePedMetadataMemory.h"
+#include "../../Client/game_de/NativePedMetadataProfile.h"
 #include "../../Client/game_de/NativePlayerInfoMemory.h"
 #include "../../Client/game_de/NativePlayerInfoProfile.h"
 #include "../../Client/game_de/NativePlayerInfoExtraProfile.h"
@@ -902,6 +904,7 @@ namespace mta::game_de::NativeImageAccess
 #define MTA_DE_PED_REFERENCE_REGISTER_INVOKE   ClockPedReferenceOwnerTest::Register
 #define MTA_DE_PED_REFERENCE_UNREGISTER_INVOKE ClockPedReferenceOwnerTest::Unregister
 #include "../../Client/game_de/NativePedReferenceMemory.cpp"
+#include "../../Client/game_de/NativePedMetadataMemory.cpp"
 #undef MTA_DE_PED_REFERENCE_UNREGISTER_INVOKE
 #undef MTA_DE_PED_REFERENCE_REGISTER_INVOKE
 #pragma push_macro("InterlockedCompareExchange")
@@ -5561,6 +5564,7 @@ namespace
 #include "NativePedVelocityOwnerTests.inl"
 #include "NativePedReferenceOwnerTests.inl"
 #include "NativePedVitalsOwnerTests.inl"
+#include "NativePedMetadataOwnerTests.inl"
 #include "NativeWorldCheatOwnerTests.inl"
 
 int main(int argc, char** argv)
@@ -5596,6 +5600,7 @@ int main(int argc, char** argv)
     NativePedVelocityOwnedSdk(fixture);
     NativePedReferenceOwnedSdk(fixture);
     NativePedVitalsOwnedSdk(fixture);
+    NativePedMetadataOwnedSdk(fixture);
     NativeReadSetAndRestoration(fixture);
     NativeCoherentCommandPublication(fixture);
     NativeReadOnlyRetirement(fixture);

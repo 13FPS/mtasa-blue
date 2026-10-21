@@ -163,6 +163,14 @@ acquisition and retirement remain with the future enclosing ped/pool owner.
 The other inherited SDK methods remain pure, and this layer has no factory or
 registry entry. It cannot yet be published as a usable `CPed`.
 
+Read-only ped metadata also uses the registered-token owner. Qualified native
+entity constructors, model producers/consumers and both ped destructor chains
+establish the raw 16-bit model word and masked entity-type byte. Reading the
+model word accepts `FFFF` and performs no model-bank lookup or validity claim.
+The abstract `CPedMetadataDE` layer adds MTA's existing `GetModelIndex` and
+`GetEntityType` methods to the four vitals methods, sharing one immutable token.
+The other SDK methods stay pure; no registry or ped factory is published.
+
 Classic pool templates and the DE ped reader also share MTA's slot bounds
 policy. Free-slot selection retains the classic cursor/probe order and does
 not reserve a row or change its generation. Native allocation remains with

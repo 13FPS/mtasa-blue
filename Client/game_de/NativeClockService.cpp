@@ -31,6 +31,7 @@
 #include "NativePedTeleportMemory.h"
 #include "NativePedVelocityMemory.h"
 #include "NativePedReferenceController.h"
+#include "NativePedVitalsMemory.h"
 #include "NativeStartGameCalls.h"
 #include "NativeUObjectMembershipAccess.h"
 #include "NativeUObjectMembershipProfile.h"
@@ -114,6 +115,8 @@ namespace mta::game_de
             ClockResult AcquirePedReference(std::uint32_t, NativePedReferenceToken&) noexcept override;
             ClockResult ResolvePedReference(const NativePedReferenceToken&, NativePedPoolReader::Value&) noexcept override;
             ClockResult ReleasePedReference(const NativePedReferenceToken&) noexcept override;
+            ClockResult ReadPedVital(const NativePedReferenceToken&, NativePedVitalField, float&) noexcept override;
+            ClockResult SetPedVital(const NativePedReferenceToken&, NativePedVitalField, float) noexcept override;
             ClockResult SetWeaponFloat(std::size_t slot, NativeWeaponFloatField field, float value) noexcept override;
             ClockResult SetWeaponShort(std::size_t slot, NativeWeaponShortField field, std::int16_t value) noexcept override;
             ClockResult SetWeaponDword(std::size_t slot, NativeWeaponDwordField field, std::uint32_t value) noexcept override;
@@ -2160,6 +2163,55 @@ namespace mta::game_de
                 return false;
             runtime.referenceGeneration.store(0);
             return result == ClockResult::Ok;
+        }
+
+        ClockResult NativeAccess::ReadPedVital(const NativePedReferenceToken& token, NativePedVitalField field, float& output) noexcept
+        {
+            auto result = RequirePlayerInfo();
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedPoolReader::Value before, after;
+            result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            float next = 0;
+            result = NativePedVitalsMemory({runtime.image}, &CheckTimingOwner, runtime.playerInfo).Read(before, field, next);
+            if (result != ClockResult::Ok)
+                return result;
+            result = ResolvePedReference(token, after);
+            if (result != ClockResult::Ok)
+                return result;
+            if (after.nativePed != before.nativePed || after.handle != before.handle)
+                return ClockResult::OwnerConflict;
+            // Publish raw CPed float bits only after the exact registered cell
+            // survives the complete read. No arithmetic quiets or clamps them.
+            std::memcpy(&output, &next, sizeof(next));
+            return ClockResult::Ok;
+        }
+
+        ClockResult NativeAccess::SetPedVital(const NativePedReferenceToken& token, NativePedVitalField field, float value) noexcept
+        {
+            auto result = RequirePlayerInfo();
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedPoolReader::Value before, after;
+            result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedVitalsMemory::Receipt receipt;
+            result = NativePedVitalsMemory({runtime.image}, &CheckTimingOwner, runtime.playerInfo).Set(before, field, value, &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = ResolvePedReference(token, after);
+                if (result == ClockResult::Ok && (after.nativePed != before.nativePed || after.handle != before.handle))
+                    result = ClockResult::OwnerConflict;
+            }
+            // This is MTA's raw field setter. Accepted health/armour survives
+            // failed acknowledgement and End; replay or rollback could damage
+            // a later native update or a recycled entity at the same address.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
         }
 
         ClockResult NativeAccess::ResolvePedPoolHandle(std::uint32_t handle, NativePedPoolReader::Value& output) noexcept

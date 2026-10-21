@@ -26,6 +26,8 @@
 #include "../../Client/game_de/NativePedReferenceMemory.h"
 #include "../../Client/game_de/NativePedReferenceProfile.h"
 #include "../../Client/game_de/NativePedReferenceController.h"
+#include "../../Client/game_de/NativePedVitalsMemory.h"
+#include "../../Client/game_de/NativePedVitalsProfile.h"
 #include "../../Client/game_de/NativePlayerInfoMemory.h"
 #include "../../Client/game_de/NativePlayerInfoProfile.h"
 #include "../../Client/game_de/NativePlayerInfoExtraProfile.h"
@@ -179,6 +181,26 @@ namespace ClockPedReferenceOwnerTest
         if (unregisterResult != mta::game_de::ClockResult::Ok)
             exception = EXCEPTION_ACCESS_VIOLATION;
         return unregisterResult;
+    }
+}
+namespace ClockPedVitalsOwnerTest
+{
+    unsigned       stores = 0;
+    std::uintptr_t image = 0;
+    bool           loseIdentity = false;
+    LONG WINAPI    Exchange(volatile LONG* address, LONG target, LONG expected)
+    {
+        ++stores;
+        const auto observed = _InterlockedCompareExchange(address, target, expected);
+        if (loseIdentity && observed == expected)
+        {
+            loseIdentity = false;
+            // Only the actual CAS is wrapped. Its accepted effect survives;
+            // the unchanged production postcheck must detect player loss.
+            const unsigned char unavailable = 1;
+            std::memcpy(reinterpret_cast<void*>(image + mta::game_de::NativePlayerInfoProfile::PlayerIndexRva), &unavailable, sizeof(unavailable));
+        }
+        return observed;
     }
 }
 namespace ClockPedVelocityOwnerTest
@@ -880,6 +902,13 @@ namespace mta::game_de::NativeImageAccess
 #include "../../Client/game_de/NativePedReferenceMemory.cpp"
 #undef MTA_DE_PED_REFERENCE_UNREGISTER_INVOKE
 #undef MTA_DE_PED_REFERENCE_REGISTER_INVOKE
+#pragma push_macro("InterlockedCompareExchange")
+#ifdef InterlockedCompareExchange
+    #undef InterlockedCompareExchange
+#endif
+#define InterlockedCompareExchange ClockPedVitalsOwnerTest::Exchange
+#include "../../Client/game_de/NativePedVitalsMemory.cpp"
+#pragma pop_macro("InterlockedCompareExchange")
 #undef GetModuleHandleW
 
 namespace mta::game_de::GameTimeReaderFixtureMemory
@@ -5529,6 +5558,7 @@ namespace
 #include "NativePedTeleportOwnerTests.inl"
 #include "NativePedVelocityOwnerTests.inl"
 #include "NativePedReferenceOwnerTests.inl"
+#include "NativePedVitalsOwnerTests.inl"
 #include "NativeWorldCheatOwnerTests.inl"
 
 int main(int argc, char** argv)
@@ -5563,6 +5593,7 @@ int main(int argc, char** argv)
     NativePedTeleportOwnedSdk(fixture);
     NativePedVelocityOwnedSdk(fixture);
     NativePedReferenceOwnedSdk(fixture);
+    NativePedVitalsOwnedSdk(fixture);
     NativeReadSetAndRestoration(fixture);
     NativeCoherentCommandPublication(fixture);
     NativeReadOnlyRetirement(fixture);

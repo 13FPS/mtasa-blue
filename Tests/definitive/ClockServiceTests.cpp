@@ -13,6 +13,7 @@
 #include "../../Client/game_de/NativeWeatherScalarProfile.h"
 #include "../../Client/game_de/NativeWeaponInfoProfile.h"
 #include "../../Client/game_de/NativeWeaponInfoWriteProfile.h"
+#include "../../Client/game_de/NativeWeaponInfoVectorProfile.h"
 #include "../../Client/game_de/NativeServiceAdmission.h"
 #include <array>
 #include <cstdio>
@@ -412,6 +413,7 @@ namespace mta::game_de::NativeImageAccess
 #define InterlockedCompareExchange16 ClockTestFaults::WeaponCompareExchange16
 #define InterlockedCompareExchange   ClockTestFaults::WeaponCompareExchange32
 #include "../../Client/game_de/NativeWeaponInfoWriteMemory.cpp"
+#include "../../Client/game_de/NativeWeaponInfoVectorMemory.cpp"
 #pragma pop_macro("InterlockedCompareExchange")
 #pragma pop_macro("InterlockedCompareExchange16")
 #undef ReadImage
@@ -816,6 +818,11 @@ namespace
             admit(NativeWeaponInfoProfile::BankRva, rows.data(), sizeof(rows), PAGE_READWRITE);
             const std::int32_t animations = 37;
             admit(NativeWeaponInfoWriteProfile::AnimationCountRva, &animations, sizeof(animations), PAGE_READWRITE);
+        }
+        void AdmitWeaponVectorPins()
+        {
+            for (const auto& pin : NativeWeaponInfoVectorProfile::Code)
+                Patch(pin.rva, pin.bytes.data(), pin.size);
         }
         void AdmitApplicationPins()
         {
@@ -3178,6 +3185,259 @@ namespace
         std::puts("Production native typed weapon write owner fixture completed");
     }
 
+    struct WeaponVectorContext
+    {
+        std::size_t                                                 slot = 77;
+        unsigned                                                    calls = 0, operation = 1, refusal = 0;
+        CVector                                                     source{1.25f, -2.5f, 3.75f};
+        const CVector*                                              input = &source;
+        eWeaponSlot                                                 targetSlot = WEAPONSLOT_TYPE_DETONATOR;
+        CVector*                                                    vector = reinterpret_cast<CVector*>(std::uintptr_t{0x1234});
+        CWeaponInfo*                                                wrapper = reinterpret_cast<CWeaponInfo*>(std::uintptr_t{0x5678});
+        std::array<CWeaponInfo*, NativeWeaponInfoProfile::RowCount> wrappers{};
+        ClockResult                                                 result = ClockResult::NotInitialized;
+    };
+
+    void WeaponVectorHandler(NativeGameTimingAccess& access, void* opaque)
+    {
+        auto& context = *static_cast<WeaponVectorContext*>(opaque);
+        ++context.calls;
+        Check(callbackDepth == 1 && timingTimerScope && timingCallbackGeneration == runtime.generation.load() && runtime.timerReady.load() &&
+                  runtime.engineThread.load() == GetCurrentThreadId(),
+              "native wrapper, vector and slot operations use the actual natural engine callback");
+        const auto generation = timingCallbackGeneration;
+        const auto admission = runtime.admissionGeneration.load();
+        const auto refreshed = runtime.refreshed.load();
+        if (context.refusal == 1)
+            timingCallbackGeneration = generation + 1;
+        if (context.refusal == 2)
+            runtime.admissionGeneration.store(admission + 1);
+        if (context.refusal == 3)
+            ++callbackDepth;
+        if (context.refusal == 4)
+            runtime.refreshed.store(GetTickCount64() - ClockServiceLeaseMsV1 - 1);
+        if (context.operation == 1)
+            context.result = access.BorrowWeaponFireOffset(context.slot, context.vector);
+        if (context.operation == 2)
+            context.result = access.SetWeaponFireOffset(context.slot, context.input);
+        if (context.operation == 3)
+            context.result = access.SetWeaponSlot(context.slot, context.targetSlot);
+        if (context.operation == 4)
+            context.result = access.GetWeaponInfoSlot(context.slot, context.wrapper);
+        if (context.operation == 5)
+        {
+            context.result = ClockResult::Ok;
+            for (std::size_t index = 0; index < context.wrappers.size(); ++index)
+            {
+                CWeaponInfo* selected = nullptr;
+                Check(access.GetWeaponInfoSlot(index, selected) == ClockResult::Ok && selected,
+                      "every native SDK bank row publishes a genuine concrete MTA wrapper inside its admitted callback");
+                CWeaponInfo* repeated = nullptr;
+                Check(access.GetWeaponInfoSlot(index, repeated) == ClockResult::Ok && repeated == selected,
+                      "the same native row reuses its stable MTA wrapper rather than allocating a copied row object");
+                Check(selected->GetTargetRange() == static_cast<float>(index + 1) &&
+                          selected->GetFireOffset() ==
+                              reinterpret_cast<CVector*>(runtime.image + NativeWeaponInfoProfile::BankRva + index * NativeWeaponInfoProfile::RowBytes + 0x24),
+                      "actual SDK getter dispatch observes the corresponding native row and returns its real float3 alias");
+                bool distinct = true;
+                for (std::size_t prior = 0; prior < index; ++prior)
+                    distinct = distinct && context.wrappers[prior] != selected;
+                Check(distinct, "distinct native rows own distinct genuine SDK wrapper identities");
+                context.wrappers[index] = selected;
+            }
+        }
+        if (context.operation == 6 || context.operation == 7)
+        {
+            context.result = access.GetWeaponInfoSlot(context.slot, context.wrapper);
+            if (context.result == ClockResult::Ok)
+            {
+                if (context.operation == 6)
+                    context.wrapper->SetFireOffset(const_cast<CVector*>(context.input));
+                else
+                    context.wrapper->SetSlot(context.targetSlot);
+            }
+        }
+        runtime.refreshed.store(refreshed);
+        if (context.refusal == 3)
+            --callbackDepth;
+        runtime.admissionGeneration.store(admission);
+        timingCallbackGeneration = generation;
+    }
+
+    void NativeWeaponVectorAndBankOwner(ClockImageFixture& fixture)
+    {
+        namespace Weapons = NativeWeaponInfoProfile;
+        fixture.AdmitWeaponPins();
+        fixture.AdmitWeaponVectorPins();
+        ClockReaderTestHost::image = fixture.image;
+        using Bank = std::array<NativeWeaponInfoValues, Weapons::RowCount>;
+        const auto bank = [&] { return fixture.Get<Bank>(Weapons::BankRva); };
+        auto       expected = bank();
+        const auto unchanged = [&]
+        {
+            const auto current = bank();
+            return std::memcmp(current.data(), expected.data(), sizeof(expected)) == 0;
+        };
+        CVector    source{1.0f, 2.0f, 3.0f};
+        const auto refused = [&]
+        {
+            auto* vector = reinterpret_cast<CVector*>(std::uintptr_t{0x1234});
+            auto* wrapper = reinterpret_cast<CWeaponInfo*>(std::uintptr_t{0x5678});
+            return runtime.access.BorrowWeaponFireOffset(77, vector) != ClockResult::Ok && vector == reinterpret_cast<CVector*>(std::uintptr_t{0x1234}) &&
+                   runtime.access.SetWeaponFireOffset(77, &source) != ClockResult::Ok &&
+                   runtime.access.SetWeaponSlot(77, WEAPONSLOT_TYPE_DETONATOR) != ClockResult::Ok &&
+                   runtime.access.GetWeaponInfoSlot(77, wrapper) != ClockResult::Ok && wrapper == reinterpret_cast<CWeaponInfo*>(std::uintptr_t{0x5678});
+        };
+        Check(refused() && unchanged(), "neither an available bank nor stable wrapper allocation grants an unbound producer native authority");
+        {
+            NativeClockService  service;
+            WeaponVectorContext context;
+            context.operation = 5;
+            BeginOwned(service, fixture, false, true, true, &WeaponVectorHandler, &context);
+            const auto invoke = [&]
+            {
+                Check(service.Renew(runtime.generation.load()), "renew only the current native vector/bank callback generation");
+                fixture.invokeTimer();
+            };
+            invoke();
+            Check(context.result == ClockResult::Ok && unchanged(), "all80 actual wrappers are read-only observations until a real SDK setter is called");
+            context.operation = 1;
+            invoke();
+            const auto rowRva = Weapons::BankRva + context.slot * Weapons::RowBytes;
+            Check(context.result == ClockResult::Ok && context.vector == reinterpret_cast<CVector*>(fixture.image + rowRva + 0x24),
+                  "the native owner borrows the actual main-image vector and never substitutes cached backing storage");
+            context.operation = 6;
+            invoke();
+            std::memcpy(expected[context.slot].fireOffset, &context.source, sizeof(context.source));
+            Check(context.result == ClockResult::Ok && unchanged() && !runtime.weaponVectorRecovery.load() && !runtime.weaponVectorGeneration.load(),
+                  "the complete actual CWeaponInfo SDK object dispatches XYZ through its real owner and commits persistent intent without rollback debt");
+            context.operation = 7;
+            invoke();
+            expected[context.slot].slot = WEAPONSLOT_TYPE_DETONATOR;
+            Check(context.result == ClockResult::Ok && unchanged(),
+                  "the complete actual SDK SetSlot reaches the independently proved native thirteen-slot field");
+            context.operation = 2;
+            context.input = context.vector;
+            invoke();
+            Check(context.result == ClockResult::Ok && unchanged(), "the real borrowed vector can be used as its own source without partial alias corruption");
+            context.input = &context.source;
+            Check(refused() && unchanged(), "the adopted producer cannot borrow wrapper, vector or slot operations between natural callbacks");
+            bool        foreignRefused = false;
+            std::thread foreign([&] { foreignRefused = refused(); });
+            foreign.join();
+            Check(foreignRefused && unchanged(), "a foreign thread cannot borrow actual native wrappers or vector/slot mutation rights");
+            for (unsigned refusal = 1; refusal <= 4; ++refusal)
+                for (unsigned operation = 1; operation <= 4; ++operation)
+                {
+                    context.refusal = refusal;
+                    context.operation = operation;
+                    context.vector = reinterpret_cast<CVector*>(std::uintptr_t{0x1234});
+                    context.wrapper = reinterpret_cast<CWeaponInfo*>(std::uintptr_t{0x5678});
+                    invoke();
+                    const auto result = refusal <= 2 ? ClockResult::OwnerConflict : refusal == 3 ? ClockResult::WrongThread : ClockResult::Expired;
+                    Check(context.result == result && unchanged() && context.vector == reinterpret_cast<CVector*>(std::uintptr_t{0x1234}) &&
+                              context.wrapper == reinterpret_cast<CWeaponInfo*>(std::uintptr_t{0x5678}),
+                          "generation, admission, nesting and expiry refusals preserve bank fields and both borrowed caller outputs");
+                }
+            context.refusal = 0;
+            context.operation = 3;
+            context.targetSlot = static_cast<eWeaponSlot>(13);
+            invoke();
+            Check(context.result == ClockResult::InvalidArgument && unchanged(),
+                  "slot13 is outside the independently decoded native array and refuses without CAS");
+            context.targetSlot = WEAPONSLOT_TYPE_DETONATOR;
+            context.operation = 2;
+            context.input = nullptr;
+            invoke();
+            Check(context.result == ClockResult::InvalidArgument && unchanged() && !runtime.weaponVectorRecovery.load(),
+                  "a null vector source refuses without retaining nonexistent partial ownership");
+            context.input = reinterpret_cast<const CVector*>(std::uintptr_t{1});
+            invoke();
+            Check(context.result == ClockResult::ReadFailure && unchanged() && !runtime.weaponVectorRecovery.load(),
+                  "an unreadable caller vector is safely refused through the actual OS source-copy boundary");
+            context.input = &context.source;
+            context.operation = 4;
+            context.slot = Weapons::RowCount;
+            invoke();
+            Check(context.result == ClockResult::InvalidArgument && context.wrapper == reinterpret_cast<CWeaponInfo*>(std::uintptr_t{0x5678}) && unchanged(),
+                  "out-of-range native bank lookup preserves caller output rather than returning an allocated dummy wrapper");
+            context.slot = 77;
+            context.operation = 1;
+            const auto& pin = NativeWeaponInfoVectorProfile::Code.front();
+            const auto  changed = static_cast<unsigned char>(pin.bytes[0] ^ 1);
+            fixture.Patch(pin.rva, &changed, sizeof(changed));
+            invoke();
+            Check(context.result == ClockResult::BindingChanged && context.vector == reinterpret_cast<CVector*>(std::uintptr_t{0x1234}) && unchanged(),
+                  "borrowed vector qualification requires the actual native slot consumers in addition to the base weapon loader");
+            fixture.Patch(pin.rva, pin.bytes.data(), sizeof(changed));
+            ClockTestFaults::weaponRowAddress = fixture.image + rowRva;
+            ClockTestFaults::weaponAfterRowRead = [] { ++timingCallbackGeneration; };
+            invoke();
+            Check(context.result == ClockResult::OwnerConflict && context.vector == reinterpret_cast<CVector*>(std::uintptr_t{0x1234}) && unchanged(),
+                  "a generation change after native row qualification cannot publish a borrowed native vector");
+            const auto calls = context.calls;
+            if (!service.End())
+            {
+                fixture.invokeTimer();
+                Check(service.End(), "persistent vector/slot and real bank ownership retire on the existing native callback");
+            }
+            Check(!service.IsRetained() && !runtime.weaponWriterReader.IsBound() && !runtime.weaponVectorRecovery.load() &&
+                      !runtime.weaponVectorGeneration.load() && context.calls == calls && unchanged(),
+                  "End preserves successful XYZ and slot intent while retiring the reader and actual wrapper access authority");
+        }
+        for (const bool superseded : {false, true})
+        {
+            fixture.AdmitWeaponPins();
+            fixture.AdmitWeaponVectorPins();
+            expected = bank();
+            NativeClockService  service;
+            WeaponVectorContext context;
+            context.operation = 2;
+            BeginOwned(service, fixture, false, true, true, &WeaponVectorHandler, &context);
+            const auto rowRva = Weapons::BankRva + context.slot * Weapons::RowBytes;
+            ClockTestFaults::weaponRowAddress = fixture.image + rowRva;
+            ClockTestFaults::weaponWriteAddress = fixture.image + rowRva + 0x28;
+            ClockTestFaults::protectWeaponBeforeAtomic.store(true);
+            fixture.invokeTimer();
+            const auto debt = State(service);
+            Check(context.result == ClockResult::RestoreFailure && runtime.weaponVectorRecovery.load() && runtime.weaponVectorJournal.remainingMask == 1 &&
+                      runtime.weaponVectorGeneration.load() == runtime.generation.load() && debt.dataRecoveryPending && !debt.restored && !service.End() &&
+                      service.IsRetained() && runtime.weaponWriterReader.IsBound() && runtime.timingHandler && runtime.timingContext,
+                  "failed partial XYZ restoration retains its exact native generation, journal, reader and callback context before End can detach");
+            Check(!RecoverWeaponVector() && runtime.weaponVectorJournal.remainingMask == 1,
+                  "the producer cannot service partial native vector debt outside its original callback");
+            DWORD ignored = 0;
+            Check(::VirtualProtect(reinterpret_cast<void*>(ClockTestFaults::weaponWriteAddress), sizeof(LONG), ClockTestFaults::weaponOldProtection,
+                                   &ignored) != FALSE,
+                  "restore only the owned test page deliberately made readonly at the second XYZ component");
+            const auto generation = runtime.weaponVectorGeneration.load();
+            runtime.weaponVectorGeneration.store(generation + 1);
+            fixture.invokeTimer();
+            Check(runtime.weaponVectorRecovery.load() && runtime.weaponVectorJournal.remainingMask == 1 && !service.End(),
+                  "even a real native callback cannot recover vector debt assigned to a different owner generation");
+            runtime.weaponVectorGeneration.store(generation);
+            if (superseded)
+            {
+                const float foreign = 99.0f;
+                fixture.Patch(rowRva + 0x24, &foreign, sizeof(foreign));
+                expected[context.slot].fireOffset[0] = foreign;
+            }
+            const auto calls = context.calls;
+            fixture.invokeTimer();
+            Check(service.End() && !service.IsRetained() && !runtime.weaponVectorRecovery.load() && !runtime.weaponVectorGeneration.load() &&
+                      !runtime.weaponVectorJournal.remainingMask && !runtime.weaponWriterReader.IsBound() && !runtime.hooked.load() &&
+                      !runtime.timerHooked.load() && !runtime.timingHandler && !runtime.timingContext && context.calls == calls && unchanged(),
+                  "only the matching natural callback resolves still-owned XYZ components before hooks, reader and wrapper authority retire");
+            const auto final = State(service);
+            Check(superseded ? !final.restored && runtime.weaponVectorSuperseded.load() && final.failure == ClockResult::OwnerConflict
+                             : final.restored && !runtime.weaponVectorSuperseded.load(),
+                  "partial XYZ recovery distinguishes exact restoration from preserved native supersession without retaining debt that no longer exists");
+            ClockTestFaults::weaponWriteAddress = ClockTestFaults::weaponRowAddress = 0;
+        }
+        ClockReaderTestHost::image = 0;
+        std::puts("Production native weapon vector and actual80-wrapper bank owner fixture completed");
+    }
+
     struct ApplicationFrameContext
     {
         unsigned               calls = 0, originalCountAtLastHandler = 0;
@@ -4178,6 +4438,7 @@ int main(int argc, char** argv)
     NativeWeatherOwnedTransactions(fixture);
     NativeWeatherScalarOwnedReads(fixture);
     NativeWeaponOwnedWrites(fixture);
+    NativeWeaponVectorAndBankOwner(fixture);
     NativeReadSetAndRestoration(fixture);
     NativeCoherentCommandPublication(fixture);
     NativeReadOnlyRetirement(fixture);

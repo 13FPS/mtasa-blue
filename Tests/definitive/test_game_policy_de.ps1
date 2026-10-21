@@ -89,7 +89,9 @@ try {
         'Client/game_de/CKeyGenDE.h','Client/game_de/CAsyncLoadingDE.h','Client/game_de/NativeGameTimingReader.h',
         'Client/game_de/NativeGameTimeReader.h','Client/game_de/NativeStreamingFileIdsReader.h','Client/game_de/NativeGameStateReader.h',
         'Client/game_de/NativeGameStateMemory.h','Client/game_de/NativeDataFileNamesReader.h','Client/game_de/NativeDataFileNamesProfile.h','Shared/sdk/SharedUtil.Defines.h',
-        'Client/game_de/NativeGameTimingAccess.h','Client/game_de/NativeImageAccess.h','Client/game_de/NativeClockMemory.h',
+        'Client/game_de/NativeGameTimingAccess.h','Client/game_de/NativeWeaponInfoVectorAccess.h','Client/game_de/NativeWeaponInfoWriteAccess.h',
+        'Client/game_de/NativeWeaponInfoWriteProfile.h','Client/game_de/CWeatherScalarsDE.h','Client/game_de/NativeWeatherScalarProfile.h',
+        'Client/game_de/NativeImageAccess.h','Client/game_de/NativeClockMemory.h',
         'Client/game_de/CWeatherTransitionDE.h','Client/sdk/game/CWeather.h',
         'Client/game_de/NativeCheatProfile.h','Client/game_de/NativeCheatFlagAccess.h',
         'Client/game_de/NativeClockProfile.h','Client/game_de/NativeGameTimingProfile.h','Client/game_de/NativeGameFPSProfile.h',
@@ -107,7 +109,7 @@ try {
             ForEach-Object { $_.Groups['name'].Value })
     }
     $testedMethods = @('GetCheckStatus','OnPedContextChange','GetPedContext','SetPreWeaponFireHandler','SetPostWeaponFireHandler','SetTaskSimpleBeHitHandler',
-        'SetJetpackWeaponEnabled','GetJetpackWeaponEnabled','SetSystemState','VerifySADataFileNames','IsCheatEnabled','SetCheatEnabled')
+        'SetJetpackWeaponEnabled','GetJetpackWeaponEnabled','SetSystemState','VerifySADataFileNames','IsCheatEnabled','SetCheatEnabled','GetWeaponInfo')
     foreach ($method in $testedMethods) { if ($provided -notcontains $method) { throw "Production SDK override is missing: $method" } }
     $gameMethods = @(InterfaceMethods 'Client/sdk/game/CGame.h' | Where-Object { $_.name -ne 'GetPools' -and $provided -notcontains $_.name })
     $poolMethods = @(InterfaceMethods 'Client/sdk/game/CPools.h' | Where-Object { $_.name -ne 'GetPedFromRef' })

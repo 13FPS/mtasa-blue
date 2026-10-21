@@ -5,6 +5,19 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+The October 21 native weapon backend now supplies the complete existing
+`CWeaponInfo` interface through eighty stable SDK objects. `CGameDE` uses MTA's
+shared weapon/skill selection and the existing engine callback owner to obtain
+these objects. Scalar setters, native slot selection and fire-offset updates
+write the qualified DE bank; the fire-offset getter preserves MTA's borrowed
+native vector contract. Interrupted vector updates retain their exact component
+journal until an admitted callback can retire owned changes, preserving later
+engine edits. This completes the weapon-info object rather than the still
+abstract `CGame`, native ped/weapon gameplay objects or network client. Offline
+fixtures and the normal backend build remain distinct from live GTA validation;
+the previously installed candidate stays available for the deferred combined
+test. The port remains experimental.
+
 The October 19 application-frame trial observed 277 natural gameplay frames
 and both configured UI dictionary entries without engine writes, then retired
 its hooks and unloaded Core normally. A combined startup observer now reuses

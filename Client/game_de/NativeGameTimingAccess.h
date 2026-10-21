@@ -11,6 +11,7 @@
 #include "CWeatherTransitionDE.h"
 #include "CWeatherScalarsDE.h"
 #include "NativeWeaponInfoWriteAccess.h"
+#include "NativeWeaponInfoVectorAccess.h"
 #include <cstdint>
 
 namespace mta::game_de
@@ -18,7 +19,10 @@ namespace mta::game_de
     // Read-only startup binding does not authorize mutations. The qualified
     // native owner implements these methods and retains restoration debt after
     // a partial write; this interface is not another exported service protocol.
-    class NativeGameTimingAccess : public NativeWeatherTransitionAccess, public NativeWeatherScalarAccess, public NativeWeaponInfoWriteAccess
+    class NativeGameTimingAccess : public NativeWeatherTransitionAccess,
+                                   public NativeWeatherScalarAccess,
+                                   public NativeWeaponInfoWriteAccess,
+                                   public NativeWeaponInfoVectorAccess
     {
     public:
         virtual ClockResult SetTimeScale(float value) noexcept = 0;
@@ -33,6 +37,9 @@ namespace mta::game_de
         // publishing a cached value or pretending to reset the native registry.
         virtual ClockResult ReadCheatFlag(NativeCheatProfile::Flag, bool&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult SetCheatFlag(NativeCheatProfile::Flag, bool) noexcept { return ClockResult::NotInitialized; }
+        // Shared MTA lookup can publish only a genuine bank wrapper qualified
+        // by this native owner, never a partial provider or a cached fake row.
+        virtual ClockResult GetWeaponInfoSlot(std::size_t, CWeaponInfo*&) noexcept { return ClockResult::NotInitialized; }
 
     protected:
         ~NativeGameTimingAccess() = default;

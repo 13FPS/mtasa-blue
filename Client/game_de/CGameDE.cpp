@@ -21,6 +21,16 @@ namespace mta::game_de
     {
     }
 
+    CWeaponInfo* CGameDE::ResolveWeaponInfoSlot(std::size_t slot)
+    {
+        // Selection stays with MTA's shared SDK policy. Its native owner alone
+        // may publish a stable, genuine wrapper after qualifying this callback
+        // and row; a native row pointer cannot substitute for that SDK object.
+        CWeaponInfo* output = nullptr;
+        RequireNativeWrite(NativeWrites().GetWeaponInfoSlot(slot, output), "GetWeaponInfo");
+        return output;
+    }
+
     CClock* CGameDE::GetClock() noexcept
     {
         return &clock;

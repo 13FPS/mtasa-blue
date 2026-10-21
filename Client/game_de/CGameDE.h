@@ -61,6 +61,8 @@ namespace mta::game_de
         CGameDE& operator=(const CGameDE&) = delete;
 
     protected:
+        CWeaponInfo* ResolveWeaponInfoSlot(std::size_t slot) override;
+
         // Borrowed services must outlive this object. Their qualification
         // and engine-thread rules stay with their existing native owners.
         CGameDE(const NativeGameTimingReader& reader, CClockDE& nativeClock, NativeGameTimingAccess& timingWriter,

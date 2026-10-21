@@ -15,7 +15,7 @@ $previousTmp = $env:TMP
 $record = [ordered]@{schema='mta_clock_service_tests_v1';directory=$outputRoot;architecture='x64';success=$false;
     compileRuns=@();testRun=$null;checks=0;failure=$null;sourceHashes=@();sourcesUnchanged=$true;
     existingSdkClockImplementationTested=$false;productionNativeCallbackTested=$false;wrongExecutableRefusalVerified=$false;
-    productionFreezePatchTested=$false;readOnlyGameTimeReaderTested=$false;nativeCGameTimingPrerequisiteTested=$false;nativeCGameTimingWriterTested=$false;nativeStoredFPSReaderTested=$false;nativePauseSafeOwnerTested=$false;nativeApplicationFrameObserverTested=$false;nativeSystemStateOwnerTested=$false;nativeCheatFlagOwnerTested=$false;nativeWeatherOwnerTested=$false;nativeWeatherScalarOwnerTested=$false;nativeTypedWeaponWriteOwnerTested=$false;executionArtifacts=@();
+    productionFreezePatchTested=$false;readOnlyGameTimeReaderTested=$false;nativeCGameTimingPrerequisiteTested=$false;nativeCGameTimingWriterTested=$false;nativeStoredFPSReaderTested=$false;nativePauseSafeOwnerTested=$false;nativeApplicationFrameObserverTested=$false;nativeSystemStateOwnerTested=$false;nativeCheatFlagOwnerTested=$false;nativeWeatherOwnerTested=$false;nativeWeatherScalarOwnerTested=$false;nativeTypedWeaponWriteOwnerTested=$false;nativeWeaponVectorAndBankOwnerTested=$false;executionArtifacts=@();
     gameLaunched=$false;gameAttached=$false;gameClockWritten=$false;gameHooksInstalled=$false;fullMtaReady=$false}
 function Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 function RunBounded([string]$Executable,[string[]]$Arguments,[string]$Name,[int]$DeadlineMs) {
@@ -68,6 +68,9 @@ try {
         'Client/game_de/NativeWeaponInfoWriteAccess.h','Client/game_de/NativeWeaponInfoWriteMemory.h','Client/game_de/NativeWeaponInfoWriteMemory.cpp',
         'Client/game_de/NativeWeaponInfoWriteProfile.h','Client/game_de/CWeaponInfoWriteDE.h','Client/game_de/CWeaponInfoWriteDE.cpp',
         'Client/game_de/CWeaponInfoReadDE.h','Client/game_de/CWeaponInfoReadDE.cpp',
+        'Client/game_de/NativeWeaponInfoVectorAccess.h','Client/game_de/NativeWeaponInfoVectorMemory.h','Client/game_de/NativeWeaponInfoVectorMemory.cpp',
+        'Client/game_de/NativeWeaponInfoVectorProfile.h','Client/game_de/CWeaponInfoDE.h','Client/game_de/CWeaponInfoDE.cpp',
+        'Client/game_de/CWeaponInfoBankDE.h','Client/game_de/CWeaponInfoBankDE.cpp','Shared/sdk/CVector.h','Shared/sdk/CVector4D.h',
         'Client/game_de/NativeGameTimingAccess.h',
         'Client/game_de/NativeGamePauseProfile.h',
         'Client/game_de/NativeApplicationFrame.h','Client/game_de/NativeApplicationFrameProfile.h',
@@ -122,6 +125,8 @@ try {
     # Its shipping executable gate stays unchanged.
     $arguments = $common + @('/W4','/WX',(Join-Path $PSScriptRoot 'ClockServiceTests.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CClockDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CGameTimingDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CWeaponInfoReadDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CWeaponInfoWriteDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CWeaponInfoDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CWeaponInfoBankDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeImageAccess.cpp')) +
         $runtimeDependencies + @(('/Fo'+$outputRoot+[IO.Path]::DirectorySeparatorChar),('/Fe'+$executable),'/link','bcrypt.lib','user32.lib') + $objects
     [ordered]@{compiler=$record.compiler;detoursArguments=$detoursArguments;arguments=$arguments} | ConvertTo-Json -Depth 5 |
@@ -157,6 +162,8 @@ try {
     if (-not $record.nativeWeatherScalarOwnerTested) { throw 'Actual native weather scalar owner fixture did not complete.' }
     $record.nativeTypedWeaponWriteOwnerTested = $text.Contains('Production native typed weapon write owner fixture completed')
     if (-not $record.nativeTypedWeaponWriteOwnerTested) { throw 'Actual native typed weapon write owner fixture did not complete.' }
+    $record.nativeWeaponVectorAndBankOwnerTested = $text.Contains('Production native weapon vector and actual80-wrapper bank owner fixture completed')
+    if (-not $record.nativeWeaponVectorAndBankOwnerTested) { throw 'Actual native weapon vector and genuine80-wrapper bank owner fixture did not complete.' }
     $record.nativeApplicationFrameObserverTested = $text.Contains('Production natural application-frame observer fixture completed')
     if (-not $record.nativeApplicationFrameObserverTested) { throw 'Actual application-frame observer fixture did not complete.' }
     $record.nativeFixtureScope = 'Owned SEC_IMAGE with exact native pins and actual Detours, callback, native memory, protection and peer operations. This does not admit the test executable as GTA or execute the game clock update.'

@@ -14,6 +14,8 @@
 #include "NativeWeatherTransitionJournal.h"
 #include "NativeWeatherScalarMemory.h"
 #include "NativeWeaponInfoWriteMemory.h"
+#include "NativeWeaponInfoVectorMemory.h"
+#include "CWeaponInfoBankDE.h"
 #include "NativeGameTimingProfile.h"
 #include "NativeGamePauseProfile.h"
 #include "NativeApplicationFrameProfile.h"
@@ -85,6 +87,10 @@ namespace mta::game_de
             ClockResult SetWeaponShort(std::size_t slot, NativeWeaponShortField field, std::int16_t value) noexcept override;
             ClockResult SetWeaponDword(std::size_t slot, NativeWeaponDwordField field, std::uint32_t value) noexcept override;
             ClockResult UpdateWeaponFlags(std::size_t slot, std::uint32_t mask, bool enabled) noexcept override;
+            ClockResult BorrowWeaponFireOffset(std::size_t slot, CVector*& output) noexcept override;
+            ClockResult SetWeaponFireOffset(std::size_t slot, const CVector* source) noexcept override;
+            ClockResult SetWeaponSlot(std::size_t slot, eWeaponSlot value) noexcept override;
+            ClockResult GetWeaponInfoSlot(std::size_t slot, CWeaponInfo*& output) noexcept override;
         };
 
         struct Counters
@@ -128,44 +134,52 @@ namespace mta::game_de
             // The independently qualified bank reader is bound only from the
             // admitted engine callback, once per generation. Persistent field
             // intents need no original-row cache or End-time row restoration.
-            NativeWeaponInfoReader     weaponWriterReader;
-            std::uint64_t              weaponWriterGeneration = 0;
-            float                      originalTimeScale = 0;
-            std::uint32_t              originalMinuteDuration = 0;
-            std::uint8_t               originalUserPause = 0;
-            bool                       timingMode = false;
-            std::atomic<bool>          timerHooked{false}, timerReady{false};
-            GameTimingHandler          timingHandler = nullptr;
-            void*                      timingContext = nullptr;
-            bool                       frameMode = false;
-            std::atomic<bool>          frameHooked{false};
-            ApplicationFrameHandler    frameHandler = nullptr;
-            void*                      frameContext = nullptr;
-            ApplicationFrameFunction   originalFrame = nullptr;
-            std::atomic<unsigned>      inFlight{0};
-            std::atomic<std::uint32_t> retainedPeerThreads{0};
-            std::atomic<DWORD>         engineThread{0};
-            std::atomic<std::uint64_t> generation{0}, refreshed{0}, lastSubmitted{0}, pendingSequence{0};
-            std::atomic<std::uint64_t> admissionGeneration{0}, admissionSerial{0};
-            std::atomic<std::uint64_t> lastCompletedSequence{0};
-            std::atomic<ClockResult>   failure{ClockResult::Ok};
-            std::atomic<ClockResult>   lastCommandResult{ClockResult::NotInitialized};
-            DWORD                      producerThread = 0;
-            std::uintptr_t             image = 0;
-            ULONGLONG                  started = 0;
-            std::uint32_t              maximumDuration = 0;
-            ClockCommandV1             pending;
-            bool                       hasPending = false;
-            ClockValues                original, observed;
-            ClockPublication           publishedClock;
-            ContinuationFunction       originalContinuation = nullptr;
-            ContinuationFunction       originalTimer = nullptr;
-            DWORD                      patchProtection = 0;
-            std::atomic<bool>          protectionPending{false};
-            std::vector<PeerThread>    recoveryPeers;
-            NativeAccess               access;
-            CClockDE                   clock{access};
-            Counters                   counters;
+            NativeWeaponInfoReader weaponWriterReader;
+            std::uint64_t          weaponWriterGeneration = 0;
+            // Only a failed partial XYZ intent owns rollback components. Full
+            // vectors persist, and later native edits retire only the precise
+            // superseded component rather than permitting a whole-row rewind.
+            NativeWeaponInfoVectorMemory::FireOffsetJournal weaponVectorJournal;
+            std::atomic<bool>                               weaponVectorRecovery{false}, weaponVectorSuperseded{false};
+            std::atomic<std::uint64_t>                      weaponVectorGeneration{0};
+            std::size_t                                     weaponVectorSlot = 0;
+            float                                           originalTimeScale = 0;
+            std::uint32_t                                   originalMinuteDuration = 0;
+            std::uint8_t                                    originalUserPause = 0;
+            bool                                            timingMode = false;
+            std::atomic<bool>                               timerHooked{false}, timerReady{false};
+            GameTimingHandler                               timingHandler = nullptr;
+            void*                                           timingContext = nullptr;
+            bool                                            frameMode = false;
+            std::atomic<bool>                               frameHooked{false};
+            ApplicationFrameHandler                         frameHandler = nullptr;
+            void*                                           frameContext = nullptr;
+            ApplicationFrameFunction                        originalFrame = nullptr;
+            std::atomic<unsigned>                           inFlight{0};
+            std::atomic<std::uint32_t>                      retainedPeerThreads{0};
+            std::atomic<DWORD>                              engineThread{0};
+            std::atomic<std::uint64_t>                      generation{0}, refreshed{0}, lastSubmitted{0}, pendingSequence{0};
+            std::atomic<std::uint64_t>                      admissionGeneration{0}, admissionSerial{0};
+            std::atomic<std::uint64_t>                      lastCompletedSequence{0};
+            std::atomic<ClockResult>                        failure{ClockResult::Ok};
+            std::atomic<ClockResult>                        lastCommandResult{ClockResult::NotInitialized};
+            DWORD                                           producerThread = 0;
+            std::uintptr_t                                  image = 0;
+            ULONGLONG                                       started = 0;
+            std::uint32_t                                   maximumDuration = 0;
+            ClockCommandV1                                  pending;
+            bool                                            hasPending = false;
+            ClockValues                                     original, observed;
+            ClockPublication                                publishedClock;
+            ContinuationFunction                            originalContinuation = nullptr;
+            ContinuationFunction                            originalTimer = nullptr;
+            DWORD                                           patchProtection = 0;
+            std::atomic<bool>                               protectionPending{false};
+            std::vector<PeerThread>                         recoveryPeers;
+            NativeAccess                                    access;
+            CClockDE                                        clock{access};
+            CWeaponInfoBankDE                               weaponBank{weaponWriterReader, access, access};
+            Counters                                        counters;
         };
 
         // A failed code/data restoration cannot discard its owner on DLL
@@ -1158,6 +1172,8 @@ namespace mta::game_de
             auto owner = CheckTimingOwner();
             if (owner != ClockResult::Ok)
                 return owner;
+            if (runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load())
+                return ClockResult::Busy;
             const auto generation = runtime.generation.load();
             if (runtime.weaponWriterGeneration && runtime.weaponWriterGeneration != generation)
                 return ClockResult::OwnerConflict;
@@ -1213,6 +1229,110 @@ namespace mta::game_de
             return NativeWeaponInfoWriteMemory::UpdateFlags(runtime.weaponWriterReader, runtime.image, slot, mask, enabled, &CheckTimingOwner);
         }
 
+        ClockResult NativeAccess::BorrowWeaponFireOffset(std::size_t slot, CVector*& output) noexcept
+        {
+            const auto owner = RequireWeaponWriterReader();
+            if (owner != ClockResult::Ok)
+                return owner;
+            return NativeWeaponInfoVectorMemory::BorrowFireOffset(runtime.weaponWriterReader, runtime.image, slot, output, &CheckTimingOwner);
+        }
+
+        ClockResult NativeAccess::SetWeaponSlot(std::size_t slot, eWeaponSlot value) noexcept
+        {
+            const auto owner = RequireWeaponWriterReader();
+            if (owner != ClockResult::Ok)
+                return owner;
+            return NativeWeaponInfoVectorMemory::SetSlot(runtime.weaponWriterReader, runtime.image, slot, value, &CheckTimingOwner);
+        }
+
+        ClockResult NativeAccess::GetWeaponInfoSlot(std::size_t slot, CWeaponInfo*& output) noexcept
+        {
+            if (slot >= NativeWeaponInfoProfile::RowCount)
+                return ClockResult::InvalidArgument;
+            const auto owner = RequireWeaponWriterReader();
+            if (owner != ClockResult::Ok)
+                return owner;
+            NativeWeaponInfoValues observed;
+            const auto             read = runtime.weaponWriterReader.Read(slot, observed);
+            if (read != Status::Ok)
+                return read == Status::WrongThread      ? ClockResult::WrongThread
+                       : read == Status::NotInitialized ? ClockResult::NotInitialized
+                                                        : ClockResult::BindingChanged;
+            auto* const selected = runtime.weaponBank.GetSlot(slot);
+            const auto  confirmed = CheckTimingOwner();
+            if (confirmed != ClockResult::Ok)
+                return confirmed;
+            if (!selected)
+                return ClockResult::BindingChanged;
+            // Stable MTA objects borrow the real qualified bank and this same
+            // write owner. Their lifetime does not own any executable row.
+            output = selected;
+            return ClockResult::Ok;
+        }
+
+        ClockResult NativeAccess::SetWeaponFireOffset(std::size_t slot, const CVector* source) noexcept
+        {
+            const auto owner = RequireWeaponWriterReader();
+            if (owner != ClockResult::Ok)
+                return owner;
+            const bool wasRestored = runtime.restored.load();
+            runtime.weaponVectorJournal = {};
+            runtime.weaponVectorSlot = slot;
+            runtime.weaponVectorGeneration.store(timingCallbackGeneration);
+            runtime.weaponVectorRecovery.store(true);
+            runtime.restored.store(false);
+            const auto result = NativeWeaponInfoVectorMemory::SetFireOffset(runtime.weaponWriterReader, runtime.image, slot, source, &CheckTimingOwner,
+                                                                            &runtime.weaponVectorJournal);
+            if (runtime.weaponVectorJournal.foreignMask)
+                runtime.weaponVectorSuperseded.store(true);
+            if (runtime.weaponVectorJournal.remainingMask)
+            {
+                Stop(ClockResult::RestoreFailure);
+                return ClockResult::RestoreFailure;
+            }
+            runtime.weaponVectorGeneration.store(0);
+            runtime.weaponVectorRecovery.store(false);
+            runtime.restored.store(wasRestored);
+            if (runtime.weaponVectorSuperseded.load())
+            {
+                Stop(ClockResult::OwnerConflict);
+                return ClockResult::OwnerConflict;
+            }
+            return result;
+        }
+
+        ClockResult CheckWeaponVectorRecoveryOwner() noexcept
+        {
+            const auto generation = runtime.generation.load();
+            // Recovery deliberately survives lease expiry/stopping, but keeps
+            // the exact natural callback, thread and admission that performed
+            // the partial write. A producer cannot inherit that cleanup right.
+            if (callbackDepth != 1 || GetCurrentThreadId() != runtime.engineThread.load() || !timingCallbackGeneration ||
+                timingCallbackGeneration != generation || runtime.weaponVectorGeneration.load() != generation || runtime.weaponWriterGeneration != generation ||
+                runtime.admissionGeneration.load() != generation || !runtime.admissionSerial.load())
+                return ClockResult::OwnerConflict;
+            return ClockResult::Ok;
+        }
+
+        bool RecoverWeaponVector() noexcept
+        {
+            if (!runtime.weaponVectorRecovery.load() && !runtime.weaponVectorGeneration.load())
+                return true;
+            if (CheckWeaponVectorRecoveryOwner() != ClockResult::Ok)
+                return false;
+            const auto result = NativeWeaponInfoVectorMemory::RecoverFireOffset(runtime.weaponWriterReader, runtime.image, runtime.weaponVectorSlot,
+                                                                                runtime.weaponVectorJournal, &CheckWeaponVectorRecoveryOwner);
+            if (runtime.weaponVectorJournal.foreignMask)
+                runtime.weaponVectorSuperseded.store(true);
+            if (runtime.weaponVectorJournal.remainingMask || (result != ClockResult::Ok && result != ClockResult::OwnerConflict))
+                return false;
+            if (runtime.weaponVectorSuperseded.load())
+                runtime.failure.store(ClockResult::OwnerConflict);
+            runtime.weaponVectorGeneration.store(0);
+            runtime.weaponVectorRecovery.store(false);
+            return true;
+        }
+
         bool RecoverWeather() noexcept
         {
             if (!runtime.weatherRecovery.load() && !runtime.weatherGeneration.load())
@@ -1253,6 +1373,8 @@ namespace mta::game_de
             // failed journal keeps this same callback/context alive for retry.
             if (clean && (runtime.weatherRecovery.load() || runtime.weatherGeneration.load()))
                 clean = RecoverWeather();
+            if (clean && (runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load()))
+                clean = RecoverWeaponVector();
             if (clean && !clockChanged && !timingChanged)
             {
                 ClockValues current;
@@ -1471,10 +1593,11 @@ namespace mta::game_de
             }
             if (runtime.stopping.load())
             {
-                if ((runtime.captured.load() && !runtime.restored.load()) || runtime.weatherRecovery.load() || runtime.weatherGeneration.load())
+                if ((runtime.captured.load() && !runtime.restored.load()) || runtime.weatherRecovery.load() || runtime.weatherGeneration.load() ||
+                    runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load())
                     RestoreOriginal();
                 else if (!runtime.captured.load() && !runtime.timingDirty.load() && !runtime.timingRecovery.load() && !runtime.weatherRecovery.load() &&
-                         !runtime.weatherGeneration.load())
+                         !runtime.weatherGeneration.load() && !runtime.weaponVectorRecovery.load() && !runtime.weaponVectorGeneration.load())
                     runtime.restored.store(true);
             }
             if (runtime.peersRetained.load() && !RetryPeerHoldsBounded())
@@ -1561,7 +1684,8 @@ namespace mta::game_de
                 if (runtime.stopping.load())
                 {
                     if ((runtime.captured.load() && !runtime.restored.load()) || runtime.timingDirty.load() || runtime.timingRecovery.load() ||
-                        runtime.weatherRecovery.load() || runtime.weatherGeneration.load())
+                        runtime.weatherRecovery.load() || runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() ||
+                        runtime.weaponVectorGeneration.load())
                         RestoreOriginal();
                     else
                     {
@@ -1802,7 +1926,8 @@ namespace mta::game_de
                 if (ready && !install &&
                     (runtime.inFlight.load() || !runtime.restored.load() || runtime.patchInstalled.load() || runtime.patchRecovery.load() ||
                      runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() || runtime.weatherRecovery.load() ||
-                     runtime.weatherGeneration.load() || runtime.peersRetained.load() || runtime.protectionPending.load()))
+                     runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load() ||
+                     runtime.peersRetained.load() || runtime.protectionPending.load()))
                     ready = false;
                 if (ready && !runtime.frameMode)
                     ready = (install ? DetourAttach : DetourDetach)(reinterpret_cast<PVOID*>(&runtime.originalContinuation),
@@ -1888,10 +2013,12 @@ namespace mta::game_de
             next.bound = runtime.bound.load();
             next.hooked = runtime.hooked.load() || runtime.timerHooked.load() || runtime.frameHooked.load();
             next.active = runtime.active.load();
-            next.ready = runtime.ready.load() && !runtime.timingRecovery.load() && !runtime.weatherRecovery.load() && !runtime.weatherGeneration.load();
+            next.ready = runtime.ready.load() && !runtime.timingRecovery.load() && !runtime.weatherRecovery.load() && !runtime.weatherGeneration.load() &&
+                         !runtime.weaponVectorRecovery.load() && !runtime.weaponVectorGeneration.load();
             next.stopping = runtime.stopping.load();
             next.restored = runtime.restored.load() && !runtime.timingDirty.load() && !runtime.timingRecovery.load() && !runtime.weatherRecovery.load() &&
-                            !runtime.weatherSuperseded.load() && !runtime.weatherGeneration.load();
+                            !runtime.weatherSuperseded.load() && !runtime.weatherGeneration.load() && !runtime.weaponVectorRecovery.load() &&
+                            !runtime.weaponVectorGeneration.load() && !runtime.weaponVectorSuperseded.load();
             next.frozen = runtime.patchInstalled.load();
             next.modulePinned = runtime.modulePinned.load();
             next.failure = runtime.failure.load();
@@ -1913,7 +2040,8 @@ namespace mta::game_de
             next.retainedPeerThreads = runtime.retainedPeerThreads.load();
             next.patchRecoveryPending = runtime.patchRecovery.load();
             next.dataRecoveryPending = runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() ||
-                                       runtime.weatherRecovery.load() || runtime.weatherGeneration.load();
+                                       runtime.weatherRecovery.load() || runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() ||
+                                       runtime.weaponVectorGeneration.load();
             next.protectionRestorePending = runtime.protectionPending.load();
             state = next;
             return true;
@@ -2062,7 +2190,8 @@ namespace mta::game_de
         if (!operation.acquired || !ValidateRequest(request) || runtime.hooked.load() || runtime.timerHooked.load() || runtime.frameHooked.load() ||
             runtime.inFlight.load() || runtime.captured.load() || runtime.patchInstalled.load() || runtime.patchRecovery.load() ||
             runtime.protectionPending.load() || runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() ||
-            runtime.weatherRecovery.load() || runtime.weatherGeneration.load() || runtime.peersRetained.load() || runtime.admissionSerial.load() ||
+            runtime.weatherRecovery.load() || runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() ||
+            runtime.weaponVectorGeneration.load() || runtime.peersRetained.load() || runtime.admissionSerial.load() ||
             runtime.generation.load() == (std::numeric_limits<std::uint64_t>::max)())
             return false;
         Admission::Token claim;
@@ -2113,6 +2242,11 @@ namespace mta::game_de
         runtime.weatherSuperseded.store(false);
         runtime.weaponWriterReader.Reset();
         runtime.weaponWriterGeneration = 0;
+        runtime.weaponVectorJournal = {};
+        runtime.weaponVectorSlot = 0;
+        runtime.weaponVectorRecovery.store(false);
+        runtime.weaponVectorGeneration.store(0);
+        runtime.weaponVectorSuperseded.store(false);
         runtime.originalTimeScale = 0;
         runtime.originalMinuteDuration = 0;
         runtime.originalUserPause = 0;
@@ -2165,7 +2299,8 @@ namespace mta::game_de
         if (!valid && !runtime.hooked.load() && !runtime.timerHooked.load() && !runtime.frameHooked.load() && !runtime.inFlight.load() &&
             !runtime.captured.load() && !runtime.patchInstalled.load() && !runtime.patchRecovery.load() && !runtime.protectionPending.load() &&
             !runtime.dataRecovery.load() && !runtime.peersRetained.load() && !runtime.timingDirty.load() && !runtime.timingRecovery.load() &&
-            !runtime.weatherRecovery.load() && !runtime.weatherGeneration.load() && !runtime.peerBusy.load())
+            !runtime.weatherRecovery.load() && !runtime.weatherGeneration.load() && !runtime.weaponVectorRecovery.load() &&
+            !runtime.weaponVectorGeneration.load() && !runtime.peerBusy.load())
         {
             if (ReleaseAdmission(generation))
             {
@@ -2275,7 +2410,8 @@ namespace mta::game_de
         // on its CLEO thread, or unload code beneath an engine callback.
         if ((runtime.captured.load() && !runtime.restored.load()) || runtime.patchInstalled.load() || runtime.patchRecovery.load() ||
             runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() || runtime.weatherRecovery.load() ||
-            runtime.weatherGeneration.load() || runtime.inFlight.load() || runtime.peersRetained.load() || runtime.protectionPending.load())
+            runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load() || runtime.inFlight.load() ||
+            runtime.peersRetained.load() || runtime.protectionPending.load())
             return false;
         const bool clean = (!runtime.hooked.load() && !runtime.timerHooked.load() && !runtime.frameHooked.load()) || ChangeHooks(false);
         if (clean)
@@ -2304,6 +2440,7 @@ namespace mta::game_de
                (runtime.hooked.load() || runtime.timerHooked.load() || runtime.frameHooked.load() || runtime.inFlight.load() ||
                 (runtime.captured.load() && !runtime.restored.load()) || runtime.patchInstalled.load() || runtime.patchRecovery.load() ||
                 runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() || runtime.weatherRecovery.load() ||
-                runtime.weatherGeneration.load() || runtime.peersRetained.load() || runtime.protectionPending.load() || runtime.admissionSerial.load());
+                runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load() ||
+                runtime.peersRetained.load() || runtime.protectionPending.load() || runtime.admissionSerial.load());
     }
 }

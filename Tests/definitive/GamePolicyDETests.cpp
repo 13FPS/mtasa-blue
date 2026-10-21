@@ -74,6 +74,18 @@ namespace
         mta::game_de::ClockResult SetTimeScale(float) noexcept override { fixture::Unqualified(); }
         mta::game_de::ClockResult SetMinuteDuration(std::uint32_t) noexcept override { fixture::Unqualified(); }
         mta::game_de::ClockResult Pause(bool) noexcept override { fixture::Unqualified(); }
+        mta::game_de::ClockResult GetWeaponInfoSlot(std::size_t slot, CWeaponInfo*& output) noexcept override
+        {
+            ++weaponReads;
+            requestedWeaponSlot = slot;
+            if (weaponResult == mta::game_de::ClockResult::Ok)
+                output = weaponResultPointer;
+            return weaponResult;
+        }
+        unsigned                  weaponReads = 0;
+        std::size_t               requestedWeaponSlot = 80;
+        CWeaponInfo*              weaponResultPointer = nullptr;
+        mta::game_de::ClockResult weaponResult = mta::game_de::ClockResult::NotInitialized;
         mta::game_de::ClockResult SetSystemState(SystemState::Enum value) noexcept override
         {
             ++stateWrites;
@@ -133,8 +145,6 @@ namespace
             ++poolReads;
             return pools;
         }
-
-        CWeaponInfo* ResolveWeaponInfoSlot(std::size_t) override { fixture::Unqualified(); }
 
         using CGameDE::GetPostWeaponFireHandler;
         using CGameDE::GetPreWeaponFireHandler;
@@ -303,6 +313,24 @@ int main()
         Refuses([&] { game.SetCheatEnabled(name, true); }, "intervening native changes remain explicit SDK refusals");
         Check(timing.cheatWrites == before + 1, "SDK never retries over a competing native property change");
     }
+    // Only compare this fixture identity; the owner fixture separately exercises
+    // the bank's actual polymorphic objects against its qualified native image.
+    unsigned char weaponIdentity = 0;
+    timing.weaponResultPointer = reinterpret_cast<CWeaponInfo*>(&weaponIdentity);
+    Refuses([&] { game.GetWeaponInfo(WEAPONTYPE_PISTOL, WEAPONSKILL_PRO); }, "SDK weapon lookup requires the existing admitted owner");
+    Check(timing.weaponReads == 1 && timing.requestedWeaponSlot == 58, "shared MTA selector forwards the exact professional-pistol slot");
+    timing.weaponResult = mta::game_de::ClockResult::Ok;
+    Check(game.GetWeaponInfo(WEAPONTYPE_TEC9, WEAPONSKILL_SPECIAL) == timing.weaponResultPointer && timing.requestedWeaponSlot == 79,
+          "actual CGame dispatch forwards the final genuine wrapper identity from its native owner");
+    const auto weaponReadsBeforeInvalid = timing.weaponReads;
+    Check(game.GetWeaponInfo(WEAPONTYPE_INVALID) == nullptr && timing.weaponReads == weaponReadsBeforeInvalid,
+          "invalid SDK weapon selection never requests native row access");
+    timing.weaponResult = mta::game_de::ClockResult::Busy;
+    Refuses([&] { game.GetWeaponInfo(WEAPONTYPE_PISTOL); }, "competing native weapon access remains an explicit SDK refusal");
+    Check(timing.weaponReads == weaponReadsBeforeInvalid + 1, "SDK never retries a refused native wrapper request");
+    timing.weaponResult = mta::game_de::ClockResult::Ok;
+    timing.weaponResultPointer = nullptr;
+    Refuses([&] { game.GetWeaponInfo(WEAPONTYPE_PISTOL); }, "accepted weapon selection cannot publish an empty wrapper registry");
     Check(!reader.IsBound() && !streaming.IsBound() && !state.IsBound(), "CPU SDK policies require no native service binding");
 
     std::printf("Passed %u actual CGameDE CPU SDK policy checks (%zu-bit)\n", checks, sizeof(void*) * 8);

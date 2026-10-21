@@ -27,6 +27,7 @@
 #include "../../Client/game_de/NativeBorrowedGcProfile.h"
 #include "../../Client/game_de/NativeUObjectMembershipAccess.h"
 #include "../../Client/game_de/NativeUObjectMembershipProfile.h"
+#include "../../Client/game_de/NativeStartupCompletionProfile.h"
 #include "../../Client/game_de/NativeStartupProvidersProfile.h"
 #include "../../Client/game_de/NativeUiClassMapProfile.h"
 #include "../../Client/game_de/NativeServiceAdmission.h"
@@ -111,6 +112,12 @@ namespace ClockStartGameOwnerTest
         write(mta::game_de::NativeStartGameProfile::SelectionRva, std::uint32_t{0});
         write(mta::game_de::NativeGamePauseProfile::userPauseRva, static_cast<unsigned char>(0));
         write(mta::game_de::NativeGameStateProfile::stateRva, std::uint32_t{8});
+        const unsigned char pump = 1;
+        SIZE_T              pumpWritten = 0;
+        if (!::WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<unsigned char*>(object) + mta::game_de::NativeStartupCompletionProfile::PumpOffset,
+                                  &pump, sizeof(pump), &pumpWritten) ||
+            pumpWritten != sizeof(pump))
+            std::abort();
         if (retireGraph)
         {
             write(mta::game_de::NativeStartupProvidersProfile::engineRva, std::uintptr_t{0});
@@ -602,8 +609,8 @@ namespace
         void (*invokeAlternateTimer)() = nullptr;
         NativeApplicationFrameProfile::FrameFunction invokeFrame = nullptr, invokeLoadingFrame = nullptr;
         std::array<unsigned char, 0x300>             frameCaller{};
-        std::array<std::uintptr_t, (NativeUiClassMapProfile::ownerOffset + NativeUiClassMapProfile::headerBytes) / sizeof(std::uintptr_t)> frameOwner{};
-        std::array<unsigned char, NativeUiClassMapProfile::entryBytes * 2>                                                                 uiEntries{};
+        std::array<std::uintptr_t, (NativeStartupCompletionProfile::PumpOffset + sizeof(std::uintptr_t)) / sizeof(std::uintptr_t)> frameOwner{};
+        std::array<unsigned char, NativeUiClassMapProfile::entryBytes * 2>                                                         uiEntries{};
         std::array<char16_t, NativeUiClassMapProfile::keyLoadingCount>    uiLoading{u'L', u'o', u'a', u'd', u'i', u'n', u'g', 0};
         std::array<char16_t, NativeUiClassMapProfile::keySimpleFadeCount> uiSimpleFade{u'S', u'i', u'm', u'p', u'l', u'e', u'F', u'a', u'd', u'e', 0};
         std::uintptr_t                                                    frameReceiver = 0;

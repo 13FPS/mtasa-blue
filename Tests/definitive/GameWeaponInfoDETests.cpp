@@ -5,6 +5,8 @@
  *****************************************************************************/
 #include "../../Client/game_de/CGameWeaponInfoDE.h"
 
+#include <game/CWeaponStatOwned.h>
+#include <memory>
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -136,6 +138,15 @@ int main()
     first.refuse = true;
     Refuses([&] { game.GetWeaponInfo(WEAPONTYPE_PISTOL); }, "registry refusal propagates through the actual SDK getter");
     Check(game.GetWeaponInfo(WEAPONTYPE_INVALID) == nullptr, "invalid IDs still return null while registry is unavailable");
+    const auto                                 priorReads = first.reads;
+    std::unique_ptr<MtaGame::CWeaponStatOwned> custom(static_cast<MtaGame::CWeaponStatOwned*>(game.CreateWeaponStat(WEAPONTYPE_PISTOL, WEAPONSKILL_STD)));
+    std::unique_ptr<MtaGame::CWeaponStatOwned> independent(static_cast<MtaGame::CWeaponStatOwned*>(other.CreateWeaponStat(WEAPONTYPE_PISTOL, WEAPONSKILL_STD)));
+    Check(custom && independent && custom->GetMaximumClipAmmo() == 17 && custom->GetDamagePerHit() == 25,
+          "actual CGame virtual factory returns complete MTA default custom-weapon CPU data");
+    custom->SetDamagePerHit(913);
+    custom->GetFireOffset()->fX = 81;
+    Check(independent->GetDamagePerHit() == 25 && independent->GetFireOffset()->fX == 0.25f, "actual game factories produce independent owned SDK data");
+    Check(first.reads == priorReads, "unlisted CPU factory does not query or mutate the separately unavailable native-wrapper registry");
     Check(!reader.IsBound(), "weapon selection policy never binds native timing or weapon storage");
     std::printf("Passed %u actual CGame weapon-info SDK selection checks (%zu-bit)\n", checks, sizeof(void*) * 8);
     return EXIT_SUCCESS;

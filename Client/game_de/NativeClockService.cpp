@@ -104,6 +104,7 @@ namespace mta::game_de
             ClockResult SetStatValue(unsigned short index, float value) noexcept override;
             ClockResult ModifyStat(unsigned short index, float value) noexcept override;
             ClockResult StartGame() noexcept override;
+            ClockResult ReadStartupProgress(NativeStartupCompletionAccess::Value& output) noexcept override;
         };
 
         struct Counters
@@ -211,35 +212,39 @@ namespace mta::game_de
             bool                                            startupMode = false;
             GameStartupHandler                              startupHandler = nullptr;
             std::atomic<bool>                               startupAttempted{false};
-            NativeStartGameCalls::Receipt                   startupReceipt;
-            void*                                           frameContext = nullptr;
-            ApplicationFrameFunction                        originalFrame = nullptr;
-            std::atomic<unsigned>                           inFlight{0};
-            std::atomic<std::uint32_t>                      retainedPeerThreads{0};
-            std::atomic<DWORD>                              engineThread{0};
-            std::atomic<std::uint64_t>                      generation{0}, refreshed{0}, lastSubmitted{0}, pendingSequence{0};
-            std::atomic<std::uint64_t>                      admissionGeneration{0}, admissionSerial{0};
-            std::atomic<std::uint64_t>                      lastCompletedSequence{0};
-            std::atomic<ClockResult>                        failure{ClockResult::Ok};
-            std::atomic<ClockResult>                        lastCommandResult{ClockResult::NotInitialized};
-            DWORD                                           producerThread = 0;
-            std::uintptr_t                                  image = 0;
-            ULONGLONG                                       started = 0;
-            std::uint32_t                                   maximumDuration = 0;
-            ClockCommandV1                                  pending;
-            bool                                            hasPending = false;
-            ClockValues                                     original, observed;
-            ClockPublication                                publishedClock;
-            ContinuationFunction                            originalContinuation = nullptr;
-            ContinuationFunction                            originalTimer = nullptr;
-            DWORD                                           patchProtection = 0;
-            std::atomic<bool>                               protectionPending{false};
-            std::vector<PeerThread>                         recoveryPeers;
-            NativeAccess                                    access;
-            CClockDE                                        clock{access};
-            CWeaponInfoBankDE                               weaponBank{weaponWriterReader, access, access};
-            CStatsDE                                        stats{statsReader, access};
-            Counters                                        counters;
+            std::atomic<std::uint64_t>                      startupRequestGeneration{0};
+            // Opaque equality only: a new application at the same global root
+            // cannot inherit this request. Never dereference a stored receiver.
+            std::atomic<std::uintptr_t>   startupRequestReceiver{0};
+            NativeStartGameCalls::Receipt startupReceipt;
+            void*                         frameContext = nullptr;
+            ApplicationFrameFunction      originalFrame = nullptr;
+            std::atomic<unsigned>         inFlight{0};
+            std::atomic<std::uint32_t>    retainedPeerThreads{0};
+            std::atomic<DWORD>            engineThread{0};
+            std::atomic<std::uint64_t>    generation{0}, refreshed{0}, lastSubmitted{0}, pendingSequence{0};
+            std::atomic<std::uint64_t>    admissionGeneration{0}, admissionSerial{0};
+            std::atomic<std::uint64_t>    lastCompletedSequence{0};
+            std::atomic<ClockResult>      failure{ClockResult::Ok};
+            std::atomic<ClockResult>      lastCommandResult{ClockResult::NotInitialized};
+            DWORD                         producerThread = 0;
+            std::uintptr_t                image = 0;
+            ULONGLONG                     started = 0;
+            std::uint32_t                 maximumDuration = 0;
+            ClockCommandV1                pending;
+            bool                          hasPending = false;
+            ClockValues                   original, observed;
+            ClockPublication              publishedClock;
+            ContinuationFunction          originalContinuation = nullptr;
+            ContinuationFunction          originalTimer = nullptr;
+            DWORD                         patchProtection = 0;
+            std::atomic<bool>             protectionPending{false};
+            std::vector<PeerThread>       recoveryPeers;
+            NativeAccess                  access;
+            CClockDE                      clock{access};
+            CWeaponInfoBankDE             weaponBank{weaponWriterReader, access, access};
+            CStatsDE                      stats{statsReader, access};
+            Counters                      counters;
             // Destroy the hold before the shared peer recovery vector/gates.
             // Its normal lifetime is explicitly retired by Reset/End.
             PeerHold weatherOverridePeers;
@@ -2345,14 +2350,52 @@ namespace mta::game_de
                 return scope;
             if (runtime.startupAttempted.load())
                 return ClockResult::Busy;
+            const auto generation = runtime.generation.load();
             runtime.startupReceipt = {};
             const auto result = NativeStartGameCalls::Apply(runtime.image, receiver, &CheckStartGameOwner, &ClaimStartGameEntry, &runtime.startupReceipt);
+            if (result == ClockResult::Ok && runtime.startupReceipt.entered && runtime.startupReceipt.returned && runtime.startupReceipt.requestAfter == 1)
+            {
+                runtime.startupRequestReceiver.store(reinterpret_cast<std::uintptr_t>(receiver));
+                runtime.startupRequestGeneration.store(generation);
+            }
             // Native frontend/UMG work may already have committed even if its
             // call throws or its final scope refuses. Preserve those effects;
             // neither an old world snapshot nor a state8 store is a recovery.
             if (runtime.startupReceipt.entered && result != ClockResult::Ok)
                 Stop(result);
             return result;
+        }
+
+        ClockResult CheckStartupProgressOwner(void* receiver) noexcept
+        {
+            const auto scope = CheckStartGameOwner(receiver);
+            if (scope != ClockResult::Ok)
+                return scope;
+            const auto generation = runtime.generation.load();
+            if (!runtime.startupAttempted.load() || runtime.startupRequestGeneration.load() != generation || !runtime.startupReceipt.entered ||
+                !runtime.startupReceipt.returned || runtime.startupReceipt.requestAfter != 1)
+                return ClockResult::NotInitialized;
+            if (runtime.startupRequestReceiver.load() != reinterpret_cast<std::uintptr_t>(receiver))
+                return ClockResult::BindingChanged;
+            for (const auto& pin : NativeStartupCompletionProfile::pins)
+            {
+                std::array<unsigned char, NativeStartupCompletionProfile::maximumPinBytes> bytes{};
+                if (!pin.size || pin.size > bytes.size() || !Image::ReadImage(runtime.image, runtime.image + pin.rva, bytes.data(), pin.size, false, true) ||
+                    std::memcmp(bytes.data(), pin.bytes, pin.size))
+                    return ClockResult::BindingChanged;
+            }
+            return CheckStartGameOwner(receiver);
+        }
+
+        ClockResult NativeAccess::ReadStartupProgress(NativeStartupCompletionAccess::Value& output) noexcept
+        {
+            const auto owner = CheckStartupProgressOwner(frameCallbackReceiver);
+            if (owner != ClockResult::Ok)
+                return owner;
+            // Only scalar facts escape this same synchronous callback. The
+            // zero latch before a request or in another generation must never
+            // masquerade as completion, and retired menu UObjects are not read.
+            return NativeStartupCompletionAccess(runtime.image, &StartupGraphRead, &CheckStartupProgressOwner).Read(frameCallbackReceiver, output);
         }
 
         void InvokeFrameHandler(void* receiver, float delta, std::uint32_t state)
@@ -2751,6 +2794,8 @@ namespace mta::game_de
         runtime.startupMode = frameMode && startupHandler;
         runtime.startupHandler = runtime.startupMode ? startupHandler : nullptr;
         runtime.startupAttempted.store(false);
+        runtime.startupRequestGeneration.store(0);
+        runtime.startupRequestReceiver.store(0);
         runtime.startupReceipt = {};
         runtime.frameContext = frameMode ? context : nullptr;
         runtime.originalFrame = nullptr;
@@ -2925,6 +2970,8 @@ namespace mta::game_de
             runtime.frameHandler = nullptr;
             runtime.startupHandler = nullptr;
             runtime.startupMode = false;
+            runtime.startupRequestGeneration.store(0);
+            runtime.startupRequestReceiver.store(0);
             runtime.frameContext = nullptr;
             runtime.weaponWriterReader.Reset();
             runtime.weaponWriterGeneration = 0;

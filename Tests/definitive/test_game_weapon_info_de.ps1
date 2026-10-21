@@ -80,9 +80,9 @@ function InterfaceMethods([string]$RelativePath) {
 }
 
 try {
-    $productionSources = @('Client/game_de/CGameWeaponInfoDE.cpp','Client/game_de/CGameTimingDE.cpp',
+    $productionSources = @('Client/game_de/CWeaponStatFactoryDE.cpp','Client/game_de/CGameWeaponInfoDE.cpp','Client/game_de/CGameTimingDE.cpp',
         'Client/game_de/NativeGameTimingReader.cpp','Client/game_de/NativeGameTimeReader.cpp','Client/game_de/NativeImageAccess.cpp')
-    $sourceNames = $productionSources + @('Client/game_de/CGameWeaponInfoDE.h','Client/game_de/CGameTimingDE.h',
+    $sourceNames = $productionSources + @('Client/game_de/CWeaponStatFactoryDE.h','Client/sdk/game/CWeaponStatData.h','Client/sdk/game/CWeaponStatDefaults.h','Client/sdk/game/CWeaponStatFlagPolicy.h','Client/sdk/game/CWeaponStatOwned.h','Client/sdk/game/CWeaponStat.h','Shared/sdk/CVector.h','Shared/sdk/CVector4D.h','Shared/sdk/SharedUtil.Defines.h','Client/game_de/CGameWeaponInfoDE.h','Client/game_de/CGameTimingDE.h',
         'Client/game_de/NativeGameTimingReader.h','Client/game_de/NativeGameTimeReader.h','Client/game_de/NativeGameTimingAccess.h',
         'Client/game_de/NativeCheatProfile.h','Client/game_de/CWeatherTransitionDE.h','Client/sdk/game/CWeather.h',
         'Client/game_de/NativeImageAccess.h','Client/game_de/NativeClockMemory.h','Client/game_de/NativeClockProfile.h',
@@ -99,7 +99,7 @@ try {
         $provided += @([regex]::Matches($text,'(?<name>\w+)\s*\([^;{}]*\)\s*(?:const\s*)?(?:noexcept\s*)?override\s*;') |
             ForEach-Object { $_.Groups['name'].Value })
     }
-    $testedMethods = @('GetWeaponInfo')
+    $testedMethods = @('GetWeaponInfo','CreateWeaponStat')
     foreach ($method in $testedMethods) { if ($provided -notcontains $method) { throw "Production SDK override is missing: $method" } }
     $gameMethods = @(InterfaceMethods 'Client/sdk/game/CGame.h' | Where-Object { $provided -notcontains $_.name })
     $generated = Join-Path $scratchRoot 'GameWeaponInfoFixture.generated.h'

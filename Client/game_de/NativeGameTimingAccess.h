@@ -14,6 +14,7 @@
 #include "NativeWeaponInfoVectorAccess.h"
 #include "NativeWeatherOverrideAccess.h"
 #include "NativeStatsWriteAccess.h"
+#include "NativeStartupCompletionAccess.h"
 #include <cstdint>
 
 class CStats;
@@ -52,6 +53,9 @@ namespace mta::game_de
         // The real request belongs to a distinct admitted normal-frame scope;
         // a gameplay timer or earlier observation never grants lifecycle calls.
         virtual ClockResult StartGame() noexcept { return ClockResult::NotInitialized; }
+        // Native pump facts are scoped to an actually entered request in this
+        // owner generation. They do not certify player or network readiness.
+        virtual ClockResult ReadStartupProgress(NativeStartupCompletionAccess::Value&) noexcept { return ClockResult::NotInitialized; }
 
     protected:
         ~NativeGameTimingAccess() = default;

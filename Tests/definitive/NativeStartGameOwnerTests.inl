@@ -135,11 +135,13 @@ public:
 
 struct StartGameOwnerContext
 {
-    ApplicationFrameContext observer;
-    ClockImageFixture*      fixture = nullptr;
-    unsigned                calls = 0, refusal = 0, graphFault = 0;
-    ClockResult             result = ClockResult::NotInitialized, duplicate = ClockResult::NotInitialized;
-    bool                    tryDuplicate = false;
+    ApplicationFrameContext              observer;
+    ClockImageFixture*                   fixture = nullptr;
+    unsigned                             calls = 0, refusal = 0, graphFault = 0, operation = 0;
+    NativeStartupCompletionAccess::Value progress{0xa5, 0x5a, 0xa5};
+    void*                                expectedReceiver = nullptr;
+    ClockResult                          result = ClockResult::NotInitialized, duplicate = ClockResult::NotInitialized;
+    bool                                 tryDuplicate = false;
 };
 
 void StartGameOwnerHandler(NativeGameTimingAccess& access, const NativeApplicationFrame& frame, void* opaque)
@@ -147,10 +149,9 @@ void StartGameOwnerHandler(NativeGameTimingAccess& access, const NativeApplicati
     auto& context = *static_cast<StartGameOwnerContext*>(opaque);
     ++context.calls;
     Check(callbackDepth == 1 && runtime.inFlight.load() == 1 && frame.generation == runtime.generation.load() &&
-              frameCallbackReceiver == context.fixture->frameOwner.data() && !timingTimerScope && !runtime.timerReady.load() && !runtime.captured.load(),
+              frameCallbackReceiver == (context.expectedReceiver ? context.expectedReceiver : context.fixture->frameOwner.data()) && !timingTimerScope &&
+              !runtime.timerReady.load() && !runtime.captured.load(),
           "the actual typed startup handler borrows the original normal frame without CJ, timer readiness or a clock snapshot");
-    StartGameGraph graph(*context.fixture);
-    graph.Fault(context.graphFault);
     const auto generation = frameCallbackGeneration;
     const auto admission = runtime.admissionGeneration.load();
     const auto refreshed = runtime.refreshed.load();
@@ -166,9 +167,16 @@ void StartGameOwnerHandler(NativeGameTimingAccess& access, const NativeApplicati
         context.fixture->Put(NativeStartGameProfile::ThreadIdRva, GetCurrentThreadId() + DWORD{1});
     if (context.refusal == 6)
         context.fixture->Put(NativeBorrowedGcProfile::markerRva, std::uint32_t{1});
-    context.result = access.StartGame();
-    if (context.tryDuplicate)
-        context.duplicate = access.StartGame();
+    if (context.operation == 1)
+        context.result = access.ReadStartupProgress(context.progress);
+    else
+    {
+        StartGameGraph graph(*context.fixture);
+        graph.Fault(context.graphFault);
+        context.result = access.StartGame();
+        if (context.tryDuplicate)
+            context.duplicate = access.StartGame();
+    }
     context.fixture->Put(NativeStartGameProfile::ThreadIdRva, GetCurrentThreadId());
     context.fixture->Put(NativeBorrowedGcProfile::markerRva, std::uint32_t{0});
     runtime.refreshed.store(refreshed);
@@ -204,6 +212,8 @@ void NativeStartGameOwnedFrame(ClockImageFixture& fixture)
         admit(pin.rva, pin.bytes, pin.size, PAGE_EXECUTE_READ);
     for (const auto& pin : NativeUObjectMembershipProfile::pins)
         admit(pin.rva, pin.bytes, pin.size, PAGE_EXECUTE_READ);
+    for (const auto& pin : NativeStartupCompletionProfile::pins)
+        admit(pin.rva, pin.bytes, pin.size, PAGE_EXECUTE_READ);
     for (const auto& pointer : P::Pointers)
     {
         const auto target = fixture.image + pointer.targetRva;
@@ -229,6 +239,7 @@ void NativeStartGameOwnedFrame(ClockImageFixture& fixture)
         fixture.Put(P::RequestRva, static_cast<unsigned char>(0));
         fixture.Put(P::SelectionRva, std::uint32_t{17});
         fixture.Put(NativeGamePauseProfile::userPauseRva, static_cast<unsigned char>(1));
+        StartGameGraph::Store(fixture.frameOwner, NativeStartupCompletionProfile::PumpOffset, static_cast<unsigned char>(0));
     };
     Check(runtime.access.StartGame() == ClockResult::NotInitialized && !ClockStartGameOwnerTest::calls,
           "an unbound producer cannot obtain startup call authority from a complete native profile");
@@ -253,11 +264,22 @@ void NativeStartGameOwnedFrame(ClockImageFixture& fixture)
         };
         prepare();
         HookApplicationFrame(fixture.frameOwner.data(), 0.125f);
-        fixture.invokeLoadingFrame(fixture.frameOwner.data(), 0.125f);
+        // The earlier frame-owner suite exercises the exact excluded loading
+        // origin. Its benign owned return suffix overlaps the independently
+        // pinned native pump-wait bytes here, so do not execute that suffix
+        // after admitting this separate observation profile.
         Check(!context.calls && !ClockStartGameOwnerTest::calls && !runtime.startupAttempted.load(),
-              "unknown and excluded loading call origins still forward once but cannot enter the typed startup handler");
+              "an unknown call origin still forwards once but cannot enter the typed startup handler");
         Check(runtime.access.StartGame() != ClockResult::Ok && !ClockStartGameOwnerTest::calls,
               "producer-side startup calls cannot borrow a future admitted native frame");
+        context.operation = 1;
+        fixture.Put(NativeGameStateProfile::stateRva, std::uint32_t{9});
+        invoke();
+        Check(context.result == ClockResult::NotInitialized && context.progress.nativeState == 0xa5 && !runtime.startupRequestGeneration.load() &&
+                  !context.progress.PumpRetired(),
+              "the native retired tuple before any entered published request cannot manufacture same-generation completion history");
+        context.operation = 0;
+        prepare();
         for (unsigned refusal = 1; refusal <= 6; ++refusal)
         {
             context.refusal = refusal;
@@ -284,13 +306,83 @@ void NativeStartGameOwnedFrame(ClockImageFixture& fixture)
                   !runtime.captured.load() && !runtime.timerHooked.load(),
               "the real post-original owner invokes the exact native SA receiver once, accepts asynchronous native progress and never requires the old graph "
               "after return");
+        Check(runtime.startupRequestGeneration.load() == runtime.generation.load() &&
+                  runtime.startupRequestReceiver.load() == reinterpret_cast<std::uintptr_t>(fixture.frameOwner.data()),
+              "only the observed real entered and published request records this generation's asynchronous status authority");
+        context.operation = 1;
+        context.tryDuplicate = false;
+        const auto pump = [&](unsigned char value) { StartGameGraph::Store(fixture.frameOwner, NativeStartupCompletionProfile::PumpOffset, value); };
+        const auto untouched = [&] { return context.progress.nativeState == 0xa5 && context.progress.request == 0x5a && context.progress.pumpActive == 0xa5; };
+        invoke();
+        Check(context.result == ClockResult::Ok && context.progress.nativeState == 8 && context.progress.request == 1 && context.progress.pumpActive == 1 &&
+                  !context.progress.PumpRetired(),
+              "the same real startup callback observes queued asynchronous native facts after the previous UI/provider graph retired");
+        fixture.Put(NativeGameStateProfile::stateRva, std::uint32_t{9});
+        invoke();
+        Check(context.result == ClockResult::Ok && !context.progress.PumpRetired(),
+              "native state9 alone is distinct from request consumption and pump retirement");
+        fixture.Put(P::RequestRva, static_cast<unsigned char>(0));
+        invoke();
+        Check(context.result == ClockResult::Ok && context.progress.pumpActive == 1 && !context.progress.PumpRetired(),
+              "a consumed native request with an active pump still remains asynchronous work");
+        pump(0);
+        invoke();
+        Check(context.result == ClockResult::Ok && context.progress.PumpRetired() && ClockStartGameOwnerTest::calls == 1,
+              "only the matching entered-request generation can publish the native state9/request0/pump0 retirement facts without repeating StartGame");
+        for (unsigned refusal = 1; refusal <= 6; ++refusal)
+        {
+            context.refusal = refusal;
+            context.progress = {0xa5, 0x5a, 0xa5};
+            invoke();
+            Check(context.result != ClockResult::Ok && untouched(),
+                  "read-only startup progress preserves output for stale generation/admission, nesting, expiry, wrong native thread and scoped GC");
+        }
+        context.refusal = 0;
+        const auto publishedGeneration = runtime.startupRequestGeneration.load();
+        runtime.startupRequestGeneration.store(publishedGeneration + 1);
+        invoke();
+        Check(context.result == ClockResult::NotInitialized && untouched(),
+              "an earlier or unrelated generation's entered receipt cannot attribute the current native retired tuple");
+        runtime.startupRequestGeneration.store(publishedGeneration);
+        {
+            auto replacement = fixture.frameOwner;
+            StartGameGraph::Store(replacement, NativeStartupCompletionProfile::PumpOffset, static_cast<unsigned char>(0));
+            fixture.SetFrameReceiver(replacement.data());
+            context.expectedReceiver = replacement.data();
+            Check(service.Renew(runtime.generation.load()), "renew before a separately admitted replacement application's frame");
+            fixture.invokeFrame(replacement.data(), 0.125f);
+            Check(context.result == ClockResult::BindingChanged && untouched() &&
+                      runtime.startupRequestReceiver.load() == reinterpret_cast<std::uintptr_t>(fixture.frameOwner.data()),
+                  "a fresh normal frame and retired tuple on a replacement SA application cannot inherit the old receiver's request attribution");
+            fixture.SetFrameReceiver(fixture.frameOwner.data());
+            context.expectedReceiver = nullptr;
+        }
+        pump(2);
+        invoke();
+        Check(context.result == ClockResult::BindingChanged && untouched(), "an unproved native pump byte refuses instead of becoming a completion boolean");
+        pump(0);
+        const auto& completionPin = NativeStartupCompletionProfile::pins[0];
+        const auto  changedPin = static_cast<unsigned char>(completionPin.bytes[0] ^ 1);
+        fixture.Patch(completionPin.rva, &changedPin, sizeof(changedPin));
+        invoke();
+        Check(context.result == ClockResult::BindingChanged && untouched(),
+              "the actual progress owner requires its independently pinned native pump producer/consumer lifecycle");
+        fixture.Patch(completionPin.rva, completionPin.bytes, completionPin.size);
+        invoke();
+        Check(context.result == ClockResult::Ok && context.progress.PumpRetired(),
+              "restoring the owned profile recovers read-only status without replaying a request or writing native state");
+        NativeStartupCompletionAccess::Value outside{0xa5, 0x5a, 0xa5};
+        Check(runtime.access.ReadStartupProgress(outside) != ClockResult::Ok && outside.nativeState == 0xa5 && outside.request == 0x5a &&
+                  outside.pumpActive == 0xa5,
+              "producer-side progress cannot reuse a previous frame's native receiver or status lease");
         bool        foreignRefused = false;
         std::thread foreign([&] { foreignRefused = runtime.access.StartGame() != ClockResult::Ok; });
         foreign.join();
         Check(foreignRefused && ClockStartGameOwnerTest::calls == 1, "a foreign producer cannot replay a returned native startup transaction");
         FinishApplicationOwned(service);
-        Check(fixture.Get<unsigned char>(P::RequestRva) == 1 && fixture.Get<std::uint32_t>(NativeGameStateProfile::stateRva) == 8,
-              "End preserves real request/state progress and retires the frame hook without fabricating an old-world restoration");
+        Check(fixture.Get<unsigned char>(P::RequestRva) == 0 && fixture.Get<std::uint32_t>(NativeGameStateProfile::stateRva) == 9 &&
+                  !runtime.startupRequestGeneration.load() && !runtime.startupRequestReceiver.load(),
+              "End retires generation history and hooks while preserving native pump retirement without a world/player readiness claim");
     }
     for (unsigned failure = 0; failure < 2; ++failure)
     {
@@ -321,4 +413,5 @@ void NativeStartGameOwnedFrame(ClockImageFixture& fixture)
     for (std::size_t index = 0; index < statePins.size(); ++index)
         fixture.Patch(NativeGameStateProfile::pins[index].rva, statePins[index].data(), NativeGameStateProfile::pins[index].size);
     std::puts("Production native synchronous StartGame frame owner fixture completed");
+    std::puts("Production native asynchronous startup completion owner fixture completed");
 }

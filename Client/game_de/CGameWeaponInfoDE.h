@@ -15,6 +15,8 @@ namespace mta::game_de
     public:
         CWeaponInfo* GetWeaponInfo(eWeaponType weapon, eWeaponSkill skill = WEAPONSKILL_STD) override;
 
+        CWeaponStat* CreateWeaponStat(eWeaponType weapon, eWeaponSkill skill) override;
+
     protected:
         CGameWeaponInfoDE(const NativeGameTimingReader& reader, NativeGameTimingAccess& writer) noexcept : CGameTimingDE(reader, writer) {}
 

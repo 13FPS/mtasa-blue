@@ -1,0 +1,79 @@
+/*****************************************************************************
+ * PROJECT: Multi Theft Auto
+ * LICENSE: See LICENSE in the repository root
+ * PURPOSE: Exact native asynchronous startup-pump lifecycle metadata
+ *****************************************************************************/
+#pragma once
+#include <array>
+#include <cstddef>
+#include <cstdint>
+
+namespace mta::game_de::NativeStartupCompletionProfile
+{
+    inline constexpr std::uintptr_t RootRva = 0x5725750, VtableRva = 0x431aea8, StateRva = 0x5300ff8, RequestRva = 0x506967c;
+    inline constexpr std::size_t    PumpOffset = 0x890;
+    // Zero is also an ordinary pre-request/previous-session condition.
+    // Only actual entered-request generation history can interpret later
+    // state9/request0/pump0 as this transaction's native pump retirement.
+    // Neither state9 nor pump retirement proves player/network readiness.
+    struct Pin
+    {
+        std::uintptr_t       rva;
+        const unsigned char* bytes;
+        std::size_t          size;
+    };
+    inline constexpr std::size_t                  maximumPinBytes = 82;
+    inline constexpr std::uintptr_t               PumpActiveProducerRva = 0x129687e;
+    inline constexpr std::array<unsigned char, 7> PumpActiveProducer = {
+        0xc6, 0x83, 0x90, 0x08, 0x00, 0x00, 0x01,
+    };
+    inline constexpr std::uintptr_t               NormalFramePumpGateRva = 0x1296d9d;
+    inline constexpr std::array<unsigned char, 7> NormalFramePumpGate = {
+        0x40, 0x38, 0xab, 0x90, 0x08, 0x00, 0x00,
+    };
+    inline constexpr std::uintptr_t                RequestConsumerEntryRva = 0x12969cc;
+    inline constexpr std::array<unsigned char, 27> RequestConsumerEntry = {
+        0x45, 0x33, 0xf6, 0x48, 0x89, 0xb4, 0x24, 0x88, 0x00, 0x00, 0x00, 0x44, 0x38, 0x35,
+        0x9e, 0x2c, 0xdd, 0x03, 0x48, 0x8b, 0xf1, 0x0f, 0x85, 0x19, 0x01, 0x00, 0x00,
+    };
+    inline constexpr std::uintptr_t                RequestConsumptionRva = 0x1296c98;
+    inline constexpr std::array<unsigned char, 25> RequestConsumption = {
+        0x44, 0x88, 0x35, 0x69, 0xc2, 0xd9, 0x03, 0x32, 0xc0, 0x44, 0x88, 0x35, 0xd4, 0x29, 0xdd, 0x03, 0x48, 0x83, 0xc4, 0x60, 0x41, 0x5e, 0x5b, 0x5d, 0xc3,
+    };
+    inline constexpr std::uintptr_t                PlayingContinuationRva = 0x1296cb1;
+    inline constexpr std::array<unsigned char, 21> PlayingContinuation = {
+        0x83, 0x3d, 0x40, 0xa3, 0x06, 0x04, 0x09, 0x75, 0x0c, 0xe8, 0x01, 0xee, 0xea, 0xff, 0xc6, 0x05, 0x42, 0xc2, 0xd9, 0x03, 0x01,
+    };
+    inline constexpr std::uintptr_t                ConsumerSuccessReturnRva = 0x1296d44;
+    inline constexpr std::array<unsigned char, 11> ConsumerSuccessReturn = {
+        0xb0, 0x01, 0x48, 0x83, 0xc4, 0x60, 0x41, 0x5e, 0x5b, 0x5d, 0xc3,
+    };
+    inline constexpr std::uintptr_t                NormalFramePumpRetirementRva = 0x1296edf;
+    inline constexpr std::array<unsigned char, 30> NormalFramePumpRetirement = {
+        0x48, 0x8b, 0xcb, 0xe8, 0xd9, 0xfa, 0xff, 0xff, 0x84, 0xc0, 0x0f, 0x84, 0x3b, 0x01, 0x00,
+        0x00, 0x48, 0x8b, 0x35, 0x5a, 0xe8, 0x48, 0x04, 0x40, 0x88, 0xab, 0x90, 0x08, 0x00, 0x00,
+    };
+    inline constexpr std::uintptr_t                NestedPumpWaitRva = 0x1297166;
+    inline constexpr std::array<unsigned char, 82> NestedPumpWait = {
+        0x80, 0xb9, 0x90, 0x08, 0x00, 0x00, 0x00, 0x48, 0x8b, 0xd9, 0x74, 0x4b, 0xc6, 0x05, 0xab, 0x40, 0x08, 0x04, 0x01, 0x80, 0xb9,
+        0x90, 0x08, 0x00, 0x00, 0x00, 0xc6, 0x05, 0x21, 0xa4, 0xd9, 0x03, 0x01, 0x74, 0x34, 0x0f, 0x29, 0x74, 0x24, 0x30, 0xf3, 0x0f,
+        0x10, 0x35, 0x02, 0x19, 0x93, 0x03, 0x66, 0x66, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00, 0x48, 0x8b, 0x03, 0x0f, 0x28,
+        0xce, 0x48, 0x8b, 0xcb, 0xff, 0x90, 0xb0, 0x03, 0x00, 0x00, 0x80, 0xbb, 0x90, 0x08, 0x00, 0x00, 0x00, 0x75, 0xe8,
+    };
+    inline constexpr std::uintptr_t                PlayingRequestPublicationRva = 0x120a2ed;
+    inline constexpr std::array<unsigned char, 38> PlayingRequestPublication = {
+        0x0f, 0xb6, 0x05, 0x88, 0xf3, 0xe5, 0x03, 0x38, 0x1d, 0x83, 0xf3, 0xe5, 0x03, 0x88, 0x1d, 0x2d, 0x3f, 0x1c, 0x04,
+        0x0f, 0x45, 0xc7, 0xc7, 0x05, 0xeb, 0x6c, 0x0f, 0x04, 0x09, 0x00, 0x00, 0x00, 0x88, 0x05, 0x69, 0xf3, 0xe5, 0x03,
+    };
+    inline constexpr std::array<Pin, 9> pins = {{
+        {PumpActiveProducerRva, PumpActiveProducer.data(), PumpActiveProducer.size()},
+        {NormalFramePumpGateRva, NormalFramePumpGate.data(), NormalFramePumpGate.size()},
+        {RequestConsumerEntryRva, RequestConsumerEntry.data(), RequestConsumerEntry.size()},
+        {RequestConsumptionRva, RequestConsumption.data(), RequestConsumption.size()},
+        {PlayingContinuationRva, PlayingContinuation.data(), PlayingContinuation.size()},
+        {ConsumerSuccessReturnRva, ConsumerSuccessReturn.data(), ConsumerSuccessReturn.size()},
+        {NormalFramePumpRetirementRva, NormalFramePumpRetirement.data(), NormalFramePumpRetirement.size()},
+        {NestedPumpWaitRva, NestedPumpWait.data(), NestedPumpWait.size()},
+        {PlayingRequestPublicationRva, PlayingRequestPublication.data(), PlayingRequestPublication.size()},
+    }};
+}

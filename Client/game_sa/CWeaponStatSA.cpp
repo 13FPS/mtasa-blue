@@ -12,6 +12,7 @@
 #include "CGameSA.h"
 #include "CWeaponStatManagerSA.h"
 #include "CWeaponStatSA.h"
+#include <game/CWeaponStatFlagPolicy.h>
 
 extern CGameSA* pGame;
 
@@ -68,46 +69,12 @@ void CWeaponStatSA::ClearFlagBits(DWORD flagBits)
 
 void CWeaponStatSA::HandleFlagsValueChange(DWORD newValue)
 {
-    // Fixup anim group if dual wield flag is changing
-    if (IsFlagSet(WEAPONTYPE_TWIN_PISTOLS) && !(newValue & WEAPONTYPE_TWIN_PISTOLS))
+    // Manager originals are mutable SDK objects. Resolve them at each flag
+    // transition so the shared policy preserves the existing classic source.
+    const auto original = [](void*, eWeaponType weapon, eWeaponSkill skill) -> MtaGame::WeaponStatOriginal
     {
-        // Clearing dual wield flag
-
-        // if it can support this anim group
-        if ((GetWeaponType() >= WEAPONTYPE_PISTOL && GetWeaponType() <= WEAPONTYPE_SNIPERRIFLE) || GetWeaponType() == WEAPONTYPE_MINIGUN)
-        {
-            // Revert anim group to default
-            CWeaponStat* pOriginalWeaponInfo = pGame->GetWeaponStatManager()->GetOriginalWeaponStats(GetWeaponType(), GetWeaponSkillLevel());
-            SetAnimGroup(pOriginalWeaponInfo->GetAnimGroup());
-        }
-    }
-    else if (!IsFlagSet(WEAPONTYPE_TWIN_PISTOLS) && (newValue & WEAPONTYPE_TWIN_PISTOLS))
-    {
-        // Setting dual wield flag
-
-        // if it can support this anim group
-        if ((GetWeaponType() >= WEAPONTYPE_PISTOL && GetWeaponType() <= WEAPONTYPE_SNIPERRIFLE) || GetWeaponType() == WEAPONTYPE_MINIGUN)
-        {
-            // sawn off shotgun anim group
-            SetAnimGroup(17);
-        }
-    }
-
-    // Don't allow setting of anim reload flag unless original has it
-    if (!IsFlagSet(WEAPONTYPE_ANIM_RELOAD) && (newValue & WEAPONTYPE_ANIM_RELOAD))
-    {
-        CWeaponStat* pOriginalWeaponInfo = pGame->GetWeaponStatManager()->GetOriginalWeaponStats(GetWeaponType(), GetWeaponSkillLevel());
-        if (!pOriginalWeaponInfo->IsFlagSet(WEAPONTYPE_ANIM_RELOAD))
-            newValue &= ~WEAPONTYPE_ANIM_RELOAD;
-    }
-
-    // Don't allow setting anim crouch flag unless original has it
-    if (!IsFlagSet(WEAPONTYPE_ANIM_CROUCHFIRE) && (newValue & WEAPONTYPE_ANIM_CROUCHFIRE))
-    {
-        CWeaponStat* pOriginalWeaponInfo = pGame->GetWeaponStatManager()->GetOriginalWeaponStats(GetWeaponType(), GetWeaponSkillLevel());
-        if (!pOriginalWeaponInfo->IsFlagSet(WEAPONTYPE_ANIM_CROUCHFIRE))
-            newValue &= ~WEAPONTYPE_ANIM_CROUCHFIRE;
-    }
-
-    m_pWeaponStats->m_nFlags = newValue;
+        CWeaponStat* value = pGame->GetWeaponStatManager()->GetOriginalWeaponStats(weapon, skill);
+        return {static_cast<DWORD>(value->GetFlags()), value->GetAnimGroup()};
+    };
+    MtaGame::ApplyWeaponStatFlags(*this, newValue, original, nullptr);
 }

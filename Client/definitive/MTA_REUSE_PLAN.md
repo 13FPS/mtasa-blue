@@ -48,6 +48,22 @@ an entered failure preserves native effects without replay or a state8 shortcut.
 This extends the partial backend; the complete `CGame` factory, native gameplay
 objects and x64 network module still remain prerequisites for full MTA startup.
 
+The retained startup owner now observes the native loading pump after that
+generation's real request was entered and published. The native state, pending
+request and pump latch must all match the freshly admitted application receiver;
+an opaque identity comparison ties these observations to the original request.
+State9/request0/pump0 can predate a new request, so those values alone supply no
+transaction history. The observation reports native pump retirement and leaves
+MTA's existing loaded-session checks responsible for player/network readiness.
+
+MTA's `CreateWeaponStat` factory also shares its existing defaults and flag
+transition policy between classic and DE. The complete owned `CWeaponStat`
+contains custom CPU data, as the classic unlisted factory does; its mutable
+fire-offset vector belongs to that object. Classic manager originals remain
+mutable and are looked up at each constrained flag transition. Custom weapon
+execution separately uses the real native weapon-info bank. The live weapon-stat
+manager still requires its remaining qualified native setters.
+
 The October 19 application-frame trial observed 277 natural gameplay frames
 and both configured UI dictionary entries without engine writes, then retired
 its hooks and unloaded Core normally. A combined startup observer now reuses

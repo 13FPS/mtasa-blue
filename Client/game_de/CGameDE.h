@@ -24,6 +24,7 @@ namespace mta::game_de
     {
     public:
         CClock*           GetClock() noexcept override;
+        CPlayerInfo*      GetPlayerInfo() override;
         CStats*           GetStats() override;
         CWeather*         GetWeather() override;
         void              StartGame() override;

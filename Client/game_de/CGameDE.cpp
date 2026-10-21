@@ -53,6 +53,18 @@ namespace mta::game_de
         return output;
     }
 
+    CPlayerInfo* CGameDE::GetPlayerInfo()
+    {
+        // The callback runtime owns the complete SDK service and its Wanted
+        // dependency. Borrow that qualified identity, rather than treating a
+        // native row address or an unavailable result as a player-info object.
+        CPlayerInfo* output = nullptr;
+        RequireNativeWrite(NativeWrites().GetPlayerInfo(output), "GetPlayerInfo");
+        if (!output)
+            RequireNativeWrite(ClockResult::NotInitialized, "GetPlayerInfo");
+        return output;
+    }
+
     CWeather* CGameDE::GetWeather()
     {
         // MTA receives the complete service owned by the existing callback

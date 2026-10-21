@@ -100,6 +100,16 @@ namespace
         unsigned                  statsReads = 0;
         CStats*                   statsPointer = nullptr;
         mta::game_de::ClockResult statsResult = mta::game_de::ClockResult::NotInitialized;
+        mta::game_de::ClockResult GetPlayerInfo(CPlayerInfo*& output) noexcept override
+        {
+            ++playerInfoReads;
+            if (playerInfoResult == mta::game_de::ClockResult::Ok)
+                output = playerInfoPointer;
+            return playerInfoResult;
+        }
+        unsigned                  playerInfoReads = 0;
+        CPlayerInfo*              playerInfoPointer = nullptr;
+        mta::game_de::ClockResult playerInfoResult = mta::game_de::ClockResult::NotInitialized;
         mta::game_de::ClockResult GetWeather(CWeather*& output) noexcept override
         {
             ++weatherReads;
@@ -434,6 +444,25 @@ int main()
     timing.statsResult = mta::game_de::ClockResult::Ok;
     timing.statsPointer = nullptr;
     Refuses([&] { game.GetStats(); }, "a successful owner result cannot publish a missing actual stats service");
+    alignas(void*) unsigned char playerInfoIdentity = 0;
+    timing.playerInfoPointer = reinterpret_cast<CPlayerInfo*>(&playerInfoIdentity);
+    Refuses([&] { game.GetPlayerInfo(); }, "actual player-info SDK publication requires its admitted native owner");
+    Check(timing.playerInfoReads == 1, "player-info lookup forwards once without hiding unavailable ownership");
+    timing.playerInfoResult = mta::game_de::ClockResult::Ok;
+    Check(game.GetPlayerInfo() == timing.playerInfoPointer && timing.playerInfoReads == 2,
+          "CGame returns the exact complete borrowed player-info SDK identity");
+    timing.playerInfoResult = mta::game_de::ClockResult::Busy;
+    Refuses([&] { game.GetPlayerInfo(); }, "competing player-info ownership is an explicit SDK refusal");
+    Check(timing.playerInfoReads == 3, "SDK publication never retries competing player-info ownership");
+    timing.playerInfoResult = mta::game_de::ClockResult::Ok;
+    timing.playerInfoPointer = nullptr;
+    Refuses([&] { game.GetPlayerInfo(); }, "a successful result cannot publish a missing complete player-info service");
+    Check(timing.playerInfoReads == 4, "null player-info publication does not retry or use stale identity");
+    LegacyTimingAccess legacyPlayerInfo;
+    auto*              defaultPlayerInfo = reinterpret_cast<CPlayerInfo*>(&playerInfoIdentity);
+    Check(legacyPlayerInfo.GetPlayerInfo(defaultPlayerInfo) == mta::game_de::ClockResult::NotInitialized &&
+              defaultPlayerInfo == reinterpret_cast<CPlayerInfo*>(&playerInfoIdentity),
+          "legacy owners refuse default player-info borrowing without overwriting output");
     unsigned char weatherIdentity = 0;
     timing.weatherPointer = reinterpret_cast<CWeather*>(&weatherIdentity);
     Refuses([&] { game.GetWeather(); }, "actual weather SDK publication requires the existing admitted native owner");

@@ -20,7 +20,7 @@ $record = [ordered]@{
     schema='mta_game_policy_de_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     generatedFixture=$null;result=$null;failure=$null;scratchDirectory=$scratchRoot;scratchRemoved=$false;
-    scope='Actual CGameDE SDK diagnostic reference, lazy ped context, typed registration and shared jetpack permissions; state write forwarding/refusal, exact19 logical cheat-name forwarding with14 owner-backed reads/five explicit unavailable results, unchangedfour native setters, and wrong-executable filename refusal. Remaining test-only SDK overrides reject all use. No native game code executes; filename Bind attempts only the real ordinary-host rejection.';
+    scope='Actual CGameDE SDK diagnostic reference, lazy ped context, typed registration and shared jetpack permissions; exact complete player-info SDK identity forwarding with explicit owner/null/default refusals; state write forwarding/refusal, exact19 logical cheat-name forwarding with14 owner-backed reads/five explicit unavailable results, unchangedfour native setters, and wrong-executable filename refusal. Remaining test-only SDK overrides reject all use. No native game code executes; filename Bind attempts only the real ordinary-host rejection.';
     nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;installationChanged=$false;
     completeCGameReady=$false;fullMtaReady=$false;nativeWeaponHookDispatchReady=$false
 }
@@ -91,7 +91,7 @@ try {
         'Client/game_de/CKeyGenDE.h','Client/game_de/CAsyncLoadingDE.h','Client/game_de/NativeGravityReadAccess.h','Client/game_de/NativeGravityReadProfile.h','Client/game_de/NativeGravityReadAccess.cpp','Client/game_de/NativeGameTimingReader.h',
         'Client/game_de/NativeGameTimeReader.h','Client/game_de/NativeStreamingFileIdsReader.h','Client/game_de/NativeGameStateReader.h',
         'Client/game_de/NativeGameStateMemory.h','Client/game_de/NativeDataFileNamesReader.h','Client/game_de/NativeDataFileNamesProfile.h','Shared/sdk/SharedUtil.Defines.h',
-        'Client/game_de/NativeGameTimingAccess.h','Client/game_de/NativeWeaponInfoVectorAccess.h','Client/game_de/NativeWeaponInfoWriteAccess.h',
+        'Client/game_de/NativeGameTimingAccess.h','Client/game_de/NativePlayerInfoAccess.h','Client/game_de/NativeWantedAccess.h','Client/game_de/NativeWeaponInfoVectorAccess.h','Client/game_de/NativeWeaponInfoWriteAccess.h',
         'Client/game_de/NativeStartupCompletionAccess.h','Client/game_de/NativeStartupCompletionProfile.h',
         'Client/game_de/NativeStatsWriteAccess.h','Client/sdk/game/CStats.h','Client/game_de/NativeWeatherOverrideAccess.h',
         'Client/game_de/NativeWeaponInfoWriteProfile.h','Client/game_de/CWeatherScalarsDE.h','Client/game_de/NativeWeatherScalarProfile.h',

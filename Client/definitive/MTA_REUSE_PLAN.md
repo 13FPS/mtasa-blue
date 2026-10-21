@@ -99,6 +99,26 @@ and `PerformChecks` remain pure. The native all-cheats initializer also changes
 time scale and weather; it cannot replace MTA's registered-row reset. Faster
 clock reads reuse the clock owner's exact stock or owned freeze identity.
 
+The existing callback owner also supplies all eighteen `CPlayerInfo` methods
+and the complete three-method `CWanted` service. `CGameDE::GetPlayerInfo`
+borrows the stable SDK object after fresh player/profile admission. Money
+preserves signed balance and separate display state; instant updates publish
+both together. Food, stamina and drunkenness retain their native field and
+fade semantics. Wheel counters, heading, health/armor limits and drive-by
+permission come from independently qualified producers and consumers. Wanted
+changes call the real native reaction path; NoFlash restores only the attributed
+timestamp, preserving other effects and later edits. Entered failures stop the
+lease without replay or whole-object rollback. These are offline implementations,
+with live validation still separate.
+
+Native ped handles now resolve through the actual pool and slot-generation
+bank. Handle1 means occupied slot0/generation1; it cannot substitute for the
+current player in a restored save. Checked observations require the existing
+callback owner and repeated root/header/slot identities. They grant no deferred
+pointer lifetime, SDK ped wrapper, pool registration or full `CPools` service.
+`GetPools`, `InitLocalPlayer`, the complete `CGame` factory and x64 networking
+remain prerequisites for full MTA startup.
+
 Rain's shared runtime now retains its own near RX leaf, separate RW descriptor
 and exact direct-writer/entry journals. Loads advance the real synchronous
 archive through a temporary value, while saves retain native Rain reads. Stack

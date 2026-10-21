@@ -15,9 +15,13 @@
 #include "NativeWeatherOverrideAccess.h"
 #include "NativeStatsWriteAccess.h"
 #include "NativeStartupCompletionAccess.h"
+#include "NativePedPoolReader.h"
+#include "NativePlayerInfoAccess.h"
+#include "NativeWantedAccess.h"
 #include <cstdint>
 
 class CStats;
+class CPlayerInfo;
 
 namespace mta::game_de
 {
@@ -29,7 +33,9 @@ namespace mta::game_de
                                    public NativeWeaponInfoWriteAccess,
                                    public NativeWeaponInfoVectorAccess,
                                    public NativeWeatherOverrideAccess,
-                                   public NativeStatsWriteAccess
+                                   public NativeStatsWriteAccess,
+                                   public NativePlayerInfoAccess,
+                                   public NativeWantedAccess
     {
     public:
         virtual ClockResult SetTimeScale(float value) noexcept = 0;
@@ -53,9 +59,14 @@ namespace mta::game_de
         // A complete SDK object borrows the independently qualified native
         // reader and this callback owner; publication grants no later lease.
         virtual ClockResult GetStats(CStats*&) noexcept { return ClockResult::NotInitialized; }
+        virtual ClockResult GetPlayerInfo(CPlayerInfo*&) noexcept { return ClockResult::NotInitialized; }
         // Publish the complete runtime-owned SDK service only after its native
         // owner qualifies it. A borrowed object never grants a later callback.
         virtual ClockResult GetWeather(CWeather*&) noexcept { return ClockResult::NotInitialized; }
+        // Native script references remain generation-qualified pool handles.
+        // These immediate facts are not SDK CPed wrappers or a pool lease.
+        virtual ClockResult ResolvePedPoolHandle(std::uint32_t, NativePedPoolReader::Value&) noexcept { return ClockResult::NotInitialized; }
+        virtual ClockResult RecheckPedPoolHandle(const NativePedPoolReader::Value&) noexcept { return ClockResult::NotInitialized; }
         // The real request belongs to a distinct admitted normal-frame scope;
         // a gameplay timer or earlier observation never grants lifecycle calls.
         virtual ClockResult StartGame() noexcept { return ClockResult::NotInitialized; }

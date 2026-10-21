@@ -22,6 +22,10 @@
 #include "CWeaponInfoBankDE.h"
 #include "NativeStatsWriteCalls.h"
 #include "CStatsDE.h"
+#include "NativePlayerInfoMemory.h"
+#include "NativeWantedMemory.h"
+#include "CWantedDE.h"
+#include "CPlayerInfoDE.h"
 #include "NativeStartGameCalls.h"
 #include "NativeUObjectMembershipAccess.h"
 #include "NativeUObjectMembershipProfile.h"
@@ -94,6 +98,8 @@ namespace mta::game_de
             ClockResult ReleaseForced() noexcept override;
             ClockResult ReadScalar(NativeWeatherScalarProfile::Field field, float& output) noexcept override;
             ClockResult GetWeather(CWeather*& output) noexcept override;
+            ClockResult ResolvePedPoolHandle(std::uint32_t, NativePedPoolReader::Value&) noexcept override;
+            ClockResult RecheckPedPoolHandle(const NativePedPoolReader::Value&) noexcept override;
             ClockResult SetWeaponFloat(std::size_t slot, NativeWeaponFloatField field, float value) noexcept override;
             ClockResult SetWeaponShort(std::size_t slot, NativeWeaponShortField field, std::int16_t value) noexcept override;
             ClockResult SetWeaponDword(std::size_t slot, NativeWeaponDwordField field, std::uint32_t value) noexcept override;
@@ -105,6 +111,18 @@ namespace mta::game_de
             ClockResult SetWeatherScalarOverride(NativeWeatherScalarProfile::Field field, float value) noexcept override;
             ClockResult ResetWeatherScalarOverride(NativeWeatherScalarProfile::Field field) noexcept override;
             ClockResult GetStats(CStats*& output) noexcept override;
+            ClockResult GetPlayerInfo(CPlayerInfo*& output) noexcept override;
+            ClockResult ReadPlayerFloat(NativePlayerInfoFloatField field, float& output) noexcept override;
+            ClockResult ReadPlayerDword(NativePlayerInfoDwordField field, std::uint32_t& output) noexcept override;
+            ClockResult ReadPlayerByte(NativePlayerInfoByteField field, std::uint8_t& output) noexcept override;
+            ClockResult SetPlayerCamDrunkLevel(std::uint8_t value) noexcept override;
+            ClockResult ReadPlayerMoney(std::int32_t& output) noexcept override;
+            ClockResult SetPlayerMoney(std::int32_t value, bool instant) noexcept override;
+            ClockResult SetPlayerLastTimeEaten(std::int16_t value) noexcept override;
+            ClockResult SetPlayerDoesNotGetTired(bool value) noexcept override;
+            ClockResult GetWanted(CWanted*& output) noexcept override;
+            ClockResult ReadWantedLevel(std::uint32_t& output) noexcept override;
+            ClockResult SetWantedLevel(std::uint32_t value, bool noFlash) noexcept override;
             ClockResult SetStatValue(unsigned short index, float value) noexcept override;
             ClockResult ModifyStat(unsigned short index, float value) noexcept override;
             ClockResult StartGame() noexcept override;
@@ -209,6 +227,12 @@ namespace mta::game_de
             // supplies a bank snapshot to replay/rewind after native effects.
             NativeStatsReader statsReader;
             std::uint64_t     statsGeneration = 0;
+            // These services borrow one qualified player row in the existing
+            // callback generation. Persistent SDK intent never owns a player
+            // snapshot for End to rewind, or a deferred native pointer lease.
+            NativePlayerInfoMemory playerInfo;
+            std::uint64_t          playerInfoGeneration = 0;
+            NativeWantedMemory     wantedMemory{playerInfo};
             // Only a failed partial XYZ intent owns rollback components. Full
             // vectors persist, and later native edits retire only the precise
             // superseded component rather than permitting a whole-row rewind.
@@ -266,6 +290,8 @@ namespace mta::game_de
             CClockDE                      clock{access};
             CWeaponInfoBankDE             weaponBank{weaponWriterReader, access, access};
             CStatsDE                      stats{statsReader, access};
+            CWantedDE                     wanted{access};
+            CPlayerInfoDE                 playerInfoSdk{access};
             CWeatherOverridesDE           weatherSdk{access, access, access};
             Counters                      counters;
             // Destroy the hold before the shared peer recovery vector/gates.
@@ -1648,6 +1674,147 @@ namespace mta::game_de
             return CheckTimingOwner();
         }
 
+        ClockResult CheckPlayerInfoOwner() noexcept
+        {
+            // Share the real callback + native PLAYING9 bookend already used
+            // for native reactions. Each primitive additionally qualifies the
+            // actual loaded player; the state DWORD cannot manufacture one.
+            return CheckStatsOwner();
+        }
+
+        ClockResult RequirePlayerInfo() noexcept
+        {
+            auto owner = CheckPlayerInfoOwner();
+            if (owner != ClockResult::Ok)
+                return owner;
+            const auto generation = runtime.generation.load();
+            if (runtime.playerInfoGeneration && runtime.playerInfoGeneration != generation)
+                return ClockResult::OwnerConflict;
+            if (!runtime.playerInfoGeneration)
+            {
+                runtime.playerInfo.Reset();
+                const auto bound = runtime.playerInfo.Bind();
+                if (bound != ClockResult::Ok)
+                    return bound;
+                owner = CheckPlayerInfoOwner();
+                if (owner != ClockResult::Ok)
+                {
+                    runtime.playerInfo.Reset();
+                    return owner;
+                }
+                runtime.playerInfoGeneration = generation;
+            }
+            return CheckPlayerInfoOwner();
+        }
+
+        ClockResult NativeAccess::GetPlayerInfo(CPlayerInfo*& output) noexcept
+        {
+            auto owner = RequirePlayerInfo();
+            if (owner != ClockResult::Ok)
+                return owner;
+            // The complete field family and dependent wanted service must
+            // both qualify now. Publishing this stable SDK identity does not
+            // retain its current native row or extend callback admission.
+            float observed = 0;
+            owner = runtime.playerInfo.ReadFloat(NativePlayerInfoFloatField::FpsMoveHeading, observed, &CheckPlayerInfoOwner);
+            if (owner != ClockResult::Ok)
+                return owner;
+            owner = runtime.wantedMemory.Qualify(&CheckPlayerInfoOwner);
+            if (owner != ClockResult::Ok)
+                return owner;
+            owner = CheckPlayerInfoOwner();
+            if (owner != ClockResult::Ok)
+                return owner;
+            output = &runtime.playerInfoSdk;
+            return ClockResult::Ok;
+        }
+
+        ClockResult NativeAccess::ReadPlayerFloat(NativePlayerInfoFloatField field, float& output) noexcept
+        {
+            const auto owner = RequirePlayerInfo();
+            return owner == ClockResult::Ok ? runtime.playerInfo.ReadFloat(field, output, &CheckPlayerInfoOwner) : owner;
+        }
+
+        ClockResult NativeAccess::ReadPlayerDword(NativePlayerInfoDwordField field, std::uint32_t& output) noexcept
+        {
+            const auto owner = RequirePlayerInfo();
+            return owner == ClockResult::Ok ? runtime.playerInfo.ReadDword(field, output, &CheckPlayerInfoOwner) : owner;
+        }
+
+        ClockResult NativeAccess::ReadPlayerByte(NativePlayerInfoByteField field, std::uint8_t& output) noexcept
+        {
+            const auto owner = RequirePlayerInfo();
+            return owner == ClockResult::Ok ? runtime.playerInfo.ReadByte(field, output, &CheckPlayerInfoOwner) : owner;
+        }
+
+        ClockResult NativeAccess::SetPlayerCamDrunkLevel(std::uint8_t value) noexcept
+        {
+            const auto owner = RequirePlayerInfo();
+            return owner == ClockResult::Ok ? runtime.playerInfo.SetCamDrunkLevel(value, &CheckPlayerInfoOwner) : owner;
+        }
+
+        ClockResult NativeAccess::ReadPlayerMoney(std::int32_t& output) noexcept
+        {
+            const auto owner = RequirePlayerInfo();
+            return owner == ClockResult::Ok ? runtime.playerInfo.ReadMoney(output, &CheckPlayerInfoOwner) : owner;
+        }
+
+        ClockResult NativeAccess::SetPlayerMoney(std::int32_t value, bool instant) noexcept
+        {
+            const auto owner = RequirePlayerInfo();
+            return owner == ClockResult::Ok ? runtime.playerInfo.SetMoney(value, instant, &CheckPlayerInfoOwner) : owner;
+        }
+
+        ClockResult NativeAccess::SetPlayerLastTimeEaten(std::int16_t value) noexcept
+        {
+            const auto owner = RequirePlayerInfo();
+            return owner == ClockResult::Ok ? runtime.playerInfo.SetLastTimeEaten(value, &CheckPlayerInfoOwner) : owner;
+        }
+
+        ClockResult NativeAccess::SetPlayerDoesNotGetTired(bool value) noexcept
+        {
+            const auto owner = RequirePlayerInfo();
+            return owner == ClockResult::Ok ? runtime.playerInfo.SetDoesNotGetTired(value, &CheckPlayerInfoOwner) : owner;
+        }
+
+        ClockResult NativeAccess::GetWanted(CWanted*& output) noexcept
+        {
+            auto owner = RequirePlayerInfo();
+            if (owner != ClockResult::Ok)
+                return owner;
+            owner = runtime.wantedMemory.Qualify(&CheckPlayerInfoOwner);
+            if (owner != ClockResult::Ok)
+                return owner;
+            owner = CheckPlayerInfoOwner();
+            if (owner != ClockResult::Ok)
+                return owner;
+            // Only this complete SDK object is published, with fresh native
+            // qualification rather than a retained raw wanted pointer.
+            output = &runtime.wanted;
+            return ClockResult::Ok;
+        }
+
+        ClockResult NativeAccess::ReadWantedLevel(std::uint32_t& output) noexcept
+        {
+            const auto owner = RequirePlayerInfo();
+            return owner == ClockResult::Ok ? runtime.wantedMemory.ReadLevel(output, &CheckPlayerInfoOwner) : owner;
+        }
+
+        ClockResult NativeAccess::SetWantedLevel(std::uint32_t value, bool noFlash) noexcept
+        {
+            const auto owner = RequirePlayerInfo();
+            if (owner != ClockResult::Ok)
+                return owner;
+            NativeWantedMemory::Receipt receipt;
+            const auto                  result = runtime.wantedMemory.SetLevel(value, noFlash, &CheckPlayerInfoOwner, &receipt);
+            // Native crime/stat reactions can precede a failed post-call
+            // bookend. Preserve those effects and retire this lease; never
+            // retry the entered call or rewind the whole wanted object.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+
         ClockResult NativeAccess::GetStats(CStats*& output) noexcept
         {
             const auto owner = RequireStatsReader();
@@ -1826,6 +1993,19 @@ namespace mta::game_de
             runtime.weaponVectorGeneration.store(0);
             runtime.weaponVectorRecovery.store(false);
             return true;
+        }
+
+        ClockResult NativeAccess::ResolvePedPoolHandle(std::uint32_t handle, NativePedPoolReader::Value& output) noexcept
+        {
+            // Begin already owns exact executable admission. The reader keeps
+            // that image's live profile/slot checks and asks this very same
+            // current callback for every observation bookend; no producer Bind
+            // or matching ambient actor can manufacture a ped-pool handle.
+            return NativePedPoolReader({runtime.image}, &CheckTimingOwner).Resolve(handle, output);
+        }
+        ClockResult NativeAccess::RecheckPedPoolHandle(const NativePedPoolReader::Value& previous) noexcept
+        {
+            return NativePedPoolReader({runtime.image}, &CheckTimingOwner).Recheck(previous);
         }
 
         ClockResult RequireWeatherOverrideOwner() noexcept
@@ -3068,6 +3248,8 @@ namespace mta::game_de
         runtime.weaponWriterGeneration = 0;
         runtime.statsReader.Reset();
         runtime.statsGeneration = 0;
+        runtime.playerInfo.Reset();
+        runtime.playerInfoGeneration = 0;
         runtime.weaponVectorJournal = {};
         runtime.weaponVectorSlot = 0;
         runtime.weaponVectorRecovery.store(false);
@@ -3270,6 +3452,8 @@ namespace mta::game_de
             runtime.weaponWriterGeneration = 0;
             runtime.statsReader.Reset();
             runtime.statsGeneration = 0;
+            runtime.playerInfo.Reset();
+            runtime.playerInfoGeneration = 0;
             runtime.weatherOverrideGeneration.store(0);
         }
         ReadState(finalState);

@@ -30,13 +30,13 @@ namespace mta::game_de::NativeWeatherOverrideProfile
     };
     extern const std::array<Writer, 37>         Writers;
     inline constexpr std::array<std::size_t, 8> WriterCounts = {7, 15, 2, 2, 4, 3, 3, 1};
-    // Rain also escapes by address into a virtual serializer. Redirecting that
-    // LEA would change save reads as well as load writes; do not claim the
-    // complete SDK setter from direct-store patches alone.
+    // This is low-level direct-store plan admission only. Rain's separate
+    // direction-aware serializer and old/new borrow retirement owner must be
+    // installed in the same cohort; these seven stores alone are incomplete.
     inline constexpr bool Admits(Field field) noexcept
     {
         const auto index = static_cast<std::size_t>(field);
-        return index < WriterCounts.size() && field != Field::Rain;
+        return index < WriterCounts.size();
     }
     struct Range
     {

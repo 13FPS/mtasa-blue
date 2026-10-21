@@ -17,7 +17,7 @@ foreach($name in @('TEMP','TMP','PATH','INCLUDE','LIB','LIBPATH','VCToolsInstall
 $record=[ordered]@{schema='mta_native_weather_win32_tests_v1';success=$false;failure=$null;sources=@();results=@();architecture='x64';
     nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;engineMemoryWritten=$false;ownedImageMemoryWritten=$true;hookInstalled=$false;
     completeGameReady=$false;completeWeatherReady=$false;nativeLifecycleReady=$false;sourcesUnchanged=$true;scratch=$scratch;scratchFilesRemaining=$null;
-    scope='Actual shipping Windows platform on a tiny owned sparse SEC_IMAGE: aligned64 and CPU-conditional128 atomic exchanges, compare conflicts, neighboring-byte preservation, image/private/protection/alignment refusal, real scalar CAS, all seven field-congruent private64KiB interior slots, allocation-base identity, simultaneous retention, wrong-range refusal and exact release. No native game instruction or process executes.'}
+    scope='Actual shipping Windows platform on a tiny owned sparse SEC_IMAGE: aligned64 and CPU-conditional128 atomic exchanges, compare conflicts, neighboring-byte preservation, image/private/protection/alignment refusal, real scalar CAS, all eight field-congruent private64KiB interior slots, allocation-base identity, simultaneous retention, wrong-range refusal and exact release. No native game instruction or process executes.'}
 function RunOwned([string]$exe,[string[]]$arguments,[string]$label,[int]$timeout){
     $info=[Diagnostics.ProcessStartInfo]::new($exe)
     $info.WorkingDirectory=$output;$info.UseShellExecute=$false;$info.CreateNoWindow=$true;$info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true
@@ -36,7 +36,7 @@ function RunOwned([string]$exe,[string[]]$arguments,[string]$label,[int]$timeout
     }finally{$process.Dispose()}
 }
 try{
-    $names=@('Client/game_de/NativeWeatherOverrideWin32.h','Client/game_de/NativeWeatherOverrideWin32.cpp',
+    $names=@('Client/game_de/NativeWeatherRainProfile.h','Client/game_de/NativeWeatherRainBridge.h','Client/game_de/NativeWeatherRainBridge.cpp','Client/game_de/NativeWeatherRainLeaf.h','Client/game_de/NativeWeatherRainLeaf.cpp','Client/game_de/NativeWeatherOverrideWin32.h','Client/game_de/NativeWeatherOverrideWin32.cpp',
         'Client/game_de/NativeWeatherOverrideOwner.h','Client/game_de/NativeWeatherOverrideAtomic.h','Client/game_de/NativeWeatherOverrideAtomic.cpp','Client/game_de/NativeWeatherOverridePlacement.h','Client/game_de/NativeWeatherOverridePlacement.cpp','Client/game_de/NativeWeatherOverrideSlot.h','Client/game_de/NativeWeatherOverrideSlot.cpp',
         'Client/game_de/NativeWeatherOverridePlan.h','Client/game_de/NativeWeatherOverridePlan.cpp','Client/game_de/NativeWeatherOverrideProfile.cpp',
         'Client/game_de/NativeWeatherScalarProfile.h','Client/game_de/NativeWeatherScalarProfile.cpp',
@@ -60,13 +60,13 @@ try{
     }
     $compiler=Join-Path $env:VCToolsInstallDir 'bin/Hostx64/x64/cl.exe'
     $exe=Join-Path $output 'native-weather-win32-tests.exe'
-    $cpp=@('Client/game_de/NativeWeatherOverrideWin32.cpp','Client/game_de/NativeWeatherOverrideAtomic.cpp','Client/game_de/NativeWeatherOverridePlacement.cpp','Client/game_de/NativeWeatherOverrideSlot.cpp',
+    $cpp=@('Client/game_de/NativeWeatherRainBridge.cpp','Client/game_de/NativeWeatherRainLeaf.cpp','Client/game_de/NativeWeatherOverrideWin32.cpp','Client/game_de/NativeWeatherOverrideAtomic.cpp','Client/game_de/NativeWeatherOverridePlacement.cpp','Client/game_de/NativeWeatherOverrideSlot.cpp',
         'Client/game_de/NativeWeatherOverridePlan.cpp','Client/game_de/NativeWeatherOverrideProfile.cpp',
         'Client/game_de/NativeWeatherScalarProfile.cpp','Client/game_de/NativeWeatherTransitionProfile.cpp','Client/game_de/NativeImageAccess.cpp',
         'Tests/definitive/NativeWeatherOverrideWin32Tests.cpp')
     $arguments=@('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/MD','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN',
         ('/I'+(Join-Path $root 'Client/sdk')),('/I'+(Join-Path $root 'Shared/sdk')))+
-        @($cpp|ForEach-Object{Join-Path $root $_})+@(('/Fo'+$output+[IO.Path]::DirectorySeparatorChar),('/Fe'+$exe),'/link','bcrypt.lib')
+        @($cpp|ForEach-Object{Join-Path $root $_})+@(('/Fo'+$scratch+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratch 'fixture.pdb')),('/Fe'+$exe),'/link','bcrypt.lib')
     $result=[ordered]@{compiler=$compiler;compilerSha256=(Sha $compiler);compile=$null;test=$null;checks=0}
     $record.results+=$result
     $result.compile=RunOwned $compiler $arguments 'compile' 60000

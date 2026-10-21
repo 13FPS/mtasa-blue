@@ -10,6 +10,7 @@
 
 #include "StdInc.h"
 #include "CWeaponStatManagerSA.h"
+#include <game/CWeaponStatListPolicy.h>
 
 CWeaponStatManagerSA::CWeaponStatManagerSA()
 {
@@ -48,24 +49,7 @@ void CWeaponStatManagerSA::InitLists()
 // Don't call me for now seems to screw up rejoining
 void CWeaponStatManagerSA::ResetLists()
 {
-    return;
-    if (m_WeaponData.size() == 0)
-        return;
-
-    CWeaponStat* pWeaponStat = nullptr;
-    // Make our list nicer by starting at the non-skill weapons so we don't have duplicates of STD weapon skill
-    for (std::list<CWeaponStat*>::iterator iter = m_WeaponData.begin(); iter != m_WeaponData.end(); iter++)
-    {
-        if ((*iter))
-        {
-            pWeaponStat = (*iter);
-            eWeaponType WeaponType = pWeaponStat->GetWeaponType();
-            if (WeaponType >= WEAPONTYPE_PISTOL && WeaponType <= WEAPONTYPE_EXTINGUISHER)
-            {
-                LoadDefault(pWeaponStat, WeaponType, pWeaponStat->GetWeaponSkillLevel());
-            }
-        }
-    }
+    MtaGame::CWeaponStatListPolicy::ResetLists();
 }
 
 CWeaponStatManagerSA::~CWeaponStatManagerSA()
@@ -105,14 +89,7 @@ CWeaponStat* CWeaponStatManagerSA::CreateWeaponStatUnlisted(eWeaponType weaponTy
 
 CWeaponStat* CWeaponStatManagerSA::GetWeaponStats(eWeaponType type, eWeaponSkill skill)
 {
-    for (std::list<CWeaponStat*>::iterator iter = m_WeaponData.begin(); iter != m_WeaponData.end(); iter++)
-    {
-        if (((*iter)->GetWeaponSkillLevel() == skill || type > WEAPONTYPE_TEC9) && (*iter)->GetWeaponType() == type)
-        {
-            return (*iter);
-        }
-    }
-    return nullptr;
+    return MtaGame::CWeaponStatListPolicy::Find(m_WeaponData, type, skill);
 }
 
 CWeaponStat* CWeaponStatManagerSA::GetWeaponStatsFromSkillLevel(eWeaponType type, float fSkillLevel)
@@ -120,33 +97,12 @@ CWeaponStat* CWeaponStatManagerSA::GetWeaponStatsFromSkillLevel(eWeaponType type
     CWeaponStat* pPoor = GetWeaponStats(type, WEAPONSKILL_POOR);
     CWeaponStat* pStd = GetWeaponStats(type, WEAPONSKILL_STD);
     CWeaponStat* pPro = GetWeaponStats(type, WEAPONSKILL_PRO);
-    if (pStd)
-    {
-        if (pPoor && pPro)
-        {
-            if (fSkillLevel >= pPro->GetRequiredStatLevel())
-                return pPro;
-            else if (fSkillLevel >= pStd->GetRequiredStatLevel())
-                return pStd;
-            else
-                return pPoor;
-        }
-        else
-            return pStd;
-    }
-    return nullptr;
+    return MtaGame::CWeaponStatListPolicy::Select(pPoor, pStd, pPro, fSkillLevel).stat;
 }
 
 CWeaponStat* CWeaponStatManagerSA::GetOriginalWeaponStats(eWeaponType type, eWeaponSkill skill)
 {
-    for (std::list<CWeaponStat*>::iterator iter = m_OriginalWeaponData.begin(); iter != m_OriginalWeaponData.end(); iter++)
-    {
-        if (((*iter)->GetWeaponSkillLevel() == skill || type > WEAPONTYPE_TEC9) && (*iter)->GetWeaponType() == type)
-        {
-            return (*iter);
-        }
-    }
-    return nullptr;
+    return MtaGame::CWeaponStatListPolicy::Find(m_OriginalWeaponData, type, skill);
 }
 void CWeaponStatManagerSA::Init()
 {
@@ -169,19 +125,5 @@ eWeaponSkill CWeaponStatManagerSA::GetWeaponSkillFromSkillLevel(eWeaponType type
     CWeaponStat* pPoor = GetWeaponStats(type, WEAPONSKILL_POOR);
     CWeaponStat* pStd = GetWeaponStats(type, WEAPONSKILL_STD);
     CWeaponStat* pPro = GetWeaponStats(type, WEAPONSKILL_PRO);
-    if (pStd)
-    {
-        if (pPoor && pPro)
-        {
-            if (fSkillLevel >= pPro->GetRequiredStatLevel())
-                return WEAPONSKILL_PRO;
-            else if (fSkillLevel >= pStd->GetRequiredStatLevel())
-                return WEAPONSKILL_STD;
-            else
-                return WEAPONSKILL_POOR;
-        }
-        else
-            return WEAPONSKILL_STD;
-    }
-    return WEAPONSKILL_STD;
+    return MtaGame::CWeaponStatListPolicy::Select(pPoor, pStd, pPro, fSkillLevel).skill;
 }

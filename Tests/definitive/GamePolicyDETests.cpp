@@ -91,6 +91,16 @@ namespace
         unsigned                  statsReads = 0;
         CStats*                   statsPointer = nullptr;
         mta::game_de::ClockResult statsResult = mta::game_de::ClockResult::NotInitialized;
+        mta::game_de::ClockResult GetWeather(CWeather*& output) noexcept override
+        {
+            ++weatherReads;
+            if (weatherResult == mta::game_de::ClockResult::Ok)
+                output = weatherPointer;
+            return weatherResult;
+        }
+        unsigned                  weatherReads = 0;
+        CWeather*                 weatherPointer = nullptr;
+        mta::game_de::ClockResult weatherResult = mta::game_de::ClockResult::NotInitialized;
         mta::game_de::ClockResult GetWeaponInfoSlot(std::size_t slot, CWeaponInfo*& output) noexcept override
         {
             ++weaponReads;
@@ -360,6 +370,18 @@ int main()
     timing.statsResult = mta::game_de::ClockResult::Ok;
     timing.statsPointer = nullptr;
     Refuses([&] { game.GetStats(); }, "a successful owner result cannot publish a missing actual stats service");
+    unsigned char weatherIdentity = 0;
+    timing.weatherPointer = reinterpret_cast<CWeather*>(&weatherIdentity);
+    Refuses([&] { game.GetWeather(); }, "actual weather SDK publication requires the existing admitted native owner");
+    Check(timing.weatherReads == 1, "weather lookup forwards once and preserves an explicit unavailable result");
+    timing.weatherResult = mta::game_de::ClockResult::Ok;
+    Check(game.GetWeather() == timing.weatherPointer && timing.weatherReads == 2, "actual CGame returns the exact borrowed complete weather SDK identity");
+    timing.weatherResult = mta::game_de::ClockResult::Busy;
+    Refuses([&] { game.GetWeather(); }, "competing native weather ownership remains an explicit SDK refusal");
+    Check(timing.weatherReads == 3, "SDK publication never retries over competing weather ownership");
+    timing.weatherResult = mta::game_de::ClockResult::Ok;
+    timing.weatherPointer = nullptr;
+    Refuses([&] { game.GetWeather(); }, "a successful owner result cannot publish a missing actual weather service");
     const auto stateWritesBeforeStart = timing.stateWrites;
     Refuses([&] { game.StartGame(); }, "actual CGame StartGame requires a separately admitted native startup owner");
     Check(timing.startRequests == 1 && timing.stateWrites == stateWritesBeforeStart, "unavailable StartGame is forwarded once without a synthetic state write");

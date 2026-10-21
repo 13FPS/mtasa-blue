@@ -15,6 +15,8 @@
 #include "NativeWeatherScalarMemory.h"
 #include "NativeWeatherOverrideOwner.h"
 #include "NativeWeatherOverrideWin32.h"
+#include "NativeWeatherRainBorrowGuard.h"
+#include "CWeatherOverridesDE.h"
 #include "NativeWeaponInfoWriteMemory.h"
 #include "NativeWeaponInfoVectorMemory.h"
 #include "CWeaponInfoBankDE.h"
@@ -90,6 +92,7 @@ namespace mta::game_de
             ClockResult ResyncWithClock() noexcept override;
             ClockResult ReleaseForced() noexcept override;
             ClockResult ReadScalar(NativeWeatherScalarProfile::Field field, float& output) noexcept override;
+            ClockResult GetWeather(CWeather*& output) noexcept override;
             ClockResult SetWeaponFloat(std::size_t slot, NativeWeaponFloatField field, float value) noexcept override;
             ClockResult SetWeaponShort(std::size_t slot, NativeWeaponShortField field, std::int16_t value) noexcept override;
             ClockResult SetWeaponDword(std::size_t slot, NativeWeaponDwordField field, std::uint32_t value) noexcept override;
@@ -116,8 +119,9 @@ namespace mta::game_de
 
         struct PeerThread
         {
-            HANDLE handle = nullptr;
-            bool   suspended = false;
+            HANDLE                               handle = nullptr;
+            bool                                 suspended = false;
+            NativeWeatherRainBorrow::Guard::Peer rain;
         };
 
         struct ClockPublication
@@ -140,15 +144,29 @@ namespace mta::game_de
         {
         public:
             ~PeerHold();
-            bool Prepare() noexcept;
-            bool Suspend(const PeerPatchRange* ranges = nullptr, std::size_t count = 0) noexcept;
-            bool Release() noexcept;
-            bool RegisterDetours() const noexcept;
-            bool Held() const noexcept { return ownsGate; }
+            bool        Prepare() noexcept;
+            bool        PrepareRain(const NativeWeatherRainBorrow::Exclusions&) noexcept;
+            ClockResult CheckRain() noexcept;
+            bool        MatchesRain(const NativeWeatherRainLeaf::State&) const noexcept;
+            bool        Suspend(const PeerPatchRange* ranges = nullptr, std::size_t count = 0) noexcept;
+            bool        Release() noexcept;
+            bool        RegisterDetours() const noexcept;
+            bool        Held() const noexcept { return ownsGate; }
 
         private:
-            std::vector<PeerThread> threads;
-            std::atomic<bool>       ownsGate{false};
+            using NextThread = LONG(NTAPI*)(HANDLE, HANDLE, ACCESS_MASK, ULONG, ULONG, PHANDLE);
+            using CloseThread = LONG(NTAPI*)(HANDLE);
+            bool                                PrepareRainEnumeration() noexcept;
+            bool                                RainSetComplete(bool calibrating) noexcept;
+            bool                                CloseRainHandle(HANDLE) noexcept;
+            std::vector<PeerThread>             threads;
+            std::atomic<bool>                   ownsGate{false};
+            NativeWeatherRainBorrow::Guard      rainGuard;
+            NativeWeatherRainBorrow::Exclusions rainExclusions;
+            bool                                rainPrepared = false;
+            NextThread                          rainNextThread = nullptr;
+            CloseThread                         rainCloseThread = nullptr;
+            std::array<HANDLE, 2>               rainHandleDebt{};
         };
 
         class WeatherOverrideHost final : public NativeWeatherOverrideHost
@@ -158,6 +176,9 @@ namespace mta::game_de
             ClockResult ParkPeers(const Window* windows, std::size_t count) noexcept override;
             bool        PeersHeld() const noexcept override;
             bool        FinishPeers(bool safeToResume) noexcept override;
+            bool        SupportsRain() const noexcept override { return true; }
+            ClockResult ParkRainPeers(const Window*, std::size_t, const NativeWeatherRainLeaf::State&) noexcept override;
+            ClockResult CheckRainPeers(const NativeWeatherRainLeaf::State&) noexcept override;
         };
 
         struct Runtime
@@ -244,6 +265,7 @@ namespace mta::game_de
             CClockDE                      clock{access};
             CWeaponInfoBankDE             weaponBank{weaponWriterReader, access, access};
             CStatsDE                      stats{statsReader, access};
+            CWeatherOverridesDE           weatherSdk{access, access, access};
             Counters                      counters;
             // Destroy the hold before the shared peer recovery vector/gates.
             // Its normal lifetime is explicitly retired by Reset/End.
@@ -616,6 +638,7 @@ namespace mta::game_de
 
         bool PeerHold::Prepare() noexcept
         {
+            rainPrepared = false;
             if (runtime.peerBusy.exchange(true))
                 return false;
             ownsGate = true;
@@ -676,6 +699,146 @@ namespace mta::game_de
             CloseHandle(snapshot);
             return ready;
         }
+        bool PeerHold::PrepareRain(const NativeWeatherRainBorrow::Exclusions& exclusions) noexcept
+        {
+            if (!Prepare() || !rainGuard.Prepare() || !PrepareRainEnumeration())
+                return false;
+            for (auto& thread : threads)
+                if (!rainGuard.PreparePeer(thread.handle, thread.rain))
+                    return false;
+            rainExclusions = exclusions;
+            rainPrepared = true;
+            return true;
+        }
+        bool PeerHold::PrepareRainEnumeration() noexcept
+        {
+            // Resolve and calibrate the exact handle/ID contract before any
+            // peer parks. The final pass uses fixed locals and these native
+            // calls, never a Toolhelp snapshot or a growing collection.
+            const auto native = GetModuleHandleW(L"ntdll.dll");
+            if (!native)
+                return false;
+            const auto next = GetProcAddress(native, "NtGetNextThread"), close = GetProcAddress(native, "NtClose");
+            static_assert(sizeof(next) == sizeof(rainNextThread) && sizeof(close) == sizeof(rainCloseThread));
+            std::memcpy(&rainNextThread, &next, sizeof(next));
+            std::memcpy(&rainCloseThread, &close, sizeof(close));
+            return rainNextThread && rainCloseThread && RainSetComplete(true);
+        }
+        bool PeerHold::CloseRainHandle(HANDLE handle) noexcept
+        {
+            if (!handle || (rainCloseThread && rainCloseThread(handle) >= 0))
+                return true;
+            for (auto& debt : rainHandleDebt)
+                if (!debt)
+                {
+                    debt = handle;
+                    return false;
+                }
+            // One enumeration step owns at most its old and next handle;
+            // every failure stops that step before another can be acquired.
+            return false;
+        }
+        bool PeerHold::RainSetComplete(bool calibrating) noexcept
+        {
+            if (!rainNextThread || !rainCloseThread || rainHandleDebt[0] || rainHandleDebt[1])
+                return false;
+            HANDLE previous = nullptr;
+            bool   currentSeen = false;
+            for (unsigned count = 0; count < 8192; ++count)
+            {
+                HANDLE     next = nullptr;
+                const auto status = rainNextThread(GetCurrentProcess(), previous, THREAD_QUERY_INFORMATION | SYNCHRONIZE, 0, 0, &next);
+                const bool closed = CloseRainHandle(previous);
+                previous = nullptr;
+                if (!closed)
+                {
+                    if (next)
+                        CloseRainHandle(next);
+                    return false;
+                }
+                if (status == static_cast<LONG>(0x8000001aUL))
+                {
+                    // Refusing an unexpected native enumeration result does
+                    // not surrender a handle it returned. Close or retain its
+                    // exact debt before reporting an unsupported end marker.
+                    if (next)
+                    {
+                        CloseRainHandle(next);
+                        return false;
+                    }
+                    return currentSeen;
+                }
+                if (status < 0 || !next)
+                {
+                    if (next)
+                        CloseRainHandle(next);
+                    return false;
+                }
+                const auto id = GetThreadId(next);
+                bool       found = id && GetProcessIdOfThread(next) == GetCurrentProcessId();
+                if (id == GetCurrentThreadId())
+                    currentSeen = true;
+                else if (!calibrating)
+                {
+                    bool prepared = false;
+                    for (const auto& thread : threads)
+                        prepared |= thread.suspended && thread.rain.threadId == id;
+                    found &= prepared;
+                }
+                if (!found)
+                {
+                    CloseRainHandle(next);
+                    return false;
+                }
+                previous = next;
+            }
+            if (previous)
+                CloseRainHandle(previous);
+            return false;
+        }
+        ClockResult PeerHold::CheckRain() noexcept
+        {
+            if (!ownsGate || !rainPrepared)
+                return ClockResult::Busy;
+            // Recheck threads born during preparation without preparing new
+            // stacks/handles under the hold. This is a bounded observed-set
+            // check, not an invented global thread-creation exclusion lease.
+            if (!RainSetComplete(false))
+                return ClockResult::Busy;
+            const auto convert = [](NativeWeatherRainBorrow::Result result) noexcept
+            {
+                switch (result)
+                {
+                    case NativeWeatherRainBorrow::Result::Clear:
+                        return ClockResult::Ok;
+                    case NativeWeatherRainBorrow::Result::Borrowed:
+                        return ClockResult::Busy;
+                    case NativeWeatherRainBorrow::Result::ReadFailure:
+                        return ClockResult::ReadFailure;
+                    case NativeWeatherRainBorrow::Result::Changed:
+                        return ClockResult::BindingChanged;
+                    default:
+                        return ClockResult::UnsupportedBuild;
+                }
+            };
+            auto result = convert(rainGuard.InspectCurrent(rainExclusions));
+            if (result != ClockResult::Ok)
+                return result;
+            for (const auto& thread : threads)
+            {
+                if (!thread.suspended)
+                    return ClockResult::Busy;
+                result = convert(rainGuard.InspectParked(thread.rain, rainExclusions));
+                if (result != ClockResult::Ok)
+                    return result;
+            }
+            return ClockResult::Ok;
+        }
+        bool PeerHold::MatchesRain(const NativeWeatherRainLeaf::State& leaf) const noexcept
+        {
+            return rainPrepared && leaf.leafEntry == rainExclusions.leaf.begin &&
+                   rainExclusions.leaf.end - rainExclusions.leaf.begin == leaf.plan.bridge.size();
+        }
 
         bool PeerHold::Suspend(const PeerPatchRange* ranges, std::size_t count) noexcept
         {
@@ -726,6 +889,16 @@ namespace mta::game_de
 
         bool PeerHold::Release() noexcept
         {
+            // Enumeration handles are explicit ownership too. Refusing a
+            // close keeps the same hold/gate alive for a later recovery;
+            // never lose its identity or manufacture successful retirement.
+            for (auto& debt : rainHandleDebt)
+                if (debt)
+                {
+                    if (!rainCloseThread || rainCloseThread(debt) < 0)
+                        return false;
+                    debt = nullptr;
+                }
             if (!ownsGate)
                 return true;
             bool          clean = true;
@@ -745,6 +918,7 @@ namespace mta::game_de
             }
             runtime.peerBusy.store(false);
             ownsGate = false;
+            rainPrepared = false;
             return clean;
         }
 
@@ -801,6 +975,60 @@ namespace mta::game_de
             // ordinary return always has stock or redirected instruction bytes.
             // Preserve this veto if a future platform cannot make that promise.
             return safeToResume ? runtime.weatherOverridePeers.Release() : false;
+        }
+        ClockResult WeatherOverrideHost::ParkRainPeers(const Window* windows, std::size_t count, const NativeWeatherRainLeaf::State& leaf) noexcept
+        {
+            if (runtime.weatherOverridePeers.Held())
+                return CheckRainPeers(leaf);
+            if (!leaf.allocationBase || !leaf.leafEntry || !leaf.allocationBytes ||
+                leaf.allocationBase > (std::numeric_limits<std::uintptr_t>::max)() - leaf.allocationBytes || leaf.leafEntry < leaf.allocationBase ||
+                leaf.leafEntry - leaf.allocationBase > leaf.allocationBytes ||
+                leaf.plan.bridge.size() > leaf.allocationBytes - (leaf.leafEntry - leaf.allocationBase))
+                return ClockResult::BindingChanged;
+            std::array<PeerPatchRange, NativeWeatherOverrideAtomicProfile::Windows.size() + 2> ranges{};
+            if ((count && !windows) || count > NativeWeatherOverrideAtomicProfile::Windows.size())
+                return ClockResult::InvalidArgument;
+            for (std::size_t index = 0; index < count; ++index)
+            {
+                const auto begin = windows[index].ExclusionBegin(), end = windows[index].ExclusionEnd();
+                if (begin >= end || end > imageSize || runtime.image > (std::numeric_limits<std::uintptr_t>::max)() - end)
+                    return ClockResult::BindingChanged;
+                ranges[index] = {runtime.image + begin, runtime.image + end};
+            }
+            NativeWeatherRainBorrow::Exclusions exclusions{};
+            exclusions.image = runtime.image;
+            exclusions.leaf = {leaf.leafEntry, leaf.leafEntry + leaf.plan.bridge.size()};
+            // Capture the compiled Body module bounds before any peers park.
+            // Its real unwind metadata stays pinned by the existing owner;
+            // the separately allocated leaf still needs its own debt proof.
+            MEMORY_BASIC_INFORMATION page{};
+            const auto               body = reinterpret_cast<std::uintptr_t>(&NativeWeatherRainBridge::Body);
+            if (!VirtualQuery(reinterpret_cast<const void*>(body), &page, sizeof(page)) || page.Type != MEM_IMAGE)
+                return ClockResult::BindingChanged;
+            const auto         module = reinterpret_cast<std::uintptr_t>(page.AllocationBase);
+            IMAGE_DOS_HEADER   dos{};
+            IMAGE_NT_HEADERS64 nt{};
+            if (!Image::ReadImage(module, module, &dos, sizeof(dos)) || dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew <= 0 || dos.e_lfanew > 65536 ||
+                !Image::ReadImage(module, module + static_cast<std::uintptr_t>(dos.e_lfanew), &nt, sizeof(nt)) || nt.Signature != IMAGE_NT_SIGNATURE ||
+                nt.FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 || nt.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC ||
+                !nt.OptionalHeader.SizeOfImage || module > (std::numeric_limits<std::uintptr_t>::max)() - nt.OptionalHeader.SizeOfImage || body < module ||
+                body - module >= nt.OptionalHeader.SizeOfImage)
+                return ClockResult::BindingChanged;
+            exclusions.bodyModule = {module, module + nt.OptionalHeader.SizeOfImage};
+            ranges[count++] = {runtime.image + NativeWeatherRainProfile::SerializerBeginRva, runtime.image + NativeWeatherRainProfile::SerializerEndRva};
+            ranges[count++] = {exclusions.leaf.begin, exclusions.leaf.end};
+            if (!runtime.weatherOverridePeers.PrepareRain(exclusions) || !runtime.weatherOverridePeers.Suspend(ranges.data(), count))
+                return runtime.weatherOverridePeers.Release() ? ClockResult::Busy : ClockResult::RestoreFailure;
+            const auto result = runtime.weatherOverridePeers.CheckRain();
+            if (result != ClockResult::Ok)
+                return runtime.weatherOverridePeers.Release() ? result : ClockResult::RestoreFailure;
+            return ClockResult::Ok;
+        }
+        ClockResult WeatherOverrideHost::CheckRainPeers(const NativeWeatherRainLeaf::State& leaf) noexcept
+        {
+            if (!leaf.allocationBase || !leaf.leafEntry || !leaf.context || !runtime.weatherOverridePeers.MatchesRain(leaf))
+                return ClockResult::BindingChanged;
+            return runtime.weatherOverridePeers.CheckRain();
         }
 
         bool ReadPatch(std::array<unsigned char, 5>& bytes) noexcept
@@ -1175,6 +1403,12 @@ namespace mta::game_de
                 return owner;
             if (runtime.weatherRecovery.load() || runtime.weatherGeneration.load())
                 return ClockResult::Busy;
+            if (runtime.weatherOverrideGeneration.load())
+            {
+                const auto access = runtime.weatherOverrides.CheckAccess();
+                if (access != ClockResult::Ok)
+                    return access;
+            }
             // Exact executable admission belongs to BeginOwner. Weather adds
             // its own live instruction/field-width checks on that same image,
             // without hashing the game file on every frame-level SDK request.
@@ -1288,6 +1522,12 @@ namespace mta::game_de
                 return owner;
             if (runtime.weatherRecovery.load() || runtime.weatherGeneration.load())
                 return ClockResult::Busy;
+            if (runtime.weatherOverrideGeneration.load())
+            {
+                const auto access = runtime.weatherOverrides.CheckAccess();
+                if (access != ClockResult::Ok)
+                    return access;
+            }
             // The existing owner already performed exact-build admission.
             // These getter-specific producer/name pins qualify the additional
             // fields without a whole executable hash on each SDK read.
@@ -1589,6 +1829,31 @@ namespace mta::game_de
                 Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
             }
             return result;
+        }
+
+        ClockResult NativeAccess::GetWeather(CWeather*& output) noexcept
+        {
+            const auto owner = RequireWeatherOverrideOwner();
+            if (owner != ClockResult::Ok)
+                return owner;
+            const auto access = runtime.weatherOverrides.CheckAccess();
+            if (access != ClockResult::Ok)
+                return FinishWeatherOverride(access);
+            // Publish the actual complete SDK object only after every scalar
+            // and the currently owned code view qualify in this callback.
+            // The pointer carries no authority into a later producer call.
+            for (std::size_t index = 0; index < NativeWeatherScalarProfile::Fields.size(); ++index)
+            {
+                float      value = 0;
+                const auto read = ReadScalar(static_cast<NativeWeatherScalarProfile::Field>(index), value);
+                if (read != ClockResult::Ok)
+                    return read;
+            }
+            const auto confirmed = CheckTimingOwner();
+            if (confirmed != ClockResult::Ok)
+                return confirmed;
+            output = &runtime.weatherSdk;
+            return ClockResult::Ok;
         }
 
         ClockResult NativeAccess::SetWeatherScalarOverride(NativeWeatherScalarProfile::Field field, float value) noexcept

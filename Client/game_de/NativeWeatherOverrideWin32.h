@@ -24,10 +24,18 @@ namespace mta::game_de
         bool        Flush(std::uintptr_t, std::size_t) noexcept override;
         bool        ReadScalar(const Binding&, Field, std::uint32_t&) noexcept override;
         Exchange    ExchangeScalar(const Binding&, Field, std::uint32_t, std::uint32_t) noexcept override;
+        bool        SupportsRain() const noexcept override { return true; }
+        ClockResult QualifyRain(const Binding&, const NativeWeatherOverrideCodeView&) noexcept override;
+        ClockResult PrepareRain(const Binding&, const NativeWeatherOverrideCodeView&, NativeWeatherRainLeaf::State&) noexcept override;
+        bool        ReadRain(NativeWeatherRainLeaf::State&, std::uint64_t&, std::uint64_t&) noexcept override;
+        bool        RevalidateRain(const Binding&, const NativeWeatherOverrideCodeView&, const NativeWeatherRainLeaf::State&, bool) noexcept override;
+        bool        ReleaseRain(const NativeWeatherRainLeaf::State&, NativeWeatherRainLeaf::ReleaseCheck, void*) noexcept override;
 
     private:
         // Interior accumulators are borrowed by code; only these retained slot
         // objects know the independent VirtualAlloc base that may be released.
         std::array<NativeWeatherOverrideSlot, 8> slots{};
+        NativeWeatherRainLeaf                    rainLeaf;
+        std::uintptr_t                           rainImage = 0, rainCopyTarget = 0;
     };
 }

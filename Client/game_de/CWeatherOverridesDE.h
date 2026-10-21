@@ -10,11 +10,17 @@
 namespace mta::game_de
 {
     // These methods preserve MTA's suppression/reset behavior: Reset restores
-    // native writers, without rewinding the successful scalar value. Rain's
-    // serializer escape remains unproved and its two void SDK methods stay pure.
+    // native writers, without rewinding the successful scalar value. Rain also
+    // owns its direction-correct serializer gate and complete borrow interval.
     class CWeatherOverridesDE : public CWeatherScalarsDE
     {
     public:
+        CWeatherOverridesDE(NativeWeatherTransitionAccess& transition, NativeWeatherScalarAccess& scalar, NativeWeatherOverrideAccess& overrides) noexcept
+            : CWeatherScalarsDE(transition, scalar), native(overrides)
+        {
+        }
+        void SetAmountOfRain(float amount) override;
+        void ResetAmountOfRain() override;
         bool SetWetRoads(float amount) override;
         bool ResetWetRoads() override;
         bool SetFoggyness(float amount) override;
@@ -30,14 +36,8 @@ namespace mta::game_de
         bool SetRainbow(float amount) override;
         bool ResetRainbow() override;
 
-    protected:
-        CWeatherOverridesDE(NativeWeatherTransitionAccess& transition, NativeWeatherScalarAccess& scalar, NativeWeatherOverrideAccess& overrides) noexcept
-            : CWeatherScalarsDE(transition, scalar), native(overrides)
-        {
-        }
-
     private:
         NativeWeatherOverrideAccess& native;
     };
-    static_assert(std::is_abstract_v<CWeatherOverridesDE> && std::is_base_of_v<CWeather, CWeatherOverridesDE>);
+    static_assert(!std::is_abstract_v<CWeatherOverridesDE> && std::is_base_of_v<CWeather, CWeatherOverridesDE>);
 }

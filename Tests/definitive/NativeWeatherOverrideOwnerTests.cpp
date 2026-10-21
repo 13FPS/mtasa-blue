@@ -43,7 +43,22 @@ namespace
         ClockResult   normal = ClockResult::Ok, recover = ClockResult::Ok, park = ClockResult::Ok;
         bool          held = false, failFinish = false, safe = true;
         std::size_t   parks = 0, finishes = 0;
-        ClockResult   Check(std::uint64_t value, bool recovering) noexcept override
+        bool          rain = false;
+        ClockResult   rainCheck = ClockResult::Ok;
+        std::size_t   rainChecks = 0;
+        bool          SupportsRain() const noexcept override { return rain; }
+        ClockResult   ParkRainPeers(const Window* windows, std::size_t count, const NativeWeatherRainLeaf::State&) noexcept override
+        {
+            const auto result = ParkPeers(windows, count);
+            return result == ClockResult::Ok ? rainCheck : result;
+        }
+        ClockResult CheckRainPeers(const NativeWeatherRainLeaf::State&) noexcept override
+        {
+            Require(held, "Rain entry changes and release require the same still-held peer/stack grant");
+            ++rainChecks;
+            return rainCheck;
+        }
+        ClockResult Check(std::uint64_t value, bool recovering) noexcept override
         {
             return value != generation ? ClockResult::OwnerConflict : recovering ? recover : normal;
         }
@@ -93,6 +108,7 @@ namespace
                 std::memcpy(image + writer.rva, writer.original.data(), writer.size);
             for (const auto& window : A::Windows)
                 std::memcpy(image + window.windowRva, window.stock.data(), window.windowSize);
+            std::memcpy(image + NativeWeatherRainBridge::EntryRva, NativeWeatherRainBridge::StockEntry.data(), NativeWeatherRainBridge::StockEntry.size());
             for (const auto field :
                  {Field::Rain, Field::WetRoads, Field::Foggyness, Field::Fog, Field::RainFog, Field::WaterFog, Field::Sandstorm, Field::Rainbow})
                 SetBits(field, Bits(0.125f));
@@ -172,6 +188,51 @@ namespace
         std::size_t                              allocations = 0, releases = 0, codeExchanges = 0, scalarExchanges = 0, unavailableExchange = 0;
         std::vector<std::uintptr_t>              scratch;
         std::array<NativeWeatherOverrideSlot, 8> slots{};
+        NativeWeatherRainLeaf                    rainLeaf;
+        bool                                     failRainAfterAllocation = false, failRainRelease = false;
+        bool                                     SupportsRain() const noexcept override { return host.rain; }
+        ClockResult                              QualifyRain(const Binding& binding, const NativeWeatherOverrideCodeView&) noexcept override
+        {
+            return binding.image == fixture.Binding().image &&
+                           !std::memcmp(fixture.image + NativeWeatherRainBridge::EntryRva, NativeWeatherRainBridge::StockEntry.data(), 8)
+                       ? ClockResult::Ok
+                       : ClockResult::BindingChanged;
+        }
+        ClockResult PrepareRain(const Binding& binding, const NativeWeatherOverrideCodeView&, NativeWeatherRainLeaf::State& output) noexcept override
+        {
+            Require(!host.held, "near RX leaf and RW context preparation happens before parking");
+            const bool prepared = rainLeaf.Prepare(binding.image);
+            rainLeaf.Read(output);
+            return prepared && !failRainAfterAllocation ? ClockResult::Ok : ClockResult::WriteFailure;
+        }
+        bool ReadRain(NativeWeatherRainLeaf::State& output, std::uint64_t& active, std::uint64_t& foreign) noexcept override
+        {
+            NativeWeatherRainLeaf::State state;
+            if (!rainLeaf.Read(state) || !state.context)
+                return false;
+            active = static_cast<std::uint64_t>(state.context->activeCalls);
+            foreign = static_cast<std::uint64_t>(state.context->unqualifiedArchive);
+            output = state;
+            return true;
+        }
+        bool RevalidateRain(const Binding& binding, const NativeWeatherOverrideCodeView&, const NativeWeatherRainLeaf::State& expected,
+                            bool retained) noexcept override
+        {
+            NativeWeatherRainLeaf::State actual;
+            if (!rainLeaf.Read(actual) || actual.allocationBase != expected.allocationBase || actual.leafEntry != expected.leafEntry ||
+                actual.context != expected.context || actual.plan.entry != expected.plan.entry || actual.plan.bridge != expected.plan.bridge ||
+                !rainLeaf.Verify())
+                return false;
+            const auto* bytes = fixture.image + NativeWeatherRainBridge::EntryRva;
+            return binding.image == fixture.Binding().image &&
+                   (!std::memcmp(bytes, NativeWeatherRainBridge::StockEntry.data(), 8) || (retained && !std::memcmp(bytes, expected.plan.entry.data(), 8)));
+        }
+        bool ReleaseRain(const NativeWeatherRainLeaf::State& expected, NativeWeatherRainLeaf::ReleaseCheck check, void* opaque) noexcept override
+        {
+            NativeWeatherRainLeaf::State actual;
+            Require(host.held, "leaf release remains inside the same held stack proof");
+            return !failRainRelease && rainLeaf.Read(actual) && actual.allocationBase == expected.allocationBase && rainLeaf.Release(check, opaque);
+        }
         explicit Platform(Fixture& fixture, Host& host) noexcept : fixture(fixture), host(host) {}
         ~Platform()
         {
@@ -541,6 +602,77 @@ namespace
             s.Clean();
         }
     }
+    void RainEntryAndRetirement()
+    {
+        {
+            Scenario s;
+            s.host.rain = true;
+            Require(s.owner.Admits(Field::Rain), "Rain requires both the full borrow host and complete serializer platform capability");
+            Require(s.owner.Set(Field::Rain, 0.75f) == ClockResult::Ok, "actual Rain owner publishes all direct writers and one indivisible direction gate");
+            NativeWeatherRainLeaf::State leaf;
+            Require(
+                s.platform.rainLeaf.Read(leaf) && leaf.prepared && !std::memcmp(s.fixture.image + NativeWeatherRainBridge::EntryRva, leaf.plan.entry.data(), 8),
+                "retained real RX leaf and RW descriptor precede the controlled native CALL publication");
+            const auto exchanges = s.platform.codeExchanges;
+            Require(
+                s.owner.Set(Field::Rain, -0.0f) == ClockResult::Ok && s.platform.codeExchanges == exchanges && s.fixture.GetBits(Field::Rain) == Bits(-0.0f),
+                "repeated Rain intent reuses exact owned entry and keeps signed zero");
+            leaf.context->activeCalls = 1;
+            Require(s.owner.Reset(Field::Rain) == ClockResult::Busy && s.owner.HasReferences() && s.platform.codeExchanges == exchanges &&
+                        !std::memcmp(s.fixture.image + NativeWeatherRainBridge::EntryRva, leaf.plan.entry.data(), 8),
+                    "active Body refuses BEFORE restoring entry: its d55 continuation must remain a JMP");
+            leaf.context->activeCalls = 0;
+            s.host.rainCheck = ClockResult::Busy;
+            Require(s.owner.Recover() == ClockResult::Busy && s.platform.codeExchanges == exchanges,
+                    "a zero activity count cannot replace an old or new active-stack borrow proof");
+            s.host.rainCheck = ClockResult::Ok;
+            s.Clean();
+            NativeWeatherRainLeaf::State sentinel;
+            sentinel.allocationBase = 123;
+            Require(!s.platform.rainLeaf.Read(sentinel) && sentinel.allocationBase == 123 &&
+                        !std::memcmp(s.fixture.image + NativeWeatherRainBridge::EntryRva, NativeWeatherRainBridge::StockEntry.data(), 8) &&
+                        s.fixture.Stock(Field::Rain) && s.fixture.GetBits(Field::Rain) == Bits(-0.0f),
+                    "same parked grant restores entry/direct words and frees the true RX/RW reservation without scalar rewind");
+        }
+        // Seven direct writer words and then the entry word form one narrow
+        // failure journal. A no-write fault at any CAS must retire every prior
+        // patch and both independent private allocation identities.
+        for (std::size_t failure = 1; failure <= P::WriterCounts[0] + 1; ++failure)
+        {
+            Scenario s;
+            s.host.rain = true;
+            s.platform.unavailableExchange = failure;
+            Require(s.owner.Set(Field::Rain, 0.5f) != ClockResult::Ok && !s.owner.HasReferences() && s.fixture.Stock(Field::Rain) &&
+                        s.fixture.GetBits(Field::Rain) == Bits(0.125f) &&
+                        !std::memcmp(s.fixture.image + NativeWeatherRainBridge::EntryRva, NativeWeatherRainBridge::StockEntry.data(), 8),
+                    "each direct/entry CAS refusal rolls back only its exact acknowledged Rain journal");
+            s.Clean();
+        }
+        {
+            Scenario s;
+            s.host.rain = true;
+            s.platform.failRainAfterAllocation = true;
+            Require(s.owner.Set(Field::Rain, 0.5f) == ClockResult::WriteFailure && s.owner.HasReferences() && s.owner.NeedsRecovery() &&
+                        s.platform.codeExchanges == 0,
+                    "post-leaf allocation failure retains its real reservation even before publication");
+            s.platform.failRainAfterAllocation = false;
+            s.Clean();
+        }
+        {
+            Scenario s;
+            s.host.rain = true;
+            Require(s.owner.Set(Field::Rain, 0.5f) == ClockResult::Ok, "prepare active Rain before a foreign archive refusal");
+            NativeWeatherRainLeaf::State leaf;
+            Require(s.platform.rainLeaf.Read(leaf), "capture the retained descriptor identity for controlled foreign-class evidence");
+            leaf.context->unqualifiedArchive = 1;
+            s.fixture.SetBits(Field::Rain, Bits(0.9375f));
+            Require(s.owner.CheckAccess() == ClockResult::OwnerConflict && s.owner.NeedsRecovery(),
+                    "unknown archive native behavior latches explicit unsupported ownership");
+            Require(s.owner.Recover() == ClockResult::OwnerConflict && !s.owner.HasReferences() && !s.owner.NeedsRecovery() && s.owner.SupersededCount() &&
+                        s.fixture.GetBits(Field::Rain) == Bits(0.9375f),
+                    "terminal foreign archive cleanup preserves its later native Rain value and reports conflict without orphaning code");
+        }
+    }
     void ImmediateMutationAuthority()
     {
         {
@@ -595,6 +727,7 @@ int main()
     ForeignCodeAndScope();
     PeerAndAdmissionFailures();
     ImmediateMutationAuthority();
+    RainEntryAndRetirement();
     std::printf("Passed %zu native weather override owner checks (64-bit; owned-memory)\n", checks);
     return 0;
 }

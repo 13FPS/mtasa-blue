@@ -4,9 +4,29 @@
  * PURPOSE: Route existing MTA weather methods through qualified writer ownership
  *****************************************************************************/
 #include "CWeatherOverridesDE.h"
+#include <stdexcept>
+#include <string>
 
 namespace mta::game_de
 {
+    namespace
+    {
+        void RequireRain(ClockResult result)
+        {
+            // The genuine SDK methods return void. An unavailable owner must
+            // remain visible to callers instead of fabricating successful rain.
+            if (result != ClockResult::Ok)
+                throw std::runtime_error("DE native Rain ownership unavailable (status " + std::to_string(static_cast<std::uint32_t>(result)) + ")");
+        }
+    }
+    void CWeatherOverridesDE::SetAmountOfRain(float amount)
+    {
+        RequireRain(native.SetWeatherScalarOverride(NativeWeatherScalarProfile::Field::Rain, amount));
+    }
+    void CWeatherOverridesDE::ResetAmountOfRain()
+    {
+        RequireRain(native.ResetWeatherScalarOverride(NativeWeatherScalarProfile::Field::Rain));
+    }
     bool CWeatherOverridesDE::SetWetRoads(float amount)
     {
         return native.SetWeatherScalarOverride(NativeWeatherScalarProfile::Field::WetRoads, amount) == ClockResult::Ok;

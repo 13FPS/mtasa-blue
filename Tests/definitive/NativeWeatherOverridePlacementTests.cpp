@@ -1,7 +1,7 @@
 /*****************************************************************************
  * PROJECT: Multi Theft Auto
  * LICENSE: See LICENSE in the repository root
- * PURPOSE: Prove all seven groups' changes fit actual aligned64 data exchanges
+ * PURPOSE: Prove all eight direct groups fit actual aligned64 data exchanges
  *****************************************************************************/
 #include "../../Client/game_de/NativeWeatherOverridePlacement.h"
 #include "../../Client/game_de/NativeWeatherOverrideSlot.h"
@@ -76,10 +76,10 @@ int main()
     P::Placement                             unchanged;
     Require(P::Placement::Prepare({}, Field::Fog, unchanged) == ClockResult::InvalidArgument && !unchanged.Count(),
             "unbound placement refuses without publication");
-    Require(P::Placement::Prepare(binding, Field::Rain, unchanged) == ClockResult::UnsupportedBuild,
-            "Rain remains refused despite physically reachable operands");
+    Require(P::Placement::Prepare(binding, Field::Rain, unchanged) == ClockResult::Ok && unchanged.Period() == 65536 && unchanged.Count(),
+            "Rain's direct-store placement preserves low16 bytes without granting serializer authority");
     Require(P::Placement::Prepare(binding, static_cast<Field>(255), unchanged) == ClockResult::InvalidArgument, "invalid scalar refuses");
-    for (const auto field : {Field::WetRoads, Field::Foggyness, Field::Fog, Field::RainFog, Field::WaterFog, Field::Sandstorm, Field::Rainbow})
+    for (const auto field : {Field::Rain, Field::WetRoads, Field::Foggyness, Field::Fog, Field::RainFog, Field::WaterFog, Field::Sandstorm, Field::Rainbow})
     {
         const auto   index = static_cast<std::size_t>(field);
         P::Placement placement;
@@ -180,7 +180,7 @@ int main()
             Require(slots[index].Release(), "empty slot release has no hidden native side effect");
         }
     for (const auto& writer : L::Writers)
-        Require(std::memcmp(image + writer.rva, writer.original.data(), writer.size) == 0, "all37 native-looking writers restore exactly; Rain untouched");
+        Require(std::memcmp(image + writer.rva, writer.original.data(), writer.size) == 0, "all37 native-looking writers including Rain restore exactly");
     Require(VirtualFree(image, 0, MEM_RELEASE) != FALSE, "owned image released");
     image = nullptr;
     std::printf("Passed %zu native weather constrained placement checks (64-bit; owned-memory)\n", checks);

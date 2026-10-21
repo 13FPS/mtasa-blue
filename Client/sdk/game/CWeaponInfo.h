@@ -11,6 +11,8 @@
 
 #pragma once
 
+// The fixed-width skill enum must also compile without the classic PCH.
+#include <cstdint>
 #include "Common.h"
 
 class CVector;

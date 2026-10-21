@@ -204,14 +204,15 @@ int main()
     const View                            stock(none, generation, RawCode);
     Check(stock.VerifyWriters(binding) == Result::Ok && P::Revalidate(binding, stock), "all37 exact native writer instructions qualify in stock image");
     O::Range range{17, 19};
-    Check(O::Plan::AccumulatorRange(binding, Field::Rain, range) == Result::UnsupportedBuild && range.minimum == 17 && range.maximum == 19,
-          "unresolved Rain serializer address escape prevents false complete setter plan");
+    Check(O::Plan::AccumulatorRange(binding, Field::Rain, range) == Result::Ok && range.minimum <= range.maximum,
+          "Rain's seven direct writers have a common range; this plan grants no serializer hook or native owner");
+    range = {17, 19};
     Check(O::Plan::AccumulatorRange(binding, static_cast<Field>(255), range) == Result::InvalidArgument && range.minimum == 17,
           "unknown field preserves range output");
     Check(O::Plan::AccumulatorRange({0}, Field::WetRoads, range) == Result::InvalidArgument, "invalid image cannot acquire writer range");
     Check(O::Plan::AccumulatorRange({(std::numeric_limits<std::uintptr_t>::max)() - 1}, Field::WetRoads, range) == Result::InvalidArgument,
           "overflow image refuses before pointer arithmetic");
-    for (std::size_t scalar = 1; scalar < P::Fields.size(); ++scalar)
+    for (std::size_t scalar = 0; scalar < P::Fields.size(); ++scalar)
     {
         const auto field = static_cast<Field>(scalar);
         O::Plan    plan;
@@ -323,21 +324,21 @@ int main()
     std::array<O::Plan, 8>                  plans;
     std::array<std::optional<O::Ledger>, 8> ledgers;
     std::array<const O::Ledger*, 8>         all{};
-    for (std::size_t scalar = 1; scalar < plans.size(); ++scalar)
+    for (std::size_t scalar = 0; scalar < plans.size(); ++scalar)
     {
         Check(O::Plan::Prepare(binding, static_cast<Field>(scalar), accumulator + scalar * 4, generation, RawCode, plans[scalar]) == Result::Ok,
               "prepare multiple independent actual scalar groups while stock");
         ledgers[scalar].emplace(plans[scalar]);
         all[scalar] = &*ledgers[scalar];
     }
-    for (std::size_t scalar = 1; scalar < plans.size(); ++scalar)
+    for (std::size_t scalar = 0; scalar < plans.size(); ++scalar)
         for (std::size_t index = 0; index < plans[scalar].Count(); ++index)
         {
             Check(ledgers[scalar]->RetainPossiblePatch(index, generation), "record all multi-field native references");
             CopyEntry(image, *plans[scalar].At(index), true);
         }
     const View combined(all, generation, RawCode);
-    Check(!P::Revalidate(binding) && P::Revalidate(binding, combined), "all seven simultaneous groups qualify without arbitrary byte masks");
+    Check(!P::Revalidate(binding) && P::Revalidate(binding, combined), "all eight simultaneous direct groups qualify without arbitrary byte masks");
     for (std::size_t index = 0; index < plans[2].Count(); ++index)
     {
         CopyEntry(image, *plans[2].At(index), false);
@@ -356,7 +357,7 @@ int main()
     image.bytes[rain->rva] ^= 1;
     Check(combined.VerifyWriters(binding) == Result::BindingChanged, "extra producer changes outside standard getter pins still refuse full override identity");
     image.bytes[rain->rva] ^= 1;
-    for (std::size_t scalar = 1; scalar < plans.size(); ++scalar)
+    for (std::size_t scalar = 0; scalar < plans.size(); ++scalar)
         for (std::size_t index = 0; index < plans[scalar].Count(); ++index)
         {
             CopyEntry(image, *plans[scalar].At(index), false);

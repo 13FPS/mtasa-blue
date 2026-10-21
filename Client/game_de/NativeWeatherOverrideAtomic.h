@@ -25,7 +25,7 @@ namespace mta::game_de::NativeWeatherOverrideAtomicProfile
             return writerEnd > windowEnd ? writerEnd : windowEnd;
         }
     };
-    extern const std::array<Window, 30> Windows;
+    extern const std::array<Window, 37> Windows;
     // The retained argument keeps callers source-compatible; congruent slots
     // make every admitted group independent of optional128-bit CPU support.
     bool          Supports(Field, bool compareExchange128) noexcept;

@@ -53,6 +53,18 @@ namespace mta::game_de
         return output;
     }
 
+    CWeather* CGameDE::GetWeather()
+    {
+        // MTA receives the complete service owned by the existing callback
+        // runtime. A partial wrapper or successful null result cannot satisfy
+        // the SDK's weather getter/reset contract.
+        CWeather* output = nullptr;
+        RequireNativeWrite(NativeWrites().GetWeather(output), "GetWeather");
+        if (!output)
+            RequireNativeWrite(ClockResult::NotInitialized, "GetWeather");
+        return output;
+    }
+
     void CGameDE::StartGame()
     {
         // The normal native menu request owns additional UI/loading effects.

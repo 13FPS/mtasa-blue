@@ -5,6 +5,7 @@
  *****************************************************************************/
 #pragma once
 #include "NativeWeatherOverrideAtomic.h"
+#include "NativeWeatherRainLeaf.h"
 #include <atomic>
 #include <optional>
 
@@ -22,6 +23,12 @@ namespace mta::game_de
         virtual ClockResult ParkPeers(const Window*, std::size_t count) noexcept = 0;
         virtual bool        PeersHeld() const noexcept = 0;
         virtual bool        FinishPeers(bool safeToResume) noexcept = 0;
+        // Rain has a bidirectional pointer escape. Its opt-in host must
+        // prepare real TEB identities before parking and check the complete
+        // old/new synchronous borrow interval, including this callback stack.
+        virtual bool        SupportsRain() const noexcept { return false; }
+        virtual ClockResult ParkRainPeers(const Window*, std::size_t, const NativeWeatherRainLeaf::State&) noexcept { return ClockResult::UnsupportedBuild; }
+        virtual ClockResult CheckRainPeers(const NativeWeatherRainLeaf::State&) noexcept { return ClockResult::UnsupportedBuild; }
 
     protected:
         ~NativeWeatherOverrideHost() = default;
@@ -53,10 +60,19 @@ namespace mta::game_de
         // hardware exchange. No platform implementation may copy an operand
         // partially, report an ambiguous write, or introduce torn instruction
         // bytes which the current callback could execute after returning.
-        virtual Exchange ExchangeCode(const Binding&, std::uintptr_t, std::size_t, const Bytes& expected, const Bytes& desired) noexcept = 0;
-        virtual bool     Flush(std::uintptr_t, std::size_t) noexcept = 0;
-        virtual bool     ReadScalar(const Binding&, Field, std::uint32_t&) noexcept = 0;
-        virtual Exchange ExchangeScalar(const Binding&, Field, std::uint32_t expected, std::uint32_t desired) noexcept = 0;
+        virtual Exchange    ExchangeCode(const Binding&, std::uintptr_t, std::size_t, const Bytes& expected, const Bytes& desired) noexcept = 0;
+        virtual bool        Flush(std::uintptr_t, std::size_t) noexcept = 0;
+        virtual bool        ReadScalar(const Binding&, Field, std::uint32_t&) noexcept = 0;
+        virtual Exchange    ExchangeScalar(const Binding&, Field, std::uint32_t expected, std::uint32_t desired) noexcept = 0;
+        virtual bool        SupportsRain() const noexcept { return false; }
+        virtual ClockResult QualifyRain(const Binding&, const NativeWeatherOverrideCodeView&) noexcept { return ClockResult::UnsupportedBuild; }
+        virtual ClockResult PrepareRain(const Binding&, const NativeWeatherOverrideCodeView&, NativeWeatherRainLeaf::State&) noexcept
+        {
+            return ClockResult::UnsupportedBuild;
+        }
+        virtual bool ReadRain(NativeWeatherRainLeaf::State&, std::uint64_t&, std::uint64_t&) noexcept { return false; }
+        virtual bool RevalidateRain(const Binding&, const NativeWeatherOverrideCodeView&, const NativeWeatherRainLeaf::State&, bool) noexcept { return false; }
+        virtual bool ReleaseRain(const NativeWeatherRainLeaf::State&, NativeWeatherRainLeaf::ReleaseCheck, void*) noexcept { return false; }
 
     protected:
         ~NativeWeatherOverridePlatform() = default;
@@ -71,6 +87,7 @@ namespace mta::game_de
         NativeWeatherOverrideOwner& operator=(const NativeWeatherOverrideOwner&) = delete;
         ClockResult                 Bind(const Binding&, std::uint64_t generation) noexcept;
         bool                        Admits(Field field) const noexcept;
+        ClockResult                 CheckAccess() noexcept;
         ClockResult                 Set(Field, float) noexcept;
         ClockResult                 Reset(Field) noexcept;
         ClockResult                 RestoreAll() noexcept;
@@ -98,11 +115,25 @@ namespace mta::game_de
             bool                                                active = false, scalarPending = false;
             std::uint32_t                                       original = 0, replacement = 0;
         };
+        struct RainEntry
+        {
+            NativeWeatherRainLeaf::State leaf{};
+            Site                         site{};
+            std::uint64_t                generation = 0;
+            bool                         retained = false, foreignSeen = false;
+        };
         ClockResult                    Admit(bool recovery) noexcept;
         ClockResult                    Prepare(Field, Group&) noexcept;
         ClockResult                    Patch(Group&, bool redirected) noexcept;
         ClockResult                    RestoreScalar(Field, Group&) noexcept;
         ClockResult                    Retire(Field, Group&) noexcept;
+        ClockResult                    RetireDirect(Field, Group&) noexcept;
+        ClockResult                    PrepareRain() noexcept;
+        ClockResult                    Park(Field, bool all = false) noexcept;
+        ClockResult                    RainQuiescent(bool recovery) noexcept;
+        ClockResult                    PatchRain(bool redirected) noexcept;
+        ClockResult                    RetireRain(Group&) noexcept;
+        static bool                    ReleaseRainCheck(void*, const NativeWeatherRainLeaf::State&) noexcept;
         ClockResult                    Finish(ClockResult) noexcept;
         void                           Publish(bool failed) noexcept;
         NativeWeatherOverrideHost&     host;
@@ -110,6 +141,7 @@ namespace mta::game_de
         Binding                        binding{};
         std::uint64_t                  generation = 0;
         std::array<Group, 8>           groups{};
+        RainEntry                      rain;
         std::atomic<bool>              references{false}, recovery{false};
         std::atomic<std::uint32_t>     superseded{0};
     };

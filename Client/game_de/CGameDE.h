@@ -25,6 +25,7 @@ namespace mta::game_de
     public:
         CClock*           GetClock() noexcept override;
         CStats*           GetStats() override;
+        CWeather*         GetWeather() override;
         void              StartGame() override;
         CKeyGen*          GetKeyGen() noexcept override;
         SystemState::Enum GetSystemState() override;

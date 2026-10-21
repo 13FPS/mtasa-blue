@@ -41,11 +41,9 @@ try{
         'Client/game_de/NativeWeatherOverridePlan.h','Client/game_de/NativeWeatherOverridePlan.cpp','Client/game_de/NativeWeatherOverrideProfile.cpp',
         'Client/game_de/NativeWeatherScalarProfile.h','Client/game_de/NativeWeatherScalarProfile.cpp',
         'Client/game_de/NativeWeatherTransitionProfile.h','Client/game_de/NativeWeatherTransitionProfile.cpp',
-        'Client/game_de/NativeClockProfile.h','Client/game_de/NativeImageAccess.h','Client/game_de/NativeImageAccess.cpp',
+        'Client/game_de/NativeWeatherRainProfile.h','Client/game_de/NativeWeatherRainBridge.h','Client/game_de/NativeWeatherRainBridge.cpp','Client/game_de/NativeWeatherRainLeaf.h','Client/game_de/NativeWeatherRainLeaf.cpp','Client/game_de/NativeClockProfile.h','Client/game_de/NativeImageAccess.h','Client/game_de/NativeImageAccess.cpp',
         'Client/sdk/game/CGameAdapter.h','Client/sdk/game/CGameClockService.h','Shared/sdk/CControllerState.h','Shared/sdk/CControlStateSynthesis.h',
-        'Tests/definitive/NativeWeatherOverrideOwnerTests.cpp','Tests/definitive/test_native_weather_override_owner.ps1',
-        'Build/definitive-recovery/mta-weather-overrides-batch-20261021/proof/qualified-native-writers.json',
-        'Build/definitive-recovery/mta-weather-overrides-batch-20261021/proof/qualified-atomic-windows.json','Build/definitive-recovery/mta-weather-overrides-batch-20261021/placement-next-proof/constrained-windows-qualified.json')
+        'Tests/definitive/NativeWeatherOverrideOwnerTests.cpp','Tests/definitive/test_native_weather_override_owner.ps1')
     $record.sources=@($names|ForEach-Object{[ordered]@{path=$_;sha256=(Sha (Join-Path $root $_))}})
     $env:TEMP=$scratch;$env:TMP=$scratch
     $vswhere=Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
@@ -65,8 +63,8 @@ try{
         $directory=Join-Path $output $mode;[IO.Directory]::CreateDirectory($directory)|Out-Null
         $exe=Join-Path $directory 'native-weather-override-owner-tests.exe'
         $arguments=@('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/MD','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN')
-        $arguments+=@(('/I'+(Join-Path $root 'Client/sdk')),('/I'+(Join-Path $root 'Shared/sdk')),(Join-Path $PSScriptRoot 'NativeWeatherOverrideOwnerTests.cpp'),(Join-Path $root 'Client/game_de/NativeImageAccess.cpp'),(Join-Path $root 'Client/game_de/NativeWeatherOverrideOwner.cpp'),(Join-Path $root 'Client/game_de/NativeWeatherOverrideAtomic.cpp'),(Join-Path $root 'Client/game_de/NativeWeatherOverridePlacement.cpp'),(Join-Path $root 'Client/game_de/NativeWeatherOverrideSlot.cpp'),(Join-Path $root 'Client/game_de/NativeWeatherOverridePlan.cpp'),(Join-Path $root 'Client/game_de/NativeWeatherOverrideProfile.cpp'),
-            ('/Fo'+$directory+[IO.Path]::DirectorySeparatorChar),('/Fe'+$exe),'/link','bcrypt.lib')
+        $arguments+=@(('/I'+(Join-Path $root 'Client/sdk')),('/I'+(Join-Path $root 'Shared/sdk')),(Join-Path $PSScriptRoot 'NativeWeatherOverrideOwnerTests.cpp'),(Join-Path $root 'Client/game_de/NativeImageAccess.cpp'),(Join-Path $root 'Client/game_de/NativeWeatherOverrideOwner.cpp'),(Join-Path $root 'Client/game_de/NativeWeatherOverrideAtomic.cpp'),(Join-Path $root 'Client/game_de/NativeWeatherOverridePlacement.cpp'),(Join-Path $root 'Client/game_de/NativeWeatherOverrideSlot.cpp'),(Join-Path $root 'Client/game_de/NativeWeatherOverridePlan.cpp'),(Join-Path $root 'Client/game_de/NativeWeatherOverrideProfile.cpp'),(Join-Path $root 'Client/game_de/NativeWeatherRainBridge.cpp'),(Join-Path $root 'Client/game_de/NativeWeatherRainLeaf.cpp'),
+            ('/Fo'+$scratch+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratch 'fixture.pdb')),('/Fe'+$exe),'/link','bcrypt.lib')
         $result=[ordered]@{mode=$mode;compiler=$compiler;compilerSha256=(Sha $compiler);compile=$null;test=$null;checks=0}
         $record.results+=$result
         $result.compile=RunOwned $compiler $arguments $directory 'compile' 60000

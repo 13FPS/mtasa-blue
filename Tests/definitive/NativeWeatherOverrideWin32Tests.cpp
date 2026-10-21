@@ -169,10 +169,10 @@ int main(int argc, char** argv)
     std::uintptr_t untouched = 0xabcdef01;
     Check(platform.AllocateNear({}, Field::Fog, {2, 1}, untouched) == ClockResult::InvalidArgument && untouched == 0xabcdef01,
           "unbound field-aware allocator preserves output");
-    Check(platform.AllocateNear(binding, Field::Rain, {2, 1}, untouched) == ClockResult::UnsupportedBuild && untouched == 0xabcdef01,
-          "Rain allocator refuses unqualified full semantics");
+    Check(platform.AllocateNear(binding, Field::Rain, {2, 1}, untouched) == ClockResult::InvalidArgument && untouched == 0xabcdef01,
+          "Rain allocator refuses a malformed direct-store reach without changing output");
     std::array<std::uintptr_t, 8> accumulators{}, allocations{};
-    for (const auto field : {Field::WetRoads, Field::Foggyness, Field::Fog, Field::RainFog, Field::WaterFog, Field::Sandstorm, Field::Rainbow})
+    for (const auto field : {Field::Rain, Field::WetRoads, Field::Foggyness, Field::Fog, Field::RainFog, Field::WaterFog, Field::Sandstorm, Field::Rainbow})
     {
         const auto                          index = static_cast<std::size_t>(field);
         NativeWeatherOverrideProfile::Range range;

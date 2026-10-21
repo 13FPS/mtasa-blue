@@ -18,7 +18,7 @@ foreach($name in @('TEMP','TMP','PATH','INCLUDE','LIB','LIBPATH','VCToolsInstall
 $record=[ordered]@{schema='mta_native_weather_override_placement_tests_v1';success=$false;failure=$null;sources=@();results=@();architecture='x64';
     nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;engineMemoryWritten=$false;hookInstalled=$false;
     completeGameReady=$false;completeWeatherReady=$false;nativeLifecycleReady=$false;sourcesUnchanged=$true;scratch=$scratch;scratchFilesRemaining=$null;
-    scope='Constrained arithmetic and actual private64KiB Win32 slot allocation let all seven complete groups retain low displacement bytes and change only one aligned64 word per writer. Actual owned-memory CAS covers all30 producer windows, exact full-instruction identity and existing code-view masks, malformed/noncongruent refusal, allocation/interior-pointer lifetime, foreign protection debt and independent exact restoration. Rain remains unsupported. No native game instruction executes and no game engine memory or installed payload changes.'}
+    scope='Constrained arithmetic and actual private64KiB Win32 slot allocation let all eight complete groups retain low displacement bytes and change only one aligned64 word per writer. Actual owned-memory CAS covers all37 direct producer windows, exact full-instruction identity and existing code-view masks, malformed/noncongruent refusal, allocation/interior-pointer lifetime, foreign protection debt and independent exact restoration. The Rain serializer is a separate owner prerequisite. No native game instruction executes and no game engine memory or installed payload changes.'}
 function RunOwned([string]$exe,[string[]]$arguments,[string]$directory,[string]$label,[int]$timeout){
     $info=[Diagnostics.ProcessStartInfo]::new($exe)
     $info.WorkingDirectory=$directory;$info.UseShellExecute=$false;$info.CreateNoWindow=$true;$info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true
@@ -43,9 +43,7 @@ try{
         'Client/game_de/NativeWeatherTransitionProfile.h','Client/game_de/NativeWeatherTransitionProfile.cpp',
         'Client/game_de/NativeClockProfile.h','Client/game_de/NativeImageAccess.h','Client/game_de/NativeImageAccess.cpp',
         'Client/sdk/game/CGameAdapter.h','Client/sdk/game/CGameClockService.h','Shared/sdk/CControllerState.h','Shared/sdk/CControlStateSynthesis.h',
-        'Tests/definitive/NativeWeatherOverridePlacementTests.cpp','Tests/definitive/test_native_weather_override_placement.ps1',
-        'Build/definitive-recovery/mta-weather-overrides-batch-20261021/proof/qualified-native-writers.json',
-        'Build/definitive-recovery/mta-weather-overrides-batch-20261021/placement-next-proof/constrained-windows-qualified.json')
+        'Tests/definitive/NativeWeatherOverridePlacementTests.cpp','Tests/definitive/test_native_weather_override_placement.ps1')
     $record.sources=@($names|ForEach-Object{[ordered]@{path=$_;sha256=(Sha (Join-Path $root $_))}})
     $env:TEMP=$scratch;$env:TMP=$scratch
     $vswhere=Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
@@ -66,7 +64,7 @@ try{
         $exe=Join-Path $directory 'native-weather-override-placement-tests.exe'
         $arguments=@('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/MD','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN')
         $arguments+=@(('/I'+(Join-Path $root 'Client/sdk')),('/I'+(Join-Path $root 'Shared/sdk')),(Join-Path $PSScriptRoot 'NativeWeatherOverridePlacementTests.cpp'),(Join-Path $root 'Client/game_de/NativeImageAccess.cpp'),(Join-Path $root 'Client/game_de/NativeWeatherOverridePlacement.cpp'),(Join-Path $root 'Client/game_de/NativeWeatherOverrideSlot.cpp'),(Join-Path $root 'Client/game_de/NativeWeatherOverridePlan.cpp'),(Join-Path $root 'Client/game_de/NativeWeatherOverrideProfile.cpp'),
-            ('/Fo'+$directory+[IO.Path]::DirectorySeparatorChar),('/Fe'+$exe),'/link','bcrypt.lib')
+            ('/Fo'+$scratch+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratch 'fixture.pdb')),('/Fe'+$exe),'/link','bcrypt.lib')
         $result=[ordered]@{mode=$mode;compiler=$compiler;compilerSha256=(Sha $compiler);compile=$null;test=$null;checks=0}
         $record.results+=$result
         $result.compile=RunOwned $compiler $arguments $directory 'compile' 60000

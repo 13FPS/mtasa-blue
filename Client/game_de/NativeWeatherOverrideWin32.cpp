@@ -76,6 +76,12 @@ namespace mta::game_de
                 return NativeWeatherOverridePlatform::Exchange::Unavailable;
             }
         }
+        bool SameRainAllocation(const NativeWeatherRainLeaf::State& first, const NativeWeatherRainLeaf::State& second) noexcept
+        {
+            return first.allocationBase == second.allocationBase && first.allocationBytes == second.allocationBytes && first.pageBytes == second.pageBytes &&
+                   first.leafEntry == second.leafEntry && first.context == second.context && first.plan.entry == second.plan.entry &&
+                   first.plan.bridge == second.plan.bridge;
+        }
     }
     NativeWeatherOverridePlatform::CodeRead NativeWeatherOverrideWin32::Reader() const noexcept
     {
@@ -84,6 +90,122 @@ namespace mta::game_de
     bool NativeWeatherOverrideWin32::Revalidate(const Binding& binding, const NativeWeatherOverrideCodeView& view) noexcept
     {
         return NativeWeatherScalarProfile::Revalidate(binding, view);
+    }
+    ClockResult NativeWeatherOverrideWin32::QualifyRain(const Binding& binding, const NativeWeatherOverrideCodeView& view) noexcept
+    {
+        if (!binding.image || (rainImage && rainImage != binding.image))
+            return ClockResult::BindingChanged;
+        if (rainCopyTarget)
+            return RevalidateRain(binding, view, {}, false) ? ClockResult::Ok : ClockResult::BindingChanged;
+        // Loader/export lookup happens before any peer parks. Under the hold
+        // only the captured expected pointer and bounded image bytes are read.
+        const auto runtime = GetModuleHandleW(L"VCRUNTIME140.dll");
+        if (!runtime)
+            return ClockResult::UnsupportedBuild;
+        const auto copy = GetProcAddress(runtime, "memcpy");
+        if (!copy)
+            return ClockResult::UnsupportedBuild;
+        rainImage = binding.image;
+        rainCopyTarget = reinterpret_cast<std::uintptr_t>(copy);
+        return RevalidateRain(binding, view, {}, false) ? ClockResult::Ok : ClockResult::BindingChanged;
+    }
+    ClockResult NativeWeatherOverrideWin32::PrepareRain(const Binding& binding, const NativeWeatherOverrideCodeView& view,
+                                                        NativeWeatherRainLeaf::State& output) noexcept
+    {
+        NativeWeatherRainLeaf::State existing{};
+        if (rainLeaf.Read(existing))
+        {
+            output = existing;
+            return ClockResult::Busy;
+        }
+        const auto qualified = QualifyRain(binding, view);
+        if (qualified != ClockResult::Ok)
+            return qualified;
+        const bool prepared = rainLeaf.Prepare(binding.image);
+        if (rainLeaf.Read(existing))
+            output = existing;
+        if (!prepared || !existing.prepared)
+            return ClockResult::WriteFailure;
+        return ClockResult::Ok;
+    }
+    bool NativeWeatherOverrideWin32::ReadRain(NativeWeatherRainLeaf::State& output, std::uint64_t& active, std::uint64_t& foreign) noexcept
+    {
+        NativeWeatherRainLeaf::State state{};
+        if (!rainLeaf.Read(state) || !state.context)
+            return false;
+        MEMORY_BASIC_INFORMATION info{};
+        const auto               address = reinterpret_cast<std::uintptr_t>(state.context);
+        if (!VirtualQuery(state.context, &info, sizeof(info)) || info.State != MEM_COMMIT || info.Type != MEM_PRIVATE ||
+            reinterpret_cast<std::uintptr_t>(info.AllocationBase) != state.allocationBase || (info.Protect & (PAGE_GUARD | PAGE_NOACCESS)) ||
+            (info.Protect & 0xff) != PAGE_READWRITE)
+            return false;
+        NativeWeatherRainBridge::Context context{};
+        SIZE_T                           read = 0;
+        if (!ReadProcessMemory(GetCurrentProcess(), state.context, &context, sizeof(context), &read) || read != sizeof(context) ||
+            address % alignof(NativeWeatherRainBridge::Context))
+            return false;
+        output = state;
+        active = static_cast<std::uint64_t>(context.activeCalls);
+        foreign = static_cast<std::uint64_t>(context.unqualifiedArchive);
+        return true;
+    }
+    bool NativeWeatherOverrideWin32::RevalidateRain(const Binding& binding, const NativeWeatherOverrideCodeView& view,
+                                                    const NativeWeatherRainLeaf::State& state, bool retained) noexcept
+    {
+        namespace Rain = NativeWeatherRainProfile;
+        if (!rainCopyTarget || rainImage != binding.image)
+            return false;
+        if (state.allocationBase)
+        {
+            NativeWeatherRainLeaf::State actual{};
+            if (!rainLeaf.Read(actual) || !SameRainAllocation(state, actual) || (state.prepared && !rainLeaf.Verify()))
+                return false;
+        }
+        if (retained && (!state.prepared || !state.leafEntry || !state.context))
+            return false;
+        std::array<unsigned char, 8> entry{};
+        if (!NativeImageAccess::ReadImage(binding.image, binding.image + Rain::EntryRva, entry.data(), entry.size(), false, true) ||
+            (entry != NativeWeatherRainBridge::StockEntry && (!retained || entry != state.plan.entry)))
+            return false;
+        std::array<unsigned char, Rain::MaximumPinBytes> bytes{};
+        for (const auto& pin : Rain::Code)
+        {
+            if (pin.size > bytes.size() ||
+                !NativeImageAccess::ReadImage(binding.image, binding.image + pin.rva, bytes.data(), pin.size, false, pin.rva != Rain::SerializerUnwindRva) ||
+                !view.Originalize(binding, pin.rva, bytes.data(), pin.size))
+                return false;
+            if (retained)
+            {
+                const auto begin = pin.rva > Rain::EntryRva ? pin.rva : Rain::EntryRva;
+                const auto pinEnd = pin.rva + pin.size, entryEnd = Rain::EntryRva + entry.size();
+                const auto end = pinEnd < entryEnd ? pinEnd : entryEnd;
+                for (auto rva = begin; rva < end; ++rva)
+                {
+                    if (bytes[rva - pin.rva] != entry[rva - Rain::EntryRva])
+                        return false;
+                    bytes[rva - pin.rva] = NativeWeatherRainBridge::StockEntry[rva - Rain::EntryRva];
+                }
+            }
+            if (std::memcmp(bytes.data(), pin.bytes, pin.size))
+                return false;
+        }
+        for (const auto& slot : Rain::Slots)
+        {
+            std::uintptr_t actual = 0;
+            if (!NativeImageAccess::ReadImage(binding.image, binding.image + slot.rva, &actual, sizeof(actual)) || actual != binding.image + slot.target)
+                return false;
+        }
+        std::uintptr_t copy = 0;
+        return NativeImageAccess::ReadImage(binding.image, binding.image + Rain::CopyIatRva, &copy, sizeof(copy)) && copy == rainCopyTarget;
+    }
+    bool NativeWeatherOverrideWin32::ReleaseRain(const NativeWeatherRainLeaf::State& expected, NativeWeatherRainLeaf::ReleaseCheck check,
+                                                 void* context) noexcept
+    {
+        NativeWeatherRainLeaf::State actual{};
+        if (!rainLeaf.Read(actual) || !SameRainAllocation(expected, actual) || !rainLeaf.Release(check, context))
+            return false;
+        rainImage = rainCopyTarget = 0;
+        return true;
     }
     bool NativeWeatherOverrideWin32::CompareExchange128() const noexcept
     {

@@ -18,14 +18,15 @@ fixtures and the normal backend build remain distinct from live GTA validation;
 the previously installed candidate stays available for the deferred combined
 test. The port remains experimental.
 
-The native weather extension reuses that same callback owner for seven scalar
+The native weather extension reuses that same callback owner for eight scalar
 override groups. Constrained allocation placement preserves displacement bytes
-outside the selected aligned 64-bit word, admitting all thirty native writers
+outside the selected aligned 64-bit word, admitting all thirty-seven direct writers
 without a partial instruction write or a 128-bit CPU requirement. Actual
 allocation bases and interior accumulator addresses have distinct retained
 identities. Reset restores native progression without rewinding an accepted
-scalar value. Rain's serializer still requires direction-sensitive handling, so
-the weather SDK remains partial. Separately, actual `CStats`
+scalar value. Rain additionally owns its directional archive entry and lifetime.
+The complete `CWeatherOverridesDE` object is borrowed through admitted
+`CGameDE::GetWeather`; it does not complete the enclosing `CGame`. Separately, actual `CStats`
 reads now use the qualified DE float/integer banks and weapon-skill classifier.
 The complete four-method `CStatsDE` also delegates Set/Modify to the qualified
 native reaction transactions through this same runtime. `CGameDE::GetStats`
@@ -73,6 +74,14 @@ lease. The native combo-count setter remains pure; the live manager is not
 published from this partial slice. This differs from the complete owned CPU
 stat returned by `CreateWeaponStat`.
 
+The manager's existing first-match lookup, skill selection and deliberately
+disabled list reset also share one SDK policy between classic and DE. The DE
+manager slice owns 76 typed CPU originals in classic insertion order, including
+duplicate standard records, and borrows live SDK identities through explicit
+registration. Metadata edits and mutable originals remain observable; unlisted
+CPU stats keep their original-provider lifetime contract. Native wrapper
+creation stays pure, so this slice does not publish `GetWeaponStatManager`.
+
 `CGameTimingDE::GetGravity` also reads the current qualified native downward
 acceleration operand through the existing timing-reader binding. It preserves
 finite binary32 values and refuses changed image/code/read prerequisites.
@@ -81,13 +90,17 @@ prevent treating this pooled constant as a mutable world-gravity property.
 `SetGravity` remains pure until those consumers and override lifetime are
 qualified independently.
 
-Rain now has separately tested support for synchronous archive direction and
-active-stack borrow exclusion. Loads can advance the real archive through a
-temporary value, while saves retain native Rain reads. Stack bounds come from
-independent NT_TIB/current-thread facts; unreadable, changed, fiber or borrowed
-stacks refuse admission. These support primitives do not enable Rain: the
-retained near-code allocation, complete parked-thread set, exact entry/direct
-writer journal and retirement still need their shared runtime integration.
+Rain's shared runtime now retains its own near RX leaf, separate RW descriptor
+and exact direct-writer/entry journals. Loads advance the real synchronous
+archive through a temporary value, while saves retain native Rain reads. Stack
+bounds come from independent NT_TIB/current-thread facts; unreadable, changed,
+fiber or borrowed stacks refuse admission. The same parked peer set must pass
+old/new continuation checks before either entry exchange and allocation release.
+A bounded native enumeration rejects unexpected threads without a loader lookup
+or growing collection under the hold; it supplies no future global thread-birth
+lock. Partial operations retain exact code, protection, cache, handle and
+allocation debt. The complete SDK implementation is checked offline; this does
+not claim live weather or full MTA readiness.
 
 The October 19 application-frame trial observed 277 natural gameplay frames
 and both configured UI dictionary entries without engine writes, then retired

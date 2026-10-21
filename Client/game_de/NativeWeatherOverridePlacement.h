@@ -45,7 +45,7 @@ namespace mta::game_de::NativeWeatherOverridePlacementProfile
             return writerEnd > windowEnd ? writerEnd : windowEnd;
         }
     };
-    extern const std::array<Window, 30> Windows;
+    extern const std::array<Window, 37> Windows;
     const Window*                       Find(std::uintptr_t writerRva) noexcept;
     // Validates the complete instruction, including bytes intentionally left
     // outside the atomic window. Only a congruent prepared accumulator can

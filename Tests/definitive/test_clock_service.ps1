@@ -15,7 +15,7 @@ $previousTmp = $env:TMP
 $record = [ordered]@{schema='mta_clock_service_tests_v1';directory=$outputRoot;architecture='x64';success=$false;
     compileRuns=@();testRun=$null;checks=0;failure=$null;sourceHashes=@();sourcesUnchanged=$true;
     existingSdkClockImplementationTested=$false;productionNativeCallbackTested=$false;wrongExecutableRefusalVerified=$false;
-    productionFreezePatchTested=$false;readOnlyGameTimeReaderTested=$false;nativeCGameTimingPrerequisiteTested=$false;nativeCGameTimingWriterTested=$false;nativeStoredFPSReaderTested=$false;nativePauseSafeOwnerTested=$false;nativeApplicationFrameObserverTested=$false;nativeSystemStateOwnerTested=$false;nativeCheatFlagOwnerTested=$false;nativeWeatherOwnerTested=$false;nativeWeatherScalarOwnerTested=$false;nativeTypedWeaponWriteOwnerTested=$false;nativeWeaponVectorAndBankOwnerTested=$false;nativeWeatherOverrideOwnerTested=$false;nativeWeatherPlacementOwnerTested=$false;nativeStatsSdkOwnerTested=$false;nativeWeaponStatSdkOwnerTested=$false;nativeStartGameOwnerTested=$false;nativeStartupCompletionOwnerTested=$false;executionArtifacts=@();
+    productionFreezePatchTested=$false;readOnlyGameTimeReaderTested=$false;nativeCGameTimingPrerequisiteTested=$false;nativeCGameTimingWriterTested=$false;nativeStoredFPSReaderTested=$false;nativePauseSafeOwnerTested=$false;nativeApplicationFrameObserverTested=$false;nativeSystemStateOwnerTested=$false;nativeCheatFlagOwnerTested=$false;nativeWeatherOwnerTested=$false;nativeWeatherScalarOwnerTested=$false;nativeTypedWeaponWriteOwnerTested=$false;nativeWeaponVectorAndBankOwnerTested=$false;nativeWeatherOverrideOwnerTested=$false;nativeWeatherPlacementOwnerTested=$false;nativeStatsSdkOwnerTested=$false;nativeWeaponStatSdkOwnerTested=$false;nativeStartGameOwnerTested=$false;nativeStartupCompletionOwnerTested=$false;nativeRainOwnerTested=$false;executionArtifacts=@();
     gameLaunched=$false;gameAttached=$false;gameClockWritten=$false;gameHooksInstalled=$false;fullMtaReady=$false}
 function Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 function RunBounded([string]$Executable,[string[]]$Arguments,[string]$Name,[int]$DeadlineMs) {
@@ -70,7 +70,7 @@ try {
         'Client/game_de/NativeWeatherOverrideOwner.h','Client/game_de/NativeWeatherOverrideOwner.cpp',
         'Client/game_de/NativeWeatherOverrideWin32.h','Client/game_de/NativeWeatherOverrideWin32.cpp',
         'Client/game_de/NativeWeatherOverridePlacement.h','Client/game_de/NativeWeatherOverridePlacement.cpp',
-        'Client/game_de/NativeWeatherOverrideSlot.h','Client/game_de/NativeWeatherOverrideSlot.cpp',
+        'Client/game_de/NativeWeatherOverrideSlot.h','Client/game_de/NativeWeatherOverrideSlot.cpp','Client/game_de/NativeWeatherRainProfile.h','Client/game_de/NativeWeatherRainBridge.h','Client/game_de/NativeWeatherRainBridge.cpp','Client/game_de/NativeWeatherRainBorrowGuard.h','Client/game_de/NativeWeatherRainBorrowGuard.cpp','Client/game_de/NativeWeatherRainLeaf.h','Client/game_de/NativeWeatherRainLeaf.cpp',
         'Client/game_de/NativeWeaponInfoReader.h','Client/game_de/NativeWeaponInfoReader.cpp','Client/game_de/NativeWeaponInfoProfile.h',
         'Client/game_de/NativeWeaponInfoWriteAccess.h','Client/game_de/NativeWeaponInfoWriteMemory.h','Client/game_de/NativeWeaponInfoWriteMemory.cpp',
         'Client/game_de/CWeaponStatNativeDE.h','Client/game_de/CWeaponStatNativeDE.cpp','Client/game_de/NativeWeaponInfoExtraProfile.h',
@@ -100,7 +100,7 @@ try {
         'Shared/sdk/enums/EntityType.h','Shared/sdk/enums/PedPieceTypes.h',
         'Client/game_de/NativeServiceAdmission.h',
         'Client/sdk/game/CClock.h','Client/sdk/game/CGameClockService.h','Client/sdk/game/CGameAdapter.h','Shared/sdk/CControllerState.h',
-        'Shared/sdk/CControlStateSynthesis.h','Tests/definitive/ClockServiceTests.cpp','Tests/definitive/test_clock_service.ps1')
+        'Shared/sdk/CControlStateSynthesis.h','Tests/definitive/ClockServiceTests.cpp','Tests/definitive/NativeWeatherRainOwnerTests.inl','Tests/definitive/test_clock_service.ps1')
     $sourceNames += @($nativeFiles | ForEach-Object { [IO.Path]::GetRelativePath($taskRoot,$_.FullName).Replace('\','/') })
     $detoursNames = @('detours.cpp','modules.cpp','disasm.cpp','image.cpp','creatwth.cpp')
     $sourceNames += @($detoursNames + @('detours.h') | ForEach-Object { 'vendor/detours/4.0.1/src/' + $_ })
@@ -157,7 +157,7 @@ try {
         (Join-Path $taskRoot 'Client/game_de/NativeWeatherOverridePlan.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeWeatherOverrideProfile.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeWeatherOverrideAtomic.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeWeatherOverrideOwner.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeWeatherOverrideWin32.cpp'),
-        (Join-Path $taskRoot 'Client/game_de/NativeWeatherOverridePlacement.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeWeatherOverrideSlot.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativeWeatherOverridePlacement.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeWeatherOverrideSlot.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeWeatherRainBridge.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeWeatherRainBorrowGuard.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeWeatherRainLeaf.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeImageAccess.cpp')) +
         $runtimeDependencies + @(('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'fixture.pdb')),('/Fe'+$executable),'/link','bcrypt.lib','user32.lib') + $objects
     [ordered]@{compiler=$record.compiler;detoursArguments=$detoursArguments;arguments=$arguments} | ConvertTo-Json -Depth 5 |
@@ -205,6 +205,8 @@ try {
     if (-not $record.nativeStatsSdkOwnerTested) { throw 'Actual native complete CStats SDK owner fixture did not complete.' }
     $record.nativeStartGameOwnerTested = $text.Contains('Production native synchronous StartGame frame owner fixture completed')
     if (-not $record.nativeStartGameOwnerTested) { throw 'Actual native synchronous StartGame frame owner fixture did not complete.' }
+    $record.nativeRainOwnerTested = $text.Contains('Production native complete Rain weather SDK owner fixture completed')
+    if (-not $record.nativeRainOwnerTested) { throw 'Actual complete Rain weather SDK owner fixture did not complete.' }
     $record.nativeStartupCompletionOwnerTested = $text.Contains('Production native asynchronous startup completion owner fixture completed')
     if (-not $record.nativeStartupCompletionOwnerTested) { throw 'Actual native asynchronous startup completion owner fixture did not complete.' }
     $record.nativeApplicationFrameObserverTested = $text.Contains('Production natural application-frame observer fixture completed')

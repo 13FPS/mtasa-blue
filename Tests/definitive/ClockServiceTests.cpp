@@ -15,6 +15,7 @@
 #include "../../Client/game_de/NativeWeatherOverridePlan.h"
 #include "../../Client/game_de/NativeWeatherOverrideAtomic.h"
 #include "../../Client/game_de/NativeWeatherOverridePlacement.h"
+#include "../../Client/game_de/NativeWeatherRainProfile.h"
 #include "../../Client/game_de/CWeatherOverridesDE.h"
 #include "../../Client/game_de/NativeWeaponInfoProfile.h"
 #include "../../Client/game_de/NativeWeaponInfoWriteProfile.h"
@@ -41,6 +42,7 @@
 #include <fstream>
 #include <intrin.h>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <thread>
 #include <tlhelp32.h>
@@ -900,6 +902,32 @@ namespace
             constexpr std::array<std::uint32_t, 8> values{0x80000000, 0xbf000000, 0x3fc00000, 0x3e800000, 0x40000000, 0x3f000000, 0xbf800000, 0x3f800000};
             for (std::size_t index = 0; index < values.size(); ++index)
                 admit(NativeWeatherScalarProfile::Fields[index], &values[index], sizeof(values[index]), PAGE_READWRITE);
+        }
+        void AdmitRainPins()
+        {
+            namespace Rain = NativeWeatherRainProfile;
+            const auto admit = [&](std::uintptr_t rva, const void* bytes, std::size_t size, DWORD protection)
+            {
+                DWORD prior = 0, ignored = 0;
+                Check(::VirtualProtect(reinterpret_cast<void*>(image + rva), size, PAGE_READWRITE, &prior) != FALSE,
+                      "initialize only bounded Rain proof pages in the owned SEC_IMAGE fixture");
+                std::memcpy(reinterpret_cast<void*>(image + rva), bytes, size);
+                Check(::VirtualProtect(reinterpret_cast<void*>(image + rva), size, protection, &ignored) != FALSE &&
+                          ::FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(image + rva), size),
+                      "retain real RX code, RO unwind/slots and the current resolved copy target without executing native serializer instructions");
+            };
+            for (const auto& pin : Rain::Code)
+                admit(pin.rva, pin.bytes, pin.size, pin.rva == Rain::SerializerUnwindRva ? PAGE_READONLY : PAGE_EXECUTE_READ);
+            for (const auto& slot : Rain::Slots)
+            {
+                const auto target = image + slot.target;
+                admit(slot.rva, &target, sizeof(target), PAGE_READONLY);
+            }
+            const auto library = GetModuleHandleW(L"VCRUNTIME140.dll");
+            const auto copy = library ? GetProcAddress(library, "memcpy") : nullptr;
+            Check(copy != nullptr, "the ordinary fixture uses its actual loaded CRT copy import for native IAT qualification");
+            const auto target = reinterpret_cast<std::uintptr_t>(copy);
+            admit(Rain::CopyIatRva, &target, sizeof(target), PAGE_READONLY);
         }
         void AdmitSystemStatePins()
         {
@@ -3869,16 +3897,6 @@ namespace
         std::puts("Production native complete CStats SDK owner fixture completed");
     }
 
-    class ClockWeatherOverridesDE final : public CWeatherOverridesDE
-    {
-    public:
-        explicit ClockWeatherOverridesDE(NativeGameTimingAccess& access) noexcept : CWeatherOverridesDE(access, access, access) {}
-        // Rain's serializer escape is still unproved. These two test-only
-        // overrides must never impersonate available production rain writes.
-        void SetAmountOfRain(float) override { std::abort(); }
-        void ResetAmountOfRain() override { std::abort(); }
-    };
-
     struct WeatherOverrideContext
     {
         unsigned                          calls = 0, operation = 1, sdkIndex = 2, refusal = 0;
@@ -3906,7 +3924,7 @@ namespace
             ++callbackDepth;
         if (context.refusal == 4)
             runtime.refreshed.store(GetTickCount64() - ClockServiceLeaseMsV1 - 1);
-        ClockWeatherOverridesDE                        sdk(access);
+        CWeatherOverridesDE                            sdk(access, access, access);
         const std::array<bool (CWeather::*)(float), 7> setters{&CWeather::SetWetRoads, &CWeather::SetFoggyness, &CWeather::SetFog,    &CWeather::SetRainFog,
                                                                &CWeather::SetWaterFog, &CWeather::SetSandstorm, &CWeather::SetRainbow};
         const std::array<bool (CWeather::*)(), 7>      resetters{&CWeather::ResetWetRoads, &CWeather::ResetFoggyness, &CWeather::ResetFog,
@@ -3931,9 +3949,10 @@ namespace
     {
         namespace Scalars = NativeWeatherScalarProfile;
         namespace Placement = NativeWeatherOverridePlacementProfile;
-        static_assert(NativeWeatherOverrideAtomicProfile::Windows.size() == 30);
+        static_assert(NativeWeatherOverrideAtomicProfile::Windows.size() == 37);
         fixture.AdmitWeatherPins();
         fixture.AdmitWeatherScalarPins();
+        fixture.AdmitRainPins();
         ClockReaderTestHost::image = fixture.image;
         using Code = std::array<std::array<unsigned char, 16>, NativeWeatherOverrideAtomicProfile::Windows.size()>;
         const auto code = [&]
@@ -4065,10 +4084,6 @@ namespace
             }
         context.refusal = 0;
         context.operation = 4;
-        context.field = Scalars::Field::Rain;
-        invoke();
-        Check(context.result == ClockResult::UnsupportedBuild && !WeatherOverrideRetained() && code() == stock,
-              "native Rain explicitly refuses its unproved serializer escape instead of treating direct writer plans as a complete override");
         context.field = static_cast<Scalars::Field>(255);
         invoke();
         Check(context.result == ClockResult::InvalidArgument && !WeatherOverrideRetained() && code() == stock,
@@ -5139,6 +5154,7 @@ namespace
 }
 
 #include "NativeWeaponStatSdkTests.inl"
+#include "NativeWeatherRainOwnerTests.inl"
 
 int main(int argc, char** argv)
 {
@@ -5163,6 +5179,7 @@ int main(int argc, char** argv)
     NativeWeaponVectorAndBankOwner(fixture);
     NativeWeaponStatSdkOwner(fixture);
     NativeWeatherOverrideOwnedSdk(fixture);
+    NativeRainOwnerAndWeatherSdk(fixture);
     NativeStatsOwnedSdk(fixture);
     NativeReadSetAndRestoration(fixture);
     NativeCoherentCommandPublication(fixture);

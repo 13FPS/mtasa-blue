@@ -22,19 +22,32 @@ namespace mta::game_de
         LifeSpan,
         Spread,
         AnimBreakoutTime,
-        AnimLoopFireTime
+        AnimLoopFireTime,
+        // Actual CWeaponStat timing setters share the same engine owner.
+        AnimLoopStart,
+        AnimLoopStop,
+        Anim2LoopStart,
+        Anim2LoopStop,
+        Anim2LoopFireTime
     };
     enum class NativeWeaponShortField : std::uint32_t
     {
         Damage,
-        MaximumClipAmmo
+        MaximumClipAmmo,
+        AimOffsetIndex,
+        // This intent uses only the low byte of the final aligned word;
+        // the neighboring combos-available byte remains independently owned.
+        DefaultCombo
     };
     enum class NativeWeaponDwordField : std::uint32_t
     {
         Skill,
         RequiredStatLevel,
         Flags,
-        AnimGroup
+        AnimGroup,
+        FireType,
+        Model,
+        Model2
     };
 
     // A read-qualified weapon bank is not a write lease. The existing engine

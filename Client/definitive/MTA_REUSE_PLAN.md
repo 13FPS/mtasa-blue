@@ -64,6 +64,31 @@ mutable and are looked up at each constrained flag transition. Custom weapon
 execution separately uses the real native weapon-info bank. The live weapon-stat
 manager still requires its remaining qualified native setters.
 
+The native `CWeaponStatNativeDE` slice now borrows those same stable bank
+objects and callback writer, including model/fire type, animation loops, aim
+offset and default-combo fields. Flag changes reuse MTA's shared policy and
+resolve mutable originals at each transition. Persistent writes preserve
+accepted effects and later native edits if a subsequent operation loses its
+lease. The native combo-count setter remains pure; the live manager is not
+published from this partial slice. This differs from the complete owned CPU
+stat returned by `CreateWeaponStat`.
+
+`CGameTimingDE::GetGravity` also reads the current qualified native downward
+acceleration operand through the existing timing-reader binding. It preserves
+finite binary32 values and refuses changed image/code/read prerequisites.
+The separate oriented-force operand and unrelated sample/filter consumers
+prevent treating this pooled constant as a mutable world-gravity property.
+`SetGravity` remains pure until those consumers and override lifetime are
+qualified independently.
+
+Rain now has separately tested support for synchronous archive direction and
+active-stack borrow exclusion. Loads can advance the real archive through a
+temporary value, while saves retain native Rain reads. Stack bounds come from
+independent NT_TIB/current-thread facts; unreadable, changed, fiber or borrowed
+stacks refuse admission. These support primitives do not enable Rain: the
+retained near-code allocation, complete parked-thread set, exact entry/direct
+writer journal and retirement still need their shared runtime integration.
+
 The October 19 application-frame trial observed 277 natural gameplay frames
 and both configured UI dictionary entries without engine writes, then retired
 its hooks and unloaded Core normally. A combined startup observer now reuses

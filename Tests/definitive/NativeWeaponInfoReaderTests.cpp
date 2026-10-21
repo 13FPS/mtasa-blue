@@ -194,6 +194,11 @@ namespace
                 seed(pin.rva, pin.bytes.data(), pin.size, code);
             for (const auto& pin : P::Literals)
                 seed(pin.rva, pin.bytes.data(), pin.size, literal);
+#if defined(MTA_DE_WEAPON_FIXTURE_EXTRA_SEED)
+            // Extra owned-image suites may add qualified code/data pages. The
+            // ordinary reader fixture keeps its original seed set unchanged.
+            MTA_DE_WEAPON_FIXTURE_EXTRA_SEED(seed, code, literal, bank);
+#endif
             for (std::size_t slot = 0; slot < P::RowCount; ++slot)
             {
                 const auto value = Row(slot);

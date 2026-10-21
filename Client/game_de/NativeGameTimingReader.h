@@ -28,6 +28,7 @@ namespace mta::game_de
         Status Bind() noexcept;
         Status Read(NativeGameTimingValues& output) const noexcept;
         Status ReadFPS(float& output) const noexcept;
+        Status ReadGravity(float& output) const noexcept;
         void   Reset() noexcept;
         bool   IsBound() const noexcept;
 

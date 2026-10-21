@@ -15,7 +15,7 @@ $previousTmp = $env:TMP
 $record = [ordered]@{schema='mta_clock_service_tests_v1';directory=$outputRoot;architecture='x64';success=$false;
     compileRuns=@();testRun=$null;checks=0;failure=$null;sourceHashes=@();sourcesUnchanged=$true;
     existingSdkClockImplementationTested=$false;productionNativeCallbackTested=$false;wrongExecutableRefusalVerified=$false;
-    productionFreezePatchTested=$false;readOnlyGameTimeReaderTested=$false;nativeCGameTimingPrerequisiteTested=$false;nativeCGameTimingWriterTested=$false;nativeStoredFPSReaderTested=$false;nativePauseSafeOwnerTested=$false;nativeApplicationFrameObserverTested=$false;nativeSystemStateOwnerTested=$false;nativeCheatFlagOwnerTested=$false;nativeWeatherOwnerTested=$false;nativeWeatherScalarOwnerTested=$false;nativeTypedWeaponWriteOwnerTested=$false;nativeWeaponVectorAndBankOwnerTested=$false;nativeWeatherOverrideOwnerTested=$false;nativeWeatherPlacementOwnerTested=$false;nativeStatsSdkOwnerTested=$false;nativeStartGameOwnerTested=$false;nativeStartupCompletionOwnerTested=$false;executionArtifacts=@();
+    productionFreezePatchTested=$false;readOnlyGameTimeReaderTested=$false;nativeCGameTimingPrerequisiteTested=$false;nativeCGameTimingWriterTested=$false;nativeStoredFPSReaderTested=$false;nativePauseSafeOwnerTested=$false;nativeApplicationFrameObserverTested=$false;nativeSystemStateOwnerTested=$false;nativeCheatFlagOwnerTested=$false;nativeWeatherOwnerTested=$false;nativeWeatherScalarOwnerTested=$false;nativeTypedWeaponWriteOwnerTested=$false;nativeWeaponVectorAndBankOwnerTested=$false;nativeWeatherOverrideOwnerTested=$false;nativeWeatherPlacementOwnerTested=$false;nativeStatsSdkOwnerTested=$false;nativeWeaponStatSdkOwnerTested=$false;nativeStartGameOwnerTested=$false;nativeStartupCompletionOwnerTested=$false;executionArtifacts=@();
     gameLaunched=$false;gameAttached=$false;gameClockWritten=$false;gameHooksInstalled=$false;fullMtaReady=$false}
 function Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 function RunBounded([string]$Executable,[string[]]$Arguments,[string]$Name,[int]$DeadlineMs) {
@@ -55,7 +55,7 @@ try {
     if (-not ($nativeFiles.Name -contains 'NativeClockService.cpp')) { throw 'Production native clock runtime is not ready.' }
     $sourceNames = @('Client/game_de/CClockDE.h','Client/game_de/CClockDE.cpp','Client/game_de/NativeImageAccess.h','Client/game_de/NativeImageAccess.cpp',
         'Client/game_de/NativeGameTimeReader.h','Client/game_de/NativeGameTimeReader.cpp','Client/sdk/game/CGameTimeService.h',
-        'Client/game_de/NativeGameTimingReader.h','Client/game_de/NativeGameTimingReader.cpp','Client/game_de/NativeGameTimingProfile.h',
+        'Client/game_de/NativeGravityReadAccess.h','Client/game_de/NativeGravityReadProfile.h','Client/game_de/NativeGravityReadAccess.cpp','Client/game_de/NativeGameTimingReader.h','Client/game_de/NativeGameTimingReader.cpp','Client/game_de/NativeGameTimingProfile.h',
         'Client/game_de/NativeGameFPSProfile.h',
         'Client/game_de/NativeGameStateMemory.h','Client/game_de/NativeGameStateMemory.cpp','Client/game_de/NativeGameStateProfile.h',
         'Client/game_de/NativeCheatProfile.h','Client/game_de/NativeCheatProfile.cpp','Client/game_de/NativeCheatFlagAccess.h',
@@ -73,6 +73,8 @@ try {
         'Client/game_de/NativeWeatherOverrideSlot.h','Client/game_de/NativeWeatherOverrideSlot.cpp',
         'Client/game_de/NativeWeaponInfoReader.h','Client/game_de/NativeWeaponInfoReader.cpp','Client/game_de/NativeWeaponInfoProfile.h',
         'Client/game_de/NativeWeaponInfoWriteAccess.h','Client/game_de/NativeWeaponInfoWriteMemory.h','Client/game_de/NativeWeaponInfoWriteMemory.cpp',
+        'Client/game_de/CWeaponStatNativeDE.h','Client/game_de/CWeaponStatNativeDE.cpp','Client/game_de/NativeWeaponInfoExtraProfile.h',
+        'Client/sdk/game/CWeaponStat.h','Client/sdk/game/CWeaponStatFlagPolicy.h','Tests/definitive/NativeWeaponStatSdkTests.inl',
         'Client/game_de/NativeWeaponInfoWriteProfile.h','Client/game_de/CWeaponInfoWriteDE.h','Client/game_de/CWeaponInfoWriteDE.cpp',
         'Client/game_de/CWeaponInfoReadDE.h','Client/game_de/CWeaponInfoReadDE.cpp',
         'Client/game_de/NativeWeaponInfoVectorAccess.h','Client/game_de/NativeWeaponInfoVectorMemory.h','Client/game_de/NativeWeaponInfoVectorMemory.cpp',
@@ -120,10 +122,10 @@ try {
     $common = @('/nologo','/std:c++17','/EHsc','/O2','/MD','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN','/DDETOURS_MTA_VM_TRANSACTION_NODES',
         ('/I'+(Join-Path $taskRoot 'Client/sdk')),('/I'+(Join-Path $taskRoot 'Shared/sdk')),('/I'+(Join-Path $taskRoot 'vendor/detours/4.0.1/src')))
     $detoursSources = @($detoursNames | ForEach-Object { Join-Path $taskRoot ('vendor/detours/4.0.1/src/' + $_) })
-    $detoursArguments = $common + @('/w','/c') + $detoursSources + @(('/Fo'+$outputRoot+[IO.Path]::DirectorySeparatorChar))
+    $detoursArguments = $common + @('/w','/c') + $detoursSources + @(('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'fixture.pdb')))
     $record.compileRuns += RunBounded $compiler $detoursArguments 'detours-compile' 60000
     if ($record.compileRuns[-1].exitCode -ne 0 -or $record.compileRuns[-1].timedOut) { throw 'Owned Detours compilation failed.' }
-    $objects = @($detoursNames | ForEach-Object { Join-Path $outputRoot ([IO.Path]::ChangeExtension($_,'.obj')) })
+    $objects = @($detoursNames | ForEach-Object { Join-Path $scratchRoot ([IO.Path]::ChangeExtension($_,'.obj')) })
     $executable = Join-Path $outputRoot 'clock_service_tests.exe'
     $runtimeDependencies = @($nativeFiles | Where-Object { $_.Extension -eq '.cpp' -and $_.Name -ne 'NativeClockService.cpp' } | ForEach-Object FullName)
     # The fixture includes the exact production runtime translation unit, like
@@ -145,18 +147,19 @@ try {
     # complete synchronous UObject/type/provider membership guards execute.
     # Its shipping executable gate stays unchanged.
     $arguments = $common + @('/W4','/WX',(Join-Path $PSScriptRoot 'ClockServiceTests.cpp'),
-        (Join-Path $taskRoot 'Client/game_de/CClockDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CGameTimingDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CClockDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CGameTimingDE.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeGravityReadAccess.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CWeatherTransitionDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CWeatherScalarsDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CWeatherOverridesDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CWeaponInfoReadDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CWeaponInfoWriteDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CWeaponInfoDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CWeaponInfoBankDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CWeaponStatNativeDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CStatsReadDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CStatsDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeWeatherOverridePlan.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeWeatherOverrideProfile.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeWeatherOverrideAtomic.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeWeatherOverrideOwner.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeWeatherOverrideWin32.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeWeatherOverridePlacement.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeWeatherOverrideSlot.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeImageAccess.cpp')) +
-        $runtimeDependencies + @(('/Fo'+$outputRoot+[IO.Path]::DirectorySeparatorChar),('/Fe'+$executable),'/link','bcrypt.lib','user32.lib') + $objects
+        $runtimeDependencies + @(('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'fixture.pdb')),('/Fe'+$executable),'/link','bcrypt.lib','user32.lib') + $objects
     [ordered]@{compiler=$record.compiler;detoursArguments=$detoursArguments;arguments=$arguments} | ConvertTo-Json -Depth 5 |
         Set-Content -LiteralPath (Join-Path $outputRoot 'compile-command.json') -Encoding utf8NoBOM
     $record.compileRuns += RunBounded $compiler $arguments 'compile' 60000
@@ -190,6 +193,8 @@ try {
     if (-not $record.nativeWeatherScalarOwnerTested) { throw 'Actual native weather scalar owner fixture did not complete.' }
     $record.nativeTypedWeaponWriteOwnerTested = $text.Contains('Production native typed weapon write owner fixture completed')
     if (-not $record.nativeTypedWeaponWriteOwnerTested) { throw 'Actual native typed weapon write owner fixture did not complete.' }
+    $record.nativeWeaponStatSdkOwnerTested = $text.Contains('Production native weapon-stat SDK slice fixture completed')
+    if (-not $record.nativeWeaponStatSdkOwnerTested) { throw 'Actual native weapon-stat SDK slice fixture did not complete.' }
     $record.nativeWeaponVectorAndBankOwnerTested = $text.Contains('Production native weapon vector and actual80-wrapper bank owner fixture completed')
     if (-not $record.nativeWeaponVectorAndBankOwnerTested) { throw 'Actual native weapon vector and genuine80-wrapper bank owner fixture did not complete.' }
     $record.nativeWeatherOverrideOwnerTested = $text.Contains('Production native weather atomic override SDK owner fixture completed')

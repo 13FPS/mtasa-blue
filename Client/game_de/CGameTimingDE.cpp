@@ -59,6 +59,18 @@ namespace mta::game_de
         return RequireFPS(timing);
     }
 
+    float CGameTimingDE::GetGravity()
+    {
+        float      value = 0;
+        const auto result = timing.ReadGravity(value);
+        // This is the current native acceleration operand. A failed read must
+        // not look like zero gravity or a cached successful frame. SetGravity
+        // remains pure because the pooled coefficient also has unrelated users.
+        if (result != Status::Ok)
+            throw std::runtime_error("DE CGame gravity unavailable (status " + std::to_string(static_cast<std::uint32_t>(result)) + ")");
+        return value;
+    }
+
     float CGameTimingDE::GetTimeStep()
     {
         return RequireTiming(timing).timeStep;

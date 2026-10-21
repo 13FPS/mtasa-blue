@@ -42,7 +42,7 @@ try{
         'Shared/sdk/CControllerState.h','Shared/sdk/CControllerActions.h','Shared/sdk/CControlStateSynthesis.h',
         'Tests/definitive/NativeWeaponInfoReaderTests.cpp','Tests/definitive/test_native_weapon_info.ps1','Tests/definitive/NativeWeaponInfoWriteTests.cpp','Tests/definitive/test_native_weapon_writes.ps1',
         'Client/game_de/NativeWeaponInfoWriteAccess.h','Client/game_de/NativeWeaponInfoWriteMemory.h','Client/game_de/NativeWeaponInfoWriteMemory.cpp',
-        'Client/game_de/NativeWeaponInfoWriteProfile.h','Client/game_de/CWeaponInfoWriteDE.h','Client/game_de/CWeaponInfoWriteDE.cpp',
+        'Client/game_de/NativeWeaponInfoWriteProfile.h','Client/game_de/NativeWeaponInfoExtraProfile.h','Client/game_de/CWeaponInfoWriteDE.h','Client/game_de/CWeaponInfoWriteDE.cpp',
         'Build/definitive-recovery/mta-world-services-batch-20261021/weapon-native/native-weapon-info-qualification.json')
     $record.sources=@($names|ForEach-Object{[ordered]@{path=$_;sha256=(Sha (Join-Path $root $_))}})
     # Generate only the SDK mutations and pointer accessor left intentionally
@@ -86,7 +86,8 @@ try{
     $exe=Join-Path $output 'native-weapon-write-tests.exe'
     $arguments=@('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/MD','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN',
         ('/I'+(Join-Path $root 'Client/sdk')),('/I'+(Join-Path $root 'Shared/sdk')),('/I'+$scratch),
-        (Join-Path $PSScriptRoot 'NativeWeaponInfoWriteTests.cpp'),('/Fo'+$output+[IO.Path]::DirectorySeparatorChar),('/Fe'+$exe),'/link','bcrypt.lib')
+        (Join-Path $PSScriptRoot 'NativeWeaponInfoWriteTests.cpp'),('/Fo'+$scratch+[IO.Path]::DirectorySeparatorChar),
+        ('/Fd'+(Join-Path $scratch 'compiler.pdb')),('/Fe'+$exe),'/link','bcrypt.lib')
     $result=[ordered]@{compiler=$compiler;compilerSha256=(Sha $compiler);compile=$null;test=$null;checks=0}
     $record.results+=$result
     $result.compile=RunOwned $compiler $arguments $output 'compile' 60000

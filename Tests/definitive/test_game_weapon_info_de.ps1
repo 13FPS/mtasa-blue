@@ -81,9 +81,9 @@ function InterfaceMethods([string]$RelativePath) {
 
 try {
     $productionSources = @('Client/game_de/CWeaponStatFactoryDE.cpp','Client/game_de/CGameWeaponInfoDE.cpp','Client/game_de/CGameTimingDE.cpp',
-        'Client/game_de/NativeGameTimingReader.cpp','Client/game_de/NativeGameTimeReader.cpp','Client/game_de/NativeImageAccess.cpp')
+        'Client/game_de/NativeGravityReadAccess.cpp','Client/game_de/NativeGameTimingReader.cpp','Client/game_de/NativeGameTimeReader.cpp','Client/game_de/NativeImageAccess.cpp')
     $sourceNames = $productionSources + @('Client/game_de/CWeaponStatFactoryDE.h','Client/sdk/game/CWeaponStatData.h','Client/sdk/game/CWeaponStatDefaults.h','Client/sdk/game/CWeaponStatFlagPolicy.h','Client/sdk/game/CWeaponStatOwned.h','Client/sdk/game/CWeaponStat.h','Shared/sdk/CVector.h','Shared/sdk/CVector4D.h','Shared/sdk/SharedUtil.Defines.h','Client/game_de/CGameWeaponInfoDE.h','Client/game_de/CGameTimingDE.h',
-        'Client/game_de/NativeGameTimingReader.h','Client/game_de/NativeGameTimeReader.h','Client/game_de/NativeGameTimingAccess.h',
+        'Client/game_de/NativeGravityReadAccess.h','Client/game_de/NativeGravityReadProfile.h','Client/game_de/NativeGravityReadAccess.cpp','Client/game_de/NativeGameTimingReader.h','Client/game_de/NativeGameTimeReader.h','Client/game_de/NativeGameTimingAccess.h',
         'Client/game_de/NativeCheatProfile.h','Client/game_de/CWeatherTransitionDE.h','Client/sdk/game/CWeather.h',
         'Client/game_de/NativeImageAccess.h','Client/game_de/NativeClockMemory.h','Client/game_de/NativeClockProfile.h',
         'Client/game_de/NativeGameTimingProfile.h','Client/game_de/NativeGameFPSProfile.h','Client/sdk/game/CWeaponInfoIndexPolicy.h',
@@ -137,7 +137,7 @@ try {
     $arguments = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/MD','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN',
         ('/I'+(Join-Path $taskRoot 'Shared/sdk')),('/I'+(Join-Path $taskRoot 'Client/sdk')),('/I'+$scratchRoot),
         (Join-Path $PSScriptRoot 'GameWeaponInfoDETests.cpp')) + @($productionSources | ForEach-Object { Join-Path $taskRoot $_ }) +
-        @(('/Fo'+$outputRoot+[IO.Path]::DirectorySeparatorChar),('/Fe'+$executable),'/link','bcrypt.lib')
+        @(('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'fixture.pdb')),('/Fe'+$executable),'/link','bcrypt.lib')
     $record.result = [ordered]@{architecture='x64';environment=$environmentResult;compile=$null;test=$null;checks=0;
         pointerBits=$null;executable=$executable;executableSha256=$null}
     $record.result.compile = RunOwned $compiler $arguments $outputRoot 'compile' 60000

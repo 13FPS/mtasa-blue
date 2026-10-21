@@ -8,6 +8,7 @@
 #include "NativeGameFPSProfile.h"
 #include "NativeClockProfile.h"
 #include "NativeImageAccess.h"
+#include "NativeGravityReadAccess.h"
 
 #include <cmath>
 #include <cstring>
@@ -149,6 +150,27 @@ namespace mta::game_de
         // samples, preserving the caller's value instead of computing an FPS
         // estimate from the independently scaled/clamped gameplay timestep.
         output = second;
+        return Status::Ok;
+    }
+
+    Status NativeGameTimingReader::ReadGravity(float& output) const noexcept
+    {
+        const auto owner = ownerThread.load();
+        const auto image = imageAddress.load();
+        if (!owner || !image)
+            return Status::NotInitialized;
+        if (owner != GetCurrentThreadId())
+            return Status::WrongThread;
+        if (image != reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr)))
+            return Status::Unsupported;
+        const auto read = [](std::uintptr_t base, std::uintptr_t address, void* destination, std::size_t bytes, bool executable) noexcept
+        { return TimingImage::ReadImage(base, address, destination, bytes, false, executable); };
+        float next = 0;
+        if (!TimingBinding(image) || !NativeGravityReadAccess(image, read).Read(next) || !TimingBinding(image))
+            return Status::Unsupported;
+        // Reuse the existing bound image and caller-thread ownership. No new
+        // native callback, mutable global, or cached default is introduced.
+        std::memcpy(&output, &next, sizeof(output));
         return Status::Ok;
     }
 

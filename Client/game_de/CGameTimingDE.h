@@ -25,6 +25,7 @@ namespace mta::game_de
         DWORD         GetSystemTime() override;
         int           GetSystemFrameCounter() const override;
         float         GetFPS() override;
+        float         GetGravity() override;
         float         GetTimeStep() override;
         float         GetOldTimeStep() override;
         float         GetTimeScale() override;

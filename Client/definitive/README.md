@@ -88,8 +88,17 @@ detaching the updater; pending cleanup prevents adapter release. The best-effort
 `mta-pad-updater.log` beside the backend records generation, forwarding/suppression,
 entry ownership and cleanup counters after peers are released.
 
-Whole-pad `Store`/`Restore`, horn history, last-touched time and rumble still need
-qualified implementations. No `GetPad` or complete game-interface factory
+The abstract `CPadActivityDE` also implements `SetLastTimeTouched` through a
+separate checked access to the native DWORD at `+0x164`. It preserves the game's
+32-bit millisecond value and verifies the exact four-byte write without copying
+adjacent native fields. Its image profile checks the native producers, consumer
+and both pad identities; it grants no engine callback or remote-context lease.
+
+Whole-pad `Store`/`Restore`, horn history and rumble still need qualified
+implementations. The classic pad layout cannot supply those offsets: several
+candidate bytes are native provider flags or a frame countdown. Whole-pad replay
+also needs ownership of shared mouse timers and external source queues, beyond
+the two controller-state blocks. No `GetPad` or complete game-interface factory
 publishes either partial class. The integrated updater path awaits GTA validation;
 full `CGame`, native remote-player contexts and x64 client networking remain
 unfinished, and **EXPERIMENTAL** stays in place.

@@ -119,6 +119,7 @@ namespace mta::game_de
             ClockResult ReadPedVital(const NativePedReferenceToken&, NativePedVitalField, float&) noexcept override;
             ClockResult SetPedVital(const NativePedReferenceToken&, NativePedVitalField, float) noexcept override;
             ClockResult ReadPedMetadata(const NativePedReferenceToken&, NativePedMetadata&) noexcept override;
+            ClockResult SetReferencedPedVelocity(const NativePedReferenceToken&, NativePedVelocityKind, const CVector&) noexcept override;
             ClockResult SetWeaponFloat(std::size_t slot, NativeWeaponFloatField field, float value) noexcept override;
             ClockResult SetWeaponShort(std::size_t slot, NativeWeaponShortField field, std::int16_t value) noexcept override;
             ClockResult SetWeaponDword(std::size_t slot, NativeWeaponDwordField field, std::uint32_t value) noexcept override;
@@ -2296,6 +2297,31 @@ namespace mta::game_de
             // conflict can follow a partial write; stopping this same owner
             // never rewinds the row or retries the remaining components.
             if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+
+        ClockResult NativeAccess::SetReferencedPedVelocity(const NativePedReferenceToken& token, NativePedVelocityKind kind, const CVector& value) noexcept
+        {
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedPoolReader::Value before, after;
+            result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            // Reuse the existing raw-vector transaction, including its exact
+            // per-component receipts and stop-on-entered-failure behavior.
+            result = SetPedVelocity(before.handle, kind, value);
+            if (result != ClockResult::Ok)
+                return result;
+            result = ResolvePedReference(token, after);
+            if (result == ClockResult::Ok && (after.nativePed != before.nativePed || after.handle != before.handle))
+                result = ClockResult::OwnerConflict;
+            // A valid vector update can outlive its weak reference. Preserve
+            // accepted components and stop rather than replaying the request
+            // against an old handle or restoring a guessed physical snapshot.
+            if (result != ClockResult::Ok)
                 Stop(result);
             return result;
         }

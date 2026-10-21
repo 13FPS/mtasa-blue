@@ -209,7 +209,8 @@ namespace ClockPedVitalsOwnerTest
 }
 namespace ClockPedVelocityOwnerTest
 {
-    unsigned    stores = 0, failAt = 0;
+    unsigned stores = 0, failAt = 0, afterAt = 0;
+    void (*after)() = nullptr;
     LONG WINAPI Exchange(volatile LONG* address, LONG target, LONG expected)
     {
         ++stores;
@@ -217,7 +218,14 @@ namespace ClockPedVelocityOwnerTest
             RaiseException(EXCEPTION_ACCESS_VIOLATION, 0, 0, nullptr);
         // Exercise the actual aligned scalar CAS. Only its fault boundary is
         // scheduled; no fake callback grant or alternative setter is supplied.
-        return _InterlockedCompareExchange(address, target, expected);
+        const auto observed = _InterlockedCompareExchange(address, target, expected);
+        if (stores == afterAt && after)
+        {
+            const auto action = after;
+            after = nullptr;
+            action();
+        }
+        return observed;
     }
 }
 
@@ -5563,6 +5571,7 @@ namespace
 #include "NativePedTeleportOwnerTests.inl"
 #include "NativePedVelocityOwnerTests.inl"
 #include "NativePedReferenceOwnerTests.inl"
+#include "NativePedMutationOwnerTests.inl"
 #include "NativePedVitalsOwnerTests.inl"
 #include "NativePedMetadataOwnerTests.inl"
 #include "NativeWorldCheatOwnerTests.inl"
@@ -5599,6 +5608,7 @@ int main(int argc, char** argv)
     NativePedTeleportOwnedSdk(fixture);
     NativePedVelocityOwnedSdk(fixture);
     NativePedReferenceOwnedSdk(fixture);
+    NativePedMutationOwnedSdk(fixture);
     NativePedVitalsOwnedSdk(fixture);
     NativePedMetadataOwnedSdk(fixture);
     NativeReadSetAndRestoration(fixture);

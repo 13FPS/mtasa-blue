@@ -171,6 +171,13 @@ The abstract `CPedMetadataDE` layer adds MTA's existing `GetModelIndex` and
 `GetEntityType` methods to the four vitals methods, sharing one immutable token.
 The other SDK methods stay pure; no registry or ped factory is published.
 
+The abstract `CPedMutationDE` layer adds the existing raw `SetMoveSpeed` and
+`SetTurnSpeed` SDK methods through that same registered token. Successful
+components persist if a later reference acknowledgement fails; the owner stops
+without replaying the request. The noexcept move-speed setter records its
+result explicitly. Velocity getters and placement methods remain pure while
+their classic bad-physics repair and teleport wrapper behavior are incomplete.
+
 Classic pool templates and the DE ped reader also share MTA's slot bounds
 policy. Free-slot selection retains the classic cursor/probe order and does
 not reserve a row or change its generation. Native allocation remains with

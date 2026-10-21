@@ -22,6 +22,7 @@
 #include "NativePedReferenceToken.h"
 #include "NativePedVitalsAccess.h"
 #include "NativePedMetadataAccess.h"
+#include "NativePedMutationAccess.h"
 #include "NativePlayerInfoAccess.h"
 #include "NativeWantedAccess.h"
 #include "NativeRopesAccess.h"
@@ -48,7 +49,8 @@ namespace mta::game_de
                                    public NativePedTeleportAccess,
                                    public NativePedVelocityAccess,
                                    public NativePedVitalsAccess,
-                                   public NativePedMetadataAccess
+                                   public NativePedMetadataAccess,
+                                   public NativePedMutationAccess
     {
     public:
         virtual ClockResult SetTimeScale(float value) noexcept = 0;

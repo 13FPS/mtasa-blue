@@ -197,6 +197,13 @@ field, preserves neighbouring physics/vitals state, and retains an accepted
 effect if acknowledgement fails. Optional borrowed-owner forwarding reaches
 the shared getter layer; an absent owner explicitly refuses these methods.
 
+Air resistance, elasticity and local-space centre of mass now use that same
+physical owner and existing SDK methods. Native damping, contact impulse and
+force/torque consumers establish their meanings independently of field layout.
+Centre-of-mass writes retain exact accepted components if a later scalar CAS or
+lifetime acknowledgement fails. Reads commit caller output only after their
+registered lifetime survives. Buoyancy remains unqualified and unavailable.
+
 Classic pool templates and the DE ped reader also share MTA's slot bounds
 policy. Free-slot selection retains the classic cursor/probe order and does
 not reserve a row or change its generation. Native allocation remains with

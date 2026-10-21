@@ -98,7 +98,7 @@ try {
         'Client/game_de/NativePedReferenceToken.h','Client/game_de/NativePedReferenceController.h','Client/game_de/NativePedReferenceController.cpp','Tests/definitive/NativePedReferenceOwnerTests.inl',
         'Client/game_de/NativePedMutationAccess.h','Tests/definitive/NativePedMutationOwnerTests.inl',
         'Client/game_de/NativePedVitalsAccess.h','Client/game_de/NativePedVitalsMemory.h','Client/game_de/NativePedVitalsMemory.cpp','Client/game_de/NativePedVitalsProfile.h','Tests/definitive/NativePedVitalsOwnerTests.inl',
-        'Client/game_de/NativePedPhysicalScalarsAccess.h','Client/game_de/NativePedPhysicalScalarsMemory.h','Client/game_de/NativePedPhysicalScalarsMemory.cpp','Client/game_de/NativePedPhysicalScalarsProfile.h','Tests/definitive/NativePedPhysicalScalarsOwnerTests.inl',
+        'Client/game_de/NativePedPhysicalScalarsAccess.h','Client/game_de/NativePedPhysicalScalarsMemory.h','Client/game_de/NativePedPhysicalScalarsMemory.cpp','Client/game_de/NativePedPhysicalScalarsProfile.h','Tests/definitive/NativePedPhysicalScalarsOwnerTests.inl','Tests/definitive/NativePedPhysicalDynamicsOwnerTests.inl',
         'Client/game_de/NativePedMetadataAccess.h','Client/game_de/NativePedMetadataMemory.h','Client/game_de/NativePedMetadataMemory.cpp','Client/game_de/NativePedMetadataProfile.h','Tests/definitive/NativePedMetadataOwnerTests.inl',
         'Client/game_de/NativePedObservationAccess.h','Tests/definitive/NativePedObservationOwnerTests.inl',
         'Client/game_de/NativeStatsReader.h','Client/game_de/NativeStatsReader.cpp','Client/game_de/NativeStatsProfile.h',
@@ -251,6 +251,8 @@ try {
     if (-not $record.nativePedVitalsOwnerTested) { throw 'Actual native ped vitals callback owner fixture did not complete.' }
     $record['nativePedPhysicalScalarsOwnerTested'] = $text.Contains('Production native ped physical scalars callback owner fixture completed')
     if (-not $record.nativePedPhysicalScalarsOwnerTested) { throw 'Actual native ped physical scalar callback owner fixture did not complete.' }
+    $record['nativePedPhysicalDynamicsOwnerTested'] = $text.Contains('Production native ped physical dynamics callback owner fixture completed')
+    if (-not $record.nativePedPhysicalDynamicsOwnerTested) { throw 'Actual native ped physical dynamics callback owner fixture did not complete.' }
     $record['nativeGenericPedVitalsOwnerTested'] = $text.Contains('Production native generic ped vitals callback owner fixture completed')
     if (-not $record.nativeGenericPedVitalsOwnerTested) { throw 'Actual native generic ped vitals callback owner fixture did not complete.' }
     $record['nativePedMetadataOwnerTested'] = $text.Contains('Production native ped metadata callback owner fixture completed')

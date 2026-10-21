@@ -1,7 +1,7 @@
 /****************************************************************************
  * PROJECT: Multi Theft Auto
  * LICENSE: See LICENSE in the repository root
- * PURPOSE: Preserve raw native mass/turn-mass and honest persistent scalar effects
+ * PURPOSE: Preserve raw native physical properties and persistent partial effects
  ****************************************************************************/
 #include "NativePedPhysicalScalarsMemory.h"
 #include "NativePedPhysicalScalarsProfile.h"
@@ -11,6 +11,7 @@
 #include <cstring>
 #include <limits>
 #include <intrin.h>
+#include <type_traits>
 
 namespace mta::game_de
 {
@@ -20,6 +21,7 @@ namespace mta::game_de
         namespace Image = NativeImageAccess;
         using Memory = NativePedPhysicalScalarsMemory;
         using Value = NativePedPoolReader::Value;
+        using Bits = std::array<std::uint32_t, 3>;
         thread_local bool writing = false;
         struct WriteScope
         {
@@ -27,6 +29,10 @@ namespace mta::game_de
             ~WriteScope() { writing = false; }
         };
         static_assert(sizeof(float) == sizeof(std::uint32_t) && sizeof(LONG) == sizeof(std::uint32_t));
+
+        static_assert(std::is_standard_layout_v<CVector> && std::is_trivially_copyable_v<CVector> && sizeof(CVector) == 12 && alignof(CVector) == 4);
+        static_assert(offsetof(CVector, fX) == 0 && offsetof(CVector, fY) == 4 && offsetof(CVector, fZ) == 8);
+        static_assert(P::CenterOfMassOffset % alignof(std::uint32_t) == 0 && P::VectorBytes == sizeof(CVector));
 
         bool Field(NativePedPhysicalScalarField field, std::size_t& offset) noexcept
         {
@@ -37,6 +43,12 @@ namespace mta::game_de
                     return true;
                 case NativePedPhysicalScalarField::TurnMass:
                     offset = P::TurnMassOffset;
+                    return true;
+                case NativePedPhysicalScalarField::AirResistance:
+                    offset = P::AirResistanceOffset;
+                    return true;
+                case NativePedPhysicalScalarField::Elasticity:
+                    offset = P::ElasticityOffset;
                     return true;
                 default:
                     return false;
@@ -106,8 +118,8 @@ namespace mta::game_de
                 return result;
             if (!Memory::Revalidate(binding))
                 return ClockResult::BindingChanged;
-            // Independent force/torque integration identifies these scalars;
-            // the exact common constructor binds that layout to both known
+            // Independent force, damping and contact-impulse effects identify
+            // this layout; the exact common constructor binds both known
             // ped classes. No CURRENT-player substitution supplies authority.
             if (expected.vtable != binding.image + P::PedVtableRva && expected.vtable != binding.image + P::PlayerVtableRva)
                 return ClockResult::UnsupportedBuild;
@@ -142,6 +154,41 @@ namespace mta::game_de
                 return result;
             output = next;
             return ClockResult::Ok;
+        }
+        struct VectorSnapshot
+        {
+            Bits          bits{};
+            unsigned char type = 0;
+        };
+        ClockResult CaptureVector(Memory::Binding binding, Memory::CheckOwner owner, const Value& expected, VectorSnapshot& output) noexcept
+        {
+            auto result = Identity(binding, owner, expected);
+            if (result != ClockResult::Ok)
+                return result;
+            VectorSnapshot next;
+            unsigned char  after = 0;
+            if (!Object(expected.nativePed + P::TypeOffset, next.type) || !Object(expected.nativePed + P::CenterOfMassOffset, next.bits) ||
+                !Object(expected.nativePed + P::TypeOffset, after))
+                return ClockResult::ReadFailure;
+            if ((next.type & 7) != 3 || next.type != after)
+                return ClockResult::BindingChanged;
+            if ((result = Identity(binding, owner, expected)) != ClockResult::Ok)
+                return result;
+            output = next;
+            return ClockResult::Ok;
+        }
+        bool Source(const CVector& source, Bits& output) noexcept
+        {
+            Bits   first{}, second{};
+            SIZE_T copied = 0;
+            // Capture all caller bits twice before any destination mutation.
+            // In particular, a native self/overlap alias must not become a
+            // partly updated source after the first accepted component.
+            if (!ReadProcessMemory(GetCurrentProcess(), &source, first.data(), sizeof(CVector), &copied) || copied != sizeof(CVector) ||
+                !ReadProcessMemory(GetCurrentProcess(), &source, second.data(), sizeof(CVector), &copied) || copied != sizeof(CVector) || first != second)
+                return false;
+            output = second;
+            return true;
         }
 #if !defined(MTA_DE_PED_PHYSICAL_SCALARS_EXCHANGE)
         bool Exchange(std::uintptr_t address, std::uint32_t expected, std::uint32_t target, std::uint32_t& observed, std::uint32_t& exception) noexcept
@@ -229,9 +276,9 @@ namespace mta::game_de
             return ClockResult::OwnerConflict;
         if ((result = D::Owner(binding, owner)) != ClockResult::Ok)
             return result;
-        // CPhysical's actual mass accessors copy raw float state, including NaN
+        // The actual CPhysical accessors copy raw float state, including NaN
         // payloads and signed zero. Arithmetic comparisons would change that
-        // contract or manufacture a plausible clamped mass/turn-mass value.
+        // contract or manufacture a plausible clamped physical property.
         std::memcpy(&output, &second.bits, sizeof(output));
         return ClockResult::Ok;
     }
@@ -300,4 +347,110 @@ namespace mta::game_de
         receipt.verified = true;
         return finish(ClockResult::Ok);
     }
+    ClockResult NativePedPhysicalScalarsMemory::ReadCenterOfMass(const Value& expected, CVector& output) const noexcept
+    {
+        namespace D = PedPhysicalScalarsDetail;
+        D::VectorSnapshot first, second;
+        auto              result = D::CaptureVector(binding, owner, expected, first);
+        if (result != ClockResult::Ok || (result = D::CaptureVector(binding, owner, expected, second)) != ClockResult::Ok)
+            return result;
+        if (first.type != second.type || first.bits != second.bits)
+            return ClockResult::OwnerConflict;
+        if ((result = D::Owner(binding, owner)) != ClockResult::Ok)
+            return result;
+        std::memcpy(&output, second.bits.data(), sizeof(output));
+        return ClockResult::Ok;
+    }
+    ClockResult NativePedPhysicalScalarsMemory::SetCenterOfMass(const Value& expected, const CVector& source, VectorReceipt* receiptOutput) const noexcept
+    {
+        namespace D = PedPhysicalScalarsDetail;
+        VectorReceipt receipt;
+        receipt.handle = expected.handle;
+        const auto finish = [&](ClockResult result)
+        {
+            if (receiptOutput)
+                *receiptOutput = receipt;
+            return result;
+        };
+        if (D::writing)
+            return finish(ClockResult::Busy);
+        auto result = D::Owner(binding, owner);
+        if (result != ClockResult::Ok)
+            return finish(result);
+        D::WriteScope scope;
+        if (!D::Source(source, receipt.target))
+            return finish(ClockResult::ReadFailure);
+        D::VectorSnapshot original, current;
+        if ((result = D::CaptureVector(binding, owner, expected, original)) != ClockResult::Ok)
+            return finish(result);
+        receipt.nativePed = expected.nativePed;
+        receipt.address = expected.nativePed + D::P::CenterOfMassOffset;
+        receipt.original = original.bits;
+        if (receipt.address % alignof(std::uint32_t))
+            return finish(ClockResult::BindingChanged);
+#if defined(MTA_DE_PED_PHYSICAL_SCALARS_EXCHANGE)
+        const auto exchange = &MTA_DE_PED_PHYSICAL_SCALARS_EXCHANGE;
+#else
+        const auto exchange = &D::Exchange;
+#endif
+        for (unsigned index = 0; index != 3; ++index)
+        {
+            if ((result = D::CaptureVector(binding, owner, expected, current)) != ClockResult::Ok)
+                return finish(result);
+            if (original.type != current.type)
+                return finish(ClockResult::BindingChanged);
+            receipt.observed = current.bits;
+            receipt.observedMask = 7;
+            // Preserve any later engine/foreign component. Accepted earlier
+            // components stay accepted even when this vector cannot finish.
+            for (unsigned prior = 0; prior != index; ++prior)
+                if (current.bits[prior] != receipt.target[prior])
+                    receipt.foreignMask |= static_cast<std::uint8_t>(1u << prior);
+            const auto bit = static_cast<std::uint8_t>(1u << index);
+            if (current.bits[index] != receipt.original[index])
+                receipt.foreignMask |= bit;
+            if (receipt.foreignMask)
+                return finish(ClockResult::OwnerConflict);
+            if (receipt.original[index] == receipt.target[index])
+            {
+                receipt.unchangedMask |= bit;
+                continue;
+            }
+            const auto address = receipt.address + index * sizeof(std::uint32_t);
+            if (!D::Pages(address, sizeof(std::uint32_t)))
+                return finish(ClockResult::WriteFailure);
+            if ((result = D::Identity(binding, owner, expected)) != ClockResult::Ok)
+                return finish(result);
+            std::uint32_t previous = 0;
+            receipt.attemptedMask |= bit;
+            receipt.entered = true;
+            // Three width-checked scalar CASes copy the native vector. This
+            // is deliberately no atomic-vector or cleanup-repair promise:
+            // an unknown/failed acknowledgement can follow a real store.
+            if (!exchange(address, receipt.original[index], receipt.target[index], previous, receipt.exceptionCode))
+                return finish(ClockResult::WriteFailure);
+            if (previous != receipt.original[index])
+            {
+                receipt.foreignMask |= bit;
+                return finish(ClockResult::OwnerConflict);
+            }
+            receipt.appliedMask |= bit;
+        }
+        if ((result = D::CaptureVector(binding, owner, expected, current)) != ClockResult::Ok)
+            return finish(result);
+        if (current.type != original.type)
+            return finish(ClockResult::BindingChanged);
+        receipt.observed = current.bits;
+        receipt.observedMask = 7;
+        for (unsigned index = 0; index != 3; ++index)
+            if (current.bits[index] != receipt.target[index])
+                receipt.foreignMask |= static_cast<std::uint8_t>(1u << index);
+        if (receipt.foreignMask)
+            return finish(ClockResult::OwnerConflict);
+        if ((result = D::Owner(binding, owner)) != ClockResult::Ok)
+            return finish(result);
+        receipt.verified = true;
+        return finish(ClockResult::Ok);
+    }
+
 }

@@ -103,6 +103,8 @@ namespace
         std::uint32_t                written = 0;
         ClockResult                  result = ClockResult::Ok;
         unsigned                     reads = 0, writes = 0;
+        CVector                      centerSupplied, centerWritten;
+        unsigned                     centerReads = 0, centerWrites = 0;
         ClockResult ReadPedPhysicalScalar(const NativePedReferenceToken& requested, NativePedPhysicalScalarField selected, float& output) noexcept override
         {
             ++reads;
@@ -117,6 +119,20 @@ namespace
             token = requested;
             field = selected;
             std::memcpy(&written, &value, sizeof(value));
+            return result;
+        }
+        ClockResult ReadPedCenterOfMass(const NativePedReferenceToken& requested, CVector& output) noexcept override
+        {
+            ++centerReads;
+            token = requested;
+            std::memcpy(&output, &centerSupplied, sizeof(output));
+            return result;
+        }
+        ClockResult SetPedCenterOfMass(const NativePedReferenceToken& requested, const CVector& value) noexcept override
+        {
+            ++centerWrites;
+            token = requested;
+            std::memcpy(&centerWritten, &value, sizeof(value));
             return result;
         }
     };
@@ -195,6 +211,72 @@ namespace
         }
         Check(scalars.reads == beforeReads && scalars.writes == beforeWrites, "higher-layer destruction neither deletes nor uses its borrowed scalar owner");
         std::puts("Production ped physics scalar-owner forwarding SDK fixture completed");
+    }
+
+    void RunPhysicsDynamicsForwardingTests()
+    {
+        Owner                   vitals;
+        MetadataOwner           metadata;
+        MutationOwner           mutation;
+        PhysicsOwner            observation;
+        PhysicsRepair           repair{observation};
+        PhysicsScalarOwner      dynamics;
+        NativePedReferenceToken token;
+        token.slot = 91;
+        token.version = 0x1029384756;
+        token.ownerGeneration = 0xaabbccddeeff;
+        const auto                 expected = token;
+        fixture::PedPhysicsFixture instance(vitals, metadata, mutation, observation, token, &PhysicsRepair::Invoke, &repair, &dynamics);
+        CPhysical&                 physical = instance;
+        token.slot = 1;
+        token.version = 2;
+        token.ownerGeneration = 3;
+        for (bool elasticity : {false, true})
+        {
+            const auto field = elasticity ? NativePedPhysicalScalarField::Elasticity : NativePedPhysicalScalarField::AirResistance;
+            dynamics.supplied = Float(elasticity ? 0x80000000 : 0x7fc01234);
+            const auto  reads = dynamics.reads;
+            const float value = elasticity ? physical.GetElasticity() : physical.GetAirResistance();
+            Check(Bits(value) == Bits(dynamics.supplied) && dynamics.reads == reads + 1 && dynamics.field == field && SameToken(dynamics.token, expected),
+                  "higher physics layer inherits genuine air/elasticity getters through the exact typed scalar owner and copied token");
+            const auto writes = dynamics.writes;
+            if (elasticity)
+                physical.SetElasticity(Float(0x7fc07654));
+            else
+                physical.SetAirResistance(Float(0x7fc07654));
+            Check(dynamics.writes == writes + 1 && dynamics.written == 0x7fc07654 && dynamics.field == field,
+                  "higher physics layer forwards each newly qualified scalar setter once without normalization or repair");
+        }
+        const CVector local(Float(0x7fc01234), Float(0x80000000), Float(0x3f800001));
+        dynamics.centerSupplied = local;
+        CVector output(101, 102, 103), target = local;
+        physical.GetCenterOfMass(output);
+        Check(dynamics.centerReads == 1 && SameVector(output, local) && SameToken(dynamics.token, expected),
+              "actual inherited COM getter returns raw local-space bits through the same optional owner");
+        physical.SetCenterOfMass(target);
+        Check(dynamics.centerWrites == 1 && SameVector(dynamics.centerWritten, local) && SameVector(target, local) && SameToken(dynamics.token, expected),
+              "actual inherited COM setter forwards its input once without transforming it or mutating caller storage");
+        dynamics.result = ClockResult::WrongThread;
+        Refuses([&] { physical.GetAirResistance(); }, "inherited air getter does not hide an explicit owner refusal");
+        Refuses([&] { physical.SetAirResistance(1); }, "inherited air setter does not hide an explicit owner refusal");
+        Refuses([&] { physical.GetElasticity(); }, "inherited elasticity getter does not hide an explicit owner refusal");
+        Refuses([&] { physical.SetElasticity(1); }, "inherited elasticity setter does not hide an explicit owner refusal");
+        output = CVector(101, 102, 103);
+        Refuses([&] { physical.GetCenterOfMass(output); }, "inherited COM getter rejects an unacknowledged whole vector");
+        Check(SameVector(output, CVector(101, 102, 103)), "refused inherited COM read preserves caller output despite the host owner touching its local copy");
+        Refuses([&] { physical.SetCenterOfMass(target); }, "inherited COM setter preserves explicit owner failure without retry");
+        Check(dynamics.centerReads == 2 && dynamics.centerWrites == 2 && SameVector(target, local),
+              "failed inherited COM operations enter the owner only once");
+        fixture::PedPhysicsFixture absent(vitals, metadata, mutation, expected);
+        Refuses([&] { absent.GetAirResistance(); }, "absent optional owner cannot synthesize air resistance");
+        Refuses([&] { absent.SetAirResistance(1); }, "absent optional owner cannot accept air resistance");
+        Refuses([&] { absent.GetElasticity(); }, "absent optional owner cannot synthesize elasticity");
+        Refuses([&] { absent.SetElasticity(1); }, "absent optional owner cannot accept elasticity");
+        Refuses([&] { absent.GetCenterOfMass(output); }, "absent optional owner cannot synthesize COM");
+        Refuses([&] { absent.SetCenterOfMass(target); }, "absent optional owner cannot accept COM");
+        Check(!observation.positionReads && !observation.matrixReads && !observation.velocityReads && !repair.calls && !mutation.writes,
+              "qualified property forwarding does not invoke unrelated native placement, velocity or the still-pure full repair hook");
+        std::puts("Production ped physics dynamics-owner forwarding SDK fixture completed");
     }
 
     void RunPhysicsGetterTests()
@@ -351,6 +433,7 @@ namespace
         Refuses([&] { unavailable.GetMoveSpeed(&output); }, "default observation owner refuses linear velocity");
         Refuses([&] { unavailable.GetTurnSpeed(&output); }, "default observation owner refuses angular velocity");
         RunPhysicsScalarForwardingTests();
+        RunPhysicsDynamicsForwardingTests();
         std::puts("Production abstract ped physics SDK policy fixture completed");
     }
 }

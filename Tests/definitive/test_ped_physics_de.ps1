@@ -1,6 +1,6 @@
 #!/usr/bin/env pwsh
 #requires -Version 7.0
-# Compile eighteen actual inherited CPed methods with a mandatory pure native-repair hook.
+# Compile twenty-four actual inherited CPed methods with a mandatory pure native-repair hook.
 [CmdletBinding()]
 param()
 
@@ -20,9 +20,9 @@ $record = [ordered]@{
     schema='mta_ped_physics_de_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     generatedFixture=$null;result=$null;failure=$null;scratchDirectory=$scratchRoot;scratchRemoved=$false;
-    scope='Actual CPedPhysicsDE inherited getters consume shared classic ordered repair policy through registered-token observations. Production repair remains a mandatory PURE hook; only the owned host test implements it. All fourteen inherited pre-physics methods remain tested, including optional same-owner mass/turn-mass dispatch and explicit absent-owner refusal. Covers native alias/caller output identity, matrix row mapping/absence, cache commit ordering, typed raw velocities, explicit owner and repair refusal, persistent accepted test effects, no retry and no generated production placeholders. No native engine code or actual native repair executes.';
+    scope='Actual CPedPhysicsDE inherited getters consume shared classic ordered repair policy through registered-token observations. Production repair remains a mandatory PURE hook; only the owned host test implements it. All twenty inherited pre-physics methods remain tested, including qualified same-owner mass/turn-mass, air resistance, elasticity and raw local-space COM; absent owners explicitly refuse. Covers native alias/caller output identity, matrix row mapping/absence, cache commit ordering, typed raw velocities, explicit owner and repair refusal, persistent accepted test effects, no retry and no generated production placeholders. No native engine code or actual native repair executes.';
     nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;installationChanged=$false;
-    completeCGameReady=$false;fullMtaReady=$false;nativePedPhysicsSdkLayerTested=$false;pedStoredPointerSdkTested=$false;completePedReady=$false;completePoolsReady=$false;nativeRepairQualified=$false;pedPhysicsPolicySdkTested=$false;pedPhysicsScalarForwardingSdkTested=$false
+    completeCGameReady=$false;fullMtaReady=$false;nativePedPhysicsSdkLayerTested=$false;pedStoredPointerSdkTested=$false;completePedReady=$false;completePoolsReady=$false;nativeRepairQualified=$false;pedPhysicsPolicySdkTested=$false;pedPhysicsScalarForwardingSdkTested=$false;pedPhysicsDynamicsForwardingSdkTested=$false
 }
 
 function Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
@@ -91,7 +91,7 @@ try {
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
     })
-    $provided = @('GetHealth','SetHealth','GetArmor','SetArmor','GetModelIndex','GetEntityType','SetMoveSpeed','SetTurnSpeed','GetStoredPointer','SetStoredPointer','GetPosition','GetMatrix','GetMoveSpeed','GetTurnSpeed','GetMass','SetMass','GetTurnMass','SetTurnMass')
+    $provided = @('GetHealth','SetHealth','GetArmor','SetArmor','GetModelIndex','GetEntityType','SetMoveSpeed','SetTurnSpeed','GetStoredPointer','SetStoredPointer','GetPosition','GetMatrix','GetMoveSpeed','GetTurnSpeed','GetMass','SetMass','GetTurnMass','SetTurnMass','GetAirResistance','SetAirResistance','GetElasticity','SetElasticity','GetCenterOfMass','SetCenterOfMass')
     $declaration = [IO.File]::ReadAllText((Join-Path $taskRoot 'Client/game_de/CPedVitalsDE.h')) + [IO.File]::ReadAllText((Join-Path $taskRoot 'Client/game_de/CPedMetadataDE.h')) + [IO.File]::ReadAllText((Join-Path $taskRoot 'Client/game_de/CPedMutationDE.h')) + [IO.File]::ReadAllText((Join-Path $taskRoot 'Client/game_de/CPedPhysicsDE.h'))
     foreach ($method in $provided) {
         if ($declaration -notmatch ('\b'+$method+'\s*\([^;{}]*\)\s*(?:const\s*)?(?:noexcept\s*)?override\s*;')) {
@@ -164,7 +164,8 @@ try {
     $record.pedStoredPointerSdkTested = $record.success -and [IO.File]::ReadAllText($record.result.test.stdout).Contains('Production MTA ped stored pointer SDK fixture completed')
     $record.pedPhysicsPolicySdkTested = $record.success -and [IO.File]::ReadAllText($record.result.test.stdout).Contains('Production abstract ped physics SDK policy fixture completed')
     $record.pedPhysicsScalarForwardingSdkTested = $record.success -and [IO.File]::ReadAllText($record.result.test.stdout).Contains('Production ped physics scalar-owner forwarding SDK fixture completed')
-    $record.success = $record.success -and $record.pedStoredPointerSdkTested -and $record.pedPhysicsPolicySdkTested -and $record.pedPhysicsScalarForwardingSdkTested
+    $record.pedPhysicsDynamicsForwardingSdkTested = $record.success -and [IO.File]::ReadAllText($record.result.test.stdout).Contains('Production ped physics dynamics-owner forwarding SDK fixture completed')
+    $record.success = $record.success -and $record.pedStoredPointerSdkTested -and $record.pedPhysicsPolicySdkTested -and $record.pedPhysicsScalarForwardingSdkTested -and $record.pedPhysicsDynamicsForwardingSdkTested
     if (-not $record.success) { throw 'Actual abstract CPed physics SDK checks failed or summary evidence was missing.' }
 } catch { AddFailure ($_.Exception.ToString()) }
 finally {

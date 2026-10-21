@@ -26,6 +26,13 @@ namespace mta::game_de
         float GetTurnMass() override;
         void  SetTurnMass(float mass) override;
 
+        float GetAirResistance() override;
+        void  SetAirResistance(float resistance) override;
+        float GetElasticity() override;
+        void  SetElasticity(float elasticity) override;
+        void  GetCenterOfMass(CVector& center) override;
+        void  SetCenterOfMass(CVector& center) override;
+
         ClockResult TrySetMoveSpeed(const CVector& velocity) noexcept;
         ClockResult LastMoveSpeedResult() const noexcept { return moveSpeedResult.load(); }
 
@@ -44,7 +51,7 @@ namespace mta::game_de
         // destruction neither acquire a reference nor retire native storage.
         NativePedMutationAccess& mutation;
         // Optional only for compatibility with already-built partial layers.
-        // Absence refuses these four methods; it supplies no cached mass or
+        // Absence refuses physical fields; it supplies no cached dynamics or
         // fabricated native capability. The enclosing owner retains lifetime.
         NativePedPhysicalScalarsAccess* const physicalScalars;
         std::atomic<ClockResult>              moveSpeedResult{ClockResult::NotInitialized};

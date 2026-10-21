@@ -4,6 +4,7 @@
  * PURPOSE: Preserve raw MTA vector setter intent and checked owner failures
  ****************************************************************************/
 #include "CPedMutationDE.h"
+#include <cstring>
 #include <stdexcept>
 #include <string>
 
@@ -18,7 +19,7 @@ namespace mta::game_de
     }
     void CPedMutationDE::WritePhysicalScalar(NativePedPhysicalScalarField field, float value, const char* operation)
     {
-        // Classic mass setters copy a raw float; native admission and honest
+        // Classic physical scalar setters copy a raw float; native admission and honest
         // persistent partial effects belong to the same registered-token owner.
         Require(physicalScalars ? physicalScalars->SetPedPhysicalScalar(ReferenceToken(), field, value) : ClockResult::NotInitialized, operation);
     }
@@ -37,6 +38,37 @@ namespace mta::game_de
     void CPedMutationDE::SetTurnMass(float mass)
     {
         WritePhysicalScalar(NativePedPhysicalScalarField::TurnMass, mass, "SetTurnMass");
+    }
+    float CPedMutationDE::GetAirResistance()
+    {
+        return ReadPhysicalScalar(NativePedPhysicalScalarField::AirResistance, "GetAirResistance");
+    }
+    void CPedMutationDE::SetAirResistance(float resistance)
+    {
+        WritePhysicalScalar(NativePedPhysicalScalarField::AirResistance, resistance, "SetAirResistance");
+    }
+    float CPedMutationDE::GetElasticity()
+    {
+        return ReadPhysicalScalar(NativePedPhysicalScalarField::Elasticity, "GetElasticity");
+    }
+    void CPedMutationDE::SetElasticity(float elasticity)
+    {
+        WritePhysicalScalar(NativePedPhysicalScalarField::Elasticity, elasticity, "SetElasticity");
+    }
+    void CPedMutationDE::GetCenterOfMass(CVector& center)
+    {
+        // A refusing owner may have filled its local copy before a later
+        // lifetime check failed. Publish only an acknowledged whole vector.
+        CVector value;
+        Require(physicalScalars ? physicalScalars->ReadPedCenterOfMass(ReferenceToken(), value) : ClockResult::NotInitialized, "GetCenterOfMass");
+        std::memcpy(&center, &value, sizeof(center));
+    }
+    void CPedMutationDE::SetCenterOfMass(CVector& center)
+    {
+        // Classic CPhysical copies local-space float bits directly. The
+        // retained owner accounts for persistent partial native intent;
+        // this SDK forward neither transforms, retries nor rewinds it.
+        Require(physicalScalars ? physicalScalars->SetPedCenterOfMass(ReferenceToken(), center) : ClockResult::NotInitialized, "SetCenterOfMass");
     }
     void* CPedMutationDE::GetStoredPointer()
     {

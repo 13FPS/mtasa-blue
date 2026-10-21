@@ -232,18 +232,26 @@ namespace ClockPedObservationOwnerTest
 }
 namespace ClockPedPhysicalScalarsOwnerTest
 {
-    unsigned       stores = 0;
+    unsigned       stores = 0, failAt = 0, loseAt = 0;
     std::uintptr_t cell = 0;
     bool           loseToken = false;
-    bool           Exchange(std::uintptr_t address, std::uint32_t expected, std::uint32_t target, std::uint32_t& observed, std::uint32_t&) noexcept
+    bool           Exchange(std::uintptr_t address, std::uint32_t expected, std::uint32_t target, std::uint32_t& observed, std::uint32_t& exception) noexcept
     {
         ++stores;
+        if (stores == failAt)
+        {
+            // Only the actual component-CAS boundary faults. A prior accepted
+            // component remains in owned native-style memory for the real
+            // callback owner to acknowledge as persistent partial intent.
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return false;
+        }
         LONG compare = 0, desired = 0;
         std::memcpy(&compare, &expected, sizeof(compare));
         std::memcpy(&desired, &target, sizeof(desired));
         const auto previous = _InterlockedCompareExchange(reinterpret_cast<volatile LONG*>(address), desired, compare);
         std::memcpy(&observed, &previous, sizeof(observed));
-        if (loseToken && observed == expected)
+        if (loseToken && observed == expected && (!loseAt || stores == loseAt))
         {
             loseToken = false;
             // The real scalar store succeeded. Clearing only its native weak
@@ -973,7 +981,10 @@ namespace mta::game_de::NativeImageAccess
 #define InterlockedCompareExchange ClockPedVitalsOwnerTest::Exchange
 #include "../../Client/game_de/NativePedVitalsMemory.cpp"
 #define MTA_DE_PED_PHYSICAL_SCALARS_EXCHANGE ClockPedPhysicalScalarsOwnerTest::Exchange
+#pragma push_macro("ReadProcessMemory")
+#define ReadProcessMemory ClockPedObservationOwnerTest::Read
 #include "../../Client/game_de/NativePedPhysicalScalarsMemory.cpp"
+#pragma pop_macro("ReadProcessMemory")
 #undef MTA_DE_PED_PHYSICAL_SCALARS_EXCHANGE
 #pragma pop_macro("InterlockedCompareExchange")
 #undef GetModuleHandleW
@@ -5628,6 +5639,7 @@ namespace
 #include "NativePedMutationOwnerTests.inl"
 #include "NativePedVitalsOwnerTests.inl"
 #include "NativePedPhysicalScalarsOwnerTests.inl"
+#include "NativePedPhysicalDynamicsOwnerTests.inl"
 #include "NativePedMetadataOwnerTests.inl"
 #include "NativePedObservationOwnerTests.inl"
 #include "NativeWorldCheatOwnerTests.inl"
@@ -5667,6 +5679,7 @@ int main(int argc, char** argv)
     NativePedMutationOwnedSdk(fixture);
     NativePedVitalsOwnedSdk(fixture);
     NativePedPhysicalScalarsOwnedSdk(fixture);
+    NativePedPhysicalDynamicsOwnedSdk(fixture);
     NativePedMetadataOwnedSdk(fixture);
     NativePedObservationOwnedSdk(fixture);
     NativeReadSetAndRestoration(fixture);

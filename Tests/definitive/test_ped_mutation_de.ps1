@@ -1,6 +1,6 @@
 #!/usr/bin/env pwsh
 #requires -Version 7.0
-# Compile ten actual inherited CPed SDK methods, including honest noexcept linear status.
+# Compile twenty actual inherited CPed SDK methods with checked native owners.
 [CmdletBinding()]
 param()
 
@@ -20,9 +20,9 @@ $record = [ordered]@{
     schema='mta_ped_mutation_de_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     generatedFixture=$null;result=$null;failure=$null;scratchDirectory=$scratchRoot;scratchRemoved=$false;
-    scope='Actual CPedMutationDE linear/angular setters and six inherited metadata/vitals methods through one immutable registered CPU token and typed borrowed owners. The actual local-model startup stored-pointer association preserves classic per-instance CPU semantics without a native lease or ownership transfer. Noexcept linear writes record their real status; explicit Try reports it, angular null/refused intents throw, and no failed intent is retried. Four actual mass/turn-mass SDK methods additionally borrow an optional typed registered-token owner, preserving raw bits and explicitly refusing when absent. Every other inherited real SDK method is generated as a test-only rejecting override. Raw float bits, exact field/token forwarding, default and explicit refusal, and no retry/cleanup are covered. No native memory or engine function executes.';
+    scope='Actual CPedMutationDE linear/angular setters and six inherited metadata/vitals methods through one immutable registered CPU token and typed borrowed owners. The actual local-model startup stored-pointer association preserves classic per-instance CPU semantics without a native lease or ownership transfer. Noexcept linear writes record their real status; explicit Try reports it, angular null/refused intents throw, and no failed intent is retried. Four actual mass/turn-mass SDK methods additionally borrow an optional typed registered-token owner, preserving raw bits and explicitly refusing when absent. Six additional air-resistance/elasticity/center-of-mass SDK methods preserve raw typed owner intent and refuse unacknowledged output. Every other inherited real SDK method is generated as a test-only rejecting override. Raw float bits, exact field/token forwarding, default and explicit refusal, and no retry/cleanup are covered. No native memory or engine function executes.';
     nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;installationChanged=$false;
-    completeCGameReady=$false;fullMtaReady=$false;nativePedMutationSdkLayerTested=$false;pedStoredPointerSdkTested=$false;pedPhysicalScalarsSdkTested=$false;completePedReady=$false;completePoolsReady=$false
+    completeCGameReady=$false;fullMtaReady=$false;nativePedMutationSdkLayerTested=$false;pedStoredPointerSdkTested=$false;pedPhysicalScalarsSdkTested=$false;pedPhysicalDynamicsSdkTested=$false;completePedReady=$false;completePoolsReady=$false
 }
 
 function Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
@@ -87,11 +87,11 @@ try {
         'Client/sdk/game/CWeaponInfo.h','Client/sdk/game/CPedSound.h','Client/sdk/game/Common.h','Client/sdk/game/CPoolSlotPolicy.h',
         'Client/sdk/game/CGameAdapter.h','Client/sdk/game/CGameClockService.h','Shared/sdk/enums/PedState.h','Shared/sdk/enums/PedMoveState.h',
         'Shared/sdk/enums/PedPieceTypes.h','Shared/sdk/enums/EntityType.h','Shared/sdk/SharedUtil.Defines.h','Shared/sdk/CVector.h',
-        'Shared/sdk/CVector4D.h','Client/game_sa/CEntitySA.h','Client/game_sa/CEntitySA.cpp','Client/mods/deathmatch/logic/CClientPed.cpp','Tests/definitive/PedMutationDETests.cpp','Tests/definitive/test_ped_mutation_de.ps1')
+        'Shared/sdk/CVector4D.h','Client/game_sa/CEntitySA.h','Client/game_sa/CEntitySA.cpp','Client/game_sa/CPhysicalSA.h','Client/game_sa/CPhysicalSA.cpp','Client/mods/deathmatch/logic/CClientPed.cpp','Tests/definitive/PedMutationDETests.cpp','Tests/definitive/test_ped_mutation_de.ps1')
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
     })
-    $provided = @('GetHealth','SetHealth','GetArmor','SetArmor','GetModelIndex','GetEntityType','SetMoveSpeed','SetTurnSpeed','GetStoredPointer','SetStoredPointer','GetMass','SetMass','GetTurnMass','SetTurnMass')
+    $provided = @('GetHealth','SetHealth','GetArmor','SetArmor','GetModelIndex','GetEntityType','SetMoveSpeed','SetTurnSpeed','GetStoredPointer','SetStoredPointer','GetMass','SetMass','GetTurnMass','SetTurnMass','GetAirResistance','SetAirResistance','GetElasticity','SetElasticity','GetCenterOfMass','SetCenterOfMass')
     $declaration = [IO.File]::ReadAllText((Join-Path $taskRoot 'Client/game_de/CPedVitalsDE.h')) + [IO.File]::ReadAllText((Join-Path $taskRoot 'Client/game_de/CPedMetadataDE.h')) + [IO.File]::ReadAllText((Join-Path $taskRoot 'Client/game_de/CPedMutationDE.h'))
     foreach ($method in $provided) {
         if ($declaration -notmatch ('\b'+$method+'\s*\([^;{}]*\)\s*(?:const\s*)?(?:noexcept\s*)?override\s*;')) {
@@ -162,7 +162,8 @@ try {
     $record.pedStoredPointerSdkTested = $record.success -and [IO.File]::ReadAllText($record.result.test.stdout).Contains('Production MTA ped stored pointer SDK fixture completed')
     $record.success = $record.success -and $record.pedStoredPointerSdkTested
     $record.pedPhysicalScalarsSdkTested = $record.success -and [IO.File]::ReadAllText($record.result.test.stdout).Contains('Production MTA ped physical scalar SDK fixture completed')
-    $record.success = $record.success -and $record.pedPhysicalScalarsSdkTested
+    $record.pedPhysicalDynamicsSdkTested = [IO.File]::ReadAllText($record.result.test.stdout).Contains('Production MTA ped physical dynamics SDK fixture completed')
+    $record.success = $record.success -and $record.pedPhysicalScalarsSdkTested -and $record.pedPhysicalDynamicsSdkTested
     if (-not $record.success) { throw 'Actual CPed metadata SDK checks failed or summary evidence was missing.' }
 } catch { AddFailure ($_.Exception.ToString()) }
 finally {

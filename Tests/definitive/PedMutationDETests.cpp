@@ -149,6 +149,8 @@ namespace
         ClockResult                  result = ClockResult::Ok;
         std::uint32_t                supplied = 0, bits = 0;
         unsigned                     reads = 0, writes = 0;
+        std::array<std::uint32_t, 3> vectorSupplied{}, vectorBits{};
+        unsigned                     vectorReads = 0, vectorWrites = 0;
         ClockResult ReadPedPhysicalScalar(const NativePedReferenceToken& requested, NativePedPhysicalScalarField selected, float& output) noexcept override
         {
             ++reads;
@@ -165,7 +167,81 @@ namespace
             std::memcpy(&bits, &value, sizeof(bits));
             return result;
         }
+        ClockResult ReadPedCenterOfMass(const NativePedReferenceToken& requested, CVector& output) noexcept override
+        {
+            ++vectorReads;
+            token = requested;
+            std::memcpy(&output, vectorSupplied.data(), sizeof(output));
+            return result;
+        }
+        ClockResult SetPedCenterOfMass(const NativePedReferenceToken& requested, const CVector& input) noexcept override
+        {
+            ++vectorWrites;
+            token = requested;
+            std::memcpy(vectorBits.data(), &input, sizeof(input));
+            return result;
+        }
     };
+    void DynamicsSdkChecks(CPed& ped, PhysicalScalarsOwner& owner, const NativePedReferenceToken& token)
+    {
+        const std::array<std::uint32_t, 7> values{0, 0x80000000, 0x3f800001, 0xc0200000, 0x7fc01234, 0x7fa54321, 0x7f800000};
+        for (const auto bits : values)
+        {
+            owner.supplied = bits;
+            auto calls = owner.reads;
+            Check(Bits(ped.GetAirResistance()) == bits && owner.reads == calls + 1 && owner.field == NativePedPhysicalScalarField::AirResistance &&
+                      SameToken(owner.token, token),
+                  "actual air-resistance SDK getter selects its native scalar and preserves raw owner bits");
+            calls = owner.reads;
+            Check(Bits(ped.GetElasticity()) == bits && owner.reads == calls + 1 && owner.field == NativePedPhysicalScalarField::Elasticity &&
+                      SameToken(owner.token, token),
+                  "actual elasticity SDK getter uses the same immutable registered token without clamping");
+            calls = owner.writes;
+            ped.SetAirResistance(Float(bits));
+            Check(
+                owner.writes == calls + 1 && owner.bits == bits && owner.field == NativePedPhysicalScalarField::AirResistance && SameToken(owner.token, token),
+                "actual air-resistance SDK setter forwards raw bits exactly once");
+            calls = owner.writes;
+            ped.SetElasticity(Float(bits));
+            Check(owner.writes == calls + 1 && owner.bits == bits && owner.field == NativePedPhysicalScalarField::Elasticity && SameToken(owner.token, token),
+                  "actual elasticity SDK setter keeps its independent field identity and raw intent");
+            owner.vectorSupplied = {bits, bits ^ 0x80000000u, 0x80000000};
+            CVector center;
+            calls = owner.vectorReads;
+            ped.GetCenterOfMass(center);
+            Check(owner.vectorReads == calls + 1 && !std::memcmp(&center, owner.vectorSupplied.data(), sizeof(center)) && SameToken(owner.token, token),
+                  "actual center-of-mass SDK getter publishes one acknowledged local-space vector with exact float bits");
+            calls = owner.vectorWrites;
+            ped.SetCenterOfMass(center);
+            Check(owner.vectorWrites == calls + 1 && owner.vectorBits == owner.vectorSupplied && SameToken(owner.token, token),
+                  "actual center-of-mass SDK setter forwards its three raw components without conversion or replay");
+        }
+        for (std::uint32_t value = static_cast<std::uint32_t>(ClockResult::InvalidArgument);
+             value <= static_cast<std::uint32_t>(ClockResult::OriginalException); ++value)
+        {
+            owner.result = static_cast<ClockResult>(value);
+            auto calls = owner.reads;
+            Refuses([&]() { ped.GetAirResistance(); }, "each air-resistance read refusal remains an observable SDK failure");
+            Refuses([&]() { ped.GetElasticity(); }, "each elasticity read refusal remains an observable SDK failure");
+            Check(owner.reads == calls + 2, "refused dynamics scalar reads do not retry");
+            calls = owner.writes;
+            Refuses([&]() { ped.SetAirResistance(Float(0x7fc01234)); }, "air-resistance setter refuses without fabricated success");
+            Refuses([&]() { ped.SetElasticity(Float(0x80000000)); }, "elasticity setter refuses without swallowing entered native effects");
+            Check(owner.writes == calls + 2 && owner.bits == 0x80000000, "refused scalar intents preserve exact input and are never replayed");
+            const std::array<std::uint32_t, 3> untouched{0x4a123456, 0x80000000, 0xffc01234};
+            CVector                            center;
+            std::memcpy(&center, untouched.data(), sizeof(center));
+            calls = owner.vectorReads;
+            Refuses([&]() { ped.GetCenterOfMass(center); }, "failed vector acknowledgement throws even if the owner touched its local output");
+            Check(owner.vectorReads == calls + 1 && !std::memcmp(&center, untouched.data(), sizeof(center)),
+                  "failed center-of-mass read preserves the caller's entire vector");
+            calls = owner.vectorWrites;
+            Refuses([&]() { ped.SetCenterOfMass(center); }, "failed center-of-mass intent is reported without rollback or replay");
+            Check(owner.vectorWrites == calls + 1 && owner.vectorBits == untouched && SameToken(owner.token, token),
+                  "refused vector intent retains exact raw arguments and immutable token once");
+        }
+        owner.result = ClockResult::Ok;
+    }
 }
 
 int main()
@@ -252,6 +328,7 @@ int main()
             Check(static_cast<unsigned>(entity.GetEntityType()) == type && metadata.reads == calls + 1 && SameToken(metadata.token, original),
                   "actual CEntity virtual dispatch consumes the typed owner's entity value instead of a guessed constant");
         }
+        DynamicsSdkChecks(ped, scalars, original);
         const std::array<std::uint32_t, 7> values{0, 0x80000000, 0x3f800001, 0xc0200000, 0x7fc01234, 0xffc07654, 0x7f800000};
         for (const auto bits : values)
         {
@@ -355,13 +432,13 @@ int main()
     }
     Check(clientIdentity == 0x1234 && replacementIdentity == 0x5678, "SDK destruction never dereferences, deletes or rewrites client pointees");
     const auto reads = owner.reads, writes = owner.writes, metadataReads = metadata.reads, mutationWrites = mutation.writes;
-    const auto scalarReads = scalars.reads, scalarWrites = scalars.writes;
+    const auto scalarReads = scalars.reads, scalarWrites = scalars.writes, vectorReads = scalars.vectorReads, vectorWrites = scalars.vectorWrites;
     {
         fixture::PedMutationFixture unused(owner, metadata, mutation, original, &scalars);
     }
     Check(owner.reads == reads && owner.writes == writes && metadata.reads == metadataReads && mutation.writes == mutationWrites,
           "SDK construction and destruction perform no native registration, cleanup or field operation");
-    Check(scalars.reads == scalarReads && scalars.writes == scalarWrites,
+    Check(scalars.reads == scalarReads && scalars.writes == scalarWrites && scalars.vectorReads == vectorReads && scalars.vectorWrites == vectorWrites,
           "optional scalar-owner lifetime is borrowed without constructor/destructor native work");
     RefusingOwner               refusing;
     RefusingMetadataOwner       refusingMetadata;
@@ -377,6 +454,14 @@ int main()
     Refuses([&] { unavailable.SetTurnMass(1); }, "missing optional scalar owner explicitly refuses turn-mass mutation");
     Refuses([&] { unavailable.GetModelIndex(); }, "default metadata owner explicitly refuses the model field");
     Refuses([&] { unavailable.GetEntityType(); }, "default metadata owner explicitly refuses the entity type");
+    Refuses([&] { unavailable.GetAirResistance(); }, "missing scalar owner refuses air resistance");
+    Refuses([&] { unavailable.SetAirResistance(1); }, "missing scalar owner refuses air-resistance intent");
+    Refuses([&] { unavailable.GetElasticity(); }, "missing scalar owner refuses elasticity");
+    Refuses([&] { unavailable.SetElasticity(1); }, "missing scalar owner refuses elasticity intent");
+    CVector center(1, 2, 3);
+    Refuses([&] { unavailable.GetCenterOfMass(center); }, "missing scalar owner refuses center-of-mass observation");
+    Check(center.fX == 1 && center.fY == 2 && center.fZ == 3, "missing optional owner preserves the caller's vector");
+    Refuses([&] { unavailable.SetCenterOfMass(center); }, "missing scalar owner refuses center-of-mass intent");
     const CVector zero(0, 0, 0);
     unavailable.SetMoveSpeed(zero);
     Check(unavailable.LastMoveSpeedResult() == ClockResult::NotInitialized, "default linear owner refusal remains observable through the noexcept SDK setter");
@@ -385,5 +470,6 @@ int main()
     Refuses([&] { unavailable.SetTurnSpeed(&angular); }, "default angular owner refuses explicitly");
     std::puts("Production MTA ped stored pointer SDK fixture completed");
     std::puts("Production MTA ped physical scalar SDK fixture completed");
+    std::puts("Production MTA ped physical dynamics SDK fixture completed");
     std::printf("Passed %u actual CPed mutation SDK checks (%zu-bit)\n", checks, sizeof(void*) * 8);
 }

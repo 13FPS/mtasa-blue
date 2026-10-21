@@ -6,6 +6,7 @@
 #include "../../Client/game_de/CClockDE.h"
 #include "../../Client/game_de/CGameTimingDE.h"
 #include "../../Client/game_de/NativeGameTimingProfile.h"
+#include "../../Client/game_de/NativeGamePauseProfile.h"
 #include "../../Client/game_de/NativeGameFPSProfile.h"
 #include "../../Client/game_de/NativeGameStateProfile.h"
 #include "../../Client/game_de/NativeCheatProfile.h"
@@ -21,6 +22,13 @@
 #include "../../Client/game_de/NativeStatsWriteCalls.h"
 #include "../../Client/game_de/NativeStatsWriteProfile.h"
 #include "../../Client/game_de/CStatsDE.h"
+#include "../../Client/game_de/NativeStartGameCalls.h"
+#include "../../Client/game_de/NativeStartGameProfile.h"
+#include "../../Client/game_de/NativeBorrowedGcProfile.h"
+#include "../../Client/game_de/NativeUObjectMembershipAccess.h"
+#include "../../Client/game_de/NativeUObjectMembershipProfile.h"
+#include "../../Client/game_de/NativeStartupProvidersProfile.h"
+#include "../../Client/game_de/NativeUiClassMapProfile.h"
 #include "../../Client/game_de/NativeServiceAdmission.h"
 #include <array>
 #include <cstdio>
@@ -64,6 +72,49 @@ namespace ClockStatsOwnerTest
                                       sizeof(value), &written) ||
                 written != sizeof(value))
                 std::abort();
+        }
+        if (after)
+        {
+            const auto next = after;
+            after = nullptr;
+            next();
+        }
+        if (result != mta::game_de::ClockResult::Ok)
+            exception = EXCEPTION_ACCESS_VIOLATION;
+        return result;
+    }
+}
+
+namespace ClockStartGameOwnerTest
+{
+    std::uintptr_t            image = 0, entry = 0;
+    void*                     receiver = nullptr;
+    unsigned                  calls = 0;
+    bool                      retireGraph = false;
+    mta::game_de::ClockResult result = mta::game_de::ClockResult::Ok;
+    void (*after)() = nullptr;
+    mta::game_de::ClockResult Invoke(mta::game_de::NativeStartGameCalls::NativeFunction function, void* object, std::uint32_t& exception) noexcept
+    {
+        ++calls;
+        entry = reinterpret_cast<std::uintptr_t>(function) - image;
+        receiver = object;
+        const auto write = [](std::uintptr_t rva, const auto& value)
+        {
+            SIZE_T copied = 0;
+            if (!::WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(image + rva), &value, sizeof(value), &copied) || copied != sizeof(value))
+                std::abort();
+        };
+        // This substitutes only the last native call. The real Apply and
+        // Runtime owner bookends still run, and accepted native effects must
+        // survive even a later exception/refusal rather than being replayed.
+        write(mta::game_de::NativeStartGameProfile::RequestRva, static_cast<unsigned char>(1));
+        write(mta::game_de::NativeStartGameProfile::SelectionRva, std::uint32_t{0});
+        write(mta::game_de::NativeGamePauseProfile::userPauseRva, static_cast<unsigned char>(0));
+        write(mta::game_de::NativeGameStateProfile::stateRva, std::uint32_t{8});
+        if (retireGraph)
+        {
+            write(mta::game_de::NativeStartupProvidersProfile::engineRva, std::uintptr_t{0});
+            write(mta::game_de::NativeUiClassMapProfile::uiTransitionClassCacheRva, std::uintptr_t{0});
         }
         if (after)
         {
@@ -482,6 +533,9 @@ namespace mta::game_de::NativeImageAccess
 #define MTA_DE_STATS_NATIVE_INVOKE ClockStatsOwnerTest::Invoke
 #include "../../Client/game_de/NativeStatsWriteCalls.cpp"
 #undef MTA_DE_STATS_NATIVE_INVOKE
+#define MTA_DE_START_GAME_NATIVE_INVOKE ClockStartGameOwnerTest::Invoke
+#include "../../Client/game_de/NativeStartGameCalls.cpp"
+#undef MTA_DE_START_GAME_NATIVE_INVOKE
 #undef GetModuleHandleW
 #undef CheckExecutableBuild
 
@@ -4151,8 +4205,8 @@ namespace
         Check(runtime.clock.TryGet(&hour, &minute) == ClockResult::NotInitialized && hour == 0xa5 && minute == 0x5a &&
                   runtime.clock.TrySet(1, 2) == ClockResult::NotInitialized && runtime.access.SetTimeScale(2) == ClockResult::NotInitialized &&
                   runtime.access.SetMinuteDuration(2000) == ClockResult::NotInitialized && runtime.access.Pause(true) == ClockResult::NotInitialized &&
-                  ClockTestFaults::clockDataWrites.load() == beforeWrites && !runtime.captured.load() && !runtime.timingCaptured.load() &&
-                  !runtime.timingDirty.load() && !runtime.patchInstalled.load(),
+                  runtime.access.StartGame() == ClockResult::NotInitialized && ClockTestFaults::clockDataWrites.load() == beforeWrites &&
+                  !runtime.captured.load() && !runtime.timingCaptured.load() && !runtime.timingDirty.load() && !runtime.patchInstalled.load(),
               "observer readiness cannot capture CClock, enqueue its writes or borrow any native timing/pause capability");
         if (context.uiMode)
         {
@@ -4428,12 +4482,14 @@ namespace
             throw std::runtime_error("owned observer failure");
     }
 
-    void BeginApplicationOwned(NativeClockService& service, ClockImageFixture& fixture, ApplicationFrameContext& context, bool attachNow = true)
+    void BeginApplicationOwned(NativeClockService& service, ClockImageFixture& fixture, ApplicationFrameContext& context, bool attachNow = true,
+                               GameStartupHandler startupHandler = nullptr, void* startupContext = nullptr)
     {
         ClockServiceStateV1 rejected;
-        Check(!service.BeginApplicationFrames({}, rejected, &ObserveApplicationFrame, &context) && rejected.failure == ClockResult::UnsupportedBuild &&
-                  !rejected.bound && !rejected.hooked && !rejected.modulePinned && rejected.generation &&
-                  !NativeServiceAdmission::IsClaimed(NativeServiceAdmission::Category::Clock),
+        const bool          admitted = startupHandler ? service.BeginGameStartupFrames({}, rejected, startupHandler, startupContext)
+                                                      : service.BeginApplicationFrames({}, rejected, &ObserveApplicationFrame, &context);
+        Check(!admitted && rejected.failure == ClockResult::UnsupportedBuild && !rejected.bound && !rejected.hooked && !rejected.modulePinned &&
+                  rejected.generation && !NativeServiceAdmission::IsClaimed(NativeServiceAdmission::Category::Clock),
               "internal application Begin preserves the shipping wrong-executable refusal before any native hook or module pin");
         NativeServiceAdmission::Token claim;
         Check(NativeServiceAdmission::TryAcquire(NativeServiceAdmission::Category::Clock, claim),
@@ -4447,8 +4503,10 @@ namespace
         runtime.active.store(true);
         runtime.started = GetTickCount64();
         runtime.refreshed.store(runtime.started);
-        runtime.frameHandler = &ObserveApplicationFrame;
-        runtime.frameContext = &context;
+        runtime.frameHandler = startupHandler ? nullptr : &ObserveApplicationFrame;
+        runtime.startupMode = startupHandler != nullptr;
+        runtime.startupHandler = startupHandler;
+        runtime.frameContext = startupHandler ? startupContext : &context;
         runtime.originalFrame = reinterpret_cast<ApplicationFrameFunction>(fixture.image + NativeApplicationFrameProfile::entryRva);
         fixture.frameOwner[0] = fixture.image + NativeApplicationFrameProfile::vtableRva;
         fixture.SetFrameReceiver(fixture.frameOwner.data());
@@ -4473,9 +4531,9 @@ namespace
     {
         runtime.originalFrame = countedFrame;
         Check(service.End() && !service.IsRetained() && !State(service).hooked && !runtime.frameHooked.load() && !runtime.hooked.load() &&
-                  !runtime.timerHooked.load() && !runtime.frameHandler && !runtime.frameContext && !runtime.inFlight.load() && !runtime.captured.load() &&
-                  !runtime.timingCaptured.load() && !runtime.timingDirty.load() && !runtime.timingRecovery.load() && !timingCallbackGeneration &&
-                  !timingTimerScope && !frameCallbackGeneration && !frameCallbackReceiver &&
+                  !runtime.timerHooked.load() && !runtime.frameHandler && !runtime.startupHandler && !runtime.startupMode && !runtime.frameContext &&
+                  !runtime.inFlight.load() && !runtime.captured.load() && !runtime.timingCaptured.load() && !runtime.timingDirty.load() &&
+                  !runtime.timingRecovery.load() && !timingCallbackGeneration && !timingTimerScope && !frameCallbackGeneration && !frameCallbackReceiver &&
                   !NativeServiceAdmission::IsClaimed(NativeServiceAdmission::Category::Clock) && CheckBinding(true),
               "an observer retires without a future clock tick after actual hook detach, callback completion and admission release");
         originalUiService = nullptr;
@@ -4878,6 +4936,8 @@ namespace
         std::puts("Production CGame native timing prerequisite fixture completed");
     }
 
+#include "NativeStartGameOwnerTests.inl"
+
     void NativeStoredFPSReader(ClockImageFixture& fixture)
     {
         NativeGameTimingReader reader;
@@ -5103,6 +5163,7 @@ int main(int argc, char** argv)
     NativeCallbackLifetime(fixture);
     NativePatchTransactions(fixture);
     NativeApplicationFrameOwner(fixture);
+    NativeStartGameOwnedFrame(fixture);
     std::puts("Production native clock runtime fixture completed");
     std::printf("Passed %u production clock service checks\n", checks.load());
     return 0;

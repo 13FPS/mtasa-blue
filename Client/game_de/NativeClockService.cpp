@@ -20,6 +20,9 @@
 #include "CWeaponInfoBankDE.h"
 #include "NativeStatsWriteCalls.h"
 #include "CStatsDE.h"
+#include "NativeStartGameCalls.h"
+#include "NativeUObjectMembershipAccess.h"
+#include "NativeUObjectMembershipProfile.h"
 #include "NativeGameTimingProfile.h"
 #include "NativeGamePauseProfile.h"
 #include "NativeApplicationFrameProfile.h"
@@ -100,6 +103,7 @@ namespace mta::game_de
             ClockResult GetStats(CStats*& output) noexcept override;
             ClockResult SetStatValue(unsigned short index, float value) noexcept override;
             ClockResult ModifyStat(unsigned short index, float value) noexcept override;
+            ClockResult StartGame() noexcept override;
         };
 
         struct Counters
@@ -204,6 +208,10 @@ namespace mta::game_de
             bool                                            frameMode = false;
             std::atomic<bool>                               frameHooked{false};
             ApplicationFrameHandler                         frameHandler = nullptr;
+            bool                                            startupMode = false;
+            GameStartupHandler                              startupHandler = nullptr;
+            std::atomic<bool>                               startupAttempted{false};
+            NativeStartGameCalls::Receipt                   startupReceipt;
             void*                                           frameContext = nullptr;
             ApplicationFrameFunction                        originalFrame = nullptr;
             std::atomic<unsigned>                           inFlight{0};
@@ -2078,6 +2086,275 @@ namespace mta::game_de
             return UiMapHeapRead(address, output, bytes);
         }
 
+        // These same bounded readers serve the existing observer wrappers and
+        // fresh startup admission. The helpers grant no lifecycle lease alone.
+        bool StartupReadUiClassMap(std::uint64_t requestedGeneration, NativeUiClassMapAccess::Key key, NativeUiClassMapAccess::Value& value) noexcept
+        {
+            const auto qualified = [&]() noexcept { return QualifiedApplicationFrame(requestedGeneration); };
+            if (!qualified() || !FrameReceiver(frameCallbackReceiver) || !CheckBinding(false, false, true))
+                return false;
+            const auto receiver = reinterpret_cast<std::uintptr_t>(frameCallbackReceiver);
+            if (UiMapProfile::ownerOffset > (std::numeric_limits<std::uintptr_t>::max)() - receiver)
+                return false;
+            NativeUiClassMapAccess::Value next{};
+            if (!NativeUiClassMapAccess(receiver + UiMapProfile::ownerOffset, &UiMapHeapRead).Lookup(key, next) || !qualified() ||
+                !FrameReceiver(frameCallbackReceiver) || !CheckBinding(false, false, true))
+                return false;
+            value = next;
+            return true;
+        }
+
+        bool StartupReadUiTransitionClass(std::uint64_t requestedGeneration, NativeUiClassMapAccess::Key key, bool& compatible) noexcept
+        {
+            NativeUiClassMapAccess::Value first{}, second{};
+            std::uintptr_t                baseBefore = 0, baseAfter = 0;
+            bool                          next = false;
+            // Each map observation independently qualifies this exact receiver's
+            // post-original callback scope. A producer, nested call or old owner
+            // cannot turn an earlier opaque class address into startup authority.
+            if (!StartupReadUiClassMap(requestedGeneration, key, first) || !first.keyPresent || !first.classAddress ||
+                !Image::ReadImage(runtime.image, runtime.image + UiMapProfile::uiTransitionClassCacheRva, &baseBefore, sizeof(baseBefore)) || !baseBefore ||
+                !NativeClassChainAccess(&UiMapHeapRead).IsChildOf(first.classAddress, baseBefore, next) ||
+                !StartupReadUiClassMap(requestedGeneration, key, second) || !second.keyPresent || second.classAddress != first.classAddress ||
+                !Image::ReadImage(runtime.image, runtime.image + UiMapProfile::uiTransitionClassCacheRva, &baseAfter, sizeof(baseAfter)) ||
+                baseAfter != baseBefore || !QualifiedApplicationFrame(requestedGeneration))
+                return false;
+            // No StaticClass call or widget creation occurs here. The caller gets
+            // only a coherent relation; UObject lifetime remains a separate duty.
+            compatible = next;
+            return true;
+        }
+
+        bool StartupReadPrerequisites(std::uint64_t requestedGeneration, std::uint32_t& facts, std::uint32_t& refusals) noexcept
+        {
+            const auto qualified = [&]() noexcept { return QualifiedApplicationFrame(requestedGeneration); };
+            if (!qualified() || !FrameReceiver(frameCallbackReceiver) || !CheckStartupBinding())
+                return false;
+            const auto    receiver = reinterpret_cast<std::uintptr_t>(frameCallbackReceiver);
+            std::uint32_t nextFacts = 0, nextRefusals = 0;
+            bool          compatible = false;
+            if (StartupReadUiTransitionClass(requestedGeneration, NativeUiClassMapAccess::Key::Loading, compatible))
+                nextFacts |= StartupLoadingTypeObserved | (compatible ? StartupLoadingTypeMatches : 0u);
+            else
+                nextRefusals |= StartupLoadingTypeRefused;
+            if (StartupReadUiTransitionClass(requestedGeneration, NativeUiClassMapAccess::Key::SimpleFade, compatible))
+                nextFacts |= StartupSimpleFadeTypeObserved | (compatible ? StartupSimpleFadeTypeMatches : 0u);
+            else
+                nextRefusals |= StartupSimpleFadeTypeRefused;
+
+            NativeStartupOwnerAccess::Value owner{}, ownerAfter{};
+            if (NativeStartupOwnerAccess(runtime.image, &StartupGraphRead).Read(receiver, owner))
+            {
+                nextFacts |= StartupGameModeOwnerObserved;
+                NativeStartupWorldAccess::Value world{};
+                if (NativeStartupWorldAccess(runtime.image, &StartupGraphRead).Read(owner.gameModeAddress, world))
+                    nextFacts |= StartupWorldLinkObserved;
+                else
+                    nextRefusals |= StartupWorldLinkRefused;
+                // The world probe must still refer to the observed enclosing
+                // owner. A moving path is a refused sample, never a mixed record.
+                if (!NativeStartupOwnerAccess(runtime.image, &StartupGraphRead).Read(receiver, ownerAfter) ||
+                    ownerAfter.gameModeAddress != owner.gameModeAddress)
+                    return false;
+            }
+            else
+                nextRefusals |= StartupGameModeOwnerRefused | StartupWorldLinkRefused;
+            if (!qualified() || !FrameReceiver(frameCallbackReceiver) || !CheckStartupBinding())
+                return false;
+            // These are independently guarded observations, not an atomic world
+            // snapshot or permission to enter StartGame, dispatch providers or GC.
+            facts = nextFacts;
+            refusals = nextRefusals;
+            return true;
+        }
+
+        bool StartupReadProviders(std::uint64_t requestedGeneration, NativeStartupProvidersAccess::Value& value) noexcept
+        {
+            const auto qualified = [&]() noexcept { return QualifiedApplicationFrame(requestedGeneration); };
+            if (!qualified() || !FrameReceiver(frameCallbackReceiver) || !CheckStartupBinding(true))
+                return false;
+            const auto                          receiver = reinterpret_cast<std::uintptr_t>(frameCallbackReceiver);
+            NativeStartupOwnerAccess::Value     owner{}, ownerAfter{};
+            NativeStartupWorldAccess::Value     world{}, worldAfter{};
+            NativeStartupProvidersAccess::Value next{};
+            if (!NativeStartupOwnerAccess(runtime.image, &StartupGraphRead).Read(receiver, owner) ||
+                !NativeStartupWorldAccess(runtime.image, &StartupGraphRead).Read(owner.gameModeAddress, world) ||
+                !NativeStartupProvidersAccess(runtime.image, &StartupGraphRead).Read(world.worldAddress, next) ||
+                !NativeStartupOwnerAccess(runtime.image, &StartupGraphRead).Read(receiver, ownerAfter) || ownerAfter.gameModeAddress != owner.gameModeAddress ||
+                !NativeStartupWorldAccess(runtime.image, &StartupGraphRead).Read(ownerAfter.gameModeAddress, worldAfter) ||
+                worldAfter.outerAddress != world.outerAddress || worldAfter.levelAddress != world.levelAddress ||
+                worldAfter.worldAddress != world.worldAddress || !qualified() || !FrameReceiver(frameCallbackReceiver) || !CheckStartupBinding(true))
+                return false;
+            // Keep the provider graph tied to the world from this receiver, rather
+            // than allowing a producer or another frame to reuse a previous link.
+            // These observations are deliberately not exposed as StartGame success.
+            value = next;
+            return true;
+        }
+
+        ClockResult CheckStartGameOwner(void* receiver) noexcept
+        {
+            if (!runtime.startupMode || !runtime.startupHandler || !runtime.frameMode || !runtime.frameHooked.load() || !runtime.bound.load() ||
+                !runtime.ready.load())
+                return ClockResult::NotInitialized;
+            if (callbackDepth != 1 || GetCurrentThreadId() != runtime.engineThread.load())
+                return ClockResult::WrongThread;
+            const auto generation = runtime.generation.load();
+            if (!frameCallbackGeneration || frameCallbackGeneration != generation || runtime.admissionGeneration.load() != generation ||
+                !runtime.admissionSerial.load())
+                return ClockResult::OwnerConflict;
+            if (!runtime.active.load() || runtime.stopping.load() || !Fresh())
+                return ClockResult::Expired;
+            if (!receiver || receiver != frameCallbackReceiver || !QualifiedApplicationFrame(generation) || !FrameReceiver(receiver) || !CheckBinding())
+                return ClockResult::BindingChanged;
+            // This is the native borrowed-GameThread protocol, including its
+            // scoped GC zero-probe. A timer thread, cached receiver or a few
+            // apparently idle purge flags cannot supply equivalent authority.
+            const auto thread = NativeStartGameCalls::CheckThread(runtime.image);
+            if (thread != ClockResult::Ok)
+                return thread;
+            return receiver == frameCallbackReceiver && QualifiedApplicationFrame(generation) && FrameReceiver(receiver) ? ClockResult::Ok
+                                                                                                                         : ClockResult::BindingChanged;
+        }
+
+        bool StartupMembershipBinding() noexcept
+        {
+            for (const auto& pin : NativeUObjectMembershipProfile::pins)
+            {
+                std::array<unsigned char, NativeUObjectMembershipProfile::maximumPinBytes> bytes{};
+                if (!pin.size || pin.size > bytes.size() || !Image::ReadImage(runtime.image, runtime.image + pin.rva, bytes.data(), pin.size, false, true) ||
+                    std::memcmp(bytes.data(), pin.bytes, pin.size))
+                    return false;
+            }
+            return true;
+        }
+
+        bool StartupEntryObjects(std::uint64_t generation, void* receiver) noexcept
+        {
+            namespace Owner = NativeStartupOwnerProfile;
+            namespace World = NativeStartupWorldProfile;
+            namespace Providers = NativeStartupProvidersProfile;
+            using Key = NativeUiClassMapAccess::Key;
+            NativeStartupOwnerAccess::Value     owner{}, ownerAfter{};
+            NativeStartupWorldAccess::Value     world{}, worldAfter{};
+            NativeStartupProvidersAccess::Value providers{}, providersAfter{};
+            NativeUiClassMapAccess::Value       loading{}, fade{}, loadingAfter{}, fadeAfter{};
+            std::uint32_t                       facts = 0, refusals = 0;
+            constexpr std::uint32_t             required = StartupLoadingTypeObserved | StartupLoadingTypeMatches | StartupSimpleFadeTypeObserved |
+                                               StartupSimpleFadeTypeMatches | StartupGameModeOwnerObserved | StartupWorldLinkObserved;
+            const auto fullGraph = [&]() noexcept
+            { return StartupReadPrerequisites(generation, facts, refusals) && facts == required && !refusals && StartupReadProviders(generation, providers); };
+            if (!StartupMembershipBinding() || !fullGraph() ||
+                !NativeStartupOwnerAccess(runtime.image, &StartupGraphRead).Read(reinterpret_cast<std::uintptr_t>(receiver), owner) ||
+                !NativeStartupWorldAccess(runtime.image, &StartupGraphRead).Read(owner.gameModeAddress, world) ||
+                !StartupReadUiClassMap(generation, Key::Loading, loading) || !loading.keyPresent || !loading.classAddress ||
+                !StartupReadUiClassMap(generation, Key::SimpleFade, fade) || !fade.keyPresent || !fade.classAddress)
+                return false;
+            constexpr std::array<std::uintptr_t, 7> cacheRvas{
+                Providers::engineRva,           UiMapProfile::uiTransitionClassCacheRva,  Owner::gameModeClassCacheRva,
+                World::levelClassCacheRva,      Providers::playerControllerClassCacheRva, Providers::viewportClassCacheRva,
+                Providers::managerClassCacheRva};
+            std::array<std::uintptr_t, cacheRvas.size()> caches{}, cachesAfter{};
+            const auto                                   readCaches = [&](auto& output) noexcept
+            {
+                for (std::size_t index = 0; index < output.size(); ++index)
+                    if (!Image::ReadImage(runtime.image, runtime.image + cacheRvas[index], &output[index], sizeof(output[index])) || !output[index])
+                        return false;
+                return true;
+            };
+            if (!readCaches(caches))
+                return false;
+            NativeUObjectMembershipAccess membership(runtime.image, &StartupGraphRead);
+            // This fixed evidence budget covers this invocation graph and its
+            // class closure, not a guessed native registry capacity. All raw
+            // pointers/snapshots die before returning from the synchronous claim.
+            std::array<NativeUObjectMembershipAccess::Snapshot, 48> objects{};
+            std::size_t                                             count = 0;
+            const auto                                              capture = [&](std::uintptr_t address) noexcept
+            {
+                if (!address || address == reinterpret_cast<std::uintptr_t>(receiver))
+                    return false;
+                for (std::size_t index = 0; index < count; ++index)
+                    if (objects[index].objectAddress == address)
+                        return true;
+                if (count == objects.size() || !membership.Capture(address, objects[count]))
+                    return false;
+                ++count;
+                return true;
+            };
+            for (const auto object : {owner.gameModeAddress, world.outerAddress, world.levelAddress, world.worldAddress, providers.controllerAddress,
+                                      providers.viewportAddress, providers.managerAddress, loading.classAddress, fade.classAddress})
+                if (!capture(object))
+                    return false;
+            for (const auto cache : caches)
+                if (!capture(cache))
+                    return false;
+            for (std::size_t index = 0; index < count; ++index)
+                if (!capture(objects[index].classAddress))
+                    return false;
+            NativeUObjectMembershipAccess::Snapshot manager{};
+            bool                                    managerType = false;
+            if (!membership.Capture(providers.managerAddress, manager) || manager.vtableAddress != runtime.image + Providers::managerVtableRva ||
+                !NativeClassChainAccess(&StartupGraphRead).IsChildOf(manager.classAddress, caches.back(), managerType) || !managerType)
+                return false;
+            // Re-observe the connected typed graph before the final membership
+            // fence. A collection of individually valid recycled objects must
+            // not be mixed with the links from an earlier observation.
+            if (!NativeStartupOwnerAccess(runtime.image, &StartupGraphRead).Read(reinterpret_cast<std::uintptr_t>(receiver), ownerAfter) ||
+                ownerAfter.gameModeAddress != owner.gameModeAddress ||
+                !NativeStartupWorldAccess(runtime.image, &StartupGraphRead).Read(ownerAfter.gameModeAddress, worldAfter) ||
+                worldAfter.outerAddress != world.outerAddress || worldAfter.levelAddress != world.levelAddress ||
+                worldAfter.worldAddress != world.worldAddress || !StartupReadProviders(generation, providersAfter) ||
+                providersAfter.controllerAddress != providers.controllerAddress || providersAfter.viewportAddress != providers.viewportAddress ||
+                providersAfter.managerAddress != providers.managerAddress || !StartupReadUiClassMap(generation, Key::Loading, loadingAfter) ||
+                !loadingAfter.keyPresent || loadingAfter.classAddress != loading.classAddress ||
+                !StartupReadUiClassMap(generation, Key::SimpleFade, fadeAfter) || !fadeAfter.keyPresent || fadeAfter.classAddress != fade.classAddress ||
+                !readCaches(cachesAfter) || cachesAfter != caches || !StartupReadPrerequisites(generation, facts, refusals) || facts != required || refusals)
+                return false;
+            for (std::size_t index = 0; index < count; ++index)
+                if (!membership.Recheck(objects[index]))
+                    return false;
+            return StartupMembershipBinding();
+        }
+
+        ClockResult ClaimStartGameEntry(void* receiver) noexcept
+        {
+            auto scope = CheckStartGameOwner(receiver);
+            if (scope != ClockResult::Ok)
+                return scope;
+            if (runtime.startupAttempted.load())
+                return ClockResult::Busy;
+            const auto generation = runtime.generation.load();
+            if (!StartupEntryObjects(generation, receiver))
+                return ClockResult::NotInitialized;
+            scope = CheckStartGameOwner(receiver);
+            if (scope != ClockResult::Ok)
+                return scope;
+            // Claim only at the primitive's true entry boundary, after fresh
+            // full prerequisites. Refused preparation consumes no attempt;
+            // once native code enters, asynchronous progress must not replay.
+            bool expected = false;
+            return runtime.startupAttempted.compare_exchange_strong(expected, true) ? ClockResult::Ok : ClockResult::Busy;
+        }
+
+        ClockResult NativeAccess::StartGame() noexcept
+        {
+            void* const receiver = frameCallbackReceiver;
+            const auto  scope = CheckStartGameOwner(receiver);
+            if (scope != ClockResult::Ok)
+                return scope;
+            if (runtime.startupAttempted.load())
+                return ClockResult::Busy;
+            runtime.startupReceipt = {};
+            const auto result = NativeStartGameCalls::Apply(runtime.image, receiver, &CheckStartGameOwner, &ClaimStartGameEntry, &runtime.startupReceipt);
+            // Native frontend/UMG work may already have committed even if its
+            // call throws or its final scope refuses. Preserve those effects;
+            // neither an old world snapshot nor a state8 store is a recovery.
+            if (runtime.startupReceipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+
         void InvokeFrameHandler(void* receiver, float delta, std::uint32_t state)
         {
             const auto previousGeneration = frameCallbackGeneration;
@@ -2086,7 +2363,11 @@ namespace mta::game_de
             frameCallbackReceiver = receiver;
             __try
             {
-                runtime.frameHandler({runtime.generation.load(), state, delta}, runtime.frameContext);
+                const NativeApplicationFrame frame{runtime.generation.load(), state, delta};
+                if (runtime.startupMode && runtime.startupHandler)
+                    runtime.startupHandler(runtime.access, frame, runtime.frameContext);
+                else if (runtime.frameHandler)
+                    runtime.frameHandler(frame, runtime.frameContext);
             }
             __finally
             {
@@ -2138,7 +2419,7 @@ namespace mta::game_de
                 return;
             }
             runtime.ready.store(true);
-            if (runtime.frameHandler)
+            if (runtime.frameHandler || (runtime.startupMode && runtime.startupHandler))
             {
                 try
                 {
@@ -2361,112 +2642,37 @@ namespace mta::game_de
         return BeginOwner(request, state, false, nullptr, context, true, handler);
     }
 
+    bool NativeClockService::BeginGameStartupFrames(const ClockServiceRequestV1& request, ClockServiceStateV1& state, GameStartupHandler handler,
+                                                    void* context) noexcept
+    {
+        if (!handler)
+            return false;
+        return BeginOwner(request, state, false, nullptr, context, true, nullptr, handler);
+    }
+
     bool NativeClockService::ReadStartupUiClassMap(std::uint64_t requestedGeneration, NativeUiClassMapAccess::Key key,
                                                    NativeUiClassMapAccess::Value& value) const noexcept
     {
-        const auto qualified = [&]() noexcept { return requestedGeneration == generation && QualifiedApplicationFrame(generation); };
-        if (!qualified() || !FrameReceiver(frameCallbackReceiver) || !CheckBinding(false, false, true))
-            return false;
-        const auto receiver = reinterpret_cast<std::uintptr_t>(frameCallbackReceiver);
-        if (UiMapProfile::ownerOffset > (std::numeric_limits<std::uintptr_t>::max)() - receiver)
-            return false;
-        NativeUiClassMapAccess::Value next{};
-        if (!NativeUiClassMapAccess(receiver + UiMapProfile::ownerOffset, &UiMapHeapRead).Lookup(key, next) || !qualified() ||
-            !FrameReceiver(frameCallbackReceiver) || !CheckBinding(false, false, true))
-            return false;
-        value = next;
-        return true;
+        return requestedGeneration == generation && StartupReadUiClassMap(requestedGeneration, key, value);
     }
 
     bool NativeClockService::ReadStartupUiTransitionClass(std::uint64_t requestedGeneration, NativeUiClassMapAccess::Key key, bool& compatible) const noexcept
     {
-        NativeUiClassMapAccess::Value first{}, second{};
-        std::uintptr_t                baseBefore = 0, baseAfter = 0;
-        bool                          next = false;
-        // Each map observation independently qualifies this exact receiver's
-        // post-original callback scope. A producer, nested call or old owner
-        // cannot turn an earlier opaque class address into startup authority.
-        if (!ReadStartupUiClassMap(requestedGeneration, key, first) || !first.keyPresent || !first.classAddress ||
-            !Image::ReadImage(runtime.image, runtime.image + UiMapProfile::uiTransitionClassCacheRva, &baseBefore, sizeof(baseBefore)) || !baseBefore ||
-            !NativeClassChainAccess(&UiMapHeapRead).IsChildOf(first.classAddress, baseBefore, next) ||
-            !ReadStartupUiClassMap(requestedGeneration, key, second) || !second.keyPresent || second.classAddress != first.classAddress ||
-            !Image::ReadImage(runtime.image, runtime.image + UiMapProfile::uiTransitionClassCacheRva, &baseAfter, sizeof(baseAfter)) ||
-            baseAfter != baseBefore || requestedGeneration != generation || !QualifiedApplicationFrame(generation))
-            return false;
-        // No StaticClass call or widget creation occurs here. The caller gets
-        // only a coherent relation; UObject lifetime remains a separate duty.
-        compatible = next;
-        return true;
+        return requestedGeneration == generation && StartupReadUiTransitionClass(requestedGeneration, key, compatible);
     }
 
     bool NativeClockService::ReadStartupPrerequisites(std::uint64_t requestedGeneration, std::uint32_t& facts, std::uint32_t& refusals) const noexcept
     {
-        const auto qualified = [&]() noexcept { return requestedGeneration == generation && QualifiedApplicationFrame(generation); };
-        if (!qualified() || !FrameReceiver(frameCallbackReceiver) || !CheckStartupBinding())
-            return false;
-        const auto    receiver = reinterpret_cast<std::uintptr_t>(frameCallbackReceiver);
-        std::uint32_t nextFacts = 0, nextRefusals = 0;
-        bool          compatible = false;
-        if (ReadStartupUiTransitionClass(requestedGeneration, NativeUiClassMapAccess::Key::Loading, compatible))
-            nextFacts |= StartupLoadingTypeObserved | (compatible ? StartupLoadingTypeMatches : 0u);
-        else
-            nextRefusals |= StartupLoadingTypeRefused;
-        if (ReadStartupUiTransitionClass(requestedGeneration, NativeUiClassMapAccess::Key::SimpleFade, compatible))
-            nextFacts |= StartupSimpleFadeTypeObserved | (compatible ? StartupSimpleFadeTypeMatches : 0u);
-        else
-            nextRefusals |= StartupSimpleFadeTypeRefused;
-
-        NativeStartupOwnerAccess::Value owner{}, ownerAfter{};
-        if (NativeStartupOwnerAccess(runtime.image, &StartupGraphRead).Read(receiver, owner))
-        {
-            nextFacts |= StartupGameModeOwnerObserved;
-            NativeStartupWorldAccess::Value world{};
-            if (NativeStartupWorldAccess(runtime.image, &StartupGraphRead).Read(owner.gameModeAddress, world))
-                nextFacts |= StartupWorldLinkObserved;
-            else
-                nextRefusals |= StartupWorldLinkRefused;
-            // The world probe must still refer to the observed enclosing
-            // owner. A moving path is a refused sample, never a mixed record.
-            if (!NativeStartupOwnerAccess(runtime.image, &StartupGraphRead).Read(receiver, ownerAfter) || ownerAfter.gameModeAddress != owner.gameModeAddress)
-                return false;
-        }
-        else
-            nextRefusals |= StartupGameModeOwnerRefused | StartupWorldLinkRefused;
-        if (!qualified() || !FrameReceiver(frameCallbackReceiver) || !CheckStartupBinding())
-            return false;
-        // These are independently guarded observations, not an atomic world
-        // snapshot or permission to enter StartGame, dispatch providers or GC.
-        facts = nextFacts;
-        refusals = nextRefusals;
-        return true;
+        return requestedGeneration == generation && StartupReadPrerequisites(requestedGeneration, facts, refusals);
     }
 
     bool NativeClockService::ReadStartupProviders(std::uint64_t requestedGeneration, NativeStartupProvidersAccess::Value& value) const noexcept
     {
-        const auto qualified = [&]() noexcept { return requestedGeneration == generation && QualifiedApplicationFrame(generation); };
-        if (!qualified() || !FrameReceiver(frameCallbackReceiver) || !CheckStartupBinding(true))
-            return false;
-        const auto                          receiver = reinterpret_cast<std::uintptr_t>(frameCallbackReceiver);
-        NativeStartupOwnerAccess::Value     owner{}, ownerAfter{};
-        NativeStartupWorldAccess::Value     world{}, worldAfter{};
-        NativeStartupProvidersAccess::Value next{};
-        if (!NativeStartupOwnerAccess(runtime.image, &StartupGraphRead).Read(receiver, owner) ||
-            !NativeStartupWorldAccess(runtime.image, &StartupGraphRead).Read(owner.gameModeAddress, world) ||
-            !NativeStartupProvidersAccess(runtime.image, &StartupGraphRead).Read(world.worldAddress, next) ||
-            !NativeStartupOwnerAccess(runtime.image, &StartupGraphRead).Read(receiver, ownerAfter) || ownerAfter.gameModeAddress != owner.gameModeAddress ||
-            !NativeStartupWorldAccess(runtime.image, &StartupGraphRead).Read(ownerAfter.gameModeAddress, worldAfter) ||
-            worldAfter.outerAddress != world.outerAddress || worldAfter.levelAddress != world.levelAddress || worldAfter.worldAddress != world.worldAddress ||
-            !qualified() || !FrameReceiver(frameCallbackReceiver) || !CheckStartupBinding(true))
-            return false;
-        // Keep the provider graph tied to the world from this receiver, rather
-        // than allowing a producer or another frame to reuse a previous link.
-        // These observations are deliberately not exposed as StartGame success.
-        value = next;
-        return true;
+        return requestedGeneration == generation && StartupReadProviders(requestedGeneration, value);
     }
 
     bool NativeClockService::BeginOwner(const ClockServiceRequestV1& request, ClockServiceStateV1& state, bool timingMode, GameTimingHandler handler,
-                                        void* context, bool frameMode, ApplicationFrameHandler frameHandler) noexcept
+                                        void* context, bool frameMode, ApplicationFrameHandler frameHandler, GameStartupHandler startupHandler) noexcept
     {
         ApiOperation operation;
         if (!operation.acquired || !ValidateRequest(request) || runtime.hooked.load() || runtime.timerHooked.load() || runtime.frameHooked.load() ||
@@ -2542,6 +2748,10 @@ namespace mta::game_de
         runtime.timingContext = timingMode ? context : nullptr;
         runtime.frameMode = frameMode;
         runtime.frameHandler = frameHandler;
+        runtime.startupMode = frameMode && startupHandler;
+        runtime.startupHandler = runtime.startupMode ? startupHandler : nullptr;
+        runtime.startupAttempted.store(false);
+        runtime.startupReceipt = {};
         runtime.frameContext = frameMode ? context : nullptr;
         runtime.originalFrame = nullptr;
         bool valid = Image::CheckExecutableBuild() && CheckBinding(true);
@@ -2593,6 +2803,8 @@ namespace mta::game_de
                 runtime.timingHandler = nullptr;
                 runtime.timingContext = nullptr;
                 runtime.frameHandler = nullptr;
+                runtime.startupHandler = nullptr;
+                runtime.startupMode = false;
                 runtime.frameContext = nullptr;
             }
         }
@@ -2711,6 +2923,8 @@ namespace mta::game_de
             runtime.timingHandler = nullptr;
             runtime.timingContext = nullptr;
             runtime.frameHandler = nullptr;
+            runtime.startupHandler = nullptr;
+            runtime.startupMode = false;
             runtime.frameContext = nullptr;
             runtime.weaponWriterReader.Reset();
             runtime.weaponWriterGeneration = 0;

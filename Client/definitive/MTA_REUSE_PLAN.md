@@ -35,6 +35,19 @@ entered failure preserves any native effects and stops the lease without
 replaying the transaction or restoring a guessed bank snapshot. These native
 calls are implemented and checked offline; live validation remains separate.
 
+`CGameDE::StartGame` now forwards MTA's existing SDK request to the actual named
+DE frontend/loading action. A separate internal startup mode uses the existing
+normal post-original game-mode frame hook, generation and retirement machinery.
+The public application-frame observer remains read-only. The admitted call
+checks the native initialized GameThread identity, scoped GC marker, current
+typed owner/world/providers, configured transition classes and immediate UObject
+registry identities. Its final entry claim consumes one attempt per generation;
+missing prerequisites consume none. The real action performs frontend teardown
+and requests asynchronous loading. Return does not certify a loaded world, and
+an entered failure preserves native effects without replay or a state8 shortcut.
+This extends the partial backend; the complete `CGame` factory, native gameplay
+objects and x64 network module still remain prerequisites for full MTA startup.
+
 The October 19 application-frame trial observed 277 natural gameplay frames
 and both configured UI dictionary entries without engine writes, then retired
 its hooks and unloaded Core normally. A combined startup observer now reuses

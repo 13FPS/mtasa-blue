@@ -20,4 +20,8 @@ namespace mta::game_de
     };
 
     using ApplicationFrameHandler = void (*)(const NativeApplicationFrame&, void*);
+    class NativeGameTimingAccess;
+    // Startup writes require a distinct internal opt-in. Observation clients
+    // retain their original handler and cannot obtain this borrowed access.
+    using GameStartupHandler = void (*)(NativeGameTimingAccess&, const NativeApplicationFrame&, void*);
 }

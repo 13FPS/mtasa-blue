@@ -49,6 +49,9 @@ namespace mta::game_de
         // A complete SDK object borrows the independently qualified native
         // reader and this callback owner; publication grants no later lease.
         virtual ClockResult GetStats(CStats*&) noexcept { return ClockResult::NotInitialized; }
+        // The real request belongs to a distinct admitted normal-frame scope;
+        // a gameplay timer or earlier observation never grants lifecycle calls.
+        virtual ClockResult StartGame() noexcept { return ClockResult::NotInitialized; }
 
     protected:
         ~NativeGameTimingAccess() = default;

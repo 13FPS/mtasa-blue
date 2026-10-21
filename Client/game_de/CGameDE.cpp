@@ -53,6 +53,14 @@ namespace mta::game_de
         return output;
     }
 
+    void CGameDE::StartGame()
+    {
+        // The normal native menu request owns additional UI/loading effects.
+        // Delegate it only through the explicit startup-frame owner; a state
+        // write or an observation callback cannot impersonate that transaction.
+        RequireNativeWrite(NativeWrites().StartGame(), "StartGame");
+    }
+
     void CGameDE::SetAsyncLoadingFromScript(bool enabled, bool forced)
     {
         asyncLoading.SetScriptOverride(enabled, forced);

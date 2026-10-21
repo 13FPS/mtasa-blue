@@ -38,6 +38,11 @@ namespace mta::game_de
         // a qualified frame was observed, never that CClock was captured.
         bool BeginApplicationFrames(const ClockServiceRequestV1& request, ClockServiceStateV1& state, ApplicationFrameHandler handler,
                                     void* context = nullptr) noexcept;
+        // Internal startup alone borrows native writes during the current
+        // post-original GameThread frame. Keep the existing exported observer
+        // protocol and its value-only handler unchanged and read-only.
+        bool BeginGameStartupFrames(const ClockServiceRequestV1& request, ClockServiceStateV1& state, GameStartupHandler handler,
+                                    void* context = nullptr) noexcept;
         // Only the qualified post-original handler can observe this receiver's
         // configured classes. Raw membership grants no UObject or startup authority.
         bool ReadStartupUiClassMap(std::uint64_t generation, NativeUiClassMapAccess::Key key, NativeUiClassMapAccess::Value& value) const noexcept;
@@ -65,7 +70,7 @@ namespace mta::game_de
 
     private:
         bool          BeginOwner(const ClockServiceRequestV1& request, ClockServiceStateV1& state, bool timingMode, GameTimingHandler handler, void* context,
-                                 bool frameMode = false, ApplicationFrameHandler frameHandler = nullptr) noexcept;
+                                 bool frameMode = false, ApplicationFrameHandler frameHandler = nullptr, GameStartupHandler startupHandler = nullptr) noexcept;
         std::uint64_t generation = 0;
         ClockServiceStateV1 finalState;
         bool                hasFinalState = false;

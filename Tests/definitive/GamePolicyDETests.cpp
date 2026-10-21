@@ -74,6 +74,13 @@ namespace
         mta::game_de::ClockResult SetTimeScale(float) noexcept override { fixture::Unqualified(); }
         mta::game_de::ClockResult SetMinuteDuration(std::uint32_t) noexcept override { fixture::Unqualified(); }
         mta::game_de::ClockResult Pause(bool) noexcept override { fixture::Unqualified(); }
+        mta::game_de::ClockResult StartGame() noexcept override
+        {
+            ++startRequests;
+            return startResult;
+        }
+        unsigned                  startRequests = 0;
+        mta::game_de::ClockResult startResult = mta::game_de::ClockResult::NotInitialized;
         mta::game_de::ClockResult GetStats(CStats*& output) noexcept override
         {
             ++statsReads;
@@ -353,6 +360,17 @@ int main()
     timing.statsResult = mta::game_de::ClockResult::Ok;
     timing.statsPointer = nullptr;
     Refuses([&] { game.GetStats(); }, "a successful owner result cannot publish a missing actual stats service");
+    const auto stateWritesBeforeStart = timing.stateWrites;
+    Refuses([&] { game.StartGame(); }, "actual CGame StartGame requires a separately admitted native startup owner");
+    Check(timing.startRequests == 1 && timing.stateWrites == stateWritesBeforeStart, "unavailable StartGame is forwarded once without a synthetic state write");
+    timing.startResult = mta::game_de::ClockResult::Ok;
+    game.StartGame();
+    Check(timing.startRequests == 2 && timing.stateWrites == stateWritesBeforeStart,
+          "actual CGame accepts the native startup request without appending state intent");
+    timing.startResult = mta::game_de::ClockResult::OwnerConflict;
+    Refuses([&] { game.StartGame(); }, "a consumed or competing native startup request remains an explicit SDK refusal");
+    Check(timing.startRequests == 3 && timing.stateWrites == stateWritesBeforeStart,
+          "SDK StartGame neither retries nor fabricates the native loading transaction");
     Check(!reader.IsBound() && !streaming.IsBound() && !state.IsBound(), "CPU SDK policies require no native service binding");
 
     std::printf("Passed %u actual CGameDE CPU SDK policy checks (%zu-bit)\n", checks, sizeof(void*) * 8);

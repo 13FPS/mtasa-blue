@@ -155,6 +155,14 @@ setter neither invokes resurrection nor rewinds later native effects. The
 qualified subset comprises the two exact known ped vtables; complete SDK ped
 publication still requires the remaining entity operations and wrapper wiring.
 
+The abstract `CPedVitalsDE` SDK layer now implements MTA's actual `GetHealth`,
+`SetHealth`, `GetArmor` and `SetArmor` virtual methods through that token-based
+owner. It preserves raw float values and reports a refused native operation
+without retrying it. Its constructor copies only CPU token identity; reference
+acquisition and retirement remain with the future enclosing ped/pool owner.
+The other inherited SDK methods remain pure, and this layer has no factory or
+registry entry. It cannot yet be published as a usable `CPed`.
+
 Classic pool templates and the DE ped reader also share MTA's slot bounds
 policy. Free-slot selection retains the classic cursor/probe order and does
 not reserve a row or change its generation. Native allocation remains with

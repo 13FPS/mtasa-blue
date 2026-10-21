@@ -5,6 +5,7 @@
  ****************************************************************************/
 #include "NativePedPoolReader.h"
 #include "NativeImageAccess.h"
+#include <game/CPoolSlotPolicy.h>
 #include <array>
 #include <cstring>
 #include <limits>
@@ -133,7 +134,7 @@ namespace mta::game_de
         if (!next.objects || !next.flags || next.capacity != static_cast<std::int32_t>(P::NativeCapacity) || next.ownsAllocations != 1 || next.cursor < -1 ||
             next.cursor >= next.capacity || next.objects % alignof(std::uintptr_t))
             return ClockResult::BindingChanged;
-        if (next.slot >= static_cast<std::uint32_t>(next.capacity))
+        if (!MtaGame::CPoolSlotPolicy::ContainsIndex(next.capacity, next.slot))
             return ClockResult::InvalidArgument;
         if (!NativePages(next.objects, P::NativeCapacity * P::ObjectStride) || !NativePages(next.flags, P::NativeCapacity))
             return ClockResult::ReadFailure;

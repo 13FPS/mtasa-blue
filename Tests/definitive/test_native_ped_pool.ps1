@@ -37,7 +37,7 @@ function RunOwned([string]$exe,[string[]]$arguments,[string]$directory,[string]$
     }finally{$process.Dispose()}
 }
 try{
-    $names=@('Client/game_de/NativePedPoolReader.h','Client/game_de/NativePedPoolReader.cpp','Client/game_de/NativePedPoolProfile.h',
+    $names=@('Client/sdk/game/CPoolSlotPolicy.h','Client/game_de/NativePedPoolReader.h','Client/game_de/NativePedPoolReader.cpp','Client/game_de/NativePedPoolProfile.h',
         'Client/game_de/NativeImageAccess.h','Client/game_de/NativeImageAccess.cpp','Client/sdk/game/CGameAdapter.h','Client/sdk/game/CGameClockService.h',
         'Shared/sdk/CControllerState.h','Shared/sdk/CControllerActions.h','Shared/sdk/CControlStateSynthesis.h',
         'Tests/definitive/NativePedPoolReaderTests.cpp','Tests/definitive/test_native_ped_pool.ps1',

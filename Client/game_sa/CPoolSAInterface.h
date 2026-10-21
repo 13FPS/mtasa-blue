@@ -12,6 +12,7 @@
 #pragma once
 
 #include <game/CPools.h>
+#include <game/CPoolSlotPolicy.h>
 
 // size of tPoolObjectFlags is 1 byte only
 union tPoolObjectFlags
@@ -85,32 +86,10 @@ public:
         if (m_nSize <= 0 || m_byteMap == nullptr)
             return static_cast<uint>(-1);
 
-        bool bLooped = false;
-        int  index = m_nFirstFree + 1;
-
-        if (index < 0 || index >= m_nSize)
-            index = 0;
-
-        while (true)
-        {
-            if (index >= m_nSize)
-            {
-                if (bLooped)
-                    return static_cast<uint>(-1);
-
-                index = 0;
-                bLooped = true;
-            }
-
-            if (m_byteMap[index].bEmpty)
-            {
-                m_nFirstFree = index;
-                return static_cast<uint>(index);
-            }
-            index++;
-        }
-
-        return static_cast<uint>(-1);
+        const auto selected = MtaGame::CPoolSlotPolicy::FindFreeAfter(m_nSize, m_nFirstFree, [this](std::int32_t index) { return m_byteMap[index].bEmpty; });
+        if (selected != MtaGame::CPoolSlotPolicy::InvalidSlot)
+            m_nFirstFree = static_cast<int>(selected);
+        return selected;
     };
 
     B* Allocate()
@@ -174,12 +153,8 @@ public:
     bool         IsEmpty(std::int32_t objectIndex) const { return m_byteMap[objectIndex].bEmpty; }
     bool         IsContains(std::int32_t index) const
     {
-        if (m_nSize <= 0)
-            return false;
-
-        if (index < 0 || index >= m_nSize)
-            return false;
-        return !IsEmpty(index);
+        // Bound selection before consulting the actual engine-owned flag map.
+        return MtaGame::CPoolSlotPolicy::ContainsIndex(m_nSize, index) && !IsEmpty(index);
     }
 
     B* GetObject(std::int32_t objectIndex)
@@ -195,10 +170,7 @@ public:
     std::int32_t GetObjectIndexSafe(B* pObject)
     {
         uint32_t index = GetObjectIndex(pObject);
-        if (m_nSize <= 0)
-            return -1;
-
-        return index >= static_cast<uint32_t>(m_nSize) ? -1 : static_cast<std::int32_t>(index);
+        return MtaGame::CPoolSlotPolicy::IndexOrInvalid(m_nSize, index);
     }
 };
 

@@ -21,6 +21,8 @@
 #include "../../Client/game_de/NativePedTransformProfile.h"
 #include "../../Client/game_de/NativePedTeleportMemory.h"
 #include "../../Client/game_de/NativePedTeleportProfile.h"
+#include "../../Client/game_de/NativePedVelocityMemory.h"
+#include "../../Client/game_de/NativePedVelocityProfile.h"
 #include "../../Client/game_de/NativePlayerInfoMemory.h"
 #include "../../Client/game_de/NativePlayerInfoProfile.h"
 #include "../../Client/game_de/NativePlayerInfoExtraProfile.h"
@@ -104,6 +106,20 @@ namespace ClockStatsOwnerTest
         if (result != mta::game_de::ClockResult::Ok)
             exception = EXCEPTION_ACCESS_VIOLATION;
         return result;
+    }
+}
+
+namespace ClockPedVelocityOwnerTest
+{
+    unsigned    stores = 0, failAt = 0;
+    LONG WINAPI Exchange(volatile LONG* address, LONG target, LONG expected)
+    {
+        ++stores;
+        if (stores == failAt)
+            RaiseException(EXCEPTION_ACCESS_VIOLATION, 0, 0, nullptr);
+        // Exercise the actual aligned scalar CAS. Only its fault boundary is
+        // scheduled; no fake callback grant or alternative setter is supplied.
+        return _InterlockedCompareExchange(address, target, expected);
     }
 }
 
@@ -780,6 +796,13 @@ namespace mta::game_de::NativeImageAccess
 #define MTA_DE_PED_TELEPORT_NATIVE_INVOKE ClockPedTeleportOwnerTest::Invoke
 #include "../../Client/game_de/NativePedTeleportMemory.cpp"
 #undef MTA_DE_PED_TELEPORT_NATIVE_INVOKE
+#pragma push_macro("InterlockedCompareExchange")
+#ifdef InterlockedCompareExchange
+    #undef InterlockedCompareExchange
+#endif
+#define InterlockedCompareExchange ClockPedVelocityOwnerTest::Exchange
+#include "../../Client/game_de/NativePedVelocityMemory.cpp"
+#pragma pop_macro("InterlockedCompareExchange")
 #undef GetModuleHandleW
 
 namespace mta::game_de::GameTimeReaderFixtureMemory
@@ -1914,6 +1937,19 @@ namespace
         ++callbackDepth;
         CompleteCommand(command);
         --callbackDepth;
+        if (runtime.lastCompletedSequence.load() != 1 || runtime.lastCommandResult.load() != ClockResult::Ok || fixture.Get<std::uint8_t>(hoursRva) != 18 ||
+            fixture.Get<std::uint8_t>(minutesRva) != 19)
+        {
+            // Keep strict publication assertions while retaining the actual
+            // refusal and page state when an earlier fixture leaves debt.
+            MEMORY_BASIC_INFORMATION page{};
+            ::VirtualQuery(reinterpret_cast<void*>(fixture.image + hoursRva), &page, sizeof(page));
+            std::fprintf(stderr, "Clock Set diagnostic: sequence=%llu result=%u failure=%u hour=%u minute=%u protection=%lu age=%llu\n",
+                         static_cast<unsigned long long>(runtime.lastCompletedSequence.load()), static_cast<unsigned>(runtime.lastCommandResult.load()),
+                         static_cast<unsigned>(runtime.failure.load()), static_cast<unsigned>(fixture.Get<std::uint8_t>(hoursRva)),
+                         static_cast<unsigned>(fixture.Get<std::uint8_t>(minutesRva)), static_cast<unsigned long>(page.Protect),
+                         static_cast<unsigned long long>(GetTickCount64() - runtime.refreshed.load()));
+        }
         Check(runtime.lastCompletedSequence.load() == 1 && runtime.lastCommandResult.load() == ClockResult::Ok && fixture.Get<std::uint8_t>(hoursRva) == 18 &&
                   fixture.Get<std::uint8_t>(minutesRva) == 19,
               "the actual SDK Set completes and changes owned native memory before callback readback is published");
@@ -5414,6 +5450,7 @@ namespace
 #include "NativePlayerInfoWantedOwnerTests.inl"
 #include "NativeRopesOwnerTests.inl"
 #include "NativePedTeleportOwnerTests.inl"
+#include "NativePedVelocityOwnerTests.inl"
 #include "NativeWorldCheatOwnerTests.inl"
 
 int main(int argc, char** argv)
@@ -5446,6 +5483,7 @@ int main(int argc, char** argv)
     NativePlayerInfoWantedOwnedSdk(fixture);
     NativeRopesOwnedSdk(fixture);
     NativePedTeleportOwnedSdk(fixture);
+    NativePedVelocityOwnedSdk(fixture);
     NativeReadSetAndRestoration(fixture);
     NativeCoherentCommandPublication(fixture);
     NativeReadOnlyRetirement(fixture);

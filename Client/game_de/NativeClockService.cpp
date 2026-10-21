@@ -29,6 +29,7 @@
 #include "NativeRopesMemory.h"
 #include "CRopesDE.h"
 #include "NativePedTeleportMemory.h"
+#include "NativePedVelocityMemory.h"
 #include "NativeStartGameCalls.h"
 #include "NativeUObjectMembershipAccess.h"
 #include "NativeUObjectMembershipProfile.h"
@@ -107,6 +108,8 @@ namespace mta::game_de
             ClockResult RecheckPedTransform(const NativePedTransformReader::Value&) noexcept override;
             ClockResult BorrowPedPosition(std::uint32_t, CVector*&) noexcept override;
             ClockResult TeleportPed(std::uint32_t, const CVector&) noexcept override;
+            ClockResult ReadPedVelocity(std::uint32_t, NativePedVelocityKind, CVector&) noexcept override;
+            ClockResult SetPedVelocity(std::uint32_t, NativePedVelocityKind, const CVector&) noexcept override;
             ClockResult SetWeaponFloat(std::size_t slot, NativeWeaponFloatField field, float value) noexcept override;
             ClockResult SetWeaponShort(std::size_t slot, NativeWeaponShortField field, std::int16_t value) noexcept override;
             ClockResult SetWeaponDword(std::size_t slot, NativeWeaponDwordField field, std::uint32_t value) noexcept override;
@@ -2110,6 +2113,24 @@ namespace mta::game_de
             // A task, world-list or placement effect may already exist even if
             // the native call faults or its acknowledgement becomes unreadable.
             // End retires this owner's hooks; it never replays/rewinds the ped.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+        ClockResult NativeAccess::ReadPedVelocity(std::uint32_t handle, NativePedVelocityKind kind, CVector& output) noexcept
+        {
+            return NativePedVelocityMemory({runtime.image}, &CheckTimingOwner).Read(handle, kind, output);
+        }
+        ClockResult NativeAccess::SetPedVelocity(std::uint32_t handle, NativePedVelocityKind kind, const CVector& value) noexcept
+        {
+            const auto admitted = CheckTimingOwner();
+            if (admitted != ClockResult::Ok)
+                return admitted;
+            NativePedVelocityMemory::Receipt receipt;
+            const auto                       result = NativePedVelocityMemory({runtime.image}, &CheckTimingOwner).Set(handle, kind, value, &receipt);
+            // Accepted components are persistent native intent. A fault or
+            // conflict can follow a partial write; stopping this same owner
+            // never rewinds the row or retries the remaining components.
             if (receipt.entered && result != ClockResult::Ok)
                 Stop(result);
             return result;

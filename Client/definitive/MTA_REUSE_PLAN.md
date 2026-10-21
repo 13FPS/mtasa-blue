@@ -127,6 +127,11 @@ shared without a layout change. Native creation and deletion remain with the
 classic caller. This policy does not publish a DE pool or fabricate wrappers
 whose lifetime cannot yet be maintained across callbacks.
 
+Classic pool templates and the DE ped reader also share MTA's slot bounds
+policy. Free-slot selection retains the classic cursor/probe order and does
+not reserve a row or change its generation. Native allocation remains with
+the engine; shared selection and bounds supply no entity lifetime guarantee.
+
 The same native callback owner supplies immediate ped position, matrix and raw
 velocity observations. Position borrows preserve the actual inline or owned
 matrix vector address, with fresh pool-generation and matrix-owner checks.
@@ -143,6 +148,15 @@ world-list and velocity effects belong to that operation. An entered failure
 stops the existing owner and preserves those effects; it never replays the
 intent or restores a guessed entity snapshot. This primitive publishes no
 partial `CPed` object and does not complete the remaining entity SDK methods.
+
+Raw linear and angular ped velocities also use the existing callback owner.
+Both vectors retain native units and copy into caller storage. Setters check
+the current occupied ped identity and update exact components conditionally;
+accepted components remain if a later write or acknowledgement fails. The
+receipt records confirmed effects, and an entered failure stops the owner
+without retry or delayed repair under a recycled pool generation. Classic
+nonfinite-value repair and object-only moving-list effects belong to separate
+SDK policies; this narrow ped service does not fabricate a full `CPhysical`.
 
 The complete two-method `CRopesDE` service reuses MTA's `CRopes` interface and
 the existing native callback owner. Creation calls the genuine DE rope

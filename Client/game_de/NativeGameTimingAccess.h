@@ -9,6 +9,8 @@
 #include <enums/SystemState.h>
 #include "NativeCheatProfile.h"
 #include "CWeatherTransitionDE.h"
+#include "CWeatherScalarsDE.h"
+#include "NativeWeaponInfoWriteAccess.h"
 #include <cstdint>
 
 namespace mta::game_de
@@ -16,7 +18,7 @@ namespace mta::game_de
     // Read-only startup binding does not authorize mutations. The qualified
     // native owner implements these methods and retains restoration debt after
     // a partial write; this interface is not another exported service protocol.
-    class NativeGameTimingAccess : public NativeWeatherTransitionAccess
+    class NativeGameTimingAccess : public NativeWeatherTransitionAccess, public NativeWeatherScalarAccess, public NativeWeaponInfoWriteAccess
     {
     public:
         virtual ClockResult SetTimeScale(float value) noexcept = 0;

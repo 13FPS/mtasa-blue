@@ -83,8 +83,19 @@ Classic and DE also share the SDK's weapon-info slot selector: 47 standard
 wrappers and three eleven-slot skill rows. DE's actual `GetWeaponInfo` override
 requires a genuine wrapper provider; it never treats a native data row as a
 `CWeaponInfo`. Invalid requests return null, while an unavailable accepted slot
-refuses explicitly. Native weapon storage and complete wrappers remain separate
-work from this shared selection policy.
+refuses explicitly. The checked native reader now maps DE's actual eighty
+112-byte rows using its initializer, loader stores and selector. Thirty-one
+existing SDK getters read fresh qualified rows through `CWeaponInfoReadDE`.
+This uses independently decoded fields rather than casting a classic weapon
+structure. Mutators and the live pointer accessor remain separate work, so the
+read slice remains abstract and no complete weapon provider is published yet.
+`CWeaponInfoWriteDE` adds eighteen existing SDK setter methods through the same
+qualified engine generation. Float, short and DWORD intents write only their
+proved fields; flag updates preserve unrelated native bits. The animation group
+is checked against the real native count, and every CAS/retry and readback
+acceptance checks callback authority. Confirmed writes persist after End;
+unconfirmed reads are explicit failures and never trigger a whole-row rewind.
+Slot and fire-offset methods remain unfinished.
 
 `CWeatherTransitionDE` supplies the existing SDK's `Get`, `Set`, `Release` and
 clock-resync methods through that same native callback owner. DE uses WORD
@@ -96,6 +107,14 @@ potentially owned data remains unresolved. Successful settings persist after
 End. A superseded field retires with `OwnerConflict` and `restored=false` rather
 than claiming that its original value was restored. Scalar overrides remain
 pure, so this is still an incomplete weather provider.
+
+Eight scalar getters additionally read Rain, WetRoads, Foggyness, Fog, RainFog,
+WaterFog, Sandstorm and Rainbow from their actual native producers. They borrow
+the same engine callback owner and preserve finite native values without a
+guessed range clamp or cached fallback. Failed reads preserve the caller's
+output. These observations do not suppress native writers or implement scalar
+Set/Reset operations. WaterFog has a proved native producer; a separate DE
+rendering consumer and visible effect remain unverified.
 
 `IsAtMenu` separately observes the real SA interface's managed menu widget and
 the legacy frontend screen count/pending slot. The concrete owner type, native

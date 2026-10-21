@@ -12,6 +12,8 @@
 #include "NativeGameStateMemory.h"
 #include "NativeCheatFlagAccess.h"
 #include "NativeWeatherTransitionJournal.h"
+#include "NativeWeatherScalarMemory.h"
+#include "NativeWeaponInfoWriteMemory.h"
 #include "NativeGameTimingProfile.h"
 #include "NativeGamePauseProfile.h"
 #include "NativeApplicationFrameProfile.h"
@@ -78,6 +80,11 @@ namespace mta::game_de
             ClockResult SetTypes(std::uint8_t primary, std::uint8_t secondary) noexcept override;
             ClockResult ResyncWithClock() noexcept override;
             ClockResult ReleaseForced() noexcept override;
+            ClockResult ReadScalar(NativeWeatherScalarProfile::Field field, float& output) noexcept override;
+            ClockResult SetWeaponFloat(std::size_t slot, NativeWeaponFloatField field, float value) noexcept override;
+            ClockResult SetWeaponShort(std::size_t slot, NativeWeaponShortField field, std::int16_t value) noexcept override;
+            ClockResult SetWeaponDword(std::size_t slot, NativeWeaponDwordField field, std::uint32_t value) noexcept override;
+            ClockResult UpdateWeaponFlags(std::size_t slot, std::uint32_t mask, bool enabled) noexcept override;
         };
 
         struct Counters
@@ -118,42 +125,47 @@ namespace mta::game_de
             NativeWeatherTransitionJournal weather;
             std::atomic<bool>              weatherRecovery{false}, weatherSuperseded{false};
             std::atomic<std::uint64_t>     weatherGeneration{0};
-            float                          originalTimeScale = 0;
-            std::uint32_t                  originalMinuteDuration = 0;
-            std::uint8_t                   originalUserPause = 0;
-            bool                           timingMode = false;
-            std::atomic<bool>              timerHooked{false}, timerReady{false};
-            GameTimingHandler              timingHandler = nullptr;
-            void*                          timingContext = nullptr;
-            bool                           frameMode = false;
-            std::atomic<bool>              frameHooked{false};
-            ApplicationFrameHandler        frameHandler = nullptr;
-            void*                          frameContext = nullptr;
-            ApplicationFrameFunction       originalFrame = nullptr;
-            std::atomic<unsigned>          inFlight{0};
-            std::atomic<std::uint32_t>     retainedPeerThreads{0};
-            std::atomic<DWORD>             engineThread{0};
-            std::atomic<std::uint64_t>     generation{0}, refreshed{0}, lastSubmitted{0}, pendingSequence{0};
-            std::atomic<std::uint64_t>     admissionGeneration{0}, admissionSerial{0};
-            std::atomic<std::uint64_t>     lastCompletedSequence{0};
-            std::atomic<ClockResult>       failure{ClockResult::Ok};
-            std::atomic<ClockResult>       lastCommandResult{ClockResult::NotInitialized};
-            DWORD                          producerThread = 0;
-            std::uintptr_t                 image = 0;
-            ULONGLONG                      started = 0;
-            std::uint32_t                  maximumDuration = 0;
-            ClockCommandV1                 pending;
-            bool                           hasPending = false;
-            ClockValues                    original, observed;
-            ClockPublication               publishedClock;
-            ContinuationFunction           originalContinuation = nullptr;
-            ContinuationFunction           originalTimer = nullptr;
-            DWORD                          patchProtection = 0;
-            std::atomic<bool>              protectionPending{false};
-            std::vector<PeerThread>        recoveryPeers;
-            NativeAccess                   access;
-            CClockDE                       clock{access};
-            Counters                       counters;
+            // The independently qualified bank reader is bound only from the
+            // admitted engine callback, once per generation. Persistent field
+            // intents need no original-row cache or End-time row restoration.
+            NativeWeaponInfoReader     weaponWriterReader;
+            std::uint64_t              weaponWriterGeneration = 0;
+            float                      originalTimeScale = 0;
+            std::uint32_t              originalMinuteDuration = 0;
+            std::uint8_t               originalUserPause = 0;
+            bool                       timingMode = false;
+            std::atomic<bool>          timerHooked{false}, timerReady{false};
+            GameTimingHandler          timingHandler = nullptr;
+            void*                      timingContext = nullptr;
+            bool                       frameMode = false;
+            std::atomic<bool>          frameHooked{false};
+            ApplicationFrameHandler    frameHandler = nullptr;
+            void*                      frameContext = nullptr;
+            ApplicationFrameFunction   originalFrame = nullptr;
+            std::atomic<unsigned>      inFlight{0};
+            std::atomic<std::uint32_t> retainedPeerThreads{0};
+            std::atomic<DWORD>         engineThread{0};
+            std::atomic<std::uint64_t> generation{0}, refreshed{0}, lastSubmitted{0}, pendingSequence{0};
+            std::atomic<std::uint64_t> admissionGeneration{0}, admissionSerial{0};
+            std::atomic<std::uint64_t> lastCompletedSequence{0};
+            std::atomic<ClockResult>   failure{ClockResult::Ok};
+            std::atomic<ClockResult>   lastCommandResult{ClockResult::NotInitialized};
+            DWORD                      producerThread = 0;
+            std::uintptr_t             image = 0;
+            ULONGLONG                  started = 0;
+            std::uint32_t              maximumDuration = 0;
+            ClockCommandV1             pending;
+            bool                       hasPending = false;
+            ClockValues                original, observed;
+            ClockPublication           publishedClock;
+            ContinuationFunction       originalContinuation = nullptr;
+            ContinuationFunction       originalTimer = nullptr;
+            DWORD                      patchProtection = 0;
+            std::atomic<bool>          protectionPending{false};
+            std::vector<PeerThread>    recoveryPeers;
+            NativeAccess               access;
+            CClockDE                   clock{access};
+            Counters                   counters;
         };
 
         // A failed code/data restoration cannot discard its owner on DLL
@@ -1111,6 +1123,96 @@ namespace mta::game_de
                                  { return journal.ReleaseForced(memory); });
         }
 
+        ClockResult NativeAccess::ReadScalar(NativeWeatherScalarProfile::Field field, float& output) noexcept
+        {
+            if (static_cast<std::size_t>(field) >= NativeWeatherScalarProfile::Fields.size())
+                return ClockResult::InvalidArgument;
+            const auto owner = CheckTimingOwner();
+            if (owner != ClockResult::Ok)
+                return owner;
+            if (runtime.weatherRecovery.load() || runtime.weatherGeneration.load())
+                return ClockResult::Busy;
+            // The existing owner already performed exact-build admission.
+            // These getter-specific producer/name pins qualify the additional
+            // fields without a whole executable hash on each SDK read.
+            const NativeWeatherScalarProfile::Binding binding{runtime.image};
+            if (!NativeWeatherScalarProfile::Revalidate(binding))
+                return ClockResult::BindingChanged;
+            float next = 0;
+            if (!NativeWeatherScalarMemory(binding, &OwnedFieldPages).Read(field, next))
+                return ClockResult::ReadFailure;
+            if (!NativeWeatherScalarProfile::Revalidate(binding))
+                return ClockResult::BindingChanged;
+            const auto confirmedOwner = CheckTimingOwner();
+            if (confirmedOwner != ClockResult::Ok)
+                return confirmedOwner;
+            // Return the current native float, including finite values outside
+            // 0..1 and signed zero. Refusal never publishes a cached/default
+            // observation or introduces a native-writer override.
+            output = next;
+            return ClockResult::Ok;
+        }
+
+        ClockResult RequireWeaponWriterReader() noexcept
+        {
+            auto owner = CheckTimingOwner();
+            if (owner != ClockResult::Ok)
+                return owner;
+            const auto generation = runtime.generation.load();
+            if (runtime.weaponWriterGeneration && runtime.weaponWriterGeneration != generation)
+                return ClockResult::OwnerConflict;
+            if (!runtime.weaponWriterGeneration)
+            {
+                // Read qualification is independent of callback authority. Its
+                // one exact executable check is reused by every field intent
+                // in this generation, while each write requalifies live rows.
+                runtime.weaponWriterReader.Reset();
+                const auto bound = runtime.weaponWriterReader.Bind();
+                if (bound != Status::Ok)
+                    return bound == Status::WrongThread ? ClockResult::WrongThread : ClockResult::BindingChanged;
+                owner = CheckTimingOwner();
+                if (owner != ClockResult::Ok)
+                {
+                    runtime.weaponWriterReader.Reset();
+                    return owner;
+                }
+                runtime.weaponWriterGeneration = generation;
+            }
+            return CheckTimingOwner();
+        }
+
+        ClockResult NativeAccess::SetWeaponFloat(std::size_t slot, NativeWeaponFloatField field, float value) noexcept
+        {
+            const auto owner = RequireWeaponWriterReader();
+            if (owner != ClockResult::Ok)
+                return owner;
+            return NativeWeaponInfoWriteMemory::SetFloat(runtime.weaponWriterReader, runtime.image, slot, field, value, &CheckTimingOwner);
+        }
+
+        ClockResult NativeAccess::SetWeaponShort(std::size_t slot, NativeWeaponShortField field, std::int16_t value) noexcept
+        {
+            const auto owner = RequireWeaponWriterReader();
+            if (owner != ClockResult::Ok)
+                return owner;
+            return NativeWeaponInfoWriteMemory::SetShort(runtime.weaponWriterReader, runtime.image, slot, field, value, &CheckTimingOwner);
+        }
+
+        ClockResult NativeAccess::SetWeaponDword(std::size_t slot, NativeWeaponDwordField field, std::uint32_t value) noexcept
+        {
+            const auto owner = RequireWeaponWriterReader();
+            if (owner != ClockResult::Ok)
+                return owner;
+            return NativeWeaponInfoWriteMemory::SetDword(runtime.weaponWriterReader, runtime.image, slot, field, value, &CheckTimingOwner);
+        }
+
+        ClockResult NativeAccess::UpdateWeaponFlags(std::size_t slot, std::uint32_t mask, bool enabled) noexcept
+        {
+            const auto owner = RequireWeaponWriterReader();
+            if (owner != ClockResult::Ok)
+                return owner;
+            return NativeWeaponInfoWriteMemory::UpdateFlags(runtime.weaponWriterReader, runtime.image, slot, mask, enabled, &CheckTimingOwner);
+        }
+
         bool RecoverWeather() noexcept
         {
             if (!runtime.weatherRecovery.load() && !runtime.weatherGeneration.load())
@@ -2009,6 +2111,8 @@ namespace mta::game_de
         runtime.weatherRecovery.store(false);
         runtime.weatherGeneration.store(0);
         runtime.weatherSuperseded.store(false);
+        runtime.weaponWriterReader.Reset();
+        runtime.weaponWriterGeneration = 0;
         runtime.originalTimeScale = 0;
         runtime.originalMinuteDuration = 0;
         runtime.originalUserPause = 0;
@@ -2186,6 +2290,8 @@ namespace mta::game_de
             runtime.timingContext = nullptr;
             runtime.frameHandler = nullptr;
             runtime.frameContext = nullptr;
+            runtime.weaponWriterReader.Reset();
+            runtime.weaponWriterGeneration = 0;
         }
         ReadState(finalState);
         hasFinalState = true;

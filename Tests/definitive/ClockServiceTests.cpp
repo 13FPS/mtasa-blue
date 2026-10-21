@@ -10,6 +10,9 @@
 #include "../../Client/game_de/NativeGameStateProfile.h"
 #include "../../Client/game_de/NativeCheatProfile.h"
 #include "../../Client/game_de/NativeWeatherTransitionProfile.h"
+#include "../../Client/game_de/NativeWeatherScalarProfile.h"
+#include "../../Client/game_de/NativeWeaponInfoProfile.h"
+#include "../../Client/game_de/NativeWeaponInfoWriteProfile.h"
 #include "../../Client/game_de/NativeServiceAdmission.h"
 #include <array>
 #include <cstdio>
@@ -44,9 +47,24 @@ namespace ClockTestFaults
     std::array<std::uintptr_t, 2> weatherProtectedPages{};
     std::array<DWORD, 2>          weatherOldProtections{};
     std::size_t                   weatherProtectedCount = 0;
+    std::uintptr_t                scalarReadAddress = 0;
+    std::atomic<bool>             failScalarRead{false};
+    void (*scalarAfterRead)() = nullptr;
+    std::uintptr_t        weaponWriteAddress = 0, weaponRowAddress = 0;
+    std::atomic<bool>     advanceWeaponBeforeAtomic{false}, protectWeaponBeforeAtomic{false}, failWeaponReadback{false}, failNextWeaponRow{false};
+    std::atomic<unsigned> weaponExchanges{0};
+    DWORD                 weaponOldProtection = 0;
+    void (*weaponAfterRowRead)() = nullptr;
 
     BOOL WINAPI Read(HANDLE process, LPCVOID address, LPVOID output, SIZE_T bytes, SIZE_T* copied)
     {
+        if (reinterpret_cast<std::uintptr_t>(address) == scalarReadAddress && bytes == sizeof(float) && failScalarRead.exchange(false))
+        {
+            if (copied)
+                *copied = 0;
+            SetLastError(ERROR_PARTIAL_COPY);
+            return FALSE;
+        }
         if (reinterpret_cast<std::uintptr_t>(address) == cheatWriteAddress && bytes == 1 && failNextCheatRead.exchange(false))
         {
             if (copied)
@@ -61,6 +79,12 @@ namespace ClockTestFaults
             return FALSE;
         }
         const auto result = ::ReadProcessMemory(process, address, output, bytes, copied);
+        if (reinterpret_cast<std::uintptr_t>(address) == scalarReadAddress && bytes == sizeof(float) && scalarAfterRead)
+        {
+            const auto after = scalarAfterRead;
+            scalarAfterRead = nullptr;
+            after();
+        }
         if (reinterpret_cast<std::uintptr_t>(address) == uiReadAddress && uiRootChangeAddress)
         {
             const std::uintptr_t absent = 0;
@@ -151,6 +175,40 @@ namespace ClockTestFaults
     {
         WeatherProtectionRace(reinterpret_cast<std::uintptr_t>(address));
         return ::_InterlockedCompareExchange(address, desired, expected);
+    }
+    void WeaponProtectionRace(std::uintptr_t address)
+    {
+        if (address == weaponWriteAddress && protectWeaponBeforeAtomic.exchange(false) &&
+            !::VirtualProtect(reinterpret_cast<void*>(address), sizeof(LONG), PAGE_READONLY, &weaponOldProtection))
+            std::abort();
+    }
+    SHORT WeaponCompareExchange16(volatile SHORT* address, SHORT desired, SHORT expected)
+    {
+        if (reinterpret_cast<std::uintptr_t>(address) == weaponWriteAddress)
+        {
+            ++weaponExchanges;
+            if (advanceWeaponBeforeAtomic.exchange(false))
+                ::_InterlockedExchange16(address, static_cast<SHORT>(expected ^ 0x40));
+        }
+        WeaponProtectionRace(reinterpret_cast<std::uintptr_t>(address));
+        const auto observed = ::_InterlockedCompareExchange16(address, desired, expected);
+        if (reinterpret_cast<std::uintptr_t>(address) == weaponWriteAddress && failWeaponReadback.exchange(false))
+            failNextWeaponRow.store(true);
+        return observed;
+    }
+    LONG WeaponCompareExchange32(volatile LONG* address, LONG desired, LONG expected)
+    {
+        if (reinterpret_cast<std::uintptr_t>(address) == weaponWriteAddress)
+        {
+            ++weaponExchanges;
+            if (advanceWeaponBeforeAtomic.exchange(false))
+                ::_InterlockedExchange(address, expected ^ 0x40);
+        }
+        WeaponProtectionRace(reinterpret_cast<std::uintptr_t>(address));
+        const auto observed = ::_InterlockedCompareExchange(address, desired, expected);
+        if (reinterpret_cast<std::uintptr_t>(address) == weaponWriteAddress && failWeaponReadback.exchange(false))
+            failNextWeaponRow.store(true);
+        return observed;
     }
     BOOL WINAPI Protect(LPVOID address, SIZE_T size, DWORD protection, PDWORD previous)
     {
@@ -304,6 +362,21 @@ namespace mta::game_de::NativeImageAccess
         }
         return true;
     }
+    bool WeaponOwnerFixtureReadImage(std::uintptr_t image, std::uintptr_t address, void* destination, std::size_t bytes, bool writable = false,
+                                     bool executable = false) noexcept
+    {
+        if (address == ClockTestFaults::weaponRowAddress && bytes == NativeWeaponInfoProfile::RowBytes && ClockTestFaults::failNextWeaponRow.exchange(false))
+            return false;
+        if (!ReadImage(image, address, destination, bytes, writable, executable))
+            return false;
+        if (address == ClockTestFaults::weaponRowAddress && bytes == NativeWeaponInfoProfile::RowBytes && ClockTestFaults::weaponAfterRowRead)
+        {
+            const auto after = ClockTestFaults::weaponAfterRowRead;
+            ClockTestFaults::weaponAfterRowRead = nullptr;
+            after();
+        }
+        return true;
+    }
 }
 
 // Only the OS read boundary can schedule an owned-image transition here. Both
@@ -319,6 +392,29 @@ namespace mta::game_de::NativeImageAccess
 #define GetModuleHandleW     ClockReaderTestHost::Module
 #include "../../Client/game_de/NativeCheatProfile.cpp"
 #include "../../Client/game_de/NativeWeatherTransitionProfile.cpp"
+#include "../../Client/game_de/NativeWeatherScalarProfile.cpp"
+#undef GetModuleHandleW
+#undef CheckExecutableBuild
+
+// Only the module identity selection and guarded OS boundary select the owned
+// SEC_IMAGE. Bank qualification, typed field CAS/readback and the actual native
+// callback authority remain production code, including each retry's scope check.
+#define CheckExecutableBuild ClockReaderFixtureExecutable
+#define GetModuleHandleW     ClockReaderTestHost::Module
+#define ReadImage            WeaponOwnerFixtureReadImage
+#define Profile              WeaponReaderProfile
+#include "../../Client/game_de/NativeWeaponInfoReader.cpp"
+#undef Profile
+#pragma push_macro("InterlockedCompareExchange16")
+#pragma push_macro("InterlockedCompareExchange")
+#undef InterlockedCompareExchange16
+#undef InterlockedCompareExchange
+#define InterlockedCompareExchange16 ClockTestFaults::WeaponCompareExchange16
+#define InterlockedCompareExchange   ClockTestFaults::WeaponCompareExchange32
+#include "../../Client/game_de/NativeWeaponInfoWriteMemory.cpp"
+#pragma pop_macro("InterlockedCompareExchange")
+#pragma pop_macro("InterlockedCompareExchange16")
+#undef ReadImage
 #undef GetModuleHandleW
 #undef CheckExecutableBuild
 
@@ -412,7 +508,7 @@ namespace
             IMAGE_NT_HEADERS64 nt{};
             nt.Signature = IMAGE_NT_SIGNATURE;
             nt.FileHeader.Machine = IMAGE_FILE_MACHINE_AMD64;
-            nt.FileHeader.NumberOfSections = 8;
+            nt.FileHeader.NumberOfSections = 10;
             nt.FileHeader.SizeOfOptionalHeader = sizeof(IMAGE_OPTIONAL_HEADER64);
             nt.FileHeader.Characteristics = IMAGE_FILE_EXECUTABLE_IMAGE | IMAGE_FILE_LARGE_ADDRESS_AWARE;
             nt.OptionalHeader.Magic = IMAGE_NT_OPTIONAL_HDR64_MAGIC;
@@ -431,7 +527,7 @@ namespace
             nt.OptionalHeader.SizeOfStackCommit = nt.OptionalHeader.SizeOfHeapCommit = 0x1000;
             nt.OptionalHeader.NumberOfRvaAndSizes = IMAGE_NUMBEROF_DIRECTORY_ENTRIES;
             std::memcpy(bytes.data() + dos.e_lfanew, &nt, sizeof(nt));
-            std::array<IMAGE_SECTION_HEADER, 8> sections{};
+            std::array<IMAGE_SECTION_HEADER, 10> sections{};
             // A Windows image section table must describe adjacent virtual
             // ranges. Sparse zero-filled sections preserve the actual native
             // RVAs without leaving loader-invalid gaps or a huge raw file.
@@ -448,27 +544,31 @@ namespace
             // Keep every registration literal and dispatch slot in immutable
             // sections instead of weakening their policy to admit this page.
             constexpr std::uint32_t cheatPageRva = static_cast<std::uint32_t>(NativeCheatProfile::FlagsRva & ~std::uintptr_t{0xfff});
-            zeroSection(3, ".gap", 0x1400000, cheatPageRva - 0x1400000);
-            zeroSection(4, ".cheats", cheatPageRva, 0x1000);
-            zeroSection(5, ".gap2", cheatPageRva + 0x1000, DataRva - cheatPageRva - 0x1000);
-            zeroSection(7, ".tail", DataRva + DataSize, nt.OptionalHeader.SizeOfImage - DataRva - DataSize);
+            constexpr std::uint32_t animationPageRva = static_cast<std::uint32_t>(NativeWeaponInfoWriteProfile::AnimationCountRva & ~std::uintptr_t{0xfff});
+            zeroSection(3, ".gap", 0x1400000, animationPageRva - 0x1400000);
+            zeroSection(4, ".anims", animationPageRva, 0x1000);
+            zeroSection(5, ".gap2", animationPageRva + 0x1000, cheatPageRva - animationPageRva - 0x1000);
+            zeroSection(6, ".cheats", cheatPageRva, 0x1000);
+            zeroSection(7, ".gap3", cheatPageRva + 0x1000, DataRva - cheatPageRva - 0x1000);
+            zeroSection(9, ".tail", DataRva + DataSize, nt.OptionalHeader.SizeOfImage - DataRva - DataSize);
             // Only bounded admitted pages gain executable/writable protection
             // below. These virtual-section flags also describe the earlier
             // application caller and later root/state fields to the real gate.
             sections[0].Characteristics |= IMAGE_SCN_MEM_EXECUTE;
             sections[2].Characteristics |= IMAGE_SCN_MEM_EXECUTE;
             sections[4].Characteristics |= IMAGE_SCN_MEM_WRITE;
-            sections[7].Characteristics |= IMAGE_SCN_MEM_WRITE;
+            sections[6].Characteristics |= IMAGE_SCN_MEM_WRITE;
+            sections[9].Characteristics |= IMAGE_SCN_MEM_WRITE;
             std::memcpy(sections[1].Name, ".text", 5);
             sections[1].VirtualAddress = TextRva;
             sections[1].Misc.VirtualSize = sections[1].SizeOfRawData = TextSize;
             sections[1].PointerToRawData = 0x1000;
             sections[1].Characteristics = IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE;
-            std::memcpy(sections[6].Name, ".data", 5);
-            sections[6].VirtualAddress = DataRva;
-            sections[6].Misc.VirtualSize = sections[6].SizeOfRawData = DataSize;
-            sections[6].PointerToRawData = 0x1000 + TextSize;
-            sections[6].Characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE;
+            std::memcpy(sections[8].Name, ".data", 5);
+            sections[8].VirtualAddress = DataRva;
+            sections[8].Misc.VirtualSize = sections[8].SizeOfRawData = DataSize;
+            sections[8].PointerToRawData = 0x1000 + TextSize;
+            sections[8].Characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE;
             std::memcpy(bytes.data() + dos.e_lfanew + sizeof(nt), sections.data(), sizeof(sections));
             const auto code = [&](std::uintptr_t rva, const auto& data) { std::memcpy(bytes.data() + 0x1000 + rva - TextRva, data.data(), data.size()); };
             code(NativeClockProfile::clockCodeRva, NativeClockProfile::clockCode);
@@ -630,6 +730,37 @@ namespace
                       "weather fixture uses readable writable non-executable image data");
             }
         }
+        void AdmitWeatherScalarPins()
+        {
+            // Preserve the real section/page policies for scalar producers and
+            // their independent named consumers. The sparse owned image needs
+            // only these bounded pages, never a second copy of the game.
+            const auto admit = [&](std::uintptr_t rva, const void* bytes, std::size_t size, DWORD protection)
+            {
+                DWORD prior = 0, ignored = 0;
+                Check(::VirtualProtect(reinterpret_cast<void*>(image + rva), size, PAGE_READWRITE, &prior) != FALSE,
+                      "initialize only bounded owned scalar profile image pages");
+                std::memcpy(reinterpret_cast<void*>(image + rva), bytes, size);
+                Check(::VirtualProtect(reinterpret_cast<void*>(image + rva), size, protection, &ignored) != FALSE &&
+                          ::FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(image + rva), size),
+                      "restore scalar proof code RX, named metadata RO and native float data RW");
+            };
+            for (const auto& pin : NativeWeatherScalarProfile::Code)
+                admit(pin.rva, pin.bytes.data(), pin.size, PAGE_EXECUTE_READ);
+            for (const auto& name : NativeWeatherScalarProfile::Names)
+            {
+                admit(name.nameRva, name.name, std::strlen(name.name) + 1, PAGE_READONLY);
+                const std::uint64_t pointer = image + name.nameRva;
+                admit(name.recordRva, &pointer, sizeof(pointer), PAGE_READONLY);
+                admit(name.recordRva + (name.propertyOffset ? 36 : 8), &name.value, sizeof(name.value), PAGE_READONLY);
+            }
+            const wchar_t intensity[] = L"RainbowIntensity", mesh[] = L"RainbowMesh";
+            admit(NativeWeatherScalarProfile::RainbowIntensityNameRva, intensity, sizeof(intensity), PAGE_READONLY);
+            admit(NativeWeatherScalarProfile::RainbowMeshNameRva, mesh, sizeof(mesh), PAGE_READONLY);
+            constexpr std::array<std::uint32_t, 8> values{0x80000000, 0xbf000000, 0x3fc00000, 0x3e800000, 0x40000000, 0x3f000000, 0xbf800000, 0x3f800000};
+            for (std::size_t index = 0; index < values.size(); ++index)
+                admit(NativeWeatherScalarProfile::Fields[index], &values[index], sizeof(values[index]), PAGE_READWRITE);
+        }
         void AdmitSystemStatePins()
         {
             for (const auto& pin : NativeGameStateProfile::pins)
@@ -642,6 +773,49 @@ namespace
                           ::FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(image + pin.rva), pin.size),
                       "native state pins use actual RX or immutable RO image pages");
             }
+        }
+        void AdmitWeaponPins()
+        {
+            // This bank uses its own native layout/loader qualification. Keep
+            // its animation-count cell in a narrow writable image section and
+            // every immutable selector/loader literal under the real RO gate.
+            const auto admit = [&](std::uintptr_t rva, const void* bytes, std::size_t size, DWORD protection)
+            {
+                DWORD prior = 0, ignored = 0;
+                Check(::VirtualProtect(reinterpret_cast<void*>(image + rva), size, PAGE_READWRITE, &prior) != FALSE,
+                      "initialize only bounded weapon bank proof pages in the owned image");
+                std::memcpy(reinterpret_cast<void*>(image + rva), bytes, size);
+                Check(::VirtualProtect(reinterpret_cast<void*>(image + rva), size, protection, &ignored) != FALSE &&
+                          ::FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(image + rva), size),
+                      "restore independent weapon code RX, selector literals RO and bank/count data RW");
+            };
+            for (const auto& pin : NativeWeaponInfoProfile::Code)
+                admit(pin.rva, pin.bytes.data(), pin.size, PAGE_EXECUTE_READ);
+            for (const auto& literal : NativeWeaponInfoProfile::Literals)
+                admit(literal.rva, literal.bytes.data(), literal.size, PAGE_READONLY);
+            std::array<NativeWeaponInfoValues, NativeWeaponInfoProfile::RowCount> rows{};
+            for (std::size_t index = 0; index < rows.size(); ++index)
+            {
+                auto& row = rows[index];
+                row.fireType = 1;
+                row.targetRange = static_cast<float>(index + 1);
+                row.weaponRange = static_cast<float>(index + 2);
+                row.model = static_cast<std::int32_t>(100 + index);
+                row.model2 = -1;
+                row.slot = static_cast<std::int32_t>(index % 12);
+                row.flags = static_cast<std::int32_t>(0x40008000);
+                row.animGroup = 1;
+                row.damage = 23;
+                row.clipAmmo = 17;
+                row.skill = 0xaabbcc01;
+                row.fireOffset[2] = 9.0f;
+                row.aimOffset = 7;
+                row.defaultCombo = 3;
+                row.combosAvailable = 4;
+            }
+            admit(NativeWeaponInfoProfile::BankRva, rows.data(), sizeof(rows), PAGE_READWRITE);
+            const std::int32_t animations = 37;
+            admit(NativeWeaponInfoWriteProfile::AnimationCountRva, &animations, sizeof(animations), PAGE_READWRITE);
         }
         void AdmitApplicationPins()
         {
@@ -2584,6 +2758,426 @@ namespace
         std::puts("Production native weather transaction owner fixture completed");
     }
 
+    struct WeatherScalarContext
+    {
+        NativeWeatherScalarProfile::Field field = NativeWeatherScalarProfile::Field::Rain;
+        unsigned                          calls = 0, refusal = 0;
+        float                             output = 123.0f;
+        ClockResult                       result = ClockResult::NotInitialized;
+    };
+
+    void WeatherScalarHandler(NativeGameTimingAccess& access, void* opaque)
+    {
+        auto& context = *static_cast<WeatherScalarContext*>(opaque);
+        ++context.calls;
+        Check(callbackDepth == 1 && timingTimerScope && timingCallbackGeneration == runtime.generation.load() && runtime.timerReady.load() &&
+                  runtime.engineThread.load() == GetCurrentThreadId(),
+              "scalar SDK reads enter through the actual qualified post-original timer callback");
+        const auto generation = timingCallbackGeneration;
+        const auto admission = runtime.admissionGeneration.load();
+        const auto refreshed = runtime.refreshed.load();
+        const auto weatherGeneration = runtime.weatherGeneration.load();
+        const auto weatherRecovery = runtime.weatherRecovery.load();
+        if (context.refusal == 1)
+            timingCallbackGeneration = generation + 1;
+        if (context.refusal == 2)
+            runtime.admissionGeneration.store(admission + 1);
+        if (context.refusal == 3)
+            ++callbackDepth;
+        if (context.refusal == 4)
+            runtime.refreshed.store(GetTickCount64() - ClockServiceLeaseMsV1 - 1);
+        if (context.refusal == 5)
+        {
+            runtime.weatherGeneration.store(generation);
+            runtime.weatherRecovery.store(true);
+        }
+        context.result = access.ReadScalar(context.field, context.output);
+        runtime.weatherGeneration.store(weatherGeneration);
+        runtime.weatherRecovery.store(weatherRecovery);
+        runtime.refreshed.store(refreshed);
+        if (context.refusal == 3)
+            --callbackDepth;
+        runtime.admissionGeneration.store(admission);
+        timingCallbackGeneration = generation;
+    }
+
+    void NativeWeatherScalarOwnedReads(ClockImageFixture& fixture)
+    {
+        namespace Scalars = NativeWeatherScalarProfile;
+        fixture.AdmitWeatherPins();
+        fixture.AdmitWeatherScalarPins();
+        ClockReaderTestHost::image = fixture.image;
+        const auto bits = [](float value)
+        {
+            std::uint32_t output = 0;
+            std::memcpy(&output, &value, sizeof(output));
+            return output;
+        };
+        const auto snapshot = [&]
+        {
+            std::array<std::uint32_t, Scalars::Fields.size()> result{};
+            for (std::size_t index = 0; index < result.size(); ++index)
+                result[index] = fixture.Get<std::uint32_t>(Scalars::Fields[index]);
+            return result;
+        };
+        const auto original = snapshot();
+        float      outside = 123.0f;
+        Check(runtime.access.ReadScalar(Scalars::Field::Rain, outside) == ClockResult::NotInitialized && outside == 123.0f,
+              "a qualified scalar image cannot authorize an unbound SDK reader");
+        NativeClockService   service;
+        WeatherScalarContext context;
+        BeginOwned(service, fixture, false, true, true, &WeatherScalarHandler, &context);
+        const auto invoke = [&]
+        {
+            Check(service.Renew(runtime.generation.load()), "renew only the actual scalar callback owner's current generation");
+            fixture.invokeTimer();
+        };
+        for (std::size_t index = 0; index < Scalars::Fields.size(); ++index)
+        {
+            context.field = static_cast<Scalars::Field>(index);
+            context.output = 123.0f;
+            invoke();
+            Check(context.result == ClockResult::Ok && bits(context.output) == original[index],
+                  "all eight actual native scalar reads preserve finite negatives, values above one and signed zero without clamping");
+        }
+        context.field = Scalars::Field::Rain;
+        Check(runtime.access.ReadScalar(context.field, outside) != ClockResult::Ok && outside == 123.0f,
+              "the adopted producer cannot borrow scalar authority between natural engine callbacks");
+        bool        foreignRefused = false;
+        std::thread foreign(
+            [&]
+            {
+                float value = 123.0f;
+                foreignRefused = runtime.access.ReadScalar(context.field, value) != ClockResult::Ok && value == 123.0f;
+            });
+        foreign.join();
+        Check(foreignRefused, "a foreign producer cannot borrow the active scalar owner or publish a guessed observation");
+        for (unsigned refusal = 1; refusal <= 5; ++refusal)
+        {
+            context.refusal = refusal;
+            context.output = 123.0f;
+            invoke();
+            const auto expected = refusal <= 2   ? ClockResult::OwnerConflict
+                                  : refusal == 3 ? ClockResult::WrongThread
+                                  : refusal == 4 ? ClockResult::Expired
+                                                 : ClockResult::Busy;
+            Check(context.result == expected && context.output == 123.0f && snapshot() == original,
+                  "scalar access rejects stale generations, mismatched admission, nested callbacks, expiry and incomplete weather mutations");
+        }
+        context.refusal = 0;
+        context.field = static_cast<Scalars::Field>(255);
+        invoke();
+        Check(context.result == ClockResult::InvalidArgument && context.output == 123.0f, "an unknown scalar identifier refuses before field access");
+        context.field = Scalars::Field::Rain;
+        const auto& pin = Scalars::Code.front();
+        const auto  changed = static_cast<unsigned char>(pin.bytes[0] ^ 1);
+        fixture.Patch(pin.rva, &changed, sizeof(changed));
+        invoke();
+        Check(context.result == ClockResult::BindingChanged && context.output == 123.0f,
+              "scalar access checks its actual live native producer beyond the shared clock and weather qualification");
+        fixture.Patch(pin.rva, pin.bytes.data(), sizeof(changed));
+        const auto&         name = Scalars::Names.front();
+        const std::uint64_t absent = 0, namedAddress = fixture.image + name.nameRva;
+        fixture.Patch(name.recordRva, &absent, sizeof(absent));
+        invoke();
+        Check(context.result == ClockResult::BindingChanged && context.output == 123.0f,
+              "a changed ASLR-aware named native consumer refuses without returning an unrelated float");
+        fixture.Patch(name.recordRva, &namedAddress, sizeof(namedAddress));
+        const std::uint32_t nonfinite = 0x7fc00000;
+        fixture.Patch(Scalars::Fields[0], &nonfinite, sizeof(nonfinite));
+        invoke();
+        Check(context.result == ClockResult::ReadFailure && context.output == 123.0f,
+              "a current native NaN is an explicit read refusal and preserves caller output");
+        fixture.Patch(Scalars::Fields[0], &original[0], sizeof(original[0]));
+        ClockTestFaults::scalarReadAddress = fixture.image + Scalars::Fields[0];
+        ClockTestFaults::failScalarRead.store(true);
+        invoke();
+        Check(context.result == ClockResult::ReadFailure && context.output == 123.0f && !ClockTestFaults::failScalarRead.load(),
+              "an actual guarded scalar OS-copy failure cannot publish a cached or default value");
+        ClockTestFaults::scalarAfterRead = [] { ++timingCallbackGeneration; };
+        invoke();
+        Check(context.result == ClockResult::OwnerConflict && context.output == 123.0f && !ClockTestFaults::scalarAfterRead,
+              "the actual owner is checked again after native data was copied before caller output can be committed");
+        const std::uint32_t fresh = 0x40200000;
+        fixture.Patch(Scalars::Fields[0], &fresh, sizeof(fresh));
+        invoke();
+        Check(context.result == ClockResult::Ok && bits(context.output) == fresh,
+              "a later qualified scalar read observes the current native value rather than its prior sample");
+        const auto beforeEnd = snapshot();
+        Check(!runtime.nativeTouched.load() && !runtime.timingDirty.load() && !runtime.timingRecovery.load() && !runtime.weatherRecovery.load() &&
+                  !runtime.weatherGeneration.load() && !runtime.weather.HasPending(),
+              "readonly scalar getters create neither timing restoration debt nor weather transaction ownership");
+        const auto calls = context.calls;
+        if (!service.End())
+        {
+            fixture.invokeTimer();
+            Check(service.End(), "the existing native callback retires readonly scalar ownership");
+        }
+        Check(!service.IsRetained() && !runtime.hooked.load() && !runtime.timerHooked.load() && !runtime.timingHandler && !runtime.timingContext &&
+                  context.calls == calls && snapshot() == beforeEnd && !NativeServiceAdmission::IsClaimed(NativeServiceAdmission::Category::Clock),
+              "End releases hooks, callback context and admission without rewriting any native weather scalar");
+        ClockTestFaults::scalarReadAddress = 0;
+        ClockReaderTestHost::image = 0;
+        std::puts("Production native weather scalar owner fixture completed");
+    }
+
+    struct WeaponWriteContext
+    {
+        std::size_t            slot = 77;
+        unsigned               calls = 0, operation = 1, refusal = 0;
+        NativeWeaponFloatField floatField = NativeWeaponFloatField::WeaponRange;
+        NativeWeaponShortField shortField = NativeWeaponShortField::Damage;
+        NativeWeaponDwordField dwordField = NativeWeaponDwordField::Flags;
+        float                  floatValue = 12.5f;
+        std::int16_t           shortValue = -123;
+        std::uint32_t          dwordValue = 0, mask = 1;
+        bool                   enabled = true;
+        ClockResult            result = ClockResult::NotInitialized;
+    };
+
+    void WeaponWriteHandler(NativeGameTimingAccess& access, void* opaque)
+    {
+        auto& context = *static_cast<WeaponWriteContext*>(opaque);
+        ++context.calls;
+        Check(callbackDepth == 1 && timingTimerScope && timingCallbackGeneration == runtime.generation.load() && runtime.timerReady.load() &&
+                  runtime.engineThread.load() == GetCurrentThreadId(),
+              "typed weapon intents execute only through the real post-original engine timer callback");
+        const auto generation = timingCallbackGeneration;
+        const auto admission = runtime.admissionGeneration.load();
+        const auto refreshed = runtime.refreshed.load();
+        if (context.refusal == 1)
+            timingCallbackGeneration = generation + 1;
+        if (context.refusal == 2)
+            runtime.admissionGeneration.store(admission + 1);
+        if (context.refusal == 3)
+            ++callbackDepth;
+        if (context.refusal == 4)
+            runtime.refreshed.store(GetTickCount64() - ClockServiceLeaseMsV1 - 1);
+        if (context.operation == 1)
+            context.result = access.SetWeaponFloat(context.slot, context.floatField, context.floatValue);
+        if (context.operation == 2)
+            context.result = access.SetWeaponShort(context.slot, context.shortField, context.shortValue);
+        if (context.operation == 3)
+            context.result = access.SetWeaponDword(context.slot, context.dwordField, context.dwordValue);
+        if (context.operation == 4)
+            context.result = access.UpdateWeaponFlags(context.slot, context.mask, context.enabled);
+        runtime.refreshed.store(refreshed);
+        if (context.refusal == 3)
+            --callbackDepth;
+        runtime.admissionGeneration.store(admission);
+        timingCallbackGeneration = generation;
+    }
+
+    void NativeWeaponOwnedWrites(ClockImageFixture& fixture)
+    {
+        namespace Weapons = NativeWeaponInfoProfile;
+        fixture.AdmitWeaponPins();
+        ClockReaderTestHost::image = fixture.image;
+        using Bank = std::array<NativeWeaponInfoValues, Weapons::RowCount>;
+        const auto bank = [&] { return fixture.Get<Bank>(Weapons::BankRva); };
+        auto       expected = bank();
+        const auto unchanged = [&]
+        {
+            const auto current = bank();
+            return std::memcmp(current.data(), expected.data(), sizeof(expected)) == 0;
+        };
+        const auto refused = [&]
+        {
+            return runtime.access.SetWeaponFloat(77, NativeWeaponFloatField::WeaponRange, 1.0f) != ClockResult::Ok &&
+                   runtime.access.SetWeaponShort(77, NativeWeaponShortField::Damage, 1) != ClockResult::Ok &&
+                   runtime.access.SetWeaponDword(77, NativeWeaponDwordField::Flags, 1) != ClockResult::Ok &&
+                   runtime.access.UpdateWeaponFlags(77, 1, true) != ClockResult::Ok;
+        };
+        Check(refused() && unchanged() && !runtime.weaponWriterReader.IsBound(),
+              "an available native bank cannot grant any typed setter to an unbound producer");
+        NativeClockService service;
+        WeaponWriteContext context;
+        BeginOwned(service, fixture, false, true, true, &WeaponWriteHandler, &context);
+        const auto invoke = [&]
+        {
+            Check(service.Renew(runtime.generation.load()), "renew the actual native weapon callback generation");
+            fixture.invokeTimer();
+        };
+        const std::array<std::size_t, 10> floatOffsets{offsetof(NativeWeaponInfoValues, weaponRange),  offsetof(NativeWeaponInfoValues, targetRange),
+                                                       offsetof(NativeWeaponInfoValues, accuracy),     offsetof(NativeWeaponInfoValues, moveSpeed),
+                                                       offsetof(NativeWeaponInfoValues, speed),        offsetof(NativeWeaponInfoValues, radius),
+                                                       offsetof(NativeWeaponInfoValues, lifeSpan),     offsetof(NativeWeaponInfoValues, spread),
+                                                       offsetof(NativeWeaponInfoValues, animBreakout), offsetof(NativeWeaponInfoValues, animFireTime)};
+        for (std::size_t index = 0; index < floatOffsets.size(); ++index)
+        {
+            context.operation = 1;
+            context.floatField = static_cast<NativeWeaponFloatField>(index);
+            context.floatValue = 10.25f + static_cast<float>(index);
+            invoke();
+            std::memcpy(reinterpret_cast<unsigned char*>(&expected[context.slot]) + floatOffsets[index], &context.floatValue, sizeof(context.floatValue));
+            Check(context.result == ClockResult::Ok && unchanged(),
+                  "every typed float setter updates only its actual native four-byte field and preserves the other79 rows");
+        }
+        for (unsigned index = 0; index < 2; ++index)
+        {
+            context.operation = 2;
+            context.shortField = static_cast<NativeWeaponShortField>(index);
+            context.shortValue = static_cast<std::int16_t>(index ? 32767 : -123);
+            invoke();
+            if (index)
+                expected[context.slot].clipAmmo = context.shortValue;
+            else
+                expected[context.slot].damage = context.shortValue;
+            Check(context.result == ClockResult::Ok && unchanged(),
+                  "each genuine signed-WORD setter preserves its neighboring native WORD and every unrelated field");
+        }
+        for (unsigned index = 0; index < 4; ++index)
+        {
+            context.operation = 3;
+            context.dwordField = static_cast<NativeWeaponDwordField>(index);
+            context.dwordValue = index == 0 ? 3 : index == 1 ? 0xfffffffe : index == 2 ? 0x80000810 : 36;
+            invoke();
+            auto& row = expected[context.slot];
+            if (index == 0)
+                row.skill = (row.skill & 0xffffff00) | context.dwordValue;
+            if (index == 1)
+                std::memcpy(&row.requiredStat, &context.dwordValue, sizeof(row.requiredStat));
+            if (index == 2)
+                std::memcpy(&row.flags, &context.dwordValue, sizeof(row.flags));
+            if (index == 3)
+                row.animGroup = context.dwordValue;
+            Check(context.result == ClockResult::Ok && unchanged(),
+                  "typed DWORD intent preserves the skill enum's upper bytes and bounds animation indices by the actual native count");
+        }
+        context.operation = 4;
+        context.mask = 0x20;
+        invoke();
+        expected[context.slot].flags |= 0x20;
+        Check(context.result == ClockResult::Ok && unchanged(), "masked flag enable preserves every unrelated native flag bit");
+        context.enabled = false;
+        context.mask = 0x10;
+        invoke();
+        expected[context.slot].flags &= ~0x10;
+        Check(context.result == ClockResult::Ok && unchanged(), "masked flag disable clears only its explicitly owned native mask");
+        Check(runtime.weaponWriterReader.IsBound() && runtime.weaponWriterGeneration == runtime.generation.load(),
+              "all typed intents reuse the reader bound by this actual engine generation");
+        Check(refused() && unchanged(), "even the adopted producer cannot borrow weapon write authority between native callbacks");
+        bool        foreignRefused = false;
+        std::thread foreign([&] { foreignRefused = refused(); });
+        foreign.join();
+        Check(foreignRefused && unchanged(), "a foreign thread cannot borrow any typed setter from the active native weapon owner");
+        for (unsigned refusal = 1; refusal <= 4; ++refusal)
+            for (unsigned operation = 1; operation <= 4; ++operation)
+            {
+                context.refusal = refusal;
+                context.operation = operation;
+                invoke();
+                const auto result = refusal <= 2 ? ClockResult::OwnerConflict : refusal == 3 ? ClockResult::WrongThread : ClockResult::Expired;
+                Check(context.result == result && unchanged(),
+                      "all typed weapon setter families reject stale scope, mismatched admission, nested callbacks and expiry before mutation");
+            }
+        context.refusal = 0;
+        for (unsigned operation = 1; operation <= 3; ++operation)
+        {
+            context.operation = operation;
+            context.floatField = static_cast<NativeWeaponFloatField>(255);
+            context.shortField = static_cast<NativeWeaponShortField>(255);
+            context.dwordField = static_cast<NativeWeaponDwordField>(255);
+            invoke();
+            Check(context.result == ClockResult::InvalidArgument && unchanged(), "unknown typed descriptors refuse without touching the weapon bank");
+        }
+        context.floatField = NativeWeaponFloatField::WeaponRange;
+        context.shortField = NativeWeaponShortField::Damage;
+        context.operation = 3;
+        context.dwordField = NativeWeaponDwordField::Skill;
+        context.dwordValue = 4;
+        invoke();
+        Check(context.result == ClockResult::InvalidArgument && unchanged(),
+              "a stored skill outside the four native enum values cannot use lookup fallback semantics");
+        context.dwordField = NativeWeaponDwordField::AnimGroup;
+        context.dwordValue = 37;
+        invoke();
+        Check(context.result == ClockResult::InvalidArgument && unchanged(), "the first animation index beyond the live native count refuses before CAS");
+        context.slot = Weapons::RowCount;
+        context.operation = 1;
+        invoke();
+        Check(context.result == ClockResult::InvalidArgument && unchanged(),
+              "a native weapon slot outside the complete80-row bank cannot wrap to writable memory");
+        context.slot = 77;
+        const auto& pin = Weapons::Code.front();
+        const auto  changed = static_cast<unsigned char>(pin.bytes[0] ^ 1);
+        fixture.Patch(pin.rva, &changed, sizeof(changed));
+        invoke();
+        Check(context.result == ClockResult::BindingChanged && unchanged(),
+              "typed intents requalify the actual native bank selector and loader before mutation");
+        fixture.Patch(pin.rva, pin.bytes.data(), sizeof(changed));
+        const auto rowRva = Weapons::BankRva + context.slot * Weapons::RowBytes;
+        ClockTestFaults::weaponRowAddress = fixture.image + rowRva;
+        ClockTestFaults::weaponWriteAddress = fixture.image + rowRva + offsetof(NativeWeaponInfoValues, weaponRange);
+        ClockTestFaults::weaponAfterRowRead = [] { ++timingCallbackGeneration; };
+        const auto beforeScopeChange = ClockTestFaults::weaponExchanges.load();
+        invoke();
+        Check(context.result == ClockResult::OwnerConflict && unchanged() && !ClockTestFaults::weaponAfterRowRead &&
+                  ClockTestFaults::weaponExchanges.load() == beforeScopeChange,
+              "the real callback guard rejects a scope change after native row sampling and before the actual CAS");
+        ClockTestFaults::advanceWeaponBeforeAtomic.store(true);
+        invoke();
+        std::uint32_t changedRange = 0;
+        std::memcpy(&changedRange, &expected[context.slot].weaponRange, sizeof(changedRange));
+        changedRange ^= 0x40;
+        std::memcpy(&expected[context.slot].weaponRange, &changedRange, sizeof(changedRange));
+        Check(context.result == ClockResult::Busy && unchanged() && !ClockTestFaults::advanceWeaponBeforeAtomic.load(),
+              "a foreign four-byte field edit survives the real whole-field CAS instead of being overwritten or restored");
+        context.operation = 2;
+        ClockTestFaults::weaponWriteAddress = fixture.image + rowRva + offsetof(NativeWeaponInfoValues, damage);
+        ClockTestFaults::advanceWeaponBeforeAtomic.store(true);
+        invoke();
+        std::uint16_t changedDamage = 0;
+        std::memcpy(&changedDamage, &expected[context.slot].damage, sizeof(changedDamage));
+        changedDamage ^= 0x40;
+        std::memcpy(&expected[context.slot].damage, &changedDamage, sizeof(changedDamage));
+        Check(context.result == ClockResult::Busy && unchanged(), "a foreign signed-WORD edit survives the actual exact-width16-bit CAS");
+        context.operation = 4;
+        context.mask = 1;
+        context.enabled = true;
+        ClockTestFaults::weaponWriteAddress = fixture.image + rowRva + offsetof(NativeWeaponInfoValues, flags);
+        ClockTestFaults::advanceWeaponBeforeAtomic.store(true);
+        const auto beforeFlagRetry = ClockTestFaults::weaponExchanges.load();
+        invoke();
+        expected[context.slot].flags = (expected[context.slot].flags ^ 0x40) | 1;
+        Check(context.result == ClockResult::Ok && unchanged() && ClockTestFaults::weaponExchanges.load() == beforeFlagRetry + 2,
+              "a masked intent retries from the actual changed flag word and preserves the native owner's unrelated bits");
+        context.operation = 3;
+        context.dwordField = NativeWeaponDwordField::RequiredStatLevel;
+        context.dwordValue = 456;
+        ClockTestFaults::weaponWriteAddress = fixture.image + rowRva + offsetof(NativeWeaponInfoValues, requiredStat);
+        ClockTestFaults::failWeaponReadback.store(true);
+        invoke();
+        expected[context.slot].requiredStat = 456;
+        Check(context.result == ClockResult::WriteFailure && unchanged() && !ClockTestFaults::failNextWeaponRow.load(),
+              "a committed field with failed actual readback remains persistent but is not falsely reported as confirmed");
+        context.dwordValue = 789;
+        ClockTestFaults::protectWeaponBeforeAtomic.store(true);
+        invoke();
+        DWORD ignored = 0;
+        Check(::VirtualProtect(reinterpret_cast<void*>(ClockTestFaults::weaponWriteAddress), sizeof(LONG), ClockTestFaults::weaponOldProtection, &ignored) !=
+                  FALSE,
+              "restore only the protection deliberately changed on the owned weapon fixture page");
+        Check(context.result == ClockResult::WriteFailure && unchanged() && !ClockTestFaults::protectWeaponBeforeAtomic.load(),
+              "an actual page-protection race at CAS refuses without widening engine permissions or creating row-restore debt");
+        Check(!runtime.nativeTouched.load() && !runtime.timingDirty.load() && !runtime.timingRecovery.load() && !runtime.weatherRecovery.load() &&
+                  !runtime.weatherGeneration.load(),
+              "persistent typed weapon intents do not capture clock fields or create unrelated weather cleanup debt");
+        const auto calls = context.calls;
+        if (!service.End())
+        {
+            fixture.invokeTimer();
+            Check(service.End(), "the existing natural callback retires typed weapon authority");
+        }
+        Check(!service.IsRetained() && !runtime.hooked.load() && !runtime.timerHooked.load() && !runtime.timingHandler && !runtime.timingContext &&
+                  !runtime.weaponWriterReader.IsBound() && !runtime.weaponWriterGeneration && context.calls == calls && unchanged() &&
+                  !NativeServiceAdmission::IsClaimed(NativeServiceAdmission::Category::Clock),
+              "End retires reader and callback authority while preserving persistent fields, foreign changes and every untouched weapon row");
+        ClockTestFaults::weaponWriteAddress = ClockTestFaults::weaponRowAddress = 0;
+        ClockReaderTestHost::image = 0;
+        std::puts("Production native typed weapon write owner fixture completed");
+    }
+
     struct ApplicationFrameContext
     {
         unsigned               calls = 0, originalCountAtLastHandler = 0;
@@ -3582,6 +4176,8 @@ int main(int argc, char** argv)
     NativeSystemStateOwnedWrites(fixture);
     NativeCheatFlagOwnedAccess(fixture);
     NativeWeatherOwnedTransactions(fixture);
+    NativeWeatherScalarOwnedReads(fixture);
+    NativeWeaponOwnedWrites(fixture);
     NativeReadSetAndRestoration(fixture);
     NativeCoherentCommandPublication(fixture);
     NativeReadOnlyRetirement(fixture);

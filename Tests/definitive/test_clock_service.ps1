@@ -15,7 +15,7 @@ $previousTmp = $env:TMP
 $record = [ordered]@{schema='mta_clock_service_tests_v1';directory=$outputRoot;architecture='x64';success=$false;
     compileRuns=@();testRun=$null;checks=0;failure=$null;sourceHashes=@();sourcesUnchanged=$true;
     existingSdkClockImplementationTested=$false;productionNativeCallbackTested=$false;wrongExecutableRefusalVerified=$false;
-    productionFreezePatchTested=$false;readOnlyGameTimeReaderTested=$false;nativeCGameTimingPrerequisiteTested=$false;nativeCGameTimingWriterTested=$false;nativeStoredFPSReaderTested=$false;nativePauseSafeOwnerTested=$false;nativeApplicationFrameObserverTested=$false;nativeSystemStateOwnerTested=$false;nativeCheatFlagOwnerTested=$false;nativeWeatherOwnerTested=$false;executionArtifacts=@();
+    productionFreezePatchTested=$false;readOnlyGameTimeReaderTested=$false;nativeCGameTimingPrerequisiteTested=$false;nativeCGameTimingWriterTested=$false;nativeStoredFPSReaderTested=$false;nativePauseSafeOwnerTested=$false;nativeApplicationFrameObserverTested=$false;nativeSystemStateOwnerTested=$false;nativeCheatFlagOwnerTested=$false;nativeWeatherOwnerTested=$false;nativeWeatherScalarOwnerTested=$false;nativeTypedWeaponWriteOwnerTested=$false;executionArtifacts=@();
     gameLaunched=$false;gameAttached=$false;gameClockWritten=$false;gameHooksInstalled=$false;fullMtaReady=$false}
 function Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 function RunBounded([string]$Executable,[string[]]$Arguments,[string]$Name,[int]$DeadlineMs) {
@@ -62,6 +62,12 @@ try {
         'Client/game_de/CWeatherTransitionDE.h','Client/game_de/CWeatherTransitionDE.cpp','Client/sdk/game/CWeather.h',
         'Client/game_de/NativeWeatherTransitionProfile.h','Client/game_de/NativeWeatherTransitionProfile.cpp',
         'Client/game_de/NativeWeatherTransitionMemory.h','Client/game_de/NativeWeatherTransitionJournal.h',
+        'Client/game_de/CWeatherScalarsDE.h','Client/game_de/CWeatherScalarsDE.cpp',
+        'Client/game_de/NativeWeatherScalarProfile.h','Client/game_de/NativeWeatherScalarProfile.cpp','Client/game_de/NativeWeatherScalarMemory.h',
+        'Client/game_de/NativeWeaponInfoReader.h','Client/game_de/NativeWeaponInfoReader.cpp','Client/game_de/NativeWeaponInfoProfile.h',
+        'Client/game_de/NativeWeaponInfoWriteAccess.h','Client/game_de/NativeWeaponInfoWriteMemory.h','Client/game_de/NativeWeaponInfoWriteMemory.cpp',
+        'Client/game_de/NativeWeaponInfoWriteProfile.h','Client/game_de/CWeaponInfoWriteDE.h','Client/game_de/CWeaponInfoWriteDE.cpp',
+        'Client/game_de/CWeaponInfoReadDE.h','Client/game_de/CWeaponInfoReadDE.cpp',
         'Client/game_de/NativeGameTimingAccess.h',
         'Client/game_de/NativeGamePauseProfile.h',
         'Client/game_de/NativeApplicationFrame.h','Client/game_de/NativeApplicationFrameProfile.h',
@@ -107,6 +113,11 @@ try {
     # CPP once so its guarded OS-read boundary can schedule a deterministic
     # owned-image transition; it includes the actual cheat profile once with
     # only its executable-identity selection redirected to the same owned image.
+    # Both complete production weather profiles use that same identity selection;
+    # scalar field reads still traverse the real memory and callback owner guards.
+    # The genuine weapon reader and typed writer are likewise included once;
+    # only owned-image identity selection and actual OS/intrinsic fault timing
+    # differ. Their per-CAS scope callback is the unchanged real timing owner.
     # No live-profile or native ownership check is substituted.
     # Its shipping executable gate stays unchanged.
     $arguments = $common + @('/W4','/WX',(Join-Path $PSScriptRoot 'ClockServiceTests.cpp'),
@@ -142,6 +153,10 @@ try {
     if (-not $record.nativeCheatFlagOwnerTested) { throw 'Actual native four-cheat-flag owner fixture did not complete.' }
     $record.nativeWeatherOwnerTested = $text.Contains('Production native weather transaction owner fixture completed')
     if (-not $record.nativeWeatherOwnerTested) { throw 'Actual native weather transaction owner fixture did not complete.' }
+    $record.nativeWeatherScalarOwnerTested = $text.Contains('Production native weather scalar owner fixture completed')
+    if (-not $record.nativeWeatherScalarOwnerTested) { throw 'Actual native weather scalar owner fixture did not complete.' }
+    $record.nativeTypedWeaponWriteOwnerTested = $text.Contains('Production native typed weapon write owner fixture completed')
+    if (-not $record.nativeTypedWeaponWriteOwnerTested) { throw 'Actual native typed weapon write owner fixture did not complete.' }
     $record.nativeApplicationFrameObserverTested = $text.Contains('Production natural application-frame observer fixture completed')
     if (-not $record.nativeApplicationFrameObserverTested) { throw 'Actual application-frame observer fixture did not complete.' }
     $record.nativeFixtureScope = 'Owned SEC_IMAGE with exact native pins and actual Detours, callback, native memory, protection and peer operations. This does not admit the test executable as GTA or execute the game clock update.'

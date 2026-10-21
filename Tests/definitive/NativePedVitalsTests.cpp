@@ -1,15 +1,13 @@
 /****************************************************************************
  * PROJECT: Multi Theft Auto
  * LICENSE: See LICENSE in the repository root
- * PURPOSE: Current-player-only raw ped vitals over real owned image/pool pages
+ * PURPOSE: Both qualified native ped classes, raw vitals and exact pool ownership
  ****************************************************************************/
 #define main NativePedVitalsTransformFixtureMain
 #include "NativePedTransformReaderTests.cpp"
 #undef main
 #include "../../Client/game_de/NativePedVitalsMemory.h"
 #include "../../Client/game_de/NativePedVitalsProfile.h"
-#include "../../Client/game_de/NativePlayerInfoProfile.h"
-#include "../../Client/game_de/NativePlayerInfoExtraProfile.h"
 #include <functional>
 #include <thread>
 #include <intrin.h>
@@ -17,7 +15,7 @@
 namespace VitalsTestHost
 {
     unsigned                                         exchanges = 0;
-    bool                                             buildAllowed = true, failBefore = false, failAfter = false;
+    bool                                             failBefore = false, failAfter = false;
     std::function<void()>                            before, after;
     std::function<void(std::uintptr_t, std::size_t)> afterRead;
     BOOL WINAPI                                      Read(HANDLE process, LPCVOID input, LPVOID output, SIZE_T bytes, SIZE_T* copied)
@@ -53,7 +51,6 @@ namespace VitalsTestHost
     void Reset()
     {
         exchanges = 0;
-        buildAllowed = true;
         failBefore = failAfter = false;
         before = after = {};
         afterRead = {};
@@ -63,40 +60,10 @@ namespace VitalsTestHost
         PoolTestHost::after = nullptr;
     }
 }
-namespace mta::game_de::NativeImageAccess
-{
-    bool VitalsFixtureExecutable() noexcept
-    {
-        return VitalsTestHost::buildAllowed && (PoolTestHost::image || CheckExecutableBuild());
-    }
-}
-// Reuse the actual player primitive once. These private helper-name aliases
-// only avoid anonymous-namespace collisions with the included pool utility.
-// Bind's build seam admits owned bytes; the shipping qualifier still hashes
-// and refuses this executable before the controlled image is selected.
-#define CheckExecutableBuild VitalsFixtureExecutable
-#define GetModuleHandleW     PoolTestHost::Module
-#define ReadProcessMemory    VitalsTestHost::Read
-#define P                    VitalsPlayerInfoProfile
-#define Binding              VitalsPlayerInfoBinding
-#define Context              VitalsPlayerInfoContext
-#define Object               VitalsPlayerInfoObject
-#define ObjectPages          VitalsPlayerInfoObjectPages
-#define Global               VitalsPlayerInfoGlobal
-#define Owner                VitalsPlayerInfoOwner
-#define Exchange             VitalsPlayerInfoExchange
-#define PlayerIdentity       VitalsPlayerInfoIdentity
-#include "../../Client/game_de/NativePlayerInfoMemory.cpp"
-#undef PlayerIdentity
-#undef Exchange
-#undef Owner
-#undef Global
-#undef ObjectPages
-#undef Object
-#undef Context
-#undef Binding
-#undef P
-#undef CheckExecutableBuild
+// Only current-image/read selection and the final scalar CAS are controlled.
+// Generic vitals have no PlayerInfo bind or current-player substitution seam.
+#define GetModuleHandleW  PoolTestHost::Module
+#define ReadProcessMemory VitalsTestHost::Read
 #include "../../Client/game_de/NativeGameStateMemory.cpp"
 #include "../../Client/game_de/NativeStartGameCalls.cpp"
 #define MTA_DE_PED_VITALS_EXCHANGE VitalsTestHost::Exchange
@@ -121,8 +88,7 @@ namespace
     }
     struct VitalsFixture
     {
-        TransformFixture       transform;
-        NativePlayerInfoMemory player;
+        TransformFixture transform;
         explicit VitalsFixture(const std::filesystem::path& directory) : transform(directory)
         {
             auto&              image = transform.image;
@@ -143,13 +109,9 @@ namespace
                                                                        : IMAGE_SCN_CNT_UNINITIALIZED_DATA | (i == 2 ? IMAGE_SCN_MEM_WRITE : 0));
             }
             // Keep real PE section and OS page checks while adding the already
-            // proved player, GameThread/GC and playing-state prerequisites.
+            // proved native layout, GameThread/GC and playing-state prerequisites.
             image.Patch(0x80, &nt, sizeof(nt), PAGE_READONLY);
             image.Patch(0x80 + sizeof(nt), sections.data(), sizeof(sections), PAGE_READONLY);
-            for (const auto& pin : NativePlayerInfoProfile::Code)
-                image.Patch(pin.rva, pin.bytes.data(), pin.size, PAGE_EXECUTE_READ);
-            for (const auto& pin : NativePlayerInfoExtraProfile::Code)
-                image.Patch(pin.rva, pin.bytes.data(), pin.size, PAGE_EXECUTE_READ);
             for (const auto& pin : NativePedVitalsProfile::Code)
                 image.Patch(pin.rva, pin.bytes.data(), pin.size, PAGE_EXECUTE_READ);
             for (const auto& pin : NativeGameStateProfile::pins)
@@ -159,8 +121,6 @@ namespace
             for (const auto& pin : NativeStartGameProfile::Code)
                 if (pin.rva == 0xab879c || pin.rva == 0xab92f0 || pin.rva == 0x1af4ef0)
                     image.Patch(pin.rva, pin.bytes.data(), pin.size, PAGE_EXECUTE_READ);
-            const auto control = image.image + NativePlayerInfoProfile::PlayerControlRva;
-            image.Patch(NativePlayerInfoProfile::PlayerVtableRva + 0x50, &control, sizeof(control), PAGE_READONLY);
             Reset();
         }
         template <class T>
@@ -172,21 +132,29 @@ namespace
         {
             transform.Reset(false);
             VitalsTestHost::Reset();
-            player.Reset();
             transform.Store(0x6a, static_cast<unsigned char>(3));
-            transform.Store(0x5f0, transform.image.image + NativePlayerInfoProfile::BankRva + 8);
-            transform.Store(0x7e0, std::int32_t{0});
+            transform.Store(0, transform.image.image + std::uintptr_t{0x4318270});
+            transform.Store(0x5f0, std::uintptr_t{0});
+            transform.Store(0x7e0, std::int32_t{-1});
             transform.Store(0x76c, std::uint32_t{0x42c80000});
             transform.Store(0x770, std::uint32_t{0x432acdef});
             transform.Store(0x774, std::uint32_t{0x42480000});
-            Global(NativePlayerInfoProfile::BankRva, reinterpret_cast<std::uintptr_t>(transform.pool.objects));
-            Global(NativePlayerInfoProfile::PlayerIndexRva, static_cast<unsigned char>(0));
+            // Keep the old current-player prerequisites deliberately absent.
+            // Neither actual ped class may inherit authority from that row.
+            Global(0x53eb720, std::uintptr_t{0});
+            Global(0x522bcf6, static_cast<unsigned char>(0xff));
+            const auto other = transform.pool.objects + 8 * NativePedPoolProfile::ObjectStride;
+            const auto playerVtable = transform.image.image + std::uintptr_t{0x4319730};
+            std::memcpy(other, &playerVtable, sizeof(playerVtable));
+            const unsigned char type = 3;
+            std::memcpy(other + 0x6a, &type, sizeof(type));
+            const std::array<std::uint32_t, 3> otherVitals{0x41480000, 0x432acdef, 0x41c80000};
+            std::memcpy(other + 0x76c, otherVitals.data(), sizeof(otherVitals));
             Global(NativeStartGameProfile::ThreadInitializedRva, static_cast<unsigned char>(1));
             Global(NativeStartGameProfile::ThreadIdRva, GetCurrentThreadId());
             Global(NativeBorrowedGcProfile::markerRva, LONG{0});
             Global(NativeGameStateProfile::stateRva, std::uint32_t{9});
         }
-        void Bind() { Check(player.Bind() == ClockResult::Ok, "the actual player primitive binds the owned exact image and producer thread"); }
         NativePedPoolReader::Value Ped(std::uint32_t handle = 1)
         {
             NativePedPoolReader        reader({transform.image.image}, &PoolTestHost::Owner);
@@ -218,20 +186,19 @@ int main(int argc, char** argv)
     VitalsFixture fixture(argv[1]);
     PoolTestHost::image = fixture.transform.image.image;
     const Memory::Binding binding{fixture.transform.image.image};
-    Memory                memory(binding, &PoolTestHost::Owner, fixture.player);
-    Memory                unowned(binding, nullptr, fixture.player);
+    Memory                memory(binding, &PoolTestHost::Owner);
+    Memory                unowned(binding, nullptr);
     const auto            reset = [&]()
     {
         fixture.Reset();
-        fixture.Bind();
         return fixture.Ped();
     };
     auto ped = reset();
-    Check(Memory::Revalidate(binding), "native vitals reuse the exact qualified player producers and real pool image pages");
+    Check(Memory::Revalidate(binding), "native vitals qualify exact generic constructors/consumers and real pool image pages");
     Memory::Receipt receipt;
     float           output = VitalsFloat(0x4a123456);
     Check(memory.Read(ped, Field::Health, output) == ClockResult::Ok && VitalsBits(output) == 0x42c80000,
-          "a genuine current-player pool observation reads native health without substituting a wrapper or ambient handle");
+          "a genuine generic ped pool observation reads native health with no current-player root, selector or wrapper");
     fixture.Neighbours(0x42c80000, 0x42480000);
     struct DefaultAccess final : NativePedVitalsAccess
     {
@@ -257,7 +224,7 @@ int main(int argc, char** argv)
                   "raw health and armour accept each exact float32 intent without clamping, filtering or widening its scalar CAS");
             output = VitalsFloat(0x4a123456);
             Check(memory.Read(ped, field, output) == ClockResult::Ok && VitalsBits(output) == bits,
-                  "raw current-player vitals preserve signed zero, out-of-range values, infinities and NaN payload bits");
+                  "raw generic-ped vitals preserve signed zero, out-of-range values, infinities and NaN payload bits");
             fixture.Neighbours(field == Field::Health ? bits : 0x42c80000, field == Field::Armor ? bits : 0x42480000);
         }
 
@@ -265,14 +232,14 @@ int main(int argc, char** argv)
     output = VitalsFloat(0x4a123456);
     Check(unowned.Read(ped, Field::Health, output) == ClockResult::NotInitialized && VitalsBits(output) == 0x4a123456 &&
               unowned.Set(ped, Field::Health, 7.0f, &receipt) == ClockResult::NotInitialized && !receipt.entered && !VitalsTestHost::exchanges,
-          "native pool and player identity do not replace callback authority or consume caller output");
+          "native pool identity does not replace callback authority or consume caller output");
     Check(memory.Read(ped, static_cast<Field>(99), output) == ClockResult::InvalidArgument && VitalsBits(output) == 0x4a123456 &&
               memory.Set(ped, static_cast<Field>(99), 7.0f, &receipt) == ClockResult::InvalidArgument && !receipt.entered && !VitalsTestHost::exchanges,
           "invalid typed fields cannot alias neighbouring max-health or another native member");
 
-    // Each independent immediate prerequisite is changed in owned memory.
-    // A non-current occupied slot remains a real ped observation; it must not
-    // inherit the current-player-only support by sharing this image or pool.
+    // The common constructor and independent generic script consumer qualify
+    // both exact classes. Pool lifetime and normal GT/GC authority remain
+    // necessary even when there is no loaded current-player row or selector.
     for (unsigned guard = 0; guard < 12; ++guard)
     {
         ped = reset();
@@ -287,33 +254,38 @@ int main(int argc, char** argv)
         if (guard == 4)
             fixture.Global(NativeGameStateProfile::stateRva, std::uint32_t{7});
         if (guard == 5)
-            fixture.Global(NativePlayerInfoProfile::PlayerIndexRva, static_cast<unsigned char>(1));
+            fixture.Global(NativePedPoolProfile::RootRva, std::uintptr_t{0});
         if (guard == 6)
-            fixture.Global(NativePlayerInfoProfile::BankRva, std::uintptr_t{0});
+            fixture.transform.pool.Put(0, std::uintptr_t{0});
         if (guard == 7)
-            fixture.transform.Store(0x5f0, std::uintptr_t{0});
+            fixture.transform.pool.flags[0] = 0x81;
         if (guard == 8)
-            fixture.transform.Store(0x7e0, std::int32_t{1});
+            fixture.transform.pool.Put(16, std::int32_t{999});
         if (guard == 9)
             fixture.transform.pool.flags[0] = 2;
         if (guard == 10)
             fixture.transform.Store(0x6a, static_cast<unsigned char>(4));
         if (guard == 11)
-            fixture.player.Reset();
+        {
+            fixture.transform.Store(0, fixture.transform.image.image + std::uintptr_t{0x1300010});
+            ped = fixture.Ped();
+        }
         output = VitalsFloat(0x4a123456);
         Check(memory.Read(ped, Field::Armor, output) != ClockResult::Ok && VitalsBits(output) == 0x4a123456 &&
                   memory.Set(ped, Field::Health, 7.0f, &receipt) != ClockResult::Ok && !receipt.entered && !VitalsTestHost::exchanges,
-              "native GT/GC/playing state, fresh player identity, exact current slot and callback remain mandatory before scalar entry");
+              "native GT/GC/playing state, exact occupied slot, known class and callback remain mandatory before scalar entry");
         fixture.Neighbours(0x42c80000, 0x42480000);
     }
     ped = reset();
     auto other = fixture.Ped((8u << 8) | 127u);
     output = VitalsFloat(0x4a123456);
-    Check(memory.Read(other, Field::Health, output) != ClockResult::Ok && VitalsBits(output) == 0x4a123456 &&
-              memory.Set(other, Field::Armor, 7.0f, &receipt) != ClockResult::Ok && !receipt.entered && !VitalsTestHost::exchanges &&
-              fixture.Raw(0x774, 8) == 0,
-          "a different genuine occupied ped cannot borrow the current local player's vitals contract");
+    Check(other.vtable == fixture.transform.image.image + 0x4319730 && memory.Read(other, Field::Health, output) == ClockResult::Ok &&
+              VitalsBits(output) == 0x41480000 && memory.Set(other, Field::Armor, VitalsFloat(0x7fc23456), &receipt) == ClockResult::Ok &&
+              receipt.handle == ((8u << 8) | 127u) && receipt.nativePed == other.nativePed && receipt.verified && fixture.Raw(0x76c, 8) == 0x41480000 &&
+              fixture.Raw(0x770, 8) == 0x432acdef && fixture.Raw(0x774, 8) == 0x7fc23456,
+          "the independently occupied exact player-class ped accepts raw vitals without any current-player root or local selector");
     fixture.Neighbours(0x42c80000, 0x42480000);
+    ped = reset();
     ClockResult foreignThread = ClockResult::Ok;
     std::thread foreign(
         [&]()
@@ -324,8 +296,7 @@ int main(int argc, char** argv)
                 foreignThread = ClockResult::Ok;
         });
     foreign.join();
-    Check(foreignThread != ClockResult::Ok && !VitalsTestHost::exchanges,
-          "a real foreign host thread cannot reuse the native GameThread/player producer binding");
+    Check(foreignThread != ClockResult::Ok && !VitalsTestHost::exchanges, "a real foreign host thread cannot reuse the native GameThread admission");
 
     ped = reset();
     VitalsTestHost::failBefore = true;
@@ -383,8 +354,9 @@ int main(int argc, char** argv)
     output = VitalsFloat(0x4a123456);
     Check(memory.Read(ped, Field::Armor, output) != ClockResult::Ok && VitalsBits(output) == 0x4a123456 &&
               memory.Set(ped, Field::Health, 7.0f, &receipt) != ClockResult::Ok && !receipt.entered && !VitalsTestHost::exchanges,
-          "changed main-image identity invalidates the current-player and native ped observation together");
+          "changed main-image identity invalidates the generic native ped observation");
     std::puts("Production native ped vitals primitive fixture completed");
+    std::puts("Production generic native ped vitals primitive fixture completed");
     std::printf("Passed %u native ped-vitals checks (64-bit; no native engine code executed)\n", checks);
     return 0;
 }

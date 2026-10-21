@@ -1,11 +1,10 @@
 /****************************************************************************
  * PROJECT: Multi Theft Auto
  * LICENSE: See LICENSE in the repository root
- * PURPOSE: Raw vitals with real current-player/pool identity bookends
+ * PURPOSE: Raw vitals with real occupied-ped and owner identity bookends
  ****************************************************************************/
 #pragma once
 #include "NativePedVitalsAccess.h"
-#include "NativePlayerInfoMemory.h"
 
 namespace mta::game_de
 {
@@ -23,9 +22,7 @@ namespace mta::game_de
             bool                entered = false, attempted = false, applied = false, observedValid = false, verified = false;
         };
 
-        NativePedVitalsMemory(Binding binding, CheckOwner owner, const NativePlayerInfoMemory& player) noexcept : binding(binding), owner(owner), player(player)
-        {
-        }
+        NativePedVitalsMemory(Binding binding, CheckOwner owner) noexcept : binding(binding), owner(owner) {}
         static bool Qualify(Binding&) noexcept;
         static bool Revalidate(const Binding&) noexcept;
         ClockResult Read(const Value&, NativePedVitalField, float&) const noexcept;
@@ -33,14 +30,14 @@ namespace mta::game_de
 
         // The Value must be the caller's fresh registered-token resolution,
         // never a saved raw-pointer lease. This primitive independently checks
-        // that same pool identity against the actual CURRENT local player.
+        // that same occupied generic/player ped identity without substituting
+        // the local-player root or inventing a borrowed native lifetime.
         // All float bits survive, including NaNs and signed zero; no clamping,
         // damage/resurrection call or whole-row rollback implements raw CPed.
         // An entered non-Ok setter can already have accepted persistent effect;
         // its real owner must stop without retrying or restoring old vitals.
     private:
-        Binding                       binding;
-        CheckOwner                    owner = nullptr;
-        const NativePlayerInfoMemory& player;
+        Binding    binding;
+        CheckOwner owner = nullptr;
     };
 }

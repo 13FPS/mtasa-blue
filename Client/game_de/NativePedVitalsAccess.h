@@ -1,7 +1,7 @@
 /****************************************************************************
  * PROJECT: Multi Theft Auto
  * LICENSE: See LICENSE in the repository root
- * PURPOSE: Internal token-based current-player health and armour access
+ * PURPOSE: Internal token-based native ped health and armour access
  ****************************************************************************/
 #pragma once
 #include "NativePedReferenceToken.h"

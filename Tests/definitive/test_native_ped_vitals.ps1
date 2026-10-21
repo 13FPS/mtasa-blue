@@ -14,11 +14,11 @@ $utf8=[Text.UTF8Encoding]::new($false)
 function Sha([string]$p){(Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLowerInvariant()}
 $previous=@{}
 foreach($name in @('TEMP','TMP','PATH','INCLUDE','LIB','LIBPATH','VCToolsInstallDir')){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
-$record=[ordered]@{schema='mta_native_ped_vitals_tests_v1';success=$false;failure=$null;sources=@();results=@();architecture='x64';
-    nativeEngineCodeExecuted=$false;nativePoolObservedInGta=$false;nativePedVitalsPrimitiveTested=$false;
+$record=[ordered]@{schema='mta_native_ped_vitals_tests_v2';success=$false;failure=$null;sources=@();results=@();architecture='x64';
+    nativeEngineCodeExecuted=$false;nativePoolObservedInGta=$false;nativePedVitalsPrimitiveTested=$false;nativeGenericPedVitalsPrimitiveTested=$false;
     gameLaunched=$false;gameAttached=$false;engineMemoryWritten=$false;hookInstalled=$false;
     completeGameReady=$false;completePoolsReady=$false;localPlayerRegistered=$false;sourcesUnchanged=$true;scratch=$scratch;scratchFilesRemaining=$null;
-    scope='Actual current-player-only health and armour float32 reads/CAS over owned SEC_IMAGE, player row and occupied native ped pool. All real player/vtable/control/selector, pool/generation, native GT/GC/playing and owner checks run. Raw bits include NaNs, infinities, signed zero and out-of-range values; maxHealth remains untouched. Foreign/conflicted/expired/partially acknowledged writes preserve accepted effects without rollback/replay. No CPed/CPools publication or game code execution.'}
+    scope='Both exact known native generic/player ped classes: raw health/armour float32 reads/CAS over owned SEC_IMAGE and occupied native pool. No current-player row, player selector or PlayerInfo binding participates. Genuine slot/generation, native GT/GC/playing state and owner checks remain real. Raw bits include NaNs, infinities, signed zero and out-of-range values; maxHealth remains untouched. Foreign/conflicted/expired/partially acknowledged writes preserve accepted effects without rollback/replay. No CPed/CPools publication or native code execution.'}
 function RunOwned([string]$exe,[string[]]$arguments,[string]$directory,[string]$label,[int]$timeout){
     $info=[Diagnostics.ProcessStartInfo]::new($exe)
     $info.WorkingDirectory=$directory;$info.UseShellExecute=$false;$info.CreateNoWindow=$true;$info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true
@@ -43,15 +43,14 @@ try{
         'Client/game_de/NativeImageAccess.h','Client/game_de/NativeImageAccess.cpp','Client/sdk/game/CGameAdapter.h','Client/sdk/game/CGameClockService.h',
         'Shared/sdk/CControllerState.h','Shared/sdk/CControllerActions.h','Shared/sdk/CControlStateSynthesis.h',
         'Client/game_de/NativePedVitalsAccess.h','Client/game_de/NativePedVitalsMemory.h','Client/game_de/NativePedVitalsMemory.cpp','Client/game_de/NativePedVitalsProfile.h',
-        'Client/game_de/NativePlayerInfoAccess.h','Client/game_de/NativePlayerInfoMemory.h','Client/game_de/NativePlayerInfoMemory.cpp',
-        'Client/game_de/NativePlayerInfoProfile.h','Client/game_de/NativePlayerInfoExtraProfile.h','Client/game_de/NativePedReferenceToken.h',
+        'Client/game_de/NativePedReferenceToken.h','Client/game_de/NativePlayerInfoProfile.h','Client/game_de/NativePlayerInfoExtraProfile.h',
         'Client/game_de/NativeGameStateMemory.h','Client/game_de/NativeGameStateMemory.cpp','Client/game_de/NativeGameStateProfile.h',
         'Client/game_de/NativeStartGameCalls.h','Client/game_de/NativeStartGameCalls.cpp','Client/game_de/NativeStartGameProfile.h',
         'Client/game_de/NativeApplicationFrameProfile.h','Client/game_de/NativeGamePauseProfile.h','Client/game_de/NativeBorrowedGcProfile.h',
         'Tests/definitive/NativePedTransformReaderTests.cpp','Tests/definitive/NativePedVitalsTests.cpp','Tests/definitive/test_native_ped_vitals.ps1',
         'Build/definitive-recovery/mta-ped-pool-handle-batch-20261021/native-proof/ped-pool-qualified.json',
         'Build/definitive-recovery/mta-ped-transform-batch-20261021/native-proof/ped-transform-qualified.json',
-        'Build/definitive-recovery/mta-ped-vitals-batch-20261021/ped-vitals-plan.json')
+        'Build/definitive-recovery/mta-generic-ped-vitals-proof-20261021/generic-ped-vitals-qualified.json')
     $record.sources=@($names|ForEach-Object{[ordered]@{path=$_;sha256=(Sha (Join-Path $root $_))}})
     $env:TEMP=$scratch;$env:TMP=$scratch
     $vswhere=Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
@@ -81,7 +80,8 @@ try{
     $summary=[regex]::Match([IO.File]::ReadAllText($result.test.stdout),'(?m)^Passed (\d+) native ped-vitals checks \(64-bit; no native engine code executed\)\r?$')
     if($summary.Success){$result.checks=[int]$summary.Groups[1].Value}
     $record.nativePedVitalsPrimitiveTested=[IO.File]::ReadAllText($result.test.stdout).Contains('Production native ped vitals primitive fixture completed')
-    if($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -le 0 -or -not $record.nativePedVitalsPrimitiveTested){throw 'Native ped-vitals checks failed.'}
+    $record.nativeGenericPedVitalsPrimitiveTested=[IO.File]::ReadAllText($result.test.stdout).Contains('Production generic native ped vitals primitive fixture completed')
+    if($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -le 0 -or -not $record.nativePedVitalsPrimitiveTested -or -not $record.nativeGenericPedVitalsPrimitiveTested){throw 'Native ped-vitals checks failed.'}
     $record.success=$true
 }catch{$record.failure=$_.Exception.ToString()}
 finally{

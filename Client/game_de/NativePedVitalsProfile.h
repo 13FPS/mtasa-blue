@@ -1,7 +1,7 @@
 /****************************************************************************
  * PROJECT: Multi Theft Auto
  * LICENSE: See LICENSE in the repository root
- * PURPOSE: Reuse qualified native current-player vitals producer evidence
+ * PURPOSE: Qualified generic/player ped vitals without current-player substitution
  ****************************************************************************/
 #pragma once
 #include "NativePlayerInfoExtraProfile.h"
@@ -10,7 +10,7 @@ namespace mta::game_de::NativePedVitalsProfile
 {
     inline constexpr std::size_t    HealthOffset = 0x76c, MaxHealthOffset = 0x770, ArmorOffset = 0x774;
     inline constexpr std::size_t    TypeOffset = 0x6a, ScalarBytes = 4;
-    inline constexpr std::uintptr_t PlayerVtableRva = NativePlayerInfoProfile::PlayerVtableRva;
+    inline constexpr std::uintptr_t PedVtableRva = 0x4318270, PlayerVtableRva = NativePlayerInfoProfile::PlayerVtableRva;
     using Pin = NativePlayerInfoProfile::Pin;
 
     constexpr Pin SavedPin(std::uintptr_t rva) noexcept
@@ -20,12 +20,29 @@ namespace mta::game_de::NativePedVitalsProfile
                 return pin;
         return {};
     }
-    // Reuse the already-qualified player ability producers rather than copy
-    // classic offsets or rescan an executable for a second equivalent profile.
-    // Current health/armour remain distinct from max-health and ability bytes.
-    inline constexpr std::array<Pin, 4> Code = {{SavedPin(0x107dfc2), SavedPin(0x107e191), SavedPin(0x116d993), SavedPin(0x10de382)}};
-    static_assert(Code[0].rva == 0x107dfc2 && Code[0].size == 48 && Code[1].rva == 0x107e191 && Code[1].size == 33);
-    static_assert(Code[2].rva == 0x116d993 && Code[2].size == 44 && Code[3].rva == 0x10de382 && Code[3].size == 56);
+    // The common constructor installs the actual generic vtable on its own
+    // receiver and initializes health76c/maxHealth770/armor774 there. The
+    // independent generic script route resolves the real ped pool, without a
+    // local-player root. Saved player pins remain semantic cross-checks only.
+    inline constexpr Pin CommonPedConstructorReceiver = {
+        0x1219860, 42, {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48, 0x83, 0xec, 0x50, 0x8b,
+                        0xda, 0x48, 0x8b, 0xf9, 0xe8, 0x72, 0x30, 0xf4, 0xff, 0x33, 0xf6, 0x48, 0x8d, 0x05, 0xe9, 0xe9, 0x0f, 0x03, 0x48, 0x89, 0x07}};
+    inline constexpr Pin CommonPedConstructorVitals = {0x12199e3, 27, {0x89, 0x9f, 0xe0, 0x07, 0x00, 0x00, 0xc7, 0x87, 0x6c, 0x07, 0x00, 0x00, 0x00, 0x00,
+                                                                       0xc8, 0x42, 0x48, 0xc7, 0x87, 0x70, 0x07, 0x00, 0x00, 0x00, 0x00, 0xc8, 0x42}};
+    inline constexpr Pin GenericScriptArmorPoolRoute = {
+        0x10de30c, 54, {0xba, 0x02, 0x00, 0x00, 0x00, 0xe8, 0x1a, 0x4c, 0xfd, 0xff, 0x48, 0x63, 0x15, 0x73, 0x4c, 0x13, 0x04, 0x85,
+                        0xd2, 0x78, 0x21, 0x4c, 0x8b, 0x05, 0x78, 0xd2, 0x64, 0x04, 0x48, 0x8b, 0xca, 0x48, 0xc1, 0xf9, 0x08, 0x49,
+                        0x8b, 0x40, 0x08, 0x38, 0x14, 0x01, 0x75, 0x0a, 0x48, 0x69, 0xf9, 0x10, 0x0b, 0x00, 0x00, 0x49, 0x03, 0x38}};
+    inline constexpr Pin GenericScriptArmorMutation = {
+        0x10de342, 64, {0x83, 0xbf, 0xe0, 0x07, 0x00, 0x00, 0x01, 0x66, 0x0f, 0x6e, 0x0d, 0x43, 0x4c, 0x13, 0x04, 0x0f, 0x5b, 0xc9, 0xf3, 0x0f, 0x58, 0x8f,
+                        0x74, 0x07, 0x00, 0x00, 0xf3, 0x0f, 0x11, 0x8f, 0x74, 0x07, 0x00, 0x00, 0x76, 0x1c, 0xf3, 0x0f, 0x5d, 0x0d, 0x1e, 0xb6, 0xae, 0x03,
+                        0x32, 0xc0, 0xf3, 0x41, 0x0f, 0x5f, 0xca, 0xf3, 0x0f, 0x11, 0x8f, 0x74, 0x07, 0x00, 0x00, 0xe9, 0x1e, 0x0c, 0x00, 0x00}};
+    inline constexpr std::array<Pin, 8> Code = {{CommonPedConstructorReceiver, CommonPedConstructorVitals, GenericScriptArmorPoolRoute,
+                                                 GenericScriptArmorMutation, SavedPin(0x107dfc2), SavedPin(0x107e191), SavedPin(0x116d993),
+                                                 SavedPin(0x10de382)}};
+    static_assert(Code[0].size == 42 && Code[1].size == 27 && Code[2].size == 54 && Code[3].size == 64);
+    static_assert(Code[4].rva == 0x107dfc2 && Code[4].size == 48 && Code[5].rva == 0x107e191 && Code[5].size == 33);
+    static_assert(Code[6].rva == 0x116d993 && Code[6].size == 44 && Code[7].rva == 0x10de382 && Code[7].size == 56);
     static_assert(HealthOffset + ScalarBytes == MaxHealthOffset && MaxHealthOffset + ScalarBytes == ArmorOffset);
     static_assert(HealthOffset % ScalarBytes == 0 && ArmorOffset % ScalarBytes == 0);
 }

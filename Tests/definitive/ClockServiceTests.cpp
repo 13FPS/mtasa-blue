@@ -186,7 +186,7 @@ namespace ClockPedReferenceOwnerTest
 namespace ClockPedVitalsOwnerTest
 {
     unsigned       stores = 0;
-    std::uintptr_t image = 0;
+    std::uintptr_t image = 0, flag = 0;
     bool           loseIdentity = false;
     LONG WINAPI    Exchange(volatile LONG* address, LONG target, LONG expected)
     {
@@ -196,9 +196,11 @@ namespace ClockPedVitalsOwnerTest
         {
             loseIdentity = false;
             // Only the actual CAS is wrapped. Its accepted effect survives;
-            // the unchanged production postcheck must detect player loss.
-            const unsigned char unavailable = 1;
-            std::memcpy(reinterpret_cast<void*>(image + mta::game_de::NativePlayerInfoProfile::PlayerIndexRva), &unavailable, sizeof(unavailable));
+            // the unchanged production postcheck must detect pool identity loss.
+            unsigned char previous = 0;
+            std::memcpy(&previous, reinterpret_cast<void*>(flag), sizeof(previous));
+            const auto different = static_cast<unsigned char>(previous ^ 1);
+            std::memcpy(reinterpret_cast<void*>(flag), &different, sizeof(different));
         }
         return observed;
     }

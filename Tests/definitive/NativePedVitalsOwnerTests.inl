@@ -1,7 +1,7 @@
 /****************************************************************************
  * PROJECT: Multi Theft Auto
  * LICENSE: See LICENSE in the repository root
- * PURPOSE: Borrow current-player vitals through the same registered-cell owner
+ * PURPOSE: Borrow generic-ped vitals through the same registered-cell owner
  ****************************************************************************/
 namespace
 {
@@ -48,7 +48,7 @@ namespace
             Saved  prior{rva, std::vector<unsigned char>(size)};
             SIZE_T copied = 0;
             Check(::ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(fixture.image + rva), prior.bytes.data(), size, &copied) && copied == size,
-                  "save bounded vitals, reference and current-player proof spans in the actual callback fixture");
+                  "save bounded generic vitals and reference proof spans in the actual callback fixture");
             saved.push_back(std::move(prior));
             fixture.Patch(rva, bytes, size);
             DWORD previous = 0;
@@ -59,9 +59,7 @@ namespace
             admit(pin.rva, pin.bytes, pin.size, PAGE_EXECUTE_READ);
         for (const auto& pin : R::Code)
             admit(pin.rva, pin.bytes, pin.size, PAGE_EXECUTE_READ);
-        for (const auto& pin : P::Code)
-            admit(pin.rva, pin.bytes.data(), pin.size, PAGE_EXECUTE_READ);
-        for (const auto& pin : NativePlayerInfoExtraProfile::Code)
+        for (const auto& pin : V::Code)
             admit(pin.rva, pin.bytes.data(), pin.size, PAGE_EXECUTE_READ);
         for (const auto& pin : NativeGameStateProfile::pins)
             admit(pin.rva, pin.bytes, pin.size, pin.code ? PAGE_EXECUTE_READ : PAGE_READONLY);
@@ -75,8 +73,6 @@ namespace
             const auto target = fixture.image + slot.targetRva;
             admit(slot.rva, &target, sizeof(target), PAGE_READONLY);
         }
-        const auto control = fixture.image + P::PlayerControlRva;
-        admit(P::PlayerVtableRva + 0x50, &control, sizeof(control), PAGE_READONLY);
         const std::uintptr_t zero = 0;
         const std::uint32_t  state = 9, marker = 0;
         const auto           thread = GetCurrentThreadId();
@@ -101,13 +97,11 @@ namespace
         ClockTeleportPool pool(fixture, Ped::RootRva, Ped::NativeCapacity, Ped::ObjectStride);
         pool.Publish();
         pool.flags[0] = 1;
-        const auto ped = reinterpret_cast<std::uintptr_t>(pool.objects);
-        const auto vtable = fixture.image + P::PlayerVtableRva;
+        const auto vtable = fixture.image + R::PedVtableRva;
         std::memcpy(pool.objects, &vtable, sizeof(vtable));
         pool.objects[V::TypeOffset] = 3;
-        const auto info = fixture.image + P::BankRva + 8;
-        std::memcpy(pool.objects + 0x5f0, &info, sizeof(info));
-        fixture.Put(P::BankRva, ped);
+        Check(!fixture.Get<std::uintptr_t>(P::BankRva), "the generic occupied pool row has no current-player root or PlayerInfo binding");
+        ClockPedVitalsOwnerTest::flag = reinterpret_cast<std::uintptr_t>(pool.flags);
         const auto store = [&](std::size_t at, std::uint32_t bits) { std::memcpy(pool.objects + at, &bits, sizeof(bits)); };
         const auto bits = [&](std::size_t at)
         {
@@ -165,8 +159,9 @@ namespace
                   "the registered token supplies no between-callback vitals read or mutation authority");
             context.operation = 1;
             invoke();
-            Check(context.result == ClockResult::Ok && floatBits(context.output) == 0x3f800001 && runtime.playerInfo.IsBound(),
-                  "an actual later callback resolves the token and independently binds that exact current-player row");
+            Check(context.result == ClockResult::Ok && floatBits(context.output) == 0x3f800001 && !runtime.playerInfo.IsBound() &&
+                      !fixture.Get<std::uintptr_t>(P::BankRva),
+                  "an actual later callback resolves generic-ped vitals with the current-player root absent");
             context.operation = 2;
             context.value = fromBits(0x7fc01234);
             invoke();
@@ -199,7 +194,7 @@ namespace
             NativeClockService service;
             BeginOwned(service, fixture, false, true, true, &PedVitalsOwnerHandler, &context);
             fixture.invokeTimer();
-            Check(context.result == ClockResult::Ok, "the next generation independently registers its current-player token");
+            Check(context.result == ClockResult::Ok, "the next generation independently registers its generic-ped token");
             const auto stores = ClockPedVitalsOwnerTest::stores;
             context.operation = 2;
             context.field = NativePedVitalField::Health;
@@ -209,20 +204,21 @@ namespace
             fixture.invokeTimer();
             Check(context.result != ClockResult::Ok && runtime.stopping.load() && ClockPedVitalsOwnerTest::stores == stores + 1 &&
                       bits(V::HealthOffset) == 0xffc07654 && bits(V::MaxHealthOffset) == 0x7fc05678,
-                  "real post-store player-identity loss stops the owner while preserving the accepted raw scalar");
+                  "real post-store pool-generation loss stops the owner while preserving the accepted raw scalar");
             Check(runtime.access.SetPedVital(context.token, context.field, 9) != ClockResult::Ok && ClockPedVitalsOwnerTest::stores == stores + 1,
                   "an entered acknowledgement failure is never replayed through a producer call");
-            // Returning this fixture's player selector permits unrelated
-            // callback bookends; it does not retry or undo the accepted field.
-            fixture.Put(P::PlayerIndexRva, static_cast<unsigned char>(0));
+            // Restore only this owned fixture generation so exact registered-
+            // cell cleanup can proceed; accepted vital bits are never replayed.
+            pool.flags[0] = 1;
             retire(service);
             Check(bits(V::HealthOffset) == 0xffc07654 && bits(V::ArmorOffset) == 0x80000000,
                   "reference cleanup after failed acknowledgement never restores an accepted native field");
         }
         ClockPedVitalsOwnerTest::loseIdentity = false;
-        ClockReaderTestHost::image = ClockPedReferenceOwnerTest::image = ClockPedVitalsOwnerTest::image = 0;
+        ClockReaderTestHost::image = ClockPedReferenceOwnerTest::image = ClockPedVitalsOwnerTest::image = ClockPedVitalsOwnerTest::flag = 0;
         for (auto item = saved.rbegin(); item != saved.rend(); ++item)
             fixture.Patch(item->rva, item->bytes.data(), item->bytes.size());
         std::puts("Production native ped vitals callback owner fixture completed");
+        std::puts("Production native generic ped vitals callback owner fixture completed");
     }
 }

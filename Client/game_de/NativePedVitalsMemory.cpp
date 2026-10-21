@@ -99,33 +99,26 @@ namespace mta::game_de
                 return ClockResult::NotInitialized;
             return owner();
         }
-        ClockResult Identity(Memory::Binding binding, Memory::CheckOwner owner, const NativePlayerInfoMemory& player, const Value& expected) noexcept
+        ClockResult Identity(Memory::Binding binding, Memory::CheckOwner owner, const Value& expected) noexcept
         {
             auto result = Owner(binding, owner);
             if (result != ClockResult::Ok)
                 return result;
             if (!Memory::Revalidate(binding))
                 return ClockResult::BindingChanged;
-            // The initial four-field slice is the real CURRENT native player,
-            // not every ped sharing an inherited-looking offset. A producer's
-            // pointer or seven-bit handle cannot substitute for this relation.
-            if (expected.vtable != binding.image + P::PlayerVtableRva)
+            // The common native CPed constructor proves these fields on its
+            // own generic receiver; the exact player class inherits that same
+            // base layout. Neither route needs a CURRENT-player substitution.
+            if (expected.vtable != binding.image + P::PedVtableRva && expected.vtable != binding.image + P::PlayerVtableRva)
                 return ClockResult::UnsupportedBuild;
-            NativePlayerInfoMemory::Identity first, second;
-            if ((result = player.ReadIdentity(first, owner)) != ClockResult::Ok)
-                return result;
-            if (first.image != binding.image || first.ped != expected.nativePed)
-                return ClockResult::BindingChanged;
             NativePedPoolReader pool(binding, owner);
             Value               current;
             if ((result = pool.Resolve(expected.handle, current)) != ClockResult::Ok)
                 return result;
             if (!SamePed(expected, current))
                 return ClockResult::BindingChanged;
-            if ((result = pool.Recheck(current)) != ClockResult::Ok || (result = player.ReadIdentity(second, owner)) != ClockResult::Ok)
+            if ((result = pool.Recheck(current)) != ClockResult::Ok)
                 return result;
-            if (first.image != second.image || first.ped != second.ped)
-                return ClockResult::BindingChanged;
             return Owner(binding, owner);
         }
         struct Snapshot
@@ -133,10 +126,9 @@ namespace mta::game_de
             std::uint32_t bits = 0;
             unsigned char type = 0;
         };
-        ClockResult Capture(Memory::Binding binding, Memory::CheckOwner owner, const NativePlayerInfoMemory& player, const Value& expected, std::size_t offset,
-                            Snapshot& output) noexcept
+        ClockResult Capture(Memory::Binding binding, Memory::CheckOwner owner, const Value& expected, std::size_t offset, Snapshot& output) noexcept
         {
-            auto result = Identity(binding, owner, player, expected);
+            auto result = Identity(binding, owner, expected);
             if (result != ClockResult::Ok)
                 return result;
             Snapshot      next;
@@ -146,7 +138,7 @@ namespace mta::game_de
                 return ClockResult::ReadFailure;
             if ((next.type & 7) != 3 || next.type != after)
                 return ClockResult::BindingChanged;
-            if ((result = Identity(binding, owner, player, expected)) != ClockResult::Ok)
+            if ((result = Identity(binding, owner, expected)) != ClockResult::Ok)
                 return result;
             output = next;
             return ClockResult::Ok;
@@ -221,8 +213,8 @@ namespace mta::game_de
         if (!D::Field(field, offset))
             return ClockResult::InvalidArgument;
         D::Snapshot first, second;
-        auto        result = D::Capture(binding, owner, player, expected, offset, first);
-        if (result != ClockResult::Ok || (result = D::Capture(binding, owner, player, expected, offset, second)) != ClockResult::Ok)
+        auto        result = D::Capture(binding, owner, expected, offset, first);
+        if (result != ClockResult::Ok || (result = D::Capture(binding, owner, expected, offset, second)) != ClockResult::Ok)
             return result;
         if (first.type != second.type || first.bits != second.bits)
             return ClockResult::OwnerConflict;
@@ -254,13 +246,13 @@ namespace mta::game_de
             return finish(ClockResult::InvalidArgument);
         D::WriteScope scope;
         D::Snapshot   first, second;
-        auto          result = D::Capture(binding, owner, player, expected, offset, first);
+        auto          result = D::Capture(binding, owner, expected, offset, first);
         if (result != ClockResult::Ok)
             return finish(result);
         receipt.original = first.bits;
         receipt.nativePed = expected.nativePed;
         receipt.address = expected.nativePed + offset;
-        if ((result = D::Capture(binding, owner, player, expected, offset, second)) != ClockResult::Ok)
+        if ((result = D::Capture(binding, owner, expected, offset, second)) != ClockResult::Ok)
             return finish(result);
         receipt.observed = second.bits;
         receipt.observedValid = true;
@@ -268,7 +260,7 @@ namespace mta::game_de
             return finish(ClockResult::OwnerConflict);
         if (receipt.address % alignof(std::uint32_t) || !D::Pages(receipt.address, sizeof(std::uint32_t)))
             return finish(ClockResult::WriteFailure);
-        if ((result = D::Identity(binding, owner, player, expected)) != ClockResult::Ok)
+        if ((result = D::Identity(binding, owner, expected)) != ClockResult::Ok)
             return finish(result);
 #if defined(MTA_DE_PED_VITALS_EXCHANGE)
         const auto exchange = &MTA_DE_PED_VITALS_EXCHANGE;
@@ -288,7 +280,7 @@ namespace mta::game_de
             return finish(ClockResult::OwnerConflict);
         receipt.applied = true;
         D::Snapshot final;
-        if ((result = D::Capture(binding, owner, player, expected, offset, final)) != ClockResult::Ok)
+        if ((result = D::Capture(binding, owner, expected, offset, final)) != ClockResult::Ok)
             return finish(result);
         receipt.observed = final.bits;
         if (final.type != first.type || final.bits != receipt.target)

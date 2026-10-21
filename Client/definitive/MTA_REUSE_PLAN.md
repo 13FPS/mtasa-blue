@@ -143,15 +143,17 @@ proves the cell address absent under the same qualified owner generation.
 This internal ownership path reuses MTA's pool slot policy and prepares the
 wrapper lifetime boundary; it does not publish a partial `CPed` or `CPools`.
 
-Token-based health and armour operations now reuse that same native owner and
-the qualified current-player identity. They preserve the classic raw float
+Token-based health and armour operations reuse that same native owner and the
+occupied native ped identity. The qualified common ped constructor and generic
+script route cover both known generic/player ped classes without a dependency
+on the current-player root. These operations preserve the classic raw float
 field behavior, including values outside normal gameplay ranges, without
 changing the adjacent maximum-health field. Each store uses an exact-width
-conditional exchange and rechecks both player and registered-token identity.
+conditional exchange and rechecks both pool and registered-token identity.
 An accepted value persists after End or failed acknowledgement; this raw
 setter neither invokes resurrection nor rewinds later native effects. The
-initial qualified subset is the current player ped, while generic-ped support
-and complete SDK ped publication still require their own native coverage.
+qualified subset comprises the two exact known ped vtables; complete SDK ped
+publication still requires the remaining entity operations and wrapper wiring.
 
 Classic pool templates and the DE ped reader also share MTA's slot bounds
 policy. Free-slot selection retains the classic cursor/probe order and does

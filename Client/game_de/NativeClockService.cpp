@@ -2167,7 +2167,7 @@ namespace mta::game_de
 
         ClockResult NativeAccess::ReadPedVital(const NativePedReferenceToken& token, NativePedVitalField field, float& output) noexcept
         {
-            auto result = RequirePlayerInfo();
+            auto result = CheckTimingOwner();
             if (result != ClockResult::Ok)
                 return result;
             NativePedPoolReader::Value before, after;
@@ -2175,7 +2175,7 @@ namespace mta::game_de
             if (result != ClockResult::Ok)
                 return result;
             float next = 0;
-            result = NativePedVitalsMemory({runtime.image}, &CheckTimingOwner, runtime.playerInfo).Read(before, field, next);
+            result = NativePedVitalsMemory({runtime.image}, &CheckTimingOwner).Read(before, field, next);
             if (result != ClockResult::Ok)
                 return result;
             result = ResolvePedReference(token, after);
@@ -2191,7 +2191,7 @@ namespace mta::game_de
 
         ClockResult NativeAccess::SetPedVital(const NativePedReferenceToken& token, NativePedVitalField field, float value) noexcept
         {
-            auto result = RequirePlayerInfo();
+            auto result = CheckTimingOwner();
             if (result != ClockResult::Ok)
                 return result;
             NativePedPoolReader::Value before, after;
@@ -2199,7 +2199,7 @@ namespace mta::game_de
             if (result != ClockResult::Ok)
                 return result;
             NativePedVitalsMemory::Receipt receipt;
-            result = NativePedVitalsMemory({runtime.image}, &CheckTimingOwner, runtime.playerInfo).Set(before, field, value, &receipt);
+            result = NativePedVitalsMemory({runtime.image}, &CheckTimingOwner).Set(before, field, value, &receipt);
             if (result == ClockResult::Ok)
             {
                 result = ResolvePedReference(token, after);

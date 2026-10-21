@@ -38,6 +38,7 @@ function RunOwned([string]$exe,[string[]]$arguments,[string]$directory,[string]$
 }
 try{
     $names=@('Client/game_de/NativeWeatherScalarProfile.h','Client/game_de/NativeWeatherScalarProfile.cpp','Client/game_de/NativeWeatherScalarMemory.h',
+        'Client/game_de/NativeWeatherOverridePlan.h','Client/game_de/NativeWeatherOverridePlan.cpp','Client/game_de/NativeWeatherOverrideProfile.cpp',
         'Client/game_de/CWeatherScalarsDE.h','Client/game_de/CWeatherScalarsDE.cpp','Client/game_de/CWeatherTransitionDE.h','Client/game_de/CWeatherTransitionDE.cpp',
         'Client/game_de/NativeWeatherTransitionProfile.h','Client/game_de/NativeWeatherTransitionProfile.cpp',
         'Client/game_de/NativeClockProfile.h','Client/game_de/NativeImageAccess.h','Client/game_de/NativeImageAccess.cpp',
@@ -66,6 +67,7 @@ try{
         $arguments=@('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/MD','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN')
         if($mode -eq 'controlled-image'){$arguments+='/DMTA_TEST_WEATHER_SCALAR_CONTROLLED=1'}
         $arguments+=@(('/I'+(Join-Path $root 'Client/sdk')),('/I'+(Join-Path $root 'Shared/sdk')),(Join-Path $PSScriptRoot 'NativeWeatherScalarTests.cpp'),(Join-Path $root 'Client/game_de/NativeImageAccess.cpp'),(Join-Path $root 'Client/game_de/CWeatherScalarsDE.cpp'),(Join-Path $root 'Client/game_de/CWeatherTransitionDE.cpp'),
+            (Join-Path $root 'Client/game_de/NativeWeatherOverridePlan.cpp'),(Join-Path $root 'Client/game_de/NativeWeatherOverrideProfile.cpp'),
             ('/Fo'+$directory+[IO.Path]::DirectorySeparatorChar),('/Fe'+$exe),'/link','bcrypt.lib')
         $result=[ordered]@{mode=$mode;compiler=$compiler;compilerSha256=(Sha $compiler);compile=$null;test=$null;checks=0}
         $record.results+=$result

@@ -11,6 +11,9 @@
 #include "../../Client/game_de/NativeCheatProfile.h"
 #include "../../Client/game_de/NativeWeatherTransitionProfile.h"
 #include "../../Client/game_de/NativeWeatherScalarProfile.h"
+#include "../../Client/game_de/NativeWeatherOverridePlan.h"
+#include "../../Client/game_de/NativeWeatherOverrideAtomic.h"
+#include "../../Client/game_de/CWeatherOverridesDE.h"
 #include "../../Client/game_de/NativeWeaponInfoProfile.h"
 #include "../../Client/game_de/NativeWeaponInfoWriteProfile.h"
 #include "../../Client/game_de/NativeWeaponInfoVectorProfile.h"
@@ -749,6 +752,13 @@ namespace
             };
             for (const auto& pin : NativeWeatherScalarProfile::Code)
                 admit(pin.rva, pin.bytes.data(), pin.size, PAGE_EXECUTE_READ);
+            // The later override-aware qualifier checks complete native store
+            // instructions even when a prior producer pin covered only part.
+            // Stock getter fixtures must supply that same full real proof.
+            for (const auto& writer : NativeWeatherOverrideProfile::Writers)
+                admit(writer.rva, writer.original.data(), writer.size, PAGE_EXECUTE_READ);
+            for (const auto& window : NativeWeatherOverrideAtomicProfile::Windows)
+                admit(window.windowRva, window.stock.data(), window.windowSize, PAGE_EXECUTE_READ);
             for (const auto& name : NativeWeatherScalarProfile::Names)
             {
                 admit(name.nameRva, name.name, std::strlen(name.name) + 1, PAGE_READONLY);
@@ -3188,6 +3198,7 @@ namespace
     struct WeaponVectorContext
     {
         std::size_t                                                 slot = 77;
+        std::size_t                                                 bankIndex = 0;
         unsigned                                                    calls = 0, operation = 1, refusal = 0;
         CVector                                                     source{1.25f, -2.5f, 3.75f};
         const CVector*                                              input = &source;
@@ -3227,7 +3238,10 @@ namespace
         if (context.operation == 5)
         {
             context.result = ClockResult::Ok;
-            for (std::size_t index = 0; index < context.wrappers.size(); ++index)
+            // Exercise one row per real callback. A full verbose bank walk
+            // must not accidentally turn the production 500ms lease into a
+            // host-speed requirement; this also proves identity across frames.
+            const auto index = context.bankIndex;
             {
                 CWeaponInfo* selected = nullptr;
                 Check(access.GetWeaponInfoSlot(index, selected) == ClockResult::Ok && selected,
@@ -3299,7 +3313,11 @@ namespace
                 Check(service.Renew(runtime.generation.load()), "renew only the current native vector/bank callback generation");
                 fixture.invokeTimer();
             };
-            invoke();
+            for (std::size_t index = 0; index < context.wrappers.size(); ++index)
+            {
+                context.bankIndex = index;
+                invoke();
+            }
             Check(context.result == ClockResult::Ok && unchanged(), "all80 actual wrappers are read-only observations until a real SDK setter is called");
             context.operation = 1;
             invoke();
@@ -3436,6 +3454,206 @@ namespace
         }
         ClockReaderTestHost::image = 0;
         std::puts("Production native weapon vector and actual80-wrapper bank owner fixture completed");
+    }
+
+    class ClockWeatherOverridesDE final : public CWeatherOverridesDE
+    {
+    public:
+        explicit ClockWeatherOverridesDE(NativeGameTimingAccess& access) noexcept : CWeatherOverridesDE(access, access, access) {}
+        // Rain's serializer escape is still unproved. These two test-only
+        // overrides must never impersonate available production rain writes.
+        void SetAmountOfRain(float) override { std::abort(); }
+        void ResetAmountOfRain() override { std::abort(); }
+    };
+
+    struct WeatherOverrideContext
+    {
+        unsigned                          calls = 0, operation = 1, sdkIndex = 2, refusal = 0;
+        float                             value = 0.625f, output = 123.0f;
+        bool                              sdkResult = false;
+        NativeWeatherScalarProfile::Field field = NativeWeatherScalarProfile::Field::Fog;
+        ClockResult                       result = ClockResult::NotInitialized;
+    };
+
+    void WeatherOverrideHandler(NativeGameTimingAccess& access, void* opaque)
+    {
+        auto& context = *static_cast<WeatherOverrideContext*>(opaque);
+        ++context.calls;
+        Check(callbackDepth == 1 && timingTimerScope && timingCallbackGeneration == runtime.generation.load() && runtime.timerReady.load() &&
+                  runtime.engineThread.load() == GetCurrentThreadId(),
+              "actual weather SDK suppression methods borrow the existing natural timer callback owner");
+        const auto generation = timingCallbackGeneration;
+        const auto admission = runtime.admissionGeneration.load();
+        const auto refreshed = runtime.refreshed.load();
+        if (context.refusal == 1)
+            timingCallbackGeneration = generation + 1;
+        if (context.refusal == 2)
+            runtime.admissionGeneration.store(admission + 1);
+        if (context.refusal == 3)
+            ++callbackDepth;
+        if (context.refusal == 4)
+            runtime.refreshed.store(GetTickCount64() - ClockServiceLeaseMsV1 - 1);
+        ClockWeatherOverridesDE                        sdk(access);
+        const std::array<bool (CWeather::*)(float), 7> setters{&CWeather::SetWetRoads, &CWeather::SetFoggyness, &CWeather::SetFog,    &CWeather::SetRainFog,
+                                                               &CWeather::SetWaterFog, &CWeather::SetSandstorm, &CWeather::SetRainbow};
+        const std::array<bool (CWeather::*)(), 7>      resetters{&CWeather::ResetWetRoads, &CWeather::ResetFoggyness, &CWeather::ResetFog,
+                                                            &CWeather::ResetRainFog,  &CWeather::ResetWaterFog,  &CWeather::ResetSandstorm,
+                                                            &CWeather::ResetRainbow};
+        if (context.operation == 1)
+            context.sdkResult = (sdk.*setters[context.sdkIndex])(context.value);
+        if (context.operation == 2)
+            context.sdkResult = (sdk.*resetters[context.sdkIndex])();
+        if (context.operation == 3)
+            context.result = access.ReadScalar(context.field, context.output);
+        if (context.operation == 4)
+            context.result = access.SetWeatherScalarOverride(context.field, context.value);
+        runtime.refreshed.store(refreshed);
+        if (context.refusal == 3)
+            --callbackDepth;
+        runtime.admissionGeneration.store(admission);
+        timingCallbackGeneration = generation;
+    }
+
+    void NativeWeatherOverrideOwnedSdk(ClockImageFixture& fixture)
+    {
+        namespace Scalars = NativeWeatherScalarProfile;
+        fixture.AdmitWeatherPins();
+        fixture.AdmitWeatherScalarPins();
+        ClockReaderTestHost::image = fixture.image;
+        using Code = std::array<std::array<unsigned char, 16>, NativeWeatherOverrideAtomicProfile::Windows.size()>;
+        const auto code = [&]
+        {
+            Code result{};
+            for (std::size_t index = 0; index < result.size(); ++index)
+            {
+                const auto& window = NativeWeatherOverrideAtomicProfile::Windows[index];
+                SIZE_T      copied = 0;
+                Check(::ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(fixture.image + window.windowRva), result[index].data(),
+                                          window.windowSize, &copied) &&
+                          copied == window.windowSize,
+                      "read the complete actual owned aligned code window without executing its native writer");
+            }
+            return result;
+        };
+        const auto stock = code();
+        const auto bits = [](float value)
+        {
+            std::uint32_t result = 0;
+            std::memcpy(&result, &value, sizeof(result));
+            return result;
+        };
+        const auto refused = [&]
+        {
+            return runtime.access.SetWeatherScalarOverride(Scalars::Field::Fog, 0.5f) != ClockResult::Ok &&
+                   runtime.access.ResetWeatherScalarOverride(Scalars::Field::Fog) != ClockResult::Ok;
+        };
+        Check(refused() && !WeatherOverrideRetained() && code() == stock,
+              "a complete stock weather profile cannot grant override authority to an unbound producer");
+        NativeClockService     service;
+        WeatherOverrideContext context;
+        BeginOwned(service, fixture, false, true, true, &WeatherOverrideHandler, &context);
+        const auto invoke = [&]
+        {
+            Check(service.Renew(runtime.generation.load()), "renew only the actual weather override callback generation");
+            fixture.invokeTimer();
+        };
+        for (unsigned index = 0; index < 7; ++index)
+        {
+            context.sdkIndex = index;
+            context.field = static_cast<Scalars::Field>(index + 1);
+            context.operation = 1;
+            context.value = 0.25f + static_cast<float>(index);
+            const auto before = fixture.Get<std::uint32_t>(Scalars::Fields[index + 1]);
+            const bool admitted = runtime.weatherOverrides.Admits(context.field);
+            invoke();
+            Check(context.sdkResult == admitted && fixture.Get<std::uint32_t>(Scalars::Fields[index + 1]) == (admitted ? bits(context.value) : before) &&
+                      runtime.weatherOverrides.HasReferences() == admitted && !runtime.weatherOverrides.NeedsRecovery(),
+                  "all seven actual SDK setters report the concrete aligned atomic capability and commit only admitted native scalar intent");
+            const auto redirected = code();
+            context.value += 0.125f;
+            invoke();
+            Check(context.sdkResult == admitted && code() == redirected &&
+                      fixture.Get<std::uint32_t>(Scalars::Fields[index + 1]) == (admitted ? bits(context.value) : before),
+                  "a repeated accepted setter reuses its retained native writer targets while unsupported groups preserve every instruction");
+            context.operation = 3;
+            context.output = 123.0f;
+            invoke();
+            Check(context.result == ClockResult::Ok && bits(context.output) == (admitted ? bits(context.value) : before),
+                  "the existing scalar getter revalidates exact same-generation redirected code through the real owner CodeView");
+            context.operation = 2;
+            invoke();
+            Check(context.sdkResult == admitted && !WeatherOverrideRetained() && code() == stock &&
+                      fixture.Get<std::uint32_t>(Scalars::Fields[index + 1]) == (admitted ? bits(context.value) : before),
+                  "all seven actual SDK resets restore only admitted writers, preserve successful scalar values and expose unsupported groups honestly");
+        }
+        Check(refused() && !WeatherOverrideRetained() && code() == stock,
+              "the adopted producer cannot borrow native code/scalar override authority between callbacks");
+        bool        foreignRefused = false;
+        std::thread foreign([&] { foreignRefused = refused(); });
+        foreign.join();
+        Check(foreignRefused && code() == stock, "a foreign thread cannot borrow retained native weather writer authority");
+        context.sdkIndex = 2;
+        context.field = Scalars::Field::Fog;
+        const auto persistentFog = fixture.Get<std::uint32_t>(Scalars::Fields[3]);
+        for (unsigned refusal = 1; refusal <= 4; ++refusal)
+            for (unsigned operation = 1; operation <= 2; ++operation)
+            {
+                context.refusal = refusal;
+                context.operation = operation;
+                invoke();
+                Check(!context.sdkResult && !WeatherOverrideRetained() && code() == stock && fixture.Get<std::uint32_t>(Scalars::Fields[3]) == persistentFog,
+                      "actual bool SDK methods reject stale generations, mismatched admission, nesting and expiry without code or scalar mutation");
+            }
+        context.refusal = 0;
+        context.operation = 4;
+        context.field = Scalars::Field::Rain;
+        invoke();
+        Check(context.result == ClockResult::UnsupportedBuild && !WeatherOverrideRetained() && code() == stock,
+              "native Rain explicitly refuses its unproved serializer escape instead of treating direct writer plans as a complete override");
+        context.field = static_cast<Scalars::Field>(255);
+        invoke();
+        Check(context.result == ClockResult::InvalidArgument && !WeatherOverrideRetained() && code() == stock,
+              "an unknown weather field cannot select an arbitrary writable native scalar or code plan");
+        context.field = Scalars::Field::Fog;
+        context.operation = 1;
+        context.value = 0.875f;
+        invoke();
+        Check(context.sdkResult && runtime.weatherOverrides.HasReferences(), "retain a real supported Fog override for the native End/recovery lifetime check");
+        const auto  redirected = code();
+        std::size_t selected = 0;
+        while (selected < NativeWeatherOverrideAtomicProfile::Windows.size() &&
+               NativeWeatherOverrideAtomicProfile::Windows[selected].field != Scalars::Field::Fog)
+            ++selected;
+        Check(selected < NativeWeatherOverrideAtomicProfile::Windows.size(), "the actual atomic profile supplies the independently proved Fog writer window");
+        const auto& window = NativeWeatherOverrideAtomicProfile::Windows[selected];
+        const auto  originalPrefix = fixture.Get<unsigned char>(window.writerRva);
+        const auto  changed = static_cast<unsigned char>(originalPrefix ^ 1);
+        fixture.Patch(window.writerRva, &changed, sizeof(changed));
+        context.operation = 2;
+        invoke();
+        const auto debt = State(service);
+        Check(!context.sdkResult && runtime.weatherOverrides.HasReferences() && runtime.weatherOverrides.NeedsRecovery() && debt.dataRecoveryPending &&
+                  !debt.restored && !service.End() && service.IsRetained() && runtime.timingHandler && runtime.timingContext,
+              "foreign instruction bytes preserve scratch/code references and the original native callback lifetime instead of claiming Reset success");
+        Check(!RestoreWeatherOverrides(), "a producer cannot reclaim native writer references outside their original engine callback");
+        fixture.Patch(window.windowRva, redirected[selected].data(), window.windowSize);
+        // The full writer can begin before its aligned operand window. Repair
+        // the fixture's foreign opcode too; restoring only the CAS word must
+        // never masquerade as recovery of a still-corrupted instruction.
+        fixture.Patch(window.writerRva, &originalPrefix, sizeof(originalPrefix));
+        const auto generation = runtime.weatherOverrideGeneration.load();
+        runtime.weatherOverrideGeneration.store(generation + 1);
+        fixture.invokeTimer();
+        Check(WeatherOverrideRetained() && !service.End(), "a real callback cannot retire weather code references assigned to a different native generation");
+        runtime.weatherOverrideGeneration.store(generation);
+        const auto calls = context.calls;
+        fixture.invokeTimer();
+        Check(service.End() && !service.IsRetained() && !WeatherOverrideRetained() && !runtime.weatherOverrideGeneration.load() && !runtime.hooked.load() &&
+                  !runtime.timerHooked.load() && !runtime.timingHandler && !runtime.timingContext && context.calls == calls && code() == stock &&
+                  fixture.Get<std::uint32_t>(Scalars::Fields[3]) == bits(context.value),
+              "only the matching natural owner restores all exact writers before releasing hooks/context, while accepted Fog intent persists");
+        ClockReaderTestHost::image = 0;
+        std::puts("Production native weather atomic override SDK owner fixture completed");
     }
 
     struct ApplicationFrameContext
@@ -4439,6 +4657,7 @@ int main(int argc, char** argv)
     NativeWeatherScalarOwnedReads(fixture);
     NativeWeaponOwnedWrites(fixture);
     NativeWeaponVectorAndBankOwner(fixture);
+    NativeWeatherOverrideOwnedSdk(fixture);
     NativeReadSetAndRestoration(fixture);
     NativeCoherentCommandPublication(fixture);
     NativeReadOnlyRetirement(fixture);

@@ -18,6 +18,16 @@ fixtures and the normal backend build remain distinct from live GTA validation;
 the previously installed candidate stays available for the deferred combined
 test. The port remains experimental.
 
+The native weather extension reuses that same callback owner for fog and rainbow
+overrides, plus sandstorm when aligned 128-bit compare/exchange is available.
+It suppresses the actual native writers and changes the live scalar, preserving
+MTA's Set/Reset behavior. Reset restores native progression without rewinding an
+accepted value. Other scalar overrides explicitly refuse where complete atomic
+writer coverage is unproved; Rain's serializer also requires direction-sensitive
+handling. The weather SDK therefore remains partial. Separately, actual `CStats`
+reads now use the qualified DE float/integer banks and weapon-skill classifier;
+its mutations still require the genuine native reaction transactions.
+
 The October 19 application-frame trial observed 277 natural gameplay frames
 and both configured UI dictionary entries without engine writes, then retired
 its hooks and unloaded Core normally. A combined startup observer now reuses

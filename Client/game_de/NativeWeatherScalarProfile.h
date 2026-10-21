@@ -6,6 +6,11 @@
 #pragma once
 #include "NativeWeatherTransitionProfile.h"
 
+namespace mta::game_de
+{
+    class NativeWeatherOverrideCodeView;
+}
+
 namespace mta::game_de::NativeWeatherScalarProfile
 {
     enum class Field : std::uint8_t
@@ -49,4 +54,5 @@ namespace mta::game_de::NativeWeatherScalarProfile
     inline constexpr std::uintptr_t            RainbowIntensityNameRva = 0x431a4f0, RainbowMeshNameRva = 0x431a750;
     bool                                       Qualify(Binding&) noexcept;
     bool                                       Revalidate(const Binding&) noexcept;
+    bool                                       Revalidate(const Binding&, const NativeWeatherOverrideCodeView&) noexcept;
 }

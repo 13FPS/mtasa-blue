@@ -13,6 +13,8 @@
 #include "NativeCheatFlagAccess.h"
 #include "NativeWeatherTransitionJournal.h"
 #include "NativeWeatherScalarMemory.h"
+#include "NativeWeatherOverrideOwner.h"
+#include "NativeWeatherOverrideWin32.h"
 #include "NativeWeaponInfoWriteMemory.h"
 #include "NativeWeaponInfoVectorMemory.h"
 #include "CWeaponInfoBankDE.h"
@@ -91,6 +93,8 @@ namespace mta::game_de
             ClockResult SetWeaponFireOffset(std::size_t slot, const CVector* source) noexcept override;
             ClockResult SetWeaponSlot(std::size_t slot, eWeaponSlot value) noexcept override;
             ClockResult GetWeaponInfoSlot(std::size_t slot, CWeaponInfo*& output) noexcept override;
+            ClockResult SetWeatherScalarOverride(NativeWeatherScalarProfile::Field field, float value) noexcept override;
+            ClockResult ResetWeatherScalarOverride(NativeWeatherScalarProfile::Field field) noexcept override;
         };
 
         struct Counters
@@ -112,6 +116,38 @@ namespace mta::game_de
             std::atomic<std::uint32_t> hour{0}, minute{0}, seconds{0}, nativeTimer{0}, lastMinuteChange{0}, millisecondsPerGameMinute{0};
             std::atomic<std::uint64_t> lastCompletedSequence{0};
             std::atomic<ClockResult>   lastCommandResult{ClockResult::NotInitialized};
+        };
+
+        struct PeerPatchRange
+        {
+            std::uintptr_t begin = 0, end = 0;
+        };
+
+        // Declaring the existing hold before Runtime permits a persistent
+        // weather hold without duplicating peer enumeration/resume policy or
+        // allowing an automatic local destructor to release unresolved code.
+        class PeerHold
+        {
+        public:
+            ~PeerHold();
+            bool Prepare() noexcept;
+            bool Suspend(const PeerPatchRange* ranges = nullptr, std::size_t count = 0) noexcept;
+            bool Release() noexcept;
+            bool RegisterDetours() const noexcept;
+            bool Held() const noexcept { return ownsGate; }
+
+        private:
+            std::vector<PeerThread> threads;
+            std::atomic<bool>       ownsGate{false};
+        };
+
+        class WeatherOverrideHost final : public NativeWeatherOverrideHost
+        {
+        public:
+            ClockResult Check(std::uint64_t generation, bool recovery) noexcept override;
+            ClockResult ParkPeers(const Window* windows, std::size_t count) noexcept override;
+            bool        PeersHeld() const noexcept override;
+            bool        FinishPeers(bool safeToResume) noexcept override;
         };
 
         struct Runtime
@@ -143,6 +179,11 @@ namespace mta::game_de
             std::atomic<bool>                               weaponVectorRecovery{false}, weaponVectorSuperseded{false};
             std::atomic<std::uint64_t>                      weaponVectorGeneration{0};
             std::size_t                                     weaponVectorSlot = 0;
+            std::atomic<std::uint64_t>                      weatherOverrideGeneration{0};
+            std::atomic<bool>                               weatherOverrideSuperseded{false};
+            WeatherOverrideHost                             weatherOverrideHost;
+            NativeWeatherOverrideWin32                      weatherOverridePlatform;
+            NativeWeatherOverrideOwner                      weatherOverrides{weatherOverrideHost, weatherOverridePlatform};
             float                                           originalTimeScale = 0;
             std::uint32_t                                   originalMinuteDuration = 0;
             std::uint8_t                                    originalUserPause = 0;
@@ -180,6 +221,9 @@ namespace mta::game_de
             CClockDE                                        clock{access};
             CWeaponInfoBankDE                               weaponBank{weaponWriterReader, access, access};
             Counters                                        counters;
+            // Destroy the hold before the shared peer recovery vector/gates.
+            // Its normal lifetime is explicitly retired by Reset/End.
+            PeerHold weatherOverridePeers;
         };
 
         // A failed code/data restoration cannot discard its owner on DLL
@@ -192,6 +236,16 @@ namespace mta::game_de
         thread_local std::uint64_t frameCallbackGeneration = 0;
         thread_local void*         frameCallbackReceiver = nullptr;
         constexpr unsigned         timingScaleBit = 1, timingMinuteBit = 2, timingPauseBit = 4;
+
+        bool WeatherOverrideRetained() noexcept
+        {
+            return runtime.weatherOverrides.HasReferences() || runtime.weatherOverrides.NeedsRecovery() || runtime.weatherOverridePeers.Held();
+        }
+
+        bool WeatherOverridePending() noexcept
+        {
+            return runtime.weatherOverrides.NeedsRecovery() || runtime.weatherOverridePeers.Held();
+        }
 
         bool ReleaseAdmission(std::uint64_t generation) noexcept
         {
@@ -501,6 +555,8 @@ namespace mta::game_de
 
         bool RetryPeerHolds() noexcept
         {
+            if (runtime.weatherOverrides.UnsafeCode())
+                return false;
             if (runtime.peerBusy.exchange(true))
                 return false;
             bool          clean = true;
@@ -529,146 +585,199 @@ namespace mta::game_de
             return !runtime.peersRetained.load();
         }
 
-        class PeerHold
+        PeerHold::~PeerHold()
         {
-        public:
-            ~PeerHold() { Release(); }
+            Release();
+        }
 
-            bool Prepare() noexcept
+        bool PeerHold::Prepare() noexcept
+        {
+            if (runtime.peerBusy.exchange(true))
+                return false;
+            ownsGate = true;
+            if (runtime.peersRetained.load() || !runtime.recoveryPeers.empty())
+                return false;
+            // The weather owner reuses this holder across native callbacks.
+            // Release closes each handle but leaves its record; carrying those
+            // null handles into the next Suspend would reject every later Set.
+            // Never discard an unexpectedly live record or suspension debt.
+            for (const auto& thread : threads)
+                if (thread.handle || thread.suspended)
+                    return false;
+            threads.clear();
+            // Any old empty capacity is retired before parking peers. A
+            // failed resume can then transfer handles with a no-allocation
+            // swap, even when the suspended producer cannot run cleanup.
+            std::vector<PeerThread>{}.swap(runtime.recoveryPeers);
+            const auto snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+            if (snapshot == INVALID_HANDLE_VALUE)
+                return false;
+            THREADENTRY32 entry{};
+            entry.dwSize = sizeof(entry);
+            bool enumerated = Thread32First(snapshot, &entry) != FALSE;
+            bool ready = enumerated;
+            try
             {
-                if (runtime.peerBusy.exchange(true))
-                    return false;
-                ownsGate = true;
-                if (runtime.peersRetained.load() || !runtime.recoveryPeers.empty())
-                    return false;
-                // Any old empty capacity is retired before parking peers. A
-                // failed resume can then transfer handles with a no-allocation
-                // swap, even when the suspended producer cannot run cleanup.
-                std::vector<PeerThread>{}.swap(runtime.recoveryPeers);
-                const auto snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-                if (snapshot == INVALID_HANDLE_VALUE)
-                    return false;
-                THREADENTRY32 entry{};
-                entry.dwSize = sizeof(entry);
-                bool enumerated = Thread32First(snapshot, &entry) != FALSE;
-                bool ready = enumerated;
-                try
+                while (enumerated)
                 {
-                    while (enumerated)
+                    if (entry.th32OwnerProcessID == GetCurrentProcessId() && entry.th32ThreadID != GetCurrentThreadId())
                     {
-                        if (entry.th32OwnerProcessID == GetCurrentProcessId() && entry.th32ThreadID != GetCurrentThreadId())
+                        const auto handle = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_SET_CONTEXT | THREAD_QUERY_INFORMATION | SYNCHRONIZE,
+                                                       FALSE, entry.th32ThreadID);
+                        if (!handle)
                         {
-                            const auto handle =
-                                OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_SET_CONTEXT | THREAD_QUERY_INFORMATION | SYNCHRONIZE, FALSE,
-                                           entry.th32ThreadID);
-                            if (!handle)
-                            {
-                                ready = false;
-                                break;
-                            }
-                            try
-                            {
-                                threads.push_back({handle, false});
-                            }
-                            catch (...)
-                            {
-                                CloseHandle(handle);
-                                throw;
-                            }
-                        }
-                        SetLastError(ERROR_SUCCESS);
-                        enumerated = Thread32Next(snapshot, &entry) != FALSE;
-                        if (!enumerated && GetLastError() != ERROR_NO_MORE_FILES)
                             ready = false;
+                            break;
+                        }
+                        try
+                        {
+                            threads.push_back({handle, false});
+                        }
+                        catch (...)
+                        {
+                            CloseHandle(handle);
+                            throw;
+                        }
                     }
+                    SetLastError(ERROR_SUCCESS);
+                    enumerated = Thread32Next(snapshot, &entry) != FALSE;
+                    if (!enumerated && GetLastError() != ERROR_NO_MORE_FILES)
+                        ready = false;
                 }
-                catch (...)
-                {
-                    ready = false;
-                }
-                CloseHandle(snapshot);
-                return ready;
             }
-
-            bool Suspend() noexcept
+            catch (...)
             {
-                // Allocate/open every record first. Once peers are parked this
-                // path takes no heap or mailbox lock which a parked peer owns.
-                for (auto& thread : threads)
-                {
-                    if (SuspendThread(thread.handle) == static_cast<DWORD>(-1))
+                ready = false;
+            }
+            CloseHandle(snapshot);
+            return ready;
+        }
+
+        bool PeerHold::Suspend(const PeerPatchRange* ranges, std::size_t count) noexcept
+        {
+            if (count && !ranges)
+                return false;
+            // Allocate/open every record first. Once peers are parked this
+            // path takes no heap or mailbox lock which a parked peer owns.
+            for (auto& thread : threads)
+            {
+                if (SuspendThread(thread.handle) == static_cast<DWORD>(-1))
+                    return false;
+                thread.suspended = true;
+            }
+            for (const auto& thread : threads)
+            {
+                CONTEXT context{};
+                context.ContextFlags = CONTEXT_CONTROL;
+                if (!GetThreadContext(thread.handle, &context))
+                    return false;
+                // A raw patch has no Detours relocation map. Reject a peer
+                // anywhere in the clock span, including the old short JG
+                // instruction inside the proposed five-byte replacement.
+                // Known script/init/serialization writer windows are also
+                // excluded; this is not ownership of arbitrary mod writers.
+                if ((context.Rip >= runtime.image + Profile::clockCodeRva && context.Rip < runtime.image + Profile::continuationRva) ||
+                    (context.Rip >= runtime.image + 0x112ce10 && context.Rip < runtime.image + 0x112cee6) ||
+                    (context.Rip >= runtime.image + 0x1146790 && context.Rip < runtime.image + 0x1147045) ||
+                    (context.Rip >= runtime.image + 0x114a1b0 && context.Rip < runtime.image + 0x114a92f) ||
+                    (context.Rip >= runtime.image + 0x10d9880 && context.Rip < runtime.image + 0x10d9900) ||
+                    (context.Rip >= runtime.image + 0x12c9400 && context.Rip < runtime.image + 0x12c9640) ||
+                    (context.Rip >= runtime.image + TimingProfile::initializeRva &&
+                     context.Rip < runtime.image + TimingProfile::initializeRva + TimingProfile::initialize.size()) ||
+                    (context.Rip >= runtime.image + TimingProfile::scriptScaleRva &&
+                     context.Rip < runtime.image + TimingProfile::scriptScaleRva + TimingProfile::scriptScale.size()) ||
+                    (context.Rip >= runtime.image + 0x1186920 && context.Rip < runtime.image + 0x1186bbc))
+                    return false;
+                for (std::size_t index = 0; index < count; ++index)
+                    if (context.Rip >= ranges[index].begin && context.Rip < ranges[index].end)
                         return false;
-                    thread.suspended = true;
-                }
-                for (const auto& thread : threads)
-                {
-                    CONTEXT context{};
-                    context.ContextFlags = CONTEXT_CONTROL;
-                    if (!GetThreadContext(thread.handle, &context))
-                        return false;
-                    // A raw patch has no Detours relocation map. Reject a peer
-                    // anywhere in the clock span, including the old short JG
-                    // instruction inside the proposed five-byte replacement.
-                    // Known script/init/serialization writer windows are also
-                    // excluded; this is not ownership of arbitrary mod writers.
-                    if ((context.Rip >= runtime.image + Profile::clockCodeRva && context.Rip < runtime.image + Profile::continuationRva) ||
-                        (context.Rip >= runtime.image + 0x112ce10 && context.Rip < runtime.image + 0x112cee6) ||
-                        (context.Rip >= runtime.image + 0x1146790 && context.Rip < runtime.image + 0x1147045) ||
-                        (context.Rip >= runtime.image + 0x114a1b0 && context.Rip < runtime.image + 0x114a92f) ||
-                        (context.Rip >= runtime.image + 0x10d9880 && context.Rip < runtime.image + 0x10d9900) ||
-                        (context.Rip >= runtime.image + 0x12c9400 && context.Rip < runtime.image + 0x12c9640) ||
-                        (context.Rip >= runtime.image + TimingProfile::initializeRva &&
-                         context.Rip < runtime.image + TimingProfile::initializeRva + TimingProfile::initialize.size()) ||
-                        (context.Rip >= runtime.image + TimingProfile::scriptScaleRva &&
-                         context.Rip < runtime.image + TimingProfile::scriptScaleRva + TimingProfile::scriptScale.size()) ||
-                        (context.Rip >= runtime.image + 0x1186920 && context.Rip < runtime.image + 0x1186bbc))
-                        return false;
-                    // Chained unwind fragments belong to one application
-                    // method. A peer anywhere in its body can return through
-                    // the entry trampoline, so include the entire method.
-                    if (runtime.frameMode && context.Rip >= runtime.image + FrameProfile::entryRva &&
-                        context.Rip < runtime.image + FrameProfile::functionEndRva)
-                        return false;
-                }
+                // Chained unwind fragments belong to one application
+                // method. A peer anywhere in its body can return through
+                // the entry trampoline, so include the entire method.
+                if (runtime.frameMode && context.Rip >= runtime.image + FrameProfile::entryRva && context.Rip < runtime.image + FrameProfile::functionEndRva)
+                    return false;
+            }
+            return true;
+        }
+
+        bool PeerHold::Release() noexcept
+        {
+            if (!ownsGate)
                 return true;
-            }
-
-            bool Release() noexcept
-            {
-                if (!ownsGate)
-                    return true;
-                bool          clean = true;
-                std::uint32_t retained = 0;
-                for (auto& thread : threads)
-                    if (thread.handle && !ResumePeer(thread))
-                    {
-                        clean = false;
-                        ++retained;
-                    }
-                if (!clean)
+            bool          clean = true;
+            std::uint32_t retained = 0;
+            for (auto& thread : threads)
+                if (thread.handle && !ResumePeer(thread))
                 {
-                    runtime.recoveryPeers.swap(threads);
-                    runtime.peersRetained.store(true);
-                    runtime.retainedPeerThreads.store(retained);
-                    Stop(ClockResult::RestoreFailure);
+                    clean = false;
+                    ++retained;
                 }
-                runtime.peerBusy.store(false);
-                ownsGate = false;
-                return clean;
-            }
-
-            bool RegisterDetours() const noexcept
+            if (!clean)
             {
-                for (const auto& thread : threads)
-                    if (!thread.suspended || DetourUpdateThreadExternallySuspended(thread.handle) != NO_ERROR)
-                        return false;
-                return true;
+                runtime.recoveryPeers.swap(threads);
+                runtime.peersRetained.store(true);
+                runtime.retainedPeerThreads.store(retained);
+                Stop(ClockResult::RestoreFailure);
             }
+            runtime.peerBusy.store(false);
+            ownsGate = false;
+            return clean;
+        }
 
-        private:
-            std::vector<PeerThread> threads;
-            bool                    ownsGate = false;
-        };
+        bool PeerHold::RegisterDetours() const noexcept
+        {
+            for (const auto& thread : threads)
+                if (!thread.suspended || DetourUpdateThreadExternallySuspended(thread.handle) != NO_ERROR)
+                    return false;
+            return true;
+        }
+
+        ClockResult WeatherOverrideHost::Check(std::uint64_t generation, bool recovery) noexcept
+        {
+            if (!generation || generation != runtime.generation.load() || timingCallbackGeneration != generation ||
+                runtime.admissionGeneration.load() != generation || !runtime.admissionSerial.load())
+                return ClockResult::OwnerConflict;
+            if (callbackDepth != 1 || GetCurrentThreadId() != runtime.engineThread.load())
+                return ClockResult::WrongThread;
+            if (!recovery)
+                return CheckTimingOwner();
+            // Failed native code/protection references keep their original
+            // callback authority after expiry or End; cleanup grants no new
+            // scalar write lease and never transfers to the producer thread.
+            return CheckBinding(false, true) && CheckTimingBinding() ? ClockResult::Ok : ClockResult::BindingChanged;
+        }
+
+        ClockResult WeatherOverrideHost::ParkPeers(const Window* windows, std::size_t count) noexcept
+        {
+            if (runtime.weatherOverridePeers.Held())
+                return ClockResult::Ok;
+            std::array<PeerPatchRange, NativeWeatherOverrideAtomicProfile::Windows.size()> ranges{};
+            if ((count && !windows) || count > ranges.size())
+                return ClockResult::InvalidArgument;
+            for (std::size_t index = 0; index < count; ++index)
+            {
+                const auto begin = windows[index].ExclusionBegin(), end = windows[index].ExclusionEnd();
+                if (begin >= end || end > imageSize || runtime.image > (std::numeric_limits<std::uintptr_t>::max)() - end)
+                    return ClockResult::BindingChanged;
+                ranges[index] = {runtime.image + begin, runtime.image + end};
+            }
+            if (!runtime.weatherOverridePeers.Prepare() || !runtime.weatherOverridePeers.Suspend(ranges.data(), count))
+                return runtime.weatherOverridePeers.Release() ? ClockResult::Busy : ClockResult::RestoreFailure;
+            return ClockResult::Ok;
+        }
+
+        bool WeatherOverrideHost::PeersHeld() const noexcept
+        {
+            return runtime.weatherOverridePeers.Held();
+        }
+
+        bool WeatherOverrideHost::FinishPeers(bool safeToResume) noexcept
+        {
+            // The concrete platform uses complete aligned CAS windows, so an
+            // ordinary return always has stock or redirected instruction bytes.
+            // Preserve this veto if a future platform cannot make that promise.
+            return safeToResume ? runtime.weatherOverridePeers.Release() : false;
+        }
 
         bool ReadPatch(std::array<unsigned char, 5>& bytes) noexcept
         {
@@ -1137,6 +1246,15 @@ namespace mta::game_de
                                  { return journal.ReleaseForced(memory); });
         }
 
+        bool CheckWeatherScalarBinding(const NativeWeatherScalarProfile::Binding& binding) noexcept
+        {
+            const auto generation = runtime.weatherOverrideGeneration.load();
+            if (!generation)
+                return !WeatherOverrideRetained() && NativeWeatherScalarProfile::Revalidate(binding);
+            return generation == timingCallbackGeneration && generation == runtime.generation.load() &&
+                   NativeWeatherScalarProfile::Revalidate(binding, runtime.weatherOverrides.CodeView());
+        }
+
         ClockResult NativeAccess::ReadScalar(NativeWeatherScalarProfile::Field field, float& output) noexcept
         {
             if (static_cast<std::size_t>(field) >= NativeWeatherScalarProfile::Fields.size())
@@ -1150,12 +1268,12 @@ namespace mta::game_de
             // These getter-specific producer/name pins qualify the additional
             // fields without a whole executable hash on each SDK read.
             const NativeWeatherScalarProfile::Binding binding{runtime.image};
-            if (!NativeWeatherScalarProfile::Revalidate(binding))
+            if (!CheckWeatherScalarBinding(binding))
                 return ClockResult::BindingChanged;
             float next = 0;
             if (!NativeWeatherScalarMemory(binding, &OwnedFieldPages).Read(field, next))
                 return ClockResult::ReadFailure;
-            if (!NativeWeatherScalarProfile::Revalidate(binding))
+            if (!CheckWeatherScalarBinding(binding))
                 return ClockResult::BindingChanged;
             const auto confirmedOwner = CheckTimingOwner();
             if (confirmedOwner != ClockResult::Ok)
@@ -1333,6 +1451,70 @@ namespace mta::game_de
             return true;
         }
 
+        ClockResult RequireWeatherOverrideOwner() noexcept
+        {
+            const auto checked = CheckTimingOwner();
+            if (checked != ClockResult::Ok)
+                return checked;
+            const auto generation = runtime.generation.load();
+            const auto retained = runtime.weatherOverrideGeneration.load();
+            if (retained && retained != generation)
+                return ClockResult::OwnerConflict;
+            if (!retained)
+            {
+                const auto bound = runtime.weatherOverrides.Bind({runtime.image}, generation);
+                if (bound != ClockResult::Ok)
+                    return bound;
+                runtime.weatherOverrideGeneration.store(generation);
+            }
+            return CheckTimingOwner();
+        }
+
+        ClockResult FinishWeatherOverride(ClockResult result) noexcept
+        {
+            if (runtime.weatherOverrides.SupersededCount())
+                runtime.weatherOverrideSuperseded.store(true);
+            if (runtime.weatherOverrides.NeedsRecovery() || runtime.weatherOverridePeers.Held() || runtime.peersRetained.load())
+            {
+                runtime.restored.store(false);
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            }
+            return result;
+        }
+
+        ClockResult NativeAccess::SetWeatherScalarOverride(NativeWeatherScalarProfile::Field field, float value) noexcept
+        {
+            const auto owner = RequireWeatherOverrideOwner();
+            if (owner != ClockResult::Ok)
+                return owner;
+            return FinishWeatherOverride(runtime.weatherOverrides.Set(field, value));
+        }
+
+        ClockResult NativeAccess::ResetWeatherScalarOverride(NativeWeatherScalarProfile::Field field) noexcept
+        {
+            const auto owner = RequireWeatherOverrideOwner();
+            if (owner != ClockResult::Ok)
+                return owner;
+            return FinishWeatherOverride(runtime.weatherOverrides.Reset(field));
+        }
+
+        bool RestoreWeatherOverrides() noexcept
+        {
+            if (!WeatherOverrideRetained())
+                return true;
+            const auto generation = runtime.weatherOverrideGeneration.load();
+            if (!generation || runtime.weatherOverrideHost.Check(generation, true) != ClockResult::Ok)
+                return false;
+            const auto result = runtime.weatherOverrides.RestoreAll();
+            if (runtime.weatherOverrides.SupersededCount())
+                runtime.weatherOverrideSuperseded.store(true);
+            if (WeatherOverrideRetained() || (result != ClockResult::Ok && result != ClockResult::OwnerConflict))
+                return false;
+            if (runtime.weatherOverrideSuperseded.load())
+                runtime.failure.store(ClockResult::OwnerConflict);
+            return true;
+        }
+
         bool RecoverWeather() noexcept
         {
             if (!runtime.weatherRecovery.load() && !runtime.weatherGeneration.load())
@@ -1371,6 +1553,8 @@ namespace mta::game_de
             // Weather rollback is an owned data CAS transaction, so resolve it
             // before parking peers for any clock code/timing restoration. Its
             // failed journal keeps this same callback/context alive for retry.
+            if (clean && WeatherOverrideRetained())
+                clean = RestoreWeatherOverrides();
             if (clean && (runtime.weatherRecovery.load() || runtime.weatherGeneration.load()))
                 clean = RecoverWeather();
             if (clean && (runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load()))
@@ -1594,10 +1778,11 @@ namespace mta::game_de
             if (runtime.stopping.load())
             {
                 if ((runtime.captured.load() && !runtime.restored.load()) || runtime.weatherRecovery.load() || runtime.weatherGeneration.load() ||
-                    runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load())
+                    runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load() || WeatherOverrideRetained())
                     RestoreOriginal();
                 else if (!runtime.captured.load() && !runtime.timingDirty.load() && !runtime.timingRecovery.load() && !runtime.weatherRecovery.load() &&
-                         !runtime.weatherGeneration.load() && !runtime.weaponVectorRecovery.load() && !runtime.weaponVectorGeneration.load())
+                         !runtime.weatherGeneration.load() && !runtime.weaponVectorRecovery.load() && !runtime.weaponVectorGeneration.load() &&
+                         !WeatherOverrideRetained())
                     runtime.restored.store(true);
             }
             if (runtime.peersRetained.load() && !RetryPeerHoldsBounded())
@@ -1685,7 +1870,7 @@ namespace mta::game_de
                 {
                     if ((runtime.captured.load() && !runtime.restored.load()) || runtime.timingDirty.load() || runtime.timingRecovery.load() ||
                         runtime.weatherRecovery.load() || runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() ||
-                        runtime.weaponVectorGeneration.load())
+                        runtime.weaponVectorGeneration.load() || WeatherOverrideRetained())
                         RestoreOriginal();
                     else
                     {
@@ -1927,7 +2112,7 @@ namespace mta::game_de
                     (runtime.inFlight.load() || !runtime.restored.load() || runtime.patchInstalled.load() || runtime.patchRecovery.load() ||
                      runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() || runtime.weatherRecovery.load() ||
                      runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load() ||
-                     runtime.peersRetained.load() || runtime.protectionPending.load()))
+                     WeatherOverrideRetained() || runtime.peersRetained.load() || runtime.protectionPending.load()))
                     ready = false;
                 if (ready && !runtime.frameMode)
                     ready = (install ? DetourAttach : DetourDetach)(reinterpret_cast<PVOID*>(&runtime.originalContinuation),
@@ -2014,11 +2199,12 @@ namespace mta::game_de
             next.hooked = runtime.hooked.load() || runtime.timerHooked.load() || runtime.frameHooked.load();
             next.active = runtime.active.load();
             next.ready = runtime.ready.load() && !runtime.timingRecovery.load() && !runtime.weatherRecovery.load() && !runtime.weatherGeneration.load() &&
-                         !runtime.weaponVectorRecovery.load() && !runtime.weaponVectorGeneration.load();
+                         !runtime.weaponVectorRecovery.load() && !runtime.weaponVectorGeneration.load() && !WeatherOverridePending();
             next.stopping = runtime.stopping.load();
             next.restored = runtime.restored.load() && !runtime.timingDirty.load() && !runtime.timingRecovery.load() && !runtime.weatherRecovery.load() &&
                             !runtime.weatherSuperseded.load() && !runtime.weatherGeneration.load() && !runtime.weaponVectorRecovery.load() &&
-                            !runtime.weaponVectorGeneration.load() && !runtime.weaponVectorSuperseded.load();
+                            !runtime.weaponVectorGeneration.load() && !runtime.weaponVectorSuperseded.load() && !WeatherOverrideRetained() &&
+                            !runtime.weatherOverrideSuperseded.load();
             next.frozen = runtime.patchInstalled.load();
             next.modulePinned = runtime.modulePinned.load();
             next.failure = runtime.failure.load();
@@ -2041,7 +2227,7 @@ namespace mta::game_de
             next.patchRecoveryPending = runtime.patchRecovery.load();
             next.dataRecoveryPending = runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() ||
                                        runtime.weatherRecovery.load() || runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() ||
-                                       runtime.weaponVectorGeneration.load();
+                                       runtime.weaponVectorGeneration.load() || WeatherOverridePending();
             next.protectionRestorePending = runtime.protectionPending.load();
             state = next;
             return true;
@@ -2191,7 +2377,7 @@ namespace mta::game_de
             runtime.inFlight.load() || runtime.captured.load() || runtime.patchInstalled.load() || runtime.patchRecovery.load() ||
             runtime.protectionPending.load() || runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() ||
             runtime.weatherRecovery.load() || runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() ||
-            runtime.weaponVectorGeneration.load() || runtime.peersRetained.load() || runtime.admissionSerial.load() ||
+            runtime.weaponVectorGeneration.load() || WeatherOverrideRetained() || runtime.peersRetained.load() || runtime.admissionSerial.load() ||
             runtime.generation.load() == (std::numeric_limits<std::uint64_t>::max)())
             return false;
         Admission::Token claim;
@@ -2247,6 +2433,8 @@ namespace mta::game_de
         runtime.weaponVectorRecovery.store(false);
         runtime.weaponVectorGeneration.store(0);
         runtime.weaponVectorSuperseded.store(false);
+        runtime.weatherOverrideGeneration.store(0);
+        runtime.weatherOverrideSuperseded.store(false);
         runtime.originalTimeScale = 0;
         runtime.originalMinuteDuration = 0;
         runtime.originalUserPause = 0;
@@ -2300,7 +2488,7 @@ namespace mta::game_de
             !runtime.captured.load() && !runtime.patchInstalled.load() && !runtime.patchRecovery.load() && !runtime.protectionPending.load() &&
             !runtime.dataRecovery.load() && !runtime.peersRetained.load() && !runtime.timingDirty.load() && !runtime.timingRecovery.load() &&
             !runtime.weatherRecovery.load() && !runtime.weatherGeneration.load() && !runtime.weaponVectorRecovery.load() &&
-            !runtime.weaponVectorGeneration.load() && !runtime.peerBusy.load())
+            !runtime.weaponVectorGeneration.load() && !WeatherOverrideRetained() && !runtime.peerBusy.load())
         {
             if (ReleaseAdmission(generation))
             {
@@ -2410,8 +2598,8 @@ namespace mta::game_de
         // on its CLEO thread, or unload code beneath an engine callback.
         if ((runtime.captured.load() && !runtime.restored.load()) || runtime.patchInstalled.load() || runtime.patchRecovery.load() ||
             runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() || runtime.weatherRecovery.load() ||
-            runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load() || runtime.inFlight.load() ||
-            runtime.peersRetained.load() || runtime.protectionPending.load())
+            runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load() || WeatherOverrideRetained() ||
+            runtime.inFlight.load() || runtime.peersRetained.load() || runtime.protectionPending.load())
             return false;
         const bool clean = (!runtime.hooked.load() && !runtime.timerHooked.load() && !runtime.frameHooked.load()) || ChangeHooks(false);
         if (clean)
@@ -2428,6 +2616,7 @@ namespace mta::game_de
             runtime.frameContext = nullptr;
             runtime.weaponWriterReader.Reset();
             runtime.weaponWriterGeneration = 0;
+            runtime.weatherOverrideGeneration.store(0);
         }
         ReadState(finalState);
         hasFinalState = true;
@@ -2440,7 +2629,7 @@ namespace mta::game_de
                (runtime.hooked.load() || runtime.timerHooked.load() || runtime.frameHooked.load() || runtime.inFlight.load() ||
                 (runtime.captured.load() && !runtime.restored.load()) || runtime.patchInstalled.load() || runtime.patchRecovery.load() ||
                 runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() || runtime.weatherRecovery.load() ||
-                runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load() ||
+                runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load() || WeatherOverrideRetained() ||
                 runtime.peersRetained.load() || runtime.protectionPending.load() || runtime.admissionSerial.load());
     }
 }

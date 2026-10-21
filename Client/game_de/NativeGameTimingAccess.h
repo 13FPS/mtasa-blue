@@ -12,6 +12,7 @@
 #include "CWeatherScalarsDE.h"
 #include "NativeWeaponInfoWriteAccess.h"
 #include "NativeWeaponInfoVectorAccess.h"
+#include "NativeWeatherOverrideAccess.h"
 #include <cstdint>
 
 namespace mta::game_de
@@ -22,7 +23,8 @@ namespace mta::game_de
     class NativeGameTimingAccess : public NativeWeatherTransitionAccess,
                                    public NativeWeatherScalarAccess,
                                    public NativeWeaponInfoWriteAccess,
-                                   public NativeWeaponInfoVectorAccess
+                                   public NativeWeaponInfoVectorAccess,
+                                   public NativeWeatherOverrideAccess
     {
     public:
         virtual ClockResult SetTimeScale(float value) noexcept = 0;

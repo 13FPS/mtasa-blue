@@ -5,6 +5,7 @@
  *****************************************************************************/
 #include "NativeWeatherScalarProfile.h"
 #include "NativeImageAccess.h"
+#include "NativeWeatherOverridePlan.h"
 #include <cstring>
 
 namespace mta::game_de::NativeWeatherScalarProfile
@@ -77,12 +78,14 @@ namespace mta::game_de::NativeWeatherScalarProfile
     namespace
     {
         namespace Image = NativeImageAccess;
-        bool Verify(const Binding& binding) noexcept
+        bool Verify(const Binding& binding, const NativeWeatherOverrideCodeView* owned = nullptr) noexcept
         {
             // Reuse the exact native weather/clock identity and live image
             // guards, including the real23-column type domain. None of these
             // pins overlap the retained owner's weather-entry or clock patch.
             if (!NativeWeatherTransitionProfile::Revalidate(binding))
+                return false;
+            if (owned && owned->VerifyWriters(binding) != ClockResult::Ok)
                 return false;
             const auto image = binding.image;
             for (const auto rva : Fields)
@@ -92,7 +95,7 @@ namespace mta::game_de::NativeWeatherScalarProfile
             {
                 std::array<unsigned char, 192> actual{};
                 if (!pin.size || pin.size > actual.size() || !Image::ReadImage(image, image + pin.rva, actual.data(), pin.size, false, true) ||
-                    std::memcmp(actual.data(), pin.bytes.data(), pin.size))
+                    (owned && !owned->Originalize(binding, pin.rva, actual.data(), pin.size)) || std::memcmp(actual.data(), pin.bytes.data(), pin.size))
                     return false;
             }
             for (const auto& name : Names)
@@ -128,5 +131,9 @@ namespace mta::game_de::NativeWeatherScalarProfile
     bool Revalidate(const Binding& binding) noexcept
     {
         return Verify(binding);
+    }
+    bool Revalidate(const Binding& binding, const NativeWeatherOverrideCodeView& owned) noexcept
+    {
+        return Verify(binding, &owned);
     }
 }

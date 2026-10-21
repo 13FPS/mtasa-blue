@@ -29,7 +29,7 @@ namespace mta::game_de
     }
     bool NativeWeatherOverrideOwner::Admits(Field field) const noexcept
     {
-        return Windows::Supports(field, platform.CompareExchange128());
+        return Windows::Supports(field, false);
     }
     ClockResult NativeWeatherOverrideOwner::Bind(const Binding& qualified, std::uint64_t ownerGeneration) noexcept
     {
@@ -79,9 +79,14 @@ namespace mta::game_de
         auto           result = Profile::Plan::AccumulatorRange(binding, field, range);
         if (result != ClockResult::Ok)
             return result;
-        group.scratch = platform.AllocateNear(range);
-        if (!group.scratch)
-            return ClockResult::WriteFailure;
+        result = platform.AllocateNear(binding, field, range, group.scratch);
+        if (result != ClockResult::Ok || !group.scratch)
+        {
+            // An allocated interior slot can outlive a failed confirmation.
+            // Keep its base/slot lifetime in this same existing engine owner.
+            Publish(true);
+            return result == ClockResult::Ok ? ClockResult::WriteFailure : result;
+        }
         if (!platform.ScratchValid(group.scratch))
             result = ClockResult::WriteFailure;
         Profile::Plan plan;
@@ -89,8 +94,8 @@ namespace mta::game_de
             result = Profile::Plan::Prepare(binding, field, group.scratch, generation, platform.Reader(), plan);
         if (result == ClockResult::Ok)
         {
-            // Preparing a seven-group logical plan does not prove an atomic
-            // mutation. Every actual site must have the stronger window proof.
+            // Congruent allocation must be confirmed by each exact changed-
+            // byte window; mere signed32 reach never grants atomic mutation.
             if (plan.Count() > group.sites.size())
                 result = ClockResult::UnsupportedBuild;
             for (std::size_t index = 0; result == ClockResult::Ok && index < plan.Count(); ++index)

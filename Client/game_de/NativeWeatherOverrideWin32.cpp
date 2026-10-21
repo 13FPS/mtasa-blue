@@ -91,59 +91,44 @@ namespace mta::game_de
     }
     bool NativeWeatherOverrideWin32::ScratchValid(std::uintptr_t address) const noexcept
     {
-        MEMORY_BASIC_INFORMATION page{};
-        return address && address % 4 == 0 && VirtualQuery(reinterpret_cast<const void*>(address), &page, sizeof(page)) &&
-               page.AllocationBase == reinterpret_cast<void*>(address) && page.State == MEM_COMMIT && page.Type == MEM_PRIVATE &&
-               page.Protect == PAGE_READWRITE && page.RegionSize >= sizeof(float);
+        if (!address)
+            return false;
+        for (const auto& slot : slots)
+            if (slot.HasAllocation() && slot.Accumulator() == address)
+                return slot.Valid();
+        return false;
     }
-    std::uintptr_t NativeWeatherOverrideWin32::AllocateNear(const NativeWeatherOverrideProfile::Range& requested) noexcept
+    ClockResult NativeWeatherOverrideWin32::AllocateNear(const Binding& binding, Field field, const NativeWeatherOverrideProfile::Range& requested,
+                                                         std::uintptr_t& output) noexcept
     {
-        SYSTEM_INFO system{};
-        GetSystemInfo(&system);
-        const auto granularity = static_cast<std::uintptr_t>(system.dwAllocationGranularity);
-        const auto minimum = reinterpret_cast<std::uintptr_t>(system.lpMinimumApplicationAddress);
-        const auto maximum = reinterpret_cast<std::uintptr_t>(system.lpMaximumApplicationAddress);
-        auto       start = requested.minimum > minimum ? requested.minimum : minimum;
-        const auto end = requested.maximum < maximum ? requested.maximum : maximum;
-        if (!granularity || start > end || start > (std::numeric_limits<std::uintptr_t>::max)() - granularity)
-            return 0;
-        start = (start + granularity - 1) / granularity * granularity;
-        // VirtualQuery skips occupied regions. Allocation happens before peer
-        // suspension, so allocator locks held by a parked thread cannot stall
-        // this native callback while patch transactions are in progress.
-        for (std::size_t attempt = 0; start <= end && attempt < 65536; ++attempt)
-        {
-            MEMORY_BASIC_INFORMATION page{};
-            if (!VirtualQuery(reinterpret_cast<const void*>(start), &page, sizeof(page)))
-                return 0;
-            const auto base = reinterpret_cast<std::uintptr_t>(page.BaseAddress);
-            if (page.RegionSize > (std::numeric_limits<std::uintptr_t>::max)() - base)
-                return 0;
-            const auto next = base + page.RegionSize;
-            if (page.State == MEM_FREE && next >= start && next - start >= system.dwPageSize)
-            {
-                const auto allocation =
-                    reinterpret_cast<std::uintptr_t>(VirtualAlloc(reinterpret_cast<void*>(start), system.dwPageSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
-                if (allocation == start && ScratchValid(allocation))
-                    return allocation;
-                if (allocation)
-                    VirtualFree(reinterpret_cast<void*>(allocation), 0, MEM_RELEASE);
-                if (end - start < granularity)
-                    return 0;
-                start += granularity;
-            }
-            else
-            {
-                if (next <= start || next > (std::numeric_limits<std::uintptr_t>::max)() - granularity)
-                    return 0;
-                start = (next + granularity - 1) / granularity * granularity;
-            }
-        }
-        return 0;
+        const auto index = static_cast<std::size_t>(field);
+        if (index >= slots.size())
+            return ClockResult::InvalidArgument;
+        if (slots[index].HasAllocation())
+            return ClockResult::Busy;
+        NativeWeatherOverrideProfile::Range qualified;
+        auto                                result = NativeWeatherOverrideProfile::Plan::AccumulatorRange(binding, field, qualified);
+        if (result != ClockResult::Ok)
+            return result;
+        if (requested.minimum != qualified.minimum || requested.maximum != qualified.maximum)
+            return ClockResult::InvalidArgument;
+        NativeWeatherOverridePlacementProfile::Placement placement;
+        result = NativeWeatherOverridePlacementProfile::Placement::Prepare(binding, field, placement);
+        if (result != ClockResult::Ok)
+            return result;
+        result = NativeWeatherOverrideSlot::Allocate(placement, slots[index]);
+        if (slots[index].HasAllocation())
+            output = slots[index].Accumulator();
+        return result;
     }
     bool NativeWeatherOverrideWin32::ReleaseScratch(std::uintptr_t address) noexcept
     {
-        return ScratchValid(address) && VirtualFree(reinterpret_cast<void*>(address), 0, MEM_RELEASE) != FALSE;
+        if (!address)
+            return false;
+        for (auto& slot : slots)
+            if (slot.HasAllocation() && slot.Accumulator() == address)
+                return slot.Release();
+        return false;
     }
     bool NativeWeatherOverrideWin32::OpenCode(const Binding& binding, std::uintptr_t address, std::size_t size, std::uint32_t& previous) noexcept
     {

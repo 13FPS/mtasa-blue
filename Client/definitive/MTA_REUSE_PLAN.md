@@ -18,13 +18,14 @@ fixtures and the normal backend build remain distinct from live GTA validation;
 the previously installed candidate stays available for the deferred combined
 test. The port remains experimental.
 
-The native weather extension reuses that same callback owner for fog and rainbow
-overrides, plus sandstorm when aligned 128-bit compare/exchange is available.
-It suppresses the actual native writers and changes the live scalar, preserving
-MTA's Set/Reset behavior. Reset restores native progression without rewinding an
-accepted value. Other scalar overrides explicitly refuse where complete atomic
-writer coverage is unproved; Rain's serializer also requires direction-sensitive
-handling. The weather SDK therefore remains partial. Separately, actual `CStats`
+The native weather extension reuses that same callback owner for seven scalar
+override groups. Constrained allocation placement preserves displacement bytes
+outside the selected aligned 64-bit word, admitting all thirty native writers
+without a partial instruction write or a 128-bit CPU requirement. Actual
+allocation bases and interior accumulator addresses have distinct retained
+identities. Reset restores native progression without rewinding an accepted
+scalar value. Rain's serializer still requires direction-sensitive handling, so
+the weather SDK remains partial. Separately, actual `CStats`
 reads now use the qualified DE float/integer banks and weapon-skill classifier.
 The complete four-method `CStatsDE` also delegates Set/Modify to the qualified
 native reaction transactions through this same runtime. `CGameDE::GetStats`

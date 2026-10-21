@@ -165,26 +165,55 @@ int main(int argc, char** argv)
     Check(platform.ExchangeScalar({}, NativeWeatherScalarProfile::Field::Rain, 0, 1) == Exchange::Unavailable, "missing binding grants no scalar writes");
     const NativeWeatherOverrideCodeView emptyView({}, 1, read);
     Check(!platform.Revalidate(binding, emptyView), "owned generic PE does not impersonate supported game qualification");
-    Check(
-        !platform.AllocateNear({2, 1}) && !platform.AllocateNear({(std::numeric_limits<std::uintptr_t>::max)(), (std::numeric_limits<std::uintptr_t>::max)()}),
-        "invalid and overflowing allocation ranges are refused");
-    SYSTEM_INFO system{};
-    GetSystemInfo(&system);
-    const NativeWeatherOverrideProfile::Range range{reinterpret_cast<std::uintptr_t>(system.lpMinimumApplicationAddress),
-                                                    reinterpret_cast<std::uintptr_t>(system.lpMaximumApplicationAddress)};
-    const auto                                scratch = platform.AllocateNear(range);
-    Check(scratch != 0 && scratch >= range.minimum && scratch <= range.maximum && platform.ScratchValid(scratch),
-          "allocate actual private RW nonexecutable scratch inside requested range");
-    Check(!platform.ScratchValid(scratch + 4), "an interior address cannot own or release the allocation");
-    Check(!platform.OpenCode({scratch}, scratch, 8, previous), "private executable-looking storage cannot become native code authority");
-    Check(platform.ExchangeCode({scratch}, scratch, 8, stock, changed) == Exchange::Unavailable, "private storage cannot bypass image code requirements");
-    Check(!read(scratch, actual.data(), actual.size()), "code reader refuses ordinary private scratch");
-    DWORD old = 0, ignored = 0;
-    Check(VirtualProtect(reinterpret_cast<void*>(scratch), 4, PAGE_READONLY, &old) != FALSE, "owned fixture can change only its own scratch protection");
-    Check(!platform.ScratchValid(scratch) && !platform.ReleaseScratch(scratch), "unqualified scratch protection cannot be silently freed");
-    Check(VirtualProtect(reinterpret_cast<void*>(scratch), 4, old, &ignored) != FALSE && platform.ReleaseScratch(scratch),
-          "restore owned RW protection before exact release");
-    Check(!platform.ScratchValid(scratch) && !platform.ReleaseScratch(scratch), "released allocation cannot be reused as retained scratch identity");
+    using Field = NativeWeatherScalarProfile::Field;
+    std::uintptr_t untouched = 0xabcdef01;
+    Check(platform.AllocateNear({}, Field::Fog, {2, 1}, untouched) == ClockResult::InvalidArgument && untouched == 0xabcdef01,
+          "unbound field-aware allocator preserves output");
+    Check(platform.AllocateNear(binding, Field::Rain, {2, 1}, untouched) == ClockResult::UnsupportedBuild && untouched == 0xabcdef01,
+          "Rain allocator refuses unqualified full semantics");
+    std::array<std::uintptr_t, 8> accumulators{}, allocations{};
+    for (const auto field : {Field::WetRoads, Field::Foggyness, Field::Fog, Field::RainFog, Field::WaterFog, Field::Sandstorm, Field::Rainbow})
+    {
+        const auto                          index = static_cast<std::size_t>(field);
+        NativeWeatherOverrideProfile::Range range;
+        Check(NativeWeatherOverrideProfile::Plan::AccumulatorRange(binding, field, range) == ClockResult::Ok, "derive each field's actual signed32 RIP reach");
+        auto invalid = range;
+        ++invalid.minimum;
+        Check(platform.AllocateNear(binding, field, invalid, untouched) == ClockResult::InvalidArgument && untouched == 0xabcdef01,
+              "caller cannot substitute a different reach domain");
+        Check(platform.AllocateNear(binding, field, range, accumulators[index]) == ClockResult::Ok && platform.ScratchValid(accumulators[index]),
+              "production allocator admits every complete group's retained interior slot");
+        Check(accumulators[index] >= range.minimum && accumulators[index] <= range.maximum, "actual slot lies inside complete producer reach intersection");
+        MEMORY_BASIC_INFORMATION page{};
+        Check(VirtualQuery(reinterpret_cast<const void*>(accumulators[index]), &page, sizeof(page)) != 0 && page.Type == MEM_PRIVATE &&
+                  page.State == MEM_COMMIT && page.Protect == PAGE_READWRITE,
+              "each actual slot is writable nonexecutable independent storage");
+        allocations[index] = reinterpret_cast<std::uintptr_t>(page.AllocationBase);
+        const auto period = field == Field::WetRoads || field == Field::Foggyness ? 16777216u : 65536u;
+        Check(accumulators[index] % period == (binding.image + NativeWeatherScalarProfile::Fields[index]) % period,
+              "actual placement preserves all low displacement bytes outside aligned64 window");
+        Check(accumulators[index] != allocations[index] && !platform.ScratchValid(allocations[index]) && !platform.ReleaseScratch(allocations[index]),
+              "backend distinguishes retained accumulator from allocation identity");
+        Check(!platform.ScratchValid(accumulators[index] + 4), "arbitrary private interior pointer grants no slot ownership");
+        Check(platform.AllocateNear(binding, field, range, untouched) == ClockResult::Busy && untouched == 0xabcdef01,
+              "same live field allocation cannot be silently replaced");
+        Check(!platform.OpenCode({allocations[index]}, allocations[index], 8, previous), "private storage grants no executable-image mutation authority");
+        Check(platform.ExchangeCode({allocations[index]}, allocations[index], 8, stock, changed) == Exchange::Unavailable,
+              "registered scratch still cannot bypass native code page requirements");
+        Check(!read(accumulators[index], actual.data(), actual.size()), "code reader refuses registered private slot");
+    }
+    for (std::size_t index = 0; index < accumulators.size(); ++index)
+        if (accumulators[index])
+        {
+            DWORD old = 0, ignored = 0;
+            Check(VirtualProtect(reinterpret_cast<void*>(allocations[index]), 65536, PAGE_READONLY, &old) != FALSE, "inject owned scratch protection refusal");
+            Check(!platform.ScratchValid(accumulators[index]) && !platform.ReleaseScratch(accumulators[index]),
+                  "foreign slot state retains allocation identity");
+            Check(VirtualProtect(reinterpret_cast<void*>(allocations[index]), 65536, old, &ignored) != FALSE && platform.ReleaseScratch(accumulators[index]),
+                  "qualified recovery frees true allocation base using retained accumulator lookup");
+            Check(!platform.ScratchValid(accumulators[index]) && !platform.ReleaseScratch(accumulators[index]),
+                  "released accumulator cannot impersonate retained identity");
+        }
     std::printf("Passed %u actual Windows weather platform checks (64-bit)\n", checks);
     return EXIT_SUCCESS;
 }

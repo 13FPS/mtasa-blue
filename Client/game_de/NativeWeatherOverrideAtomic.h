@@ -25,9 +25,11 @@ namespace mta::game_de::NativeWeatherOverrideAtomicProfile
             return writerEnd > windowEnd ? writerEnd : windowEnd;
         }
     };
-    extern const std::array<Window, 6> Windows;
-    bool                               Supports(Field, bool compareExchange128) noexcept;
-    const Window*                      Find(std::uintptr_t writerRva) noexcept;
+    extern const std::array<Window, 30> Windows;
+    // The retained argument keeps callers source-compatible; congruent slots
+    // make every admitted group independent of optional128-bit CPU support.
+    bool          Supports(Field, bool compareExchange128) noexcept;
+    const Window* Find(std::uintptr_t writerRva) noexcept;
     // Neighbor bytes are pinned as carefully as the instruction. The atomic
     // compare must preserve them, including neighboring native writer bytes.
     bool Build(const Window&, const Entry&, std::array<unsigned char, 16>& redirected) noexcept;

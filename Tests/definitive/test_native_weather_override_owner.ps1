@@ -18,7 +18,7 @@ foreach($name in @('TEMP','TMP','PATH','INCLUDE','LIB','LIBPATH','VCToolsInstall
 $record=[ordered]@{schema='mta_native_weather_override_owner_tests_v1';success=$false;failure=$null;sources=@();results=@();architecture='x64';
     nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;engineMemoryWritten=$false;hookInstalled=$false;
     completeGameReady=$false;completeWeatherReady=$false;nativeLifecycleReady=$false;sourcesUnchanged=$true;scratch=$scratch;scratchFilesRemaining=$null;
-    scope='Actual reusable owner with controlled owned-memory host/platform only. Persistent Fog/Rainbow plus CPU-qualified Sandstorm, exact aligned64/128 CAS windows with pinned neighbors, peer authority bookends, no torn operand fallback, repeated Set and independent Reset, partial rollback, unreadable code/scalar, flush/protection/allocation/peer debt, same-generation recovery and foreign scalar/code preservation. All fixture pages are owned MEM_PRIVATE nonexecutable memory; no game/native instruction executes or engine payload is installed.'}
+    scope='Actual reusable owner with controlled owned-memory host/platform only. All seven complete groups via constrained private64KiB slots and aligned64 CAS only, all30 exact aligned64 CAS windows with pinned neighbors, peer authority bookends, no torn operand fallback, repeated Set and independent Reset, partial rollback, unreadable code/scalar, flush/protection/allocation/peer debt, same-generation recovery and foreign scalar/code preservation. All fixture pages are owned MEM_PRIVATE nonexecutable memory; no game/native instruction executes or engine payload is installed.'}
 function RunOwned([string]$exe,[string[]]$arguments,[string]$directory,[string]$label,[int]$timeout){
     $info=[Diagnostics.ProcessStartInfo]::new($exe)
     $info.WorkingDirectory=$directory;$info.UseShellExecute=$false;$info.CreateNoWindow=$true;$info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true
@@ -37,7 +37,7 @@ function RunOwned([string]$exe,[string[]]$arguments,[string]$directory,[string]$
     }finally{$process.Dispose()}
 }
 try{
-    $names=@('Client/game_de/NativeWeatherOverrideOwner.h','Client/game_de/NativeWeatherOverrideOwner.cpp','Client/game_de/NativeWeatherOverrideAtomic.h','Client/game_de/NativeWeatherOverrideAtomic.cpp',
+    $names=@('Client/game_de/NativeWeatherOverrideOwner.h','Client/game_de/NativeWeatherOverrideOwner.cpp','Client/game_de/NativeWeatherOverrideAtomic.h','Client/game_de/NativeWeatherOverrideAtomic.cpp','Client/game_de/NativeWeatherOverridePlacement.h','Client/game_de/NativeWeatherOverridePlacement.cpp','Client/game_de/NativeWeatherOverrideSlot.h','Client/game_de/NativeWeatherOverrideSlot.cpp',
         'Client/game_de/NativeWeatherOverridePlan.h','Client/game_de/NativeWeatherOverridePlan.cpp','Client/game_de/NativeWeatherOverrideProfile.cpp',
         'Client/game_de/NativeWeatherScalarProfile.h','Client/game_de/NativeWeatherScalarProfile.cpp',
         'Client/game_de/NativeWeatherTransitionProfile.h','Client/game_de/NativeWeatherTransitionProfile.cpp',
@@ -45,7 +45,7 @@ try{
         'Client/sdk/game/CGameAdapter.h','Client/sdk/game/CGameClockService.h','Shared/sdk/CControllerState.h','Shared/sdk/CControlStateSynthesis.h',
         'Tests/definitive/NativeWeatherOverrideOwnerTests.cpp','Tests/definitive/test_native_weather_override_owner.ps1',
         'Build/definitive-recovery/mta-weather-overrides-batch-20261021/proof/qualified-native-writers.json',
-        'Build/definitive-recovery/mta-weather-overrides-batch-20261021/proof/qualified-atomic-windows.json')
+        'Build/definitive-recovery/mta-weather-overrides-batch-20261021/proof/qualified-atomic-windows.json','Build/definitive-recovery/mta-weather-overrides-batch-20261021/placement-next-proof/constrained-windows-qualified.json')
     $record.sources=@($names|ForEach-Object{[ordered]@{path=$_;sha256=(Sha (Join-Path $root $_))}})
     $env:TEMP=$scratch;$env:TMP=$scratch
     $vswhere=Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
@@ -65,7 +65,7 @@ try{
         $directory=Join-Path $output $mode;[IO.Directory]::CreateDirectory($directory)|Out-Null
         $exe=Join-Path $directory 'native-weather-override-owner-tests.exe'
         $arguments=@('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/MD','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN')
-        $arguments+=@(('/I'+(Join-Path $root 'Client/sdk')),('/I'+(Join-Path $root 'Shared/sdk')),(Join-Path $PSScriptRoot 'NativeWeatherOverrideOwnerTests.cpp'),(Join-Path $root 'Client/game_de/NativeImageAccess.cpp'),(Join-Path $root 'Client/game_de/NativeWeatherOverrideOwner.cpp'),(Join-Path $root 'Client/game_de/NativeWeatherOverrideAtomic.cpp'),(Join-Path $root 'Client/game_de/NativeWeatherOverridePlan.cpp'),(Join-Path $root 'Client/game_de/NativeWeatherOverrideProfile.cpp'),
+        $arguments+=@(('/I'+(Join-Path $root 'Client/sdk')),('/I'+(Join-Path $root 'Shared/sdk')),(Join-Path $PSScriptRoot 'NativeWeatherOverrideOwnerTests.cpp'),(Join-Path $root 'Client/game_de/NativeImageAccess.cpp'),(Join-Path $root 'Client/game_de/NativeWeatherOverrideOwner.cpp'),(Join-Path $root 'Client/game_de/NativeWeatherOverrideAtomic.cpp'),(Join-Path $root 'Client/game_de/NativeWeatherOverridePlacement.cpp'),(Join-Path $root 'Client/game_de/NativeWeatherOverrideSlot.cpp'),(Join-Path $root 'Client/game_de/NativeWeatherOverridePlan.cpp'),(Join-Path $root 'Client/game_de/NativeWeatherOverrideProfile.cpp'),
             ('/Fo'+$directory+[IO.Path]::DirectorySeparatorChar),('/Fe'+$exe),'/link','bcrypt.lib')
         $result=[ordered]@{mode=$mode;compiler=$compiler;compilerSha256=(Sha $compiler);compile=$null;test=$null;checks=0}
         $record.results+=$result

@@ -13,6 +13,7 @@
 #include "../../Client/game_de/NativeWeatherScalarProfile.h"
 #include "../../Client/game_de/NativeWeatherOverridePlan.h"
 #include "../../Client/game_de/NativeWeatherOverrideAtomic.h"
+#include "../../Client/game_de/NativeWeatherOverridePlacement.h"
 #include "../../Client/game_de/CWeatherOverridesDE.h"
 #include "../../Client/game_de/NativeWeaponInfoProfile.h"
 #include "../../Client/game_de/NativeWeaponInfoWriteProfile.h"
@@ -3866,6 +3867,8 @@ namespace
     void NativeWeatherOverrideOwnedSdk(ClockImageFixture& fixture)
     {
         namespace Scalars = NativeWeatherScalarProfile;
+        namespace Placement = NativeWeatherOverridePlacementProfile;
+        static_assert(NativeWeatherOverrideAtomicProfile::Windows.size() == 30);
         fixture.AdmitWeatherPins();
         fixture.AdmitWeatherScalarPins();
         ClockReaderTestHost::image = fixture.image;
@@ -3885,6 +3888,42 @@ namespace
             return result;
         };
         const auto stock = code();
+        const auto accumulator = [&](Scalars::Field field)
+        {
+            Placement::Placement placement;
+            Check(Placement::Placement::Prepare({fixture.image}, field, placement) == ClockResult::Ok,
+                  "the real SDK override field has an independently constrained native accumulator placement");
+            std::uintptr_t selected = 0;
+            std::size_t    writers = 0;
+            for (const auto& writer : NativeWeatherOverrideProfile::Writers)
+            {
+                if (writer.field != field)
+                    continue;
+                const auto   bytes = fixture.Get<std::array<unsigned char, 10>>(writer.rva);
+                std::int32_t displacement = 0;
+                std::memcpy(&displacement, bytes.data() + writer.displacement, sizeof(displacement));
+                const auto target = static_cast<std::uintptr_t>(static_cast<std::intptr_t>(fixture.image + writer.rva + writer.size) + displacement);
+                MEMORY_BASIC_INFORMATION info{};
+                Check(VirtualQuery(reinterpret_cast<const void*>(target), &info, sizeof(info)) == sizeof(info) && info.Type == MEM_PRIVATE &&
+                          info.State == MEM_COMMIT && (info.Protect & 0xff) == PAGE_READWRITE && runtime.weatherOverridePlatform.ScratchValid(target),
+                      "actual native writer operands resolve to retained private RW accumulator slots rather than executable padding or native storage");
+                const Placement::Candidate candidate{reinterpret_cast<std::uintptr_t>(info.AllocationBase), target};
+                Check(placement.Accepts(candidate) && candidate.allocation != candidate.accumulator && (!selected || selected == target),
+                      "every writer in the native group shares one congruent interior accumulator with its separate real allocation base");
+                const auto* window = NativeWeatherOverrideAtomicProfile::Find(writer.rva);
+                Check(window && window->windowSize == 8 && window->windowRva % 8 == 0,
+                      "all thirty active native writer changes use one complete aligned64 replacement window");
+                for (std::size_t index = 0; index < writer.size; ++index)
+                    if (writer.rva + index < window->windowRva || writer.rva + index >= window->windowRva + window->windowSize)
+                        Check(bytes[index] == writer.original[index],
+                              "constrained placement preserves the actual instruction prefix and low displacement bytes outside its atomic word");
+                selected = target;
+                ++writers;
+            }
+            Check(selected && writers == NativeWeatherOverrideProfile::WriterCounts[static_cast<std::size_t>(field)],
+                  "the actual SDK owner redirects the complete proved native writer group, including all fifteen WetRoads sites");
+            return selected;
+        };
         const auto bits = [](float value)
         {
             std::uint32_t result = 0;
@@ -3914,10 +3953,17 @@ namespace
             context.value = 0.25f + static_cast<float>(index);
             const auto before = fixture.Get<std::uint32_t>(Scalars::Fields[index + 1]);
             const bool admitted = runtime.weatherOverrides.Admits(context.field);
+            Check(admitted, "congruent aligned64 placement admits every one of the seven complete non-Rain SDK groups without a CPU128 dependency");
             invoke();
             Check(context.sdkResult == admitted && fixture.Get<std::uint32_t>(Scalars::Fields[index + 1]) == (admitted ? bits(context.value) : before) &&
                       runtime.weatherOverrides.HasReferences() == admitted && !runtime.weatherOverrides.NeedsRecovery(),
                   "all seven actual SDK setters report the concrete aligned atomic capability and commit only admitted native scalar intent");
+            const auto  target = accumulator(context.field);
+            const float nativeWriterValue = -11.5f;
+            SIZE_T      written = 0;
+            Check(::WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(target), &nativeWriterValue, sizeof(nativeWriterValue), &written) &&
+                      written == sizeof(nativeWriterValue) && fixture.Get<std::uint32_t>(Scalars::Fields[index + 1]) == bits(context.value),
+                  "a simulated native producer store through the real redirected target cannot overwrite the accepted SDK scalar intent");
             const auto redirected = code();
             context.value += 0.125f;
             invoke();
@@ -3932,7 +3978,8 @@ namespace
             context.operation = 2;
             invoke();
             Check(context.sdkResult == admitted && !WeatherOverrideRetained() && code() == stock &&
-                      fixture.Get<std::uint32_t>(Scalars::Fields[index + 1]) == (admitted ? bits(context.value) : before),
+                      fixture.Get<std::uint32_t>(Scalars::Fields[index + 1]) == (admitted ? bits(context.value) : before) &&
+                      !runtime.weatherOverridePlatform.ScratchValid(target),
                   "all seven actual SDK resets restore only admitted writers, preserve successful scalar values and expose unsupported groups honestly");
         }
         Check(refused() && !WeatherOverrideRetained() && code() == stock,
@@ -3963,6 +4010,42 @@ namespace
         invoke();
         Check(context.result == ClockResult::InvalidArgument && !WeatherOverrideRetained() && code() == stock,
               "an unknown weather field cannot select an arbitrary writable native scalar or code plan");
+        std::array<std::uintptr_t, 7> concurrentTargets{};
+        std::array<std::uint32_t, 7>  concurrentValues{};
+        for (unsigned index = 0; index < concurrentTargets.size(); ++index)
+        {
+            context.sdkIndex = index;
+            context.field = static_cast<Scalars::Field>(index + 1);
+            context.operation = 1;
+            context.value = 12.25f + static_cast<float>(index);
+            invoke();
+            Check(context.sdkResult && runtime.weatherOverrides.HasReferences() && !runtime.weatherOverrides.NeedsRecovery(),
+                  "the same genuine callback owner can retain all seven native weather writer groups concurrently");
+            concurrentTargets[index] = accumulator(context.field);
+            concurrentValues[index] = bits(context.value);
+            for (unsigned prior = 0; prior < index; ++prior)
+                Check(concurrentTargets[index] != concurrentTargets[prior] &&
+                          (concurrentTargets[index] & ~std::uintptr_t{0xffff}) != (concurrentTargets[prior] & ~std::uintptr_t{0xffff}),
+                      "concurrent native groups retain independent real allocation bases even when their native low offsets share a page");
+        }
+        for (unsigned index = 0; index < concurrentTargets.size(); ++index)
+        {
+            context.field = static_cast<Scalars::Field>(index + 1);
+            context.operation = 3;
+            invoke();
+            Check(context.result == ClockResult::Ok && bits(context.output) == concurrentValues[index],
+                  "actual SDK scalar reads qualify the combined same-generation code view with all thirty writer redirections active");
+        }
+        Check(!service.End() && service.IsRetained(), "End retains all concurrent native writer and slot references until the existing callback restores them");
+        fixture.invokeTimer();
+        Check(service.End() && !service.IsRetained() && !WeatherOverrideRetained() && code() == stock,
+              "one original engine callback retires every concurrent writer group and its separate allocation before releasing the hooks");
+        for (unsigned index = 0; index < concurrentTargets.size(); ++index)
+            Check(!runtime.weatherOverridePlatform.ScratchValid(concurrentTargets[index]) &&
+                      fixture.Get<std::uint32_t>(Scalars::Fields[index + 1]) == concurrentValues[index],
+                  "concurrent End releases owned allocation bases while preserving all seven successful scalar intents");
+        BeginOwned(service, fixture, false, true, true, &WeatherOverrideHandler, &context);
+        context.sdkIndex = 2;
         context.field = Scalars::Field::Fog;
         context.operation = 1;
         context.value = 0.875f;
@@ -4003,6 +4086,7 @@ namespace
               "only the matching natural owner restores all exact writers before releasing hooks/context, while accepted Fog intent persists");
         ClockReaderTestHost::image = 0;
         std::puts("Production native weather atomic override SDK owner fixture completed");
+        std::puts("Production native seven-group weather placement owner fixture completed");
     }
 
     struct ApplicationFrameContext

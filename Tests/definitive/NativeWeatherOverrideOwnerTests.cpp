@@ -4,6 +4,7 @@
  * PURPOSE: Owned nonexecutable-memory coverage of actual weather owner journals
  *****************************************************************************/
 #include "../../Client/game_de/NativeWeatherOverrideOwner.h"
+#include "../../Client/game_de/NativeWeatherOverrideSlot.h"
 #include <intrin.h>
 #include <cmath>
 #include <cstdio>
@@ -162,19 +163,20 @@ namespace
     }
     struct Platform final : NativeWeatherOverridePlatform
     {
-        Fixture&                    fixture;
-        Host&                       host;
-        bool                        atomic128 = IsProcessorFeaturePresent(PF_COMPARE_EXCHANGE128) != FALSE;
-        bool                        failAllocation = false, failRelease = false, failOpen = false, failClose = false, failFlush = false;
-        bool                        failScalar = false;
-        bool                        expireAfterOpen = false, expireAfterScalarRead = false, revokeRecoveryAfterScalarRead = false;
-        std::size_t                 allocations = 0, releases = 0, codeExchanges = 0, scalarExchanges = 0, unavailableExchange = 0;
-        std::vector<std::uintptr_t> scratch;
+        Fixture&                                 fixture;
+        Host&                                    host;
+        bool                                     atomic128 = IsProcessorFeaturePresent(PF_COMPARE_EXCHANGE128) != FALSE;
+        bool                                     failAllocation = false, failRelease = false, failOpen = false, failClose = false, failFlush = false;
+        bool                                     failScalar = false, failAfterAllocation = false;
+        bool                                     expireAfterOpen = false, expireAfterScalarRead = false, revokeRecoveryAfterScalarRead = false;
+        std::size_t                              allocations = 0, releases = 0, codeExchanges = 0, scalarExchanges = 0, unavailableExchange = 0;
+        std::vector<std::uintptr_t>              scratch;
+        std::array<NativeWeatherOverrideSlot, 8> slots{};
         explicit Platform(Fixture& fixture, Host& host) noexcept : fixture(fixture), host(host) {}
         ~Platform()
         {
-            for (const auto allocation : scratch)
-                VirtualFree(reinterpret_cast<void*>(allocation), 0, MEM_RELEASE);
+            for (auto& slot : slots)
+                slot.Release();
         }
         CodeRead Reader() const noexcept override { return &Fixture::Read; }
         bool     Revalidate(const Binding& binding, const NativeWeatherOverrideCodeView& view) noexcept override
@@ -190,45 +192,48 @@ namespace
             }
             return true;
         }
-        bool           CompareExchange128() const noexcept override { return atomic128; }
-        std::uintptr_t AllocateNear(const P::Range& range) noexcept override
+        bool        CompareExchange128() const noexcept override { return atomic128; }
+        ClockResult AllocateNear(const Binding& binding, Field field, const P::Range&, std::uintptr_t& output) noexcept override
         {
             Require(!host.held, "scratch allocation precedes suspension");
             ++allocations;
             if (failAllocation)
-                return 0;
-            SYSTEM_INFO system{};
-            GetSystemInfo(&system);
-            auto address = (range.minimum + system.dwAllocationGranularity - 1) & ~static_cast<std::uintptr_t>(system.dwAllocationGranularity - 1);
-            for (std::size_t attempt = 0; address <= range.maximum && attempt < 65536; ++attempt, address += system.dwAllocationGranularity)
+                return ClockResult::WriteFailure;
+            const auto                                       index = static_cast<std::size_t>(field);
+            NativeWeatherOverridePlacementProfile::Placement placement;
+            auto                                             result = NativeWeatherOverridePlacementProfile::Placement::Prepare(binding, field, placement);
+            if (result != ClockResult::Ok)
+                return result;
+            result = NativeWeatherOverrideSlot::Allocate(placement, slots[index]);
+            if (slots[index].HasAllocation())
             {
-                const auto value = reinterpret_cast<std::uintptr_t>(
-                    VirtualAlloc(reinterpret_cast<void*>(address), system.dwPageSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
-                if (value)
-                {
-                    scratch.push_back(value);
-                    return value;
-                }
+                output = slots[index].Accumulator();
+                scratch.push_back(output);
             }
-            return 0;
+            return failAfterAllocation ? ClockResult::WriteFailure : result;
         }
         bool ScratchValid(std::uintptr_t address) const noexcept override
         {
-            for (const auto value : scratch)
-                if (value == address)
-                    return true;
+            for (const auto& slot : slots)
+                if (slot.HasAllocation() && slot.Accumulator() == address)
+                    return slot.Valid();
             return false;
         }
         bool ReleaseScratch(std::uintptr_t address) noexcept override
         {
             if (failRelease)
                 return false;
-            for (auto entry = scratch.begin(); entry != scratch.end(); ++entry)
-                if (*entry == address)
+            for (auto& slot : slots)
+                if (slot.HasAllocation() && slot.Accumulator() == address)
                 {
-                    if (!VirtualFree(reinterpret_cast<void*>(address), 0, MEM_RELEASE))
+                    if (!slot.Release())
                         return false;
-                    scratch.erase(entry);
+                    for (auto entry = scratch.begin(); entry != scratch.end(); ++entry)
+                        if (*entry == address)
+                        {
+                            scratch.erase(entry);
+                            break;
+                        }
                     ++releases;
                     return true;
                 }
@@ -316,7 +321,7 @@ namespace
     {
         Scenario   s;
         const auto allocations = s.platform.allocations;
-        for (const auto field : {Field::Rain, Field::WetRoads, Field::Foggyness, Field::RainFog, Field::WaterFog})
+        for (const auto field : {Field::Rain})
         {
             Require(!s.owner.Admits(field), "unproved whole-group atomic capability refused");
             Require(s.owner.Set(field, 0.5f) == ClockResult::UnsupportedBuild, "unsupported setter is explicit");
@@ -324,7 +329,8 @@ namespace
         }
         Require(s.platform.allocations == allocations && s.host.parks == 0, "refusals acquire no code or suspension ownership");
         s.platform.atomic128 = false;
-        Require(!s.owner.Admits(Field::Sandstorm) && s.owner.Set(Field::Sandstorm, 1) == ClockResult::UnsupportedBuild, "Sandstorm requires CPU-qualified128");
+        for (const auto field : {Field::WetRoads, Field::Foggyness, Field::Fog, Field::RainFog, Field::WaterFog, Field::Sandstorm, Field::Rainbow})
+            Require(s.owner.Admits(field), "every complete group now admits constrained aligned64 independently of128 support");
         Require(s.owner.Set(Field::Fog, (std::numeric_limits<float>::quiet_NaN)()) == ClockResult::InvalidArgument, "NaN refuses before native ownership");
         Require(s.owner.Set(Field::Fog, (std::numeric_limits<float>::infinity)()) == ClockResult::InvalidArgument, "infinity refuses");
         Require(s.owner.Set(static_cast<Field>(255), 0) == ClockResult::InvalidArgument, "invalid enum refuses");
@@ -358,9 +364,9 @@ namespace
         Scenario s;
         Require(s.owner.Set(Field::Fog, 0.2f) == ClockResult::Ok, "Fog admitted");
         Require(s.owner.Set(Field::Rainbow, 0.7f) == ClockResult::Ok, "Rainbow admitted independently");
-        const bool sandstorm = s.platform.atomic128;
+        const bool sandstorm = true;
         if (sandstorm)
-            Require(s.owner.Set(Field::Sandstorm, 0.9f) == ClockResult::Ok, "mixed aligned64/128 Sandstorm group admitted as a whole");
+            Require(s.owner.Set(Field::Sandstorm, 0.9f) == ClockResult::Ok, "constrained aligned64 Sandstorm group admitted as a whole");
         Require(s.owner.Bind(s.fixture.Binding(), 38) == ClockResult::Busy, "binding replacement cannot orphan native references");
         Require(s.owner.Reset(Field::Fog) == ClockResult::Ok && s.fixture.Stock(Field::Fog), "independent Fog Reset");
         Require(!s.fixture.Stock(Field::Rainbow), "other group's suppression survives Fog Reset");
@@ -371,9 +377,49 @@ namespace
             Require(s.fixture.Stock(Field::Sandstorm) && s.fixture.GetBits(Field::Sandstorm) == Bits(0.9f),
                     "Sandstorm End restores all three windows without scalar rewind");
     }
+    void EveryGroupPersistentLifecycle()
+    {
+        Scenario s;
+        s.platform.atomic128 = false;
+        std::array<std::uintptr_t, 8> allocations{};
+        for (const auto field : {Field::WetRoads, Field::Foggyness, Field::Fog, Field::RainFog, Field::WaterFog, Field::Sandstorm, Field::Rainbow})
+        {
+            const auto index = static_cast<std::size_t>(field);
+            Require(s.owner.Set(field, 0.625f) == ClockResult::Ok, "each complete native group accepts persistent intent with64-bit CAS only");
+            allocations[index] = s.platform.slots[index].AllocationIdentity();
+            Require(s.platform.slots[index].Accumulator() != allocations[index], "slot identity is distinct from interior RIP target");
+            Require(s.owner.Set(field, -0.0f) == ClockResult::Ok && s.platform.slots[index].AllocationIdentity() == allocations[index],
+                    "repeated Set reuses immutable constrained allocation for this group");
+            for (const auto& writer : P::Writers)
+                if (writer.field == field)
+                    Require(s.fixture.Target(writer) == s.platform.slots[index].Accumulator(), "every actual producer decodes to exact retained interior slot");
+            Require(s.fixture.GetBits(field) == Bits(-0.0f), "native accepted bits are preserved for every group");
+        }
+        Require(s.platform.scratch.size() == 7 && s.owner.CodeView().VerifyWriters(s.fixture.Binding()) == ClockResult::Ok,
+                "all seven private allocations and30 exact native writer masks coexist");
+        for (const auto field : {Field::WetRoads, Field::RainFog, Field::Foggyness, Field::WaterFog, Field::Sandstorm, Field::Fog, Field::Rainbow})
+        {
+            Require(s.owner.Reset(field) == ClockResult::Ok && s.fixture.Stock(field), "independent exact group reset restores full original instructions");
+            Require(s.fixture.GetBits(field) == Bits(-0.0f), "independent Reset leaves accepted scalar intent unchanged");
+            Require(s.owner.CodeView().VerifyWriters(s.fixture.Binding()) == ClockResult::Ok, "remaining constrained groups retain exact lifecycle masks");
+        }
+        s.Clean();
+    }
+    void RetainAllocationConfirmationFailure()
+    {
+        Scenario s;
+        s.platform.failAfterAllocation = true;
+        Require(s.owner.Set(Field::WaterFog, 0.5f) == ClockResult::WriteFailure, "post-allocation failure is an explicit refused mutation");
+        Require(s.owner.HasReferences() && s.owner.NeedsRecovery() && s.platform.scratch.size() == 1,
+                "interior pointer is captured even when allocator cannot publish success");
+        Require(s.platform.codeExchanges == 0 && s.fixture.Stock(Field::WaterFog), "unconfirmed allocation grants no native code mutation");
+        s.platform.failAfterAllocation = false;
+        s.Clean();
+        Require(s.platform.releases == 1, "same recovery owner releases true allocation base after failed confirmation");
+    }
     void PartialCodeRollback()
     {
-        for (const auto field : {Field::Fog, Field::Rainbow, Field::Sandstorm})
+        for (const auto field : {Field::WetRoads, Field::Foggyness, Field::Fog, Field::RainFog, Field::WaterFog, Field::Sandstorm, Field::Rainbow})
         {
             Scenario capability;
             if (!capability.owner.Admits(field))
@@ -540,6 +586,8 @@ int main()
     static_assert(sizeof(void*) == 8);
     CapabilitiesAndIntent();
     IndependentGroups();
+    EveryGroupPersistentLifecycle();
+    RetainAllocationConfirmationFailure();
     PartialCodeRollback();
     RetainedCodeReadDebt();
     RetainedAcknowledgeDebt();

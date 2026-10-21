@@ -39,14 +39,16 @@ namespace mta::game_de
             Conflict,
             Exchanged
         };
-        virtual CodeRead       Reader() const noexcept = 0;
-        virtual bool           Revalidate(const Binding&, const NativeWeatherOverrideCodeView&) noexcept = 0;
-        virtual bool           CompareExchange128() const noexcept = 0;
-        virtual std::uintptr_t AllocateNear(const NativeWeatherOverrideProfile::Range&) noexcept = 0;
-        virtual bool           ScratchValid(std::uintptr_t) const noexcept = 0;
-        virtual bool           ReleaseScratch(std::uintptr_t) noexcept = 0;
-        virtual bool           OpenCode(const Binding&, std::uintptr_t, std::size_t, std::uint32_t& previous) noexcept = 0;
-        virtual bool           CloseCode(const Binding&, std::uintptr_t, std::size_t, std::uint32_t previous) noexcept = 0;
+        virtual CodeRead Reader() const noexcept = 0;
+        virtual bool     Revalidate(const Binding&, const NativeWeatherOverrideCodeView&) noexcept = 0;
+        virtual bool     CompareExchange128() const noexcept = 0;
+        // Publish an interior accumulator even on post-allocation failure so
+        // this owner can retain the platform's separate allocation identity.
+        virtual ClockResult AllocateNear(const Binding&, Field, const NativeWeatherOverrideProfile::Range&, std::uintptr_t& accumulator) noexcept = 0;
+        virtual bool        ScratchValid(std::uintptr_t) const noexcept = 0;
+        virtual bool        ReleaseScratch(std::uintptr_t) noexcept = 0;
+        virtual bool        OpenCode(const Binding&, std::uintptr_t, std::size_t, std::uint32_t& previous) noexcept = 0;
+        virtual bool        CloseCode(const Binding&, std::uintptr_t, std::size_t, std::uint32_t previous) noexcept = 0;
         // Exchanged/Conflict/Unavailable all describe one indivisible aligned
         // hardware exchange. No platform implementation may copy an operand
         // partially, report an ambiguous write, or introduce torn instruction
@@ -91,7 +93,7 @@ namespace mta::game_de
         struct Group
         {
             std::optional<NativeWeatherOverrideProfile::Ledger> ledger;
-            std::array<Site, 3>                                 sites{};
+            std::array<Site, 15>                                sites{};
             std::uintptr_t                                      scratch = 0;
             bool                                                active = false, scalarPending = false;
             std::uint32_t                                       original = 0, replacement = 0;

@@ -17,7 +17,7 @@ foreach($name in @('TEMP','TMP','PATH','INCLUDE','LIB','LIBPATH','VCToolsInstall
 $record=[ordered]@{schema='mta_native_weather_win32_tests_v1';success=$false;failure=$null;sources=@();results=@();architecture='x64';
     nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;engineMemoryWritten=$false;ownedImageMemoryWritten=$true;hookInstalled=$false;
     completeGameReady=$false;completeWeatherReady=$false;nativeLifecycleReady=$false;sourcesUnchanged=$true;scratch=$scratch;scratchFilesRemaining=$null;
-    scope='Actual shipping Windows platform on a tiny owned sparse SEC_IMAGE: aligned64 and CPU-conditional128 atomic exchanges, compare conflicts, neighboring-byte preservation, image/private/protection/alignment refusal, real scalar CAS, owned near RW scratch and exact release. No native game instruction or process executes.'}
+    scope='Actual shipping Windows platform on a tiny owned sparse SEC_IMAGE: aligned64 and CPU-conditional128 atomic exchanges, compare conflicts, neighboring-byte preservation, image/private/protection/alignment refusal, real scalar CAS, all seven field-congruent private64KiB interior slots, allocation-base identity, simultaneous retention, wrong-range refusal and exact release. No native game instruction or process executes.'}
 function RunOwned([string]$exe,[string[]]$arguments,[string]$label,[int]$timeout){
     $info=[Diagnostics.ProcessStartInfo]::new($exe)
     $info.WorkingDirectory=$output;$info.UseShellExecute=$false;$info.CreateNoWindow=$true;$info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true
@@ -37,7 +37,7 @@ function RunOwned([string]$exe,[string[]]$arguments,[string]$label,[int]$timeout
 }
 try{
     $names=@('Client/game_de/NativeWeatherOverrideWin32.h','Client/game_de/NativeWeatherOverrideWin32.cpp',
-        'Client/game_de/NativeWeatherOverrideOwner.h','Client/game_de/NativeWeatherOverrideAtomic.h','Client/game_de/NativeWeatherOverrideAtomic.cpp',
+        'Client/game_de/NativeWeatherOverrideOwner.h','Client/game_de/NativeWeatherOverrideAtomic.h','Client/game_de/NativeWeatherOverrideAtomic.cpp','Client/game_de/NativeWeatherOverridePlacement.h','Client/game_de/NativeWeatherOverridePlacement.cpp','Client/game_de/NativeWeatherOverrideSlot.h','Client/game_de/NativeWeatherOverrideSlot.cpp',
         'Client/game_de/NativeWeatherOverridePlan.h','Client/game_de/NativeWeatherOverridePlan.cpp','Client/game_de/NativeWeatherOverrideProfile.cpp',
         'Client/game_de/NativeWeatherScalarProfile.h','Client/game_de/NativeWeatherScalarProfile.cpp',
         'Client/game_de/NativeWeatherTransitionProfile.h','Client/game_de/NativeWeatherTransitionProfile.cpp',
@@ -60,7 +60,7 @@ try{
     }
     $compiler=Join-Path $env:VCToolsInstallDir 'bin/Hostx64/x64/cl.exe'
     $exe=Join-Path $output 'native-weather-win32-tests.exe'
-    $cpp=@('Client/game_de/NativeWeatherOverrideWin32.cpp','Client/game_de/NativeWeatherOverrideAtomic.cpp',
+    $cpp=@('Client/game_de/NativeWeatherOverrideWin32.cpp','Client/game_de/NativeWeatherOverrideAtomic.cpp','Client/game_de/NativeWeatherOverridePlacement.cpp','Client/game_de/NativeWeatherOverrideSlot.cpp',
         'Client/game_de/NativeWeatherOverridePlan.cpp','Client/game_de/NativeWeatherOverrideProfile.cpp',
         'Client/game_de/NativeWeatherScalarProfile.cpp','Client/game_de/NativeWeatherTransitionProfile.cpp','Client/game_de/NativeImageAccess.cpp',
         'Tests/definitive/NativeWeatherOverrideWin32Tests.cpp')

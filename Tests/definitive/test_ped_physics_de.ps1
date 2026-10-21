@@ -1,6 +1,6 @@
 #!/usr/bin/env pwsh
 #requires -Version 7.0
-# Compile fourteen actual inherited CPed methods with a mandatory pure native-repair hook.
+# Compile eighteen actual inherited CPed methods with a mandatory pure native-repair hook.
 [CmdletBinding()]
 param()
 
@@ -20,9 +20,9 @@ $record = [ordered]@{
     schema='mta_ped_physics_de_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     generatedFixture=$null;result=$null;failure=$null;scratchDirectory=$scratchRoot;scratchRemoved=$false;
-    scope='Actual CPedPhysicsDE inherited getters consume shared classic ordered repair policy through registered-token observations. Production repair remains a mandatory PURE hook; only the owned host test implements it. All ten prior SDK methods remain tested. Covers native alias/caller output identity, matrix row mapping/absence, cache commit ordering, typed raw velocities, explicit owner and repair refusal, persistent accepted test effects, no retry and no generated production placeholders. No native engine code or actual native repair executes.';
+    scope='Actual CPedPhysicsDE inherited getters consume shared classic ordered repair policy through registered-token observations. Production repair remains a mandatory PURE hook; only the owned host test implements it. All fourteen inherited pre-physics methods remain tested, including optional same-owner mass/turn-mass dispatch and explicit absent-owner refusal. Covers native alias/caller output identity, matrix row mapping/absence, cache commit ordering, typed raw velocities, explicit owner and repair refusal, persistent accepted test effects, no retry and no generated production placeholders. No native engine code or actual native repair executes.';
     nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;installationChanged=$false;
-    completeCGameReady=$false;fullMtaReady=$false;nativePedPhysicsSdkLayerTested=$false;pedStoredPointerSdkTested=$false;completePedReady=$false;completePoolsReady=$false;nativeRepairQualified=$false;pedPhysicsPolicySdkTested=$false
+    completeCGameReady=$false;fullMtaReady=$false;nativePedPhysicsSdkLayerTested=$false;pedStoredPointerSdkTested=$false;completePedReady=$false;completePoolsReady=$false;nativeRepairQualified=$false;pedPhysicsPolicySdkTested=$false;pedPhysicsScalarForwardingSdkTested=$false
 }
 
 function Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
@@ -81,7 +81,7 @@ function InterfaceMethods([string]$RelativePath) {
 
 try {
     $productionSources = @('Client/game_de/CPedVitalsDE.cpp','Client/game_de/CPedMetadataDE.cpp','Client/game_de/CPedMutationDE.cpp','Client/game_de/CPedPhysicsDE.cpp')
-    $sourceNames = $productionSources + @('Client/game_de/CPedVitalsDE.h','Client/game_de/CPedMetadataDE.h','Client/game_de/CPedMutationDE.h','Client/game_de/NativePedMutationAccess.h','Client/game_de/CPedPhysicsDE.h','Client/game_de/NativePedObservationAccess.h','Client/game_de/NativePedTransformReader.h','Client/sdk/game/CEntityPhysicsState.h','Shared/sdk/CMatrix.h','Client/game_de/NativePedVelocityAccess.h','Client/game_de/NativePedMetadataAccess.h','Client/game_de/NativePedVitalsAccess.h',
+    $sourceNames = $productionSources + @('Client/game_de/CPedVitalsDE.h','Client/game_de/CPedMetadataDE.h','Client/game_de/CPedMutationDE.h','Client/game_de/NativePedMutationAccess.h','Client/game_de/NativePedPhysicalScalarsAccess.h','Client/game_de/CPedPhysicsDE.h','Client/game_de/NativePedObservationAccess.h','Client/game_de/NativePedTransformReader.h','Client/sdk/game/CEntityPhysicsState.h','Shared/sdk/CMatrix.h','Client/game_de/NativePedVelocityAccess.h','Client/game_de/NativePedMetadataAccess.h','Client/game_de/NativePedVitalsAccess.h',
         'Client/game_de/NativePedReferenceToken.h','Client/game_de/NativePedPoolReader.h','Client/game_de/NativePedPoolProfile.h',
         'Client/sdk/game/CPed.h','Client/sdk/game/CPhysical.h','Client/sdk/game/CEntity.h','Client/sdk/game/CPedIK.h',
         'Client/sdk/game/CWeaponInfo.h','Client/sdk/game/CPedSound.h','Client/sdk/game/Common.h','Client/sdk/game/CPoolSlotPolicy.h',
@@ -91,7 +91,7 @@ try {
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
     })
-    $provided = @('GetHealth','SetHealth','GetArmor','SetArmor','GetModelIndex','GetEntityType','SetMoveSpeed','SetTurnSpeed','GetStoredPointer','SetStoredPointer','GetPosition','GetMatrix','GetMoveSpeed','GetTurnSpeed')
+    $provided = @('GetHealth','SetHealth','GetArmor','SetArmor','GetModelIndex','GetEntityType','SetMoveSpeed','SetTurnSpeed','GetStoredPointer','SetStoredPointer','GetPosition','GetMatrix','GetMoveSpeed','GetTurnSpeed','GetMass','SetMass','GetTurnMass','SetTurnMass')
     $declaration = [IO.File]::ReadAllText((Join-Path $taskRoot 'Client/game_de/CPedVitalsDE.h')) + [IO.File]::ReadAllText((Join-Path $taskRoot 'Client/game_de/CPedMetadataDE.h')) + [IO.File]::ReadAllText((Join-Path $taskRoot 'Client/game_de/CPedMutationDE.h')) + [IO.File]::ReadAllText((Join-Path $taskRoot 'Client/game_de/CPedPhysicsDE.h'))
     foreach ($method in $provided) {
         if ($declaration -notmatch ('\b'+$method+'\s*\([^;{}]*\)\s*(?:const\s*)?(?:noexcept\s*)?override\s*;')) {
@@ -112,8 +112,8 @@ try {
     $lines = @('#pragma once','#pragma warning(push)','#pragma warning(disable : 4100)','namespace fixture {',
         ('inline constexpr unsigned RejectingMethods = {0};' -f $pedMethods.Count),
         'class PedPhysicsFixture final : public mta::game_de::CPedPhysicsDE { public:',
-        'PedPhysicsFixture(mta::game_de::NativePedVitalsAccess& vitals,mta::game_de::NativePedMetadataAccess& metadata,mta::game_de::NativePedMutationAccess& mutation,const mta::game_de::NativePedReferenceToken& token) noexcept : CPedPhysicsDE(vitals,metadata,mutation,DefaultObservation(),token) {}',
-        'PedPhysicsFixture(mta::game_de::NativePedVitalsAccess& vitals,mta::game_de::NativePedMetadataAccess& metadata,mta::game_de::NativePedMutationAccess& mutation,mta::game_de::NativePedObservationAccess& observation,const mta::game_de::NativePedReferenceToken& token,RepairFunction callback,void* opaque) noexcept : CPedPhysicsDE(vitals,metadata,mutation,observation,token),repair(callback),context(opaque) {}',
+        'PedPhysicsFixture(mta::game_de::NativePedVitalsAccess& vitals,mta::game_de::NativePedMetadataAccess& metadata,mta::game_de::NativePedMutationAccess& mutation,const mta::game_de::NativePedReferenceToken& token,mta::game_de::NativePedPhysicalScalarsAccess* scalars=nullptr) noexcept : CPedPhysicsDE(vitals,metadata,mutation,DefaultObservation(),token,scalars) {}',
+        'PedPhysicsFixture(mta::game_de::NativePedVitalsAccess& vitals,mta::game_de::NativePedMetadataAccess& metadata,mta::game_de::NativePedMutationAccess& mutation,mta::game_de::NativePedObservationAccess& observation,const mta::game_de::NativePedReferenceToken& token,RepairFunction callback,void* opaque,mta::game_de::NativePedPhysicalScalarsAccess* scalars=nullptr) noexcept : CPedPhysicsDE(vitals,metadata,mutation,observation,token,scalars),repair(callback),context(opaque) {}',
         'mta::game_de::ClockResult RepairLastGoodPhysicsState(const CMatrix& matrix) noexcept override { return repair ? repair(context,matrix) : mta::game_de::ClockResult::NotInitialized; }')
     $lines += @($pedMethods | ForEach-Object { $_.signature + ' override { Unqualified(); }' })
     $lines += @('private: RepairFunction repair=nullptr; void* context=nullptr;','};','}','#pragma warning(pop)')
@@ -163,7 +163,8 @@ try {
     $record.nativePedPhysicsSdkLayerTested = $record.success
     $record.pedStoredPointerSdkTested = $record.success -and [IO.File]::ReadAllText($record.result.test.stdout).Contains('Production MTA ped stored pointer SDK fixture completed')
     $record.pedPhysicsPolicySdkTested = $record.success -and [IO.File]::ReadAllText($record.result.test.stdout).Contains('Production abstract ped physics SDK policy fixture completed')
-    $record.success = $record.success -and $record.pedStoredPointerSdkTested -and $record.pedPhysicsPolicySdkTested
+    $record.pedPhysicsScalarForwardingSdkTested = $record.success -and [IO.File]::ReadAllText($record.result.test.stdout).Contains('Production ped physics scalar-owner forwarding SDK fixture completed')
+    $record.success = $record.success -and $record.pedStoredPointerSdkTested -and $record.pedPhysicsPolicySdkTested -and $record.pedPhysicsScalarForwardingSdkTested
     if (-not $record.success) { throw 'Actual abstract CPed physics SDK checks failed or summary evidence was missing.' }
 } catch { AddFailure ($_.Exception.ToString()) }
 finally {

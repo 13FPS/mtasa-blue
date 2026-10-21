@@ -141,6 +141,31 @@ namespace
     class RefusingMutationOwner final : public NativePedMutationAccess
     {
     };
+    class PhysicalScalarsOwner final : public NativePedPhysicalScalarsAccess
+    {
+    public:
+        NativePedReferenceToken      token;
+        NativePedPhysicalScalarField field = NativePedPhysicalScalarField::Mass;
+        ClockResult                  result = ClockResult::Ok;
+        std::uint32_t                supplied = 0, bits = 0;
+        unsigned                     reads = 0, writes = 0;
+        ClockResult ReadPedPhysicalScalar(const NativePedReferenceToken& requested, NativePedPhysicalScalarField selected, float& output) noexcept override
+        {
+            ++reads;
+            token = requested;
+            field = selected;
+            std::memcpy(&output, &supplied, sizeof(output));
+            return result;
+        }
+        ClockResult SetPedPhysicalScalar(const NativePedReferenceToken& requested, NativePedPhysicalScalarField selected, float value) noexcept override
+        {
+            ++writes;
+            token = requested;
+            field = selected;
+            std::memcpy(&bits, &value, sizeof(bits));
+            return result;
+        }
+    };
 }
 
 int main()
@@ -158,13 +183,14 @@ int main()
     token.version = 0x123456789;
     token.ownerGeneration = 0xfedcba987;
     token.slot = 23;
-    const auto    original = token;
-    Owner         owner;
-    MetadataOwner metadata;
-    MutationOwner mutation;
-    int           clientIdentity = 0x1234, replacementIdentity = 0x5678;
+    const auto           original = token;
+    Owner                owner;
+    MetadataOwner        metadata;
+    MutationOwner        mutation;
+    PhysicalScalarsOwner scalars;
+    int                  clientIdentity = 0x1234, replacementIdentity = 0x5678;
     {
-        fixture::PedMutationFixture instance(owner, metadata, mutation, token);
+        fixture::PedMutationFixture instance(owner, metadata, mutation, token, &scalars);
         CPed&                       ped = instance;
         const CPed&                 constant = instance;
         CEntity&                    clientEntity = instance;
@@ -229,6 +255,25 @@ int main()
         const std::array<std::uint32_t, 7> values{0, 0x80000000, 0x3f800001, 0xc0200000, 0x7fc01234, 0xffc07654, 0x7f800000};
         for (const auto bits : values)
         {
+            scalars.supplied = bits;
+            auto scalarCalls = scalars.reads;
+            Check(Bits(ped.GetMass()) == bits && scalars.reads == scalarCalls + 1 && scalars.field == NativePedPhysicalScalarField::Mass &&
+                      SameToken(scalars.token, original),
+                  "actual inherited mass getter preserves raw owner float bits through the same immutable registered token");
+            scalarCalls = scalars.reads;
+            Check(Bits(ped.GetTurnMass()) == bits && scalars.reads == scalarCalls + 1 && scalars.field == NativePedPhysicalScalarField::TurnMass &&
+                      SameToken(scalars.token, original),
+                  "actual turn-mass getter selects the separate qualified native scalar without arithmetic");
+            scalarCalls = scalars.writes;
+            ped.SetMass(Float(bits));
+            Check(scalars.writes == scalarCalls + 1 && scalars.bits == bits && scalars.field == NativePedPhysicalScalarField::Mass &&
+                      SameToken(scalars.token, original),
+                  "actual mass setter forwards one raw native intent without clamping or snapshot repair");
+            scalarCalls = scalars.writes;
+            ped.SetTurnMass(Float(bits));
+            Check(scalars.writes == scalarCalls + 1 && scalars.bits == bits && scalars.field == NativePedPhysicalScalarField::TurnMass &&
+                      SameToken(scalars.token, original),
+                  "actual turn-mass setter preserves NaN payloads and signed zero through the typed owner");
             owner.supplied = bits;
             auto calls = owner.reads;
             Check(Bits(constant.GetHealth()) == bits && owner.reads == calls + 1 && owner.field == NativePedVitalField::Health &&
@@ -258,6 +303,19 @@ int main()
             Refuses([&] { ped.GetEntityType(); }, "every entity-type owner refusal throws instead of manufacturing an enum");
             Check(metadata.reads == metadataReads + 1 && SameToken(metadata.token, original), "failed type read is attempted once without retry");
             owner.result = static_cast<ClockResult>(value);
+            scalars.result = static_cast<ClockResult>(value);
+            auto scalarReads = scalars.reads;
+            Refuses([&] { ped.GetMass(); }, "every explicit mass owner refusal throws instead of manufacturing a float");
+            Check(scalars.reads == scalarReads + 1, "failed mass observation is attempted once without retry");
+            scalarReads = scalars.reads;
+            Refuses([&] { ped.GetTurnMass(); }, "every explicit turn-mass owner refusal throws");
+            Check(scalars.reads == scalarReads + 1, "failed turn-mass observation is attempted once");
+            auto scalarWrites = scalars.writes;
+            Refuses([&] { ped.SetMass(Float(0x7fc01234)); }, "every explicit mass setter refusal remains an observable SDK failure");
+            Check(scalars.writes == scalarWrites + 1 && scalars.bits == 0x7fc01234, "failed mass intent preserves raw arguments without retry");
+            scalarWrites = scalars.writes;
+            Refuses([&] { ped.SetTurnMass(Float(0x80000000)); }, "every explicit turn-mass setter refusal remains observable");
+            Check(scalars.writes == scalarWrites + 1 && scalars.bits == 0x80000000, "failed turn-mass intent preserves signed zero without replay");
             mutation.result = static_cast<ClockResult>(value);
             mutationCalls = mutation.writes;
             ped.SetMoveSpeed(speed);
@@ -297,11 +355,14 @@ int main()
     }
     Check(clientIdentity == 0x1234 && replacementIdentity == 0x5678, "SDK destruction never dereferences, deletes or rewrites client pointees");
     const auto reads = owner.reads, writes = owner.writes, metadataReads = metadata.reads, mutationWrites = mutation.writes;
+    const auto scalarReads = scalars.reads, scalarWrites = scalars.writes;
     {
-        fixture::PedMutationFixture unused(owner, metadata, mutation, original);
+        fixture::PedMutationFixture unused(owner, metadata, mutation, original, &scalars);
     }
     Check(owner.reads == reads && owner.writes == writes && metadata.reads == metadataReads && mutation.writes == mutationWrites,
           "SDK construction and destruction perform no native registration, cleanup or field operation");
+    Check(scalars.reads == scalarReads && scalars.writes == scalarWrites,
+          "optional scalar-owner lifetime is borrowed without constructor/destructor native work");
     RefusingOwner               refusing;
     RefusingMetadataOwner       refusingMetadata;
     RefusingMutationOwner       refusingMutation;
@@ -310,6 +371,10 @@ int main()
     Refuses([&] { unavailable.GetArmor(); }, "default optional owner explicitly refuses armour access");
     Refuses([&] { unavailable.SetHealth(1); }, "default optional owner explicitly refuses health mutation");
     Refuses([&] { unavailable.SetArmor(1); }, "default optional owner explicitly refuses armour mutation");
+    Refuses([&] { unavailable.GetMass(); }, "missing optional scalar owner explicitly refuses mass instead of returning a cached default");
+    Refuses([&] { unavailable.GetTurnMass(); }, "missing optional scalar owner explicitly refuses turn mass");
+    Refuses([&] { unavailable.SetMass(1); }, "missing optional scalar owner explicitly refuses mass mutation");
+    Refuses([&] { unavailable.SetTurnMass(1); }, "missing optional scalar owner explicitly refuses turn-mass mutation");
     Refuses([&] { unavailable.GetModelIndex(); }, "default metadata owner explicitly refuses the model field");
     Refuses([&] { unavailable.GetEntityType(); }, "default metadata owner explicitly refuses the entity type");
     const CVector zero(0, 0, 0);
@@ -319,5 +384,6 @@ int main()
     CVector angular(1, 2, 3);
     Refuses([&] { unavailable.SetTurnSpeed(&angular); }, "default angular owner refuses explicitly");
     std::puts("Production MTA ped stored pointer SDK fixture completed");
+    std::puts("Production MTA ped physical scalar SDK fixture completed");
     std::printf("Passed %u actual CPed mutation SDK checks (%zu-bit)\n", checks, sizeof(void*) * 8);
 }

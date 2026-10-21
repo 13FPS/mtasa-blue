@@ -32,6 +32,7 @@
 #include "NativePedVelocityMemory.h"
 #include "NativePedReferenceController.h"
 #include "NativePedVitalsMemory.h"
+#include "NativePedPhysicalScalarsMemory.h"
 #include "NativePedMetadataMemory.h"
 #include "NativeStartGameCalls.h"
 #include "NativeUObjectMembershipAccess.h"
@@ -119,6 +120,8 @@ namespace mta::game_de
             ClockResult ReadPedVital(const NativePedReferenceToken&, NativePedVitalField, float&) noexcept override;
             ClockResult SetPedVital(const NativePedReferenceToken&, NativePedVitalField, float) noexcept override;
             ClockResult ReadPedMetadata(const NativePedReferenceToken&, NativePedMetadata&) noexcept override;
+            ClockResult ReadPedPhysicalScalar(const NativePedReferenceToken&, NativePedPhysicalScalarField, float&) noexcept override;
+            ClockResult SetPedPhysicalScalar(const NativePedReferenceToken&, NativePedPhysicalScalarField, float) noexcept override;
             ClockResult SetReferencedPedVelocity(const NativePedReferenceToken&, NativePedVelocityKind, const CVector&) noexcept override;
             ClockResult ReadReferencedPedTransform(const NativePedReferenceToken&, NativePedTransformReader::Value&) noexcept override;
             ClockResult BorrowReferencedPedPosition(const NativePedReferenceToken&, CVector*&) noexcept override;
@@ -2195,6 +2198,49 @@ namespace mta::game_de
             return ClockResult::Ok;
         }
 
+        ClockResult NativeAccess::ReadPedPhysicalScalar(const NativePedReferenceToken& token, NativePedPhysicalScalarField field, float& output) noexcept
+        {
+            NativePedPoolReader::Value before, after;
+            auto                       result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            float next;
+            result = NativePedPhysicalScalarsMemory({runtime.image}, &CheckTimingOwner).Read(before, field, next);
+            if (result != ClockResult::Ok)
+                return result;
+            result = ResolvePedReference(token, after);
+            if (result != ClockResult::Ok)
+                return result;
+            if (after.nativePed != before.nativePed || after.handle != before.handle)
+                return ClockResult::OwnerConflict;
+            // The SDK reads raw physical values, including unusual float bits.
+            // Publish only after the same registered lifetime survives; this
+            // neither evaluates force nor repairs a physics row on observation.
+            std::memcpy(&output, &next, sizeof(next));
+            return ClockResult::Ok;
+        }
+
+        ClockResult NativeAccess::SetPedPhysicalScalar(const NativePedReferenceToken& token, NativePedPhysicalScalarField field, float value) noexcept
+        {
+            NativePedPoolReader::Value before, after;
+            auto                       result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedPhysicalScalarsMemory::Receipt receipt;
+            result = NativePedPhysicalScalarsMemory({runtime.image}, &CheckTimingOwner).Set(before, field, value, &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = ResolvePedReference(token, after);
+                if (result == ClockResult::Ok && (after.nativePed != before.nativePed || after.handle != before.handle))
+                    result = ClockResult::OwnerConflict;
+            }
+            // Preserve an accepted mass/turn-mass effect even when its final
+            // acknowledgement loses the ped lifetime. End retires the owner;
+            // retry or rollback could overwrite a later native physics update.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
         ClockResult NativeAccess::ReadPedMetadata(const NativePedReferenceToken& token, NativePedMetadata& output) noexcept
         {
             auto result = CheckTimingOwner();

@@ -190,6 +190,13 @@ hook. Complete placement, world/actor refresh and collision reset must be
 qualified before a concrete ped can supply that hook. Placement setters and
 the classic teleport wrapper remain incomplete; no ped factory is published.
 
+The same registered owner supplies the existing physical mass and turn-mass
+SDK getters/setters. Independent native force and torque consumers establish
+the fields and their raw units. Each scalar mutation touches one binary32
+field, preserves neighbouring physics/vitals state, and retains an accepted
+effect if acknowledgement fails. Optional borrowed-owner forwarding reaches
+the shared getter layer; an absent owner explicitly refuses these methods.
+
 Classic pool templates and the DE ped reader also share MTA's slot bounds
 policy. Free-slot selection retains the classic cursor/probe order and does
 not reserve a row or change its generation. Native allocation remains with

@@ -28,6 +28,8 @@
 #include "../../Client/game_de/NativePedReferenceProfile.h"
 #include "../../Client/game_de/NativePedReferenceController.h"
 #include "../../Client/game_de/NativePedVitalsMemory.h"
+#include "../../Client/game_de/NativePedPhysicalScalarsMemory.h"
+#include "../../Client/game_de/NativePedPhysicalScalarsProfile.h"
 #include "../../Client/game_de/NativePedVitalsProfile.h"
 #include "../../Client/game_de/NativePedMetadataMemory.h"
 #include "../../Client/game_de/NativePedMetadataProfile.h"
@@ -226,6 +228,31 @@ namespace ClockPedObservationOwnerTest
             ++invalidations;
         }
         return result;
+    }
+}
+namespace ClockPedPhysicalScalarsOwnerTest
+{
+    unsigned       stores = 0;
+    std::uintptr_t cell = 0;
+    bool           loseToken = false;
+    bool           Exchange(std::uintptr_t address, std::uint32_t expected, std::uint32_t target, std::uint32_t& observed, std::uint32_t&) noexcept
+    {
+        ++stores;
+        LONG compare = 0, desired = 0;
+        std::memcpy(&compare, &expected, sizeof(compare));
+        std::memcpy(&desired, &target, sizeof(desired));
+        const auto previous = _InterlockedCompareExchange(reinterpret_cast<volatile LONG*>(address), desired, compare);
+        std::memcpy(&observed, &previous, sizeof(observed));
+        if (loseToken && observed == expected)
+        {
+            loseToken = false;
+            // The real scalar store succeeded. Clearing only its native weak
+            // word tests the Runtime's independent token acknowledgement; the
+            // node still names the cell, so no storage may be released yet.
+            const std::uintptr_t zero = 0;
+            std::memcpy(reinterpret_cast<void*>(cell), &zero, sizeof(zero));
+        }
+        return true;
     }
 }
 namespace ClockPedVelocityOwnerTest
@@ -945,6 +972,9 @@ namespace mta::game_de::NativeImageAccess
 #endif
 #define InterlockedCompareExchange ClockPedVitalsOwnerTest::Exchange
 #include "../../Client/game_de/NativePedVitalsMemory.cpp"
+#define MTA_DE_PED_PHYSICAL_SCALARS_EXCHANGE ClockPedPhysicalScalarsOwnerTest::Exchange
+#include "../../Client/game_de/NativePedPhysicalScalarsMemory.cpp"
+#undef MTA_DE_PED_PHYSICAL_SCALARS_EXCHANGE
 #pragma pop_macro("InterlockedCompareExchange")
 #undef GetModuleHandleW
 
@@ -5597,6 +5627,7 @@ namespace
 #include "NativePedReferenceOwnerTests.inl"
 #include "NativePedMutationOwnerTests.inl"
 #include "NativePedVitalsOwnerTests.inl"
+#include "NativePedPhysicalScalarsOwnerTests.inl"
 #include "NativePedMetadataOwnerTests.inl"
 #include "NativePedObservationOwnerTests.inl"
 #include "NativeWorldCheatOwnerTests.inl"
@@ -5635,6 +5666,7 @@ int main(int argc, char** argv)
     NativePedReferenceOwnedSdk(fixture);
     NativePedMutationOwnedSdk(fixture);
     NativePedVitalsOwnedSdk(fixture);
+    NativePedPhysicalScalarsOwnedSdk(fixture);
     NativePedMetadataOwnedSdk(fixture);
     NativePedObservationOwnedSdk(fixture);
     NativeReadSetAndRestoration(fixture);

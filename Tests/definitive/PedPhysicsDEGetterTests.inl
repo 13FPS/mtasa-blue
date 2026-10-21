@@ -94,6 +94,109 @@ namespace
         }
     };
 
+    class PhysicsScalarOwner final : public NativePedPhysicalScalarsAccess
+    {
+    public:
+        NativePedReferenceToken      token;
+        NativePedPhysicalScalarField field = NativePedPhysicalScalarField::Mass;
+        float                        supplied = 0;
+        std::uint32_t                written = 0;
+        ClockResult                  result = ClockResult::Ok;
+        unsigned                     reads = 0, writes = 0;
+        ClockResult ReadPedPhysicalScalar(const NativePedReferenceToken& requested, NativePedPhysicalScalarField selected, float& output) noexcept override
+        {
+            ++reads;
+            token = requested;
+            field = selected;
+            output = supplied;
+            return result;
+        }
+        ClockResult SetPedPhysicalScalar(const NativePedReferenceToken& requested, NativePedPhysicalScalarField selected, float value) noexcept override
+        {
+            ++writes;
+            token = requested;
+            field = selected;
+            std::memcpy(&written, &value, sizeof(value));
+            return result;
+        }
+    };
+
+    void RunPhysicsScalarForwardingTests()
+    {
+        Owner                   vitals;
+        MetadataOwner           metadata;
+        MutationOwner           mutation;
+        PhysicsOwner            observation;
+        PhysicsRepair           repair{observation};
+        PhysicsScalarOwner      scalars, secondScalars;
+        NativePedReferenceToken token;
+        token.slot = 81;
+        token.version = 0x1122334455667788;
+        token.ownerGeneration = 0x445566778899;
+        const auto                 expectedToken = token;
+        fixture::PedPhysicsFixture instance(vitals, metadata, mutation, observation, token, &PhysicsRepair::Invoke, &repair, &scalars);
+        CPed&                      ped = instance;
+        CPhysical&                 physical = instance;
+        token.slot = 1;
+        token.version = 2;
+        token.ownerGeneration = 3;
+        Check(!scalars.reads && !scalars.writes, "physics-layer constructor only borrows the optional scalar owner");
+        // This tests the higher layer's actual constructor forwarding and SDK
+        // virtual dispatch. Native scalar admission/clamps belong to the real
+        // owner and its separate primitive fixture, not this host fake.
+        for (std::uint32_t raw : {0u, 0x80000000u, 0x3f800001u, 0xc0200000u, 0x7fc01234u, 0x7f800000u})
+        {
+            scalars.supplied = Float(raw);
+            auto reads = scalars.reads;
+            Check(Bits(physical.GetMass()) == raw && scalars.reads == reads + 1 && scalars.field == NativePedPhysicalScalarField::Mass &&
+                      SameToken(scalars.token, expectedToken),
+                  "physics SDK inherited mass getter reaches its exact borrowed scalar owner and immutable token");
+            reads = scalars.reads;
+            Check(Bits(ped.GetTurnMass()) == raw && scalars.reads == reads + 1 && scalars.field == NativePedPhysicalScalarField::TurnMass,
+                  "physics SDK inherited turn-mass getter preserves typed selection and owner value bits");
+            auto writes = scalars.writes;
+            physical.SetMass(Float(raw));
+            Check(scalars.writes == writes + 1 && scalars.written == raw && scalars.field == NativePedPhysicalScalarField::Mass &&
+                      SameToken(scalars.token, expectedToken),
+                  "physics SDK inherited mass setter forwards raw intent once without replacing the registered token");
+            writes = scalars.writes;
+            ped.SetTurnMass(Float(raw));
+            Check(scalars.writes == writes + 1 && scalars.written == raw && scalars.field == NativePedPhysicalScalarField::TurnMass,
+                  "physics SDK inherited turn-mass setter forwards to the same optional scalar owner");
+        }
+        for (std::uint32_t status = static_cast<std::uint32_t>(ClockResult::InvalidArgument);
+             status <= static_cast<std::uint32_t>(ClockResult::OriginalException); ++status)
+        {
+            scalars.result = static_cast<ClockResult>(status);
+            const auto reads = scalars.reads, writes = scalars.writes;
+            Refuses([&] { physical.GetMass(); }, "inherited physics mass getter reports every actual scalar owner refusal");
+            Refuses([&] { physical.GetTurnMass(); }, "inherited physics turn-mass getter reports every actual scalar owner refusal");
+            Refuses([&] { physical.SetMass(Float(0x80000000)); }, "inherited physics mass setter reports every owner refusal without retry");
+            Refuses([&] { physical.SetTurnMass(Float(0x7fc01234)); }, "inherited physics turn-mass setter reports every owner refusal without retry");
+            Check(scalars.reads == reads + 2 && scalars.writes == writes + 2 && scalars.written == 0x7fc01234 && SameToken(scalars.token, expectedToken),
+                  "scalar failures use the exact higher-layer owner once per intent without a fake repair or successful fallback");
+        }
+        scalars.result = ClockResult::Ok;
+        const auto originalReads = scalars.reads;
+        secondScalars.supplied = 17;
+        fixture::PedPhysicsFixture second(vitals, metadata, mutation, observation, expectedToken, &PhysicsRepair::Invoke, &repair, &secondScalars);
+        Check(second.GetMass() == 17 && secondScalars.reads == 1 && scalars.reads == originalReads,
+              "separate higher SDK instances preserve their exact optional scalar-owner association");
+        fixture::PedPhysicsFixture unavailable(vitals, metadata, mutation, expectedToken);
+        Refuses([&] { unavailable.GetMass(); }, "default absent scalar owner explicitly refuses inherited mass read");
+        Refuses([&] { unavailable.GetTurnMass(); }, "default absent scalar owner explicitly refuses inherited turn-mass read");
+        Refuses([&] { unavailable.SetMass(1); }, "default absent scalar owner explicitly refuses inherited mass write");
+        Refuses([&] { unavailable.SetTurnMass(1); }, "default absent scalar owner explicitly refuses inherited turn-mass write");
+        Check(!observation.positionReads && !observation.matrixReads && !observation.velocityReads && !repair.calls && !mutation.writes,
+              "scalar dispatch and refusals do not invoke unrelated physics observations, velocity setters or native repair");
+        const auto beforeReads = scalars.reads, beforeWrites = scalars.writes;
+        {
+            fixture::PedPhysicsFixture unused(vitals, metadata, mutation, observation, expectedToken, &PhysicsRepair::Invoke, &repair, &scalars);
+        }
+        Check(scalars.reads == beforeReads && scalars.writes == beforeWrites, "higher-layer destruction neither deletes nor uses its borrowed scalar owner");
+        std::puts("Production ped physics scalar-owner forwarding SDK fixture completed");
+    }
+
     void RunPhysicsGetterTests()
     {
         Owner                   vitals;
@@ -247,6 +350,7 @@ namespace
         Refuses([&] { unavailable.GetMatrix(&matrix); }, "default observation owner refuses a copied matrix");
         Refuses([&] { unavailable.GetMoveSpeed(&output); }, "default observation owner refuses linear velocity");
         Refuses([&] { unavailable.GetTurnSpeed(&output); }, "default observation owner refuses angular velocity");
+        RunPhysicsScalarForwardingTests();
         std::puts("Production abstract ped physics SDK policy fixture completed");
     }
 }

@@ -9,6 +9,35 @@
 
 namespace mta::game_de
 {
+    float CPedMutationDE::ReadPhysicalScalar(NativePedPhysicalScalarField field, const char* operation) const
+    {
+        float      value = 0;
+        const auto result = physicalScalars ? physicalScalars->ReadPedPhysicalScalar(ReferenceToken(), field, value) : ClockResult::NotInitialized;
+        Require(result, operation);
+        return value;
+    }
+    void CPedMutationDE::WritePhysicalScalar(NativePedPhysicalScalarField field, float value, const char* operation)
+    {
+        // Classic mass setters copy a raw float; native admission and honest
+        // persistent partial effects belong to the same registered-token owner.
+        Require(physicalScalars ? physicalScalars->SetPedPhysicalScalar(ReferenceToken(), field, value) : ClockResult::NotInitialized, operation);
+    }
+    float CPedMutationDE::GetMass()
+    {
+        return ReadPhysicalScalar(NativePedPhysicalScalarField::Mass, "GetMass");
+    }
+    void CPedMutationDE::SetMass(float mass)
+    {
+        WritePhysicalScalar(NativePedPhysicalScalarField::Mass, mass, "SetMass");
+    }
+    float CPedMutationDE::GetTurnMass()
+    {
+        return ReadPhysicalScalar(NativePedPhysicalScalarField::TurnMass, "GetTurnMass");
+    }
+    void CPedMutationDE::SetTurnMass(float mass)
+    {
+        WritePhysicalScalar(NativePedPhysicalScalarField::TurnMass, mass, "SetTurnMass");
+    }
     void* CPedMutationDE::GetStoredPointer()
     {
         return storedPointer;

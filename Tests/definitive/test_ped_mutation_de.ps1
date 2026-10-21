@@ -20,9 +20,9 @@ $record = [ordered]@{
     schema='mta_ped_mutation_de_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     generatedFixture=$null;result=$null;failure=$null;scratchDirectory=$scratchRoot;scratchRemoved=$false;
-    scope='Actual CPedMutationDE linear/angular setters and six inherited metadata/vitals methods through one immutable registered CPU token and typed borrowed owners. The actual local-model startup stored-pointer association preserves classic per-instance CPU semantics without a native lease or ownership transfer. Noexcept linear writes record their real status; explicit Try reports it, angular null/refused intents throw, and no failed intent is retried. Every other inherited real SDK method is generated as a test-only rejecting override. Raw float bits, exact field/token forwarding, default and explicit refusal, and no retry/cleanup are covered. No native memory or engine function executes.';
+    scope='Actual CPedMutationDE linear/angular setters and six inherited metadata/vitals methods through one immutable registered CPU token and typed borrowed owners. The actual local-model startup stored-pointer association preserves classic per-instance CPU semantics without a native lease or ownership transfer. Noexcept linear writes record their real status; explicit Try reports it, angular null/refused intents throw, and no failed intent is retried. Four actual mass/turn-mass SDK methods additionally borrow an optional typed registered-token owner, preserving raw bits and explicitly refusing when absent. Every other inherited real SDK method is generated as a test-only rejecting override. Raw float bits, exact field/token forwarding, default and explicit refusal, and no retry/cleanup are covered. No native memory or engine function executes.';
     nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;installationChanged=$false;
-    completeCGameReady=$false;fullMtaReady=$false;nativePedMutationSdkLayerTested=$false;pedStoredPointerSdkTested=$false;completePedReady=$false;completePoolsReady=$false
+    completeCGameReady=$false;fullMtaReady=$false;nativePedMutationSdkLayerTested=$false;pedStoredPointerSdkTested=$false;pedPhysicalScalarsSdkTested=$false;completePedReady=$false;completePoolsReady=$false
 }
 
 function Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
@@ -81,7 +81,7 @@ function InterfaceMethods([string]$RelativePath) {
 
 try {
     $productionSources = @('Client/game_de/CPedVitalsDE.cpp','Client/game_de/CPedMetadataDE.cpp','Client/game_de/CPedMutationDE.cpp')
-    $sourceNames = $productionSources + @('Client/game_de/CPedVitalsDE.h','Client/game_de/CPedMetadataDE.h','Client/game_de/CPedMutationDE.h','Client/game_de/NativePedMutationAccess.h','Client/game_de/NativePedVelocityAccess.h','Client/game_de/NativePedMetadataAccess.h','Client/game_de/NativePedVitalsAccess.h',
+    $sourceNames = $productionSources + @('Client/game_de/CPedVitalsDE.h','Client/game_de/CPedMetadataDE.h','Client/game_de/CPedMutationDE.h','Client/game_de/NativePedMutationAccess.h','Client/game_de/NativePedPhysicalScalarsAccess.h','Client/game_de/NativePedVelocityAccess.h','Client/game_de/NativePedMetadataAccess.h','Client/game_de/NativePedVitalsAccess.h',
         'Client/game_de/NativePedReferenceToken.h','Client/game_de/NativePedPoolReader.h','Client/game_de/NativePedPoolProfile.h',
         'Client/sdk/game/CPed.h','Client/sdk/game/CPhysical.h','Client/sdk/game/CEntity.h','Client/sdk/game/CPedIK.h',
         'Client/sdk/game/CWeaponInfo.h','Client/sdk/game/CPedSound.h','Client/sdk/game/Common.h','Client/sdk/game/CPoolSlotPolicy.h',
@@ -91,7 +91,7 @@ try {
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
     })
-    $provided = @('GetHealth','SetHealth','GetArmor','SetArmor','GetModelIndex','GetEntityType','SetMoveSpeed','SetTurnSpeed','GetStoredPointer','SetStoredPointer')
+    $provided = @('GetHealth','SetHealth','GetArmor','SetArmor','GetModelIndex','GetEntityType','SetMoveSpeed','SetTurnSpeed','GetStoredPointer','SetStoredPointer','GetMass','SetMass','GetTurnMass','SetTurnMass')
     $declaration = [IO.File]::ReadAllText((Join-Path $taskRoot 'Client/game_de/CPedVitalsDE.h')) + [IO.File]::ReadAllText((Join-Path $taskRoot 'Client/game_de/CPedMetadataDE.h')) + [IO.File]::ReadAllText((Join-Path $taskRoot 'Client/game_de/CPedMutationDE.h'))
     foreach ($method in $provided) {
         if ($declaration -notmatch ('\b'+$method+'\s*\([^;{}]*\)\s*(?:const\s*)?(?:noexcept\s*)?override\s*;')) {
@@ -112,7 +112,7 @@ try {
     $lines = @('#pragma once','#pragma warning(push)','#pragma warning(disable : 4100)','namespace fixture {',
         ('inline constexpr unsigned RejectingMethods = {0};' -f $pedMethods.Count),
         'class PedMutationFixture final : public mta::game_de::CPedMutationDE { public:',
-        'PedMutationFixture(mta::game_de::NativePedVitalsAccess& vitals,mta::game_de::NativePedMetadataAccess& metadata,mta::game_de::NativePedMutationAccess& mutation,const mta::game_de::NativePedReferenceToken& token) noexcept : CPedMutationDE(vitals,metadata,mutation,token) {}')
+        'PedMutationFixture(mta::game_de::NativePedVitalsAccess& vitals,mta::game_de::NativePedMetadataAccess& metadata,mta::game_de::NativePedMutationAccess& mutation,const mta::game_de::NativePedReferenceToken& token,mta::game_de::NativePedPhysicalScalarsAccess* scalars=nullptr) noexcept : CPedMutationDE(vitals,metadata,mutation,token,scalars) {}')
     $lines += @($pedMethods | ForEach-Object { $_.signature + ' override { Unqualified(); }' })
     $lines += @('};','}','#pragma warning(pop)')
     $lines | Set-Content -LiteralPath $generated -Encoding utf8NoBOM
@@ -161,6 +161,8 @@ try {
     $record.nativePedMutationSdkLayerTested = $record.success
     $record.pedStoredPointerSdkTested = $record.success -and [IO.File]::ReadAllText($record.result.test.stdout).Contains('Production MTA ped stored pointer SDK fixture completed')
     $record.success = $record.success -and $record.pedStoredPointerSdkTested
+    $record.pedPhysicalScalarsSdkTested = $record.success -and [IO.File]::ReadAllText($record.result.test.stdout).Contains('Production MTA ped physical scalar SDK fixture completed')
+    $record.success = $record.success -and $record.pedPhysicalScalarsSdkTested
     if (-not $record.success) { throw 'Actual CPed metadata SDK checks failed or summary evidence was missing.' }
 } catch { AddFailure ($_.Exception.ToString()) }
 finally {

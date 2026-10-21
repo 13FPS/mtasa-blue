@@ -23,8 +23,8 @@ namespace mta::game_de
 
     protected:
         CPedPhysicsDE(NativePedVitalsAccess& vitals, NativePedMetadataAccess& metadata, NativePedMutationAccess& mutation,
-                      NativePedObservationAccess& observation, const NativePedReferenceToken& token) noexcept
-            : CPedMutationDE(vitals, metadata, mutation, token), observation(observation)
+                      NativePedObservationAccess& observation, const NativePedReferenceToken& token, NativePedPhysicalScalarsAccess* scalars = nullptr) noexcept
+            : CPedMutationDE(vitals, metadata, mutation, token, scalars), observation(observation)
         {
         }
         // Required order: genuine SetMatrix/SetPosition placement + world/RW

@@ -80,15 +80,18 @@ function InterfaceMethods([string]$RelativePath) {
 }
 
 try {
-    $productionSources = @('Client/game_de/CGameDE.cpp','Client/game_de/CGameTimingDE.cpp','Client/game_de/CClockDE.cpp',
+    $productionSources = @('Client/game_de/CGameDE.cpp','Client/game_de/CGameTimingDE.cpp','Client/game_de/CGameWeaponInfoDE.cpp','Client/game_de/CClockDE.cpp',
         'Client/game_de/CKeyGenDE.cpp','Client/game_de/CAsyncLoadingDE.cpp','Client/game_de/NativeGameTimingReader.cpp',
         'Client/game_de/NativeGameTimeReader.cpp','Client/game_de/NativeStreamingFileIdsReader.cpp',
-        'Client/game_de/NativeGameStateReader.cpp','Client/game_de/NativeGameStateMemory.cpp','Client/game_de/NativeDataFileNamesReader.cpp','Client/game_de/NativeImageAccess.cpp')
-    $sourceNames = $productionSources + @('Client/game_de/CGameDE.h','Client/game_de/CGameTimingDE.h','Client/game_de/CClockDE.h',
+        'Client/game_de/NativeGameStateReader.cpp','Client/game_de/NativeGameStateMemory.cpp','Client/game_de/NativeDataFileNamesReader.cpp','Client/game_de/NativeImageAccess.cpp',
+        'Client/game_de/NativeCheatProfile.cpp')
+    $sourceNames = $productionSources + @('Client/game_de/CGameDE.h','Client/game_de/CGameTimingDE.h','Client/game_de/CGameWeaponInfoDE.h','Client/sdk/game/CWeaponInfoIndexPolicy.h','Client/game_de/CClockDE.h',
         'Client/game_de/CKeyGenDE.h','Client/game_de/CAsyncLoadingDE.h','Client/game_de/NativeGameTimingReader.h',
         'Client/game_de/NativeGameTimeReader.h','Client/game_de/NativeStreamingFileIdsReader.h','Client/game_de/NativeGameStateReader.h',
         'Client/game_de/NativeGameStateMemory.h','Client/game_de/NativeDataFileNamesReader.h','Client/game_de/NativeDataFileNamesProfile.h','Shared/sdk/SharedUtil.Defines.h',
         'Client/game_de/NativeGameTimingAccess.h','Client/game_de/NativeImageAccess.h','Client/game_de/NativeClockMemory.h',
+        'Client/game_de/CWeatherTransitionDE.h','Client/sdk/game/CWeather.h',
+        'Client/game_de/NativeCheatProfile.h','Client/game_de/NativeCheatFlagAccess.h',
         'Client/game_de/NativeClockProfile.h','Client/game_de/NativeGameTimingProfile.h','Client/game_de/NativeGameFPSProfile.h',
         'Client/game_de/NativeStreamingFileIdsProfile.h','Client/game_de/NativeGameStateProfile.h','Client/game_de/NativeFrontendMenuProfile.h',
         'Shared/sdk/CAsyncLoadingPolicy.h','Shared/sdk/CJetpackWeaponPolicy.h','Client/sdk/game/CGame.h','Client/sdk/game/CPools.h','Client/sdk/game/Common.h',
@@ -98,13 +101,13 @@ try {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
     })
     $provided = @()
-    foreach ($header in @('Client/game_de/CGameDE.h','Client/game_de/CGameTimingDE.h')) {
+    foreach ($header in @('Client/game_de/CGameDE.h','Client/game_de/CGameTimingDE.h','Client/game_de/CGameWeaponInfoDE.h')) {
         $text = [IO.File]::ReadAllText((Join-Path $taskRoot $header))
         $provided += @([regex]::Matches($text,'(?<name>\w+)\s*\([^;{}]*\)\s*(?:const\s*)?(?:noexcept\s*)?override\s*;') |
             ForEach-Object { $_.Groups['name'].Value })
     }
     $testedMethods = @('GetCheckStatus','OnPedContextChange','GetPedContext','SetPreWeaponFireHandler','SetPostWeaponFireHandler','SetTaskSimpleBeHitHandler',
-        'SetJetpackWeaponEnabled','GetJetpackWeaponEnabled','SetSystemState','VerifySADataFileNames')
+        'SetJetpackWeaponEnabled','GetJetpackWeaponEnabled','SetSystemState','VerifySADataFileNames','IsCheatEnabled','SetCheatEnabled')
     foreach ($method in $testedMethods) { if ($provided -notcontains $method) { throw "Production SDK override is missing: $method" } }
     $gameMethods = @(InterfaceMethods 'Client/sdk/game/CGame.h' | Where-Object { $_.name -ne 'GetPools' -and $provided -notcontains $_.name })
     $poolMethods = @(InterfaceMethods 'Client/sdk/game/CPools.h' | Where-Object { $_.name -ne 'GetPedFromRef' })

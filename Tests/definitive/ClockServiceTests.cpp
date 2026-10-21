@@ -8,6 +8,8 @@
 #include "../../Client/game_de/NativeGameTimingProfile.h"
 #include "../../Client/game_de/NativeGameFPSProfile.h"
 #include "../../Client/game_de/NativeGameStateProfile.h"
+#include "../../Client/game_de/NativeCheatProfile.h"
+#include "../../Client/game_de/NativeWeatherTransitionProfile.h"
 #include "../../Client/game_de/NativeServiceAdmission.h"
 #include <array>
 #include <cstdio>
@@ -25,19 +27,33 @@
 
 namespace ClockTestFaults
 {
-    std::atomic<unsigned> partialDataWrites{0}, failFlushes{0}, protectionCountdown{0};
-    std::atomic<bool>     failEnumeration{false}, failProtectionRestores{false};
-    std::atomic<unsigned> failResumes{0};
-    std::atomic<unsigned> clockDataWrites{0}, clockCodeExchanges{0};
-    std::atomic<unsigned> partialTimingWrites{0}, failTimingWrites{0}, timingDataWrites{0};
-    std::uintptr_t        timingWriteAddress = 0;
-    std::atomic<DWORD>    resumeTarget{0};
-    std::uintptr_t        patchAddress = 0, dataAddress = 0;
-    std::uintptr_t        uiReadAddress = 0, uiRootChangeAddress = 0;
-    std::atomic<bool>     failUiRead{false};
+    std::atomic<unsigned>         partialDataWrites{0}, failFlushes{0}, protectionCountdown{0};
+    std::atomic<bool>             failEnumeration{false}, failProtectionRestores{false};
+    std::atomic<unsigned>         failResumes{0};
+    std::atomic<unsigned>         clockDataWrites{0}, clockCodeExchanges{0};
+    std::atomic<unsigned>         partialTimingWrites{0}, failTimingWrites{0}, timingDataWrites{0};
+    std::uintptr_t                timingWriteAddress = 0;
+    std::atomic<DWORD>            resumeTarget{0};
+    std::uintptr_t                patchAddress = 0, dataAddress = 0;
+    std::uintptr_t                uiReadAddress = 0, uiRootChangeAddress = 0;
+    std::atomic<bool>             failUiRead{false};
+    std::uintptr_t                cheatWriteAddress = 0;
+    std::atomic<bool>             advanceCheatBeforeAtomic{false}, failCheatReadback{false}, failNextCheatRead{false};
+    std::uintptr_t                weatherFailAddress = 0, weatherRollbackAddress = 0;
+    std::atomic<bool>             failWeatherPair{false};
+    std::array<std::uintptr_t, 2> weatherProtectedPages{};
+    std::array<DWORD, 2>          weatherOldProtections{};
+    std::size_t                   weatherProtectedCount = 0;
 
     BOOL WINAPI Read(HANDLE process, LPCVOID address, LPVOID output, SIZE_T bytes, SIZE_T* copied)
     {
+        if (reinterpret_cast<std::uintptr_t>(address) == cheatWriteAddress && bytes == 1 && failNextCheatRead.exchange(false))
+        {
+            if (copied)
+                *copied = 0;
+            SetLastError(ERROR_PARTIAL_COPY);
+            return FALSE;
+        }
         if (reinterpret_cast<std::uintptr_t>(address) == uiReadAddress && failUiRead.exchange(false))
         {
             if (copied)
@@ -99,6 +115,42 @@ namespace ClockTestFaults
         if (reinterpret_cast<std::uintptr_t>(address) == patchAddress)
             clockCodeExchanges.fetch_add(1);
         return ::InterlockedCompareExchange64(address, desired, expected);
+    }
+    char CheatCompareExchange(volatile char* address, char desired, char expected)
+    {
+        if (reinterpret_cast<std::uintptr_t>(address) == cheatWriteAddress && advanceCheatBeforeAtomic.exchange(false))
+            ::_InterlockedExchange8(address, static_cast<char>(expected ? 0 : 1));
+        const auto observed = ::_InterlockedCompareExchange8(address, desired, expected);
+        if (reinterpret_cast<std::uintptr_t>(address) == cheatWriteAddress && failCheatReadback.exchange(false))
+            failNextCheatRead.store(true);
+        return observed;
+    }
+    void WeatherProtectionRace(std::uintptr_t address)
+    {
+        if (address != weatherFailAddress || !failWeatherPair.exchange(false))
+            return;
+        weatherProtectedCount = 0;
+        for (const auto target : {weatherFailAddress, weatherRollbackAddress})
+        {
+            const auto page = target & ~std::uintptr_t{0xfff};
+            if (weatherProtectedCount && weatherProtectedPages[0] == page)
+                continue;
+            DWORD prior = 0;
+            if (!::VirtualProtect(reinterpret_cast<void*>(page), 0x1000, PAGE_READONLY, &prior))
+                std::abort();
+            weatherProtectedPages[weatherProtectedCount] = page;
+            weatherOldProtections[weatherProtectedCount++] = prior;
+        }
+    }
+    short WeatherCompareExchange16(volatile short* address, short desired, short expected)
+    {
+        WeatherProtectionRace(reinterpret_cast<std::uintptr_t>(address));
+        return ::_InterlockedCompareExchange16(address, desired, expected);
+    }
+    LONG WeatherCompareExchange32(volatile LONG* address, LONG desired, LONG expected)
+    {
+        WeatherProtectionRace(reinterpret_cast<std::uintptr_t>(address));
+        return ::_InterlockedCompareExchange(address, desired, expected);
     }
     BOOL WINAPI Protect(LPVOID address, SIZE_T size, DWORD protection, PDWORD previous)
     {
@@ -162,7 +214,16 @@ namespace ClockTestFaults
     #undef InterlockedCompareExchange64
 #endif
 #define InterlockedCompareExchange64 ClockTestFaults::CompareExchange
+#pragma push_macro("_InterlockedCompareExchange8")
+#define _InterlockedCompareExchange8 ClockTestFaults::CheatCompareExchange
+#pragma push_macro("_InterlockedCompareExchange16")
+#pragma push_macro("_InterlockedCompareExchange")
+#define _InterlockedCompareExchange16 ClockTestFaults::WeatherCompareExchange16
+#define _InterlockedCompareExchange   ClockTestFaults::WeatherCompareExchange32
 #include "../../Client/game_de/NativeClockService.cpp"
+#pragma pop_macro("_InterlockedCompareExchange")
+#pragma pop_macro("_InterlockedCompareExchange16")
+#pragma pop_macro("_InterlockedCompareExchange8")
 #undef InterlockedCompareExchange64
 #undef ResumeThread
 #undef Thread32Next
@@ -250,6 +311,16 @@ namespace mta::game_de::NativeImageAccess
 #define ReadImage SystemStateFixtureReadImage
 #include "../../Client/game_de/NativeGameStateMemory.cpp"
 #undef ReadImage
+
+// Qualify the complete production cheat profile against the owned image while
+// retaining its real PE sections, pages, instruction/alias and table checks.
+// Public clock Begin still uses its unchanged shipping executable identity.
+#define CheckExecutableBuild ClockReaderFixtureExecutable
+#define GetModuleHandleW     ClockReaderTestHost::Module
+#include "../../Client/game_de/NativeCheatProfile.cpp"
+#include "../../Client/game_de/NativeWeatherTransitionProfile.cpp"
+#undef GetModuleHandleW
+#undef CheckExecutableBuild
 
 namespace mta::game_de::GameTimeReaderFixtureMemory
 {
@@ -341,7 +412,7 @@ namespace
             IMAGE_NT_HEADERS64 nt{};
             nt.Signature = IMAGE_NT_SIGNATURE;
             nt.FileHeader.Machine = IMAGE_FILE_MACHINE_AMD64;
-            nt.FileHeader.NumberOfSections = 6;
+            nt.FileHeader.NumberOfSections = 8;
             nt.FileHeader.SizeOfOptionalHeader = sizeof(IMAGE_OPTIONAL_HEADER64);
             nt.FileHeader.Characteristics = IMAGE_FILE_EXECUTABLE_IMAGE | IMAGE_FILE_LARGE_ADDRESS_AWARE;
             nt.OptionalHeader.Magic = IMAGE_NT_OPTIONAL_HDR64_MAGIC;
@@ -360,7 +431,7 @@ namespace
             nt.OptionalHeader.SizeOfStackCommit = nt.OptionalHeader.SizeOfHeapCommit = 0x1000;
             nt.OptionalHeader.NumberOfRvaAndSizes = IMAGE_NUMBEROF_DIRECTORY_ENTRIES;
             std::memcpy(bytes.data() + dos.e_lfanew, &nt, sizeof(nt));
-            std::array<IMAGE_SECTION_HEADER, 6> sections{};
+            std::array<IMAGE_SECTION_HEADER, 8> sections{};
             // A Windows image section table must describe adjacent virtual
             // ranges. Sparse zero-filled sections preserve the actual native
             // RVAs without leaving loader-invalid gaps or a huge raw file.
@@ -373,24 +444,31 @@ namespace
             };
             zeroSection(0, ".head", 0x1000, TextRva - 0x1000);
             zeroSection(2, ".late", TextRva + TextSize, 0x1400000 - TextRva - TextSize);
-            zeroSection(3, ".gap", 0x1400000, DataRva - 0x1400000);
-            zeroSection(5, ".tail", DataRva + DataSize, nt.OptionalHeader.SizeOfImage - DataRva - DataSize);
+            // The real flag array needs an independent writable image section.
+            // Keep every registration literal and dispatch slot in immutable
+            // sections instead of weakening their policy to admit this page.
+            constexpr std::uint32_t cheatPageRva = static_cast<std::uint32_t>(NativeCheatProfile::FlagsRva & ~std::uintptr_t{0xfff});
+            zeroSection(3, ".gap", 0x1400000, cheatPageRva - 0x1400000);
+            zeroSection(4, ".cheats", cheatPageRva, 0x1000);
+            zeroSection(5, ".gap2", cheatPageRva + 0x1000, DataRva - cheatPageRva - 0x1000);
+            zeroSection(7, ".tail", DataRva + DataSize, nt.OptionalHeader.SizeOfImage - DataRva - DataSize);
             // Only bounded admitted pages gain executable/writable protection
             // below. These virtual-section flags also describe the earlier
             // application caller and later root/state fields to the real gate.
             sections[0].Characteristics |= IMAGE_SCN_MEM_EXECUTE;
             sections[2].Characteristics |= IMAGE_SCN_MEM_EXECUTE;
-            sections[5].Characteristics |= IMAGE_SCN_MEM_WRITE;
+            sections[4].Characteristics |= IMAGE_SCN_MEM_WRITE;
+            sections[7].Characteristics |= IMAGE_SCN_MEM_WRITE;
             std::memcpy(sections[1].Name, ".text", 5);
             sections[1].VirtualAddress = TextRva;
             sections[1].Misc.VirtualSize = sections[1].SizeOfRawData = TextSize;
             sections[1].PointerToRawData = 0x1000;
             sections[1].Characteristics = IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE;
-            std::memcpy(sections[4].Name, ".data", 5);
-            sections[4].VirtualAddress = DataRva;
-            sections[4].Misc.VirtualSize = sections[4].SizeOfRawData = DataSize;
-            sections[4].PointerToRawData = 0x1000 + TextSize;
-            sections[4].Characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE;
+            std::memcpy(sections[6].Name, ".data", 5);
+            sections[6].VirtualAddress = DataRva;
+            sections[6].Misc.VirtualSize = sections[6].SizeOfRawData = DataSize;
+            sections[6].PointerToRawData = 0x1000 + TextSize;
+            sections[6].Characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE;
             std::memcpy(bytes.data() + dos.e_lfanew + sizeof(nt), sections.data(), sizeof(sections));
             const auto code = [&](std::uintptr_t rva, const auto& data) { std::memcpy(bytes.data() + 0x1000 + rva - TextRva, data.data(), data.size()); };
             code(NativeClockProfile::clockCodeRva, NativeClockProfile::clockCode);
@@ -499,6 +577,58 @@ namespace
             admit(NativeGameFPSProfile::averageMsRva, values.data(), sizeof(values), PAGE_READWRITE);
             admit(NativeGameFPSProfile::previousSecondsRva, &previousSeconds, sizeof(previousSeconds), PAGE_READWRITE);
             admit(NativeGameFPSProfile::secondsPerCycleRva, &secondsPerCycle, sizeof(secondsPerCycle), PAGE_READWRITE);
+        }
+        void AdmitCheatPins()
+        {
+            const auto admit = [&](std::uintptr_t rva, const void* bytes, std::size_t size, DWORD protection)
+            {
+                DWORD previous = 0, ignored = 0;
+                Check(::VirtualProtect(reinterpret_cast<void*>(image + rva), size, PAGE_READWRITE, &previous) != FALSE,
+                      "initialize only the owned cheat profile's bounded image pages");
+                std::memcpy(reinterpret_cast<void*>(image + rva), bytes, size);
+                Check(::VirtualProtect(reinterpret_cast<void*>(image + rva), size, protection, &ignored) != FALSE &&
+                          ::FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(image + rva), size),
+                      "restore owned cheat proof code RX, immutable data RO and flag array RW");
+            };
+            for (const auto& pin : NativeCheatProfile::Code)
+                admit(pin.rva, pin.bytes.data(), pin.size, PAGE_EXECUTE_READ);
+            for (const auto& registration : NativeCheatProfile::Registrations)
+            {
+                std::array<unsigned char, 7> instruction{0x4c, 0x8d, 0x05};
+                const auto                   relative = static_cast<std::int32_t>(registration.nameRva - registration.instructionRva - instruction.size());
+                std::memcpy(instruction.data() + 3, &relative, sizeof(relative));
+                admit(registration.instructionRva, instruction.data(), instruction.size(), PAGE_EXECUTE_READ);
+                admit(registration.nameRva, registration.name, std::strlen(registration.name) + 1, PAGE_READONLY);
+            }
+            std::array<unsigned char, NativeCheatProfile::NativeFlagCount> flags;
+            flags.fill(0xa5);
+            for (const auto& member : NativeCheatProfile::Members)
+            {
+                const std::uint64_t absent = 0;
+                admit(NativeCheatProfile::DispatchTableRva + member.nativeIndex * sizeof(absent), &absent, sizeof(absent), PAGE_READONLY);
+                flags[member.nativeIndex] = 0;
+            }
+            admit(NativeCheatProfile::FlagsRva, flags.data(), flags.size(), PAGE_READWRITE);
+        }
+        void AdmitWeatherPins()
+        {
+            for (const auto& pin : NativeWeatherTransitionProfile::Code)
+                Patch(pin.rva, pin.bytes.data(), pin.size);
+            SeedWeatherFields();
+        }
+        void SeedWeatherFields()
+        {
+            constexpr std::array<std::uint32_t, 5> values{1, 2, 3, 1000, 0x3f000000};
+            for (std::size_t index = 0; index < values.size(); ++index)
+            {
+                const auto& field = NativeWeatherTransitionProfile::Fields[index];
+                DWORD       prior = 0, ignored = 0;
+                Check(::VirtualProtect(reinterpret_cast<void*>(image + field.rva), field.size, PAGE_READWRITE, &prior) != FALSE,
+                      "admit only the owned weather transition field page");
+                std::memcpy(reinterpret_cast<void*>(image + field.rva), &values[index], field.size);
+                Check(::VirtualProtect(reinterpret_cast<void*>(image + field.rva), field.size, PAGE_READWRITE, &ignored) != FALSE,
+                      "weather fixture uses readable writable non-executable image data");
+            }
         }
         void AdmitSystemStatePins()
         {
@@ -2101,6 +2231,359 @@ namespace
         std::puts("Production native CGame system-state owner fixture completed");
     }
 
+    struct CheatFlagContext
+    {
+        NativeCheatProfile::Flag flag = NativeCheatProfile::Flag::HoverCars;
+        unsigned                 calls = 0, operations = 3, refusal = 0;
+        bool                     value = false, output = true;
+        ClockResult              readResult = ClockResult::NotInitialized, writeResult = ClockResult::NotInitialized;
+    };
+
+    void CheatFlagHandler(NativeGameTimingAccess& access, void* opaque)
+    {
+        auto& context = *static_cast<CheatFlagContext*>(opaque);
+        ++context.calls;
+        Check(callbackDepth == 1 && timingTimerScope && timingCallbackGeneration == runtime.generation.load() && runtime.timerReady.load() &&
+                  runtime.engineThread.load() == GetCurrentThreadId(),
+              "four-flag access uses the actual admitted post-original timer handler");
+        const auto generation = timingCallbackGeneration;
+        const auto admission = runtime.admissionGeneration.load();
+        const auto refreshed = runtime.refreshed.load();
+        if (context.refusal == 1)
+            timingCallbackGeneration = generation + 1;
+        if (context.refusal == 2)
+            runtime.admissionGeneration.store(admission + 1);
+        if (context.refusal == 3)
+            ++callbackDepth;
+        if (context.refusal == 4)
+            runtime.refreshed.store(GetTickCount64() - ClockServiceLeaseMsV1 - 1);
+        if (context.operations & 1)
+            context.readResult = access.ReadCheatFlag(context.flag, context.output);
+        if (context.operations & 2)
+            context.writeResult = access.SetCheatFlag(context.flag, context.value);
+        runtime.refreshed.store(refreshed);
+        if (context.refusal == 3)
+            --callbackDepth;
+        runtime.admissionGeneration.store(admission);
+        timingCallbackGeneration = generation;
+    }
+
+    void NativeCheatFlagOwnedAccess(ClockImageFixture& fixture)
+    {
+        namespace Cheats = NativeCheatProfile;
+        fixture.AdmitCheatPins();
+        ClockReaderTestHost::image = fixture.image;
+        bool outside = true;
+        Check(runtime.access.ReadCheatFlag(Cheats::Flag::HoverCars, outside) == ClockResult::NotInitialized && outside &&
+                  runtime.access.SetCheatFlag(Cheats::Flag::HoverCars, true) == ClockResult::NotInitialized,
+              "an unbound owner cannot read or mutate native cheat flags merely because their image profile is available");
+        NativeClockService service;
+        CheatFlagContext   context;
+        BeginOwned(service, fixture, false, true, true, &CheatFlagHandler, &context);
+        for (std::size_t index = 0; index < Cheats::Members.size(); ++index)
+        {
+            context.flag = static_cast<Cheats::Flag>(index);
+            context.operations = 1;
+            context.output = true;
+            fixture.invokeTimer();
+            Check(context.readResult == ClockResult::Ok && !context.output,
+                  "each genuine SDK flag reads its initially clear native byte from the real callback");
+            context.operations = 2;
+            context.value = true;
+            fixture.invokeTimer();
+            Check(context.writeResult == ClockResult::Ok && fixture.Get<unsigned char>(Cheats::FlagsRva + Cheats::Members[index].nativeIndex) == 1,
+                  "the actual engine owner sets each independently qualified one-byte cheat property");
+            fixture.invokeTimer();
+            Check(context.writeResult == ClockResult::Ok, "repeated native cheat intent is an explicit idempotent success");
+            context.operations = 1;
+            context.output = false;
+            fixture.invokeTimer();
+            Check(context.readResult == ClockResult::Ok && context.output, "each set flag is read fresh through the same actual owner");
+        }
+        context.flag = Cheats::Flag::HoverCars;
+        context.operations = 3;
+        context.value = false;
+        outside = false;
+        Check(runtime.access.ReadCheatFlag(context.flag, outside) != ClockResult::Ok && !outside &&
+                  runtime.access.SetCheatFlag(context.flag, false) != ClockResult::Ok,
+              "a producer on the adopted thread cannot borrow cheat access outside its native callback");
+        bool        foreignRefused = false;
+        std::thread foreign(
+            [&]
+            {
+                bool value = false;
+                foreignRefused = runtime.access.ReadCheatFlag(context.flag, value) != ClockResult::Ok && !value &&
+                                 runtime.access.SetCheatFlag(context.flag, false) != ClockResult::Ok;
+            });
+        foreign.join();
+        Check(foreignRefused, "a foreign producer cannot borrow the active native flag owner or publish a guessed read");
+        for (unsigned refusal = 1; refusal <= 4; ++refusal)
+        {
+            context.refusal = refusal;
+            context.output = false;
+            fixture.invokeTimer();
+            const auto expected = refusal <= 2 ? ClockResult::OwnerConflict : refusal == 3 ? ClockResult::WrongThread : ClockResult::Expired;
+            Check(context.readResult == expected && context.writeResult == expected && !context.output &&
+                      fixture.Get<unsigned char>(Cheats::FlagsRva + Cheats::Members[0].nativeIndex) == 1,
+                  "generation, admission, nesting and expiry guards preserve the native flag and caller read output");
+        }
+        context.refusal = 0;
+        context.flag = static_cast<Cheats::Flag>(255);
+        context.output = false;
+        fixture.invokeTimer();
+        Check(context.readResult == ClockResult::InvalidArgument && context.writeResult == ClockResult::InvalidArgument && !context.output,
+              "unknown flag identifiers refuse before native reads or writes");
+        context.flag = Cheats::Flag::HoverCars;
+        const auto& registration = Cheats::Registrations[0];
+        const char  changed = '?';
+        fixture.Patch(registration.nameRva, &changed, 1);
+        fixture.invokeTimer();
+        Check(context.readResult == ClockResult::BindingChanged && context.writeResult == ClockResult::BindingChanged && !context.output &&
+                  fixture.Get<unsigned char>(Cheats::FlagsRva + Cheats::Members[0].nativeIndex) == 1,
+              "both native access paths require the real alias and dispatch profile after existing exact-build admission");
+        fixture.Patch(registration.nameRva, registration.name, 1);
+        ClockTestFaults::cheatWriteAddress = fixture.image + Cheats::FlagsRva + Cheats::Members[0].nativeIndex;
+        context.operations = 1;
+        ClockTestFaults::failNextCheatRead.store(true);
+        fixture.invokeTimer();
+        Check(context.readResult == ClockResult::ReadFailure && !context.output && !ClockTestFaults::failNextCheatRead.load(),
+              "a real guarded OS-copy failure preserves caller output rather than publishing false cheat state");
+        context.operations = 2;
+        context.value = true;
+        ClockTestFaults::advanceCheatBeforeAtomic.store(true);
+        fixture.invokeTimer();
+        Check(context.writeResult == ClockResult::Busy && !ClockTestFaults::advanceCheatBeforeAtomic.load() &&
+                  fixture.Get<unsigned char>(Cheats::FlagsRva + Cheats::Members[0].nativeIndex) == 0,
+              "an intervening native flag change survives the real byte CAS and is reported as a conflict");
+        ClockTestFaults::failCheatReadback.store(true);
+        fixture.invokeTimer();
+        Check(context.writeResult == ClockResult::WriteFailure && !ClockTestFaults::failCheatReadback.load() && !ClockTestFaults::failNextCheatRead.load() &&
+                  fixture.Get<unsigned char>(Cheats::FlagsRva + Cheats::Members[0].nativeIndex) == 1,
+              "an actual committed byte with failed readback remains unconfirmed and cannot be reported as success");
+        Check(!runtime.nativeTouched.load() && !runtime.timingCaptured.load() && !runtime.timingDirty.load() && !runtime.timingRecovery.load(),
+              "persistent flag setters never create temporary clock or timing restoration debt");
+        const auto flagsBeforeEnd = fixture.Get<std::array<unsigned char, Cheats::NativeFlagCount>>(Cheats::FlagsRva);
+        const auto calls = context.calls;
+        if (!service.End())
+        {
+            fixture.invokeTimer();
+            Check(service.End(), "native flag ownership can retire through its existing callback");
+        }
+        const auto flagsAfterEnd = fixture.Get<std::array<unsigned char, Cheats::NativeFlagCount>>(Cheats::FlagsRva);
+        Check(!service.IsRetained() && !runtime.hooked.load() && !runtime.timerHooked.load() && !runtime.timingHandler && !runtime.timingContext &&
+                  context.calls == calls && flagsAfterEnd == flagsBeforeEnd && !NativeServiceAdmission::IsClaimed(NativeServiceAdmission::Category::Clock),
+              "End retires hooks and authority without rewinding persistent native cheat properties or foreign edits");
+        bool expectedArray = true;
+        for (std::size_t index = 0; index < flagsAfterEnd.size(); ++index)
+        {
+            bool member = false;
+            for (const auto& selected : Cheats::Members)
+                member = member || selected.nativeIndex == index;
+            expectedArray = expectedArray && flagsAfterEnd[index] == (member ? 1 : 0xa5);
+        }
+        Check(expectedArray, "four native property setters preserve every unrelated cheat byte instead of calling the native whole-registry reset");
+        ClockTestFaults::cheatWriteAddress = 0;
+        ClockReaderTestHost::image = 0;
+        std::puts("Production native four-cheat-flag owner fixture completed");
+    }
+
+    struct WeatherContext
+    {
+        unsigned      calls = 0, operation = 1, refusal = 0;
+        std::uint8_t  primary = 21, secondary = 22;
+        std::uint16_t output = 0xabcd;
+        ClockResult   result = ClockResult::NotInitialized;
+    };
+
+    void WeatherHandler(NativeGameTimingAccess& access, void* opaque)
+    {
+        auto& context = *static_cast<WeatherContext*>(opaque);
+        ++context.calls;
+        Check(callbackDepth == 1 && timingTimerScope && timingCallbackGeneration == runtime.generation.load() && runtime.timerReady.load() &&
+                  runtime.engineThread.load() == GetCurrentThreadId(),
+              "weather access is dispatched by the actual qualified post-original timer owner");
+        const auto generation = timingCallbackGeneration;
+        const auto admission = runtime.admissionGeneration.load();
+        const auto refreshed = runtime.refreshed.load();
+        if (context.refusal == 1)
+            timingCallbackGeneration = generation + 1;
+        if (context.refusal == 2)
+            runtime.admissionGeneration.store(admission + 1);
+        if (context.refusal == 3)
+            ++callbackDepth;
+        if (context.refusal == 4)
+            runtime.refreshed.store(GetTickCount64() - ClockServiceLeaseMsV1 - 1);
+        if (context.operation == 1)
+            context.result = access.ReadForced(context.output);
+        if (context.operation == 2)
+            context.result = access.SetTypes(context.primary, context.secondary);
+        if (context.operation == 3)
+            context.result = access.ResyncWithClock();
+        if (context.operation == 4)
+            context.result = access.ReleaseForced();
+        runtime.refreshed.store(refreshed);
+        if (context.refusal == 3)
+            --callbackDepth;
+        runtime.admissionGeneration.store(admission);
+        timingCallbackGeneration = generation;
+    }
+
+    void NativeWeatherOwnedTransactions(ClockImageFixture& fixture)
+    {
+        namespace Weather = NativeWeatherTransitionProfile;
+        using Field = Weather::Field;
+        fixture.AdmitWeatherPins();
+        ClockReaderTestHost::image = fixture.image;
+        const auto field = [&](Field selected)
+        {
+            const auto& info = Weather::Fields[static_cast<std::size_t>(selected)];
+            return info.size == 2 ? fixture.Get<std::uint16_t>(info.rva) : fixture.Get<std::uint32_t>(info.rva);
+        };
+        const auto snapshot = [&]
+        {
+            std::array<std::uint32_t, Weather::Fields.size()> result{};
+            for (std::size_t index = 0; index < result.size(); ++index)
+                result[index] = field(static_cast<Field>(index));
+            return result;
+        };
+        {
+            std::uint16_t outside = 0xabcd;
+            Check(runtime.access.ReadForced(outside) == ClockResult::NotInitialized && outside == 0xabcd &&
+                      runtime.access.SetTypes(21, 22) == ClockResult::NotInitialized && runtime.access.ResyncWithClock() == ClockResult::NotInitialized &&
+                      runtime.access.ReleaseForced() == ClockResult::NotInitialized,
+                  "weather image qualification cannot grant reads or any setter to an unbound producer");
+            NativeClockService service;
+            WeatherContext     context;
+            BeginOwned(service, fixture, false, true, true, &WeatherHandler, &context);
+            const auto invoke = [&]
+            {
+                Check(service.Renew(runtime.generation.load()), "the producer renews only its actual weather callback generation");
+                fixture.invokeTimer();
+            };
+            invoke();
+            Check(context.result == ClockResult::Ok && context.output == 3, "the actual weather owner reads the independently qualified forced WORD");
+            context.operation = 2;
+            invoke();
+            Check(context.result == ClockResult::Ok && field(Field::OldType) == 21 && field(Field::NewType) == 22 && field(Field::ForcedType) == 3,
+                  "both upper valid native weather types are written without calling force-now or changing forced weather");
+            const auto valid = snapshot();
+            for (const auto invalid : {std::uint8_t{23}, std::uint8_t{255}})
+            {
+                context.primary = invalid;
+                invoke();
+                Check(context.result == ClockResult::InvalidArgument && snapshot() == valid && !runtime.weatherRecovery.load(),
+                      "weather values outside the native 23-column domain refuse without mutation or recovery debt");
+            }
+            context.primary = 21;
+            context.operation = 3;
+            invoke();
+            Check(context.result == ClockResult::Ok && field(Field::PreviousClockSeconds) == 34 * 60 + 27 && field(Field::InterpolationBits) == 0 &&
+                      field(Field::OldType) == 21 && field(Field::NewType) == 22,
+                  "weather interpolation resync uses the current native minute and low seconds byte while preserving selected types");
+            context.operation = 4;
+            invoke();
+            Check(context.result == ClockResult::Ok && field(Field::ForcedType) == 0xffff && field(Field::OldType) == 21 && field(Field::NewType) == 22,
+                  "Release writes the full native signed-WORD sentinel instead of a classic byte or force-now side effects");
+            const auto persistent = snapshot();
+            outside = 0xabcd;
+            Check(runtime.access.ReadForced(outside) != ClockResult::Ok && outside == 0xabcd && runtime.access.SetTypes(1, 2) != ClockResult::Ok &&
+                      runtime.access.ResyncWithClock() != ClockResult::Ok && runtime.access.ReleaseForced() != ClockResult::Ok && snapshot() == persistent,
+                  "the matching producer OS thread cannot borrow weather authority between natural callbacks");
+            bool        foreignRefused = false;
+            std::thread foreign(
+                [&]
+                {
+                    std::uint16_t value = 0xabcd;
+                    foreignRefused = runtime.access.ReadForced(value) != ClockResult::Ok && value == 0xabcd &&
+                                     runtime.access.SetTypes(1, 2) != ClockResult::Ok && runtime.access.ResyncWithClock() != ClockResult::Ok &&
+                                     runtime.access.ReleaseForced() != ClockResult::Ok;
+                });
+            foreign.join();
+            Check(foreignRefused && snapshot() == persistent, "a foreign thread cannot borrow any of the four native weather operations");
+            for (unsigned refusal = 1; refusal <= 4; ++refusal)
+                for (unsigned operation = 1; operation <= 4; ++operation)
+                {
+                    context.refusal = refusal;
+                    context.operation = operation;
+                    context.output = 0xabcd;
+                    invoke();
+                    const auto expected = refusal <= 2 ? ClockResult::OwnerConflict : refusal == 3 ? ClockResult::WrongThread : ClockResult::Expired;
+                    Check(context.result == expected && context.output == 0xabcd && snapshot() == persistent && !runtime.weatherRecovery.load(),
+                          "all four weather operations reject stale generations, admission mismatch, nesting and expiry without touching fields");
+                }
+            context.refusal = 0;
+            context.operation = 1;
+            const auto& pin = Weather::Code[0];
+            const auto  changed = static_cast<unsigned char>(pin.bytes[0] ^ 1);
+            fixture.Patch(pin.rva, &changed, 1);
+            invoke();
+            Check(context.result == ClockResult::BindingChanged && context.output == 0xabcd && snapshot() == persistent,
+                  "native weather queries require their independent exact live profile on the otherwise valid timing owner");
+            fixture.Patch(pin.rva, pin.bytes.data(), 1);
+            const auto calls = context.calls;
+            if (!service.End())
+            {
+                fixture.invokeTimer();
+                Check(service.End(), "successful persistent weather ownership can retire on its existing callback");
+            }
+            Check(!service.IsRetained() && !runtime.hooked.load() && !runtime.timerHooked.load() && !runtime.weatherRecovery.load() &&
+                      !runtime.weatherGeneration.load() && context.calls == calls && snapshot() == persistent,
+                  "End retains successful weather changes and clears only native lifetime ownership, without a generic weather rewind");
+        }
+        for (const unsigned operation : {2u, 3u})
+        {
+            fixture.SeedWeatherFields();
+            NativeClockService service;
+            WeatherContext     context;
+            context.operation = operation;
+            BeginOwned(service, fixture, false, true, true, &WeatherHandler, &context);
+            const auto first = operation == 2 ? Field::OldType : Field::PreviousClockSeconds;
+            const auto second = operation == 2 ? Field::NewType : Field::InterpolationBits;
+            const auto firstRva = Weather::Fields[static_cast<std::size_t>(first)].rva;
+            ClockTestFaults::weatherRollbackAddress = fixture.image + firstRva;
+            ClockTestFaults::weatherFailAddress = fixture.image + Weather::Fields[static_cast<std::size_t>(second)].rva;
+            ClockTestFaults::failWeatherPair.store(true);
+            fixture.invokeTimer();
+            const auto debt = State(service);
+            Check(context.result == ClockResult::RestoreFailure && !ClockTestFaults::failWeatherPair.load() && runtime.weatherRecovery.load() &&
+                      runtime.weatherGeneration.load() == runtime.generation.load() && runtime.weather.HasPending() && debt.dataRecoveryPending &&
+                      !debt.restored && !debt.ready && debt.failure == ClockResult::RestoreFailure && !service.End() && service.IsRetained() &&
+                      runtime.timerHooked.load() && runtime.timingHandler == &WeatherHandler && runtime.timingContext == &context,
+                  "a failed second weather write and failed first-field rollback retain the actual timer, journal, generation and handler context");
+            for (std::size_t index = 0; index < ClockTestFaults::weatherProtectedCount; ++index)
+            {
+                DWORD ignored = 0;
+                Check(::VirtualProtect(reinterpret_cast<void*>(ClockTestFaults::weatherProtectedPages[index]), 0x1000,
+                                       ClockTestFaults::weatherOldProtections[index], &ignored) != FALSE,
+                      "restore only owned pages changed by the deterministic weather protection race");
+            }
+            const auto          calls = context.calls;
+            const std::uint16_t original = operation == 2 ? 1 : 1000;
+            const auto          generation = runtime.weatherGeneration.load();
+            runtime.weatherGeneration.store(generation + 1);
+            fixture.invokeTimer();
+            Check(runtime.weatherRecovery.load() && runtime.weather.HasPending() && !service.End(),
+                  "a stale weather recovery generation cannot borrow or clear the partial native transaction");
+            runtime.weatherGeneration.store(generation);
+            if (operation == 3)
+                fixture.Put(firstRva, std::uint16_t{1500});
+            fixture.invokeTimer();
+            Check(service.End() && !service.IsRetained() && !runtime.weatherRecovery.load() && !runtime.weatherGeneration.load() &&
+                      !runtime.weather.HasPending() && !runtime.hooked.load() && !runtime.timerHooked.load() && !runtime.timingHandler &&
+                      !runtime.timingContext && !NativeServiceAdmission::IsClaimed(NativeServiceAdmission::Category::Clock) && context.calls == calls &&
+                      field(first) == (operation == 2 ? static_cast<std::uint32_t>(original) : std::uint32_t{1500}),
+                  "only the qualified same-generation callback resolves owned weather debt before hooks, context and admission retire");
+            const auto final = State(service);
+            Check(operation == 2 ? final.restored && !runtime.weatherSuperseded.load()
+                                 : !final.restored && runtime.weatherSuperseded.load() && final.failure == ClockResult::OwnerConflict,
+                  "exact rollback is distinguished from terminal foreign supersession without retaining an owner that has no remaining owned data");
+            ClockTestFaults::weatherFailAddress = ClockTestFaults::weatherRollbackAddress = 0;
+            ClockTestFaults::weatherProtectedCount = 0;
+        }
+        ClockReaderTestHost::image = 0;
+        std::puts("Production native weather transaction owner fixture completed");
+    }
+
     struct ApplicationFrameContext
     {
         unsigned               calls = 0, originalCountAtLastHandler = 0;
@@ -3097,6 +3580,8 @@ int main(int argc, char** argv)
     NativeTimingWritesAndRestoration(fixture);
     NativePauseSafeTimingOwner(fixture);
     NativeSystemStateOwnedWrites(fixture);
+    NativeCheatFlagOwnedAccess(fixture);
+    NativeWeatherOwnedTransactions(fixture);
     NativeReadSetAndRestoration(fixture);
     NativeCoherentCommandPublication(fixture);
     NativeReadOnlyRetirement(fixture);

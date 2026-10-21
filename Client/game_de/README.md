@@ -64,10 +64,38 @@ MTA's existing per-game diagnostic reference, lazy ped context and three typed
 handler registrations also live in `CGameDE`. A missing local context resolves
 through the actual virtual pool service and reference 1; registrations alone do
 not install or dispatch engine hooks. Both game backends share the jetpack weapon
-permission policy. Its storage starts disabled, fixing the classic table's
-uninitialized pre-configuration values while preserving its size and alignment.
+permission policy. Its storage starts disabled, matching the classic factory's
+`ZERO_ON_NEW` allocation and making that initialization explicit for both
+backends while preserving the classic member's size and alignment.
 Map/reset packets continue to select the allowed weapons. The game class remains
 abstract while the remaining native providers are unfinished.
+
+The existing `IsCheatEnabled` and `SetCheatEnabled` SDK methods now cover MTA's
+four settable world properties: `hovercars`, `aircars`, `extrabunny` and
+`extrajump`. Native registrations, the direct-toggle dispatcher and physics
+consumers establish each DE flag independently. Reads and single-byte atomic
+writes borrow the timing owner's admitted engine callback; unknown names return
+false and unavailable native access refuses explicitly. These persistent
+settings are not rewound at timing cleanup. The remaining cheat registry,
+`ResetCheats` and `PerformChecks` are still unfinished.
+
+Classic and DE also share the SDK's weapon-info slot selector: 47 standard
+wrappers and three eleven-slot skill rows. DE's actual `GetWeaponInfo` override
+requires a genuine wrapper provider; it never treats a native data row as a
+`CWeaponInfo`. Invalid requests return null, while an unavailable accepted slot
+refuses explicitly. Native weapon storage and complete wrappers remain separate
+work from this shared selection policy.
+
+`CWeatherTransitionDE` supplies the existing SDK's `Get`, `Set`, `Release` and
+clock-resync methods through that same native callback owner. DE uses WORD
+weather types, a full `0xFFFF` release sentinel and an integer seconds-within-hour
+wrap comparison. The native timecycle loader establishes 23 valid weather
+columns. Paired updates journal only incomplete operations: recovery compares
+the last owned value, preserves later engine edits, and retains the owner while
+potentially owned data remains unresolved. Successful settings persist after
+End. A superseded field retires with `OwnerConflict` and `restored=false` rather
+than claiming that its original value was restored. Scalar overrides remain
+pure, so this is still an incomplete weather provider.
 
 `IsAtMenu` separately observes the real SA interface's managed menu widget and
 the legacy frontend screen count/pending slot. The concrete owner type, native

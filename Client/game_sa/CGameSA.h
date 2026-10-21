@@ -13,6 +13,7 @@
 #include <CAsyncLoadingPolicy.h>
 #include <CJetpackWeaponPolicy.h>
 #include <game/CGame.h>
+#include <game/CWeaponInfoIndexPolicy.h>
 #include <game/RenderWare.h>
 #include "CFxManagerSA.h"
 #include "CModelInfoSA.h"
@@ -41,6 +42,8 @@ extern unsigned int OBJECTDYNAMICINFO_MAX;  // default: 160
 #define NUM_WeaponInfosStdSkill   WEAPONTYPE_LAST_WEAPONTYPE
 #define NUM_WeaponInfosOtherSkill 11
 #define NUM_WeaponInfosTotal      (NUM_WeaponInfosStdSkill + (3 * NUM_WeaponInfosOtherSkill))  // std, (poor, pro, special)
+
+static_assert(NUM_WeaponInfosTotal == MtaGame::CWeaponInfoIndexPolicy::SlotCount);
 
 #define MODELINFO_DFF_MAX 20000
 #define MODELINFO_TXD_MAX 25000
@@ -397,8 +400,8 @@ private:
     std::map<std::string, SCheatSA*> m_Cheats;
 
     using JetpackWeaponPolicy = MtaGame::CJetpackWeaponPolicy<WEAPONTYPE_LAST_WEAPONTYPE, WEAPONTYPE_BRASSKNUCKLE>;
-    // The shared policy initializes previously indeterminate permissions without
-    // changing this classic object's storage footprint or member alignment.
+    // The normal ZERO_ON_NEW factory already clears these permissions. Keep
+    // those defaults explicit without changing storage size or alignment.
     static_assert(sizeof(JetpackWeaponPolicy) == sizeof(SFixedArray<bool, WEAPONTYPE_LAST_WEAPONTYPE>));
     static_assert(alignof(JetpackWeaponPolicy) == alignof(SFixedArray<bool, WEAPONTYPE_LAST_WEAPONTYPE>));
     JetpackWeaponPolicy m_JetpackWeapons;

@@ -10,6 +10,8 @@
 #include "NativeClockMemory.h"
 #include "NativeGameTimingAccess.h"
 #include "NativeGameStateMemory.h"
+#include "NativeCheatFlagAccess.h"
+#include "NativeWeatherTransitionJournal.h"
 #include "NativeGameTimingProfile.h"
 #include "NativeGamePauseProfile.h"
 #include "NativeApplicationFrameProfile.h"
@@ -70,6 +72,12 @@ namespace mta::game_de
             ClockResult SetMinuteDuration(std::uint32_t value) noexcept override;
             ClockResult Pause(bool value) noexcept override;
             ClockResult SetSystemState(SystemState::Enum value) noexcept override;
+            ClockResult ReadCheatFlag(NativeCheatProfile::Flag flag, bool& output) noexcept override;
+            ClockResult SetCheatFlag(NativeCheatProfile::Flag flag, bool value) noexcept override;
+            ClockResult ReadForced(std::uint16_t& output) noexcept override;
+            ClockResult SetTypes(std::uint8_t primary, std::uint8_t secondary) noexcept override;
+            ClockResult ResyncWithClock() noexcept override;
+            ClockResult ReleaseForced() noexcept override;
         };
 
         struct Counters
@@ -104,42 +112,48 @@ namespace mta::game_de
             // trigger the displayed-clock rewind used by a real CClock Set.
             std::atomic<unsigned>      timingCaptured{0}, timingDirty{0}, timingRecovery{0};
             std::atomic<std::uint64_t> timingGeneration{0};
-            float                      originalTimeScale = 0;
-            std::uint32_t              originalMinuteDuration = 0;
-            std::uint8_t               originalUserPause = 0;
-            bool                       timingMode = false;
-            std::atomic<bool>          timerHooked{false}, timerReady{false};
-            GameTimingHandler          timingHandler = nullptr;
-            void*                      timingContext = nullptr;
-            bool                       frameMode = false;
-            std::atomic<bool>          frameHooked{false};
-            ApplicationFrameHandler    frameHandler = nullptr;
-            void*                      frameContext = nullptr;
-            ApplicationFrameFunction   originalFrame = nullptr;
-            std::atomic<unsigned>      inFlight{0};
-            std::atomic<std::uint32_t> retainedPeerThreads{0};
-            std::atomic<DWORD>         engineThread{0};
-            std::atomic<std::uint64_t> generation{0}, refreshed{0}, lastSubmitted{0}, pendingSequence{0};
-            std::atomic<std::uint64_t> admissionGeneration{0}, admissionSerial{0};
-            std::atomic<std::uint64_t> lastCompletedSequence{0};
-            std::atomic<ClockResult>   failure{ClockResult::Ok};
-            std::atomic<ClockResult>   lastCommandResult{ClockResult::NotInitialized};
-            DWORD                      producerThread = 0;
-            std::uintptr_t             image = 0;
-            ULONGLONG                  started = 0;
-            std::uint32_t              maximumDuration = 0;
-            ClockCommandV1             pending;
-            bool                       hasPending = false;
-            ClockValues                original, observed;
-            ClockPublication           publishedClock;
-            ContinuationFunction       originalContinuation = nullptr;
-            ContinuationFunction       originalTimer = nullptr;
-            DWORD                      patchProtection = 0;
-            std::atomic<bool>          protectionPending{false};
-            std::vector<PeerThread>    recoveryPeers;
-            NativeAccess               access;
-            CClockDE                   clock{access};
-            Counters                   counters;
+            // Weather setters persist after success. Only an incomplete
+            // multi-field operation retains rollback debt on this same native
+            // callback owner; producer APIs observe the atomic debt marker.
+            NativeWeatherTransitionJournal weather;
+            std::atomic<bool>              weatherRecovery{false}, weatherSuperseded{false};
+            std::atomic<std::uint64_t>     weatherGeneration{0};
+            float                          originalTimeScale = 0;
+            std::uint32_t                  originalMinuteDuration = 0;
+            std::uint8_t                   originalUserPause = 0;
+            bool                           timingMode = false;
+            std::atomic<bool>              timerHooked{false}, timerReady{false};
+            GameTimingHandler              timingHandler = nullptr;
+            void*                          timingContext = nullptr;
+            bool                           frameMode = false;
+            std::atomic<bool>              frameHooked{false};
+            ApplicationFrameHandler        frameHandler = nullptr;
+            void*                          frameContext = nullptr;
+            ApplicationFrameFunction       originalFrame = nullptr;
+            std::atomic<unsigned>          inFlight{0};
+            std::atomic<std::uint32_t>     retainedPeerThreads{0};
+            std::atomic<DWORD>             engineThread{0};
+            std::atomic<std::uint64_t>     generation{0}, refreshed{0}, lastSubmitted{0}, pendingSequence{0};
+            std::atomic<std::uint64_t>     admissionGeneration{0}, admissionSerial{0};
+            std::atomic<std::uint64_t>     lastCompletedSequence{0};
+            std::atomic<ClockResult>       failure{ClockResult::Ok};
+            std::atomic<ClockResult>       lastCommandResult{ClockResult::NotInitialized};
+            DWORD                          producerThread = 0;
+            std::uintptr_t                 image = 0;
+            ULONGLONG                      started = 0;
+            std::uint32_t                  maximumDuration = 0;
+            ClockCommandV1                 pending;
+            bool                           hasPending = false;
+            ClockValues                    original, observed;
+            ClockPublication               publishedClock;
+            ContinuationFunction           originalContinuation = nullptr;
+            ContinuationFunction           originalTimer = nullptr;
+            DWORD                          patchProtection = 0;
+            std::atomic<bool>              protectionPending{false};
+            std::vector<PeerThread>        recoveryPeers;
+            NativeAccess                   access;
+            CClockDE                       clock{access};
+            Counters                       counters;
         };
 
         // A failed code/data restoration cannot discard its owner on DLL
@@ -924,6 +938,203 @@ namespace mta::game_de
             }
         }
 
+        bool OwnedFieldPages(std::uintptr_t address, std::size_t bytes, bool writable, bool executable) noexcept
+        {
+            // Scalar access borrows this existing owner's image; its
+            // page callback cannot admit an arbitrary writable heap or image.
+            return !executable && Image::ImagePages(runtime.image, address, bytes, writable);
+        }
+
+        ClockResult NativeAccess::ReadCheatFlag(NativeCheatProfile::Flag flag, bool& output) noexcept
+        {
+            if (static_cast<std::size_t>(flag) >= NativeCheatProfile::Members.size())
+                return ClockResult::InvalidArgument;
+            const auto owner = CheckTimingOwner();
+            if (owner != ClockResult::Ok)
+                return owner;
+            // BeginOwner already admitted this generation using the exact
+            // executable hash. Revalidate its live profile here instead of
+            // hashing the entire game file during each native frame query.
+            const NativeCheatProfile::Binding binding{runtime.image, runtime.image + NativeCheatProfile::FlagsRva};
+            if (!NativeCheatProfile::Revalidate(binding))
+                return ClockResult::BindingChanged;
+            bool next = false;
+            if (!NativeCheatFlagAccess(binding, &OwnedFieldPages).Read(flag, next))
+                return ClockResult::ReadFailure;
+            if (!NativeCheatProfile::Revalidate(binding))
+                return ClockResult::BindingChanged;
+            const auto confirmedOwner = CheckTimingOwner();
+            if (confirmedOwner != ClockResult::Ok)
+                return confirmedOwner;
+            output = next;
+            return ClockResult::Ok;
+        }
+
+        ClockResult NativeAccess::SetCheatFlag(NativeCheatProfile::Flag flag, bool value) noexcept
+        {
+            if (static_cast<std::size_t>(flag) >= NativeCheatProfile::Members.size())
+                return ClockResult::InvalidArgument;
+            const auto owner = CheckTimingOwner();
+            if (owner != ClockResult::Ok)
+                return owner;
+            // Reuse the exact-build admission held by this native generation;
+            // only the small live profile needs to be checked per operation.
+            const NativeCheatProfile::Binding binding{runtime.image, runtime.image + NativeCheatProfile::FlagsRva};
+            if (!NativeCheatProfile::Revalidate(binding))
+                return ClockResult::BindingChanged;
+            const NativeCheatFlagAccess access(binding, &OwnedFieldPages);
+            bool                        current = false;
+            if (!access.Read(flag, current))
+                return ClockResult::ReadFailure;
+            if (!NativeCheatProfile::Revalidate(binding))
+                return ClockResult::BindingChanged;
+            const auto confirmedOwner = CheckTimingOwner();
+            if (confirmedOwner != ClockResult::Ok)
+                return confirmedOwner;
+            switch (access.WriteIf(flag, current, value))
+            {
+                case NativeCheatFlagAccess::WriteResult::Conflict:
+                    return ClockResult::Busy;
+                case NativeCheatFlagAccess::WriteResult::Written:
+                case NativeCheatFlagAccess::WriteResult::Unchanged:
+                    break;
+                default:
+                    // Refused access and an unconfirmed readback cannot be
+                    // reported as success. A possible committed byte is kept:
+                    // this is persistent intent, not temporary timing debt.
+                    return ClockResult::WriteFailure;
+            }
+            if (!NativeCheatProfile::Revalidate(binding))
+                return ClockResult::BindingChanged;
+            return CheckTimingOwner();
+        }
+
+        ClockResult RequireWeatherBinding(NativeWeatherTransitionProfile::Binding& output) noexcept
+        {
+            const auto owner = CheckTimingOwner();
+            if (owner != ClockResult::Ok)
+                return owner;
+            if (runtime.weatherRecovery.load() || runtime.weatherGeneration.load())
+                return ClockResult::Busy;
+            // Exact executable admission belongs to BeginOwner. Weather adds
+            // its own live instruction/field-width checks on that same image,
+            // without hashing the game file on every frame-level SDK request.
+            const NativeWeatherTransitionProfile::Binding binding{runtime.image};
+            if (!NativeWeatherTransitionProfile::Revalidate(binding))
+                return ClockResult::BindingChanged;
+            const auto confirmedOwner = CheckTimingOwner();
+            if (confirmedOwner != ClockResult::Ok)
+                return confirmedOwner;
+            output = binding;
+            return ClockResult::Ok;
+        }
+
+        ClockResult NativeAccess::ReadForced(std::uint16_t& output) noexcept
+        {
+            NativeWeatherTransitionProfile::Binding binding;
+            const auto                              owner = RequireWeatherBinding(binding);
+            if (owner != ClockResult::Ok)
+                return owner;
+            const NativeWeatherTransitionMemory memory(binding, &OwnedFieldPages);
+            std::uint16_t                       next = 0;
+            const auto                          result = runtime.weather.ReadForced(memory, next);
+            if (result != ClockResult::Ok)
+                return result;
+            if (!NativeWeatherTransitionProfile::Revalidate(binding))
+                return ClockResult::BindingChanged;
+            const auto confirmedOwner = CheckTimingOwner();
+            if (confirmedOwner != ClockResult::Ok)
+                return confirmedOwner;
+            output = next;
+            return ClockResult::Ok;
+        }
+
+        template <typename Operation>
+        ClockResult MutateWeather(Operation operation) noexcept
+        {
+            NativeWeatherTransitionProfile::Binding binding;
+            const auto                              owner = RequireWeatherBinding(binding);
+            if (owner != ClockResult::Ok)
+                return owner;
+            const NativeWeatherTransitionMemory memory(binding, &OwnedFieldPages);
+            const bool                          previousRestored = runtime.restored.load();
+            // Publish transaction ownership before the first possible write.
+            // Even an interrupted handler must retain its native generation
+            // until a qualified callback has examined the recovery journal.
+            runtime.weatherGeneration.store(timingCallbackGeneration);
+            runtime.weatherRecovery.store(true);
+            runtime.restored.store(false);
+            const auto result = operation(runtime.weather, memory);
+            if (runtime.weather.SupersededCount())
+                runtime.weatherSuperseded.store(true);
+            if (runtime.weather.HasPending())
+            {
+                Stop(ClockResult::RestoreFailure);
+                return ClockResult::RestoreFailure;
+            }
+            runtime.weatherGeneration.store(0);
+            runtime.weatherRecovery.store(false);
+            runtime.restored.store(previousRestored);
+            if (runtime.weatherSuperseded.load())
+            {
+                // A later engine value superseded part of the failed SDK
+                // transaction. It stays intact, and retirement must report
+                // ownership loss instead of claiming the originals returned.
+                runtime.failure.store(ClockResult::OwnerConflict);
+                Stop(ClockResult::OwnerConflict);
+                return ClockResult::OwnerConflict;
+            }
+            if (result != ClockResult::Ok)
+                return result;
+            // Confirmed setters are persistent SDK intent. They clear only
+            // their incomplete-operation journal, never add End-time rewind.
+            if (!NativeWeatherTransitionProfile::Revalidate(binding))
+                return ClockResult::BindingChanged;
+            return CheckTimingOwner();
+        }
+
+        ClockResult NativeAccess::SetTypes(std::uint8_t primary, std::uint8_t secondary) noexcept
+        {
+            return MutateWeather([=](NativeWeatherTransitionJournal& journal, const NativeWeatherTransitionMemory& memory) noexcept
+                                 { return journal.SetTypes(memory, primary, secondary); });
+        }
+
+        ClockResult NativeAccess::ResyncWithClock() noexcept
+        {
+            return MutateWeather([](NativeWeatherTransitionJournal& journal, const NativeWeatherTransitionMemory& memory) noexcept
+                                 { return journal.ResyncWithClock(memory); });
+        }
+
+        ClockResult NativeAccess::ReleaseForced() noexcept
+        {
+            return MutateWeather([](NativeWeatherTransitionJournal& journal, const NativeWeatherTransitionMemory& memory) noexcept
+                                 { return journal.ReleaseForced(memory); });
+        }
+
+        bool RecoverWeather() noexcept
+        {
+            if (!runtime.weatherRecovery.load() && !runtime.weatherGeneration.load())
+                return true;
+            const auto generation = runtime.generation.load();
+            if (callbackDepth != 1 || GetCurrentThreadId() != runtime.engineThread.load() || !timingCallbackGeneration ||
+                timingCallbackGeneration != generation || runtime.weatherGeneration.load() != generation || runtime.admissionGeneration.load() != generation ||
+                !runtime.admissionSerial.load())
+                return false;
+            const NativeWeatherTransitionProfile::Binding binding{runtime.image};
+            if (!NativeWeatherTransitionProfile::Revalidate(binding))
+                return false;
+            const auto result = runtime.weather.Recover(NativeWeatherTransitionMemory(binding, &OwnedFieldPages));
+            if (runtime.weather.SupersededCount())
+                runtime.weatherSuperseded.store(true);
+            if (runtime.weather.HasPending() || (result != ClockResult::Ok && result != ClockResult::OwnerConflict))
+                return false;
+            if (runtime.weatherSuperseded.load())
+                runtime.failure.store(ClockResult::OwnerConflict);
+            runtime.weatherGeneration.store(0);
+            runtime.weatherRecovery.store(false);
+            return true;
+        }
+
         bool RestoreOriginal() noexcept
         {
             runtime.counters.restoreAttempts.fetch_add(1);
@@ -935,6 +1146,11 @@ namespace mta::game_de
                 clean = clean && callbackDepth == 1 && timingCallbackGeneration == runtime.generation.load() &&
                         runtime.timingGeneration.load() == timingCallbackGeneration && runtime.admissionGeneration.load() == timingCallbackGeneration &&
                         runtime.admissionSerial.load() && (runtime.timingCaptured.load() & timingChanged) == timingChanged && CheckTimingBinding();
+            // Weather rollback is an owned data CAS transaction, so resolve it
+            // before parking peers for any clock code/timing restoration. Its
+            // failed journal keeps this same callback/context alive for retry.
+            if (clean && (runtime.weatherRecovery.load() || runtime.weatherGeneration.load()))
+                clean = RecoverWeather();
             if (clean && !clockChanged && !timingChanged)
             {
                 ClockValues current;
@@ -1153,9 +1369,10 @@ namespace mta::game_de
             }
             if (runtime.stopping.load())
             {
-                if (runtime.captured.load() && !runtime.restored.load())
+                if ((runtime.captured.load() && !runtime.restored.load()) || runtime.weatherRecovery.load() || runtime.weatherGeneration.load())
                     RestoreOriginal();
-                else if (!runtime.captured.load() && !runtime.timingDirty.load() && !runtime.timingRecovery.load())
+                else if (!runtime.captured.load() && !runtime.timingDirty.load() && !runtime.timingRecovery.load() && !runtime.weatherRecovery.load() &&
+                         !runtime.weatherGeneration.load())
                     runtime.restored.store(true);
             }
             if (runtime.peersRetained.load() && !RetryPeerHoldsBounded())
@@ -1241,7 +1458,8 @@ namespace mta::game_de
                     runtime.timingHandler(runtime.access, runtime.timingContext);
                 if (runtime.stopping.load())
                 {
-                    if ((runtime.captured.load() && !runtime.restored.load()) || runtime.timingDirty.load() || runtime.timingRecovery.load())
+                    if ((runtime.captured.load() && !runtime.restored.load()) || runtime.timingDirty.load() || runtime.timingRecovery.load() ||
+                        runtime.weatherRecovery.load() || runtime.weatherGeneration.load())
                         RestoreOriginal();
                     else
                     {
@@ -1481,8 +1699,8 @@ namespace mta::game_de
                 ready = peers.RegisterDetours();
                 if (ready && !install &&
                     (runtime.inFlight.load() || !runtime.restored.load() || runtime.patchInstalled.load() || runtime.patchRecovery.load() ||
-                     runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() || runtime.peersRetained.load() ||
-                     runtime.protectionPending.load()))
+                     runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() || runtime.weatherRecovery.load() ||
+                     runtime.weatherGeneration.load() || runtime.peersRetained.load() || runtime.protectionPending.load()))
                     ready = false;
                 if (ready && !runtime.frameMode)
                     ready = (install ? DetourAttach : DetourDetach)(reinterpret_cast<PVOID*>(&runtime.originalContinuation),
@@ -1568,9 +1786,10 @@ namespace mta::game_de
             next.bound = runtime.bound.load();
             next.hooked = runtime.hooked.load() || runtime.timerHooked.load() || runtime.frameHooked.load();
             next.active = runtime.active.load();
-            next.ready = runtime.ready.load() && !runtime.timingRecovery.load();
+            next.ready = runtime.ready.load() && !runtime.timingRecovery.load() && !runtime.weatherRecovery.load() && !runtime.weatherGeneration.load();
             next.stopping = runtime.stopping.load();
-            next.restored = runtime.restored.load() && !runtime.timingDirty.load() && !runtime.timingRecovery.load();
+            next.restored = runtime.restored.load() && !runtime.timingDirty.load() && !runtime.timingRecovery.load() && !runtime.weatherRecovery.load() &&
+                            !runtime.weatherSuperseded.load() && !runtime.weatherGeneration.load();
             next.frozen = runtime.patchInstalled.load();
             next.modulePinned = runtime.modulePinned.load();
             next.failure = runtime.failure.load();
@@ -1591,7 +1810,8 @@ namespace mta::game_de
             next.patchInstalled = runtime.patchInstalled.load();
             next.retainedPeerThreads = runtime.retainedPeerThreads.load();
             next.patchRecoveryPending = runtime.patchRecovery.load();
-            next.dataRecoveryPending = runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load();
+            next.dataRecoveryPending = runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() ||
+                                       runtime.weatherRecovery.load() || runtime.weatherGeneration.load();
             next.protectionRestorePending = runtime.protectionPending.load();
             state = next;
             return true;
@@ -1740,7 +1960,8 @@ namespace mta::game_de
         if (!operation.acquired || !ValidateRequest(request) || runtime.hooked.load() || runtime.timerHooked.load() || runtime.frameHooked.load() ||
             runtime.inFlight.load() || runtime.captured.load() || runtime.patchInstalled.load() || runtime.patchRecovery.load() ||
             runtime.protectionPending.load() || runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() ||
-            runtime.peersRetained.load() || runtime.admissionSerial.load() || runtime.generation.load() == (std::numeric_limits<std::uint64_t>::max)())
+            runtime.weatherRecovery.load() || runtime.weatherGeneration.load() || runtime.peersRetained.load() || runtime.admissionSerial.load() ||
+            runtime.generation.load() == (std::numeric_limits<std::uint64_t>::max)())
             return false;
         Admission::Token claim;
         if (!Admission::TryAcquire(Admission::Category::Clock, claim))
@@ -1785,6 +2006,9 @@ namespace mta::game_de
         runtime.timingDirty.store(0);
         runtime.timingRecovery.store(0);
         runtime.timingGeneration.store(0);
+        runtime.weatherRecovery.store(false);
+        runtime.weatherGeneration.store(0);
+        runtime.weatherSuperseded.store(false);
         runtime.originalTimeScale = 0;
         runtime.originalMinuteDuration = 0;
         runtime.originalUserPause = 0;
@@ -1837,7 +2061,7 @@ namespace mta::game_de
         if (!valid && !runtime.hooked.load() && !runtime.timerHooked.load() && !runtime.frameHooked.load() && !runtime.inFlight.load() &&
             !runtime.captured.load() && !runtime.patchInstalled.load() && !runtime.patchRecovery.load() && !runtime.protectionPending.load() &&
             !runtime.dataRecovery.load() && !runtime.peersRetained.load() && !runtime.timingDirty.load() && !runtime.timingRecovery.load() &&
-            !runtime.peerBusy.load())
+            !runtime.weatherRecovery.load() && !runtime.weatherGeneration.load() && !runtime.peerBusy.load())
         {
             if (ReleaseAdmission(generation))
             {
@@ -1946,8 +2170,8 @@ namespace mta::game_de
         // Cleanup is asynchronous: the producer must not restore native data
         // on its CLEO thread, or unload code beneath an engine callback.
         if ((runtime.captured.load() && !runtime.restored.load()) || runtime.patchInstalled.load() || runtime.patchRecovery.load() ||
-            runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() || runtime.inFlight.load() ||
-            runtime.peersRetained.load() || runtime.protectionPending.load())
+            runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() || runtime.weatherRecovery.load() ||
+            runtime.weatherGeneration.load() || runtime.inFlight.load() || runtime.peersRetained.load() || runtime.protectionPending.load())
             return false;
         const bool clean = (!runtime.hooked.load() && !runtime.timerHooked.load() && !runtime.frameHooked.load()) || ChangeHooks(false);
         if (clean)
@@ -1973,7 +2197,7 @@ namespace mta::game_de
         return generation && generation == runtime.generation.load() &&
                (runtime.hooked.load() || runtime.timerHooked.load() || runtime.frameHooked.load() || runtime.inFlight.load() ||
                 (runtime.captured.load() && !runtime.restored.load()) || runtime.patchInstalled.load() || runtime.patchRecovery.load() ||
-                runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() || runtime.peersRetained.load() ||
-                runtime.protectionPending.load() || runtime.admissionSerial.load());
+                runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() || runtime.weatherRecovery.load() ||
+                runtime.weatherGeneration.load() || runtime.peersRetained.load() || runtime.protectionPending.load() || runtime.admissionSerial.load());
     }
 }

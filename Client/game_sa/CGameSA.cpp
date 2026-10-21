@@ -321,31 +321,8 @@ CGameSA::~CGameSA()
 
 CWeaponInfo* CGameSA::GetWeaponInfo(eWeaponType weapon, eWeaponSkill skill)
 {
-    if ((skill == WEAPONSKILL_STD && weapon >= WEAPONTYPE_UNARMED && weapon < WEAPONTYPE_LAST_WEAPONTYPE) ||
-        (skill != WEAPONSKILL_STD && weapon >= WEAPONTYPE_PISTOL && weapon <= WEAPONTYPE_TEC9))
-    {
-        int offset = 0;
-        switch (skill)
-        {
-            case WEAPONSKILL_STD:
-                offset = 0;
-                break;
-            case WEAPONSKILL_POOR:
-                offset = NUM_WeaponInfosStdSkill - WEAPONTYPE_PISTOL;
-                break;
-            case WEAPONSKILL_PRO:
-                offset = NUM_WeaponInfosStdSkill + NUM_WeaponInfosOtherSkill - WEAPONTYPE_PISTOL;
-                break;
-            case WEAPONSKILL_SPECIAL:
-                offset = NUM_WeaponInfosStdSkill + 2 * NUM_WeaponInfosOtherSkill - WEAPONTYPE_PISTOL;
-                break;
-            default:
-                break;
-        }
-        return WeaponInfos[offset + weapon];
-    }
-    else
-        return NULL;
+    std::size_t index = 0;
+    return MtaGame::CWeaponInfoIndexPolicy::TryGetIndex(weapon, skill, index) ? WeaponInfos[index] : nullptr;
 }
 
 void CGameSA::Pause(bool bPaused)

@@ -7,6 +7,7 @@
 #include <SharedUtil.Defines.h>
 #include <game/CPools.h>
 
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <stdexcept>
@@ -79,9 +80,28 @@ namespace
             requestedState = value;
             return stateResult;
         }
-        unsigned                  stateWrites = 0;
-        SystemState::Enum         requestedState = SystemState::GS_START_UP;
-        mta::game_de::ClockResult stateResult = mta::game_de::ClockResult::NotInitialized;
+        mta::game_de::ClockResult ReadCheatFlag(mta::game_de::NativeCheatProfile::Flag flag, bool& output) noexcept override
+        {
+            ++cheatReads;
+            requestedFlag = flag;
+            if (cheatResult == mta::game_de::ClockResult::Ok)
+                output = cheatValue;
+            return cheatResult;
+        }
+        mta::game_de::ClockResult SetCheatFlag(mta::game_de::NativeCheatProfile::Flag flag, bool enabled) noexcept override
+        {
+            ++cheatWrites;
+            requestedFlag = flag;
+            requestedEnabled = enabled;
+            return cheatResult;
+        }
+        unsigned                               cheatReads = 0, cheatWrites = 0;
+        bool                                   cheatValue = false, requestedEnabled = false;
+        mta::game_de::NativeCheatProfile::Flag requestedFlag = mta::game_de::NativeCheatProfile::Flag::HoverCars;
+        mta::game_de::ClockResult              cheatResult = mta::game_de::ClockResult::NotInitialized;
+        unsigned                               stateWrites = 0;
+        SystemState::Enum                      requestedState = SystemState::GS_START_UP;
+        mta::game_de::ClockResult              stateResult = mta::game_de::ClockResult::NotInitialized;
     };
 
     class TestPools final : public fixture::PoolFixtureBase
@@ -113,6 +133,8 @@ namespace
             ++poolReads;
             return pools;
         }
+
+        CWeaponInfo* ResolveWeaponInfoSlot(std::size_t) override { fixture::Unqualified(); }
 
         using CGameDE::GetPostWeaponFireHandler;
         using CGameDE::GetPreWeaponFireHandler;
@@ -255,6 +277,32 @@ int main()
     Refuses([&] { game.SetSystemState(SystemState::GS_INIT_PLAYING_GAME); }, "a competing native state transition remains an explicit SDK refusal");
     Check(timing.stateWrites == 3, "SDK does not retry a refused state write over native progress");
     Refuses([&] { game.VerifySADataFileNames(); }, "SDK filename verification refuses the ordinary test executable instead of declaring its data valid");
+    for (const auto* name : std::array<const char*, 7>{nullptr, "", "Hovercars", "hovercars ", "tankmode", "noreload", "healtharmormoney"})
+    {
+        Check(!game.IsCheatEnabled(name), "unqualified registry names follow MTA's unknown-name false result");
+        Check(!game.SetCheatEnabled(name, true), "unsupported native actions never reach the four world-property writes");
+    }
+    Check(timing.cheatReads == 0 && timing.cheatWrites == 0, "unknown names never ask the native owner for access");
+    for (std::size_t index = 0; index < mta::game_de::NativeCheatProfile::Members.size(); ++index)
+    {
+        const auto* name = mta::game_de::NativeCheatProfile::Members[index].sdkName;
+        const auto  flag = static_cast<mta::game_de::NativeCheatProfile::Flag>(index);
+        timing.cheatResult = mta::game_de::ClockResult::NotInitialized;
+        Refuses([&] { game.IsCheatEnabled(name); }, "known native property read requires the existing admitted owner");
+        Refuses([&] { game.SetCheatEnabled(name, true); }, "known property setter cannot report success without a native write");
+        timing.cheatResult = mta::game_de::ClockResult::Ok;
+        timing.cheatValue = true;
+        Check(game.IsCheatEnabled(name) && timing.requestedFlag == flag, "SDK property lookup reads the exact native flag identity");
+        timing.cheatValue = false;
+        Check(!game.IsCheatEnabled(name), "SDK returns the actual owner's disabled flag");
+        Check(game.SetCheatEnabled(name, true) && timing.requestedFlag == flag && timing.requestedEnabled,
+              "SDK forwards each canonical MTA enable request to its native owner");
+        Check(game.SetCheatEnabled(name, false) && timing.requestedFlag == flag && !timing.requestedEnabled, "SDK forwards each canonical MTA disable request");
+        timing.cheatResult = mta::game_de::ClockResult::Busy;
+        const auto before = timing.cheatWrites;
+        Refuses([&] { game.SetCheatEnabled(name, true); }, "intervening native changes remain explicit SDK refusals");
+        Check(timing.cheatWrites == before + 1, "SDK never retries over a competing native property change");
+    }
     Check(!reader.IsBound() && !streaming.IsBound() && !state.IsBound(), "CPU SDK policies require no native service binding");
 
     std::printf("Passed %u actual CGameDE CPU SDK policy checks (%zu-bit)\n", checks, sizeof(void*) * 8);

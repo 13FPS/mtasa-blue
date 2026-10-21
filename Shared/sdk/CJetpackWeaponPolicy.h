@@ -32,9 +32,9 @@ namespace MtaGame
             return weaponType >= 0 && static_cast<std::size_t>(weaponType) >= FirstWeapon && static_cast<std::size_t>(weaponType) < Size;
         }
 
-        // Classic's former SFixedArray had no initializer, so reading before a
-        // map packet could observe indeterminate bools. Start unconfigured
-        // permissions disabled in both backends; existing map/reset traffic
+        // Classic's normal ZERO_ON_NEW factory already clears its former
+        // SFixedArray. Preserve those permissions explicitly when reused by DE
+        // or constructed outside that allocator. Existing map/reset traffic
         // remains responsible for choosing the session's allowed weapons.
         bool enabled[Size]{};
     };

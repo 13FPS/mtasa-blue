@@ -5,7 +5,7 @@
  *****************************************************************************/
 #pragma once
 
-#include "CGameTimingDE.h"
+#include "CGameWeaponInfoDE.h"
 #include "CClockDE.h"
 #include "CKeyGenDE.h"
 #include "CAsyncLoadingDE.h"
@@ -20,7 +20,7 @@ namespace mta::game_de
     // engine callback owner's existing instance, so a future complete CGame
     // cannot accidentally create a second native clock or cleanup owner.
     // Unimplemented SDK methods remain pure: this is not yet a factory product.
-    class CGameDE : public CGameTimingDE
+    class CGameDE : public CGameWeaponInfoDE
     {
     public:
         CClock*           GetClock() noexcept override;
@@ -29,6 +29,8 @@ namespace mta::game_de
         void              SetSystemState(SystemState::Enum state) override;
         bool              IsAtMenu() override;
         bool              VerifySADataFileNames() override;
+        bool              IsCheatEnabled(const char* name) override;
+        bool              SetCheatEnabled(const char* name, bool enabled) override;
 
         void SetAsyncLoadingFromScript(bool enabled, bool forced) override;
         void SuspendASyncLoading(bool suspended, uint autoUnsuspendDelay = 0) override;

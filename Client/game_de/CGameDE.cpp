@@ -17,7 +17,7 @@ namespace mta::game_de
 {
     CGameDE::CGameDE(const NativeGameTimingReader& reader, CClockDE& nativeClock, NativeGameTimingAccess& timingWriter,
                      const NativeStreamingFileIdsReader& streamingReader, const NativeGameStateReader& stateReader) noexcept
-        : CGameTimingDE(reader, timingWriter), clock(nativeClock), streaming(streamingReader), gameState(stateReader)
+        : CGameWeaponInfoDE(reader, timingWriter), clock(nativeClock), streaming(streamingReader), gameState(stateReader)
     {
     }
 
@@ -145,6 +145,30 @@ namespace mta::game_de
         if (result != Status::Ok)
             throw std::runtime_error("DE CGame data filenames unavailable (status " + std::to_string(static_cast<std::uint32_t>(result)) + ")");
         return verified;
+    }
+
+    bool CGameDE::IsCheatEnabled(const char* name)
+    {
+        NativeCheatProfile::Flag flag;
+        if (!NativeCheatProfile::Find(name, flag))
+            return false;
+        bool enabled = false;
+        RequireNativeWrite(NativeWrites().ReadCheatFlag(flag, enabled), "IsCheatEnabled");
+        return enabled;
+    }
+
+    bool CGameDE::SetCheatEnabled(const char* name, bool enabled)
+    {
+        NativeCheatProfile::Flag flag;
+        if (!NativeCheatProfile::Find(name, flag))
+            return false;
+        // These four properties are the existing MTA settable registry. The
+        // native command dispatcher also performs unrelated actions, so the
+        // admitted owner writes only the independently qualified flag byte.
+        // ResetCheats/PerformChecks remain pure until the other registry rows
+        // have genuine DE implementations; this is no anti-cheat certificate.
+        RequireNativeWrite(NativeWrites().SetCheatFlag(flag, enabled), "SetCheatEnabled");
+        return true;
     }
 
     NativeStreamingFileIds CGameDE::RequireStreamingLayout() const

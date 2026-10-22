@@ -41,6 +41,7 @@
 #include "NativePedShotFlagsMemory.h"
 #include "NativePedBleedingMemory.h"
 #include "NativePedStayMemory.h"
+#include "NativePedFightingStyleMemory.h"
 #include "NativePedMetadataMemory.h"
 #include "NativeTaskRemovalCalls.h"
 #include "NativeStreamingRequestCalls.h"
@@ -174,6 +175,8 @@ namespace mta::game_de
             ClockResult SetPedBleeding(const NativePedReferenceToken&, bool) noexcept override;
             ClockResult ReadPedStayInSamePlace(const NativePedReferenceToken&, bool&) noexcept override;
             ClockResult SetPedStayInSamePlace(const NativePedReferenceToken&, bool) noexcept override;
+            ClockResult ReadPedFightingStyle(const NativePedReferenceToken&, std::uint8_t&) noexcept override;
+            ClockResult SetPedFightingStyle(const NativePedReferenceToken&, std::uint8_t, std::uint8_t) noexcept override;
             ClockResult ReadPedCurrentRotation(const NativePedReferenceToken&, float&) noexcept override;
             ClockResult SetPedCurrentRotation(const NativePedReferenceToken&, float) noexcept override;
             ClockResult ReadPedPhysicalScalar(const NativePedReferenceToken&, NativePedPhysicalScalarField, float&) noexcept override;
@@ -2502,6 +2505,45 @@ namespace mta::game_de
             // A masked flag may already be accepted before token revocation.
             // Stop without replay/rollback or restoring unowned neighbors;
             // registered native-visible cell storage remains retirement debt.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+        ClockResult NativeAccess::ReadPedFightingStyle(const NativePedReferenceToken& token, std::uint8_t& output) noexcept
+        {
+            NativePedPoolReader::Value before, after;
+            auto                       result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            std::uint8_t next;
+            result = NativePedFightingStyleMemory({runtime.image}, &CheckTimingOwner).ReadFightingStyle(before, next);
+            if (result != ClockResult::Ok)
+                return result;
+            result = ResolvePedReference(token, after);
+            if (result != ClockResult::Ok)
+                return result;
+            if (after.nativePed != before.nativePed || after.handle != before.handle)
+                return ClockResult::OwnerConflict;
+            output = next;
+            return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::SetPedFightingStyle(const NativePedReferenceToken& token, std::uint8_t style, std::uint8_t extra) noexcept
+        {
+            NativePedPoolReader::Value before, after;
+            auto                       result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedFightingStyleMemory::Receipt receipt;
+            result = NativePedFightingStyleMemory({runtime.image}, &CheckTimingOwner).SetFightingStyle(before, style, extra, &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = ResolvePedReference(token, after);
+                if (result == ClockResult::Ok && (after.nativePed != before.nativePed || after.handle != before.handle))
+                    result = ClockResult::OwnerConflict;
+            }
+            // Same-style verified no-op has not entered a write. Otherwise
+            // accepted or unknown effects survive lost acknowledgement; Stop
+            // without replay while native-visible reference debt is retained.
             if (receipt.entered && result != ClockResult::Ok)
                 Stop(result);
             return result;

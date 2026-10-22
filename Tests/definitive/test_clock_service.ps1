@@ -15,7 +15,7 @@ $previousTmp = $env:TMP
 $record = [ordered]@{schema='mta_clock_service_tests_v1';directory=$outputRoot;architecture='x64';success=$false;
     compileRuns=@();testRun=$null;checks=0;failure=$null;sourceHashes=@();sourcesUnchanged=$true;
     existingSdkClockImplementationTested=$false;productionNativeCallbackTested=$false;wrongExecutableRefusalVerified=$false;
-    productionFreezePatchTested=$false;readOnlyGameTimeReaderTested=$false;nativeCGameTimingPrerequisiteTested=$false;nativeCGameTimingWriterTested=$false;nativeStoredFPSReaderTested=$false;nativePauseSafeOwnerTested=$false;nativeApplicationFrameObserverTested=$false;nativeSystemStateOwnerTested=$false;nativeCheatFlagOwnerTested=$false;nativeWorldCheatRegistryTested=$false;nativeWeatherOwnerTested=$false;nativeWeatherScalarOwnerTested=$false;nativeTypedWeaponWriteOwnerTested=$false;nativeWeaponVectorAndBankOwnerTested=$false;nativeWeatherOverrideOwnerTested=$false;nativeWeatherPlacementOwnerTested=$false;nativeStatsSdkOwnerTested=$false;nativeWeaponStatSdkOwnerTested=$false;nativeWeaponStatManagerOwnerTested=$false;nativeStartGameOwnerTested=$false;nativeStartupCompletionOwnerTested=$false;nativeRainOwnerTested=$false;nativePedPoolOwnerTested=$false;nativePedTeleportOwnerTested=$false;nativePedVelocityOwnerTested=$false;nativePedReferenceOwnerTested=$false;nativePedMutationOwnerTested=$false;nativePedVitalsOwnerTested=$false;nativePedPhysicalScalarsOwnerTested=$false;nativePedCurrentRotationOwnerTested=$false;nativePedOxygenOwnerTested=$false;nativePedDuckingOwnerTested=$false;nativePedBikeFlagsOwnerTested=$false;nativePedShotFlagsOwnerTested=$false;nativePedBleedingOwnerTested=$false;nativePedStayOwnerTested=$false;nativeStreamingSceneOwnerTested=$false;nativeStreamingSharedReentryOwnerTested=$false;nativeGenericPedVitalsOwnerTested=$false;nativePedMetadataOwnerTested=$false;nativePedObservationOwnerTested=$false;nativePedIntelligenceOwnerTested=$false;nativeTaskPoolOwnerTested=$false;nativeTaskSecondaryRemovalOwnerTested=$false;nativeModelBankOwnerTested=$false;nativeModelLoadedOwnerTested=$false;nativeStreamingRequestOwnerTested=$false;nativeModelStreamingOwnerTested=$false;nativeModelReferenceOwnerTested=$false;nativeModelFinalReleaseOwnerTested=$false;nativeStreamingUpgradeOwnerTested=$false;nativeModelOwnershipOwnerTested=$false;nativeStreamingLoadAllOwnerTested=$false;nativeStreamingResourcesOwnerTested=$false;nativeModelAcquireOwnerTested=$false;nativeModelClassificationOwnerTested=$false;nativeModelTypeOwnerTested=$false;nativeStreamingRemovalOwnerTested=$false;nativeStreamingPriorityOwnerTested=$false;nativeStreamingModelGroupsOwnerTested=$false;nativeModelArchiveOwnerTested=$false;nativePlayerInfoWantedOwnerTested=$false;nativeRopesOwnerTested=$false;executionArtifacts=@();
+    productionFreezePatchTested=$false;readOnlyGameTimeReaderTested=$false;nativeCGameTimingPrerequisiteTested=$false;nativeCGameTimingWriterTested=$false;nativeStoredFPSReaderTested=$false;nativePauseSafeOwnerTested=$false;nativeApplicationFrameObserverTested=$false;nativeSystemStateOwnerTested=$false;nativeCheatFlagOwnerTested=$false;nativeWorldCheatRegistryTested=$false;nativeWeatherOwnerTested=$false;nativeWeatherScalarOwnerTested=$false;nativeTypedWeaponWriteOwnerTested=$false;nativeWeaponVectorAndBankOwnerTested=$false;nativeWeatherOverrideOwnerTested=$false;nativeWeatherPlacementOwnerTested=$false;nativeStatsSdkOwnerTested=$false;nativeWeaponStatSdkOwnerTested=$false;nativeWeaponStatManagerOwnerTested=$false;nativeStartGameOwnerTested=$false;nativeStartupCompletionOwnerTested=$false;nativeRainOwnerTested=$false;nativePedPoolOwnerTested=$false;nativePedTeleportOwnerTested=$false;nativePedVelocityOwnerTested=$false;nativePedReferenceOwnerTested=$false;nativePedMutationOwnerTested=$false;nativePedVitalsOwnerTested=$false;nativePedPhysicalScalarsOwnerTested=$false;nativePedCurrentRotationOwnerTested=$false;nativePedOxygenOwnerTested=$false;nativePedDuckingOwnerTested=$false;nativePedBikeFlagsOwnerTested=$false;nativePedShotFlagsOwnerTested=$false;nativePedBleedingOwnerTested=$false;nativePedStayOwnerTested=$false;nativePedFightingStyleOwnerTested=$false;nativeStreamingSceneOwnerTested=$false;nativeStreamingSharedReentryOwnerTested=$false;nativeGenericPedVitalsOwnerTested=$false;nativePedMetadataOwnerTested=$false;nativePedObservationOwnerTested=$false;nativePedIntelligenceOwnerTested=$false;nativeTaskPoolOwnerTested=$false;nativeTaskSecondaryRemovalOwnerTested=$false;nativeModelBankOwnerTested=$false;nativeModelLoadedOwnerTested=$false;nativeStreamingRequestOwnerTested=$false;nativeModelStreamingOwnerTested=$false;nativeModelReferenceOwnerTested=$false;nativeModelFinalReleaseOwnerTested=$false;nativeStreamingUpgradeOwnerTested=$false;nativeModelOwnershipOwnerTested=$false;nativeStreamingLoadAllOwnerTested=$false;nativeStreamingResourcesOwnerTested=$false;nativeModelAcquireOwnerTested=$false;nativeModelClassificationOwnerTested=$false;nativeModelTypeOwnerTested=$false;nativeStreamingRemovalOwnerTested=$false;nativeStreamingPriorityOwnerTested=$false;nativeStreamingModelGroupsOwnerTested=$false;nativeModelArchiveOwnerTested=$false;nativePlayerInfoWantedOwnerTested=$false;nativeRopesOwnerTested=$false;executionArtifacts=@();
     gameLaunched=$false;gameAttached=$false;gameClockWritten=$false;gameHooksInstalled=$false;fullMtaReady=$false}
 function Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 function RunBounded([string]$Executable,[string[]]$Arguments,[string]$Name,[int]$DeadlineMs) {
@@ -239,6 +239,15 @@ try {
         'Client/game_de/NativePedStayProfile.h',
         'Tests/definitive/NativePedBehaviorOwnerTests.inl'
     )
+    $sourceNames += @(
+        'Client/game_de/NativePedFightingStyleAccess.h',
+        'Client/game_de/NativePedFightingStyleMemory.h',
+        'Client/game_de/NativePedFightingStyleMemory.cpp',
+        'Client/game_de/NativePedFightingStyleProfile.h',
+        'Client/sdk/game/CPedFightingStylePolicy.h',
+        'Build/definitive-recovery/mta-native-ped-fighting-style-20261023/fighting-style-qualified.json',
+        'Tests/definitive/NativePedCombatOwnerTests.inl'
+    )
     $sourceNames += @($nativeFiles | ForEach-Object { [IO.Path]::GetRelativePath($taskRoot,$_.FullName).Replace('\','/') })
     $detoursNames = @('detours.cpp','modules.cpp','disasm.cpp','image.cpp','creatwth.cpp')
     $sourceNames += @($detoursNames + @('detours.h') | ForEach-Object { 'vendor/detours/4.0.1/src/' + $_ })
@@ -306,7 +315,9 @@ try {
         Set-Content -LiteralPath (Join-Path $outputRoot 'compile-command.json') -Encoding utf8NoBOM
     $record.compileRuns += RunBounded $compiler $arguments 'compile' 60000
     if ($record.compileRuns[-1].exitCode -ne 0 -or $record.compileRuns[-1].timedOut) { throw 'Clock SDK/runtime fixture compilation failed.' }
-    $record.testRun = RunBounded $executable @($outputRoot) 'test' 30000
+    # The cumulative callback fixture includes current owner and retirement cases.
+    # Keep it bounded while allowing the full set to finish on a busy build host.
+    $record.testRun = RunBounded $executable @($outputRoot) 'test' 60000
     $text = [IO.File]::ReadAllText($record.testRun.stdout) + [IO.File]::ReadAllText($record.testRun.stderr)
     if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
     if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
@@ -409,6 +420,8 @@ try {
     }
     $record.nativeWeaponStatManagerOwnerTested = $text.Contains('Production complete weapon-stat manager callback owner fixture completed')
     if (-not $record.nativeWeaponStatManagerOwnerTested) { throw 'Complete weapon-stat manager did not execute on the actual native callback owner.' }
+    $record.nativePedFightingStyleOwnerTested = $text.Contains('Production native fighting-style callback owner fixture completed')
+    if (-not $record.nativePedFightingStyleOwnerTested) { throw 'Fighting style did not execute on the actual registered-token callback owner.' }
     $record.nativePedBleedingOwnerTested = $text.Contains('Production native bleeding callback owner fixture completed')
     $record.nativePedStayOwnerTested = $text.Contains('Production native stay callback owner fixture completed')
     if (-not ($record.nativePedBleedingOwnerTested -and $record.nativePedStayOwnerTested)) {
@@ -468,3 +481,4 @@ finally {
 }
 [ordered]@{success=$record.success;receipt=(Join-Path $outputRoot 'test-result.json');checks=$record.checks;failure=$record.failure} | ConvertTo-Json -Compress
 if (-not $record.success) { throw "Clock service checks failed; see $outputRoot" }
+

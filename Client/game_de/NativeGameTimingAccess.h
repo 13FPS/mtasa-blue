@@ -39,6 +39,7 @@
 #include "NativePedShotFlagsAccess.h"
 #include "NativePedBleedingAccess.h"
 #include "NativePedStayAccess.h"
+#include "NativePedFightingStyleAccess.h"
 #include "NativePlayerInfoAccess.h"
 #include "NativeWantedAccess.h"
 #include "NativeRopesAccess.h"
@@ -77,6 +78,7 @@ namespace mta::game_de
                                    public NativePedShotFlagsAccess,
                                    public NativePedBleedingAccess,
                                    public NativePedStayAccess,
+                                   public NativePedFightingStyleAccess,
                                    public NativeTaskRemovalAccess,
                                    public NativeStreamingModelAccess,
                                    public NativeModelClassificationAccess

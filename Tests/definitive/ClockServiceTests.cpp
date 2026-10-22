@@ -44,6 +44,8 @@
 #include "../../Client/game_de/NativePedBleedingProfile.h"
 #include "../../Client/game_de/NativePedStayMemory.h"
 #include "../../Client/game_de/NativePedStayProfile.h"
+#include "../../Client/game_de/NativePedFightingStyleMemory.h"
+#include "../../Client/game_de/NativePedFightingStyleProfile.h"
 #include "../../Client/game_de/NativePedVitalsProfile.h"
 #include "../../Client/game_de/NativePedMetadataMemory.h"
 #include "../../Client/game_de/NativePedMetadataProfile.h"
@@ -917,6 +919,22 @@ namespace ClockPedBehaviorOwnerTest
         return ClockPedFlagsOwnerTest::Exchange(stay, at, expected, target, observed);
     }
 }
+namespace ClockPedCombatOwnerTest
+{
+    ClockPedFlagsOwnerTest::Host host;
+    bool                         failAfter = false;
+    static_assert((mta::game_de::NativePedFightingStyleProfile::StyleMask & 1) == 0);
+    bool Exchange(std::uintptr_t at, std::uint32_t expected, std::uint32_t target, std::uint32_t& observed, std::uint32_t& exception) noexcept
+    {
+        const auto result = ClockPedFlagsOwnerTest::Exchange(host, at, expected, target, observed);
+        if (failAfter)
+        {
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return false;
+        }
+        return result;
+    }
+}
 namespace ClockPedVelocityOwnerTest
 {
     unsigned stores = 0, failAt = 0, afterAt = 0;
@@ -1758,6 +1776,9 @@ namespace mta::game_de::NativeImageAccess
 #define MTA_DE_PED_STAY_EXCHANGE ClockPedBehaviorOwnerTest::ExchangeStay
 #include "../../Client/game_de/NativePedStayMemory.cpp"
 #undef MTA_DE_PED_STAY_EXCHANGE
+#define MTA_DE_PED_FIGHTING_STYLE_EXCHANGE ClockPedCombatOwnerTest::Exchange
+#include "../../Client/game_de/NativePedFightingStyleMemory.cpp"
+#undef MTA_DE_PED_FIGHTING_STYLE_EXCHANGE
 #pragma pop_macro("InterlockedCompareExchange")
 #undef GetModuleHandleW
 

@@ -243,6 +243,16 @@ $sourceNames += @(
     'Client/game_de/CPedBehaviorDE.h',
     'Client/game_de/CPedBehaviorDE.cpp'
 )
+$sourceNames += @(
+    'Client/game_de/NativePedFightingStyleAccess.h',
+    'Client/game_de/NativePedFightingStyleMemory.h',
+    'Client/game_de/NativePedFightingStyleMemory.cpp',
+    'Client/game_de/NativePedFightingStyleProfile.h',
+    'Client/sdk/game/CPedFightingStylePolicy.h',
+    'Build/definitive-recovery/mta-native-ped-fighting-style-20261023/fighting-style-qualified.json',
+    'Client/game_de/CPedCombatDE.h',
+    'Client/game_de/CPedCombatDE.cpp'
+)
 $sourceNames += @(Get-ChildItem -LiteralPath $detoursSourceRoot -File | ForEach-Object {
     [IO.Path]::GetRelativePath($taskRoot, $_.FullName).Replace('\', '/')
 })
@@ -330,6 +340,8 @@ if ((Test-Path -LiteralPath $moduleSource) -and $detoursLibraryExit -eq 0) {
         (Join-Path $taskRoot 'Client/game_de/CPedBehaviorDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedBleedingMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedStayMemory.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativePedFightingStyleMemory.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CPedCombatDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedBikeFlagsMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedShotFlagsMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedOxygenMemory.cpp'),

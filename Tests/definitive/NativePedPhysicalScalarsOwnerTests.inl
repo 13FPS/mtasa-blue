@@ -14,6 +14,7 @@ namespace
         bool                         duckingOutput = true;
         bool                         flagBoolean = true;
         std::uint32_t                flagInput = 0, flagOutput = 0x12345678;
+        std::uint8_t                 styleInput = 0, styleExtra = 0, styleOutput = 0xfa;
         float                        target = 0, output = 123;
     };
     void PedPhysicalScalarsOwnerHandler(NativeGameTimingAccess& access, void* opaque)
@@ -68,6 +69,12 @@ namespace
                 break;
             case 15:
                 context.result = access.SetPedStayInSamePlace(context.token, context.flagBoolean);
+                break;
+            case 16:
+                context.result = access.ReadPedFightingStyle(context.token, context.styleOutput);
+                break;
+            case 17:
+                context.result = access.SetPedFightingStyle(context.token, context.styleInput, context.styleExtra);
                 break;
             default:
                 std::abort();
@@ -276,6 +283,7 @@ namespace
 #include "NativePedOxygenStateOwnerTests.inl"
 #include "NativePedFlagsOwnerTests.inl"
 #include "NativePedBehaviorOwnerTests.inl"
+#include "NativePedCombatOwnerTests.inl"
         ClockPedPhysicalScalarsOwnerTest::cell = 0;
         ClockPedPhysicalScalarsOwnerTest::loseToken = false;
         ClockReaderTestHost::image = ClockPedReferenceOwnerTest::image = 0;

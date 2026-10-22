@@ -305,6 +305,14 @@ flag. The stay property does not substitute either of the separate native task
 commands. Both operations share the existing token, callback admission and
 bounded conditional-write policy; they do not simulate blood or task behavior.
 
+`CPedCombatDE` adds the actual fighting-style accessor pair. Classic and DE
+share MTA's same-style early return and extra-move bit policy. The named DE
+command establishes the native style/extra storage, but its reset behavior is
+different and is not invoked. A changed style updates its byte and the eligible
+extra bit while preserving both adjacent bytes and other extra bits; a same
+style request adds nothing. This remains within the registered-ped owner and
+its existing failure and retirement rules.
+
 The abstract `CPedVitalsDE` SDK layer now implements MTA's actual `GetHealth`,
 `SetHealth`, `GetArmor` and `SetArmor` virtual methods through that token-based
 owner. It preserves raw float values and reports a refused native operation

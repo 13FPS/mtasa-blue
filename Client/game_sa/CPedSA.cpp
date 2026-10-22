@@ -12,6 +12,7 @@
 #include "StdInc.h"
 #include "CGameSA.h"
 #include "CPedSA.h"
+#include <game/CPedFightingStylePolicy.h>
 #include "CVisibilityPluginsSA.h"
 #include "CPedModelInfoSA.h"
 #include "CPlayerInfoSA.h"
@@ -487,13 +488,16 @@ void CPedSA::RebuildPlayer()
 void CPedSA::SetFightingStyle(eFightingStyle style, std::uint8_t styleExtra)
 {
     CPedSAInterface* pedInterface = GetPedInterface();
-    if (style == pedInterface->bFightingStyle)
+    // Preserve the exact shared MTA policy, including the no-extra-effect
+    // early return. DE's named script setter has a different reset policy.
+    if (!MtaGame::CPedFightingStylePolicy::ChangesStyle(static_cast<std::uint8_t>(pedInterface->bFightingStyle), static_cast<std::uint8_t>(style)))
         return;
 
     pedInterface->bFightingStyle = style;
 
-    if (styleExtra > 0 && styleExtra <= 6)
-        pedInterface->bFightingStyleExtra |= (1 << (styleExtra - 1));
+    const auto extraMask = MtaGame::CPedFightingStylePolicy::ExtraMask(styleExtra);
+    if (extraMask)
+        pedInterface->bFightingStyleExtra |= extraMask;
 }
 
 CEntity* CPedSA::GetContactEntity() const

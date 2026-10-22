@@ -45,6 +45,12 @@
 #include "../../Client/game_de/NativeModelLoadedProfile.h"
 #include "../../Client/game_de/NativeStreamingRequestCalls.h"
 #include "../../Client/game_de/NativeStreamingRequestProfile.h"
+#include "../../Client/game_de/NativeStreamingModelContext.h"
+#include "../../Client/game_de/NativeModelReferenceMemory.h"
+#include "../../Client/game_de/NativeModelReferenceProfile.h"
+#include "../../Client/game_de/NativeStreamingUpgradeReader.h"
+#include "../../Client/game_de/NativeStreamingUpgradeCalls.h"
+#include "../../Client/game_de/NativeStreamingUpgradeProfile.h"
 #include "../../Client/game_de/NativePlayerInfoMemory.h"
 #include "../../Client/game_de/NativePlayerInfoProfile.h"
 #include "../../Client/game_de/NativePlayerInfoExtraProfile.h"
@@ -176,6 +182,93 @@ namespace ClockStreamingRequestOwnerTest
             if (!::WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(image + mta::game_de::NativeApplicationFrameProfile::rootRva),
                                       &replacementRoot, sizeof(replacementRoot), &written) ||
                 written != sizeof(replacementRoot))
+                std::abort();
+        }
+        if (result != mta::game_de::ClockResult::Ok)
+            exception = EXCEPTION_ACCESS_VIOLATION;
+        return result;
+    }
+}
+
+// These seams replace only the final native operation on owned test memory.
+// Image/type/registry/loaded-row/callback admission stays production code.
+namespace ClockModelReferenceOwnerTest
+{
+    std::uintptr_t            image = 0, address = 0;
+    std::uint32_t             before = 0, target = 0;
+    unsigned                  calls = 0;
+    bool                      conflict = false, loseRoot = false;
+    mta::game_de::ClockResult result = mta::game_de::ClockResult::Ok;
+    mta::game_de::ClockResult Exchange(std::uintptr_t passed, std::uint32_t expected, std::uint32_t next, std::uint32_t& observed,
+                                       std::uint32_t& exception) noexcept
+    {
+        ++calls;
+        address = passed;
+        before = expected;
+        target = next;
+        if (conflict)
+        {
+            const auto advanced = expected + 7;
+            std::memcpy(reinterpret_cast<void*>(passed), &advanced, sizeof(advanced));
+            conflict = false;
+        }
+        LONG e = 0, t = 0;
+        std::memcpy(&e, &expected, sizeof(e));
+        std::memcpy(&t, &next, sizeof(t));
+        const auto prior = _InterlockedCompareExchange(reinterpret_cast<volatile LONG*>(passed), t, e);
+        std::memcpy(&observed, &prior, sizeof(observed));
+        if (loseRoot)
+        {
+            loseRoot = false;
+            const std::uintptr_t zero = 0;
+            SIZE_T               written = 0;
+            if (!::WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(image + mta::game_de::NativeApplicationFrameProfile::rootRva), &zero,
+                                      sizeof(zero), &written) ||
+                written != sizeof(zero))
+                std::abort();
+        }
+        if (result != mta::game_de::ClockResult::Ok)
+            exception = EXCEPTION_ACCESS_VIOLATION;
+        return result;
+    }
+}
+namespace ClockStreamingUpgradeOwnerTest
+{
+    using NativeFunction = mta::game_de::NativeStreamingUpgradeCalls::NativeFunction;
+    std::uintptr_t            image = 0, entry = 0;
+    std::uint32_t             modelIndex = 0, flags = 0, companion = 1001;
+    unsigned                  calls = 0;
+    bool                      loseRoot = false;
+    mta::game_de::ClockResult result = mta::game_de::ClockResult::Ok;
+    mta::game_de::ClockResult Invoke(NativeFunction function, std::uint32_t model, std::uint32_t requestedFlags, std::uint32_t& exception) noexcept
+    {
+        ++calls;
+        entry = reinterpret_cast<std::uintptr_t>(function) - image;
+        modelIndex = model;
+        flags = requestedFlags;
+        const auto accept = [&](std::uint32_t key)
+        {
+            namespace L = mta::game_de::NativeModelLoadedProfile;
+            const auto    address = image + L::ArrayRva + static_cast<std::uintptr_t>(key) * L::RowStride + L::FlagsOffset;
+            unsigned char prior = 0;
+            std::memcpy(&prior, reinterpret_cast<void*>(address), 1);
+            const std::array<unsigned char, 2> accepted{static_cast<unsigned char>(prior | static_cast<unsigned char>(requestedFlags)), 2};
+            SIZE_T                             written = 0;
+            if (!::WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(address), accepted.data(), accepted.size(), &written) ||
+                written != accepted.size())
+                std::abort();
+        };
+        accept(model);
+        if (companion != 0xffffffff)
+            accept(companion);
+        if (loseRoot)
+        {
+            loseRoot = false;
+            const std::uintptr_t zero = 0;
+            SIZE_T               written = 0;
+            if (!::WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(image + mta::game_de::NativeApplicationFrameProfile::rootRva), &zero,
+                                      sizeof(zero), &written) ||
+                written != sizeof(zero))
                 std::abort();
         }
         if (result != mta::game_de::ClockResult::Ok)
@@ -1175,6 +1268,15 @@ namespace mta::game_de::NativeImageAccess
 #define ReadImage ModelLoadedOwnerFixtureReadImage
 #include "../../Client/game_de/NativeModelLoadedReader.cpp"
 #undef ReadImage
+// Shared model context is compiled once under the same current-image seam.
+#include "../../Client/game_de/NativeStreamingModelContext.cpp"
+#define MTA_DE_MODEL_REFERENCE_EXCHANGE ClockModelReferenceOwnerTest::Exchange
+#include "../../Client/game_de/NativeModelReferenceMemory.cpp"
+#undef MTA_DE_MODEL_REFERENCE_EXCHANGE
+#include "../../Client/game_de/NativeStreamingUpgradeReader.cpp"
+#define MTA_DE_STREAMING_UPGRADE_NATIVE_INVOKE ClockStreamingUpgradeOwnerTest::Invoke
+#include "../../Client/game_de/NativeStreamingUpgradeCalls.cpp"
+#undef MTA_DE_STREAMING_UPGRADE_NATIVE_INVOKE
 #define MTA_DE_STREAMING_REQUEST_NATIVE_INVOKE ClockStreamingRequestOwnerTest::Invoke
 #include "../../Client/game_de/NativeStreamingRequestCalls.cpp"
 #undef MTA_DE_STREAMING_REQUEST_NATIVE_INVOKE
@@ -5854,6 +5956,7 @@ namespace
 #include "NativeModelBankOwnerTests.inl"
 #include "NativeModelLoadedOwnerTests.inl"
 #include "NativeStreamingRequestOwnerTests.inl"
+#include "NativeModelOwnershipOwnerTests.inl"
 #include "NativeWorldCheatOwnerTests.inl"
 
 int main(int argc, char** argv)
@@ -5900,6 +6003,7 @@ int main(int argc, char** argv)
     NativeModelBankOwnedSdk(fixture);
     NativeModelLoadedOwnedSdk(fixture);
     NativeStreamingRequestOwnedSdk(fixture);
+    NativeModelOwnershipOwnedSdk(fixture);
     NativeReadSetAndRestoration(fixture);
     NativeCoherentCommandPublication(fixture);
     NativeReadOnlyRetirement(fixture);

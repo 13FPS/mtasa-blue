@@ -83,7 +83,10 @@ int main(int argc, char** argv)
               "all raw state/flag bytes survive; streamedIn is exactly the native state1 predicate rather than any nonzero state");
         Check(reader.Recheck(value) == ClockResult::Ok, "an unchanged immediate raw streaming tuple rechecks inside the owner");
     }
-    for (const auto index : {std::uint32_t{0}, std::uint32_t{1}, L::ModelCount - 1})
+    for (const auto index : {std::uint32_t{0},     std::uint32_t{1},     std::uint32_t{19999}, std::uint32_t{20000}, std::uint32_t{24999}, std::uint32_t{25000},
+                             std::uint32_t{25254}, std::uint32_t{25255}, std::uint32_t{25510}, std::uint32_t{25511}, std::uint32_t{25574}, std::uint32_t{25575},
+                             std::uint32_t{25754}, std::uint32_t{25755}, std::uint32_t{26229}, std::uint32_t{26230}, L::ModelCount - 5,    L::ModelCount - 4,
+                             L::ModelCount - 3,    L::ModelCount - 2,    L::ModelCount - 1})
         for (const auto state : {static_cast<unsigned char>(0), static_cast<unsigned char>(1), static_cast<unsigned char>(2), static_cast<unsigned char>(255)})
         {
             fixture.Reset();
@@ -92,14 +95,14 @@ int main(int argc, char** argv)
             Check(reader.Read(index, value) == ClockResult::Ok &&
                       value.rowAddress == binding.image + L::ArrayRva + static_cast<std::uintptr_t>(index) * L::RowStride && value.rawLoadState == state &&
                       value.rawFlags == 0xff && value.streamedIn == (state == 1),
-                  "first and final ordinary-model rows use the real16byte stride without reading beyond the bank's model domain");
+                  "DFF,TXD,COL,IPL,DAT,IFP,RRR,SCM and all four sentinel boundaries use the actual complete16byte resource domain");
         }
     for (const auto index : {L::ModelCount, L::ModelCount + 1, std::uint32_t{32768}, std::uint32_t{65535}, std::uint32_t{65536}, 0xffffffffu})
     {
         fixture.Reset();
         value = LoadedSentinel();
         Check(reader.Read(index, value) == ClockResult::InvalidArgument && LoadedUntouched(value) && PoolTestHost::reads == 0 && PoolTestHost::ownerCalls == 0,
-              "full unsigned key refuses unrelated file categories, rawffff and truncation aliases before reads or owner callbacks");
+              "full unsigned key refuses beyond-final-row, rawffff and truncation aliases before reads or owner callbacks");
     }
     fixture.Reset();
     fixture.bank.Slot(17, 0);
@@ -182,7 +185,7 @@ int main(int argc, char** argv)
     fixture.bank.transform.image.Patch(sectionAt, &shortSection, sizeof(shortSection), PAGE_READONLY);
     value = LoadedSentinel();
     Check(reader.Read(17, value) != ClockResult::Ok && LoadedUntouched(value),
-          "whole ordinary-model streaming domain must fit the qualified image data section even for an earlier queried row");
+          "whole initialized resource-row streaming domain must fit the qualified image data section even for an earlier queried row");
     fixture.bank.transform.image.Patch(sectionAt, &dataSection, sizeof(dataSection), PAGE_READONLY);
     for (const auto& pin : L::Code)
     {

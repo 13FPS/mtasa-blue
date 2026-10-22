@@ -21,7 +21,7 @@ $record = [ordered]@{
     schema='mta_streaming_sdk_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     results=@();actualStreamingSdkSliceTested=$false;failure=$null;scratchDirectory=$scratchRoot;scratchFilesRemaining=$null;scratchRemoved=$false;
-    scope='Actual MTA CStreaming RequestModel and HasModelLoaded virtual dispatch through a borrowed owner. Covers full DWORD keys/flags, explicit refusal of the entire shared upgrade interval, all owner refusal statuses, genuine false/true loaded results and no wrapper retry. Unimplemented SDK methods remain pure in production; unrelated concrete overrides exist only in the test fixture. No game code or native memory is executed';
+    scope='Actual MTA CStreaming RequestModel and HasModelLoaded virtual dispatch through a borrowed owner. Covers full DWORD keys/flags, distinct paired upgrade dispatch for the entire shared upgrade interval, all owner refusal statuses, genuine false/true loaded results, absent-owner refusal and no wrapper retry or ordinary fallback. Unimplemented SDK methods remain pure in production; unrelated concrete overrides exist only in the test fixture. No game code or native memory is executed';
     ownedBuffersOnly=$true;nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;
     foreignProcessAccessed=$false;nativeLifecycleReady=$false;fullMtaReady=$false;
     clientDllLoaded=$false;installationChanged=$false

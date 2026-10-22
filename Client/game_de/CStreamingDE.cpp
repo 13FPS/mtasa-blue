@@ -18,18 +18,23 @@ namespace mta::game_de
 
     void CStreamingDE::RequestModel(DWORD model, DWORD flags)
     {
-        // MTA routes vehicle upgrades through a separate native operation.
-        // Until that DE path is qualified, do not disguise a normal request
-        // as the upgrade transaction or silently change its flags/model key.
+        // Reuse MTA's upgrade classification while the owner performs DE's
+        // complete paired request; ordinary requests cannot substitute for it.
         if (MtaGame::CModelRequestPolicy::IsUpgradeModel(model))
-            Require(ClockResult::UnsupportedBuild, "RequestModel vehicle upgrade");
-        Require(access.RequestStreamingModel(model, flags), "RequestModel");
+            Require(access.RequestStreamingUpgrade(model, flags), "RequestModel vehicle upgrade");
+        else
+            Require(access.RequestStreamingModel(model, flags), "RequestModel");
     }
 
     bool CStreamingDE::HasModelLoaded(DWORD model)
     {
         if (MtaGame::CModelRequestPolicy::IsUpgradeModel(model))
-            Require(ClockResult::UnsupportedBuild, "HasModelLoaded vehicle upgrade");
+        {
+            // The selected row alone cannot prove its companion has loaded.
+            bool loaded = false;
+            Require(access.ReadStreamingUpgradeLoaded(model, loaded), "HasModelLoaded vehicle upgrade");
+            return loaded;
+        }
         NativeModelLoadedReader::Value value;
         Require(access.ReadStreamingModelLoaded(model, value), "HasModelLoaded");
         return value.streamedIn;

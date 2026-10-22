@@ -1,7 +1,7 @@
 /****************************************************************************
  * PROJECT: Multi Theft Auto
  * LICENSE: See LICENSE in the repository root
- * PURPOSE: Observe the qualified native ordinary-model stream state predicate
+ * PURPOSE: Observe the qualified native full resource-row stream state predicate
  ****************************************************************************/
 #pragma once
 #include "NativeModelBankReader.h"

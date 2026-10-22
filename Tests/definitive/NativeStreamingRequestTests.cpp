@@ -3,9 +3,12 @@
  * LICENSE: See LICENSE in the repository root
  * PURPOSE: Real model request guards on owned native-shaped registry/data pages
  ****************************************************************************/
+#pragma push_macro("main")
+#undef main
 #define main NativeStreamingRequestTransformFixtureMain
 #include "NativePedTransformReaderTests.cpp"
 #undef main
+#pragma pop_macro("main")
 #include "../../Client/game_de/NativeModelBankReader.h"
 #include "../../Client/game_de/NativeModelBankProfile.h"
 #include "../../Client/game_de/NativeModelLoadedReader.h"
@@ -26,6 +29,7 @@ namespace
 #include "../../Client/game_de/NativeStartGameCalls.cpp"
 #include "../../Client/game_de/NativeModelBankReader.cpp"
 #include "../../Client/game_de/NativeModelLoadedReader.cpp"
+#include "../../Client/game_de/NativeStreamingModelContext.cpp"
 #define MTA_DE_STREAMING_REQUEST_NATIVE_INVOKE ::InvokeRequest
 #include "../../Client/game_de/NativeStreamingRequestCalls.cpp"
 #undef MTA_DE_STREAMING_REQUEST_NATIVE_INVOKE

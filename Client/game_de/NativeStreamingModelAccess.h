@@ -16,5 +16,9 @@ namespace mta::game_de
         // Native entry, partial effects and cleanup remain the runtime's concern.
         virtual ClockResult RequestStreamingModel(std::uint32_t, std::uint32_t) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult ReadStreamingModelLoaded(std::uint32_t, NativeModelLoadedReader::Value&) noexcept { return ClockResult::NotInitialized; }
+        // Upgrade requests also own their paired model. Keeping that operation
+        // distinct prevents an older owner from accepting only half the work.
+        virtual ClockResult RequestStreamingUpgrade(std::uint32_t, std::uint32_t) noexcept { return ClockResult::NotInitialized; }
+        virtual ClockResult ReadStreamingUpgradeLoaded(std::uint32_t, bool&) noexcept { return ClockResult::NotInitialized; }
     };
 }

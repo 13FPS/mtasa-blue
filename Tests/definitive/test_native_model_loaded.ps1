@@ -18,7 +18,7 @@ $record=[ordered]@{schema='mta_native_model_loaded_tests_v1';success=$false;fail
     nativeEngineCodeExecuted=$false;nativePoolObservedInGta=$false;nativeModelLoadedPrimitiveTested=$false;
     gameLaunched=$false;gameAttached=$false;engineMemoryWritten=$false;hookInstalled=$false;
     completeGameReady=$false;completePoolsReady=$false;localPlayerRegistered=$false;modelInfoSdkPublished=$false;nativeModelObjectDereferenced=$false;modelReferenceClaimed=$false;rwObjectPublished=$false;sourcesUnchanged=$true;scratch=$scratch;scratchFilesRemaining=$null;
-    scope='Immediate ordinary-model stream flags/state and the exact state1 predicate under full unsigned key, native16byte row schema, exact image/code/data-section and native GT/GC/PLAYING/callback owner checks. The SDK compound IsLoaded, upgrade-specific HasModelLoaded and mutating script opcode remain separate. No model/UE/RwObject dereference, native request, blocking load or reference lease.'}
+    scope='Immediate complete resource-row stream flags/state and the exact state1 predicate under full unsigned key, native16byte row schema over the initializer-derived26316 physical rows including four list sentinels, exact image/code/data-section and native GT/GC/PLAYING/callback owner checks. The SDK compound IsLoaded, upgrade-specific HasModelLoaded and mutating script opcode remain separate. No model/UE/RwObject dereference, native request, blocking load or reference lease.'}
 function RunOwned([string]$exe,[string[]]$arguments,[string]$directory,[string]$label,[int]$timeout){
     $info=[Diagnostics.ProcessStartInfo]::new($exe)
     $info.WorkingDirectory=$directory;$info.UseShellExecute=$false;$info.CreateNoWindow=$true;$info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true
@@ -52,6 +52,7 @@ try{
         'Build/definitive-recovery/mta-ped-pool-handle-batch-20261021/native-proof/ped-pool-qualified.json',
         'Build/definitive-recovery/mta-ped-transform-batch-20261021/native-proof/ped-transform-qualified.json',
         'Build/definitive-recovery/mta-native-model-loaded-proof-20261022/model-loaded-qualified.json')
+    $names+=@('Build/definitive-recovery/mta-native-streaming-upgrade-proof-20261022/native-proof/full-resource-loaded-qualified.json')
     $record.sources=@($names|ForEach-Object{[ordered]@{path=$_;sha256=(Sha (Join-Path $root $_))}})
     $env:TEMP=$scratch;$env:TMP=$scratch
     $vswhere=Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'

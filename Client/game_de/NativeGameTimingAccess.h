@@ -118,6 +118,10 @@ namespace mta::game_de
         // Observe only the current bounded bank association. An opaque model
         // word supplies no loaded state, model object, RwObject or reference.
         virtual ClockResult ReadModelBankEntry(std::uint32_t, NativeModelBankReader::Value&) noexcept { return ClockResult::NotInitialized; }
+        // Only an occupied loaded row can receive this interior native count
+        // adjustment. It neither inserts an absent native row nor removes
+        // the final one and cannot stand in for an SDK model lifetime.
+        virtual ClockResult AdjustModelReference(std::uint32_t, int) noexcept { return ClockResult::NotInitialized; }
         // The real request belongs to a distinct admitted normal-frame scope;
         // a gameplay timer or earlier observation never grants lifecycle calls.
         virtual ClockResult StartGame() noexcept { return ClockResult::NotInitialized; }

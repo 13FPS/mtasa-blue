@@ -94,8 +94,9 @@ namespace mta::game_de
     {
         namespace D = ModelLoadedDetail;
         namespace P = NativeModelLoadedProfile;
-        // The full SDK key is bounded to actual ordinary model rows; raw
-        // WORD ffff and high-DWORD aliases never select unrelated file stores.
+        // The full SDK key is bounded to the initializer's complete resource
+        // array. The narrower DFF metadata bank remains a request-only limit;
+        // WORD ffff and high-DWORD aliases never select outside this array.
         if (modelIndex >= P::ModelCount)
             return ClockResult::InvalidArgument;
         auto result = D::Owner(binding, owner);

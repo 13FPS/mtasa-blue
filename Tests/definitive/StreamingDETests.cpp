@@ -23,7 +23,7 @@ namespace
     }
     struct Access final : NativeStreamingModelAccess
     {
-        unsigned      requests = 0, queries = 0;
+        unsigned      requests = 0, queries = 0, upgradeRequests = 0, upgradeQueries = 0;
         std::uint32_t model = 0, flags = 0;
         ClockResult   requestResult = ClockResult::Ok, queryResult = ClockResult::Ok;
         bool          loaded = false;
@@ -43,6 +43,21 @@ namespace
                 output.modelIndex = index;
                 output.streamedIn = loaded;
             }
+            return queryResult;
+        }
+        ClockResult RequestStreamingUpgrade(std::uint32_t index, std::uint32_t requestFlags) noexcept override
+        {
+            ++upgradeRequests;
+            model = index;
+            flags = requestFlags;
+            return requestResult;
+        }
+        ClockResult ReadStreamingUpgradeLoaded(std::uint32_t index, bool& output) noexcept override
+        {
+            ++upgradeQueries;
+            model = index;
+            if (queryResult == ClockResult::Ok)
+                output = loaded;
             return queryResult;
         }
     };
@@ -114,23 +129,41 @@ int main()
         for (DWORD upgrade = 1000; upgrade <= 1193; ++upgrade)
         {
             const auto requests = owner.requests, queries = owner.queries;
-            Refuses([&] { sdk->RequestModel(upgrade, 6); }, "RequestModel");
-            Refuses([&] { (void)sdk->HasModelLoaded(upgrade); }, "HasModelLoaded");
+            for (const auto flags : std::array<DWORD, 4>{0, 6, 0x16, (std::numeric_limits<DWORD>::max)()})
+            {
+                const auto before = owner.upgradeRequests;
+                sdk->RequestModel(upgrade, flags);
+                Check(owner.upgradeRequests == before + 1 && owner.model == upgrade && owner.flags == flags,
+                      "every upgrade and complete DWORD flag set must reach the paired native operation exactly once");
+            }
+            for (const bool loaded : {false, true})
+            {
+                owner.loaded = loaded;
+                const auto before = owner.upgradeQueries;
+                Check(sdk->HasModelLoaded(upgrade) == loaded && owner.upgradeQueries == before + 1 && owner.model == upgrade,
+                      "actual SDK returns the paired upgrade query's true or false result");
+            }
             Check(owner.requests == requests && owner.queries == queries,
                   "MTA's entire upgrade interval cannot fall through to an ordinary native request or raw row query");
         }
         for (unsigned status = 1; status <= static_cast<unsigned>(ClockResult::OriginalException); ++status)
         {
             owner.requestResult = owner.queryResult = static_cast<ClockResult>(status);
-            const auto requests = owner.requests, queries = owner.queries;
+            const auto requests = owner.requests, queries = owner.queries, upgradeRequests = owner.upgradeRequests, upgradeQueries = owner.upgradeQueries;
             Refuses([&] { sdk->RequestModel(7, 0x16); }, "RequestModel");
             Refuses([&] { (void)sdk->HasModelLoaded(7); }, "HasModelLoaded");
+            Refuses([&] { sdk->RequestModel(1000, 0x16); }, "RequestModel vehicle upgrade");
+            Refuses([&] { (void)sdk->HasModelLoaded(1193); }, "HasModelLoaded vehicle upgrade");
             Check(owner.requests == requests + 1 && owner.queries == queries + 1, "a refused or entered-uncertain request is never retried by the SDK wrapper");
+            Check(owner.upgradeRequests == upgradeRequests + 1 && owner.upgradeQueries == upgradeQueries + 1,
+                  "a refused or entered-uncertain upgrade never retries or falls through to ordinary streaming");
         }
         NativeStreamingModelAccess absent;
         Streaming                  unbound(absent);
         Refuses([&] { unbound.RequestModel(0, 6); }, "RequestModel");
         Refuses([&] { (void)unbound.HasModelLoaded(0); }, "HasModelLoaded");
+        Refuses([&] { unbound.RequestModel(1000, 6); }, "RequestModel vehicle upgrade");
+        Refuses([&] { (void)unbound.HasModelLoaded(1193); }, "HasModelLoaded vehicle upgrade");
         std::puts("Production MTA streaming SDK slice fixture completed");
         std::printf("Passed %u actual MTA streaming SDK checks (%zu-bit)\n", checks, sizeof(void*) * 8);
         return 0;

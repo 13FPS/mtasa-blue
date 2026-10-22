@@ -52,6 +52,7 @@ try{
         'Build/definitive-recovery/mta-ped-pool-handle-batch-20261021/native-proof/ped-pool-qualified.json',
         'Build/definitive-recovery/mta-ped-transform-batch-20261021/native-proof/ped-transform-qualified.json',
         'Build/definitive-recovery/mta-native-model-loaded-proof-20261022/model-loaded-qualified.json',
+        'Client/game_de/NativeStreamingModelContext.h','Client/game_de/NativeStreamingModelContext.cpp',
         'Client/game_de/NativeStreamingRequestCalls.h',
         'Client/game_de/NativeStreamingRequestCalls.cpp',
         'Client/game_de/NativeStreamingRequestProfile.h',

@@ -36,6 +36,9 @@
 #include "NativePedMetadataMemory.h"
 #include "NativeTaskRemovalCalls.h"
 #include "NativeStreamingRequestCalls.h"
+#include "NativeModelReferenceMemory.h"
+#include "NativeStreamingUpgradeReader.h"
+#include "NativeStreamingUpgradeCalls.h"
 #include <game/CModelRequestPolicy.h>
 #include "NativeStartGameCalls.h"
 #include "NativeUObjectMembershipAccess.h"
@@ -129,6 +132,9 @@ namespace mta::game_de
             ClockResult ReadModelBankEntry(std::uint32_t, NativeModelBankReader::Value&) noexcept override;
             ClockResult ReadStreamingModelLoaded(std::uint32_t, NativeModelLoadedReader::Value&) noexcept override;
             ClockResult RequestStreamingModel(std::uint32_t, std::uint32_t) noexcept override;
+            ClockResult AdjustModelReference(std::uint32_t, int) noexcept override;
+            ClockResult RequestStreamingUpgrade(std::uint32_t, std::uint32_t) noexcept override;
+            ClockResult ReadStreamingUpgradeLoaded(std::uint32_t, bool&) noexcept override;
             ClockResult ReadPedPhysicalScalar(const NativePedReferenceToken&, NativePedPhysicalScalarField, float&) noexcept override;
             ClockResult SetPedPhysicalScalar(const NativePedReferenceToken&, NativePedPhysicalScalarField, float) noexcept override;
             ClockResult ReadPedCenterOfMass(const NativePedReferenceToken&, CVector&) noexcept override;
@@ -2361,6 +2367,36 @@ namespace mta::game_de
             // old row or claim asynchronous acceptance means fully loaded.
             if (receipt.entered && result != ClockResult::Ok)
                 Stop(result);
+            return result;
+        }
+        ClockResult NativeAccess::AdjustModelReference(std::uint32_t modelIndex, int delta) noexcept
+        {
+            NativeModelReferenceMemory::Receipt receipt;
+            const auto                          result = NativeModelReferenceMemory::Adjust(runtime.image, modelIndex, delta, &CheckTimingOwner, &receipt);
+            // An accepted count can survive lost acknowledgement. Replaying
+            // or rolling back would change another native owner's reference.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+        ClockResult NativeAccess::RequestStreamingUpgrade(std::uint32_t modelIndex, std::uint32_t flags) noexcept
+        {
+            NativeStreamingUpgradeCalls::Receipt receipt;
+            const auto                           result = NativeStreamingUpgradeCalls::Request(runtime.image, modelIndex, flags, &CheckTimingOwner, &receipt);
+            // One genuine native upgrade operation owns both model requests.
+            // Partial effects or a lost final context cannot be replayed.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+        ClockResult NativeAccess::ReadStreamingUpgradeLoaded(std::uint32_t modelIndex, bool& output) noexcept
+        {
+            NativeStreamingUpgradeReader::Value value;
+            const auto                          result = NativeStreamingUpgradeReader({runtime.image}, &CheckTimingOwner).Read(modelIndex, value);
+            // Publish only the actual selected-plus-companion predicate after
+            // every read succeeds; failures preserve the caller's old value.
+            if (result == ClockResult::Ok)
+                output = value.streamedIn;
             return result;
         }
         ClockResult NativeAccess::ReadStreamingModelLoaded(std::uint32_t modelIndex, NativeModelLoadedReader::Value& output) noexcept

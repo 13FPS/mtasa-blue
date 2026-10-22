@@ -12,14 +12,22 @@ Intelligence, embedded task manager and task bank through the existing engine
 owner. Its abstract `CTaskManagerDE` implements secondary-task removal for the
 qualified native subset, without publishing persistent task wrappers.
 
-The abstract `CStreamingDE` implements the existing `RequestModel` and
-`HasModelLoaded` methods for qualified ordinary model slots. Native request
-acceptance preserves asynchronous effects and does not imply loading finished.
-Loaded queries use the DE streaming row layout; native model-bank associations
-remain opaque and cannot substitute for SDK model objects or RenderWare data.
-Vehicle upgrades retain MTA's separate dispatch rule and explicitly refuse
-until that native path is qualified. Priority-only loading and native model
-reference ownership are also separate prerequisites.
+The abstract `CStreamingDE` implements MTA's existing `RequestModel` and
+`HasModelLoaded` dispatch, including its separate vehicle-upgrade interval.
+Upgrade requests enter DE's genuine paired-model operation once; their loaded
+query checks the selected model and its configured companion. Ordinary requests
+remain bounded to qualified model slots. Acceptance preserves asynchronous
+effects and does not imply loading finished. Raw loaded observations cover the
+initializer's complete streaming-row extent, including its list sentinels;
+these facts do not publish SDK model objects or RenderWare data.
+
+Ordinary requests, upgrades and immediate reference adjustments share the same
+native root/provider/model checks and callback owner. Reference changes reacquire
+an occupied keyed map row each time and use one conditional DWORD update.
+Incrementing an existing zero-count row is supported; creating an absent entry,
+overflow, underflow and decrements reaching zero are refused. This does not grant
+a retained model lease or complete MTA's `ModelAddRef`/`RemoveRef` contract.
+Priority-only loading and final model removal remain separate prerequisites.
 
 These batches have offline primitive, actual SDK/callback-owner and normal
 build coverage. The changed classic callers compile through their normal

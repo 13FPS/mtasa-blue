@@ -158,6 +158,13 @@ selection returns null; lost ownership or an unavailable bank remains an
 explicit failure. The wrapper is still abstract: standalone allocation,
 initialization, removal, firing and native reload timing remain separate work.
 
+`CPedWeaponSelectionDE` reads the genuine current-slot byte through the same
+registered ped owner. Its typed SDK getter checks enum representability before
+conversion and never indexes the weapon array. `CWeaponPolicyDE` also preserves
+MTA's null-guarded `SetAsCurrentWeapon` delegation to its borrowed ped. Native
+slot changes remain separate: the engine operation removes and creates model
+attachments, so a raw slot store cannot stand in for that lifecycle.
+
 MTA's `CreateWeaponStat` factory also shares its existing defaults and flag
 transition policy between classic and DE. The complete owned `CWeaponStat`
 contains custom CPU data, as the classic unlisted factory does; its mutable

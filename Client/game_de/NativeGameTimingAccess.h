@@ -42,6 +42,7 @@
 #include "NativePedFightingStyleAccess.h"
 #include "NativePedWeaponFieldsAccess.h"
 #include "NativePedWeaponAmmoAccess.h"
+#include "NativePedCurrentWeaponSlotAccess.h"
 #include "NativePlayerInfoAccess.h"
 #include "NativeWantedAccess.h"
 #include "NativeRopesAccess.h"
@@ -84,6 +85,7 @@ namespace mta::game_de
                                    public NativePedFightingStyleAccess,
                                    public NativePedWeaponFieldsAccess,
                                    public NativePedWeaponAmmoAccess,
+                                   public NativePedCurrentWeaponSlotAccess,
                                    public NativeTaskRemovalAccess,
                                    public NativeStreamingModelAccess,
                                    public NativeModelClassificationAccess

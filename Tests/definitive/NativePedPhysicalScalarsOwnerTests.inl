@@ -106,11 +106,14 @@ namespace
             case 26:
                 context.result = access.ReadPedWeaponInfo(context.token, context.weaponSlot, context.weaponSkill, context.weaponInfo);
                 break;
+            case 27:
+                context.result = access.ReadPedCurrentWeaponSlot(context.token, context.weaponOutput);
+                break;
             default:
                 std::abort();
         }
     }
-    void NativePedPhysicalScalarsOwnedSdk(ClockImageFixture& fixture)
+    void NativePedPhysicalScalarsOwnedSdk(ClockImageFixture& fixture, bool currentWeaponOnly = false)
     {
         namespace S = NativePedPhysicalScalarsProfile;
         namespace R = NativePedReferenceProfile;
@@ -222,104 +225,109 @@ namespace
                       !NativeServiceAdmission::IsClaimed(NativeServiceAdmission::Category::Clock),
                   "scalar retirement acknowledges native cell storage, hooks and owner admission together");
         };
+        if (!currentWeaponOnly)
         {
-            NativeClockService service;
-            BeginOwned(service, fixture, false, true, true, &PedPhysicalScalarsOwnerHandler, &context);
-            const auto invoke = [&]()
             {
-                Check(service.Renew(runtime.generation.load()), "renew the actual callback lease between independent scalar requests");
+                NativeClockService service;
+                BeginOwned(service, fixture, false, true, true, &PedPhysicalScalarsOwnerHandler, &context);
+                const auto invoke = [&]()
+                {
+                    Check(service.Renew(runtime.generation.load()), "renew the actual callback lease between independent scalar requests");
+                    fixture.invokeTimer();
+                };
+                invoke();
+                Check(context.result == ClockResult::Ok && context.token.version && runtime.pedReferences.IsRetained(),
+                      "native physical scalars borrow a token issued only after verified native reference registration");
+                Check(runtime.access.ReadPedPhysicalScalar(context.token, context.field, context.output) != ClockResult::Ok && context.output == 123 &&
+                          runtime.access.SetPedPhysicalScalar(context.token, context.field, 7) != ClockResult::Ok && !ClockPedPhysicalScalarsOwnerTest::stores,
+                      "a valid token cannot lend native scalar authority to a producer between callbacks");
+                context.operation = 1;
+                invoke();
+                Check(context.result == ClockResult::Ok && floatBits(context.output) == 0x3f800001 && !runtime.playerInfo.IsBound(),
+                      "the actual callback reads generic-ped mass without a current-player binding or unit conversion");
+                context.operation = 2;
+                context.target = fromBits(0x7fc12345);
+                invoke();
+                Check(context.result == ClockResult::Ok && raw(S::MassOffset) == 0x7fc12345 && raw(S::TurnMassOffset) == 0x40000001 &&
+                          raw(S::TurnMassOffset + 4) == 0x42a50000 && ClockPedPhysicalScalarsOwnerTest::stores == 1,
+                      "the actual owner commits raw mass NaN payload while leaving adjacent physical scalars untouched");
+                const auto valid = context.token;
+                ++context.token.version;
+                context.output = 123;
+                context.operation = 1;
+                invoke();
+                Check(context.result != ClockResult::Ok && context.output == 123 && ClockPedPhysicalScalarsOwnerTest::stores == 1 && !runtime.stopping.load(),
+                      "a stale scalar token refuses output publication without stopping the unrelated valid owner");
+                context.token = valid;
+                context.operation = 2;
+                context.field = NativePedPhysicalScalarField::TurnMass;
+                context.target = fromBits(0x80000000);
+                invoke();
+                Check(context.result == ClockResult::Ok && raw(S::TurnMassOffset) == 0x80000000 && raw(S::MassOffset) == 0x7fc12345 &&
+                          ClockPedPhysicalScalarsOwnerTest::stores == 2,
+                      "the same native owner preserves signed-zero turn-mass without changing accepted mass");
+                context.operation = 1;
+                invoke();
+                Check(context.result == ClockResult::Ok && floatBits(context.output) == 0x80000000,
+                      "token output is committed only after the complete native scalar read and token postcheck");
+                retire(service);
+                Check(raw(S::MassOffset) == 0x7fc12345 && raw(S::TurnMassOffset) == 0x80000000,
+                      "End retires only reference lifetime and preserves accepted native physical scalar intent");
+            }
+            {
+                context.operation = 0;
+                NativeClockService service;
+                BeginOwned(service, fixture, false, true, true, &PedPhysicalScalarsOwnerHandler, &context);
                 fixture.invokeTimer();
-            };
-            invoke();
-            Check(context.result == ClockResult::Ok && context.token.version && runtime.pedReferences.IsRetained(),
-                  "native physical scalars borrow a token issued only after verified native reference registration");
-            Check(runtime.access.ReadPedPhysicalScalar(context.token, context.field, context.output) != ClockResult::Ok && context.output == 123 &&
-                      runtime.access.SetPedPhysicalScalar(context.token, context.field, 7) != ClockResult::Ok && !ClockPedPhysicalScalarsOwnerTest::stores,
-                  "a valid token cannot lend native scalar authority to a producer between callbacks");
-            context.operation = 1;
-            invoke();
-            Check(context.result == ClockResult::Ok && floatBits(context.output) == 0x3f800001 && !runtime.playerInfo.IsBound(),
-                  "the actual callback reads generic-ped mass without a current-player binding or unit conversion");
-            context.operation = 2;
-            context.target = fromBits(0x7fc12345);
-            invoke();
-            Check(context.result == ClockResult::Ok && raw(S::MassOffset) == 0x7fc12345 && raw(S::TurnMassOffset) == 0x40000001 &&
-                      raw(S::TurnMassOffset + 4) == 0x42a50000 && ClockPedPhysicalScalarsOwnerTest::stores == 1,
-                  "the actual owner commits raw mass NaN payload while leaving adjacent physical scalars untouched");
-            const auto valid = context.token;
-            ++context.token.version;
-            context.output = 123;
-            context.operation = 1;
-            invoke();
-            Check(context.result != ClockResult::Ok && context.output == 123 && ClockPedPhysicalScalarsOwnerTest::stores == 1 && !runtime.stopping.load(),
-                  "a stale scalar token refuses output publication without stopping the unrelated valid owner");
-            context.token = valid;
-            context.operation = 2;
-            context.field = NativePedPhysicalScalarField::TurnMass;
-            context.target = fromBits(0x80000000);
-            invoke();
-            Check(context.result == ClockResult::Ok && raw(S::TurnMassOffset) == 0x80000000 && raw(S::MassOffset) == 0x7fc12345 &&
-                      ClockPedPhysicalScalarsOwnerTest::stores == 2,
-                  "the same native owner preserves signed-zero turn-mass without changing accepted mass");
-            context.operation = 1;
-            invoke();
-            Check(context.result == ClockResult::Ok && floatBits(context.output) == 0x80000000,
-                  "token output is committed only after the complete native scalar read and token postcheck");
-            retire(service);
-            Check(raw(S::MassOffset) == 0x7fc12345 && raw(S::TurnMassOffset) == 0x80000000,
-                  "End retires only reference lifetime and preserves accepted native physical scalar intent");
-        }
-        {
-            context.operation = 0;
-            NativeClockService service;
-            BeginOwned(service, fixture, false, true, true, &PedPhysicalScalarsOwnerHandler, &context);
-            fixture.invokeTimer();
-            Check(context.result == ClockResult::Ok, "a new generation independently acquires its physical scalar token");
-            const auto stores = ClockPedPhysicalScalarsOwnerTest::stores;
-            const auto unlinks = ClockPedReferenceOwnerTest::unregisters;
-            const auto node = ClockPedReferenceOwnerTest::node;
-            ClockPedPhysicalScalarsOwnerTest::cell = ClockPedReferenceOwnerTest::cell;
-            ClockPedPhysicalScalarsOwnerTest::loseToken = true;
-            context.operation = 2;
-            context.field = NativePedPhysicalScalarField::Mass;
-            context.target = fromBits(0xffc07654);
-            Check(service.Renew(runtime.generation.load()), "renew before one accepted scalar loses token acknowledgement");
-            fixture.invokeTimer();
-            Check(context.result != ClockResult::Ok && runtime.stopping.load() && ClockPedPhysicalScalarsOwnerTest::stores == stores + 1 &&
-                      raw(S::MassOffset) == 0xffc07654 && raw(S::TurnMassOffset) == 0x80000000 && !ClockPedPhysicalScalarsOwnerTest::loseToken,
-                  "post-token loss stops after the scalar succeeded and preserves its accepted native mass bits");
-            Check(runtime.pedReferences.IsRetained() && service.IsRetained() &&
-                      ClockPedReferenceOwnerTest::Get<std::uintptr_t>(node + 8) == ClockPedPhysicalScalarsOwnerTest::cell && !service.End(),
-                  "zero reference word cannot free scalar-owner storage while a native node still names its address");
-            fixture.invokeTimer();
-            Check(ClockPedPhysicalScalarsOwnerTest::stores == stores + 1 && ClockPedReferenceOwnerTest::unregisters == unlinks &&
-                      runtime.pedReferences.IsRetained() && !service.End(),
-                  "stopping callbacks retain the cell debt without replaying scalar mutation or native unlink");
-            // Only the already-proved ResolveReferences address-retirement
-            // postcondition can discharge this debt. Accepted mass is never
-            // restored while the reference bank is brought to that state.
-            ClockPedReferenceOwnerTest::Put(node + 8, std::uintptr_t{0});
-            const auto head = ClockPedReferenceOwnerTest::Get<std::uintptr_t>(fixture.image + R::FreeHeadRva);
-            ClockPedReferenceOwnerTest::Put(node, head);
-            ClockPedReferenceOwnerTest::Put(fixture.image + R::FreeHeadRva, node);
-            ClockPedReferenceOwnerTest::Put(reinterpret_cast<std::uintptr_t>(pool.objects) + R::EntityHeadOffset, std::uintptr_t{0});
-            fixture.invokeTimer();
-            retire(service);
-            Check(ClockPedPhysicalScalarsOwnerTest::stores == stores + 1 && ClockPedReferenceOwnerTest::unregisters == unlinks &&
-                      raw(S::MassOffset) == 0xffc07654 && raw(S::TurnMassOffset) == 0x80000000 && raw(S::TurnMassOffset + 4) == 0x42a50000,
-                  "bank-wide address absence finishes retirement with no scalar rollback or action replay");
-        }
+                Check(context.result == ClockResult::Ok, "a new generation independently acquires its physical scalar token");
+                const auto stores = ClockPedPhysicalScalarsOwnerTest::stores;
+                const auto unlinks = ClockPedReferenceOwnerTest::unregisters;
+                const auto node = ClockPedReferenceOwnerTest::node;
+                ClockPedPhysicalScalarsOwnerTest::cell = ClockPedReferenceOwnerTest::cell;
+                ClockPedPhysicalScalarsOwnerTest::loseToken = true;
+                context.operation = 2;
+                context.field = NativePedPhysicalScalarField::Mass;
+                context.target = fromBits(0xffc07654);
+                Check(service.Renew(runtime.generation.load()), "renew before one accepted scalar loses token acknowledgement");
+                fixture.invokeTimer();
+                Check(context.result != ClockResult::Ok && runtime.stopping.load() && ClockPedPhysicalScalarsOwnerTest::stores == stores + 1 &&
+                          raw(S::MassOffset) == 0xffc07654 && raw(S::TurnMassOffset) == 0x80000000 && !ClockPedPhysicalScalarsOwnerTest::loseToken,
+                      "post-token loss stops after the scalar succeeded and preserves its accepted native mass bits");
+                Check(runtime.pedReferences.IsRetained() && service.IsRetained() &&
+                          ClockPedReferenceOwnerTest::Get<std::uintptr_t>(node + 8) == ClockPedPhysicalScalarsOwnerTest::cell && !service.End(),
+                      "zero reference word cannot free scalar-owner storage while a native node still names its address");
+                fixture.invokeTimer();
+                Check(ClockPedPhysicalScalarsOwnerTest::stores == stores + 1 && ClockPedReferenceOwnerTest::unregisters == unlinks &&
+                          runtime.pedReferences.IsRetained() && !service.End(),
+                      "stopping callbacks retain the cell debt without replaying scalar mutation or native unlink");
+                // Only the already-proved ResolveReferences address-retirement
+                // postcondition can discharge this debt. Accepted mass is never
+                // restored while the reference bank is brought to that state.
+                ClockPedReferenceOwnerTest::Put(node + 8, std::uintptr_t{0});
+                const auto head = ClockPedReferenceOwnerTest::Get<std::uintptr_t>(fixture.image + R::FreeHeadRva);
+                ClockPedReferenceOwnerTest::Put(node, head);
+                ClockPedReferenceOwnerTest::Put(fixture.image + R::FreeHeadRva, node);
+                ClockPedReferenceOwnerTest::Put(reinterpret_cast<std::uintptr_t>(pool.objects) + R::EntityHeadOffset, std::uintptr_t{0});
+                fixture.invokeTimer();
+                retire(service);
+                Check(ClockPedPhysicalScalarsOwnerTest::stores == stores + 1 && ClockPedReferenceOwnerTest::unregisters == unlinks &&
+                          raw(S::MassOffset) == 0xffc07654 && raw(S::TurnMassOffset) == 0x80000000 && raw(S::TurnMassOffset + 4) == 0x42a50000,
+                      "bank-wide address absence finishes retirement with no scalar rollback or action replay");
+            }
 #include "NativePedRotationOwnerTests.inl"
 #include "NativePedOxygenStateOwnerTests.inl"
 #include "NativePedFlagsOwnerTests.inl"
 #include "NativePedBehaviorOwnerTests.inl"
 #include "NativePedCombatOwnerTests.inl"
 #include "NativePedWeaponOwnerTests.inl"
+        }
+#include "NativePedCurrentWeaponOwnerTests.inl"
         ClockPedPhysicalScalarsOwnerTest::cell = 0;
         ClockPedPhysicalScalarsOwnerTest::loseToken = false;
         ClockReaderTestHost::image = ClockPedReferenceOwnerTest::image = 0;
         for (auto item = saved.rbegin(); item != saved.rend(); ++item)
             fixture.Patch(item->rva, item->bytes.data(), item->bytes.size());
-        std::puts("Production native ped physical scalars callback owner fixture completed");
+        if (!currentWeaponOnly)
+            std::puts("Production native ped physical scalars callback owner fixture completed");
     }
 }

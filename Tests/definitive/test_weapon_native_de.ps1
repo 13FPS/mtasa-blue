@@ -19,8 +19,8 @@ $record = [ordered]@{
     schema='mta_weapon_native_sdk_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     generatedFixture=$null;result=$null;failure=$null;scratchDirectory=$scratchRoot;scratchRemoved=$false;
-    actualPedWeaponSdkSliceTested=$false;actualWeaponCpuMetadataSdkTested=$false;
-    scope='Actual abstract CWeaponNativeDE nine-method SDK slice and inherited borrowed CPU metadata. Exact immutable token/slot, fullDWORD ammo, representable type/state enum getters, typed refusal outside unfixed enum language ranges, real-owner GetInfo pointer/null forwarding, all explicit native refusal statuses and accepted-effect/no-replay behavior. Other actual SDK methods reject in the generated fixture. No native field proof, complete weapon factory/lifecycle, firing, reload or standalone native weapon is claimed.';
+    actualPedWeaponSdkSliceTested=$false;actualWeaponCpuMetadataSdkTested=$false;actualWeaponCurrentSlotDelegationSdkTested=$false;
+    scope='Actual CWeapon borrowed-ped SetAsCurrentWeapon delegates once, preserves null no-op and propagates ped refusal with no duplicate native owner; fire-time/reload remain separate. Actual abstract CWeaponNativeDE nine-method SDK slice and inherited borrowed CPU metadata. Exact immutable token/slot, fullDWORD ammo, representable type/state enum getters, typed refusal outside unfixed enum language ranges, real-owner GetInfo pointer/null forwarding, all explicit native refusal statuses and accepted-effect/no-replay behavior. Other actual SDK methods reject in the generated fixture. No native field proof, complete weapon factory/lifecycle, firing, reload or standalone native weapon is claimed.';
     nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;installationChanged=$false;
     completeWeaponReady=$false;completeCGameReady=$false;fullMtaReady=$false
 }
@@ -80,17 +80,17 @@ function InterfaceMethods([string]$RelativePath) {
 }
 
 try {
-    $productionSources = @('Client/game_de/CWeaponNativeDE.cpp')
+    $productionSources = @('Client/game_de/CWeaponNativeDE.cpp','Client/game_de/CWeaponPolicyDE.cpp')
     $sourceNames = $productionSources + @('Client/game_de/CWeaponNativeDE.h','Client/game_de/CWeaponPolicyDE.h',
         'Client/game_de/NativeGameTimingAccess.h','Client/game_de/NativePedWeaponFieldsAccess.h','Client/game_de/NativePedWeaponAmmoAccess.h',
         'Client/game_de/NativePedReferenceToken.h','Client/game_de/NativePedPoolReader.h','Client/game_de/NativePedPoolProfile.h',
         'Client/sdk/game/CWeapon.h','Client/sdk/game/CWeaponInfo.h','Client/sdk/game/Common.h','Client/sdk/game/CGameClockService.h','Client/sdk/game/CGameAdapter.h',
-        'Shared/sdk/enums/PedPieceTypes.h','Client/game_sa/CWeaponSA.h','Client/game_sa/CWeaponSA.cpp','Client/game_sa/CWeaponInfoSA.h',
+        'Client/sdk/game/CPed.h','Client/sdk/game/CPhysical.h','Client/sdk/game/CEntity.h','Client/sdk/game/CPedIK.h','Client/sdk/game/CPedSound.h','Shared/sdk/SharedUtil.Defines.h','Shared/sdk/SharedUtil.IntTypes.h','Shared/sdk/CVector.h','Shared/sdk/enums/PedPieceTypes.h','Client/game_sa/CWeaponSA.h','Client/game_sa/CWeaponSA.cpp','Client/game_sa/CWeaponInfoSA.h',
         'Tests/definitive/WeaponNativeDETests.cpp','Tests/definitive/test_weapon_native_de.ps1')
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
     })
-    $provided = @('GetPed','GetSlot','GetType','SetType','GetState','SetState','GetAmmoInClip','SetAmmoInClip','GetAmmoTotal','SetAmmoTotal','GetInfo')
+    $provided = @('SetAsCurrentWeapon','GetPed','GetSlot','GetType','SetType','GetState','SetState','GetAmmoInClip','SetAmmoInClip','GetAmmoTotal','SetAmmoTotal','GetInfo')
     $declaration = [IO.File]::ReadAllText((Join-Path $taskRoot 'Client/game_de/CWeaponNativeDE.h'))
     foreach ($method in @('GetType','SetType','GetState','SetState','GetAmmoInClip','SetAmmoInClip','GetAmmoTotal','SetAmmoTotal','GetInfo')) {
         if ($declaration -notmatch ('\b'+$method+'\s*\([^;{}]*\)\s*(?:const\s*)?override\s*;')) {
@@ -103,6 +103,18 @@ try {
         'class WeaponFixture final : public mta::game_de::CWeaponNativeDE { public:',
         'WeaponFixture(mta::game_de::NativeGameTimingAccess& access,const mta::game_de::NativePedReferenceToken& token,CPed* owner,eWeaponSlot slot) noexcept : CWeaponNativeDE(access,token,owner,slot) {}')
     $lines += @($rejecting | ForEach-Object { $_.signature + ' override { Unqualified(); }' })
+    $lines += @('};','class PedSlotFixture final : public CPed { public:',
+        'unsigned slotCalls = 0; eWeaponSlot lastSlot = WEAPONSLOT_TYPE_UNARMED; bool refuse = false;',
+        'void SetCurrentWeaponSlot(eWeaponSlot slot) override { ++slotCalls; lastSlot = slot; if (refuse) throw std::runtime_error("fixture ped slot refused"); }')
+    $allPedMethods = @(foreach ($header in @('Client/sdk/game/CEntity.h','Client/sdk/game/CPhysical.h','Client/sdk/game/CPed.h')) {
+        InterfaceMethods $header | Where-Object { $_.name -ne 'SetCurrentWeaponSlot' }
+    })
+    $seen = @{}
+    $pedMethods = @($allPedMethods | Where-Object {
+        $key = [regex]::Replace($_.signature,'\s+','')
+        if ($seen.ContainsKey($key)) { $false } else { $seen[$key] = $true; $true }
+    })
+    $lines += @($pedMethods | ForEach-Object { $_.signature + ' override { Unqualified(); }' })
     $lines += @('};','}','#pragma warning(pop)')
     $lines | Set-Content -LiteralPath $generated -Encoding utf8NoBOM
     $durableGenerated = Join-Path $outputRoot 'WeaponNativeFixture.generated.h'
@@ -147,8 +159,9 @@ try {
     }
     $record.actualPedWeaponSdkSliceTested = $text.Contains('Production actual ped-owned CWeapon SDK slice fixture completed')
     $record.actualWeaponCpuMetadataSdkTested = $text.Contains('Production actual CWeapon CPU metadata SDK fixture completed')
+    $record.actualWeaponCurrentSlotDelegationSdkTested = $text.Contains('Production actual CWeapon current-slot delegation SDK fixture completed')
     $record.success = $record.result.test.exitCode -eq 0 -and -not $record.result.test.timedOut -and
-        $record.result.checks -gt 0 -and $record.result.pointerBits -eq 64 -and $record.actualPedWeaponSdkSliceTested -and $record.actualWeaponCpuMetadataSdkTested
+        $record.result.checks -gt 0 -and $record.result.pointerBits -eq 64 -and $record.actualPedWeaponSdkSliceTested -and $record.actualWeaponCpuMetadataSdkTested -and $record.actualWeaponCurrentSlotDelegationSdkTested
     if (-not $record.success) { throw 'Actual ped-owned CWeapon SDK checks or completion evidence failed.' }
 } catch { AddFailure ($_.Exception.ToString()) }
 finally {

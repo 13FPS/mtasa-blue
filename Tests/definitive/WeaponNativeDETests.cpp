@@ -5,6 +5,17 @@
  *****************************************************************************/
 #include "../../Client/game_de/CWeaponNativeDE.h"
 #include "../../Client/game_de/NativeGameTimingAccess.h"
+#include <SharedUtil.Defines.h>
+#include <CVector.h>
+#if defined(_MSC_VER)
+    #pragma warning(push)
+    #pragma warning(disable : 4471)
+#endif
+#include <game/CPed.h>
+#if defined(_MSC_VER)
+    #pragma warning(pop)
+#endif
+#include <game/CPedIK.h>
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -24,7 +35,7 @@ namespace fixture
 }
 
 // The generated subclass rejects the remaining SDK, without overriding the
-// actual production eight-field routes or borrowed owner/slot getters.
+// actual production fields/lookup, CPU metadata or borrowed-ped delegation.
 #include "WeaponNativeFixture.generated.h"
 
 namespace
@@ -325,6 +336,46 @@ int main()
         Check(receiver.fields[field] == acceptedBits[field] && receiver.calls[field * 2 + 1] == counts[field * 2 + 1] + 1,
               "an accepted effect survives reported failure and CPU wrapper destruction without rollback or replay");
     }
+
+    // Use an actual CPed SDK receiver here. The earlier opaque metadata
+    // sentinels are never dereferenced as peds or used for this operation.
+    fixture::PedSlotFixture ped;
+    fixture::PedSlotFixture independentPed;
+    const auto              nativeCallsBeforeDelegation = receiver.calls;
+    const auto              infoCallsBeforeDelegation = receiver.infoCalls;
+    for (unsigned slot = 0; slot < WEAPONSLOT_MAX; ++slot)
+    {
+        fixture::WeaponFixture selected(receiver, retained, &ped, static_cast<eWeaponSlot>(slot));
+        CWeapon&               current = selected;
+        const auto             before = ped.slotCalls;
+        current.SetAsCurrentWeapon();
+        Check(ped.slotCalls == before + 1 && Raw(ped.lastSlot) == slot && !independentPed.slotCalls,
+              "SetAsCurrentWeapon delegates once to the same borrowed ped with the exact existing SDK slot");
+    }
+    {
+        fixture::WeaponFixture noOwner(receiver, retained, nullptr, WEAPONSLOT_TYPE_SHOTGUN);
+        const auto             before = ped.slotCalls;
+        noOwner.SetAsCurrentWeapon();
+        Check(ped.slotCalls == before && !independentPed.slotCalls,
+              "classic null borrowed owner is a no-op without native lookup, fallback owner or selected-slot mutation");
+    }
+    const auto beforeFailure = ped.slotCalls;
+    ped.refuse = true;
+    bool delegatedFailure = false;
+    try
+    {
+        fixture::WeaponFixture selected(receiver, retained, &ped, WEAPONSLOT_MAX);
+        selected.SetAsCurrentWeapon();
+    }
+    catch (const std::runtime_error& error)
+    {
+        delegatedFailure = std::string(error.what()) == "fixture ped slot refused";
+    }
+    Check(delegatedFailure && ped.slotCalls == beforeFailure + 1 && ped.lastSlot == WEAPONSLOT_MAX && !independentPed.slotCalls,
+          "borrowed-ped refusal propagates unchanged after one exact sentinel dispatch with no retry or compensating selection");
+    Check(receiver.calls == nativeCallsBeforeDelegation && receiver.infoCalls == infoCallsBeforeDelegation,
+          "weapon delegation does not acquire a competing field owner, inspect type, query weapon info or write raw slot storage");
+    std::puts("Production actual CWeapon current-slot delegation SDK fixture completed");
 
     ReceiverBase           absent;
     fixture::WeaponFixture unavailable(absent, retained, nullptr, WEAPONSLOT_TYPE_HANDGUN);

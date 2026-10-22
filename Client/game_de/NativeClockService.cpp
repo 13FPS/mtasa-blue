@@ -44,6 +44,7 @@
 #include "NativePedFightingStyleMemory.h"
 #include "NativePedWeaponFieldsMemory.h"
 #include "NativePedWeaponAmmoMemory.h"
+#include "NativePedCurrentWeaponSlotMemory.h"
 #include "NativePedMetadataMemory.h"
 #include "NativeTaskRemovalCalls.h"
 #include "NativeStreamingRequestCalls.h"
@@ -206,6 +207,7 @@ namespace mta::game_de
             ClockResult SetWeaponSlot(std::size_t slot, eWeaponSlot value) noexcept override;
             ClockResult GetWeaponInfoSlot(std::size_t slot, CWeaponInfo*& output) noexcept override;
             ClockResult ReadPedWeaponInfo(const NativePedReferenceToken&, std::uint32_t, eWeaponSkill, CWeaponInfo*&) noexcept override;
+            ClockResult ReadPedCurrentWeaponSlot(const NativePedReferenceToken&, std::uint32_t&) noexcept override;
             ClockResult GetWeaponStatManager(CWeaponStatManager*&) noexcept override;
             ClockResult SetWeatherScalarOverride(NativeWeatherScalarProfile::Field field, float value) noexcept override;
             ClockResult ResetWeatherScalarOverride(NativeWeatherScalarProfile::Field field) noexcept override;
@@ -2747,6 +2749,26 @@ namespace mta::game_de
             if (receipt.entered && result != ClockResult::Ok)
                 Stop(result);
             return result;
+        }
+        ClockResult NativeAccess::ReadPedCurrentWeaponSlot(const NativePedReferenceToken& token, std::uint32_t& output) noexcept
+        {
+            NativePedPoolReader::Value before, after;
+            auto                       result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            std::uint32_t next = 0;
+            result = NativePedCurrentWeaponSlotMemory({runtime.image}, &CheckTimingOwner).ReadCurrentSlot(before, next);
+            if (result != ClockResult::Ok)
+                return result;
+            if ((result = ResolvePedReference(token, after)) != ClockResult::Ok)
+                return result;
+            if (after.nativePed != before.nativePed || after.handle != before.handle)
+                return ClockResult::OwnerConflict;
+            // Preserve the raw unsigned BYTE only after the same registered
+            // native cell survives. This never indexes the weapon array or
+            // grants the unqualified model/actor slot-change lifecycle.
+            output = next;
+            return ClockResult::Ok;
         }
         ClockResult NativeAccess::ReadPedCurrentRotation(const NativePedReferenceToken& token, float& output) noexcept
         {

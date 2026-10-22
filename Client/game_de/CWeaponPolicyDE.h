@@ -1,7 +1,7 @@
 /*****************************************************************************
  * PROJECT: Multi Theft Auto
  * LICENSE: See LICENSE in the repository root
- * PURPOSE: Preserve actual weapon wrapper metadata independently of native slots
+ * PURPOSE: Preserve actual weapon metadata and borrowed-ped delegation
  *****************************************************************************/
 #pragma once
 
@@ -24,6 +24,8 @@ namespace mta::game_de
     public:
         CPed*       GetPed() const noexcept override { return owner; }
         eWeaponSlot GetSlot() const noexcept override { return weaponSlot; }
+        // Native selection remains the borrowed ped virtual's responsibility.
+        void SetAsCurrentWeapon() override;
 
     protected:
         CWeaponPolicyDE(CPed* borrowedOwner, eWeaponSlot slot) noexcept : owner(borrowedOwner), weaponSlot(slot) {}

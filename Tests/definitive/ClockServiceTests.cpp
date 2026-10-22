@@ -50,6 +50,8 @@
 #include "../../Client/game_de/NativePedWeaponProfile.h"
 #include "../../Client/game_de/NativePedWeaponAmmoMemory.h"
 #include "../../Client/game_de/NativePedWeaponAmmoProfile.h"
+#include "../../Client/game_de/NativePedCurrentWeaponSlotMemory.h"
+#include "../../Client/game_de/NativePedCurrentWeaponSlotProfile.h"
 #include "../../Client/game_de/NativePedVitalsProfile.h"
 #include "../../Client/game_de/NativePedMetadataMemory.h"
 #include "../../Client/game_de/NativePedMetadataProfile.h"
@@ -970,6 +972,31 @@ namespace ClockPedWeaponOwnerTest
         return Exchange(ammo, failAmmoAfter, at, expected, target, observed, exception);
     }
 }
+namespace ClockPedCurrentWeaponOwnerTest
+{
+    std::uintptr_t address = 0, cell = 0;
+    unsigned       action = 0;
+    BOOL WINAPI    Read(HANDLE process, LPCVOID source, LPVOID output, SIZE_T bytes, SIZE_T* copied)
+    {
+        const auto result = ::ReadProcessMemory(process, source, output, bytes, copied);
+        if (result && reinterpret_cast<std::uintptr_t>(source) == address && bytes == 1 && action)
+        {
+            const auto selected = action;
+            action = 0;
+            if (selected == 1)
+            {
+                const std::uint8_t changed = 12;
+                std::memcpy(reinterpret_cast<void*>(address), &changed, sizeof(changed));
+            }
+            if (selected == 2)
+            {
+                const std::uintptr_t zero = 0;
+                std::memcpy(reinterpret_cast<void*>(cell), &zero, sizeof(zero));
+            }
+        }
+        return result;
+    }
+}
 namespace ClockPedVelocityOwnerTest
 {
     unsigned stores = 0, failAt = 0, afterAt = 0;
@@ -1815,6 +1842,11 @@ namespace mta::game_de::NativeImageAccess
 #include "../../Client/game_de/NativePedFightingStyleMemory.cpp"
 #undef MTA_DE_PED_FIGHTING_STYLE_EXCHANGE
 #include "../../Client/game_de/NativePedWeaponContext.cpp"
+#pragma push_macro("ReadProcessMemory")
+#undef ReadProcessMemory
+#define ReadProcessMemory ClockPedCurrentWeaponOwnerTest::Read
+#include "../../Client/game_de/NativePedCurrentWeaponSlotMemory.cpp"
+#pragma pop_macro("ReadProcessMemory")
 #define MTA_DE_PED_WEAPON_FIELDS_EXCHANGE ClockPedWeaponOwnerTest::ExchangeFields
 #include "../../Client/game_de/NativePedWeaponFieldsMemory.cpp"
 #undef MTA_DE_PED_WEAPON_FIELDS_EXCHANGE
@@ -6492,17 +6524,18 @@ int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
     const bool pedOwnerOnly = argc == 3 && std::strcmp(argv[2], "--ped-owner") == 0;
-    Check((argc == 2 || pedOwnerOnly) && std::filesystem::path(argv[1]).is_absolute() &&
+    const bool currentWeaponOnly = argc == 3 && std::strcmp(argv[2], "--ped-current-weapon") == 0;
+    Check((argc == 2 || pedOwnerOnly || currentWeaponOnly) && std::filesystem::path(argv[1]).is_absolute() &&
               std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
-    if (pedOwnerOnly)
+    if (pedOwnerOnly || currentWeaponOnly)
     {
         // This fixture creates its pool, reference nodes and callback admission
         // itself. New ped-owned services need that real owner without replaying
         // unrelated weather, streaming and peer-recovery suites on every batch.
         ClockImageFixture fixture;
         fixture.Create(argv[1]);
-        NativePedPhysicalScalarsOwnedSdk(fixture);
+        NativePedPhysicalScalarsOwnedSdk(fixture, currentWeaponOnly);
         std::puts("Production native registered-ped owner slice fixture completed");
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;

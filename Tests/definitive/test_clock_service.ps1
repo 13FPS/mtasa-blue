@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('Full','PedOwner')]
+    [ValidateSet('Full','PedOwner','PedCurrentWeapon')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -25,6 +25,7 @@ $record = [ordered]@{schema='mta_clock_service_tests_v1';directory=$outputRoot;a
 $record['runScope'] = $Scope
 $record['nativePedOwnerSliceTested'] = $false
 $record['nativePedWeaponInstanceOwnerTested'] = $false
+$record['nativePedCurrentWeaponSlotOwnerTested'] = $false
 function Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 function RunBounded([string]$Executable,[string[]]$Arguments,[string]$Name,[int]$DeadlineMs) {
     $stdout = Join-Path $outputRoot ($Name + '.log')
@@ -278,6 +279,18 @@ try {
         'Build/definitive-recovery/mta-weapon-info-lookup-reuse-20261023/weapon-info-lookup-qualified-v2.json',
         'Tests/definitive/NativePedWeaponOwnerTests.inl'
     )
+    $sourceNames += @(
+        'Client/game_de/NativePedCurrentWeaponSlotAccess.h',
+        'Client/game_de/NativePedCurrentWeaponSlotMemory.h',
+        'Client/game_de/NativePedCurrentWeaponSlotMemory.cpp',
+        'Client/game_de/NativePedCurrentWeaponSlotProfile.h',
+        'Client/game_de/CPedWeaponSelectionDE.h',
+        'Client/game_de/CPedWeaponSelectionDE.cpp',
+        'Client/game_de/CWeaponPolicyDE.cpp',
+        'Build/definitive-recovery/mta-native-ped-current-weapon-slot-20261023/current-slot-read-qualified.json',
+        'Build/definitive-recovery/mta-native-ped-current-weapon-slot-20261023/current-weapon-slot-setter-gap.json',
+        'Tests/definitive/NativePedCurrentWeaponOwnerTests.inl'
+    )
     $sourceNames += @($nativeFiles | ForEach-Object { [IO.Path]::GetRelativePath($taskRoot,$_.FullName).Replace('\','/') })
     $detoursNames = @('detours.cpp','modules.cpp','disasm.cpp','image.cpp','creatwth.cpp')
     $sourceNames += @($detoursNames + @('detours.h') | ForEach-Object { 'vendor/detours/4.0.1/src/' + $_ })
@@ -349,11 +362,19 @@ try {
     # Keep it bounded while allowing the full set to finish on a busy build host.
     $fixtureArguments = @($outputRoot)
     if ($Scope -eq 'PedOwner') { $fixtureArguments += '--ped-owner' }
+    if ($Scope -eq 'PedCurrentWeapon') { $fixtureArguments += '--ped-current-weapon' }
     $record.testRun = RunBounded $executable $fixtureArguments 'test' 60000
     $text = [IO.File]::ReadAllText($record.testRun.stdout) + [IO.File]::ReadAllText($record.testRun.stderr)
     if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
     if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
-    if ($Scope -eq 'PedOwner') {
+    if ($Scope -eq 'PedCurrentWeapon') {
+        $record.nativePedOwnerSliceTested = $text.Contains('Production native registered-ped owner slice fixture completed')
+        $record.nativePedCurrentWeaponSlotOwnerTested = $text.Contains('Production native current weapon slot callback owner fixture completed')
+        if (-not ($record.nativePedOwnerSliceTested -and $record.nativePedCurrentWeaponSlotOwnerTested)) {
+            throw 'Current weapon slot read did not finish through the actual selected-ped token callback.'
+        }
+        $record.productionNativeCallbackTested = $true
+    } elseif ($Scope -eq 'PedOwner') {
         $record.nativePedOwnerSliceTested = $text.Contains('Production native registered-ped owner slice fixture completed')
         $record.nativePedPhysicalScalarsOwnerTested = $text.Contains('Production native ped physical scalars callback owner fixture completed')
         $record.nativePedWeaponInstanceOwnerTested = $text.Contains('Production native ped weapon instance callback owner fixture completed')
@@ -461,6 +482,9 @@ try {
     }
     $record.nativeWeaponStatManagerOwnerTested = $text.Contains('Production complete weapon-stat manager callback owner fixture completed')
     if (-not $record.nativeWeaponStatManagerOwnerTested) { throw 'Complete weapon-stat manager did not execute on the actual native callback owner.' }
+    $record.nativePedCurrentWeaponSlotOwnerTested = $text.Contains('Production native current weapon slot callback owner fixture completed')
+    if (-not $record.nativePedCurrentWeaponSlotOwnerTested) { throw 'Current weapon slot read did not finish through the real selected-ped callback.' }
+
     $record.nativePedWeaponInstanceOwnerTested = $text.Contains('Production native ped weapon instance callback owner fixture completed')
     if (-not $record.nativePedWeaponInstanceOwnerTested) { throw 'Selected ped weapon scalars and actual bank lookup did not execute through the registered token callback owner.' }
     $record.nativePedFightingStyleOwnerTested = $text.Contains('Production native fighting-style callback owner fixture completed')

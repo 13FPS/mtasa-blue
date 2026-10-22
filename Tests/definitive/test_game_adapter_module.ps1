@@ -274,6 +274,17 @@ $sourceNames += @(
     'Build/definitive-recovery/mta-native-ped-weapon-ammo-20261023/ped-weapon-ammo-qualified.json',
     'Build/definitive-recovery/mta-weapon-info-lookup-reuse-20261023/weapon-info-lookup-qualified-v2.json'
 )
+$sourceNames += @(
+    'Client/game_de/NativePedCurrentWeaponSlotAccess.h',
+    'Client/game_de/NativePedCurrentWeaponSlotMemory.h',
+    'Client/game_de/NativePedCurrentWeaponSlotMemory.cpp',
+    'Client/game_de/NativePedCurrentWeaponSlotProfile.h',
+    'Client/game_de/CPedWeaponSelectionDE.h',
+    'Client/game_de/CPedWeaponSelectionDE.cpp',
+    'Client/game_de/CWeaponPolicyDE.cpp',
+    'Build/definitive-recovery/mta-native-ped-current-weapon-slot-20261023/current-slot-read-qualified.json',
+    'Build/definitive-recovery/mta-native-ped-current-weapon-slot-20261023/current-weapon-slot-setter-gap.json'
+)
 $sourceNames += @(Get-ChildItem -LiteralPath $detoursSourceRoot -File | ForEach-Object {
     [IO.Path]::GetRelativePath($taskRoot, $_.FullName).Replace('\', '/')
 })
@@ -367,6 +378,9 @@ if ((Test-Path -LiteralPath $moduleSource) -and $detoursLibraryExit -eq 0) {
         (Join-Path $taskRoot 'Client/game_de/NativePedWeaponFieldsMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedWeaponAmmoMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CWeaponNativeDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativePedCurrentWeaponSlotMemory.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CPedWeaponSelectionDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CWeaponPolicyDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedBikeFlagsMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedShotFlagsMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedOxygenMemory.cpp'),

@@ -37,6 +37,8 @@
 #include "NativePedRotationMemory.h"
 #include "NativePedOxygenMemory.h"
 #include "NativePedDuckingMemory.h"
+#include "NativePedBikeFlagsMemory.h"
+#include "NativePedShotFlagsMemory.h"
 #include "NativePedMetadataMemory.h"
 #include "NativeTaskRemovalCalls.h"
 #include "NativeStreamingRequestCalls.h"
@@ -162,6 +164,10 @@ namespace mta::game_de
             ClockResult ReadPedOxygenLevel(const NativePedReferenceToken&, float&) noexcept override;
             ClockResult SetPedOxygenLevel(const NativePedReferenceToken&, float) noexcept override;
             ClockResult ReadPedDucking(const NativePedReferenceToken&, bool&) noexcept override;
+            ClockResult ReadPedCantBeKnockedOffBike(const NativePedReferenceToken&, std::uint32_t&) noexcept override;
+            ClockResult SetPedCantBeKnockedOffBike(const NativePedReferenceToken&, std::uint32_t) noexcept override;
+            ClockResult ReadPedCanBeShotInVehicle(const NativePedReferenceToken&, bool&) noexcept override;
+            ClockResult SetPedCanBeShotInVehicle(const NativePedReferenceToken&, bool) noexcept override;
             ClockResult ReadPedCurrentRotation(const NativePedReferenceToken&, float&) noexcept override;
             ClockResult SetPedCurrentRotation(const NativePedReferenceToken&, float) noexcept override;
             ClockResult ReadPedPhysicalScalar(const NativePedReferenceToken&, NativePedPhysicalScalarField, float&) noexcept override;
@@ -2329,6 +2335,88 @@ namespace mta::game_de
             // false or a task-presence guess. Publish only after token fences.
             output = next;
             return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::ReadPedCantBeKnockedOffBike(const NativePedReferenceToken& token, std::uint32_t& output) noexcept
+        {
+            NativePedPoolReader::Value before, after;
+            auto                       result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            std::uint32_t next;
+            result = NativePedBikeFlagsMemory({runtime.image}, &CheckTimingOwner).ReadCantBeKnockedOffBike(before, next);
+            if (result != ClockResult::Ok)
+                return result;
+            result = ResolvePedReference(token, after);
+            if (result != ClockResult::Ok)
+                return result;
+            if (after.nativePed != before.nativePed || after.handle != before.handle)
+                return ClockResult::OwnerConflict;
+            // Only this named selected-ped flag is published, after the same
+            // registered lifetime survives. No cached/absent fallback exists.
+            output = next;
+            return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::SetPedCantBeKnockedOffBike(const NativePedReferenceToken& token, std::uint32_t value) noexcept
+        {
+            NativePedPoolReader::Value before, after;
+            auto                       result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedBikeFlagsMemory::Receipt receipt;
+            result = NativePedBikeFlagsMemory({runtime.image}, &CheckTimingOwner).SetCantBeKnockedOffBike(before, value, &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = ResolvePedReference(token, after);
+                if (result == ClockResult::Ok && (after.nativePed != before.nativePed || after.handle != before.handle))
+                    result = ClockResult::OwnerConflict;
+            }
+            // Masked field intent may already be accepted before token loss.
+            // Stop without replay or restoring neighbors owned by the engine;
+            // native-visible reference storage remains retirement debt.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+        ClockResult NativeAccess::ReadPedCanBeShotInVehicle(const NativePedReferenceToken& token, bool& output) noexcept
+        {
+            NativePedPoolReader::Value before, after;
+            auto                       result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            bool next;
+            result = NativePedShotFlagsMemory({runtime.image}, &CheckTimingOwner).ReadCanBeShotInVehicle(before, next);
+            if (result != ClockResult::Ok)
+                return result;
+            result = ResolvePedReference(token, after);
+            if (result != ClockResult::Ok)
+                return result;
+            if (after.nativePed != before.nativePed || after.handle != before.handle)
+                return ClockResult::OwnerConflict;
+            // Only this named selected-ped flag is published, after the same
+            // registered lifetime survives. No cached/absent fallback exists.
+            output = next;
+            return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::SetPedCanBeShotInVehicle(const NativePedReferenceToken& token, bool value) noexcept
+        {
+            NativePedPoolReader::Value before, after;
+            auto                       result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedShotFlagsMemory::Receipt receipt;
+            result = NativePedShotFlagsMemory({runtime.image}, &CheckTimingOwner).SetCanBeShotInVehicle(before, value, &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = ResolvePedReference(token, after);
+                if (result == ClockResult::Ok && (after.nativePed != before.nativePed || after.handle != before.handle))
+                    result = ClockResult::OwnerConflict;
+            }
+            // Masked field intent may already be accepted before token loss.
+            // Stop without replay or restoring neighbors owned by the engine;
+            // native-visible reference storage remains retirement debt.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
         }
         ClockResult NativeAccess::ReadPedCurrentRotation(const NativePedReferenceToken& token, float& output) noexcept
         {

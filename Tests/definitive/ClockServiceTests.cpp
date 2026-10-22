@@ -36,6 +36,10 @@
 #include "../../Client/game_de/NativePedOxygenProfile.h"
 #include "../../Client/game_de/NativePedDuckingMemory.h"
 #include "../../Client/game_de/NativePedDuckingProfile.h"
+#include "../../Client/game_de/NativePedBikeFlagsMemory.h"
+#include "../../Client/game_de/NativePedBikeFlagsProfile.h"
+#include "../../Client/game_de/NativePedShotFlagsMemory.h"
+#include "../../Client/game_de/NativePedShotFlagsProfile.h"
 #include "../../Client/game_de/NativePedVitalsProfile.h"
 #include "../../Client/game_de/NativePedMetadataMemory.h"
 #include "../../Client/game_de/NativePedMetadataProfile.h"
@@ -846,6 +850,51 @@ namespace ClockPedOxygenOwnerTest
             std::memcpy(reinterpret_cast<void*>(cell), &zero, sizeof(zero));
         }
         return true;
+    }
+}
+namespace ClockPedFlagsOwnerTest
+{
+    struct Host
+    {
+        unsigned       stores = 0;
+        std::uintptr_t cell = 0;
+        bool           neighborOnce = false, loseToken = false;
+    };
+    Host bike, shot;
+    static_assert(((mta::game_de::NativePedBikeFlagsProfile::KnockoffMask | mta::game_de::NativePedShotFlagsProfile::CanBeShotMask) & 1) == 0);
+    bool Exchange(Host& host, std::uintptr_t address, std::uint32_t expected, std::uint32_t target, std::uint32_t& observed) noexcept
+    {
+        ++host.stores;
+        if (host.neighborOnce)
+        {
+            host.neighborOnce = false;
+            // This genuine unaccepted conflict changes only an unowned bit.
+            // The production masked writer must retain it on any bounded retry.
+            std::uint32_t current = 0;
+            std::memcpy(&current, reinterpret_cast<void*>(address), sizeof(current));
+            current ^= 1;
+            std::memcpy(reinterpret_cast<void*>(address), &current, sizeof(current));
+        }
+        LONG compare = 0, desired = 0;
+        std::memcpy(&compare, &expected, sizeof(compare));
+        std::memcpy(&desired, &target, sizeof(desired));
+        const auto previous = _InterlockedCompareExchange(reinterpret_cast<volatile LONG*>(address), desired, compare);
+        std::memcpy(&observed, &previous, sizeof(observed));
+        if (host.loseToken && observed == expected)
+        {
+            host.loseToken = false;
+            const std::uintptr_t zero = 0;
+            std::memcpy(reinterpret_cast<void*>(host.cell), &zero, sizeof(zero));
+        }
+        return true;
+    }
+    bool ExchangeBike(std::uintptr_t at, std::uint32_t expected, std::uint32_t target, std::uint32_t& observed, std::uint32_t&) noexcept
+    {
+        return Exchange(bike, at, expected, target, observed);
+    }
+    bool ExchangeShot(std::uintptr_t at, std::uint32_t expected, std::uint32_t target, std::uint32_t& observed, std::uint32_t&) noexcept
+    {
+        return Exchange(shot, at, expected, target, observed);
     }
 }
 namespace ClockPedVelocityOwnerTest
@@ -1677,6 +1726,12 @@ namespace mta::game_de::NativeImageAccess
 #include "../../Client/game_de/NativePedOxygenMemory.cpp"
 #undef MTA_DE_PED_OXYGEN_EXCHANGE
 #include "../../Client/game_de/NativePedDuckingMemory.cpp"
+#define MTA_DE_PED_BIKE_FLAGS_EXCHANGE ClockPedFlagsOwnerTest::ExchangeBike
+#include "../../Client/game_de/NativePedBikeFlagsMemory.cpp"
+#undef MTA_DE_PED_BIKE_FLAGS_EXCHANGE
+#define MTA_DE_PED_SHOT_FLAGS_EXCHANGE ClockPedFlagsOwnerTest::ExchangeShot
+#include "../../Client/game_de/NativePedShotFlagsMemory.cpp"
+#undef MTA_DE_PED_SHOT_FLAGS_EXCHANGE
 #pragma pop_macro("InterlockedCompareExchange")
 #undef GetModuleHandleW
 

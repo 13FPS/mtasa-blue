@@ -275,6 +275,15 @@ preserve the full DWORD even when native access is unavailable. This value is
 neither the native ped category nor the entity-type field, and it does not
 publish a concrete ped or prove a factory/destructor mapping.
 
+`CPedFlagsDE` adds MTA's existing vehicle shooting-permission and bike
+knockoff accessors on that same registered lifetime. Independently named native
+commands establish the masks; the neighboring `TestForShotInVehicle` property
+remains unqualified. Bike writes preserve MTA's full-DWORD intent and its low
+two-bit assignment, including stored value three, without claiming a gameplay
+meaning for that value. Conditional masked writes preserve neighboring bits;
+only an unaccepted neighbor-only conflict can retry, within a fixed bound.
+Accepted effects survive failed acknowledgement without replay or rollback.
+
 The abstract `CPedVitalsDE` SDK layer now implements MTA's actual `GetHealth`,
 `SetHealth`, `GetArmor` and `SetArmor` virtual methods through that token-based
 owner. It preserves raw float values and reports a refused native operation

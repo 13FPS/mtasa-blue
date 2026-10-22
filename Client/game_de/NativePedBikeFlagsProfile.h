@@ -1,0 +1,39 @@
+/****************************************************************************
+ * PROJECT: Multi Theft Auto
+ * LICENSE: See LICENSE in the repository root
+ * PURPOSE: Named native bike-knockoff two-bit storage and common initialization
+ ****************************************************************************/
+#pragma once
+#include <array>
+#include <cstddef>
+#include <cstdint>
+namespace mta::game_de::NativePedBikeFlagsProfile
+{
+    inline constexpr std::size_t   FlagsOffset = 0x63c, MaximumAttempts = 8, MaximumPinBytes = 91;
+    inline constexpr std::uint32_t KnockoffMask = 0x18000000, Shift = 27, StoredValueMask = 3;
+    // Named08C6 shifts its full DWORD parameter by27 and replaces exactly
+    // these two bits. Match actual MTA bitfield assignment, including low-two
+    // truncation of every DWORD input; no gameplay meaning for3 is inferred.
+    // The common constructor clears the same pair for both known classes.
+    static_assert(FlagsOffset % sizeof(std::uint32_t) == 0);
+    static_assert((StoredValueMask << Shift) == KnockoffMask);
+    struct Pin
+    {
+        std::uintptr_t       rva;
+        const unsigned char* bytes;
+        std::size_t          size;
+    };
+    inline constexpr std::array<unsigned char, 91> NamedKnockoffBranch = {
+        0xba, 0x02, 0x00, 0x00, 0x00, 0xe8, 0x3f, 0x8a, 0xfe, 0xff, 0x48, 0x63, 0x15, 0x98, 0x8a, 0x14, 0x04, 0x85, 0xd2, 0x78, 0x23, 0x4c, 0x8b,
+        0x05, 0x9d, 0x10, 0x66, 0x04, 0x48, 0x8b, 0xca, 0x48, 0xc1, 0xf9, 0x08, 0x49, 0x8b, 0x40, 0x08, 0x38, 0x14, 0x01, 0x75, 0x0c, 0x48, 0x69,
+        0xf9, 0x10, 0x0b, 0x00, 0x00, 0x49, 0x03, 0x38, 0xeb, 0x02, 0x33, 0xff, 0x8b, 0x05, 0x6d, 0x8a, 0x14, 0x04, 0xc1, 0xe0, 0x1b, 0x33, 0x87,
+        0x3c, 0x06, 0x00, 0x00, 0x25, 0x00, 0x00, 0x00, 0x18, 0x31, 0x87, 0x3c, 0x06, 0x00, 0x00, 0x32, 0xc0, 0xe9, 0x4f, 0x0e, 0x00, 0x00,
+    };
+    inline constexpr std::array<unsigned char, 21> CommonPedKnockoffInitialization = {
+        0x8b, 0x87, 0x3c, 0x06, 0x00, 0x00, 0x25, 0x00, 0x00, 0x00, 0x20, 0x0f, 0xba, 0xe8, 0x1a, 0x89, 0x87, 0x3c, 0x06, 0x00, 0x00,
+    };
+    inline constexpr std::array<Pin, 2> Code = {{
+        {0x10ca4e7, NamedKnockoffBranch.data(), NamedKnockoffBranch.size()},
+        {0x1219d86, CommonPedKnockoffInitialization.data(), CommonPedKnockoffInitialization.size()},
+    }};
+}

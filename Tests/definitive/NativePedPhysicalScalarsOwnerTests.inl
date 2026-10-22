@@ -12,6 +12,8 @@ namespace
         ClockResult                  result = ClockResult::NotInitialized;
         unsigned                     operation = 0;
         bool                         duckingOutput = true;
+        bool                         flagBoolean = true;
+        std::uint32_t                flagInput = 0, flagOutput = 0x12345678;
         float                        target = 0, output = 123;
     };
     void PedPhysicalScalarsOwnerHandler(NativeGameTimingAccess& access, void* opaque)
@@ -42,6 +44,18 @@ namespace
                 break;
             case 7:
                 context.result = access.ReadPedDucking(context.token, context.duckingOutput);
+                break;
+            case 8:
+                context.result = access.ReadPedCantBeKnockedOffBike(context.token, context.flagOutput);
+                break;
+            case 9:
+                context.result = access.SetPedCantBeKnockedOffBike(context.token, context.flagInput);
+                break;
+            case 10:
+                context.result = access.ReadPedCanBeShotInVehicle(context.token, context.duckingOutput);
+                break;
+            case 11:
+                context.result = access.SetPedCanBeShotInVehicle(context.token, context.flagBoolean);
                 break;
             default:
                 std::abort();
@@ -248,6 +262,7 @@ namespace
         }
 #include "NativePedRotationOwnerTests.inl"
 #include "NativePedOxygenStateOwnerTests.inl"
+#include "NativePedFlagsOwnerTests.inl"
         ClockPedPhysicalScalarsOwnerTest::cell = 0;
         ClockPedPhysicalScalarsOwnerTest::loseToken = false;
         ClockReaderTestHost::image = ClockPedReferenceOwnerTest::image = 0;

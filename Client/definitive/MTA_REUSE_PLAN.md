@@ -5,6 +5,28 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+The October 22 startup work reuses MTA's task-wrapper selection, ordered
+registry retirement and model request/reference sequencing in shared SDK
+policies consumed by the actual classic callers. DE observes the native ped
+Intelligence, embedded task manager and task bank through the existing engine
+owner. Its abstract `CTaskManagerDE` implements secondary-task removal for the
+qualified native subset, without publishing persistent task wrappers.
+
+The abstract `CStreamingDE` implements the existing `RequestModel` and
+`HasModelLoaded` methods for qualified ordinary model slots. Native request
+acceptance preserves asynchronous effects and does not imply loading finished.
+Loaded queries use the DE streaming row layout; native model-bank associations
+remain opaque and cannot substitute for SDK model objects or RenderWare data.
+Vehicle upgrades retain MTA's separate dispatch rule and explicitly refuse
+until that native path is qualified. Priority-only loading and native model
+reference ownership are also separate prerequisites.
+
+These batches have offline primitive, actual SDK/callback-owner and normal
+build coverage. The changed classic callers compile through their normal
+project. The installed GTA candidate remains separate from this newer source;
+complete `CPed`, `CPools`, streaming, the `CGame` factory and x64 networking
+still gate full MTA startup and playability.
+
 The October 21 native weapon backend now supplies the complete existing
 `CWeaponInfo` interface through eighty stable SDK objects. `CGameDE` uses MTA's
 shared weapon/skill selection and the existing engine callback owner to obtain

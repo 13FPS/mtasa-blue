@@ -35,6 +35,8 @@
 #include "NativePedPhysicalScalarsMemory.h"
 #include "NativePedMetadataMemory.h"
 #include "NativeTaskRemovalCalls.h"
+#include "NativeStreamingRequestCalls.h"
+#include <game/CModelRequestPolicy.h>
 #include "NativeStartGameCalls.h"
 #include "NativeUObjectMembershipAccess.h"
 #include "NativeUObjectMembershipProfile.h"
@@ -125,6 +127,8 @@ namespace mta::game_de
             ClockResult ReadTaskPoolEntry(std::uintptr_t, NativeTaskPoolReader::Value&) noexcept override;
             ClockResult RemoveReferencedPedSecondaryTask(const NativePedReferenceToken&, int) noexcept override;
             ClockResult ReadModelBankEntry(std::uint32_t, NativeModelBankReader::Value&) noexcept override;
+            ClockResult ReadStreamingModelLoaded(std::uint32_t, NativeModelLoadedReader::Value&) noexcept override;
+            ClockResult RequestStreamingModel(std::uint32_t, std::uint32_t) noexcept override;
             ClockResult ReadPedPhysicalScalar(const NativePedReferenceToken&, NativePedPhysicalScalarField, float&) noexcept override;
             ClockResult SetPedPhysicalScalar(const NativePedReferenceToken&, NativePedPhysicalScalarField, float) noexcept override;
             ClockResult ReadPedCenterOfMass(const NativePedReferenceToken&, CVector&) noexcept override;
@@ -2341,6 +2345,30 @@ namespace mta::game_de
             // A model-bank word is opaque and grants neither SDK publication
             // nor later model/RwObject lifetime or loaded-state authority.
             return NativeModelBankReader({runtime.image}, &CheckTimingOwner).Read(modelIndex, output);
+        }
+        ClockResult NativeAccess::RequestStreamingModel(std::uint32_t modelIndex, std::uint32_t flags) noexcept
+        {
+            // The SDK has a separate upgrade-model request path. Refusing that
+            // missing native operation preserves its dispatch policy instead
+            // of treating an ordinary-model request as a compatible upgrade.
+            if (MtaGame::CModelRequestPolicy::IsUpgradeModel(modelIndex))
+                return ClockResult::UnsupportedBuild;
+            NativeStreamingRequestCalls::Receipt receipt;
+            const auto                           result = NativeStreamingRequestCalls::Request(runtime.image, modelIndex, flags, &CheckTimingOwner, &receipt);
+            // Requesting may already have changed flags, queues or UE state
+            // before failure or lost final acknowledgement. Stop this same
+            // owner after entered failure; never retry, cancel, restore the
+            // old row or claim asynchronous acceptance means fully loaded.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+        ClockResult NativeAccess::ReadStreamingModelLoaded(std::uint32_t modelIndex, NativeModelLoadedReader::Value& output) noexcept
+        {
+            // The raw state1 predicate remains a current-callback fact. SDK
+            // upgrade/render-object checks and model reference ownership are
+            // separate requirements, so no cached loaded result is published.
+            return NativeModelLoadedReader({runtime.image}, &CheckTimingOwner).Read(modelIndex, output);
         }
         ClockResult NativeAccess::ReadTaskPoolEntry(std::uintptr_t task, NativeTaskPoolReader::Value& output) noexcept
         {

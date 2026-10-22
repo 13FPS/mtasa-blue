@@ -41,6 +41,10 @@
 #include "../../Client/game_de/NativeTaskRemovalProfile.h"
 #include "../../Client/game_de/NativeModelBankReader.h"
 #include "../../Client/game_de/NativeModelBankProfile.h"
+#include "../../Client/game_de/NativeModelLoadedReader.h"
+#include "../../Client/game_de/NativeModelLoadedProfile.h"
+#include "../../Client/game_de/NativeStreamingRequestCalls.h"
+#include "../../Client/game_de/NativeStreamingRequestProfile.h"
 #include "../../Client/game_de/NativePlayerInfoMemory.h"
 #include "../../Client/game_de/NativePlayerInfoProfile.h"
 #include "../../Client/game_de/NativePlayerInfoExtraProfile.h"
@@ -132,6 +136,52 @@ namespace ClockModelBankOwnerTest
     std::uintptr_t slot = 0, advanced = 0;
     unsigned       changes = 0;
     bool           advanceOnRead = false;
+}
+
+namespace ClockModelLoadedOwnerTest
+{
+    std::uintptr_t               address = 0;
+    std::array<unsigned char, 2> advanced{};
+    unsigned                     changes = 0;
+    bool                         advanceOnRead = false;
+}
+
+namespace ClockStreamingRequestOwnerTest
+{
+    using NativeFunction = mta::game_de::NativeStreamingRequestCalls::NativeFunction;
+    std::uintptr_t            image = 0, entry = 0, root = 0, replacementRoot = 0;
+    std::uint32_t             modelIndex = 0, flags = 0;
+    unsigned                  calls = 0;
+    bool                      changeRoot = false;
+    mta::game_de::ClockResult result = mta::game_de::ClockResult::Ok;
+    mta::game_de::ClockResult Invoke(NativeFunction function, std::uint32_t model, std::uint32_t requestedFlags, std::uint32_t& exception) noexcept
+    {
+        ++calls;
+        entry = reinterpret_cast<std::uintptr_t>(function) - image;
+        modelIndex = model;
+        flags = requestedFlags;
+        const auto row =
+            image + mta::game_de::NativeModelLoadedProfile::ArrayRva + static_cast<std::uintptr_t>(model) * mta::game_de::NativeModelLoadedProfile::RowStride;
+        unsigned char before = 0;
+        std::memcpy(&before, reinterpret_cast<void*>(row + mta::game_de::NativeModelLoadedProfile::FlagsOffset), 1);
+        const std::array<unsigned char, 2> accepted{static_cast<unsigned char>(before | static_cast<unsigned char>(requestedFlags)), 2};
+        SIZE_T                             written = 0;
+        if (!::WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(row + mta::game_de::NativeModelLoadedProfile::FlagsOffset), accepted.data(),
+                                  accepted.size(), &written) ||
+            written != accepted.size())
+            std::abort();
+        if (changeRoot)
+        {
+            changeRoot = false;
+            if (!::WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(image + mta::game_de::NativeApplicationFrameProfile::rootRva),
+                                      &replacementRoot, sizeof(replacementRoot), &written) ||
+                written != sizeof(replacementRoot))
+                std::abort();
+        }
+        if (result != mta::game_de::ClockResult::Ok)
+            exception = EXCEPTION_ACCESS_VIOLATION;
+        return result;
+    }
 }
 
 namespace ClockStatsOwnerTest
@@ -947,6 +997,24 @@ namespace mta::game_de::NativeImageAccess
         return true;
     }
 
+    bool ModelLoadedOwnerFixtureReadImage(std::uintptr_t image, std::uintptr_t address, void* destination, std::size_t bytes, bool writable = false,
+                                          bool executable = false) noexcept
+    {
+        if (!ReadImage(image, address, destination, bytes, writable, executable))
+            return false;
+        if (ClockModelLoadedOwnerTest::advanceOnRead && address == ClockModelLoadedOwnerTest::address && bytes == 2)
+        {
+            ClockModelLoadedOwnerTest::advanceOnRead = false;
+            SIZE_T written = 0;
+            if (!::WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(address), ClockModelLoadedOwnerTest::advanced.data(),
+                                      ClockModelLoadedOwnerTest::advanced.size(), &written) ||
+                written != 2)
+                std::abort();
+            ++ClockModelLoadedOwnerTest::changes;
+        }
+        return true;
+    }
+
     bool WeaponOwnerFixtureReadImage(std::uintptr_t image, std::uintptr_t address, void* destination, std::size_t bytes, bool writable = false,
                                      bool executable = false) noexcept
     {
@@ -1104,6 +1172,12 @@ namespace mta::game_de::NativeImageAccess
 #define ReadImage ModelBankOwnerFixtureReadImage
 #include "../../Client/game_de/NativeModelBankReader.cpp"
 #undef ReadImage
+#define ReadImage ModelLoadedOwnerFixtureReadImage
+#include "../../Client/game_de/NativeModelLoadedReader.cpp"
+#undef ReadImage
+#define MTA_DE_STREAMING_REQUEST_NATIVE_INVOKE ClockStreamingRequestOwnerTest::Invoke
+#include "../../Client/game_de/NativeStreamingRequestCalls.cpp"
+#undef MTA_DE_STREAMING_REQUEST_NATIVE_INVOKE
 #undef MTA_DE_PED_REFERENCE_UNREGISTER_INVOKE
 #undef MTA_DE_PED_REFERENCE_REGISTER_INVOKE
 #pragma push_macro("InterlockedCompareExchange")
@@ -5778,6 +5852,8 @@ namespace
 #include "NativeTaskPoolOwnerTests.inl"
 #include "NativeTaskSecondaryOwnerTests.inl"
 #include "NativeModelBankOwnerTests.inl"
+#include "NativeModelLoadedOwnerTests.inl"
+#include "NativeStreamingRequestOwnerTests.inl"
 #include "NativeWorldCheatOwnerTests.inl"
 
 int main(int argc, char** argv)
@@ -5822,6 +5898,8 @@ int main(int argc, char** argv)
     NativeTaskPoolOwnedSdk(fixture);
     NativeTaskSecondaryOwnedSdk(fixture);
     NativeModelBankOwnedSdk(fixture);
+    NativeModelLoadedOwnedSdk(fixture);
+    NativeStreamingRequestOwnedSdk(fixture);
     NativeReadSetAndRestoration(fixture);
     NativeCoherentCommandPublication(fixture);
     NativeReadOnlyRetirement(fixture);

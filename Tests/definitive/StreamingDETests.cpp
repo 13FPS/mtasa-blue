@@ -1,0 +1,143 @@
+/****************************************************************************
+ * PROJECT: Multi Theft Auto
+ * LICENSE: See LICENSE in the repository root
+ * PURPOSE: Verify actual streaming SDK dispatch without executing game code
+ ****************************************************************************/
+#include "../../Client/game_de/CStreamingDE.h"
+#include <array>
+#include <cstdio>
+#include <cstdlib>
+#include <limits>
+#include <stdexcept>
+#include <string>
+
+namespace
+{
+    using namespace mta::game_de;
+    unsigned checks = 0;
+    void     Check(bool condition, const char* message)
+    {
+        ++checks;
+        if (!condition)
+            throw std::runtime_error(message);
+    }
+    struct Access final : NativeStreamingModelAccess
+    {
+        unsigned      requests = 0, queries = 0;
+        std::uint32_t model = 0, flags = 0;
+        ClockResult   requestResult = ClockResult::Ok, queryResult = ClockResult::Ok;
+        bool          loaded = false;
+        ClockResult   RequestStreamingModel(std::uint32_t index, std::uint32_t requestFlags) noexcept override
+        {
+            ++requests;
+            model = index;
+            flags = requestFlags;
+            return requestResult;
+        }
+        ClockResult ReadStreamingModelLoaded(std::uint32_t index, NativeModelLoadedReader::Value& output) noexcept override
+        {
+            ++queries;
+            model = index;
+            if (queryResult == ClockResult::Ok)
+            {
+                output.modelIndex = index;
+                output.streamedIn = loaded;
+            }
+            return queryResult;
+        }
+    };
+    // Only the two shipping overrides are exercised. Other SDK operations are
+    // deliberately unavailable in this test-only concrete adapter.
+    struct Streaming final : CStreamingDE
+    {
+        explicit Streaming(NativeStreamingModelAccess& owner) : CStreamingDE(owner) {}
+        [[noreturn]] static void Unavailable() { throw std::logic_error("unrelated SDK operation in streaming fixture"); }
+        void                     RemoveModel(std::uint32_t) override { Unavailable(); }
+        void                     LoadAllRequestedModels(bool, const char*) override { Unavailable(); }
+        void                     RequestSpecialModel(DWORD, const char*, DWORD) override { Unavailable(); }
+        CStreamingInfo*          GetStreamingInfo(uint32) override { Unavailable(); }
+        void                     ReinitStreaming() override { Unavailable(); }
+        unsigned char            AddArchive(const wchar_t*) override { Unavailable(); }
+        void                     RemoveArchive(unsigned char) override { Unavailable(); }
+        void                     SetStreamingInfo(unsigned int, unsigned char, unsigned int, unsigned short, unsigned int) override { Unavailable(); }
+        bool                     SetStreamingBufferSize(uint32) override { Unavailable(); }
+        uint32                   GetStreamingBufferSize() override { Unavailable(); }
+        void                     MakeSpaceFor(std::uint32_t) override { Unavailable(); }
+        std::uint32_t            GetMemoryUsed() const override { Unavailable(); }
+        void                     RemoveBigBuildings() override { Unavailable(); }
+        void                     LoadScene(const CVector*) override { Unavailable(); }
+        void                     LoadSceneCollision(const CVector*) override { Unavailable(); }
+        std::uint32_t            GetNumPedsLoaded() const noexcept override { std::abort(); }
+        bool                     IsModelInLoadedPedGroup(std::uint16_t) const noexcept override { std::abort(); }
+        std::uint32_t            GetNumLoadedVehicles() const noexcept override { std::abort(); }
+        bool                     IsModelInLoadedVehicleGroup(std::uint16_t) const noexcept override { std::abort(); }
+    };
+    template <class Action>
+    void Refuses(Action action, const char* operation)
+    {
+        bool refused = false;
+        try
+        {
+            action();
+        }
+        catch (const std::runtime_error& error)
+        {
+            refused = std::string(error.what()).find(operation) != std::string::npos;
+        }
+        Check(refused, "owner refusal must remain an explicit SDK failure with operation context");
+    }
+}
+int main()
+{
+    try
+    {
+        Access      owner;
+        Streaming   streaming(owner);
+        CStreaming* sdk = &streaming;
+        for (const auto model : std::array<DWORD, 7>{0, 999, 1194, 19999, 20000, 65536, (std::numeric_limits<DWORD>::max)()})
+        {
+            for (const auto flags : std::array<DWORD, 4>{0, 6, 0x16, (std::numeric_limits<DWORD>::max)()})
+            {
+                const auto before = owner.requests;
+                sdk->RequestModel(model, flags);
+                Check(owner.requests == before + 1 && owner.model == model && owner.flags == flags,
+                      "actual SDK request forwards the complete DWORD model and flags once, without narrowing or hidden retries");
+            }
+            for (const bool loaded : {false, true})
+            {
+                owner.loaded = loaded;
+                const auto before = owner.queries;
+                Check(sdk->HasModelLoaded(model) == loaded && owner.queries == before + 1 && owner.model == model,
+                      "actual SDK query preserves true and false loaded results and full model key");
+            }
+        }
+        for (DWORD upgrade = 1000; upgrade <= 1193; ++upgrade)
+        {
+            const auto requests = owner.requests, queries = owner.queries;
+            Refuses([&] { sdk->RequestModel(upgrade, 6); }, "RequestModel");
+            Refuses([&] { (void)sdk->HasModelLoaded(upgrade); }, "HasModelLoaded");
+            Check(owner.requests == requests && owner.queries == queries,
+                  "MTA's entire upgrade interval cannot fall through to an ordinary native request or raw row query");
+        }
+        for (unsigned status = 1; status <= static_cast<unsigned>(ClockResult::OriginalException); ++status)
+        {
+            owner.requestResult = owner.queryResult = static_cast<ClockResult>(status);
+            const auto requests = owner.requests, queries = owner.queries;
+            Refuses([&] { sdk->RequestModel(7, 0x16); }, "RequestModel");
+            Refuses([&] { (void)sdk->HasModelLoaded(7); }, "HasModelLoaded");
+            Check(owner.requests == requests + 1 && owner.queries == queries + 1, "a refused or entered-uncertain request is never retried by the SDK wrapper");
+        }
+        NativeStreamingModelAccess absent;
+        Streaming                  unbound(absent);
+        Refuses([&] { unbound.RequestModel(0, 6); }, "RequestModel");
+        Refuses([&] { (void)unbound.HasModelLoaded(0); }, "HasModelLoaded");
+        std::puts("Production MTA streaming SDK slice fixture completed");
+        std::printf("Passed %u actual MTA streaming SDK checks (%zu-bit)\n", checks, sizeof(void*) * 8);
+        return 0;
+    }
+    catch (const std::exception& error)
+    {
+        std::fprintf(stderr, "Streaming SDK failed after %u checks: %s\n", checks, error.what());
+        return 1;
+    }
+}

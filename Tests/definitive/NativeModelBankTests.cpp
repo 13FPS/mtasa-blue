@@ -3,9 +3,14 @@
  * LICENSE: See LICENSE in the repository root
  * PURPOSE: Actual qualified bounded bank observations over owned SEC_IMAGE pages
  ****************************************************************************/
+// Preserve a containing fixture's entry-point rename when this owned-image
+// scaffold is itself reused by the streaming-state tests.
+#pragma push_macro("main")
+#undef main
 #define main NativeModelBankTransformFixtureMain
 #include "NativePedTransformReaderTests.cpp"
 #undef main
+#pragma pop_macro("main")
 #include "../../Client/game_de/NativeModelBankReader.h"
 #include "../../Client/game_de/NativeModelBankProfile.h"
 #include <thread>

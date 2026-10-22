@@ -15,6 +15,7 @@
 #include "CColStoreSA.h"
 #include "CGameSA.h"
 #include "CModelInfoSA.h"
+#include <game/CModelRequestPolicy.h>
 #include "CPedModelInfoSA.h"
 #include "CPedSA.h"
 #include "CPoolsSA.h"
@@ -388,69 +389,56 @@ uint CModelInfoSA::GetAnimFileIndex()
 
 void CModelInfoSA::Request(EModelRequestType requestType, const char* szTag)
 {
-    // don't bother loading it if it already is
-    if (IsLoaded())
-        return;
-
-    // Bikes can sometimes get stuck when loading unless the anim file is handled like what is does here
-    // Don't change the code below unless you can test it (by recreating the problem it solves)
-    if (IsVehicle())
-    {
-        uint uiAnimFileIndex = GetAnimFileIndex();
-        if (uiAnimFileIndex != 0xffffffff)
+    // Keep dependency loading and native effects in the real model wrapper;
+    // the shared policy preserves their established request/retry ordering.
+    MtaGame::CModelRequestPolicy::Request(
+        requestType, szTag, [this] { return IsLoaded(); },
+        [this](EModelRequestType dependencyType, const char* dependencyTag)
         {
-            uint          uiAnimId = uiAnimFileIndex + pGame->GetBaseIDforIFP();
-            CModelInfoSA* pAnim = static_cast<CModelInfoSA*>(pGame->GetModelInfo(uiAnimId));
-            if (!pAnim)
+            // Bikes can sometimes get stuck when loading unless the anim file is handled like what is does here
+            // Don't change the code below unless you can test it (by recreating the problem it solves)
+            if (IsVehicle())
             {
-                if (uiAnimId != pGame->GetBaseIDforIFP() + 139)
-                    LogEvent(505, "Model no anim", "", SString("%d (%d)", m_dwModelID, uiAnimId));
+                uint uiAnimFileIndex = GetAnimFileIndex();
+                if (uiAnimFileIndex != 0xffffffff)
+                {
+                    uint          uiAnimId = uiAnimFileIndex + pGame->GetBaseIDforIFP();
+                    CModelInfoSA* pAnim = static_cast<CModelInfoSA*>(pGame->GetModelInfo(uiAnimId));
+                    if (!pAnim)
+                    {
+                        if (uiAnimId != pGame->GetBaseIDforIFP() + 139)
+                            LogEvent(505, "Model no anim", "", SString("%d (%d)", m_dwModelID, uiAnimId));
+                    }
+                    else if (!pAnim->IsLoaded())
+                    {
+                        OutputDebugLine(SString("[Models] Requesting anim file %d for model %d", uiAnimId, m_dwModelID));
+                        pAnim->Request(dependencyType, dependencyTag);
+                    }
+                }
             }
-            else if (!pAnim->IsLoaded())
+            else if (m_dwModelID <= 288 && m_dwModelID != 7 && !pGame->GetModelInfo(7)->IsLoaded())
             {
-                OutputDebugLine(SString("[Models] Requesting anim file %d for model %d", uiAnimId, m_dwModelID));
-                pAnim->Request(requestType, szTag);
+                // Skin 7 must be loaded in order for other skins to work. No, really. (#4010)
+                pGame->GetModelInfo(7)->Request(dependencyType, "Model 7");
             }
-        }
-    }
-    else if (m_dwModelID <= 288 && m_dwModelID != 7 && !pGame->GetModelInfo(7)->IsLoaded())
-    {
-        // Skin 7 must be loaded in order for other skins to work. No, really. (#4010)
-        pGame->GetModelInfo(7)->Request(requestType, "Model 7");
-    }
-
-    if (requestType == BLOCKING)
-    {
-        pGame->GetStreaming()->RequestModel(m_dwModelID, 0x16);
-        pGame->GetStreaming()->LoadAllRequestedModels(true, szTag);
-        if (!IsLoaded())
+        },
+        [this](std::uint32_t flags) { pGame->GetStreaming()->RequestModel(m_dwModelID, flags); },
+        [](bool onlyPriority, const char* tag) { pGame->GetStreaming()->LoadAllRequestedModels(onlyPriority, tag); },
+        [this](bool loaded, int attempts, const char* tag)
         {
-            // Try 3 more times, final time without high priority flag
-            int iCount = 0;
-            while (iCount++ < 10 && !IsLoaded())
+            if (!loaded)
             {
-                bool bOnlyPriorityModels = (iCount < 3 || iCount & 1);
-                pGame->GetStreaming()->LoadAllRequestedModels(bOnlyPriorityModels, szTag);
-            }
-            if (!IsLoaded())
-            {
-                AddReportLog(6641, SString("Blocking load fail: %d (%s)", m_dwModelID, szTag));
-                LogEvent(641, "Blocking load fail", "", SString("%d (%s)", m_dwModelID, szTag));
+                AddReportLog(6641, SString("Blocking load fail: %d (%s)", m_dwModelID, tag));
+                LogEvent(641, "Blocking load fail", "", SString("%d (%s)", m_dwModelID, tag));
                 dassert(0);
             }
             else
             {
-                AddReportLog(6642, SString("Blocking load: %d (%s) (Took %d attempts)", m_dwModelID, szTag, iCount));
-                LogEvent(642, "Blocking load", "", SString("%d (%s) (Took %d attempts)", m_dwModelID, szTag, iCount));
+                AddReportLog(6642, SString("Blocking load: %d (%s) (Took %d attempts)", m_dwModelID, tag, attempts));
+                LogEvent(642, "Blocking load", "", SString("%d (%s) (Took %d attempts)", m_dwModelID, tag, attempts));
             }
-        }
-    }
-    else
-    {
-        pGame->GetStreaming()->RequestModel(m_dwModelID, 0x06);
-    }
+        });
 }
-
 void CModelInfoSA::Remove()
 {
     // Don't remove if GTA refers to it somehow.
@@ -482,20 +470,14 @@ bool CModelInfoSA::UnloadUnused()
 
 bool CModelInfoSA::IsLoaded()
 {
-    if (DoIsLoaded())
-    {
-        if (m_dwPendingInterfaceRef)
+    return MtaGame::CModelRequestPolicy::IsLoaded(
+        m_dwReferences, m_dwPendingInterfaceRef, [this] { return DoIsLoaded(); },
+        [this]
         {
-            assert(m_dwReferences > 0);
             m_pInterface = ppModelInfo[m_dwModelID];
             m_pInterface->usNumberOfRefs++;
-            m_dwPendingInterfaceRef = 0;
-        }
-        return true;
-    }
-    return false;
+        });
 }
-
 bool CModelInfoSA::DoIsLoaded()
 {
     // return (BOOL)*(BYTE *)(ARRAY_ModelLoaded + 20*dwModelID);
@@ -1103,32 +1085,15 @@ void CModelInfoSA::StaticFlushPendingRestreamIPL()
 
 void CModelInfoSA::ModelAddRef(EModelRequestType requestType, const char* szTag)
 {
-    // Are we not loaded?
-    if (!IsLoaded())
-    {
-        // Request it. Wait for it to load if we're asked to.
-        if (pGame && pGame->IsASyncLoadingEnabled())
-            Request(requestType, szTag);
-        else
-            Request(BLOCKING, szTag);
-    }
-
-    // Increment the references.
-    if (m_dwReferences == 0)
-    {
-        assert(!m_dwPendingInterfaceRef);
-        if (IsLoaded())
+    MtaGame::CModelRequestPolicy::AddRef(
+        m_dwReferences, m_dwPendingInterfaceRef, requestType, szTag, [this] { return IsLoaded(); }, [] { return pGame && pGame->IsASyncLoadingEnabled(); },
+        [this](EModelRequestType type, const char* tag) { Request(type, tag); },
+        [this]
         {
             m_pInterface = ppModelInfo[m_dwModelID];
             m_pInterface->usNumberOfRefs++;
-        }
-        else
-            m_dwPendingInterfaceRef = 1;
-    }
-
-    m_dwReferences++;
+        });
 }
-
 int CModelInfoSA::GetRefCount()
 {
     return static_cast<int>(m_dwReferences);
@@ -1136,24 +1101,10 @@ int CModelInfoSA::GetRefCount()
 
 void CModelInfoSA::RemoveRef()
 {
-    // Decrement the references
-    if (m_dwReferences > 0)
-        m_dwReferences--;
-
-    if (m_dwReferences == 0 && m_dwPendingInterfaceRef)
-    {
-        m_dwPendingInterfaceRef = 0;
-        return;
-    }
-
-    // Unload it if 0 references left and we're not CJ model.
-    // And if we're loaded.
-    if (m_dwReferences == 0 && m_dwModelID != 0 && IsLoaded())
-    {
-        Remove();
-    }
+    // The final pending cancellation and non-CJ loaded-state check remain
+    // shared MTA policy; Remove still owns the actual native reference effect.
+    MtaGame::CModelRequestPolicy::RemoveRef(m_dwReferences, m_dwPendingInterfaceRef, m_dwModelID, [this] { return IsLoaded(); }, [this] { Remove(); });
 }
-
 void CModelInfoSA::SetAlphaTransparencyEnabled(bool bEnabled)
 {
     m_pInterface = ppModelInfo[m_dwModelID];

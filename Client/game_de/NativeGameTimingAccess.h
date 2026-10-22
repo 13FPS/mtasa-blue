@@ -28,6 +28,7 @@
 #include "NativeTaskPoolReader.h"
 #include "NativeTaskRemovalAccess.h"
 #include "NativeModelBankReader.h"
+#include "NativeStreamingModelAccess.h"
 #include "NativePedPhysicalScalarsAccess.h"
 #include "NativePlayerInfoAccess.h"
 #include "NativeWantedAccess.h"
@@ -59,7 +60,8 @@ namespace mta::game_de
                                    public NativePedMutationAccess,
                                    public NativePedObservationAccess,
                                    public NativePedPhysicalScalarsAccess,
-                                   public NativeTaskRemovalAccess
+                                   public NativeTaskRemovalAccess,
+                                   public NativeStreamingModelAccess
     {
     public:
         virtual ClockResult SetTimeScale(float value) noexcept = 0;

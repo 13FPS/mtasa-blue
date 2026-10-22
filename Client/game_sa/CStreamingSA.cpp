@@ -13,6 +13,7 @@
 #include <core/CCoreInterface.h>
 #include "CStreamingSA.h"
 #include "CModelInfoSA.h"
+#include <game/CModelRequestPolicy.h>
 #include "Fileapi.h"
 #include "processthreadsapi.h"
 #include "CGameSA.h"
@@ -66,7 +67,7 @@ namespace
 
 bool IsUpgradeModelId(DWORD dwModelID)
 {
-    return dwModelID >= 1000 && dwModelID <= 1193;
+    return MtaGame::CModelRequestPolicy::IsUpgradeModel(dwModelID);
 }
 
 CStreamingSA::CStreamingSA()

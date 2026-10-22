@@ -196,6 +196,17 @@ $sourceNames += @(
     'Client/game_de/NativeModelReferenceRelease.cpp',
     'Client/game_de/NativeStreamingRemoveAdmission.h'
 )
+$sourceNames += @(
+    'Client/game_de/NativePedRotationAccess.h',
+    'Client/game_de/NativePedRotationMemory.h',
+    'Client/game_de/NativePedRotationMemory.cpp',
+    'Client/game_de/NativePedRotationProfile.h',
+    'Client/game_de/NativeStreamingSceneCalls.h',
+    'Client/game_de/NativeStreamingSceneCalls.cpp',
+    'Client/game_de/NativeStreamingSceneProfile.h',
+    'Client/game_de/CPedRotationDE.h',
+    'Client/game_de/CPedRotationDE.cpp'
+)
 $sourceNames += @(Get-ChildItem -LiteralPath $detoursSourceRoot -File | ForEach-Object {
     [IO.Path]::GetRelativePath($taskRoot, $_.FullName).Replace('\', '/')
 })
@@ -277,6 +288,9 @@ if ((Test-Path -LiteralPath $moduleSource) -and $detoursLibraryExit -eq 0) {
         (Join-Path $taskRoot 'Client/game_de/CPedMetadataDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CPedMutationDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CPedPhysicsDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CPedRotationDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativePedRotationMemory.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativeStreamingSceneCalls.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedPhysicalScalarsMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedIntelligenceReader.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeTaskPoolReader.cpp'),

@@ -36,6 +36,9 @@ namespace mta::game_de::NativeStreamingCompletionContext
     bool        Profile(std::uintptr_t image) noexcept;
     ClockResult Owner(std::uintptr_t image, CheckOwner) noexcept;
     ClockResult Capture(std::uintptr_t image, Value&) noexcept;
-    bool        Fence(std::uintptr_t image, const Value&) noexcept;
-    bool        Same(const Value&, const Value&, bool sameMode) noexcept;
+    // Extend the same stack-only graph for a genuine completion entry's
+    // independently qualified immediate dependencies; no extra owner is made.
+    bool Add(std::uintptr_t image, std::uintptr_t object, Value&) noexcept;
+    bool Fence(std::uintptr_t image, const Value&) noexcept;
+    bool Same(const Value&, const Value&, bool sameMode) noexcept;
 }

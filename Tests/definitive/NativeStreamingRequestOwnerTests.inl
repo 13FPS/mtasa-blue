@@ -196,7 +196,16 @@ namespace
             Check(context.result != ClockResult::Ok && !ClockStreamingRequestOwnerTest::calls && !runtime.stopping.load(),
                   "unknown raw stream states remain observable but cannot authorize the request operation");
             seedRow(0, 0);
+            ClockStreamingRequestOwnerTest::reenterScene = +[]() noexcept
+            {
+                const CVector position(1, 2, 3);
+                return runtime.access.LoadStreamingScene(&position);
+            };
+            const auto sceneCalls = ClockStreamingSceneOwnerTest::calls;
             invoke();
+            Check(ClockStreamingRequestOwnerTest::nestedScene == ClockResult::Busy && ClockStreamingSceneOwnerTest::calls == sceneCalls,
+                  "same native Request scope refuses recursive adapter scene completion before native entry");
+            ClockStreamingRequestOwnerTest::reenterScene = nullptr;
             Check(
                 context.result == ClockResult::Ok && ClockStreamingRequestOwnerTest::calls == 1 && ClockStreamingRequestOwnerTest::entry == P::RequestRva &&
                     ClockStreamingRequestOwnerTest::modelIndex == 3 && ClockStreamingRequestOwnerTest::flags == 6 &&
@@ -225,6 +234,16 @@ namespace
             Check(ClockStreamingRequestOwnerTest::calls == calls + 1 && fixture.Get<unsigned char>(row + L::StateOffset) == 2,
                   "failure cleanup never replays the request or restores its pre-call streaming bytes");
             ClockStreamingRequestOwnerTest::result = ClockResult::Ok;
+        }
+        {
+            seedRow(0, 0);
+            NativeClockService service;
+            BeginOwned(service, fixture, false, true, true, &StreamingRequestOwnerHandler, &context);
+            const auto calls = ClockStreamingRequestOwnerTest::calls;
+            fixture.invokeTimer();
+            Check(context.result == ClockResult::Ok && ClockStreamingRequestOwnerTest::calls == calls + 1 && !runtime.stopping.load(),
+                  "request gate releases after prior entered exception and permits later deliberate native admission");
+            retire(service);
         }
         {
             seedRow(0, 0);

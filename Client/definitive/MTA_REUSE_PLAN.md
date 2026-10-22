@@ -44,6 +44,17 @@ own wait and completion callbacks. Unresolved requests without those handles
 refuse instead of silently flushing unrelated work. Both paths share the same
 recursion guard; lost acknowledgement preserves effects and stops the owner.
 
+`CStreamingDE::LoadScene` uses the genuine named scene-loading entry and the
+same loading guard. Admission checks the current world, persistent level,
+typed GTA world settings and their native scene target. Adapter model and
+upgrade requests also use that guard, keeping nested requests from borrowing
+a loading operation's live admission; native internal requests remain part of
+the game's own operation. Entered scene effects survive failure without replay.
+The native collision-request command only marks requests asynchronously and
+does not establish MTA's separate synchronous `LoadSceneCollision` contract.
+Streaming memory bytes and the classic paired-buffer protocol also remain
+unmapped; model counts and provider extents cannot stand in for those services.
+
 Ordinary `RemoveModel` uses DE's genuine removal entry for the qualified idle
 and loaded-model branches, including current streaming links and asset owners.
 The direct streaming operation leaves the separate model reference untouched;
@@ -239,6 +250,15 @@ An accepted value persists after End or failed acknowledgement; this raw
 setter neither invokes resurrection nor rewinds later native effects. The
 qualified subset comprises the two exact known ped vtables; complete SDK ped
 publication still requires the remaining entity operations and wrapper wiring.
+
+The abstract `CPedRotationDE` adds MTA's raw current-rotation getter/setter
+through that same registered-ped owner. Native construction, the named heading
+producer and current-facing control consumer qualify the radian field; the SDK
+preserves raw binary32 values rather than wrapping script degrees or updating
+the placement matrix. Each write changes only the current field and retains
+accepted effects on later failure. The adjacent target field still lacks a
+separate semantic mapping, so target rotation remains pure alongside native
+physics repair and the other unfinished ped methods.
 
 The abstract `CPedVitalsDE` SDK layer now implements MTA's actual `GetHealth`,
 `SetHealth`, `GetArmor` and `SetArmor` virtual methods through that token-based

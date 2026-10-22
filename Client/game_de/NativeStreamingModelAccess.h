@@ -7,6 +7,8 @@
 #include "NativeModelLoadedReader.h"
 #include "NativeStreamingModelGroupsReader.h"
 
+class CVector;
+
 namespace mta::game_de
 {
     class NativeStreamingModelAccess
@@ -17,6 +19,9 @@ namespace mta::game_de
         // into acceptance. Priority intent remains distinct from loading all.
         virtual ClockResult ReadStreamingModelGroups(NativeStreamingModelGroupsReader::Value&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult LoadStreamingModels(bool) noexcept { return ClockResult::NotInitialized; }
+        // Scene completion has genuine world/settings effects beyond loading
+        // model rows. An older owner must refuse this separate SDK intent.
+        virtual ClockResult LoadStreamingScene(const CVector*) noexcept { return ClockResult::NotInitialized; }
         // Removal is a direct streaming intent. This does not decrement a
         // model wrapper/reference count or infer final-release ownership.
         virtual ClockResult RemoveStreamingModel(std::uint32_t) noexcept { return ClockResult::NotInitialized; }

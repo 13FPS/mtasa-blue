@@ -27,6 +27,12 @@ namespace
             case 2:
                 context.result = access.SetPedPhysicalScalar(context.token, context.field, context.target);
                 break;
+            case 3:
+                context.result = access.ReadPedCurrentRotation(context.token, context.output);
+                break;
+            case 4:
+                context.result = access.SetPedCurrentRotation(context.token, context.target);
+                break;
             default:
                 std::abort();
         }
@@ -230,6 +236,7 @@ namespace
                       raw(S::MassOffset) == 0xffc07654 && raw(S::TurnMassOffset) == 0x80000000 && raw(S::TurnMassOffset + 4) == 0x42a50000,
                   "bank-wide address absence finishes retirement with no scalar rollback or action replay");
         }
+#include "NativePedRotationOwnerTests.inl"
         ClockPedPhysicalScalarsOwnerTest::cell = 0;
         ClockPedPhysicalScalarsOwnerTest::loseToken = false;
         ClockReaderTestHost::image = ClockPedReferenceOwnerTest::image = 0;

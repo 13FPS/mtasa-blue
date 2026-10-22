@@ -273,6 +273,7 @@
               "retirement neither repeats loading nor restores stale native mode/world state");
     }
 #include "NativeStreamingPriorityOwnerTests.inl"
+#include "NativeStreamingSceneOwnerTests.inl"
     ClockStreamingLoadAllOwnerTest::image = ClockStreamingLoadAllOwnerTest::world = ClockStreamingLoadAllOwnerTest::level = 0;
     ClockStreamingLoadAllOwnerTest::reenter = nullptr;
     std::puts("Production native streaming load-all callback owner fixture completed");

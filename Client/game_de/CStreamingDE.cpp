@@ -11,6 +11,14 @@
 
 namespace mta::game_de
 {
+    void CStreamingDE::LoadScene(const CVector* position)
+    {
+        // Pass the actual SDK pointer once. The native owner copies/qualifies
+        // its finite XYZ intent and accounts for persistent engine effects;
+        // this slice does not substitute collision loading or retry a scene.
+        Require(access.LoadStreamingScene(position), "LoadScene");
+    }
+
     void CStreamingDE::Require(ClockResult result, const char* operation)
     {
         if (result != ClockResult::Ok)

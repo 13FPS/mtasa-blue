@@ -34,6 +34,7 @@
 #include "NativePedReferenceController.h"
 #include "NativePedVitalsMemory.h"
 #include "NativePedPhysicalScalarsMemory.h"
+#include "NativePedRotationMemory.h"
 #include "NativePedMetadataMemory.h"
 #include "NativeTaskRemovalCalls.h"
 #include "NativeStreamingRequestCalls.h"
@@ -42,6 +43,8 @@
 #include "NativeStreamingUpgradeReader.h"
 #include "NativeStreamingUpgradeCalls.h"
 #include "NativeStreamingLoadAllCalls.h"
+#include "NativeStreamingSceneCalls.h"
+#include "NativeStreamingCompletionContext.h"
 #include "NativeStreamingPriorityCalls.h"
 #include "NativeStreamingRemoveCalls.h"
 #include "NativeModelClassificationCalls.h"
@@ -144,6 +147,7 @@ namespace mta::game_de
             ClockResult ReadStreamingModelLoaded(std::uint32_t, NativeModelLoadedReader::Value&) noexcept override;
             ClockResult RequestStreamingModel(std::uint32_t, std::uint32_t) noexcept override;
             ClockResult LoadStreamingModels(bool) noexcept override;
+            ClockResult LoadStreamingScene(const CVector*) noexcept override;
             ClockResult ReadStreamingModelGroups(NativeStreamingModelGroupsReader::Value&) noexcept override;
             ClockResult ReadModelArchiveAllocated(std::uint32_t, bool&) noexcept override;
             ClockResult RemoveStreamingModel(std::uint32_t) noexcept override;
@@ -153,6 +157,8 @@ namespace mta::game_de
             ClockResult ReleaseFinalModelReference(std::uint32_t, NativeModelReferenceRelease::ZeroPolicy) noexcept override;
             ClockResult RequestStreamingUpgrade(std::uint32_t, std::uint32_t) noexcept override;
             ClockResult ReadStreamingUpgradeLoaded(std::uint32_t, bool&) noexcept override;
+            ClockResult ReadPedCurrentRotation(const NativePedReferenceToken&, float&) noexcept override;
+            ClockResult SetPedCurrentRotation(const NativePedReferenceToken&, float) noexcept override;
             ClockResult ReadPedPhysicalScalar(const NativePedReferenceToken&, NativePedPhysicalScalarField, float&) noexcept override;
             ClockResult SetPedPhysicalScalar(const NativePedReferenceToken&, NativePedPhysicalScalarField, float) noexcept override;
             ClockResult ReadPedCenterOfMass(const NativePedReferenceToken&, CVector&) noexcept override;
@@ -2258,6 +2264,47 @@ namespace mta::game_de
             return ClockResult::Ok;
         }
 
+        ClockResult NativeAccess::ReadPedCurrentRotation(const NativePedReferenceToken& token, float& output) noexcept
+        {
+            NativePedPoolReader::Value before, after;
+            auto                       result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            float next;
+            result = NativePedRotationMemory({runtime.image}, &CheckTimingOwner).ReadCurrent(before, next);
+            if (result != ClockResult::Ok)
+                return result;
+            result = ResolvePedReference(token, after);
+            if (result != ClockResult::Ok)
+                return result;
+            if (after.nativePed != before.nativePed || after.handle != before.handle)
+                return ClockResult::OwnerConflict;
+            // Publish raw native radians only after the same registered cell
+            // survives. This observes neither a degree conversion nor target.
+            std::memcpy(&output, &next, sizeof(next));
+            return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::SetPedCurrentRotation(const NativePedReferenceToken& token, float value) noexcept
+        {
+            NativePedPoolReader::Value before, after;
+            auto                       result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedRotationMemory::Receipt receipt;
+            result = NativePedRotationMemory({runtime.image}, &CheckTimingOwner).SetCurrent(before, value, &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = ResolvePedReference(token, after);
+                if (result == ClockResult::Ok && (after.nativePed != before.nativePed || after.handle != before.handle))
+                    result = ClockResult::OwnerConflict;
+            }
+            // The current-facing field can already have changed before token
+            // revocation. Stop without rollback/replay; do not write target,
+            // matrix, placement or a second heading representation here.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
         ClockResult NativeAccess::ReadPedPhysicalScalar(const NativePedReferenceToken& token, NativePedPhysicalScalarField field, float& output) noexcept
         {
             NativePedPoolReader::Value before, after;
@@ -2397,6 +2444,12 @@ namespace mta::game_de
         }
         ClockResult NativeAccess::RequestStreamingModel(std::uint32_t modelIndex, std::uint32_t flags) noexcept
         {
+            // Reuse the native completion scope: scene/loading callbacks may
+            // request recursively, but an adapter replay has no fresh entry.
+            // Native engine-internal direct requests remain engine behavior.
+            if (!NativeStreamingCompletionContext::TryEnter())
+                return ClockResult::Busy;
+            NativeStreamingCompletionContext::Scope scope;
             // The SDK has a separate upgrade-model request path. Refusing that
             // missing native operation preserves its dispatch policy instead
             // of treating an ordinary-model request as a compatible upgrade.
@@ -2461,6 +2514,17 @@ namespace mta::game_de
                 output = value.allocatedInArchive;
             return result;
         }
+        ClockResult NativeAccess::LoadStreamingScene(const CVector* position) noexcept
+        {
+            NativeStreamingSceneCalls::Receipt receipt;
+            const auto                         result = NativeStreamingSceneCalls::Load(runtime.image, position, &CheckTimingOwner, &receipt);
+            // Scene callbacks can already change streaming/world state before
+            // a lost return acknowledgement. Retire this same owner without
+            // replay, restoring old settings or guessing collision effects.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
         ClockResult NativeAccess::LoadStreamingModels(bool onlyPriority) noexcept
         {
             if (onlyPriority)
@@ -2514,8 +2578,14 @@ namespace mta::game_de
         }
         ClockResult NativeAccess::RequestStreamingUpgrade(std::uint32_t modelIndex, std::uint32_t flags) noexcept
         {
-            NativeStreamingUpgradeCalls::Receipt receipt;
-            const auto                           result = NativeStreamingUpgradeCalls::Request(runtime.image, modelIndex, flags, &CheckTimingOwner, &receipt);
+            // Reuse the native completion scope: scene/loading callbacks may
+            // request recursively, but an adapter replay has no fresh entry.
+            // Native engine-internal direct requests remain engine behavior.
+            if (!NativeStreamingCompletionContext::TryEnter())
+                return ClockResult::Busy;
+            NativeStreamingCompletionContext::Scope scope;
+            NativeStreamingUpgradeCalls::Receipt    receipt;
+            const auto result = NativeStreamingUpgradeCalls::Request(runtime.image, modelIndex, flags, &CheckTimingOwner, &receipt);
             // One genuine native upgrade operation owns both model requests.
             // Partial effects or a lost final context cannot be replayed.
             if (receipt.entered && result != ClockResult::Ok)

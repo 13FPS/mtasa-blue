@@ -15,7 +15,7 @@
 namespace mta::game_de
 {
     // The complete streaming service still requires its native archive, memory,
-    // scene operations. Keep those SDK methods pure rather
+    // and collision-scene operations. Keep those SDK methods pure rather
     // than publishing this slice as a complete CStreaming instance.
     class CStreamingDE : public CStreaming
     {
@@ -24,6 +24,7 @@ namespace mta::game_de
         void          RemoveModel(std::uint32_t model) override;
         bool          HasModelLoaded(DWORD model) override;
         void          LoadAllRequestedModels(bool onlyPriority, const char* tag) override;
+        void          LoadScene(const CVector* position) override;
         std::uint32_t GetNumPedsLoaded() const noexcept override;
         bool          IsModelInLoadedPedGroup(std::uint16_t model) const noexcept override;
         std::uint32_t GetNumLoadedVehicles() const noexcept override;

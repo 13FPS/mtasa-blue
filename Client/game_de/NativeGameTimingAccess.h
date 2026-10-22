@@ -32,6 +32,7 @@
 #include "NativeStreamingModelAccess.h"
 #include "NativeModelClassificationAccess.h"
 #include "NativePedPhysicalScalarsAccess.h"
+#include "NativePedRotationAccess.h"
 #include "NativePlayerInfoAccess.h"
 #include "NativeWantedAccess.h"
 #include "NativeRopesAccess.h"
@@ -63,6 +64,7 @@ namespace mta::game_de
                                    public NativePedMutationAccess,
                                    public NativePedObservationAccess,
                                    public NativePedPhysicalScalarsAccess,
+                                   public NativePedRotationAccess,
                                    public NativeTaskRemovalAccess,
                                    public NativeStreamingModelAccess,
                                    public NativeModelClassificationAccess

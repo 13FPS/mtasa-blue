@@ -30,6 +30,8 @@
 #include "../../Client/game_de/NativePedVitalsMemory.h"
 #include "../../Client/game_de/NativePedPhysicalScalarsMemory.h"
 #include "../../Client/game_de/NativePedPhysicalScalarsProfile.h"
+#include "../../Client/game_de/NativePedRotationMemory.h"
+#include "../../Client/game_de/NativePedRotationProfile.h"
 #include "../../Client/game_de/NativePedVitalsProfile.h"
 #include "../../Client/game_de/NativePedMetadataMemory.h"
 #include "../../Client/game_de/NativePedMetadataProfile.h"
@@ -54,6 +56,8 @@
 #include "../../Client/game_de/NativeStreamingUpgradeProfile.h"
 #include "../../Client/game_de/NativeStreamingLoadAllCalls.h"
 #include "../../Client/game_de/NativeStreamingLoadAllProfile.h"
+#include "../../Client/game_de/NativeStreamingSceneCalls.h"
+#include "../../Client/game_de/NativeStreamingSceneProfile.h"
 #include "../../Client/game_de/NativeStreamingPriorityCalls.h"
 #include "../../Client/game_de/NativeStreamingPriorityProfile.h"
 #include "../../Client/game_de/NativeStreamingRemoveCalls.h"
@@ -270,6 +274,44 @@ namespace ClockStreamingLoadAllOwnerTest
         return mta::game_de::ClockResult::Ok;
     }
 }
+namespace ClockStreamingSceneOwnerTest
+{
+    using NativeFunction = mta::game_de::NativeStreamingSceneCalls::NativeFunction;
+    std::uintptr_t image = 0, target = 0, world = 0, level = 0, entry = 0;
+    unsigned       calls = 0, effects = 0, scenario = 0;
+    CVector        received;
+    const CVector* source = nullptr;
+    bool           copied = false;
+    void (*reenter)() noexcept = nullptr;
+    std::array<mta::game_de::ClockResult, 5> nested{};
+    mta::game_de::ClockResult                Invoke(NativeFunction function, const CVector* position, std::uint32_t& exception) noexcept
+    {
+        ++calls;
+        ++effects;
+        entry = reinterpret_cast<std::uintptr_t>(function) - image;
+        std::memcpy(&received, position, sizeof(received));
+        copied = position != source;
+        // Model one persistent engine effect at the final native boundary;
+        // actual scene/streaming implementations remain genuine engine code.
+        reinterpret_cast<unsigned char*>(target)[mta::game_de::NativeStreamingSceneProfile::TargetBytes - 1] = 0x6b;
+        auto* mode = reinterpret_cast<unsigned char*>(world + mta::game_de::NativeStreamingLoadAllProfile::WorldModeOffset);
+        if (*mode == 2)
+            *mode = 1;
+        if (scenario == 1)
+        {
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return mta::game_de::ClockResult::OriginalException;
+        }
+        if (scenario == 2)
+        {
+            const std::uintptr_t zero = 0;
+            std::memcpy(reinterpret_cast<void*>(level + 0xd0), &zero, sizeof(zero));
+        }
+        if (scenario == 3 && reenter)
+            reenter();
+        return mta::game_de::ClockResult::Ok;
+    }
+}
 namespace ClockStreamingResourceOwnerTest
 {
     using NativeFunction = mta::game_de::NativeStreamingResourceCalls::NativeFunction;
@@ -405,10 +447,12 @@ namespace ClockModelLoadedOwnerTest
 namespace ClockStreamingRequestOwnerTest
 {
     using NativeFunction = mta::game_de::NativeStreamingRequestCalls::NativeFunction;
-    std::uintptr_t            image = 0, entry = 0, root = 0, replacementRoot = 0;
-    std::uint32_t             modelIndex = 0, flags = 0;
-    unsigned                  calls = 0;
-    bool                      changeRoot = false;
+    std::uintptr_t image = 0, entry = 0, root = 0, replacementRoot = 0;
+    std::uint32_t  modelIndex = 0, flags = 0;
+    unsigned       calls = 0;
+    bool           changeRoot = false;
+    mta::game_de::ClockResult (*reenterScene)() noexcept = nullptr;
+    mta::game_de::ClockResult nestedScene = mta::game_de::ClockResult::Ok;
     mta::game_de::ClockResult result = mta::game_de::ClockResult::Ok;
     mta::game_de::ClockResult Invoke(NativeFunction function, std::uint32_t model, std::uint32_t requestedFlags, std::uint32_t& exception) noexcept
     {
@@ -426,6 +470,8 @@ namespace ClockStreamingRequestOwnerTest
                                   accepted.size(), &written) ||
             written != accepted.size())
             std::abort();
+        if (reenterScene)
+            nestedScene = reenterScene();
         if (changeRoot)
         {
             changeRoot = false;
@@ -748,6 +794,28 @@ namespace ClockPedPhysicalScalarsOwnerTest
             // The real scalar store succeeded. Clearing only its native weak
             // word tests the Runtime's independent token acknowledgement; the
             // node still names the cell, so no storage may be released yet.
+            const std::uintptr_t zero = 0;
+            std::memcpy(reinterpret_cast<void*>(cell), &zero, sizeof(zero));
+        }
+        return true;
+    }
+}
+namespace ClockPedRotationOwnerTest
+{
+    unsigned       stores = 0;
+    std::uintptr_t cell = 0;
+    bool           loseToken = false;
+    bool           Exchange(std::uintptr_t address, std::uint32_t expected, std::uint32_t target, std::uint32_t& observed, std::uint32_t&) noexcept
+    {
+        ++stores;
+        LONG compare = 0, desired = 0;
+        std::memcpy(&compare, &expected, sizeof(compare));
+        std::memcpy(&desired, &target, sizeof(desired));
+        const auto previous = _InterlockedCompareExchange(reinterpret_cast<volatile LONG*>(address), desired, compare);
+        std::memcpy(&observed, &previous, sizeof(observed));
+        if (loseToken && observed == expected)
+        {
+            loseToken = false;
             const std::uintptr_t zero = 0;
             std::memcpy(reinterpret_cast<void*>(cell), &zero, sizeof(zero));
         }
@@ -1536,6 +1604,9 @@ namespace mta::game_de::NativeImageAccess
 #define MTA_DE_STREAMING_LOADALL_NATIVE_INVOKE ClockStreamingLoadAllOwnerTest::Invoke
 #include "../../Client/game_de/NativeStreamingLoadAllCalls.cpp"
 #undef MTA_DE_STREAMING_LOADALL_NATIVE_INVOKE
+#define MTA_DE_STREAMING_SCENE_NATIVE_INVOKE ClockStreamingSceneOwnerTest::Invoke
+#include "../../Client/game_de/NativeStreamingSceneCalls.cpp"
+#undef MTA_DE_STREAMING_SCENE_NATIVE_INVOKE
 #define MTA_DE_STREAMING_PRIORITY_WAIT_INVOKE  ClockStreamingPriorityOwnerTest::Wait
 #define MTA_DE_STREAMING_PRIORITY_DRAIN_INVOKE ClockStreamingPriorityOwnerTest::Drain
 #include "../../Client/game_de/NativeStreamingPriorityCalls.cpp"
@@ -1573,6 +1644,9 @@ namespace mta::game_de::NativeImageAccess
 #include "../../Client/game_de/NativePedPhysicalScalarsMemory.cpp"
 #pragma pop_macro("ReadProcessMemory")
 #undef MTA_DE_PED_PHYSICAL_SCALARS_EXCHANGE
+#define MTA_DE_PED_ROTATION_EXCHANGE ClockPedRotationOwnerTest::Exchange
+#include "../../Client/game_de/NativePedRotationMemory.cpp"
+#undef MTA_DE_PED_ROTATION_EXCHANGE
 #pragma pop_macro("InterlockedCompareExchange")
 #undef GetModuleHandleW
 

@@ -5,6 +5,7 @@
  ****************************************************************************/
 #include "../../Client/game_de/CStreamingDE.h"
 #include <array>
+#include <cstring>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
@@ -24,10 +25,18 @@ namespace
     }
     struct Access final : NativeStreamingModelAccess
     {
-        unsigned                                requests = 0, queries = 0, upgradeRequests = 0, upgradeQueries = 0, loads = 0, removes = 0;
-        std::uint32_t                           model = 0, flags = 0;
-        ClockResult                             requestResult = ClockResult::Ok, queryResult = ClockResult::Ok;
-        bool                                    loaded = false, lastOnlyPriority = true;
+        unsigned       requests = 0, queries = 0, upgradeRequests = 0, upgradeQueries = 0, loads = 0, removes = 0;
+        std::uint32_t  model = 0, flags = 0;
+        ClockResult    requestResult = ClockResult::Ok, queryResult = ClockResult::Ok;
+        bool           loaded = false, lastOnlyPriority = true;
+        unsigned       scenes = 0;
+        const CVector* scenePointer = nullptr;
+        ClockResult    LoadStreamingScene(const CVector* position) noexcept override
+        {
+            ++scenes;
+            scenePointer = position;
+            return requestResult;
+        }
         unsigned                                groupReads = 0;
         ClockResult                             groupResult = ClockResult::Ok;
         NativeStreamingModelGroupsReader::Value groups;
@@ -102,7 +111,6 @@ namespace
         void                     MakeSpaceFor(std::uint32_t) override { Unavailable(); }
         std::uint32_t            GetMemoryUsed() const override { Unavailable(); }
         void                     RemoveBigBuildings() override { Unavailable(); }
-        void                     LoadScene(const CVector*) override { Unavailable(); }
         void                     LoadSceneCollision(const CVector*) override { Unavailable(); }
     };
     template <class Action>
@@ -248,6 +256,27 @@ int main(int argc, char** argv)
             Refuses([&] { sdk->RemoveModel(17); }, "RemoveModel");
             Check(owner.removes == before + 1, "entered-uncertain direct native removal never retries through the SDK wrapper");
         }
+        owner.requestResult = ClockResult::Ok;
+        CVector                            scene;
+        const std::array<std::uint32_t, 3> sceneBits{0x80000000, 0x3f800001, 0xff7fffff};
+        static_assert(sizeof(CVector) == sizeof(sceneBits));
+        std::memcpy(&scene, sceneBits.data(), sizeof(scene));
+        for (const auto* position : std::array<const CVector*, 2>{&scene, nullptr})
+        {
+            const auto before = owner.scenes;
+            sdk->LoadScene(position);
+            Check(owner.scenes == before + 1 && owner.scenePointer == position,
+                  "actual LoadScene forwards the SDK pointer once; native admission owns finite copied XYZ validation");
+        }
+        Check(std::memcmp(&scene, sceneBits.data(), sizeof(scene)) == 0, "scene SDK dispatch leaves all original XYZ bits untouched");
+        for (unsigned status = 1; status <= static_cast<unsigned>(ClockResult::OriginalException); ++status)
+        {
+            owner.requestResult = static_cast<ClockResult>(status);
+            const auto before = owner.scenes;
+            Refuses([&] { sdk->LoadScene(&scene); }, "LoadScene");
+            Check(owner.scenes == before + 1, "uncertain scene completion refuses explicitly without SDK retry or collision fallback");
+        }
+        std::puts("Production MTA streaming scene SDK fixture completed");
         std::puts("Production MTA streaming load-all SDK fixture completed");
         NativeStreamingModelAccess absent;
         Streaming                  unbound(absent);
@@ -256,6 +285,7 @@ int main(int argc, char** argv)
         Refuses([&] { unbound.RequestModel(1000, 6); }, "RequestModel vehicle upgrade");
         Refuses([&] { (void)unbound.HasModelLoaded(1193); }, "HasModelLoaded vehicle upgrade");
         Refuses([&] { unbound.RemoveModel(17); }, "RemoveModel");
+        Refuses([&] { unbound.LoadScene(&scene); }, "LoadScene");
         Refuses([&] { unbound.LoadAllRequestedModels(false, nullptr); }, "LoadAllRequestedModels");
         Refuses([&] { unbound.LoadAllRequestedModels(true, nullptr); }, "LoadAllRequestedModels priority-only");
         std::puts("Production MTA streaming priority SDK fixture completed");

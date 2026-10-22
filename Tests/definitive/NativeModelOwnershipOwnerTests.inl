@@ -12,6 +12,7 @@ namespace
         UpgradeRequest,
         UpgradeLoaded,
         LoadAll,
+        Scene,
         ResourceRequest,
         Classification,
         ModelType,
@@ -29,6 +30,7 @@ namespace
         NativeModelTypeObservation              typeObservation{true, 77};
         NativeStreamingModelGroupsReader::Value groups;
         NativeModelReferenceRelease::ZeroPolicy zeroPolicy = NativeModelReferenceRelease::ZeroPolicy::KeepResident;
+        const CVector*                          scenePosition = nullptr;
         ClockResult                             result = ClockResult::NotInitialized;
     };
     void ModelOwnershipOwnerHandler(NativeGameTimingAccess& access, void* opaque)
@@ -59,6 +61,9 @@ namespace
                 break;
             case ModelOwnershipOperation::UpgradeRequest:
                 context.result = access.RequestStreamingUpgrade(context.index, context.flags);
+                break;
+            case ModelOwnershipOperation::Scene:
+                context.result = access.LoadStreamingScene(context.scenePosition);
                 break;
             case ModelOwnershipOperation::LoadAll:
                 context.result = access.LoadStreamingModels(context.onlyPriority);

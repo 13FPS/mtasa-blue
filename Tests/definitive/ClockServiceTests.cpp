@@ -46,6 +46,10 @@
 #include "../../Client/game_de/NativePedStayProfile.h"
 #include "../../Client/game_de/NativePedFightingStyleMemory.h"
 #include "../../Client/game_de/NativePedFightingStyleProfile.h"
+#include "../../Client/game_de/NativePedWeaponFieldsMemory.h"
+#include "../../Client/game_de/NativePedWeaponProfile.h"
+#include "../../Client/game_de/NativePedWeaponAmmoMemory.h"
+#include "../../Client/game_de/NativePedWeaponAmmoProfile.h"
 #include "../../Client/game_de/NativePedVitalsProfile.h"
 #include "../../Client/game_de/NativePedMetadataMemory.h"
 #include "../../Client/game_de/NativePedMetadataProfile.h"
@@ -935,6 +939,37 @@ namespace ClockPedCombatOwnerTest
         return result;
     }
 }
+namespace ClockPedWeaponOwnerTest
+{
+    ClockPedFlagsOwnerTest::Host fields, ammo;
+    bool                         failFieldsAfter = false, failAmmoAfter = false;
+    std::uintptr_t               infoTypeAddress = 0;
+    void                         ChangeInfoType()
+    {
+        const std::uint32_t changed = 23;
+        std::memcpy(reinterpret_cast<void*>(infoTypeAddress), &changed, sizeof(changed));
+    }
+
+    bool Exchange(ClockPedFlagsOwnerTest::Host& host, bool failAfter, std::uintptr_t at, std::uint32_t expected, std::uint32_t target, std::uint32_t& observed,
+                  std::uint32_t& exception) noexcept
+    {
+        const auto result = ClockPedFlagsOwnerTest::Exchange(host, at, expected, target, observed);
+        if (failAfter)
+        {
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return false;
+        }
+        return result;
+    }
+    bool ExchangeFields(std::uintptr_t at, std::uint32_t expected, std::uint32_t target, std::uint32_t& observed, std::uint32_t& exception) noexcept
+    {
+        return Exchange(fields, failFieldsAfter, at, expected, target, observed, exception);
+    }
+    bool ExchangeAmmo(std::uintptr_t at, std::uint32_t expected, std::uint32_t target, std::uint32_t& observed, std::uint32_t& exception) noexcept
+    {
+        return Exchange(ammo, failAmmoAfter, at, expected, target, observed, exception);
+    }
+}
 namespace ClockPedVelocityOwnerTest
 {
     unsigned stores = 0, failAt = 0, afterAt = 0;
@@ -1779,6 +1814,14 @@ namespace mta::game_de::NativeImageAccess
 #define MTA_DE_PED_FIGHTING_STYLE_EXCHANGE ClockPedCombatOwnerTest::Exchange
 #include "../../Client/game_de/NativePedFightingStyleMemory.cpp"
 #undef MTA_DE_PED_FIGHTING_STYLE_EXCHANGE
+#include "../../Client/game_de/NativePedWeaponContext.cpp"
+#define MTA_DE_PED_WEAPON_FIELDS_EXCHANGE ClockPedWeaponOwnerTest::ExchangeFields
+#include "../../Client/game_de/NativePedWeaponFieldsMemory.cpp"
+#undef MTA_DE_PED_WEAPON_FIELDS_EXCHANGE
+#define MTA_DE_PED_WEAPON_AMMO_EXCHANGE ClockPedWeaponOwnerTest::ExchangeAmmo
+#include "../../Client/game_de/NativePedWeaponAmmoMemory.cpp"
+#undef MTA_DE_PED_WEAPON_AMMO_EXCHANGE
+
 #pragma pop_macro("InterlockedCompareExchange")
 #undef GetModuleHandleW
 
@@ -6448,8 +6491,22 @@ namespace
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
-    Check(argc == 2 && std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
+    const bool pedOwnerOnly = argc == 3 && std::strcmp(argv[2], "--ped-owner") == 0;
+    Check((argc == 2 || pedOwnerOnly) && std::filesystem::path(argv[1]).is_absolute() &&
+              std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (pedOwnerOnly)
+    {
+        // This fixture creates its pool, reference nodes and callback admission
+        // itself. New ped-owned services need that real owner without replaying
+        // unrelated weather, streaming and peer-recovery suites on every batch.
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        NativePedPhysicalScalarsOwnedSdk(fixture);
+        std::puts("Production native registered-ped owner slice fixture completed");
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     ClockInterfaceContract();
     NativeContractValidation();
     NativeServiceAdmissionContract();

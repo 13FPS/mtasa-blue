@@ -143,6 +143,21 @@ State9/request0/pump0 can predate a new request, so those values alone supply no
 transaction history. The observation reports native pump retirement and leaves
 MTA's existing loaded-session checks responsible for player/network readiness.
 
+The abstract `CWeaponNativeDE` implements MTA's type, state and independent
+clip/total-ammo accessors on the genuine thirteen-slot native ped weapon array.
+The shared context rechecks the selected slot and raw type, and one mutation
+guard covers all four DWORD fields. These operations preserve raw MTA storage;
+the script ammo clamp and coupled initialization effects are not substituted.
+Typed getters refuse values outside the SDK enum's language range before
+conversion, without changing global enum declarations or claiming gameplay
+ranges. `CWeaponPolicyDE` preserves the explicit borrowed CPU ped/slot pair.
+
+`GetInfo` reuses MTA's existing selector and the qualified runtime weapon-info
+bank, with current type and registered-token bookends. A legitimate missing
+selection returns null; lost ownership or an unavailable bank remains an
+explicit failure. The wrapper is still abstract: standalone allocation,
+initialization, removal, firing and native reload timing remain separate work.
+
 MTA's `CreateWeaponStat` factory also shares its existing defaults and flag
 transition policy between classic and DE. The complete owned `CWeaponStat`
 contains custom CPU data, as the classic unlisted factory does; its mutable

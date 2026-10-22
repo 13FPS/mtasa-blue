@@ -42,6 +42,8 @@
 #include "NativePedBleedingMemory.h"
 #include "NativePedStayMemory.h"
 #include "NativePedFightingStyleMemory.h"
+#include "NativePedWeaponFieldsMemory.h"
+#include "NativePedWeaponAmmoMemory.h"
 #include "NativePedMetadataMemory.h"
 #include "NativeTaskRemovalCalls.h"
 #include "NativeStreamingRequestCalls.h"
@@ -177,6 +179,14 @@ namespace mta::game_de
             ClockResult SetPedStayInSamePlace(const NativePedReferenceToken&, bool) noexcept override;
             ClockResult ReadPedFightingStyle(const NativePedReferenceToken&, std::uint8_t&) noexcept override;
             ClockResult SetPedFightingStyle(const NativePedReferenceToken&, std::uint8_t, std::uint8_t) noexcept override;
+            ClockResult ReadPedWeaponType(const NativePedReferenceToken&, std::uint32_t, std::uint32_t&) noexcept override;
+            ClockResult SetPedWeaponType(const NativePedReferenceToken&, std::uint32_t, std::uint32_t) noexcept override;
+            ClockResult ReadPedWeaponState(const NativePedReferenceToken&, std::uint32_t, std::uint32_t&) noexcept override;
+            ClockResult SetPedWeaponState(const NativePedReferenceToken&, std::uint32_t, std::uint32_t) noexcept override;
+            ClockResult ReadPedWeaponAmmoInClip(const NativePedReferenceToken&, std::uint32_t, std::uint32_t&) noexcept override;
+            ClockResult SetPedWeaponAmmoInClip(const NativePedReferenceToken&, std::uint32_t, std::uint32_t) noexcept override;
+            ClockResult ReadPedWeaponAmmoTotal(const NativePedReferenceToken&, std::uint32_t, std::uint32_t&) noexcept override;
+            ClockResult SetPedWeaponAmmoTotal(const NativePedReferenceToken&, std::uint32_t, std::uint32_t) noexcept override;
             ClockResult ReadPedCurrentRotation(const NativePedReferenceToken&, float&) noexcept override;
             ClockResult SetPedCurrentRotation(const NativePedReferenceToken&, float) noexcept override;
             ClockResult ReadPedPhysicalScalar(const NativePedReferenceToken&, NativePedPhysicalScalarField, float&) noexcept override;
@@ -195,6 +205,7 @@ namespace mta::game_de
             ClockResult SetWeaponFireOffset(std::size_t slot, const CVector* source) noexcept override;
             ClockResult SetWeaponSlot(std::size_t slot, eWeaponSlot value) noexcept override;
             ClockResult GetWeaponInfoSlot(std::size_t slot, CWeaponInfo*& output) noexcept override;
+            ClockResult ReadPedWeaponInfo(const NativePedReferenceToken&, std::uint32_t, eWeaponSkill, CWeaponInfo*&) noexcept override;
             ClockResult GetWeaponStatManager(CWeaponStatManager*&) noexcept override;
             ClockResult SetWeatherScalarOverride(NativeWeatherScalarProfile::Field field, float value) noexcept override;
             ClockResult ResetWeatherScalarOverride(NativeWeatherScalarProfile::Field field) noexcept override;
@@ -2121,6 +2132,39 @@ namespace mta::game_de
             return ClockResult::Ok;
         }
 
+        ClockResult NativeAccess::ReadPedWeaponInfo(const NativePedReferenceToken& token, std::uint32_t slot, eWeaponSkill skill, CWeaponInfo*& output) noexcept
+        {
+            NativePedPoolReader::Value before, after;
+            auto                       result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedWeaponContext        context({runtime.image}, &CheckTimingOwner);
+            NativePedWeaponContext::Value selected;
+            if ((result = context.Capture(before, slot, selected)) != ClockResult::Ok)
+                return result;
+            CWeaponInfo* next = nullptr;
+            std::size_t  index = 0;
+            // The raw native DWORD can contain values outside C++'s unfixed
+            // enum range. Refuse before constructing an invalid enum object
+            // merely to ask the existing shared selector. Raw scalar access
+            // retains its independent complete-DWORD storage contract.
+            static_assert(WEAPONTYPE_INVALID == 255);
+            if (selected.rawType > 255)
+                return ClockResult::InvalidArgument;
+            if (MtaGame::CWeaponInfoIndexPolicy::TryGetIndex(static_cast<eWeaponType>(selected.rawType), skill, index))
+            {
+                if ((result = GetWeaponInfoSlot(index, next)) != ClockResult::Ok)
+                    return result;
+            }
+            if ((result = context.Recheck(selected)) != ClockResult::Ok)
+                return result;
+            if ((result = ResolvePedReference(token, after)) != ClockResult::Ok)
+                return result;
+            if (after.nativePed != before.nativePed || after.handle != before.handle)
+                return ClockResult::OwnerConflict;
+            output = next;
+            return ClockResult::Ok;
+        }
         ClockResult NativeAccess::SetWeaponFireOffset(std::size_t slot, const CVector* source) noexcept
         {
             const auto owner = RequireWeaponWriterReader();
@@ -2544,6 +2588,162 @@ namespace mta::game_de
             // Same-style verified no-op has not entered a write. Otherwise
             // accepted or unknown effects survive lost acknowledgement; Stop
             // without replay while native-visible reference debt is retained.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+        ClockResult NativeAccess::ReadPedWeaponType(const NativePedReferenceToken& token, std::uint32_t slot, std::uint32_t& output) noexcept
+        {
+            NativePedPoolReader::Value before, after;
+            auto                       result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            std::uint32_t next = 0;
+            result = NativePedWeaponFieldsMemory({runtime.image}, &CheckTimingOwner).ReadType(before, slot, next);
+            if (result != ClockResult::Ok)
+                return result;
+            result = ResolvePedReference(token, after);
+            if (result != ClockResult::Ok)
+                return result;
+            if (after.nativePed != before.nativePed || after.handle != before.handle)
+                return ClockResult::OwnerConflict;
+            output = next;
+            return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::SetPedWeaponType(const NativePedReferenceToken& token, std::uint32_t slot, std::uint32_t value) noexcept
+        {
+            NativePedPoolReader::Value before, after;
+            auto                       result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedWeaponFieldsMemory::Receipt receipt;
+            result = NativePedWeaponFieldsMemory({runtime.image}, &CheckTimingOwner).SetType(before, slot, value, &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = ResolvePedReference(token, after);
+                if (result == ClockResult::Ok && (after.nativePed != before.nativePed || after.handle != before.handle))
+                    result = ClockResult::OwnerConflict;
+            }
+            // A single raw slot store can survive lost acknowledgement. Stop
+            // the same owner without replay/rollback; reference cells remain
+            // address-retirement debt until native visibility is discharged.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+        ClockResult NativeAccess::ReadPedWeaponState(const NativePedReferenceToken& token, std::uint32_t slot, std::uint32_t& output) noexcept
+        {
+            NativePedPoolReader::Value before, after;
+            auto                       result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            std::uint32_t next = 0;
+            result = NativePedWeaponFieldsMemory({runtime.image}, &CheckTimingOwner).ReadState(before, slot, next);
+            if (result != ClockResult::Ok)
+                return result;
+            result = ResolvePedReference(token, after);
+            if (result != ClockResult::Ok)
+                return result;
+            if (after.nativePed != before.nativePed || after.handle != before.handle)
+                return ClockResult::OwnerConflict;
+            output = next;
+            return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::SetPedWeaponState(const NativePedReferenceToken& token, std::uint32_t slot, std::uint32_t value) noexcept
+        {
+            NativePedPoolReader::Value before, after;
+            auto                       result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedWeaponFieldsMemory::Receipt receipt;
+            result = NativePedWeaponFieldsMemory({runtime.image}, &CheckTimingOwner).SetState(before, slot, value, &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = ResolvePedReference(token, after);
+                if (result == ClockResult::Ok && (after.nativePed != before.nativePed || after.handle != before.handle))
+                    result = ClockResult::OwnerConflict;
+            }
+            // A single raw slot store can survive lost acknowledgement. Stop
+            // the same owner without replay/rollback; reference cells remain
+            // address-retirement debt until native visibility is discharged.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+        ClockResult NativeAccess::ReadPedWeaponAmmoInClip(const NativePedReferenceToken& token, std::uint32_t slot, std::uint32_t& output) noexcept
+        {
+            NativePedPoolReader::Value before, after;
+            auto                       result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            std::uint32_t next = 0;
+            result = NativePedWeaponAmmoMemory({runtime.image}, &CheckTimingOwner).ReadAmmoInClip(before, slot, next);
+            if (result != ClockResult::Ok)
+                return result;
+            result = ResolvePedReference(token, after);
+            if (result != ClockResult::Ok)
+                return result;
+            if (after.nativePed != before.nativePed || after.handle != before.handle)
+                return ClockResult::OwnerConflict;
+            output = next;
+            return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::SetPedWeaponAmmoInClip(const NativePedReferenceToken& token, std::uint32_t slot, std::uint32_t value) noexcept
+        {
+            NativePedPoolReader::Value before, after;
+            auto                       result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedWeaponAmmoMemory::Receipt receipt;
+            result = NativePedWeaponAmmoMemory({runtime.image}, &CheckTimingOwner).SetAmmoInClip(before, slot, value, &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = ResolvePedReference(token, after);
+                if (result == ClockResult::Ok && (after.nativePed != before.nativePed || after.handle != before.handle))
+                    result = ClockResult::OwnerConflict;
+            }
+            // A single raw slot store can survive lost acknowledgement. Stop
+            // the same owner without replay/rollback; reference cells remain
+            // address-retirement debt until native visibility is discharged.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+        ClockResult NativeAccess::ReadPedWeaponAmmoTotal(const NativePedReferenceToken& token, std::uint32_t slot, std::uint32_t& output) noexcept
+        {
+            NativePedPoolReader::Value before, after;
+            auto                       result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            std::uint32_t next = 0;
+            result = NativePedWeaponAmmoMemory({runtime.image}, &CheckTimingOwner).ReadAmmoTotal(before, slot, next);
+            if (result != ClockResult::Ok)
+                return result;
+            result = ResolvePedReference(token, after);
+            if (result != ClockResult::Ok)
+                return result;
+            if (after.nativePed != before.nativePed || after.handle != before.handle)
+                return ClockResult::OwnerConflict;
+            output = next;
+            return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::SetPedWeaponAmmoTotal(const NativePedReferenceToken& token, std::uint32_t slot, std::uint32_t value) noexcept
+        {
+            NativePedPoolReader::Value before, after;
+            auto                       result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedWeaponAmmoMemory::Receipt receipt;
+            result = NativePedWeaponAmmoMemory({runtime.image}, &CheckTimingOwner).SetAmmoTotal(before, slot, value, &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = ResolvePedReference(token, after);
+                if (result == ClockResult::Ok && (after.nativePed != before.nativePed || after.handle != before.handle))
+                    result = ClockResult::OwnerConflict;
+            }
+            // A single raw slot store can survive lost acknowledgement. Stop
+            // the same owner without replay/rollback; reference cells remain
+            // address-retirement debt until native visibility is discharged.
             if (receipt.entered && result != ClockResult::Ok)
                 Stop(result);
             return result;

@@ -40,6 +40,8 @@
 #include "NativePedBleedingAccess.h"
 #include "NativePedStayAccess.h"
 #include "NativePedFightingStyleAccess.h"
+#include "NativePedWeaponFieldsAccess.h"
+#include "NativePedWeaponAmmoAccess.h"
 #include "NativePlayerInfoAccess.h"
 #include "NativeWantedAccess.h"
 #include "NativeRopesAccess.h"
@@ -49,6 +51,7 @@ class CStats;
 class CWeaponStatManager;
 class CPlayerInfo;
 class CRopes;
+enum eWeaponSkill : std::uint8_t;
 
 namespace mta::game_de
 {
@@ -79,6 +82,8 @@ namespace mta::game_de
                                    public NativePedBleedingAccess,
                                    public NativePedStayAccess,
                                    public NativePedFightingStyleAccess,
+                                   public NativePedWeaponFieldsAccess,
+                                   public NativePedWeaponAmmoAccess,
                                    public NativeTaskRemovalAccess,
                                    public NativeStreamingModelAccess,
                                    public NativeModelClassificationAccess
@@ -102,6 +107,14 @@ namespace mta::game_de
         // Shared MTA lookup can publish only a genuine bank wrapper qualified
         // by this native owner, never a partial provider or a cached fake row.
         virtual ClockResult GetWeaponInfoSlot(std::size_t, CWeaponInfo*&) noexcept { return ClockResult::NotInitialized; }
+        // Match actual CWeapon::GetInfo by selecting the stable MTA bank from
+        // this registered ped's current inline type. Invalid SDK mapping is a
+        // qualified null result; callback or lifetime failure remains refusal.
+        virtual ClockResult ReadPedWeaponInfo(const NativePedReferenceToken&, std::uint32_t, eWeaponSkill, CWeaponInfo*&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
+
         // Only the complete runtime-owned manager may be published. Its CPU
         // registry/SDK identity never grants a native row write callback.
         virtual ClockResult GetWeaponStatManager(CWeaponStatManager*&) noexcept { return ClockResult::NotInitialized; }

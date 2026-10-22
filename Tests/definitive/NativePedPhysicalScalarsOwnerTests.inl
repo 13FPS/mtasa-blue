@@ -15,6 +15,9 @@ namespace
         bool                         flagBoolean = true;
         std::uint32_t                flagInput = 0, flagOutput = 0x12345678;
         std::uint8_t                 styleInput = 0, styleExtra = 0, styleOutput = 0xfa;
+        std::uint32_t                weaponSlot = 0, weaponInput = 0, weaponOutput = 0xdeadbeef;
+        eWeaponSkill                 weaponSkill = WEAPONSKILL_STD;
+        CWeaponInfo*                 weaponInfo = reinterpret_cast<CWeaponInfo*>(std::uintptr_t{0x5678});
         float                        target = 0, output = 123;
     };
     void PedPhysicalScalarsOwnerHandler(NativeGameTimingAccess& access, void* opaque)
@@ -75,6 +78,33 @@ namespace
                 break;
             case 17:
                 context.result = access.SetPedFightingStyle(context.token, context.styleInput, context.styleExtra);
+                break;
+            case 18:
+                context.result = access.ReadPedWeaponType(context.token, context.weaponSlot, context.weaponOutput);
+                break;
+            case 19:
+                context.result = access.SetPedWeaponType(context.token, context.weaponSlot, context.weaponInput);
+                break;
+            case 20:
+                context.result = access.ReadPedWeaponState(context.token, context.weaponSlot, context.weaponOutput);
+                break;
+            case 21:
+                context.result = access.SetPedWeaponState(context.token, context.weaponSlot, context.weaponInput);
+                break;
+            case 22:
+                context.result = access.ReadPedWeaponAmmoInClip(context.token, context.weaponSlot, context.weaponOutput);
+                break;
+            case 23:
+                context.result = access.SetPedWeaponAmmoInClip(context.token, context.weaponSlot, context.weaponInput);
+                break;
+            case 24:
+                context.result = access.ReadPedWeaponAmmoTotal(context.token, context.weaponSlot, context.weaponOutput);
+                break;
+            case 25:
+                context.result = access.SetPedWeaponAmmoTotal(context.token, context.weaponSlot, context.weaponInput);
+                break;
+            case 26:
+                context.result = access.ReadPedWeaponInfo(context.token, context.weaponSlot, context.weaponSkill, context.weaponInfo);
                 break;
             default:
                 std::abort();
@@ -284,6 +314,7 @@ namespace
 #include "NativePedFlagsOwnerTests.inl"
 #include "NativePedBehaviorOwnerTests.inl"
 #include "NativePedCombatOwnerTests.inl"
+#include "NativePedWeaponOwnerTests.inl"
         ClockPedPhysicalScalarsOwnerTest::cell = 0;
         ClockPedPhysicalScalarsOwnerTest::loseToken = false;
         ClockReaderTestHost::image = ClockPedReferenceOwnerTest::image = 0;

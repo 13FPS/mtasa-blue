@@ -253,6 +253,27 @@ $sourceNames += @(
     'Client/game_de/CPedCombatDE.h',
     'Client/game_de/CPedCombatDE.cpp'
 )
+$sourceNames += @(
+    'Client/game_de/NativePedWeaponContext.h',
+    'Client/game_de/NativePedWeaponContext.cpp',
+    'Client/game_de/NativePedWeaponProfile.h',
+    'Client/game_de/NativePedWeaponFieldsAccess.h',
+    'Client/game_de/NativePedWeaponFieldsMemory.h',
+    'Client/game_de/NativePedWeaponFieldsMemory.cpp',
+    'Client/game_de/NativePedWeaponAmmoAccess.h',
+    'Client/game_de/NativePedWeaponAmmoMemory.h',
+    'Client/game_de/NativePedWeaponAmmoMemory.cpp',
+    'Client/game_de/NativePedWeaponAmmoProfile.h',
+    'Client/game_de/CWeaponPolicyDE.h',
+    'Client/game_de/CWeaponNativeDE.h',
+    'Client/game_de/CWeaponNativeDE.cpp',
+    'Client/sdk/game/CWeapon.h',
+    'Client/sdk/game/CWeaponInfo.h',
+    'Client/sdk/game/CWeaponInfoIndexPolicy.h',
+    'Build/definitive-recovery/mta-native-weapon-instance-fields-20261023/native-proof/weapon-instance-fields-qualified.json',
+    'Build/definitive-recovery/mta-native-ped-weapon-ammo-20261023/ped-weapon-ammo-qualified.json',
+    'Build/definitive-recovery/mta-weapon-info-lookup-reuse-20261023/weapon-info-lookup-qualified-v2.json'
+)
 $sourceNames += @(Get-ChildItem -LiteralPath $detoursSourceRoot -File | ForEach-Object {
     [IO.Path]::GetRelativePath($taskRoot, $_.FullName).Replace('\', '/')
 })
@@ -342,6 +363,10 @@ if ((Test-Path -LiteralPath $moduleSource) -and $detoursLibraryExit -eq 0) {
         (Join-Path $taskRoot 'Client/game_de/NativePedStayMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedFightingStyleMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CPedCombatDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativePedWeaponContext.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativePedWeaponFieldsMemory.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativePedWeaponAmmoMemory.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CWeaponNativeDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedBikeFlagsMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedShotFlagsMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedOxygenMemory.cpp'),

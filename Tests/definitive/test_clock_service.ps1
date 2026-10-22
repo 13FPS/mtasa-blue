@@ -1,7 +1,10 @@
 #!/usr/bin/env pwsh
 #requires -Version 7.0
 [CmdletBinding()]
-param()
+param(
+    [ValidateSet('Full','PedOwner')]
+    [string]$Scope = 'Full'
+)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $taskRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
@@ -17,6 +20,11 @@ $record = [ordered]@{schema='mta_clock_service_tests_v1';directory=$outputRoot;a
     existingSdkClockImplementationTested=$false;productionNativeCallbackTested=$false;wrongExecutableRefusalVerified=$false;
     productionFreezePatchTested=$false;readOnlyGameTimeReaderTested=$false;nativeCGameTimingPrerequisiteTested=$false;nativeCGameTimingWriterTested=$false;nativeStoredFPSReaderTested=$false;nativePauseSafeOwnerTested=$false;nativeApplicationFrameObserverTested=$false;nativeSystemStateOwnerTested=$false;nativeCheatFlagOwnerTested=$false;nativeWorldCheatRegistryTested=$false;nativeWeatherOwnerTested=$false;nativeWeatherScalarOwnerTested=$false;nativeTypedWeaponWriteOwnerTested=$false;nativeWeaponVectorAndBankOwnerTested=$false;nativeWeatherOverrideOwnerTested=$false;nativeWeatherPlacementOwnerTested=$false;nativeStatsSdkOwnerTested=$false;nativeWeaponStatSdkOwnerTested=$false;nativeWeaponStatManagerOwnerTested=$false;nativeStartGameOwnerTested=$false;nativeStartupCompletionOwnerTested=$false;nativeRainOwnerTested=$false;nativePedPoolOwnerTested=$false;nativePedTeleportOwnerTested=$false;nativePedVelocityOwnerTested=$false;nativePedReferenceOwnerTested=$false;nativePedMutationOwnerTested=$false;nativePedVitalsOwnerTested=$false;nativePedPhysicalScalarsOwnerTested=$false;nativePedCurrentRotationOwnerTested=$false;nativePedOxygenOwnerTested=$false;nativePedDuckingOwnerTested=$false;nativePedBikeFlagsOwnerTested=$false;nativePedShotFlagsOwnerTested=$false;nativePedBleedingOwnerTested=$false;nativePedStayOwnerTested=$false;nativePedFightingStyleOwnerTested=$false;nativeStreamingSceneOwnerTested=$false;nativeStreamingSharedReentryOwnerTested=$false;nativeGenericPedVitalsOwnerTested=$false;nativePedMetadataOwnerTested=$false;nativePedObservationOwnerTested=$false;nativePedIntelligenceOwnerTested=$false;nativeTaskPoolOwnerTested=$false;nativeTaskSecondaryRemovalOwnerTested=$false;nativeModelBankOwnerTested=$false;nativeModelLoadedOwnerTested=$false;nativeStreamingRequestOwnerTested=$false;nativeModelStreamingOwnerTested=$false;nativeModelReferenceOwnerTested=$false;nativeModelFinalReleaseOwnerTested=$false;nativeStreamingUpgradeOwnerTested=$false;nativeModelOwnershipOwnerTested=$false;nativeStreamingLoadAllOwnerTested=$false;nativeStreamingResourcesOwnerTested=$false;nativeModelAcquireOwnerTested=$false;nativeModelClassificationOwnerTested=$false;nativeModelTypeOwnerTested=$false;nativeStreamingRemovalOwnerTested=$false;nativeStreamingPriorityOwnerTested=$false;nativeStreamingModelGroupsOwnerTested=$false;nativeModelArchiveOwnerTested=$false;nativePlayerInfoWantedOwnerTested=$false;nativeRopesOwnerTested=$false;executionArtifacts=@();
     gameLaunched=$false;gameAttached=$false;gameClockWritten=$false;gameHooksInstalled=$false;fullMtaReady=$false}
+# Historical markers start false and are set only by the branch that actually
+# executed. Focus mode must never inherit the cumulative suite's claims.
+$record['runScope'] = $Scope
+$record['nativePedOwnerSliceTested'] = $false
+$record['nativePedWeaponInstanceOwnerTested'] = $false
 function Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 function RunBounded([string]$Executable,[string[]]$Arguments,[string]$Name,[int]$DeadlineMs) {
     $stdout = Join-Path $outputRoot ($Name + '.log')
@@ -248,6 +256,28 @@ try {
         'Build/definitive-recovery/mta-native-ped-fighting-style-20261023/fighting-style-qualified.json',
         'Tests/definitive/NativePedCombatOwnerTests.inl'
     )
+    $sourceNames += @(
+        'Client/game_de/NativePedWeaponContext.h',
+        'Client/game_de/NativePedWeaponContext.cpp',
+        'Client/game_de/NativePedWeaponProfile.h',
+        'Client/game_de/NativePedWeaponFieldsAccess.h',
+        'Client/game_de/NativePedWeaponFieldsMemory.h',
+        'Client/game_de/NativePedWeaponFieldsMemory.cpp',
+        'Client/game_de/NativePedWeaponAmmoAccess.h',
+        'Client/game_de/NativePedWeaponAmmoMemory.h',
+        'Client/game_de/NativePedWeaponAmmoMemory.cpp',
+        'Client/game_de/NativePedWeaponAmmoProfile.h',
+        'Client/game_de/CWeaponPolicyDE.h',
+        'Client/game_de/CWeaponNativeDE.h',
+        'Client/game_de/CWeaponNativeDE.cpp',
+        'Client/sdk/game/CWeapon.h',
+        'Client/sdk/game/CWeaponInfo.h',
+        'Client/sdk/game/CWeaponInfoIndexPolicy.h',
+        'Build/definitive-recovery/mta-native-weapon-instance-fields-20261023/native-proof/weapon-instance-fields-qualified.json',
+        'Build/definitive-recovery/mta-native-ped-weapon-ammo-20261023/ped-weapon-ammo-qualified.json',
+        'Build/definitive-recovery/mta-weapon-info-lookup-reuse-20261023/weapon-info-lookup-qualified-v2.json',
+        'Tests/definitive/NativePedWeaponOwnerTests.inl'
+    )
     $sourceNames += @($nativeFiles | ForEach-Object { [IO.Path]::GetRelativePath($taskRoot,$_.FullName).Replace('\','/') })
     $detoursNames = @('detours.cpp','modules.cpp','disasm.cpp','image.cpp','creatwth.cpp')
     $sourceNames += @($detoursNames + @('detours.h') | ForEach-Object { 'vendor/detours/4.0.1/src/' + $_ })
@@ -317,10 +347,21 @@ try {
     if ($record.compileRuns[-1].exitCode -ne 0 -or $record.compileRuns[-1].timedOut) { throw 'Clock SDK/runtime fixture compilation failed.' }
     # The cumulative callback fixture includes current owner and retirement cases.
     # Keep it bounded while allowing the full set to finish on a busy build host.
-    $record.testRun = RunBounded $executable @($outputRoot) 'test' 60000
+    $fixtureArguments = @($outputRoot)
+    if ($Scope -eq 'PedOwner') { $fixtureArguments += '--ped-owner' }
+    $record.testRun = RunBounded $executable $fixtureArguments 'test' 60000
     $text = [IO.File]::ReadAllText($record.testRun.stdout) + [IO.File]::ReadAllText($record.testRun.stderr)
     if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
     if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
+    if ($Scope -eq 'PedOwner') {
+        $record.nativePedOwnerSliceTested = $text.Contains('Production native registered-ped owner slice fixture completed')
+        $record.nativePedPhysicalScalarsOwnerTested = $text.Contains('Production native ped physical scalars callback owner fixture completed')
+        $record.nativePedWeaponInstanceOwnerTested = $text.Contains('Production native ped weapon instance callback owner fixture completed')
+        if (-not ($record.nativePedOwnerSliceTested -and $record.nativePedPhysicalScalarsOwnerTested -and $record.nativePedWeaponInstanceOwnerTested)) {
+            throw 'Current ped weapon owner cases did not complete through the real registered callback fixture.'
+        }
+        $record.productionNativeCallbackTested = $true
+    } else {
     if (-not $text.Contains('Production native clock runtime fixture completed')) { throw 'Actual production native runtime fixture did not complete.' }
     $record.existingSdkClockImplementationTested = $true
     $record.productionNativeCallbackTested = $true
@@ -420,6 +461,8 @@ try {
     }
     $record.nativeWeaponStatManagerOwnerTested = $text.Contains('Production complete weapon-stat manager callback owner fixture completed')
     if (-not $record.nativeWeaponStatManagerOwnerTested) { throw 'Complete weapon-stat manager did not execute on the actual native callback owner.' }
+    $record.nativePedWeaponInstanceOwnerTested = $text.Contains('Production native ped weapon instance callback owner fixture completed')
+    if (-not $record.nativePedWeaponInstanceOwnerTested) { throw 'Selected ped weapon scalars and actual bank lookup did not execute through the registered token callback owner.' }
     $record.nativePedFightingStyleOwnerTested = $text.Contains('Production native fighting-style callback owner fixture completed')
     if (-not $record.nativePedFightingStyleOwnerTested) { throw 'Fighting style did not execute on the actual registered-token callback owner.' }
     $record.nativePedBleedingOwnerTested = $text.Contains('Production native bleeding callback owner fixture completed')
@@ -455,6 +498,7 @@ try {
     if (-not $record.nativeStartupCompletionOwnerTested) { throw 'Actual native asynchronous startup completion owner fixture did not complete.' }
     $record.nativeApplicationFrameObserverTested = $text.Contains('Production natural application-frame observer fixture completed')
     if (-not $record.nativeApplicationFrameObserverTested) { throw 'Actual application-frame observer fixture did not complete.' }
+    }
     $record.nativeFixtureScope = 'Owned SEC_IMAGE with exact native pins and actual Detours, callback, native memory, protection and peer operations. This does not admit the test executable as GTA or execute the game clock update.'
     $record.executable = [ordered]@{path=$executable;bytes=(Get-Item -LiteralPath $executable).Length;sha256=(Sha $executable)}
     foreach ($entry in $record.sourceHashes) { if ((Sha (Join-Path $taskRoot $entry.path)) -ne $entry.sha256) { $record.sourcesUnchanged = $false } }
@@ -481,4 +525,3 @@ finally {
 }
 [ordered]@{success=$record.success;receipt=(Join-Path $outputRoot 'test-result.json');checks=$record.checks;failure=$record.failure} | ConvertTo-Json -Compress
 if (-not $record.success) { throw "Clock service checks failed; see $outputRoot" }
-

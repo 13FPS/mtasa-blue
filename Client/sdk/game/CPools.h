@@ -22,14 +22,11 @@ class CClientEntity;
 class CEntity;
 class CEntitySAInterface;
 class CObject;
-class CObjectSA;
 class CPed;
-class CPedSA;
 class CBuilding;
 class CBuildingSA;
 class CVector;
 class CVehicle;
-class CVehicleSA;
 struct RpClump;
 
 enum ePools
@@ -57,6 +54,9 @@ enum ePools
     MAX_POOLS
 };
 
+// SDK links retain the real backend wrapper through its common interface.
+// Every backend owns one registry; a native row or a cast of a classic
+// SClientEntity specialization is never a substitute for these pointers.
 class CPools
 {
 public:
@@ -64,27 +64,27 @@ public:
     virtual CVehicle* AddVehicle(class CClientVehicle* pClientVehicle, std::uint16_t model, std::uint8_t variation, std::uint8_t variation2) noexcept = 0;
     virtual void      RemoveVehicle(CVehicle* pVehicle, bool bDelete = true) = 0;
 
-    virtual SClientEntity<CVehicleSA>* GetVehicle(DWORD* pGameInterface) = 0;
-    virtual SClientEntity<CVehicleSA>* GetVehicle(size_t pos) = 0;
-    virtual unsigned long              GetVehicleCount() = 0;
+    virtual SClientEntity<CVehicle>* GetVehicle(DWORD* pGameInterface) = 0;
+    virtual SClientEntity<CVehicle>* GetVehicle(size_t pos) = 0;
+    virtual unsigned long            GetVehicleCount() = 0;
 
     // Objects pool
     virtual CObject* AddObject(class CClientObject* pClientObject, DWORD dwModelID, bool bLowLod, bool bBreakingDisabled) = 0;
     virtual void     RemoveObject(CObject* pObject, bool bDelete = true) = 0;
 
-    virtual SClientEntity<CObjectSA>* GetObject(DWORD* pGameInterface) = 0;
-    virtual CObject*                  GetObjectFromIndex(std::uint32_t elementIndexInPool) = 0;
-    virtual unsigned long             GetObjectCount() = 0;
+    virtual SClientEntity<CObject>* GetObject(DWORD* pGameInterface) = 0;
+    virtual CObject*                GetObjectFromIndex(std::uint32_t elementIndexInPool) = 0;
+    virtual unsigned long           GetObjectCount() = 0;
 
     // Peds pool
     virtual CPed* AddPed(class CClientPed* pClientPed, unsigned int nModelIndex) = 0;
     virtual CPed* AddPed(class CClientPed* pClientPed, DWORD* pGameInterface) = 0;
     virtual void  RemovePed(CPed* pPed, bool bDelete = true) = 0;
 
-    virtual SClientEntity<CPedSA>* GetPed(DWORD* pGameInterface) = 0;  // not sure we really want this here
-    virtual SClientEntity<CPedSA>* GetPed(size_t pos) = 0;
-    virtual CPed*                  GetPedFromRef(DWORD dwGameRef) = 0;
-    virtual unsigned long          GetPedCount() = 0;
+    virtual SClientEntity<CPed>* GetPed(DWORD* pGameInterface) = 0;  // not sure we really want this here
+    virtual SClientEntity<CPed>* GetPed(size_t pos) = 0;
+    virtual CPed*                GetPedFromRef(DWORD dwGameRef) = 0;
+    virtual unsigned long        GetPedCount() = 0;
 
     // Others
     virtual CVehicle* AddTrain(class CClientVehicle* pClientVehicle, const CVector& vecPosition, std::vector<DWORD> models, bool iDirection,

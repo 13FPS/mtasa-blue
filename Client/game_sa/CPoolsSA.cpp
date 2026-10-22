@@ -29,8 +29,13 @@
 
 #include "enums/VehicleClass.h"
 #include <new>
+#include <type_traits>
 
 extern CGameSA* pGame;
+
+// The one canonical registry now owns common SDK pointers. Virtual
+// destruction still reaches each actual classic wrapper exactly once.
+static_assert(std::has_virtual_destructor_v<CPed> && std::has_virtual_destructor_v<CVehicle> && std::has_virtual_destructor_v<CObject>);
 
 CPoolsSA::CPoolsSA()
 {
@@ -196,7 +201,7 @@ void CPoolsSA::RemoveVehicle(CVehicle* pVehicle, bool bDelete)
             return;
         }
 
-        CVehicleSA* pVehicleSA = m_vehiclePool.arrayOfClientEntities[dwElementIndexInPool].pEntity;
+        CVehicle* pVehicleSA = m_vehiclePool.arrayOfClientEntities[dwElementIndexInPool].pEntity;
         m_vehiclePool.arrayOfClientEntities[dwElementIndexInPool] = {nullptr, nullptr};
 
         // Delete it from memory
@@ -209,7 +214,7 @@ void CPoolsSA::RemoveVehicle(CVehicle* pVehicle, bool bDelete)
     }
 }
 
-SClientEntity<CVehicleSA>* CPoolsSA::GetVehicle(DWORD* pGameInterface)
+SClientEntity<CVehicle>* CPoolsSA::GetVehicle(DWORD* pGameInterface)
 {
     if (m_bGetVehicleEnabled)
     {
@@ -222,7 +227,7 @@ SClientEntity<CVehicleSA>* CPoolsSA::GetVehicle(DWORD* pGameInterface)
             if (dwElementIndexInPool < MAX_VEHICLES)
             {
                 // Return only if MTA has an entity for this slot
-                SClientEntity<CVehicleSA>* pSlot = &m_vehiclePool.arrayOfClientEntities[dwElementIndexInPool];
+                SClientEntity<CVehicle>* pSlot = &m_vehiclePool.arrayOfClientEntities[dwElementIndexInPool];
                 if (!pSlot->pEntity)
                     return nullptr;
 
@@ -237,7 +242,7 @@ void CPoolsSA::DeleteAllVehicles()
 {
     while (m_vehiclePool.ulCount > 0)
     {
-        CVehicleSA* pVehicle = m_vehiclePool.arrayOfClientEntities[m_vehiclePool.ulCount - 1].pEntity;
+        CVehicle* pVehicle = m_vehiclePool.arrayOfClientEntities[m_vehiclePool.ulCount - 1].pEntity;
 
         RemoveVehicle(pVehicle);
     }
@@ -320,7 +325,7 @@ void CPoolsSA::RemoveObject(CObject* pObject, bool bDelete)
             return;
         }
 
-        CObjectSA* pObjectSA = m_objectPool.arrayOfClientEntities[dwElementIndexInPool].pEntity;
+        CObject* pObjectSA = m_objectPool.arrayOfClientEntities[dwElementIndexInPool].pEntity;
         m_objectPool.arrayOfClientEntities[dwElementIndexInPool] = {nullptr, nullptr};
 
         // Delete it from memory
@@ -333,7 +338,7 @@ void CPoolsSA::RemoveObject(CObject* pObject, bool bDelete)
     }
 }
 
-SClientEntity<CObjectSA>* CPoolsSA::GetObject(DWORD* pGameInterface)
+SClientEntity<CObject>* CPoolsSA::GetObject(DWORD* pGameInterface)
 {
     CObjectSAInterface* pInterface = reinterpret_cast<CObjectSAInterface*>(pGameInterface);
 
@@ -344,7 +349,7 @@ SClientEntity<CObjectSA>* CPoolsSA::GetObject(DWORD* pGameInterface)
         if (dwElementIndexInPool < MAX_OBJECTS)
         {
             // Return only if MTA has an entity for this slot
-            SClientEntity<CObjectSA>* pSlot = &m_objectPool.arrayOfClientEntities[dwElementIndexInPool];
+            SClientEntity<CObject>* pSlot = &m_objectPool.arrayOfClientEntities[dwElementIndexInPool];
             if (!pSlot->pEntity)
                 return nullptr;
 
@@ -364,7 +369,7 @@ CObject* CPoolsSA::GetObjectFromIndex(std::uint32_t elementIndexInPool)
     CObjectSAInterface* pInterface = objectPool->GetObject(elementIndexInPool);
     if (pInterface)
     {
-        CObjectSA* pObject = m_objectPool.arrayOfClientEntities[elementIndexInPool].pEntity;
+        CObject* pObject = m_objectPool.arrayOfClientEntities[elementIndexInPool].pEntity;
         if (pObject)
             return pObject;
     }
@@ -375,7 +380,7 @@ void CPoolsSA::DeleteAllObjects()
 {
     while (m_objectPool.ulCount > 0)
     {
-        CObjectSA* pObject = m_objectPool.arrayOfClientEntities[m_objectPool.ulCount - 1].pEntity;
+        CObject* pObject = m_objectPool.arrayOfClientEntities[m_objectPool.ulCount - 1].pEntity;
 
         RemoveObject(pObject);
     }
@@ -423,7 +428,8 @@ inline bool CPoolsSA::AddPedToPool(CClientPed* pClientPed, CPedSA* pPed)
         return false;
     }
 
-    return MtaGame::CPedRegistryPolicy::Register(m_pedPool.arrayOfClientEntities, m_pedPool.ulCount, dwElementIndexInPool, pPed, (CClientEntity*)pClientPed);
+    return MtaGame::CPedRegistryPolicy::Register<CPed>(m_pedPool.arrayOfClientEntities, m_pedPool.ulCount, dwElementIndexInPool, pPed,
+                                                       (CClientEntity*)pClientPed);
 }
 
 CPed* CPoolsSA::AddPed(CClientPed* pClientPed, unsigned int nModelIndex)
@@ -492,7 +498,7 @@ void CPoolsSA::RemovePed(CPed* pPed, bool bDelete)
             return;
         }
 
-        CPedSA* pPed = MtaGame::CPedRegistryPolicy::Clear(m_pedPool.arrayOfClientEntities, dwElementIndexInPool);
+        CPed* pPed = MtaGame::CPedRegistryPolicy::Clear(m_pedPool.arrayOfClientEntities, dwElementIndexInPool);
 
         // Delete the element from memory
         switch (pPed->GetType())
@@ -519,7 +525,7 @@ void CPoolsSA::RemovePed(CPed* pPed, bool bDelete)
     }
 }
 
-SClientEntity<CPedSA>* CPoolsSA::GetPed(DWORD* pGameInterface)
+SClientEntity<CPed>* CPoolsSA::GetPed(DWORD* pGameInterface)
 {
     CPedSAInterface* pInterface = reinterpret_cast<CPedSAInterface*>(pGameInterface);
 
@@ -567,7 +573,7 @@ void CPoolsSA::DeleteAllPeds()
 {
     while (m_pedPool.ulCount > 0)
     {
-        CPedSA* pPed = m_pedPool.arrayOfClientEntities[m_pedPool.ulCount - 1].pEntity;
+        CPed* pPed = m_pedPool.arrayOfClientEntities[m_pedPool.ulCount - 1].pEntity;
         RemovePed(pPed);
     }
 }
@@ -752,7 +758,7 @@ uint CPoolsSA::GetModelIdFromClump(RpClump* pRpClump)
     // Search our pools for a match
     for (uint i = 0; i < m_pedPool.ulCount; i++)
     {
-        CEntitySA* pEntitySA = m_pedPool.arrayOfClientEntities[i].pEntity;
+        CEntity* pEntitySA = m_pedPool.arrayOfClientEntities[i].pEntity;
         if (pEntitySA)
         {
             if (pEntitySA->GetRpClump() == pRpClump)
@@ -764,7 +770,7 @@ uint CPoolsSA::GetModelIdFromClump(RpClump* pRpClump)
 
     for (uint i = 0; i < m_vehiclePool.ulCount; i++)
     {
-        CEntitySA* pEntitySA = m_vehiclePool.arrayOfClientEntities[i].pEntity;
+        CEntity* pEntitySA = m_vehiclePool.arrayOfClientEntities[i].pEntity;
         if (pEntitySA)
         {
             if (pEntitySA->GetRpClump() == pRpClump)
@@ -776,7 +782,7 @@ uint CPoolsSA::GetModelIdFromClump(RpClump* pRpClump)
 
     for (uint i = 0; i < m_objectPool.ulCount; i++)
     {
-        CEntitySA* pEntitySA = m_objectPool.arrayOfClientEntities[i].pEntity;
+        CEntity* pEntitySA = m_objectPool.arrayOfClientEntities[i].pEntity;
         if (pEntitySA)
         {
             if (pEntitySA->GetRpClump() == pRpClump)

@@ -11,6 +11,7 @@
 
 #include "StdInc.h"
 #include "CGaragesSA.h"
+#include <game/CGarageInitializationPolicy.h>
 
 CGaragesSA::CGaragesSA(CGaragesSAInterface* pInterface)
 {
@@ -33,12 +34,9 @@ CGaragesSA::~CGaragesSA()
 
 void CGaragesSA::Initialize()
 {
-    // Disable pay and sprays and mod shops
-    static const int iPayAndSprays[] = {7, 8, 10, 11, 12, 15, 18, 19, 24, 27, 32, 33, 36, 40, 41, 47};
-    for (unsigned int i = 0; i < sizeof(iPayAndSprays) / sizeof(int); ++i)
-    {
-        Garages[iPayAndSprays[i]]->SetType(1);
-    }
+    // Keep MTA's exact IDs/order while this backend retains its native array
+    // ownership and direct SetType behavior, including exception propagation.
+    MtaGame::CGarageInitializationPolicy::Initialize([this](std::uint32_t index, std::uint8_t type) { Garages[index]->SetType(type); });
 }
 
 CGarageSA* CGaragesSA::GetGarage(DWORD dwID)

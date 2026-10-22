@@ -177,13 +177,13 @@ static void OverrideAlphaTestRefForElementAlpha(CEntitySAInterface* pEntity)
 
     if (pEntity->nType == ENTITY_TYPE_OBJECT)
     {
-        SClientEntity<CObjectSA>* pObjectClientEntity = pGameInterface->GetPools()->GetObject((DWORD*)pEntity);
+        SClientEntity<CObject>* pObjectClientEntity = pGameInterface->GetPools()->GetObject((DWORD*)pEntity);
         if (pObjectClientEntity && pObjectClientEntity->pEntity)
             ucAlpha = pObjectClientEntity->pEntity->GetAlpha();
     }
     else if (pEntity->nType == ENTITY_TYPE_VEHICLE)
     {
-        SClientEntity<CVehicleSA>* pVehicleClientEntity = pGameInterface->GetPools()->GetVehicle((DWORD*)pEntity);
+        SClientEntity<CVehicle>* pVehicleClientEntity = pGameInterface->GetPools()->GetVehicle((DWORD*)pEntity);
         if (pVehicleClientEntity && pVehicleClientEntity->pEntity)
             ucAlpha = pVehicleClientEntity->pEntity->GetAlpha();
     }

@@ -52,6 +52,9 @@
 #include "../../Client/game_de/NativePedWeaponAmmoProfile.h"
 #include "../../Client/game_de/NativePedCurrentWeaponSlotMemory.h"
 #include "../../Client/game_de/NativePedCurrentWeaponSlotProfile.h"
+#include "../../Client/game_de/NativeNamedGarageMemory.h"
+#include "../../Client/game_de/NativeNamedGarageProfile.h"
+#include "../../Client/game_de/CGarageNamedDE.h"
 #include "../../Client/game_de/NativePedVitalsProfile.h"
 #include "../../Client/game_de/NativePedMetadataMemory.h"
 #include "../../Client/game_de/NativePedMetadataProfile.h"
@@ -972,6 +975,36 @@ namespace ClockPedWeaponOwnerTest
         return Exchange(ammo, failAmmoAfter, at, expected, target, observed, exception);
     }
 }
+namespace ClockNamedGarageOwnerTest
+{
+    std::uintptr_t nameAddress = 0, countAddress = 0;
+    unsigned       stores = 0, action = 0;
+    bool           Exchange(std::uintptr_t address, std::uint8_t expected, std::uint8_t target, std::uint8_t& observed, std::uint32_t& exception) noexcept
+    {
+        ++stores;
+        if (action == 4)
+            *reinterpret_cast<volatile std::uint8_t*>(address) = static_cast<std::uint8_t>(expected ^ 0x80u);
+        char before = 0, after = 0;
+        std::memcpy(&before, &expected, 1);
+        std::memcpy(&after, &target, 1);
+        const auto previous = _InterlockedCompareExchange8(reinterpret_cast<volatile char*>(address), after, before);
+        std::memcpy(&observed, &previous, 1);
+        if (action == 1)
+        {
+            const unsigned char renamed[8] = {'n', 'e', 'w', 0, 0, 0, 0, 0};
+            std::memcpy(reinterpret_cast<void*>(nameAddress), renamed, sizeof(renamed));
+        }
+        if (action == 2)
+            *reinterpret_cast<volatile std::uint32_t*>(countAddress) = 2;
+        if (action == 3)
+        {
+            exception = 0xc0000005;
+            return false;
+        }
+        return true;
+    }
+}
+
 namespace ClockPedCurrentWeaponOwnerTest
 {
     std::uintptr_t address = 0, cell = 0;
@@ -1841,6 +1874,9 @@ namespace mta::game_de::NativeImageAccess
 #define MTA_DE_PED_FIGHTING_STYLE_EXCHANGE ClockPedCombatOwnerTest::Exchange
 #include "../../Client/game_de/NativePedFightingStyleMemory.cpp"
 #undef MTA_DE_PED_FIGHTING_STYLE_EXCHANGE
+#define MTA_DE_NAMED_GARAGE_EXCHANGE ClockNamedGarageOwnerTest::Exchange
+#include "../../Client/game_de/NativeNamedGarageMemory.cpp"
+#undef MTA_DE_NAMED_GARAGE_EXCHANGE
 #include "../../Client/game_de/NativePedWeaponContext.cpp"
 #pragma push_macro("ReadProcessMemory")
 #undef ReadProcessMemory
@@ -6519,15 +6555,27 @@ namespace
 #include "NativeStreamingRequestOwnerTests.inl"
 #include "NativeModelOwnershipOwnerTests.inl"
 #include "NativeWorldCheatOwnerTests.inl"
+#include "NativeNamedGarageOwnerTests.inl"
 
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
     const bool pedOwnerOnly = argc == 3 && std::strcmp(argv[2], "--ped-owner") == 0;
     const bool currentWeaponOnly = argc == 3 && std::strcmp(argv[2], "--ped-current-weapon") == 0;
-    Check((argc == 2 || pedOwnerOnly || currentWeaponOnly) && std::filesystem::path(argv[1]).is_absolute() &&
+    const bool garageNamedOnly = argc == 3 && std::strcmp(argv[2], "--garage-named") == 0;
+    Check((argc == 2 || pedOwnerOnly || currentWeaponOnly || garageNamedOnly) && std::filesystem::path(argv[1]).is_absolute() &&
               std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (garageNamedOnly)
+    {
+        // This native name/property fixture supplies all its own admission.
+        // Historical ped, model, weather and peer-recovery suites stay separate.
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        NativeNamedGaragesOwnedSdk(fixture);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (pedOwnerOnly || currentWeaponOnly)
     {
         // This fixture creates its pool, reference nodes and callback admission
@@ -6565,6 +6613,7 @@ int main(int argc, char** argv)
     NativePedPoolOwnedReads(fixture);
     NativePlayerInfoWantedOwnedSdk(fixture);
     NativeRopesOwnedSdk(fixture);
+    NativeNamedGaragesOwnedSdk(fixture);
     NativePedTeleportOwnedSdk(fixture);
     NativePedVelocityOwnedSdk(fixture);
     NativePedReferenceOwnedSdk(fixture);

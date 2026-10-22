@@ -11,7 +11,6 @@
 
 #pragma once
 
-class CGarageSAInterface;
 class CVector;
 
 class CGarage
@@ -28,5 +27,6 @@ public:
     virtual void SetOpen(bool bOpen) = 0;
     virtual bool IsOpen() const = 0;
 
-    virtual CGarageSAInterface* GetInterface() = 0;
+    // Native pointer access belongs to the concrete backend. SDK clients
+    // use these garage properties instead of a classic-only interface view.
 };

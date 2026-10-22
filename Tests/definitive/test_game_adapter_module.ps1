@@ -283,7 +283,20 @@ $sourceNames += @(
     'Client/game_de/CPedWeaponSelectionDE.cpp',
     'Client/game_de/CWeaponPolicyDE.cpp',
     'Build/definitive-recovery/mta-native-ped-current-weapon-slot-20261023/current-slot-read-qualified.json',
-    'Build/definitive-recovery/mta-native-ped-current-weapon-slot-20261023/current-weapon-slot-setter-gap.json'
+    'Build/definitive-recovery/mta-native-ped-current-weapon-slot-20261023/current-weapon-slot-setter-gap.json',
+    'Client/sdk/game/CGarage.h',
+    'Client/sdk/game/CGarageDoorStatePolicy.h',
+    'Client/sdk/game/CGarageInitializationPolicy.h',
+    'Client/game_de/CGaragesDE.h',
+    'Client/game_de/CGaragesDE.cpp',
+    'Client/game_de/CGarageNamedDE.h',
+    'Client/game_de/CGarageNamedDE.cpp',
+    'Client/game_de/NativeNamedGarageAccess.h',
+    'Client/game_de/NativeNamedGarageMemory.h',
+    'Client/game_de/NativeNamedGarageMemory.cpp',
+    'Client/game_de/NativeNamedGarageProfile.h',
+    'Build/definitive-recovery/mta-native-garage-bank-20261023/named-garage-properties-qualified.json',
+    'Build/definitive-recovery/mta-native-garage-bank-20261023/garage-sdk-mapping-gap.json'
 )
 $sourceNames += @(Get-ChildItem -LiteralPath $detoursSourceRoot -File | ForEach-Object {
     [IO.Path]::GetRelativePath($taskRoot, $_.FullName).Replace('\', '/')
@@ -381,6 +394,9 @@ if ((Test-Path -LiteralPath $moduleSource) -and $detoursLibraryExit -eq 0) {
         (Join-Path $taskRoot 'Client/game_de/NativePedCurrentWeaponSlotMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CPedWeaponSelectionDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CWeaponPolicyDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativeNamedGarageMemory.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CGaragesDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CGarageNamedDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedBikeFlagsMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedShotFlagsMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedOxygenMemory.cpp'),

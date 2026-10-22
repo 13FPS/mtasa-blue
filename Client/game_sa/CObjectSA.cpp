@@ -21,7 +21,7 @@ extern CGameSA* pGame;
 
 static void CObject_PreRender(CObjectSAInterface* objectInterface)
 {
-    SClientEntity<CObjectSA>* objectEntity = pGame->GetPools()->GetObject((DWORD*)objectInterface);
+    SClientEntity<CObject>* objectEntity = pGame->GetPools()->GetObject((DWORD*)objectInterface);
     if (objectEntity && objectEntity->pEntity)
         objectEntity->pEntity->SetPreRenderRequired(true);
 }

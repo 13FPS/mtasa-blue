@@ -12,11 +12,13 @@
 
 static const uint32_t CModelInfo__ms_modelInfoPtrs = 0xA9B0C8;
 
-static CVector* vehicleDummiesPositionArray = nullptr;
+// These hooks only read/copy SDK dummy positions. Keep that borrowed
+// const view instead of requiring a mutable classic-wrapper overload.
+static const CVector* vehicleDummiesPositionArray = nullptr;
 
 static void __cdecl UpdateVehicleDummiesPositionArray(CVehicleSAInterface* vehicleInterface)
 {
-    SClientEntity<CVehicleSA>* vehicle = pGameInterface->GetPools()->GetVehicle(reinterpret_cast<DWORD*>(vehicleInterface));
+    SClientEntity<CVehicle>* vehicle = pGameInterface->GetPools()->GetVehicle(reinterpret_cast<DWORD*>(vehicleInterface));
     vehicleDummiesPositionArray = (vehicle != nullptr) ? vehicle->pEntity->GetDummyPositions() : nullptr;
 }
 
@@ -394,7 +396,7 @@ static void __cdecl ApplySecondaryExhaustNitroPosition(CVehicleSAInterface* vehi
     if (vehicleDummiesPositionArray != nullptr)
     {
         // Check if EXHAUST_SECONDARY is initialized (non-zero)
-        CVector& exhaustSecondary = vehicleDummiesPositionArray[(std::size_t)VehicleDummies::EXHAUST_SECONDARY];
+        const CVector& exhaustSecondary = vehicleDummiesPositionArray[(std::size_t)VehicleDummies::EXHAUST_SECONDARY];
         if (exhaustSecondary.fX != 0.0f || exhaustSecondary.fY != 0.0f || exhaustSecondary.fZ != 0.0f)
         {
             *secondaryExhaustPosition = exhaustSecondary;
@@ -402,7 +404,7 @@ static void __cdecl ApplySecondaryExhaustNitroPosition(CVehicleSAInterface* vehi
         else
         {
             // EXHAUST_SECONDARY is uninitialized, try EXHAUST with negated X
-            CVector& exhaust = vehicleDummiesPositionArray[(std::size_t)VehicleDummies::EXHAUST];
+            const CVector& exhaust = vehicleDummiesPositionArray[(std::size_t)VehicleDummies::EXHAUST];
             if (exhaust.fX != 0.0f || exhaust.fY != 0.0f || exhaust.fZ != 0.0f)
             {
                 *secondaryExhaustPosition = exhaust;

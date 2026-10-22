@@ -129,7 +129,7 @@ bool IsLocalPlayer(CPed* pPed)
 
 bool IsLocalPlayer(CPedSAInterface* pPedInterface)
 {
-    SClientEntity<CPedSA>* pPedEntity = m_pools->GetPed((DWORD*)pPedInterface);
+    SClientEntity<CPed>* pPedEntity = m_pools->GetPed((DWORD*)pPedInterface);
     if (pPedEntity)
     {
         return IsLocalPlayer(pPedEntity->pEntity);
@@ -139,8 +139,8 @@ bool IsLocalPlayer(CPedSAInterface* pPedInterface)
 
 VOID WriteGunDirectionDataForPed(CPedSAInterface* pPedInterface, float* fGunDirectionX, float* fGunDirectionY, eVehicleAimDirection* cGunDirection)
 {
-    SClientEntity<CPedSA>* pPedClientEntity = m_pools->GetPed((DWORD*)pPedInterface);
-    CPed*                  pAimingPed = pPedClientEntity ? pPedClientEntity->pEntity : nullptr;
+    SClientEntity<CPed>* pPedClientEntity = m_pools->GetPed((DWORD*)pPedInterface);
+    CPed*                pAimingPed = pPedClientEntity ? pPedClientEntity->pEntity : nullptr;
 
     if (!pAimingPed)
         return;
@@ -204,9 +204,9 @@ bool WriteTargetDataForPed(CPedSAInterface* pPed, DWORD vecTargetPos, CVector* o
     vecLastOrigin = *origin;
 
     // vecTargetPosition is a pointer to a vecTargetPosition*
-    SClientEntity<CPedSA>* pPedClientEntity = m_pools->GetPed((DWORD*)pPed);
-    CPed*                  pTargetingPed = pPedClientEntity ? pPedClientEntity->pEntity : nullptr;
-    CPlayerPed*            pTargetingPlayerPed = dynamic_cast<CPlayerPed*>(pTargetingPed);
+    SClientEntity<CPed>* pPedClientEntity = m_pools->GetPed((DWORD*)pPed);
+    CPed*                pTargetingPed = pPedClientEntity ? pPedClientEntity->pEntity : nullptr;
+    CPlayerPed*          pTargetingPlayerPed = dynamic_cast<CPlayerPed*>(pTargetingPed);
     if (!pTargetingPlayerPed)
         return true;
 
@@ -244,8 +244,8 @@ bool WriteTargetDataForPed(CPedSAInterface* pPed, DWORD vecTargetPos, CVector* o
 
 void Event_PostFire()
 {
-    SClientEntity<CPedSA>* pPedClientEntity = m_pools->GetPed((DWORD*)pShootingPed);
-    CPed*                  pTargetingPed = pPedClientEntity ? pPedClientEntity->pEntity : nullptr;
+    SClientEntity<CPed>* pPedClientEntity = m_pools->GetPed((DWORD*)pShootingPed);
+    CPed*                pTargetingPed = pPedClientEntity ? pPedClientEntity->pEntity : nullptr;
 
     if (m_pPostWeaponFireHandler)
     {
@@ -258,8 +258,8 @@ static void Event_BulletImpact()
 {
     if (m_pBulletImpactHandler)
     {
-        SClientEntity<CPedSA>* pPedClientEntity = m_pools->GetPed((DWORD*)pBulletImpactInitiator);
-        CPed*                  pInitiator = pPedClientEntity ? pPedClientEntity->pEntity : nullptr;
+        SClientEntity<CPed>* pPedClientEntity = m_pools->GetPed((DWORD*)pBulletImpactInitiator);
+        CPed*                pInitiator = pPedClientEntity ? pPedClientEntity->pEntity : nullptr;
         if (pInitiator)
         {
             CEntity* pVictim = m_pools->GetEntity((DWORD*)pBulletImpactVictim);
@@ -344,7 +344,7 @@ static void __declspec(naked) HOOK_CTaskSimpleUsegun_ProcessPed()
 
 static CPed* GetTargetingPed()
 {
-    SClientEntity<CPedSA>* pClientEntity = m_pools->GetPed((DWORD*)pAPed);
+    SClientEntity<CPed>* pClientEntity = m_pools->GetPed((DWORD*)pAPed);
     return pClientEntity ? pClientEntity->pEntity : nullptr;
 }
 
@@ -820,10 +820,10 @@ bool ProcessDamageEvent(CEventDamageSAInterface* event, CPedSAInterface* affects
 {
     if (m_pDamageHandler && event)
     {
-        CPoolsSA*              pPools = (CPoolsSA*)pGameInterface->GetPools();
-        SClientEntity<CPedSA>* pPedClientEntity = pPools->GetPed((DWORD*)affectsPed);
-        CPed*                  pPed = pPedClientEntity ? pPedClientEntity->pEntity : nullptr;
-        CEntity*               pInflictor = NULL;
+        CPoolsSA*            pPools = (CPoolsSA*)pGameInterface->GetPools();
+        SClientEntity<CPed>* pPedClientEntity = pPools->GetPed((DWORD*)affectsPed);
+        CPed*                pPed = pPedClientEntity ? pPedClientEntity->pEntity : nullptr;
+        CEntity*             pInflictor = NULL;
 
         if (pPed)
         {
@@ -959,7 +959,7 @@ static CEntity* GetProjectileOwner(CPools* pPools)
         {
             case ENTITY_TYPE_VEHICLE:
             {
-                SClientEntity<CVehicleSA>* pVehicleClientEntity = pPools->GetVehicle((DWORD*)pProjectileOwner);
+                SClientEntity<CVehicle>* pVehicleClientEntity = pPools->GetVehicle((DWORD*)pProjectileOwner);
                 if (pVehicleClientEntity)
                 {
                     pOwner = pVehicleClientEntity->pEntity;
@@ -968,7 +968,7 @@ static CEntity* GetProjectileOwner(CPools* pPools)
             }
             case ENTITY_TYPE_PED:
             {
-                SClientEntity<CPedSA>* pPedClientEntity = pPools->GetPed((DWORD*)pProjectileOwner);
+                SClientEntity<CPed>* pPedClientEntity = pPools->GetPed((DWORD*)pProjectileOwner);
                 if (pPedClientEntity)
                 {
                     pOwner = pPedClientEntity->pEntity;
@@ -990,7 +990,7 @@ static void GetProjectileTarget(CPools* pPools)
         {
             case ENTITY_TYPE_VEHICLE:
             {
-                SClientEntity<CVehicleSA>* pVehicleClientEntity = pPools->GetVehicle((DWORD*)projectileTargetEntityInterface);
+                SClientEntity<CVehicle>* pVehicleClientEntity = pPools->GetVehicle((DWORD*)projectileTargetEntityInterface);
                 if (pVehicleClientEntity)
                 {
                     projectileTargetEntity = pVehicleClientEntity->pEntity;
@@ -999,7 +999,7 @@ static void GetProjectileTarget(CPools* pPools)
             }
             case ENTITY_TYPE_PED:
             {
-                SClientEntity<CPedSA>* pPedClientEntity = pPools->GetPed((DWORD*)projectileTargetEntityInterface);
+                SClientEntity<CPed>* pPedClientEntity = pPools->GetPed((DWORD*)projectileTargetEntityInterface);
                 if (pPedClientEntity)
                 {
                     projectileTargetEntity = pPedClientEntity->pEntity;
@@ -1127,8 +1127,8 @@ static void __declspec(naked) HOOK_CProjectile__CProjectile()
 
 static void CheckInVehicleDamage()
 {
-    SClientEntity<CPedSA>* pPedClientEntity = m_pools->GetPed((DWORD*)pShootingPed);
-    CPlayerPed*            pPed = pPedClientEntity ? dynamic_cast<CPlayerPed*>(pPedClientEntity->pEntity) : nullptr;
+    SClientEntity<CPed>* pPedClientEntity = m_pools->GetPed((DWORD*)pShootingPed);
+    CPlayerPed*          pPed = pPedClientEntity ? dynamic_cast<CPlayerPed*>(pPedClientEntity->pEntity) : nullptr;
     if (pPed && !IsLocalPlayer(pPed))
     {
         // Did he hit a vehicle?
@@ -1168,8 +1168,8 @@ static void CheckInVehicleDamage()
 //////////////////////////////////////////////////////////////////////////////////////////
 void OnMy_CWeapon_FireInstantHit_Mid(CEntitySAInterface* pEntity, CVector* pvecNonAimedStart, CVector* pvecAimedStart, CVector* pvecEnd, bool bFlag)
 {
-    SClientEntity<CPedSA>* pPedClientEntity = m_pools->GetPed((DWORD*)pEntity);
-    CPed*                  pTargetingPed = pPedClientEntity ? pPedClientEntity->pEntity : nullptr;
+    SClientEntity<CPed>* pPedClientEntity = m_pools->GetPed((DWORD*)pEntity);
+    CPed*                pTargetingPed = pPedClientEntity ? pPedClientEntity->pEntity : nullptr;
     if (pTargetingPed && IsLocalPlayer(pTargetingPed))
     {
         CVector vecEnd = *pvecEnd;
@@ -1258,8 +1258,8 @@ VOID InitFireInstantHit_MidHooks()
 //////////////////////////////////////////////////////////////////////////////////////////
 void OnMy_CWeapon_FireSniper_Mid(CEntitySAInterface* pEntity, CVector* pvecEndHit, CVector* pvecEndMaxRange, CVector* pvecStart, CVector* pvecDir)
 {
-    SClientEntity<CPedSA>* pPedClientEntity = m_pools->GetPed((DWORD*)pEntity);
-    CPed*                  pTargetingPed = pPedClientEntity ? pPedClientEntity->pEntity : nullptr;
+    SClientEntity<CPed>* pPedClientEntity = m_pools->GetPed((DWORD*)pEntity);
+    CPed*                pTargetingPed = pPedClientEntity ? pPedClientEntity->pEntity : nullptr;
     if (pTargetingPed && IsLocalPlayer(pTargetingPed))
     {
         CVector vecEnd = *pvecEndMaxRange;
@@ -1346,9 +1346,9 @@ VOID InitFireSniper_MidHooks()
 //////////////////////////////////////////////////////////////////////////////////////////
 void HandleRemoteInstantHit()
 {
-    SClientEntity<CPedSA>* pPedClientEntity = m_pools->GetPed((DWORD*)pShootingPed);
-    CPed*                  pTargetingPed = pPedClientEntity ? pPedClientEntity->pEntity : nullptr;
-    CPlayerPed*            pTargetingPlayerPed = dynamic_cast<CPlayerPed*>(pTargetingPed);
+    SClientEntity<CPed>* pPedClientEntity = m_pools->GetPed((DWORD*)pShootingPed);
+    CPed*                pTargetingPed = pPedClientEntity ? pPedClientEntity->pEntity : nullptr;
+    CPlayerPed*          pTargetingPlayerPed = dynamic_cast<CPlayerPed*>(pTargetingPed);
     if (!pTargetingPlayerPed)
         return;
 
@@ -1458,8 +1458,8 @@ static void __declspec(naked) HOOK_CWeapon_FireInstantHit()
 
 bool FireInstantHit_CameraMode()
 {
-    SClientEntity<CPedSA>* pPedClientEntity = m_pools->GetPed((DWORD*)pShootingPed);
-    CPlayerPed*            pPed = pPedClientEntity ? dynamic_cast<CPlayerPed*>(pPedClientEntity->pEntity) : nullptr;
+    SClientEntity<CPed>* pPedClientEntity = m_pools->GetPed((DWORD*)pShootingPed);
+    CPlayerPed*          pPed = pPedClientEntity ? dynamic_cast<CPlayerPed*>(pPedClientEntity->pEntity) : nullptr;
     if (pPed && !IsLocalPlayer(pPed))
     {
         // Are we onfoot?
@@ -1535,8 +1535,8 @@ static void __declspec(naked) HOOK_CWeapon_FireInstantHit_CameraMode()
 CPedSAInterface* pFireInstantHit_IsPlayerPed = NULL;
 bool             FireInstantHit_IsPlayer()
 {
-    SClientEntity<CPedSA>* pPedClientEntity = m_pools->GetPed((DWORD*)pFireInstantHit_IsPlayerPed);
-    CPlayerPed*            pPed = pPedClientEntity ? dynamic_cast<CPlayerPed*>(pPedClientEntity->pEntity) : nullptr;
+    SClientEntity<CPed>* pPedClientEntity = m_pools->GetPed((DWORD*)pFireInstantHit_IsPlayerPed);
+    CPlayerPed*          pPed = pPedClientEntity ? dynamic_cast<CPlayerPed*>(pPedClientEntity->pEntity) : nullptr;
     if (pPed)
     {
         if (IsLocalPlayer(pPed))
@@ -1786,9 +1786,9 @@ void CEventVehicleExplosion_NotifyDeathmatch()
 {
     if (m_pDeathHandler)
     {
-        CPoolsSA*              pPools = (CPoolsSA*)pGameInterface->GetPools();
-        SClientEntity<CPedSA>* pPedClientEntity = pPools->GetPed((DWORD*)CEventVehicleExplosion_pPed);
-        CPed*                  pPed = pPedClientEntity ? pPedClientEntity->pEntity : nullptr;
+        CPoolsSA*            pPools = (CPoolsSA*)pGameInterface->GetPools();
+        SClientEntity<CPed>* pPedClientEntity = pPools->GetPed((DWORD*)CEventVehicleExplosion_pPed);
+        CPed*                pPed = pPedClientEntity ? pPedClientEntity->pEntity : nullptr;
 
         if (pPed)
         {

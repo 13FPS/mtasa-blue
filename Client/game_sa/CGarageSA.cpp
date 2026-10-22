@@ -11,6 +11,7 @@
 
 #include "StdInc.h"
 #include "CGarageSA.h"
+#include <game/CGarageDoorStatePolicy.h>
 
 CGarageSA::CGarageSA(CGarageSAInterface* pInterface)
 {
@@ -53,21 +54,12 @@ void CGarageSA::GetBoundingBox(float& left, float& right, float& front, float& b
 
 void CGarageSA::SetOpen(bool bOpen)
 {
-    if (bOpen)
-        internalInterface->DoorState = 3;
-    else
-        internalInterface->DoorState = 2;
+    // Reuse the actual SDK byte policy across backends; native script door
+    // transitions may deliberately report a different notion of open.
+    internalInterface->DoorState = MtaGame::CGarageDoorStatePolicy::StateForOpen(bOpen);
 }
 
 bool CGarageSA::IsOpen() const
 {
-    switch (internalInterface->DoorState)
-    {
-        case 1:
-        case 3:
-            return true;
-            break;
-        default:
-            return false;
-    }
+    return MtaGame::CGarageDoorStatePolicy::IsOpen(internalInterface->DoorState);
 }

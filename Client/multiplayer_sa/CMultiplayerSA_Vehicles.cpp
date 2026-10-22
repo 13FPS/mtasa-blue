@@ -16,7 +16,7 @@
 
 static bool __fastcall AreVehicleDoorsUndamageable(CVehicleSAInterface* vehicle)
 {
-    SClientEntity<CVehicleSA>* pair = pGameInterface->GetPools()->GetVehicle((DWORD*)vehicle);
+    SClientEntity<CVehicle>* pair = pGameInterface->GetPools()->GetVehicle((DWORD*)vehicle);
 
     if (!pair)
         return false;

@@ -85,6 +85,26 @@ classic version value and the existing join-packet byte layout. Core already
 separates DE startup from its classic downgrade check. This identity does not
 make the still-abstract game interface or x64 networking ready.
 
+The shared pool interface now returns MTA's common `CPed`, `CVehicle` and
+`CObject` links. Classic uses the same registry rows and registration/deletion
+policy with those types; actual callers use the existing SDK methods. DE does
+not need a parallel registry or a cast between differently typed row layouts.
+This removes a classic-only SDK dependency without completing native pool or
+ped factories.
+
+Garage initialization also shares MTA's ordered sixteen-entry policy between
+the actual classic manager and the abstract DE manager. The unused classic
+garage-interface accessor stays on `CGarageSA`, outside the shared SDK, so
+modules must be rebuilt together. Native garage identity, complete properties
+and the DE manager's `GetGarage` factory remain separate prerequisites.
+
+Named garage type/open access uses the genuine bank's first matching name and
+rechecks its published count and selected row around each operation. The SDK
+slice shares MTA's door-state policy with classic and preserves independent
+byte stores; DE script commands have additional transition effects. Geometry
+and classic numeric-ID mapping remain unqualified, so this does not expose a
+complete garage manager.
+
 These batches have offline primitive, actual SDK/callback-owner and normal
 build coverage. The changed classic callers compile through their normal
 project. The installed GTA candidate remains separate from this newer source;

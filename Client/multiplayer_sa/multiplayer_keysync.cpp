@@ -492,8 +492,8 @@ void SwitchContext(CPed* thePed)
 
 void SwitchContext(CPedSAInterface* ped)
 {
-    SClientEntity<CPedSA>* pPedClientEntity = pGameInterface->GetPools()->GetPed((DWORD*)ped);
-    CPed*                  thePed = pPedClientEntity ? pPedClientEntity->pEntity : nullptr;
+    SClientEntity<CPed>* pPedClientEntity = pGameInterface->GetPools()->GetPed((DWORD*)ped);
+    CPed*                thePed = pPedClientEntity ? pPedClientEntity->pEntity : nullptr;
     SwitchContext(thePed);
 }
 
@@ -559,9 +559,9 @@ void SwitchContext(CVehicle* pVehicle)
 void SwitchContext(CVehicleSAInterface* pVehicleInterface)
 {
     // Grab the CVehicle for the given vehicle interface
-    CPools*                    pPools = pGameInterface->GetPools();
-    SClientEntity<CVehicleSA>* pVehicleClientEntity = pPools->GetVehicle((DWORD*)pVehicleInterface);
-    CVehicle*                  pVehicle = pVehicleClientEntity ? pVehicleClientEntity->pEntity : nullptr;
+    CPools*                  pPools = pGameInterface->GetPools();
+    SClientEntity<CVehicle>* pVehicleClientEntity = pPools->GetVehicle((DWORD*)pVehicleInterface);
+    CVehicle*                pVehicle = pVehicleClientEntity ? pVehicleClientEntity->pEntity : nullptr;
     if (pVehicle)
     {
         SwitchContext(pVehicle);

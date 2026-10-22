@@ -320,8 +320,8 @@ static void __declspec(naked) HOOK_CTaskSimplePlayerOnFoot_ProcessWeaponFire()
 CPedSAInterface* pFallingPedInterface;
 bool             CWorld_Remove_FallenPedsCheck()
 {
-    SClientEntity<CPedSA>* pPedClientEntity = pGameInterface->GetPools()->GetPed((DWORD*)pFallingPedInterface);
-    CPed*                  pPed = pPedClientEntity ? pPedClientEntity->pEntity : nullptr;
+    SClientEntity<CPed>* pPedClientEntity = pGameInterface->GetPools()->GetPed((DWORD*)pFallingPedInterface);
+    CPed*                pPed = pPedClientEntity ? pPedClientEntity->pEntity : nullptr;
     if (pPed && pPed->GetVehicle() != NULL)
     {
         // Disallow
@@ -374,8 +374,8 @@ void CMultiplayerSA::SetVehicleFellThroughMapHandler(VehicleFellThroughMapHandle
 CVehicleSAInterface* pFallingVehicleInterface;
 bool                 CWorld_Remove_FallenVehiclesCheck()
 {
-    SClientEntity<CVehicleSA>* pVehicleClientEntity = pGameInterface->GetPools()->GetVehicle((DWORD*)pFallingVehicleInterface);
-    CVehicle*                  pVehicle = pVehicleClientEntity ? pVehicleClientEntity->pEntity : nullptr;
+    SClientEntity<CVehicle>* pVehicleClientEntity = pGameInterface->GetPools()->GetVehicle((DWORD*)pFallingVehicleInterface);
+    CVehicle*                pVehicle = pVehicleClientEntity ? pVehicleClientEntity->pEntity : nullptr;
     if (pVehicle && m_pVehicleFellThroughMapHandler(pFallingVehicleInterface))
     {
         // Disallow
@@ -542,8 +542,8 @@ CPedSAInterface* pTyreSmokePed = NULL;
 
 bool IsPlayerPedLocal()
 {
-    SClientEntity<CPedSA>* pPedClientEntity = pGameInterface->GetPools()->GetPed((DWORD*)pTyreSmokePed);
-    CPed*                  pPed = pPedClientEntity ? pPedClientEntity->pEntity : nullptr;
+    SClientEntity<CPed>* pPedClientEntity = pGameInterface->GetPools()->GetPed((DWORD*)pTyreSmokePed);
+    CPed*                pPed = pPedClientEntity ? pPedClientEntity->pEntity : nullptr;
     if (pPed)
     {
         CPed* pLocalPlayerPed = pGameInterface->GetPools()->GetPedFromRef((DWORD)1);

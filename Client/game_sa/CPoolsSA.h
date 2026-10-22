@@ -10,6 +10,12 @@
  *****************************************************************************/
 #pragma once
 
+// Construction helpers still name classic wrappers. Keep their declarations
+// here so cyclic game_sa includes do not depend on classic names in the SDK.
+class CPedSA;
+class CVehicleSA;
+class CObjectSA;
+
 #include <game/CPools.h>
 #include <game/CPedRegistryPolicy.h>
 #include "CPedSA.h"
@@ -40,11 +46,11 @@ private:
     bool AddVehicleToPool(CClientVehicle* pClientVehicle, CVehicleSA* pVehicle);
 
 public:
-    void                       RemoveVehicle(CVehicle* pVehicle, bool bDelete = true);
-    SClientEntity<CVehicleSA>* GetVehicle(DWORD* pGameInterface);
-    SClientEntity<CVehicleSA>* GetVehicle(size_t pos) { return &m_vehiclePool.arrayOfClientEntities[pos]; };
-    unsigned long              GetVehicleCount() { return m_vehiclePool.ulCount; };
-    void                       DeleteAllVehicles();
+    void                     RemoveVehicle(CVehicle* pVehicle, bool bDelete = true);
+    SClientEntity<CVehicle>* GetVehicle(DWORD* pGameInterface);
+    SClientEntity<CVehicle>* GetVehicle(size_t pos) { return &m_vehiclePool.arrayOfClientEntities[pos]; };
+    unsigned long            GetVehicleCount() { return m_vehiclePool.ulCount; };
+    void                     DeleteAllVehicles();
 
     // Objects pool
     CObject* AddObject(CClientObject* pClientObject, DWORD dwModelID, bool bLowLod, bool bBreakingDisabled);
@@ -53,11 +59,11 @@ private:
     bool AddObjectToPool(CClientObject* pClientObject, CObjectSA* pObject);
 
 public:
-    void                      RemoveObject(CObject* pObject, bool bDelete = true);
-    SClientEntity<CObjectSA>* GetObject(DWORD* pGameInterface);
-    CObject*                  GetObjectFromIndex(std::uint32_t elementIndexInPool);
-    unsigned long             GetObjectCount() { return m_objectPool.ulCount; }
-    void                      DeleteAllObjects();
+    void                    RemoveObject(CObject* pObject, bool bDelete = true);
+    SClientEntity<CObject>* GetObject(DWORD* pGameInterface);
+    CObject*                GetObjectFromIndex(std::uint32_t elementIndexInPool);
+    unsigned long           GetObjectCount() { return m_objectPool.ulCount; }
+    void                    DeleteAllObjects();
 
     // Peds pool
     CPed* AddPed(CClientPed* pClientPed, unsigned int nModelIndex);
@@ -67,13 +73,13 @@ private:
     bool AddPedToPool(CClientPed* pClientPed, CPedSA* pPed);
 
 public:
-    void                   RemovePed(CPed* ped, bool bDelete = true);
-    SClientEntity<CPedSA>* GetPed(DWORD* pGameInterface);
-    SClientEntity<CPedSA>* GetPed(size_t pos) { return &m_pedPool.arrayOfClientEntities[pos]; };
-    CPed*                  GetPedFromRef(DWORD dwGameRef);
-    CPedSAInterface*       GetPedInterface(DWORD dwGameRef);  // game_sa specific
-    unsigned long          GetPedCount() { return m_pedPool.ulCount; }
-    void                   DeleteAllPeds();
+    void                 RemovePed(CPed* ped, bool bDelete = true);
+    SClientEntity<CPed>* GetPed(DWORD* pGameInterface);
+    SClientEntity<CPed>* GetPed(size_t pos) { return &m_pedPool.arrayOfClientEntities[pos]; };
+    CPed*                GetPedFromRef(DWORD dwGameRef);
+    CPedSAInterface*     GetPedInterface(DWORD dwGameRef);  // game_sa specific
+    unsigned long        GetPedCount() { return m_pedPool.ulCount; }
+    void                 DeleteAllPeds();
 
     CEntity*       GetEntity(DWORD* pGameInterface);
     CClientEntity* GetClientEntity(DWORD* pGameInterface);
@@ -105,10 +111,13 @@ public:
     CPtrNodeSingleLinkPool& GetPtrNodeSingleLinkPool() noexcept override { return m_PtrNodeSingleLinkPool; };
 
 private:
+    // Store the SDK base pointer in the actual existing registry. Normal
+    // C++ upcasts retain any multiple-inheritance adjustment; no parallel
+    // view or layout reinterpretation is needed by SDK/client callers.
     // Pools
-    SPoolData<CVehicleSA, CVehicleSAInterface, MAX_VEHICLES> m_vehiclePool;
-    SPoolData<CPedSA, CPedSAInterface, MAX_PEDS>             m_pedPool;
-    SPoolData<CObjectSA, CObjectSAInterface, MAX_OBJECTS>    m_objectPool;
+    SPoolData<CVehicle, CVehicleSAInterface, MAX_VEHICLES> m_vehiclePool;
+    SPoolData<CPed, CPedSAInterface, MAX_PEDS>             m_pedPool;
+    SPoolData<CObject, CObjectSAInterface, MAX_OBJECTS>    m_objectPool;
 
     CPoolSAInterface<CPedSAInterface>**     m_ppPedPoolInterface;
     CPoolSAInterface<CObjectSAInterface>**  m_ppObjectPoolInterface;

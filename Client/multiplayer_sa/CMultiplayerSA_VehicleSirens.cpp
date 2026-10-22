@@ -184,8 +184,8 @@ void GetVehicleSirenType()
     if (pVehicleWithTheSiren)
     {
         // Grab the CVehicle
-        SClientEntity<CVehicleSA>* pVehicleClientEntity = pGameInterface->GetPools()->GetVehicle((DWORD*)pVehicleWithTheSiren);
-        CVehicle*                  pVehicle = pVehicleClientEntity ? pVehicleClientEntity->pEntity : nullptr;
+        SClientEntity<CVehicle>* pVehicleClientEntity = pGameInterface->GetPools()->GetVehicle((DWORD*)pVehicleWithTheSiren);
+        CVehicle*                pVehicle = pVehicleClientEntity ? pVehicleClientEntity->pEntity : nullptr;
         // Valid ? I see a pattern here!
         if (pVehicle)
         {
@@ -226,8 +226,8 @@ void GetVehicleSirenType()
 // which otherwise each repeated the same pool lookup and null/sirens check on their own.
 CVehicle* GetSirenVehicle(CVehicleSAInterface* vehicleInterface)
 {
-    SClientEntity<CVehicleSA>* pVehicleClientEntity = pGameInterface->GetPools()->GetVehicle((DWORD*)vehicleInterface);
-    CVehicle*                  pVehicle = pVehicleClientEntity ? pVehicleClientEntity->pEntity : nullptr;
+    SClientEntity<CVehicle>* pVehicleClientEntity = pGameInterface->GetPools()->GetVehicle((DWORD*)vehicleInterface);
+    CVehicle*                pVehicle = pVehicleClientEntity ? pVehicleClientEntity->pEntity : nullptr;
     return (pVehicle && pVehicle->DoesVehicleHaveSirens()) ? pVehicle : nullptr;
 }
 
@@ -367,8 +367,8 @@ bool ProcessVehicleSirenPosition()
     if (pVehicleWithTheSiren)
     {
         // Grab our vehicle from the interface
-        SClientEntity<CVehicleSA>* pVehicleClientEntity = pGameInterface->GetPools()->GetVehicle((DWORD*)pVehicleWithTheSiren);
-        CVehicle*                  pVehicle = pVehicleClientEntity ? pVehicleClientEntity->pEntity : nullptr;
+        SClientEntity<CVehicle>* pVehicleClientEntity = pGameInterface->GetPools()->GetVehicle((DWORD*)pVehicleWithTheSiren);
+        CVehicle*                pVehicle = pVehicleClientEntity ? pVehicleClientEntity->pEntity : nullptr;
         // Valid - Wait this seems familiar
         if (pVehicle)
         {
@@ -940,8 +940,8 @@ bool TestVehicleForSiren()
     if (pVehicleWithTheSiren)
     {
         // Grab our vehicle
-        SClientEntity<CVehicleSA>* pVehicleClientEntity = pGameInterface->GetPools()->GetVehicle((DWORD*)pVehicleWithTheSiren);
-        CVehicle*                  pVehicle = pVehicleClientEntity ? pVehicleClientEntity->pEntity : nullptr;
+        SClientEntity<CVehicle>* pVehicleClientEntity = pGameInterface->GetPools()->GetVehicle((DWORD*)pVehicleWithTheSiren);
+        CVehicle*                pVehicle = pVehicleClientEntity ? pVehicleClientEntity->pEntity : nullptr;
         // Is it valid and it doesn't have a siren by default
         if (pVehicle)
         {
@@ -998,8 +998,8 @@ bool SirenCheckCameraPosition()
     // Default SA sirens we don't bother processing
     // if ( DoesVehicleHaveSiren ( ) == false )
     {
-        SClientEntity<CVehicleSA>* pVehicleClientEntity = pGameInterface->GetPools()->GetVehicle((DWORD*)pVehicleWithTheSiren);
-        CVehicle*                  pVehicle = pVehicleClientEntity ? pVehicleClientEntity->pEntity : nullptr;
+        SClientEntity<CVehicle>* pVehicleClientEntity = pGameInterface->GetPools()->GetVehicle((DWORD*)pVehicleWithTheSiren);
+        CVehicle*                pVehicle = pVehicleClientEntity ? pVehicleClientEntity->pEntity : nullptr;
         if (pVehicle)
         {
             // Do we have sirens given by us and is the 360 flag set?
@@ -1062,8 +1062,8 @@ bool __fastcall DisableVehicleSiren(CVehicleSAInterface* vehicleInterface)
 {
     if (vehicleInterface && vehicleInterface->HasVTBL())
     {
-        SClientEntity<CVehicleSA>* pVehicleClientEntity = pGameInterface->GetPools()->GetVehicle((DWORD*)vehicleInterface);
-        CVehicle*                  pVehicle = pVehicleClientEntity ? pVehicleClientEntity->pEntity : nullptr;
+        SClientEntity<CVehicle>* pVehicleClientEntity = pGameInterface->GetPools()->GetVehicle((DWORD*)vehicleInterface);
+        CVehicle*                pVehicle = pVehicleClientEntity ? pVehicleClientEntity->pEntity : nullptr;
         if (pVehicle && (pVehicle->IsSirenSilentEffectEnabled() || pVehicle->GetModelIndex() == 420 || pVehicle->GetModelIndex() == 438))
         {
             return true;

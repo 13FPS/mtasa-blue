@@ -53,7 +53,7 @@ CTaskSimpleChokingSA::CTaskSimpleChokingSA(CPed* pAttacker, bool bIsTearGas)
 CPed* CTaskSimpleChokingSA::GetAttacker()
 {
     CTaskSimpleChokingSAInterface* internalInterface = (CTaskSimpleChokingSAInterface*)GetInterface();
-    SClientEntity<CPedSA>*         pPedClientEntity = pGame->GetPools()->GetPed((DWORD*)internalInterface->m_pAttacker);
+    SClientEntity<CPed>*           pPedClientEntity = pGame->GetPools()->GetPed((DWORD*)internalInterface->m_pAttacker);
     return pPedClientEntity ? pPedClientEntity->pEntity : nullptr;
 }
 

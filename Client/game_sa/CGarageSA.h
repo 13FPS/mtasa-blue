@@ -49,6 +49,8 @@ public:
     void SetOpen(bool bOpen);
     bool IsOpen() const;
 
+    // Keep the typed classic view local; common garage clients do not use
+    // it and DE must not manufacture this native layout to satisfy the SDK.
     CGarageSAInterface* GetInterface() { return internalInterface; }
 
 private:

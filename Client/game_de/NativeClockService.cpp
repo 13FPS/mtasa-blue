@@ -45,6 +45,7 @@
 #include "NativePedWeaponFieldsMemory.h"
 #include "NativePedWeaponAmmoMemory.h"
 #include "NativePedCurrentWeaponSlotMemory.h"
+#include "NativeNamedGarageMemory.h"
 #include "NativePedMetadataMemory.h"
 #include "NativeTaskRemovalCalls.h"
 #include "NativeStreamingRequestCalls.h"
@@ -208,6 +209,10 @@ namespace mta::game_de
             ClockResult GetWeaponInfoSlot(std::size_t slot, CWeaponInfo*& output) noexcept override;
             ClockResult ReadPedWeaponInfo(const NativePedReferenceToken&, std::uint32_t, eWeaponSkill, CWeaponInfo*&) noexcept override;
             ClockResult ReadPedCurrentWeaponSlot(const NativePedReferenceToken&, std::uint32_t&) noexcept override;
+            ClockResult ReadNamedGarageType(const NativeGarageName&, std::uint8_t&) noexcept override;
+            ClockResult SetNamedGarageType(const NativeGarageName&, std::uint8_t) noexcept override;
+            ClockResult ReadNamedGarageOpen(const NativeGarageName&, bool&) noexcept override;
+            ClockResult SetNamedGarageOpen(const NativeGarageName&, bool) noexcept override;
             ClockResult GetWeaponStatManager(CWeaponStatManager*&) noexcept override;
             ClockResult SetWeatherScalarOverride(NativeWeatherScalarProfile::Field field, float value) noexcept override;
             ClockResult ResetWeatherScalarOverride(NativeWeatherScalarProfile::Field field) noexcept override;
@@ -2769,6 +2774,34 @@ namespace mta::game_de
             // grants the unqualified model/actor slot-change lifecycle.
             output = next;
             return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::ReadNamedGarageType(const NativeGarageName& name, std::uint8_t& output) noexcept
+        {
+            // A native name is reacquired inside this current owner, never
+            // converted into an unproved classic numeric garage ID or lease.
+            return NativeNamedGarageMemory({runtime.image}, &CheckTimingOwner).ReadType(name, output);
+        }
+        ClockResult NativeAccess::ReadNamedGarageOpen(const NativeGarageName& name, bool& output) noexcept
+        {
+            return NativeNamedGarageMemory({runtime.image}, &CheckTimingOwner).ReadOpen(name, output);
+        }
+        ClockResult NativeAccess::SetNamedGarageType(const NativeGarageName& name, std::uint8_t type) noexcept
+        {
+            NativeNamedGarageMemory::Receipt receipt;
+            const auto                       result = NativeNamedGarageMemory({runtime.image}, &CheckTimingOwner).SetType(name, type, &receipt);
+            // The one selected byte can persist without its acknowledgement.
+            // Retire this same callback owner; no replay or rollback may run.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+        ClockResult NativeAccess::SetNamedGarageOpen(const NativeGarageName& name, bool open) noexcept
+        {
+            NativeNamedGarageMemory::Receipt receipt;
+            const auto                       result = NativeNamedGarageMemory({runtime.image}, &CheckTimingOwner).SetOpen(name, open, &receipt);
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
         }
         ClockResult NativeAccess::ReadPedCurrentRotation(const NativePedReferenceToken& token, float& output) noexcept
         {

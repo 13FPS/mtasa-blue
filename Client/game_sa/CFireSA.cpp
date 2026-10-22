@@ -81,7 +81,7 @@ CEntity* CFireSA::GetCreator()
         {
             case ENTITY_TYPE_PED:
             {
-                SClientEntity<CPedSA>* pPedClientEntity = pPools->GetPed((DWORD*)createEntitySA);
+                SClientEntity<CPed>* pPedClientEntity = pPools->GetPed((DWORD*)createEntitySA);
                 if (pPedClientEntity)
                 {
                     creatorEntity = pPedClientEntity->pEntity;
@@ -90,7 +90,7 @@ CEntity* CFireSA::GetCreator()
             }
             case ENTITY_TYPE_VEHICLE:
             {
-                SClientEntity<CVehicleSA>* pVehicleClientEntity = pPools->GetVehicle((DWORD*)createEntitySA);
+                SClientEntity<CVehicle>* pVehicleClientEntity = pPools->GetVehicle((DWORD*)createEntitySA);
                 if (pVehicleClientEntity)
                 {
                     creatorEntity = pVehicleClientEntity->pEntity;
@@ -117,7 +117,7 @@ CEntity* CFireSA::GetEntityOnFire()
         {
             case ENTITY_TYPE_PED:
             {
-                SClientEntity<CPedSA>* pPedClientEntity = pPools->GetPed((DWORD*)TargetEntitySA);
+                SClientEntity<CPed>* pPedClientEntity = pPools->GetPed((DWORD*)TargetEntitySA);
                 if (pPedClientEntity)
                 {
                     TargetEntity = pPedClientEntity->pEntity;
@@ -126,7 +126,7 @@ CEntity* CFireSA::GetEntityOnFire()
             }
             case ENTITY_TYPE_VEHICLE:
             {
-                SClientEntity<CVehicleSA>* pVehicleClientEntity = pPools->GetVehicle((DWORD*)TargetEntitySA);
+                SClientEntity<CVehicle>* pVehicleClientEntity = pPools->GetVehicle((DWORD*)TargetEntitySA);
                 if (pVehicleClientEntity)
                 {
                     TargetEntity = pVehicleClientEntity->pEntity;

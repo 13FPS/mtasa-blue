@@ -91,7 +91,7 @@ static void __declspec(naked) HOOK_Vehicle_PreRender(void)
 static float&          fTimeStep = *(float*)(0xB7CB5C);
 static bool __fastcall CanProcessFlyingCarStuff(CAutomobileSAInterface* vehicleInterface)
 {
-    SClientEntity<CVehicleSA>* vehicle = pGame->GetPools()->GetVehicle((DWORD*)vehicleInterface);
+    SClientEntity<CVehicle>* vehicle = pGame->GetPools()->GetVehicle((DWORD*)vehicleInterface);
     if (!vehicle || !vehicle->pEntity)
         return true;
 
@@ -499,7 +499,7 @@ CVehicle* CVehicleSA::GetNextTrainCarriage()
     CTrainSAInterface* pVehicle = GetNextCarriageInTrain();
     if (pVehicle)
     {
-        SClientEntity<CVehicleSA>* pVehicleClientEntity = pGame->GetPools()->GetVehicle((DWORD*)pVehicle);
+        SClientEntity<CVehicle>* pVehicleClientEntity = pGame->GetPools()->GetVehicle((DWORD*)pVehicle);
         return pVehicleClientEntity ? pVehicleClientEntity->pEntity : nullptr;
     }
     return nullptr;
@@ -556,7 +556,7 @@ CVehicle* CVehicleSA::GetPreviousTrainCarriage()
     CTrainSAInterface* pVehicle = GetPreviousCarriageInTrain();
     if (pVehicle)
     {
-        SClientEntity<CVehicleSA>* pVehicleClientEntity = pGame->GetPools()->GetVehicle((DWORD*)pVehicle);
+        SClientEntity<CVehicle>* pVehicleClientEntity = pGame->GetPools()->GetVehicle((DWORD*)pVehicle);
         return pVehicleClientEntity ? pVehicleClientEntity->pEntity : nullptr;
     }
     return nullptr;
@@ -1020,7 +1020,7 @@ CPed* CVehicleSA::GetDriver()
     CPedSAInterface* pDriver = GetVehicleInterface()->pDriver;
     if (pDriver)
     {
-        SClientEntity<CPedSA>* pPedClientEntity = pPools->GetPed((DWORD*)pDriver);
+        SClientEntity<CPed>* pPedClientEntity = pPools->GetPed((DWORD*)pDriver);
         if (pPedClientEntity)
         {
             return pPedClientEntity->pEntity;
@@ -1038,7 +1038,7 @@ CPed* CVehicleSA::GetPassenger(unsigned char ucSlot)
         CPedSAInterface* pPassenger = GetVehicleInterface()->pPassengers[ucSlot];
         if (pPassenger)
         {
-            SClientEntity<CPedSA>* pPedClientEntity = pPools->GetPed((DWORD*)pPassenger);
+            SClientEntity<CPed>* pPedClientEntity = pPools->GetPed((DWORD*)pPassenger);
             if (pPedClientEntity)
             {
                 return pPedClientEntity->pEntity;
@@ -1330,7 +1330,7 @@ CVehicle* CVehicleSA::GetTowedVehicle()
 
     if (trailerVehicle)
     {
-        SClientEntity<CVehicleSA>* pVehicleClientEntity = pGame->GetPools()->GetVehicle((DWORD*)trailerVehicle);
+        SClientEntity<CVehicle>* pVehicleClientEntity = pGame->GetPools()->GetVehicle((DWORD*)trailerVehicle);
         return pVehicleClientEntity ? pVehicleClientEntity->pEntity : nullptr;
     }
 
@@ -1343,7 +1343,7 @@ CVehicle* CVehicleSA::GetTowedByVehicle()
 
     if (towingVehicle)
     {
-        SClientEntity<CVehicleSA>* pVehicleClientEntity = pGame->GetPools()->GetVehicle((DWORD*)towingVehicle);
+        SClientEntity<CVehicle>* pVehicleClientEntity = pGame->GetPools()->GetVehicle((DWORD*)towingVehicle);
         return pVehicleClientEntity ? pVehicleClientEntity->pEntity : nullptr;
     }
 

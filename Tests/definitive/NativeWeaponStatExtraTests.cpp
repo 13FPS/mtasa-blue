@@ -288,6 +288,156 @@ namespace
         ExtraWriteHost::Reset();
     }
 
+    void ExtraComboCountChecks(OwnedImage& fixture, NativeWeaponInfoReader& reader)
+    {
+        static_assert(static_cast<std::uint32_t>(NativeWeaponShortField::Damage) == 0);
+        static_assert(static_cast<std::uint32_t>(NativeWeaponShortField::MaximumClipAmmo) == 1);
+        static_assert(static_cast<std::uint32_t>(NativeWeaponShortField::AimOffsetIndex) == 2);
+        static_assert(static_cast<std::uint32_t>(NativeWeaponShortField::DefaultCombo) == 3);
+        static_assert(static_cast<std::uint32_t>(NativeWeaponShortField::CombosAvailable) == 4);
+        static_assert(offsetof(NativeWeaponInfoValues, combosAvailable) == 0x6f);
+        const auto image = fixture.image;
+        const auto set = [&](std::size_t slot, std::int16_t count)
+        { return ExtraMemory::SetShort(reader, image, slot, NativeWeaponShortField::CombosAvailable, count, ExtraWriteHost::Admit); };
+        ExtraWriteHost::Reset();
+        // Exhaust the BYTE representation, not an invented gameplay domain.
+        // Unknown default-combo bytes remain independently owned storage.
+        for (std::int16_t count = 0; count <= 255; ++count)
+        {
+            ExtraPut(image, 0, 0x6e, static_cast<std::uint8_t>(255 - count));
+            const auto before = ExtraSnapshot(image);
+            Check(set(0, count) == ClockResult::Ok, "each raw BYTE count is admitted without changing the default-combo policy");
+            ExtraExact(before, image, 0, 0x6f, static_cast<std::uint8_t>(count));
+        }
+        for (std::size_t slot = 0; slot < P::RowCount; ++slot)
+        {
+            for (const auto count : {std::int16_t{0}, std::int16_t{1}, std::int16_t{127}, std::int16_t{128}, std::int16_t{254}, std::int16_t{255}})
+            {
+                ExtraPut(image, slot, 0x6e, static_cast<std::uint8_t>(slot * 3));
+                const auto before = ExtraSnapshot(image);
+                Check(set(slot, count) == ClockResult::Ok, "count writes use precisely the existing eighty qualified rows");
+                ExtraExact(before, image, slot, 0x6f, static_cast<std::uint8_t>(count));
+            }
+        }
+        auto       before = ExtraSnapshot(image);
+        const auto calls = ExtraWriteHost::calls;
+        for (int count = (std::numeric_limits<std::int16_t>::min)(); count <= (std::numeric_limits<std::int16_t>::max)(); ++count)
+            if (count < 0 || count > 255)
+                Check(set(0, static_cast<std::int16_t>(count)) == ClockResult::InvalidArgument,
+                      "count requests outside BYTE representation refuse before narrowing or shifting");
+        Check(ExtraWriteHost::calls == calls && ExtraSnapshot(image) == before, "out-of-byte count requests never reach CAS or alter a row");
+
+        constexpr std::size_t  slot = 5;
+        NativeWeaponInfoValues row;
+        ExtraWriteHost::Reset();
+        ExtraPut(image, slot, 0x6e, std::uint16_t{0x0104});
+        before = ExtraSnapshot(image);
+        ExtraWriteHost::before = [&] { ExtraPut(image, slot, 0x6e, std::uint8_t{255}); };
+        Check(set(slot, 201) == ClockResult::Ok && ExtraWriteHost::calls == 2, "count retries only the foreign low-byte neighbor change");
+        ExtraExact(before, image, slot, 0x6e, std::uint16_t{0xc9ff});
+
+        ExtraWriteHost::Reset();
+        ExtraPut(image, slot, 0x6e, std::uint16_t{0x0104});
+        before = ExtraSnapshot(image);
+        ExtraWriteHost::before = [&] { ExtraPut(image, slot, 0x6f, std::uint8_t{2}); };
+        Check(set(slot, 201) == ClockResult::Busy && ExtraWriteHost::calls == 1, "competing count intent is never overwritten or retried");
+        ExtraExact(before, image, slot, 0x6f, std::uint8_t{2});
+
+        ExtraWriteHost::Reset();
+        ExtraPut(image, slot, 0x6e, std::uint16_t{0x0104});
+        before = ExtraSnapshot(image);
+        ExtraWriteHost::before = [&] { ExtraPut(image, slot, 0x6e, std::uint8_t{7}); };
+        ExtraWriteHost::after = [&] { ExtraPut(image, slot, 0x6f, std::uint8_t{222}); };
+        Check(set(slot, 201) == ClockResult::Busy && ExtraWriteHost::calls == 1, "fresh neighbor retry cannot authorize an intervening foreign count value");
+        ExtraExact(before, image, slot, 0x6e, std::uint16_t{0xde07});
+
+        ExtraWriteHost::Reset();
+        ExtraPut(image, slot, 0x6e, std::uint16_t{0x0100});
+        before = ExtraSnapshot(image);
+        ExtraWriteHost::before = [&] { ExtraPut(image, slot, 0x6e, static_cast<std::uint8_t>(ExtraWriteHost::calls)); };
+        Check(set(slot, 201) == ClockResult::Busy && ExtraWriteHost::calls == 8, "count neighbor retry is bounded to eight actual CAS attempts");
+        ExtraExact(before, image, slot, 0x6e, std::uint16_t{0x0108});
+
+        ExtraWriteHost::Reset();
+        ExtraPut(image, slot, 0x6e, std::uint16_t{0x0104});
+        before = ExtraSnapshot(image);
+        ExtraWriteHost::after = [&] { ExtraPut(image, slot, 0x6e, std::uint8_t{6}); };
+        Check(set(slot, 0) == ClockResult::Ok && ExtraWriteHost::calls == 1, "count readback ignores a later unrelated default-combo change");
+        ExtraExact(before, image, slot, 0x6e, std::uint16_t{0x0006});
+
+        ExtraWriteHost::Reset();
+        ExtraPut(image, slot, 0x6e, std::uint16_t{0x0104});
+        before = ExtraSnapshot(image);
+        ExtraWriteHost::after = [&] { ExtraPut(image, slot, 0x6e, std::uint16_t{0xde07}); };
+        Check(set(slot, 201) == ClockResult::WriteFailure && ExtraWriteHost::calls == 1, "superseded accepted count is an honest post-write failure");
+        ExtraExact(before, image, slot, 0x6e, std::uint16_t{0xde07});
+
+        for (const auto expiry : {1u, 2u, 3u, 4u})
+        {
+            ExtraWriteHost::Reset();
+            ExtraPut(image, slot, 0x6e, std::uint16_t{0x0104});
+            before = ExtraSnapshot(image);
+            ExtraWriteHost::expireAt = expiry;
+            Check(set(slot, 201) == ClockResult::Expired && ExtraWriteHost::calls == (expiry <= 2 ? 0u : 1u),
+                  "count respects both pre-CAS and post-CAS generation-owner bookends");
+            if (expiry <= 2)
+                Check(ExtraSnapshot(image) == before, "pre-entry count owner expiry preserves every bank byte");
+            else
+                ExtraExact(before, image, slot, 0x6f, std::uint8_t{201});
+        }
+        ExtraWriteHost::Reset();
+        before = ExtraSnapshot(image);
+        ExtraWriteHost::fault = true;
+        Check(set(slot, 201) == ClockResult::WriteFailure && ExtraWriteHost::calls == 1 && ExtraSnapshot(image) == before,
+              "actual raised count CAS fault refuses without a partial paired-byte store");
+        ExtraWriteHost::Reset();
+        ClockResult wrongThread = ClockResult::Ok;
+        std::thread foreign([&] { wrongThread = set(slot, 201); });
+        foreign.join();
+        Check(wrongThread == ClockResult::WrongThread && !ExtraWriteHost::calls && ExtraSnapshot(image) == before,
+              "count keeps actual reader thread ownership and never exposes a raw row writer");
+        Check(set(P::RowCount, 201) == ClockResult::InvalidArgument && !ExtraWriteHost::calls, "count refuses the first row beyond the native bank");
+        const auto module = WeaponTestHost::image;
+        WeaponTestHost::image = 0;
+        const auto wrongImage = set(slot, 201);
+        WeaponTestHost::image = module;
+        Check(wrongImage == ClockResult::BindingChanged && !ExtraWriteHost::calls && ExtraSnapshot(image) == before,
+              "count retains the exact current module identity guard");
+
+        // The existing full native profile includes the byte's genuine loader
+        // producer. Scalar extra-pin bookends are reused, with no new claim
+        // that the neighboring combo table bounds a raw count.
+        for (const auto& pin : E::Code)
+        {
+            const auto original = *reinterpret_cast<const unsigned char*>(image + pin.rva);
+            const auto corrupt = static_cast<unsigned char>(original ^ 1);
+            fixture.Patch(pin.rva, &corrupt, 1);
+            Check(set(slot, 201) == ClockResult::BindingChanged && !ExtraWriteHost::calls && ExtraSnapshot(image) == before,
+                  "count retains existing extra producer/consumer profile guards");
+            fixture.Patch(pin.rva, &original, 1);
+        }
+        const auto rva = E::Code[0].rva;
+        const auto original = *reinterpret_cast<const unsigned char*>(image + rva);
+        const auto corrupt = static_cast<unsigned char>(original ^ 1);
+        ExtraWriteHost::admissionStep = [&](unsigned count)
+        {
+            if (count == 1)
+                fixture.Patch(rva, &corrupt, 1);
+        };
+        Check(set(slot, 201) == ClockResult::BindingChanged && !ExtraWriteHost::calls && ExtraSnapshot(image) == before,
+              "late pre-CAS count provenance loss refuses before mutation");
+        fixture.Patch(rva, &original, 1);
+        ExtraWriteHost::Reset();
+        ExtraWriteHost::after = [&] { fixture.Patch(rva, &corrupt, 1); };
+        Check(set(slot, 77) == ClockResult::WriteFailure && ExtraWriteHost::calls == 1,
+              "post-CAS count provenance loss preserves accepted effect and reports failure");
+        fixture.Patch(rva, &original, 1);
+        ExtraExact(before, image, slot, 0x6f, std::uint8_t{77});
+        ExtraWriteHost::Reset();
+        Check(reader.Read(slot, row) == Status::Ok && row.combosAvailable == 77, "existing native getter representation observes precisely the stored count");
+        std::printf("Production native weapon combo-count byte storage fixture completed\n");
+    }
+
     void ExtraModelChecks(OwnedImage& fixture, NativeWeaponInfoReader& reader, ModelObjects& objects)
     {
         const auto image = fixture.image;
@@ -524,6 +674,7 @@ int wmain(int argc, wchar_t** argv)
     objects.Initialize(fixture.image);
     ExtraScalarChecks(reader, fixture.image);
     ExtraAimComboChecks(reader, fixture.image);
+    ExtraComboCountChecks(fixture, reader);
     ExtraModelChecks(fixture, reader, objects);
     ExtraFailureChecks(fixture, reader, objects);
     ExtraProfileChecks(fixture, reader);

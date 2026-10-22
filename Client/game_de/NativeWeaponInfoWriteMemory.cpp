@@ -103,6 +103,9 @@ namespace mta::game_de::NativeWeaponInfoWriteMemory
                     output = offsetof(NativeWeaponInfoValues, aimOffset);
                     return true;
                 case NativeWeaponShortField::DefaultCombo:
+                case NativeWeaponShortField::CombosAvailable:
+                    // Both byte intents use the enclosing aligned word. Their
+                    // separate masks must never authorize replacing a neighbor.
                     output = offsetof(NativeWeaponInfoValues, defaultCombo);
                     return true;
                 default:
@@ -441,6 +444,18 @@ namespace mta::game_de::NativeWeaponInfoWriteMemory
             if (value < 0 || static_cast<std::size_t>(value) >= NativeWeaponInfoExtraProfile::AimRecordCount)
                 return ClockResult::InvalidArgument;
             return Store(reader, image, slot, offset, bits, static_cast<std::uint16_t>(UINT16_MAX), false, checkOwner, false, ExtraKind::Aim);
+        }
+        if (field == NativeWeaponShortField::CombosAvailable)
+        {
+            if (value < 0 || value > UINT8_MAX)
+                return ClockResult::InvalidArgument;
+            // The exact native loader and existing getter establish a BYTE
+            // at +0x6f, matching the classic SDK's raw storage contract. This
+            // grants no gameplay guarantee for arbitrary byte values. Shift
+            // only after range validation and retain the low DefaultCombo
+            // byte even when it is outside the separate known-combo policy.
+            const auto shifted = static_cast<std::uint16_t>(bits << 8);
+            return Store(reader, image, slot, offset, shifted, std::uint16_t{0xff00}, true, checkOwner, false, ExtraKind::Scalar, true);
         }
         if (field == NativeWeaponShortField::DefaultCombo)
         {

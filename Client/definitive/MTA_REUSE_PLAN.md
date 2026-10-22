@@ -129,25 +129,30 @@ transition policy between classic and DE. The complete owned `CWeaponStat`
 contains custom CPU data, as the classic unlisted factory does; its mutable
 fire-offset vector belongs to that object. Classic manager originals remain
 mutable and are looked up at each constrained flag transition. Custom weapon
-execution separately uses the real native weapon-info bank. The live weapon-stat
-manager still requires its remaining qualified native setters.
+execution separately uses the real native weapon-info bank.
 
-The native `CWeaponStatNativeDE` slice now borrows those same stable bank
+The complete native `CWeaponStatNativeDE` borrows those same stable bank
 objects and callback writer, including model/fire type, animation loops, aim
 offset and default-combo fields. Flag changes reuse MTA's shared policy and
 resolve mutable originals at each transition. Persistent writes preserve
 accepted effects and later native edits if a subsequent operation loses its
-lease. The native combo-count setter remains pure; the live manager is not
-published from this partial slice. This differs from the complete owned CPU
-stat returned by `CreateWeaponStat`.
+lease. The combo-count setter preserves the exact native BYTE storage contract,
+including the adjacent default-combo byte; this proves storage behavior rather
+than a gameplay range. This differs from the complete owned CPU stat returned
+by `CreateWeaponStat`.
 
 The manager's existing first-match lookup, skill selection and deliberately
 disabled list reset also share one SDK policy between classic and DE. The DE
-manager slice owns 76 typed CPU originals in classic insertion order, including
+manager owns 76 typed CPU originals in classic insertion order, including
 duplicate standard records, and borrows live SDK identities through explicit
 registration. Metadata edits and mutable originals remain observable; unlisted
-CPU stats keep their original-provider lifetime contract. Native wrapper
-creation stays pure, so this slice does not publish `GetWeaponStatManager`.
+CPU stats keep their original-provider lifetime contract. The complete
+`CWeaponStatManagerDE` creates live wrappers only for exact identities from its
+80-row bank and applies the shared MTA defaults after registration. Construction
+creates CPU originals with no native I/O and leaves the live registry empty,
+matching MTA's separate initialization step. The partial `CGameDE` now exposes
+this runtime-owned manager through a qualified borrow without replaying defaults.
+Full `CGame::Initialize` population and startup remain separate work.
 
 `CGameTimingDE::GetGravity` also reads the current qualified native downward
 acceleration operand through the existing timing-reader binding. It preserves

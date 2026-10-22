@@ -3,8 +3,8 @@
  * LICENSE: See LICENSE in the repository root
  * PURPOSE: Real retained bank/owner coverage for the native stat SDK slice
  ****************************************************************************/
-// Included in the existing production runtime fixture. The one unqualified
-// setter is completed only by this rejecting test subclass, never a product.
+// The subclass exposes protected construction for this existing focused slice.
+// The complete manager fixture also exercises the final native count setter.
 struct NativeStatOriginalTest
 {
     MtaGame::WeaponStatOriginal        value{0, 7};
@@ -29,9 +29,8 @@ public:
         : CWeaponStatNativeDE(bank, access, slot, WEAPONTYPE_PISTOL, WEAPONSKILL_STD, lookup, context)
     {
     }
-    void SetCombosAvailable(BYTE) override { throw std::logic_error("unqualified native combo-count setter reached fixture"); }
 };
-static_assert(std::is_abstract_v<CWeaponStatNativeDE> && !std::is_abstract_v<NativeStatSdkFixture>);
+static_assert(!std::is_abstract_v<CWeaponStatNativeDE> && !std::is_abstract_v<NativeStatSdkFixture>);
 
 struct NativeStatSdkContext
 {

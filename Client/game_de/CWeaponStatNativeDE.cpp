@@ -98,4 +98,11 @@ namespace mta::game_de
     {
         RequireWrite(native.SetWeaponShort(slot, NativeWeaponShortField::DefaultCombo, value), "SetDefaultCombo");
     }
+    void CWeaponStatNativeDE::SetCombosAvailable(BYTE value)
+    {
+        // Classic stores the supplied byte directly. The native owner's
+        // aligned masked exchange preserves DefaultCombo in the low byte;
+        // accepting storage grants no claim about safe gameplay combinations.
+        RequireWrite(native.SetWeaponShort(slot, NativeWeaponShortField::CombosAvailable, value), "SetCombosAvailable");
+    }
 }

@@ -13,8 +13,8 @@ namespace mta::game_de
 {
     // Native-backed stats share the runtime's existing SDK bank and writer.
     // They must not expose a copied CPU record as a live engine object. The
-    // remaining unqualified combo-count setter keeps this slice abstract and
-    // prevents publication of an incomplete CWeaponStatManager.
+    // final combo-count method preserves the exact SDK byte-storage contract;
+    // it does not claim that every stored byte is a valid gameplay combo range.
     class CWeaponStatNativeDE : public CWeaponStat
     {
     public:
@@ -91,6 +91,7 @@ namespace mta::game_de
         BYTE         GetDefaultCombo() override { return info.GetDefaultCombo(); }
         void         SetDefaultCombo(BYTE value) override;
         BYTE         GetCombosAvailable() override { return info.GetCombosAvailable(); }
+        void         SetCombosAvailable(BYTE value) override;
 
     protected:
         // Like the classic live wrapper, later metadata edits change original
@@ -111,5 +112,5 @@ namespace mta::game_de
         const MtaGame::WeaponStatOriginalLookup originalLookup;
         void* const                             originalContext;
     };
-    static_assert(std::is_abstract_v<CWeaponStatNativeDE> && std::is_base_of_v<CWeaponStat, CWeaponStatNativeDE>);
+    static_assert(!std::is_abstract_v<CWeaponStatNativeDE> && std::is_base_of_v<CWeaponStat, CWeaponStatNativeDE>);
 }

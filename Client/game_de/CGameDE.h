@@ -23,20 +23,21 @@ namespace mta::game_de
     class CGameDE : public CGameWeaponInfoDE
     {
     public:
-        eGameVersion      GetGameVersion() override;
-        CClock*           GetClock() noexcept override;
-        CPlayerInfo*      GetPlayerInfo() override;
-        CRopes*           GetRopes() override;
-        CStats*           GetStats() override;
-        CWeather*         GetWeather() override;
-        void              StartGame() override;
-        CKeyGen*          GetKeyGen() noexcept override;
-        SystemState::Enum GetSystemState() override;
-        void              SetSystemState(SystemState::Enum state) override;
-        bool              IsAtMenu() override;
-        bool              VerifySADataFileNames() override;
-        bool              IsCheatEnabled(const char* name) override;
-        bool              SetCheatEnabled(const char* name, bool enabled) override;
+        eGameVersion        GetGameVersion() override;
+        CClock*             GetClock() noexcept override;
+        CPlayerInfo*        GetPlayerInfo() override;
+        CRopes*             GetRopes() override;
+        CStats*             GetStats() override;
+        CWeaponStatManager* GetWeaponStatManager() override;
+        CWeather*           GetWeather() override;
+        void                StartGame() override;
+        CKeyGen*            GetKeyGen() noexcept override;
+        SystemState::Enum   GetSystemState() override;
+        void                SetSystemState(SystemState::Enum state) override;
+        bool                IsAtMenu() override;
+        bool                VerifySADataFileNames() override;
+        bool                IsCheatEnabled(const char* name) override;
+        bool                SetCheatEnabled(const char* name, bool enabled) override;
 
         void SetAsyncLoadingFromScript(bool enabled, bool forced) override;
         void SuspendASyncLoading(bool suspended, uint autoUnsuspendDelay = 0) override;

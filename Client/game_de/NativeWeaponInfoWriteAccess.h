@@ -37,7 +37,10 @@ namespace mta::game_de
         AimOffsetIndex,
         // This intent uses only the low byte of the final aligned word;
         // the neighboring combos-available byte remains independently owned.
-        DefaultCombo
+        DefaultCombo,
+        // Match the SDK's raw BYTE storage intent while preserving every
+        // independently owned DefaultCombo bit in the adjacent low byte.
+        CombosAvailable
     };
     enum class NativeWeaponDwordField : std::uint32_t
     {

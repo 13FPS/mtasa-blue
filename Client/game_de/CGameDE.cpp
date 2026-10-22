@@ -48,6 +48,18 @@ namespace mta::game_de
         return &keyGen;
     }
 
+    CWeaponStatManager* CGameDE::GetWeaponStatManager()
+    {
+        // Reuse the complete manager owned by this callback runtime. CPU
+        // originals and an empty live registry do not imply that CGame native
+        // initialization/default population has already run.
+        CWeaponStatManager* output = nullptr;
+        RequireNativeWrite(NativeWrites().GetWeaponStatManager(output), "GetWeaponStatManager");
+        if (!output)
+            RequireNativeWrite(ClockResult::NotInitialized, "GetWeaponStatManager");
+        return output;
+    }
+
     CStats* CGameDE::GetStats()
     {
         // The runtime owns a complete SDK stats object and its native reader.

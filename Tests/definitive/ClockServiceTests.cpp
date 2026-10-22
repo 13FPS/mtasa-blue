@@ -83,6 +83,7 @@
 #include "../../Client/game_de/NativeWeaponInfoVectorProfile.h"
 #include "../../Client/game_de/NativeWeaponInfoExtraProfile.h"
 #include "../../Client/game_de/CWeaponStatNativeDE.h"
+#include "../../Client/game_de/CWeaponStatManagerDE.h"
 #include "../../Client/game_de/NativeStatsWriteCalls.h"
 #include "../../Client/game_de/NativeStatsWriteProfile.h"
 #include "../../Client/game_de/CStatsDE.h"
@@ -6211,6 +6212,7 @@ namespace
 }
 
 #include "NativeWeaponStatSdkTests.inl"
+#include "NativeWeaponStatManagerOwnerTests.inl"
 #include "NativeWeatherRainOwnerTests.inl"
 #include "NativePedPoolOwnerTests.inl"
 #include "NativePlayerInfoWantedOwnerTests.inl"
@@ -6256,6 +6258,7 @@ int main(int argc, char** argv)
     NativeWeaponOwnedWrites(fixture);
     NativeWeaponVectorAndBankOwner(fixture);
     NativeWeaponStatSdkOwner(fixture);
+    NativeWeaponStatManagerOwner(fixture);
     NativeWeatherOverrideOwnedSdk(fixture);
     NativeRainOwnerAndWeatherSdk(fixture);
     NativeStatsOwnedSdk(fixture);

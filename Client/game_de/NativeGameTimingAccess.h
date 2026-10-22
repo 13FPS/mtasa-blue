@@ -37,6 +37,7 @@
 #include <cstdint>
 
 class CStats;
+class CWeaponStatManager;
 class CPlayerInfo;
 class CRopes;
 
@@ -84,6 +85,9 @@ namespace mta::game_de
         // Shared MTA lookup can publish only a genuine bank wrapper qualified
         // by this native owner, never a partial provider or a cached fake row.
         virtual ClockResult GetWeaponInfoSlot(std::size_t, CWeaponInfo*&) noexcept { return ClockResult::NotInitialized; }
+        // Only the complete runtime-owned manager may be published. Its CPU
+        // registry/SDK identity never grants a native row write callback.
+        virtual ClockResult GetWeaponStatManager(CWeaponStatManager*&) noexcept { return ClockResult::NotInitialized; }
         // A complete SDK object borrows the independently qualified native
         // reader and this callback owner; publication grants no later lease.
         virtual ClockResult GetStats(CStats*&) noexcept { return ClockResult::NotInitialized; }

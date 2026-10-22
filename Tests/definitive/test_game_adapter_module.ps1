@@ -180,6 +180,17 @@ $sourceNames += @(
     'Client/game_de/NativeModelArchiveReader.cpp',
     'Client/game_de/NativeModelArchiveProfile.h'
 )
+$sourceNames += @(
+    'Client/game_de/CWeaponStatManagerDE.h',
+    'Client/game_de/CWeaponStatManagerDE.cpp',
+    'Client/game_de/CWeaponStatManagerPolicyDE.h',
+    'Client/game_de/CWeaponStatManagerPolicyDE.cpp',
+    'Client/sdk/game/CWeaponStatManager.h',
+    'Client/sdk/game/CWeaponStatListPolicy.h',
+    'Client/sdk/game/CWeaponStatDefaults.h',
+    'Client/sdk/game/CWeaponStatOwned.h',
+    'Client/sdk/game/CWeaponStatData.h'
+)
 $sourceNames += @(Get-ChildItem -LiteralPath $detoursSourceRoot -File | ForEach-Object {
     [IO.Path]::GetRelativePath($taskRoot, $_.FullName).Replace('\', '/')
 })
@@ -290,6 +301,7 @@ if ((Test-Path -LiteralPath $moduleSource) -and $detoursLibraryExit -eq 0) {
         (Join-Path $taskRoot 'Client/game_de/CGameWeaponInfoDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CWeaponStatFactoryDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CWeaponStatNativeDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CWeaponStatManagerPolicyDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CWeaponStatManagerDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeWeaponInfoReader.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CWeaponInfoReadDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeWeaponInfoWriteMemory.cpp'),

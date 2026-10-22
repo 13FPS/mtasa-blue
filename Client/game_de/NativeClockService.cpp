@@ -20,6 +20,7 @@
 #include "NativeWeaponInfoWriteMemory.h"
 #include "NativeWeaponInfoVectorMemory.h"
 #include "CWeaponInfoBankDE.h"
+#include "CWeaponStatManagerDE.h"
 #include "NativeStatsWriteCalls.h"
 #include "CStatsDE.h"
 #include "NativePlayerInfoMemory.h"
@@ -166,6 +167,7 @@ namespace mta::game_de
             ClockResult SetWeaponFireOffset(std::size_t slot, const CVector* source) noexcept override;
             ClockResult SetWeaponSlot(std::size_t slot, eWeaponSlot value) noexcept override;
             ClockResult GetWeaponInfoSlot(std::size_t slot, CWeaponInfo*& output) noexcept override;
+            ClockResult GetWeaponStatManager(CWeaponStatManager*&) noexcept override;
             ClockResult SetWeatherScalarOverride(NativeWeatherScalarProfile::Field field, float value) noexcept override;
             ClockResult ResetWeatherScalarOverride(NativeWeatherScalarProfile::Field field) noexcept override;
             ClockResult GetStats(CStats*& output) noexcept override;
@@ -358,12 +360,15 @@ namespace mta::game_de
             NativeAccess                  access;
             CClockDE                      clock{access};
             CWeaponInfoBankDE             weaponBank{weaponWriterReader, access, access};
-            CStatsDE                      stats{statsReader, access};
-            CWantedDE                     wanted{access};
-            CPlayerInfoDE                 playerInfoSdk{access};
-            CRopesDE                      ropesSdk{access};
-            CWeatherOverridesDE           weatherSdk{access, access, access};
-            Counters                      counters;
+            // Construct CPU originals and an empty live registry only. Actual
+            // CGame initialization/population remains a separate native intent.
+            CWeaponStatManagerDE weaponStatManager{weaponBank, access};
+            CStatsDE             stats{statsReader, access};
+            CWantedDE            wanted{access};
+            CPlayerInfoDE        playerInfoSdk{access};
+            CRopesDE             ropesSdk{access};
+            CWeatherOverridesDE  weatherSdk{access, access, access};
+            Counters             counters;
             // Destroy the hold before the shared peer recovery vector/gates.
             // Its normal lifetime is explicitly retired by Reset/End.
             PeerHold weatherOverridePeers;
@@ -2040,6 +2045,27 @@ namespace mta::game_de
             if (owner != ClockResult::Ok)
                 return owner;
             return NativeWeaponInfoVectorMemory::SetSlot(runtime.weaponWriterReader, runtime.image, slot, value, &CheckTimingOwner);
+        }
+
+        ClockResult NativeAccess::GetWeaponStatManager(CWeaponStatManager*& output) noexcept
+        {
+            const auto owner = RequireWeaponWriterReader();
+            if (owner != ClockResult::Ok)
+                return owner;
+            NativeWeaponInfoValues observed;
+            const auto             read = runtime.weaponWriterReader.Read(0, observed);
+            if (read != Status::Ok)
+                return read == Status::WrongThread      ? ClockResult::WrongThread
+                       : read == Status::NotInitialized ? ClockResult::NotInitialized
+                                                        : ClockResult::BindingChanged;
+            const auto confirmed = CheckTimingOwner();
+            if (confirmed != ClockResult::Ok)
+                return confirmed;
+            // This is one complete SDK manager over the already qualified
+            // bank/access. Publishing it does not populate defaults, create a
+            // second service owner or lend authority to later native writes.
+            output = &runtime.weaponStatManager;
+            return ClockResult::Ok;
         }
 
         ClockResult NativeAccess::GetWeaponInfoSlot(std::size_t slot, CWeaponInfo*& output) noexcept

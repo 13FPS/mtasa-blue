@@ -90,6 +90,16 @@ namespace
         }
         unsigned                  startRequests = 0;
         mta::game_de::ClockResult startResult = mta::game_de::ClockResult::NotInitialized;
+        mta::game_de::ClockResult GetWeaponStatManager(CWeaponStatManager*& output) noexcept override
+        {
+            ++weaponManagerReads;
+            if (weaponManagerResult == mta::game_de::ClockResult::Ok)
+                output = weaponManagerPointer;
+            return weaponManagerResult;
+        }
+        unsigned                  weaponManagerReads = 0;
+        CWeaponStatManager*       weaponManagerPointer = nullptr;
+        mta::game_de::ClockResult weaponManagerResult = mta::game_de::ClockResult::NotInitialized;
         mta::game_de::ClockResult GetStats(CStats*& output) noexcept override
         {
             ++statsReads;
@@ -453,6 +463,25 @@ int main()
     timing.weaponResult = mta::game_de::ClockResult::Ok;
     timing.weaponResultPointer = nullptr;
     Refuses([&] { game.GetWeaponInfo(WEAPONTYPE_PISTOL); }, "accepted weapon selection cannot publish an empty wrapper registry");
+    alignas(void*) unsigned char weaponManagerIdentity = 0;
+    timing.weaponManagerPointer = reinterpret_cast<CWeaponStatManager*>(&weaponManagerIdentity);
+    Refuses([&] { game.GetWeaponStatManager(); }, "complete weapon manager getter requires actual owner qualification");
+    Check(timing.weaponManagerReads == 1, "weapon manager SDK getter forwards refused owner exactly once");
+    timing.weaponManagerResult = mta::game_de::ClockResult::Ok;
+    Check(game.GetWeaponStatManager() == timing.weaponManagerPointer && timing.weaponManagerReads == 2,
+          "actual CGame returns exact borrowed complete manager identity from its native callback owner");
+    timing.weaponManagerResult = mta::game_de::ClockResult::Busy;
+    Refuses([&] { game.GetWeaponStatManager(); }, "complete manager SDK publication preserves competing owner refusal");
+    Check(timing.weaponManagerReads == 3, "manager publication does not retry over competing native authority");
+    timing.weaponManagerResult = mta::game_de::ClockResult::Ok;
+    timing.weaponManagerPointer = nullptr;
+    Refuses([&] { game.GetWeaponStatManager(); }, "successful null cannot substitute an incomplete or absent manager");
+    LegacyTimingAccess  legacyManager;
+    CWeaponStatManager* defaultManager = reinterpret_cast<CWeaponStatManager*>(&weaponManagerIdentity);
+    Check(legacyManager.GetWeaponStatManager(defaultManager) == mta::game_de::ClockResult::NotInitialized &&
+              defaultManager == reinterpret_cast<CWeaponStatManager*>(&weaponManagerIdentity),
+          "older timing-only owner refuses complete manager publication and preserves prior output");
+    std::puts("Actual CGameDE complete weapon-stat manager SDK fixture completed");
     unsigned char statsIdentity = 0;
     timing.statsPointer = reinterpret_cast<CStats*>(&statsIdentity);
     Refuses([&] { game.GetStats(); }, "actual stats SDK publication requires the existing admitted native owner");

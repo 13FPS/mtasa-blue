@@ -16,8 +16,8 @@ $previous=@{}
 foreach($name in @('TEMP','TMP','PATH','INCLUDE','LIB','LIBPATH','VCToolsInstallDir')){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
 $record=[ordered]@{schema='mta_native_weapon_stat_extra_tests_v1';success=$false;failure=$null;sources=@();results=@();architecture='x64';
     nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;engineMemoryWritten=$false;hookInstalled=$false;
-    completeGameReady=$false;completeWeaponInfoReady=$false;generatedFixture=$null;sourcesUnchanged=$true;scratch=$scratch;scratchFilesRemaining=$null;
-    scope='Existing exact-width weapon primitives extended with five timing scalars, native fire type, bounded aim indices, known default-combo IDs and checked native model-table identities. Uses the actual sparse OS image, native reader, existing same-owner access methods and fault/CAS seams. Unknown combo-count semantics stay unimplemented; no native function, game, hook or foreign process executes.'}
+    completeGameReady=$false;completeWeaponInfoReady=$false;nativeWeaponComboCountStorageTested=$false;generatedFixture=$null;sourcesUnchanged=$true;scratch=$scratch;scratchFilesRemaining=$null;
+    scope='Existing exact-width weapon primitives extended with five timing scalars, native fire type, bounded aim indices, known default-combo IDs and checked native model-table identities. Uses the actual sparse OS image, native reader, existing same-owner access methods and fault/CAS seams. Combo count matches the classic raw BYTE storage intent, preserves the DefaultCombo neighbor and does not claim gameplay behavior for arbitrary values; no native function, game, hook or foreign process executes.'}
 function RunOwned([string]$exe,[string[]]$arguments,[string]$directory,[string]$label,[int]$timeout){
     $info=[Diagnostics.ProcessStartInfo]::new($exe)
     $info.WorkingDirectory=$directory;$info.UseShellExecute=$false;$info.CreateNoWindow=$true;$info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true
@@ -37,14 +37,15 @@ function RunOwned([string]$exe,[string[]]$arguments,[string]$directory,[string]$
 }
 try{
     $names=@('Client/game_de/NativeWeaponInfoExtraProfile.h','Client/game_de/NativeWeaponInfoProfile.h','Client/game_de/NativeWeaponInfoReader.h','Client/game_de/NativeWeaponInfoReader.cpp',
-        'Client/game_de/CWeaponInfoReadDE.h','Client/game_de/CWeaponInfoReadDE.cpp','Client/sdk/game/CWeaponInfo.h',
+        'Client/game_de/CWeaponInfoReadDE.h','Client/game_de/CWeaponInfoReadDE.cpp','Client/sdk/game/CWeaponInfo.h','Client/game_sa/CWeaponStatSA.h',
         'Client/game_de/NativeImageAccess.h','Client/game_de/NativeImageAccess.cpp','Client/sdk/game/CGameAdapter.h','Client/sdk/game/CGameClockService.h',
         'Shared/sdk/CControllerState.h','Shared/sdk/CControllerActions.h','Shared/sdk/CControlStateSynthesis.h',
         'Tests/definitive/NativeWeaponInfoReaderTests.cpp','Tests/definitive/test_native_weapon_info.ps1','Tests/definitive/NativeWeaponStatExtraTests.cpp','Tests/definitive/test_native_weapon_stat_extras.ps1',
         'Client/game_de/NativeWeaponInfoWriteAccess.h','Client/game_de/NativeWeaponInfoWriteMemory.h','Client/game_de/NativeWeaponInfoWriteMemory.cpp',
         'Client/game_de/NativeWeaponInfoWriteProfile.h','Client/game_de/CWeaponInfoWriteDE.h','Client/game_de/CWeaponInfoWriteDE.cpp',
         'Build/definitive-recovery/mta-world-services-batch-20261021/weapon-native/native-weapon-info-qualification.json',
-        'Build/definitive-recovery/mta-weapon-stat-native-batch-20261021/native-proof/native-weapon-stat-extra-qualification.json')
+        'Build/definitive-recovery/mta-weapon-stat-native-batch-20261021/native-proof/native-weapon-stat-extra-qualification.json',
+        'Build/definitive-recovery/mta-native-weapon-combo-count-20261022/combo-count-storage-qualified.json')
     $record.sources=@($names|ForEach-Object{[ordered]@{path=$_;sha256=(Sha (Join-Path $root $_))}})
     # Generate only the SDK mutations and pointer accessor left intentionally
     # pure by the read-only production slice. No implemented getter is replaced.
@@ -98,6 +99,8 @@ try{
     $summary=[regex]::Match([IO.File]::ReadAllText($result.test.stdout),'(?m)^Passed (\d+) native weapon-stat extra-field checks \(64-bit\)\r?$')
     if($summary.Success){$result.checks=[int]$summary.Groups[1].Value}
     if($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -le 0){throw 'Native weapon-stat extra-field checks failed.'}
+    $record.nativeWeaponComboCountStorageTested=[IO.File]::ReadAllText($result.test.stdout).Contains('Production native weapon combo-count byte storage fixture completed')
+    if(-not $record.nativeWeaponComboCountStorageTested){throw 'Native combo-count storage fixture marker absent.'}
     $record.success=$true
 }catch{$record.failure=$_.Exception.ToString()}
 finally{

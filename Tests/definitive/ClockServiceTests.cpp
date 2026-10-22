@@ -40,6 +40,10 @@
 #include "../../Client/game_de/NativePedBikeFlagsProfile.h"
 #include "../../Client/game_de/NativePedShotFlagsMemory.h"
 #include "../../Client/game_de/NativePedShotFlagsProfile.h"
+#include "../../Client/game_de/NativePedBleedingMemory.h"
+#include "../../Client/game_de/NativePedBleedingProfile.h"
+#include "../../Client/game_de/NativePedStayMemory.h"
+#include "../../Client/game_de/NativePedStayProfile.h"
 #include "../../Client/game_de/NativePedVitalsProfile.h"
 #include "../../Client/game_de/NativePedMetadataMemory.h"
 #include "../../Client/game_de/NativePedMetadataProfile.h"
@@ -897,6 +901,22 @@ namespace ClockPedFlagsOwnerTest
         return Exchange(shot, at, expected, target, observed);
     }
 }
+namespace ClockPedBehaviorOwnerTest
+{
+    // Reuse the existing final masked-CAS test boundary. Separate host state
+    // ensures the older bike/shot counters and native effects stay unrelated.
+    using Host = ClockPedFlagsOwnerTest::Host;
+    Host bleeding, stay;
+    static_assert(((mta::game_de::NativePedBleedingProfile::BleedingMask | mta::game_de::NativePedStayProfile::StayMask) & 1) == 0);
+    bool ExchangeBleeding(std::uintptr_t at, std::uint32_t expected, std::uint32_t target, std::uint32_t& observed, std::uint32_t&) noexcept
+    {
+        return ClockPedFlagsOwnerTest::Exchange(bleeding, at, expected, target, observed);
+    }
+    bool ExchangeStay(std::uintptr_t at, std::uint32_t expected, std::uint32_t target, std::uint32_t& observed, std::uint32_t&) noexcept
+    {
+        return ClockPedFlagsOwnerTest::Exchange(stay, at, expected, target, observed);
+    }
+}
 namespace ClockPedVelocityOwnerTest
 {
     unsigned stores = 0, failAt = 0, afterAt = 0;
@@ -1732,6 +1752,12 @@ namespace mta::game_de::NativeImageAccess
 #define MTA_DE_PED_SHOT_FLAGS_EXCHANGE ClockPedFlagsOwnerTest::ExchangeShot
 #include "../../Client/game_de/NativePedShotFlagsMemory.cpp"
 #undef MTA_DE_PED_SHOT_FLAGS_EXCHANGE
+#define MTA_DE_PED_BLEEDING_EXCHANGE ClockPedBehaviorOwnerTest::ExchangeBleeding
+#include "../../Client/game_de/NativePedBleedingMemory.cpp"
+#undef MTA_DE_PED_BLEEDING_EXCHANGE
+#define MTA_DE_PED_STAY_EXCHANGE ClockPedBehaviorOwnerTest::ExchangeStay
+#include "../../Client/game_de/NativePedStayMemory.cpp"
+#undef MTA_DE_PED_STAY_EXCHANGE
 #pragma pop_macro("InterlockedCompareExchange")
 #undef GetModuleHandleW
 

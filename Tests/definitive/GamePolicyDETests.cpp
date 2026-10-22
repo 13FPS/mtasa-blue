@@ -5,6 +5,8 @@
  *****************************************************************************/
 #include "../../Client/game_de/CGameDE.h"
 #include <SharedUtil.Defines.h>
+#include "../../Client/game_de/CWeaponStatManagerDE.h"
+#include <memory>
 #include <game/CPools.h>
 #include <game/CWorldCheatPolicy.h>
 
@@ -192,6 +194,27 @@ namespace
         unsigned                               stateWrites = 0;
         SystemState::Enum                      requestedState = SystemState::GS_START_UP;
         mta::game_de::ClockResult              stateResult = mta::game_de::ClockResult::NotInitialized;
+    };
+
+    // Error-boundary supplement only. Positive factory behavior below uses
+    // the actual complete CWeaponStatManagerDE over its real SDK bank wrappers.
+    class RefusingUnlistedManager final : public mta::game_de::CWeaponStatManagerPolicyDE
+    {
+    public:
+        void         CreateWeaponStat(CWeaponInfo*, eWeaponType, eWeaponSkill) override { fixture::Unqualified(); }
+        CWeaponStat* CreateWeaponStatUnlisted(eWeaponType type, eWeaponSkill skill) override
+        {
+            ++calls;
+            requestedType = type;
+            requestedSkill = skill;
+            if (throws)
+                throw std::runtime_error("fixture unlisted factory refused after entry");
+            return nullptr;
+        }
+        unsigned     calls = 0;
+        eWeaponType  requestedType = WEAPONTYPE_UNARMED;
+        eWeaponSkill requestedSkill = WEAPONSKILL_STD;
+        bool         throws = false;
     };
 
     class TestPools final : public fixture::PoolFixtureBase
@@ -482,6 +505,90 @@ int main()
               defaultManager == reinterpret_cast<CWeaponStatManager*>(&weaponManagerIdentity),
           "older timing-only owner refuses complete manager publication and preserves prior output");
     std::puts("Actual CGameDE complete weapon-stat manager SDK fixture completed");
+    {
+        // These are the actual complete native manager and all eighty genuine
+        // SDK bank wrappers, with an unbound reader and refusing native writes.
+        // Unlisted custom data may never populate or read that native bank.
+        mta::game_de::NativeWeaponInfoReader weaponReader;
+        mta::game_de::CWeaponInfoBankDE      bank(weaponReader, timing, timing);
+        mta::game_de::CWeaponStatManagerDE   manager(bank, timing), independentManager(bank, timing);
+        static_assert(!std::is_abstract_v<mta::game_de::CWeaponStatManagerDE>);
+        const auto nativeSlotReads = timing.weaponReads;
+        const auto readsBefore = timing.weaponManagerReads;
+        timing.weaponManagerPointer = &manager;
+        timing.weaponManagerResult = mta::game_de::ClockResult::Expired;
+        Refuses([&] { game.CreateWeaponStat(WEAPONTYPE_PISTOL, WEAPONSKILL_STD); },
+                "actual CGame factory cannot bypass refused native manager publication through inherited standalone defaults");
+        Check(timing.weaponManagerReads == readsBefore + 1 && !manager.GetWeaponStats(WEAPONTYPE_PISTOL),
+              "factory owner refusal is forwarded once without native live registration");
+        timing.weaponManagerResult = mta::game_de::ClockResult::Ok;
+        timing.weaponManagerPointer = nullptr;
+        Refuses([&] { game.CreateWeaponStat(WEAPONTYPE_PISTOL, WEAPONSKILL_STD); }, "successful null manager never becomes factory readiness");
+        timing.weaponManagerPointer = &manager;
+        const auto                                 successfulReads = timing.weaponManagerReads;
+        std::unique_ptr<MtaGame::CWeaponStatOwned> custom(static_cast<MtaGame::CWeaponStatOwned*>(game.CreateWeaponStat(WEAPONTYPE_PISTOL, WEAPONSKILL_STD)));
+        std::unique_ptr<MtaGame::CWeaponStatOwned> another(static_cast<MtaGame::CWeaponStatOwned*>(game.CreateWeaponStat(WEAPONTYPE_PISTOL, WEAPONSKILL_STD)));
+        Check(custom && another && custom != another && custom->GetMaximumClipAmmo() == 17 && custom->GetDamagePerHit() == 25 &&
+                  custom->GetWeaponType() == WEAPONTYPE_PISTOL && custom->GetWeaponSkillLevel() == WEAPONSKILL_STD &&
+                  timing.weaponManagerReads == successfulReads + 2,
+              "actual CGame virtual factory returns distinct complete caller-owned CPU stats with shared MTA defaults and exact metadata");
+        custom->SetDamagePerHit(913);
+        custom->GetFireOffset()->fX = 81;
+        Check(another->GetDamagePerHit() == 25 && another->GetFireOffset()->fX == 0.25f && !manager.GetWeaponStats(WEAPONTYPE_PISTOL),
+              "caller edits and mutable vector borrows remain independent of another custom record and the native live registry");
+        auto* original = manager.GetOriginalWeaponStats(WEAPONTYPE_PISTOL);
+        original->SetFlags(0);
+        original->SetAnimGroup(79);
+        custom->SetFlags(0);
+        custom->SetFlagBits(WEAPONTYPE_ANIM_RELOAD);
+        Check(!custom->IsFlagSet(WEAPONTYPE_ANIM_RELOAD), "game-created record uses its manager's currently restrictive original flags");
+        original->SetFlags(WEAPONTYPE_ANIM_RELOAD);
+        custom->SetFlagBits(WEAPONTYPE_ANIM_RELOAD | WEAPONTYPE_TWIN_PISTOLS);
+        Check(custom->IsFlagSet(WEAPONTYPE_ANIM_RELOAD) && custom->GetAnimGroup() == 17,
+              "later mutable originals are consumed without replacing the caller's existing CPU stat");
+        original->SetAnimGroup(83);
+        custom->ClearFlagBits(WEAPONTYPE_TWIN_PISTOLS);
+        Check(custom->GetAnimGroup() == 83, "dual-wield removal lazily reads the later mutable manager animation group");
+        timing.weaponManagerPointer = &independentManager;
+        std::unique_ptr<MtaGame::CWeaponStatOwned> independent(
+            static_cast<MtaGame::CWeaponStatOwned*>(game.CreateWeaponStat(WEAPONTYPE_PISTOL, WEAPONSKILL_STD)));
+        independentManager.GetOriginalWeaponStats(WEAPONTYPE_PISTOL)->SetAnimGroup(91);
+        custom->SetFlags(WEAPONTYPE_TWIN_PISTOLS);
+        independent->SetFlags(WEAPONTYPE_TWIN_PISTOLS);
+        custom->ClearFlagBits(WEAPONTYPE_TWIN_PISTOLS);
+        independent->ClearFlagBits(WEAPONTYPE_TWIN_PISTOLS);
+        Check(custom->GetAnimGroup() == 83 && independent->GetAnimGroup() == 91,
+              "each returned record borrows its creating manager rather than a later game lookup or immutable global-default provider");
+        std::unique_ptr<MtaGame::CWeaponStatOwned> unsupported(
+            static_cast<MtaGame::CWeaponStatOwned*>(game.CreateWeaponStat(WEAPONTYPE_UNARMED, static_cast<eWeaponSkill>(255))));
+        Check(unsupported && unsupported->GetWeaponType() == WEAPONTYPE_UNARMED && unsupported->GetWeaponSkillLevel() == static_cast<eWeaponSkill>(255) &&
+                  unsupported->GetDamagePerHit() == 0 && unsupported->GetWeaponRange() == 0,
+              "unsupported shared-default selection preserves the existing successful zero CPU record and caller metadata convention");
+        Check(!weaponReader.IsBound() && timing.weaponReads == nativeSlotReads &&
+                  manager.GetStartupState() == mta::game_de::CWeaponStatManagerDE::StartupState::NotStarted &&
+                  independentManager.GetStartupState() == mta::game_de::CWeaponStatManagerDE::StartupState::NotStarted &&
+                  !manager.GetWeaponStats(WEAPONTYPE_PISTOL) && !independentManager.GetWeaponStats(WEAPONTYPE_PISTOL),
+              "unlisted CGame creation neither starts native defaults nor reads/binds/publishes a live native weapon row");
+        RefusingUnlistedManager refusingFactory;
+        timing.weaponManagerPointer = &refusingFactory;
+        Refuses([&] { game.CreateWeaponStat(WEAPONTYPE_DESERT_EAGLE, WEAPONSKILL_PRO); },
+                "unexpected null factory output refuses rather than appearing to be a completed caller-owned record");
+        Check(refusingFactory.calls == 1 && refusingFactory.requestedType == WEAPONTYPE_DESERT_EAGLE && refusingFactory.requestedSkill == WEAPONSKILL_PRO,
+              "exact type and skill are forwarded to the admitted manager once");
+        refusingFactory.throws = true;
+        const auto refusalReads = timing.weaponManagerReads;
+        Refuses([&] { game.CreateWeaponStat(WEAPONTYPE_PISTOL, WEAPONSKILL_POOR); }, "manager factory exception is propagated without replacement or replay");
+        Check(refusingFactory.calls == 2 && timing.weaponManagerReads == refusalReads + 1,
+              "failed factory entry is not repeated or replaced with standalone defaults");
+        timing.weaponManagerPointer = nullptr;
+        // Concrete CPU owners are destroyed before both borrowed managers.
+        // Neither manager nor CGame assumes ownership of the unlisted records.
+    }
+    TestGame legacyFactory(reader, clock, legacyManager, streaming, state);
+    Refuses([&] { legacyFactory.CreateWeaponStat(WEAPONTYPE_PISTOL, WEAPONSKILL_STD); },
+            "older timing-only access cannot manufacture manager-backed factory authority");
+    std::puts("Actual CGameDE manager-backed unlisted weapon-stat factory SDK fixture completed");
+
     unsigned char statsIdentity = 0;
     timing.statsPointer = reinterpret_cast<CStats*>(&statsIdentity);
     Refuses([&] { game.GetStats(); }, "actual stats SDK publication requires the existing admitted native owner");

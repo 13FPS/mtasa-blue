@@ -20,9 +20,9 @@ $record = [ordered]@{
     schema='mta_ped_oxygen_state_de_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     generatedFixture=$null;result=$null;failure=$null;scratchDirectory=$scratchRoot;scratchRemoved=$false;
-    scope='Actual CPedStateDE oxygen getter/setter and named IsDucking query borrow the same immutable registered token. Preserves raw breath bits, true/false queries, all explicit owner refusal statuses, accepted-effect/no-retry forwarding, independent full DWORD CPU wrapper identity under refused native access and absent-owner refusal. Production SetDucking, target rotation, native repair and complete ped factory remain unavailable. No native engine code or process executes.';
+    scope='Actual CPedStateDE oxygen getter/setter and named IsDucking query borrow the same immutable registered token. Preserves raw breath bits, true/false queries, all explicit owner refusal statuses, accepted-effect/no-retry forwarding, independent full DWORD CPU wrapper identity and protected signed custom-move bookkeeping (default0) under refused/absent native access. Seat remains pure because classic has no initialized default; no native custom-animation setter is claimed. Production SetDucking, target rotation, native repair and complete ped factory remain unavailable. No native engine code or process executes.';
     nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;installationChanged=$false;
-    completeCGameReady=$false;fullMtaReady=$false;completePedReady=$false;completePoolsReady=$false;nativeRepairQualified=$false;actualPedOxygenStateSdkTested=$false;actualPedWrapperTypeSdkTested=$false
+    completeCGameReady=$false;fullMtaReady=$false;completePedReady=$false;completePoolsReady=$false;nativeRepairQualified=$false;actualPedOxygenStateSdkTested=$false;actualPedWrapperTypeSdkTested=$false;actualPedCustomMoveBookkeepingSdkTested=$false
 }
 
 function Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
@@ -94,7 +94,7 @@ try {
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
     })
-    $provided = @('GetHealth','SetHealth','GetArmor','SetArmor','GetModelIndex','GetEntityType','SetMoveSpeed','SetTurnSpeed','GetStoredPointer','SetStoredPointer','GetPosition','GetMatrix','GetMoveSpeed','GetTurnSpeed','GetMass','SetMass','GetTurnMass','SetTurnMass','GetAirResistance','SetAirResistance','GetElasticity','SetElasticity','GetCenterOfMass','SetCenterOfMass','GetCurrentRotation','SetCurrentRotation','GetOxygenLevel','SetOxygenLevel','IsDucking','GetType')
+    $provided = @('GetHealth','SetHealth','GetArmor','SetArmor','GetModelIndex','GetEntityType','SetMoveSpeed','SetTurnSpeed','GetStoredPointer','SetStoredPointer','GetPosition','GetMatrix','GetMoveSpeed','GetTurnSpeed','GetMass','SetMass','GetTurnMass','SetTurnMass','GetAirResistance','SetAirResistance','GetElasticity','SetElasticity','GetCenterOfMass','SetCenterOfMass','GetCurrentRotation','SetCurrentRotation','GetOxygenLevel','SetOxygenLevel','IsDucking','GetType','GetCustomMoveAnim')
     $declaration = [IO.File]::ReadAllText((Join-Path $taskRoot 'Client/game_de/CPedVitalsDE.h')) + [IO.File]::ReadAllText((Join-Path $taskRoot 'Client/game_de/CPedMetadataDE.h')) + [IO.File]::ReadAllText((Join-Path $taskRoot 'Client/game_de/CPedMutationDE.h')) + [IO.File]::ReadAllText((Join-Path $taskRoot 'Client/game_de/CPedPhysicsDE.h')) + [IO.File]::ReadAllText((Join-Path $taskRoot 'Client/game_de/CPedRotationDE.h')) + [IO.File]::ReadAllText((Join-Path $taskRoot 'Client/game_de/CPedStateDE.h'))
     foreach ($method in $provided) {
         if ($declaration -notmatch ('\b'+$method+'\s*\([^;{}]*\)\s*(?:const\s*)?(?:noexcept\s*)?override\s*;')) {
@@ -116,6 +116,7 @@ try {
         ('inline constexpr unsigned RejectingMethods = {0};' -f $pedMethods.Count),
         'class PedStateFixture final : public mta::game_de::CPedStateDE { public:',
         'PedStateFixture(mta::game_de::NativePedVitalsAccess& vitals,mta::game_de::NativePedMetadataAccess& metadata,mta::game_de::NativePedMutationAccess& mutation,mta::game_de::NativePedObservationAccess& observation,mta::game_de::NativePedRotationAccess& rotation,mta::game_de::NativePedOxygenAccess& oxygen,mta::game_de::NativePedDuckingAccess& ducking,const mta::game_de::NativePedReferenceToken& token,std::uint32_t wrapperType) noexcept : CPedStateDE(vitals,metadata,mutation,observation,rotation,oxygen,ducking,token,wrapperType) {}',
+        'void RecordCustomMoveAnimForFixture(int value) noexcept { m_iCustomMoveAnim = value; }',
         'mta::game_de::ClockResult RepairLastGoodPhysicsState(const CMatrix&) noexcept override { Unqualified(); }')
     $lines += @($pedMethods | ForEach-Object { $_.signature + ' override { Unqualified(); }' })
     $lines += @('};','}','#pragma warning(pop)')
@@ -123,7 +124,7 @@ try {
     $durableGenerated = Join-Path $outputRoot 'PedStateFixture.generated.h'
     Copy-Item -LiteralPath $generated -Destination $durableGenerated
     $record.generatedFixture = [ordered]@{path=$durableGenerated;sha256=(Sha $generated);rejectingOverrides=$pedMethods.Count;
-        interfaces=@('CPed','CPhysical','CEntity');productionMethodsNotOverridden=$provided;testedMethods=@('GetOxygenLevel','SetOxygenLevel','IsDucking','GetType')}
+        interfaces=@('CPed','CPhysical','CEntity');productionMethodsNotOverridden=$provided;testedMethods=@('GetOxygenLevel','SetOxygenLevel','IsDucking','GetType','GetCustomMoveAnim')}
     $env:TEMP = $scratchRoot
     $env:TMP = $scratchRoot
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
@@ -164,7 +165,8 @@ try {
         $record.result.checks -gt 0 -and $record.result.pointerBits -eq 64
     $record.actualPedOxygenStateSdkTested = $record.success -and [IO.File]::ReadAllText($record.result.test.stdout).Contains('Production MTA oxygen and ducking ped SDK fixture completed')
     $record.actualPedWrapperTypeSdkTested = $record.success -and [IO.File]::ReadAllText($record.result.test.stdout).Contains('Production MTA ped wrapper type SDK fixture completed')
-    $record.success = $record.success -and $record.actualPedOxygenStateSdkTested -and $record.actualPedWrapperTypeSdkTested
+    $record.actualPedCustomMoveBookkeepingSdkTested = $record.success -and [IO.File]::ReadAllText($record.result.test.stdout).Contains('Production MTA ped custom-move bookkeeping SDK fixture completed')
+    $record.success = $record.success -and $record.actualPedOxygenStateSdkTested -and $record.actualPedWrapperTypeSdkTested -and $record.actualPedCustomMoveBookkeepingSdkTested
     if (-not $record.success) { throw 'Actual abstract CPed oxygen/state SDK checks failed or summary evidence was missing.' }
 } catch { AddFailure ($_.Exception.ToString()) }
 finally {

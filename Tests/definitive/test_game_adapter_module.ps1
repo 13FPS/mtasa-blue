@@ -231,6 +231,18 @@ $sourceNames += @(
     'Client/game_de/CPedFlagsDE.h',
     'Client/game_de/CPedFlagsDE.cpp'
 )
+$sourceNames += @(
+    'Client/game_de/NativePedBleedingAccess.h',
+    'Client/game_de/NativePedBleedingMemory.h',
+    'Client/game_de/NativePedBleedingMemory.cpp',
+    'Client/game_de/NativePedBleedingProfile.h',
+    'Client/game_de/NativePedStayAccess.h',
+    'Client/game_de/NativePedStayMemory.h',
+    'Client/game_de/NativePedStayMemory.cpp',
+    'Client/game_de/NativePedStayProfile.h',
+    'Client/game_de/CPedBehaviorDE.h',
+    'Client/game_de/CPedBehaviorDE.cpp'
+)
 $sourceNames += @(Get-ChildItem -LiteralPath $detoursSourceRoot -File | ForEach-Object {
     [IO.Path]::GetRelativePath($taskRoot, $_.FullName).Replace('\', '/')
 })
@@ -315,6 +327,9 @@ if ((Test-Path -LiteralPath $moduleSource) -and $detoursLibraryExit -eq 0) {
         (Join-Path $taskRoot 'Client/game_de/CPedRotationDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CPedStateDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CPedFlagsDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CPedBehaviorDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativePedBleedingMemory.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativePedStayMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedBikeFlagsMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedShotFlagsMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedOxygenMemory.cpp'),

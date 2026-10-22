@@ -57,6 +57,18 @@ namespace
             case 11:
                 context.result = access.SetPedCanBeShotInVehicle(context.token, context.flagBoolean);
                 break;
+            case 12:
+                context.result = access.ReadPedBleeding(context.token, context.duckingOutput);
+                break;
+            case 13:
+                context.result = access.SetPedBleeding(context.token, context.flagBoolean);
+                break;
+            case 14:
+                context.result = access.ReadPedStayInSamePlace(context.token, context.duckingOutput);
+                break;
+            case 15:
+                context.result = access.SetPedStayInSamePlace(context.token, context.flagBoolean);
+                break;
             default:
                 std::abort();
         }
@@ -263,6 +275,7 @@ namespace
 #include "NativePedRotationOwnerTests.inl"
 #include "NativePedOxygenStateOwnerTests.inl"
 #include "NativePedFlagsOwnerTests.inl"
+#include "NativePedBehaviorOwnerTests.inl"
         ClockPedPhysicalScalarsOwnerTest::cell = 0;
         ClockPedPhysicalScalarsOwnerTest::loseToken = false;
         ClockReaderTestHost::image = ClockPedReferenceOwnerTest::image = 0;

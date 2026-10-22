@@ -29,6 +29,7 @@ namespace mta::game_de
         CRopes*             GetRopes() override;
         CStats*             GetStats() override;
         CWeaponStatManager* GetWeaponStatManager() override;
+        CWeaponStat*        CreateWeaponStat(eWeaponType weapon, eWeaponSkill skill) override;
         CWeather*           GetWeather() override;
         void                StartGame() override;
         CKeyGen*            GetKeyGen() noexcept override;

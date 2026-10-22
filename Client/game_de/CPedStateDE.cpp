@@ -13,6 +13,10 @@ namespace mta::game_de
     {
         return wrapperTypeValue;
     }
+    int CPedStateDE::GetCustomMoveAnim() const noexcept
+    {
+        return m_iCustomMoveAnim;
+    }
     void CPedStateDE::Require(ClockResult result, const char* operation)
     {
         if (result != ClockResult::Ok)

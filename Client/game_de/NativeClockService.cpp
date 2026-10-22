@@ -39,6 +39,8 @@
 #include "NativePedDuckingMemory.h"
 #include "NativePedBikeFlagsMemory.h"
 #include "NativePedShotFlagsMemory.h"
+#include "NativePedBleedingMemory.h"
+#include "NativePedStayMemory.h"
 #include "NativePedMetadataMemory.h"
 #include "NativeTaskRemovalCalls.h"
 #include "NativeStreamingRequestCalls.h"
@@ -168,6 +170,10 @@ namespace mta::game_de
             ClockResult SetPedCantBeKnockedOffBike(const NativePedReferenceToken&, std::uint32_t) noexcept override;
             ClockResult ReadPedCanBeShotInVehicle(const NativePedReferenceToken&, bool&) noexcept override;
             ClockResult SetPedCanBeShotInVehicle(const NativePedReferenceToken&, bool) noexcept override;
+            ClockResult ReadPedBleeding(const NativePedReferenceToken&, bool&) noexcept override;
+            ClockResult SetPedBleeding(const NativePedReferenceToken&, bool) noexcept override;
+            ClockResult ReadPedStayInSamePlace(const NativePedReferenceToken&, bool&) noexcept override;
+            ClockResult SetPedStayInSamePlace(const NativePedReferenceToken&, bool) noexcept override;
             ClockResult ReadPedCurrentRotation(const NativePedReferenceToken&, float&) noexcept override;
             ClockResult SetPedCurrentRotation(const NativePedReferenceToken&, float) noexcept override;
             ClockResult ReadPedPhysicalScalar(const NativePedReferenceToken&, NativePedPhysicalScalarField, float&) noexcept override;
@@ -2414,6 +2420,88 @@ namespace mta::game_de
             // Masked field intent may already be accepted before token loss.
             // Stop without replay or restoring neighbors owned by the engine;
             // native-visible reference storage remains retirement debt.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+        ClockResult NativeAccess::ReadPedBleeding(const NativePedReferenceToken& token, bool& output) noexcept
+        {
+            NativePedPoolReader::Value before, after;
+            auto                       result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            bool next;
+            result = NativePedBleedingMemory({runtime.image}, &CheckTimingOwner).ReadBleeding(before, next);
+            if (result != ClockResult::Ok)
+                return result;
+            result = ResolvePedReference(token, after);
+            if (result != ClockResult::Ok)
+                return result;
+            if (after.nativePed != before.nativePed || after.handle != before.handle)
+                return ClockResult::OwnerConflict;
+            // Refusal is distinct from a successful false named property.
+            // Publish only after the same registered lifetime survives.
+            output = next;
+            return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::SetPedBleeding(const NativePedReferenceToken& token, bool value) noexcept
+        {
+            NativePedPoolReader::Value before, after;
+            auto                       result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedBleedingMemory::Receipt receipt;
+            result = NativePedBleedingMemory({runtime.image}, &CheckTimingOwner).SetBleeding(before, value, &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = ResolvePedReference(token, after);
+                if (result == ClockResult::Ok && (after.nativePed != before.nativePed || after.handle != before.handle))
+                    result = ClockResult::OwnerConflict;
+            }
+            // A masked flag may already be accepted before token revocation.
+            // Stop without replay/rollback or restoring unowned neighbors;
+            // registered native-visible cell storage remains retirement debt.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+        ClockResult NativeAccess::ReadPedStayInSamePlace(const NativePedReferenceToken& token, bool& output) noexcept
+        {
+            NativePedPoolReader::Value before, after;
+            auto                       result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            bool next;
+            result = NativePedStayMemory({runtime.image}, &CheckTimingOwner).ReadStayInSamePlace(before, next);
+            if (result != ClockResult::Ok)
+                return result;
+            result = ResolvePedReference(token, after);
+            if (result != ClockResult::Ok)
+                return result;
+            if (after.nativePed != before.nativePed || after.handle != before.handle)
+                return ClockResult::OwnerConflict;
+            // Refusal is distinct from a successful false named property.
+            // Publish only after the same registered lifetime survives.
+            output = next;
+            return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::SetPedStayInSamePlace(const NativePedReferenceToken& token, bool value) noexcept
+        {
+            NativePedPoolReader::Value before, after;
+            auto                       result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedStayMemory::Receipt receipt;
+            result = NativePedStayMemory({runtime.image}, &CheckTimingOwner).SetStayInSamePlace(before, value, &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = ResolvePedReference(token, after);
+                if (result == ClockResult::Ok && (after.nativePed != before.nativePed || after.handle != before.handle))
+                    result = ClockResult::OwnerConflict;
+            }
+            // A masked flag may already be accepted before token revocation.
+            // Stop without replay/rollback or restoring unowned neighbors;
+            // registered native-visible cell storage remains retirement debt.
             if (receipt.entered && result != ClockResult::Ok)
                 Stop(result);
             return result;

@@ -9,6 +9,7 @@
 // classic PCH; the DE backend must provide that dependency explicitly.
 #include <SharedUtil.Defines.h>
 #include <game/CPools.h>
+#include <game/CWeaponStatManager.h>
 
 #include <stdexcept>
 #include <string>
@@ -57,6 +58,18 @@ namespace mta::game_de
         RequireNativeWrite(NativeWrites().GetWeaponStatManager(output), "GetWeaponStatManager");
         if (!output)
             RequireNativeWrite(ClockResult::NotInitialized, "GetWeaponStatManager");
+        return output;
+    }
+
+    CWeaponStat* CGameDE::CreateWeaponStat(eWeaponType weapon, eWeaponSkill skill)
+    {
+        // Like the classic CGame factory, use this manager's unlisted CPU
+        // factory so later flag transitions read its mutable originals. The
+        // caller owns the record and must retire it before this borrowed
+        // manager; no live registration or native default writes occur here.
+        auto* output = GetWeaponStatManager()->CreateWeaponStatUnlisted(weapon, skill);
+        if (!output)
+            RequireNativeWrite(ClockResult::NotInitialized, "CreateWeaponStat");
         return output;
     }
 

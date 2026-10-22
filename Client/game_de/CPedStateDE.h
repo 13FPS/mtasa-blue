@@ -21,6 +21,7 @@ namespace mta::game_de
         void          SetOxygenLevel(float oxygen) override;
         bool          IsDucking() const override;
         std::uint32_t GetType() const noexcept override;
+        int           GetCustomMoveAnim() const noexcept override;
         // Preserve the real CPedSA bookkeeping operation without translating
         // it into native memory or changing this wrapper's registered token.
         void SetType(std::uint32_t type) noexcept { wrapperTypeValue = type; }
@@ -35,6 +36,11 @@ namespace mta::game_de
               wrapperTypeValue(wrapperType)
         {
         }
+
+        // Classic CPlayerPed's producer manages block references and applies
+        // native animation separately. Preserve its protected signed default
+        // and bookkeeping without pretending to perform those engine effects.
+        int m_iCustomMoveAnim{0};
 
     private:
         static void             Require(ClockResult, const char* operation);

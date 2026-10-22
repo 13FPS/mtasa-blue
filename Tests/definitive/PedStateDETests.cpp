@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -117,6 +118,9 @@ int main()
         fixture::PedStateFixture ped(owner, owner, owner, owner, owner, owner, owner, token, PLAYER_PED);
         CPed*                    sdk = &ped;
         const CPed*              constant = &ped;
+        static_assert(noexcept(constant->GetCustomMoveAnim()) && std::is_same_v<decltype(constant->GetCustomMoveAnim()), int>);
+        Check(constant->GetCustomMoveAnim() == 0 && !owner.reads && !owner.writes && !owner.duckReads,
+              "classic custom-move bookkeeping starts at zero without native token I/O or animation effects");
         for (const auto type : std::array<std::uint32_t, 5>{PLAYER_PED, CIVILIAN_PED, 0x10000, 0x80000000, 0xffffffff})
         {
             owner.result = ClockResult::Expired;
@@ -125,6 +129,20 @@ int main()
             Check(constant->GetType() == type && owner.reads == reads && owner.writes == writes && owner.duckReads == duckReads,
                   "actual full DWORD wrapper type is CPU bookkeeping independent of native category, token and callback status");
         }
+
+        for (const int value : {(std::numeric_limits<int>::min)(), -1, 0, 55, 138, (std::numeric_limits<int>::max)()})
+        {
+            owner.result = ClockResult::Expired;
+            const auto reads = owner.reads, writes = owner.writes, duckReads = owner.duckReads;
+            const auto wrapperType = constant->GetType();
+            ped.RecordCustomMoveAnimForFixture(value);
+            Check(constant->GetCustomMoveAnim() == value && constant->GetType() == wrapperType && owner.reads == reads && owner.writes == writes &&
+                      owner.duckReads == duckReads,
+                  "protected signed bookkeeping preserves all int values and CPU identity while native access refuses");
+        }
+        fixture::PedStateFixture independent(owner, owner, owner, owner, owner, owner, owner, token, PLAYER_PED);
+        Check(independent.GetCustomMoveAnim() == 0 && constant->GetCustomMoveAnim() == (std::numeric_limits<int>::max)(),
+              "custom movement bookkeeping belongs to each wrapper rather than a shared current-player cache");
         owner.result = ClockResult::Ok;
         for (const auto bits : std::array<std::uint32_t, 9>{0, 0x80000000, 0x3f800001, 0xc1200000, 0x7f7fffff, 0xff7fffff, 0x7f800000, 0x7fc12345, 0xffc07654})
         {
@@ -159,6 +177,11 @@ int main()
         Refuses([&] { unbound.SetOxygenLevel(2); }, "SetOxygenLevel");
         Refuses([&] { (void)unbound.IsDucking(); }, "IsDucking");
         Check(unbound.GetType() == CIVILIAN_PED, "absent native services do not change explicit CPU wrapper identity");
+        Check(unbound.GetCustomMoveAnim() == 0, "absent native services preserve the actual CPU custom-move default");
+        unbound.RecordCustomMoveAnimForFixture((std::numeric_limits<int>::min)());
+        Check(unbound.GetCustomMoveAnim() == (std::numeric_limits<int>::min)() && unbound.GetType() == CIVILIAN_PED,
+              "protected CPU bookkeeping requires no native service and leaves wrapper classification unchanged");
+        std::puts("Production MTA ped custom-move bookkeeping SDK fixture completed");
         std::puts("Production MTA oxygen and ducking ped SDK fixture completed");
         std::puts("Production MTA ped wrapper type SDK fixture completed");
         std::printf("Passed %u actual CPed oxygen/state SDK checks (%zu-bit)\n", checks, sizeof(void*) * 8);

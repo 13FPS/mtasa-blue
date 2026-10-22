@@ -150,6 +150,13 @@ fire-offset vector belongs to that object. Classic manager originals remain
 mutable and are looked up at each constrained flag transition. Custom weapon
 execution separately uses the real native weapon-info bank.
 
+The assembled `CGameDE::CreateWeaponStat` now uses the qualified manager's
+unlisted factory, like classic MTA. Its caller owns the concrete CPU record and
+must retire it before that manager; later constrained flag changes observe that
+creating manager's mutable originals. This route neither registers a live stat
+nor starts native default population. The earlier standalone partial factory
+retains its separate immutable-default behavior.
+
 The complete native `CWeaponStatNativeDE` borrows those same stable bank
 objects and callback writer, including model/fire type, animation loops, aim
 offset and default-combo fields. Flag changes reuse MTA's shared policy and
@@ -275,6 +282,13 @@ preserve the full DWORD even when native access is unavailable. This value is
 neither the native ped category nor the entity-type field, and it does not
 publish a concrete ped or prove a factory/destructor mapping.
 
+`GetCustomMoveAnim()` likewise reads MTA's protected signed CPU bookkeeping,
+with the existing zero initialization. Future animation producers must update
+that bookkeeping after their own engine operation; this getter neither changes
+native animations nor depends on a currently admitted native callback. Occupied
+seat methods remain pure until the enclosing wrapper supplies explicit initial
+seat state rather than borrowing an uninitialized classic value.
+
 `CPedFlagsDE` adds MTA's existing vehicle shooting-permission and bike
 knockoff accessors on that same registered lifetime. Independently named native
 commands establish the masks; the neighboring `TestForShotInVehicle` property
@@ -283,6 +297,13 @@ two-bit assignment, including stored value three, without claiming a gameplay
 meaning for that value. Conditional masked writes preserve neighboring bits;
 only an unaccepted neighbor-only conflict can retry, within a fixed bound.
 Accepted effects survive failed acknowledgement without replay or rollback.
+
+`CPedBehaviorDE` continues the same SDK chain with the named bleeding and
+stay-in-same-place properties. Each setter owns its proved bit in the shared
+native word and preserves the other property, ducking and every neighboring
+flag. The stay property does not substitute either of the separate native task
+commands. Both operations share the existing token, callback admission and
+bounded conditional-write policy; they do not simulate blood or task behavior.
 
 The abstract `CPedVitalsDE` SDK layer now implements MTA's actual `GetHealth`,
 `SetHealth`, `GetArmor` and `SetArmor` virtual methods through that token-based

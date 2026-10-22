@@ -33,6 +33,10 @@
 #include "../../Client/game_de/NativePedVitalsProfile.h"
 #include "../../Client/game_de/NativePedMetadataMemory.h"
 #include "../../Client/game_de/NativePedMetadataProfile.h"
+#include "../../Client/game_de/NativePedIntelligenceReader.h"
+#include "../../Client/game_de/NativePedIntelligenceProfile.h"
+#include "../../Client/game_de/NativeTaskPoolReader.h"
+#include "../../Client/game_de/NativeTaskPoolProfile.h"
 #include "../../Client/game_de/NativePlayerInfoMemory.h"
 #include "../../Client/game_de/NativePlayerInfoProfile.h"
 #include "../../Client/game_de/NativePlayerInfoExtraProfile.h"
@@ -208,6 +212,48 @@ namespace ClockPedVitalsOwnerTest
             std::memcpy(reinterpret_cast<void*>(flag), &different, sizeof(different));
         }
         return observed;
+    }
+}
+namespace ClockTaskPoolOwnerTest
+{
+    std::uintptr_t address = 0, flag = 0;
+    bool           changeOnRead = false;
+    unsigned       changes = 0;
+    BOOL WINAPI    Read(HANDLE process, LPCVOID source, LPVOID destination, SIZE_T bytes, SIZE_T* copied)
+    {
+        const auto result = ::ReadProcessMemory(process, source, destination, bytes, copied);
+        if (result && changeOnRead && reinterpret_cast<std::uintptr_t>(source) == address && bytes == sizeof(std::uintptr_t))
+        {
+            changeOnRead = false;
+            unsigned char current = 0;
+            std::memcpy(&current, reinterpret_cast<void*>(flag), 1);
+            current = static_cast<unsigned char>((current + 1) & 0x7f);
+            // Only the actual task-bank generation advances after a real OS
+            // vptr copy; no fake callback grant or native task method exists.
+            std::memcpy(reinterpret_cast<void*>(flag), &current, 1);
+            ++changes;
+        }
+        return result;
+    }
+}
+namespace ClockPedIntelligenceOwnerTest
+{
+    std::uintptr_t address = 0, cell = 0;
+    bool           clearOnRead = false;
+    unsigned       invalidations = 0;
+    BOOL WINAPI    Read(HANDLE process, LPCVOID source, LPVOID destination, SIZE_T bytes, SIZE_T* copied)
+    {
+        const auto result = ::ReadProcessMemory(process, source, destination, bytes, copied);
+        if (result && clearOnRead && reinterpret_cast<std::uintptr_t>(source) == address && bytes == mta::game_de::NativePedIntelligenceProfile::PrefixBytes)
+        {
+            clearOnRead = false;
+            const std::uintptr_t zero = 0;
+            // Only registered-cell acknowledgement is lost after the real
+            // native prefix copy. The qualified ped/intelligence remain live.
+            std::memcpy(reinterpret_cast<void*>(cell), &zero, sizeof(zero));
+            ++invalidations;
+        }
+        return result;
     }
 }
 namespace ClockPedObservationOwnerTest
@@ -972,6 +1018,14 @@ namespace mta::game_de::NativeImageAccess
 #define MTA_DE_PED_REFERENCE_UNREGISTER_INVOKE ClockPedReferenceOwnerTest::Unregister
 #include "../../Client/game_de/NativePedReferenceMemory.cpp"
 #include "../../Client/game_de/NativePedMetadataMemory.cpp"
+#pragma push_macro("ReadProcessMemory")
+#define ReadProcessMemory ClockPedIntelligenceOwnerTest::Read
+#include "../../Client/game_de/NativePedIntelligenceReader.cpp"
+#pragma pop_macro("ReadProcessMemory")
+#pragma push_macro("ReadProcessMemory")
+#define ReadProcessMemory ClockTaskPoolOwnerTest::Read
+#include "../../Client/game_de/NativeTaskPoolReader.cpp"
+#pragma pop_macro("ReadProcessMemory")
 #undef MTA_DE_PED_REFERENCE_UNREGISTER_INVOKE
 #undef MTA_DE_PED_REFERENCE_REGISTER_INVOKE
 #pragma push_macro("InterlockedCompareExchange")
@@ -5642,6 +5696,8 @@ namespace
 #include "NativePedPhysicalDynamicsOwnerTests.inl"
 #include "NativePedMetadataOwnerTests.inl"
 #include "NativePedObservationOwnerTests.inl"
+#include "NativePedIntelligenceOwnerTests.inl"
+#include "NativeTaskPoolOwnerTests.inl"
 #include "NativeWorldCheatOwnerTests.inl"
 
 int main(int argc, char** argv)
@@ -5682,6 +5738,8 @@ int main(int argc, char** argv)
     NativePedPhysicalDynamicsOwnedSdk(fixture);
     NativePedMetadataOwnedSdk(fixture);
     NativePedObservationOwnedSdk(fixture);
+    NativePedIntelligenceOwnedSdk(fixture);
+    NativeTaskPoolOwnedSdk(fixture);
     NativeReadSetAndRestoration(fixture);
     NativeCoherentCommandPublication(fixture);
     NativeReadOnlyRetirement(fixture);

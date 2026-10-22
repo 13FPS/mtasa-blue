@@ -24,6 +24,8 @@
 #include "NativePedMetadataAccess.h"
 #include "NativePedMutationAccess.h"
 #include "NativePedObservationAccess.h"
+#include "NativePedIntelligenceReader.h"
+#include "NativeTaskPoolReader.h"
 #include "NativePedPhysicalScalarsAccess.h"
 #include "NativePlayerInfoAccess.h"
 #include "NativeWantedAccess.h"
@@ -98,6 +100,16 @@ namespace mta::game_de
         virtual ClockResult AcquirePedReference(std::uint32_t, NativePedReferenceToken&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult ResolvePedReference(const NativePedReferenceToken&, NativePedPoolReader::Value&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult ReleasePedReference(const NativePedReferenceToken&) noexcept { return ClockResult::NotInitialized; }
+        // Observe the actual intelligence/embedded-manager pair through the
+        // same registered ped lifetime. Task words remain opaque addresses;
+        // they cannot be treated as live SDK task wrappers or retained leases.
+        virtual ClockResult ReadReferencedPedIntelligence(const NativePedReferenceToken&, NativePedIntelligenceReader::Value&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
+        // A current task-bank observation is separate from a retained ped
+        // reference and grants no persistent CTask identity or deletion lease.
+        virtual ClockResult ReadTaskPoolEntry(std::uintptr_t, NativeTaskPoolReader::Value&) noexcept { return ClockResult::NotInitialized; }
         // The real request belongs to a distinct admitted normal-frame scope;
         // a gameplay timer or earlier observation never grants lifecycle calls.
         virtual ClockResult StartGame() noexcept { return ClockResult::NotInitialized; }

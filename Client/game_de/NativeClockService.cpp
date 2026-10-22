@@ -120,6 +120,8 @@ namespace mta::game_de
             ClockResult ReadPedVital(const NativePedReferenceToken&, NativePedVitalField, float&) noexcept override;
             ClockResult SetPedVital(const NativePedReferenceToken&, NativePedVitalField, float) noexcept override;
             ClockResult ReadPedMetadata(const NativePedReferenceToken&, NativePedMetadata&) noexcept override;
+            ClockResult ReadReferencedPedIntelligence(const NativePedReferenceToken&, NativePedIntelligenceReader::Value&) noexcept override;
+            ClockResult ReadTaskPoolEntry(std::uintptr_t, NativeTaskPoolReader::Value&) noexcept override;
             ClockResult ReadPedPhysicalScalar(const NativePedReferenceToken&, NativePedPhysicalScalarField, float&) noexcept override;
             ClockResult SetPedPhysicalScalar(const NativePedReferenceToken&, NativePedPhysicalScalarField, float) noexcept override;
             ClockResult ReadPedCenterOfMass(const NativePedReferenceToken&, CVector&) noexcept override;
@@ -2285,6 +2287,35 @@ namespace mta::game_de
             if (receipt.entered && result != ClockResult::Ok)
                 Stop(result);
             return result;
+        }
+        ClockResult NativeAccess::ReadReferencedPedIntelligence(const NativePedReferenceToken& token, NativePedIntelligenceReader::Value& output) noexcept
+        {
+            NativePedPoolReader::Value before, after;
+            auto                       result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedIntelligenceReader::Value next;
+            result = NativePedIntelligenceReader({runtime.image}, &CheckTimingOwner).Read(before, next);
+            if (result != ClockResult::Ok)
+                return result;
+            result = ResolvePedReference(token, after);
+            if (result != ClockResult::Ok)
+                return result;
+            if (after.nativePed != before.nativePed || after.handle != before.handle || next.ped.nativePed != before.nativePed ||
+                next.ped.handle != before.handle)
+                return ClockResult::OwnerConflict;
+            // These are current-callback facts about the actual native pair.
+            // A task can be destroyed before its manager cell clears, so even
+            // unchanged opaque task words grant no task lifetime or SDK object.
+            output = next;
+            return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::ReadTaskPoolEntry(std::uintptr_t task, NativeTaskPoolReader::Value& output) noexcept
+        {
+            // The exact same admitted callback qualifies the pool and its two
+            // known native implementations. Native deletion is inlined and
+            // generation bits can wrap: this never publishes a cached CTask.
+            return NativeTaskPoolReader({runtime.image}, &CheckTimingOwner).Read(task, output);
         }
         ClockResult NativeAccess::ReadPedMetadata(const NativePedReferenceToken& token, NativePedMetadata& output) noexcept
         {

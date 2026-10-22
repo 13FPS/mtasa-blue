@@ -47,6 +47,7 @@
 #include "../../Client/game_de/NativeStreamingRequestProfile.h"
 #include "../../Client/game_de/NativeStreamingModelContext.h"
 #include "../../Client/game_de/NativeModelReferenceMemory.h"
+#include "../../Client/game_de/NativeModelReferenceRelease.h"
 #include "../../Client/game_de/NativeModelReferenceProfile.h"
 #include "../../Client/game_de/NativeStreamingUpgradeReader.h"
 #include "../../Client/game_de/NativeStreamingUpgradeCalls.h"
@@ -1543,6 +1544,9 @@ namespace mta::game_de::NativeImageAccess
 #define MTA_DE_STREAMING_REMOVE_NATIVE_INVOKE ClockStreamingRemoveOwnerTest::Invoke
 #include "../../Client/game_de/NativeStreamingRemoveCalls.cpp"
 #undef MTA_DE_STREAMING_REMOVE_NATIVE_INVOKE
+#define MTA_DE_MODEL_REFERENCE_RELEASE_EXCHANGE ClockModelReferenceOwnerTest::Exchange
+#include "../../Client/game_de/NativeModelReferenceRelease.cpp"
+#undef MTA_DE_MODEL_REFERENCE_RELEASE_EXCHANGE
 #define MTA_DE_MODEL_CLASSIFICATION_NATIVE_INVOKE ClockModelClassificationOwnerTest::Invoke
 #include "../../Client/game_de/NativeModelClassificationCalls.cpp"
 #undef MTA_DE_MODEL_CLASSIFICATION_NATIVE_INVOKE

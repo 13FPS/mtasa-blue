@@ -5,7 +5,7 @@
  ****************************************************************************/
 #include "NativeStreamingRemoveCalls.h"
 #include "NativeModelLoadedProfile.h"
-#include "NativeStreamingRemoveMemory.h"
+#include "NativeStreamingRemoveAdmission.h"
 namespace mta::game_de::NativeStreamingRemoveCalls
 {
     namespace R = NativeStreamingRemoveMemory;
@@ -28,113 +28,111 @@ namespace mta::game_de::NativeStreamingRemoveCalls
         }
     }
 #endif
+    namespace
+    {
+        ClockResult Run(std::uintptr_t image, std::uint32_t modelIndex, CheckOwner owner, CheckBeforeEntry guard, void* guardContext, Receipt* output,
+                        Invoke invoke) noexcept
+        {
+            Receipt receipt;
+            receipt.entryRva = P::RemoveRva;
+            receipt.modelIndex = modelIndex;
+            const auto finish = [&](ClockResult result)
+            {
+                if (output)
+                    *output = receipt;
+                return result;
+            };
+            if (modelIndex >= NativeModelLoadedProfile::ModelCount)
+                return finish(ClockResult::InvalidArgument);
+            if (!owner)
+                return finish(ClockResult::NotInitialized);
+            try
+            {
+                NativeStreamingRemoveAdmission::Value admission;
+                NativeModelLoadedReader::Value        observed;
+                auto                                  result = NativeStreamingRemoveAdmission::Capture(image, modelIndex, owner, admission, &observed);
+                receipt.rawFlagsBefore = observed.rawFlags;
+                receipt.rawStateBefore = observed.rawLoadState;
+                if (result != ClockResult::Ok)
+                    return finish(result);
+                NativeModelLoadedReader        loaded({image}, owner);
+                NativeModelLoadedReader::Value after{};
+                NativeModelBankReader          bank({image}, owner);
+                const auto&                    before = admission.state;
+                const auto&                    model = admission.model;
+                const auto&                    first = admission.native;
+                const auto&                    idleBefore = admission.idle;
+                receipt.rawFlagsBefore = before.rawFlags;
+                receipt.rawStateBefore = before.rawLoadState;
+                if (before.rawLoadState == 1)
+                {
+                    receipt.root = first.context.root;
+                    receipt.provider = first.context.provider;
+                    receipt.modelInfo = first.model;
+                    receipt.bundle = first.bundle;
+                    receipt.assetMap = first.assets.map;
+                }
+                if (guard && (result = guard(guardContext)) != ClockResult::Ok)
+                    return finish(result);
+                if ((result = owner()) != ClockResult::Ok)
+                    return finish(result);
+                const auto function = reinterpret_cast<NativeFunction>(image + P::RemoveRva);
+#if defined(MTA_DE_STREAMING_REMOVE_NATIVE_INVOKE)
+                const auto entry = invoke ? invoke : &MTA_DE_STREAMING_REMOVE_NATIVE_INVOKE;
+#else
+                const auto entry = invoke ? invoke : &NativeCall;
+#endif
+                receipt.entered = true;
+                result = entry(function, modelIndex, receipt.exceptionCode);
+                if (result != ClockResult::Ok)
+                    return finish(result);
+                receipt.returned = true;
+                if ((result = loaded.Read(modelIndex, after)) != ClockResult::Ok)
+                    return finish(result);
+                receipt.rawFlagsAfter = after.rawFlags;
+                receipt.rawStateAfter = after.rawLoadState;
+                if (after.rawLoadState != 0 || after.rawFlags != before.rawFlags)
+                    return finish(ClockResult::BindingChanged);
+                if (before.rawLoadState == 1)
+                {
+                    if ((result = bank.Recheck(model)) != ClockResult::Ok)
+                        return finish(result);
+                    if ((result = R::RecheckReturned(image, model, first)) != ClockResult::Ok)
+                        return finish(result);
+                    if (!R::H::QualifyProfile(image))
+                        return finish(ClockResult::BindingChanged);
+                }
+                else
+                {
+                    R::StreamRow idleAfter{};
+                    if (!NativeImageAccess::ReadImage(image, after.rowAddress, idleAfter.data(), idleAfter.size(), true) || idleBefore != idleAfter)
+                        return finish(ClockResult::BindingChanged);
+                }
+                if (!R::QualifyProfile(image))
+                    return finish(ClockResult::BindingChanged);
+                return finish(owner());
+            }
+            catch (...)
+            {
+                // Host observation allocation failure after entry is still an
+                // entered failure. No accepted native effects are undone/replayed.
+                return finish(ClockResult::ReadFailure);
+            }
+        }
+    }
     ClockResult Remove(std::uintptr_t image, std::uint32_t modelIndex, CheckOwner owner, Receipt* output, Invoke invoke) noexcept
     {
-        Receipt receipt;
-        receipt.entryRva = P::RemoveRva;
-        receipt.modelIndex = modelIndex;
-        const auto finish = [&](ClockResult result)
+        return Run(image, modelIndex, owner, nullptr, nullptr, output, invoke);
+    }
+    ClockResult RemoveGuarded(std::uintptr_t image, std::uint32_t modelIndex, CheckOwner owner, CheckBeforeEntry guard, void* context, Receipt* output,
+                              Invoke invoke) noexcept
+    {
+        if (!guard)
         {
             if (output)
-                *output = receipt;
-            return result;
-        };
-        if (modelIndex >= NativeModelLoadedProfile::ModelCount)
-            return finish(ClockResult::InvalidArgument);
-        if (!owner)
-            return finish(ClockResult::NotInitialized);
-        try
-        {
-            NativeModelLoadedReader        loaded({image}, owner);
-            NativeModelLoadedReader::Value before{}, after{};
-            auto                           result = loaded.Read(modelIndex, before);
-            if (result != ClockResult::Ok)
-                return finish(result);
-            receipt.rawFlagsBefore = before.rawFlags;
-            receipt.rawStateBefore = before.rawLoadState;
-            // Pending removal cancels genuine jobs and has a distinct owner
-            // protocol. Do not turn those states into an invented unload.
-            if (before.rawLoadState != 0 && before.rawLoadState != 1)
-                return finish(ClockResult::UnsupportedBuild);
-            if (!R::QualifyProfile(image))
-                return finish(ClockResult::UnsupportedBuild);
-            NativeModelBankReader        bank({image}, owner);
-            NativeModelBankReader::Value model{};
-            R::Value                     first{}, confirmed{};
-            R::StreamRow                 idleBefore{};
-            if (before.rawLoadState == 0 && !NativeImageAccess::ReadImage(image, before.rowAddress, idleBefore.data(), idleBefore.size(), true))
-                return finish(ClockResult::ReadFailure);
-            if (before.rawLoadState == 1)
-            {
-                if (modelIndex >= NativeModelBankProfile::ModelCount)
-                    return finish(ClockResult::UnsupportedBuild);
-                if ((result = bank.Read(modelIndex, model)) != ClockResult::Ok)
-                    return finish(result);
-                if (!model.nativeModelInfo)
-                    return finish(ClockResult::NotInitialized);
-                if ((result = R::Capture(image, model, first)) != ClockResult::Ok)
-                    return finish(result);
-                if ((result = bank.Recheck(model)) != ClockResult::Ok)
-                    return finish(result);
-                if ((result = R::Capture(image, model, confirmed)) != ClockResult::Ok)
-                    return finish(result);
-                if (!R::Same(first, confirmed) || !R::Memberships(image, first))
-                    return finish(ClockResult::BindingChanged);
-                receipt.root = first.context.root;
-                receipt.provider = first.context.provider;
-                receipt.modelInfo = first.model;
-                receipt.bundle = first.bundle;
-                receipt.assetMap = first.assets.map;
-            }
-            // State0's genuine early return never dereferences a model/root/
-            // bundle/heap, so that no-op acquires no allocation prerequisites.
-            if ((result = loaded.Recheck(before)) != ClockResult::Ok)
-                return finish(result);
-            if (!R::QualifyProfile(image))
-                return finish(ClockResult::BindingChanged);
-            if ((result = owner()) != ClockResult::Ok)
-                return finish(result);
-            const auto function = reinterpret_cast<NativeFunction>(image + P::RemoveRva);
-#if defined(MTA_DE_STREAMING_REMOVE_NATIVE_INVOKE)
-            const auto entry = invoke ? invoke : &MTA_DE_STREAMING_REMOVE_NATIVE_INVOKE;
-#else
-            const auto entry = invoke ? invoke : &NativeCall;
-#endif
-            receipt.entered = true;
-            result = entry(function, modelIndex, receipt.exceptionCode);
-            if (result != ClockResult::Ok)
-                return finish(result);
-            receipt.returned = true;
-            if ((result = loaded.Read(modelIndex, after)) != ClockResult::Ok)
-                return finish(result);
-            receipt.rawFlagsAfter = after.rawFlags;
-            receipt.rawStateAfter = after.rawLoadState;
-            if (after.rawLoadState != 0 || after.rawFlags != before.rawFlags)
-                return finish(ClockResult::BindingChanged);
-            if (before.rawLoadState == 1)
-            {
-                if ((result = bank.Recheck(model)) != ClockResult::Ok)
-                    return finish(result);
-                if ((result = R::RecheckReturned(image, model, first)) != ClockResult::Ok)
-                    return finish(result);
-                if (!R::H::QualifyProfile(image))
-                    return finish(ClockResult::BindingChanged);
-            }
-            else
-            {
-                R::StreamRow idleAfter{};
-                if (!NativeImageAccess::ReadImage(image, after.rowAddress, idleAfter.data(), idleAfter.size(), true) || idleBefore != idleAfter)
-                    return finish(ClockResult::BindingChanged);
-            }
-            if (!R::QualifyProfile(image))
-                return finish(ClockResult::BindingChanged);
-            return finish(owner());
+                *output = {};
+            return ClockResult::InvalidArgument;
         }
-        catch (...)
-        {
-            // Host observation allocation failure after entry is still an
-            // entered failure. No accepted native effects are undone/replayed.
-            return finish(ClockResult::ReadFailure);
-        }
+        return Run(image, modelIndex, owner, guard, context, output, invoke);
     }
 }

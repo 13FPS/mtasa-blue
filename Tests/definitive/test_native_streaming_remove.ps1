@@ -78,6 +78,7 @@ try{
         'Client/game_de/NativeModelTypeLeaf.h',
         'Client/game_de/NativeStreamingRemoveCalls.h',
         'Client/game_de/NativeStreamingRemoveCalls.cpp',
+        'Client/game_de/NativeStreamingRemoveAdmission.h',
         'Client/game_de/NativeStreamingRemoveProfile.h',
         'Client/game_de/NativeStreamingRemoveMemory.h',
         'Client/game_de/NativeStreamingRemoveAssets.h',

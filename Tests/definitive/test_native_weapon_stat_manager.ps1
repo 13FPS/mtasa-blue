@@ -74,6 +74,7 @@ try{
         'Client/sdk/game/CWeaponStatData.h',
         'Client/sdk/game/CWeaponStatFlagPolicy.h',
         'Client/sdk/game/CWeaponStatListPolicy.h',
+        'Client/sdk/game/CWeaponStartupPolicy.h',
         'Client/sdk/game/CGameAdapter.h',
         'Client/sdk/game/CGameClockService.h',
         'Client/sdk/game/Common.h',

@@ -368,6 +368,97 @@ namespace WeaponManagerFixture
         Check(reader.Bind() == Status::Ok && bank.GetSlot(22)->GetWeaponRange() == 901.25f,
               "native bank survives manager retirement and observes persistent accepted intent after its own reader rebind");
     }
+
+    template <class Operation>
+    bool StartupRefused(Operation&& operation)
+    {
+        try
+        {
+            operation();
+        }
+        catch (const std::logic_error&)
+        {
+            return true;
+        }
+        return false;
+    }
+
+    void ExplicitStartup(NativeWeaponInfoReader& reader, std::uintptr_t image)
+    {
+        ResetRows(image);
+        {
+            Owner               owner(reader, image);
+            CWeaponInfoBankDE   bank(reader, owner, owner);
+            Manager             manager(bank, owner);
+            CWeaponStatManager& sdk = manager;
+            Check(manager.GetStartupState() == Manager::StartupState::NotStarted && !sdk.GetWeaponStats(WEAPONTYPE_UNARMED),
+                  "complete manager construction still leaves explicit shared startup unattempted and live registry empty");
+            manager.InitializeLiveStats();
+            Check(manager.GetStartupState() == Manager::StartupState::Complete && owner.calls > 0,
+                  "explicit DE initialization consumes the real shared startup schedule with admitted native default writes");
+            for (std::size_t row = 0; row < P::RowCount; ++row)
+            {
+                const auto  type = static_cast<eWeaponType>(row < 47 ? row : 22 + (row - 47) % 11);
+                const auto  skill = row < 47 ? WEAPONSKILL_STD : row < 58 ? WEAPONSKILL_POOR : row < 69 ? WEAPONSKILL_PRO : WEAPONSKILL_SPECIAL;
+                auto*       value = sdk.GetWeaponStats(type, skill);
+                const auto* defaults = MtaGame::CWeaponStatDefaults::Select(type, skill);
+                const auto  expectedRange = defaults ? defaults->weapon_range : Row(row).weaponRange;
+                const auto  expectedCount = defaults ? defaults->combos_available : Row(row).combosAvailable;
+                Check(value && value->GetWeaponType() == type && value->GetWeaponSkillLevel() == skill && value->GetWeaponRange() == expectedRange &&
+                          value->GetCombosAvailable() == expectedCount,
+                      "explicit startup registers every exact standard/poor/pro/special native row and preserves unsupported default no-ops");
+                Check(value->GetFireOffset() == bank.GetSlot(row)->GetFireOffset(),
+                      "each initialized live stat remains bound to its original retained native bank wrapper");
+            }
+            const auto completed = Snapshot(image);
+            const auto calls = owner.calls;
+            Check(StartupRefused([&] { manager.InitializeLiveStats(); }) && manager.GetStartupState() == Manager::StartupState::Complete &&
+                      owner.calls == calls && Snapshot(image) == completed,
+                  "completed explicit startup rejects replay rather than silently appending duplicates or reapplying native defaults");
+        }
+        for (const auto failure : {1u, 3u})
+        {
+            ResetRows(image);
+            Owner               owner(reader, image);
+            CWeaponInfoBankDE   bank(reader, owner, owner);
+            Manager             manager(bank, owner);
+            CWeaponStatManager& sdk = manager;
+            const auto          before = Snapshot(image);
+            owner.failAt = failure;
+            Check(Unavailable([&] { manager.InitializeLiveStats(); }) && manager.GetStartupState() == Manager::StartupState::Failed && owner.calls == failure &&
+                      sdk.GetWeaponStats(WEAPONTYPE_PISTOL) && !sdk.GetWeaponStats(WEAPONTYPE_PISTOL_SILENCED),
+                  "first or later native default refusal ends startup at the already-registered failing row and marks this attempt failed");
+            for (int type = WEAPONTYPE_UNARMED; type < WEAPONTYPE_PISTOL; ++type)
+                Check(sdk.GetWeaponStats(static_cast<eWeaponType>(type)) != nullptr,
+                      "earlier unsupported-default startup rows persist in exact factory order after failure");
+            auto expected = before;
+            if (failure == 3)
+            {
+                const auto* defaults = MtaGame::CWeaponStatDefaults::Select(WEAPONTYPE_PISTOL, WEAPONSKILL_STD);
+                std::memcpy(expected.data() + 22 * P::RowBytes + offsetof(NativeWeaponInfoValues, weaponRange), &defaults->weapon_range, sizeof(float));
+                std::memcpy(expected.data() + 22 * P::RowBytes + offsetof(NativeWeaponInfoValues, targetRange), &defaults->target_range, sizeof(float));
+            }
+            Check(Snapshot(image) == expected, "failed startup keeps precisely its accepted native prefix without restoring rows or touching later defaults");
+            owner.failAt = 0;
+            const auto calls = owner.calls;
+            sdk.Init();
+            sdk.ResetLists();
+            Check(StartupRefused([&] { manager.InitializeLiveStats(); }) && manager.GetStartupState() == Manager::StartupState::Failed &&
+                      owner.calls == calls && Snapshot(image) == expected,
+                  "ordinary Init/disabled ResetLists do not clear failure or authorize automatic/manual native startup replay");
+        }
+        ResetRows(image);
+        {
+            Owner             owner(reader, image);
+            CWeaponInfoBankDE bank(reader, owner, owner);
+            Manager           manager(bank, owner);
+            manager.CreateWeaponStat(bank.GetSlot(0), WEAPONTYPE_UNARMED, WEAPONSKILL_STD);
+            const auto before = Snapshot(image);
+            Check(StartupRefused([&] { manager.InitializeLiveStats(); }) && manager.GetStartupState() == Manager::StartupState::NotStarted &&
+                      owner.calls == 0 && Snapshot(image) == before,
+                  "explicit startup refuses an already-populated live registry before silently replaying manual factory state");
+        }
+    }
 }
 
 int wmain(int argc, wchar_t** argv)
@@ -388,6 +479,7 @@ int wmain(int argc, wchar_t** argv)
     WeaponManagerFixture::DefaultsAndMutableOriginals(reader, fixture.image);
     WeaponManagerFixture::ResetRows(fixture.image);
     WeaponManagerFixture::RefusalOrderingAndRetirement(reader, fixture.image);
+    WeaponManagerFixture::ExplicitStartup(reader, fixture.image);
     reader.Reset();
     std::printf("Passed %u actual native weapon-stat manager SDK lifecycle checks (64-bit)\n", checks);
     return 0;

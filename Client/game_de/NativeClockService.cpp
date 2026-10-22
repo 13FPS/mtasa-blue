@@ -38,6 +38,7 @@
 #include "NativeTaskRemovalCalls.h"
 #include "NativeStreamingRequestCalls.h"
 #include "NativeModelReferenceMemory.h"
+#include "NativeModelReferenceRelease.h"
 #include "NativeStreamingUpgradeReader.h"
 #include "NativeStreamingUpgradeCalls.h"
 #include "NativeStreamingLoadAllCalls.h"
@@ -149,6 +150,7 @@ namespace mta::game_de
             ClockResult ReadModelVehiclePredicate(std::uint32_t, NativeModelVehiclePredicate, bool&) noexcept override;
             ClockResult ReadModelType(std::uint32_t, NativeModelTypeObservation&) noexcept override;
             ClockResult AdjustModelReference(std::uint32_t, int) noexcept override;
+            ClockResult ReleaseFinalModelReference(std::uint32_t, NativeModelReferenceRelease::ZeroPolicy) noexcept override;
             ClockResult RequestStreamingUpgrade(std::uint32_t, std::uint32_t) noexcept override;
             ClockResult ReadStreamingUpgradeLoaded(std::uint32_t, bool&) noexcept override;
             ClockResult ReadPedPhysicalScalar(const NativePedReferenceToken&, NativePedPhysicalScalarField, float&) noexcept override;
@@ -2478,6 +2480,18 @@ namespace mta::game_de
                 Stop(result);
             return result;
         }
+        ClockResult NativeAccess::ReleaseFinalModelReference(std::uint32_t model, NativeModelReferenceRelease::ZeroPolicy policy) noexcept
+        {
+            NativeModelReferenceRelease::Receipt receipt;
+            const auto                           result = NativeModelReferenceRelease::ReleaseFinal(runtime.image, model, policy, &CheckTimingOwner, &receipt);
+            // The exact native count may already be zero even if final native
+            // removal or acknowledgement failed. Retire this same owner; never
+            // replay decrement/removal, restore the old count or infer policy.
+            if (receipt.reference.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+
         ClockResult NativeAccess::AdjustModelReference(std::uint32_t modelIndex, int delta) noexcept
         {
             if (delta == 1)

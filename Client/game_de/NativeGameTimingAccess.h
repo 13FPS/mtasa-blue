@@ -28,6 +28,7 @@
 #include "NativeTaskPoolReader.h"
 #include "NativeTaskRemovalAccess.h"
 #include "NativeModelBankReader.h"
+#include "NativeModelReferenceRelease.h"
 #include "NativeStreamingModelAccess.h"
 #include "NativeModelClassificationAccess.h"
 #include "NativePedPhysicalScalarsAccess.h"
@@ -128,6 +129,10 @@ namespace mta::game_de
         // adjustment. It neither inserts an absent native row nor removes
         // the final one and cannot stand in for an SDK model lifetime.
         virtual ClockResult AdjustModelReference(std::uint32_t, int) noexcept { return ClockResult::NotInitialized; }
+        // Explicit selected-key final release is distinct from interior count
+        // adjustment. The caller supplies zero policy; no custom-clump/col
+        // absence or complete SDK model lifetime is inferred here.
+        virtual ClockResult ReleaseFinalModelReference(std::uint32_t, NativeModelReferenceRelease::ZeroPolicy) noexcept { return ClockResult::NotInitialized; }
         // The real request belongs to a distinct admitted normal-frame scope;
         // a gameplay timer or earlier observation never grants lifecycle calls.
         virtual ClockResult StartGame() noexcept { return ClockResult::NotInitialized; }

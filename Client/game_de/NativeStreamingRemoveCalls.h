@@ -10,6 +10,7 @@ namespace mta::game_de::NativeStreamingRemoveCalls
     using CheckOwner = NativeModelLoadedReader::CheckOwner;
     using NativeFunction = void (*)(std::int32_t modelIndex);
     using Invoke = ClockResult (*)(NativeFunction, std::uint32_t modelIndex, std::uint32_t& exceptionCode) noexcept;
+    using CheckBeforeEntry = ClockResult (*)(void*) noexcept;
     struct Receipt
     {
         std::uintptr_t entryRva = 0, root = 0, provider = 0, modelInfo = 0, bundle = 0, assetMap = 0;
@@ -22,4 +23,9 @@ namespace mta::game_de::NativeStreamingRemoveCalls
     // entered failure can retain partial native effects and must retire its
     // callback owner without a replay, rollback or synthetic unloaded state.
     ClockResult Remove(std::uintptr_t image, std::uint32_t modelIndex, CheckOwner, Receipt* = nullptr, Invoke = nullptr) noexcept;
+    // Synchronous internal continuation for an already accepted final model
+    // decrement. The stack-owned guard reacquires its zero/key/current owner
+    // after removal admission, immediately before the genuine native entry.
+    ClockResult RemoveGuarded(std::uintptr_t image, std::uint32_t modelIndex, CheckOwner, CheckBeforeEntry, void*, Receipt* = nullptr,
+                              Invoke = nullptr) noexcept;
 }

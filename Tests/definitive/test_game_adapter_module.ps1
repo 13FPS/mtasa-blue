@@ -191,6 +191,11 @@ $sourceNames += @(
     'Client/sdk/game/CWeaponStatOwned.h',
     'Client/sdk/game/CWeaponStatData.h'
 )
+$sourceNames += @(
+    'Client/game_de/NativeModelReferenceRelease.h',
+    'Client/game_de/NativeModelReferenceRelease.cpp',
+    'Client/game_de/NativeStreamingRemoveAdmission.h'
+)
 $sourceNames += @(Get-ChildItem -LiteralPath $detoursSourceRoot -File | ForEach-Object {
     [IO.Path]::GetRelativePath($taskRoot, $_.FullName).Replace('\', '/')
 })
@@ -281,6 +286,7 @@ if ((Test-Path -LiteralPath $moduleSource) -and $detoursLibraryExit -eq 0) {
         (Join-Path $taskRoot 'Client/game_de/CStreamingDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeStreamingModelContext.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeModelReferenceMemory.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativeModelReferenceRelease.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeStreamingUpgradeReader.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeStreamingUpgradeCalls.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeStreamingLoadAllCalls.cpp'),

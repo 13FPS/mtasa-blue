@@ -8,6 +8,7 @@
 #include "NativeStreamingObserversOwnerTests.inl"
 #include "NativeModelClassificationOwnerTests.inl"
 #include "NativeStreamingRemovalOwnerTests.inl"
+#include "NativeModelFinalReleaseOwnerTests.inl"
 
 {
     namespace A = NativeModelReferenceTransactionProfile;

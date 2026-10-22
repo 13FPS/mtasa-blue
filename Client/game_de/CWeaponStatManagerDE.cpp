@@ -4,6 +4,7 @@
  * PURPOSE: Preserve MTA live-stat lookup, defaults and concrete ownership
  *****************************************************************************/
 #include "CWeaponStatManagerDE.h"
+#include <game/CWeaponStartupPolicy.h>
 #include <stdexcept>
 
 namespace mta::game_de
@@ -67,5 +68,27 @@ namespace mta::game_de
     void CWeaponStatManagerDE::CreateWeaponStat(CWeaponInfo* existing, eWeaponType type, eWeaponSkill skill)
     {
         AddLive(RequireExisting(existing), type, skill);
+    }
+
+    void CWeaponStatManagerDE::InitializeLiveStats()
+    {
+        if (startupState != StartupState::NotStarted || !ownedLive.empty())
+            throw std::logic_error("DE weapon-stat startup requires a fresh unattempted live registry");
+        startupState = StartupState::Running;
+        try
+        {
+            MtaGame::CWeaponStartupPolicy::Initialize([this](const MtaGame::CWeaponStartupPolicy::Entry& entry)
+                                                      { CreateWeaponStat(bank.GetSlot(entry.row), entry.statType, entry.skill); });
+            startupState = StartupState::Complete;
+        }
+        catch (...)
+        {
+            // The factory already registered the failing row; accepted native
+            // default fields and earlier rows persist. Retrying from row0 would
+            // replay those writes and append duplicates, so failure is final
+            // for this manager lifetime rather than an implicit reset/retry.
+            startupState = StartupState::Failed;
+            throw;
+        }
     }
 }

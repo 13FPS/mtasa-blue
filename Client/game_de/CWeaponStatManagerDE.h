@@ -22,6 +22,19 @@ namespace mta::game_de
 
         void CreateWeaponStat(CWeaponInfo* existing, eWeaponType type, eWeaponSkill skill) override;
 
+        enum class StartupState : unsigned char
+        {
+            NotStarted,
+            Running,
+            Complete,
+            Failed
+        };
+        // Separate from construction and ordinary factory calls. A qualified
+        // future CGame initialization owner may attempt this exact MTA startup
+        // schedule once on an empty live list; no native lease is created here.
+        void         InitializeLiveStats();
+        StartupState GetStartupState() const noexcept { return startupState; }
+
     private:
         // The SDK lacks a virtual destructor. Keep the exact concrete native
         // type in the owning list instead of deleting through CWeaponStat.
@@ -42,6 +55,7 @@ namespace mta::game_de
         CWeaponInfoBankDE&                   bank;
         NativeWeaponInfoWriteAccess&         writes;
         std::list<std::unique_ptr<LiveStat>> ownedLive;
+        StartupState                         startupState = StartupState::NotStarted;
     };
     static_assert(!std::is_abstract_v<CWeaponStatManagerDE> && std::is_base_of_v<CWeaponStatManager, CWeaponStatManagerDE>);
 }

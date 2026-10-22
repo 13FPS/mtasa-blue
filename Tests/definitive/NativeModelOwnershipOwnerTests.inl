@@ -8,6 +8,7 @@ namespace
     enum class ModelOwnershipOperation
     {
         Reference,
+        FinalReference,
         UpgradeRequest,
         UpgradeLoaded,
         LoadAll,
@@ -27,6 +28,7 @@ namespace
         NativeModelVehiclePredicate             predicate = NativeModelVehiclePredicate::Boat;
         NativeModelTypeObservation              typeObservation{true, 77};
         NativeStreamingModelGroupsReader::Value groups;
+        NativeModelReferenceRelease::ZeroPolicy zeroPolicy = NativeModelReferenceRelease::ZeroPolicy::KeepResident;
         ClockResult                             result = ClockResult::NotInitialized;
     };
     void ModelOwnershipOwnerHandler(NativeGameTimingAccess& access, void* opaque)
@@ -48,6 +50,9 @@ namespace
                 break;
             case ModelOwnershipOperation::Remove:
                 context.result = access.RemoveStreamingModel(context.index);
+                break;
+            case ModelOwnershipOperation::FinalReference:
+                context.result = access.ReleaseFinalModelReference(context.index, context.zeroPolicy);
                 break;
             case ModelOwnershipOperation::Reference:
                 context.result = access.AdjustModelReference(context.index, context.delta);

@@ -33,6 +33,7 @@
 #include "CFxSA.h"
 #include "CFxSystemSA.h"
 #include "CGameSA.h"
+#include <game/CWeaponStartupPolicy.h>
 #include <game/CWorldCheatPolicy.h>
 #include "CGaragesSA.h"
 #include "CHandlingManagerSA.h"
@@ -149,40 +150,17 @@ CGameSA::CGameSA()
 
         m_pRenderer = std::make_unique<CRendererSA>();
 
-        // Normal weapon types (WEAPONSKILL_STD)
-        for (int i = 0; i < NUM_WeaponInfosStdSkill; i++)
-        {
-            eWeaponType weaponType = (eWeaponType)(WEAPONTYPE_PISTOL + i);
-            WeaponInfos[i] = new CWeaponInfoSA((CWeaponInfoSAInterface*)(ARRAY_WeaponInfo + i * CLASSSIZE_WeaponInfo), weaponType);
-            m_pWeaponStatsManager->CreateWeaponStat(WeaponInfos[i], (eWeaponType)(weaponType - WEAPONTYPE_PISTOL), WEAPONSKILL_STD);
-        }
-
-        // Extra weapon types for skills (WEAPONSKILL_POOR,WEAPONSKILL_PRO,WEAPONSKILL_SPECIAL)
-        int          index;
-        eWeaponSkill weaponSkill = eWeaponSkill::WEAPONSKILL_POOR;
-        for (int skill = 0; skill < 3; skill++)
-        {
-            // STD is created first, then it creates "extra weapon types" (poor, pro, special?) but in the enum 1 = STD which meant the STD weapon skill
-            // contained pro info
-            if (skill >= 1)
+        static_assert(NUM_WeaponInfosStdSkill == MtaGame::CWeaponInfoIndexPolicy::StandardCount &&
+                      NUM_WeaponInfosOtherSkill == MtaGame::CWeaponInfoIndexPolicy::SkillCount &&
+                      NUM_WeaponInfosTotal == MtaGame::CWeaponInfoIndexPolicy::SlotCount);
+        // Keep each native wrapper allocation before its matching stat/default
+        // operation, including the constructor's distinct standard metadata.
+        MtaGame::CWeaponStartupPolicy::Initialize(
+            [this](const MtaGame::CWeaponStartupPolicy::Entry& entry)
             {
-                if (skill == 1)
-                {
-                    weaponSkill = eWeaponSkill::WEAPONSKILL_PRO;
-                }
-                if (skill == 2)
-                {
-                    weaponSkill = eWeaponSkill::WEAPONSKILL_SPECIAL;
-                }
-            }
-            for (int i = 0; i < NUM_WeaponInfosOtherSkill; i++)
-            {
-                eWeaponType weaponType = (eWeaponType)(WEAPONTYPE_PISTOL + i);
-                index = NUM_WeaponInfosStdSkill + skill * NUM_WeaponInfosOtherSkill + i;
-                WeaponInfos[index] = new CWeaponInfoSA((CWeaponInfoSAInterface*)(ARRAY_WeaponInfo + index * CLASSSIZE_WeaponInfo), weaponType);
-                m_pWeaponStatsManager->CreateWeaponStat(WeaponInfos[index], weaponType, weaponSkill);
-            }
-        }
+                WeaponInfos[entry.row] = new CWeaponInfoSA((CWeaponInfoSAInterface*)(ARRAY_WeaponInfo + entry.row * CLASSSIZE_WeaponInfo), entry.infoType);
+                m_pWeaponStatsManager->CreateWeaponStat(WeaponInfos[entry.row], entry.statType, entry.skill);
+            });
 
         m_pPlayerInfo = new CPlayerInfoSA((CPlayerInfoSAInterface*)CLASS_CPlayerInfo);
 

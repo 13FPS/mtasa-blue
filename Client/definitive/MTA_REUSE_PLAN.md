@@ -28,9 +28,14 @@ native root/provider/model checks and callback owner. Reference changes reacquir
 a keyed map row each time and use one conditional DWORD update. Missing entries
 use DE's genuine reserve/publish helpers and initialized allocator. Upgrade
 references affect only their selected key, preserving MTA's existing reference
-semantics. Overflow, underflow and decrements reaching zero are refused. This
-does not grant a retained model lease or complete MTA's `ModelAddRef`/`RemoveRef`
-contract. Final model removal remains a separate prerequisite.
+semantics. Interior adjustments still refuse overflow, underflow and zero.
+An explicit final-release operation admits exactly one to zero, preserving the
+occupied keyed row. Its caller chooses whether to keep the model resident or
+remove it using actual custom-resource eligibility; native fields cannot supply
+MTA's custom-clump/collision policy. Removal requires complete admission before
+the count changes and another current-owner check at native entry. Accepted
+effects persist on later failure without rollback or replay. This does not
+grant a retained model lease or complete MTA's `ModelAddRef`/`RemoveRef` wrapper.
 
 `CStreamingDE::LoadAllRequestedModels(false)` enters DE's genuine all-model
 flush with a current typed game-mode/world context. Priority loading uses the
@@ -41,8 +46,8 @@ recursion guard; lost acknowledgement preserves effects and stops the owner.
 
 Ordinary `RemoveModel` uses DE's genuine removal entry for the qualified idle
 and loaded-model branches, including current streaming links and asset owners.
-This streaming operation does not decrement a separate model reference or
-complete MTA's custom-clump/collision and final-reference release contract.
+The direct streaming operation leaves the separate model reference untouched;
+explicit final release composes the two only under the caller's chosen policy.
 Archive, memory and scene operations still keep the streaming service abstract.
 
 The abstract `CModelInfoDE` supplies the actual SDK's model key, type and named
@@ -54,6 +59,9 @@ named `IS_MODEL_IN_CDIMAGE` predicate: a current nonnull bank word with native
 missing-archive flag 80 clear. This observes archive membership rather than
 inventing classic physical block sizes or using loaded state as a substitute.
 These observations publish no model factory, retained lease or render object.
+The native loaded flag, provider bundle and typed weak asset do not establish
+MTA's second DFF render-readiness gate. The qualified native instancing factory
+can return null and mutates ownership, so it cannot substitute for a pure query.
 
 MTA's four loaded ped/vehicle group getters now read DE's actual 24 ped slots,
 raw ped count and 50 aggregate vehicle slots. Shared selection rules preserve
@@ -152,7 +160,12 @@ CPU stats keep their original-provider lifetime contract. The complete
 creates CPU originals with no native I/O and leaves the live registry empty,
 matching MTA's separate initialization step. The partial `CGameDE` now exposes
 this runtime-owned manager through a qualified borrow without replaying defaults.
-Full `CGame::Initialize` population and startup remain separate work.
+Classic startup and explicit DE live-stat population now consume one shared
+80-row schedule, preserving MTA's different standard info/stat keys and exact
+poor/professional/special ordering. DE population admits one explicit attempt
+on an empty live registry; failure preserves its registered/native prefix and
+refuses replay. The incomplete `CGame` does not invoke this stage automatically.
+Full game initialization and startup remain separate work.
 
 `CGameTimingDE::GetGravity` also reads the current qualified native downward
 acceleration operand through the existing timing-reader binding. It preserves

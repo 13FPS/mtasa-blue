@@ -15,8 +15,9 @@ namespace
 {
     mta::game_de::ClockResult InvokeLoadAll(mta::game_de::NativeStreamingLoadAllCalls::NativeFunction, std::uint32_t&) noexcept;
 }
-#define GetModuleHandleW                       PoolTestHost::Module
-#define ReadProcessMemory                      PoolTestHost::Read
+#define GetModuleHandleW  PoolTestHost::Module
+#define ReadProcessMemory PoolTestHost::Read
+#include "../../Client/game_de/NativeStreamingCompletionContext.cpp"
 #define MTA_DE_STREAMING_LOADALL_NATIVE_INVOKE ::InvokeLoadAll
 #include "../../Client/game_de/NativeStreamingLoadAllCalls.cpp"
 #undef MTA_DE_STREAMING_LOADALL_NATIVE_INVOKE

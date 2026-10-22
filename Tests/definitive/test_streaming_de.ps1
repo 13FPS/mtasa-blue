@@ -20,8 +20,8 @@ foreach ($name in @('TEMP','TMP','VCToolsInstallDir','INCLUDE','LIB','LIBPATH','
 $record = [ordered]@{
     schema='mta_streaming_sdk_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
-    results=@();actualStreamingSdkSliceTested=$false;actualStreamingLoadAllSdkTested=$false;failure=$null;scratchDirectory=$scratchRoot;scratchFilesRemaining=$null;scratchRemoved=$false;
-    scope='Actual MTA CStreaming RequestModel, HasModelLoaded and false-only LoadAllRequestedModels virtual dispatch through a borrowed owner. Covers full DWORD keys/flags, distinct paired upgrade dispatch for the entire shared upgrade interval, all owner refusal statuses, genuine false/true loaded results, absent-owner refusal and no wrapper retry or ordinary fallback. Unimplemented SDK methods remain pure in production; unrelated concrete overrides exist only in the test fixture. No game code or native memory is executed';
+    results=@();actualStreamingSdkSliceTested=$false;actualStreamingLoadAllSdkTested=$false;actualStreamingPrioritySdkTested=$false;actualStreamingRemoveSdkTested=$false;failure=$null;scratchDirectory=$scratchRoot;scratchFilesRemaining=$null;scratchRemoved=$false;
+    scope='Actual MTA CStreaming RequestModel, HasModelLoaded, RemoveModel and both LoadAllRequestedModels intents dispatch through a borrowed owner. Covers full DWORD keys/flags, distinct paired upgrade dispatch for the entire shared upgrade interval, all owner refusal statuses, genuine false/true loaded results, absent-owner refusal, preserved priority-only intent and no wrapper retry or ordinary/global fallback. Unimplemented SDK methods remain pure in production; unrelated concrete overrides exist only in the test fixture. No game code or native memory is executed';
     ownedBuffersOnly=$true;nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;
     foreignProcessAccessed=$false;nativeLifecycleReady=$false;fullMtaReady=$false;
     clientDllLoaded=$false;installationChanged=$false
@@ -126,7 +126,7 @@ try {
             (Join-Path $PSScriptRoot 'StreamingDETests.cpp'),(Join-Path $taskRoot 'Client/game_de/CStreamingDE.cpp'),
             ('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'compiler.pdb')),('/Fe'+$executable))
         $result = [ordered]@{architecture=$architecture;environment=$environmentResult;compile=$null;test=$null;
-            checks=0;pointerBits=$null;executable=$executable;executableSha256=$null;actualStreamingSdkSliceTested=$false;actualStreamingLoadAllSdkTested=$false}
+            checks=0;pointerBits=$null;executable=$executable;executableSha256=$null;actualStreamingSdkSliceTested=$false;actualStreamingLoadAllSdkTested=$false;actualStreamingPrioritySdkTested=$false;actualStreamingRemoveSdkTested=$false}
         $record.results += $result
         $result.compile = RunOwned $compiler $arguments $directory 'compile' 60000
         if ($result.compile.exitCode -ne 0 -or $result.compile.timedOut) { throw "$architecture actual MTA streaming SDK fixture compilation failed." }
@@ -140,7 +140,11 @@ try {
         }
         $result.actualStreamingSdkSliceTested = $text.Contains('Production MTA streaming SDK slice fixture completed')
         $result.actualStreamingLoadAllSdkTested = $text.Contains('Production MTA streaming load-all SDK fixture completed')
-        if (-not $result.actualStreamingLoadAllSdkTested) { throw 'Actual false-only LoadAll SDK override did not execute.' }
+        $result.actualStreamingPrioritySdkTested = $text.Contains('Production MTA streaming priority SDK fixture completed')
+        $result.actualStreamingRemoveSdkTested = $text.Contains('Production MTA streaming remove SDK fixture completed')
+        if (-not ($result.actualStreamingLoadAllSdkTested -and $result.actualStreamingPrioritySdkTested -and $result.actualStreamingRemoveSdkTested)) {
+            throw 'Actual priority/all completion and direct-removal SDK overrides did not execute.'
+        }
         $expectedBits = if ($architecture -eq 'x86') { 32 } else { 64 }
         if ($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -le 0 -or $result.pointerBits -ne $expectedBits -or -not $result.actualStreamingSdkSliceTested) {
             throw "$architecture actual MTA streaming SDK checks failed or summary/pointer-width evidence was missing."
@@ -149,6 +153,8 @@ try {
     $record.success = $record.results.Count -eq 1
     $record.actualStreamingSdkSliceTested = $record.success -and $record.results[0].actualStreamingSdkSliceTested
     $record.actualStreamingLoadAllSdkTested = $record.success -and $record.results[0].actualStreamingLoadAllSdkTested
+    $record.actualStreamingPrioritySdkTested = $record.success -and $record.results[0].actualStreamingPrioritySdkTested
+    $record.actualStreamingRemoveSdkTested = $record.success -and $record.results[0].actualStreamingRemoveSdkTested
 } catch { AddFailure ($_.Exception.ToString()) }
 finally {
     foreach ($name in $previousEnvironment.Keys) {

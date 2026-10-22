@@ -33,10 +33,24 @@ does not grant a retained model lease or complete MTA's `ModelAddRef`/`RemoveRef
 contract. Final model removal remains a separate prerequisite.
 
 `CStreamingDE::LoadAllRequestedModels(false)` enters DE's genuine all-model
-flush with a current typed game-mode/world context. Recursive callbacks refuse
-a second entry; lost acknowledgement preserves native effects and stops the
-owner. Priority-only loading remains explicitly unavailable. Archive, memory and
-scene operations still keep the complete streaming service abstract.
+flush with a current typed game-mode/world context. Priority loading uses the
+current priority flags and qualified native pending handles, then the game's
+own wait and completion callbacks. Unresolved requests without those handles
+refuse instead of silently flushing unrelated work. Both paths share the same
+recursion guard; lost acknowledgement preserves effects and stops the owner.
+
+Ordinary `RemoveModel` uses DE's genuine removal entry for the qualified idle
+and loaded-model branches, including current streaming links and asset owners.
+This streaming operation does not decrement a separate model reference or
+complete MTA's custom-clump/collision and final-reference release contract.
+Archive, memory and scene operations still keep the streaming service abstract.
+
+The abstract `CModelInfoDE` supplies the actual SDK's model key, type and named
+boat/car/plane/helicopter predicates. Named predicates use genuine native
+classifier entries. Type reads share a bounded reader for complete native
+constant-return functions, without invoking an arbitrary virtual method.
+`IsVehicle` keeps MTA's archive-allocation prerequisite, which remains pure.
+These observations publish no model factory, retained lease or render object.
 
 These batches have offline primitive, actual SDK/callback-owner and normal
 build coverage. The changed classic callers compile through their normal

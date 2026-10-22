@@ -70,6 +70,8 @@ try{
         'Tests/definitive/NativeStreamingLoadAllTests.cpp',
         'Tests/definitive/test_native_streaming_loadall.ps1',
         'Tests/definitive/NativeStreamingLoadAllGraphFixture.h',
+        'Client/game_de/NativeStreamingCompletionContext.h',
+        'Client/game_de/NativeStreamingCompletionContext.cpp',
         'Client/game_de/NativeStreamingLoadAllCalls.h',
         'Client/game_de/NativeStreamingLoadAllCalls.cpp',
         'Client/game_de/NativeStreamingLoadAllProfile.h',

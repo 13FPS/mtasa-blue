@@ -17,8 +17,9 @@ namespace mta::game_de::NativeStreamingLoadAllCalls
         unsigned char  modeBefore = 0, modeAfter = 0;
         bool           entered = false, returned = false;
     };
-    // onlyPriority=true has no qualified DE equivalent and is refused before
-    // any entry. Native callbacks may run while loading; recursive admission
-    // is Busy, not another request. Receipt facts borrow no object/GC lease.
+    // The global native entry has no priority argument; true refuses here.
+    // The SDK routes selective work to NativeStreamingPriorityCalls instead.
+    // Both genuine paths share one reentry gate, preserving outer ownership.
+    // Receipt facts borrow no object/GC lease.
     ClockResult Load(std::uintptr_t image, bool onlyPriority, CheckOwner, Receipt* = nullptr, Invoke = nullptr) noexcept;
 }

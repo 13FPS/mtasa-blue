@@ -11,21 +11,35 @@ namespace
         UpgradeRequest,
         UpgradeLoaded,
         LoadAll,
-        ResourceRequest
+        ResourceRequest,
+        Classification,
+        ModelType,
+        Remove
     };
     struct ModelOwnershipOwnerContext
     {
-        ModelOwnershipOperation operation = ModelOwnershipOperation::Reference;
-        std::uint32_t           index = 3, flags = 6;
-        int                     delta = 1;
-        bool                    loaded = true, onlyPriority = false;
-        ClockResult             result = ClockResult::NotInitialized;
+        ModelOwnershipOperation     operation = ModelOwnershipOperation::Reference;
+        std::uint32_t               index = 3, flags = 6;
+        int                         delta = 1;
+        bool                        loaded = true, onlyPriority = false;
+        NativeModelVehiclePredicate predicate = NativeModelVehiclePredicate::Boat;
+        NativeModelTypeObservation  typeObservation{true, 77};
+        ClockResult                 result = ClockResult::NotInitialized;
     };
     void ModelOwnershipOwnerHandler(NativeGameTimingAccess& access, void* opaque)
     {
         auto& context = *static_cast<ModelOwnershipOwnerContext*>(opaque);
         switch (context.operation)
         {
+            case ModelOwnershipOperation::Classification:
+                context.result = access.ReadModelVehiclePredicate(context.index, context.predicate, context.loaded);
+                break;
+            case ModelOwnershipOperation::ModelType:
+                context.result = access.ReadModelType(context.index, context.typeObservation);
+                break;
+            case ModelOwnershipOperation::Remove:
+                context.result = access.RemoveStreamingModel(context.index);
+                break;
             case ModelOwnershipOperation::Reference:
                 context.result = access.AdjustModelReference(context.index, context.delta);
                 break;

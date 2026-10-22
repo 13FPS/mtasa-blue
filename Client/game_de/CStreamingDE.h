@@ -15,12 +15,13 @@
 namespace mta::game_de
 {
     // The complete streaming service still requires its native archive, memory,
-    // scene and priority-loading operations. Keep those SDK methods pure rather
+    // scene operations. Keep those SDK methods pure rather
     // than publishing this slice as a complete CStreaming instance.
     class CStreamingDE : public CStreaming
     {
     public:
         void RequestModel(DWORD model, DWORD flags) override;
+        void RemoveModel(std::uint32_t model) override;
         bool HasModelLoaded(DWORD model) override;
         void LoadAllRequestedModels(bool onlyPriority, const char* tag) override;
 

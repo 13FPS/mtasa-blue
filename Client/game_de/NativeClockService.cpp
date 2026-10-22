@@ -40,6 +40,9 @@
 #include "NativeStreamingUpgradeReader.h"
 #include "NativeStreamingUpgradeCalls.h"
 #include "NativeStreamingLoadAllCalls.h"
+#include "NativeStreamingPriorityCalls.h"
+#include "NativeStreamingRemoveCalls.h"
+#include "NativeModelClassificationCalls.h"
 #include "NativeStreamingResourceCalls.h"
 #include "NativeModelReferenceTransactions.h"
 #include "NativeModelBankProfile.h"
@@ -137,6 +140,9 @@ namespace mta::game_de
             ClockResult ReadStreamingModelLoaded(std::uint32_t, NativeModelLoadedReader::Value&) noexcept override;
             ClockResult RequestStreamingModel(std::uint32_t, std::uint32_t) noexcept override;
             ClockResult LoadStreamingModels(bool) noexcept override;
+            ClockResult RemoveStreamingModel(std::uint32_t) noexcept override;
+            ClockResult ReadModelVehiclePredicate(std::uint32_t, NativeModelVehiclePredicate, bool&) noexcept override;
+            ClockResult ReadModelType(std::uint32_t, NativeModelTypeObservation&) noexcept override;
             ClockResult AdjustModelReference(std::uint32_t, int) noexcept override;
             ClockResult RequestStreamingUpgrade(std::uint32_t, std::uint32_t) noexcept override;
             ClockResult ReadStreamingUpgradeLoaded(std::uint32_t, bool&) noexcept override;
@@ -2385,8 +2391,41 @@ namespace mta::game_de
                 Stop(result);
             return result;
         }
+        ClockResult NativeAccess::RemoveStreamingModel(std::uint32_t modelIndex) noexcept
+        {
+            NativeStreamingRemoveCalls::Receipt receipt;
+            const auto                          result = NativeStreamingRemoveCalls::Remove(runtime.image, modelIndex, &CheckTimingOwner, &receipt);
+            // Native retirement/callback effects may already have occurred.
+            // Stop this same owner after entered failure without repeating
+            // removal or resurrecting its old row, bundle or native object.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+        ClockResult NativeAccess::ReadModelVehiclePredicate(std::uint32_t modelIndex, NativeModelVehiclePredicate predicate, bool& output) noexcept
+        {
+            NativeModelClassificationCalls::Receipt receipt;
+            const auto result = NativeModelClassificationCalls::Read(runtime.image, modelIndex, predicate, &CheckTimingOwner, output, &receipt);
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+        ClockResult NativeAccess::ReadModelType(std::uint32_t modelIndex, NativeModelTypeObservation& output) noexcept
+        {
+            // The shared complete pure-leaf observation invokes no getter and
+            // grants no model/archive lifetime beyond this current callback.
+            return NativeModelClassificationCalls::ReadType(runtime.image, modelIndex, &CheckTimingOwner, output);
+        }
         ClockResult NativeAccess::LoadStreamingModels(bool onlyPriority) noexcept
         {
+            if (onlyPriority)
+            {
+                NativeStreamingPriorityCalls::Receipt receipt;
+                const auto                            result = NativeStreamingPriorityCalls::Load(runtime.image, &CheckTimingOwner, &receipt);
+                if (receipt.entered && result != ClockResult::Ok)
+                    Stop(result);
+                return result;
+            }
             NativeStreamingLoadAllCalls::Receipt receipt;
             const auto                           result = NativeStreamingLoadAllCalls::Load(runtime.image, onlyPriority, &CheckTimingOwner, &receipt);
             // Engine callbacks and completed loads can survive lost return

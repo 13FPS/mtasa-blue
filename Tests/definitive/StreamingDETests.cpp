@@ -23,11 +23,17 @@ namespace
     }
     struct Access final : NativeStreamingModelAccess
     {
-        unsigned      requests = 0, queries = 0, upgradeRequests = 0, upgradeQueries = 0, loads = 0;
+        unsigned      requests = 0, queries = 0, upgradeRequests = 0, upgradeQueries = 0, loads = 0, removes = 0;
         std::uint32_t model = 0, flags = 0;
         ClockResult   requestResult = ClockResult::Ok, queryResult = ClockResult::Ok;
         bool          loaded = false, lastOnlyPriority = true;
-        ClockResult   LoadStreamingModels(bool onlyPriority) noexcept override
+        ClockResult   RemoveStreamingModel(std::uint32_t index) noexcept override
+        {
+            ++removes;
+            model = index;
+            return requestResult;
+        }
+        ClockResult LoadStreamingModels(bool onlyPriority) noexcept override
         {
             ++loads;
             lastOnlyPriority = onlyPriority;
@@ -73,7 +79,6 @@ namespace
     {
         explicit Streaming(NativeStreamingModelAccess& owner) : CStreamingDE(owner) {}
         [[noreturn]] static void Unavailable() { throw std::logic_error("unrelated SDK operation in streaming fixture"); }
-        void                     RemoveModel(std::uint32_t) override { Unavailable(); }
         void                     RequestSpecialModel(DWORD, const char*, DWORD) override { Unavailable(); }
         CStreamingInfo*          GetStreamingInfo(uint32) override { Unavailable(); }
         void                     ReinitStreaming() override { Unavailable(); }
@@ -168,14 +173,26 @@ int main()
         sdk->LoadAllRequestedModels(false, "actual SDK diagnostic tag");
         Check(owner.loads == priorLoads + 1 && !owner.lastOnlyPriority,
               "blocking-all SDK intent reaches the owner once without inventing native tag arguments");
-        Refuses([&] { sdk->LoadAllRequestedModels(true, "priority intent"); }, "LoadAllRequestedModels priority-only");
-        Check(owner.loads == priorLoads + 1, "priority-only SDK request cannot fall through to blocking-all");
+        sdk->LoadAllRequestedModels(true, "priority intent");
+        Check(owner.loads == priorLoads + 2 && owner.lastOnlyPriority,
+              "actual SDK true intent reaches the distinct qualified owner route once without false fallback");
+        for (const auto key : std::array<std::uint32_t, 5>{0, 19999, 20000, 65536, 0xffffffff})
+        {
+            const auto before = owner.removes;
+            sdk->RemoveModel(key);
+            Check(owner.removes == before + 1 && owner.model == key, "actual SDK RemoveModel forwards complete DWORD once without hidden reference decrement");
+        }
         for (unsigned status = 1; status <= static_cast<unsigned>(ClockResult::OriginalException); ++status)
         {
             owner.requestResult = static_cast<ClockResult>(status);
             const auto calls = owner.loads;
             Refuses([&] { sdk->LoadAllRequestedModels(false, nullptr); }, "LoadAllRequestedModels");
             Check(owner.loads == calls + 1 && !owner.lastOnlyPriority, "blocking-all entered failure remains explicit without SDK retry");
+            Refuses([&] { sdk->LoadAllRequestedModels(true, nullptr); }, "LoadAllRequestedModels priority-only");
+            Check(owner.loads == calls + 2 && owner.lastOnlyPriority, "priority-only owner refusal never retries through blocking-all");
+            const auto before = owner.removes;
+            Refuses([&] { sdk->RemoveModel(17); }, "RemoveModel");
+            Check(owner.removes == before + 1, "entered-uncertain direct native removal never retries through the SDK wrapper");
         }
         std::puts("Production MTA streaming load-all SDK fixture completed");
         NativeStreamingModelAccess absent;
@@ -184,8 +201,11 @@ int main()
         Refuses([&] { (void)unbound.HasModelLoaded(0); }, "HasModelLoaded");
         Refuses([&] { unbound.RequestModel(1000, 6); }, "RequestModel vehicle upgrade");
         Refuses([&] { (void)unbound.HasModelLoaded(1193); }, "HasModelLoaded vehicle upgrade");
+        Refuses([&] { unbound.RemoveModel(17); }, "RemoveModel");
         Refuses([&] { unbound.LoadAllRequestedModels(false, nullptr); }, "LoadAllRequestedModels");
         Refuses([&] { unbound.LoadAllRequestedModels(true, nullptr); }, "LoadAllRequestedModels priority-only");
+        std::puts("Production MTA streaming priority SDK fixture completed");
+        std::puts("Production MTA streaming remove SDK fixture completed");
         std::puts("Production MTA streaming SDK slice fixture completed");
         std::printf("Passed %u actual MTA streaming SDK checks (%zu-bit)\n", checks, sizeof(void*) * 8);
         return 0;

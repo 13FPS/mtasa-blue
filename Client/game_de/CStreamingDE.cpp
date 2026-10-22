@@ -28,12 +28,18 @@ namespace mta::game_de
 
     void CStreamingDE::LoadAllRequestedModels(bool onlyPriority, const char*)
     {
-        // The real DE opcode flushes all requests and accepts no priority
-        // selector. Refuse unsupported priority intent before reaching owner;
-        // diagnostic tags never become native arguments or hidden retries.
-        if (onlyPriority)
-            Require(ClockResult::UnsupportedBuild, "LoadAllRequestedModels priority-only");
-        Require(access.LoadStreamingModels(false), "LoadAllRequestedModels");
+        // The retained owner distinguishes genuine priority-handle waiting
+        // from the global blocking-all entry. Preserve the actual SDK intent;
+        // a missing priority route must refuse rather than load everything.
+        Require(access.LoadStreamingModels(onlyPriority), onlyPriority ? "LoadAllRequestedModels priority-only" : "LoadAllRequestedModels");
+    }
+
+    void CStreamingDE::RemoveModel(std::uint32_t model)
+    {
+        // CModelInfo owns its separate reference/custom-model policy. Direct
+        // CStreaming removal must not invent a decrement or a final-release
+        // shortcut before the genuine native operation.
+        Require(access.RemoveStreamingModel(model), "RemoveModel");
     }
 
     bool CStreamingDE::HasModelLoaded(DWORD model)

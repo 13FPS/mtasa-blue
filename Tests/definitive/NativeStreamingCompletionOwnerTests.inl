@@ -5,6 +5,9 @@
  ****************************************************************************/
 // Included inside the existing initialized ownership fixture so this
 // batch exercises the retained production callback, not a second owner.
+#include "NativeModelClassificationOwnerTests.inl"
+#include "NativeStreamingRemovalOwnerTests.inl"
+
 {
     namespace A = NativeModelReferenceTransactionProfile;
     for (const auto& pin : A::Code)
@@ -267,6 +270,7 @@
         Check(ClockStreamingLoadAllOwnerTest::calls == admitted && graph.world[Q::WorldModeOffset] == 1,
               "retirement neither repeats loading nor restores stale native mode/world state");
     }
+#include "NativeStreamingPriorityOwnerTests.inl"
     ClockStreamingLoadAllOwnerTest::image = ClockStreamingLoadAllOwnerTest::world = ClockStreamingLoadAllOwnerTest::level = 0;
     ClockStreamingLoadAllOwnerTest::reenter = nullptr;
     std::puts("Production native streaming load-all callback owner fixture completed");

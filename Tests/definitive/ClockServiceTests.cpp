@@ -53,6 +53,11 @@
 #include "../../Client/game_de/NativeStreamingUpgradeProfile.h"
 #include "../../Client/game_de/NativeStreamingLoadAllCalls.h"
 #include "../../Client/game_de/NativeStreamingLoadAllProfile.h"
+#include "../../Client/game_de/NativeStreamingPriorityCalls.h"
+#include "../../Client/game_de/NativeStreamingPriorityProfile.h"
+#include "../../Client/game_de/NativeStreamingRemoveCalls.h"
+#include "../../Client/game_de/NativeStreamingRemoveProfile.h"
+#include "../../Client/game_de/NativeModelClassificationCalls.h"
 #include "../../Client/game_de/NativeStreamingResourceCalls.h"
 #include "../../Client/game_de/NativeStreamingResourceProfile.h"
 #include "../../Client/game_de/NativeModelReferenceTransactions.h"
@@ -102,6 +107,134 @@
 #include <tlhelp32.h>
 #include <type_traits>
 #include <vector>
+
+namespace ClockModelClassificationOwnerTest
+{
+    using NativeFunction = mta::game_de::NativeModelClassificationCalls::NativeFunction;
+    std::uintptr_t            image = 0, entry = 0, replacementModel = 0;
+    std::uint32_t             key = 0;
+    unsigned                  calls = 0, scenario = 0;
+    unsigned char             value = 0;
+    mta::game_de::ClockResult Invoke(NativeFunction function, std::uint32_t model, unsigned char& output, std::uint32_t& exception) noexcept
+    {
+        ++calls;
+        entry = reinterpret_cast<std::uintptr_t>(function) - image;
+        key = model;
+        output = value;
+        if (scenario == 1)
+        {
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return mta::game_de::ClockResult::OriginalException;
+        }
+        SIZE_T written = 0;
+        if (scenario == 2 &&
+            (!::WriteProcessMemory(GetCurrentProcess(),
+                                   reinterpret_cast<void*>(image + mta::game_de::NativeModelBankProfile::BankRva + model * sizeof(std::uintptr_t)),
+                                   &replacementModel, sizeof(replacementModel), &written) ||
+             written != sizeof(replacementModel)))
+            std::abort();
+        if (scenario == 3)
+        {
+            const std::uintptr_t missing = 0;
+            if (!::WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(image + mta::game_de::NativeStreamingRequestProfile::RootRva), &missing,
+                                      sizeof(missing), &written) ||
+                written != sizeof(missing))
+                std::abort();
+        }
+        return mta::game_de::ClockResult::Ok;
+    }
+}
+namespace ClockStreamingRemoveOwnerTest
+{
+    using NativeFunction = mta::game_de::NativeStreamingRemoveCalls::NativeFunction;
+    std::uintptr_t            image = 0, entry = 0;
+    std::uint32_t             key = 0;
+    unsigned                  calls = 0, scenario = 0;
+    mta::game_de::ClockResult Invoke(NativeFunction function, std::uint32_t model, std::uint32_t& exception) noexcept
+    {
+        ++calls;
+        entry = reinterpret_cast<std::uintptr_t>(function) - image;
+        key = model;
+        // State0 is the genuine native early return: do not manufacture an
+        // unload, clear flags, decrement a counter or run an inverse operation.
+        if (scenario == 1)
+        {
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return mta::game_de::ClockResult::OriginalException;
+        }
+        if (scenario == 2)
+        {
+            auto* flags = reinterpret_cast<unsigned char*>(image + mta::game_de::NativeModelLoadedProfile::ArrayRva +
+                                                           model * mta::game_de::NativeModelLoadedProfile::RowStride +
+                                                           mta::game_de::NativeModelLoadedProfile::FlagsOffset);
+            *flags = static_cast<unsigned char>(*flags | 0x40);
+        }
+        return mta::game_de::ClockResult::Ok;
+    }
+}
+namespace ClockStreamingPriorityOwnerTest
+{
+    using Calls = mta::game_de::NativeStreamingPriorityCalls::WaitFunction;
+    std::uintptr_t image = 0, root = 0, waitEntry = 0, drainEntry = 0, handle = 0;
+    std::uint32_t  model = 17;
+    unsigned       waits = 0, drains = 0, scenario = 0;
+    mta::game_de::ClockResult (*reenterTrue)() noexcept = nullptr;
+    mta::game_de::ClockResult (*reenterFalse)() noexcept = nullptr;
+    mta::game_de::ClockResult nestedTrue = mta::game_de::ClockResult::Ok, nestedFalse = mta::game_de::ClockResult::Ok;
+    mta::game_de::ClockResult Wait(Calls function, std::uintptr_t selected, std::int32_t& nativeResult, std::uint32_t& exception) noexcept
+    {
+        ++waits;
+        waitEntry = reinterpret_cast<std::uintptr_t>(function) - image;
+        handle = selected;
+        nativeResult = 2;
+        *reinterpret_cast<unsigned char*>(root + 0x78) = 1;
+        if (scenario == 1)
+        {
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return mta::game_de::ClockResult::OriginalException;
+        }
+        if (scenario == 2)
+        {
+            const std::uintptr_t missing = 0;
+            SIZE_T               written = 0;
+            if (!::WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(image + mta::game_de::NativeStreamingLoadAllProfile::RootRva), &missing,
+                                      sizeof(missing), &written) ||
+                written != sizeof(missing))
+                std::abort();
+        }
+        if (scenario == 3)
+        {
+            nestedTrue = reenterTrue();
+            nestedFalse = reenterFalse();
+        }
+        return mta::game_de::ClockResult::Ok;
+    }
+    mta::game_de::ClockResult Drain(mta::game_de::NativeStreamingPriorityCalls::DrainFunction function, std::uintptr_t selected,
+                                    std::uint32_t& exception) noexcept
+    {
+        ++drains;
+        drainEntry = reinterpret_cast<std::uintptr_t>(function) - image;
+        if (selected != root)
+            std::abort();
+        if (scenario == 4)
+        {
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return mta::game_de::ClockResult::OriginalException;
+        }
+        if (scenario == 5)
+            return mta::game_de::ClockResult::Ok;
+        // Model the genuine callback's selected completion and detached array.
+        // The adapter never writes these flags or holds the retired handle.
+        auto* state = reinterpret_cast<unsigned char*>(image + mta::game_de::NativeStreamingPriorityProfile::RowsRva +
+                                                       model * mta::game_de::NativeStreamingPriorityProfile::RowBytes + 12);
+        state[0] = 0;
+        state[1] = 1;
+        const std::array<unsigned char, 16> empty{};
+        std::memcpy(reinterpret_cast<void*>(root + 0x80), empty.data(), empty.size());
+        *reinterpret_cast<unsigned char*>(root + 0x78) = 0;
+        return mta::game_de::ClockResult::Ok;
+    }
+}
 
 namespace ClockStreamingLoadAllOwnerTest
 {
@@ -1383,6 +1516,7 @@ namespace mta::game_de::NativeImageAccess
 #undef ReadImage
 // Shared model context is compiled once under the same current-image seam.
 #include "../../Client/game_de/NativeStreamingModelContext.cpp"
+#include "../../Client/game_de/NativeStreamingCompletionContext.cpp"
 #define MTA_DE_MODEL_REFERENCE_EXCHANGE ClockModelReferenceOwnerTest::Exchange
 #include "../../Client/game_de/NativeModelReferenceMemory.cpp"
 #undef MTA_DE_MODEL_REFERENCE_EXCHANGE
@@ -1396,6 +1530,17 @@ namespace mta::game_de::NativeImageAccess
 #define MTA_DE_STREAMING_LOADALL_NATIVE_INVOKE ClockStreamingLoadAllOwnerTest::Invoke
 #include "../../Client/game_de/NativeStreamingLoadAllCalls.cpp"
 #undef MTA_DE_STREAMING_LOADALL_NATIVE_INVOKE
+#define MTA_DE_STREAMING_PRIORITY_WAIT_INVOKE  ClockStreamingPriorityOwnerTest::Wait
+#define MTA_DE_STREAMING_PRIORITY_DRAIN_INVOKE ClockStreamingPriorityOwnerTest::Drain
+#include "../../Client/game_de/NativeStreamingPriorityCalls.cpp"
+#undef MTA_DE_STREAMING_PRIORITY_DRAIN_INVOKE
+#undef MTA_DE_STREAMING_PRIORITY_WAIT_INVOKE
+#define MTA_DE_STREAMING_REMOVE_NATIVE_INVOKE ClockStreamingRemoveOwnerTest::Invoke
+#include "../../Client/game_de/NativeStreamingRemoveCalls.cpp"
+#undef MTA_DE_STREAMING_REMOVE_NATIVE_INVOKE
+#define MTA_DE_MODEL_CLASSIFICATION_NATIVE_INVOKE ClockModelClassificationOwnerTest::Invoke
+#include "../../Client/game_de/NativeModelClassificationCalls.cpp"
+#undef MTA_DE_MODEL_CLASSIFICATION_NATIVE_INVOKE
 #include "../../Client/game_de/NativeStreamingResourceContext.cpp"
 #define MTA_DE_STREAMING_RESOURCE_NATIVE_INVOKE ClockStreamingResourceOwnerTest::Invoke
 #include "../../Client/game_de/NativeStreamingResourceCalls.cpp"

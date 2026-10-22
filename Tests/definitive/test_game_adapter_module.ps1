@@ -153,6 +153,25 @@ $sourceNames += @(
     'Client/game_de/NativeModelReferenceMap.h',
     'Client/game_de/NativeModelReferenceHeap.h'
 )
+$sourceNames += @(
+    'Client/game_de/NativeModelClassificationProfile.h',
+    'Client/game_de/NativeModelClassificationCalls.h',
+    'Client/game_de/NativeModelClassificationCalls.cpp',
+    'Client/game_de/NativeModelClassificationAccess.h',
+    'Client/game_de/NativeModelTypeLeaf.h',
+    'Client/game_de/NativeStreamingCompletionContext.h',
+    'Client/game_de/NativeStreamingCompletionContext.cpp',
+    'Client/game_de/NativeStreamingPriorityCalls.h',
+    'Client/game_de/NativeStreamingPriorityCalls.cpp',
+    'Client/game_de/NativeStreamingPriorityProfile.h',
+    'Client/game_de/NativeStreamingRemoveCalls.h',
+    'Client/game_de/NativeStreamingRemoveCalls.cpp',
+    'Client/game_de/NativeStreamingRemoveProfile.h',
+    'Client/game_de/NativeStreamingRemoveMemory.h',
+    'Client/game_de/CModelInfoDE.h',
+    'Client/game_de/CModelInfoDE.cpp',
+    'Client/sdk/game/CModelInfo.h'
+)
 $sourceNames += @(Get-ChildItem -LiteralPath $detoursSourceRoot -File | ForEach-Object {
     [IO.Path]::GetRelativePath($taskRoot, $_.FullName).Replace('\', '/')
 })
@@ -246,6 +265,11 @@ if ((Test-Path -LiteralPath $moduleSource) -and $detoursLibraryExit -eq 0) {
         (Join-Path $taskRoot 'Client/game_de/NativeStreamingUpgradeReader.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeStreamingUpgradeCalls.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeStreamingLoadAllCalls.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativeStreamingCompletionContext.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativeStreamingPriorityCalls.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativeStreamingRemoveCalls.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativeModelClassificationCalls.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CModelInfoDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeStreamingResourceContext.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeStreamingResourceCalls.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeModelReferenceTransactions.cpp'),

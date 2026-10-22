@@ -35,6 +35,8 @@
 #include "NativePedVitalsMemory.h"
 #include "NativePedPhysicalScalarsMemory.h"
 #include "NativePedRotationMemory.h"
+#include "NativePedOxygenMemory.h"
+#include "NativePedDuckingMemory.h"
 #include "NativePedMetadataMemory.h"
 #include "NativeTaskRemovalCalls.h"
 #include "NativeStreamingRequestCalls.h"
@@ -157,6 +159,9 @@ namespace mta::game_de
             ClockResult ReleaseFinalModelReference(std::uint32_t, NativeModelReferenceRelease::ZeroPolicy) noexcept override;
             ClockResult RequestStreamingUpgrade(std::uint32_t, std::uint32_t) noexcept override;
             ClockResult ReadStreamingUpgradeLoaded(std::uint32_t, bool&) noexcept override;
+            ClockResult ReadPedOxygenLevel(const NativePedReferenceToken&, float&) noexcept override;
+            ClockResult SetPedOxygenLevel(const NativePedReferenceToken&, float) noexcept override;
+            ClockResult ReadPedDucking(const NativePedReferenceToken&, bool&) noexcept override;
             ClockResult ReadPedCurrentRotation(const NativePedReferenceToken&, float&) noexcept override;
             ClockResult SetPedCurrentRotation(const NativePedReferenceToken&, float) noexcept override;
             ClockResult ReadPedPhysicalScalar(const NativePedReferenceToken&, NativePedPhysicalScalarField, float&) noexcept override;
@@ -2264,6 +2269,67 @@ namespace mta::game_de
             return ClockResult::Ok;
         }
 
+        ClockResult NativeAccess::ReadPedOxygenLevel(const NativePedReferenceToken& token, float& output) noexcept
+        {
+            NativePedPoolReader::Value before, after;
+            auto                       result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            float next;
+            result = NativePedOxygenMemory({runtime.image}, &CheckTimingOwner).ReadOxygen(before, next);
+            if (result != ClockResult::Ok)
+                return result;
+            result = ResolvePedReference(token, after);
+            if (result != ClockResult::Ok)
+                return result;
+            if (after.nativePed != before.nativePed || after.handle != before.handle)
+                return ClockResult::OwnerConflict;
+            // Only the selected registered ped's qualified inline player-data
+            // breath is observed; no current-player/stamina/default fallback.
+            std::memcpy(&output, &next, sizeof(next));
+            return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::SetPedOxygenLevel(const NativePedReferenceToken& token, float value) noexcept
+        {
+            NativePedPoolReader::Value before, after;
+            auto                       result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedOxygenMemory::Receipt receipt;
+            result = NativePedOxygenMemory({runtime.image}, &CheckTimingOwner).SetOxygen(before, value, &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = ResolvePedReference(token, after);
+                if (result == ClockResult::Ok && (after.nativePed != before.nativePed || after.handle != before.handle))
+                    result = ClockResult::OwnerConflict;
+            }
+            // Raw breath can already have changed before token revocation.
+            // Stop this same owner without replay/rollback or a replacement
+            // player-data guess; native reference retirement remains debt.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+        ClockResult NativeAccess::ReadPedDucking(const NativePedReferenceToken& token, bool& output) noexcept
+        {
+            NativePedPoolReader::Value before, after;
+            auto                       result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            bool next;
+            result = NativePedDuckingMemory({runtime.image}, &CheckTimingOwner).ReadDucking(before, next);
+            if (result != ClockResult::Ok)
+                return result;
+            result = ResolvePedReference(token, after);
+            if (result != ClockResult::Ok)
+                return result;
+            if (after.nativePed != before.nativePed || after.handle != before.handle)
+                return ClockResult::OwnerConflict;
+            // A refused current flag observation must not become successful
+            // false or a task-presence guess. Publish only after token fences.
+            output = next;
+            return ClockResult::Ok;
+        }
         ClockResult NativeAccess::ReadPedCurrentRotation(const NativePedReferenceToken& token, float& output) noexcept
         {
             NativePedPoolReader::Value before, after;

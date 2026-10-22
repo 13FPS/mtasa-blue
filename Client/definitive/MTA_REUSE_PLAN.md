@@ -260,6 +260,21 @@ accepted effects on later failure. The adjacent target field still lacks a
 separate semantic mapping, so target rotation remains pure alongside native
 physics repair and the other unfinished ped methods.
 
+`CPedStateDE` extends that same SDK chain with raw oxygen and the genuine
+ducking predicate. Oxygen requires the selected registered player ped's own
+qualified inline player data; missing data, a different ped or a generic ped
+cannot borrow whichever player is current. The current-player selector is not
+used as a substitute. A single conditional breath-field write preserves raw
+binary32 values, stamina and neighboring data, with accepted effects retained
+on failed acknowledgement. Ducking observes the independently named native
+flag for either supported ped class; its setter remains separate work.
+
+The SDK's `GetType()` instead reports MTA's CPU wrapper identity, used by its
+pool ownership policy. The explicit constructor value and `SetType` bookkeeping
+preserve the full DWORD even when native access is unavailable. This value is
+neither the native ped category nor the entity-type field, and it does not
+publish a concrete ped or prove a factory/destructor mapping.
+
 The abstract `CPedVitalsDE` SDK layer now implements MTA's actual `GetHealth`,
 `SetHealth`, `GetArmor` and `SetArmor` virtual methods through that token-based
 owner. It preserves raw float values and reports a refused native operation

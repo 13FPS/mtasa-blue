@@ -11,6 +11,7 @@ namespace
         NativePedPhysicalScalarField field = NativePedPhysicalScalarField::Mass;
         ClockResult                  result = ClockResult::NotInitialized;
         unsigned                     operation = 0;
+        bool                         duckingOutput = true;
         float                        target = 0, output = 123;
     };
     void PedPhysicalScalarsOwnerHandler(NativeGameTimingAccess& access, void* opaque)
@@ -32,6 +33,15 @@ namespace
                 break;
             case 4:
                 context.result = access.SetPedCurrentRotation(context.token, context.target);
+                break;
+            case 5:
+                context.result = access.ReadPedOxygenLevel(context.token, context.output);
+                break;
+            case 6:
+                context.result = access.SetPedOxygenLevel(context.token, context.target);
+                break;
+            case 7:
+                context.result = access.ReadPedDucking(context.token, context.duckingOutput);
                 break;
             default:
                 std::abort();
@@ -237,6 +247,7 @@ namespace
                   "bank-wide address absence finishes retirement with no scalar rollback or action replay");
         }
 #include "NativePedRotationOwnerTests.inl"
+#include "NativePedOxygenStateOwnerTests.inl"
         ClockPedPhysicalScalarsOwnerTest::cell = 0;
         ClockPedPhysicalScalarsOwnerTest::loseToken = false;
         ClockReaderTestHost::image = ClockPedReferenceOwnerTest::image = 0;

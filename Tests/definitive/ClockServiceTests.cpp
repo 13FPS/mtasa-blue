@@ -32,6 +32,10 @@
 #include "../../Client/game_de/NativePedPhysicalScalarsProfile.h"
 #include "../../Client/game_de/NativePedRotationMemory.h"
 #include "../../Client/game_de/NativePedRotationProfile.h"
+#include "../../Client/game_de/NativePedOxygenMemory.h"
+#include "../../Client/game_de/NativePedOxygenProfile.h"
+#include "../../Client/game_de/NativePedDuckingMemory.h"
+#include "../../Client/game_de/NativePedDuckingProfile.h"
 #include "../../Client/game_de/NativePedVitalsProfile.h"
 #include "../../Client/game_de/NativePedMetadataMemory.h"
 #include "../../Client/game_de/NativePedMetadataProfile.h"
@@ -801,6 +805,28 @@ namespace ClockPedPhysicalScalarsOwnerTest
     }
 }
 namespace ClockPedRotationOwnerTest
+{
+    unsigned       stores = 0;
+    std::uintptr_t cell = 0;
+    bool           loseToken = false;
+    bool           Exchange(std::uintptr_t address, std::uint32_t expected, std::uint32_t target, std::uint32_t& observed, std::uint32_t&) noexcept
+    {
+        ++stores;
+        LONG compare = 0, desired = 0;
+        std::memcpy(&compare, &expected, sizeof(compare));
+        std::memcpy(&desired, &target, sizeof(desired));
+        const auto previous = _InterlockedCompareExchange(reinterpret_cast<volatile LONG*>(address), desired, compare);
+        std::memcpy(&observed, &previous, sizeof(observed));
+        if (loseToken && observed == expected)
+        {
+            loseToken = false;
+            const std::uintptr_t zero = 0;
+            std::memcpy(reinterpret_cast<void*>(cell), &zero, sizeof(zero));
+        }
+        return true;
+    }
+}
+namespace ClockPedOxygenOwnerTest
 {
     unsigned       stores = 0;
     std::uintptr_t cell = 0;
@@ -1647,6 +1673,10 @@ namespace mta::game_de::NativeImageAccess
 #define MTA_DE_PED_ROTATION_EXCHANGE ClockPedRotationOwnerTest::Exchange
 #include "../../Client/game_de/NativePedRotationMemory.cpp"
 #undef MTA_DE_PED_ROTATION_EXCHANGE
+#define MTA_DE_PED_OXYGEN_EXCHANGE ClockPedOxygenOwnerTest::Exchange
+#include "../../Client/game_de/NativePedOxygenMemory.cpp"
+#undef MTA_DE_PED_OXYGEN_EXCHANGE
+#include "../../Client/game_de/NativePedDuckingMemory.cpp"
 #pragma pop_macro("InterlockedCompareExchange")
 #undef GetModuleHandleW
 

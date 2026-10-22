@@ -20,16 +20,21 @@ namespace mta::game_de
     class CStreamingDE : public CStreaming
     {
     public:
-        void RequestModel(DWORD model, DWORD flags) override;
-        void RemoveModel(std::uint32_t model) override;
-        bool HasModelLoaded(DWORD model) override;
-        void LoadAllRequestedModels(bool onlyPriority, const char* tag) override;
+        void          RequestModel(DWORD model, DWORD flags) override;
+        void          RemoveModel(std::uint32_t model) override;
+        bool          HasModelLoaded(DWORD model) override;
+        void          LoadAllRequestedModels(bool onlyPriority, const char* tag) override;
+        std::uint32_t GetNumPedsLoaded() const noexcept override;
+        bool          IsModelInLoadedPedGroup(std::uint16_t model) const noexcept override;
+        std::uint32_t GetNumLoadedVehicles() const noexcept override;
+        bool          IsModelInLoadedVehicleGroup(std::uint16_t model) const noexcept override;
 
     protected:
         explicit CStreamingDE(NativeStreamingModelAccess& access) noexcept : access(access) {}
 
     private:
-        static void Require(ClockResult result, const char* operation);
+        static void                             Require(ClockResult result, const char* operation);
+        NativeStreamingModelGroupsReader::Value ReadGroups() const noexcept;
         // Borrow the existing callback owner. This wrapper owns no native
         // model, streaming row, request queue or model-reference lease.
         NativeStreamingModelAccess& access;

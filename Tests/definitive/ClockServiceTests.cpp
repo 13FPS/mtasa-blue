@@ -58,6 +58,8 @@
 #include "../../Client/game_de/NativeStreamingRemoveCalls.h"
 #include "../../Client/game_de/NativeStreamingRemoveProfile.h"
 #include "../../Client/game_de/NativeModelClassificationCalls.h"
+#include "../../Client/game_de/NativeModelArchiveProfile.h"
+#include "../../Client/game_de/NativeStreamingModelGroupsProfile.h"
 #include "../../Client/game_de/NativeStreamingResourceCalls.h"
 #include "../../Client/game_de/NativeStreamingResourceProfile.h"
 #include "../../Client/game_de/NativeModelReferenceTransactions.h"
@@ -1516,6 +1518,8 @@ namespace mta::game_de::NativeImageAccess
 #undef ReadImage
 // Shared model context is compiled once under the same current-image seam.
 #include "../../Client/game_de/NativeStreamingModelContext.cpp"
+#include "../../Client/game_de/NativeModelArchiveReader.cpp"
+#include "../../Client/game_de/NativeStreamingModelGroupsReader.cpp"
 #include "../../Client/game_de/NativeStreamingCompletionContext.cpp"
 #define MTA_DE_MODEL_REFERENCE_EXCHANGE ClockModelReferenceOwnerTest::Exchange
 #include "../../Client/game_de/NativeModelReferenceMemory.cpp"

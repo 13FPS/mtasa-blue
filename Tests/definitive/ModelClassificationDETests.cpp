@@ -6,6 +6,7 @@
 #include "../../Client/game_de/CModelInfoDE.h"
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <stdexcept>
 #include <string>
 namespace
@@ -28,7 +29,19 @@ namespace
         unsigned                    typeCalls = 0;
         unsigned char               rawType = 0;
         bool                        hasModel = true;
-        ClockResult                 ReadModelType(std::uint32_t model, NativeModelTypeObservation& output) noexcept override
+        unsigned                    archiveCalls = 0;
+        ClockResult                 archiveStatus = ClockResult::Ok;
+        bool                        archiveValid = true;
+        ClockResult                 ReadModelArchiveAllocated(std::uint32_t model, bool& output) noexcept override
+        {
+            ++archiveCalls;
+            key = model;
+            if (archiveStatus == ClockResult::Ok)
+                output = archiveValid;
+            return archiveStatus;
+        }
+
+        ClockResult ReadModelType(std::uint32_t model, NativeModelTypeObservation& output) noexcept override
         {
             ++typeCalls;
             key = model;
@@ -91,15 +104,8 @@ namespace
             static_cast<void>(bState);
             Unavailable();
         }
-        CBoundingBox*    GetBoundingBox() override { Unavailable(); }
-        bool             IsValid() override { Unavailable(); }
-        mutable unsigned archiveCalls = 0;
-        bool             archiveValid = true;
-        bool             IsAllocatedInArchive() const noexcept override
-        {
-            ++archiveCalls;
-            return archiveValid;
-        }
+        CBoundingBox*  GetBoundingBox() override { Unavailable(); }
+        bool           IsValid() override { Unavailable(); }
         unsigned short GetTextureDictionaryID() override { Unavailable(); }
         void           SetTextureDictionaryID(unsigned short usTxdId) override
         {
@@ -326,16 +332,39 @@ namespace
         throw std::logic_error("invalid fixture predicate");
     }
 }
-int main()
+int main(int argc, char** argv)
 {
     try
     {
         Access access;
+        if (argc == 2 && std::string(argv[1]) == "--noexcept-refusal")
+        {
+            std::set_terminate(+[]() noexcept
+                               {
+                                   std::puts("Production MTA model archive noexcept refusal fixture completed");
+                                   std::fflush(stdout);
+                                   std::_Exit(86);
+                               });
+            Model model(17, access);
+            access.archiveStatus = ClockResult::Expired;
+            (void)model.IsAllocatedInArchive();
+            return 88;
+        }
+        Check(argc == 1, "model SDK fixture accepts only its explicit bounded child mode");
+
         for (const auto key : std::array<std::uint32_t, 6>{0, 17, 19999, 20000, 65536, 0xffffffff})
         {
             Model       model(key, access);
             CModelInfo& sdk = model;
             Check(sdk.GetModel() == key, "actual MTA model identifier preserves the entire DWORD without indexing native arrays");
+            for (bool allocated : {false, true})
+            {
+                access.archiveValid = allocated;
+                const auto before = access.archiveCalls;
+                Check(sdk.IsAllocatedInArchive() == allocated && access.archiveCalls == before + 1 && access.key == key,
+                      "actual SDK forwards complete archive key once and preserves genuine true and false owner results");
+            }
+
             for (const auto& entry : NativeModelClassificationProfile::Entries)
                 for (bool value : {false, true})
                 {
@@ -350,19 +379,19 @@ int main()
                 const auto types = access.typeCalls;
                 Check(static_cast<unsigned char>(sdk.GetModelType()) == rawType && access.typeCalls == types + 1 && access.key == key,
                       "actual SDK GetModelType preserves the current native AL byte without vtable identity substitution");
-                const auto beforeType = access.typeCalls, beforeArchive = model.archiveCalls;
+                const auto beforeType = access.typeCalls, beforeArchive = access.archiveCalls;
                 const bool vehicle = sdk.IsVehicle();
                 Check(vehicle == (key < 20000 && rawType == 6) && access.typeCalls == beforeType + (key < 20000 ? 1 : 0) &&
-                          model.archiveCalls == beforeArchive + (key < 20000 ? 1 : 0),
+                          access.archiveCalls == beforeArchive + (key < 20000 ? 1 : 0),
                       "actual MTA IsVehicle preserves model bounds and archive admission before native type comparison");
             }
             access.hasModel = false;
             Check(sdk.GetModelType() == eModelInfoType::UNKNOWN, "actual classic absent-interface GetModelType maps only qualified absence to UNKNOWN");
             access.hasModel = true;
-            model.archiveValid = false;
+            access.archiveValid = false;
             const auto beforeType = access.typeCalls;
             Check(!sdk.IsVehicle() && access.typeCalls == beforeType, "unallocated archive cannot be replaced by a known vehicle-type byte");
-            model.archiveValid = true;
+            access.archiveValid = true;
             for (unsigned status = 1; status <= static_cast<unsigned>(ClockResult::OriginalException); ++status)
             {
                 access.status = static_cast<ClockResult>(status);
@@ -416,6 +445,7 @@ int main()
             refused = true;
         }
         Check(refused, "unbound raw metadata type cannot manufacture an SDK enum result");
+        std::puts("Production MTA model archive SDK fixture completed");
         std::puts("Production MTA model type SDK fixture completed");
         std::puts("Production MTA model classification SDK fixture completed");
         std::printf("Passed %u actual MTA model-classification SDK checks (%zu-bit)\n", checks, sizeof(void*) * 8);

@@ -49,8 +49,22 @@ The abstract `CModelInfoDE` supplies the actual SDK's model key, type and named
 boat/car/plane/helicopter predicates. Named predicates use genuine native
 classifier entries. Type reads share a bounded reader for complete native
 constant-return functions, without invoking an arbitrary virtual method.
-`IsVehicle` keeps MTA's archive-allocation prerequisite, which remains pure.
+`IsVehicle` keeps MTA's archive-allocation prerequisite using DE's genuine
+named `IS_MODEL_IN_CDIMAGE` predicate: a current nonnull bank word with native
+missing-archive flag 80 clear. This observes archive membership rather than
+inventing classic physical block sizes or using loaded state as a substitute.
 These observations publish no model factory, retained lease or render object.
+
+MTA's four loaded ped/vehicle group getters now read DE's actual 24 ped slots,
+raw ped count and 50 aggregate vehicle slots. Shared selection rules preserve
+MTA's signed-value filtering and vehicle terminator behavior. These group facts
+grant no native model lifetime. Refused noexcept SDK queries fail explicitly;
+they cannot silently report empty groups or absent archives.
+
+`CGameDE::GetGameVersion` identifies DE as version 30 while preserving every
+classic version value and the existing join-packet byte layout. Core already
+separates DE startup from its classic downgrade check. This identity does not
+make the still-abstract game interface or x64 networking ready.
 
 These batches have offline primitive, actual SDK/callback-owner and normal
 build coverage. The changed classic callers compile through their normal

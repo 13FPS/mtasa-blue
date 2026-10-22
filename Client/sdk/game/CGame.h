@@ -85,6 +85,9 @@ enum eGameVersion
     VERSION_US_10 = 11,
     VERSION_11 = 15,
     VERSION_20 = 20,
+    // Keep the classic identities and join-packet byte stable while allowing
+    // SDK consumers to distinguish the DE backend from every classic release.
+    VERSION_DE = 30,
     VERSION_UNKNOWN = 0xFF,
 };
 

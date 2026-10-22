@@ -20,9 +20,10 @@ $record = [ordered]@{
     schema='mta_game_policy_de_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     generatedFixture=$null;result=$null;failure=$null;scratchDirectory=$scratchRoot;scratchRemoved=$false;
-    scope='Actual CGameDE SDK diagnostic reference, lazy ped context, typed registration and shared jetpack permissions; exact complete player-info SDK identity forwarding with explicit owner/null/default refusals; state write forwarding/refusal, exact19 logical cheat-name forwarding with14 owner-backed reads/five explicit unavailable results, unchangedfour native setters, and wrong-executable filename refusal. Remaining test-only SDK overrides reject all use. No native game code executes; filename Bind attempts only the real ordinary-host rejection.';
+    scope='Actual distinct DE version30 SDK virtual dispatch with unchanged classic numeric values/join-byte fit; actual CGameDE SDK diagnostic reference, lazy ped context, typed registration and shared jetpack permissions; exact complete player-info SDK identity forwarding with explicit owner/null/default refusals; state write forwarding/refusal, exact19 logical cheat-name forwarding with14 owner-backed reads/five explicit unavailable results, unchangedfour native setters, and wrong-executable filename refusal. Remaining test-only SDK overrides reject all use. No native game code executes; filename Bind attempts only the real ordinary-host rejection.';
     nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;installationChanged=$false;
-    completeCGameReady=$false;fullMtaReady=$false;nativeWeaponHookDispatchReady=$false
+    completeCGameReady=$false;fullMtaReady=$false;nativeWeaponHookDispatchReady=$false;
+    actualDefinitiveGameVersionSdkTested=$false
 }
 
 function Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
@@ -115,7 +116,7 @@ try {
         $provided += @([regex]::Matches($text,'(?<name>\w+)\s*\([^;{}]*\)\s*(?:const\s*)?(?:noexcept\s*)?override\s*;') |
             ForEach-Object { $_.Groups['name'].Value })
     }
-    $testedMethods = @('GetCheckStatus','OnPedContextChange','GetPedContext','SetPreWeaponFireHandler','SetPostWeaponFireHandler','SetTaskSimpleBeHitHandler',
+    $testedMethods = @('GetGameVersion','GetCheckStatus','OnPedContextChange','GetPedContext','SetPreWeaponFireHandler','SetPostWeaponFireHandler','SetTaskSimpleBeHitHandler',
         'SetJetpackWeaponEnabled','GetJetpackWeaponEnabled','SetSystemState','VerifySADataFileNames','IsCheatEnabled','SetCheatEnabled','GetWeaponInfo','GetStats','GetRopes','StartGame')
     foreach ($method in $testedMethods) { if ($provided -notcontains $method) { throw "Production SDK override is missing: $method" } }
     $gameMethods = @(InterfaceMethods 'Client/sdk/game/CGame.h' | Where-Object { $_.name -ne 'GetPools' -and $provided -notcontains $_.name })
@@ -172,7 +173,9 @@ try {
     }
     $record.success = $record.result.test.exitCode -eq 0 -and -not $record.result.test.timedOut -and
         $record.result.checks -gt 0 -and $record.result.pointerBits -eq 64
-    if (-not $record.success) { throw 'Actual CGameDE CPU-policy checks failed or summary evidence was missing.' }
+    $record.actualDefinitiveGameVersionSdkTested = [IO.File]::ReadAllText($record.result.test.stdout).Contains('Actual CGameDE definitive version identity SDK fixture completed')
+    $record.success = $record.success -and $record.actualDefinitiveGameVersionSdkTested
+    if (-not $record.success) { throw 'Actual CGameDE CPU-policy checks failed or summary/version evidence was missing.' }
 } catch { AddFailure ($_.Exception.ToString()) }
 finally {
     foreach ($name in $previousEnvironment.Keys) {

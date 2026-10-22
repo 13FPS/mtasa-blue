@@ -5,6 +5,7 @@
  ****************************************************************************/
 // Included inside the existing initialized ownership fixture so this
 // batch exercises the retained production callback, not a second owner.
+#include "NativeStreamingObserversOwnerTests.inl"
 #include "NativeModelClassificationOwnerTests.inl"
 #include "NativeStreamingRemovalOwnerTests.inl"
 

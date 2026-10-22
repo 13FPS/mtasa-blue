@@ -172,6 +172,14 @@ $sourceNames += @(
     'Client/game_de/CModelInfoDE.cpp',
     'Client/sdk/game/CModelInfo.h'
 )
+$sourceNames += @(
+    'Client/game_de/NativeStreamingModelGroupsReader.h',
+    'Client/game_de/NativeStreamingModelGroupsReader.cpp',
+    'Client/game_de/NativeStreamingModelGroupsProfile.h',
+    'Client/game_de/NativeModelArchiveReader.h',
+    'Client/game_de/NativeModelArchiveReader.cpp',
+    'Client/game_de/NativeModelArchiveProfile.h'
+)
 $sourceNames += @(Get-ChildItem -LiteralPath $detoursSourceRoot -File | ForEach-Object {
     [IO.Path]::GetRelativePath($taskRoot, $_.FullName).Replace('\', '/')
 })
@@ -266,6 +274,8 @@ if ((Test-Path -LiteralPath $moduleSource) -and $detoursLibraryExit -eq 0) {
         (Join-Path $taskRoot 'Client/game_de/NativeStreamingUpgradeCalls.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeStreamingLoadAllCalls.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeStreamingCompletionContext.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativeStreamingModelGroupsReader.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativeModelArchiveReader.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeStreamingPriorityCalls.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeStreamingRemoveCalls.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeModelClassificationCalls.cpp'),

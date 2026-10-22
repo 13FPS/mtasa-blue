@@ -6,6 +6,7 @@
 #include "CStreamingDE.h"
 #include <game/CModelRequestPolicy.h>
 #include <stdexcept>
+#include <exception>
 #include <string>
 
 namespace mta::game_de
@@ -14,6 +15,33 @@ namespace mta::game_de
     {
         if (result != ClockResult::Ok)
             throw std::runtime_error(std::string("DE streaming owner refused ") + operation + ": " + std::to_string(static_cast<unsigned>(result)));
+    }
+
+    NativeStreamingModelGroupsReader::Value CStreamingDE::ReadGroups() const noexcept
+    {
+        NativeStreamingModelGroupsReader::Value value;
+        // These real SDK signatures cannot report failure or throw. A refused
+        // owner must not masquerade as an empty tracker and permit unloading.
+        // The incomplete service remains abstract and is not factory-published.
+        if (access.ReadStreamingModelGroups(value) != ClockResult::Ok)
+            std::terminate();
+        return value;
+    }
+    std::uint32_t CStreamingDE::GetNumPedsLoaded() const noexcept
+    {
+        return ReadGroups().pedCount;
+    }
+    bool CStreamingDE::IsModelInLoadedPedGroup(std::uint16_t model) const noexcept
+    {
+        return NativeStreamingModelGroupsReader::IsPedTracked(ReadGroups(), model);
+    }
+    std::uint32_t CStreamingDE::GetNumLoadedVehicles() const noexcept
+    {
+        return NativeStreamingModelGroupsReader::VehicleCount(ReadGroups());
+    }
+    bool CStreamingDE::IsModelInLoadedVehicleGroup(std::uint16_t model) const noexcept
+    {
+        return NativeStreamingModelGroupsReader::IsVehicleTracked(ReadGroups(), model);
     }
 
     void CStreamingDE::RequestModel(DWORD model, DWORD flags)

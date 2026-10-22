@@ -23,6 +23,7 @@ namespace mta::game_de
     class CGameDE : public CGameWeaponInfoDE
     {
     public:
+        eGameVersion      GetGameVersion() override;
         CClock*           GetClock() noexcept override;
         CPlayerInfo*      GetPlayerInfo() override;
         CRopes*           GetRopes() override;

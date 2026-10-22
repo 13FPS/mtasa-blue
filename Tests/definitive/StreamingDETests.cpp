@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -23,11 +24,22 @@ namespace
     }
     struct Access final : NativeStreamingModelAccess
     {
-        unsigned      requests = 0, queries = 0, upgradeRequests = 0, upgradeQueries = 0, loads = 0, removes = 0;
-        std::uint32_t model = 0, flags = 0;
-        ClockResult   requestResult = ClockResult::Ok, queryResult = ClockResult::Ok;
-        bool          loaded = false, lastOnlyPriority = true;
-        ClockResult   RemoveStreamingModel(std::uint32_t index) noexcept override
+        unsigned                                requests = 0, queries = 0, upgradeRequests = 0, upgradeQueries = 0, loads = 0, removes = 0;
+        std::uint32_t                           model = 0, flags = 0;
+        ClockResult                             requestResult = ClockResult::Ok, queryResult = ClockResult::Ok;
+        bool                                    loaded = false, lastOnlyPriority = true;
+        unsigned                                groupReads = 0;
+        ClockResult                             groupResult = ClockResult::Ok;
+        NativeStreamingModelGroupsReader::Value groups;
+        ClockResult                             ReadStreamingModelGroups(NativeStreamingModelGroupsReader::Value& output) noexcept override
+        {
+            ++groupReads;
+            if (groupResult == ClockResult::Ok)
+                output = groups;
+            return groupResult;
+        }
+
+        ClockResult RemoveStreamingModel(std::uint32_t index) noexcept override
         {
             ++removes;
             model = index;
@@ -73,8 +85,8 @@ namespace
             return queryResult;
         }
     };
-    // Only the three shipping overrides are exercised. Other SDK operations are
-    // deliberately unavailable in this test-only concrete adapter.
+    // Qualified production overrides are exercised directly. Other SDK
+    // operations remain unavailable in this test-only concrete adapter.
     struct Streaming final : CStreamingDE
     {
         explicit Streaming(NativeStreamingModelAccess& owner) : CStreamingDE(owner) {}
@@ -92,10 +104,6 @@ namespace
         void                     RemoveBigBuildings() override { Unavailable(); }
         void                     LoadScene(const CVector*) override { Unavailable(); }
         void                     LoadSceneCollision(const CVector*) override { Unavailable(); }
-        std::uint32_t            GetNumPedsLoaded() const noexcept override { std::abort(); }
-        bool                     IsModelInLoadedPedGroup(std::uint16_t) const noexcept override { std::abort(); }
-        std::uint32_t            GetNumLoadedVehicles() const noexcept override { std::abort(); }
-        bool                     IsModelInLoadedVehicleGroup(std::uint16_t) const noexcept override { std::abort(); }
     };
     template <class Action>
     void Refuses(Action action, const char* operation)
@@ -112,13 +120,59 @@ namespace
         Check(refused, "owner refusal must remain an explicit SDK failure with operation context");
     }
 }
-int main()
+int main(int argc, char** argv)
 {
     try
     {
         Access      owner;
         Streaming   streaming(owner);
         CStreaming* sdk = &streaming;
+        if (argc == 2 && std::string(argv[1]) == "--noexcept-refusal")
+        {
+            std::set_terminate(+[]() noexcept
+                               {
+                                   std::puts("Production MTA streaming groups noexcept refusal fixture completed");
+                                   std::fflush(stdout);
+                                   std::_Exit(86);
+                               });
+            owner.groupResult = ClockResult::Expired;
+            (void)sdk->GetNumPedsLoaded();
+            return 88;
+        }
+        Check(argc == 1, "streaming SDK fixture accepts only its explicit bounded child mode");
+        owner.groups.peds.fill(-1);
+        owner.groups.vehicles.fill(-1);
+        for (const auto count : std::array<std::uint32_t, 4>{0, 1, 24, 0xffffffff})
+        {
+            owner.groups.pedCount = count;
+            const auto before = owner.groupReads;
+            Check(sdk->GetNumPedsLoaded() == count && owner.groupReads == before + 1,
+                  "actual SDK preserves native raw ped count without clamping to slot capacity");
+        }
+        owner.groups.peds[0] = -2;
+        owner.groups.peds[1] = 0x10000;
+        owner.groups.peds[23] = 0xffff;
+        Check(sdk->IsModelInLoadedPedGroup(0xffff) && !sdk->IsModelInLoadedPedGroup(0),
+              "actual SDK checks all24 native ped slots and excludes negative/overflow DWORD entries");
+        owner.groups.vehicles[0] = 17;
+        owner.groups.vehicles[1] = -2;
+        owner.groups.vehicles[2] = 18;
+        owner.groups.vehicles[3] = -1;
+        owner.groups.vehicles[4] = 19;
+        Check(sdk->GetNumLoadedVehicles() == 3 && sdk->IsModelInLoadedVehicleGroup(17) && sdk->IsModelInLoadedVehicleGroup(18) &&
+                  !sdk->IsModelInLoadedVehicleGroup(19) && !sdk->IsModelInLoadedVehicleGroup(0xffff),
+              "actual SDK counts occupied entries including other negatives, skips negative membership and stops at the first unused sentinel");
+        owner.groups.vehicles.fill(17);
+        owner.groups.vehicles[49] = 123;
+        Check(sdk->GetNumLoadedVehicles() == 50 && sdk->IsModelInLoadedVehicleGroup(123),
+              "actual SDK keeps qualified DE50 capacity instead of truncating to classic23");
+        owner.groups.vehicles.fill(-1);
+        owner.groups.peds.fill(-1);
+        owner.groups.pedCount = 0;
+        Check(sdk->GetNumPedsLoaded() == 0 && sdk->GetNumLoadedVehicles() == 0 && !sdk->IsModelInLoadedPedGroup(17) && !sdk->IsModelInLoadedVehicleGroup(17),
+              "qualified genuine empty values return zero and false normally");
+        std::puts("Production MTA streaming groups SDK fixture completed");
+
         for (const auto model : std::array<DWORD, 7>{0, 999, 1194, 19999, 20000, 65536, (std::numeric_limits<DWORD>::max)()})
         {
             for (const auto flags : std::array<DWORD, 4>{0, 6, 0x16, (std::numeric_limits<DWORD>::max)()})

@@ -43,6 +43,8 @@
 #include "NativeStreamingPriorityCalls.h"
 #include "NativeStreamingRemoveCalls.h"
 #include "NativeModelClassificationCalls.h"
+#include "NativeModelArchiveReader.h"
+#include "NativeStreamingModelGroupsReader.h"
 #include "NativeStreamingResourceCalls.h"
 #include "NativeModelReferenceTransactions.h"
 #include "NativeModelBankProfile.h"
@@ -140,6 +142,8 @@ namespace mta::game_de
             ClockResult ReadStreamingModelLoaded(std::uint32_t, NativeModelLoadedReader::Value&) noexcept override;
             ClockResult RequestStreamingModel(std::uint32_t, std::uint32_t) noexcept override;
             ClockResult LoadStreamingModels(bool) noexcept override;
+            ClockResult ReadStreamingModelGroups(NativeStreamingModelGroupsReader::Value&) noexcept override;
+            ClockResult ReadModelArchiveAllocated(std::uint32_t, bool&) noexcept override;
             ClockResult RemoveStreamingModel(std::uint32_t) noexcept override;
             ClockResult ReadModelVehiclePredicate(std::uint32_t, NativeModelVehiclePredicate, bool&) noexcept override;
             ClockResult ReadModelType(std::uint32_t, NativeModelTypeObservation&) noexcept override;
@@ -2415,6 +2419,19 @@ namespace mta::game_de
             // The shared complete pure-leaf observation invokes no getter and
             // grants no model/archive lifetime beyond this current callback.
             return NativeModelClassificationCalls::ReadType(runtime.image, modelIndex, &CheckTimingOwner, output);
+        }
+        ClockResult NativeAccess::ReadStreamingModelGroups(NativeStreamingModelGroupsReader::Value& output) noexcept
+        {
+            // Immediate tracker values confer no model or streaming-row lease.
+            return NativeStreamingModelGroupsReader({runtime.image}, &CheckTimingOwner).Read(output);
+        }
+        ClockResult NativeAccess::ReadModelArchiveAllocated(std::uint32_t model, bool& output) noexcept
+        {
+            NativeModelArchiveReader::Value value;
+            const auto                      result = NativeModelArchiveReader({runtime.image}, &CheckTimingOwner).Read(model, value);
+            if (result == ClockResult::Ok)
+                output = value.allocatedInArchive;
+            return result;
         }
         ClockResult NativeAccess::LoadStreamingModels(bool onlyPriority) noexcept
         {

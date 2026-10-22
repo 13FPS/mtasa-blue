@@ -5,6 +5,7 @@
  ****************************************************************************/
 #include "CModelInfoDE.h"
 #include <stdexcept>
+#include <exception>
 #include <string>
 namespace mta::game_de
 {
@@ -22,12 +23,22 @@ namespace mta::game_de
     }
     bool CModelInfoDE::IsVehicle() const
     {
-        // Preserve the actual MTA wrapper's key/archive prerequisites. The
-        // archive method stays pure until its DE backing is qualified; a pure
-        // type observation must not invent an allocated native archive result.
+        // Preserve MTA's key/archive gate using DE's genuine named archive
+        // predicate before consuming the native model-type observation.
         if (model >= 20000 || !IsAllocatedInArchive())
             return false;
         return QueryType() == eModelInfoType::VEHICLE;
+    }
+    bool CModelInfoDE::IsAllocatedInArchive() const noexcept
+    {
+        bool allocated = false;
+        // The genuine DE named predicate is the counterpart of this SDK
+        // intent, not a fabricated classic physical sizeInBlocks field.
+        // noexcept offers no refusal value: do not turn owner loss into an
+        // apparently successful absent archive. This slice stays unpublished.
+        if (access.ReadModelArchiveAllocated(model, allocated) != ClockResult::Ok)
+            std::terminate();
+        return allocated;
     }
     bool CModelInfoDE::Query(NativeModelVehiclePredicate predicate)
     {

@@ -31,6 +31,13 @@ namespace mta::game_de
         return output;
     }
 
+    eGameVersion CGameDE::GetGameVersion()
+    {
+        // This identifies the actual SDK backend without borrowing a world
+        // object or impersonating a classic regional executable version.
+        return VERSION_DE;
+    }
+
     CClock* CGameDE::GetClock() noexcept
     {
         return &clock;

@@ -5,6 +5,7 @@
  ****************************************************************************/
 #pragma once
 #include "NativeModelLoadedReader.h"
+#include "NativeStreamingModelGroupsReader.h"
 
 namespace mta::game_de
 {
@@ -14,6 +15,7 @@ namespace mta::game_de
         virtual ~NativeStreamingModelAccess() = default;
         // An older owner cannot silently turn a synchronous loading intent
         // into acceptance. Priority intent remains distinct from loading all.
+        virtual ClockResult ReadStreamingModelGroups(NativeStreamingModelGroupsReader::Value&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult LoadStreamingModels(bool) noexcept { return ClockResult::NotInitialized; }
         // Removal is a direct streaming intent. This does not decrement a
         // model wrapper/reference count or infer final-release ownership.

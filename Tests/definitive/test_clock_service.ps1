@@ -15,7 +15,7 @@ $previousTmp = $env:TMP
 $record = [ordered]@{schema='mta_clock_service_tests_v1';directory=$outputRoot;architecture='x64';success=$false;
     compileRuns=@();testRun=$null;checks=0;failure=$null;sourceHashes=@();sourcesUnchanged=$true;
     existingSdkClockImplementationTested=$false;productionNativeCallbackTested=$false;wrongExecutableRefusalVerified=$false;
-    productionFreezePatchTested=$false;readOnlyGameTimeReaderTested=$false;nativeCGameTimingPrerequisiteTested=$false;nativeCGameTimingWriterTested=$false;nativeStoredFPSReaderTested=$false;nativePauseSafeOwnerTested=$false;nativeApplicationFrameObserverTested=$false;nativeSystemStateOwnerTested=$false;nativeCheatFlagOwnerTested=$false;nativeWorldCheatRegistryTested=$false;nativeWeatherOwnerTested=$false;nativeWeatherScalarOwnerTested=$false;nativeTypedWeaponWriteOwnerTested=$false;nativeWeaponVectorAndBankOwnerTested=$false;nativeWeatherOverrideOwnerTested=$false;nativeWeatherPlacementOwnerTested=$false;nativeStatsSdkOwnerTested=$false;nativeWeaponStatSdkOwnerTested=$false;nativeStartGameOwnerTested=$false;nativeStartupCompletionOwnerTested=$false;nativeRainOwnerTested=$false;nativePedPoolOwnerTested=$false;nativePedTeleportOwnerTested=$false;nativePedVelocityOwnerTested=$false;nativePedReferenceOwnerTested=$false;nativePedMutationOwnerTested=$false;nativePedVitalsOwnerTested=$false;nativePedPhysicalScalarsOwnerTested=$false;nativeGenericPedVitalsOwnerTested=$false;nativePedMetadataOwnerTested=$false;nativePedObservationOwnerTested=$false;nativePedIntelligenceOwnerTested=$false;nativeTaskPoolOwnerTested=$false;nativeTaskSecondaryRemovalOwnerTested=$false;nativeModelBankOwnerTested=$false;nativeModelLoadedOwnerTested=$false;nativeStreamingRequestOwnerTested=$false;nativeModelStreamingOwnerTested=$false;nativeModelReferenceOwnerTested=$false;nativeStreamingUpgradeOwnerTested=$false;nativeModelOwnershipOwnerTested=$false;nativeStreamingLoadAllOwnerTested=$false;nativeStreamingResourcesOwnerTested=$false;nativeModelAcquireOwnerTested=$false;nativeModelClassificationOwnerTested=$false;nativeModelTypeOwnerTested=$false;nativeStreamingRemovalOwnerTested=$false;nativeStreamingPriorityOwnerTested=$false;nativePlayerInfoWantedOwnerTested=$false;nativeRopesOwnerTested=$false;executionArtifacts=@();
+    productionFreezePatchTested=$false;readOnlyGameTimeReaderTested=$false;nativeCGameTimingPrerequisiteTested=$false;nativeCGameTimingWriterTested=$false;nativeStoredFPSReaderTested=$false;nativePauseSafeOwnerTested=$false;nativeApplicationFrameObserverTested=$false;nativeSystemStateOwnerTested=$false;nativeCheatFlagOwnerTested=$false;nativeWorldCheatRegistryTested=$false;nativeWeatherOwnerTested=$false;nativeWeatherScalarOwnerTested=$false;nativeTypedWeaponWriteOwnerTested=$false;nativeWeaponVectorAndBankOwnerTested=$false;nativeWeatherOverrideOwnerTested=$false;nativeWeatherPlacementOwnerTested=$false;nativeStatsSdkOwnerTested=$false;nativeWeaponStatSdkOwnerTested=$false;nativeStartGameOwnerTested=$false;nativeStartupCompletionOwnerTested=$false;nativeRainOwnerTested=$false;nativePedPoolOwnerTested=$false;nativePedTeleportOwnerTested=$false;nativePedVelocityOwnerTested=$false;nativePedReferenceOwnerTested=$false;nativePedMutationOwnerTested=$false;nativePedVitalsOwnerTested=$false;nativePedPhysicalScalarsOwnerTested=$false;nativeGenericPedVitalsOwnerTested=$false;nativePedMetadataOwnerTested=$false;nativePedObservationOwnerTested=$false;nativePedIntelligenceOwnerTested=$false;nativeTaskPoolOwnerTested=$false;nativeTaskSecondaryRemovalOwnerTested=$false;nativeModelBankOwnerTested=$false;nativeModelLoadedOwnerTested=$false;nativeStreamingRequestOwnerTested=$false;nativeModelStreamingOwnerTested=$false;nativeModelReferenceOwnerTested=$false;nativeStreamingUpgradeOwnerTested=$false;nativeModelOwnershipOwnerTested=$false;nativeStreamingLoadAllOwnerTested=$false;nativeStreamingResourcesOwnerTested=$false;nativeModelAcquireOwnerTested=$false;nativeModelClassificationOwnerTested=$false;nativeModelTypeOwnerTested=$false;nativeStreamingRemovalOwnerTested=$false;nativeStreamingPriorityOwnerTested=$false;nativeStreamingModelGroupsOwnerTested=$false;nativeModelArchiveOwnerTested=$false;nativePlayerInfoWantedOwnerTested=$false;nativeRopesOwnerTested=$false;executionArtifacts=@();
     gameLaunched=$false;gameAttached=$false;gameClockWritten=$false;gameHooksInstalled=$false;fullMtaReady=$false}
 function Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 function RunBounded([string]$Executable,[string[]]$Arguments,[string]$Name,[int]$DeadlineMs) {
@@ -167,6 +167,15 @@ try {
         'Tests/definitive/NativeModelClassificationOwnerTests.inl',
         'Tests/definitive/NativeStreamingRemovalOwnerTests.inl',
         'Tests/definitive/NativeStreamingPriorityOwnerTests.inl'
+    )
+    $sourceNames += @(
+        'Client/game_de/NativeStreamingModelGroupsReader.h',
+        'Client/game_de/NativeStreamingModelGroupsReader.cpp',
+        'Client/game_de/NativeStreamingModelGroupsProfile.h',
+        'Client/game_de/NativeModelArchiveReader.h',
+        'Client/game_de/NativeModelArchiveReader.cpp',
+        'Client/game_de/NativeModelArchiveProfile.h',
+        'Tests/definitive/NativeStreamingObserversOwnerTests.inl'
     )
     $sourceNames += @($nativeFiles | ForEach-Object { [IO.Path]::GetRelativePath($taskRoot,$_.FullName).Replace('\','/') })
     $detoursNames = @('detours.cpp','modules.cpp','disasm.cpp','image.cpp','creatwth.cpp')
@@ -329,6 +338,11 @@ try {
     $record.nativeStreamingPriorityOwnerTested = $text.Contains('Production native streaming priority callback owner fixture completed')
     if (-not ($record.nativeModelClassificationOwnerTested -and $record.nativeModelTypeOwnerTested -and $record.nativeStreamingRemovalOwnerTested -and $record.nativeStreamingPriorityOwnerTested)) {
         throw 'Native classification/type, selective completion or direct removal did not execute on the actual retained callback owner.'
+    }
+    $record.nativeStreamingModelGroupsOwnerTested = $text.Contains('Production native streaming groups callback owner fixture completed')
+    $record.nativeModelArchiveOwnerTested = $text.Contains('Production native model archive callback owner fixture completed')
+    if (-not ($record.nativeStreamingModelGroupsOwnerTested -and $record.nativeModelArchiveOwnerTested)) {
+        throw 'Native groups/archive observations did not execute on the actual retained callback owner.'
     }
     $record.nativeModelReferenceOwnerTested = $text.Contains('Production native model reference callback owner fixture completed')
     $record.nativeStreamingUpgradeOwnerTested = $text.Contains('Production native streaming upgrade callback owner fixture completed')

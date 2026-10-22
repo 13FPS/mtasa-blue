@@ -20,7 +20,7 @@ foreach ($name in @('TEMP','TMP','VCToolsInstallDir','INCLUDE','LIB','LIBPATH','
 $record = [ordered]@{
     schema='mta_model_classification_sdk_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
-    results=@();actualModelClassificationSdkTested=$false;actualModelTypeSdkTested=$false;failure=$null;scratchDirectory=$scratchRoot;scratchFilesRemaining=$null;scratchRemoved=$false;
+    results=@();actualModelClassificationSdkTested=$false;actualModelTypeSdkTested=$false;actualModelArchiveSdkTested=$false;actualModelArchiveNoexceptRefusalTested=$false;noexceptRefusal=$null;failure=$null;scratchDirectory=$scratchRoot;scratchFilesRemaining=$null;scratchRemoved=$false;
     scope='Actual MTA CModelInfo GetModel/IsBoat/IsCar/IsPlane/IsHeli virtual overrides through a borrowed owner. Full DWORD model key and exact named predicate are forwarded once, both true and false results are preserved, every owner refusal remains explicit and default owners refuse. Other model operations remain pure in production and unavailable in test-only concrete fixture. No native model factory or render/collision/model pointer is published';
     ownedBuffersOnly=$true;nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;
     foreignProcessAccessed=$false;nativeLifecycleReady=$false;fullMtaReady=$false;
@@ -95,6 +95,10 @@ try {
         'Client/game_de/NativeModelClassificationProfile.h'
     )
     $sourceNames += @('Client/game_de/NativeModelTypeLeaf.h')
+    $sourceNames += @(
+        'Client/game_de/NativeStreamingModelGroupsReader.h',
+        'Client/game_de/NativeStreamingModelGroupsProfile.h'
+    )
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
     })
@@ -136,7 +140,7 @@ try {
             (Join-Path $PSScriptRoot 'ModelClassificationDETests.cpp'),(Join-Path $taskRoot 'Client/game_de/CModelInfoDE.cpp'),
             ('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'compiler.pdb')),('/Fe'+$executable))
         $result = [ordered]@{architecture=$architecture;environment=$environmentResult;compile=$null;test=$null;
-            checks=0;pointerBits=$null;executable=$executable;executableSha256=$null;actualModelClassificationSdkTested=$false;actualModelTypeSdkTested=$false}
+            checks=0;pointerBits=$null;executable=$executable;executableSha256=$null;actualModelClassificationSdkTested=$false;actualModelTypeSdkTested=$false;actualModelArchiveSdkTested=$false;actualModelArchiveNoexceptRefusalTested=$false;noexceptRefusal=$null}
         $record.results += $result
         $result.compile = RunOwned $compiler $arguments $directory 'compile' 60000
         if ($result.compile.exitCode -ne 0 -or $result.compile.timedOut) { throw "$architecture actual MTA model-classification SDK fixture compilation failed." }
@@ -151,12 +155,23 @@ try {
         $result.actualModelClassificationSdkTested = $text.Contains('Production MTA model classification SDK fixture completed')
         $result.actualModelTypeSdkTested = $text.Contains('Production MTA model type SDK fixture completed')
         if (-not $result.actualModelTypeSdkTested) { throw 'Actual model type SDK methods did not execute.' }
+        $result.actualModelArchiveSdkTested = $text.Contains('Production MTA model archive SDK fixture completed')
+        $result.noexceptRefusal = RunOwned $executable @('--noexcept-refusal') $directory 'noexcept-refusal' 10000
+        $refusalText = [IO.File]::ReadAllText($result.noexceptRefusal.stdout)
+        $result.actualModelArchiveNoexceptRefusalTested = $result.noexceptRefusal.exitCode -eq 86 -and -not $result.noexceptRefusal.timedOut -and
+            $refusalText.Contains('Production MTA model archive noexcept refusal fixture completed')
+        if (-not ($result.actualModelArchiveSdkTested -and $result.actualModelArchiveNoexceptRefusalTested)) {
+            throw 'Actual SDK observer or explicit noexcept owner-refusal path did not execute.'
+        }
         $expectedBits = if ($architecture -eq 'x86') { 32 } else { 64 }
         if ($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -le 0 -or $result.pointerBits -ne $expectedBits -or -not $result.actualModelClassificationSdkTested) {
             throw "$architecture actual MTA model-classification SDK checks failed or summary/pointer-width evidence was missing."
         }
     }
     $record.success = $record.results.Count -eq 1
+    $record.actualModelArchiveSdkTested = $record.success -and $record.results[0].actualModelArchiveSdkTested
+    $record.actualModelArchiveNoexceptRefusalTested = $record.success -and $record.results[0].actualModelArchiveNoexceptRefusalTested
+    $record.noexceptRefusal = $record.results[0].noexceptRefusal
     $record.actualModelClassificationSdkTested = $record.success -and $record.results[0].actualModelClassificationSdkTested
     $record.actualModelTypeSdkTested = $record.success -and $record.results[0].actualModelTypeSdkTested
 } catch { AddFailure ($_.Exception.ToString()) }

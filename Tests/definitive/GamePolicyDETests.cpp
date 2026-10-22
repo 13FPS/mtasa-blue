@@ -253,6 +253,13 @@ namespace
 int main()
 {
     static_assert(std::is_abstract_v<mta::game_de::CGameDE>);
+    static_assert(VERSION_ALL == 0 && VERSION_EU_10 == 5 && VERSION_US_10 == 11);
+    static_assert(VERSION_11 == 15 && VERSION_20 == 20 && VERSION_UNKNOWN == 0xff);
+    static_assert(VERSION_DE == 30 && VERSION_DE != VERSION_ALL && VERSION_DE != VERSION_EU_10 && VERSION_DE != VERSION_US_10 && VERSION_DE != VERSION_11 &&
+                  VERSION_DE != VERSION_20 && VERSION_DE != VERSION_UNKNOWN);
+    constexpr auto definitiveVersionByte = static_cast<unsigned char>(VERSION_DE);
+    static_assert(definitiveVersionByte == 30 && static_cast<eGameVersion>(definitiveVersionByte) == VERSION_DE);
+    static_assert(static_cast<unsigned char>(VERSION_UNKNOWN) == 0xff);
     static_assert(std::is_base_of_v<CGame, TestGame> && !std::is_abstract_v<TestGame>);
     mta::game_de::NativeGameTimingReader       reader;
     mta::game_de::NativeStreamingFileIdsReader streaming;
@@ -264,6 +271,10 @@ int main()
     CGame&                                     game = first;
     CGame&                                     other = second;
     TestPools                                  firstPools, secondPools;
+
+    Check(game.GetGameVersion() == VERSION_DE && other.GetGameVersion() == VERSION_DE,
+          "actual CGame virtual dispatch identifies DE independently of native world/service binding");
+    Check(static_cast<unsigned char>(game.GetGameVersion()) == definitiveVersionByte, "distinct DE SDK version fits the unchanged join-packet version byte");
 
     Check(game.GetCheckStatus() == 0 && other.GetCheckStatus() == 0, "classic initial check status is zero per instance");
     int& checkStatus = game.GetCheckStatus();
@@ -514,6 +525,7 @@ int main()
           "SDK StartGame neither retries nor fabricates the native loading transaction");
     Check(!reader.IsBound() && !streaming.IsBound() && !state.IsBound(), "CPU SDK policies require no native service binding");
 
+    std::puts("Actual CGameDE definitive version identity SDK fixture completed");
     std::printf("Passed %u actual CGameDE CPU SDK policy checks (%zu-bit)\n", checks, sizeof(void*) * 8);
     return EXIT_SUCCESS;
 }

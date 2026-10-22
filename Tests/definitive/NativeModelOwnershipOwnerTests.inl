@@ -14,23 +14,32 @@ namespace
         ResourceRequest,
         Classification,
         ModelType,
+        ModelGroups,
+        ArchiveAllocated,
         Remove
     };
     struct ModelOwnershipOwnerContext
     {
-        ModelOwnershipOperation     operation = ModelOwnershipOperation::Reference;
-        std::uint32_t               index = 3, flags = 6;
-        int                         delta = 1;
-        bool                        loaded = true, onlyPriority = false;
-        NativeModelVehiclePredicate predicate = NativeModelVehiclePredicate::Boat;
-        NativeModelTypeObservation  typeObservation{true, 77};
-        ClockResult                 result = ClockResult::NotInitialized;
+        ModelOwnershipOperation                 operation = ModelOwnershipOperation::Reference;
+        std::uint32_t                           index = 3, flags = 6;
+        int                                     delta = 1;
+        bool                                    loaded = true, onlyPriority = false;
+        NativeModelVehiclePredicate             predicate = NativeModelVehiclePredicate::Boat;
+        NativeModelTypeObservation              typeObservation{true, 77};
+        NativeStreamingModelGroupsReader::Value groups;
+        ClockResult                             result = ClockResult::NotInitialized;
     };
     void ModelOwnershipOwnerHandler(NativeGameTimingAccess& access, void* opaque)
     {
         auto& context = *static_cast<ModelOwnershipOwnerContext*>(opaque);
         switch (context.operation)
         {
+            case ModelOwnershipOperation::ModelGroups:
+                context.result = access.ReadStreamingModelGroups(context.groups);
+                break;
+            case ModelOwnershipOperation::ArchiveAllocated:
+                context.result = access.ReadModelArchiveAllocated(context.index, context.loaded);
+                break;
             case ModelOwnershipOperation::Classification:
                 context.result = access.ReadModelVehiclePredicate(context.index, context.predicate, context.loaded);
                 break;

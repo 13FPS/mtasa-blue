@@ -37,6 +37,10 @@
 #include "../../Client/game_de/NativePedIntelligenceProfile.h"
 #include "../../Client/game_de/NativeTaskPoolReader.h"
 #include "../../Client/game_de/NativeTaskPoolProfile.h"
+#include "../../Client/game_de/NativeTaskRemovalCalls.h"
+#include "../../Client/game_de/NativeTaskRemovalProfile.h"
+#include "../../Client/game_de/NativeModelBankReader.h"
+#include "../../Client/game_de/NativeModelBankProfile.h"
 #include "../../Client/game_de/NativePlayerInfoMemory.h"
 #include "../../Client/game_de/NativePlayerInfoProfile.h"
 #include "../../Client/game_de/NativePlayerInfoExtraProfile.h"
@@ -81,6 +85,54 @@
 #include <tlhelp32.h>
 #include <type_traits>
 #include <vector>
+
+namespace ClockTaskRemovalOwnerTest
+{
+    using Calls = mta::game_de::NativeTaskRemovalCalls::NativeFunction;
+    unsigned                  calls = 0, deletions = 0;
+    std::uintptr_t            image = 0, entry = 0, manager = 0, flag = 0, referenceCell = 0;
+    std::int32_t              index = -1;
+    bool                      clearReference = false, sawLiveManagerCellDuringDeletion = false;
+    mta::game_de::ClockResult result = mta::game_de::ClockResult::Ok;
+    mta::game_de::ClockResult Invoke(Calls function, std::uintptr_t passedManager, std::int32_t passedIndex, std::uint32_t& exception) noexcept
+    {
+        ++calls;
+        entry = reinterpret_cast<std::uintptr_t>(function) - image;
+        manager = passedManager;
+        index = passedIndex;
+        const auto     cell = manager + 0x28 + static_cast<std::uintptr_t>(index) * sizeof(std::uintptr_t);
+        std::uintptr_t task = 0;
+        std::memcpy(&task, reinterpret_cast<void*>(cell), sizeof(task));
+        if (!task || !flag)
+            std::abort();
+        // Substitute only the final typed native invocation. Model its proved
+        // task-bank retirement before manager-cell clear on owned buffers;
+        // all production owner, pool, code and post-call checks still run.
+        auto* generation = reinterpret_cast<unsigned char*>(flag);
+        *generation = static_cast<unsigned char>(*generation | 0x80);
+        ++deletions;
+        std::uintptr_t stillPresent = 0;
+        std::memcpy(&stillPresent, reinterpret_cast<void*>(cell), sizeof(stillPresent));
+        sawLiveManagerCellDuringDeletion = stillPresent == task;
+        const std::uintptr_t zero = 0;
+        std::memcpy(reinterpret_cast<void*>(cell), &zero, sizeof(zero));
+        if (clearReference)
+        {
+            clearReference = false;
+            std::memcpy(reinterpret_cast<void*>(referenceCell), &zero, sizeof(zero));
+        }
+        if (result != mta::game_de::ClockResult::Ok)
+            exception = EXCEPTION_ACCESS_VIOLATION;
+        return result;
+    }
+}
+
+namespace ClockModelBankOwnerTest
+{
+    std::uintptr_t slot = 0, advanced = 0;
+    unsigned       changes = 0;
+    bool           advanceOnRead = false;
+}
 
 namespace ClockStatsOwnerTest
 {
@@ -877,6 +929,24 @@ namespace mta::game_de::NativeImageAccess
         }
         return true;
     }
+    bool ModelBankOwnerFixtureReadImage(std::uintptr_t image, std::uintptr_t address, void* destination, std::size_t bytes, bool writable = false,
+                                        bool executable = false) noexcept
+    {
+        if (!ReadImage(image, address, destination, bytes, writable, executable))
+            return false;
+        if (ClockModelBankOwnerTest::advanceOnRead && address == ClockModelBankOwnerTest::slot && bytes == sizeof(std::uintptr_t))
+        {
+            ClockModelBankOwnerTest::advanceOnRead = false;
+            SIZE_T written = 0;
+            if (!::WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(address), &ClockModelBankOwnerTest::advanced,
+                                      sizeof(ClockModelBankOwnerTest::advanced), &written) ||
+                written != sizeof(std::uintptr_t))
+                std::abort();
+            ++ClockModelBankOwnerTest::changes;
+        }
+        return true;
+    }
+
     bool WeaponOwnerFixtureReadImage(std::uintptr_t image, std::uintptr_t address, void* destination, std::size_t bytes, bool writable = false,
                                      bool executable = false) noexcept
     {
@@ -1026,6 +1096,14 @@ namespace mta::game_de::NativeImageAccess
 #define ReadProcessMemory ClockTaskPoolOwnerTest::Read
 #include "../../Client/game_de/NativeTaskPoolReader.cpp"
 #pragma pop_macro("ReadProcessMemory")
+// Include each new primitive once. Only final native invocation or a guarded
+// bank read is substituted; the real callback/token and native checks remain.
+#define MTA_DE_TASK_REMOVAL_NATIVE_INVOKE ClockTaskRemovalOwnerTest::Invoke
+#include "../../Client/game_de/NativeTaskRemovalCalls.cpp"
+#undef MTA_DE_TASK_REMOVAL_NATIVE_INVOKE
+#define ReadImage ModelBankOwnerFixtureReadImage
+#include "../../Client/game_de/NativeModelBankReader.cpp"
+#undef ReadImage
 #undef MTA_DE_PED_REFERENCE_UNREGISTER_INVOKE
 #undef MTA_DE_PED_REFERENCE_REGISTER_INVOKE
 #pragma push_macro("InterlockedCompareExchange")
@@ -5698,6 +5776,8 @@ namespace
 #include "NativePedObservationOwnerTests.inl"
 #include "NativePedIntelligenceOwnerTests.inl"
 #include "NativeTaskPoolOwnerTests.inl"
+#include "NativeTaskSecondaryOwnerTests.inl"
+#include "NativeModelBankOwnerTests.inl"
 #include "NativeWorldCheatOwnerTests.inl"
 
 int main(int argc, char** argv)
@@ -5740,6 +5820,8 @@ int main(int argc, char** argv)
     NativePedObservationOwnedSdk(fixture);
     NativePedIntelligenceOwnedSdk(fixture);
     NativeTaskPoolOwnedSdk(fixture);
+    NativeTaskSecondaryOwnedSdk(fixture);
+    NativeModelBankOwnedSdk(fixture);
     NativeReadSetAndRestoration(fixture);
     NativeCoherentCommandPublication(fixture);
     NativeReadOnlyRetirement(fixture);

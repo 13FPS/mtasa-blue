@@ -34,6 +34,7 @@
 #include "NativePedVitalsMemory.h"
 #include "NativePedPhysicalScalarsMemory.h"
 #include "NativePedMetadataMemory.h"
+#include "NativeTaskRemovalCalls.h"
 #include "NativeStartGameCalls.h"
 #include "NativeUObjectMembershipAccess.h"
 #include "NativeUObjectMembershipProfile.h"
@@ -122,6 +123,8 @@ namespace mta::game_de
             ClockResult ReadPedMetadata(const NativePedReferenceToken&, NativePedMetadata&) noexcept override;
             ClockResult ReadReferencedPedIntelligence(const NativePedReferenceToken&, NativePedIntelligenceReader::Value&) noexcept override;
             ClockResult ReadTaskPoolEntry(std::uintptr_t, NativeTaskPoolReader::Value&) noexcept override;
+            ClockResult RemoveReferencedPedSecondaryTask(const NativePedReferenceToken&, int) noexcept override;
+            ClockResult ReadModelBankEntry(std::uint32_t, NativeModelBankReader::Value&) noexcept override;
             ClockResult ReadPedPhysicalScalar(const NativePedReferenceToken&, NativePedPhysicalScalarField, float&) noexcept override;
             ClockResult SetPedPhysicalScalar(const NativePedReferenceToken&, NativePedPhysicalScalarField, float) noexcept override;
             ClockResult ReadPedCenterOfMass(const NativePedReferenceToken&, CVector&) noexcept override;
@@ -2309,6 +2312,35 @@ namespace mta::game_de
             // unchanged opaque task words grant no task lifetime or SDK object.
             output = next;
             return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::RemoveReferencedPedSecondaryTask(const NativePedReferenceToken& token, int index) noexcept
+        {
+            NativePedPoolReader::Value before, after;
+            auto                       result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            NativeTaskRemovalCalls::Receipt receipt;
+            result = NativeTaskRemovalCalls::RemoveSecondary(runtime.image, before, index, &CheckTimingOwner, &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = ResolvePedReference(token, after);
+                if (result == ClockResult::Ok && (before.nativePed != after.nativePed || before.handle != after.handle))
+                    result = ClockResult::OwnerConflict;
+            }
+            // Native deletion precedes manager-cell clear and can succeed
+            // before a fault or lost token acknowledgement. Stop this same
+            // owner after entered failure; replay or restoration could delete
+            // a later task or resurrect a freed native pointer.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+        ClockResult NativeAccess::ReadModelBankEntry(std::uint32_t modelIndex, NativeModelBankReader::Value& output) noexcept
+        {
+            // The existing natural callback owns this immediate observation.
+            // A model-bank word is opaque and grants neither SDK publication
+            // nor later model/RwObject lifetime or loaded-state authority.
+            return NativeModelBankReader({runtime.image}, &CheckTimingOwner).Read(modelIndex, output);
         }
         ClockResult NativeAccess::ReadTaskPoolEntry(std::uintptr_t task, NativeTaskPoolReader::Value& output) noexcept
         {

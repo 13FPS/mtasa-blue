@@ -26,6 +26,8 @@
 #include "NativePedObservationAccess.h"
 #include "NativePedIntelligenceReader.h"
 #include "NativeTaskPoolReader.h"
+#include "NativeTaskRemovalAccess.h"
+#include "NativeModelBankReader.h"
 #include "NativePedPhysicalScalarsAccess.h"
 #include "NativePlayerInfoAccess.h"
 #include "NativeWantedAccess.h"
@@ -56,7 +58,8 @@ namespace mta::game_de
                                    public NativePedMetadataAccess,
                                    public NativePedMutationAccess,
                                    public NativePedObservationAccess,
-                                   public NativePedPhysicalScalarsAccess
+                                   public NativePedPhysicalScalarsAccess,
+                                   public NativeTaskRemovalAccess
     {
     public:
         virtual ClockResult SetTimeScale(float value) noexcept = 0;
@@ -110,6 +113,9 @@ namespace mta::game_de
         // A current task-bank observation is separate from a retained ped
         // reference and grants no persistent CTask identity or deletion lease.
         virtual ClockResult ReadTaskPoolEntry(std::uintptr_t, NativeTaskPoolReader::Value&) noexcept { return ClockResult::NotInitialized; }
+        // Observe only the current bounded bank association. An opaque model
+        // word supplies no loaded state, model object, RwObject or reference.
+        virtual ClockResult ReadModelBankEntry(std::uint32_t, NativeModelBankReader::Value&) noexcept { return ClockResult::NotInitialized; }
         // The real request belongs to a distinct admitted normal-frame scope;
         // a gameplay timer or earlier observation never grants lifecycle calls.
         virtual ClockResult StartGame() noexcept { return ClockResult::NotInitialized; }

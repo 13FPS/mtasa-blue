@@ -12,6 +12,7 @@
 #include "StdInc.h"
 #include "CGameSA.h"
 #include "CTaskManagementSystemSA.h"
+#include <game/CTaskWrapperPolicy.h>
 #include "TaskAttackSA.h"
 #include "TaskBasicSA.h"
 #include "TaskCarAccessoriesSA.h"
@@ -72,31 +73,9 @@ void CTaskManagementSystemSA::RemoveTask(CTaskSAInterface* pTaskInterface)
 
     assert(pTaskInterface);
 
-    // Find it in our list
-    STaskListItem*                 pItem;
-    list<STaskListItem*>::iterator iter = m_TaskList.begin();
-    for (; iter != m_TaskList.end(); iter++)
-    {
-        pItem = *iter;
-        if (pItem->taskInterface == pTaskInterface)
-        {
-            // Grab the task SA
-            CTaskSA* pTaskSA = pItem->pTaskSA;
-
-            // Delete the object
-            delete pItem;
-
-            // Remove from list
-            m_TaskList.erase(iter);
-
-            // Eventually destroy the task
-            if (pTaskSA)
-                pTaskSA->DestroyJustThis();
-
-            // Done (don't continue or we waste resources/crash)
-            return;
-        }
-    }
+    MtaGame::CTaskWrapperPolicy::RetireFirst(
+        m_TaskList, pTaskInterface, [](const STaskListItem* item) { return item->taskInterface; }, [](const STaskListItem* item) { return item->pTaskSA; },
+        [](STaskListItem* item) { delete item; }, [](CTaskSA* task) { task->DestroyJustThis(); });
 }
 
 CTaskSA* CTaskManagementSystemSA::GetTask(CTaskSAInterface* pTaskInterface)
@@ -118,19 +97,9 @@ CTaskSA* CTaskManagementSystemSA::GetTask(CTaskSAInterface* pTaskInterface)
     if (dwVTableAddr < GTA_BASE_MIN || dwVTableAddr > GTA_BASE_MAX)
         return nullptr;
 
-    // Find it in our list
-    STaskListItem*                       pListItem;
-    list<STaskListItem*>::const_iterator iter = m_TaskList.begin();
-    for (; iter != m_TaskList.end(); iter++)
-    {
-        // Matches?
-        pListItem = *iter;
-        if (pListItem->taskInterface == pTaskInterface && pListItem->pTaskSA)
-        {
-            // Yes it has existed before, return it
-            return pListItem->pTaskSA;
-        }
-    }
+    if (auto* task = MtaGame::CTaskWrapperPolicy::FindCached(
+            m_TaskList, pTaskInterface, [](const STaskListItem* item) { return item->taskInterface; }, [](const STaskListItem* item) { return item->pTaskSA; }))
+        return task;
 
     // its not existed before, lets create the task
     // First, we create a temp task
@@ -152,7 +121,7 @@ CTaskSA* CTaskManagementSystemSA::GetTask(CTaskSAInterface* pTaskInterface)
     CTaskSA* pTask = dynamic_cast<CTaskSA*>(CreateAppropriateTask(pTaskInterface, iTaskType));
     if (pTask)
     {
-        pListItem = new STaskListItem;
+        auto* pListItem = new STaskListItem;
         pListItem->pTaskSA = pTask;
         pListItem->taskInterface = pTaskInterface;
         m_TaskList.push_back(pListItem);
@@ -165,102 +134,104 @@ CTaskSA* CTaskManagementSystemSA::CreateAppropriateTask(CTaskSAInterface* pTaskI
 {
     CTaskSA* pTaskSA = NULL;
 
-    switch (iTaskType)
+    using Factory = MtaGame::CTaskWrapperPolicy::Factory;
+    switch (MtaGame::CTaskWrapperPolicy::SelectFactory(iTaskType))
     {
         // Attack
-        case TASK_SIMPLE_GANG_DRIVEBY:
+        case Factory::GangDriveBy:
             pTaskSA = new CTaskSimpleGangDriveBySA;
             break;
-        case TASK_SIMPLE_USE_GUN:
+        case Factory::UseGun:
             pTaskSA = new CTaskSimpleUseGunSA;
             break;
-        case TASK_SIMPLE_FIGHT:
+        case Factory::Fight:
             pTaskSA = new CTaskSimpleFightSA;
             break;
 
         // Basic
-        case TASK_COMPLEX_USE_MOBILE_PHONE:
+        case Factory::UseMobilePhone:
             pTaskSA = new CTaskComplexUseMobilePhoneSA;
             break;
-        case TASK_SIMPLE_ANIM:
+        case Factory::RunAnim:
             pTaskSA = new CTaskSimpleRunAnimSA;
             break;
-        case TASK_SIMPLE_NAMED_ANIM:
+        case Factory::RunNamedAnim:
             pTaskSA = new CTaskSimpleRunNamedAnimSA;
             break;
-        case TASK_COMPLEX_DIE:
+        case Factory::Die:
             pTaskSA = new CTaskComplexDieSA;
             break;
-        case TASK_SIMPLE_STEALTH_KILL:
+        case Factory::StealthKill:
             pTaskSA = new CTaskSimpleStealthKillSA;
             break;
-        case TASK_COMPLEX_SUNBATHE:
+        case Factory::Sunbathe:
             pTaskSA = new CTaskComplexSunbatheSA;
             break;
-        case TASK_SIMPLE_SWIM:
+        case Factory::Swim:
             pTaskSA = new CTaskSimpleSwimSA;
             break;
 
         // Car accessories
-        case TASK_SIMPLE_CAR_SET_PED_IN_AS_PASSENGER:
+        case Factory::CarSetPassenger:
             pTaskSA = new CTaskSimpleCarSetPedInAsPassengerSA;
             break;
-        case TASK_SIMPLE_CAR_SET_PED_IN_AS_DRIVER:
+        case Factory::CarSetDriver:
             pTaskSA = new CTaskSimpleCarSetPedInAsDriverSA;
             break;
-        case TASK_SIMPLE_CAR_SET_PED_OUT:
+        case Factory::CarSetOut:
             pTaskSA = new CTaskSimpleCarSetPedOutSA;
             break;
 
         // Car
-        case TASK_COMPLEX_ENTER_CAR_AS_DRIVER:
+        case Factory::EnterCarDriver:
             pTaskSA = new CTaskComplexEnterCarAsDriverSA;
             break;
-        case TASK_COMPLEX_ENTER_CAR_AS_PASSENGER:
+        case Factory::EnterCarPassenger:
             pTaskSA = new CTaskComplexEnterCarAsPassengerSA;
             break;
-        case TASK_COMPLEX_ENTER_BOAT_AS_DRIVER:
+        case Factory::EnterBoatDriver:
             pTaskSA = new CTaskComplexEnterBoatAsDriverSA;
             break;
-        case TASK_COMPLEX_LEAVE_CAR:
+        case Factory::LeaveCar:
             pTaskSA = new CTaskComplexLeaveCarSA;
             break;
 
         // GoTo
-        case TASK_COMPLEX_WANDER:
+        case Factory::WanderStandard:
             pTaskSA = new CTaskComplexWanderStandardSA;
             break;
 
         // IK
-        case TASK_SIMPLE_IK_CHAIN:
+        case Factory::IkChain:
             pTaskSA = new CTaskSimpleIKChainSA;
             break;
-        case TASK_SIMPLE_IK_LOOK_AT:
+        case Factory::IkLookAt:
             pTaskSA = new CTaskSimpleIKLookAtSA;
             break;
-        case TASK_SIMPLE_IK_MANAGER:
+        case Factory::IkManager:
             pTaskSA = new CTaskSimpleIKManagerSA;
             break;
 
         // JumpFall
-        case TASK_SIMPLE_CLIMB:
+        case Factory::Climb:
             pTaskSA = new CTaskSimpleClimbSA;
             break;
-        case TASK_SIMPLE_JETPACK:
+        case Factory::JetPack:
             pTaskSA = new CTaskSimpleJetPackSA;
             break;
 
         // Physical response
-        case TASK_SIMPLE_CHOKING:
+        case Factory::Choking:
             pTaskSA = new CTaskSimpleChokingSA;
             break;
 
         // Secondary
-        case TASK_SIMPLE_DUCK:
+        case Factory::Duck:
             pTaskSA = new CTaskSimpleDuckSA;
             break;
 
-        // Just create the baseclass
+        // Unknown logical types retain the existing real base wrapper.
+        case Factory::Base:
         default:
             pTaskSA = new CTaskSA;
             break;

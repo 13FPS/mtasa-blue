@@ -53,6 +53,7 @@ try{
         'Build/definitive-recovery/mta-ped-transform-batch-20261021/native-proof/ped-transform-qualified.json',
         'Build/definitive-recovery/mta-native-model-loaded-proof-20261022/model-loaded-qualified.json',
         'Client/game_de/NativeStreamingModelContext.h','Client/game_de/NativeStreamingModelContext.cpp',
+        'Client/game_de/NativeModelReferenceMap.h','Client/game_de/NativeStreamingUpgradeProfile.h',
         'Client/game_de/NativeModelReferenceMemory.h','Client/game_de/NativeModelReferenceMemory.cpp','Client/game_de/NativeModelReferenceProfile.h',
         'Tests/definitive/NativeModelReferenceTests.cpp','Tests/definitive/test_native_model_reference.ps1',
         'Build/definitive-recovery/mta-native-model-reference-adjust-proof-20261022/reference-adjust-qualified.json',

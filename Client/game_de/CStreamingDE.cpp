@@ -26,6 +26,16 @@ namespace mta::game_de
             Require(access.RequestStreamingModel(model, flags), "RequestModel");
     }
 
+    void CStreamingDE::LoadAllRequestedModels(bool onlyPriority, const char*)
+    {
+        // The real DE opcode flushes all requests and accepts no priority
+        // selector. Refuse unsupported priority intent before reaching owner;
+        // diagnostic tags never become native arguments or hidden retries.
+        if (onlyPriority)
+            Require(ClockResult::UnsupportedBuild, "LoadAllRequestedModels priority-only");
+        Require(access.LoadStreamingModels(false), "LoadAllRequestedModels");
+    }
+
     bool CStreamingDE::HasModelLoaded(DWORD model)
     {
         if (MtaGame::CModelRequestPolicy::IsUpgradeModel(model))

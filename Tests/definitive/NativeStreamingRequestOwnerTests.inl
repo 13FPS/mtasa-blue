@@ -148,7 +148,10 @@ namespace
                 Check(service.Renew(runtime.generation.load()), "renew one native owner between explicit model requests");
                 fixture.invokeTimer();
             };
-            for (const auto invalid : {NativeModelBankProfile::ModelCount, std::uint32_t{0xffff}, std::uint32_t{0x10000}, std::uint32_t{0xffffffff}})
+            // The full SDK request domain now includes resources after the
+            // DFF bank; only physical list sentinels and larger keys are invalid.
+            for (const auto invalid : {NativeStreamingResourceProfile::ResourceEnd, NativeStreamingResourceProfile::ResourceEnd + 3, std::uint32_t{0xffff},
+                                       std::uint32_t{0x10000}, std::uint32_t{0xffffffff}})
             {
                 context.index = invalid;
                 invoke();

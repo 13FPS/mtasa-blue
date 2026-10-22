@@ -12,6 +12,9 @@ namespace mta::game_de
     {
     public:
         virtual ~NativeStreamingModelAccess() = default;
+        // An older owner cannot silently turn a synchronous loading intent
+        // into acceptance. Priority intent remains distinct from loading all.
+        virtual ClockResult LoadStreamingModels(bool) noexcept { return ClockResult::NotInitialized; }
         // Older/read-only owners cannot turn a request into a successful no-op.
         // Native entry, partial effects and cleanup remain the runtime's concern.
         virtual ClockResult RequestStreamingModel(std::uint32_t, std::uint32_t) noexcept { return ClockResult::NotInitialized; }

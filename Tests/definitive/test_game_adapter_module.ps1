@@ -136,6 +136,23 @@ $sourceNames = @('Client/sdk/game/CGameAdapter.h', 'Client/game_de/GameAdapter.c
     'Client/sdk/game/CPools.h','Client/sdk/game/CPoolClientEntity.h','Client/sdk/game/CPedRegistryPolicy.h','Client/sdk/game/CPoolSlotPolicy.h',
     'Tests/definitive/GameAdapterModuleTests.cpp', 'Tests/definitive/test_game_adapter_module.ps1')
 $detoursSourceRoot = Join-Path $taskRoot 'vendor/detours/4.0.1/src'
+$sourceNames += @(
+    'Client/game_de/NativeStreamingLoadAllCalls.h',
+    'Client/game_de/NativeStreamingLoadAllCalls.cpp',
+    'Client/game_de/NativeStreamingLoadAllProfile.h',
+    'Tests/definitive/NativeStreamingLoadAllGraphFixture.h',
+    'Tests/definitive/NativeStreamingCompletionOwnerTests.inl',
+    'Client/game_de/NativeStreamingResourceCalls.h',
+    'Client/game_de/NativeStreamingResourceCalls.cpp',
+    'Client/game_de/NativeStreamingResourceContext.h',
+    'Client/game_de/NativeStreamingResourceContext.cpp',
+    'Client/game_de/NativeStreamingResourceProfile.h',
+    'Client/game_de/NativeModelReferenceTransactions.h',
+    'Client/game_de/NativeModelReferenceTransactions.cpp',
+    'Client/game_de/NativeModelReferenceTransactionProfile.h',
+    'Client/game_de/NativeModelReferenceMap.h',
+    'Client/game_de/NativeModelReferenceHeap.h'
+)
 $sourceNames += @(Get-ChildItem -LiteralPath $detoursSourceRoot -File | ForEach-Object {
     [IO.Path]::GetRelativePath($taskRoot, $_.FullName).Replace('\', '/')
 })
@@ -228,6 +245,10 @@ if ((Test-Path -LiteralPath $moduleSource) -and $detoursLibraryExit -eq 0) {
         (Join-Path $taskRoot 'Client/game_de/NativeModelReferenceMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeStreamingUpgradeReader.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeStreamingUpgradeCalls.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativeStreamingLoadAllCalls.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativeStreamingResourceContext.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativeStreamingResourceCalls.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativeModelReferenceTransactions.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeRopesMemory.cpp'),(Join-Path $taskRoot 'Client/game_de/CRopesDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePlayerInfoMemory.cpp'),(Join-Path $taskRoot 'Client/game_de/CPlayerInfoDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeWantedMemory.cpp'),(Join-Path $taskRoot 'Client/game_de/CWantedDE.cpp'), (Join-Path $taskRoot 'Client/game_de/CClockDE.cpp'),

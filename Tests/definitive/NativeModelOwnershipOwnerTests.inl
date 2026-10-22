@@ -9,14 +9,16 @@ namespace
     {
         Reference,
         UpgradeRequest,
-        UpgradeLoaded
+        UpgradeLoaded,
+        LoadAll,
+        ResourceRequest
     };
     struct ModelOwnershipOwnerContext
     {
         ModelOwnershipOperation operation = ModelOwnershipOperation::Reference;
         std::uint32_t           index = 3, flags = 6;
         int                     delta = 1;
-        bool                    loaded = true;
+        bool                    loaded = true, onlyPriority = false;
         ClockResult             result = ClockResult::NotInitialized;
     };
     void ModelOwnershipOwnerHandler(NativeGameTimingAccess& access, void* opaque)
@@ -29,6 +31,12 @@ namespace
                 break;
             case ModelOwnershipOperation::UpgradeRequest:
                 context.result = access.RequestStreamingUpgrade(context.index, context.flags);
+                break;
+            case ModelOwnershipOperation::LoadAll:
+                context.result = access.LoadStreamingModels(context.onlyPriority);
+                break;
+            case ModelOwnershipOperation::ResourceRequest:
+                context.result = access.RequestStreamingModel(context.index, context.flags);
                 break;
             case ModelOwnershipOperation::UpgradeLoaded:
                 context.result = access.ReadStreamingUpgradeLoaded(context.index, context.loaded);
@@ -140,11 +148,12 @@ namespace
             std::uint32_t key = 3, count = 2;
             std::int32_t  next = -1, bucket = 0;
         };
-        RefRow reference;
-        auto*  map = owner.data() + R::MapOffset;
+        std::array<RefRow, 4> referenceRows{};
+        auto&                 reference = referenceRows[0];
+        auto*                 map = owner.data() + R::MapOffset;
         store(map, 0, reinterpret_cast<std::uintptr_t>(&reference));
         store(map, 8, std::int32_t{1});
-        store(map, 0xc, std::int32_t{1});
+        store(map, 0xc, std::int32_t{4});
         store(map, 0x10, std::uint32_t{1});
         store(map, 0x28, std::int32_t{1});
         store(map, 0x2c, std::int32_t{128});
@@ -183,6 +192,8 @@ namespace
         ModelOwnershipOwnerContext  context;
         DefaultPedIntelligenceOwner absent;
         bool                        sentinel = true;
+        Check(absent.LoadStreamingModels(false) == ClockResult::NotInitialized,
+              "older/default owners refuse blocking-all intent rather than report a completed load");
         Check(absent.AdjustModelReference(3, 1) == ClockResult::NotInitialized && absent.RequestStreamingUpgrade(1000, 6) == ClockResult::NotInitialized &&
                   absent.ReadStreamingUpgradeLoaded(1000, sentinel) == ClockResult::NotInitialized && sentinel,
               "default timing owners refuse extra model operations and preserve query output");
@@ -238,8 +249,8 @@ namespace
             fixture.Put(NativeModelBankProfile::BankRva + 4 * sizeof(std::uintptr_t), modelAddress);
             seed(4, 1);
             invoke();
-            Check(context.result == ClockResult::NotInitialized && !ClockModelReferenceOwnerTest::calls && reference.count == 2,
-                  "a loaded metadata association cannot insert an absent native reference-map key");
+            Check(context.result != ClockResult::Ok && !ClockModelReferenceOwnerTest::calls && reference.count == 2,
+                  "a loaded metadata association cannot insert an absent key without the native allocator prerequisites");
             context.index = 3;
             reference.count = 1;
             context.delta = -1;
@@ -383,6 +394,9 @@ namespace
             fixture.Put(P::RootRva, root);
             ClockStreamingUpgradeOwnerTest::result = ClockResult::Ok;
         }
+        // Execute the larger completion/resource/acquisition batch on this
+        // same actual callback owner and initialized model context.
+#include "NativeStreamingCompletionOwnerTests.inl"
         ClockReaderTestHost::image = ClockModelReferenceOwnerTest::image = ClockStreamingUpgradeOwnerTest::image = 0;
         ClockModelLoadedOwnerTest::address = 0;
         ClockModelLoadedOwnerTest::advanceOnRead = false;

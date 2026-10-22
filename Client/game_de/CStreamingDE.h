@@ -22,6 +22,7 @@ namespace mta::game_de
     public:
         void RequestModel(DWORD model, DWORD flags) override;
         bool HasModelLoaded(DWORD model) override;
+        void LoadAllRequestedModels(bool onlyPriority, const char* tag) override;
 
     protected:
         explicit CStreamingDE(NativeStreamingModelAccess& access) noexcept : access(access) {}

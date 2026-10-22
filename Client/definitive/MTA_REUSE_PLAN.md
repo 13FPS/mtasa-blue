@@ -15,19 +15,28 @@ qualified native subset, without publishing persistent task wrappers.
 The abstract `CStreamingDE` implements MTA's existing `RequestModel` and
 `HasModelLoaded` dispatch, including its separate vehicle-upgrade interval.
 Upgrade requests enter DE's genuine paired-model operation once; their loaded
-query checks the selected model and its configured companion. Ordinary requests
-remain bounded to qualified model slots. Acceptance preserves asynchronous
-effects and does not imply loading finished. Raw loaded observations cover the
-initializer's complete streaming-row extent, including its list sentinels;
-these facts do not publish SDK model objects or RenderWare data.
+query checks the selected model and its configured companion. File requests
+also use DE's genuine entry for all seven non-DFF categories, with their current
+typed source/cache/buffer and intrusive-list prerequisites. List sentinels are
+excluded from requests. Acceptance preserves asynchronous effects and does not
+imply loading finished. Raw loaded observations cover the initializer's complete
+streaming-row extent, including its sentinels; these facts do not publish SDK
+model objects or RenderWare data.
 
 Ordinary requests, upgrades and immediate reference adjustments share the same
 native root/provider/model checks and callback owner. Reference changes reacquire
-an occupied keyed map row each time and use one conditional DWORD update.
-Incrementing an existing zero-count row is supported; creating an absent entry,
-overflow, underflow and decrements reaching zero are refused. This does not grant
-a retained model lease or complete MTA's `ModelAddRef`/`RemoveRef` contract.
-Priority-only loading and final model removal remain separate prerequisites.
+a keyed map row each time and use one conditional DWORD update. Missing entries
+use DE's genuine reserve/publish helpers and initialized allocator. Upgrade
+references affect only their selected key, preserving MTA's existing reference
+semantics. Overflow, underflow and decrements reaching zero are refused. This
+does not grant a retained model lease or complete MTA's `ModelAddRef`/`RemoveRef`
+contract. Final model removal remains a separate prerequisite.
+
+`CStreamingDE::LoadAllRequestedModels(false)` enters DE's genuine all-model
+flush with a current typed game-mode/world context. Recursive callbacks refuse
+a second entry; lost acknowledgement preserves native effects and stops the
+owner. Priority-only loading remains explicitly unavailable. Archive, memory and
+scene operations still keep the complete streaming service abstract.
 
 These batches have offline primitive, actual SDK/callback-owner and normal
 build coverage. The changed classic callers compile through their normal

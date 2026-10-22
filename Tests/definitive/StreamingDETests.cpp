@@ -23,11 +23,17 @@ namespace
     }
     struct Access final : NativeStreamingModelAccess
     {
-        unsigned      requests = 0, queries = 0, upgradeRequests = 0, upgradeQueries = 0;
+        unsigned      requests = 0, queries = 0, upgradeRequests = 0, upgradeQueries = 0, loads = 0;
         std::uint32_t model = 0, flags = 0;
         ClockResult   requestResult = ClockResult::Ok, queryResult = ClockResult::Ok;
-        bool          loaded = false;
-        ClockResult   RequestStreamingModel(std::uint32_t index, std::uint32_t requestFlags) noexcept override
+        bool          loaded = false, lastOnlyPriority = true;
+        ClockResult   LoadStreamingModels(bool onlyPriority) noexcept override
+        {
+            ++loads;
+            lastOnlyPriority = onlyPriority;
+            return requestResult;
+        }
+        ClockResult RequestStreamingModel(std::uint32_t index, std::uint32_t requestFlags) noexcept override
         {
             ++requests;
             model = index;
@@ -61,14 +67,13 @@ namespace
             return queryResult;
         }
     };
-    // Only the two shipping overrides are exercised. Other SDK operations are
+    // Only the three shipping overrides are exercised. Other SDK operations are
     // deliberately unavailable in this test-only concrete adapter.
     struct Streaming final : CStreamingDE
     {
         explicit Streaming(NativeStreamingModelAccess& owner) : CStreamingDE(owner) {}
         [[noreturn]] static void Unavailable() { throw std::logic_error("unrelated SDK operation in streaming fixture"); }
         void                     RemoveModel(std::uint32_t) override { Unavailable(); }
-        void                     LoadAllRequestedModels(bool, const char*) override { Unavailable(); }
         void                     RequestSpecialModel(DWORD, const char*, DWORD) override { Unavailable(); }
         CStreamingInfo*          GetStreamingInfo(uint32) override { Unavailable(); }
         void                     ReinitStreaming() override { Unavailable(); }
@@ -158,12 +163,29 @@ int main()
             Check(owner.upgradeRequests == upgradeRequests + 1 && owner.upgradeQueries == upgradeQueries + 1,
                   "a refused or entered-uncertain upgrade never retries or falls through to ordinary streaming");
         }
+        owner.requestResult = ClockResult::Ok;
+        const auto priorLoads = owner.loads;
+        sdk->LoadAllRequestedModels(false, "actual SDK diagnostic tag");
+        Check(owner.loads == priorLoads + 1 && !owner.lastOnlyPriority,
+              "blocking-all SDK intent reaches the owner once without inventing native tag arguments");
+        Refuses([&] { sdk->LoadAllRequestedModels(true, "priority intent"); }, "LoadAllRequestedModels priority-only");
+        Check(owner.loads == priorLoads + 1, "priority-only SDK request cannot fall through to blocking-all");
+        for (unsigned status = 1; status <= static_cast<unsigned>(ClockResult::OriginalException); ++status)
+        {
+            owner.requestResult = static_cast<ClockResult>(status);
+            const auto calls = owner.loads;
+            Refuses([&] { sdk->LoadAllRequestedModels(false, nullptr); }, "LoadAllRequestedModels");
+            Check(owner.loads == calls + 1 && !owner.lastOnlyPriority, "blocking-all entered failure remains explicit without SDK retry");
+        }
+        std::puts("Production MTA streaming load-all SDK fixture completed");
         NativeStreamingModelAccess absent;
         Streaming                  unbound(absent);
         Refuses([&] { unbound.RequestModel(0, 6); }, "RequestModel");
         Refuses([&] { (void)unbound.HasModelLoaded(0); }, "HasModelLoaded");
         Refuses([&] { unbound.RequestModel(1000, 6); }, "RequestModel vehicle upgrade");
         Refuses([&] { (void)unbound.HasModelLoaded(1193); }, "HasModelLoaded vehicle upgrade");
+        Refuses([&] { unbound.LoadAllRequestedModels(false, nullptr); }, "LoadAllRequestedModels");
+        Refuses([&] { unbound.LoadAllRequestedModels(true, nullptr); }, "LoadAllRequestedModels priority-only");
         std::puts("Production MTA streaming SDK slice fixture completed");
         std::printf("Passed %u actual MTA streaming SDK checks (%zu-bit)\n", checks, sizeof(void*) * 8);
         return 0;

@@ -11,6 +11,7 @@
 #pragma pop_macro("main")
 #include "../../Client/game_de/NativeModelReferenceMemory.h"
 #include "../../Client/game_de/NativeModelReferenceProfile.h"
+#include "../../Client/game_de/NativeStreamingUpgradeProfile.h"
 #include <utility>
 namespace
 {
@@ -60,7 +61,7 @@ namespace
             std::memcpy(&result, references + static_cast<std::size_t>(index) * 16 + 4, 4);
             return result;
         }
-        void Shape(std::int32_t count, std::int32_t selected, bool externalBits, std::int32_t hashCount)
+        void Shape(std::int32_t count, std::int32_t selected, bool externalBits, std::int32_t hashCount, std::uint32_t selectedKey = 17)
         {
             used = count;
             std::memset(Map(), 0, RP::HeaderBytes);
@@ -79,7 +80,7 @@ namespace
             Header(0x48, hashCount);
             auto*                                                       bits = externalBits ? allocationBits : Map() + 0x10;
             auto*                                                       hash = hashCount == 1 ? Map() + 0x38 : buckets;
-            const std::array<std::pair<std::int32_t, std::uint32_t>, 3> live{{{0, 0}, {selected, 17}, {2, B::ModelCount - 1}}};
+            const std::array<std::pair<std::int32_t, std::uint32_t>, 3> live{{{0, 0}, {selected, selectedKey}, {2, B::ModelCount - 1}}};
             for (const auto& entry : live)
             {
                 const auto    index = entry.first;
@@ -292,11 +293,25 @@ int main(int argc, char** argv)
     fixture.Put(fixture.buckets, 4, std::int32_t{2});
     fixture.Put(fixture.buckets, 12, std::int32_t{-1});
     Check(adjust(17, 1, receipt) == ClockResult::BindingChanged && !receipt.entered, "duplicate occupied keys cannot choose an arbitrary native reference row");
-    for (const auto key : {B::ModelCount, std::uint32_t{65535}, std::uint32_t{65536}, std::uint32_t{0xffffffff}, std::uint32_t{1000}, std::uint32_t{1193}})
+    for (const auto key : {std::uint32_t{1000}, std::uint32_t{1099}, std::uint32_t{1193}})
+    {
+        reset();
+        fixture.Shape(4, 1, false, 4, key);
+        fixture.Slot(key, fixture.Address(fixture.metadata));
+        fixture.Stream(key, 0x40, 1);
+        fixture.Global(NativeStreamingUpgradeProfile::LinkCountRva, std::int32_t{1});
+        fixture.Global(NativeStreamingUpgradeProfile::FirstLinksRva, static_cast<std::uint16_t>(key));
+        fixture.Global(NativeStreamingUpgradeProfile::SecondLinksRva, static_cast<std::uint16_t>(B::ModelCount - 1));
+        Check(adjust(key, 1, receipt) == ClockResult::Ok && fixture.Count(1) == 8 && fixture.Count(2) == 7 && referenceCalls == 1,
+              "an upgrade increments only its selected native reference while its configured companion count stays unchanged");
+        Check(adjust(key, -1, receipt) == ClockResult::Ok && fixture.Count(1) == 7 && fixture.Count(2) == 7 && referenceCalls == 2,
+              "an upgrade's interior decrement preserves the independent companion reference and existing zero guards");
+    }
+    for (const auto key : {B::ModelCount, std::uint32_t{65535}, std::uint32_t{65536}, std::uint32_t{0xffffffff}})
     {
         reset();
         Check(adjust(key, 1, receipt) != ClockResult::Ok && !receipt.entered && referenceCalls == 0 && PoolTestHost::reads == 0,
-              "unsigned out-of-range keys and unimplemented upgrade reference policy never alias another model");
+              "unsigned out-of-range keys never alias another model");
     }
     for (const auto delta : {0, 2, -2})
     {

@@ -39,6 +39,10 @@
 #include "NativeModelReferenceMemory.h"
 #include "NativeStreamingUpgradeReader.h"
 #include "NativeStreamingUpgradeCalls.h"
+#include "NativeStreamingLoadAllCalls.h"
+#include "NativeStreamingResourceCalls.h"
+#include "NativeModelReferenceTransactions.h"
+#include "NativeModelBankProfile.h"
 #include <game/CModelRequestPolicy.h>
 #include "NativeStartGameCalls.h"
 #include "NativeUObjectMembershipAccess.h"
@@ -132,6 +136,7 @@ namespace mta::game_de
             ClockResult ReadModelBankEntry(std::uint32_t, NativeModelBankReader::Value&) noexcept override;
             ClockResult ReadStreamingModelLoaded(std::uint32_t, NativeModelLoadedReader::Value&) noexcept override;
             ClockResult RequestStreamingModel(std::uint32_t, std::uint32_t) noexcept override;
+            ClockResult LoadStreamingModels(bool) noexcept override;
             ClockResult AdjustModelReference(std::uint32_t, int) noexcept override;
             ClockResult RequestStreamingUpgrade(std::uint32_t, std::uint32_t) noexcept override;
             ClockResult ReadStreamingUpgradeLoaded(std::uint32_t, bool&) noexcept override;
@@ -2359,6 +2364,17 @@ namespace mta::game_de
             // of treating an ordinary-model request as a compatible upgrade.
             if (MtaGame::CModelRequestPolicy::IsUpgradeModel(modelIndex))
                 return ClockResult::UnsupportedBuild;
+            // Non-DFF resources have native category/list/archive prerequisites.
+            // Reuse that genuine RequestModel route instead of a DFF metadata
+            // placeholder or synthetic loaded-state transition.
+            if (modelIndex >= NativeModelBankProfile::ModelCount)
+            {
+                NativeStreamingResourceCalls::Receipt receipt;
+                const auto result = NativeStreamingResourceCalls::Request(runtime.image, modelIndex, flags, &CheckTimingOwner, &receipt);
+                if (receipt.entered && result != ClockResult::Ok)
+                    Stop(result);
+                return result;
+            }
             NativeStreamingRequestCalls::Receipt receipt;
             const auto                           result = NativeStreamingRequestCalls::Request(runtime.image, modelIndex, flags, &CheckTimingOwner, &receipt);
             // Requesting may already have changed flags, queues or UE state
@@ -2369,8 +2385,29 @@ namespace mta::game_de
                 Stop(result);
             return result;
         }
+        ClockResult NativeAccess::LoadStreamingModels(bool onlyPriority) noexcept
+        {
+            NativeStreamingLoadAllCalls::Receipt receipt;
+            const auto                           result = NativeStreamingLoadAllCalls::Load(runtime.image, onlyPriority, &CheckTimingOwner, &receipt);
+            // Engine callbacks and completed loads can survive lost return
+            // acknowledgement. Retire this same owner without another flush,
+            // queue rollback or restoring objects from the previous world.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
         ClockResult NativeAccess::AdjustModelReference(std::uint32_t modelIndex, int delta) noexcept
         {
+            if (delta == 1)
+            {
+                // Acquisition preserves existing-key adjustment and uses the
+                // genuine reserve/publish transaction only for an absent key.
+                NativeModelReferenceTransactions::Receipt receipt;
+                const auto result = NativeModelReferenceTransactions::Acquire(runtime.image, modelIndex, &CheckTimingOwner, &receipt);
+                if (receipt.entered && result != ClockResult::Ok)
+                    Stop(result);
+                return result;
+            }
             NativeModelReferenceMemory::Receipt receipt;
             const auto                          result = NativeModelReferenceMemory::Adjust(runtime.image, modelIndex, delta, &CheckTimingOwner, &receipt);
             // An accepted count can survive lost acknowledgement. Replaying

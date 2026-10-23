@@ -36,6 +36,7 @@
 #include "NativePedWaterFlagsMemory.h"
 #include "NativePedWaterTaskReader.h"
 #include "NativePedOrientationMemory.h"
+#include "NativeAnimationBlockMemory.h"
 #include "NativePedVelocityMemory.h"
 #include "NativePedReferenceController.h"
 #include "NativePedVitalsMemory.h"
@@ -202,6 +203,7 @@ namespace mta::game_de
             ClockResult ReadPedCenterOfMass(const NativePedReferenceToken&, CVector&) noexcept override;
             ClockResult SetPedCenterOfMass(const NativePedReferenceToken&, const CVector&) noexcept override;
             ClockResult SetPedOrientation(const NativePedReferenceToken&, const CVector&) noexcept override;
+            ClockResult ReadAnimationBlock(const NativeAnimationBlockIdentity&, NativeAnimationBlockValues&) noexcept override;
             ClockResult ReadPedInWater(const NativePedReferenceToken&, bool&) noexcept override;
             ClockResult SetPedInWaterFlags(const NativePedReferenceToken&, bool) noexcept override;
             ClockResult SetReferencedPedPosition(const NativePedReferenceToken&, const CVector&) noexcept override;
@@ -3490,6 +3492,34 @@ namespace mta::game_de
             if (receipt.entered && result != ClockResult::Ok)
                 Stop(result);
             return result;
+        }
+
+        ClockResult NativeAccess::ReadAnimationBlock(const NativeAnimationBlockIdentity& expected, NativeAnimationBlockValues& output) noexcept
+        {
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto generation = runtime.generation.load();
+            const auto identity = expected;
+            // A copied index/name can recur in a later native session. This
+            // CPU affinity prevents an old SDK receiver from silently reviving;
+            // it grants neither an animation-block lease nor reference cells.
+            if (!identity.ownerGeneration || identity.ownerGeneration != generation)
+                return ClockResult::OwnerConflict;
+            NativeAnimationBlockValues next;
+            result = NativeAnimationBlockMemory({runtime.image}, &CheckTimingOwner).Read(identity, next);
+            if (result != ClockResult::Ok)
+                return result;
+            if ((result = CheckTimingOwner()) != ClockResult::Ok)
+                return result;
+            if (expected.ownerGeneration != generation || runtime.generation.load() != generation || expected.index != identity.index ||
+                expected.name != identity.name)
+                return ClockResult::OwnerConflict;
+            // Read-only refusal preserves the entire caller value and leaves
+            // this runtime usable. No native effect or block ownership exists
+            // to replay, restore or retire through a second registry.
+            output = next;
+            return ClockResult::Ok;
         }
 
         ClockResult NativeAccess::ReadPedInWater(const NativePedReferenceToken& token, bool& output) noexcept

@@ -37,6 +37,32 @@ the count changes and another current-owner check at native entry. Accepted
 effects persist on later failure without rollback or replay. This does not
 grant a retained model lease or complete MTA's `ModelAddRef`/`RemoveRef` wrapper.
 
+The abstract `CModelInfoRequestDE` now reuses that same request/reference policy
+for the actual SDK methods. It owns MTA's wrapper DWORD reference and pending
+counters, borrows the real game's async/streaming receivers, and preserves
+request flags, retry order, pending acknowledgement and exception prefixes.
+`GetRefCount` returns the wrapper counter. Native interface increments and
+custom-aware removal remain mandatory backend effects; DE's separate sparse
+DWORD map is not a classic metadata ushort reference field. Usable render data,
+model dependencies and blocking-load reporting also remain explicit required
+operations, so this layer does not publish a model factory.
+
+`CAnimBlockDE` implements the existing animation-block index, loaded flag,
+animation offset and count methods using DE's actual named block bank. Its
+copied index/name identity belongs to one runtime generation; reads recheck
+the native row and current callback before publishing values. An old wrapper
+cannot borrow a later runtime, and a refused read does not stop an unrelated
+current owner. The native DWORD animation count widens to the SDK's `size_t`
+without changing its bits. The observation bound is not an allocation capacity.
+
+`CAnimBlockRequestDE` and the real classic `CAnimBlockSA::Request` share MTA's
+original loaded short circuit, unsigned IFP model arithmetic, nullable model
+lookup, request flags, reference increment and blocking load order. Release
+builds preserve the original removal of assertion observations. Native
+`AddRef`, borrowed names, hierarchy/raw interfaces and the complete animation
+factory remain required work; request sequencing supplies no substitute
+native reference counter or render object.
+
 `CStreamingDE::LoadAllRequestedModels(false)` enters DE's genuine all-model
 flush with a current typed game-mode/world context. Priority loading uses the
 current priority flags and qualified native pending handles, then the game's

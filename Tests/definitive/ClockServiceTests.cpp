@@ -27,6 +27,9 @@
 #include "../../Client/game_de/CPedOrientationDE.h"
 #include "../../Client/game_de/NativePedOrientationMemory.h"
 #include "../../Client/game_de/NativePedOrientationProfile.h"
+#include "../../Client/game_de/NativeAnimationBlockMemory.h"
+#include "../../Client/game_de/NativeAnimationBlockProfile.h"
+#include "../../Client/game_de/CAnimBlockDE.h"
 #include "../../Client/game_de/NativePedPlacementMemory.h"
 #include "../../Client/game_de/NativePedPoseMutation.h"
 #include "../../Client/game_de/CPedPoseDE.h"
@@ -1688,6 +1691,36 @@ namespace ClockReaderTestHost
     }
 }
 
+namespace ClockAnimationOwnerTest
+{
+    std::uintptr_t row = 0;
+    unsigned       reads = 0;
+    bool           failNext = false;
+    void (*afterRead)() = nullptr;
+    mta::game_de::NativeAnimationBlockIdentity* identity = nullptr;
+    std::uintptr_t                              changedAddress = 0;
+    std::uint32_t                               changedValue = 0;
+    void                                        StoreWord() noexcept
+    {
+        SIZE_T written = 0;
+        if (!::WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(changedAddress), &changedValue, sizeof(changedValue), &written) ||
+            written != sizeof(changedValue))
+            std::abort();
+    }
+    void ChangeAffinity() noexcept
+    {
+        ++identity->ownerGeneration;
+    }
+    void ChangeIndex() noexcept
+    {
+        ++identity->index;
+    }
+    void ChangeName() noexcept
+    {
+        identity->name[0] ^= 1;
+    }
+}
+
 namespace mta::game_de::NativeImageAccess
 {
     bool ClockReaderFixtureExecutable() noexcept
@@ -1778,6 +1811,29 @@ namespace mta::game_de::NativeImageAccess
                 written != 2)
                 std::abort();
             ++ClockModelLoadedOwnerTest::changes;
+        }
+        return true;
+    }
+
+    bool AnimationBlockOwnerFixtureReadImage(std::uintptr_t image, std::uintptr_t address, void* destination, std::size_t bytes, bool writable = false,
+                                             bool executable = false) noexcept
+    {
+        const bool selected = address == ClockAnimationOwnerTest::row && bytes == NativeAnimationBlockProfile::RowBytes;
+        if (selected && ClockAnimationOwnerTest::failNext)
+        {
+            ClockAnimationOwnerTest::failNext = false;
+            return false;
+        }
+        if (!ReadImage(image, address, destination, bytes, writable, executable))
+            return false;
+        if (selected)
+        {
+            ++ClockAnimationOwnerTest::reads;
+            if (const auto after = ClockAnimationOwnerTest::afterRead)
+            {
+                ClockAnimationOwnerTest::afterRead = nullptr;
+                after();
+            }
         }
         return true;
     }
@@ -2007,6 +2063,11 @@ namespace mta::game_de::NativeImageAccess
 #define MTA_DE_PED_WATER_FLAGS_EXCHANGE ClockPedWaterOwnerTest::Exchange
 #include "../../Client/game_de/NativePedWaterFlagsMemory.cpp"
 #include "../../Client/game_de/NativePedWaterTaskReader.cpp"
+// Only the selected owned-image read boundary schedules transitions. Native
+// identity, current callback and the shipping reader's bookends stay intact.
+#define ReadImage AnimationBlockOwnerFixtureReadImage
+#include "../../Client/game_de/NativeAnimationBlockMemory.cpp"
+#undef ReadImage
 #undef MTA_DE_PED_WATER_FLAGS_EXCHANGE
 #define MTA_DE_PED_PLACEMENT_EXCHANGE ClockPedPhysicalScalarsOwnerTest::Exchange
 #include "../../Client/game_de/NativePedPlacementMemory.cpp"
@@ -6721,10 +6782,12 @@ namespace
 #include "NativeNamedGarageOwnerTests.inl"
 
 #include "NativeGameConstructorWeaponOwnerTests.inl"
+#include "NativeAnimationBlockOwnerTests.inl"
 
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool animationOnly = argc == 3 && std::strcmp(argv[2], "--animation-block") == 0;
     const bool constructorSuccess = argc == 3 && std::strcmp(argv[2], "--weapon-constructor-success") == 0;
     const bool constructorPartial = argc == 3 && std::strcmp(argv[2], "--weapon-constructor-partial") == 0;
     const bool constructorRecovery = argc == 3 && std::strcmp(argv[2], "--weapon-constructor-recovery") == 0;
@@ -6739,9 +6802,19 @@ int main(int argc, char** argv)
     const bool poseOnly = argc == 3 && std::strcmp(argv[2], "--ped-pose") == 0;
     const bool poolRegistryOnly = argc == 3 && std::strcmp(argv[2], "--ped-pool-registry") == 0;
     Check((argc == 2 || constructorOnly || pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly || poseOnly ||
-           waterOnly) &&
+           waterOnly || animationOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (animationOnly)
+    {
+        // This cohort observes only animation metadata through the real owner;
+        // earlier ped, streaming and constructor receipts stay historical.
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        NativeAnimationBlocksOwnedSdk(fixture);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (constructorOnly)
     {
         // Each process supplies a fresh real runtime manager. Failure remains

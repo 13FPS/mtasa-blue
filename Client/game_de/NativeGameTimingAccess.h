@@ -51,6 +51,7 @@
 #include "NativeWantedAccess.h"
 #include "NativeRopesAccess.h"
 #include "NativeNamedGarageAccess.h"
+#include "NativeAnimationBlockAccess.h"
 #include "NativeWeaponConstructorProgress.h"
 #include <cstdint>
 
@@ -100,7 +101,8 @@ namespace mta::game_de
                                    public NativeTaskRemovalAccess,
                                    public NativeStreamingModelAccess,
                                    public NativeModelClassificationAccess,
-                                   public NativeNamedGarageAccess
+                                   public NativeNamedGarageAccess,
+                                   public NativeAnimationBlockAccess
     {
     public:
         virtual ClockResult SetTimeScale(float value) noexcept = 0;

@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation')]
+    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -26,6 +26,8 @@ $record['runScope'] = $Scope
 $record['nativePedOwnerSliceTested'] = $false
 $record['nativePedWaterTaskOwnerTested'] = $false
 $record['actualPedWaterTaskOwnerTested'] = $false
+$record['nativeAnimationBlockOwnerTested'] = $false
+$record['actualAnimationBlockSdkOwnerTested'] = $false
 $record['nativePedOrientationOwnerTested'] = $false
 $record['actualPedOrientationOwnerTested'] = $false
 $record['nativePedWeaponInstanceOwnerTested'] = $false
@@ -111,6 +113,7 @@ try {
         'Client/game_de/NativeRopesProfile.h','Client/game_de/CRopesDE.h','Client/game_de/CRopesDE.cpp','Client/sdk/game/CRopes.h','Shared/sdk/SharedUtil.Defines.h',
         'Tests/definitive/NativeRopesOwnerTests.inl',
         'Client/game_de/NativePedTransformReader.h','Client/game_de/NativePedTransformReader.cpp','Client/game_de/NativePedTransformProfile.h',
+        'Client/game_de/NativeAnimationBlockAccess.h','Client/game_de/NativeAnimationBlockMemory.h','Client/game_de/NativeAnimationBlockMemory.cpp','Client/game_de/NativeAnimationBlockProfile.h','Client/game_de/CAnimBlockDE.h','Client/game_de/CAnimBlockDE.cpp','Client/sdk/game/CAnimBlock.h','Client/game_de/CModelInfoRequestDE.h','Client/game_de/CModelInfoRequestDE.cpp','Client/sdk/game/CModelRequestPolicy.h','Client/game_de/CAnimBlockRequestDE.h','Client/game_de/CAnimBlockRequestDE.cpp','Client/sdk/game/CAnimBlockRequestPolicy.h',
         'Client/game_de/NativePedOrientationAccess.h','Client/game_de/NativePedOrientationMemory.h','Client/game_de/NativePedOrientationMemory.cpp','Client/game_de/NativePedOrientationProfile.h','Client/game_de/NativePedPoseContext.h','Client/game_de/NativePedPoseContext.cpp','Client/game_de/CPedOrientationDE.h','Client/game_de/CPedOrientationDE.cpp','Client/sdk/game/CGameModelPreparationPolicy.h','Client/game_de/NativePedWaterTaskAccess.h','Client/game_de/NativePedWaterTaskReader.h','Client/game_de/NativePedWaterTaskReader.cpp','Client/game_de/NativePedWaterTaskProfile.h','Client/game_de/NativePedWaterFlagsAccess.h','Client/game_de/NativePedWaterFlagsMemory.h','Client/game_de/NativePedWaterFlagsMemory.cpp','Client/game_de/NativePedWaterFlagsProfile.h','Client/game_de/CPedWeaponStatsDE.h','Client/game_de/CPedWeaponStatsDE.cpp','Client/sdk/game/CPedWeaponStatPolicy.h','Client/game_de/CPedWaterDE.h','Client/game_de/CPedWaterDE.cpp','Client/game_de/CGameInitializationDE.h','Client/game_de/CGameInitializationDE.cpp','Client/sdk/game/CGameInitializationPolicy.h','Client/game_de/NativePedPlacementAccess.h','Client/game_de/NativePedPlacementMemory.h','Client/game_de/NativePedPlacementMemory.cpp','Client/game_de/NativePedPoseMutation.h','Client/game_de/CPedPoseDE.h','Client/game_de/CPedPoseDE.cpp','Client/sdk/game/CEntityPlacementPolicy.h','Client/game_de/NativePedTeleportAccess.h','Client/game_de/NativePedTeleportMemory.h','Client/game_de/NativePedTeleportMemory.cpp','Client/game_de/NativePedTeleportProfile.h',
         'Client/game_de/NativePedVelocityAccess.h','Client/game_de/NativePedVelocityMemory.h','Client/game_de/NativePedVelocityMemory.cpp','Client/game_de/NativePedVelocityProfile.h',
         'Client/sdk/game/CPoolSlotPolicy.h','Tests/definitive/NativePedVelocityOwnerTests.inl',
@@ -337,6 +340,7 @@ try {
         'Build/definitive-recovery/mta-pools-ped-registry-de-20261023/pools-ped-registry-source-ready.json'
     )
     $sourceNames += @('Tests/definitive/NativePedPoseOwnerTests.inl','Tests/definitive/Write-PedPoseFixture.ps1')
+    $sourceNames += @('Tests/definitive/NativeAnimationBlockOwnerTests.inl')
     $sourceNames += @('Tests/definitive/NativePedOrientationOwnerTests.inl','Tests/definitive/Write-PedOrientationFixture.ps1','Tests/definitive/NativePedWaterOwnerTests.inl','Tests/definitive/NativePedWaterTaskOwnerTests.inl','Tests/definitive/Write-PedWaterFixture.ps1')
     $sourceNames += @($nativeFiles | ForEach-Object { [IO.Path]::GetRelativePath($taskRoot,$_.FullName).Replace('\','/') })
     $detoursNames = @('detours.cpp','modules.cpp','disasm.cpp','image.cpp','creatwth.cpp')
@@ -432,6 +436,9 @@ try {
         (Join-Path $taskRoot 'Client/game_de/CPedWaterDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CPedOrientationDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGameInitializationDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CAnimBlockDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CAnimBlockRequestDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CModelInfoRequestDE.cpp'),
 
         (Join-Path $taskRoot 'Client/game_de/CStatsReadDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CStatsDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeWeatherOverridePlan.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeWeatherOverrideProfile.cpp'),
@@ -448,6 +455,7 @@ try {
     # The cumulative callback fixture includes current owner and retirement cases.
     # Keep it bounded while allowing the full set to finish on a busy build host.
     $fixtureArguments = @($outputRoot)
+    if ($Scope -eq 'AnimationBlock') { $fixtureArguments += '--animation-block' }
     if ($Scope -eq 'PedWater') { $fixtureArguments += '--ped-water' }
     if ($Scope -eq 'PedWaterOrientation') { $fixtureArguments += '--ped-water-orientation' }
     if ($Scope -eq 'PedPose') { $fixtureArguments += '--ped-pose' }
@@ -493,7 +501,14 @@ try {
         if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
         if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
     }
-    if ($Scope -eq 'ConstructorWeapons') {
+    if ($Scope -eq 'AnimationBlock') {
+        $record.nativeAnimationBlockOwnerTested = $text.Contains('Production native animation block callback owner fixture completed')
+        $record.actualAnimationBlockSdkOwnerTested = $text.Contains('Production actual animation block SDK callback fixture completed')
+        if (-not ($record.nativeAnimationBlockOwnerTested -and $record.actualAnimationBlockSdkOwnerTested)) {
+            throw 'Current native animation identity/generation and actual four SDK getters did not execute.'
+        }
+        $record.productionNativeCallbackTested = $true
+    } elseif ($Scope -eq 'ConstructorWeapons') {
         $record.nativeConstructorWeaponPreparationOwnerTested = $text.Contains('Production bounded constructor weapon preparation owner fixture completed')
         $record.nativeConstructorWeaponFailureOwnerTested = $text.Contains('Production constructor persistent row failure fixture completed')
         $record.nativeConstructorWeaponFrameRecoveryOwnerTested = $text.Contains('Production constructor startup-frame vector recovery fixture completed')

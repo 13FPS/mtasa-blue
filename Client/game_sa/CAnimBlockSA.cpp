@@ -14,6 +14,7 @@
 #include "CAnimBlockSA.h"
 #include "CAnimManagerSA.h"
 #include "CGameSA.h"
+#include <game/CAnimBlockRequestPolicy.h>
 
 extern CGameSA* pGame;
 
@@ -24,30 +25,11 @@ int CAnimBlockSAInterface::GetIndex()
 
 void CAnimBlockSA::Request(EModelRequestType requestType, bool bAllowBlockingFail)
 {
-    if (IsLoaded())
-        return;
-
-    DWORD dwModelID = GetIndex() + pGame->GetBaseIDforIFP();
-
-    if (requestType == BLOCKING)
-    {
-        CModelInfo* pModelInfo = pGame->GetModelInfo(dwModelID);
-        pGame->GetStreaming()->RequestModel(dwModelID, 0x14);
-        AddRef();
-        pGame->GetStreaming()->LoadAllRequestedModels(true);
-
-        // bAllowBlockingFail is for debugging only (Blocking load should never fail)
-        if (!bAllowBlockingFail)
-        {
-            assert(IsLoaded());
-            assert(pGame->GetStreaming()->HasModelLoaded(dwModelID));
-        }
-    }
-    else
-    {
-        pGame->GetStreaming()->RequestModel(dwModelID, 0x04);
-        AddRef();
-    }
+    MtaGame::CAnimBlockRequestPolicy::Request(
+        static_cast<std::uint32_t>(requestType), bAllowBlockingFail, [this] { return IsLoaded(); }, [this] { return GetIndex(); },
+        [] { return pGame->GetBaseIDforIFP(); }, [](std::uint32_t model) { return pGame->GetModelInfo(model); },
+        [](std::uint32_t model, std::uint32_t flags) { pGame->GetStreaming()->RequestModel(model, flags); }, [this] { AddRef(); }, [](bool onlyPriority)
+        { pGame->GetStreaming()->LoadAllRequestedModels(onlyPriority); }, [](std::uint32_t model) { return pGame->GetStreaming()->HasModelLoaded(model); });
 }
 
 CAnimBlendHierarchySAInterface* CAnimBlockSA::GetAnimationHierarchyInterface(size_t iAnimation)

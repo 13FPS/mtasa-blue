@@ -19,6 +19,9 @@
 #include "../../Client/game_de/NativePedPoolReader.h"
 #include "../../Client/game_de/NativePedTransformReader.h"
 #include "../../Client/game_de/NativePedTransformProfile.h"
+#include "../../Client/game_de/NativePedPlacementMemory.h"
+#include "../../Client/game_de/NativePedPoseMutation.h"
+#include "../../Client/game_de/CPedPoseDE.h"
 #include "../../Client/game_de/NativePedTeleportMemory.h"
 #include "../../Client/game_de/NativePedTeleportProfile.h"
 #include "../../Client/game_de/NativePedVelocityMemory.h"
@@ -144,6 +147,14 @@
 #include <vector>
 #include <functional>
 #include "PedPoolRegistryFixture.generated.h"
+namespace ped_pose_fixture
+{
+    [[noreturn]] inline void Unqualified()
+    {
+        std::abort();
+    }
+}
+#include "PedPoseFixture.generated.h"
 
 namespace ClockModelClassificationOwnerTest
 {
@@ -1882,6 +1893,9 @@ namespace mta::game_de::NativeImageAccess
 #include "../../Client/game_de/NativePedPhysicalScalarsMemory.cpp"
 #pragma pop_macro("ReadProcessMemory")
 #undef MTA_DE_PED_PHYSICAL_SCALARS_EXCHANGE
+#define MTA_DE_PED_PLACEMENT_EXCHANGE ClockPedPhysicalScalarsOwnerTest::Exchange
+#include "../../Client/game_de/NativePedPlacementMemory.cpp"
+#undef MTA_DE_PED_PLACEMENT_EXCHANGE
 #define MTA_DE_PED_ROTATION_EXCHANGE ClockPedRotationOwnerTest::Exchange
 #include "../../Client/game_de/NativePedRotationMemory.cpp"
 #undef MTA_DE_PED_ROTATION_EXCHANGE
@@ -6605,8 +6619,9 @@ int main(int argc, char** argv)
     const bool currentWeaponOnly = argc == 3 && std::strcmp(argv[2], "--ped-current-weapon") == 0;
     const bool garageNamedOnly = argc == 3 && std::strcmp(argv[2], "--garage-named") == 0;
     const bool garagePoolsOnly = argc == 3 && std::strcmp(argv[2], "--garage-pools") == 0;
+    const bool poseOnly = argc == 3 && std::strcmp(argv[2], "--ped-pose") == 0;
     const bool poolRegistryOnly = argc == 3 && std::strcmp(argv[2], "--ped-pool-registry") == 0;
-    Check((argc == 2 || constructorOnly || pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly) &&
+    Check((argc == 2 || constructorOnly || pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly || poseOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
     if (constructorOnly)
@@ -6619,6 +6634,16 @@ int main(int argc, char** argv)
             ConstructorWeaponFixture::TimerJournal(fixture);
         else
             ConstructorWeaponFixture::Run(fixture, constructorPartial ? 1u : constructorRecovery ? 2u : 0u);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (poseOnly)
+    {
+        // Execute only this actual SDK/token/placement completion cohort;
+        // historical constructor/garage/weapon tests keep separate receipts.
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        NativePedPhysicalScalarsOwnedSdk(fixture, false, false, true);
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }

@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <game/CEntityPlacementPolicy.h>
 #include <CRect.h>
 #include "BoneNode_cSA.h"
 #include "CAnimBlendAssociationSA.h"
@@ -121,65 +122,68 @@ bool CEntitySA::SetScaleInternal(const CVector& scale)
     return true;
 }
 
+// MSVC cannot compile inline assembly inside the shared policy's lambda.
+// Keep the existing native ECX-only train call here, with its effect still
+// ordered after position storage and remembered-state commit by the policy.
+static void RecalculateTrainRailPosition(CEntitySAInterface* entity)
+{
+    DWORD dwThis = (DWORD)entity;
+    DWORD dwFunc = FUNC_CTrain_FindPositionOnTrackFromCoors;
+    // clang-format off
+    __asm
+    {
+        mov     ecx, dwThis
+        call    dwFunc
+    }
+    // clang-format on
+}
+
 void CEntitySA::SetPosition(float fX, float fY, float fZ)
 {
-    // Remove & add to world?
-    if (std::isnan(fX) || std::isnan(fY) || std::isnan(fZ) || std::isinf(fX) || std::isinf(fY) || std::isinf(fZ))
-        return;
-
-    CVector* vecPos;
-    if (m_pInterface->matrix)
-    {
-        OnChangingPosition(CVector(fX, fY, fZ));
-        vecPos = &m_pInterface->matrix->vPos;
-    }
-    else
-    {
-        vecPos = &m_pInterface->m_transform.m_translate;
-    }
-
-    if (vecPos)
-    {
-        vecPos->fX = fX;
-        vecPos->fY = fY;
-        vecPos->fZ = fZ;
-        m_PhysicsState.RememberPosition(*vecPos);
-    }
-
-    WORD wModelID = GetModelIndex();
-    if (wModelID == 537 || wModelID == 538 || wModelID == 569 || wModelID == 570 || wModelID == 590 || wModelID == 449)
-    {
-        // If it's a train, recalculate its rail position parameter (does not affect derailed state)
-        DWORD dwThis = (DWORD)m_pInterface;
-        DWORD dwFunc = FUNC_CTrain_FindPositionOnTrackFromCoors;
-        // clang-format off
-        __asm
+    MtaGame::CEntityPlacementPolicy::SetPosition(
+        fX, fY, fZ,
+        [this](const CVector& requested) -> CVector*
         {
-            mov     ecx, dwThis
-            call    dwFunc
-        }
-        // clang-format on
-    }
-    if (m_pInterface->nType == ENTITY_TYPE_OBJECT)
-    {
-        ((CObjectSAInterface*)m_pInterface)->bUpdateScale = true;
-    }
+            CVector* vecPos;
+            if (m_pInterface->matrix)
+            {
+                OnChangingPosition(requested);
+                vecPos = &m_pInterface->matrix->vPos;
+            }
+            else
+            {
+                vecPos = &m_pInterface->m_transform.m_translate;
+            }
+            if (vecPos)
+            {
+                vecPos->fX = requested.fX;
+                vecPos->fY = requested.fY;
+                vecPos->fZ = requested.fZ;
+            }
+            return vecPos;
+        },
+        [this](const CVector& committed) { m_PhysicsState.RememberPosition(committed); },
+        [this]
+        {
+            // These are class-specific native effects, not shared CPU policy.
+            // Remembered placement still commits before either existing path.
+            WORD wModelID = GetModelIndex();
+            if (MtaGame::CEntityPlacementPolicy::RequiresTrainRailRecalculation(wModelID))
+            {
+                RecalculateTrainRailPosition(m_pInterface);
+            }
+            if (m_pInterface->nType == ENTITY_TYPE_OBJECT)
+            {
+                ((CObjectSAInterface*)m_pInterface)->bUpdateScale = true;
+            }
+        });
 }
 
 void CEntitySA::Teleport(float fX, float fY, float fZ)
 {
-    if (std::isnan(fX) || std::isnan(fY) || std::isnan(fZ) || std::isinf(fX) || std::isinf(fY) || std::isinf(fZ))
-        return;
-
-    if (m_pInterface->matrix)
-    {
-        SetPosition(fX, fY, fZ);
-        m_pInterface->Teleport(CVector(fX, fY, fZ), true);
-    }
-    else
-    {
-        SetPosition(fX, fY, fZ);
-    }
+    MtaGame::CEntityPlacementPolicy::Teleport(
+        fX, fY, fZ, [this] { return m_pInterface->matrix != nullptr; }, [this](const CVector& requested)
+        { SetPosition(requested.fX, requested.fY, requested.fZ); }, [this](const CVector& requested, bool reset) { m_pInterface->Teleport(requested, reset); });
 }
 
 void CEntitySA::ProcessControl()
@@ -267,8 +271,7 @@ void CEntitySA::FixBoatOrientation()
 
 void CEntitySA::SetPosition(CVector* vecPosition)
 {
-    if (vecPosition)
-        SetPosition(vecPosition->fX, vecPosition->fY, vecPosition->fZ);
+    MtaGame::CEntityPlacementPolicy::SetPosition(vecPosition, [this](float x, float y, float z) { SetPosition(x, y, z); });
 }
 
 void CEntitySA::RestoreLastGoodPhysicsState()

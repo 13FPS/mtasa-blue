@@ -18,6 +18,7 @@
 #include <game/CGameClockService.h>
 #include <game/CGameApplicationFrameObservation.h>
 #include <game/CGameStartupObservation.h>
+#include <game/CGameConstructorPreparation.h>
 #include <game/CGameTimeService.h>
 #include <game/CGameFrontendAdmission.h>
 #include <cstdint>
@@ -31,38 +32,42 @@ public:
     CGameAdapterModule(const CGameAdapterModule&) = delete;
     CGameAdapterModule& operator=(const CGameAdapterModule&) = delete;
 
-    bool                 Start(CCoreInterface* owner, const std::wstring& absoluteModulePath);
-    bool                 StartAdjacent(CCoreInterface* owner);
-    static std::wstring  AdjacentModulePath(std::string& error);
-    bool                 Pulse();
-    bool                 Reset();
-    bool                 PublishLocalObservation(const mta::game_de::LocalObservation& observation);
-    bool                 GetLocalObservation(mta::game_de::LocalObservation& observation);
-    bool                 SubmitControlActions(const mta::game_de::ControlActionFrame& frame);
-    bool                 GetMtaInputState(mta::game_de::MtaInputState& state);
-    bool                 BindNativeInput();
-    bool                 ReadNativeControllerState(std::uint32_t padIndex, mta::game_de::NativeControllerState& state);
-    bool                 ReadNativeDeviceState(mta::game_de::NativeDeviceState& state);
-    bool                 BeginNativeMovementTrial();
-    bool                 GetNativeMovementTrialState(mta::game_de::NativeMovementTrialState& state);
-    bool                 EndNativeMovementTrial();
-    bool                 BeginFrontendInputLease(void* window, mta::game_de::FrontendInputLeaseStateV1& state);
-    bool                 RenewFrontendInputLease(std::uint64_t generation);
-    bool                 ReadFrontendInputLease(mta::game_de::FrontendInputLeaseStateV1& state);
-    bool                 EndFrontendInputLease(std::uint64_t generation);
-    bool                 BeginLocalInputLease(void* window, mta::game_de::LocalInputLeaseStateV1& state);
-    bool                 RenewLocalInputLease(std::uint64_t generation);
-    bool                 ReadLocalInputLease(mta::game_de::LocalInputLeaseStateV1& state);
-    bool                 EndLocalInputLease(std::uint64_t generation);
-    bool                 BeginNativeClockService(const mta::game_de::ClockServiceRequestV1& request, mta::game_de::ClockServiceStateV1& state);
-    bool                 SubmitNativeClockCommand(const mta::game_de::ClockCommandV1& command);
-    bool                 RenewNativeClockService(std::uint64_t generation);
-    bool                 ReadNativeClockService(mta::game_de::ClockServiceStateV1& state);
-    bool                 EndNativeClockService(std::uint64_t generation);
-    bool                 BeginNativeApplicationFrameObservation(const mta::game_de::ClockServiceRequestV1& request, mta::game_de::ClockServiceStateV1& state);
-    bool                 ReadNativeApplicationFrameObservation(std::uint64_t generation, mta::game_de::ApplicationFrameObservationStateV1& state);
-    bool                 BeginNativeStartupObservation(const mta::game_de::ClockServiceRequestV1& request, mta::game_de::ClockServiceStateV1& state);
-    bool                 ReadNativeStartupObservation(std::uint64_t generation, mta::game_de::StartupObservationStateV1& state);
+    bool                Start(CCoreInterface* owner, const std::wstring& absoluteModulePath);
+    bool                StartAdjacent(CCoreInterface* owner);
+    static std::wstring AdjacentModulePath(std::string& error);
+    bool                Pulse();
+    bool                Reset();
+    bool                PublishLocalObservation(const mta::game_de::LocalObservation& observation);
+    bool                GetLocalObservation(mta::game_de::LocalObservation& observation);
+    bool                SubmitControlActions(const mta::game_de::ControlActionFrame& frame);
+    bool                GetMtaInputState(mta::game_de::MtaInputState& state);
+    bool                BindNativeInput();
+    bool                ReadNativeControllerState(std::uint32_t padIndex, mta::game_de::NativeControllerState& state);
+    bool                ReadNativeDeviceState(mta::game_de::NativeDeviceState& state);
+    bool                BeginNativeMovementTrial();
+    bool                GetNativeMovementTrialState(mta::game_de::NativeMovementTrialState& state);
+    bool                EndNativeMovementTrial();
+    bool                BeginFrontendInputLease(void* window, mta::game_de::FrontendInputLeaseStateV1& state);
+    bool                RenewFrontendInputLease(std::uint64_t generation);
+    bool                ReadFrontendInputLease(mta::game_de::FrontendInputLeaseStateV1& state);
+    bool                EndFrontendInputLease(std::uint64_t generation);
+    bool                BeginLocalInputLease(void* window, mta::game_de::LocalInputLeaseStateV1& state);
+    bool                RenewLocalInputLease(std::uint64_t generation);
+    bool                ReadLocalInputLease(mta::game_de::LocalInputLeaseStateV1& state);
+    bool                EndLocalInputLease(std::uint64_t generation);
+    bool                BeginNativeClockService(const mta::game_de::ClockServiceRequestV1& request, mta::game_de::ClockServiceStateV1& state);
+    bool                SubmitNativeClockCommand(const mta::game_de::ClockCommandV1& command);
+    bool                RenewNativeClockService(std::uint64_t generation);
+    bool                ReadNativeClockService(mta::game_de::ClockServiceStateV1& state);
+    bool                EndNativeClockService(std::uint64_t generation);
+    bool                BeginNativeApplicationFrameObservation(const mta::game_de::ClockServiceRequestV1& request, mta::game_de::ClockServiceStateV1& state);
+    bool                ReadNativeApplicationFrameObservation(std::uint64_t generation, mta::game_de::ApplicationFrameObservationStateV1& state);
+    bool                BeginNativeStartupObservation(const mta::game_de::ClockServiceRequestV1& request, mta::game_de::ClockServiceStateV1& state);
+    bool                ReadNativeStartupObservation(std::uint64_t generation, mta::game_de::StartupObservationStateV1& state);
+    // Preparation is explicit and write-capable. Its returned token belongs
+    // to the existing clock Renew/Read/End owner, including failed admission.
+    bool                 BeginNativeConstructorPreparation(const mta::game_de::ClockServiceRequestV1& request, mta::game_de::ClockServiceStateV1& state);
+    bool                 ReadNativeConstructorPreparation(std::uint64_t generation, mta::game_de::ConstructorPreparationStateV1& state);
     bool                 HasGameTimeService() const noexcept;
     mta::game_de::Status ReadGameTimeState(mta::game_de::GameTimeStateV1& state) noexcept;
     mta::game_de::Status ReadFrontendAdmission(mta::game_de::FrontendAdmissionStateV1& state) noexcept;
@@ -129,6 +134,8 @@ private:
     decltype(&mta::game_de::ReadGameApplicationFrameObservationV1)  m_applicationFrameRead = nullptr;
     decltype(&mta::game_de::BeginGameStartupObservationV1)          m_startupObservationBegin = nullptr;
     decltype(&mta::game_de::ReadGameStartupObservationV1)           m_startupObservationRead = nullptr;
+    decltype(&mta::game_de::BeginGameConstructorPreparationV1)      m_constructorPreparationBegin = nullptr;
+    decltype(&mta::game_de::ReadGameConstructorPreparationV1)       m_constructorPreparationRead = nullptr;
     decltype(&mta::game_de::ReadGameTimeStateV1)                    m_gameTimeRead = nullptr;
     decltype(&mta::game_de::ReadGameFrontendAdmissionV1)            m_frontendAdmissionRead = nullptr;
     mta::game_de::IGameRenderObservation*                           m_renderObservation = nullptr;
@@ -168,6 +175,9 @@ private:
     // until explicit End/Reset acknowledges clock cleanup.
     bool m_clockDiagnostics = false;
     bool m_clockAttemptPending = false;
+    // This is the explicit preparation token, not an additional native lease.
+    // Clear only with the same successful clock End/Reset/Shutdown lifecycle.
+    std::uint64_t m_constructorPreparationGeneration = 0;
     // Even failed native admission may owe End. Keep this separate from the
     // optional export group and never infer retirement from inactive input.
     bool          m_localLeaseAttemptPending = false;

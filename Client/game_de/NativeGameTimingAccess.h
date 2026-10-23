@@ -23,6 +23,7 @@
 #include "NativePedVitalsAccess.h"
 #include "NativePedMetadataAccess.h"
 #include "NativePedMutationAccess.h"
+#include "NativePedPlacementAccess.h"
 #include "NativePedObservationAccess.h"
 #include "NativePedIntelligenceReader.h"
 #include "NativeTaskPoolReader.h"
@@ -76,6 +77,7 @@ namespace mta::game_de
                                    public NativePedVitalsAccess,
                                    public NativePedMetadataAccess,
                                    public NativePedMutationAccess,
+                                   public NativePedPlacementAccess,
                                    public NativePedObservationAccess,
                                    public NativePedPhysicalScalarsAccess,
                                    public NativePedRotationAccess,

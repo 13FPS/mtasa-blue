@@ -39,10 +39,12 @@ namespace
         CVector            target{123.25f, -456.5f, 789.75f};
         ClockResult        result = ClockResult::NotInitialized;
     };
-    void PedTeleportOwnerHandler(NativeGameTimingAccess& access, void* opaque)
+    // Both the raw primitive regression and actual SDK completion need the
+    // identical short-lived actor graph. Sharing its admission prevents a
+    // second, weaker synthetic actor path in the placement owner fixture.
+    template <class Action>
+    void WithPedTeleportActor(ClockImageFixture& fixture, ClockTeleportPool& peds, Action&& action)
     {
-        auto& context = *static_cast<PedTeleportOwnerContext*>(opaque);
-        auto& fixture = *context.fixture;
         namespace P = NativePedTeleportProfile;
         // The existing graph already registers each raw object and class. Add
         // only the proved skeletal actor/root associations for this borrowed
@@ -62,12 +64,17 @@ namespace
         fixture.Put(P::ComponentClassCacheRva, StartGameGraph::Address(graph.managerClass));
         fixture.Put(NativeStartupWorldProfile::levelClassCacheRva, StartGameGraph::Address(graph.levelClass));
         const auto actor = StartGameGraph::Address(graph.game);
-        std::memcpy(context.peds->objects + P::ActorOffset, &actor, sizeof(actor));
-        context.result = access.TeleportPed(1, context.target);
+        std::memcpy(peds.objects + P::ActorOffset, &actor, sizeof(actor));
+        action();
         const std::uintptr_t zero = 0;
-        std::memcpy(context.peds->objects + P::ActorOffset, &zero, sizeof(zero));
+        std::memcpy(peds.objects + P::ActorOffset, &zero, sizeof(zero));
         fixture.Put(P::ActorClassCacheRva, zero);
         fixture.Put(P::ComponentClassCacheRva, zero);
+    }
+    void PedTeleportOwnerHandler(NativeGameTimingAccess& access, void* opaque)
+    {
+        auto& context = *static_cast<PedTeleportOwnerContext*>(opaque);
+        WithPedTeleportActor(*context.fixture, *context.peds, [&] { context.result = access.TeleportPed(1, context.target); });
     }
     void NativePedTeleportOwnedSdk(ClockImageFixture& fixture)
     {

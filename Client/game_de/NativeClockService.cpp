@@ -32,6 +32,7 @@
 #include "NativeRopesMemory.h"
 #include "CRopesDE.h"
 #include "NativePedTeleportMemory.h"
+#include "NativePedPlacementMemory.h"
 #include "NativePedVelocityMemory.h"
 #include "NativePedReferenceController.h"
 #include "NativePedVitalsMemory.h"
@@ -197,6 +198,8 @@ namespace mta::game_de
             ClockResult SetPedPhysicalScalar(const NativePedReferenceToken&, NativePedPhysicalScalarField, float) noexcept override;
             ClockResult ReadPedCenterOfMass(const NativePedReferenceToken&, CVector&) noexcept override;
             ClockResult SetPedCenterOfMass(const NativePedReferenceToken&, const CVector&) noexcept override;
+            ClockResult SetReferencedPedPosition(const NativePedReferenceToken&, const CVector&) noexcept override;
+            ClockResult CompleteReferencedPedTeleport(const NativePedReferenceToken&, const CVector&) noexcept override;
             ClockResult SetReferencedPedVelocity(const NativePedReferenceToken&, NativePedVelocityKind, const CVector&) noexcept override;
             ClockResult ReadReferencedPedTransform(const NativePedReferenceToken&, NativePedTransformReader::Value&) noexcept override;
             ClockResult BorrowReferencedPedPosition(const NativePedReferenceToken&, CVector*&) noexcept override;
@@ -3454,6 +3457,60 @@ namespace mta::game_de
             // conflict can follow a partial write; stopping this same owner
             // never rewinds the row or retries the remaining components.
             if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+
+        ClockResult NativeAccess::SetReferencedPedPosition(const NativePedReferenceToken& token, const CVector& position) noexcept
+        {
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedPoolReader::Value before, after;
+            result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedPlacementMemory::Receipt receipt;
+            result = NativePedPlacementMemory({runtime.image}, &CheckTimingOwner).Set(before, position, &receipt);
+            if (result != ClockResult::Ok)
+            {
+                if (receipt.entered)
+                    Stop(result);
+                return result;
+            }
+            result = ResolvePedReference(token, after);
+            if (result == ClockResult::Ok && (before.nativePed != after.nativePed || before.handle != after.handle))
+                result = ClockResult::OwnerConflict;
+            // Accepted XYZ storage is persistent even when the original weak
+            // reference disappears during final acknowledgement. End retires
+            // this sole controller's cells; it never replays/restores placement.
+            if (result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+        ClockResult NativeAccess::CompleteReferencedPedTeleport(const NativePedReferenceToken& token, const CVector& position) noexcept
+        {
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedPoolReader::Value before, after;
+            result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            // This completion is called in the same callback after SDK
+            // SetPosition and last-good state have committed. Unlike standalone
+            // raw TeleportPed, a later pre-native refusal is a failure of an
+            // already-started intent. Only this exact admitted owner/token may
+            // stop it; foreign/stale tokens above cannot retire another owner.
+            NativePedTeleportMemory::Receipt receipt;
+            result = NativePedTeleportMemory({runtime.image}, &CheckTimingOwner).Apply(before.handle, position, &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = ResolvePedReference(token, after);
+                if (result == ClockResult::Ok && (before.nativePed != after.nativePed || before.handle != after.handle))
+                    result = ClockResult::OwnerConflict;
+            }
+            if (result != ClockResult::Ok)
                 Stop(result);
             return result;
         }

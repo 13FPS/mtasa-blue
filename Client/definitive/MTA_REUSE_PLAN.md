@@ -266,6 +266,13 @@ prepared weapon services without acquiring timing or weapon write authority.
 This prepares constructor services before MTA's separate later game initialization;
 the complete `CGame` factory and remaining services are still unfinished.
 
+Core's existing `CGameAdapterModule` now owns this optional preparation contract.
+It resolves the begin/read exports together with their clock retirement functions
+before admission, validates the shared MTA schedule's progress values, and retains
+the exact producer token after a failed begin or end. Older providers remain usable
+without these optional exports. Preparation is explicit and does not advertise a
+complete `CGame` or start another native owner implicitly.
+
 `CGameTimingDE::GetGravity` also reads the current qualified native downward
 acceleration operand through the existing timing-reader binding. It preserves
 finite binary32 values and refuses changed image/code/read prerequisites.
@@ -464,6 +471,16 @@ world-list and velocity effects belong to that operation. An entered failure
 stops the existing owner and preserves those effects; it never replays the
 intent or restores a guessed entity snapshot. This primitive publishes no
 partial `CPed` object and does not complete the remaining entity SDK methods.
+
+The abstract `CPedPoseDE` layer now implements the actual SDK `SetPosition`
+overloads and `Teleport`. Classic `CEntitySA` and DE share the finite-input and
+commit-order policy. DE placement writes only the qualified current position
+components, refusing the classic train cases before any write. Matrix-backed
+SDK teleport commits placement and last-good CPU position before entering the
+existing native teleport operation once; inline placement skips that operation.
+Placement and teleport share a reentry boundary. Partial or uncertain effects
+remain with the existing token owner and stop its intent without rollback or
+replay. Matrix/orientation repair and complete ped construction remain unfinished.
 
 Raw linear and angular ped velocities also use the existing callback owner.
 Both vectors retain native units and copy into caller storage. Setters check

@@ -13,6 +13,7 @@
 #include <utility>
 #include <windows.h>
 #include <enums/SystemState.h>
+#include <game/CWeaponInfoIndexPolicy.h>
 
 namespace
 {
@@ -145,6 +146,15 @@ bool CGameAdapterModule::Start(CCoreInterface* owner, const std::wstring& absolu
     resolveClock(m_applicationFrameRead, "ReadGameApplicationFrameObservationV1");
     resolveClock(m_startupObservationBegin, "BeginGameStartupObservationV1");
     resolveClock(m_startupObservationRead, "ReadGameStartupObservationV1");
+    resolveClock(m_constructorPreparationBegin, "BeginGameConstructorPreparationV1");
+    resolveClock(m_constructorPreparationRead, "ReadGameConstructorPreparationV1");
+    if (!m_constructorPreparationBegin || !m_constructorPreparationRead || !m_clockRenew || !m_clockRead || !m_clockEnd)
+    {
+        // Resolve every retirement dependency before admission. An older or
+        // partially exported provider must remain usable without this mode.
+        m_constructorPreparationBegin = nullptr;
+        m_constructorPreparationRead = nullptr;
+    }
     resolveClock(m_gameTimeRead, "ReadGameTimeStateV1");
     resolveClock(m_frontendAdmissionRead, "ReadGameFrontendAdmissionV1");
     resolveClock(m_localLeaseBegin, "BeginGameLocalInputLeaseV1");
@@ -281,6 +291,7 @@ bool CGameAdapterModule::Reset()
     if (!RequireOwnerThread("Reset") || !EndNativeRenderObservation() || !RecordStatus(m_adapter->Reset(), "Reset"))
         return false;
     m_clockAttemptPending = false;
+    m_constructorPreparationGeneration = 0;
     m_localLeaseAttemptPending = false;
     m_localLeaseGeneration = 0;
     m_hasRenderObservation = false;
@@ -594,6 +605,92 @@ bool CGameAdapterModule::ReadNativeStartupObservation(std::uint64_t generation, 
            RecordStatus(m_startupObservationRead(mta::game_de::StartupObservationVersionV1, m_adapter, generation, &state), "ReadNativeStartupObservation");
 }
 
+bool CGameAdapterModule::BeginNativeConstructorPreparation(const mta::game_de::ClockServiceRequestV1& request, mta::game_de::ClockServiceStateV1& state)
+{
+    using namespace mta::game_de;
+    if (!RequireOwnerThread("BeginNativeConstructorPreparation") || !RequireClockRetired() || !RequireLocalInputRetired())
+        return false;
+    if (m_renderObservation || m_renderObservationV2 || m_renderObservationV3 || m_renderObservationV4 || m_renderObservationV5 || m_renderObservationV6)
+    {
+        SetError("End render observation before starting constructor preparation");
+        return false;
+    }
+    if (!m_constructorPreparationBegin || !m_constructorPreparationRead)
+    {
+        SetError("The adapter lacks the complete optional constructor preparation and clock retirement contract");
+        return false;
+    }
+    if (request.size != sizeof(request) || request.version != ClockServiceVersionV1 || !request.maximumDurationMs ||
+        request.maximumDurationMs > ClockServiceMaximumDurationMsV1 || request.reserved[0] || request.reserved[1] || request.reserved[2])
+    {
+        SetError("Constructor preparation requires a valid native clock request");
+        return false;
+    }
+    if (!m_clockDiagnostics)
+    {
+        try
+        {
+            m_error.reserve(512);
+        }
+        catch (...)
+        {
+            SetError("Cannot reserve constructor cleanup diagnostics before Begin");
+            return false;
+        }
+        m_clockDiagnostics = true;
+    }
+    // Admission can fail after native hook ownership. Preserve the returned
+    // cleanup token even on failure; no preparation retry precedes retirement.
+    m_clockAttemptPending = true;
+    m_constructorPreparationGeneration = 0;
+    ClockServiceStateV1 next;
+    const auto          status = m_constructorPreparationBegin(ConstructorPreparationVersionV1, m_adapter, &request, &next);
+    if (next.size != sizeof(next) || next.version != ClockServiceVersionV1 || next.producerThread != m_ownerThread || !next.generation || next.reserved[0] ||
+        next.reserved[1])
+    {
+        SetError("Constructor preparation returned no valid producer-owned clock token; cleanup remains pending");
+        return false;
+    }
+    m_constructorPreparationGeneration = next.generation;
+    state = next;
+    return RecordStatus(status, "BeginNativeConstructorPreparation");
+}
+
+bool CGameAdapterModule::ReadNativeConstructorPreparation(std::uint64_t generation, mta::game_de::ConstructorPreparationStateV1& state)
+{
+    using namespace mta::game_de;
+    if (!RequireOwnerThread("ReadNativeConstructorPreparation"))
+        return false;
+    if (!m_constructorPreparationRead || !m_clockAttemptPending || !generation || generation != m_constructorPreparationGeneration)
+    {
+        SetError("Constructor preparation read requires its current producer-owned clock token");
+        return false;
+    }
+    ConstructorPreparationStateV1 next;
+    if (!RecordStatus(m_constructorPreparationRead(ConstructorPreparationVersionV1, m_adapter, generation, &next), "ReadNativeConstructorPreparation"))
+        return false;
+    constexpr auto rows = MtaGame::CWeaponInfoIndexPolicy::SlotCount;
+    const bool     complete = (next.flags & ConstructorPreparationComplete) != 0;
+    const bool     failed = (next.flags & ConstructorPreparationFailed) != 0;
+    const bool     notified = (next.flags & ConstructorPreparationReadyNotified) != 0;
+    bool           reserved = false;
+    for (const auto value : next.reserved)
+        reserved |= value != 0;
+    // Validate the exact shared MTA schedule's acknowledged prefix, rather than
+    // interpreting a pointer or a ready notification as a complete CGame.
+    if (next.size != sizeof(next) || next.version != ConstructorPreparationVersionV1 || next.generation != generation || reserved || next.totalRows != rows ||
+        next.completedRows > rows || next.registeredRows > rows || next.registeredRows < next.completedRows || next.registeredRows - next.completedRows > 1 ||
+        (next.flags & ~(ConstructorPreparationComplete | ConstructorPreparationFailed | ConstructorPreparationReadyNotified)) ||
+        (complete && (failed || next.completedRows != rows || next.registeredRows != rows)) || (notified && !complete))
+    {
+        SetError("Constructor preparation provider returned an invalid value snapshot; caller output preserved");
+        return false;
+    }
+    state = next;
+    m_error.clear();
+    return true;
+}
+
 bool CGameAdapterModule::SubmitNativeClockCommand(const mta::game_de::ClockCommandV1& command)
 {
     return RequireOwnerThread("SubmitNativeClockCommand") && m_clockSubmit &&
@@ -614,10 +711,17 @@ bool CGameAdapterModule::ReadNativeClockService(mta::game_de::ClockServiceStateV
 
 bool CGameAdapterModule::EndNativeClockService(std::uint64_t generation)
 {
-    if (!RequireOwnerThread("EndNativeClockService") || !m_clockEnd ||
-        !RecordStatus(m_clockEnd(mta::game_de::ClockServiceVersionV1, m_adapter, generation), "EndNativeClockService"))
+    if (!RequireOwnerThread("EndNativeClockService"))
+        return false;
+    if (m_constructorPreparationGeneration && generation != m_constructorPreparationGeneration)
+    {
+        SetError("Constructor preparation must retire through its exact native clock token");
+        return false;
+    }
+    if (!m_clockEnd || !RecordStatus(m_clockEnd(mta::game_de::ClockServiceVersionV1, m_adapter, generation), "EndNativeClockService"))
         return false;
     m_clockAttemptPending = false;
+    m_constructorPreparationGeneration = 0;
     return true;
 }
 
@@ -1689,6 +1793,8 @@ void CGameAdapterModule::Stop() noexcept
     m_applicationFrameRead = nullptr;
     m_startupObservationBegin = nullptr;
     m_startupObservationRead = nullptr;
+    m_constructorPreparationBegin = nullptr;
+    m_constructorPreparationRead = nullptr;
     m_gameTimeRead = nullptr;
     m_frontendAdmissionRead = nullptr;
     m_renderEndpointReaderV2 = nullptr;
@@ -1697,6 +1803,7 @@ void CGameAdapterModule::Stop() noexcept
     m_hasSetupDiagnostic = false;
     m_hasRootsDiagnostic = false;
     m_clockAttemptPending = false;
+    m_constructorPreparationGeneration = 0;
     m_clockDiagnostics = false;
 }
 

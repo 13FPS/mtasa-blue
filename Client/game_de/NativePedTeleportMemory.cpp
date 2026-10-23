@@ -4,6 +4,7 @@
  * PURPOSE: Preserve one native teleport action and its already-entered effects
  ****************************************************************************/
 #include "NativePedTeleportMemory.h"
+#include "NativePedPoseMutation.h"
 #include "NativePedTeleportProfile.h"
 #include "NativePedTransformProfile.h"
 #include "NativeImageAccess.h"
@@ -24,12 +25,6 @@ namespace mta::game_de
     {
         namespace P = NativePedTeleportProfile;
         namespace Image = NativeImageAccess;
-        thread_local bool enteredScope = false;
-        struct Scope
-        {
-            Scope() noexcept { enteredScope = true; }
-            ~Scope() { enteredScope = false; }
-        };
         bool Pages(std::uintptr_t at, std::size_t bytes, bool native = false) noexcept
         {
             if (!at || !bytes || bytes > (std::numeric_limits<std::uintptr_t>::max)() - at)
@@ -435,7 +430,11 @@ namespace mta::game_de
                 *receiptOutput = receipt;
             return result;
         };
-        if (D::enteredScope)
+        // Adapter placement and native teleport share one callback-reentry
+        // boundary. This does not pin the engine receiver or serialize its
+        // internal calls; all original immediate graph checks remain required.
+        NativePedPoseMutation scope;
+        if (!scope)
             return finish(ClockResult::Busy);
         auto result = D::Owner(binding, owner);
         if (result != ClockResult::Ok)
@@ -443,7 +442,6 @@ namespace mta::game_de
         if (!D::Read(reinterpret_cast<std::uintptr_t>(&input), &receipt.requested, sizeof(receipt.requested)) || !std::isfinite(receipt.requested.fX) ||
             !std::isfinite(receipt.requested.fY) || !std::isfinite(receipt.requested.fZ))
             return finish(ClockResult::InvalidArgument);
-        D::Scope scope;
         try
         {
             D::Context before;

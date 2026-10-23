@@ -358,6 +358,11 @@ int main(int argc, char** argv)
     TeleportTestHost::active = &memory;
     const CVector   target(123.25f, -456.5f, 789.75f);
     Memory::Receipt receipt;
+    {
+        NativePedPoseMutation placement;
+        Check(placement && memory.Apply(1, target, &receipt) == ClockResult::Busy && !receipt.entered && !TeleportTestHost::calls,
+              "a current adapter placement transaction excludes native teleport before owner borrowing or native entry");
+    }
     Check(unowned.Apply(1, target, &receipt) == ClockResult::NotInitialized && !receipt.entered && !TeleportTestHost::calls,
           "an image/ped handle cannot replace real borrowed callback authority");
     Check(memory.Apply(1, target, &receipt) == ClockResult::Ok && receipt.handle == 1 && receipt.entered && receipt.returned && receipt.afterObserved &&

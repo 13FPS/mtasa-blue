@@ -48,7 +48,7 @@ try{
         'Client/game_de/NativeClassChainAccess.h','Client/game_de/NativeUiClassMapProfile.h',
         'Client/game_de/NativeUObjectMembershipAccess.h','Client/game_de/NativeUObjectMembershipProfile.h',
         'Client/game_de/NativeStartupWorldAccess.h','Client/game_de/NativeStartupWorldProfile.h','Client/game_de/NativeStartupProvidersProfile.h',
-        'Client/game_de/NativePedTeleportAccess.h','Client/game_de/NativePedTeleportMemory.h','Client/game_de/NativePedTeleportMemory.cpp','Client/game_de/NativePedTeleportProfile.h',
+        'Client/game_de/NativePedTeleportAccess.h','Client/game_de/NativePedTeleportMemory.h','Client/game_de/NativePedTeleportMemory.cpp','Client/game_de/NativePedPoseMutation.h','Client/game_de/NativePedTeleportProfile.h',
         'Tests/definitive/NativePedTransformReaderTests.cpp','Tests/definitive/NativePedTeleportTests.cpp','Tests/definitive/test_native_ped_teleport.ps1',
         'Build/definitive-recovery/mta-ped-pool-handle-batch-20261021/native-proof/ped-pool-qualified.json',
         'Build/definitive-recovery/mta-ped-transform-batch-20261021/native-proof/ped-transform-qualified.json',

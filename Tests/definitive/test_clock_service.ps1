@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons')]
+    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -107,7 +107,7 @@ try {
         'Client/game_de/NativeRopesProfile.h','Client/game_de/CRopesDE.h','Client/game_de/CRopesDE.cpp','Client/sdk/game/CRopes.h','Shared/sdk/SharedUtil.Defines.h',
         'Tests/definitive/NativeRopesOwnerTests.inl',
         'Client/game_de/NativePedTransformReader.h','Client/game_de/NativePedTransformReader.cpp','Client/game_de/NativePedTransformProfile.h',
-        'Client/game_de/NativePedTeleportAccess.h','Client/game_de/NativePedTeleportMemory.h','Client/game_de/NativePedTeleportMemory.cpp','Client/game_de/NativePedTeleportProfile.h',
+        'Client/game_de/NativePedPlacementAccess.h','Client/game_de/NativePedPlacementMemory.h','Client/game_de/NativePedPlacementMemory.cpp','Client/game_de/NativePedPoseMutation.h','Client/game_de/CPedPoseDE.h','Client/game_de/CPedPoseDE.cpp','Client/sdk/game/CEntityPlacementPolicy.h','Client/game_de/NativePedTeleportAccess.h','Client/game_de/NativePedTeleportMemory.h','Client/game_de/NativePedTeleportMemory.cpp','Client/game_de/NativePedTeleportProfile.h',
         'Client/game_de/NativePedVelocityAccess.h','Client/game_de/NativePedVelocityMemory.h','Client/game_de/NativePedVelocityMemory.cpp','Client/game_de/NativePedVelocityProfile.h',
         'Client/sdk/game/CPoolSlotPolicy.h','Tests/definitive/NativePedVelocityOwnerTests.inl',
         'Tests/definitive/NativePedTeleportOwnerTests.inl',
@@ -332,6 +332,7 @@ try {
         'Build/definitive-recovery/mta-native-named-garage-geometry-20261023/named-garage-geometry-qualified.json',
         'Build/definitive-recovery/mta-pools-ped-registry-de-20261023/pools-ped-registry-source-ready.json'
     )
+    $sourceNames += @('Tests/definitive/NativePedPoseOwnerTests.inl','Tests/definitive/Write-PedPoseFixture.ps1')
     $sourceNames += @($nativeFiles | ForEach-Object { [IO.Path]::GetRelativePath($taskRoot,$_.FullName).Replace('\','/') })
     $detoursNames = @('detours.cpp','modules.cpp','disasm.cpp','image.cpp','creatwth.cpp')
     $sourceNames += @($detoursNames + @('detours.h') | ForEach-Object { 'vendor/detours/4.0.1/src/' + $_ })
@@ -358,6 +359,11 @@ try {
     Copy-Item -LiteralPath $generatedFixture.path -Destination $generatedEvidence
     $record['pedPoolRegistryGeneratedFixture'] = [ordered]@{path=$generatedEvidence;sha256=(Sha $generatedEvidence);
         rejectingPedMethods=$generatedFixture.rejectingPedMethods;rejectingPoolMethods=$generatedFixture.rejectingPoolMethods}
+    . (Join-Path $PSScriptRoot 'Write-PedPoseFixture.ps1')
+    $poseFixture = Write-PedPoseFixture $taskRoot (Join-Path $scratchRoot 'PedPoseFixture.generated.h')
+    $poseEvidence = Join-Path $outputRoot 'PedPoseFixture.generated.h'
+    Copy-Item -LiteralPath $poseFixture.path -Destination $poseEvidence
+    $record['pedPoseGeneratedFixture'] = [ordered]@{path=$poseEvidence;sha256=(Sha $poseEvidence);rejectingOverrides=$poseFixture.rejectingOverrides}
     $common = @('/nologo','/std:c++17','/EHsc','/O2','/MD','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN','/DDETOURS_MTA_VM_TRANSACTION_NODES',
         ('/I'+(Join-Path $taskRoot 'Client/sdk')),('/I'+(Join-Path $taskRoot 'Shared/sdk')),('/I'+(Join-Path $taskRoot 'vendor/detours/4.0.1/src')),('/I'+$scratchRoot))
     $detoursSources = @($detoursNames | ForEach-Object { Join-Path $taskRoot ('vendor/detours/4.0.1/src/' + $_) })
@@ -397,6 +403,17 @@ try {
         (Join-Path $taskRoot 'Client/game_de/CRopesDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGaragesDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CGarageNamedDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CPoolsDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CPedVitalsDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CPedMetadataDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CPedMutationDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CPedPhysicsDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CPedRotationDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CPedStateDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CPedFlagsDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CPedBehaviorDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CPedCombatDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CPedWeaponSelectionDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CPedPoseDE.cpp'),
+
         (Join-Path $taskRoot 'Client/game_de/CStatsReadDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CStatsDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeWeatherOverridePlan.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeWeatherOverrideProfile.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeWeatherOverrideAtomic.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeWeatherOverrideOwner.cpp'),
@@ -412,6 +429,7 @@ try {
     # The cumulative callback fixture includes current owner and retirement cases.
     # Keep it bounded while allowing the full set to finish on a busy build host.
     $fixtureArguments = @($outputRoot)
+    if ($Scope -eq 'PedPose') { $fixtureArguments += '--ped-pose' }
     if ($Scope -eq 'PedOwner') { $fixtureArguments += '--ped-owner' }
     if ($Scope -eq 'PedCurrentWeapon') { $fixtureArguments += '--ped-current-weapon' }
     if ($Scope -eq 'GarageNamed') { $fixtureArguments += '--garage-named' }
@@ -462,6 +480,14 @@ try {
         if (-not ($record.nativeConstructorWeaponPreparationOwnerTested -and $record.nativeConstructorWeaponFailureOwnerTested -and
                   $record.nativeConstructorWeaponFrameRecoveryOwnerTested -and $record.nativeWeaponTimingRecoveryRegressionTested)) {
             throw 'Current bounded constructor, persistent prefix, normal-frame debt or existing timing journal regression did not complete.'
+        }
+        $record.productionNativeCallbackTested = $true
+    } elseif ($Scope -eq 'PedPose') {
+        $record.nativePedPlacementOwnerTested = $text.Contains('Production native ped placement callback owner fixture completed')
+        $record.actualPedPoseOwnerTested = $text.Contains('Production actual ped pose SDK callback fixture completed')
+        $record.nativePedTeleportCompletionOwnerTested = $text.Contains('Production native ped teleport completion intent fixture completed')
+        if (-not ($record.nativePedPlacementOwnerTested -and $record.actualPedPoseOwnerTested -and $record.nativePedTeleportCompletionOwnerTested)) {
+            throw 'Actual ped placement, SDK ordering and same-callback teleport completion did not finish.'
         }
         $record.productionNativeCallbackTested = $true
     } elseif ($Scope -eq 'GaragePools') {

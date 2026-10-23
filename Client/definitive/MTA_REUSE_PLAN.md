@@ -5,6 +5,24 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+The abstract camera layer now exposes MTA's actual const
+`CCamera::IsSphereVisible` method, used by `CClientMarker::IsOnScreen`. It reuses
+the genuine camera sphere predicate already qualified for the ped screen query,
+without the ped radius, model or center-resolution stages. The backend copies
+the caller's center before callbacks, preserves radius bits, and enters the
+native predicate once through the current camera/world/thread/GC owner.
+
+Native camera matrix, planes and depth may legitimately advance during that
+operation; the adapter does not freeze them or calculate a substitute frustum.
+Only a completed result publishes its boolean, including a successful false
+result. An entered fault stops the owner without replay. Other camera methods,
+render-model ownership and the complete camera/game factories remain required.
+
+MTA's authored gateway animation names are now shared by the actual classic
+animation manager and its DE SDK layer through `CAnimGatewayNames`. This
+reuses the exact `ped` and `run_wuzi` literals; observing those CPU constants
+does not require a native animation table or supply a hierarchy factory.
+
 `CWorldIgnoreEntityDE` implements shooter exclusion for current registered peds
 through the existing controlled `CPoolsDE` registry. It copies a qualified token
 without exposing a classic native interface or creating another registry. Null

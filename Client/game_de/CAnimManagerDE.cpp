@@ -4,6 +4,7 @@
  * PURPOSE: Preserve native counter and missing-name facts without fallback
  ****************************************************************************/
 #include "CAnimManagerDE.h"
+#include <game/CAnimGatewayNames.h>
 #include <stdexcept>
 #include <string>
 namespace mta::game_de
@@ -30,6 +31,16 @@ namespace mta::game_de
     int CAnimManagerDE::GetNumAnimBlocks()
     {
         return Read("GetNumAnimBlocks").blocks;
+    }
+    // Gateway names belong to MTA itself. A native observation refusal must
+    // not turn these authored constants into missing or synthetic data.
+    const char* CAnimManagerDE::GetGateWayBlockName() const
+    {
+        return MtaGame::CAnimGatewayNames::GetBlockName();
+    }
+    const char* CAnimManagerDE::GetGateWayAnimationName() const
+    {
+        return MtaGame::CAnimGatewayNames::GetAnimationName();
     }
     int CAnimManagerDE::GetAnimationBlockIndex(const char* name)
     {

@@ -49,6 +49,7 @@
 #include "NativeWorldAreaMemory.h"
 #include "NativeWorldJetpackMemory.h"
 #include "NativeWorldIgnoredEntityMemory.h"
+#include "NativeCameraSphereVisibleCalls.h"
 #include "CWorldLineDE.h"
 #include "NativeAnimationBlockMemory.h"
 #include "NativeAnimationManagerMemory.h"
@@ -185,6 +186,7 @@ namespace mta::game_de
             ClockResult IsWorldLineOfSightClear(const CVector&, const CVector&, const SLineOfSightFlags&, bool&) noexcept override;
             ClockResult ReadWorldCurrentArea(std::uint32_t&) noexcept override;
             ClockResult ReadJetpackMaxHeight(float&) noexcept override;
+            ClockResult ReadCameraSphereVisible(const CVector&, float, bool&) noexcept override;
             ClockResult ReadStreamingModelGroups(NativeStreamingModelGroupsReader::Value&) noexcept override;
             ClockResult ReadModelArchiveAllocated(std::uint32_t, bool&) noexcept override;
             ClockResult RemoveStreamingModel(std::uint32_t) noexcept override;
@@ -3540,6 +3542,30 @@ namespace mta::game_de
                 output = value.allocatedInArchive;
             return result;
         }
+        ClockResult NativeAccess::ReadCameraSphereVisible(const CVector& center, float radius, bool& output) noexcept
+        {
+            // Fix caller data before admission callbacks. The genuine camera
+            // entry owns sphere/frustum interpretation; no ped bounds, model
+            // readiness or CPU radius clamp belongs in this scalar operation.
+            CVector selected;
+            std::memcpy(&selected, &center, sizeof(selected));
+            float selectedRadius;
+            std::memcpy(&selectedRadius, &radius, sizeof(selectedRadius));
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            bool                                    next = false;
+            NativeCameraSphereVisibleCalls::Receipt receipt;
+            result = NativeCameraSphereVisibleCalls::Read(runtime.image, selected, selectedRadius, next, &CheckTimingOwner, &receipt);
+            // Once native camera code entered, a failed acknowledgement is
+            // not an invisible result and must never be replayed or rolled back.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            if (result == ClockResult::Ok)
+                output = next;
+            return result;
+        }
+
         ClockResult NativeAccess::ReadJetpackMaxHeight(float& output) noexcept
         {
             // MTA's getter observes the qualified native consumer value. The

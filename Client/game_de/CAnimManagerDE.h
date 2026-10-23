@@ -16,9 +16,11 @@ namespace mta::game_de
     class CAnimManagerDE : public CAnimManager
     {
     public:
-        int GetNumAnimations() override;
-        int GetNumAnimBlocks() override;
-        int GetAnimationBlockIndex(const char*) override;
+        int         GetNumAnimations() override;
+        int         GetNumAnimBlocks() override;
+        int         GetAnimationBlockIndex(const char*) override;
+        const char* GetGateWayBlockName() const override;
+        const char* GetGateWayAnimationName() const override;
 
     protected:
         CAnimManagerDE(NativeAnimationManagerAccess& value, std::uint64_t generation) noexcept : native(value), ownerGeneration(generation) {}
@@ -29,7 +31,7 @@ namespace mta::game_de
         const std::uint64_t           ownerGeneration;
     };
     // Registering/loading/refcounting and actual block/hierarchy factories keep
-    // their genuine mandatory contracts. Three observations do not publish a
+    // their genuine mandatory contracts. Observations and authored gateway names do not publish a
     // complete manager or replace any classic raw animation interface.
     static_assert(std::is_abstract_v<CAnimManagerDE> && std::is_base_of_v<CAnimManager, CAnimManagerDE>);
 }

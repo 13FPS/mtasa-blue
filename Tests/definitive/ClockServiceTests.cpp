@@ -141,6 +141,9 @@
 #include "../../Client/game_de/NativeWorldJetpackMemory.h"
 #include "../../Client/game_de/NativeWorldIgnoredEntityMemory.h"
 #include "../../Client/game_de/CWorldIgnoreEntityDE.h"
+#include "../../Client/game_de/CCameraSphereVisibleDE.h"
+#include "../../Client/game_de/NativeCameraSphereVisibleCalls.h"
+#include "NativeCameraSphereVisibleFixture.h"
 #include "NativeWorldIgnoredEntityFixture.h"
 #include "../../Client/game_de/CWorldJetpackHeightDE.h"
 #include "NativeWorldJetpackFixture.h"
@@ -352,6 +355,55 @@ namespace world_ignore_entity_fixture
     }
 }
 #include "WorldIgnoreEntityFixture.generated.h"
+namespace camera_sphere_visible_fixture
+{
+    [[noreturn]] inline void Unqualified(const char* method)
+    {
+        std::fprintf(stderr, "Unqualified camera sphere SDK call: %s\n", method);
+        std::abort();
+    }
+}
+#include "CameraSphereVisibleFixture.generated.h"
+
+namespace ClockCameraSphereOwnerTest
+{
+    using NativeFunction = mta::game_de::NativeCameraSphereVisibleCalls::NativeFunction;
+    std::uintptr_t image = 0, entry = 0, camera = 0, centerAddress = 0;
+    unsigned       calls = 0, scenario = 0;
+    CVector        receivedCenter;
+    float          receivedRadius = 0;
+    bool           next = false;
+    CVector*       callerCenter = nullptr;
+    void (*reenter)() noexcept = nullptr;
+    mta::game_de::ClockResult Invoke(NativeFunction function, std::uintptr_t receiver, const CVector& center, float radius, bool& output,
+                                     std::uint32_t& exception) noexcept
+    {
+        ++calls;
+        entry = reinterpret_cast<std::uintptr_t>(function);
+        camera = receiver;
+        centerAddress = reinterpret_cast<std::uintptr_t>(&center);
+        std::memcpy(&receivedCenter, &center, sizeof(center));
+        std::memcpy(&receivedRadius, &radius, sizeof(radius));
+        if (callerCenter)
+        {
+            callerCenter->fX = 100;
+            callerCenter->fY = 200;
+            callerCenter->fZ = 300;
+            callerCenter = nullptr;
+        }
+        if (reenter)
+            reenter();
+        output = next;
+        if (scenario == 1)
+        {
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return mta::game_de::ClockResult::OriginalException;
+        }
+        if (scenario == 2)
+            *reinterpret_cast<std::uint32_t*>(image + mta::game_de::NativeGameStateProfile::stateRva) = 0;
+        return mta::game_de::ClockResult::Ok;
+    }
+}
 
 namespace ClockModelClassificationOwnerTest
 {
@@ -2737,6 +2789,9 @@ namespace ClockWorldIgnoreOwnerTest
 
 #include "../../Client/game_de/NativeWorldAreaMemory.cpp"
 #include "../../Client/game_de/NativeWorldJetpackMemory.cpp"
+#define MTA_DE_CAMERA_SPHERE_VISIBLE_NATIVE_INVOKE ClockCameraSphereOwnerTest::Invoke
+#include "../../Client/game_de/NativeCameraSphereVisibleCalls.cpp"
+#undef MTA_DE_CAMERA_SPHERE_VISIBLE_NATIVE_INVOKE
 #pragma push_macro("InterlockedCompareExchangePointer")
 #undef InterlockedCompareExchangePointer
 #define InterlockedCompareExchangePointer ClockWorldIgnoreOwnerTest::Compare
@@ -7559,6 +7614,7 @@ namespace
 #include "NativePedOnScreenOwnerTests.inl"
 #include "NativePedWeaponGrantOwnerTests.inl"
 #include "NativeWorldIgnoreEntityOwnerTests.inl"
+#include "NativeCameraSphereVisibleOwnerTests.inl"
 #include "NativeAnimationBlockOwnerTests.inl"
 #include "NativeAnimationBlockNameOwnerTests.inl"
 #include "NativeAnimationManagerOwnerTests.inl"
@@ -7566,6 +7622,7 @@ namespace
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool cameraSphereOnly = argc == 3 && std::strcmp(argv[2], "--camera-sphere-visible") == 0;
     const bool worldIgnoreOnly = argc == 3 && std::strcmp(argv[2], "--world-ignore-entity") == 0;
     const bool pedWeaponGrantOnly = argc == 3 && std::strcmp(argv[2], "--ped-weapon-grant") == 0;
     const bool pedOnScreenOnly = argc == 3 && std::strcmp(argv[2], "--ped-on-screen") == 0;
@@ -7604,9 +7661,18 @@ int main(int argc, char** argv)
     Check((argc == 2 || constructorOnly || pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly || poseOnly ||
            waterOnly || animationOnly || animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly ||
            fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly ||
-           worldLineOnly || worldAreaOnly || worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly) &&
+           worldLineOnly || worldAreaOnly || worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly ||
+           cameraSphereOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (cameraSphereOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        CameraSphereVisibleOwnerFixture::Run(fixture);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (worldIgnoreOnly)
     {
         ClockImageFixture fixture;

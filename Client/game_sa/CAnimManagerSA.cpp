@@ -16,6 +16,7 @@
 #include "CAnimBlendSequenceSA.h"
 #include "CAnimBlockSA.h"
 #include "CAnimManagerSA.h"
+#include <game/CAnimGatewayNames.h>
 #include "CGameSA.h"
 #include "CKeyGenSA.h"
 
@@ -27,8 +28,7 @@ extern CGameSA* pGame;
 // ped block, but in reality, it's playing our custom animation, and Of course, we can return run_wuzi
 // animation within the hook if we want to play it instead. Why run_wuzi? We can also use another animation,
 // but I've tested with this one mostly, so let's stick to this.
-static const char* const kGateWayBlockName = "ped";
-static const char* const kGateWayAnimationName = "run_wuzi";
+static const char* const kGateWayAnimationName = MtaGame::CAnimGatewayNames::GetAnimationName();
 
 CAnimManagerSA::CAnimManagerSA()
 {
@@ -954,12 +954,12 @@ bool CAnimManagerSA::isGateWayAnimationHierarchy(CAnimBlendHierarchySAInterface*
 
 const char* CAnimManagerSA::GetGateWayBlockName() const
 {
-    return kGateWayBlockName;
+    return MtaGame::CAnimGatewayNames::GetBlockName();
 }
 
 const char* CAnimManagerSA::GetGateWayAnimationName() const
 {
-    return kGateWayAnimationName;
+    return MtaGame::CAnimGatewayNames::GetAnimationName();
 }
 
 bool CAnimManagerSA::IsValidGroup(std::uint32_t uiAnimGroup) const

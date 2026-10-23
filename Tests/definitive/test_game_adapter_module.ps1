@@ -106,7 +106,7 @@ $sourceNames = @('Client/sdk/game/CGameAdapter.h', 'Client/game_de/GameAdapter.c
     'Shared/sdk/CControllerActions.h', 'Shared/sdk/CControlStateSynthesis.h',
     'Client/game_de/NativePedPoolProfile.h','Client/game_de/NativePedPoolReader.h','Client/game_de/NativePedPoolReader.cpp',
     'Client/game_de/NativePedTransformProfile.h','Client/game_de/NativePedTransformReader.h','Client/game_de/NativePedTransformReader.cpp',
-    'Client/game_de/NativeAnimationManagerAccess.h','Client/game_de/NativeAnimationManagerMemory.h','Client/game_de/NativeAnimationManagerMemory.cpp','Client/game_de/NativeAnimationManagerProfile.h','Client/game_de/CAnimManagerDE.h','Client/game_de/CAnimManagerDE.cpp','Client/sdk/game/CAnimManager.h',
+    'Client/game_de/NativeAnimationManagerAccess.h','Client/game_de/NativeAnimationManagerMemory.h','Client/game_de/NativeAnimationManagerMemory.cpp','Client/game_de/NativeAnimationManagerProfile.h','Client/game_de/CAnimManagerDE.h','Client/game_de/CAnimManagerDE.cpp','Client/sdk/game/CAnimGatewayNames.h','Client/sdk/game/CAnimManager.h',
         'Client/game_de/NativePedVisibilityAccess.h','Client/game_de/NativePedVisibilityMemory.h','Client/game_de/NativePedVisibilityMemory.cpp','Client/game_de/NativePedVisibilityProfile.h','Client/game_de/CPedVisibilityDE.h','Client/game_de/CPedVisibilityDE.cpp',
         'Client/game_de/NativePedGogglesAccess.h','Client/game_de/NativePedGogglesMemory.h','Client/game_de/NativePedGogglesMemory.cpp','Client/game_de/NativePedGogglesProfile.h','Client/game_de/CPedGogglesDE.h','Client/game_de/CPedGogglesDE.cpp',
         'Client/game_de/CPedTasksDE.h','Client/game_de/CPedTasksDE.cpp','Client/sdk/game/CPedTaskPolicy.h','Client/sdk/game/CPedIntelligence.h','Client/sdk/game/CTaskManager.h','Client/sdk/game/Task.h','Client/sdk/game/TaskTypes.h',
@@ -325,6 +325,7 @@ $sourceNames += @('Client/game_de/NativeWorldJetpackHeightAccess.h','Client/game
 $sourceNames += @('Client/game_de/NativePedOnScreenAccess.h','Client/game_de/CPedOnScreenDE.h','Client/game_de/CPedOnScreenDE.cpp','Client/game_de/NativePedOnScreenCalls.h','Client/game_de/NativePedOnScreenCalls.cpp','Client/game_de/NativePedOnScreenProfile.h')
 $sourceNames += @('Client/game_de/NativePedWeaponGrantAccess.h','Client/game_de/CPedGiveWeaponDE.h','Client/game_de/CPedGiveWeaponDE.cpp','Client/game_de/NativePedWeaponGrantCalls.h','Client/game_de/NativePedWeaponGrantCalls.cpp','Client/game_de/NativePedWeaponGrantProfile.h','Client/sdk/game/CPedGiveWeaponPolicy.h')
 $sourceNames += @('Client/game_de/NativeWorldIgnoreEntityAccess.h','Client/game_de/CWorldIgnoreEntityDE.h','Client/game_de/CWorldIgnoreEntityDE.cpp','Client/game_de/NativeWorldIgnoredEntityMemory.h','Client/game_de/NativeWorldIgnoredEntityMemory.cpp','Client/game_de/NativeWorldIgnoredEntityProfile.h')
+$sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/game_de/CCameraSphereVisibleDE.h','Client/game_de/CCameraSphereVisibleDE.cpp','Client/game_de/NativeCameraSphereVisibleCalls.h','Client/game_de/NativeCameraSphereVisibleCalls.cpp','Client/game_de/NativeCameraSphereVisibleProfile.h')
 $sourceNames += @('Client/game_de/WeaponFireHandlerAccess.h','Client/game_de/CWeaponFireBulletDE.h','Client/game_de/CWeaponFireBulletDE.cpp','Client/sdk/game/CWeaponFireBulletPolicy.h')
 $sourceHashes = @($sourceNames | ForEach-Object {
     $taskPath = Join-Path $taskRoot $_
@@ -447,6 +448,7 @@ if ((Test-Path -LiteralPath $moduleSource) -and $detoursLibraryExit -eq 0) {
         (Join-Path $taskRoot 'Client/game_de/CWorldAreaDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CWorldJetpackHeightDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CWorldIgnoreEntityDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CCameraSphereVisibleDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGameInitializationDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGameResetDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGameWorldDE.cpp'),
@@ -476,6 +478,7 @@ if ((Test-Path -LiteralPath $moduleSource) -and $detoursLibraryExit -eq 0) {
         (Join-Path $taskRoot 'Client/game_de/NativeWorldAreaMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeWorldJetpackMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeWorldIgnoredEntityMemory.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativeCameraSphereVisibleCalls.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedPhysicalScalarsMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedIntelligenceReader.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeTaskPoolReader.cpp'),

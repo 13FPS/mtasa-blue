@@ -2,7 +2,7 @@
 #requires -Version 7.0
 # Compile the actual partial CGameDE with rejecting test-only SDK dependencies.
 [CmdletBinding()]
-param()
+param([ValidateSet('Full','WeaponFireHandlers')][string]$Scope='Full')
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -17,7 +17,7 @@ foreach ($name in @('TEMP','TMP','VCToolsInstallDir','INCLUDE','LIB','LIBPATH','
     $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name,'Process')
 }
 $record = [ordered]@{
-    schema='mta_game_policy_de_tests_v1';directory=$outputRoot;success=$false;
+    schema='mta_game_policy_de_tests_v1';directory=$outputRoot;success=$false;selectedScope=$Scope;actualGameWeaponFireHandlersSdkTested=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     generatedFixture=$null;result=$null;failure=$null;scratchDirectory=$scratchRoot;scratchRemoved=$false;
     scope='Actual explicit prepared-services constructor and retained-manager owner/clock identity fences, one dispatch, status/null/default refusal, no preparation or native write replay; Actual manager-backed CGame::CreateWeaponStat virtual dispatch, caller-owned complete CPU records, mutable creating-manager original lookup, no native live registration/default replay, exact null/owner/factory refusals; actual distinct DE version30 SDK virtual dispatch with unchanged classic numeric values/join-byte fit; actual CGameDE SDK diagnostic reference, lazy ped context, typed registration and shared jetpack permissions; exact complete player-info SDK identity forwarding with explicit owner/null/default refusals; state write forwarding/refusal, exact19 logical cheat-name forwarding with14 owner-backed reads/five explicit unavailable results, unchangedfour native setters, and wrong-executable filename refusal. Remaining test-only SDK overrides reject all use. No native game code executes; filename Bind attempts only the real ordinary-host rejection.';
@@ -114,6 +114,7 @@ try {
         'Client/sdk/game/CWeaponStatListPolicy.h','Client/sdk/game/CWeaponStartupPolicy.h',
         'Build/definitive-recovery/mta-game-weapon-stat-factory-sdk-20261023/game-factory-contract.json'
     )
+    $sourceNames += @('Client/game_de/WeaponFireHandlerAccess.h')
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
     })
@@ -173,7 +174,9 @@ try {
     $record.result.compile = RunOwned $compiler $arguments $outputRoot 'compile' 60000
     if ($record.result.compile.exitCode -ne 0 -or $record.result.compile.timedOut) { throw 'Actual CGameDE CPU-policy fixture compilation failed.' }
     $record.result.executableSha256 = Sha $executable
-    $record.result.test = RunOwned $executable @() $outputRoot 'test' 10000
+    $fixtureArguments = @()
+    if ($Scope -eq 'WeaponFireHandlers') { $fixtureArguments += '--weapon-fire-handlers' }
+    $record.result.test = RunOwned $executable $fixtureArguments $outputRoot 'test' 10000
     $summary = [regex]::Match([IO.File]::ReadAllText($record.result.test.stdout).TrimEnd(),
         '(?:^|\r?\n)Passed (\d+) actual CGameDE CPU SDK policy checks \((\d+)-bit\)$')
     if ($summary.Success) {
@@ -182,15 +185,21 @@ try {
     }
     $record.success = $record.result.test.exitCode -eq 0 -and -not $record.result.test.timedOut -and
         $record.result.checks -gt 0 -and $record.result.pointerBits -eq 64
-    $record.actualWeaponStatManagerGameSdkTested = [IO.File]::ReadAllText($record.result.test.stdout).Contains('Actual CGameDE complete weapon-stat manager SDK fixture completed')
-    if (-not $record.actualWeaponStatManagerGameSdkTested) { throw 'Actual complete weapon-stat manager CGame getter did not execute.' }
-    $record.actualManagerBackedGameWeaponStatFactorySdkTested = [IO.File]::ReadAllText($record.result.test.stdout).Contains('Actual CGameDE manager-backed unlisted weapon-stat factory SDK fixture completed')
-    if (-not $record.actualManagerBackedGameWeaponStatFactorySdkTested) { throw 'Actual manager-backed CGame unlisted factory did not execute.' }
-    $record.actualPreparedConstructorServicesSdkTested = [IO.File]::ReadAllText($record.result.test.stdout).Contains('Actual CGameDE prepared constructor services SDK fixture completed')
-    if (-not $record.actualPreparedConstructorServicesSdkTested) { throw 'Actual prepared constructor services SDK checks did not execute.' }
-    $record.actualDefinitiveGameVersionSdkTested = [IO.File]::ReadAllText($record.result.test.stdout).Contains('Actual CGameDE definitive version identity SDK fixture completed')
-    $record.success = $record.success -and $record.actualDefinitiveGameVersionSdkTested -and $record.actualPreparedConstructorServicesSdkTested
-    if (-not $record.success) { throw 'Actual CGameDE CPU-policy checks failed or summary/version evidence was missing.' }
+    if ($Scope -eq 'WeaponFireHandlers') {
+        $record.scope = 'Only actual CGameDE same-store borrowed WeaponFireHandlerAccess, common SetPre/SetPost typed replacement/null/isolation; no old game policy checks, callbacks or native services execute.'
+        $record.actualGameWeaponFireHandlersSdkTested = [IO.File]::ReadAllText($record.result.test.stdout).Contains('Actual CGameDE borrowed weapon-fire handler registration fixture completed')
+        if (-not ($record.success -and $record.actualGameWeaponFireHandlersSdkTested)) { throw 'Actual CGameDE borrowed handler registration scope did not complete.' }
+    } else {
+        $record.actualWeaponStatManagerGameSdkTested = [IO.File]::ReadAllText($record.result.test.stdout).Contains('Actual CGameDE complete weapon-stat manager SDK fixture completed')
+        if (-not $record.actualWeaponStatManagerGameSdkTested) { throw 'Actual complete weapon-stat manager CGame getter did not execute.' }
+        $record.actualManagerBackedGameWeaponStatFactorySdkTested = [IO.File]::ReadAllText($record.result.test.stdout).Contains('Actual CGameDE manager-backed unlisted weapon-stat factory SDK fixture completed')
+        if (-not $record.actualManagerBackedGameWeaponStatFactorySdkTested) { throw 'Actual manager-backed CGame unlisted factory did not execute.' }
+        $record.actualPreparedConstructorServicesSdkTested = [IO.File]::ReadAllText($record.result.test.stdout).Contains('Actual CGameDE prepared constructor services SDK fixture completed')
+        if (-not $record.actualPreparedConstructorServicesSdkTested) { throw 'Actual prepared constructor services SDK checks did not execute.' }
+        $record.actualDefinitiveGameVersionSdkTested = [IO.File]::ReadAllText($record.result.test.stdout).Contains('Actual CGameDE definitive version identity SDK fixture completed')
+        $record.success = $record.success -and $record.actualDefinitiveGameVersionSdkTested -and $record.actualPreparedConstructorServicesSdkTested
+        if (-not $record.success) { throw 'Actual CGameDE CPU-policy checks failed or summary/version evidence was missing.' }
+    }
 } catch { AddFailure ($_.Exception.ToString()) }
 finally {
     foreach ($name in $previousEnvironment.Keys) {

@@ -13,6 +13,7 @@
 #include "NativeGameStateReader.h"
 #include "NativeDataFileNamesReader.h"
 #include <CJetpackWeaponPolicy.h>
+#include "WeaponFireHandlerAccess.h"
 
 namespace mta::game_de
 {
@@ -20,7 +21,7 @@ namespace mta::game_de
     // engine callback owner's existing instance, so a future complete CGame
     // cannot accidentally create a second native clock or cleanup owner.
     // Unimplemented SDK methods remain pure: this is not yet a factory product.
-    class CGameDE : public CGameWeaponInfoDE
+    class CGameDE : public CGameWeaponInfoDE, public WeaponFireHandlerAccess
     {
     public:
         eGameVersion        GetGameVersion() override;
@@ -95,8 +96,8 @@ namespace mta::game_de
         // Registration is SDK bookkeeping only. A future qualified DE hook
         // must read these borrowed handlers rather than installing a second
         // registration store or assuming that registration enabled dispatch.
-        PreWeaponFireHandler*   GetPreWeaponFireHandler() const noexcept { return preWeaponFireHandler; }
-        PostWeaponFireHandler*  GetPostWeaponFireHandler() const noexcept { return postWeaponFireHandler; }
+        PreWeaponFireHandler*   GetPreWeaponFireHandler() const noexcept override { return preWeaponFireHandler; }
+        PostWeaponFireHandler*  GetPostWeaponFireHandler() const noexcept override { return postWeaponFireHandler; }
         TaskSimpleBeHitHandler* GetTaskSimpleBeHitHandler() const noexcept { return taskSimpleBeHitHandler; }
 
     private:

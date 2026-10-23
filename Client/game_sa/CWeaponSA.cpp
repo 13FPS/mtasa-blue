@@ -16,6 +16,7 @@
 #include "CWeaponStatManagerSA.h"
 #include "CWeaponStatSA.h"
 #include "CWorldSA.h"
+#include <game/CWeaponFireBulletPolicy.h>
 
 extern CGameSA* pGame;
 
@@ -94,60 +95,24 @@ bool CWeaponSA::FireInstantHit(CEntity* firingEntity, CVector* vecOrigin, CVecto
 
 bool CWeaponSA::FireBullet(CEntity* firingEntity, const CVector& vecOrigin, const CVector& vecTarget)
 {
-    if (!firingEntity)
-        return false;
-
-    switch (GetType())
-    {
-        case WEAPONTYPE_PISTOL:
-        case WEAPONTYPE_PISTOL_SILENCED:
-        case WEAPONTYPE_DESERT_EAGLE:
-        case WEAPONTYPE_SHOTGUN:
-        case WEAPONTYPE_SAWNOFF_SHOTGUN:
-        case WEAPONTYPE_SPAS12_SHOTGUN:
-        case WEAPONTYPE_MICRO_UZI:
-        case WEAPONTYPE_MP5:
-        case WEAPONTYPE_AK47:
-        case WEAPONTYPE_M4:
-        case WEAPONTYPE_TEC9:
-        case WEAPONTYPE_COUNTRYRIFLE:
-        case WEAPONTYPE_SNIPERRIFLE:
-        case WEAPONTYPE_MINIGUN:
+    // Reuse MTA's existing sequence while leaving genuine world/stat/player
+    // services and native FireInstantHit dispatch with the classic backend.
+    // Keep handler lookups inside their original gates, after any callbacks.
+    return MtaGame::CWeaponFireBulletPolicy::Fire(
+        *this, firingEntity, vecOrigin, vecTarget, [](CEntity* entity) { pGame->GetWorld()->IgnoreEntity(entity); },
+        [](CEntity* entity) { return dynamic_cast<CPlayerPed*>(entity); },
+        [](CPlayerPed* player)
         {
-            // Don't hit shooter
-            pGame->GetWorld()->IgnoreEntity(firingEntity);
-
-            // Do pre shot lag compensation
-            CPlayerPed* firingPlayerPed = dynamic_cast<CPlayerPed*>(firingEntity);
-            if (pGame->m_pPreWeaponFireHandler && firingPlayerPed)
-                pGame->m_pPreWeaponFireHandler(firingPlayerPed, false);
-
-            // Get the gun muzzle position
-            CWeaponStat* currentWeaponInfo = pGame->GetWeaponStatManager()->GetWeaponStatsFromSkillLevel(GetType(), 999.0f);
-            CVector      vecGunMuzzle = *currentWeaponInfo->GetFireOffset();
-            if (firingPlayerPed)
-                firingPlayerPed->GetTransformedBonePosition(BONE_RIGHTWRIST, &vecGunMuzzle);
-
-            // Bullet trace
-            FireInstantHit(firingEntity, const_cast<CVector*>(&vecOrigin), &vecGunMuzzle, nullptr, const_cast<CVector*>(&vecTarget), nullptr, false, true);
-
-            // Fire sound
-            if (firingPlayerPed)
-                firingPlayerPed->AddWeaponAudioEvent(EPedWeaponAudioEventType::FIRE);
-
-            // Do post shot lag compensation reset & script events
-            if (pGame->m_pPostWeaponFireHandler && firingPlayerPed)
+            if (pGame->m_pPreWeaponFireHandler && player)
+                pGame->m_pPreWeaponFireHandler(player, false);
+        },
+        [] { return pGame->GetWeaponStatManager(); }, [](CPlayerPed* player, CVector* muzzle) { player->GetTransformedBonePosition(BONE_RIGHTWRIST, muzzle); },
+        [](CPlayerPed* player) { player->AddWeaponAudioEvent(EPedWeaponAudioEventType::FIRE); },
+        [](CPlayerPed* player)
+        {
+            if (pGame->m_pPostWeaponFireHandler && player)
                 pGame->m_pPostWeaponFireHandler();
-
-            pGame->GetWorld()->IgnoreEntity(nullptr);
-            return true;
-        }
-
-        default:
-            break;
-    }
-
-    return false;
+        });
 }
 
 bool CWeaponSA::GenerateDamageEvent(CPed* ped, CEntity* responsible, eWeaponType weaponType, int damagePerHit, ePedPieceTypes hitZone, std::uint8_t dir) const

@@ -5,6 +5,20 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+The firing batch shares the actual `CWeaponSA::FireBullet` itinerary with
+abstract `CWeaponFireBulletDE`. Its supported weapon set, shooter exclusion,
+fresh pre/post handler reads, stat lookup after the pre callback, transformed
+muzzle, native argument aliases, audio and final ignore reset retain their
+existing order. The policy preserves accepted effect prefixes on exceptions;
+it does not add rollback or turn a false native result into a failed itinerary.
+
+`CGameDE` exposes a storage-free view of its existing handler registrations to
+that layer. The common setters remain the only registration store, including
+replacement, clearing and per-game isolation. Actual native `FireInstantHit`,
+world exclusion, transformed bone and player audio remain required backend
+services. The qualified world-static `06BC` bullet operation has a different
+receiver, ABI and result, so it cannot substitute for the SDK weapon method.
+
 The October 23 weapon-grant batch shares the actual `CPedSA::GiveWeapon`
 sequence with abstract `CPedGiveWeaponDE`: weapon-info lookup, typed blocking
 model request and custom-model preparation, satchel/detonator recursion, one

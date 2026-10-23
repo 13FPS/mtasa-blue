@@ -13,6 +13,7 @@
 #include <array>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <stdexcept>
 #include <type_traits>
 
@@ -418,7 +419,7 @@ namespace
     }
 }
 
-int main()
+int main(int argc, char** argv)
 {
     static_assert(std::is_abstract_v<mta::game_de::CGameDE>);
     static_assert(VERSION_ALL == 0 && VERSION_EU_10 == 5 && VERSION_US_10 == 11);
@@ -438,7 +439,58 @@ int main()
     TestGame                                   first(reader, clock, timing, streaming, state), second(reader, clock, timing, streaming, state);
     CGame&                                     game = first;
     CGame&                                     other = second;
-    TestPools                                  firstPools, secondPools;
+    if (argc == 2 && std::strcmp(argv[1], "--weapon-fire-handlers") == 0)
+    {
+        // Read the same actual registrations through the borrowed interface
+        // consumed by CWeaponFireBulletDE. This scope returns before the old
+        // game policy suite, so the new route is verified without replaying it.
+        using mta::game_de::WeaponFireHandlerAccess;
+        static_assert(std::is_base_of_v<WeaponFireHandlerAccess, mta::game_de::CGameDE>);
+        const WeaponFireHandlerAccess& firstView = first;
+        const WeaponFireHandlerAccess& otherView = second;
+        static_assert(noexcept(firstView.GetPreWeaponFireHandler()) && noexcept(firstView.GetPostWeaponFireHandler()));
+        Check(firstView.GetPreWeaponFireHandler() == nullptr && firstView.GetPostWeaponFireHandler() == nullptr,
+              "actual game borrowed handler view starts empty");
+        Check(otherView.GetPreWeaponFireHandler() == nullptr && otherView.GetPostWeaponFireHandler() == nullptr,
+              "separate actual game owns independent empty registrations");
+        game.SetPreWeaponFireHandler(PreFirst);
+        game.SetPostWeaponFireHandler(PostFirst);
+        Check(firstView.GetPreWeaponFireHandler() == PreFirst && firstView.GetPostWeaponFireHandler() == PostFirst,
+              "common CGame registration reaches the exact handler view borrowed by DE weapons");
+        Check(
+            first.GetPreWeaponFireHandler() == firstView.GetPreWeaponFireHandler() && first.GetPostWeaponFireHandler() == firstView.GetPostWeaponFireHandler(),
+            "protected game getters and public view identify the same existing stores");
+        Check(!otherView.GetPreWeaponFireHandler() && !otherView.GetPostWeaponFireHandler(),
+              "registering first game cannot populate another game or a global handler registry");
+        game.SetPreWeaponFireHandler(PreSecond);
+        Check(firstView.GetPreWeaponFireHandler() == PreSecond && firstView.GetPostWeaponFireHandler() == PostFirst,
+              "fresh pre view observes replacement while preserving post registration");
+        game.SetPostWeaponFireHandler(PostSecond);
+        Check(firstView.GetPreWeaponFireHandler() == PreSecond && firstView.GetPostWeaponFireHandler() == PostSecond,
+              "fresh post view observes replacement without a cached firing copy");
+        other.SetPreWeaponFireHandler(PreFirst);
+        other.SetPostWeaponFireHandler(PostFirst);
+        Check(otherView.GetPreWeaponFireHandler() == PreFirst && otherView.GetPostWeaponFireHandler() == PostFirst &&
+                  firstView.GetPreWeaponFireHandler() == PreSecond && firstView.GetPostWeaponFireHandler() == PostSecond,
+              "both actual games preserve their own exact typed callbacks");
+        game.SetPreWeaponFireHandler(nullptr);
+        Check(!firstView.GetPreWeaponFireHandler() && firstView.GetPostWeaponFireHandler() == PostSecond,
+              "clearing pre through common SDK is immediately visible without clearing post");
+        game.SetPostWeaponFireHandler(nullptr);
+        Check(!firstView.GetPreWeaponFireHandler() && !firstView.GetPostWeaponFireHandler() && otherView.GetPreWeaponFireHandler() == PreFirst &&
+                  otherView.GetPostWeaponFireHandler() == PostFirst,
+              "clearing first game leaves the other actual game untouched");
+        other.SetPreWeaponFireHandler(nullptr);
+        other.SetPostWeaponFireHandler(nullptr);
+        Check(!otherView.GetPreWeaponFireHandler() && !otherView.GetPostWeaponFireHandler(),
+              "null SDK registration clears the remaining borrowed handler view");
+        Check(!handlerCalls && !reader.IsBound() && !streaming.IsBound() && !state.IsBound(),
+              "registration and view reads dispatch no callback or native service");
+        std::puts("Actual CGameDE borrowed weapon-fire handler registration fixture completed");
+        std::printf("Passed %u actual CGameDE CPU SDK policy checks (%zu-bit)\n", checks, sizeof(void*) * 8);
+        return EXIT_SUCCESS;
+    }
+    TestPools firstPools, secondPools;
 
     Check(game.GetGameVersion() == VERSION_DE && other.GetGameVersion() == VERSION_DE,
           "actual CGame virtual dispatch identifies DE independently of native world/service binding");

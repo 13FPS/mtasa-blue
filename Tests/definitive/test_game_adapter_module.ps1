@@ -324,6 +324,7 @@ $sourceNames += @('Client/game_de/NativeWorldAreaAccess.h','Client/game_de/CWorl
 $sourceNames += @('Client/game_de/NativeWorldJetpackHeightAccess.h','Client/game_de/CWorldJetpackHeightDE.h','Client/game_de/CWorldJetpackHeightDE.cpp','Client/game_de/NativeWorldJetpackMemory.h','Client/game_de/NativeWorldJetpackMemory.cpp','Client/game_de/NativeWorldJetpackProfile.h')
 $sourceNames += @('Client/game_de/NativePedOnScreenAccess.h','Client/game_de/CPedOnScreenDE.h','Client/game_de/CPedOnScreenDE.cpp','Client/game_de/NativePedOnScreenCalls.h','Client/game_de/NativePedOnScreenCalls.cpp','Client/game_de/NativePedOnScreenProfile.h')
 $sourceNames += @('Client/game_de/NativePedWeaponGrantAccess.h','Client/game_de/CPedGiveWeaponDE.h','Client/game_de/CPedGiveWeaponDE.cpp','Client/game_de/NativePedWeaponGrantCalls.h','Client/game_de/NativePedWeaponGrantCalls.cpp','Client/game_de/NativePedWeaponGrantProfile.h','Client/sdk/game/CPedGiveWeaponPolicy.h')
+$sourceNames += @('Client/game_de/WeaponFireHandlerAccess.h','Client/game_de/CWeaponFireBulletDE.h','Client/game_de/CWeaponFireBulletDE.cpp','Client/sdk/game/CWeaponFireBulletPolicy.h')
 $sourceHashes = @($sourceNames | ForEach-Object {
     $taskPath = Join-Path $taskRoot $_
     [ordered]@{ path=$_; exists=(Test-Path -LiteralPath $taskPath); sha256=$(if (Test-Path -LiteralPath $taskPath) {
@@ -425,6 +426,7 @@ if ((Test-Path -LiteralPath $moduleSource) -and $detoursLibraryExit -eq 0) {
         (Join-Path $taskRoot 'Client/game_de/NativePedWeaponFieldsMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedWeaponAmmoMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CWeaponNativeDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CWeaponFireBulletDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedCurrentWeaponSlotMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CPedWeaponSelectionDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CPedPoseDE.cpp'),

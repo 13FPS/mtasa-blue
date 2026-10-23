@@ -114,7 +114,8 @@ namespace
         }
     }
     void NativePedPhysicalScalarsOwnedSdk(ClockImageFixture& fixture, bool currentWeaponOnly = false, bool poolRegistryOnly = false, bool poseOnly = false,
-                                          bool waterOnly = false, bool orientationWithWater = false, bool areaOnly = false, std::uint8_t fireCollisionOnly = 0)
+                                          bool waterOnly = false, bool orientationWithWater = false, bool areaOnly = false, std::uint8_t fireCollisionOnly = 0,
+                                          bool duckingSetterOnly = false)
     {
         namespace S = NativePedPhysicalScalarsProfile;
         namespace R = NativePedReferenceProfile;
@@ -226,7 +227,7 @@ namespace
                       !NativeServiceAdmission::IsClaimed(NativeServiceAdmission::Category::Clock),
                   "scalar retirement acknowledges native cell storage, hooks and owner admission together");
         };
-        if (!currentWeaponOnly && !poolRegistryOnly && !poseOnly && !waterOnly && !areaOnly && !fireCollisionOnly)
+        if (!currentWeaponOnly && !poolRegistryOnly && !poseOnly && !waterOnly && !areaOnly && !fireCollisionOnly && !duckingSetterOnly)
         {
             {
                 NativeClockService service;
@@ -322,13 +323,17 @@ namespace
 #include "NativePedCombatOwnerTests.inl"
 #include "NativePedWeaponOwnerTests.inl"
         }
-        if (!poolRegistryOnly && !poseOnly && !waterOnly && !areaOnly && !fireCollisionOnly)
+        if (!poolRegistryOnly && !poseOnly && !waterOnly && !areaOnly && !fireCollisionOnly && !duckingSetterOnly)
         {
 #include "NativePedCurrentWeaponOwnerTests.inl"
         }
         if (poolRegistryOnly)
         {
 #include "NativePoolsPedRegistryOwnerTests.inl"
+        }
+        if (duckingSetterOnly)
+        {
+#include "NativePedDuckingSetterOwnerTests.inl"
         }
         if (fireCollisionOnly)
         {
@@ -355,7 +360,7 @@ namespace
         ClockReaderTestHost::image = ClockPedReferenceOwnerTest::image = 0;
         for (auto item = saved.rbegin(); item != saved.rend(); ++item)
             fixture.Patch(item->rva, item->bytes.data(), item->bytes.size());
-        if (!currentWeaponOnly && !poolRegistryOnly && !poseOnly && !waterOnly && !areaOnly && !fireCollisionOnly)
+        if (!currentWeaponOnly && !poolRegistryOnly && !poseOnly && !waterOnly && !areaOnly && !fireCollisionOnly && !duckingSetterOnly)
             std::puts("Production native ped physical scalars callback owner fixture completed");
     }
 }

@@ -183,6 +183,7 @@ namespace mta::game_de
             ClockResult ReadPedOxygenLevel(const NativePedReferenceToken&, float&) noexcept override;
             ClockResult SetPedOxygenLevel(const NativePedReferenceToken&, float) noexcept override;
             ClockResult ReadPedDucking(const NativePedReferenceToken&, bool&) noexcept override;
+            ClockResult SetPedDucking(const NativePedReferenceToken&, bool) noexcept override;
             ClockResult ReadPedCantBeKnockedOffBike(const NativePedReferenceToken&, std::uint32_t&) noexcept override;
             ClockResult SetPedCantBeKnockedOffBike(const NativePedReferenceToken&, std::uint32_t) noexcept override;
             ClockResult ReadPedCanBeShotInVehicle(const NativePedReferenceToken&, bool&) noexcept override;
@@ -3557,6 +3558,33 @@ namespace mta::game_de
             // Exactly one masked intent was attempted. Even a competing word
             // can leave ownership uncertain: keep cell debt and Stop without
             // retrying, restoring flags or inventing an actor collision rebuild.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+
+        ClockResult NativeAccess::SetPedDucking(const NativePedReferenceToken& token, bool value) noexcept
+        {
+            // Fix this caller's CPU token before any owner callback. A
+            // retained setter cannot redirect a write to a later selection.
+            const auto selected = token;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedPoolReader::Value before, after;
+            if ((result = ResolvePedReference(selected, before)) != ClockResult::Ok)
+                return result;
+            NativePedDuckingMemory::Receipt receipt;
+            result = NativePedDuckingMemory({runtime.image}, &CheckTimingOwner).SetDucking(before, value, &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = ResolvePedReference(selected, after);
+                if (result == ClockResult::Ok && !SameRegisteredPed(before, after))
+                    result = ClockResult::OwnerConflict;
+            }
+            // A raw flag effect may already exist, even when its token or
+            // acknowledgement is lost. Retire this same owner with its cell
+            // debt intact; never replay, undo or substitute a crouch task.
             if (receipt.entered && result != ClockResult::Ok)
                 Stop(result);
             return result;

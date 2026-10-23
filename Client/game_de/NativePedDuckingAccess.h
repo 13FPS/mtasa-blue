@@ -12,6 +12,7 @@ namespace mta::game_de
     {
     public:
         virtual ClockResult ReadPedDucking(const NativePedReferenceToken&, bool&) noexcept { return ClockResult::NotInitialized; }
+        virtual ClockResult SetPedDucking(const NativePedReferenceToken&, bool) noexcept { return ClockResult::NotInitialized; }
 
     protected:
         ~NativePedDuckingAccess() = default;

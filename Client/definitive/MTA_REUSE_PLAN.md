@@ -273,6 +273,14 @@ The DE wrapper explicitly borrows its enclosing `CGame`; native service refusal
 propagates. Only an actual null stat yields MTA's existing range value of 1.0.
 This does not allocate a weapon or complete the remaining ped factory methods.
 
+`CPedTasksDE` similarly reuses MTA's actual gang-driveby query policy. Stored
+intelligence availability is checked before the virtual getter; the query
+then reads the primary task and its type once. A missing task returns false,
+while service errors propagate. The real intelligence wrapper, availability
+hook and task-manager implementation remain mandatory factory dependencies;
+this composition does not fabricate native task ownership or query another
+priority as a substitute.
+
 MTA's `CreateWeaponStat` factory also shares its existing defaults and flag
 transition policy between classic and DE. The complete owned `CWeaponStat`
 contains custom CPU data, as the classic unlisted factory does; its mutable
@@ -442,8 +450,11 @@ qualified inline player data; missing data, a different ped or a generic ped
 cannot borrow whichever player is current. The current-player selector is not
 used as a substitute. A single conditional breath-field write preserves raw
 binary32 values, stamina and neighboring data, with accepted effects retained
-on failed acknowledgement. Ducking observes the independently named native
-flag for either supported ped class; its setter remains separate work.
+on failed acknowledgement. Ducking uses the independently named native flag
+for either supported ped class. Its raw SDK setter changes that bit with one
+masked conditional store, preserving neighbors without retry or replay. Like
+the classic setter, this property write does not create a crouch task or apply
+an animation; accepted or uncertain effects persist after failed acknowledgement.
 
 The SDK's `GetType()` instead reports MTA's CPU wrapper identity, used by its
 pool ownership policy. The explicit constructor value and `SetType` bookkeeping

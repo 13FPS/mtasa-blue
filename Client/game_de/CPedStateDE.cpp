@@ -42,4 +42,11 @@ namespace mta::game_de
         Require(duckingAccess.ReadPedDucking(ReferenceToken(), value), "IsDucking");
         return value;
     }
+    void CPedStateDE::SetDucking(bool ducking)
+    {
+        // Match actual CPedSA's raw bool assignment. Tasks and animation are
+        // independent native effects; they are not synthesized or replayed.
+        Require(duckingAccess.SetPedDucking(ReferenceToken(), ducking), "SetDucking");
+    }
+
 }

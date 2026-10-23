@@ -10,12 +10,19 @@
 #include <array>
 #include <cstring>
 #include <limits>
+#include <intrin.h>
 namespace mta::game_de
 {
     namespace PedDuckingDetail
     {
         namespace P = NativePedDuckingProfile;
         using Memory = NativePedDuckingMemory;
+        thread_local bool writing = false;
+        struct Scope
+        {
+            Scope() noexcept { writing = true; }
+            ~Scope() { writing = false; }
+        };
         bool Pages(std::uintptr_t at) noexcept
         {
             if (!at || at % alignof(std::uint32_t) || at > (std::numeric_limits<std::uintptr_t>::max)() - sizeof(std::uint32_t))
@@ -62,6 +69,42 @@ namespace mta::game_de
             output = (flags & P::DuckingMask) != 0;
             return ClockResult::Ok;
         }
+        ClockResult CaptureWord(Memory::Binding binding, Memory::CheckOwner owner, const Memory::Value& expected, std::uint32_t& output) noexcept
+        {
+            auto result = Identity(binding, owner, expected);
+            if (result != ClockResult::Ok)
+                return result;
+            if (expected.nativePed > (std::numeric_limits<std::uintptr_t>::max)() - P::FlagsOffset)
+                return ClockResult::ReadFailure;
+            const auto    at = expected.nativePed + P::FlagsOffset;
+            std::uint32_t flags = 0;
+            SIZE_T        copied = 0;
+            if (!Pages(at) || !ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(at), &flags, sizeof(flags), &copied) || copied != sizeof(flags))
+                return ClockResult::ReadFailure;
+            if ((result = Identity(binding, owner, expected)) != ClockResult::Ok)
+                return result;
+            output = flags;
+            return ClockResult::Ok;
+        }
+#if !defined(MTA_DE_PED_DUCKING_EXCHANGE)
+        bool Exchange(std::uintptr_t at, std::uint32_t expected, std::uint32_t target, std::uint32_t& observed, std::uint32_t& exception) noexcept
+        {
+            LONG before = 0, after = 0;
+            std::memcpy(&before, &expected, sizeof(before));
+            std::memcpy(&after, &target, sizeof(after));
+            __try
+            {
+                const auto previous = InterlockedCompareExchange(reinterpret_cast<volatile LONG*>(at), after, before);
+                std::memcpy(&observed, &previous, sizeof(observed));
+                return true;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                exception = GetExceptionCode();
+                return false;
+            }
+        }
+#endif
     }
     bool NativePedDuckingMemory::Qualify(Binding& output) noexcept
     {
@@ -124,5 +167,62 @@ namespace mta::game_de
         // machine, so only this proven boolean participates in coherence.
         output = second;
         return ClockResult::Ok;
+    }
+    ClockResult NativePedDuckingMemory::SetDucking(const Value& expected, bool enabled, Receipt* output) const noexcept
+    {
+        namespace D = PedDuckingDetail;
+        const Value selected = expected;
+        Receipt     receipt;
+        receipt.handle = selected.handle;
+        const auto finish = [&](ClockResult result)
+        {
+            if (output)
+                *output = receipt;
+            return result;
+        };
+        if (D::writing)
+            return finish(ClockResult::Busy);
+        D::Scope      scope;
+        std::uint32_t current = 0;
+        auto          result = D::CaptureWord(binding, owner, selected, receipt.original);
+        if (result != ClockResult::Ok || (result = D::CaptureWord(binding, owner, selected, current)) != ClockResult::Ok)
+            return finish(result);
+        constexpr auto mask = D::P::DuckingMask;
+        const auto     originalOwned = receipt.original & mask;
+        if ((current & mask) != originalOwned)
+            return finish(ClockResult::OwnerConflict);
+        receipt.nativePed = selected.nativePed;
+        receipt.address = selected.nativePed + D::P::FlagsOffset;
+        receipt.observed = current;
+        receipt.observedValid = true;
+#if defined(MTA_DE_PED_DUCKING_EXCHANGE)
+        const auto exchange = &MTA_DE_PED_DUCKING_EXCHANGE;
+#else
+        const auto exchange = &D::Exchange;
+#endif
+        if (!D::Pages(receipt.address))
+            return finish(ClockResult::WriteFailure);
+        if ((result = D::Identity(binding, owner, selected)) != ClockResult::Ok)
+            return finish(result);
+        receipt.target = (current & ~mask) | (enabled ? mask : 0);
+        receipt.entered = true;
+        receipt.attempts = 1;
+        std::uint32_t previous = 0;
+        if (!exchange(receipt.address, current, receipt.target, previous, receipt.exceptionCode))
+            return finish(ClockResult::WriteFailure);
+        receipt.observed = previous;
+        // A failed CAS has written nothing. Keep the racing engine word;
+        // this SDK intent never reacquires it for a second write attempt.
+        if (previous != current)
+            return finish(ClockResult::OwnerConflict);
+        receipt.accepted = true;
+        if ((result = D::CaptureWord(binding, owner, selected, receipt.observed)) != ClockResult::Ok)
+            return finish(result);
+        if ((receipt.observed ^ receipt.target) & mask)
+            return finish(ClockResult::OwnerConflict);
+        if ((result = D::Identity(binding, owner, selected)) != ClockResult::Ok)
+            return finish(result);
+        receipt.verified = true;
+        return finish(ClockResult::Ok);
     }
 }

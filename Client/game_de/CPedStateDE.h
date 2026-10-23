@@ -13,13 +13,14 @@ namespace mta::game_de
     // The CPU wrapper type drives the classic pool's wrapper destruction; it
     // is unrelated to native ped categories or the entity type. Oxygen and
     // ducking use the same registered native lifetime as the existing chain.
-    // Target rotation, SetDucking, repair and the remaining SDK stay pure.
+    // Target rotation, repair and the remaining SDK stay pure.
     class CPedStateDE : public CPedRotationDE
     {
     public:
         float         GetOxygenLevel() const override;
         void          SetOxygenLevel(float oxygen) override;
         bool          IsDucking() const override;
+        void          SetDucking(bool ducking) override;
         std::uint32_t GetType() const noexcept override;
         int           GetCustomMoveAnim() const noexcept override;
         // Preserve the real CPedSA bookkeeping operation without translating

@@ -14,6 +14,7 @@
 #include "CPedSA.h"
 #include <game/CPedFightingStylePolicy.h>
 #include <game/CPedWeaponStatPolicy.h>
+#include <game/CPedTaskPolicy.h>
 #include "CVisibilityPluginsSA.h"
 #include "CPedModelInfoSA.h"
 #include "CPlayerInfoSA.h"
@@ -642,11 +643,9 @@ void CPedSA::AddWeaponAudioEvent(EPedWeaponAudioEventType audioEventType)
 
 bool CPedSA::IsDoingGangDriveby() const
 {
-    if (!m_pedIntelligence)
-        return false;
-
-    CTask* task = GetPedIntelligence()->GetTaskManager()->GetTask(TASK_PRIORITY_PRIMARY);
-    return (task && task->GetTaskType() == TASK_SIMPLE_GANG_DRIVEBY);
+    // Preserve the direct stored-wrapper guard before the virtual getter.
+    // Native task ownership and each actual service lookup stay in classic.
+    return MtaGame::CPedTaskPolicy::IsDoingGangDriveby(static_cast<bool>(m_pedIntelligence), [this] { return GetPedIntelligence(); });
 }
 
 float CPedSA::GetOxygenLevel() const

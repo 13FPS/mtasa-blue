@@ -33,3 +33,8 @@ project "Game DE"
 	filter "system:not windows"
 		flags { "ExcludeFromBuild" }
 	filter {}
+
+	filter {}
+	-- The complete compatible-file service is MTA code shared by the backends;
+	-- compiling it does not publish a native/DE audio source or service factory.
+	files { "../sdk/game/CAudioContainerFiles.h", "../sdk/game/CAudioContainerFiles.cpp" }

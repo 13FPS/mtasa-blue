@@ -356,6 +356,15 @@ they do not re-read the whole weapon bank on each ordinary getter. These
 borrowed objects must retire before the owner generation ends, and their raw
 SDK pointers do not independently convey a native lease.
 
+The complete `CAudioContainerFiles` implements MTA's three audio-file SDK
+methods from an explicit archive root. Classic `CAudioContainerSA` delegates
+to it using its existing relative `AUDIO` source. Lookup, RIFF/PCM and radio
+extraction retain caller-owned buffers and report unavailable or malformed
+input through the existing failure contract. Missing classic lookup data does
+not introduce a constructor exception. Lookup readiness describes that file
+only; it does not prove full archive compatibility. No DE archive root,
+`GetAudioContainer` publication or native audio-engine capability is inferred.
+
 Core's existing `CGameAdapterModule` now owns this optional preparation contract.
 It resolves the begin/read exports together with their clock retirement functions
 before admission, validates the shared MTA schedule's progress values, and retains

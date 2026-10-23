@@ -33,6 +33,7 @@
 #include "CRopesDE.h"
 #include "NativePedTeleportMemory.h"
 #include "NativePedPlacementMemory.h"
+#include "NativePedWaterFlagsMemory.h"
 #include "NativePedVelocityMemory.h"
 #include "NativePedReferenceController.h"
 #include "NativePedVitalsMemory.h"
@@ -198,6 +199,7 @@ namespace mta::game_de
             ClockResult SetPedPhysicalScalar(const NativePedReferenceToken&, NativePedPhysicalScalarField, float) noexcept override;
             ClockResult ReadPedCenterOfMass(const NativePedReferenceToken&, CVector&) noexcept override;
             ClockResult SetPedCenterOfMass(const NativePedReferenceToken&, const CVector&) noexcept override;
+            ClockResult SetPedInWaterFlags(const NativePedReferenceToken&, bool) noexcept override;
             ClockResult SetReferencedPedPosition(const NativePedReferenceToken&, const CVector&) noexcept override;
             ClockResult CompleteReferencedPedTeleport(const NativePedReferenceToken&, const CVector&) noexcept override;
             ClockResult SetReferencedPedVelocity(const NativePedReferenceToken&, NativePedVelocityKind, const CVector&) noexcept override;
@@ -3457,6 +3459,34 @@ namespace mta::game_de
             // conflict can follow a partial write; stopping this same owner
             // never rewinds the row or retries the remaining components.
             if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+
+        ClockResult NativeAccess::SetPedInWaterFlags(const NativePedReferenceToken& token, bool inWater) noexcept
+        {
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedPoolReader::Value before, after;
+            result = ResolvePedReference(token, before);
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedWaterFlagsMemory::Receipt receipt;
+            result = NativePedWaterFlagsMemory({runtime.image}, &CheckTimingOwner).SetInWaterFlags(before, inWater, &receipt);
+            if (result != ClockResult::Ok)
+            {
+                if (receipt.entered)
+                    Stop(result);
+                return result;
+            }
+            result = ResolvePedReference(token, after);
+            if (result == ClockResult::Ok && (before.nativePed != after.nativePed || before.handle != after.handle))
+                result = ClockResult::OwnerConflict;
+            // Accepted physical flags are persistent intent. Token loss after
+            // acknowledgement retires this same original controller's cells;
+            // it never restores either bit or invents the task-based getter.
+            if (result != ClockResult::Ok)
                 Stop(result);
             return result;
         }

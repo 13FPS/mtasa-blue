@@ -13,6 +13,7 @@
 #include "CGameSA.h"
 #include "CPedSA.h"
 #include <game/CPedFightingStylePolicy.h>
+#include <game/CPedWeaponStatPolicy.h>
 #include "CVisibilityPluginsSA.h"
 #include "CPedModelInfoSA.h"
 #include "CPlayerInfoSA.h"
@@ -618,27 +619,18 @@ void CPedSA::SetVoice(const char* voiceType, const char* voice)
 // GetCurrentWeaponStat will only work if the game ped context is currently set to this ped
 CWeaponStat* CPedSA::GetCurrentWeaponStat() const
 {
-    if (pGame->GetPedContext() != this)
-    {
-        OutputDebugLine("WARNING: GetCurrentWeaponStat ped context mismatch");
-        return nullptr;
-    }
-
-    CWeapon* weapon = GetWeapon(GetCurrentWeaponSlot());
-    if (!weapon)
-        return nullptr;
-
-    eWeaponType   weaponType = weapon->GetType();
-    std::uint16_t weaponSkillStat = pGame->GetStats()->GetSkillStatIndex(weaponType);
-    float         skill = pGame->GetStats()->GetStatValue(weaponSkillStat);
-
-    return pGame->GetWeaponStatManager()->GetWeaponStatsFromSkillLevel(weaponType, skill);
+    // Share only the existing SDK order; classic globals, exact mismatch
+    // diagnostic and each original service lookup stay with this backend.
+    return MtaGame::CPedWeaponStatPolicy::Current(
+        this, [] { return pGame->GetPedContext(); }, [this] { return GetWeapon(GetCurrentWeaponSlot()); },
+        [](eWeaponType type) { return pGame->GetStats()->GetSkillStatIndex(type); }, [](std::uint16_t index) { return pGame->GetStats()->GetStatValue(index); },
+        [](eWeaponType type, float level) { return pGame->GetWeaponStatManager()->GetWeaponStatsFromSkillLevel(type, level); },
+        [] { OutputDebugLine("WARNING: GetCurrentWeaponStat ped context mismatch"); });
 }
 
 float CPedSA::GetCurrentWeaponRange() const
 {
-    CWeaponStat* weaponStat = GetCurrentWeaponStat();
-    return weaponStat ? weaponStat->GetWeaponRange() : 1.0f;
+    return MtaGame::CPedWeaponStatPolicy::Range([this] { return GetCurrentWeaponStat(); });
 }
 
 void CPedSA::AddWeaponAudioEvent(EPedWeaponAudioEventType audioEventType)

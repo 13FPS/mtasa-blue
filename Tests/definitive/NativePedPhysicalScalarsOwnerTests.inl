@@ -113,7 +113,8 @@ namespace
                 std::abort();
         }
     }
-    void NativePedPhysicalScalarsOwnedSdk(ClockImageFixture& fixture, bool currentWeaponOnly = false, bool poolRegistryOnly = false, bool poseOnly = false)
+    void NativePedPhysicalScalarsOwnedSdk(ClockImageFixture& fixture, bool currentWeaponOnly = false, bool poolRegistryOnly = false, bool poseOnly = false,
+                                          bool waterOnly = false)
     {
         namespace S = NativePedPhysicalScalarsProfile;
         namespace R = NativePedReferenceProfile;
@@ -225,7 +226,7 @@ namespace
                       !NativeServiceAdmission::IsClaimed(NativeServiceAdmission::Category::Clock),
                   "scalar retirement acknowledges native cell storage, hooks and owner admission together");
         };
-        if (!currentWeaponOnly && !poolRegistryOnly && !poseOnly)
+        if (!currentWeaponOnly && !poolRegistryOnly && !poseOnly && !waterOnly)
         {
             {
                 NativeClockService service;
@@ -321,13 +322,17 @@ namespace
 #include "NativePedCombatOwnerTests.inl"
 #include "NativePedWeaponOwnerTests.inl"
         }
-        if (!poolRegistryOnly && !poseOnly)
+        if (!poolRegistryOnly && !poseOnly && !waterOnly)
         {
 #include "NativePedCurrentWeaponOwnerTests.inl"
         }
         if (poolRegistryOnly)
         {
 #include "NativePoolsPedRegistryOwnerTests.inl"
+        }
+        if (waterOnly)
+        {
+#include "NativePedWaterOwnerTests.inl"
         }
         if (poseOnly)
         {
@@ -338,7 +343,7 @@ namespace
         ClockReaderTestHost::image = ClockPedReferenceOwnerTest::image = 0;
         for (auto item = saved.rbegin(); item != saved.rend(); ++item)
             fixture.Patch(item->rva, item->bytes.data(), item->bytes.size());
-        if (!currentWeaponOnly && !poolRegistryOnly && !poseOnly)
+        if (!currentWeaponOnly && !poolRegistryOnly && !poseOnly && !waterOnly)
             std::puts("Production native ped physical scalars callback owner fixture completed");
     }
 }

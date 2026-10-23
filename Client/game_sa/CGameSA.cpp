@@ -34,6 +34,7 @@
 #include "CFxSystemSA.h"
 #include "CGameSA.h"
 #include <game/CWeaponStartupPolicy.h>
+#include <game/CGameInitializationPolicy.h>
 #include <game/CWorldCheatPolicy.h>
 #include "CGaragesSA.h"
 #include "CHandlingManagerSA.h"
@@ -450,14 +451,11 @@ void CGameSA::Terminate()
 
 void CGameSA::Initialize()
 {
-    // Initialize garages
-    m_pGarages->Initialize();
-    SetupSpecialCharacters();
-    SetupBrokenModels();
-    m_pRenderWare->Initialize();
-
-    // *Sebas* Hide the GTA:SA Main menu.
-    MemPutFast<BYTE>(CLASS_CMenuManager + 0x5C, 0);
+    // Share the later startup itinerary while keeping classic receivers and
+    // native effects here. Reconnects still execute it on every explicit call;
+    // constructor weapon preparation remains a separate earlier operation.
+    MtaGame::CGameInitializationPolicy::Initialize([this] { m_pGarages->Initialize(); }, [this] { SetupSpecialCharacters(); }, [this] { SetupBrokenModels(); },
+                                                   [this] { m_pRenderWare->Initialize(); }, [] { MemPutFast<BYTE>(CLASS_CMenuManager + 0x5C, 0); });
 }
 
 eGameVersion CGameSA::GetGameVersion()

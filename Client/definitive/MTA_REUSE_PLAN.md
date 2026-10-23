@@ -130,6 +130,12 @@ named class implements all eight SDK properties with controlled construction.
 Classic numeric-ID mapping remains unqualified, so this does not expose a
 complete garage manager.
 
+Bounded native loader proofs now establish the genuine `grge` parser's append
+call and the order of `IPL` directives within one DAT input. The packaged record's
+integer columns supply flags and type. Outer startup file order, initial bank
+state and classic numeric garage identities remain unqualified; these findings
+do not supply a numeric garage factory or permit the sixteen default writes.
+
 These batches have offline primitive, actual SDK/callback-owner and normal
 build coverage. The changed classic callers compile through their normal
 project. The installed GTA candidate remains separate from this newer source;
@@ -210,6 +216,13 @@ MTA's null-guarded `SetAsCurrentWeapon` delegation to its borrowed ped. Native
 slot changes remain separate: the engine operation removes and creates model
 attachments, so a raw slot store cannot stand in for that lifecycle.
 
+The abstract `CPedWeaponStatsDE` extends that same chain with MTA's current
+weapon-stat and range methods. Classic and DE share the context check and lazy
+weapon, skill and manager lookup order, including both fresh `GetStats` calls.
+The DE wrapper explicitly borrows its enclosing `CGame`; native service refusal
+propagates. Only an actual null stat yields MTA's existing range value of 1.0.
+This does not allocate a weapon or complete the remaining ped factory methods.
+
 MTA's `CreateWeaponStat` factory also shares its existing defaults and flag
 transition policy between classic and DE. The complete owned `CWeaponStat`
 contains custom CPU data, as the classic unlisted factory does; its mutable
@@ -272,6 +285,14 @@ before admission, validates the shared MTA schedule's progress values, and retai
 the exact producer token after a failed begin or end. Older providers remain usable
 without these optional exports. Preparation is explicit and does not advertise a
 complete `CGame` or start another native owner implicitly.
+
+Classic and the abstract `CGameInitializationDE` also share MTA's separate later
+initialization order: garages, special characters, broken models, renderer,
+then native menu hiding. DE requires fresh readiness before effects and keeps
+the missing native operations mandatory. Each explicit call preserves classic
+reconnect behavior; exceptions propagate with their applied prefix. The typed
+renderer initialization stays outside the common renderer interface. This does
+not establish numeric garage mapping or publish a complete `CGame`.
 
 `CGameTimingDE::GetGravity` also reads the current qualified native downward
 acceleration operand through the existing timing-reader binding. It preserves
@@ -376,6 +397,13 @@ that bookkeeping after their own engine operation; this getter neither changes
 native animations nor depends on a currently admitted native callback. Occupied
 seat methods remain pure until the enclosing wrapper supplies explicit initial
 seat state rather than borrowing an uninitialized classic value.
+
+`CPedWaterDE` extends the same wrapper chain with `SetInWaterFlags`. Independent
+native construction, buoyancy and query consumers qualify the submerged and
+touching bits. One masked conditional write preserves every neighboring flag,
+with accepted effects retained on failed acknowledgement by the existing token
+owner. MTA's `IsInWater` instead inspects its primary task and remains pure;
+GTA's script flag query does not supply that task-based SDK behavior.
 
 `CPedFlagsDE` adds MTA's existing vehicle shooting-permission and bike
 knockoff accessors on that same registered lifetime. Independently named native

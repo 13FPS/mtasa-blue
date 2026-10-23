@@ -36,6 +36,18 @@ namespace mta::game_de
                first.capacity == second.capacity && first.cursor == second.cursor && first.generation == second.generation &&
                first.ownsAllocations == second.ownsAllocations;
     }
+    bool CPoolsDE::HasExactBorrowedPedBinding(const CPedVitalsDE& wrapper, const NativePedReferenceToken& expected) const noexcept
+    {
+        return &wrapper.native == static_cast<const NativePedVitalsAccess*>(&pedRegistryOwner) && wrapper.reference.version == expected.version &&
+               wrapper.reference.ownerGeneration == expected.ownerGeneration && wrapper.reference.slot == expected.slot;
+    }
+    bool CPoolsDE::HasBorrowedPedLink(const CPed& wrapper) const noexcept
+    {
+        for (const auto& link : pedLinks)
+            if (link.pEntity == &wrapper)
+                return true;
+        return false;
+    }
     bool CPoolsDE::Matches(std::size_t index) const noexcept
     {
         if (index >= PedCapacity)

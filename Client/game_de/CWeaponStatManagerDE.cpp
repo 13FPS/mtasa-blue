@@ -74,19 +74,52 @@ namespace mta::game_de
     {
         if (startupState != StartupState::NotStarted || !ownedLive.empty())
             throw std::logic_error("DE weapon-stat startup requires a fresh unattempted live registry");
+        // Retain the existing synchronous entry for callers that already own
+        // its full operation. Native constructor preparation uses one row per
+        // natural callback instead of renewing a lease inside this loop.
+        while (!ContinueLiveStats())
+        {
+        }
+    }
+
+    bool CWeaponStatManagerDE::ContinueLiveStats(StartupOwner confirm)
+    {
+        if (startupState == StartupState::Complete || startupState == StartupState::Failed || ownedLive.size() != completedStartupRows ||
+            completedStartupRows >= NativeWeaponInfoProfile::RowCount)
+            throw std::logic_error("DE weapon-stat startup cannot replay or adopt another live registry");
         startupState = StartupState::Running;
+        const auto selectedRow = completedStartupRows;
         try
         {
-            MtaGame::CWeaponStartupPolicy::Initialize([this](const MtaGame::CWeaponStartupPolicy::Entry& entry)
-                                                      { CreateWeaponStat(bank.GetSlot(entry.row), entry.statType, entry.skill); });
-            startupState = StartupState::Complete;
+            bool found = false;
+            // Filter the genuine shared schedule by one captured cursor. Never
+            // copy the standard/skill itinerary or let advancing the cursor
+            // select another row during this same iteration.
+            MtaGame::CWeaponStartupPolicy::Initialize(
+                [this, selectedRow, &found](const MtaGame::CWeaponStartupPolicy::Entry& entry)
+                {
+                    if (entry.row == selectedRow)
+                    {
+                        if (found)
+                            throw std::logic_error("DE shared weapon startup row is not unique");
+                        found = true;
+                        CreateWeaponStat(bank.GetSlot(entry.row), entry.statType, entry.skill);
+                    }
+                });
+            if (!found)
+                throw std::logic_error("DE shared weapon startup row was not found");
+            if (confirm && confirm() != ClockResult::Ok)
+                throw std::runtime_error("DE weapon startup lost its native owner after the row");
+            ++completedStartupRows;
+            if (completedStartupRows == NativeWeaponInfoProfile::RowCount)
+                startupState = StartupState::Complete;
+            return startupState == StartupState::Complete;
         }
         catch (...)
         {
-            // The factory already registered the failing row; accepted native
-            // default fields and earlier rows persist. Retrying from row0 would
-            // replay those writes and append duplicates, so failure is final
-            // for this manager lifetime rather than an implicit reset/retry.
+            // Registration and accepted native writes precede acknowledgement.
+            // Preserve the failing row plus every completed row, but make this
+            // manager lifetime terminal: no replay, rollback or cursor reset.
             startupState = StartupState::Failed;
             throw;
         }

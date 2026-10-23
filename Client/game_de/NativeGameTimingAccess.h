@@ -47,10 +47,12 @@
 #include "NativeWantedAccess.h"
 #include "NativeRopesAccess.h"
 #include "NativeNamedGarageAccess.h"
+#include "NativeWeaponConstructorProgress.h"
 #include <cstdint>
 
 class CStats;
 class CWeaponStatManager;
+class CClock;
 class CPlayerInfo;
 class CRopes;
 enum eWeaponSkill : std::uint8_t;
@@ -122,6 +124,13 @@ namespace mta::game_de
         // Only the complete runtime-owned manager may be published. Its CPU
         // registry/SDK identity never grants a native row write callback.
         virtual ClockResult GetWeaponStatManager(CWeaponStatManager*&) noexcept { return ClockResult::NotInitialized; }
+        // Internal opted-in normal startup frames prepare at most one row.
+        // On an entered failure the progress receipt describes the retained
+        // prefix; pre-entry refusals preserve it. No null service is published.
+        virtual ClockResult PrepareConstructorWeapons(NativeWeaponConstructorProgress&) noexcept { return ClockResult::NotInitialized; }
+        // A real CGame constructor may consume only the already complete
+        // manager owned by this exact borrowed clock/current native owner.
+        virtual ClockResult RequireConstructorWeapons(const CClock*, CWeaponStatManager*&) noexcept { return ClockResult::NotInitialized; }
         // A complete SDK object borrows the independently qualified native
         // reader and this callback owner; publication grants no later lease.
         virtual ClockResult GetStats(CStats*&) noexcept { return ClockResult::NotInitialized; }

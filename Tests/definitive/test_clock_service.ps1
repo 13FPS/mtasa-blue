@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry')]
+    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -30,6 +30,10 @@ $record['nativeNamedGarageOwnerTested'] = $false
 $record['actualNamedGarageSdkOwnerTested'] = $false
 $record['nativeNamedGarageGeometryOwnerTested'] = $false
 $record['nativePoolsPedRegistryOwnerTested'] = $false
+$record['nativeConstructorWeaponPreparationOwnerTested'] = $false
+$record['nativeConstructorWeaponFailureOwnerTested'] = $false
+$record['nativeConstructorWeaponFrameRecoveryOwnerTested'] = $false
+$record['nativeWeaponTimingRecoveryRegressionTested'] = $false
 function Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 function RunBounded([string]$Executable,[string[]]$Arguments,[string]$Name,[int]$DeadlineMs) {
     $stdout = Join-Path $outputRoot ($Name + '.log')
@@ -331,6 +335,8 @@ try {
     $sourceNames += @($nativeFiles | ForEach-Object { [IO.Path]::GetRelativePath($taskRoot,$_.FullName).Replace('\','/') })
     $detoursNames = @('detours.cpp','modules.cpp','disasm.cpp','image.cpp','creatwth.cpp')
     $sourceNames += @($detoursNames + @('detours.h') | ForEach-Object { 'vendor/detours/4.0.1/src/' + $_ })
+    $sourceNames += @('Client/game_de/NativeWeaponConstructorProgress.h','Tests/definitive/NativeGameConstructorWeaponOwnerTests.inl',
+        'Client/sdk/game/CWeaponStartupPolicy.h')
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
     })
@@ -411,11 +417,54 @@ try {
     if ($Scope -eq 'GarageNamed') { $fixtureArguments += '--garage-named' }
     if ($Scope -eq 'GaragePools') { $fixtureArguments += '--garage-pools' }
     if ($Scope -eq 'PedPoolRegistry') { $fixtureArguments += '--ped-pool-registry' }
-    $record.testRun = RunBounded $executable $fixtureArguments 'test' 60000
-    $text = [IO.File]::ReadAllText($record.testRun.stdout) + [IO.File]::ReadAllText($record.testRun.stderr)
-    if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
-    if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
-    if ($Scope -eq 'GaragePools') {
+    if ($Scope -eq 'ConstructorWeapons') {
+        # Compile once; each new ordinary-host process owns a fresh one-shot
+        # production manager. Historical Clock/weather/ped suites are skipped.
+        $record['testRuns'] = @()
+        $record['testScenarioExecutables'] = @()
+        $texts = @()
+        foreach ($scenario in @('success','partial','recovery','timer')) {
+            # Each fresh process preserves its own synthetic image. The fixture
+            # deliberately refuses overwriting earlier evidence and requires
+            # that image beside its executable, so reuse the compiled test
+            # binary in distinct owned directories rather than weaken either
+            # guard or rebuild it for every scenario.
+            $scenarioRoot = Join-Path $outputRoot ('scenario-'+$scenario)
+            [IO.Directory]::CreateDirectory($scenarioRoot) | Out-Null
+            $scenarioExecutable = Join-Path $scenarioRoot ([IO.Path]::GetFileName($executable))
+            if (Test-Path -LiteralPath $scenarioExecutable) { throw 'Scenario executable already exists; preserve prior evidence.' }
+            Copy-Item -LiteralPath $executable -Destination $scenarioExecutable
+            $scenarioSha = Sha $scenarioExecutable
+            if ($scenarioSha -cne (Sha $executable)) { throw 'Copied scenario differs from the once-compiled test binary.' }
+            $record.testScenarioExecutables += @{scenario=$scenario;path=$scenarioExecutable;sha256=$scenarioSha;directory=$scenarioRoot}
+            $run = RunBounded $scenarioExecutable @($scenarioRoot,('--weapon-constructor-'+$scenario)) ('test-'+$scenario) 60000
+            $record.testRuns += $run
+            $part = [IO.File]::ReadAllText($run.stdout) + [IO.File]::ReadAllText($run.stderr)
+            if ($run.exitCode -ne 0 -or $run.timedOut -or $part -notmatch 'Passed (\d+) production clock service checks') {
+                throw "Constructor weapon $scenario fixture failed."
+            }
+            $record.checks += [int]$Matches[1]
+            $texts += $part
+        }
+        $record.testRun = $record.testRuns[-1]
+        $text = $texts -join [Environment]::NewLine
+    } else {
+        $record.testRun = RunBounded $executable $fixtureArguments 'test' 60000
+        $text = [IO.File]::ReadAllText($record.testRun.stdout) + [IO.File]::ReadAllText($record.testRun.stderr)
+        if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
+        if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
+    }
+    if ($Scope -eq 'ConstructorWeapons') {
+        $record.nativeConstructorWeaponPreparationOwnerTested = $text.Contains('Production bounded constructor weapon preparation owner fixture completed')
+        $record.nativeConstructorWeaponFailureOwnerTested = $text.Contains('Production constructor persistent row failure fixture completed')
+        $record.nativeConstructorWeaponFrameRecoveryOwnerTested = $text.Contains('Production constructor startup-frame vector recovery fixture completed')
+        $record.nativeWeaponTimingRecoveryRegressionTested = $text.Contains('Production existing timing weapon-vector recovery regression fixture completed')
+        if (-not ($record.nativeConstructorWeaponPreparationOwnerTested -and $record.nativeConstructorWeaponFailureOwnerTested -and
+                  $record.nativeConstructorWeaponFrameRecoveryOwnerTested -and $record.nativeWeaponTimingRecoveryRegressionTested)) {
+            throw 'Current bounded constructor, persistent prefix, normal-frame debt or existing timing journal regression did not complete.'
+        }
+        $record.productionNativeCallbackTested = $true
+    } elseif ($Scope -eq 'GaragePools') {
         $record.nativeNamedGarageOwnerTested = $text.Contains('Production native named garage callback owner fixture completed')
         $record.actualNamedGarageSdkOwnerTested = $text.Contains('Actual named garage SDK callback owner fixture completed')
         $record.nativeNamedGarageGeometryOwnerTested = $text.Contains('Production native named garage geometry callback owner fixture completed')

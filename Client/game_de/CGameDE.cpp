@@ -22,6 +22,17 @@ namespace mta::game_de
     {
     }
 
+    CGameDE::CGameDE(const NativeGameTimingReader& reader, CClockDE& nativeClock, NativeGameTimingAccess& timingWriter,
+                     const NativeStreamingFileIdsReader& streamingReader, const NativeGameStateReader& stateReader, ConstructorServices)
+        : CGameDE(reader, nativeClock, timingWriter, streamingReader, stateReader)
+    {
+        CWeaponStatManager* selected = nullptr;
+        RequireNativeWrite(timingWriter.RequireConstructorWeapons(&nativeClock, selected), "constructor weapon services");
+        if (!selected)
+            RequireNativeWrite(ClockResult::NotInitialized, "constructor weapon services");
+        preparedWeaponManager = selected;
+    }
+
     CWeaponInfo* CGameDE::ResolveWeaponInfoSlot(std::size_t slot)
     {
         // Selection stays with MTA's shared SDK policy. Its native owner alone
@@ -55,9 +66,12 @@ namespace mta::game_de
         // originals and an empty live registry do not imply that CGame native
         // initialization/default population has already run.
         CWeaponStatManager* output = nullptr;
-        RequireNativeWrite(NativeWrites().GetWeaponStatManager(output), "GetWeaponStatManager");
+        RequireNativeWrite(preparedWeaponManager ? NativeWrites().RequireConstructorWeapons(&clock, output) : NativeWrites().GetWeaponStatManager(output),
+                           "GetWeaponStatManager");
         if (!output)
             RequireNativeWrite(ClockResult::NotInitialized, "GetWeaponStatManager");
+        if (preparedWeaponManager && output != preparedWeaponManager)
+            RequireNativeWrite(ClockResult::OwnerConflict, "GetWeaponStatManager");
         return output;
     }
 

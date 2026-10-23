@@ -32,7 +32,14 @@ namespace mta::game_de
         // Separate from construction and ordinary factory calls. A qualified
         // future CGame initialization owner may attempt this exact MTA startup
         // schedule once on an empty live list; no native lease is created here.
-        void         InitializeLiveStats();
+        using StartupOwner = ClockResult (*)() noexcept;
+        void InitializeLiveStats();
+        // Startup preparation advances one whole row through the SAME shared
+        // itinerary before a future CGame is constructed. The caller supplies
+        // its current native callback check; no lease is refreshed here.
+        bool         ContinueLiveStats(StartupOwner confirm = nullptr);
+        std::size_t  GetCompletedStartupRows() const noexcept { return completedStartupRows; }
+        std::size_t  GetRegisteredLiveRows() const noexcept { return ownedLive.size(); }
         StartupState GetStartupState() const noexcept { return startupState; }
 
     private:
@@ -56,6 +63,7 @@ namespace mta::game_de
         NativeWeaponInfoWriteAccess&         writes;
         std::list<std::unique_ptr<LiveStat>> ownedLive;
         StartupState                         startupState = StartupState::NotStarted;
+        std::size_t                          completedStartupRows = 0;
     };
     static_assert(!std::is_abstract_v<CWeaponStatManagerDE> && std::is_base_of_v<CWeaponStatManager, CWeaponStatManagerDE>);
 }

@@ -7,6 +7,7 @@
 #include "NativeWeaponInfoProfile.h"
 #include "NativeWeaponInfoWriteProfile.h"
 #include "NativeWeaponInfoExtraProfile.h"
+#include "NativeWeaponInfoVectorProfile.h"
 #include "NativeImageAccess.h"
 
 #include <array>
@@ -412,6 +413,47 @@ namespace mta::game_de::NativeWeaponInfoWriteMemory
             }
             return ClockResult::Busy;
         }
+    }
+
+    ClockResult QualifyStartupDependencies(const NativeWeaponInfoReader& reader, std::uintptr_t image, std::size_t slot, std::uint32_t animationGroup,
+                                           std::uint32_t model, std::uint32_t model2, CheckOwner checkOwner) noexcept
+    {
+        if (!image || image != reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr)))
+            return ClockResult::BindingChanged;
+        auto result = checkOwner ? checkOwner() : ClockResult::Ok;
+        if (result != ClockResult::Ok)
+            return result;
+        NativeWeaponInfoValues row;
+        if ((result = ReadResult(reader.Read(slot, row))) != ClockResult::Ok)
+            return result;
+        std::int32_t countBefore = 0, countAfter = 0;
+        if (!AnimationCount(image, countBefore))
+            return ClockResult::NotInitialized;
+        if (animationGroup >= static_cast<std::uint32_t>(countBefore))
+            return ClockResult::NotInitialized;
+        ModelReference ignored, first, second, firstAfter, secondAfter;
+        if ((result = ExtraState(image, ExtraKind::Aim, 0, ignored)) != ClockResult::Ok ||
+            (result = ExtraState(image, ExtraKind::Combo, 0, ignored)) != ClockResult::Ok ||
+            (result = ExtraState(image, ExtraKind::Model, model, first)) != ClockResult::Ok ||
+            (result = ExtraState(image, ExtraKind::Model, model2, second)) != ClockResult::Ok)
+            return result;
+        for (const auto& pin : NativeWeaponInfoVectorProfile::Code)
+        {
+            std::array<unsigned char, 160> bytes{};
+            if (pin.size > bytes.size() || !NativeImageAccess::ReadImage(image, image + pin.rva, bytes.data(), pin.size, false, true) ||
+                std::memcmp(bytes.data(), pin.bytes.data(), pin.size))
+                return ClockResult::BindingChanged;
+        }
+        if (!AnimationCount(image, countAfter) || countAfter != countBefore)
+            return ClockResult::BindingChanged;
+        if ((result = ExtraState(image, ExtraKind::Model, model, firstAfter)) != ClockResult::Ok ||
+            (result = ExtraState(image, ExtraKind::Model, model2, secondAfter)) != ClockResult::Ok)
+            return result;
+        if (!first.Same(firstAfter) || !second.Same(secondAfter))
+            return ClockResult::OwnerConflict;
+        if ((result = ReadResult(reader.Read(slot, row))) != ClockResult::Ok)
+            return result;
+        return checkOwner ? checkOwner() : ClockResult::Ok;
     }
 
     ClockResult SetFloat(const NativeWeaponInfoReader& reader, std::uintptr_t image, std::size_t slot, NativeWeaponFloatField field, float value,

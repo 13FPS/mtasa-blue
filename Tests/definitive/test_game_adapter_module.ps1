@@ -70,7 +70,7 @@ $sourceNames = @('Client/sdk/game/CGameAdapter.h', 'Client/game_de/GameAdapter.c
     'Client/game_de/CStatsReadDE.h', 'Client/game_de/CStatsReadDE.cpp',
     'Client/game_de/NativeStatsWriteAccess.h', 'Client/game_de/NativeStatsWriteProfile.h',
     'Client/game_de/NativeStatsWriteCalls.h', 'Client/game_de/NativeStatsWriteCalls.cpp', 'Client/game_de/CStatsDE.h', 'Client/game_de/CStatsDE.cpp',
-    'Client/game_de/NativeGameTimingAccess.h', 'Client/game_de/NativeGravityReadAccess.h','Client/game_de/NativeGravityReadProfile.h','Client/game_de/NativeGravityReadAccess.cpp','Client/game_de/NativeGameTimingReader.h', 'Client/game_de/NativeGameTimingReader.cpp',
+    'Client/game_de/NativeGameTimingAccess.h','Client/game_de/NativeWeaponConstructorProgress.h','Client/sdk/game/CGameConstructorPreparation.h', 'Client/game_de/NativeGravityReadAccess.h','Client/game_de/NativeGravityReadProfile.h','Client/game_de/NativeGravityReadAccess.cpp','Client/game_de/NativeGameTimingReader.h', 'Client/game_de/NativeGameTimingReader.cpp',
     'Client/game_de/NativeGameTimingProfile.h', 'Client/game_de/NativeGameFPSProfile.h', 'Client/game_de/NativeGamePauseProfile.h',
     'Client/game_de/NativeStreamingFileIdsProfile.h', 'Client/game_de/NativeStreamingFileIdsReader.h', 'Client/game_de/NativeStreamingFileIdsReader.cpp',
     'Client/game_de/NativeGameStateProfile.h', 'Client/game_de/NativeFrontendMenuProfile.h', 'Client/game_de/NativeGameStateReader.h', 'Client/game_de/NativeGameStateReader.cpp',
@@ -496,6 +496,7 @@ $compilerExit = $LASTEXITCODE
 $compilerOutput | Set-Content -LiteralPath (Join-Path $outputRoot 'compile.log') -Encoding utf8
 $testExit = $null
 $testCount = $null
+$testOutput = @()
 if ($compilerExit -eq 0 -and $moduleExit -eq 0) {
     $testArguments = @()
     if ($FrontendAdmissionOnly) { $testArguments += '--frontend-admission-only' }
@@ -504,6 +505,9 @@ if ($compilerExit -eq 0 -and $moduleExit -eq 0) {
     $testOutput | Set-Content -LiteralPath (Join-Path $outputRoot 'test.log') -Encoding utf8
     if (($testOutput -join "`n") -match 'Passed (\d+) MTA Game DE adapter checks') { $testCount = [int]$Matches[1] }
 }
+$constructorAdapterContractTested = -not $FrontendAdmissionOnly -and
+    (($testOutput -join "`n").Contains('Production constructor preparation optional adapter contract fixture completed'))
+$constructorAdapterContractRequired = [bool]$FrontendAdmissionOnly -or $constructorAdapterContractTested
 $sourceUnchanged = $true
 foreach ($entry in $sourceHashes) {
     $taskPath = Join-Path $taskRoot $entry.path
@@ -516,12 +520,13 @@ $normalBackendUnchanged = -not $reuseModule -or
     ((Get-FileHash -LiteralPath $GameDeDll -Algorithm SHA256).Hash -eq $ExpectedGameDeSha256 -and
      (Get-FileHash -LiteralPath $module -Algorithm SHA256).Hash -eq $ExpectedGameDeSha256)
 $record = [ordered]@{ recordedAt=[DateTimeOffset]::Now.ToString('o'); directory=$outputRoot;
-    success=($moduleExit -eq 0 -and $compilerExit -eq 0 -and $testExit -eq 0 -and $null -ne $testCount -and $sourceUnchanged -and $normalBackendUnchanged);
+    success=($moduleExit -eq 0 -and $compilerExit -eq 0 -and $testExit -eq 0 -and $null -ne $testCount -and $sourceUnchanged -and $normalBackendUnchanged -and $constructorAdapterContractRequired);
     sourceHashes=$sourceHashes; sourceUnchanged=$sourceUnchanged; architecture='x64'; moduleCompilerExit=$(if ($reuseModule) { $null } else { $moduleExit });
     normalBackendReused=$reuseModule; normalBackendSource=$(if ($reuseModule) { $GameDeDll } else { $null });
     expectedNormalBackendSha256=$(if ($reuseModule) { $ExpectedGameDeSha256.ToLowerInvariant() } else { $null });
     normalBackendUnchanged=$normalBackendUnchanged;
     frontendAdmissionOnly=[bool]$FrontendAdmissionOnly;
+    actualConstructorPreparationAdapterContractTested=$constructorAdapterContractTested;
     detoursCompilerExit=$detoursCompilerExit; detoursLibraryExit=$detoursLibraryExit; detoursLibrary=$detoursLibrary;
     detoursLibrarySha256=$(if (Test-Path -LiteralPath $detoursLibrary) { (Get-FileHash -LiteralPath $detoursLibrary -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null });
     compilerExit=$compilerExit; testExit=$testExit; checks=$testCount; module=$module;

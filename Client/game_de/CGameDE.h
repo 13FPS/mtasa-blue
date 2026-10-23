@@ -71,6 +71,16 @@ namespace mta::game_de
     protected:
         CWeaponInfo* ResolveWeaponInfoSlot(std::size_t slot) override;
 
+        enum class ConstructorServices : unsigned char
+        {
+            PreparedWeapons
+        };
+        // Native preparation happens on prior admitted normal frames. This
+        // explicit constructor consumes ready services without replaying the
+        // native schedule or moving it into later CGame::Initialize.
+        CGameDE(const NativeGameTimingReader& reader, CClockDE& nativeClock, NativeGameTimingAccess& timingWriter,
+                const NativeStreamingFileIdsReader& streamingReader, const NativeGameStateReader& stateReader, ConstructorServices);
+
         // Borrowed services must outlive this object. Their qualification
         // and engine-thread rules stay with their existing native owners.
         CGameDE(const NativeGameTimingReader& reader, CClockDE& nativeClock, NativeGameTimingAccess& timingWriter,
@@ -86,6 +96,7 @@ namespace mta::game_de
     private:
         NativeStreamingFileIds RequireStreamingLayout() const;
 
+        CWeaponStatManager*                                                                preparedWeaponManager = nullptr;
         CClockDE&                                                                          clock;
         CKeyGenDE                                                                          keyGen;
         CAsyncLoadingDE                                                                    asyncLoading;

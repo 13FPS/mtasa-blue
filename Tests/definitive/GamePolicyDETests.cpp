@@ -92,6 +92,54 @@ namespace
         }
         unsigned                  startRequests = 0;
         mta::game_de::ClockResult startResult = mta::game_de::ClockResult::NotInitialized;
+        mta::game_de::ClockResult PrepareConstructorWeapons(mta::game_de::NativeWeaponConstructorProgress&) noexcept override
+        {
+            ++constructorPreparations;
+            return mta::game_de::ClockResult::NotInitialized;
+        }
+        mta::game_de::ClockResult RequireConstructorWeapons(const CClock* selectedClock, CWeaponStatManager*& output) noexcept override
+        {
+            ++constructorRequires;
+            constructorClock = selectedClock;
+            if (constructorResult == mta::game_de::ClockResult::Ok || publishConstructorOutputOnFailure)
+                output = constructorManager;
+            return constructorResult;
+        }
+        mta::game_de::ClockResult SetWeaponFloat(std::size_t, mta::game_de::NativeWeaponFloatField, float) noexcept override
+        {
+            ++nativeWeaponWrites;
+            return mta::game_de::ClockResult::NotInitialized;
+        }
+        mta::game_de::ClockResult SetWeaponShort(std::size_t, mta::game_de::NativeWeaponShortField, std::int16_t) noexcept override
+        {
+            ++nativeWeaponWrites;
+            return mta::game_de::ClockResult::NotInitialized;
+        }
+        mta::game_de::ClockResult SetWeaponDword(std::size_t, mta::game_de::NativeWeaponDwordField, std::uint32_t) noexcept override
+        {
+            ++nativeWeaponWrites;
+            return mta::game_de::ClockResult::NotInitialized;
+        }
+        mta::game_de::ClockResult UpdateWeaponFlags(std::size_t, std::uint32_t, bool) noexcept override
+        {
+            ++nativeWeaponWrites;
+            return mta::game_de::ClockResult::NotInitialized;
+        }
+        mta::game_de::ClockResult SetWeaponFireOffset(std::size_t, const CVector*) noexcept override
+        {
+            ++nativeWeaponWrites;
+            return mta::game_de::ClockResult::NotInitialized;
+        }
+        mta::game_de::ClockResult SetWeaponSlot(std::size_t, eWeaponSlot) noexcept override
+        {
+            ++nativeWeaponWrites;
+            return mta::game_de::ClockResult::NotInitialized;
+        }
+        unsigned                  constructorPreparations = 0, constructorRequires = 0, nativeWeaponWrites = 0;
+        const CClock*             constructorClock = nullptr;
+        CWeaponStatManager*       constructorManager = nullptr;
+        mta::game_de::ClockResult constructorResult = mta::game_de::ClockResult::NotInitialized;
+        bool                      publishConstructorOutputOnFailure = false;
         mta::game_de::ClockResult GetWeaponStatManager(CWeaponStatManager*& output) noexcept override
         {
             ++weaponManagerReads;
@@ -241,6 +289,12 @@ namespace
         {
         }
 
+        TestGame(const mta::game_de::NativeGameTimingReader& reader, mta::game_de::CClockDE& clock, mta::game_de::NativeGameTimingAccess& timing,
+                 const mta::game_de::NativeStreamingFileIdsReader& streaming, const mta::game_de::NativeGameStateReader& state, ConstructorServices services)
+            : GameFixtureBase(reader, clock, timing, streaming, state, services)
+        {
+        }
+
         CPools* GetPools() const noexcept override
         {
             ++poolReads;
@@ -254,6 +308,87 @@ namespace
         CPools*          pools = nullptr;
         mutable unsigned poolReads = 0;
     };
+
+    void ConstructorServiceChecks(const mta::game_de::NativeGameTimingReader& reader, mta::game_de::CClockDE& clock,
+                                  const mta::game_de::NativeStreamingFileIdsReader& streaming, const mta::game_de::NativeGameStateReader& state)
+    {
+        using namespace mta::game_de;
+        using Tag = TestGame::ConstructorServices;
+        static_assert(std::is_nothrow_constructible_v<TestGame, const NativeGameTimingReader&, CClockDE&, NativeGameTimingAccess&,
+                                                      const NativeStreamingFileIdsReader&, const NativeGameStateReader&>);
+        static_assert(!std::is_nothrow_constructible_v<TestGame, const NativeGameTimingReader&, CClockDE&, NativeGameTimingAccess&,
+                                                       const NativeStreamingFileIdsReader&, const NativeGameStateReader&, Tag>);
+        UnusedTimingAccess     owner;
+        NativeWeaponInfoReader weaponReader;
+        CWeaponInfoBankDE      bank(weaponReader, owner, owner);
+        CWeaponStatManagerDE   manager(bank, owner), replacement(bank, owner);
+        TestGame               cpuOnly(reader, clock, owner, streaming, state);
+        Check(owner.constructorRequires == 0 && owner.constructorPreparations == 0 && owner.nativeWeaponWrites == 0,
+              "existing noexcept partial constructor does not silently obtain or initialize native services");
+        for (const auto result : {ClockResult::NotInitialized, ClockResult::InvalidArgument, ClockResult::WrongThread, ClockResult::Busy,
+                                  ClockResult::OwnerConflict, ClockResult::BindingChanged, ClockResult::OriginalException, ClockResult::Expired})
+        {
+            owner.constructorResult = result;
+            owner.constructorManager = &manager;
+            owner.publishConstructorOutputOnFailure = true;
+            const auto before = owner.constructorRequires;
+            Refuses([&] { TestGame refused(reader, clock, owner, streaming, state, Tag::PreparedWeapons); },
+                    "actual tagged constructor refuses owner status even when owner writes a genuine manager output before refusal");
+            Check(owner.constructorRequires == before + 1 && owner.constructorClock == &clock,
+                  "constructor forwards the exact borrowed clock once without readiness retry");
+            Check(!owner.constructorPreparations && !owner.nativeWeaponWrites && !owner.weaponManagerReads && !owner.weaponReads,
+                  "constructor rejection never prepares defaults, probes a replacement bank, invokes legacy lookup or performs native writes");
+        }
+        owner.constructorResult = ClockResult::Ok;
+        owner.constructorManager = nullptr;
+        auto before = owner.constructorRequires;
+        Refuses([&] { TestGame missing(reader, clock, owner, streaming, state, Tag::PreparedWeapons); },
+                "successful null cannot qualify constructor services or publish an incomplete game object");
+        Check(owner.constructorRequires == before + 1 && !owner.constructorPreparations && !owner.nativeWeaponWrites,
+              "successful-null rejection has one owner dispatch and no default replay");
+        owner.constructorManager = &manager;
+        before = owner.constructorRequires;
+        TestGame prepared(reader, clock, owner, streaming, state, Tag::PreparedWeapons);
+        Check(owner.constructorRequires == before + 1 && owner.constructorClock == &clock && prepared.GetClock() == &clock,
+              "actual tagged constructor borrows the exact already-prepared complete manager and existing clock");
+        Check(!owner.constructorPreparations && !owner.nativeWeaponWrites && !owner.weaponManagerReads && !owner.weaponReads &&
+                  manager.GetStartupState() == CWeaponStatManagerDE::StartupState::NotStarted && !manager.GetWeaponStats(WEAPONTYPE_PISTOL),
+              "SDK fixture owner identity is a real complete manager but the constructor itself does not populate live defaults or claim native preparation");
+        before = owner.constructorRequires;
+        Check(prepared.GetWeaponStatManager() == &manager && owner.constructorRequires == before + 1 && !owner.weaponManagerReads,
+              "tagged game's manager getter freshly requires the same constructor owner once rather than returning an unchecked cache/legacy owner");
+        owner.constructorManager = &replacement;
+        before = owner.constructorRequires;
+        Refuses([&] { prepared.GetWeaponStatManager(); }, "tagged game refuses a changed complete manager identity");
+        Check(owner.constructorRequires == before + 1 && !owner.weaponManagerReads, "changed identity is not retried or replaced through the legacy getter");
+        owner.constructorResult = ClockResult::Expired;
+        before = owner.constructorRequires;
+        Refuses([&] { prepared.GetWeaponStatManager(); }, "retained prepared manager never bypasses a current native owner refusal");
+        Check(owner.constructorRequires == before + 1, "refused current constructor-owner publication is dispatched once");
+        owner.constructorResult = ClockResult::Ok;
+        owner.constructorManager = &manager;
+        Check(prepared.GetWeaponStatManager() == &manager, "failed/changed observations do not poison the original accepted identity");
+        owner.weaponManagerResult = ClockResult::Ok;
+        owner.weaponManagerPointer = &replacement;
+        before = owner.weaponManagerReads;
+        const auto requireBeforeLegacy = owner.constructorRequires;
+        Check(cpuOnly.GetWeaponStatManager() == &replacement && owner.weaponManagerReads == before + 1 && owner.constructorRequires == requireBeforeLegacy,
+              "original partial object's manager route stays independent of the explicit tagged constructor route");
+        UnusedClockAccess anotherClockAccess;
+        CClockDE          anotherClock(anotherClockAccess);
+        TestGame          independent(reader, anotherClock, owner, streaming, state, Tag::PreparedWeapons);
+        Check(owner.constructorClock == &anotherClock && independent.GetClock() == &anotherClock,
+              "independent constructor forwards its own existing clock instead of a static/current-game clock");
+        LegacyTimingAccess  legacy;
+        CWeaponStatManager* preserved = &manager;
+        Check(legacy.RequireConstructorWeapons(&clock, preserved) == ClockResult::NotInitialized && preserved == &manager,
+              "older optional owner refuses constructor services without changing an existing caller output");
+        Refuses([&] { TestGame absent(reader, clock, legacy, streaming, state, Tag::PreparedWeapons); },
+                "timing-only owner cannot satisfy native constructor readiness");
+        Check(!owner.constructorPreparations && !owner.nativeWeaponWrites && !weaponReader.IsBound(),
+              "all actual constructor/retained-getter tests execute no native default preparation, live row reads or writes");
+        std::puts("Actual CGameDE prepared constructor services SDK fixture completed");
+    }
 
     bool PreFirst(CPlayerPed*, bool)
     {
@@ -661,6 +796,7 @@ int main()
           "SDK StartGame neither retries nor fabricates the native loading transaction");
     Check(!reader.IsBound() && !streaming.IsBound() && !state.IsBound(), "CPU SDK policies require no native service binding");
 
+    ConstructorServiceChecks(reader, clock, streaming, state);
     std::puts("Actual CGameDE definitive version identity SDK fixture completed");
     std::printf("Passed %u actual CGameDE CPU SDK policy checks (%zu-bit)\n", checks, sizeof(void*) * 8);
     return EXIT_SUCCESS;

@@ -105,6 +105,15 @@ Counts, count-only reset and local-client invalidation
 remain MTA bookkeeping. Construction/deletion factories and `GetPools`
 publication are still separate work.
 
+`CPedBorrowedFactoryDE<ConcretePed>` now provides the enclosing lifetime for a
+complete, caller-supplied DE SDK wrapper. It acquires through the existing native
+reference controller, checks the exact token and owner, then registers the typed
+wrapper in the same pool. Explicit retirement withdraws the SDK row before typed
+destruction and one native release attempt. A mutable row that still names the
+wrapper delays destruction; an entered release failure stays with the controller
+for its existing cleanup. The destructor cannot retry native work. This seam
+does not supply missing ped virtuals or allocate/delete a native ped.
+
 Garage initialization also shares MTA's ordered sixteen-entry policy between
 the actual classic manager and the abstract DE manager. The unused classic
 garage-interface accessor stays on `CGarageSA`, outside the shared SDK, so
@@ -240,8 +249,22 @@ Classic startup and explicit DE live-stat population now consume one shared
 80-row schedule, preserving MTA's different standard info/stat keys and exact
 poor/professional/special ordering. DE population admits one explicit attempt
 on an empty live registry; failure preserves its registered/native prefix and
-refuses replay. The incomplete `CGame` does not invoke this stage automatically.
-Full game initialization and startup remain separate work.
+refuses replay. The explicit constructor-preparation host now acknowledges one
+complete row per natural application frame, waiting for that row's model and
+animation prerequisites before native effects. It uses the same schedule and
+manager, without renewing a callback lease or replaying completed rows. Entered
+failure retains its effects and stops preparation; vector component debt stays
+with its exact native callback owner for retirement.
+
+Optional `BeginGameConstructorPreparationV1` and `ReadGameConstructorPreparationV1`
+connect that host to the retained adapter and its existing clock cleanup owner.
+Progress exposes counts and flags after actual admission, with producer and
+generation checks. The existing startup observer remains read-only. The tagged
+`CGameDE` constructor accepts only completed services from its exact clock; it
+performs no initialization writes. Its completion callback can freshly read
+prepared weapon services without acquiring timing or weapon write authority.
+This prepares constructor services before MTA's separate later game initialization;
+the complete `CGame` factory and remaining services are still unfinished.
 
 `CGameTimingDE::GetGravity` also reads the current qualified native downward
 acceleration operand through the existing timing-reader binding. It preserves

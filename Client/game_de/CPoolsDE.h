@@ -21,6 +21,8 @@ namespace mta::game_de
 {
     class CPedVitalsDE;
     class NativeGameTimingAccess;
+    template <class ConcretePed>
+    class CPedBorrowedFactoryDE;
 
     // This is the real SDK lookup/count slice, not a complete native pool or
     // factory. All construction/deletion and non-ped pool methods remain pure.
@@ -83,6 +85,14 @@ namespace mta::game_de
         ClockResult BindBorrowedPed(CPedVitalsDE&, CClientEntity*, BorrowedPedRegistration&) noexcept;
 
     private:
+        // One enclosing typed factory may compose this same registry with the
+        // existing controller. These checks grant no native lifetime authority;
+        // they only prevent adopting a differently bound wrapper or deleting
+        // an owned wrapper while any mutable canonical row still names it.
+        template <class ConcretePed>
+        friend class CPedBorrowedFactoryDE;
+        bool HasExactBorrowedPedBinding(const CPedVitalsDE&, const NativePedReferenceToken&) const noexcept;
+        bool HasBorrowedPedLink(const CPed&) const noexcept;
         struct Control
         {
             BorrowedPedRegistration* registration = nullptr;

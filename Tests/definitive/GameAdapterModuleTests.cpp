@@ -14,6 +14,7 @@
 #include <game/CGameClockService.h>
 #include <game/CGameApplicationFrameObservation.h>
 #include <game/CGameStartupObservation.h>
+#include <game/CGameConstructorPreparation.h>
 #include <game/CGameLocalInputLease.h>
 #include <game/CGameTimeService.h>
 #include <game/CGameFrontendAdmission.h>
@@ -860,6 +861,177 @@ namespace
                   ReadGameStartupObservationV1(1, adapter.value, nextGeneration, &observation) == Status::NotInitialized &&
                   std::memcmp(&beforeReset, &observation, sizeof(observation)) == 0,
               "ordinary adapter reset and shutdown retire the same context and preserve refused output");
+    }
+
+    void TestConstructorPreparationRejection()
+    {
+        OwnedAdapter          adapter;
+        OwnerIdentity         owner;
+        ClockServiceRequestV1 request;
+        ClockServiceStateV1   ownership;
+        ownership.hour = 99;
+        ConstructorPreparationStateV1 progress;
+        progress.generation = 0xa531;
+        progress.completedRows = 3;
+        progress.registeredRows = 4;
+        progress.totalRows = 80;
+        progress.flags = ConstructorPreparationFailed;
+        const auto originalOwnership = ownership;
+        const auto originalProgress = progress;
+        const auto unchanged = [&] { return std::memcmp(&progress, &originalProgress, sizeof(progress)) == 0; };
+        Check(BeginGameConstructorPreparationV1(1, adapter.value, &request, &ownership) == Status::NotInitialized &&
+                  std::memcmp(&ownership, &originalOwnership, sizeof(ownership)) == 0 &&
+                  ReadGameConstructorPreparationV1(1, adapter.value, 1, &progress) == Status::NotInitialized && unchanged(),
+              "constructor preparation requires the initialized retained producer and does not fabricate initial progress");
+        Check(adapter.value->Initialize(owner.Get()) == Status::Ok, "initialize the actual optional constructor preparation adapter");
+        for (const auto version : {0u, 2u, AdapterAbiVersion, UINT32_MAX})
+            Check(BeginGameConstructorPreparationV1(version, adapter.value, &request, &ownership) == Status::InvalidArgument &&
+                      ReadGameConstructorPreparationV1(version, adapter.value, 1, &progress) == Status::InvalidArgument &&
+                      std::memcmp(&ownership, &originalOwnership, sizeof(ownership)) == 0 && unchanged(),
+                  "the independent constructor preparation version does not alias an adapter or observer ABI");
+        Check(BeginGameConstructorPreparationV1(1, nullptr, &request, &ownership) == Status::InvalidArgument &&
+                  BeginGameConstructorPreparationV1(1, adapter.value, nullptr, &ownership) == Status::InvalidArgument &&
+                  BeginGameConstructorPreparationV1(1, adapter.value, &request, nullptr) == Status::InvalidArgument &&
+                  ReadGameConstructorPreparationV1(1, nullptr, 1, &progress) == Status::InvalidArgument &&
+                  ReadGameConstructorPreparationV1(1, adapter.value, 0, &progress) == Status::InvalidArgument &&
+                  ReadGameConstructorPreparationV1(1, adapter.value, 1, nullptr) == Status::InvalidArgument && unchanged(),
+              "missing constructor arguments and zero generations refuse before native setup or output mutation");
+        auto* poison = VirtualAlloc(nullptr, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_NOACCESS);
+        Check(poison != nullptr, "reserve one owned inaccessible optional-export validation page");
+        auto* unknown = static_cast<IGameAdapter*>(poison);
+        Check(BeginGameConstructorPreparationV1(1, unknown, static_cast<const ClockServiceRequestV1*>(poison), static_cast<ClockServiceStateV1*>(poison)) ==
+                      Status::InvalidArgument &&
+                  ReadGameConstructorPreparationV1(1, unknown, 1, static_cast<ConstructorPreparationStateV1*>(poison)) == Status::InvalidArgument,
+              "unknown adapter identity is rejected before its poisoned request, output or vtable can be dereferenced");
+        for (unsigned field = 0; field != 10; ++field)
+        {
+            auto invalid = progress;
+            if (field == 0)
+                ++invalid.size;
+            else if (field == 1)
+                ++invalid.version;
+            else
+                invalid.reserved[field - 2] = 1;
+            const auto before = invalid;
+            Check(ReadGameConstructorPreparationV1(1, adapter.value, 1, &invalid) == Status::InvalidArgument &&
+                      std::memcmp(&invalid, &before, sizeof(invalid)) == 0,
+                  "every constructor output header/reserved word is strict and unchanged on refusal");
+        }
+        Check(ReadGameConstructorPreparationV1(1, adapter.value, 1, &progress) == Status::NotInitialized && unchanged(),
+              "adapter initialization alone has acknowledged no constructor row or ready notification");
+
+        // This existing read-only mode supplies a real cleanup generation. A
+        // malformed write-capable request must not reset its context first.
+        Check(BeginGameStartupObservationV1(1, adapter.value, &request, &ownership) == Status::Unsupported && ownership.generation,
+              "ordinary host creates the real read-only startup cleanup generation before constructor-mode preflight checks");
+        const auto                readonlyGeneration = ownership.generation;
+        StartupObservationStateV1 readonly;
+        readonly.generation = readonly.frame.generation = readonlyGeneration;
+        const auto readonlyUnchanged = [&]
+        {
+            StartupObservationStateV1 current;
+            ClockServiceStateV1       currentOwner;
+            return ReadGameStartupObservationV1(1, adapter.value, readonlyGeneration, &current) == Status::Ok &&
+                   std::memcmp(&current, &readonly, sizeof(current)) == 0 && ReadGameClockServiceV1(1, adapter.value, &currentOwner) == Status::Ok &&
+                   currentOwner.generation == readonlyGeneration &&
+                   ReadGameConstructorPreparationV1(1, adapter.value, readonlyGeneration, &progress) == Status::NotInitialized && unchanged();
+        };
+        for (unsigned field = 0; field != 7; ++field)
+        {
+            auto invalid = request;
+            if (field == 0)
+                ++invalid.size;
+            else if (field == 1)
+                ++invalid.version;
+            else if (field == 2)
+                invalid.maximumDurationMs = 0;
+            else if (field == 3)
+                invalid.maximumDurationMs = ClockServiceMaximumDurationMsV1 + 1;
+            else
+                invalid.reserved[field - 4] = 1;
+            const auto before = ownership;
+            Check(BeginGameConstructorPreparationV1(1, adapter.value, &invalid, &ownership) == Status::InvalidArgument &&
+                      std::memcmp(&ownership, &before, sizeof(ownership)) == 0 && readonlyUnchanged(),
+                  "malformed constructor lease size/version/duration/reserved never discards the existing read-only mode");
+        }
+        for (unsigned field = 0; field != 4; ++field)
+        {
+            auto invalid = ownership;
+            if (field == 0)
+                ++invalid.size;
+            else if (field == 1)
+                ++invalid.version;
+            else
+                invalid.reserved[field - 2] = 1;
+            const auto before = invalid;
+            Check(BeginGameConstructorPreparationV1(1, adapter.value, &request, &invalid) == Status::InvalidArgument &&
+                      std::memcmp(&invalid, &before, sizeof(invalid)) == 0 && readonlyUnchanged(),
+                  "invalid clock ownership output preflight also preserves the prior startup publication and cleanup token");
+        }
+        Check(EndGameClockServiceV1(1, adapter.value, readonlyGeneration) == Status::Ok &&
+                  BeginGameConstructorPreparationV1(1, adapter.value, &request, &ownership) == Status::Unsupported && ownership.generation &&
+                  ownership.generation != readonlyGeneration && !ownership.bound && !ownership.hooked && !ownership.active && !ownership.ready &&
+                  !ownership.modulePinned && !ownership.inFlight && !ownership.patchInstalled && !ownership.retainedPeerThreads,
+              "explicit constructor mode refuses this real non-GTA host with its own cleanup generation and no hooks or ready services");
+        const auto generation = ownership.generation;
+        Check(ReadGameConstructorPreparationV1(1, adapter.value, generation, &progress) == Status::NotInitialized && unchanged() &&
+                  ReadGameConstructorPreparationV1(1, adapter.value, readonlyGeneration, &progress) == Status::InvalidArgument && unchanged(),
+              "no admitted constructor row means no invented zero/complete snapshot, and the old read-only token cannot borrow this mode");
+        std::array<Status, 6> foreign{};
+        const auto            beforeForeign = ownership;
+        std::thread           otherThread(
+            [&]
+            {
+                foreign = {BeginGameConstructorPreparationV1(1, adapter.value, &request, &ownership),
+                           ReadGameConstructorPreparationV1(1, adapter.value, generation, &progress),
+                           BeginGameConstructorPreparationV1(1, adapter.value, static_cast<const ClockServiceRequestV1*>(poison),
+                                                                       static_cast<ClockServiceStateV1*>(poison)),
+                           ReadGameConstructorPreparationV1(1, adapter.value, generation, static_cast<ConstructorPreparationStateV1*>(poison)),
+                           RenewGameClockServiceV1(1, adapter.value, generation),
+                           EndGameClockServiceV1(1, adapter.value, generation)};
+            });
+        otherThread.join();
+        Check(std::all_of(foreign.begin(), foreign.end(), [](Status value) { return value == Status::WrongThread; }) &&
+                  std::memcmp(&ownership, &beforeForeign, sizeof(ownership)) == 0 && unchanged(),
+              "the actual producer check precedes even poisoned constructor payloads and foreign renewal/retirement cannot steal ownership");
+        Check(VirtualFree(poison, 0, MEM_RELEASE) != 0, "release only the owned optional-export validation page");
+        OwnedAdapter  otherAdapter;
+        OwnerIdentity otherIdentity;
+        Check(otherAdapter.value->Initialize(otherIdentity.Get()) == Status::Ok &&
+                  ReadGameConstructorPreparationV1(1, otherAdapter.value, generation, &progress) == Status::NotInitialized && unchanged() &&
+                  EndGameClockServiceV1(1, otherAdapter.value, generation) == Status::Unsupported &&
+                  EndGameClockServiceV1(1, adapter.value, readonlyGeneration) == Status::Unsupported,
+              "another retained adapter or stale generation cannot read or retire this constructor cleanup owner");
+        StartupObservationStateV1          oldStartup = readonly;
+        ApplicationFrameObservationStateV1 oldFrames;
+        oldFrames.frames = 123;
+        Check(ReadGameStartupObservationV1(1, adapter.value, readonlyGeneration, &oldStartup) == Status::NotInitialized &&
+                  std::memcmp(&oldStartup, &readonly, sizeof(readonly)) == 0 &&
+                  ReadGameApplicationFrameObservationV1(1, adapter.value, generation, &oldFrames) == Status::NotInitialized && oldFrames.frames == 123,
+              "the explicit write-capable constructor mode never aliases either read-only observer record");
+        Check(EndGameClockServiceV1(1, adapter.value, generation) == Status::Ok && EndGameClockServiceV1(1, adapter.value, generation) == Status::Ok &&
+                  ReadGameConstructorPreparationV1(1, adapter.value, generation, &progress) == Status::NotInitialized && unchanged() &&
+                  ReadGameClockServiceV1(1, adapter.value, &ownership) == Status::Ok && ownership.generation == generation && !ownership.bound &&
+                  !ownership.hooked && !ownership.active && !ownership.inFlight && !ownership.retainedPeerThreads,
+              "the same owner End is idempotent, leaves real cleanup status readable, and does not turn retired rows into a preparation snapshot");
+        Check(BeginGameStartupObservationV1(1, adapter.value, &request, &ownership) == Status::Unsupported && ownership.generation != generation &&
+                  ReadGameConstructorPreparationV1(1, adapter.value, generation, &progress) == Status::NotInitialized && unchanged(),
+              "a later read-only startup mode revokes constructor progress instead of inheriting its readiness or effects");
+        const auto nextReadonly = ownership.generation;
+        Check(EndGameClockServiceV1(1, adapter.value, nextReadonly) == Status::Ok &&
+                  BeginGameConstructorPreparationV1(1, adapter.value, &request, &ownership) == Status::Unsupported && ownership.generation != generation &&
+                  ReadGameConstructorPreparationV1(1, adapter.value, generation, &progress) == Status::InvalidArgument && unchanged(),
+              "re-entering explicit preparation creates a distinct generation and cannot revive an old constructor token");
+        const auto latest = ownership.generation;
+        Check(EndGameClockServiceV1(1, adapter.value, latest) == Status::Ok &&
+                  BeginGameClockServiceV1(1, adapter.value, &request, &ownership) == Status::Unsupported &&
+                  ReadGameConstructorPreparationV1(1, adapter.value, latest, &progress) == Status::NotInitialized && unchanged() &&
+                  adapter.value->GetCapabilities() == implementedCapabilities && adapter.value->GetGameInterface() == nullptr,
+              "ordinary clock ownership revokes constructor mode without advertising complete CGame services or gameplay capabilities");
+        Check(adapter.value->Reset() == Status::Ok && adapter.value->Shutdown() == Status::Ok &&
+                  ReadGameConstructorPreparationV1(1, adapter.value, latest, &progress) == Status::NotInitialized && unchanged(),
+              "reset and shutdown keep refused constructor progress untouched and retire only the existing real owner");
+        std::cout << "Production constructor preparation optional adapter contract fixture completed\n";
     }
 
     void TestLocalInputLeaseRejection()
@@ -1778,6 +1950,13 @@ int main(int argc, char** argv)
     static_assert(
         std::is_nothrow_invocable_r_v<Status, decltype(ReadGameStartupObservationV1), std::uint32_t, IGameAdapter*, std::uint64_t, StartupObservationStateV1*>);
     static_assert(std::is_nothrow_invocable_r_v<Status, decltype(ReadGameTimeStateV1), std::uint32_t, IGameAdapter*, GameTimeStateV1*>);
+    static_assert(ConstructorPreparationVersionV1 == 1 && sizeof(ConstructorPreparationStateV1) == 64 &&
+                  offsetof(ConstructorPreparationStateV1, generation) == 8 && offsetof(ConstructorPreparationStateV1, reserved) == 32 &&
+                  std::is_standard_layout_v<ConstructorPreparationStateV1> && std::is_trivially_copyable_v<ConstructorPreparationStateV1>);
+    static_assert(std::is_nothrow_invocable_r_v<Status, decltype(BeginGameConstructorPreparationV1), std::uint32_t, IGameAdapter*, const ClockServiceRequestV1*,
+                                                ClockServiceStateV1*>);
+    static_assert(std::is_nothrow_invocable_r_v<Status, decltype(ReadGameConstructorPreparationV1), std::uint32_t, IGameAdapter*, std::uint64_t,
+                                                ConstructorPreparationStateV1*>);
     static_assert(std::is_nothrow_invocable_r_v<Status, decltype(BeginGameLocalInputLeaseV1), std::uint32_t, IGameAdapter*, const LocalInputLeaseRequestV1*,
                                                 LocalInputLeaseStateV1*>);
     static_assert(
@@ -1833,6 +2012,7 @@ int main(int argc, char** argv)
         TestClockServiceRejection();
         TestApplicationFrameObservationRejection();
         TestStartupObservationRejection();
+        TestConstructorPreparationRejection();
         TestGameTimeServiceRejection();
         TestFrontendAdmissionRejection();
         TestLocalInputLeaseRejection();

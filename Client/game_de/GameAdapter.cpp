@@ -15,6 +15,7 @@
 #include <game/CGameClockService.h>
 #include <game/CGameApplicationFrameObservation.h>
 #include <game/CGameStartupObservation.h>
+#include <game/CGameConstructorPreparation.h>
 #include <game/CGameTimeService.h>
 #include <game/CGameFrontendAdmission.h>
 #include "FrontendInputLeasePolicy.h"
@@ -36,6 +37,9 @@
 #include <limits>
 #include <new>
 #include <windows.h>
+// The actual SDK weapon policy uses Win32 scalar types normally supplied by
+// the classic precompiled header; this standalone adapter defines them first.
+#include <game/CWeaponInfoIndexPolicy.h>
 
 namespace mta::game_de
 {
@@ -85,6 +89,7 @@ namespace mta::game_de
                 Begin,
                 BeginApplicationObservation,
                 BeginStartupObservation,
+                BeginConstructorPreparation,
                 Submit,
                 Renew,
                 Read,
@@ -274,10 +279,12 @@ namespace mta::game_de
                                 break;
                             current->applicationObservationMode.store(false);
                             current->startupObservationMode.store(false);
+                            current->ResetConstructorPreparation(false);
                             completed = current->nativeClock.Begin(*request, *output);
                             break;
                         case ClockAction::BeginApplicationObservation:
                         case ClockAction::BeginStartupObservation:
+                        case ClockAction::BeginConstructorPreparation:
                         {
                             if (!NativeClockService::ValidateRequest(*request) || output->size != sizeof(*output) || output->version != ClockServiceVersionV1 ||
                                 output->reserved[0] || output->reserved[1])
@@ -292,12 +299,21 @@ namespace mta::game_de
                             // exact object and its partially installed hook.
                             current->ResetApplicationObservation(action == ClockAction::BeginApplicationObservation);
                             current->ResetStartupObservation(action == ClockAction::BeginStartupObservation);
+                            current->ResetConstructorPreparation(action == ClockAction::BeginConstructorPreparation);
                             ClockServiceStateV1 next;
-                            completed = current->nativeClock.BeginApplicationFrames(*request, next, &ObserveApplicationFrame, current);
+                            if (action == ClockAction::BeginConstructorPreparation)
+                                completed = current->nativeClock.BeginGameConstructorFrames(*request, next, &ConstructorPrepared, current);
+                            else
+                                completed = current->nativeClock.BeginApplicationFrames(*request, next, &ObserveApplicationFrame, current);
                             if (next.generation)
                             {
-                                std::uint64_t unbound = 0;
-                                current->applicationObservationGeneration.compare_exchange_strong(unbound, next.generation);
+                                if (action == ClockAction::BeginConstructorPreparation)
+                                    current->constructorPreparationGeneration.store(next.generation);
+                                else
+                                {
+                                    std::uint64_t unbound = 0;
+                                    current->applicationObservationGeneration.compare_exchange_strong(unbound, next.generation);
+                                }
                                 *output = next;
                             }
                             break;
@@ -317,6 +333,76 @@ namespace mta::game_de
                     }
                     if (result != Status::InvalidArgument)
                         result = completed ? Status::Ok : Status::Unsupported;
+                    break;
+                }
+                ReleaseSRWLockShared(&frontendAdapterLock);
+                return result;
+            }
+            static Status ReadConstructorPreparation(IGameAdapter* adapter, std::uint64_t generation, ConstructorPreparationStateV1* output) noexcept
+            {
+                // Match the retained object and producer before examining its
+                // request/output, just as the existing optional exports do.
+                if (!TryAcquireSRWLockShared(&frontendAdapterLock))
+                    return Status::Unsupported;
+                Status result = Status::InvalidArgument;
+                for (auto* current = frontendAdapters; current; current = current->nextFrontendAdapter)
+                {
+                    if (static_cast<IGameAdapter*>(current) != adapter)
+                        continue;
+                    result = current->Access();
+                    if (result != Status::Ok)
+                        break;
+                    if (output->size != sizeof(*output) || output->version != ConstructorPreparationVersionV1)
+                    {
+                        result = Status::InvalidArgument;
+                        break;
+                    }
+                    bool reserved = false;
+                    for (const auto value : output->reserved)
+                        reserved |= value != 0;
+                    if (reserved)
+                    {
+                        result = Status::InvalidArgument;
+                        break;
+                    }
+                    const auto selected = current->constructorPreparationGeneration.load();
+                    if (!current->constructorPreparationMode.load() || !selected)
+                    {
+                        result = Status::NotInitialized;
+                        break;
+                    }
+                    if (generation != selected)
+                    {
+                        result = Status::InvalidArgument;
+                        break;
+                    }
+                    NativeWeaponConstructorProgress progress;
+                    if (!current->nativeClock.ReadConstructorPreparation(generation, progress))
+                    {
+                        result = Status::NotInitialized;
+                        break;
+                    }
+                    constexpr auto rows = MtaGame::CWeaponInfoIndexPolicy::SlotCount;
+                    if (progress.completedRows > rows || progress.registeredRows > rows || progress.registeredRows < progress.completedRows ||
+                        progress.registeredRows - progress.completedRows > 1 ||
+                        (progress.complete && (progress.failed || progress.completedRows != rows || progress.registeredRows != rows)))
+                    {
+                        result = Status::Unsupported;
+                        break;
+                    }
+                    ConstructorPreparationStateV1 next;
+                    next.generation = generation;
+                    next.completedRows = progress.completedRows;
+                    next.registeredRows = progress.registeredRows;
+                    next.totalRows = static_cast<std::uint32_t>(rows);
+                    next.flags = (progress.complete ? ConstructorPreparationComplete : 0u) | (progress.failed ? ConstructorPreparationFailed : 0u);
+                    // Ready notification follows the complete publication. Do
+                    // not combine an older in-progress snapshot with a newer
+                    // callback flag and accidentally claim premature readiness.
+                    if (progress.complete && current->constructorPreparationNotified.load())
+                        next.flags |= ConstructorPreparationReadyNotified;
+                    *output = next;
+                    result = Status::Ok;
                     break;
                 }
                 ReleaseSRWLockShared(&frontendAdapterLock);
@@ -1032,7 +1118,24 @@ namespace mta::game_de
                 nativeGameState.Reset();
                 ResetApplicationObservation(false);
                 ResetStartupObservation(false);
+                ResetConstructorPreparation(false);
                 capabilities.store(BaseCapabilities);
+            }
+
+            void ResetConstructorPreparation(bool enabled) noexcept
+            {
+                // Only call after the prior native callback/context retires.
+                // A new mode must not inherit readiness from an older owner.
+                constructorPreparationMode.store(enabled);
+                constructorPreparationGeneration.store(0);
+                constructorPreparationNotified.store(false);
+            }
+            static void ConstructorPrepared(NativeGameTimingAccess&, CClockDE&, const NativeApplicationFrame&, void* context) noexcept
+            {
+                // The runtime has acknowledged every default before notifying
+                // this retained context. Publishing a value is sufficient;
+                // incomplete CGame/native factories remain unavailable.
+                static_cast<GameAdapter*>(context)->constructorPreparationNotified.store(true);
             }
 
             // Native access will require a real backend binding. For this first
@@ -1058,6 +1161,8 @@ namespace mta::game_de
             NativeClockService         nativeClock;
             NativeGameTimeReader       nativeGameTime;
             NativeGameStateReader      nativeGameState;
+            std::atomic<bool>          constructorPreparationMode{false}, constructorPreparationNotified{false};
+            std::atomic<std::uint64_t> constructorPreparationGeneration{0};
             // The hook retains this adapter until End retires it. Publications
             // expose only counts/masks, never a borrowed UClass address.
             std::atomic<bool>          applicationObservationMode{false};
@@ -1694,6 +1799,22 @@ namespace mta::game_de
         if (version != StartupObservationVersionV1 || !adapter || !generation || !output)
             return Status::InvalidArgument;
         return GameAdapter::ReadStartupObservation(adapter, generation, output);
+    }
+
+    extern "C" Status BeginGameConstructorPreparationV1(std::uint32_t version, IGameAdapter* adapter, const ClockServiceRequestV1* request,
+                                                        ClockServiceStateV1* output) noexcept
+    {
+        if (version != ConstructorPreparationVersionV1 || !adapter || !request || !output)
+            return Status::InvalidArgument;
+        return GameAdapter::ClockService(adapter, GameAdapter::ClockAction::BeginConstructorPreparation, request, nullptr, 0, output);
+    }
+
+    extern "C" Status ReadGameConstructorPreparationV1(std::uint32_t version, IGameAdapter* adapter, std::uint64_t generation,
+                                                       ConstructorPreparationStateV1* output) noexcept
+    {
+        if (version != ConstructorPreparationVersionV1 || !adapter || !generation || !output)
+            return Status::InvalidArgument;
+        return GameAdapter::ReadConstructorPreparation(adapter, generation, output);
     }
 
     extern "C" Status SubmitGameClockCommandV1(std::uint32_t version, IGameAdapter* adapter, const ClockCommandV1* command) noexcept

@@ -9,10 +9,13 @@
 #include "NativeApplicationFrame.h"
 #include "NativeUiClassMapAccess.h"
 #include "NativeStartupProvidersAccess.h"
+#include "NativeWeaponConstructorProgress.h"
 
 namespace mta::game_de
 {
     class NativeGameTimingAccess;
+    class CClockDE;
+    using ConstructorReadyHandler = void (*)(NativeGameTimingAccess&, CClockDE&, const NativeApplicationFrame&, void*);
     using GameTimingHandler = void (*)(NativeGameTimingAccess&, void*);
     // The producer owns requests, while the natural clock continuation owns
     // every SDK call and native restoration. Pending cleanup keeps this owner
@@ -43,6 +46,17 @@ namespace mta::game_de
         // protocol and its value-only handler unchanged and read-only.
         bool BeginGameStartupFrames(const ClockServiceRequestV1& request, ClockServiceStateV1& state, GameStartupHandler handler,
                                     void* context = nullptr) noexcept;
+        // Prepare the existing runtime-owned bank/manager one whole row per
+        // qualified normal frame, then notify once with its genuine clock.
+        // The handler may construct a future complete CGame only after its
+        // additional services are ready; this route publishes no CGame itself.
+        // Retain handler/context until End succeeds, including failed setup.
+        bool BeginGameConstructorFrames(const ClockServiceRequestV1& request, ClockServiceStateV1& state, ConstructorReadyHandler handler,
+                                        void* context = nullptr) noexcept;
+        // Producer-side value-only receipt of the last admitted preparation
+        // frame. Missing/unpublished/foreign generations preserve the output;
+        // observing Complete never lends a callback or CGame pointer.
+        bool ReadConstructorPreparation(std::uint64_t generation, NativeWeaponConstructorProgress&) const noexcept;
         // Only the qualified post-original handler can observe this receiver's
         // configured classes. Raw membership grants no UObject or startup authority.
         bool ReadStartupUiClassMap(std::uint64_t generation, NativeUiClassMapAccess::Key key, NativeUiClassMapAccess::Value& value) const noexcept;
@@ -70,7 +84,8 @@ namespace mta::game_de
 
     private:
         bool          BeginOwner(const ClockServiceRequestV1& request, ClockServiceStateV1& state, bool timingMode, GameTimingHandler handler, void* context,
-                                 bool frameMode = false, ApplicationFrameHandler frameHandler = nullptr, GameStartupHandler startupHandler = nullptr) noexcept;
+                                 bool frameMode = false, ApplicationFrameHandler frameHandler = nullptr, GameStartupHandler startupHandler = nullptr,
+                                 ConstructorReadyHandler readyHandler = nullptr) noexcept;
         std::uint64_t generation = 0;
         ClockServiceStateV1 finalState;
         bool                hasFinalState = false;

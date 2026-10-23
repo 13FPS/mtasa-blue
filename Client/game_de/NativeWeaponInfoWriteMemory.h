@@ -18,6 +18,12 @@ namespace mta::game_de::NativeWeaponInfoWriteMemory
     // The real owner supplies its synchronous scope check here as well as at
     // dispatch, because profile copies can outlive a generation or callback.
     // An owned-memory unit fixture may omit it; omission grants no engine lease.
+    // Constructor preparation observes the existing native prerequisites
+    // BEFORE registering a row. Missing model/animation/table data is a wait,
+    // not permission to apply an early scalar prefix and fail later. This
+    // qualification writes nothing and grants no lease to subsequent setters.
+    ClockResult QualifyStartupDependencies(const NativeWeaponInfoReader& reader, std::uintptr_t image, std::size_t slot, std::uint32_t animationGroup,
+                                           std::uint32_t model, std::uint32_t model2, CheckOwner checkOwner = nullptr) noexcept;
     ClockResult SetFloat(const NativeWeaponInfoReader& reader, std::uintptr_t image, std::size_t slot, NativeWeaponFloatField field, float value,
                          CheckOwner checkOwner = nullptr) noexcept;
     ClockResult SetShort(const NativeWeaponInfoReader& reader, std::uintptr_t image, std::size_t slot, NativeWeaponShortField field, std::int16_t value,

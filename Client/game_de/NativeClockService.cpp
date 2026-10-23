@@ -20,6 +20,8 @@
 #include "NativeWeaponInfoWriteMemory.h"
 #include "NativeWeaponInfoVectorMemory.h"
 #include "CWeaponInfoBankDE.h"
+#include <game/CWeaponStartupPolicy.h>
+#include <game/CWeaponStatDefaults.h>
 #include "CWeaponStatManagerDE.h"
 #include "NativeStatsWriteCalls.h"
 #include "CStatsDE.h"
@@ -217,6 +219,8 @@ namespace mta::game_de
             ClockResult ReadNamedGarageOpen(const NativeGarageName&, bool&) noexcept override;
             ClockResult SetNamedGarageOpen(const NativeGarageName&, bool) noexcept override;
             ClockResult GetWeaponStatManager(CWeaponStatManager*&) noexcept override;
+            ClockResult PrepareConstructorWeapons(NativeWeaponConstructorProgress&) noexcept override;
+            ClockResult RequireConstructorWeapons(const CClock*, CWeaponStatManager*&) noexcept override;
             ClockResult SetWeatherScalarOverride(NativeWeatherScalarProfile::Field field, float value) noexcept override;
             ClockResult ResetWeatherScalarOverride(NativeWeatherScalarProfile::Field field) noexcept override;
             ClockResult GetStats(CStats*& output) noexcept override;
@@ -360,25 +364,33 @@ namespace mta::game_de
             std::atomic<bool>                               weaponVectorRecovery{false}, weaponVectorSuperseded{false};
             std::atomic<std::uint64_t>                      weaponVectorGeneration{0};
             std::size_t                                     weaponVectorSlot = 0;
-            std::atomic<std::uint64_t>                      weatherOverrideGeneration{0};
-            std::atomic<bool>                               weatherOverrideSuperseded{false};
-            WeatherOverrideHost                             weatherOverrideHost;
-            NativeWeatherOverrideWin32                      weatherOverridePlatform;
-            NativeWeatherOverrideOwner                      weatherOverrides{weatherOverrideHost, weatherOverridePlatform};
-            float                                           originalTimeScale = 0;
-            std::uint32_t                                   originalMinuteDuration = 0;
-            std::uint8_t                                    originalUserPause = 0;
-            bool                                            timingMode = false;
-            std::atomic<bool>                               timerHooked{false}, timerReady{false};
-            GameTimingHandler                               timingHandler = nullptr;
-            void*                                           timingContext = nullptr;
-            bool                                            frameMode = false;
-            std::atomic<bool>                               frameHooked{false};
-            ApplicationFrameHandler                         frameHandler = nullptr;
-            bool                                            startupMode = false;
-            GameStartupHandler                              startupHandler = nullptr;
-            std::atomic<bool>                               startupAttempted{false};
-            std::atomic<std::uint64_t>                      startupRequestGeneration{0};
+            // A constructor vector journal belongs to the exact normal-frame
+            // receiver that entered it, not merely another qualified receiver
+            // in the same retained generation. Timer journals record zero.
+            std::uintptr_t             weaponVectorFrameReceiver = 0;
+            std::atomic<std::uint64_t> weatherOverrideGeneration{0};
+            std::atomic<bool>          weatherOverrideSuperseded{false};
+            WeatherOverrideHost        weatherOverrideHost;
+            NativeWeatherOverrideWin32 weatherOverridePlatform;
+            NativeWeatherOverrideOwner weatherOverrides{weatherOverrideHost, weatherOverridePlatform};
+            float                      originalTimeScale = 0;
+            std::uint32_t              originalMinuteDuration = 0;
+            std::uint8_t               originalUserPause = 0;
+            bool                       timingMode = false;
+            std::atomic<bool>          timerHooked{false}, timerReady{false};
+            GameTimingHandler          timingHandler = nullptr;
+            void*                      timingContext = nullptr;
+            bool                       frameMode = false;
+            std::atomic<bool>          frameHooked{false};
+            ApplicationFrameHandler    frameHandler = nullptr;
+            bool                       startupMode = false;
+            ConstructorReadyHandler    constructorReadyHandler = nullptr;
+            bool                       constructorReadyNotified = false;
+            std::atomic<std::uint64_t> constructorProgressSequence{0}, constructorProgressGeneration{0};
+            std::atomic<std::uint32_t> constructorCompletedRows{0}, constructorRegisteredRows{0}, constructorProgressFlags{0};
+            GameStartupHandler         startupHandler = nullptr;
+            std::atomic<bool>          startupAttempted{false};
+            std::atomic<std::uint64_t> startupRequestGeneration{0};
             // Opaque equality only: a new application at the same global root
             // cannot inherit this request. Never dereference a stored receiver.
             std::atomic<std::uintptr_t>   startupRequestReceiver{0};
@@ -412,6 +424,7 @@ namespace mta::game_de
             // Construct CPU originals and an empty live registry only. Actual
             // CGame initialization/population remains a separate native intent.
             CWeaponStatManagerDE weaponStatManager{weaponBank, access};
+            std::uint64_t        weaponConstructorLastGeneration = 0, weaponConstructorLastFrame = 0;
             CStatsDE             stats{statsReader, access};
             CWantedDE            wanted{access};
             CPlayerInfoDE        playerInfoSdk{access};
@@ -432,7 +445,16 @@ namespace mta::game_de
         thread_local bool          timingTimerScope = false;
         thread_local std::uint64_t frameCallbackGeneration = 0;
         thread_local void*         frameCallbackReceiver = nullptr;
-        constexpr unsigned         timingScaleBit = 1, timingMinuteBit = 2, timingPauseBit = 4;
+        thread_local std::uint64_t frameCallbackSerial = 0;
+        // Only an already admitted startup frame may temporarily borrow the
+        // existing weapon bank/writers while preparing one constructor row.
+        // General timing/service APIs never consult this private sub-scope.
+        thread_local bool constructorWeaponScope = false;
+        thread_local bool constructorWeaponReadScope = false;
+        ClockResult       CheckStartGameOwner(void* receiver) noexcept;
+        bool              FrameReceiver(void* receiver) noexcept;
+
+        constexpr unsigned timingScaleBit = 1, timingMinuteBit = 2, timingPauseBit = 4;
 
         bool WeatherOverrideRetained() noexcept
         {
@@ -737,6 +759,16 @@ namespace mta::game_de
                 !runtime.admissionSerial.load() || (runtime.timingGeneration.load() && runtime.timingGeneration.load() != current))
                 return ClockResult::OwnerConflict;
             return CheckTimingBinding() ? ClockResult::Ok : ClockResult::BindingChanged;
+        }
+
+        ClockResult CheckWeaponWriterOwner() noexcept
+        {
+            return constructorWeaponScope ? CheckStartGameOwner(frameCallbackReceiver) : CheckTimingOwner();
+        }
+
+        ClockResult CheckWeaponReaderOwner() noexcept
+        {
+            return constructorWeaponScope || constructorWeaponReadScope ? CheckStartGameOwner(frameCallbackReceiver) : CheckTimingOwner();
         }
 
         bool ResumePeer(PeerThread& thread) noexcept
@@ -1727,9 +1759,9 @@ namespace mta::game_de
             return ClockResult::Ok;
         }
 
-        ClockResult RequireWeaponWriterReader() noexcept
+        ClockResult RequireWeaponReader(NativeWeaponInfoWriteMemory::CheckOwner checkOwner) noexcept
         {
-            auto owner = CheckTimingOwner();
+            auto owner = checkOwner();
             if (owner != ClockResult::Ok)
                 return owner;
             if (runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load())
@@ -1746,7 +1778,7 @@ namespace mta::game_de
                 const auto bound = runtime.weaponWriterReader.Bind();
                 if (bound != Status::Ok)
                     return bound == Status::WrongThread ? ClockResult::WrongThread : ClockResult::BindingChanged;
-                owner = CheckTimingOwner();
+                owner = checkOwner();
                 if (owner != ClockResult::Ok)
                 {
                     runtime.weaponWriterReader.Reset();
@@ -1754,7 +1786,16 @@ namespace mta::game_de
                 }
                 runtime.weaponWriterGeneration = generation;
             }
-            return CheckTimingOwner();
+            return checkOwner();
+        }
+
+        ClockResult RequireWeaponWriterReader() noexcept
+        {
+            return RequireWeaponReader(&CheckWeaponWriterOwner);
+        }
+        ClockResult RequireWeaponReadReader() noexcept
+        {
+            return RequireWeaponReader(&CheckWeaponReaderOwner);
         }
 
         ClockResult RequireStatsReader() noexcept
@@ -2053,7 +2094,7 @@ namespace mta::game_de
             const auto owner = RequireWeaponWriterReader();
             if (owner != ClockResult::Ok)
                 return owner;
-            return NativeWeaponInfoWriteMemory::SetFloat(runtime.weaponWriterReader, runtime.image, slot, field, value, &CheckTimingOwner);
+            return NativeWeaponInfoWriteMemory::SetFloat(runtime.weaponWriterReader, runtime.image, slot, field, value, &CheckWeaponWriterOwner);
         }
 
         ClockResult NativeAccess::SetWeaponShort(std::size_t slot, NativeWeaponShortField field, std::int16_t value) noexcept
@@ -2061,7 +2102,7 @@ namespace mta::game_de
             const auto owner = RequireWeaponWriterReader();
             if (owner != ClockResult::Ok)
                 return owner;
-            return NativeWeaponInfoWriteMemory::SetShort(runtime.weaponWriterReader, runtime.image, slot, field, value, &CheckTimingOwner);
+            return NativeWeaponInfoWriteMemory::SetShort(runtime.weaponWriterReader, runtime.image, slot, field, value, &CheckWeaponWriterOwner);
         }
 
         ClockResult NativeAccess::SetWeaponDword(std::size_t slot, NativeWeaponDwordField field, std::uint32_t value) noexcept
@@ -2069,7 +2110,7 @@ namespace mta::game_de
             const auto owner = RequireWeaponWriterReader();
             if (owner != ClockResult::Ok)
                 return owner;
-            return NativeWeaponInfoWriteMemory::SetDword(runtime.weaponWriterReader, runtime.image, slot, field, value, &CheckTimingOwner);
+            return NativeWeaponInfoWriteMemory::SetDword(runtime.weaponWriterReader, runtime.image, slot, field, value, &CheckWeaponWriterOwner);
         }
 
         ClockResult NativeAccess::UpdateWeaponFlags(std::size_t slot, std::uint32_t mask, bool enabled) noexcept
@@ -2077,7 +2118,7 @@ namespace mta::game_de
             const auto owner = RequireWeaponWriterReader();
             if (owner != ClockResult::Ok)
                 return owner;
-            return NativeWeaponInfoWriteMemory::UpdateFlags(runtime.weaponWriterReader, runtime.image, slot, mask, enabled, &CheckTimingOwner);
+            return NativeWeaponInfoWriteMemory::UpdateFlags(runtime.weaponWriterReader, runtime.image, slot, mask, enabled, &CheckWeaponWriterOwner);
         }
 
         ClockResult NativeAccess::BorrowWeaponFireOffset(std::size_t slot, CVector*& output) noexcept
@@ -2085,7 +2126,7 @@ namespace mta::game_de
             const auto owner = RequireWeaponWriterReader();
             if (owner != ClockResult::Ok)
                 return owner;
-            return NativeWeaponInfoVectorMemory::BorrowFireOffset(runtime.weaponWriterReader, runtime.image, slot, output, &CheckTimingOwner);
+            return NativeWeaponInfoVectorMemory::BorrowFireOffset(runtime.weaponWriterReader, runtime.image, slot, output, &CheckWeaponWriterOwner);
         }
 
         ClockResult NativeAccess::SetWeaponSlot(std::size_t slot, eWeaponSlot value) noexcept
@@ -2093,12 +2134,12 @@ namespace mta::game_de
             const auto owner = RequireWeaponWriterReader();
             if (owner != ClockResult::Ok)
                 return owner;
-            return NativeWeaponInfoVectorMemory::SetSlot(runtime.weaponWriterReader, runtime.image, slot, value, &CheckTimingOwner);
+            return NativeWeaponInfoVectorMemory::SetSlot(runtime.weaponWriterReader, runtime.image, slot, value, &CheckWeaponWriterOwner);
         }
 
         ClockResult NativeAccess::GetWeaponStatManager(CWeaponStatManager*& output) noexcept
         {
-            const auto owner = RequireWeaponWriterReader();
+            const auto owner = RequireWeaponReadReader();
             if (owner != ClockResult::Ok)
                 return owner;
             NativeWeaponInfoValues observed;
@@ -2107,7 +2148,7 @@ namespace mta::game_de
                 return read == Status::WrongThread      ? ClockResult::WrongThread
                        : read == Status::NotInitialized ? ClockResult::NotInitialized
                                                         : ClockResult::BindingChanged;
-            const auto confirmed = CheckTimingOwner();
+            const auto confirmed = CheckWeaponReaderOwner();
             if (confirmed != ClockResult::Ok)
                 return confirmed;
             // This is one complete SDK manager over the already qualified
@@ -2117,11 +2158,131 @@ namespace mta::game_de
             return ClockResult::Ok;
         }
 
+        struct ConstructorWeaponScope
+        {
+            ConstructorWeaponScope() noexcept { constructorWeaponScope = true; }
+            ~ConstructorWeaponScope() { constructorWeaponScope = false; }
+        };
+
+        struct ConstructorWeaponReadScope
+        {
+            bool previous = constructorWeaponReadScope;
+            ConstructorWeaponReadScope() noexcept { constructorWeaponReadScope = true; }
+            ~ConstructorWeaponReadScope() { constructorWeaponReadScope = previous; }
+        };
+
+        NativeWeaponConstructorProgress ConstructorWeaponProgress() noexcept
+        {
+            return {static_cast<std::uint32_t>(runtime.weaponStatManager.GetCompletedStartupRows()),
+                    static_cast<std::uint32_t>(runtime.weaponStatManager.GetRegisteredLiveRows()),
+                    runtime.weaponStatManager.GetStartupState() == CWeaponStatManagerDE::StartupState::Complete,
+                    runtime.weaponStatManager.GetStartupState() == CWeaponStatManagerDE::StartupState::Failed};
+        }
+
+        void PublishConstructorWeaponProgress(const NativeWeaponConstructorProgress& progress) noexcept
+        {
+            runtime.constructorProgressSequence.fetch_add(1);
+            runtime.constructorCompletedRows.store(progress.completedRows);
+            runtime.constructorRegisteredRows.store(progress.registeredRows);
+            runtime.constructorProgressFlags.store((progress.complete ? 1u : 0u) | (progress.failed ? 2u : 0u));
+            runtime.constructorProgressGeneration.store(runtime.generation.load());
+            runtime.constructorProgressSequence.fetch_add(1);
+        }
+
+        ClockResult NativeAccess::PrepareConstructorWeapons(NativeWeaponConstructorProgress& output) noexcept
+        {
+            if (constructorWeaponScope)
+                return ClockResult::Busy;
+            auto result = CheckStartGameOwner(frameCallbackReceiver);
+            if (result != ClockResult::Ok)
+                return result;
+            ConstructorWeaponScope scope;
+            if ((result = RequireWeaponWriterReader()) != ClockResult::Ok)
+                return result;
+            auto progress = ConstructorWeaponProgress();
+            if (progress.failed || progress.complete)
+            {
+                PublishConstructorWeaponProgress(progress);
+                output = progress;
+                return progress.complete ? ClockResult::Ok : ClockResult::WriteFailure;
+            }
+            if (progress.registeredRows != progress.completedRows)
+                return ClockResult::OwnerConflict;
+            NativeWeaponInfoValues row;
+            const auto             read = runtime.weaponWriterReader.Read(progress.completedRows, row);
+            if (read != Status::Ok)
+                return read == Status::WrongThread ? ClockResult::WrongThread : ClockResult::BindingChanged;
+            const MtaGame::WeaponStatData* defaults = nullptr;
+            const auto                     selectedRow = progress.completedRows;
+            MtaGame::CWeaponStartupPolicy::Initialize(
+                [&](const MtaGame::CWeaponStartupPolicy::Entry& entry)
+                {
+                    if (entry.row == selectedRow)
+                        defaults = MtaGame::CWeaponStatDefaults::Select(entry.statType, entry.skill);
+                });
+            if (defaults && (result = NativeWeaponInfoWriteMemory::QualifyStartupDependencies(
+                                 runtime.weaponWriterReader, runtime.image, selectedRow, defaults->anim_group, static_cast<std::uint32_t>(defaults->model),
+                                 static_cast<std::uint32_t>(defaults->model2), &CheckWeaponWriterOwner)) != ClockResult::Ok)
+                return result;
+            if ((result = CheckWeaponWriterOwner()) != ClockResult::Ok)
+                return result;
+            const auto generation = runtime.generation.load();
+            const auto frame = frameCallbackSerial;
+            if (!frame)
+                return ClockResult::OwnerConflict;
+            if (runtime.weaponConstructorLastGeneration == generation && runtime.weaponConstructorLastFrame == frame)
+                return ClockResult::Busy;
+            runtime.weaponConstructorLastGeneration = generation;
+            runtime.weaponConstructorLastFrame = frame;
+            try
+            {
+                // One whole row is the bounded continuation unit. The manager
+                // alone owns itinerary/cursor and acknowledgement; neither this
+                // owner nor the future CGame repeats or reconstructs it.
+                runtime.weaponStatManager.ContinueLiveStats(&CheckWeaponWriterOwner);
+            }
+            catch (...)
+            {
+                output = ConstructorWeaponProgress();
+                PublishConstructorWeaponProgress(output);
+                Stop(ClockResult::WriteFailure);
+                return ClockResult::WriteFailure;
+            }
+            output = ConstructorWeaponProgress();
+            PublishConstructorWeaponProgress(output);
+            return ClockResult::Ok;
+        }
+
+        ClockResult NativeAccess::RequireConstructorWeapons(const CClock* expectedClock, CWeaponStatManager*& output) noexcept
+        {
+            if (constructorWeaponScope)
+                return ClockResult::Busy;
+            auto result = CheckStartGameOwner(frameCallbackReceiver);
+            if (result != ClockResult::Ok)
+                return result;
+            if (expectedClock != &runtime.clock)
+                return ClockResult::InvalidArgument;
+            ConstructorWeaponReadScope scope;
+            if ((result = RequireWeaponReadReader()) != ClockResult::Ok)
+                return result;
+            const auto progress = ConstructorWeaponProgress();
+            if (!progress.complete || progress.failed || progress.completedRows != NativeWeaponInfoProfile::RowCount ||
+                progress.registeredRows != NativeWeaponInfoProfile::RowCount)
+                return ClockResult::NotInitialized;
+            NativeWeaponInfoValues row;
+            if (runtime.weaponWriterReader.Read(0, row) != Status::Ok)
+                return ClockResult::BindingChanged;
+            if ((result = CheckWeaponReaderOwner()) != ClockResult::Ok)
+                return result;
+            output = &runtime.weaponStatManager;
+            return ClockResult::Ok;
+        }
+
         ClockResult NativeAccess::GetWeaponInfoSlot(std::size_t slot, CWeaponInfo*& output) noexcept
         {
             if (slot >= NativeWeaponInfoProfile::RowCount)
                 return ClockResult::InvalidArgument;
-            const auto owner = RequireWeaponWriterReader();
+            const auto owner = RequireWeaponReadReader();
             if (owner != ClockResult::Ok)
                 return owner;
             NativeWeaponInfoValues observed;
@@ -2131,7 +2292,7 @@ namespace mta::game_de
                        : read == Status::NotInitialized ? ClockResult::NotInitialized
                                                         : ClockResult::BindingChanged;
             auto* const selected = runtime.weaponBank.GetSlot(slot);
-            const auto  confirmed = CheckTimingOwner();
+            const auto  confirmed = CheckWeaponReaderOwner();
             if (confirmed != ClockResult::Ok)
                 return confirmed;
             if (!selected)
@@ -2183,10 +2344,11 @@ namespace mta::game_de
             const bool wasRestored = runtime.restored.load();
             runtime.weaponVectorJournal = {};
             runtime.weaponVectorSlot = slot;
-            runtime.weaponVectorGeneration.store(timingCallbackGeneration);
+            runtime.weaponVectorFrameReceiver = constructorWeaponScope ? reinterpret_cast<std::uintptr_t>(frameCallbackReceiver) : 0;
+            runtime.weaponVectorGeneration.store(runtime.generation.load());
             runtime.weaponVectorRecovery.store(true);
             runtime.restored.store(false);
-            const auto result = NativeWeaponInfoVectorMemory::SetFireOffset(runtime.weaponWriterReader, runtime.image, slot, source, &CheckTimingOwner,
+            const auto result = NativeWeaponInfoVectorMemory::SetFireOffset(runtime.weaponWriterReader, runtime.image, slot, source, &CheckWeaponWriterOwner,
                                                                             &runtime.weaponVectorJournal);
             if (runtime.weaponVectorJournal.foreignMask)
                 runtime.weaponVectorSuperseded.store(true);
@@ -2197,6 +2359,7 @@ namespace mta::game_de
             }
             runtime.weaponVectorGeneration.store(0);
             runtime.weaponVectorRecovery.store(false);
+            runtime.weaponVectorFrameReceiver = 0;
             runtime.restored.store(wasRestored);
             if (runtime.weaponVectorSuperseded.load())
             {
@@ -2212,8 +2375,13 @@ namespace mta::game_de
             // Recovery deliberately survives lease expiry/stopping, but keeps
             // the exact natural callback, thread and admission that performed
             // the partial write. A producer cannot inherit that cleanup right.
-            if (callbackDepth != 1 || GetCurrentThreadId() != runtime.engineThread.load() || !timingCallbackGeneration ||
-                timingCallbackGeneration != generation || runtime.weaponVectorGeneration.load() != generation || runtime.weaponWriterGeneration != generation ||
+            const bool timing = !runtime.weaponVectorFrameReceiver && timingCallbackGeneration && timingCallbackGeneration == generation;
+            const bool startup =
+                runtime.weaponVectorFrameReceiver && runtime.weaponVectorFrameReceiver == reinterpret_cast<std::uintptr_t>(frameCallbackReceiver) &&
+                runtime.startupMode && runtime.frameMode && runtime.frameHooked.load() && frameCallbackReceiver && frameCallbackGeneration == generation &&
+                FrameReceiver(frameCallbackReceiver) && CheckBinding(false, true) && NativeStartGameCalls::CheckThread(runtime.image) == ClockResult::Ok;
+            if (callbackDepth != 1 || GetCurrentThreadId() != runtime.engineThread.load() || (!timing && !startup) ||
+                runtime.weaponVectorGeneration.load() != generation || runtime.weaponWriterGeneration != generation ||
                 runtime.admissionGeneration.load() != generation || !runtime.admissionSerial.load())
                 return ClockResult::OwnerConflict;
             return ClockResult::Ok;
@@ -2235,6 +2403,7 @@ namespace mta::game_de
                 runtime.failure.store(ClockResult::OwnerConflict);
             runtime.weaponVectorGeneration.store(0);
             runtime.weaponVectorRecovery.store(false);
+            runtime.weaponVectorFrameReceiver = 0;
             return true;
         }
 
@@ -4247,12 +4416,32 @@ namespace mta::game_de
             return NativeStartupCompletionAccess(runtime.image, &StartupGraphRead, &CheckStartupProgressOwner).Read(frameCallbackReceiver, output);
         }
 
+        void PrepareConstructorServicesFrame(NativeGameTimingAccess& access, const NativeApplicationFrame& frame, void* context)
+        {
+            if (runtime.constructorReadyNotified || !runtime.constructorReadyHandler)
+                return;
+            NativeWeaponConstructorProgress progress;
+            if (access.PrepareConstructorWeapons(progress) != ClockResult::Ok || !progress.complete)
+                return;
+            CWeaponStatManager* manager = nullptr;
+            if (access.RequireConstructorWeapons(&runtime.clock, manager) != ClockResult::Ok || manager != &runtime.weaponStatManager)
+                return;
+            // Claim the notification BEFORE client construction. A throwing
+            // future complete factory cannot replay the accepted constructor
+            // prefix or receive a second publication attempt on another frame.
+            runtime.constructorReadyNotified = true;
+            ConstructorWeaponReadScope readScope;
+            runtime.constructorReadyHandler(access, runtime.clock, frame, context);
+        }
+
         void InvokeFrameHandler(void* receiver, float delta, std::uint32_t state)
         {
             const auto previousGeneration = frameCallbackGeneration;
             const auto previousReceiver = frameCallbackReceiver;
+            const auto previousSerial = frameCallbackSerial;
             frameCallbackGeneration = runtime.generation.load();
             frameCallbackReceiver = receiver;
+            frameCallbackSerial = runtime.counters.qualified.load();
             __try
             {
                 const NativeApplicationFrame frame{runtime.generation.load(), state, delta};
@@ -4269,6 +4458,7 @@ namespace mta::game_de
                     Stop(ClockResult::OriginalException);
                 frameCallbackGeneration = previousGeneration;
                 frameCallbackReceiver = previousReceiver;
+                frameCallbackSerial = previousSerial;
             }
         }
 
@@ -4289,7 +4479,22 @@ namespace mta::game_de
             if (runtime.active.load() && !Fresh())
                 Stop(ClockResult::Expired);
             if (!runtime.active.load() || runtime.stopping.load())
+            {
+                if (runtime.startupMode && (runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load()) && receiverQualifiedBefore &&
+                    FrameReceiver(receiver) && CheckBinding(false, true))
+                {
+                    const auto previousGeneration = frameCallbackGeneration;
+                    const auto previousReceiver = frameCallbackReceiver;
+                    frameCallbackGeneration = runtime.generation.load();
+                    frameCallbackReceiver = receiver;
+                    const bool recovered = RecoverWeaponVector();
+                    frameCallbackGeneration = previousGeneration;
+                    frameCallbackReceiver = previousReceiver;
+                    if (recovered)
+                        runtime.restored.store(true);
+                }
                 return;
+            }
             std::uint32_t state = 0;
             if (!receiverQualifiedBefore || !FrameReceiver(receiver) || !CheckBinding() || !std::isfinite(delta) || !ReadValue(FrameProfile::stateRva, state) ||
                 state > 9)
@@ -4333,10 +4538,12 @@ namespace mta::game_de
             const auto previousTimerScope = timingTimerScope;
             const auto previousFrameGeneration = frameCallbackGeneration;
             const auto previousFrameReceiver = frameCallbackReceiver;
+            const auto previousFrameSerial = frameCallbackSerial;
             timingCallbackGeneration = 0;
             timingTimerScope = false;
             frameCallbackGeneration = 0;
             frameCallbackReceiver = nullptr;
+            frameCallbackSerial = 0;
             runtime.inFlight.fetch_add(1);
             runtime.counters.callbacks.fetch_add(1);
             ++callbackDepth;
@@ -4359,6 +4566,7 @@ namespace mta::game_de
                 timingTimerScope = previousTimerScope;
                 frameCallbackGeneration = previousFrameGeneration;
                 frameCallbackReceiver = previousFrameReceiver;
+                frameCallbackSerial = previousFrameSerial;
                 --callbackDepth;
                 runtime.inFlight.fetch_sub(1);
             }
@@ -4544,6 +4752,41 @@ namespace mta::game_de
         return BeginOwner(request, state, false, nullptr, context, true, nullptr, handler);
     }
 
+    bool NativeClockService::BeginGameConstructorFrames(const ClockServiceRequestV1& request, ClockServiceStateV1& state, ConstructorReadyHandler handler,
+                                                        void* context) noexcept
+    {
+        if (!handler)
+            return false;
+        return BeginOwner(request, state, false, nullptr, context, true, nullptr, &PrepareConstructorServicesFrame, handler);
+    }
+
+    bool NativeClockService::ReadConstructorPreparation(std::uint64_t requestedGeneration, NativeWeaponConstructorProgress& output) const noexcept
+    {
+        if (!generation || requestedGeneration != generation || generation != runtime.generation.load() || !runtime.bound.load() ||
+            GetCurrentThreadId() != runtime.producerThread)
+            return false;
+        for (unsigned attempt = 0; attempt != 4; ++attempt)
+        {
+            const auto sequence = runtime.constructorProgressSequence.load();
+            if (sequence & 1)
+                continue;
+            const auto                      publishedGeneration = runtime.constructorProgressGeneration.load();
+            NativeWeaponConstructorProgress next;
+            next.completedRows = runtime.constructorCompletedRows.load();
+            next.registeredRows = runtime.constructorRegisteredRows.load();
+            const auto flags = runtime.constructorProgressFlags.load();
+            next.complete = (flags & 1) != 0;
+            next.failed = (flags & 2) != 0;
+            if (sequence != runtime.constructorProgressSequence.load())
+                continue;
+            if (publishedGeneration != generation || generation != runtime.generation.load() || !runtime.bound.load())
+                return false;
+            output = next;
+            return true;
+        }
+        return false;
+    }
+
     bool NativeClockService::ReadStartupUiClassMap(std::uint64_t requestedGeneration, NativeUiClassMapAccess::Key key,
                                                    NativeUiClassMapAccess::Value& value) const noexcept
     {
@@ -4566,7 +4809,8 @@ namespace mta::game_de
     }
 
     bool NativeClockService::BeginOwner(const ClockServiceRequestV1& request, ClockServiceStateV1& state, bool timingMode, GameTimingHandler handler,
-                                        void* context, bool frameMode, ApplicationFrameHandler frameHandler, GameStartupHandler startupHandler) noexcept
+                                        void* context, bool frameMode, ApplicationFrameHandler frameHandler, GameStartupHandler startupHandler,
+                                        ConstructorReadyHandler readyHandler) noexcept
     {
         ApiOperation operation;
         if (!operation.acquired || !ValidateRequest(request) || runtime.hooked.load() || runtime.timerHooked.load() || runtime.frameHooked.load() ||
@@ -4632,6 +4876,7 @@ namespace mta::game_de
         runtime.ropesGeneration = 0;
         runtime.weaponVectorJournal = {};
         runtime.weaponVectorSlot = 0;
+        runtime.weaponVectorFrameReceiver = 0;
         runtime.weaponVectorRecovery.store(false);
         runtime.weaponVectorGeneration.store(0);
         runtime.weaponVectorSuperseded.store(false);
@@ -4648,6 +4893,9 @@ namespace mta::game_de
         runtime.frameHandler = frameHandler;
         runtime.startupMode = frameMode && startupHandler;
         runtime.startupHandler = runtime.startupMode ? startupHandler : nullptr;
+        runtime.constructorReadyHandler = runtime.startupMode ? readyHandler : nullptr;
+        runtime.constructorReadyNotified = false;
+        runtime.constructorProgressGeneration.store(0);
         runtime.startupAttempted.store(false);
         runtime.startupRequestGeneration.store(0);
         runtime.startupRequestReceiver.store(0);
@@ -4704,6 +4952,8 @@ namespace mta::game_de
                 runtime.timingContext = nullptr;
                 runtime.frameHandler = nullptr;
                 runtime.startupHandler = nullptr;
+                runtime.constructorReadyHandler = nullptr;
+                runtime.constructorReadyNotified = false;
                 runtime.startupMode = false;
                 runtime.frameContext = nullptr;
             }
@@ -4824,6 +5074,8 @@ namespace mta::game_de
             runtime.timingContext = nullptr;
             runtime.frameHandler = nullptr;
             runtime.startupHandler = nullptr;
+            runtime.constructorReadyHandler = nullptr;
+            runtime.constructorReadyNotified = false;
             runtime.startupMode = false;
             runtime.startupRequestGeneration.store(0);
             runtime.startupRequestReceiver.store(0);

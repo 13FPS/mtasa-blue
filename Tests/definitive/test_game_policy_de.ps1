@@ -20,10 +20,10 @@ $record = [ordered]@{
     schema='mta_game_policy_de_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     generatedFixture=$null;result=$null;failure=$null;scratchDirectory=$scratchRoot;scratchRemoved=$false;
-    scope='Actual manager-backed CGame::CreateWeaponStat virtual dispatch, caller-owned complete CPU records, mutable creating-manager original lookup, no native live registration/default replay, exact null/owner/factory refusals; actual distinct DE version30 SDK virtual dispatch with unchanged classic numeric values/join-byte fit; actual CGameDE SDK diagnostic reference, lazy ped context, typed registration and shared jetpack permissions; exact complete player-info SDK identity forwarding with explicit owner/null/default refusals; state write forwarding/refusal, exact19 logical cheat-name forwarding with14 owner-backed reads/five explicit unavailable results, unchangedfour native setters, and wrong-executable filename refusal. Remaining test-only SDK overrides reject all use. No native game code executes; filename Bind attempts only the real ordinary-host rejection.';
+    scope='Actual explicit prepared-services constructor and retained-manager owner/clock identity fences, one dispatch, status/null/default refusal, no preparation or native write replay; Actual manager-backed CGame::CreateWeaponStat virtual dispatch, caller-owned complete CPU records, mutable creating-manager original lookup, no native live registration/default replay, exact null/owner/factory refusals; actual distinct DE version30 SDK virtual dispatch with unchanged classic numeric values/join-byte fit; actual CGameDE SDK diagnostic reference, lazy ped context, typed registration and shared jetpack permissions; exact complete player-info SDK identity forwarding with explicit owner/null/default refusals; state write forwarding/refusal, exact19 logical cheat-name forwarding with14 owner-backed reads/five explicit unavailable results, unchangedfour native setters, and wrong-executable filename refusal. Remaining test-only SDK overrides reject all use. No native game code executes; filename Bind attempts only the real ordinary-host rejection.';
     nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;installationChanged=$false;
     completeCGameReady=$false;fullMtaReady=$false;nativeWeaponHookDispatchReady=$false;
-    actualDefinitiveGameVersionSdkTested=$false;actualWeaponStatManagerGameSdkTested=$false;actualManagerBackedGameWeaponStatFactorySdkTested=$false
+    actualDefinitiveGameVersionSdkTested=$false;actualWeaponStatManagerGameSdkTested=$false;actualManagerBackedGameWeaponStatFactorySdkTested=$false;actualPreparedConstructorServicesSdkTested=$false
 }
 
 function Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
@@ -93,7 +93,7 @@ try {
         'Client/game_de/CKeyGenDE.h','Client/game_de/CAsyncLoadingDE.h','Client/game_de/NativeGravityReadAccess.h','Client/game_de/NativeGravityReadProfile.h','Client/game_de/NativeGravityReadAccess.cpp','Client/game_de/NativeGameTimingReader.h',
         'Client/game_de/NativeGameTimeReader.h','Client/game_de/NativeStreamingFileIdsReader.h','Client/game_de/NativeGameStateReader.h',
         'Client/game_de/NativeGameStateMemory.h','Client/game_de/NativeDataFileNamesReader.h','Client/game_de/NativeDataFileNamesProfile.h','Shared/sdk/SharedUtil.Defines.h',
-        'Client/game_de/NativeGameTimingAccess.h','Client/game_de/NativeRopesAccess.h','Client/sdk/game/CRopes.h','Client/game_de/NativePlayerInfoAccess.h','Client/game_de/NativeWantedAccess.h','Client/game_de/NativeWeaponInfoVectorAccess.h','Client/game_de/NativeWeaponInfoWriteAccess.h',
+        'Client/game_de/NativeGameTimingAccess.h','Client/game_de/NativeWeaponConstructorProgress.h','Client/game_de/NativeRopesAccess.h','Client/sdk/game/CRopes.h','Client/game_de/NativePlayerInfoAccess.h','Client/game_de/NativeWantedAccess.h','Client/game_de/NativeWeaponInfoVectorAccess.h','Client/game_de/NativeWeaponInfoWriteAccess.h',
         'Client/game_de/NativePedTransformReader.h','Client/game_de/NativePedPoolReader.h',
         'Client/game_de/NativePedTeleportAccess.h',
         'Client/game_de/NativePedVelocityAccess.h',
@@ -131,7 +131,9 @@ try {
     $generated = Join-Path $scratchRoot 'GamePolicyFixture.generated.h'
     $lines = @('#pragma once','#pragma warning(push)','#pragma warning(disable : 4100)','namespace fixture {',
         'class GameFixtureBase : public mta::game_de::CGameDE { public:',
-        'GameFixtureBase(const mta::game_de::NativeGameTimingReader& reader, mta::game_de::CClockDE& clock, mta::game_de::NativeGameTimingAccess& timing, const mta::game_de::NativeStreamingFileIdsReader& streaming, const mta::game_de::NativeGameStateReader& state) noexcept : CGameDE(reader, clock, timing, streaming, state) {}')
+        'GameFixtureBase(const mta::game_de::NativeGameTimingReader& reader, mta::game_de::CClockDE& clock, mta::game_de::NativeGameTimingAccess& timing, const mta::game_de::NativeStreamingFileIdsReader& streaming, const mta::game_de::NativeGameStateReader& state) noexcept : CGameDE(reader, clock, timing, streaming, state) {}',
+        'using ConstructorServices = mta::game_de::CGameDE::ConstructorServices;',
+        'GameFixtureBase(const mta::game_de::NativeGameTimingReader& reader, mta::game_de::CClockDE& clock, mta::game_de::NativeGameTimingAccess& timing, const mta::game_de::NativeStreamingFileIdsReader& streaming, const mta::game_de::NativeGameStateReader& state, ConstructorServices services) : CGameDE(reader, clock, timing, streaming, state, services) {}')
     $lines += @($gameMethods | ForEach-Object { $_.signature + ' override { Unqualified(); }' })
     $lines += @('};','class PoolFixtureBase : public CPools { public:')
     $lines += @($poolMethods | ForEach-Object { $_.signature + ' override { Unqualified(); }' })
@@ -184,8 +186,10 @@ try {
     if (-not $record.actualWeaponStatManagerGameSdkTested) { throw 'Actual complete weapon-stat manager CGame getter did not execute.' }
     $record.actualManagerBackedGameWeaponStatFactorySdkTested = [IO.File]::ReadAllText($record.result.test.stdout).Contains('Actual CGameDE manager-backed unlisted weapon-stat factory SDK fixture completed')
     if (-not $record.actualManagerBackedGameWeaponStatFactorySdkTested) { throw 'Actual manager-backed CGame unlisted factory did not execute.' }
+    $record.actualPreparedConstructorServicesSdkTested = [IO.File]::ReadAllText($record.result.test.stdout).Contains('Actual CGameDE prepared constructor services SDK fixture completed')
+    if (-not $record.actualPreparedConstructorServicesSdkTested) { throw 'Actual prepared constructor services SDK checks did not execute.' }
     $record.actualDefinitiveGameVersionSdkTested = [IO.File]::ReadAllText($record.result.test.stdout).Contains('Actual CGameDE definitive version identity SDK fixture completed')
-    $record.success = $record.success -and $record.actualDefinitiveGameVersionSdkTested
+    $record.success = $record.success -and $record.actualDefinitiveGameVersionSdkTested -and $record.actualPreparedConstructorServicesSdkTested
     if (-not $record.success) { throw 'Actual CGameDE CPU-policy checks failed or summary/version evidence was missing.' }
 } catch { AddFailure ($_.Exception.ToString()) }
 finally {

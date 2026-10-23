@@ -3,9 +3,14 @@
  * LICENSE: See LICENSE in the repository root
  * PURPOSE: Verified native pointer-cell publication and conservative lifetime
  ****************************************************************************/
+// Preserve a caller's renamed main so later focused lifecycle fixtures can
+// reuse this actual owned-image scaffold without executing historical suites.
+#pragma push_macro("main")
+#undef main
 #define main NativePedReferenceTransformFixtureMain
 #include "NativePedTransformReaderTests.cpp"
 #undef main
+#pragma pop_macro("main")
 #include "../../Client/game_de/NativePedReferenceMemory.h"
 #include "../../Client/game_de/NativePedReferenceProfile.h"
 #include <type_traits>

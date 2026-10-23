@@ -1299,6 +1299,7 @@ namespace ClockTestFaults
     std::atomic<unsigned> weaponExchanges{0};
     DWORD                 weaponOldProtection = 0;
     void (*weaponAfterRowRead)() = nullptr;
+    void (*weaponAfterAtomic)() = nullptr;
 
     BOOL WINAPI Read(HANDLE process, LPCVOID address, LPVOID output, SIZE_T bytes, SIZE_T* copied)
     {
@@ -1444,6 +1445,12 @@ namespace ClockTestFaults
         const auto observed = ::_InterlockedCompareExchange16(address, desired, expected);
         if (reinterpret_cast<std::uintptr_t>(address) == weaponWriteAddress && failWeaponReadback.exchange(false))
             failNextWeaponRow.store(true);
+        if (reinterpret_cast<std::uintptr_t>(address) == weaponWriteAddress && weaponAfterAtomic)
+        {
+            const auto after = weaponAfterAtomic;
+            weaponAfterAtomic = nullptr;
+            after();
+        }
         return observed;
     }
     LONG WeaponCompareExchange32(volatile LONG* address, LONG desired, LONG expected)
@@ -1458,6 +1465,12 @@ namespace ClockTestFaults
         const auto observed = ::_InterlockedCompareExchange(address, desired, expected);
         if (reinterpret_cast<std::uintptr_t>(address) == weaponWriteAddress && failWeaponReadback.exchange(false))
             failNextWeaponRow.store(true);
+        if (reinterpret_cast<std::uintptr_t>(address) == weaponWriteAddress && weaponAfterAtomic)
+        {
+            const auto after = weaponAfterAtomic;
+            weaponAfterAtomic = nullptr;
+            after();
+        }
         return observed;
     }
     BOOL WINAPI Protect(LPVOID address, SIZE_T size, DWORD protection, PDWORD previous)
@@ -6578,17 +6591,37 @@ namespace
 #include "NativeWorldCheatOwnerTests.inl"
 #include "NativeNamedGarageOwnerTests.inl"
 
+#include "NativeGameConstructorWeaponOwnerTests.inl"
+
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool constructorSuccess = argc == 3 && std::strcmp(argv[2], "--weapon-constructor-success") == 0;
+    const bool constructorPartial = argc == 3 && std::strcmp(argv[2], "--weapon-constructor-partial") == 0;
+    const bool constructorRecovery = argc == 3 && std::strcmp(argv[2], "--weapon-constructor-recovery") == 0;
+    const bool constructorTimer = argc == 3 && std::strcmp(argv[2], "--weapon-constructor-timer") == 0;
+    const bool constructorOnly = constructorSuccess || constructorPartial || constructorRecovery || constructorTimer;
     const bool pedOwnerOnly = argc == 3 && std::strcmp(argv[2], "--ped-owner") == 0;
     const bool currentWeaponOnly = argc == 3 && std::strcmp(argv[2], "--ped-current-weapon") == 0;
     const bool garageNamedOnly = argc == 3 && std::strcmp(argv[2], "--garage-named") == 0;
     const bool garagePoolsOnly = argc == 3 && std::strcmp(argv[2], "--garage-pools") == 0;
     const bool poolRegistryOnly = argc == 3 && std::strcmp(argv[2], "--ped-pool-registry") == 0;
-    Check((argc == 2 || pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly) &&
+    Check((argc == 2 || constructorOnly || pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (constructorOnly)
+    {
+        // Each process supplies a fresh real runtime manager. Failure remains
+        // terminal rather than resetting production one-shot state for tests.
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        if (constructorTimer)
+            ConstructorWeaponFixture::TimerJournal(fixture);
+        else
+            ConstructorWeaponFixture::Run(fixture, constructorPartial ? 1u : constructorRecovery ? 2u : 0u);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (garagePoolsOnly || poolRegistryOnly)
     {
         // One focused current cohort uses the actual named SDK and sole ped

@@ -5,6 +5,20 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+The borrowed ped layer now implements MTA's actual `CPed::ClearWeapon`
+operation. It snapshots the existing registered token and forwards the original
+weapon type to one genuine DE native call. This operation does not require a
+complete SDK weapon-wrapper bank or substitute `CWeapon::Remove` for ped logic.
+
+Admission follows the native branches: a missing standard slot or mismatching
+row remains a native no-op; matching rows admit the model-reference storage
+that will be decremented. Unequipping uses the genuine existing native entry,
+with attachment prerequisites only on its actual branches. No model request,
+streaming-loaded condition for a decrement, or CPU reference-count clamp is
+added. Native code owns slot, model, actor and goggles changes. Entered failures
+stop the existing owner without replay or rollback; complete factories remain
+separate requirements.
+
 The abstract camera layer now exposes MTA's actual const
 `CCamera::IsSphereVisible` method, used by `CClientMarker::IsOnScreen`. It reuses
 the genuine camera sphere predicate already qualified for the ped screen query,

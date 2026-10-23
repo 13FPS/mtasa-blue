@@ -43,6 +43,7 @@
 #include "NativePedVisibilityMemory.h"
 #include "NativePedOnScreenCalls.h"
 #include "NativePedWeaponGrantCalls.h"
+#include "NativePedWeaponClearCalls.h"
 #include "NativeStreamingSpecialModelCalls.h"
 #include "NativeWorldGroundCalls.h"
 #include "NativeWorldLineCalls.h"
@@ -237,6 +238,7 @@ namespace mta::game_de
             ClockResult ReadPedVisible(const NativePedReferenceToken&, bool&) noexcept override;
             ClockResult ReadPedOnScreen(const NativePedReferenceToken&, bool&) noexcept override;
             ClockResult GrantPedWeapon(const NativePedReferenceToken&, eWeaponType, std::uint32_t, std::uint32_t&) noexcept override;
+            ClockResult ClearPedWeapon(const NativePedReferenceToken&, eWeaponType) noexcept override;
             ClockResult SetWorldIgnoredPed(const NativePedReferenceToken&) noexcept override;
             ClockResult ClearWorldIgnoredEntity() noexcept override;
             ClockResult SetPedVisible(const NativePedReferenceToken&, bool) noexcept override;
@@ -3963,6 +3965,36 @@ namespace mta::game_de
             }
             output = next;
             return ClockResult::Ok;
+        }
+
+        ClockResult NativeAccess::ClearPedWeapon(const NativePedReferenceToken& token, eWeaponType type) noexcept
+        {
+            // Select the registered receiver before any reader or owner
+            // callback. The native whole entry owns slot/model/attachment
+            // effects; neither its ignored return nor a CPU slot substitutes
+            // for the actual single-weapon SDK operation.
+            const auto selected = token;
+            auto       result = RequireWeaponReader(&CheckTimingOwner);
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedPoolReader::Value before, after;
+            if ((result = ResolvePedReference(selected, before)) != ClockResult::Ok)
+                return result;
+            NativePedWeaponClearCalls::Receipt receipt;
+            result = NativePedWeaponClearCalls::Clear(runtime.image, before, runtime.weaponWriterReader, static_cast<std::uint32_t>(type), &CheckTimingOwner,
+                                                      &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = ResolvePedReference(selected, after);
+                if (result == ClockResult::Ok && !SameRegisteredPed(before, after))
+                    result = ClockResult::OwnerConflict;
+            }
+            // Entered effects cannot be retried or undone after an exception
+            // or lost final registered relation. Keep the existing cell debt
+            // until its genuine owner acknowledges retirement.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
         }
 
         ClockResult NativeAccess::GrantPedWeapon(const NativePedReferenceToken& token, eWeaponType type, std::uint32_t ammo, std::uint32_t& output) noexcept

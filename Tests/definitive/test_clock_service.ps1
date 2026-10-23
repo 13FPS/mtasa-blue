@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible')]
+    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -37,6 +37,8 @@ $record['actualWorldLineSdkOwnerTested'] = $false
 $record['nativeWorldGroundOwnerTested'] = $false
 $record['actualWorldGroundSdkOwnerTested'] = $false
 $record['nativePedWeaponGrantOwnerTested'] = $false
+$record['nativePedWeaponClearOwnerTested'] = $false
+$record['actualPedClearWeaponSdkOwnerTested'] = $false
 $record['nativeWorldIgnoreEntityOwnerTested'] = $false
 $record['nativeCameraSphereVisibleOwnerTested'] = $false
 $record['actualCameraSphereVisibleSdkOwnerTested'] = $false
@@ -403,6 +405,7 @@ $sourceNames += @('Client/game_de/NativeWorldAreaAccess.h','Client/game_de/CWorl
 $sourceNames += @('Client/game_de/NativeWorldJetpackHeightAccess.h','Client/game_de/CWorldJetpackHeightDE.h','Client/game_de/CWorldJetpackHeightDE.cpp','Client/game_de/NativeWorldJetpackMemory.h','Client/game_de/NativeWorldJetpackMemory.cpp','Client/game_de/NativeWorldJetpackProfile.h')
 $sourceNames += @('Client/game_de/NativePedOnScreenAccess.h','Client/game_de/CPedOnScreenDE.h','Client/game_de/CPedOnScreenDE.cpp','Client/game_de/NativePedOnScreenCalls.h','Client/game_de/NativePedOnScreenCalls.cpp','Client/game_de/NativePedOnScreenProfile.h')
 $sourceNames += @('Client/game_de/NativePedWeaponGrantAccess.h','Client/game_de/CPedGiveWeaponDE.h','Client/game_de/CPedGiveWeaponDE.cpp','Client/game_de/NativePedWeaponGrantCalls.h','Client/game_de/NativePedWeaponGrantCalls.cpp','Client/game_de/NativePedWeaponGrantProfile.h','Client/sdk/game/CPedGiveWeaponPolicy.h')
+$sourceNames += @('Client/game_de/NativePedWeaponClearAccess.h','Client/game_de/CPedClearWeaponDE.h','Client/game_de/CPedClearWeaponDE.cpp','Client/game_de/NativePedWeaponClearCalls.h','Client/game_de/NativePedWeaponClearCalls.cpp','Client/game_de/NativePedWeaponClearProfile.h')
 $sourceNames += @('Client/game_de/NativeWorldIgnoreEntityAccess.h','Client/game_de/CWorldIgnoreEntityDE.h','Client/game_de/CWorldIgnoreEntityDE.cpp','Client/game_de/NativeWorldIgnoredEntityMemory.h','Client/game_de/NativeWorldIgnoredEntityMemory.cpp','Client/game_de/NativeWorldIgnoredEntityProfile.h')
 $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/game_de/CCameraSphereVisibleDE.h','Client/game_de/CCameraSphereVisibleDE.cpp','Client/game_de/NativeCameraSphereVisibleCalls.h','Client/game_de/NativeCameraSphereVisibleCalls.cpp','Client/game_de/NativeCameraSphereVisibleProfile.h')
     $sourceNames += @('Tests/definitive/NativePedWeaponGrantFixture.h','Tests/definitive/NativePedWeaponGrantOwnerTests.inl','Tests/definitive/Write-PedGiveWeaponFixture.ps1')
@@ -413,6 +416,7 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
     $sourceNames += @('Tests/definitive/NativeWorldLineFixture.h','Tests/definitive/NativeWorldLineOwnerTests.inl','Tests/definitive/Write-WorldLineFixture.ps1')
     $sourceNames += @('Tests/definitive/NativeWorldGroundFixture.h','Tests/definitive/NativeWorldGroundOwnerTests.inl','Tests/definitive/Write-WorldGroundFixture.ps1')
     $sourceNames += @('Tests/definitive/NativeCameraSphereVisibleFixture.h','Tests/definitive/NativeCameraSphereVisibleOwnerTests.inl','Tests/definitive/Write-CameraSphereVisibleFixture.ps1')
+    $sourceNames += @('Tests/definitive/NativePedWeaponClearFixture.h','Tests/definitive/NativePedWeaponClearOwnerTests.inl','Tests/definitive/Write-PedClearWeaponFixture.ps1')
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
     })
@@ -474,6 +478,11 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
     $ignoreEvidence = Join-Path $outputRoot 'WorldIgnoreEntityFixture.generated.h'
     Copy-Item -LiteralPath $ignoreFixture.path -Destination $ignoreEvidence
     $record['worldIgnoreGeneratedFixture'] = [ordered]@{path=$ignoreEvidence;sha256=(Sha $ignoreEvidence)}
+    . (Join-Path $PSScriptRoot 'Write-PedClearWeaponFixture.ps1')
+    $clearWeaponFixture = Write-PedClearWeaponFixture $taskRoot (Join-Path $scratchRoot 'PedClearWeaponFixture.generated.h')
+    $clearWeaponEvidence = Join-Path $outputRoot 'PedClearWeaponFixture.generated.h'
+    Copy-Item -LiteralPath $clearWeaponFixture.path -Destination $clearWeaponEvidence
+    $record['pedClearWeaponGeneratedFixture'] = [ordered]@{path=$clearWeaponEvidence;sha256=(Sha $clearWeaponEvidence)}
     . (Join-Path $PSScriptRoot 'Write-PedGiveWeaponFixture.ps1')
     $giveWeaponFixture = Write-PedGiveWeaponFixture $taskRoot (Join-Path $scratchRoot 'PedGiveWeaponFixture.generated.h')
     $giveWeaponEvidence = Join-Path $outputRoot 'PedGiveWeaponFixture.generated.h'
@@ -579,6 +588,7 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         (Join-Path $taskRoot 'Client/game_de/CPedVisibilityDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CPedOnScreenDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CPedGiveWeaponDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CPedClearWeaponDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CWorldGroundDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CWorldLineDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CWorldAreaDE.cpp'),
@@ -626,6 +636,7 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
     if ($Scope -eq 'WorldLine') { $fixtureArguments += '--world-line' }
     if ($Scope -eq 'WorldGround') { $fixtureArguments += '--world-ground' }
     if ($Scope -eq 'ConstructorServices') { $fixtureArguments += '--constructor-services' }
+    if ($Scope -eq 'PedWeaponClear') { $fixtureArguments += '--ped-weapon-clear' }
     if ($Scope -eq 'PedWeaponGrant') { $fixtureArguments += '--ped-weapon-grant' }
     if ($Scope -eq 'WorldIgnoreEntity') { $fixtureArguments += '--world-ignore-entity' }
     if ($Scope -eq 'CameraSphereVisible') { $fixtureArguments += '--camera-sphere-visible' }
@@ -688,7 +699,12 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
         if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
     }
-    if ($Scope -eq 'CameraSphereVisible') {
+    if ($Scope -eq 'PedWeaponClear') {
+        $record.nativePedWeaponClearOwnerTested = $text.Contains('Production native registered weapon-clear callback owner fixture completed')
+        $record.actualPedClearWeaponSdkOwnerTested = $text.Contains('Production actual CPed ClearWeapon SDK callback fixture completed')
+        if (-not ($record.nativePedWeaponClearOwnerTested -and $record.actualPedClearWeaponSdkOwnerTested)) { throw 'New native/actual SDK weapon clear owner did not complete.' }
+        $record.productionNativeCallbackTested = $true
+    } elseif ($Scope -eq 'CameraSphereVisible') {
         $record.nativeCameraSphereVisibleOwnerTested = $text.Contains('Production native camera sphere callback owner fixture completed')
         $record.actualCameraSphereVisibleSdkOwnerTested = $text.Contains('Production actual CCamera sphere SDK owner fixture completed')
         if (-not ($record.nativeCameraSphereVisibleOwnerTested -and $record.actualCameraSphereVisibleSdkOwnerTested)) { throw 'New native/actual SDK camera sphere owner did not complete.' }

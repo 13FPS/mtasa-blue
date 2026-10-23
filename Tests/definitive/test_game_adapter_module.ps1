@@ -324,6 +324,7 @@ $sourceNames += @('Client/game_de/NativeWorldAreaAccess.h','Client/game_de/CWorl
 $sourceNames += @('Client/game_de/NativeWorldJetpackHeightAccess.h','Client/game_de/CWorldJetpackHeightDE.h','Client/game_de/CWorldJetpackHeightDE.cpp','Client/game_de/NativeWorldJetpackMemory.h','Client/game_de/NativeWorldJetpackMemory.cpp','Client/game_de/NativeWorldJetpackProfile.h')
 $sourceNames += @('Client/game_de/NativePedOnScreenAccess.h','Client/game_de/CPedOnScreenDE.h','Client/game_de/CPedOnScreenDE.cpp','Client/game_de/NativePedOnScreenCalls.h','Client/game_de/NativePedOnScreenCalls.cpp','Client/game_de/NativePedOnScreenProfile.h')
 $sourceNames += @('Client/game_de/NativePedWeaponGrantAccess.h','Client/game_de/CPedGiveWeaponDE.h','Client/game_de/CPedGiveWeaponDE.cpp','Client/game_de/NativePedWeaponGrantCalls.h','Client/game_de/NativePedWeaponGrantCalls.cpp','Client/game_de/NativePedWeaponGrantProfile.h','Client/sdk/game/CPedGiveWeaponPolicy.h')
+$sourceNames += @('Client/game_de/NativePedWeaponClearAccess.h','Client/game_de/CPedClearWeaponDE.h','Client/game_de/CPedClearWeaponDE.cpp','Client/game_de/NativePedWeaponClearCalls.h','Client/game_de/NativePedWeaponClearCalls.cpp','Client/game_de/NativePedWeaponClearProfile.h')
 $sourceNames += @('Client/game_de/NativeWorldIgnoreEntityAccess.h','Client/game_de/CWorldIgnoreEntityDE.h','Client/game_de/CWorldIgnoreEntityDE.cpp','Client/game_de/NativeWorldIgnoredEntityMemory.h','Client/game_de/NativeWorldIgnoredEntityMemory.cpp','Client/game_de/NativeWorldIgnoredEntityProfile.h')
 $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/game_de/CCameraSphereVisibleDE.h','Client/game_de/CCameraSphereVisibleDE.cpp','Client/game_de/NativeCameraSphereVisibleCalls.h','Client/game_de/NativeCameraSphereVisibleCalls.cpp','Client/game_de/NativeCameraSphereVisibleProfile.h')
 $sourceNames += @('Client/game_de/WeaponFireHandlerAccess.h','Client/game_de/CWeaponFireBulletDE.h','Client/game_de/CWeaponFireBulletDE.cpp','Client/sdk/game/CWeaponFireBulletPolicy.h')
@@ -443,6 +444,7 @@ if ((Test-Path -LiteralPath $moduleSource) -and $detoursLibraryExit -eq 0) {
         (Join-Path $taskRoot 'Client/game_de/CPedVisibilityDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CPedOnScreenDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CPedGiveWeaponDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CPedClearWeaponDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CWorldGroundDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CWorldLineDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CWorldAreaDE.cpp'),
@@ -470,6 +472,7 @@ if ((Test-Path -LiteralPath $moduleSource) -and $detoursLibraryExit -eq 0) {
         (Join-Path $taskRoot 'Client/game_de/NativePedVisibilityMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedOnScreenCalls.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedWeaponGrantCalls.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativePedWeaponClearCalls.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedRotationMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeStreamingSceneCalls.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeWorldGroundContext.cpp'),

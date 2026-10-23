@@ -4,11 +4,19 @@
  * PURPOSE: Preserve raw CPed vitals while reporting real owner refusal
  ****************************************************************************/
 #include "CPedVitalsDE.h"
+#include <game/CEntityFirePolicy.h>
 #include <stdexcept>
 #include <string>
 
 namespace mta::game_de
 {
+    bool CPedVitalsDE::IsOnFire()
+    {
+        // This is the real classic nonconst CEntity fallback, independent of
+        // native state. The later const CPed query still requires its actual
+        // token owner and can refuse; it is never synthesized from false here.
+        return MtaGame::CEntityFirePolicy::IsOnFire();
+    }
     void CPedVitalsDE::Require(ClockResult result, const char* operation)
     {
         if (result != ClockResult::Ok)

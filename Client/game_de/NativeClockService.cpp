@@ -37,6 +37,8 @@
 #include "NativePedWaterTaskReader.h"
 #include "NativePedOrientationMemory.h"
 #include "NativePedAreaMemory.h"
+#include "NativePedFireMemory.h"
+#include "NativePedCollisionMemory.h"
 #include "NativeStreamingSpecialModelCalls.h"
 #include "NativeAnimationBlockMemory.h"
 #include "NativeAnimationManagerMemory.h"
@@ -212,6 +214,8 @@ namespace mta::game_de
             ClockResult FindAnimationBlockIndex(std::uint64_t, const NativeAnimationBlockName&, std::int32_t&) noexcept override;
             ClockResult ReadPedInWater(const NativePedReferenceToken&, bool&) noexcept override;
             ClockResult ReadPedAreaCode(const NativePedReferenceToken&, std::uint8_t&) noexcept override;
+            ClockResult ReadPedOnFire(const NativePedReferenceToken&, bool&) noexcept override;
+            ClockResult SetPedUsesCollision(const NativePedReferenceToken&, bool) noexcept override;
             ClockResult SetPedAreaCode(const NativePedReferenceToken&, std::uint8_t) noexcept override;
             ClockResult RequestStreamingSpecialModel(std::uint32_t, const char*, std::uint32_t) noexcept override;
             ClockResult SetPedInWaterFlags(const NativePedReferenceToken&, bool) noexcept override;
@@ -3503,12 +3507,61 @@ namespace mta::game_de
             return result;
         }
 
-        bool SameAreaPed(const NativePedPoolReader::Value& a, const NativePedPoolReader::Value& b) noexcept
+        bool SameRegisteredPed(const NativePedPoolReader::Value& a, const NativePedPoolReader::Value& b) noexcept
         {
             return a.nativePed == b.nativePed && a.handle == b.handle && a.pool == b.pool && a.objects == b.objects && a.flags == b.flags && a.slot == b.slot &&
                    a.generation == b.generation && a.vtable == b.vtable && a.firstMethod == b.firstMethod && a.capacity == b.capacity && a.cursor == b.cursor &&
                    a.ownsAllocations == b.ownsAllocations;
         }
+        ClockResult NativeAccess::ReadPedOnFire(const NativePedReferenceToken& token, bool& output) noexcept
+        {
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedPoolReader::Value before, after;
+            if ((result = ResolvePedReference(token, before)) != ClockResult::Ok)
+                return result;
+            bool next = false;
+            if ((result = NativePedFireMemory({runtime.image}, &CheckTimingOwner).ReadOnFire(before, next)) != ClockResult::Ok)
+                return result;
+            result = ResolvePedReference(token, after);
+            if (result == ClockResult::Ok && !SameRegisteredPed(before, after))
+                result = ClockResult::OwnerConflict;
+            // Association presence has no target lifetime claim. A successfully
+            // observed ped losing its original registered relation retires only
+            // this admitted runtime; initial/unsupported refusal means no bool.
+            if (result != ClockResult::Ok)
+            {
+                Stop(result);
+                return result;
+            }
+            output = next;
+            return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::SetPedUsesCollision(const NativePedReferenceToken& token, bool value) noexcept
+        {
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedPoolReader::Value before, after;
+            if ((result = ResolvePedReference(token, before)) != ClockResult::Ok)
+                return result;
+            NativePedCollisionMemory::Receipt receipt;
+            result = NativePedCollisionMemory({runtime.image}, &CheckTimingOwner).SetUsesCollision(before, value, &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = ResolvePedReference(token, after);
+                if (result == ClockResult::Ok && !SameRegisteredPed(before, after))
+                    result = ClockResult::OwnerConflict;
+            }
+            // Exactly one masked intent was attempted. Even a competing word
+            // can leave ownership uncertain: keep cell debt and Stop without
+            // retrying, restoring flags or inventing an actor collision rebuild.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+
         ClockResult NativeAccess::ReadPedAreaCode(const NativePedReferenceToken& token, std::uint8_t& output) noexcept
         {
             auto result = CheckTimingOwner();
@@ -3521,7 +3574,7 @@ namespace mta::game_de
             if ((result = NativePedAreaMemory({runtime.image}, &CheckTimingOwner).ReadAreaCode(before, next)) != ClockResult::Ok)
                 return result;
             result = ResolvePedReference(token, after);
-            if (result == ClockResult::Ok && !SameAreaPed(before, after))
+            if (result == ClockResult::Ok && !SameRegisteredPed(before, after))
                 result = ClockResult::OwnerConflict;
             // Only a successfully observed ped that then loses its original
             // registered relation retires this admitted runtime. Initial or
@@ -3547,7 +3600,7 @@ namespace mta::game_de
             if (result == ClockResult::Ok)
             {
                 result = ResolvePedReference(token, after);
-                if (result == ClockResult::Ok && !SameAreaPed(before, after))
+                if (result == ClockResult::Ok && !SameRegisteredPed(before, after))
                     result = ClockResult::OwnerConflict;
             }
             // A one-byte accepted or uncertain write persists. Keep the sole

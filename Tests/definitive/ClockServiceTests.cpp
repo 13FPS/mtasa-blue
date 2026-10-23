@@ -28,6 +28,11 @@
 #include "../../Client/game_de/NativePedOrientationMemory.h"
 #include "../../Client/game_de/NativePedOrientationProfile.h"
 #include "../../Client/game_de/NativePedAreaMemory.h"
+#include "../../Client/game_de/NativePedFireMemory.h"
+#include "../../Client/game_de/NativePedFireProfile.h"
+#include "../../Client/game_de/NativePedCollisionMemory.h"
+#include "../../Client/game_de/NativePedCollisionProfile.h"
+#include "../../Client/game_de/CPedCollisionDE.h"
 #include "../../Client/game_de/NativePedAreaProfile.h"
 #include "../../Client/game_de/CPedAreaDE.h"
 #include "../../Client/game_de/NativeStreamingSpecialModelCalls.h"
@@ -207,6 +212,15 @@ namespace ped_area_fixture
     }
 }
 #include "PedAreaFixture.generated.h"
+namespace ped_collision_fixture
+{
+    [[noreturn]] void Unqualified(const char* method)
+    {
+        std::fprintf(stderr, "Unexpected unqualified ped collision fixture call: %s\n", method);
+        std::abort();
+    }
+}
+#include "PedCollisionFixture.generated.h"
 
 namespace ClockModelClassificationOwnerTest
 {
@@ -888,6 +902,71 @@ namespace ClockPedPhysicalScalarsOwnerTest
             // node still names the cell, so no storage may be released yet.
             const std::uintptr_t zero = 0;
             std::memcpy(reinterpret_cast<void*>(cell), &zero, sizeof(zero));
+        }
+        return true;
+    }
+}
+namespace ClockPedFireOwnerTest
+{
+    std::uintptr_t watched = 0, cell = 0, replacement = 0;
+    unsigned       reads = 0, changeAfter = 0;
+    bool           failNext = false, loseToken = false;
+    BOOL WINAPI    Read(HANDLE process, LPCVOID source, LPVOID destination, SIZE_T bytes, SIZE_T* copied)
+    {
+        const bool selected = reinterpret_cast<std::uintptr_t>(source) == watched && bytes == sizeof(std::uintptr_t);
+        if (selected && failNext)
+        {
+            failNext = false;
+            if (copied)
+                *copied = 0;
+            return FALSE;
+        }
+        if (!::ReadProcessMemory(process, source, destination, bytes, copied))
+            return FALSE;
+        if (selected)
+        {
+            ++reads;
+            if (changeAfter && reads == changeAfter)
+                std::memcpy(reinterpret_cast<void*>(watched), &replacement, sizeof(replacement));
+            if (loseToken && reads == 2)
+            {
+                loseToken = false;
+                const std::uintptr_t zero = 0;
+                std::memcpy(reinterpret_cast<void*>(cell), &zero, sizeof(zero));
+            }
+        }
+        return TRUE;
+    }
+}
+namespace ClockPedCollisionOwnerTest
+{
+    unsigned       stores = 0;
+    std::uintptr_t cell = 0;
+    bool           neighborRace = false, loseToken = false, failAfter = false;
+    bool           Exchange(std::uintptr_t address, std::uint32_t expected, std::uint32_t target, std::uint32_t& observed, std::uint32_t& exception) noexcept
+    {
+        ++stores;
+        if (neighborRace)
+        {
+            neighborRace = false;
+            std::uint32_t competing = expected ^ 2u;
+            std::memcpy(reinterpret_cast<void*>(address), &competing, sizeof(competing));
+        }
+        LONG compare = 0, desired = 0;
+        std::memcpy(&compare, &expected, sizeof(compare));
+        std::memcpy(&desired, &target, sizeof(desired));
+        const auto previous = _InterlockedCompareExchange(reinterpret_cast<volatile LONG*>(address), desired, compare);
+        std::memcpy(&observed, &previous, sizeof(observed));
+        if (observed == expected && loseToken)
+        {
+            loseToken = false;
+            const std::uintptr_t zero = 0;
+            std::memcpy(reinterpret_cast<void*>(cell), &zero, sizeof(zero));
+        }
+        if (failAfter)
+        {
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return false;
         }
         return true;
     }
@@ -2192,6 +2271,13 @@ namespace mta::game_de::NativeImageAccess
 #define MTA_DE_PED_WATER_FLAGS_EXCHANGE ClockPedWaterOwnerTest::Exchange
 #define MTA_DE_PED_AREA_EXCHANGE        ClockPedAreaOwnerTest::Exchange
 #include "../../Client/game_de/NativePedAreaMemory.cpp"
+#pragma push_macro("ReadProcessMemory")
+#define ReadProcessMemory ClockPedFireOwnerTest::Read
+#include "../../Client/game_de/NativePedFireMemory.cpp"
+#pragma pop_macro("ReadProcessMemory")
+#define MTA_DE_PED_COLLISION_EXCHANGE ClockPedCollisionOwnerTest::Exchange
+#include "../../Client/game_de/NativePedCollisionMemory.cpp"
+#undef MTA_DE_PED_COLLISION_EXCHANGE
 #undef MTA_DE_PED_AREA_EXCHANGE
 #include "../../Client/game_de/NativePedWaterFlagsMemory.cpp"
 #include "../../Client/game_de/NativePedWaterTaskReader.cpp"
@@ -6924,6 +7010,9 @@ namespace
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool fireCollisionOnly = argc == 3 && std::strcmp(argv[2], "--fire-collision") == 0;
+    const bool fireOnly = argc == 3 && std::strcmp(argv[2], "--ped-fire") == 0;
+    const bool collisionOnly = argc == 3 && std::strcmp(argv[2], "--ped-collision") == 0;
     const bool areaSpecialOnly = argc == 3 && std::strcmp(argv[2], "--area-special-model") == 0;
     const bool areaOnly = argc == 3 && std::strcmp(argv[2], "--ped-area") == 0;
     const bool specialOnly = argc == 3 && std::strcmp(argv[2], "--special-model") == 0;
@@ -6945,9 +7034,31 @@ int main(int argc, char** argv)
     const bool poseOnly = argc == 3 && std::strcmp(argv[2], "--ped-pose") == 0;
     const bool poolRegistryOnly = argc == 3 && std::strcmp(argv[2], "--ped-pool-registry") == 0;
     Check((argc == 2 || constructorOnly || pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly || poseOnly ||
-           waterOnly || animationOnly || animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly) &&
+           waterOnly || animationOnly || animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly ||
+           fireCollisionOnly || fireOnly || collisionOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (fireCollisionOnly || fireOnly || collisionOnly)
+    {
+        if (fireCollisionOnly || fireOnly)
+        {
+            const auto directory = std::filesystem::path(argv[1]) / L"ped-fire-owner";
+            Check(std::filesystem::create_directory(directory), "fresh durable registered fire owner setup");
+            ClockImageFixture fixture;
+            fixture.Create(directory);
+            NativePedPhysicalScalarsOwnedSdk(fixture, false, false, false, false, false, false, 1);
+        }
+        if (fireCollisionOnly || collisionOnly)
+        {
+            const auto directory = std::filesystem::path(argv[1]) / L"ped-collision-owner";
+            Check(std::filesystem::create_directory(directory), "fresh durable registered collision owner setup");
+            ClockImageFixture fixture;
+            fixture.Create(directory);
+            NativePedPhysicalScalarsOwnedSdk(fixture, false, false, false, false, false, false, 2);
+        }
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (areaSpecialOnly || areaOnly || specialOnly)
     {
         if (areaSpecialOnly || areaOnly)

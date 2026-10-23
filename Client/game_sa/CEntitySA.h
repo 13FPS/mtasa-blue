@@ -12,6 +12,7 @@
 #pragma once
 
 #include <game/CEntity.h>
+#include <game/CEntityFirePolicy.h>
 #include <game/CEntityPhysicsState.h>
 #include "CPlaceableSA.h"
 #include <CMatrix.h>
@@ -315,7 +316,7 @@ public:
     bool GetBonePosition(eBone boneId, CVector& position);
     bool SetBonePosition(eBone boneId, const CVector& position);
 
-    bool IsOnFire() override { return false; }
+    bool IsOnFire() override { return MtaGame::CEntityFirePolicy::IsOnFire(); }
     bool SetOnFire(bool onFire) override { return false; }
 
     // CEntitySA interface

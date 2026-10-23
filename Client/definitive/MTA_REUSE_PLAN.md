@@ -490,6 +490,20 @@ byte store, including same-value requests, without changing neighbors or
 retrying. Lost acknowledgement retains accepted effects; no interior streaming
 or complete entity factory is supplied by this property.
 
+`CPedFireDE` adds the actual const ped fire query by observing the associated
+native fire pointer without following or exposing it. The inherited nonconst
+entity query retains MTA's separate generic fallback through a policy shared
+with the classic backend. Keeping that fallback in the earlier ped layer
+preserves classic name hiding and dispatch through both SDK interfaces.
+`SetOnFire` and native fire-object lifetime remain unimplemented.
+
+`CPedCollisionDE` implements the existing entity collision-use setter on the
+same registered ped. The named DE command, constructor and physical contact
+consumer establish the flag's role. One masked conditional store preserves
+neighbors and never retries; accepted or uncertain effects are not replayed.
+This raw flag operation does not create a new getter, rebuild UE collision
+components or publish a complete ped factory.
+
 `CPedFlagsDE` adds MTA's existing vehicle shooting-permission and bike
 knockoff accessors on that same registered lifetime. Independently named native
 commands establish the masks; the neighboring `TestForShotInVehicle` property

@@ -28,6 +28,8 @@
 #include "NativePedWaterTaskAccess.h"
 #include "NativePedOrientationAccess.h"
 #include "NativePedAreaAccess.h"
+#include "NativePedFireAccess.h"
+#include "NativePedCollisionAccess.h"
 #include "NativePedObservationAccess.h"
 #include "NativePedIntelligenceReader.h"
 #include "NativeTaskPoolReader.h"
@@ -88,6 +90,8 @@ namespace mta::game_de
                                    public NativePedWaterTaskAccess,
                                    public NativePedOrientationAccess,
                                    public NativePedAreaAccess,
+                                   public NativePedFireAccess,
+                                   public NativePedCollisionAccess,
                                    public NativePedObservationAccess,
                                    public NativePedPhysicalScalarsAccess,
                                    public NativePedRotationAccess,

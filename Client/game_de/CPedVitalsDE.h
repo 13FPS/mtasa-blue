@@ -21,7 +21,7 @@
 
 namespace mta::game_de
 {
-    // Only these four genuine SDK methods are implemented. The enclosing
+    // These genuine SDK methods retain their own contracts. The enclosing
     // future ped/pool owner must supply every remaining CPed method and own
     // registration retirement before this layer can be a usable SDK object.
     class CPedVitalsDE : public CPed
@@ -31,6 +31,9 @@ namespace mta::game_de
         void  SetHealth(float health) override;
         float GetArmor() const override;
         void  SetArmor(float armor) override;
+        // Keep the nonconst CEntity policy in an early base so the later
+        // const ped fire declaration hides it exactly as classic CPedSA does.
+        bool IsOnFire() override;
 
     protected:
         CPedVitalsDE(NativePedVitalsAccess& access, const NativePedReferenceToken& token) noexcept : native(access), reference(token) {}

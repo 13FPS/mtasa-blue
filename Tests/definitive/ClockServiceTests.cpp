@@ -179,6 +179,16 @@
 #include "../../Client/game_de/CAnimManagerDE.h"
 #include "AnimationManagerOwnerFixture.h"
 #include "PedPoolRegistryFixture.generated.h"
+#include "../../Client/game_de/CGameDE.h"
+namespace constructor_services_fixture
+{
+    [[noreturn]] inline void Unqualified(const char* method)
+    {
+        std::fprintf(stderr, "Unqualified constructor bundle SDK call: %s\n", method);
+        std::abort();
+    }
+}
+#include "GameConstructorServicesFixture.generated.h"
 namespace ped_pose_fixture
 {
     [[noreturn]] inline void Unqualified()
@@ -7108,6 +7118,7 @@ namespace
 #include "NativeNamedGarageOwnerTests.inl"
 
 #include "NativeGameConstructorWeaponOwnerTests.inl"
+#include "NativeGameConstructorServicesOwnerTests.inl"
 #include "NativeAnimationBlockOwnerTests.inl"
 #include "NativeAnimationBlockNameOwnerTests.inl"
 #include "NativeAnimationManagerOwnerTests.inl"
@@ -7115,6 +7126,7 @@ namespace
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool constructorServicesOnly = argc == 3 && std::strcmp(argv[2], "--constructor-services") == 0;
     const bool gogglesOnly = argc == 3 && std::strcmp(argv[2], "--ped-goggles") == 0;
     const bool duckingSetterOnly = argc == 3 && std::strcmp(argv[2], "--ducking-setter") == 0;
     const bool fireCollisionOnly = argc == 3 && std::strcmp(argv[2], "--fire-collision") == 0;
@@ -7142,9 +7154,17 @@ int main(int argc, char** argv)
     const bool poolRegistryOnly = argc == 3 && std::strcmp(argv[2], "--ped-pool-registry") == 0;
     Check((argc == 2 || constructorOnly || pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly || poseOnly ||
            waterOnly || animationOnly || animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly ||
-           fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly || gogglesOnly) &&
+           fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly || gogglesOnly || constructorServicesOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (constructorServicesOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        ConstructorServicesFixture::Run(fixture);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (gogglesOnly)
     {
         ClockImageFixture fixture;

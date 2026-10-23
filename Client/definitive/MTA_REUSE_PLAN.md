@@ -346,6 +346,16 @@ prepared weapon services without acquiring timing or weapon write authority.
 This prepares constructor services before MTA's separate later game initialization;
 the complete `CGame` factory and remaining services are still unfinished.
 
+A separate prepared constructor route captures the existing complete clock,
+stats, player-info/wanted, ropes, weather and weapon services as one borrowed
+identity bundle. It publishes only after the current playing-state owner and
+all eighty weapon rows qualify, and records that owner's generation. This does
+not strengthen the earlier weapon-only frame contract into a gameplay lease.
+Prepared getters recheck the captured generation and their selected service;
+they do not re-read the whole weapon bank on each ordinary getter. These
+borrowed objects must retire before the owner generation ends, and their raw
+SDK pointers do not independently convey a native lease.
+
 Core's existing `CGameAdapterModule` now owns this optional preparation contract.
 It resolves the begin/read exports together with their clock retirement functions
 before admission, validates the shared MTA schedule's progress values, and retains
@@ -360,6 +370,15 @@ the missing native operations mandatory. Each explicit call preserves classic
 reconnect behavior; exceptions propagate with their applied prefix. The typed
 renderer initialization stays outside the common renderer interface. This does
 not establish numeric garage mapping or publish a complete `CGame`.
+
+The shared `CGameResetPolicy` preserves MTA's reconnect/reset itinerary too.
+It gates effects on actual playing state, then retains fire cleanup, camera
+restoration/fade, unpause, both existing HUD-disable calls, HUD visibility,
+model/object defaults, world restoration and the conditional building-capacity
+reset in their original order. The abstract `CGameResetDE` uses the common SDK
+services and requires the remaining native restoration operations explicitly.
+Repeated calls retain MTA's behavior; a failed effect propagates with its
+already applied prefix, without replay or a successful placeholder.
 
 Their special-character and broken-model stages also consume the same ordered
 44 named assignments and two collision substitutions. Classic retains its

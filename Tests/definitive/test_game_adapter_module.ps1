@@ -314,6 +314,7 @@ $sourceNames += @(
 $sourceNames += @(Get-ChildItem -LiteralPath $detoursSourceRoot -File | ForEach-Object {
     [IO.Path]::GetRelativePath($taskRoot, $_.FullName).Replace('\', '/')
 })
+$sourceNames += @('Client/game_de/NativeGameConstructorServices.h','Client/game_de/CGameDE.h','Client/game_de/CGameDE.cpp','Client/game_de/CGameWeaponInfoDE.h','Client/game_de/CGameWeaponInfoDE.cpp','Client/game_de/CWeaponStatFactoryDE.h','Client/game_de/CWeaponStatFactoryDE.cpp','Client/game_de/CKeyGenDE.h','Client/game_de/CKeyGenDE.cpp','Client/game_de/CAsyncLoadingDE.h','Client/game_de/CAsyncLoadingDE.cpp','Client/game_de/NativeDataFileNamesReader.h','Client/game_de/NativeDataFileNamesReader.cpp','Client/game_de/NativeDataFileNamesProfile.h','Client/game_de/NativeStreamingFileIdsReader.h','Client/game_de/NativeStreamingFileIdsReader.cpp','Client/game_de/NativeGameStateReader.h','Client/game_de/NativeGameStateReader.cpp','Client/game_de/CGameResetDE.h','Client/game_de/CGameResetDE.cpp','Client/sdk/game/CGameResetPolicy.h')
 $sourceHashes = @($sourceNames | ForEach-Object {
     $taskPath = Join-Path $taskRoot $_
     [ordered]@{ path=$_; exists=(Test-Path -LiteralPath $taskPath); sha256=$(if (Test-Path -LiteralPath $taskPath) {
@@ -427,6 +428,7 @@ if ((Test-Path -LiteralPath $moduleSource) -and $detoursLibraryExit -eq 0) {
         (Join-Path $taskRoot 'Client/game_de/CPedTasksDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CPedGogglesDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGameInitializationDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CGameResetDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CAnimBlockDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CAnimManagerDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CAnimBlockRequestDE.cpp'),

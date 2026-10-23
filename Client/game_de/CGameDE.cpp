@@ -33,13 +33,43 @@ namespace mta::game_de
         preparedWeaponManager = selected;
     }
 
+    CGameDE::CGameDE(const NativeGameTimingReader& reader, CClockDE& nativeClock, NativeGameTimingAccess& timingWriter,
+                     const NativeStreamingFileIdsReader& streamingReader, const NativeGameStateReader& stateReader,
+                     const NativeGameConstructorServices& services)
+        : CGameDE(reader, nativeClock, timingWriter, streamingReader, stateReader)
+    {
+        const auto supplied = services;
+        if (!supplied.Complete() || supplied.clock != &nativeClock)
+            RequireNativeWrite(ClockResult::InvalidArgument, "constructor service bundle");
+        RequireNativeWrite(timingWriter.ValidateConstructorServices(supplied), "constructor service bundle");
+        NativeGameConstructorServices current;
+        RequireNativeWrite(timingWriter.CaptureConstructorServices(&nativeClock, current), "constructor service bundle");
+        if (!current.Complete() || !supplied.Same(current) || !supplied.Same(services))
+            RequireNativeWrite(ClockResult::OwnerConflict, "constructor service bundle");
+        preparedServices = supplied;
+    }
+
+    const NativeGameConstructorServices& CGameDE::RequirePreparedServices(const char* operation)
+    {
+        RequireNativeWrite(NativeWrites().ValidateConstructorServices(preparedServices), operation);
+        return preparedServices;
+    }
+
     CWeaponInfo* CGameDE::ResolveWeaponInfoSlot(std::size_t slot)
     {
         // Selection stays with MTA's shared SDK policy. Its native owner alone
         // may publish a stable, genuine wrapper after qualifying this callback
         // and row; a native row pointer cannot substitute for that SDK object.
+        if (preparedServices.generation)
+        {
+            if (slot >= preparedServices.weapons.size())
+                RequireNativeWrite(ClockResult::InvalidArgument, "GetWeaponInfo");
+            RequirePreparedServices("GetWeaponInfo");
+        }
         CWeaponInfo* output = nullptr;
         RequireNativeWrite(NativeWrites().GetWeaponInfoSlot(slot, output), "GetWeaponInfo");
+        if (preparedServices.generation && output != preparedServices.weapons[slot])
+            RequireNativeWrite(ClockResult::OwnerConflict, "GetWeaponInfo");
         return output;
     }
 
@@ -62,6 +92,8 @@ namespace mta::game_de
 
     CWeaponStatManager* CGameDE::GetWeaponStatManager()
     {
+        if (preparedServices.generation)
+            RequirePreparedServices("GetWeaponStatManager");
         // Reuse the complete manager owned by this callback runtime. CPU
         // originals and an empty live registry do not imply that CGame native
         // initialization/default population has already run.
@@ -71,6 +103,8 @@ namespace mta::game_de
         if (!output)
             RequireNativeWrite(ClockResult::NotInitialized, "GetWeaponStatManager");
         if (preparedWeaponManager && output != preparedWeaponManager)
+            RequireNativeWrite(ClockResult::OwnerConflict, "GetWeaponStatManager");
+        if (preparedServices.generation && output != preparedServices.weaponManager)
             RequireNativeWrite(ClockResult::OwnerConflict, "GetWeaponStatManager");
         return output;
     }
@@ -89,6 +123,8 @@ namespace mta::game_de
 
     CStats* CGameDE::GetStats()
     {
+        if (preparedServices.generation)
+            RequirePreparedServices("GetStats");
         // The runtime owns a complete SDK stats object and its native reader.
         // Publish only that qualified borrowed object, never a copied bank or
         // an incomplete read-only slice masquerading as a writable service.
@@ -96,22 +132,30 @@ namespace mta::game_de
         RequireNativeWrite(NativeWrites().GetStats(output), "GetStats");
         if (!output)
             RequireNativeWrite(ClockResult::NotInitialized, "GetStats");
+        if (preparedServices.generation && output != preparedServices.stats)
+            RequireNativeWrite(ClockResult::OwnerConflict, "GetStats");
         return output;
     }
 
     CRopes* CGameDE::GetRopes()
     {
+        if (preparedServices.generation)
+            RequirePreparedServices("GetRopes");
         // Publish only the complete object owned by this same callback runtime.
         // Its identity is stable, but every action requires a fresh native scope.
         CRopes* output = nullptr;
         RequireNativeWrite(NativeWrites().GetRopes(output), "GetRopes");
         if (!output)
             RequireNativeWrite(ClockResult::NotInitialized, "GetRopes");
+        if (preparedServices.generation && output != preparedServices.ropes)
+            RequireNativeWrite(ClockResult::OwnerConflict, "GetRopes");
         return output;
     }
 
     CPlayerInfo* CGameDE::GetPlayerInfo()
     {
+        if (preparedServices.generation)
+            RequirePreparedServices("GetPlayerInfo");
         // The callback runtime owns the complete SDK service and its Wanted
         // dependency. Borrow that qualified identity, rather than treating a
         // native row address or an unavailable result as a player-info object.
@@ -119,11 +163,15 @@ namespace mta::game_de
         RequireNativeWrite(NativeWrites().GetPlayerInfo(output), "GetPlayerInfo");
         if (!output)
             RequireNativeWrite(ClockResult::NotInitialized, "GetPlayerInfo");
+        if (preparedServices.generation && output != preparedServices.playerInfo)
+            RequireNativeWrite(ClockResult::OwnerConflict, "GetPlayerInfo");
         return output;
     }
 
     CWeather* CGameDE::GetWeather()
     {
+        if (preparedServices.generation)
+            RequirePreparedServices("GetWeather");
         // MTA receives the complete service owned by the existing callback
         // runtime. A partial wrapper or successful null result cannot satisfy
         // the SDK's weather getter/reset contract.
@@ -131,6 +179,8 @@ namespace mta::game_de
         RequireNativeWrite(NativeWrites().GetWeather(output), "GetWeather");
         if (!output)
             RequireNativeWrite(ClockResult::NotInitialized, "GetWeather");
+        if (preparedServices.generation && output != preparedServices.weather)
+            RequireNativeWrite(ClockResult::OwnerConflict, "GetWeather");
         return output;
     }
 

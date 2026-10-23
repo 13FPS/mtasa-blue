@@ -35,6 +35,7 @@
 #include "CGameSA.h"
 #include <game/CWeaponStartupPolicy.h>
 #include <game/CGameInitializationPolicy.h>
+#include <game/CGameResetPolicy.h>
 #include <game/CGameModelPreparationPolicy.h>
 #include <game/CWorldCheatPolicy.h>
 #include "CGaragesSA.h"
@@ -400,43 +401,17 @@ void CGameSA::SetGameSpeed(float fSpeed)
 
 void CGameSA::Reset()
 {
-    // Things to do if the game was loaded
-    if (GetSystemState() == SystemState::GS_PLAYING_GAME)
-    {
-        // Extinguish all fires
-        m_pFireManager->ExtinguishAllFires();
-
-        // Restore camera stuff
-        m_pCamera->Restore();
-        m_pCamera->SetFadeColor(0, 0, 0);
-        m_pCamera->Fade(0, FADE_OUT);
-
-        Pause(false);  // We don't have to pause as the fadeout will stop the sound. Pausing it will make the fadein next start ugly
-        m_pHud->Disable(false);
-
-        // Restore the HUD
-        m_pHud->Disable(false);
-        m_pHud->SetComponentVisible(HUD_ALL, true);
-
-        // Restore model dummies' positions
-        CModelInfoSA::ResetAllVehicleDummies();
-        CModelInfoSA::RestoreAllObjectsPropertiesGroups();
-        // restore default properties of all CObjectGroupPhysicalPropertiesSA instances
-        CObjectGroupPhysicalPropertiesSA::RestoreDefaultValues();
-
-        // Restore vehicle model wheel sizes
-        CModelInfoSA::ResetAllVehiclesWheelSizes();
-
-        // Restore changed TXD IDs
-        CModelInfoSA::StaticResetTextureDictionaries();
-
-        // Restore default world state
-        RestoreGameWorld();
-
-        // Reset building pool to default capacity if a server enlarged it
-        if (m_Pools->GetBuildingsPool().GetSize() != MAX_BUILDINGS)
-            SetBuildingPoolSize(MAX_BUILDINGS);
-    }
+    // Keep the actual loaded-game reset itinerary shared with DE without
+    // moving constructor/later Initialize work or changing repeated calls.
+    MtaGame::CGameResetPolicy::Reset(
+        GetSystemState() == SystemState::GS_PLAYING_GAME, [this] { m_pFireManager->ExtinguishAllFires(); }, [this] { m_pCamera->Restore(); },
+        [this] { m_pCamera->SetFadeColor(0, 0, 0); }, [this] { m_pCamera->Fade(0, FADE_OUT); },
+        // Fade-out stops audio; pausing would spoil the next fade-in.
+        [this] { Pause(false); }, [this] { m_pHud->Disable(false); }, [this] { m_pHud->SetComponentVisible(HUD_ALL, true); },
+        [] { CModelInfoSA::ResetAllVehicleDummies(); }, [] { CModelInfoSA::RestoreAllObjectsPropertiesGroups(); },
+        [] { CObjectGroupPhysicalPropertiesSA::RestoreDefaultValues(); }, [] { CModelInfoSA::ResetAllVehiclesWheelSizes(); },
+        [] { CModelInfoSA::StaticResetTextureDictionaries(); }, [this] { RestoreGameWorld(); }, [this] { return m_Pools->GetBuildingsPool().GetSize(); },
+        [] { return MAX_BUILDINGS; }, [this](int capacity) { return SetBuildingPoolSize(static_cast<std::size_t>(capacity)); });
 }
 
 void CGameSA::Terminate()

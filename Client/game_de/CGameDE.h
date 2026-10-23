@@ -81,6 +81,12 @@ namespace mta::game_de
         CGameDE(const NativeGameTimingReader& reader, CClockDE& nativeClock, NativeGameTimingAccess& timingWriter,
                 const NativeStreamingFileIdsReader& streamingReader, const NativeGameStateReader& stateReader, ConstructorServices);
 
+        // Unlike PreparedWeapons, this explicit overload consumes every
+        // completed service from one current loaded timing-owner generation.
+        // The supplied value is re-admitted; it is not a producer-made lease.
+        CGameDE(const NativeGameTimingReader& reader, CClockDE& nativeClock, NativeGameTimingAccess& timingWriter,
+                const NativeStreamingFileIdsReader& streamingReader, const NativeGameStateReader& stateReader, const NativeGameConstructorServices& services);
+
         // Borrowed services must outlive this object. Their qualification
         // and engine-thread rules stay with their existing native owners.
         CGameDE(const NativeGameTimingReader& reader, CClockDE& nativeClock, NativeGameTimingAccess& timingWriter,
@@ -94,8 +100,10 @@ namespace mta::game_de
         TaskSimpleBeHitHandler* GetTaskSimpleBeHitHandler() const noexcept { return taskSimpleBeHitHandler; }
 
     private:
-        NativeStreamingFileIds RequireStreamingLayout() const;
+        NativeStreamingFileIds               RequireStreamingLayout() const;
+        const NativeGameConstructorServices& RequirePreparedServices(const char* operation);
 
+        NativeGameConstructorServices                                                      preparedServices;
         CWeaponStatManager*                                                                preparedWeaponManager = nullptr;
         CClockDE&                                                                          clock;
         CKeyGenDE                                                                          keyGen;

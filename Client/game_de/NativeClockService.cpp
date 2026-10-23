@@ -248,6 +248,8 @@ namespace mta::game_de
             ClockResult GetWeaponStatManager(CWeaponStatManager*&) noexcept override;
             ClockResult PrepareConstructorWeapons(NativeWeaponConstructorProgress&) noexcept override;
             ClockResult RequireConstructorWeapons(const CClock*, CWeaponStatManager*&) noexcept override;
+            ClockResult CaptureConstructorServices(const CClock*, NativeGameConstructorServices&) noexcept override;
+            ClockResult ValidateConstructorServices(const NativeGameConstructorServices&) noexcept override;
             ClockResult SetWeatherScalarOverride(NativeWeatherScalarProfile::Field field, float value) noexcept override;
             ClockResult ResetWeatherScalarOverride(NativeWeatherScalarProfile::Field field) noexcept override;
             ClockResult GetStats(CStats*& output) noexcept override;
@@ -2206,6 +2208,13 @@ namespace mta::game_de
                     runtime.weaponStatManager.GetStartupState() == CWeaponStatManagerDE::StartupState::Failed};
         }
 
+        bool ConstructorWeaponsReady() noexcept
+        {
+            const auto progress = ConstructorWeaponProgress();
+            return progress.complete && !progress.failed && progress.completedRows == NativeWeaponInfoProfile::RowCount &&
+                   progress.registeredRows == NativeWeaponInfoProfile::RowCount;
+        }
+
         void PublishConstructorWeaponProgress(const NativeWeaponConstructorProgress& progress) noexcept
         {
             runtime.constructorProgressSequence.fetch_add(1);
@@ -2292,9 +2301,7 @@ namespace mta::game_de
             ConstructorWeaponReadScope scope;
             if ((result = RequireWeaponReadReader()) != ClockResult::Ok)
                 return result;
-            const auto progress = ConstructorWeaponProgress();
-            if (!progress.complete || progress.failed || progress.completedRows != NativeWeaponInfoProfile::RowCount ||
-                progress.registeredRows != NativeWeaponInfoProfile::RowCount)
+            if (!ConstructorWeaponsReady())
                 return ClockResult::NotInitialized;
             NativeWeaponInfoValues row;
             if (runtime.weaponWriterReader.Read(0, row) != Status::Ok)
@@ -2303,6 +2310,66 @@ namespace mta::game_de
                 return result;
             output = &runtime.weaponStatManager;
             return ClockResult::Ok;
+        }
+
+        ClockResult NativeAccess::CaptureConstructorServices(const CClock* expectedClock, NativeGameConstructorServices& output) noexcept
+        {
+            // This read uses the ordinary loaded timing owner, independently
+            // of the earlier normal-frame constructor writer/read scopes.
+            // Reusing those scopes would grant unrelated services admission.
+            auto result = CheckStatsOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            if (expectedClock != &runtime.clock)
+                return ClockResult::InvalidArgument;
+            if (!ConstructorWeaponsReady())
+                return ClockResult::NotInitialized;
+            NativeGameConstructorServices selected;
+            selected.generation = runtime.generation.load();
+            selected.clock = &runtime.clock;
+            if ((result = GetWeaponStatManager(selected.weaponManager)) != ClockResult::Ok || (result = GetStats(selected.stats)) != ClockResult::Ok ||
+                (result = GetPlayerInfo(selected.playerInfo)) != ClockResult::Ok || (result = GetWanted(selected.wanted)) != ClockResult::Ok ||
+                (result = GetRopes(selected.ropes)) != ClockResult::Ok || (result = GetWeather(selected.weather)) != ClockResult::Ok)
+                return result;
+            for (std::size_t slot = 0; slot < selected.weapons.size(); ++slot)
+                if ((result = GetWeaponInfoSlot(slot, selected.weapons[slot])) != ClockResult::Ok)
+                    return result;
+            if ((result = CheckStatsOwner()) != ClockResult::Ok)
+                return result;
+            if (selected.generation != runtime.generation.load() || !ConstructorWeaponsReady())
+                return ClockResult::OwnerConflict;
+            if (!selected.Complete())
+                return ClockResult::NotInitialized;
+            // Publish once, after all current dependencies and the exact
+            // generation qualify. Binding CPU readers creates no native effect
+            // and never allocates a second service, registry or reference cell.
+            output = selected;
+            return ClockResult::Ok;
+        }
+
+        ClockResult NativeAccess::ValidateConstructorServices(const NativeGameConstructorServices& supplied) noexcept
+        {
+            const auto selected = supplied;
+            auto       result = CheckStatsOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            if (!selected.Complete() || selected.generation != runtime.generation.load())
+                return ClockResult::OwnerConflict;
+            if (!ConstructorWeaponsReady())
+                return ClockResult::NotInitialized;
+            // The objects are already owned by this runtime. Compare CPU
+            // identities only; the selected getter still freshly qualifies
+            // its own native dependency rather than rereading all 80 rows.
+            if (selected.clock != &runtime.clock || selected.stats != &runtime.stats || selected.playerInfo != &runtime.playerInfoSdk ||
+                selected.wanted != &runtime.wanted || selected.ropes != &runtime.ropesSdk || selected.weather != &runtime.weatherSdk ||
+                selected.weaponManager != &runtime.weaponStatManager)
+                return ClockResult::OwnerConflict;
+            for (std::size_t slot = 0; slot < selected.weapons.size(); ++slot)
+                if (selected.weapons[slot] != runtime.weaponBank.GetSlot(slot))
+                    return ClockResult::OwnerConflict;
+            if ((result = CheckStatsOwner()) != ClockResult::Ok)
+                return result;
+            return selected.generation == runtime.generation.load() && selected.Same(supplied) ? ClockResult::Ok : ClockResult::OwnerConflict;
         }
 
         ClockResult NativeAccess::GetWeaponInfoSlot(std::size_t slot, CWeaponInfo*& output) noexcept

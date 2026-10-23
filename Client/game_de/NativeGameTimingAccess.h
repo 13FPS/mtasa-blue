@@ -58,6 +58,7 @@
 #include "NativeAnimationBlockAccess.h"
 #include "NativeAnimationManagerAccess.h"
 #include "NativeWeaponConstructorProgress.h"
+#include "NativeGameConstructorServices.h"
 #include <cstdint>
 
 class CStats;
@@ -151,6 +152,14 @@ namespace mta::game_de
         // A real CGame constructor may consume only the already complete
         // manager owned by this exact borrowed clock/current native owner.
         virtual ClockResult RequireConstructorWeapons(const CClock*, CWeaponStatManager*&) noexcept { return ClockResult::NotInitialized; }
+        // Full-service construction is a separate loaded timing-owner read.
+        // Earlier PreparedWeapons frame readiness cannot impersonate it, and
+        // partial qualification must leave the caller's entire bundle intact.
+        virtual ClockResult CaptureConstructorServices(const CClock*, NativeGameConstructorServices&) noexcept { return ClockResult::NotInitialized; }
+        // Later prepared getters check this fixed CPU identity bundle, then
+        // freshly qualify only their selected native service. Validation is
+        // not permission to replay the original whole-bank capture.
+        virtual ClockResult ValidateConstructorServices(const NativeGameConstructorServices&) noexcept { return ClockResult::NotInitialized; }
         // A complete SDK object borrows the independently qualified native
         // reader and this callback owner; publication grants no later lease.
         virtual ClockResult GetStats(CStats*&) noexcept { return ClockResult::NotInitialized; }

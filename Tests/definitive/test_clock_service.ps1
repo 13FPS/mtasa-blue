@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles')]
+    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','ConstructorServices')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -23,6 +23,8 @@ $record = [ordered]@{schema='mta_clock_service_tests_v1';directory=$outputRoot;a
 # Historical markers start false and are set only by the branch that actually
 # executed. Focus mode must never inherit the cumulative suite's claims.
 $record['runScope'] = $Scope
+$record['nativeGameConstructorServicesOwnerTested'] = $false
+$record['actualGameConstructorServicesSdkOwnerTested'] = $false
 $record['nativePedOwnerSliceTested'] = $false
 $record['nativePedWaterTaskOwnerTested'] = $false
 $record['actualPedWaterTaskOwnerTested'] = $false
@@ -372,6 +374,7 @@ try {
     $sourceNames += @($detoursNames + @('detours.h') | ForEach-Object { 'vendor/detours/4.0.1/src/' + $_ })
     $sourceNames += @('Client/game_de/NativeWeaponConstructorProgress.h','Tests/definitive/NativeGameConstructorWeaponOwnerTests.inl',
         'Client/sdk/game/CWeaponStartupPolicy.h')
+    $sourceNames += @('Client/game_de/NativeGameConstructorServices.h','Client/game_de/CGameDE.h','Client/game_de/CGameDE.cpp','Client/game_de/CGameWeaponInfoDE.h','Client/game_de/CGameWeaponInfoDE.cpp','Client/game_de/CWeaponStatFactoryDE.h','Client/game_de/CWeaponStatFactoryDE.cpp','Client/game_de/CKeyGenDE.h','Client/game_de/CKeyGenDE.cpp','Client/game_de/CAsyncLoadingDE.h','Client/game_de/CAsyncLoadingDE.cpp','Client/game_de/NativeDataFileNamesReader.h','Client/game_de/NativeDataFileNamesReader.cpp','Client/game_de/NativeDataFileNamesProfile.h','Client/game_de/NativeStreamingFileIdsReader.h','Client/game_de/NativeStreamingFileIdsReader.cpp','Client/game_de/NativeGameStateReader.h','Client/game_de/NativeGameStateReader.cpp','Client/game_de/CGameResetDE.h','Client/game_de/CGameResetDE.cpp','Client/sdk/game/CGameResetPolicy.h','Client/sdk/game/CWeaponInfoIndexPolicy.h','Client/sdk/game/CKeyGen.h','Tests/definitive/NativeGameConstructorServicesOwnerTests.inl','Tests/definitive/Write-GameConstructorServicesFixture.ps1')
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
     })
@@ -428,6 +431,11 @@ try {
     $gogglesEvidence = Join-Path $outputRoot 'PedGogglesFixture.generated.h'
     Copy-Item -LiteralPath $gogglesFixture.path -Destination $gogglesEvidence
     $record['pedGogglesGeneratedFixture'] = [ordered]@{path=$gogglesEvidence;sha256=(Sha $gogglesEvidence);rejectingOverrides=$gogglesFixture.rejectingOverrides}
+    . (Join-Path $PSScriptRoot 'Write-GameConstructorServicesFixture.ps1')
+    $constructorFixture = Write-GameConstructorServicesFixture $taskRoot (Join-Path $scratchRoot 'GameConstructorServicesFixture.generated.h')
+    $constructorEvidence = Join-Path $outputRoot 'GameConstructorServicesFixture.generated.h'
+    Copy-Item -LiteralPath $constructorFixture.path -Destination $constructorEvidence
+    $record['constructorServicesGeneratedFixture'] = [ordered]@{path=$constructorEvidence;sha256=(Sha $constructorEvidence);rejectingOverrides=$constructorFixture.rejectingOverrides}
     $common = @('/nologo','/std:c++17','/EHsc','/O2','/MD','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN','/DDETOURS_MTA_VM_TRANSACTION_NODES',
         ('/I'+(Join-Path $taskRoot 'Client/sdk')),('/I'+(Join-Path $taskRoot 'Shared/sdk')),('/I'+(Join-Path $taskRoot 'vendor/detours/4.0.1/src')),('/I'+$scratchRoot))
     $detoursSources = @($detoursNames | ForEach-Object { Join-Path $taskRoot ('vendor/detours/4.0.1/src/' + $_) })
@@ -489,6 +497,15 @@ try {
         # link its production implementation rather than a fixture substitute.
         (Join-Path $taskRoot 'Client/game_de/CStreamingDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGameInitializationDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CGameDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CGameWeaponInfoDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CWeaponStatFactoryDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CKeyGenDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CAsyncLoadingDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativeStreamingFileIdsReader.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativeGameStateReader.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativeDataFileNamesReader.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CGameResetDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CAnimBlockDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CAnimManagerDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CAnimBlockRequestDE.cpp'),
@@ -509,6 +526,7 @@ try {
     # The cumulative callback fixture includes current owner and retirement cases.
     # Keep it bounded while allowing the full set to finish on a busy build host.
     $fixtureArguments = @($outputRoot)
+    if ($Scope -eq 'ConstructorServices') { $fixtureArguments += '--constructor-services' }
     if ($Scope -eq 'PedGoggles') { $fixtureArguments += '--ped-goggles' }
     if ($Scope -eq 'DuckingSetter') { $fixtureArguments += '--ducking-setter' }
     if ($Scope -eq 'FireCollision') { $fixtureArguments += '--fire-collision' }
@@ -566,7 +584,12 @@ try {
         if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
         if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
     }
-    if ($Scope -eq 'PedGoggles') {
+    if ($Scope -eq 'ConstructorServices') {
+        $record.nativeGameConstructorServicesOwnerTested = $text.Contains('Production native constructor service bundle callback owner fixture completed')
+        $record.actualGameConstructorServicesSdkOwnerTested = $text.Contains('Production actual prepared constructor service bundle SDK fixture completed')
+        if (-not ($record.nativeGameConstructorServicesOwnerTested -and $record.actualGameConstructorServicesSdkOwnerTested)) { throw 'New native/actual SDK constructor-service bundle owner did not complete.' }
+        $record.productionNativeCallbackTested = $true
+    } elseif ($Scope -eq 'PedGoggles') {
         $record.nativePedGogglesOwnerTested = $text.Contains('Production native registered goggles callback owner fixture completed')
         $record.actualPedGogglesSdkOwnerTested = $text.Contains('Production actual ped goggles SDK callback fixture completed')
         if (-not ($record.nativePedGogglesOwnerTested -and $record.actualPedGogglesSdkOwnerTested)) { throw 'New native/actual SDK goggles query owner did not complete.' }

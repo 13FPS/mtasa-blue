@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround')]
+    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -28,6 +28,10 @@ $record['actualGameConstructorServicesSdkOwnerTested'] = $false
 $record['nativePedOwnerSliceTested'] = $false
 $record['nativePedWaterTaskOwnerTested'] = $false
 $record['actualPedWaterTaskOwnerTested'] = $false
+$record['nativeWorldAreaOwnerTested'] = $false
+$record['actualWorldAreaSdkOwnerTested'] = $false
+$record['nativeWorldLineOwnerTested'] = $false
+$record['actualWorldLineSdkOwnerTested'] = $false
 $record['nativeWorldGroundOwnerTested'] = $false
 $record['actualWorldGroundSdkOwnerTested'] = $false
 $record['nativePedVisibilityOwnerTested'] = $false
@@ -384,6 +388,10 @@ try {
 $sourceNames += @('Client/game_de/CGameWorldDE.h','Client/game_de/CGameWorldDE.cpp','Client/sdk/game/CGameWorldPolicy.h')
 $sourceNames += @('Client/sdk/game/CAudioContainerFiles.h','Client/sdk/game/CAudioContainerFiles.cpp','Client/sdk/game/CAudioContainer.h')
 $sourceNames += @('Client/game_de/NativeWorldGroundAccess.h','Client/game_de/CWorldGroundDE.h','Client/game_de/CWorldGroundDE.cpp','Client/game_de/NativeWorldGroundCalls.h','Client/game_de/NativeWorldGroundCalls.cpp','Client/game_de/NativeWorldGroundContext.h','Client/game_de/NativeWorldGroundContext.cpp','Client/game_de/NativeWorldGroundProfile.h','Client/sdk/game/CWorld.h','Shared/sdk/CVector2D.h')
+$sourceNames += @('Client/game_de/NativeWorldLineAccess.h','Client/game_de/CWorldLineDE.h','Client/game_de/CWorldLineDE.cpp','Client/game_de/NativeWorldLineCalls.h','Client/game_de/NativeWorldLineCalls.cpp','Client/game_de/NativeWorldLineProfile.h')
+$sourceNames += @('Client/game_de/NativeWorldAreaAccess.h','Client/game_de/CWorldAreaDE.h','Client/game_de/CWorldAreaDE.cpp','Client/game_de/NativeWorldAreaMemory.h','Client/game_de/NativeWorldAreaMemory.cpp','Client/game_de/NativeWorldAreaProfile.h')
+    $sourceNames += @('Tests/definitive/NativeWorldAreaFixture.h','Tests/definitive/NativeWorldAreaOwnerTests.inl','Tests/definitive/Write-WorldAreaFixture.ps1')
+    $sourceNames += @('Tests/definitive/NativeWorldLineFixture.h','Tests/definitive/NativeWorldLineOwnerTests.inl','Tests/definitive/Write-WorldLineFixture.ps1')
     $sourceNames += @('Tests/definitive/NativeWorldGroundFixture.h','Tests/definitive/NativeWorldGroundOwnerTests.inl','Tests/definitive/Write-WorldGroundFixture.ps1')
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
@@ -446,6 +454,16 @@ $sourceNames += @('Client/game_de/NativeWorldGroundAccess.h','Client/game_de/CWo
     $gogglesEvidence = Join-Path $outputRoot 'PedGogglesFixture.generated.h'
     Copy-Item -LiteralPath $gogglesFixture.path -Destination $gogglesEvidence
     $record['pedGogglesGeneratedFixture'] = [ordered]@{path=$gogglesEvidence;sha256=(Sha $gogglesEvidence);rejectingOverrides=$gogglesFixture.rejectingOverrides}
+    . (Join-Path $PSScriptRoot 'Write-WorldAreaFixture.ps1')
+    $areaFixture = Write-WorldAreaFixture $taskRoot (Join-Path $scratchRoot 'WorldAreaFixture.generated.h')
+    $areaEvidence = Join-Path $outputRoot 'WorldAreaFixture.generated.h'
+    Copy-Item -LiteralPath $areaFixture.path -Destination $areaEvidence
+    $record['worldAreaGeneratedFixture'] = [ordered]@{path=$areaEvidence;sha256=(Sha $areaEvidence);rejectingOverrides=$areaFixture.rejectingOverrides}
+    . (Join-Path $PSScriptRoot 'Write-WorldLineFixture.ps1')
+    $lineFixture = Write-WorldLineFixture $taskRoot (Join-Path $scratchRoot 'WorldLineFixture.generated.h')
+    $lineEvidence = Join-Path $outputRoot 'WorldLineFixture.generated.h'
+    Copy-Item -LiteralPath $lineFixture.path -Destination $lineEvidence
+    $record['worldLineGeneratedFixture'] = [ordered]@{path=$lineEvidence;sha256=(Sha $lineEvidence);rejectingOverrides=$lineFixture.rejectingOverrides}
     . (Join-Path $PSScriptRoot 'Write-WorldGroundFixture.ps1')
     $groundFixture = Write-WorldGroundFixture $taskRoot (Join-Path $scratchRoot 'WorldGroundFixture.generated.h')
     $groundEvidence = Join-Path $outputRoot 'WorldGroundFixture.generated.h'
@@ -515,6 +533,8 @@ $sourceNames += @('Client/game_de/NativeWorldGroundAccess.h','Client/game_de/CWo
         (Join-Path $taskRoot 'Client/game_de/CPedGogglesDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CPedVisibilityDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CWorldGroundDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CWorldLineDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CWorldAreaDE.cpp'),
         # The new owner scope instantiates the actual SDK streaming receiver;
         # link its production implementation rather than a fixture substitute.
         (Join-Path $taskRoot 'Client/game_de/CStreamingDE.cpp'),
@@ -550,6 +570,9 @@ $sourceNames += @('Client/game_de/NativeWorldGroundAccess.h','Client/game_de/CWo
     # The cumulative callback fixture includes current owner and retirement cases.
     # Keep it bounded while allowing the full set to finish on a busy build host.
     $fixtureArguments = @($outputRoot)
+    if ($Scope -eq 'WorldArea') { $fixtureArguments += '--world-area' }
+    if ($Scope -eq 'WorldQueries') { $fixtureArguments += '--world-queries' }
+    if ($Scope -eq 'WorldLine') { $fixtureArguments += '--world-line' }
     if ($Scope -eq 'WorldGround') { $fixtureArguments += '--world-ground' }
     if ($Scope -eq 'ConstructorServices') { $fixtureArguments += '--constructor-services' }
     if ($Scope -eq 'PedVisibility') { $fixtureArguments += '--ped-visibility' }
@@ -610,7 +633,24 @@ $sourceNames += @('Client/game_de/NativeWorldGroundAccess.h','Client/game_de/CWo
         if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
         if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
     }
-    if ($Scope -eq 'WorldGround') {
+    if ($Scope -eq 'WorldQueries') {
+        $record.nativeWorldLineOwnerTested = $text.Contains('Production native whole line-clear callback owner fixture completed')
+        $record.actualWorldLineSdkOwnerTested = $text.Contains('Production actual CWorld line-clear SDK callback fixture completed')
+        $record.nativeWorldAreaOwnerTested = $text.Contains('Production native current-area DWORD callback owner fixture completed')
+        $record.actualWorldAreaSdkOwnerTested = $text.Contains('Production actual CWorld current-area SDK callback fixture completed')
+        if (-not ($record.nativeWorldLineOwnerTested -and $record.actualWorldLineSdkOwnerTested -and $record.nativeWorldAreaOwnerTested -and $record.actualWorldAreaSdkOwnerTested)) { throw 'Combined new native/actual SDK Line and Area owners did not complete.' }
+        $record.productionNativeCallbackTested = $true
+    } elseif ($Scope -eq 'WorldArea') {
+        $record.nativeWorldAreaOwnerTested = $text.Contains('Production native current-area DWORD callback owner fixture completed')
+        $record.actualWorldAreaSdkOwnerTested = $text.Contains('Production actual CWorld current-area SDK callback fixture completed')
+        if (-not ($record.nativeWorldAreaOwnerTested -and $record.actualWorldAreaSdkOwnerTested)) { throw 'New native/actual SDK current-area owner did not complete.' }
+        $record.productionNativeCallbackTested = $true
+    } elseif ($Scope -eq 'WorldLine') {
+        $record.nativeWorldLineOwnerTested = $text.Contains('Production native whole line-clear callback owner fixture completed')
+        $record.actualWorldLineSdkOwnerTested = $text.Contains('Production actual CWorld line-clear SDK callback fixture completed')
+        if (-not ($record.nativeWorldLineOwnerTested -and $record.actualWorldLineSdkOwnerTested)) { throw 'New native/actual SDK line query owner did not complete.' }
+        $record.productionNativeCallbackTested = $true
+    } elseif ($Scope -eq 'WorldGround') {
         $record.nativeWorldGroundOwnerTested = $text.Contains('Production native whole ground query callback owner fixture completed')
         $record.actualWorldGroundSdkOwnerTested = $text.Contains('Production actual CWorld ground query SDK callback fixture completed')
         if (-not ($record.nativeWorldGroundOwnerTested -and $record.actualWorldGroundSdkOwnerTested)) { throw 'New native/actual SDK ground query owner did not complete.' }

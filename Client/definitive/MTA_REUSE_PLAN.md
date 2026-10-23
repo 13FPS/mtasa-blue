@@ -115,6 +115,21 @@ remain accepted. Entered failure preserves those effects and stops the owner
 without rollback or replay. The remaining world SDK methods and complete
 `GetWorld` factory stay separate prerequisites.
 
+`CWorldLineDE::IsLineOfSightClear` reuses that whole native query admission
+and the existing MTA flags. It owns both endpoint copies, passes the seven
+flags consumed by DE's native clear query in their original order, and returns
+the native boolean directly. Shoot-through and car-tire flags remain unused,
+matching the classic MTA implementation. A blocked ray is a successful false
+result; owner refusal raises a service error. Native scan and lazy matrix
+effects retain the same one-entry, no-replay behavior as the ground query.
+
+The adjacent `CWorldAreaDE::GetCurrentArea` preserves MTA's raw DWORD area
+contract through a guarded native data read on the same current loaded owner.
+Its global area value is independent of the per-ped byte area. It does not
+enter an engine function or require the ground query's matrix-list state.
+The read publishes all 32 bits only after its ownership bookends agree;
+refusal leaves the caller's output untouched and never supplies a default area.
+
 Ordinary `RemoveModel` uses DE's genuine removal entry for the qualified idle
 and loaded-model branches, including current streaming links and asset owners.
 The direct streaming operation leaves the separate model reference untouched;

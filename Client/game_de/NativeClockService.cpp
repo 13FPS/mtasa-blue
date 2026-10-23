@@ -43,6 +43,9 @@
 #include "NativePedVisibilityMemory.h"
 #include "NativeStreamingSpecialModelCalls.h"
 #include "NativeWorldGroundCalls.h"
+#include "NativeWorldLineCalls.h"
+#include "NativeWorldAreaMemory.h"
+#include "CWorldLineDE.h"
 #include "NativeAnimationBlockMemory.h"
 #include "NativeAnimationManagerMemory.h"
 #include "NativePedVelocityMemory.h"
@@ -175,6 +178,8 @@ namespace mta::game_de
             ClockResult LoadStreamingModels(bool) noexcept override;
             ClockResult LoadStreamingScene(const CVector*) noexcept override;
             ClockResult FindWorldGroundZ(const CVector&, float&) noexcept override;
+            ClockResult IsWorldLineOfSightClear(const CVector&, const CVector&, const SLineOfSightFlags&, bool&) noexcept override;
+            ClockResult ReadWorldCurrentArea(std::uint32_t&) noexcept override;
             ClockResult ReadStreamingModelGroups(NativeStreamingModelGroupsReader::Value&) noexcept override;
             ClockResult ReadModelArchiveAllocated(std::uint32_t, bool&) noexcept override;
             ClockResult RemoveStreamingModel(std::uint32_t) noexcept override;
@@ -3344,6 +3349,34 @@ namespace mta::game_de
             const auto                      result = NativeModelArchiveReader({runtime.image}, &CheckTimingOwner).Read(model, value);
             if (result == ClockResult::Ok)
                 output = value.allocatedInArchive;
+            return result;
+        }
+        ClockResult NativeAccess::ReadWorldCurrentArea(std::uint32_t& output) noexcept
+        {
+            // This actual DWORD property is a guarded copy, with current
+            // loaded-world/thread bookends. It enters no native function and
+            // owns no scan/matrix/setter effect, so refusal must not Stop an
+            // otherwise valid owner or masquerade as successful area0.
+            return NativeWorldAreaMemory::Read(runtime.image, output, &CheckTimingOwner);
+        }
+        ClockResult NativeAccess::IsWorldLineOfSightClear(const CVector& start, const CVector& end, const SLineOfSightFlags& flags, bool& output) noexcept
+        {
+            // Own every SDK value before callbacks. The actual native entry
+            // receives its seven genuine categories/options; neither ignored
+            // common flag becomes a script policy or an invented new argument.
+            const CVector                 startIntent = start;
+            const CVector                 endIntent = end;
+            const SLineOfSightFlags       flagIntent = flags;
+            bool                          clear = false;
+            NativeWorldLineCalls::Receipt receipt;
+            const auto result = NativeWorldLineCalls::Clear(runtime.image, startIntent, endIntent, flagIntent, clear, &CheckTimingOwner, &receipt);
+            // The engine owns scan/matrix effects. An entered exception or lost
+            // current-world acknowledgement retires this owner without replay
+            // or rollback, even though the exposed SDK result is only a bool.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            if (result == ClockResult::Ok)
+                output = clear;
             return result;
         }
         ClockResult NativeAccess::FindWorldGroundZ(const CVector& position, float& output) noexcept

@@ -40,6 +40,8 @@
 #include "NativeModelReferenceRelease.h"
 #include "NativeStreamingModelAccess.h"
 #include "NativeWorldGroundAccess.h"
+#include "NativeWorldLineAccess.h"
+#include "NativeWorldAreaAccess.h"
 #include "NativeModelClassificationAccess.h"
 #include "NativePedPhysicalScalarsAccess.h"
 #include "NativePedRotationAccess.h"
@@ -114,6 +116,8 @@ namespace mta::game_de
                                    public NativeTaskRemovalAccess,
                                    public NativeStreamingModelAccess,
                                    public NativeWorldGroundAccess,
+                                   public NativeWorldLineAccess,
+                                   public NativeWorldAreaAccess,
                                    public NativeModelClassificationAccess,
                                    public NativeNamedGarageAccess,
                                    public NativeAnimationBlockAccess,

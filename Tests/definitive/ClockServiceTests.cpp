@@ -123,6 +123,12 @@
 #include "../../Client/game_de/NativeWorldGroundCalls.h"
 #include "../../Client/game_de/CWorldGroundDE.h"
 #include "NativeWorldGroundFixture.h"
+#include "../../Client/game_de/NativeWorldLineCalls.h"
+#include "../../Client/game_de/CWorldLineDE.h"
+#include "NativeWorldLineFixture.h"
+#include "../../Client/game_de/NativeWorldAreaMemory.h"
+#include "../../Client/game_de/CWorldAreaDE.h"
+#include "NativeWorldAreaFixture.h"
 #include "../../Client/game_de/NativeStreamingSceneProfile.h"
 #include "../../Client/game_de/NativeStreamingPriorityCalls.h"
 #include "../../Client/game_de/NativeStreamingPriorityProfile.h"
@@ -204,6 +210,24 @@ namespace world_ground_fixture
     }
 }
 #include "WorldGroundFixture.generated.h"
+namespace world_line_fixture
+{
+    [[noreturn]] inline void Unqualified(const char* method)
+    {
+        std::fprintf(stderr, "Unqualified world line SDK call: %s\n", method);
+        std::abort();
+    }
+}
+#include "WorldLineFixture.generated.h"
+namespace world_area_fixture
+{
+    [[noreturn]] inline void Unqualified(const char* method)
+    {
+        std::fprintf(stderr, "Unqualified world area SDK call: %s\n", method);
+        std::abort();
+    }
+}
+#include "WorldAreaFixture.generated.h"
 namespace ped_pose_fixture
 {
     [[noreturn]] inline void Unqualified()
@@ -433,6 +457,46 @@ namespace ClockStreamingLoadAllOwnerTest
         }
         if (scenario == 3 && reenter)
             nested = reenter();
+        return mta::game_de::ClockResult::Ok;
+    }
+}
+namespace ClockWorldLineOwnerTest
+{
+    using NativeFunction = mta::game_de::NativeWorldLineCalls::NativeFunction;
+    using Flags = mta::game_de::NativeWorldLineCalls::Flags;
+    std::uintptr_t image = 0, level = 0, entry = 0;
+    unsigned       calls = 0, effects = 0, scenario = 0;
+    bool           clear = false, copied = false;
+    CVector        receivedStart, receivedEnd;
+    Flags          receivedFlags{};
+    const CVector* startSource = nullptr;
+    const CVector* endSource = nullptr;
+    void (*reenter)() noexcept = nullptr;
+    mta::game_de::ClockResult Invoke(NativeFunction function, const CVector& start, const CVector& end, const Flags& flags, bool& output,
+                                     std::uint32_t& exception) noexcept
+    {
+        ++calls;
+        ++effects;
+        entry = reinterpret_cast<std::uintptr_t>(function) - image;
+        receivedStart = start;
+        receivedEnd = end;
+        receivedFlags = flags;
+        copied = &start != startSource && &end != endSource;
+        output = clear;
+        // This final-entry seam records a persistent accepted prefix without
+        // implementing native sector traversal, physics or matrix allocation.
+        if (scenario == 2)
+        {
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return mta::game_de::ClockResult::OriginalException;
+        }
+        if (scenario == 3)
+        {
+            const std::uintptr_t zero = 0;
+            std::memcpy(reinterpret_cast<void*>(level + 0xd0), &zero, sizeof(zero));
+        }
+        if (scenario == 4 && reenter)
+            reenter();
         return mta::game_de::ClockResult::Ok;
     }
 }
@@ -2463,6 +2527,10 @@ namespace mta::game_de::NativeImageAccess
 #define MTA_DE_WORLD_GROUND_NATIVE_INVOKE ClockWorldGroundOwnerTest::Invoke
 #include "../../Client/game_de/NativeWorldGroundCalls.cpp"
 #undef MTA_DE_WORLD_GROUND_NATIVE_INVOKE
+#define MTA_DE_WORLD_LINE_NATIVE_INVOKE ClockWorldLineOwnerTest::Invoke
+#include "../../Client/game_de/NativeWorldLineCalls.cpp"
+#undef MTA_DE_WORLD_LINE_NATIVE_INVOKE
+#include "../../Client/game_de/NativeWorldAreaMemory.cpp"
 #define MTA_DE_MODEL_REFERENCE_EXCHANGE ClockModelReferenceOwnerTest::Exchange
 #include "../../Client/game_de/NativeModelReferenceMemory.cpp"
 #undef MTA_DE_MODEL_REFERENCE_EXCHANGE
@@ -7268,6 +7336,8 @@ namespace
 #include "NativeGameConstructorWeaponOwnerTests.inl"
 #include "NativeGameConstructorServicesOwnerTests.inl"
 #include "NativeWorldGroundOwnerTests.inl"
+#include "NativeWorldLineOwnerTests.inl"
+#include "NativeWorldAreaOwnerTests.inl"
 #include "NativeAnimationBlockOwnerTests.inl"
 #include "NativeAnimationBlockNameOwnerTests.inl"
 #include "NativeAnimationManagerOwnerTests.inl"
@@ -7275,6 +7345,9 @@ namespace
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool worldAreaOnly = argc == 3 && std::strcmp(argv[2], "--world-area") == 0;
+    const bool worldQueriesOnly = argc == 3 && std::strcmp(argv[2], "--world-queries") == 0;
+    const bool worldLineOnly = argc == 3 && std::strcmp(argv[2], "--world-line") == 0;
     const bool worldGroundOnly = argc == 3 && std::strcmp(argv[2], "--world-ground") == 0;
     const bool constructorServicesOnly = argc == 3 && std::strcmp(argv[2], "--constructor-services") == 0;
     const bool visibilityOnly = argc == 3 && std::strcmp(argv[2], "--ped-visibility") == 0;
@@ -7303,12 +7376,39 @@ int main(int argc, char** argv)
     const bool waterOnly = orientationWithWater || (argc == 3 && std::strcmp(argv[2], "--ped-water") == 0);
     const bool poseOnly = argc == 3 && std::strcmp(argv[2], "--ped-pose") == 0;
     const bool poolRegistryOnly = argc == 3 && std::strcmp(argv[2], "--ped-pool-registry") == 0;
-    Check(
-        (argc == 2 || constructorOnly || pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly || poseOnly || waterOnly ||
-         animationOnly || animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly ||
-         fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly) &&
-            std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
-        "durable fixture evidence is restricted to the explicit owned executable output directory");
+    Check((argc == 2 || constructorOnly || pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly || poseOnly ||
+           waterOnly || animationOnly || animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly ||
+           fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly ||
+           worldLineOnly || worldAreaOnly || worldQueriesOnly) &&
+              std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
+          "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (worldQueriesOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        // One compiled process exercises only these two new groups. The line
+        // group retires all owned runtime/image state before the area group.
+        WorldLineOwnerFixture::Run(fixture);
+        WorldAreaOwnerFixture::Run(fixture);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (worldAreaOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        WorldAreaOwnerFixture::Run(fixture);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (worldLineOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        WorldLineOwnerFixture::Run(fixture);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (worldGroundOnly)
     {
         ClockImageFixture fixture;

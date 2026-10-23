@@ -319,6 +319,8 @@ $sourceNames += @('Client/game_de/NativeGameConstructorServices.h','Client/game_
 $sourceNames += @('Client/game_de/CGameWorldDE.h','Client/game_de/CGameWorldDE.cpp','Client/sdk/game/CGameWorldPolicy.h')
 $sourceNames += @('Client/sdk/game/CAudioContainerFiles.h','Client/sdk/game/CAudioContainerFiles.cpp','Client/sdk/game/CAudioContainer.h')
 $sourceNames += @('Client/game_de/NativeWorldGroundAccess.h','Client/game_de/CWorldGroundDE.h','Client/game_de/CWorldGroundDE.cpp','Client/game_de/NativeWorldGroundCalls.h','Client/game_de/NativeWorldGroundCalls.cpp','Client/game_de/NativeWorldGroundContext.h','Client/game_de/NativeWorldGroundContext.cpp','Client/game_de/NativeWorldGroundProfile.h','Client/sdk/game/CWorld.h','Shared/sdk/CVector2D.h')
+$sourceNames += @('Client/game_de/NativeWorldLineAccess.h','Client/game_de/CWorldLineDE.h','Client/game_de/CWorldLineDE.cpp','Client/game_de/NativeWorldLineCalls.h','Client/game_de/NativeWorldLineCalls.cpp','Client/game_de/NativeWorldLineProfile.h')
+$sourceNames += @('Client/game_de/NativeWorldAreaAccess.h','Client/game_de/CWorldAreaDE.h','Client/game_de/CWorldAreaDE.cpp','Client/game_de/NativeWorldAreaMemory.h','Client/game_de/NativeWorldAreaMemory.cpp','Client/game_de/NativeWorldAreaProfile.h')
 $sourceHashes = @($sourceNames | ForEach-Object {
     $taskPath = Join-Path $taskRoot $_
     [ordered]@{ path=$_; exists=(Test-Path -LiteralPath $taskPath); sha256=$(if (Test-Path -LiteralPath $taskPath) {
@@ -433,6 +435,8 @@ if ((Test-Path -LiteralPath $moduleSource) -and $detoursLibraryExit -eq 0) {
         (Join-Path $taskRoot 'Client/game_de/CPedGogglesDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CPedVisibilityDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CWorldGroundDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CWorldLineDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CWorldAreaDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGameInitializationDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGameResetDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGameWorldDE.cpp'),
@@ -456,6 +460,8 @@ if ((Test-Path -LiteralPath $moduleSource) -and $detoursLibraryExit -eq 0) {
         (Join-Path $taskRoot 'Client/game_de/NativeStreamingSceneCalls.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeWorldGroundContext.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeWorldGroundCalls.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativeWorldLineCalls.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativeWorldAreaMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedPhysicalScalarsMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedIntelligenceReader.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeTaskPoolReader.cpp'),

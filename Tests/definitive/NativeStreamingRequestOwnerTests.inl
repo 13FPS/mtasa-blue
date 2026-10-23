@@ -15,7 +15,7 @@ namespace
         auto& context = *static_cast<StreamingRequestOwnerContext*>(opaque);
         context.result = access.RequestStreamingModel(context.index, context.flags);
     }
-    void NativeStreamingRequestOwnedSdk(ClockImageFixture& fixture)
+    void NativeStreamingRequestOwnedSdk(ClockImageFixture& fixture, bool specialOnly = false)
     {
         namespace P = NativeStreamingRequestProfile;
         namespace L = NativeModelLoadedProfile;
@@ -117,6 +117,16 @@ namespace
         ClockStreamingRequestOwnerTest::calls = 0;
         ClockStreamingRequestOwnerTest::result = ClockResult::Ok;
         ClockStreamingRequestOwnerTest::changeRoot = false;
+        if (specialOnly)
+        {
+            // Reuse only genuine request admission, not historical assertions.
+#include "NativeStreamingSpecialModelOwnerTests.inl"
+            ClockReaderTestHost::image = ClockStreamingRequestOwnerTest::image = ClockStreamingRequestOwnerTest::root = 0;
+            ClockStreamingRequestOwnerTest::changeRoot = false;
+            for (auto item = saved.rbegin(); item != saved.rend(); ++item)
+                fixture.Patch(item->rva, item->bytes.data(), item->bytes.size());
+            return;
+        }
         StreamingRequestOwnerContext context;
         DefaultPedIntelligenceOwner  absent;
         Check(absent.RequestStreamingModel(3, 6) == ClockResult::NotInitialized && runtime.access.RequestStreamingModel(3, 6) == ClockResult::NotInitialized &&

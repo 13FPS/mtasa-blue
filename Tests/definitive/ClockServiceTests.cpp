@@ -27,6 +27,14 @@
 #include "../../Client/game_de/CPedOrientationDE.h"
 #include "../../Client/game_de/NativePedOrientationMemory.h"
 #include "../../Client/game_de/NativePedOrientationProfile.h"
+#include "../../Client/game_de/NativePedAreaMemory.h"
+#include "../../Client/game_de/NativePedAreaProfile.h"
+#include "../../Client/game_de/CPedAreaDE.h"
+#include "../../Client/game_de/NativeStreamingSpecialModelCalls.h"
+#include "../../Client/game_de/NativeStreamingSpecialModelProfile.h"
+#include "../../Client/game_de/NativeStreamingFileIdsProfile.h"
+#include "../../Client/game_de/CStreamingDE.h"
+#include <utility>
 #include "../../Client/game_de/NativeAnimationBlockMemory.h"
 #include "../../Client/game_de/NativeAnimationBlockProfile.h"
 #include "../../Client/game_de/NativeAnimationManagerMemory.h"
@@ -190,6 +198,15 @@ namespace ped_orientation_fixture
     }
 }
 #include "PedOrientationFixture.generated.h"
+namespace ped_area_fixture
+{
+    [[noreturn]] inline void Unqualified(const char* method) noexcept
+    {
+        std::fprintf(stderr, "Unqualified area fixture SDK call: %s\n", method);
+        std::abort();
+    }
+}
+#include "PedAreaFixture.generated.h"
 
 namespace ClockModelClassificationOwnerTest
 {
@@ -873,6 +890,67 @@ namespace ClockPedPhysicalScalarsOwnerTest
             std::memcpy(reinterpret_cast<void*>(cell), &zero, sizeof(zero));
         }
         return true;
+    }
+}
+namespace ClockPedAreaOwnerTest
+{
+    unsigned       stores = 0;
+    std::uintptr_t cell = 0;
+    bool           loseToken = false, failAfter = false;
+    bool           Exchange(std::uintptr_t at, std::uint8_t expected, std::uint8_t target, std::uint8_t& observed, std::uint32_t& exception) noexcept
+    {
+        ++stores;
+        const auto previous = _InterlockedCompareExchange8(reinterpret_cast<volatile char*>(at), static_cast<char>(target), static_cast<char>(expected));
+        observed = static_cast<std::uint8_t>(previous);
+        if (observed == expected && loseToken)
+        {
+            loseToken = false;
+            const std::uintptr_t zero = 0;
+            std::memcpy(reinterpret_cast<void*>(cell), &zero, sizeof(zero));
+        }
+        if (failAfter)
+        {
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return false;
+        }
+        return true;
+    }
+}
+namespace ClockSpecialModelOwnerTest
+{
+    unsigned                                                       calls = 0, mode = 0;
+    std::uintptr_t                                                 image = 0, metadata = 0;
+    std::uint32_t                                                  model = 0, channel = 0;
+    mta::game_de::NativeStreamingSpecialModelCalls::NativeFunction entry = nullptr;
+    std::array<char, 9>                                            copied{};
+    void (*during)() = nullptr;
+    mta::game_de::ClockResult Invoke(mta::game_de::NativeStreamingSpecialModelCalls::NativeFunction function, std::uint32_t selected, const char* name,
+                                     std::uint32_t flags, std::uint32_t& exception) noexcept
+    {
+        ++calls;
+        entry = function;
+        model = selected;
+        channel = flags;
+        copied.fill(0);
+        std::memcpy(copied.data(), name, std::strlen(name) + 1);
+        std::memcpy(reinterpret_cast<void*>(metadata + 0xc), name, std::strlen(name) + 1);
+        auto* row = reinterpret_cast<unsigned char*>(image + mta::game_de::NativeModelLoadedProfile::ArrayRva +
+                                                     selected * mta::game_de::NativeModelLoadedProfile::RowStride);
+        row[mta::game_de::NativeModelLoadedProfile::FlagsOffset] = static_cast<unsigned char>(flags);
+        row[mta::game_de::NativeModelLoadedProfile::StateOffset] = 2;
+        if (during)
+            during();
+        if (mode == 1)
+        {
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return mta::game_de::ClockResult::OriginalException;
+        }
+        if (mode == 2)
+        {
+            const std::uintptr_t zero = 0;
+            std::memcpy(reinterpret_cast<void*>(image + mta::game_de::NativeStreamingRequestProfile::RootRva), &zero, sizeof(zero));
+        }
+        return mta::game_de::ClockResult::Ok;
     }
 }
 namespace ClockPedWaterOwnerTest
@@ -2088,6 +2166,9 @@ namespace mta::game_de::NativeImageAccess
 #include "../../Client/game_de/NativeStreamingResourceContext.cpp"
 #define MTA_DE_STREAMING_RESOURCE_NATIVE_INVOKE ClockStreamingResourceOwnerTest::Invoke
 #include "../../Client/game_de/NativeStreamingResourceCalls.cpp"
+#define MTA_DE_STREAMING_SPECIAL_MODEL_NATIVE_INVOKE ClockSpecialModelOwnerTest::Invoke
+#include "../../Client/game_de/NativeStreamingSpecialModelCalls.cpp"
+#undef MTA_DE_STREAMING_SPECIAL_MODEL_NATIVE_INVOKE
 #undef MTA_DE_STREAMING_RESOURCE_NATIVE_INVOKE
 #define MTA_DE_MODEL_REFERENCE_NATIVE_RESERVE ClockModelAcquireOwnerTest::Reserve
 #define MTA_DE_MODEL_REFERENCE_NATIVE_PUBLISH ClockModelAcquireOwnerTest::Publish
@@ -2109,6 +2190,9 @@ namespace mta::game_de::NativeImageAccess
 #pragma pop_macro("ReadProcessMemory")
 #undef MTA_DE_PED_PHYSICAL_SCALARS_EXCHANGE
 #define MTA_DE_PED_WATER_FLAGS_EXCHANGE ClockPedWaterOwnerTest::Exchange
+#define MTA_DE_PED_AREA_EXCHANGE        ClockPedAreaOwnerTest::Exchange
+#include "../../Client/game_de/NativePedAreaMemory.cpp"
+#undef MTA_DE_PED_AREA_EXCHANGE
 #include "../../Client/game_de/NativePedWaterFlagsMemory.cpp"
 #include "../../Client/game_de/NativePedWaterTaskReader.cpp"
 // Only the selected owned-image read boundary schedules transitions. Native
@@ -6840,6 +6924,9 @@ namespace
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool areaSpecialOnly = argc == 3 && std::strcmp(argv[2], "--area-special-model") == 0;
+    const bool areaOnly = argc == 3 && std::strcmp(argv[2], "--ped-area") == 0;
+    const bool specialOnly = argc == 3 && std::strcmp(argv[2], "--special-model") == 0;
     const bool animationServicesOnly = argc == 3 && std::strcmp(argv[2], "--animation-services") == 0;
     const bool animationManagerOnly = argc == 3 && std::strcmp(argv[2], "--animation-manager") == 0;
     const bool animationNameOnly = argc == 3 && std::strcmp(argv[2], "--animation-block-name") == 0;
@@ -6858,9 +6945,30 @@ int main(int argc, char** argv)
     const bool poseOnly = argc == 3 && std::strcmp(argv[2], "--ped-pose") == 0;
     const bool poolRegistryOnly = argc == 3 && std::strcmp(argv[2], "--ped-pool-registry") == 0;
     Check((argc == 2 || constructorOnly || pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly || poseOnly ||
-           waterOnly || animationOnly || animationNameOnly || animationManagerOnly || animationServicesOnly) &&
+           waterOnly || animationOnly || animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (areaSpecialOnly || areaOnly || specialOnly)
+    {
+        if (areaSpecialOnly || areaOnly)
+        {
+            const auto directory = std::filesystem::path(argv[1]) / L"ped-area-owner";
+            Check(std::filesystem::create_directory(directory), "fresh durable registered area owner setup");
+            ClockImageFixture fixture;
+            fixture.Create(directory);
+            NativePedPhysicalScalarsOwnedSdk(fixture, false, false, false, false, false, true);
+        }
+        if (areaSpecialOnly || specialOnly)
+        {
+            const auto directory = std::filesystem::path(argv[1]) / L"special-model-owner";
+            Check(std::filesystem::create_directory(directory), "fresh durable special-model owner setup");
+            ClockImageFixture fixture;
+            fixture.Create(directory);
+            NativeStreamingRequestOwnedSdk(fixture, true);
+        }
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (animationNameOnly)
     {
         ClockImageFixture fixture;

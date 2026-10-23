@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices')]
+    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -26,6 +26,10 @@ $record['runScope'] = $Scope
 $record['nativePedOwnerSliceTested'] = $false
 $record['nativePedWaterTaskOwnerTested'] = $false
 $record['actualPedWaterTaskOwnerTested'] = $false
+$record['nativePedAreaOwnerTested'] = $false
+$record['actualPedAreaSdkOwnerTested'] = $false
+$record['nativeStreamingSpecialModelOwnerTested'] = $false
+$record['actualStreamingSpecialModelSdkOwnerTested'] = $false
 $record['nativeAnimationManagerOwnerTested'] = $false
 $record['actualAnimationManagerSdkOwnerTested'] = $false
 $record['nativeAnimationBlockNameOwnerTested'] = $false
@@ -118,6 +122,7 @@ try {
         'Tests/definitive/NativeRopesOwnerTests.inl',
         'Client/game_de/NativePedTransformReader.h','Client/game_de/NativePedTransformReader.cpp','Client/game_de/NativePedTransformProfile.h',
         'Client/game_de/NativeAnimationManagerAccess.h','Client/game_de/NativeAnimationManagerMemory.h','Client/game_de/NativeAnimationManagerMemory.cpp','Client/game_de/NativeAnimationManagerProfile.h','Client/game_de/CAnimManagerDE.h','Client/game_de/CAnimManagerDE.cpp','Client/sdk/game/CAnimManager.h',
+        'Client/game_de/NativePedAreaAccess.h','Client/game_de/NativePedAreaMemory.h','Client/game_de/NativePedAreaMemory.cpp','Client/game_de/NativePedAreaProfile.h','Client/game_de/CPedAreaDE.h','Client/game_de/CPedAreaDE.cpp','Client/game_de/NativeStreamingSpecialModelCalls.h','Client/game_de/NativeStreamingSpecialModelCalls.cpp','Client/game_de/NativeStreamingSpecialModelProfile.h','Client/game_de/NativeStreamingFileIdsProfile.h','Client/game_de/NativeStreamingRemoveAdmission.h','Client/game_de/NativeStreamingRemoveMemory.h','Client/game_de/NativeModelReferenceHeap.h',
         'Client/game_de/NativeAnimationBlockAccess.h','Client/game_de/NativeAnimationBlockMemory.h','Client/game_de/NativeAnimationBlockMemory.cpp','Client/game_de/NativeAnimationBlockProfile.h','Client/game_de/CAnimBlockDE.h','Client/game_de/CAnimBlockDE.cpp','Client/sdk/game/CAnimBlock.h','Client/game_de/CModelInfoRequestDE.h','Client/game_de/CModelInfoRequestDE.cpp','Client/sdk/game/CModelRequestPolicy.h','Client/game_de/CAnimBlockRequestDE.h','Client/game_de/CAnimBlockRequestDE.cpp','Client/sdk/game/CAnimBlockRequestPolicy.h',
         'Client/game_de/NativePedOrientationAccess.h','Client/game_de/NativePedOrientationMemory.h','Client/game_de/NativePedOrientationMemory.cpp','Client/game_de/NativePedOrientationProfile.h','Client/game_de/NativePedPoseContext.h','Client/game_de/NativePedPoseContext.cpp','Client/game_de/CPedOrientationDE.h','Client/game_de/CPedOrientationDE.cpp','Client/sdk/game/CGameModelPreparationPolicy.h','Client/game_de/NativePedWaterTaskAccess.h','Client/game_de/NativePedWaterTaskReader.h','Client/game_de/NativePedWaterTaskReader.cpp','Client/game_de/NativePedWaterTaskProfile.h','Client/game_de/NativePedWaterFlagsAccess.h','Client/game_de/NativePedWaterFlagsMemory.h','Client/game_de/NativePedWaterFlagsMemory.cpp','Client/game_de/NativePedWaterFlagsProfile.h','Client/game_de/CPedWeaponStatsDE.h','Client/game_de/CPedWeaponStatsDE.cpp','Client/sdk/game/CPedWeaponStatPolicy.h','Client/game_de/CPedWaterDE.h','Client/game_de/CPedWaterDE.cpp','Client/game_de/CGameInitializationDE.h','Client/game_de/CGameInitializationDE.cpp','Client/sdk/game/CGameInitializationPolicy.h','Client/game_de/NativePedPlacementAccess.h','Client/game_de/NativePedPlacementMemory.h','Client/game_de/NativePedPlacementMemory.cpp','Client/game_de/NativePedPoseMutation.h','Client/game_de/CPedPoseDE.h','Client/game_de/CPedPoseDE.cpp','Client/sdk/game/CEntityPlacementPolicy.h','Client/game_de/NativePedTeleportAccess.h','Client/game_de/NativePedTeleportMemory.h','Client/game_de/NativePedTeleportMemory.cpp','Client/game_de/NativePedTeleportProfile.h',
         'Client/game_de/NativePedVelocityAccess.h','Client/game_de/NativePedVelocityMemory.h','Client/game_de/NativePedVelocityMemory.cpp','Client/game_de/NativePedVelocityProfile.h',
@@ -344,6 +349,7 @@ try {
         'Build/definitive-recovery/mta-native-named-garage-geometry-20261023/named-garage-geometry-qualified.json',
         'Build/definitive-recovery/mta-pools-ped-registry-de-20261023/pools-ped-registry-source-ready.json'
     )
+    $sourceNames += @('Tests/definitive/NativePedAreaOwnerTests.inl','Tests/definitive/NativeStreamingSpecialModelOwnerTests.inl','Tests/definitive/Write-PedAreaFixture.ps1')
     $sourceNames += @('Tests/definitive/NativePedPoseOwnerTests.inl','Tests/definitive/Write-PedPoseFixture.ps1')
     $sourceNames += @('Tests/definitive/NativeAnimationBlockOwnerTests.inl','Tests/definitive/NativeAnimationBlockNameOwnerTests.inl','Tests/definitive/NativeAnimationManagerOwnerTests.inl','Tests/definitive/AnimationManagerOwnerFixture.h')
     $sourceNames += @('Tests/definitive/NativePedOrientationOwnerTests.inl','Tests/definitive/Write-PedOrientationFixture.ps1','Tests/definitive/NativePedWaterOwnerTests.inl','Tests/definitive/NativePedWaterTaskOwnerTests.inl','Tests/definitive/Write-PedWaterFixture.ps1')
@@ -388,6 +394,11 @@ try {
     $orientationEvidence = Join-Path $outputRoot 'PedOrientationFixture.generated.h'
     Copy-Item -LiteralPath $orientationFixture.path -Destination $orientationEvidence
     $record['pedOrientationGeneratedFixture'] = [ordered]@{path=$orientationEvidence;sha256=(Sha $orientationEvidence);rejectingOverrides=$orientationFixture.rejectingOverrides}
+    . (Join-Path $PSScriptRoot 'Write-PedAreaFixture.ps1')
+    $areaFixture = Write-PedAreaFixture $taskRoot (Join-Path $scratchRoot 'PedAreaFixture.generated.h')
+    $areaEvidence = Join-Path $outputRoot 'PedAreaFixture.generated.h'
+    Copy-Item -LiteralPath $areaFixture.path -Destination $areaEvidence
+    $record['pedAreaGeneratedFixture'] = [ordered]@{path=$areaEvidence;sha256=(Sha $areaEvidence);rejectingOverrides=$areaFixture.rejectingOverrides}
     $common = @('/nologo','/std:c++17','/EHsc','/O2','/MD','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN','/DDETOURS_MTA_VM_TRANSACTION_NODES',
         ('/I'+(Join-Path $taskRoot 'Client/sdk')),('/I'+(Join-Path $taskRoot 'Shared/sdk')),('/I'+(Join-Path $taskRoot 'vendor/detours/4.0.1/src')),('/I'+$scratchRoot))
     $detoursSources = @($detoursNames | ForEach-Object { Join-Path $taskRoot ('vendor/detours/4.0.1/src/' + $_) })
@@ -440,6 +451,10 @@ try {
         (Join-Path $taskRoot 'Client/game_de/CPedWeaponStatsDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CPedWaterDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CPedOrientationDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CPedAreaDE.cpp'),
+        # The new owner scope instantiates the actual SDK streaming receiver;
+        # link its production implementation rather than a fixture substitute.
+        (Join-Path $taskRoot 'Client/game_de/CStreamingDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGameInitializationDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CAnimBlockDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CAnimManagerDE.cpp'),
@@ -461,6 +476,9 @@ try {
     # The cumulative callback fixture includes current owner and retirement cases.
     # Keep it bounded while allowing the full set to finish on a busy build host.
     $fixtureArguments = @($outputRoot)
+    if ($Scope -eq 'AreaSpecialModel') { $fixtureArguments += '--area-special-model' }
+    if ($Scope -eq 'PedArea') { $fixtureArguments += '--ped-area' }
+    if ($Scope -eq 'SpecialModel') { $fixtureArguments += '--special-model' }
     if ($Scope -eq 'AnimationServices') { $fixtureArguments += '--animation-services' }
     if ($Scope -eq 'AnimationManager') { $fixtureArguments += '--animation-manager' }
     if ($Scope -eq 'AnimationBlockName') { $fixtureArguments += '--animation-block-name' }
@@ -510,7 +528,19 @@ try {
         if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
         if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
     }
-    if ($Scope -eq 'AnimationServices') {
+    if ($Scope -in @('AreaSpecialModel','PedArea','SpecialModel')) {
+        if ($Scope -in @('AreaSpecialModel','PedArea')) {
+            $record.nativePedAreaOwnerTested = $text.Contains('Production native registered area callback owner fixture completed')
+            $record.actualPedAreaSdkOwnerTested = $text.Contains('Production actual ped area SDK callback fixture completed')
+            if (-not ($record.nativePedAreaOwnerTested -and $record.actualPedAreaSdkOwnerTested)) { throw 'New registered area native/SDK owner did not complete.' }
+        }
+        if ($Scope -in @('AreaSpecialModel','SpecialModel')) {
+            $record.nativeStreamingSpecialModelOwnerTested = $text.Contains('Production native special model callback owner fixture completed')
+            $record.actualStreamingSpecialModelSdkOwnerTested = $text.Contains('Production actual special model SDK callback fixture completed')
+            if (-not ($record.nativeStreamingSpecialModelOwnerTested -and $record.actualStreamingSpecialModelSdkOwnerTested)) { throw 'New genuine special-model native/SDK owner did not complete.' }
+        }
+        $record.productionNativeCallbackTested = $true
+    } elseif ($Scope -eq 'AnimationServices') {
         $record.nativeAnimationBlockNameOwnerTested = $text.Contains('Production native immediate animation name callback owner fixture completed')
         $record.actualAnimationBlockNameSdkOwnerTested = $text.Contains('Production actual mutable animation name SDK callback fixture completed')
         $record.nativeAnimationManagerOwnerTested = $text.Contains('Production native animation manager callback owner fixture completed')

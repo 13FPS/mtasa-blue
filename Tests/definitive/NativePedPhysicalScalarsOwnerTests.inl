@@ -114,7 +114,7 @@ namespace
         }
     }
     void NativePedPhysicalScalarsOwnedSdk(ClockImageFixture& fixture, bool currentWeaponOnly = false, bool poolRegistryOnly = false, bool poseOnly = false,
-                                          bool waterOnly = false, bool orientationWithWater = false)
+                                          bool waterOnly = false, bool orientationWithWater = false, bool areaOnly = false)
     {
         namespace S = NativePedPhysicalScalarsProfile;
         namespace R = NativePedReferenceProfile;
@@ -226,7 +226,7 @@ namespace
                       !NativeServiceAdmission::IsClaimed(NativeServiceAdmission::Category::Clock),
                   "scalar retirement acknowledges native cell storage, hooks and owner admission together");
         };
-        if (!currentWeaponOnly && !poolRegistryOnly && !poseOnly && !waterOnly)
+        if (!currentWeaponOnly && !poolRegistryOnly && !poseOnly && !waterOnly && !areaOnly)
         {
             {
                 NativeClockService service;
@@ -322,13 +322,17 @@ namespace
 #include "NativePedCombatOwnerTests.inl"
 #include "NativePedWeaponOwnerTests.inl"
         }
-        if (!poolRegistryOnly && !poseOnly && !waterOnly)
+        if (!poolRegistryOnly && !poseOnly && !waterOnly && !areaOnly)
         {
 #include "NativePedCurrentWeaponOwnerTests.inl"
         }
         if (poolRegistryOnly)
         {
 #include "NativePoolsPedRegistryOwnerTests.inl"
+        }
+        if (areaOnly)
+        {
+#include "NativePedAreaOwnerTests.inl"
         }
         if (waterOnly)
         {
@@ -347,7 +351,7 @@ namespace
         ClockReaderTestHost::image = ClockPedReferenceOwnerTest::image = 0;
         for (auto item = saved.rbegin(); item != saved.rend(); ++item)
             fixture.Patch(item->rva, item->bytes.data(), item->bytes.size());
-        if (!currentWeaponOnly && !poolRegistryOnly && !poseOnly && !waterOnly)
+        if (!currentWeaponOnly && !poolRegistryOnly && !poseOnly && !waterOnly && !areaOnly)
             std::puts("Production native ped physical scalars callback owner fixture completed");
     }
 }

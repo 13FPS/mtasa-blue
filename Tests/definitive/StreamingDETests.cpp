@@ -37,6 +37,16 @@ namespace
             scenePointer = position;
             return requestResult;
         }
+        unsigned    specialRequests = 0;
+        const char* specialName = nullptr;
+        ClockResult RequestStreamingSpecialModel(std::uint32_t index, const char* name, std::uint32_t channel) noexcept override
+        {
+            ++specialRequests;
+            model = index;
+            flags = channel;
+            specialName = name;
+            return requestResult;
+        }
         unsigned                                groupReads = 0;
         ClockResult                             groupResult = ClockResult::Ok;
         NativeStreamingModelGroupsReader::Value groups;
@@ -100,7 +110,6 @@ namespace
     {
         explicit Streaming(NativeStreamingModelAccess& owner) : CStreamingDE(owner) {}
         [[noreturn]] static void Unavailable() { throw std::logic_error("unrelated SDK operation in streaming fixture"); }
-        void                     RequestSpecialModel(DWORD, const char*, DWORD) override { Unavailable(); }
         CStreamingInfo*          GetStreamingInfo(uint32) override { Unavailable(); }
         void                     ReinitStreaming() override { Unavailable(); }
         unsigned char            AddArchive(const wchar_t*) override { Unavailable(); }
@@ -278,9 +287,32 @@ int main(int argc, char** argv)
         }
         std::puts("Production MTA streaming scene SDK fixture completed");
         std::puts("Production MTA streaming load-all SDK fixture completed");
+        owner.requestResult = ClockResult::Ok;
+        char       special[] = "Mixed_2";
+        const auto originalName = std::array<char, 8>{'M', 'i', 'x', 'e', 'd', '_', '2', 0};
+        for (const auto model : {0u, 290u, 19999u, 0xffffffffu})
+            for (const auto channel : {0u, 1u, 0x16u, 0x80000000u, 0xffffffffu})
+                for (const char* name : {static_cast<const char*>(special), static_cast<const char*>(nullptr)})
+                {
+                    const auto before = owner.specialRequests;
+                    sdk->RequestSpecialModel(model, name, channel);
+                    Check(owner.specialRequests == before + 1 && owner.model == model && owner.flags == channel && owner.specialName == name,
+                          "actual SDK forwards original special-model pointer/full DWORD model/channel exactly once; native owner decides admission");
+                }
+        Check(std::memcmp(special, originalName.data(), originalName.size()) == 0, "SDK never lowercases or rewrites special-model input");
+        for (unsigned status = 1; status <= static_cast<unsigned>(ClockResult::OriginalException); ++status)
+        {
+            owner.requestResult = static_cast<ClockResult>(status);
+            const auto before = owner.specialRequests;
+            Refuses([&] { sdk->RequestSpecialModel(290, special, 0xffffffffu); }, "RequestSpecialModel");
+            Check(owner.specialRequests == before + 1,
+                  "destructive entered-uncertain special-model effects cannot cause SDK retry or ordinary RequestModel fallback");
+        }
+        std::puts("Production MTA streaming special-model SDK fixture completed");
         NativeStreamingModelAccess absent;
         Streaming                  unbound(absent);
         Refuses([&] { unbound.RequestModel(0, 6); }, "RequestModel");
+        Refuses([&] { unbound.RequestSpecialModel(290, special, 6); }, "RequestSpecialModel");
         Refuses([&] { (void)unbound.HasModelLoaded(0); }, "HasModelLoaded");
         Refuses([&] { unbound.RequestModel(1000, 6); }, "RequestModel vehicle upgrade");
         Refuses([&] { (void)unbound.HasModelLoaded(1193); }, "HasModelLoaded vehicle upgrade");

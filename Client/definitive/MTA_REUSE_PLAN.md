@@ -37,6 +37,16 @@ the count changes and another current-owner check at native entry. Accepted
 effects persist on later failure without rollback or replay. This does not
 grant a retained model lease or complete MTA's `ModelAddRef`/`RemoveRef` wrapper.
 
+`CStreamingDE::RequestSpecialModel` enters DE's genuine existing-slot rename and
+requeue operation. The qualified subset requires an existing non-upgrade DFF
+slot, zero native interface references, supported removal state and an ASCII
+name of at most eight bytes. It preserves the full channel/flags value. Current
+world, heap and initialized FName/cache admission precede that single entry;
+the game owns hashing, name storage, cache growth, removal and asynchronous
+requests. Its copied input stays alive through the native call and is not
+retained afterward. Failed entered effects are not undone or replayed. This
+does not create missing metadata or implement `MakePedModel`.
+
 The abstract `CModelInfoRequestDE` now reuses that same request/reference policy
 for the actual SDK methods. It owns MTA's wrapper DWORD reference and pending
 counters, borrows the real game's async/streaming receivers, and preserves
@@ -471,6 +481,14 @@ alive. Failed entered phases retain their effects and stop without replay or
 compensating Add. Orientation shares the placement/Teleport reentry gate and
 preserves the existing matrix-required Teleport route. It does not implement
 arbitrary `SetMatrix`, target rotation or last-good physics repair.
+
+`CPedAreaDE` implements the inherited raw area-code byte getter/setter on that
+same registered ped. Independently named DE read/write commands identify its
+storage, but MTA's setter does not include those commands' additional interior
+cleanup. The backend preserves all 256 byte values and uses one conditional
+byte store, including same-value requests, without changing neighbors or
+retrying. Lost acknowledgement retains accepted effects; no interior streaming
+or complete entity factory is supplied by this property.
 
 `CPedFlagsDE` adds MTA's existing vehicle shooting-permission and bike
 knockoff accessors on that same registered lifetime. Independently named native

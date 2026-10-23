@@ -36,6 +36,8 @@
 #include "NativePedWaterFlagsMemory.h"
 #include "NativePedWaterTaskReader.h"
 #include "NativePedOrientationMemory.h"
+#include "NativePedAreaMemory.h"
+#include "NativeStreamingSpecialModelCalls.h"
 #include "NativeAnimationBlockMemory.h"
 #include "NativeAnimationManagerMemory.h"
 #include "NativePedVelocityMemory.h"
@@ -209,6 +211,9 @@ namespace mta::game_de
             ClockResult ReadAnimationManagerCounts(std::uint64_t, NativeAnimationManagerCounts&) noexcept override;
             ClockResult FindAnimationBlockIndex(std::uint64_t, const NativeAnimationBlockName&, std::int32_t&) noexcept override;
             ClockResult ReadPedInWater(const NativePedReferenceToken&, bool&) noexcept override;
+            ClockResult ReadPedAreaCode(const NativePedReferenceToken&, std::uint8_t&) noexcept override;
+            ClockResult SetPedAreaCode(const NativePedReferenceToken&, std::uint8_t) noexcept override;
+            ClockResult RequestStreamingSpecialModel(std::uint32_t, const char*, std::uint32_t) noexcept override;
             ClockResult SetPedInWaterFlags(const NativePedReferenceToken&, bool) noexcept override;
             ClockResult SetReferencedPedPosition(const NativePedReferenceToken&, const CVector&) noexcept override;
             ClockResult CompleteReferencedPedTeleport(const NativePedReferenceToken&, const CVector&) noexcept override;
@@ -3495,6 +3500,76 @@ namespace mta::game_de
             // Wrong/foreign/stale admission above never stops another owner.
             if (receipt.entered && result != ClockResult::Ok)
                 Stop(result);
+            return result;
+        }
+
+        bool SameAreaPed(const NativePedPoolReader::Value& a, const NativePedPoolReader::Value& b) noexcept
+        {
+            return a.nativePed == b.nativePed && a.handle == b.handle && a.pool == b.pool && a.objects == b.objects && a.flags == b.flags && a.slot == b.slot &&
+                   a.generation == b.generation && a.vtable == b.vtable && a.firstMethod == b.firstMethod && a.capacity == b.capacity && a.cursor == b.cursor &&
+                   a.ownsAllocations == b.ownsAllocations;
+        }
+        ClockResult NativeAccess::ReadPedAreaCode(const NativePedReferenceToken& token, std::uint8_t& output) noexcept
+        {
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedPoolReader::Value before, after;
+            if ((result = ResolvePedReference(token, before)) != ClockResult::Ok)
+                return result;
+            std::uint8_t next = 0;
+            if ((result = NativePedAreaMemory({runtime.image}, &CheckTimingOwner).ReadAreaCode(before, next)) != ClockResult::Ok)
+                return result;
+            result = ResolvePedReference(token, after);
+            if (result == ClockResult::Ok && !SameAreaPed(before, after))
+                result = ClockResult::OwnerConflict;
+            // Only a successfully observed ped that then loses its original
+            // registered relation retires this admitted runtime. Initial or
+            // unsupported read refusal cannot stop another owner or mean zero.
+            if (result != ClockResult::Ok)
+            {
+                Stop(result);
+                return result;
+            }
+            output = next;
+            return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::SetPedAreaCode(const NativePedReferenceToken& token, std::uint8_t value) noexcept
+        {
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedPoolReader::Value before, after;
+            if ((result = ResolvePedReference(token, before)) != ClockResult::Ok)
+                return result;
+            NativePedAreaMemory::Receipt receipt;
+            result = NativePedAreaMemory({runtime.image}, &CheckTimingOwner).SetAreaCode(before, value, &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = ResolvePedReference(token, after);
+                if (result == ClockResult::Ok && !SameAreaPed(before, after))
+                    result = ClockResult::OwnerConflict;
+            }
+            // A one-byte accepted or uncertain write persists. Keep the sole
+            // controller's cell debt; do not replay CAS, restore area or invoke
+            // the named command's unrelated interior/player effects.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+        ClockResult NativeAccess::RequestStreamingSpecialModel(std::uint32_t model, const char* name, std::uint32_t channel) noexcept
+        {
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            NativeStreamingSpecialModelCalls::Receipt receipt;
+            // The genuine primitive owns the same completion gate as other
+            // loading operations; an outer scope would double-enter and fail.
+            result = NativeStreamingSpecialModelCalls::Request(runtime.image, model, name, channel, &CheckTimingOwner, &receipt);
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            // Names/cache growth, removal and asynchronous request prefixes
+            // remain accepted native effects even if acknowledgement is lost.
             return result;
         }
 

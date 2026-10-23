@@ -52,6 +52,14 @@ namespace mta::game_de
         return NativeStreamingModelGroupsReader::IsVehicleTracked(ReadGroups(), model);
     }
 
+    void CStreamingDE::RequestSpecialModel(DWORD model, const char* name, DWORD channel)
+    {
+        // Preserve the SDK's exact pointer and full DWORD channel once. The
+        // qualified native owner copies intent before callbacks, admits its
+        // bounded existing-slot domain, and accounts for partial rename effects.
+        Require(access.RequestStreamingSpecialModel(model, name, channel), "RequestSpecialModel");
+    }
+
     void CStreamingDE::RequestModel(DWORD model, DWORD flags)
     {
         // Reuse MTA's upgrade classification while the owner performs DE's

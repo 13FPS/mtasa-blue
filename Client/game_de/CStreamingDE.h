@@ -21,6 +21,7 @@ namespace mta::game_de
     {
     public:
         void          RequestModel(DWORD model, DWORD flags) override;
+        void          RequestSpecialModel(DWORD model, const char* name, DWORD channel) override;
         void          RemoveModel(std::uint32_t model) override;
         bool          HasModelLoaded(DWORD model) override;
         void          LoadAllRequestedModels(bool onlyPriority, const char* tag) override;

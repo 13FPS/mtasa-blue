@@ -20,7 +20,7 @@ foreach ($name in @('TEMP','TMP','VCToolsInstallDir','INCLUDE','LIB','LIBPATH','
 $record = [ordered]@{
     schema='mta_streaming_sdk_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
-    results=@();actualStreamingSdkSliceTested=$false;actualStreamingLoadAllSdkTested=$false;actualStreamingPrioritySdkTested=$false;actualStreamingRemoveSdkTested=$false;actualStreamingSceneSdkTested=$false;actualStreamingGroupsSdkTested=$false;actualStreamingGroupsNoexceptRefusalTested=$false;noexceptRefusal=$null;failure=$null;scratchDirectory=$scratchRoot;scratchFilesRemaining=$null;scratchRemoved=$false;
+    results=@();actualStreamingSdkSliceTested=$false;actualStreamingLoadAllSdkTested=$false;actualStreamingPrioritySdkTested=$false;actualStreamingRemoveSdkTested=$false;actualStreamingSceneSdkTested=$false;actualStreamingSpecialModelSdkTested=$false;actualStreamingGroupsSdkTested=$false;actualStreamingGroupsNoexceptRefusalTested=$false;noexceptRefusal=$null;failure=$null;scratchDirectory=$scratchRoot;scratchFilesRemaining=$null;scratchRemoved=$false;
     scope='Actual MTA CStreaming RequestModel, HasModelLoaded, RemoveModel and both LoadAllRequestedModels intents dispatch through a borrowed owner. Covers full DWORD keys/flags, distinct paired upgrade dispatch for the entire shared upgrade interval, all owner refusal statuses, genuine false/true loaded results, absent-owner refusal, preserved priority-only intent and no wrapper retry or ordinary/global fallback. Unimplemented SDK methods remain pure in production; unrelated concrete overrides exist only in the test fixture. No game code or native memory is executed';
     ownedBuffersOnly=$true;nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;
     foreignProcessAccessed=$false;nativeLifecycleReady=$false;fullMtaReady=$false;
@@ -130,7 +130,7 @@ try {
             (Join-Path $PSScriptRoot 'StreamingDETests.cpp'),(Join-Path $taskRoot 'Client/game_de/CStreamingDE.cpp'),
             ('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'compiler.pdb')),('/Fe'+$executable))
         $result = [ordered]@{architecture=$architecture;environment=$environmentResult;compile=$null;test=$null;
-            checks=0;pointerBits=$null;executable=$executable;executableSha256=$null;actualStreamingSdkSliceTested=$false;actualStreamingLoadAllSdkTested=$false;actualStreamingPrioritySdkTested=$false;actualStreamingRemoveSdkTested=$false;actualStreamingSceneSdkTested=$false;actualStreamingGroupsSdkTested=$false;actualStreamingGroupsNoexceptRefusalTested=$false;noexceptRefusal=$null}
+            checks=0;pointerBits=$null;executable=$executable;executableSha256=$null;actualStreamingSdkSliceTested=$false;actualStreamingLoadAllSdkTested=$false;actualStreamingPrioritySdkTested=$false;actualStreamingRemoveSdkTested=$false;actualStreamingSceneSdkTested=$false;actualStreamingSpecialModelSdkTested=$false;actualStreamingGroupsSdkTested=$false;actualStreamingGroupsNoexceptRefusalTested=$false;noexceptRefusal=$null}
         $record.results += $result
         $result.compile = RunOwned $compiler $arguments $directory 'compile' 60000
         if ($result.compile.exitCode -ne 0 -or $result.compile.timedOut) { throw "$architecture actual MTA streaming SDK fixture compilation failed." }
@@ -149,6 +149,8 @@ try {
         if (-not ($result.actualStreamingLoadAllSdkTested -and $result.actualStreamingPrioritySdkTested -and $result.actualStreamingRemoveSdkTested)) {
             throw 'Actual priority/all completion and direct-removal SDK overrides did not execute.'
         }
+        $result.actualStreamingSpecialModelSdkTested = $text.Contains('Production MTA streaming special-model SDK fixture completed')
+        if (-not $result.actualStreamingSpecialModelSdkTested) { throw 'Actual RequestSpecialModel SDK override did not execute.' }
         $result.actualStreamingSceneSdkTested = $text.Contains('Production MTA streaming scene SDK fixture completed')
         if (-not $result.actualStreamingSceneSdkTested) { throw 'Actual LoadScene SDK override did not execute.' }
         $result.actualStreamingGroupsSdkTested = $text.Contains('Production MTA streaming groups SDK fixture completed')
@@ -173,6 +175,7 @@ try {
     $record.actualStreamingPrioritySdkTested = $record.success -and $record.results[0].actualStreamingPrioritySdkTested
     $record.actualStreamingRemoveSdkTested = $record.success -and $record.results[0].actualStreamingRemoveSdkTested
     $record.actualStreamingSceneSdkTested = $record.success -and $record.results[0].actualStreamingSceneSdkTested
+    $record.actualStreamingSpecialModelSdkTested = $record.success -and $record.results[0].actualStreamingSpecialModelSdkTested
 } catch { AddFailure ($_.Exception.ToString()) }
 finally {
     foreach ($name in $previousEnvironment.Keys) {

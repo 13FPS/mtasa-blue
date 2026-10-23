@@ -28,6 +28,9 @@ namespace mta::game_de
         // Older/read-only owners cannot turn a request into a successful no-op.
         // Native entry, partial effects and cleanup remain the runtime's concern.
         virtual ClockResult RequestStreamingModel(std::uint32_t, std::uint32_t) noexcept { return ClockResult::NotInitialized; }
+        // Special-model rename is destructive existing-slot work, not a model
+        // factory or an ordinary request with an ignored name.
+        virtual ClockResult RequestStreamingSpecialModel(std::uint32_t, const char*, std::uint32_t) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult ReadStreamingModelLoaded(std::uint32_t, NativeModelLoadedReader::Value&) noexcept { return ClockResult::NotInitialized; }
         // Upgrade requests also own their paired model. Keeping that operation
         // distinct prevents an older owner from accepting only half the work.

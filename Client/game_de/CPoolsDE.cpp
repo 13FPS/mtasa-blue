@@ -249,6 +249,54 @@ namespace mta::game_de
         output = nullptr;
         return ClockResult::Ok;
     }
+    ClockResult CPoolsDE::ReadPedClientEntity(CPed* wrapper, CClientEntity*& output) noexcept
+    {
+        auto result = pedRegistryOwner.CheckPedPoolAccess();
+        if (result != ClockResult::Ok)
+            return result;
+        // Pointer identity only: no foreign wrapper or native interface is
+        // dereferenced, and no count, reference cell or registration is added.
+        auto* const row = MtaGame::CPedRegistryPolicy::FindByWrapper(pedLinks, wrapper);
+        if (!row)
+        {
+            result = pedRegistryOwner.CheckPedPoolAccess();
+            if (result != ClockResult::Ok)
+                return result;
+            if (MtaGame::CPedRegistryPolicy::FindByWrapper(pedLinks, wrapper))
+                return ClockResult::BindingChanged;
+            output = nullptr;
+            return ClockResult::Ok;
+        }
+        const auto                 index = static_cast<std::size_t>(row - pedLinks.data());
+        const auto                 version = pedControls[index].version;
+        auto* const                client = row->pClientEntity;
+        NativePedPoolReader::Value before, after;
+        result = ReadControlled(index, before);
+        if (result != ClockResult::Ok)
+            return result;
+        result = pedRegistryOwner.RecheckPedPoolHandle(before);
+        if (result != ClockResult::Ok)
+            return result;
+        result = ReadControlled(index, after);
+        if (result != ClockResult::Ok)
+            return result;
+        if (!Same(before, after))
+            return ClockResult::BindingChanged;
+        result = pedRegistryOwner.CheckPedPoolAccess();
+        if (result != ClockResult::Ok)
+            return result;
+        result = pedRegistryOwner.RecheckPedPoolHandle(after);
+        if (result != ClockResult::Ok)
+            return result;
+        if (!Matches(index) || pedControls[index].version != version || row->pEntity != wrapper || row->pClientEntity != client ||
+            MtaGame::CPedRegistryPolicy::FindByWrapper(pedLinks, wrapper) != row)
+            return ClockResult::BindingChanged;
+        // Invalidation deliberately updates the controlled expected client to
+        // null. Arbitrary caller replacement remains a refusal, like all other
+        // existing controlled DE lookups; neither case borrows StoredPointer.
+        output = client;
+        return ClockResult::Ok;
+    }
     void CPoolsDE::Require(ClockResult result, const char* operation)
     {
         if (result != ClockResult::Ok)
@@ -270,6 +318,12 @@ namespace mta::game_de
     {
         SClientEntity<CPed>* value = nullptr;
         Require(ReadPedByIndex(index, value), "GetPed(index)");
+        return value;
+    }
+    CClientEntity* CPoolsDE::GetPedClientEntity(CPed* wrapper)
+    {
+        CClientEntity* value = nullptr;
+        Require(ReadPedClientEntity(wrapper, value), "GetPedClientEntity");
         return value;
     }
     void CPoolsDE::ResetPedPoolCount()

@@ -40,6 +40,19 @@ namespace MtaGame
             return index < Size && entries[index].pEntity ? &entries[index] : nullptr;
         }
         template <class Ped, std::size_t Size>
+        static SClientEntity<Ped>* FindByWrapper(std::array<SClientEntity<Ped>, Size>& entries, const Ped* ped) noexcept
+        {
+            if (!ped)
+                return nullptr;
+            // Slots are sparse and count can be reset independently. Search
+            // the actual bounded registry, never a guessed native capacity or
+            // the independently writable StoredPointer bookkeeping field.
+            for (auto& entry : entries)
+                if (entry.pEntity == ped)
+                    return &entry;
+            return nullptr;
+        }
+        template <class Ped, std::size_t Size>
         static bool AssociateIfPresent(std::array<SClientEntity<Ped>, Size>& entries, std::size_t index, CClientEntity* client) noexcept
         {
             auto* slot = Find(entries, index);

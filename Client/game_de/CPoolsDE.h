@@ -60,6 +60,7 @@ namespace mta::game_de
         SClientEntity<CPed>* GetPed(DWORD* nativeInterface) override;
         SClientEntity<CPed>* GetPed(std::size_t index) override;
         CPed*                GetPedFromRef(DWORD handle) override;
+        CClientEntity*       GetPedClientEntity(CPed* wrapper) override;
         // These are actual CPU registration bookkeeping, not native pool
         // occupancy/readiness. Reset deliberately preserves existing rows.
         unsigned long GetPedCount() override { return pedRegistrationCount; }
@@ -72,6 +73,9 @@ namespace mta::game_de
         ClockResult ReadPedFromRef(std::uint32_t handle, CPed*&) noexcept;
         ClockResult ReadPedByIndex(std::size_t index, SClientEntity<CPed>*&) noexcept;
         ClockResult ReadPedByAddress(std::uintptr_t nativeAddress, SClientEntity<CPed>*&) noexcept;
+        // The exact CPU wrapper identity selects one existing controlled row;
+        // its current token/owner still admits the nullable client association.
+        ClockResult ReadPedClientEntity(CPed* wrapper, CClientEntity*&) noexcept;
 
         CPoolsDE(const CPoolsDE&) = delete;
         CPoolsDE& operator=(const CPoolsDE&) = delete;

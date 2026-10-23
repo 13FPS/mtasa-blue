@@ -155,6 +155,16 @@ Counts, count-only reset and local-client invalidation
 remain MTA bookkeeping. Construction/deletion factories and `GetPools`
 publication are still separate work.
 
+`CPools::GetPedClientEntity` resolves an existing common ped wrapper through
+that same registry. The actual post-shot, damage, death and bullet-impact
+callbacks use it at their original lookup points, preserving current client
+reassociation, local invalidation and event ordering. They no longer need a
+classic native-interface roundtrip for a wrapper already supplied by MTA.
+Sparse slots are searched independently of the resettable registration count;
+the separate `GetStoredPointer` field is not an association fallback. DE checks
+its controlled row, native token and current owner before returning the client,
+and preserves explicit refusals. This adds no registry or native ped factory.
+
 `CPedBorrowedFactoryDE<ConcretePed>` now provides the enclosing lifetime for a
 complete, caller-supplied DE SDK wrapper. It acquires through the existing native
 reference controller, checks the exact token and owner, then registers the typed
@@ -289,6 +299,15 @@ registered-ped checks precede publication. No target object is dereferenced or
 exported; vision effects, removal and the remaining ped factory are separate
 dependencies. An unavailable owner raises the existing service failure rather
 than silently reporting that the ped has no goggles.
+
+`CPedVisibilityDE` implements MTA's raw `IsVisible` and `SetVisible` property
+through that same registered owner. The named DE visibility command and common
+entity constructor identify its flag independently. Reads require coherent
+snapshots; writes use one masked conditional update and preserve every other
+flag. The script command's separate current-player global is excluded from
+these SDK methods. Owner loss preserves output or accepted effects and follows
+the existing retirement path without retry. This does not implement the other
+rendering methods or complete the ped factory.
 
 MTA's `CreateWeaponStat` factory also shares its existing defaults and flag
 transition policy between classic and DE. The complete owned `CWeaponStat`

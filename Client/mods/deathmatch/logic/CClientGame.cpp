@@ -4314,16 +4314,15 @@ bool CClientGame::DamageHandler(CPed* pDamagePed, CEventDamage* pEvent)
 
     if (pDamagePed)
     {
-        SClientEntity<CPed>* pPedClientEntity = pPools->GetPed(reinterpret_cast<DWORD*>(pDamagePed->GetInterface()));
+        CClientEntity* pPedClientEntity = pPools->GetPedClientEntity(pDamagePed);
 
-        if (pPedClientEntity)
+        // Keep this fresh lookup after the existing event getters. The linked
+        // client may have been reassociated or invalidated since the producer.
+        // NOTE(botder): Don't use the damaged ped if the associated game entity doesn't exist to avoid a crash
+        //               in the function ApplyPedDamageFromGame
+        if (pPedClientEntity && pPedClientEntity->GetGameEntity() != nullptr)
         {
-            // NOTE(botder): Don't use the damaged ped if the associated game entity doesn't exist to avoid a crash
-            //               in the function ApplyPedDamageFromGame
-            if (pPedClientEntity->pClientEntity && pPedClientEntity->pClientEntity->GetGameEntity() != nullptr)
-            {
-                pDamagedPed = reinterpret_cast<CClientPed*>(pPedClientEntity->pClientEntity);
-            }
+            pDamagedPed = reinterpret_cast<CClientPed*>(pPedClientEntity);
         }
     }
 
@@ -4635,13 +4634,8 @@ bool CClientGame::ApplyPedDamageFromGame(eWeaponType weaponUsed, float fDamage, 
 
 void CClientGame::DeathHandler(CPed* pKilledPedSA, unsigned char ucDeathReason, unsigned char ucBodyPart)
 {
-    CPools*              pPools = g_pGame->GetPools();
-    SClientEntity<CPed>* pPedEntity = pPools->GetPed((DWORD*)pKilledPedSA->GetInterface());
-    if (!pPedEntity)
-    {
-        return;
-    }
-    CClientPed* pKilledPed = reinterpret_cast<CClientPed*>(pPedEntity->pClientEntity);
+    CPools*     pPools = g_pGame->GetPools();
+    CClientPed* pKilledPed = reinterpret_cast<CClientPed*>(pPools->GetPedClientEntity(pKilledPedSA));
     if (!pKilledPed)
         return;
 
@@ -5232,13 +5226,11 @@ void CClientGame::PostWeaponFire()
     CClientPed* pLocalPlayer = g_pClientGame->m_pLocalPlayer;
     if (pLocalPlayer && pWeaponFirePed)
     {
-        CPools*              pPools = g_pGame->GetPools();
-        CClientPed*          pPed = nullptr;
-        SClientEntity<CPed>* pPedEntity = pPools->GetPed((DWORD*)pWeaponFirePed->GetInterface());
-        if (pPedEntity)
-        {
-            pPed = reinterpret_cast<CClientPed*>(pPedEntity->pClientEntity);
-        }
+        CPools* pPools = g_pGame->GetPools();
+        // Multiplayer already supplied the registered common wrapper. Read
+        // its current canonical client association without a classic native
+        // interface round-trip or the separate StoredPointer bookkeeping.
+        CClientPed* pPed = reinterpret_cast<CClientPed*>(pPools->GetPedClientEntity(pWeaponFirePed));
         if (pPed)
         {
             if (pPed->GetType() == CCLIENTPLAYER)
@@ -5343,12 +5335,13 @@ void CClientGame::BulletImpact(CPed* pInitiator, CEntity* pVictim, const CVector
     CClientPed* pLocalPlayer = g_pClientGame->m_pLocalPlayer;
     if (pLocalPlayer && pInitiator)
     {
-        CPools*              pPools = g_pGame->GetPools();
-        SClientEntity<CPed>* pPedEntity = pPools->GetPed((DWORD*)pInitiator->GetInterface());
+        CPools*        pPools = g_pGame->GetPools();
+        CClientEntity* pPedEntity = pPools->GetPedClientEntity(pInitiator);
         if (pPedEntity)
         {
-            // Find the client ped that initiated the bullet impact
-            CClientPed* pInitiatorPed = reinterpret_cast<CClientPed*>(pPedEntity->pClientEntity);
+            // Find the client ped that initiated the bullet impact. Preserve
+            // this position before line-of-sight processing and victim lookup.
+            CClientPed* pInitiatorPed = reinterpret_cast<CClientPed*>(pPedEntity);
             if (!pInitiatorPed)
             {
                 return;

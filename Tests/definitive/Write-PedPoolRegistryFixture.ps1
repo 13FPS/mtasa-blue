@@ -23,7 +23,7 @@ function Write-PedPoolRegistryFixture([string]$RepositoryRoot,[string]$OutputPat
         }
     })
     $poolMethods=@(InterfaceMethods 'Client/sdk/game/CPools.h' | Where-Object {
-        $_.name -notin @('GetPed','GetPedFromRef','GetPedCount','ResetPedPoolCount','InvalidateLocalPlayerClientEntity')
+        $_.name -notin @('GetPed','GetPedFromRef','GetPedClientEntity','GetPedCount','ResetPedPoolCount','InvalidateLocalPlayerClientEntity')
     })
     $lines=@('#pragma once','#pragma warning(push)','#pragma warning(disable : 4100)',
         'namespace pool_registry_fixture {',

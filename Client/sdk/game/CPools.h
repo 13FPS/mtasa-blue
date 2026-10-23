@@ -108,4 +108,12 @@ public:
     virtual CDummyPool&             GetDummyPool() noexcept = 0;
     virtual CTxdPool&               GetTxdPool() noexcept = 0;
     virtual CPtrNodeSingleLinkPool& GetPtrNodeSingleLinkPool() noexcept = 0;
+
+    // Resolve the current client association of an already registered common
+    // ped wrapper, without exposing a backend's native interface. This reads
+    // the existing pool row, not GetStoredPointer (which has separate lifetime
+    // and reassociation semantics). Appended to retain existing method slots.
+    // An unregistered/null wrapper has no CPU association; native admission
+    // failures remain explicit backend refusals rather than qualified absence.
+    virtual CClientEntity* GetPedClientEntity(CPed* pPed) = 0;
 };

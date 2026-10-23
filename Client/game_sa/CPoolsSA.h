@@ -77,9 +77,16 @@ public:
     SClientEntity<CPed>* GetPed(DWORD* pGameInterface);
     SClientEntity<CPed>* GetPed(size_t pos) { return &m_pedPool.arrayOfClientEntities[pos]; };
     CPed*                GetPedFromRef(DWORD dwGameRef);
-    CPedSAInterface*     GetPedInterface(DWORD dwGameRef);  // game_sa specific
-    unsigned long        GetPedCount() { return m_pedPool.ulCount; }
-    void                 DeleteAllPeds();
+    CClientEntity*       GetPedClientEntity(CPed* ped) override
+    {
+        // The caller already holds this registry's common wrapper; retaining
+        // the canonical row also observes reassociation and local invalidation.
+        auto* row = MtaGame::CPedRegistryPolicy::FindByWrapper(m_pedPool.arrayOfClientEntities, ped);
+        return row ? row->pClientEntity : nullptr;
+    }
+    CPedSAInterface* GetPedInterface(DWORD dwGameRef);  // game_sa specific
+    unsigned long    GetPedCount() { return m_pedPool.ulCount; }
+    void             DeleteAllPeds();
 
     CEntity*       GetEntity(DWORD* pGameInterface);
     CClientEntity* GetClientEntity(DWORD* pGameInterface);

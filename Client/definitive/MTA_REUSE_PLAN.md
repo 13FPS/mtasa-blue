@@ -59,9 +59,23 @@ without changing its bits. The observation bound is not an allocation capacity.
 original loaded short circuit, unsigned IFP model arithmetic, nullable model
 lookup, request flags, reference increment and blocking load order. Release
 builds preserve the original removal of assertion observations. Native
-`AddRef`, borrowed names, hierarchy/raw interfaces and the complete animation
-factory remain required work; request sequencing supplies no substitute
-native reference counter or render object.
+`AddRef`, hierarchy/raw interfaces and the complete animation factory remain
+required work; request sequencing supplies no substitute native reference
+counter or render object.
+
+`CAnimBlockDE::GetName` returns the actual mutable inline name address in DE's
+validated image bank. The copied index/name/generation identity is checked
+again at publication; a changed identity preserves the caller's output and
+refuses the read. This is a current-callback borrow, with no copied writable
+name, reference lease or guarantee that the text stays unchanged. A native
+name edit invalidates later reads through the old copied identity.
+
+The abstract `CAnimManagerDE` reads the game's signed animation and block
+counters and implements `GetAnimationBlockIndex` with the genuine first-match
+name-folding rules. It snapshots the current native names, preserves the real
+missing-name result of `-1`, and refuses lost ownership rather than reporting
+an absent block. Its lookup budget is separate from native capacity. These
+observations create no blocks, animation hierarchies or reference ownership.
 
 `CStreamingDE::LoadAllRequestedModels(false)` enters DE's genuine all-model
 flush with a current typed game-mode/world context. Priority loading uses the

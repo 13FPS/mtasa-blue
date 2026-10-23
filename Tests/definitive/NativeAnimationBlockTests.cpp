@@ -242,4 +242,6 @@ int main(int argc, char** argv)
     Check(reader.Read(identity, value) != ClockResult::Ok && UntouchedBlock(value), "main image binding loss refuses metadata output");
     std::puts("Production native animation block metadata primitive fixture completed");
     std::printf("Passed %u native animation block metadata checks (64-bit; no native engine code executed)\n", checks);
+    // This entry is also compiled under a non-main name by focused fixtures.
+    return 0;
 }

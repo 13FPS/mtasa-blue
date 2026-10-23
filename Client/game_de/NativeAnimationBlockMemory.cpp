@@ -165,4 +165,26 @@ namespace mta::game_de
         output = next;
         return ClockResult::Ok;
     }
+    ClockResult NativeAnimationBlockMemory::ReadName(const NativeAnimationBlockIdentity& identity, char*& output) const noexcept
+    {
+        // Owner checks can invoke callbacks before returning. Capture the
+        // caller's complete identity once so those callbacks cannot redirect
+        // the eventual address to an index that was never validated.
+        const auto                 expected = identity;
+        NativeAnimationBlockValues observed;
+        const auto                 result = Read(expected, observed);
+        if (result != ClockResult::Ok)
+            return result;
+        if (identity.index != expected.index || identity.name != expected.name || identity.ownerGeneration != expected.ownerGeneration)
+            return ClockResult::BindingChanged;
+        // Read already proved current count/index/copied name, writable native
+        // MEM_IMAGE storage and callback/GameThread/GC/state identity twice.
+        // No native operation intervenes before publishing that exact address.
+        // The caller borrows mutable native storage only for this callback;
+        // changing it will invalidate future reads through the old identity.
+        output = reinterpret_cast<char*>(binding.image + NativeAnimationBlockProfile::BankRva +
+                                         static_cast<std::uintptr_t>(expected.index) * NativeAnimationBlockProfile::RowBytes);
+        return ClockResult::Ok;
+    }
+
 }

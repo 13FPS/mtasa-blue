@@ -25,6 +25,18 @@ namespace mta::game_de
             throw std::runtime_error("DE animation block owner returned another or unrepresentable index");
         return value;
     }
+    char* CAnimBlockDE::GetName()
+    {
+        char*      value = nullptr;
+        const auto result = native.ReadAnimationBlockName(identity, value);
+        if (result != ClockResult::Ok)
+            throw std::runtime_error("DE animation block owner refused GetName: " + std::to_string(static_cast<unsigned>(result)));
+        if (!value)
+            throw std::runtime_error("DE animation block owner returned no native name");
+        // Preserve actual SDK mutable pointer intent. Copying into the wrapper
+        // would falsely hide native edits and invent a longer-lived name.
+        return value;
+    }
     int CAnimBlockDE::GetIndex()
     {
         return static_cast<int>(Read("GetIndex").index);

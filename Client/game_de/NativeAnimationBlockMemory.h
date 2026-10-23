@@ -16,6 +16,9 @@ namespace mta::game_de
         static bool Qualify(Binding&) noexcept;
         static bool Revalidate(const Binding&) noexcept;
         ClockResult Read(const NativeAnimationBlockIdentity&, NativeAnimationBlockValues&) const noexcept;
+        // Returning an immediate address does not freeze native name contents or
+        // callback lifetime. The runtime also checks CPU generation at commit.
+        ClockResult ReadName(const NativeAnimationBlockIdentity&, char*&) const noexcept;
 
     private:
         Binding binding;

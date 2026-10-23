@@ -37,6 +37,7 @@
 #include "NativePedWaterTaskReader.h"
 #include "NativePedOrientationMemory.h"
 #include "NativeAnimationBlockMemory.h"
+#include "NativeAnimationManagerMemory.h"
 #include "NativePedVelocityMemory.h"
 #include "NativePedReferenceController.h"
 #include "NativePedVitalsMemory.h"
@@ -204,6 +205,9 @@ namespace mta::game_de
             ClockResult SetPedCenterOfMass(const NativePedReferenceToken&, const CVector&) noexcept override;
             ClockResult SetPedOrientation(const NativePedReferenceToken&, const CVector&) noexcept override;
             ClockResult ReadAnimationBlock(const NativeAnimationBlockIdentity&, NativeAnimationBlockValues&) noexcept override;
+            ClockResult ReadAnimationBlockName(const NativeAnimationBlockIdentity&, char*&) noexcept override;
+            ClockResult ReadAnimationManagerCounts(std::uint64_t, NativeAnimationManagerCounts&) noexcept override;
+            ClockResult FindAnimationBlockIndex(std::uint64_t, const NativeAnimationBlockName&, std::int32_t&) noexcept override;
             ClockResult ReadPedInWater(const NativePedReferenceToken&, bool&) noexcept override;
             ClockResult SetPedInWaterFlags(const NativePedReferenceToken&, bool) noexcept override;
             ClockResult SetReferencedPedPosition(const NativePedReferenceToken&, const CVector&) noexcept override;
@@ -3518,6 +3522,78 @@ namespace mta::game_de
             // Read-only refusal preserves the entire caller value and leaves
             // this runtime usable. No native effect or block ownership exists
             // to replay, restore or retire through a second registry.
+            output = next;
+            return ClockResult::Ok;
+        }
+
+        ClockResult NativeAccess::ReadAnimationBlockName(const NativeAnimationBlockIdentity& expected, char*& output) noexcept
+        {
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto generation = runtime.generation.load();
+            const auto identity = expected;
+            if (!identity.ownerGeneration || identity.ownerGeneration != generation)
+                return ClockResult::OwnerConflict;
+            char* next = nullptr;
+            result = NativeAnimationBlockMemory({runtime.image}, &CheckTimingOwner).ReadName(identity, next);
+            if (result != ClockResult::Ok)
+                return result;
+            if ((result = CheckTimingOwner()) != ClockResult::Ok)
+                return result;
+            if (expected.ownerGeneration != generation || runtime.generation.load() != generation || expected.index != identity.index ||
+                expected.name != identity.name)
+                return ClockResult::OwnerConflict;
+            // This is the actual mutable native MEM_IMAGE name, borrowed only
+            // until another native operation or the callback ends. No copy,
+            // stable-name guarantee, reference lease or cleanup debt exists.
+            // Read-only refusal never stops an otherwise usable runtime.
+            output = next;
+            return ClockResult::Ok;
+        }
+
+        ClockResult NativeAccess::ReadAnimationManagerCounts(std::uint64_t ownerGeneration, NativeAnimationManagerCounts& output) noexcept
+        {
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto generation = runtime.generation.load();
+            if (!ownerGeneration || ownerGeneration != generation)
+                return ClockResult::OwnerConflict;
+            NativeAnimationManagerCounts next;
+            result = NativeAnimationManagerMemory({runtime.image}, &CheckTimingOwner).ReadCounts(next);
+            if (result != ClockResult::Ok)
+                return result;
+            if ((result = CheckTimingOwner()) != ClockResult::Ok)
+                return result;
+            if (runtime.generation.load() != generation)
+                return ClockResult::OwnerConflict;
+            // These signed native counters are observations, not a fabricated
+            // loaded-block sum or permission to publish hierarchy pointers.
+            output = next;
+            return ClockResult::Ok;
+        }
+
+        ClockResult NativeAccess::FindAnimationBlockIndex(std::uint64_t ownerGeneration, const NativeAnimationBlockName& query, std::int32_t& output) noexcept
+        {
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto generation = runtime.generation.load();
+            const auto copied = query;
+            if (!ownerGeneration || ownerGeneration != generation)
+                return ClockResult::OwnerConflict;
+            std::int32_t next = -1;
+            result = NativeAnimationManagerMemory({runtime.image}, &CheckTimingOwner).FindBlockIndex(copied, next);
+            if (result != ClockResult::Ok)
+                return result;
+            if ((result = CheckTimingOwner()) != ClockResult::Ok)
+                return result;
+            if (runtime.generation.load() != generation || query != copied)
+                return ClockResult::OwnerConflict;
+            // A genuine first-match or missing-name -1 is distinct from owner
+            // refusal. Both paths preserve caller output until every fence;
+            // neither needs a second block registry, native call or Stop.
             output = next;
             return ClockResult::Ok;
         }

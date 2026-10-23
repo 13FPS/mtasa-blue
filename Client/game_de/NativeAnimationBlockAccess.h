@@ -29,6 +29,9 @@ namespace mta::game_de
     {
     public:
         virtual ~NativeAnimationBlockAccess() = default;
+        // Borrow within the freshly admitted current callback.
+        // This is the actual mutable image-bank name, not a stable CPU copy.
+        virtual ClockResult ReadAnimationBlockName(const NativeAnimationBlockIdentity&, char*&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult ReadAnimationBlock(const NativeAnimationBlockIdentity&, NativeAnimationBlockValues&) noexcept
         {
             return ClockResult::NotInitialized;

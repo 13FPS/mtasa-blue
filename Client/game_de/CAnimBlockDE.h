@@ -13,6 +13,7 @@ namespace mta::game_de
     class CAnimBlockDE : public CAnimBlock
     {
     public:
+        char*       GetName() override;
         int         GetIndex() override;
         bool        IsLoaded() override;
         int         GetIDOffset() override;
@@ -26,7 +27,7 @@ namespace mta::game_de
         NativeAnimationBlockAccess&        native;
         const NativeAnimationBlockIdentity identity;
     };
-    // Borrowed writable names, native refs/requests and classic raw interfaces
-    // still require their real contracts. Metadata is not a complete factory.
+    // Native refs/requests and classic raw interfaces still require their real
+    // contracts. A borrowed name and metadata are not a complete factory.
     static_assert(std::is_abstract_v<CAnimBlockDE> && std::is_base_of_v<CAnimBlock, CAnimBlockDE>);
 }

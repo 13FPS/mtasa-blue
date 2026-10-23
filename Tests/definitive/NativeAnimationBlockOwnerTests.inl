@@ -78,7 +78,7 @@ namespace
         timingCallbackGeneration = generation;
     }
 
-    void NativeAnimationBlocksOwnedSdk(ClockImageFixture& fixture)
+    void NativeAnimationBlocksOwnedSdk(ClockImageFixture& fixture, void (*preparedOwner)(ClockImageFixture&) = nullptr)
     {
         namespace P = NativeAnimationBlockProfile;
         struct Saved
@@ -148,6 +148,28 @@ namespace
         ClockReaderTestHost::image = fixture.image;
         ClockAnimationOwnerTest::row = fixture.image + P::BankRva;
 
+        // New focused services can reuse exact native admission/restoration
+        // without executing or claiming the historical metadata assertions.
+        const auto restore = [&]
+        {
+            ClockAnimationOwnerTest::row = ClockAnimationOwnerTest::changedAddress = 0;
+            ClockAnimationOwnerTest::identity = nullptr;
+            ClockAnimationOwnerTest::afterRead = nullptr;
+            ClockAnimationOwnerTest::failNext = false;
+            for (auto it = saved.rbegin(); it != saved.rend(); ++it)
+            {
+                fixture.Patch(it->rva, it->bytes.data(), it->bytes.size());
+                DWORD ignored = 0;
+                Check(::VirtualProtect(reinterpret_cast<void*>(fixture.image + it->rva), it->bytes.size(), it->protection, &ignored) != FALSE,
+                      "restore only this task's bounded fixture bytes/pages after actual owner retirement");
+            }
+        };
+        if (preparedOwner)
+        {
+            preparedOwner(fixture);
+            restore();
+            return;
+        }
         struct AnimationOwnerSdk final : CAnimBlockDE
         {
             AnimationOwnerSdk(NativeAnimationBlockAccess& access, const NativeAnimationBlockIdentity& identity) : CAnimBlockDE(access, identity) {}
@@ -350,17 +372,7 @@ namespace
         context.output = sentinel;
         Check(runtime.access.ReadAnimationBlock(context.identity, context.output) != ClockResult::Ok && SameAnimationValues(context.output, sentinel),
               "End removes callback authority while leaving caller-owned immutable identities untouched");
-        ClockAnimationOwnerTest::row = ClockAnimationOwnerTest::changedAddress = 0;
-        ClockAnimationOwnerTest::identity = nullptr;
-        ClockAnimationOwnerTest::afterRead = nullptr;
-        ClockAnimationOwnerTest::failNext = false;
-        for (auto it = saved.rbegin(); it != saved.rend(); ++it)
-        {
-            fixture.Patch(it->rva, it->bytes.data(), it->bytes.size());
-            DWORD ignored = 0;
-            Check(::VirtualProtect(reinterpret_cast<void*>(fixture.image + it->rva), it->bytes.size(), it->protection, &ignored) != FALSE,
-                  "restore only this task's bounded fixture bytes/pages after actual owner retirement");
-        }
+        restore();
         std::puts("Production native animation block callback owner fixture completed");
         std::puts("Production actual animation block SDK callback fixture completed");
     }

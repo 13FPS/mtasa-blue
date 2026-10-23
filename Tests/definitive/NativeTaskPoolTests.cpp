@@ -3,9 +3,12 @@
  * LICENSE: See LICENSE in the repository root
  * PURPOSE: Actual immediate task-bank reads on owned image and native-sized pages
  ****************************************************************************/
+#pragma push_macro("main")
+#undef main
 #define main NativeTaskPoolTransformFixtureMain
 #include "NativePedTransformReaderTests.cpp"
 #undef main
+#pragma pop_macro("main")
 #include "../../Client/game_de/NativeTaskPoolReader.h"
 #include "../../Client/game_de/NativeTaskPoolProfile.h"
 #include <thread>

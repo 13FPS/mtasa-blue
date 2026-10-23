@@ -5,9 +5,12 @@
  ****************************************************************************/
 // Reuse the existing checked image, real pool and selected-matrix fixture.
 // Renaming main does not execute that suite or bypass its shipping readers.
+#pragma push_macro("main")
+#undef main
 #define main NativePedTransformFixtureMain
 #include "NativePedTransformReaderTests.cpp"
 #undef main
+#pragma pop_macro("main")
 #include "../../Client/game_de/NativePedTeleportMemory.h"
 #include "../../Client/game_de/NativePedTeleportProfile.h"
 
@@ -76,6 +79,7 @@ namespace TeleportTestHost
 #define GetModuleHandleW  PoolTestHost::Module
 #include "../../Client/game_de/NativeGameStateMemory.cpp"
 #include "../../Client/game_de/NativeStartGameCalls.cpp"
+#include "../../Client/game_de/NativePedPoseContext.cpp"
 #define MTA_DE_PED_TELEPORT_NATIVE_INVOKE TeleportTestHost::Invoke
 #include "../../Client/game_de/NativePedTeleportMemory.cpp"
 #undef MTA_DE_PED_TELEPORT_NATIVE_INVOKE

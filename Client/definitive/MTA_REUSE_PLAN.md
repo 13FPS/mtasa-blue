@@ -294,6 +294,16 @@ reconnect behavior; exceptions propagate with their applied prefix. The typed
 renderer initialization stays outside the common renderer interface. This does
 not establish numeric garage mapping or publish a complete `CGame`.
 
+Their special-character and broken-model stages also consume the same ordered
+44 named assignments and two collision substitutions. Classic retains its
+direct model-array receiver and conditional collision-pointer copy. DE calls
+the actual `CModelInfo::MakePedModel` on a mandatory qualified startup receiver;
+the collision hook must preserve the conditional borrowed-pointer semantics.
+The native IDE ped-metadata publisher has been identified, but its typed-row
+construction, capacity, occupied-key retirement and collision ownership remain
+unqualified. A special-model streaming request does not replace that creation
+contract, and these stages cannot be overridden with whole-stage no-ops.
+
 `CGameTimingDE::GetGravity` also reads the current qualified native downward
 acceleration operand through the existing timing-reader binding. It preserves
 finite binary32 values and refuses changed image/code/read prerequisites.
@@ -402,8 +412,25 @@ seat state rather than borrowing an uninitialized classic value.
 native construction, buoyancy and query consumers qualify the submerged and
 touching bits. One masked conditional write preserves every neighboring flag,
 with accepted effects retained on failed acknowledgement by the existing token
-owner. MTA's `IsInWater` instead inspects its primary task and remains pure;
-GTA's script flag query does not supply that task-based SDK behavior.
+owner. The distinct `IsInWater` getter follows MTA's primary-task predicate:
+the existing immutable ped token admits a fresh intelligence/primary-2/task
+observation, and the qualified water task has native type 268. A qualified null
+or known non-water task returns false; an unknown class or changed owner refuses
+the read rather than guessing from the physical flags. Native deletion can
+precede manager-cell and pool-flag clearing, so this immediate observation does
+not publish a task wrapper or lifetime lease. Recognizing 268 for reading also
+does not expand secondary-task deletion: that path still explicitly admits
+only the previously qualified 203 and 305 classes.
+
+`CPedOrientationDE` forwards MTA's three original radians through that same
+registered ped owner. The genuine DE route removes world membership, applies
+native Euler orientation, then updates the actor/component and adds world
+membership again. Every phase freshly qualifies the resulting graph; legitimate
+list retirement and republication do not require stale list identities to stay
+alive. Failed entered phases retain their effects and stop without replay or
+compensating Add. Orientation shares the placement/Teleport reentry gate and
+preserves the existing matrix-required Teleport route. It does not implement
+arbitrary `SetMatrix`, target rotation or last-good physics repair.
 
 `CPedFlagsDE` adds MTA's existing vehicle shooting-permission and bike
 knockoff accessors on that same registered lifetime. Independently named native

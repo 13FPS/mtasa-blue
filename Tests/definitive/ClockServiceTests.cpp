@@ -20,8 +20,13 @@
 #include "../../Client/game_de/NativePedTransformReader.h"
 #include "../../Client/game_de/NativePedTransformProfile.h"
 #include "../../Client/game_de/NativePedWaterFlagsMemory.h"
+#include "../../Client/game_de/NativePedWaterTaskReader.h"
+#include "../../Client/game_de/NativePedWaterTaskProfile.h"
 #include "../../Client/game_de/NativePedWaterFlagsProfile.h"
 #include "../../Client/game_de/CPedWaterDE.h"
+#include "../../Client/game_de/CPedOrientationDE.h"
+#include "../../Client/game_de/NativePedOrientationMemory.h"
+#include "../../Client/game_de/NativePedOrientationProfile.h"
 #include "../../Client/game_de/NativePedPlacementMemory.h"
 #include "../../Client/game_de/NativePedPoseMutation.h"
 #include "../../Client/game_de/CPedPoseDE.h"
@@ -167,6 +172,17 @@ namespace ped_water_fixture
     }
 }
 #include "PedWaterFixture.generated.h"
+namespace ped_orientation_fixture
+{
+    // The generated rejecting methods need the same named diagnostic in the
+    // combined owner fixture as in the standalone orientation SDK fixture.
+    [[noreturn]] inline void Unqualified(const char* method) noexcept
+    {
+        std::fprintf(stderr, "Unqualified orientation fixture SDK call: %s\n", method);
+        std::abort();
+    }
+}
+#include "PedOrientationFixture.generated.h"
 
 namespace ClockModelClassificationOwnerTest
 {
@@ -1108,6 +1124,69 @@ namespace ClockPedVelocityOwnerTest
     }
 }
 
+namespace ClockPedOrientationOwnerTest
+{
+    using Memory = mta::game_de::NativePedOrientationMemory;
+    unsigned                      calls = 0, failAt = 0;
+    std::uintptr_t                cell = 0;
+    bool                          loseOnAdd = false;
+    std::array<Memory::Phase, 3>  phases{};
+    std::array<std::uintptr_t, 3> entries{}, receivers{};
+    std::array<CVector, 3>        arguments{};
+    std::function<void()>         afterRemove;
+    void                          Reset()
+    {
+        calls = failAt = 0;
+        cell = 0;
+        loseOnAdd = false;
+        phases = {};
+        entries = {};
+        receivers = {};
+        arguments = {};
+        afterRemove = {};
+    }
+    mta::game_de::ClockResult Invoke(Memory::Phase phase, const Memory::Entries& functions, void* ped, const CVector& angles, std::uint32_t& exception) noexcept
+    {
+        const auto index = calls++;
+        if (index >= phases.size())
+            std::abort();
+        phases[index] = phase;
+        receivers[index] = reinterpret_cast<std::uintptr_t>(ped);
+        arguments[index] = angles;
+        entries[index] = phase == Memory::Phase::Remove   ? reinterpret_cast<std::uintptr_t>(functions.remove)
+                         : phase == Memory::Phase::Rotate ? reinterpret_cast<std::uintptr_t>(functions.rotate)
+                                                          : reinterpret_cast<std::uintptr_t>(functions.add);
+        if (phase == Memory::Phase::Remove && afterRemove)
+        {
+            const auto action = std::move(afterRemove);
+            afterRemove = {};
+            action();
+        }
+        if (phase == Memory::Phase::Rotate)
+        {
+            std::uintptr_t matrix = 0;
+            std::memcpy(&matrix, static_cast<unsigned char*>(ped) + 0x18, sizeof(matrix));
+            // This is an accepted-prefix marker at the final call seam, not
+            // an emulation of native trig or a claim of rendered GTA output.
+            if (matrix)
+                std::memcpy(reinterpret_cast<void*>(matrix), &angles, sizeof(angles));
+            else
+                std::memcpy(static_cast<unsigned char*>(ped) + 0x14, &angles.fZ, sizeof(float));
+        }
+        if (phase == Memory::Phase::Add && loseOnAdd)
+        {
+            const std::uintptr_t zero = 0;
+            std::memcpy(reinterpret_cast<void*>(cell), &zero, sizeof(zero));
+        }
+        if (failAt && calls == failAt)
+        {
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return mta::game_de::ClockResult::OriginalException;
+        }
+        return mta::game_de::ClockResult::Ok;
+    }
+}
+
 namespace ClockPedTeleportOwnerTest
 {
     using Memory = mta::game_de::NativePedTeleportMemory;
@@ -1827,9 +1906,13 @@ namespace mta::game_de::NativeImageAccess
 #define GetModuleHandleW ClockReaderTestHost::Module
 #include "../../Client/game_de/NativePedPoolReader.cpp"
 #include "../../Client/game_de/NativePedTransformReader.cpp"
+#include "../../Client/game_de/NativePedPoseContext.cpp"
 #define MTA_DE_PED_TELEPORT_NATIVE_INVOKE ClockPedTeleportOwnerTest::Invoke
 #include "../../Client/game_de/NativePedTeleportMemory.cpp"
 #undef MTA_DE_PED_TELEPORT_NATIVE_INVOKE
+#define MTA_DE_PED_ORIENTATION_NATIVE_INVOKE ClockPedOrientationOwnerTest::Invoke
+#include "../../Client/game_de/NativePedOrientationMemory.cpp"
+#undef MTA_DE_PED_ORIENTATION_NATIVE_INVOKE
 #pragma push_macro("InterlockedCompareExchange")
 #ifdef InterlockedCompareExchange
     #undef InterlockedCompareExchange
@@ -1923,6 +2006,7 @@ namespace mta::game_de::NativeImageAccess
 #undef MTA_DE_PED_PHYSICAL_SCALARS_EXCHANGE
 #define MTA_DE_PED_WATER_FLAGS_EXCHANGE ClockPedWaterOwnerTest::Exchange
 #include "../../Client/game_de/NativePedWaterFlagsMemory.cpp"
+#include "../../Client/game_de/NativePedWaterTaskReader.cpp"
 #undef MTA_DE_PED_WATER_FLAGS_EXCHANGE
 #define MTA_DE_PED_PLACEMENT_EXCHANGE ClockPedPhysicalScalarsOwnerTest::Exchange
 #include "../../Client/game_de/NativePedPlacementMemory.cpp"
@@ -6650,7 +6734,8 @@ int main(int argc, char** argv)
     const bool currentWeaponOnly = argc == 3 && std::strcmp(argv[2], "--ped-current-weapon") == 0;
     const bool garageNamedOnly = argc == 3 && std::strcmp(argv[2], "--garage-named") == 0;
     const bool garagePoolsOnly = argc == 3 && std::strcmp(argv[2], "--garage-pools") == 0;
-    const bool waterOnly = argc == 3 && std::strcmp(argv[2], "--ped-water") == 0;
+    const bool orientationWithWater = argc == 3 && std::strcmp(argv[2], "--ped-water-orientation") == 0;
+    const bool waterOnly = orientationWithWater || (argc == 3 && std::strcmp(argv[2], "--ped-water") == 0);
     const bool poseOnly = argc == 3 && std::strcmp(argv[2], "--ped-pose") == 0;
     const bool poolRegistryOnly = argc == 3 && std::strcmp(argv[2], "--ped-pool-registry") == 0;
     Check((argc == 2 || constructorOnly || pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly || poseOnly ||
@@ -6676,7 +6761,7 @@ int main(int argc, char** argv)
         // constructor and garage receipts stay separate historical evidence.
         ClockImageFixture fixture;
         fixture.Create(argv[1]);
-        NativePedPhysicalScalarsOwnedSdk(fixture, false, false, false, true);
+        NativePedPhysicalScalarsOwnedSdk(fixture, false, false, false, true, orientationWithWater);
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }

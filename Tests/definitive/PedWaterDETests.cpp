@@ -45,7 +45,8 @@ namespace
                       NativePedFightingStyleAccess,
                       NativePedCurrentWeaponSlotAccess,
                       NativePedPlacementAccess,
-                      NativePedWaterFlagsAccess
+                      NativePedWaterFlagsAccess,
+                      NativePedWaterTaskAccess
     {
     };
     struct Owner final : Accesses
@@ -54,7 +55,17 @@ namespace
         bool                    value = false;
         unsigned                calls = 0;
         ClockResult             result = ClockResult::Ok;
-        ClockResult             SetPedInWaterFlags(const NativePedReferenceToken& token, bool target) noexcept override
+        bool                    queryValue = false;
+        unsigned                queryCalls = 0;
+        ClockResult             ReadPedInWater(const NativePedReferenceToken& token, bool& output) noexcept override
+        {
+            ++queryCalls;
+            observed = token;
+            if (result == ClockResult::Ok)
+                output = queryValue;
+            return result;
+        }
+        ClockResult SetPedInWaterFlags(const NativePedReferenceToken& token, bool target) noexcept override
         {
             ++calls;
             observed = token;
@@ -72,9 +83,9 @@ int main()
         Owner                              owner;
         const NativePedReferenceToken      token{0xfedcba9876543210ULL, 0x123456789abcdef0ULL, 17};
         ped_water_fixture::PedWaterFixture ped(game, owner, owner, owner, owner, owner, owner, owner, owner, owner, owner, owner, owner, owner, owner, owner,
-                                               token, 0x12345678);
+                                               owner, token, 0x12345678);
         CPed&                              sdk = ped;
-        Check(!owner.calls && sdk.GetType() == 0x12345678 && sdk.GetCustomMoveAnim() == 0,
+        Check(!owner.calls && !owner.queryCalls && sdk.GetType() == 0x12345678 && sdk.GetCustomMoveAnim() == 0,
               "water layer preserves the actual Stats/Pose chain and required borrowed game without constructor native I/O");
         for (bool enabled : {false, true, true, false})
         {
@@ -84,11 +95,31 @@ int main()
                       owner.observed.ownerGeneration == token.ownerGeneration && owner.observed.slot == token.slot,
                   "actual CPed virtual setter forwards the immutable token and one bool without a task/script query or CPU cache");
         }
+        for (const bool value : {false, true, true, false})
+        {
+            owner.queryValue = value;
+            const auto  before = owner.queryCalls;
+            const CPed& observed = sdk;
+            Check(observed.IsInWater() == value && owner.queryCalls == before + 1 && owner.observed.version == token.version &&
+                      owner.observed.ownerGeneration == token.ownerGeneration && owner.observed.slot == token.slot,
+                  "actual const CPed getter forwards the immutable token once, preserves either qualified bool and never reads physical flag cache");
+        }
         for (const auto result :
              {ClockResult::NotInitialized, ClockResult::WrongThread, ClockResult::Expired, ClockResult::BindingChanged, ClockResult::UnsupportedBuild,
               ClockResult::OwnerConflict, ClockResult::WriteFailure, ClockResult::OriginalException, ClockResult::Stopped, ClockResult::Busy})
         {
             owner.result = result;
+            const auto queries = owner.queryCalls;
+            bool       queryRefused = false;
+            try
+            {
+                (void)sdk.IsInWater();
+            }
+            catch (const std::runtime_error&)
+            {
+                queryRefused = true;
+            }
+            Check(queryRefused && owner.queryCalls == queries + 1, "every refused task observation throws instead of fabricating SDK false");
             const auto before = owner.calls;
             bool       refused = false;
             try
@@ -104,7 +135,7 @@ int main()
         }
         Accesses                           absent;
         ped_water_fixture::PedWaterFixture unavailable(game, absent, absent, absent, absent, absent, absent, absent, absent, absent, absent, absent, absent,
-                                                       absent, absent, absent, token, 2);
+                                                       absent, absent, absent, absent, token, 2);
         bool                               refused = false;
         try
         {
@@ -115,6 +146,17 @@ int main()
             refused = true;
         }
         Check(refused, "default access cannot invent a water setter or read a different current player");
+        refused = false;
+        try
+        {
+            (void)unavailable.IsInWater();
+        }
+        catch (const std::runtime_error&)
+        {
+            refused = true;
+        }
+        Check(refused, "default access cannot invent a successful absent-water task observation");
+        std::puts("Production MTA ped primary water task SDK fixture completed");
         std::puts("Production MTA ped physical water SDK fixture completed");
         std::printf("Passed %u actual CPed water SDK checks (%zu-bit)\n", checks, sizeof(void*) * 8);
         return 0;

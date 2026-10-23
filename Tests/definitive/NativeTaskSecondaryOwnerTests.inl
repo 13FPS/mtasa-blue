@@ -179,7 +179,9 @@ namespace
             invoke();
             Check(context.result == ClockResult::Ok && !ClockTaskRemovalOwnerTest::calls && !runtime.stopping.load(),
                   "an empty manager cell acknowledges a no-op without fabricating native deletion entry");
-            for (std::size_t kind = 0; kind < T::Slots.size(); ++kind)
+            // Reader-only classes cannot enlarge the original destructive
+            // capability merely by extending its immutable read whitelist.
+            for (std::size_t kind = 0; kind < 2; ++kind)
             {
                 context.index = kind ? 5 : 0;
                 const auto task = installTask(context.index, kind, kind + 7);
@@ -192,6 +194,16 @@ namespace
                       "actual callback routes both bounded native task classes through the exact manager/index ABI and acknowledges deletion-before-clear");
                 Check(task != 0, "accepted task addresses were real owned pool rows rather than SDK wrappers");
             }
+            const auto readOnlyTask = installTask(0, 2, 9);
+            context.index = 0;
+            const auto calls = ClockTaskRemovalOwnerTest::calls;
+            invoke();
+            Check(context.result == ClockResult::UnsupportedBuild && ClockTaskRemovalOwnerTest::calls == calls && slotWord(0) == readOnlyTask &&
+                      !(tasks.flags[9] & T::EmptyBit) && !runtime.stopping.load(),
+                  "read-only water268 refuses before native deletion while the same admitted owner remains usable");
+            // Retire the fixture's CPU association without pretending to have
+            // deleted a real task or restoring an earlier task snapshot.
+            ClockPedReferenceOwnerTest::Put(secondary(0), std::uintptr_t{0});
             const auto deletions = ClockTaskRemovalOwnerTest::deletions;
             retire(service);
             Check(ClockTaskRemovalOwnerTest::deletions == deletions && !slotWord(0) && !slotWord(5),

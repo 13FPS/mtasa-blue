@@ -373,6 +373,16 @@ int main(int argc, char** argv)
                           passedManager == fixture.IntelligenceAddress() + I::ManagerOffset,
                       "all six secondary slots remove each exact class via one real-ABI boundary with native generation-zero/final-row admission");
             }
+    {
+        const auto ped = reset(0, 0, 2);
+        const auto oldTask = fixture.Cell(0);
+        const auto flag = fixture.tasks.flags[0];
+        R::Receipt receipt;
+        Check(R::RemoveSecondary(fixture.transform.image.image, ped, 0, &PoolTestHost::Owner, &receipt, &InvokeRemoval) == ClockResult::UnsupportedBuild &&
+                  !receipt.entered && !receipt.returned && receipt.oldTaskType == 268 && !removalCalls && fixture.Cell(0) == oldTask &&
+                  fixture.tasks.flags[0] == flag,
+              "new read-only water268 qualification never broadens the old203/305 native deletion capability");
+    }
     auto ped = reset();
     fixture.intelligence.Store(17, I::SecondaryOffset, std::uintptr_t{0});
     fixture.Global(TP::RootRva, std::uintptr_t{0});

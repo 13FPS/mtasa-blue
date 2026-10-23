@@ -67,7 +67,7 @@
                 call.action = [&](NativeGameTimingAccess& access)
                 {
                     ped_water_fixture::PedWaterFixture ped(game, access, access, access, access, access, access, access, access, access, access, access, access,
-                                                           access, access, access, token, 0x12345678);
+                                                           access, access, access, access, token, 0x12345678);
                     CPed&                              sdk = ped;
                     try
                     {
@@ -163,6 +163,7 @@
                   ClockPedReferenceOwnerTest::unregisters == unlinks,
               "proved native address retirement completes without changing accepted physical water state");
     }
+#include "NativePedWaterTaskOwnerTests.inl"
     ClockPedWaterOwnerTest::failAfter = false;
     ClockPedPhysicalScalarsOwnerTest::failAt = ClockPedPhysicalScalarsOwnerTest::loseAt = 0;
     std::puts("Production native ped physical water callback owner fixture completed");

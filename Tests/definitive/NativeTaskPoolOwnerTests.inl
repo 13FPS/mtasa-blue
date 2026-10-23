@@ -68,7 +68,7 @@ namespace
         admit(NativeBorrowedGcProfile::markerRva, &marker, sizeof(marker), PAGE_READWRITE);
         ClockTeleportPool tasks(fixture, T::RootRva, T::NativeCapacity, T::ObjectStride);
         tasks.Publish();
-        const std::array<std::size_t, 2> indexes{0, 7};
+        const std::array<std::size_t, T::Slots.size()> indexes{0, 7, 13};
         for (std::size_t i = 0; i != T::Slots.size(); ++i)
         {
             tasks.flags[indexes[i]] = static_cast<unsigned char>(3 + i);

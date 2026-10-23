@@ -6,6 +6,8 @@
 #include "CGameInitializationDE.h"
 #include <game/CGarages.h>
 #include <game/CGameInitializationPolicy.h>
+#include <game/CGameModelPreparationPolicy.h>
+#include <game/CModelInfo.h>
 #include <stdexcept>
 
 namespace mta::game_de
@@ -24,5 +26,17 @@ namespace mta::game_de
                 garages->Initialize();
             },
             [this] { SetupSpecialCharacters(); }, [this] { SetupBrokenModels(); }, [this] { InitializeRenderer(); }, [this] { HideNativeMenu(); });
+    }
+
+    void CGameInitializationDE::SetupSpecialCharacters()
+    {
+        MtaGame::CGameModelPreparationPolicy::SetupSpecialCharacters([this](std::uint32_t model, const char* name)
+                                                                     { ResolveStartupPedModel(model).MakePedModel(name); });
+    }
+
+    void CGameInitializationDE::SetupBrokenModels()
+    {
+        MtaGame::CGameModelPreparationPolicy::SetupBrokenModels([this](std::uint32_t target, std::uint32_t source)
+                                                                { FixStartupModelCollision(target, source); });
     }
 }

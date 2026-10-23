@@ -7,6 +7,7 @@
 
 #include "CGameDE.h"
 #include <type_traits>
+#include <cstdint>
 
 namespace mta::game_de
 {
@@ -27,8 +28,19 @@ namespace mta::game_de
         // renderer and native menu readiness. This is not a cached lease:
         // each later effect still retains its own current owner checks.
         virtual void RequireInitializationReady() = 0;
-        virtual void SetupSpecialCharacters() = 0;
-        virtual void SetupBrokenModels() = 0;
+        void         SetupSpecialCharacters();
+        void         SetupBrokenModels();
+
+        // The qualified backend resolves the selected SDK facade even when
+        // its native slot must be created/replaced by MakePedModel. Ordinary
+        // loaded/valid-model lookup cannot substitute for this operation.
+        // Reference lifetime and current owner remain backend obligations.
+        virtual CModelInfo& ResolveStartupPedModel(std::uint32_t model) = 0;
+
+        // Preserve FixModelCol's exact conditional borrowed-pointer copy,
+        // including a null source collision. Native collision identity and
+        // ownership must be qualified; SetColModel is a different policy.
+        virtual void FixStartupModelCollision(std::uint32_t target, std::uint32_t source) = 0;
         // Classic Initialize is a typed CRenderWareSA method, absent from the
         // common renderer SDK. Keep its qualified DE counterpart mandatory
         // instead of inventing a common virtual or a successful no-op.

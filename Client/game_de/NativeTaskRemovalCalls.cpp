@@ -117,6 +117,11 @@ namespace mta::game_de::NativeTaskRemovalCalls
         receipt.oldTaskSlot = task.slot;
         receipt.oldTaskType = task.nativeType;
         receipt.oldTaskGeneration = task.generation;
+        // The task reader also observes read-only water268. Read qualification
+        // is not deletion authority: preserve the original203/305 operation
+        // rather than silently expanding its destructive class contract.
+        if (task.nativeType != 203 && task.nativeType != 305)
+            return finish(ClockResult::UnsupportedBuild);
         if (!task.simple)
         {
             std::uintptr_t child = 0;

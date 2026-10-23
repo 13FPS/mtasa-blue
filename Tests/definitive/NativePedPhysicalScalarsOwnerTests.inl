@@ -114,7 +114,7 @@ namespace
         }
     }
     void NativePedPhysicalScalarsOwnedSdk(ClockImageFixture& fixture, bool currentWeaponOnly = false, bool poolRegistryOnly = false, bool poseOnly = false,
-                                          bool waterOnly = false)
+                                          bool waterOnly = false, bool orientationWithWater = false)
     {
         namespace S = NativePedPhysicalScalarsProfile;
         namespace R = NativePedReferenceProfile;
@@ -333,6 +333,10 @@ namespace
         if (waterOnly)
         {
 #include "NativePedWaterOwnerTests.inl"
+            if (orientationWithWater)
+            {
+#include "NativePedOrientationOwnerTests.inl"
+            }
         }
         if (poseOnly)
         {

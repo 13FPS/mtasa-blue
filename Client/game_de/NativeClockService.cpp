@@ -34,6 +34,8 @@
 #include "NativePedTeleportMemory.h"
 #include "NativePedPlacementMemory.h"
 #include "NativePedWaterFlagsMemory.h"
+#include "NativePedWaterTaskReader.h"
+#include "NativePedOrientationMemory.h"
 #include "NativePedVelocityMemory.h"
 #include "NativePedReferenceController.h"
 #include "NativePedVitalsMemory.h"
@@ -199,6 +201,8 @@ namespace mta::game_de
             ClockResult SetPedPhysicalScalar(const NativePedReferenceToken&, NativePedPhysicalScalarField, float) noexcept override;
             ClockResult ReadPedCenterOfMass(const NativePedReferenceToken&, CVector&) noexcept override;
             ClockResult SetPedCenterOfMass(const NativePedReferenceToken&, const CVector&) noexcept override;
+            ClockResult SetPedOrientation(const NativePedReferenceToken&, const CVector&) noexcept override;
+            ClockResult ReadPedInWater(const NativePedReferenceToken&, bool&) noexcept override;
             ClockResult SetPedInWaterFlags(const NativePedReferenceToken&, bool) noexcept override;
             ClockResult SetReferencedPedPosition(const NativePedReferenceToken&, const CVector&) noexcept override;
             ClockResult CompleteReferencedPedTeleport(const NativePedReferenceToken&, const CVector&) noexcept override;
@@ -3349,7 +3353,7 @@ namespace mta::game_de
         }
         ClockResult NativeAccess::ReadTaskPoolEntry(std::uintptr_t task, NativeTaskPoolReader::Value& output) noexcept
         {
-            // The exact same admitted callback qualifies the pool and its two
+            // The exact same admitted callback qualifies the pool and its three
             // known native implementations. Native deletion is inlined and
             // generation bits can wrap: this never publishes a cached CTask.
             return NativeTaskPoolReader({runtime.image}, &CheckTimingOwner).Read(task, output);
@@ -3461,6 +3465,64 @@ namespace mta::game_de
             if (receipt.entered && result != ClockResult::Ok)
                 Stop(result);
             return result;
+        }
+
+        ClockResult NativeAccess::SetPedOrientation(const NativePedReferenceToken& token, const CVector& radians) noexcept
+        {
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedPoolReader::Value before, after;
+            if ((result = ResolvePedReference(token, before)) != ClockResult::Ok)
+                return result;
+            NativePedOrientationMemory::Receipt receipt;
+            result = NativePedOrientationMemory({runtime.image}, &CheckTimingOwner).Apply(before.handle, radians, &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = ResolvePedReference(token, after);
+                if (result == ClockResult::Ok && (before.nativePed != after.nativePed || before.handle != after.handle))
+                    result = ClockResult::OwnerConflict;
+            }
+            // Any entered Remove/Euler/Add prefix may persist. Keep the same
+            // controller's original cells/debt; neither Add compensation nor
+            // phase replay, a heading-only store or CPU repair can replace it.
+            // Wrong/foreign/stale admission above never stops another owner.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+
+        ClockResult NativeAccess::ReadPedInWater(const NativePedReferenceToken& token, bool& output) noexcept
+        {
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedPoolReader::Value before, after;
+            if ((result = ResolvePedReference(token, before)) != ClockResult::Ok)
+                return result;
+            bool next = false;
+            result = NativePedWaterTaskReader({runtime.image}, &CheckTimingOwner).Read(before, next);
+            // Read-only unsupported classes are not false and do not stop an
+            // otherwise valid owner. There has been no native task effect.
+            if (result != ClockResult::Ok)
+                return result;
+            result = ResolvePedReference(token, after);
+            if (result == ClockResult::Ok &&
+                (before.nativePed != after.nativePed || before.handle != after.handle || before.pool != after.pool || before.objects != after.objects ||
+                 before.flags != after.flags || before.slot != after.slot || before.generation != after.generation || before.vtable != after.vtable ||
+                 before.firstMethod != after.firstMethod || before.capacity != after.capacity || before.cursor != after.cursor ||
+                 before.ownsAllocations != after.ownsAllocations))
+                result = ClockResult::OwnerConflict;
+            // Only this admitted runtime is retired after a successful raw
+            // observation loses its original token relation. Keep the caller
+            // bool and any native-visible reference-cell retirement debt.
+            if (result != ClockResult::Ok)
+            {
+                Stop(result);
+                return result;
+            }
+            output = next;
+            return ClockResult::Ok;
         }
 
         ClockResult NativeAccess::SetPedInWaterFlags(const NativePedReferenceToken& token, bool inWater) noexcept

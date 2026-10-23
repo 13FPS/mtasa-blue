@@ -1,6 +1,6 @@
 #!/usr/bin/env pwsh
 #requires -Version 7.0
-# Compile actual const CPed current-slot forwarding; selection mutation/lifecycle stay pure.
+# Compile actual task-based CPed water query and independent physical flag forwarding.
 [CmdletBinding()]
 param()
 
@@ -20,9 +20,9 @@ $record = [ordered]@{
     schema='mta_ped_water_de_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     generatedFixture=$null;result=$null;failure=$null;scratchDirectory=$scratchRoot;scratchRemoved=$false;
-    scope='Actual abstract CPedWeaponSelectionDE const current-slot getter over the same registered token. Preserve legal C++ eWeaponSlot values0..15 including13..15; larger raw bytes and native owner failures explicitly refuse before enum conversion, with one owner read and no cache, clamp, array indexing, current-selection write, complete ped factory or native engine execution.';
+    scope='Actual abstract CPedWaterDE task query and independent two-bit setter over one immutable registered token. Both qualified bool values survive; refused observations throw rather than fabricate false. No complete ped/task factory, lifetime lease or native engine execution.';
     nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;installationChanged=$false;
-    completeCGameReady=$false;fullMtaReady=$false;completePedReady=$false;completePoolsReady=$false;nativeRepairQualified=$false;actualPedWaterSdkTested=$false
+    completeCGameReady=$false;fullMtaReady=$false;completePedReady=$false;completePoolsReady=$false;nativeRepairQualified=$false;actualPedWaterSdkTested=$false;actualPedWaterTaskSdkTested=$false
 }
 
 function Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
@@ -78,6 +78,7 @@ try {
         'Shared/sdk/enums/PedPieceTypes.h','Shared/sdk/enums/EntityType.h','Shared/sdk/SharedUtil.Defines.h','Shared/sdk/CVector.h',
         'Shared/sdk/CVector4D.h','Shared/sdk/SharedUtil.IntTypes.h','Client/game_sa/CPedSA.h','Client/game_sa/CPedSA.cpp','Client/game_sa/CPlayerPedSA.cpp','Client/game_sa/CPoolsSA.cpp','Client/game_sa/CEntitySA.h','Client/game_sa/CEntitySA.cpp','Client/mods/deathmatch/logic/CClientPed.cpp','Tests/definitive/PedCombatDETests.cpp','Client/sdk/game/CPedFightingStylePolicy.h','Build/definitive-recovery/mta-native-ped-fighting-style-20261023/fighting-style-qualified.json')
     $sourceNames += @('Client/game_de/CPedWeaponSelectionDE.h','Client/game_de/NativePedCurrentWeaponSlotAccess.h','Tests/definitive/PedWaterDETests.cpp','Client/game_de/CPedWaterDE.h','Client/game_de/CPedPoseDE.h','Client/game_de/CPedWeaponStatsDE.h','Client/game_de/NativePedWaterFlagsAccess.h','Client/game_de/NativePedPlacementAccess.h','Client/sdk/game/CEntityPlacementPolicy.h','Client/sdk/game/CPedWeaponStatPolicy.h','Client/sdk/game/CGame.h','Tests/definitive/Write-PedWaterFixture.ps1')
+    $sourceNames += @('Client/game_de/NativePedWaterTaskAccess.h','Client/game_de/NativePedWaterTaskReader.h','Client/game_de/NativePedWaterTaskReader.cpp','Client/game_de/NativePedWaterTaskProfile.h')
     # Pin this actual runner so renaming a copied fixture cannot leave a
     # nonexistent source prerequisite before compilation starts.
     $sourceNames += [IO.Path]::GetRelativePath($taskRoot,$PSCommandPath).Replace('\','/')
@@ -129,7 +130,8 @@ try {
     $record.success = $record.result.test.exitCode -eq 0 -and -not $record.result.test.timedOut -and
         $record.result.checks -gt 0 -and $record.result.pointerBits -eq 64
     $record.actualPedWaterSdkTested = $record.success -and [IO.File]::ReadAllText($record.result.test.stdout).Contains('Production MTA ped physical water SDK fixture completed')
-    $record.success = $record.success -and $record.actualPedWaterSdkTested
+    $record.actualPedWaterTaskSdkTested = $record.success -and [IO.File]::ReadAllText($record.result.test.stdout).Contains('Production MTA ped primary water task SDK fixture completed')
+    $record.success = $record.success -and $record.actualPedWaterSdkTested -and $record.actualPedWaterTaskSdkTested
     if (-not $record.success) { throw 'Actual abstract CPed water SDK checks failed or summary evidence was missing.' }
 } catch { AddFailure ($_.Exception.ToString()) }
 finally {

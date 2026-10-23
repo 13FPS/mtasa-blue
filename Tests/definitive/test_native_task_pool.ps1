@@ -18,7 +18,7 @@ $record=[ordered]@{schema='mta_native_task_pool_tests_v1';success=$false;failure
     nativeEngineCodeExecuted=$false;nativePoolObservedInGta=$false;nativeTaskPoolPrimitiveTested=$false;
     gameLaunched=$false;gameAttached=$false;engineMemoryWritten=$false;hookInstalled=$false;
     completeGameReady=$false;completePoolsReady=$false;localPlayerRegistered=$false;taskObjectsObserved=$true;nativeTaskCallsExecuted=$false;nativeTaskLifetimeReady=$false;taskSdkPublished=$false;sourcesUnchanged=$true;scratch=$scratch;scratchFilesRemaining=$null;
-    scope='Immediate checked occupied task-bank identity for only two native ctor/vtables. Real supported-image/header/code/table checks, complete2500*A8 bank and flags, callback/native GT/no-GC/state9 and generation bookends. Native constant type/simple facts qualify through exact immutable method identities without executing any task function. Refused/changed/foreign contexts preserve all caller output. No SDK task, native allocation/deletion call, persistent lifetime lease, generic delete hook or broader task class is admitted.'}
+    scope='Immediate checked occupied task-bank identity for only three qualified native ctor/vtables. Real supported-image/header/code/table checks, complete2500*A8 bank and flags, callback/native GT/no-GC/state9 and generation bookends. Native constant type/simple facts qualify through exact immutable method identities without executing any task function. Refused/changed/foreign contexts preserve all caller output. No SDK task, native allocation/deletion call, persistent lifetime lease, generic delete hook or broader task class is admitted.'}
 function RunOwned([string]$exe,[string[]]$arguments,[string]$directory,[string]$label,[int]$timeout){
     $info=[Diagnostics.ProcessStartInfo]::new($exe)
     $info.WorkingDirectory=$directory;$info.UseShellExecute=$false;$info.CreateNoWindow=$true;$info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true
@@ -50,7 +50,8 @@ try{
         'Tests/definitive/NativePedTransformReaderTests.cpp','Tests/definitive/NativeTaskPoolTests.cpp','Tests/definitive/test_native_task_pool.ps1',
         'Build/definitive-recovery/mta-ped-pool-handle-batch-20261021/native-proof/ped-pool-qualified.json',
         'Build/definitive-recovery/mta-ped-transform-batch-20261021/native-proof/ped-transform-qualified.json',
-        'Build/definitive-recovery/mta-native-task-lifetime-proof-20261021/allocator-proof/task-pool-qualified.json')
+        'Build/definitive-recovery/mta-native-task-lifetime-proof-20261021/allocator-proof/task-pool-qualified.json',
+        'Build/definitive-recovery/mta-native-ped-water-task-20261023/ped-water-task-qualified.json')
     $record.sources=@($names|ForEach-Object{[ordered]@{path=$_;sha256=(Sha (Join-Path $root $_))}})
     $env:TEMP=$scratch;$env:TMP=$scratch
     $vswhere=Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'

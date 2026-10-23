@@ -27,8 +27,8 @@ namespace mta::game_de
         ClockResult Read(std::uintptr_t nativeTask, Value&) const noexcept;
         ClockResult Recheck(const Value&) const noexcept;
 
-        // Only the two constructors/vtables qualified by the common native
-        // ped setup are admitted. Values are synchronous opaque observations,
+        // Only the three constructors/vtables qualified by native ped setup
+        // and the exact water event response are admitted. Values are synchronous opaque observations,
         // never CTask/CTaskSAInterface pointers or a task lifetime lease. Native
         // deletion runs before manager cells and pool flags are cleared, and
         // seven-bit generations can wrap; caching this Value grants no later

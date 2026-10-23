@@ -12,6 +12,7 @@
 #pragma once
 
 #include <game/CGame.h>
+#include <game/CAircraftLimitsPolicy.h>
 
 #include "multiplayersa_init.h"
 #include "CLimitsSA.h"
@@ -327,15 +328,11 @@ public:
     virtual void SetLODSystemEnabled(bool bEnable);
     virtual void SetAltWaterOrderEnabled(bool bEnable);
 
-    float GetAircraftMaxHeight() { return m_fAircraftMaxHeight; };
-    void  SetAircraftMaxHeight(float fHeight) { m_fAircraftMaxHeight = fHeight; };
+    float GetAircraftMaxHeight() { return MtaGame::CAircraftLimitsPolicy::GetMaxHeight(m_aircraftLimits); };
+    void  SetAircraftMaxHeight(float fHeight) { MtaGame::CAircraftLimitsPolicy::SetMaxHeight(m_aircraftLimits, fHeight); };
 
-    float GetAircraftMaxVelocity() { return m_fAircraftMaxVelocity; };
-    void  SetAircraftMaxVelocity(float fVelocity)
-    {
-        m_fAircraftMaxVelocity = fVelocity;
-        m_fAircraftMaxVelocity_Sq = fVelocity * fVelocity;
-    };
+    float GetAircraftMaxVelocity() { return MtaGame::CAircraftLimitsPolicy::GetMaxVelocity(m_aircraftLimits); };
+    void  SetAircraftMaxVelocity(float fVelocity) { MtaGame::CAircraftLimitsPolicy::SetMaxVelocity(m_aircraftLimits, fVelocity); };
 
     void SetAutomaticVehicleStartupOnPedEnter(bool bSet);
 
@@ -382,17 +379,18 @@ private:
     bool                m_bEnabledLODSystem;
     bool                m_bEnabledAltWaterOrder;
     bool                m_bEnabledClothesMemFix;
-    float               m_fAircraftMaxHeight;
-    float               m_fAircraftMaxVelocity;
-    float               m_fAircraftMaxVelocity_Sq;
-    bool                m_bHeatHazeEnabled;
-    bool                m_bHeatHazeCustomized;
-    float               m_fNearClipDistance;
-    float               m_fMaddDoggPoolLevel;
-    eAnimGroup          m_dwLastStaticAnimGroupID;
-    eAnimID             m_dwLastStaticAnimID;
-    DWORD               m_dwLastAnimArrayAddress;
-    float               m_fShadowsOffset;
+    // Keep native operand targets inside the same module-owned lifetime and
+    // the original three-float layout. Constructor ordering initializes this
+    // aggregate at the existing point, after remote-data/stat setup.
+    MtaGame::CAircraftLimitsPolicy::State m_aircraftLimits;
+    bool                                  m_bHeatHazeEnabled;
+    bool                                  m_bHeatHazeCustomized;
+    float                                 m_fNearClipDistance;
+    float                                 m_fMaddDoggPoolLevel;
+    eAnimGroup                            m_dwLastStaticAnimGroupID;
+    eAnimID                               m_dwLastStaticAnimID;
+    DWORD                                 m_dwLastAnimArrayAddress;
+    float                                 m_fShadowsOffset;
 
     bool m_isRapidVehicleStopFixEnabled{false};
 

@@ -130,6 +130,20 @@ enter an engine function or require the ground query's matrix-list state.
 The read publishes all 32 bits only after its ownership bookends agree;
 refusal leaves the caller's output untouched and never supplies a default area.
 
+MTA's aircraft height, velocity and squared velocity now share
+`CAircraftLimitsPolicy`. The classic multiplayer implementation owns the same
+three-float state, initializes it at the original constructor point, and binds
+its six native consumer operands to that state. Raw float and velocity-product
+semantics stay in this shared policy. DE consumer bindings remain separate
+prerequisites; copying these values alone does not control DE aircraft.
+
+`CWorldJetpackHeightDE::GetJetpackMaxHeight` reads the native scalar actually
+consumed by DE's jetpack thrust calculation through the current world owner.
+The qualified value resides in read-only data shared with native code. The
+getter preserves its accepted bits without a constant fallback. The setter
+remains unimplemented until an isolated native consumer binding is qualified;
+the shared read-only literal is never treated as writable game state.
+
 Ordinary `RemoveModel` uses DE's genuine removal entry for the qualified idle
 and loaded-model branches, including current streaming links and asset owners.
 The direct streaming operation leaves the separate model reference untouched;

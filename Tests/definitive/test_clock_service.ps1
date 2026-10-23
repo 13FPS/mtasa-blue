@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries')]
+    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -28,6 +28,8 @@ $record['actualGameConstructorServicesSdkOwnerTested'] = $false
 $record['nativePedOwnerSliceTested'] = $false
 $record['nativePedWaterTaskOwnerTested'] = $false
 $record['actualPedWaterTaskOwnerTested'] = $false
+$record['nativeWorldJetpackHeightOwnerTested'] = $false
+$record['actualWorldJetpackHeightSdkOwnerTested'] = $false
 $record['nativeWorldAreaOwnerTested'] = $false
 $record['actualWorldAreaSdkOwnerTested'] = $false
 $record['nativeWorldLineOwnerTested'] = $false
@@ -390,6 +392,8 @@ $sourceNames += @('Client/sdk/game/CAudioContainerFiles.h','Client/sdk/game/CAud
 $sourceNames += @('Client/game_de/NativeWorldGroundAccess.h','Client/game_de/CWorldGroundDE.h','Client/game_de/CWorldGroundDE.cpp','Client/game_de/NativeWorldGroundCalls.h','Client/game_de/NativeWorldGroundCalls.cpp','Client/game_de/NativeWorldGroundContext.h','Client/game_de/NativeWorldGroundContext.cpp','Client/game_de/NativeWorldGroundProfile.h','Client/sdk/game/CWorld.h','Shared/sdk/CVector2D.h')
 $sourceNames += @('Client/game_de/NativeWorldLineAccess.h','Client/game_de/CWorldLineDE.h','Client/game_de/CWorldLineDE.cpp','Client/game_de/NativeWorldLineCalls.h','Client/game_de/NativeWorldLineCalls.cpp','Client/game_de/NativeWorldLineProfile.h')
 $sourceNames += @('Client/game_de/NativeWorldAreaAccess.h','Client/game_de/CWorldAreaDE.h','Client/game_de/CWorldAreaDE.cpp','Client/game_de/NativeWorldAreaMemory.h','Client/game_de/NativeWorldAreaMemory.cpp','Client/game_de/NativeWorldAreaProfile.h')
+$sourceNames += @('Client/game_de/NativeWorldJetpackHeightAccess.h','Client/game_de/CWorldJetpackHeightDE.h','Client/game_de/CWorldJetpackHeightDE.cpp','Client/game_de/NativeWorldJetpackMemory.h','Client/game_de/NativeWorldJetpackMemory.cpp','Client/game_de/NativeWorldJetpackProfile.h')
+    $sourceNames += @('Tests/definitive/NativeWorldJetpackFixture.h','Tests/definitive/NativeWorldJetpackOwnerTests.inl','Tests/definitive/Write-WorldJetpackHeightFixture.ps1')
     $sourceNames += @('Tests/definitive/NativeWorldAreaFixture.h','Tests/definitive/NativeWorldAreaOwnerTests.inl','Tests/definitive/Write-WorldAreaFixture.ps1')
     $sourceNames += @('Tests/definitive/NativeWorldLineFixture.h','Tests/definitive/NativeWorldLineOwnerTests.inl','Tests/definitive/Write-WorldLineFixture.ps1')
     $sourceNames += @('Tests/definitive/NativeWorldGroundFixture.h','Tests/definitive/NativeWorldGroundOwnerTests.inl','Tests/definitive/Write-WorldGroundFixture.ps1')
@@ -454,6 +458,11 @@ $sourceNames += @('Client/game_de/NativeWorldAreaAccess.h','Client/game_de/CWorl
     $gogglesEvidence = Join-Path $outputRoot 'PedGogglesFixture.generated.h'
     Copy-Item -LiteralPath $gogglesFixture.path -Destination $gogglesEvidence
     $record['pedGogglesGeneratedFixture'] = [ordered]@{path=$gogglesEvidence;sha256=(Sha $gogglesEvidence);rejectingOverrides=$gogglesFixture.rejectingOverrides}
+    . (Join-Path $PSScriptRoot 'Write-WorldJetpackHeightFixture.ps1')
+    $jetpackHeightFixture = Write-WorldJetpackHeightFixture $taskRoot (Join-Path $scratchRoot 'WorldJetpackHeightFixture.generated.h')
+    $jetpackHeightEvidence = Join-Path $outputRoot 'WorldJetpackHeightFixture.generated.h'
+    Copy-Item -LiteralPath $jetpackHeightFixture.path -Destination $jetpackHeightEvidence
+    $record['worldJetpackHeightGeneratedFixture'] = [ordered]@{path=$jetpackHeightEvidence;sha256=(Sha $jetpackHeightEvidence);rejectingOverrides=$jetpackHeightFixture.rejectingOverrides}
     . (Join-Path $PSScriptRoot 'Write-WorldAreaFixture.ps1')
     $areaFixture = Write-WorldAreaFixture $taskRoot (Join-Path $scratchRoot 'WorldAreaFixture.generated.h')
     $areaEvidence = Join-Path $outputRoot 'WorldAreaFixture.generated.h'
@@ -535,6 +544,7 @@ $sourceNames += @('Client/game_de/NativeWorldAreaAccess.h','Client/game_de/CWorl
         (Join-Path $taskRoot 'Client/game_de/CWorldGroundDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CWorldLineDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CWorldAreaDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CWorldJetpackHeightDE.cpp'),
         # The new owner scope instantiates the actual SDK streaming receiver;
         # link its production implementation rather than a fixture substitute.
         (Join-Path $taskRoot 'Client/game_de/CStreamingDE.cpp'),
@@ -570,6 +580,7 @@ $sourceNames += @('Client/game_de/NativeWorldAreaAccess.h','Client/game_de/CWorl
     # The cumulative callback fixture includes current owner and retirement cases.
     # Keep it bounded while allowing the full set to finish on a busy build host.
     $fixtureArguments = @($outputRoot)
+    if ($Scope -eq 'WorldJetpack') { $fixtureArguments += '--world-jetpack' }
     if ($Scope -eq 'WorldArea') { $fixtureArguments += '--world-area' }
     if ($Scope -eq 'WorldQueries') { $fixtureArguments += '--world-queries' }
     if ($Scope -eq 'WorldLine') { $fixtureArguments += '--world-line' }
@@ -633,7 +644,12 @@ $sourceNames += @('Client/game_de/NativeWorldAreaAccess.h','Client/game_de/CWorl
         if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
         if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
     }
-    if ($Scope -eq 'WorldQueries') {
+    if ($Scope -eq 'WorldJetpack') {
+        $record.nativeWorldJetpackHeightOwnerTested = $text.Contains('Production native jetpack-height guarded callback owner fixture completed')
+        $record.actualWorldJetpackHeightSdkOwnerTested = $text.Contains('Production actual CWorld jetpack-height SDK callback fixture completed')
+        if (-not ($record.nativeWorldJetpackHeightOwnerTested -and $record.actualWorldJetpackHeightSdkOwnerTested)) { throw 'New native/actual SDK jetpack-height getter owner did not complete.' }
+        $record.productionNativeCallbackTested = $true
+    } elseif ($Scope -eq 'WorldQueries') {
         $record.nativeWorldLineOwnerTested = $text.Contains('Production native whole line-clear callback owner fixture completed')
         $record.actualWorldLineSdkOwnerTested = $text.Contains('Production actual CWorld line-clear SDK callback fixture completed')
         $record.nativeWorldAreaOwnerTested = $text.Contains('Production native current-area DWORD callback owner fixture completed')

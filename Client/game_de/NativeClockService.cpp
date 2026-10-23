@@ -45,6 +45,7 @@
 #include "NativeWorldGroundCalls.h"
 #include "NativeWorldLineCalls.h"
 #include "NativeWorldAreaMemory.h"
+#include "NativeWorldJetpackMemory.h"
 #include "CWorldLineDE.h"
 #include "NativeAnimationBlockMemory.h"
 #include "NativeAnimationManagerMemory.h"
@@ -180,6 +181,7 @@ namespace mta::game_de
             ClockResult FindWorldGroundZ(const CVector&, float&) noexcept override;
             ClockResult IsWorldLineOfSightClear(const CVector&, const CVector&, const SLineOfSightFlags&, bool&) noexcept override;
             ClockResult ReadWorldCurrentArea(std::uint32_t&) noexcept override;
+            ClockResult ReadJetpackMaxHeight(float&) noexcept override;
             ClockResult ReadStreamingModelGroups(NativeStreamingModelGroupsReader::Value&) noexcept override;
             ClockResult ReadModelArchiveAllocated(std::uint32_t, bool&) noexcept override;
             ClockResult RemoveStreamingModel(std::uint32_t) noexcept override;
@@ -3350,6 +3352,14 @@ namespace mta::game_de
             if (result == ClockResult::Ok)
                 output = value.allocatedInArchive;
             return result;
+        }
+        ClockResult NativeAccess::ReadJetpackMaxHeight(float& output) noexcept
+        {
+            // MTA's getter observes the qualified native consumer value. The
+            // current thread/world bookends permit only a guarded copy; this
+            // enters no native function and writes no shared RData or operand.
+            // A refused read therefore preserves both output and this owner.
+            return NativeWorldJetpackMemory::Read(runtime.image, output, &CheckTimingOwner);
         }
         ClockResult NativeAccess::ReadWorldCurrentArea(std::uint32_t& output) noexcept
         {

@@ -42,6 +42,7 @@
 #include "NativeWorldGroundAccess.h"
 #include "NativeWorldLineAccess.h"
 #include "NativeWorldAreaAccess.h"
+#include "NativeWorldJetpackHeightAccess.h"
 #include "NativeModelClassificationAccess.h"
 #include "NativePedPhysicalScalarsAccess.h"
 #include "NativePedRotationAccess.h"
@@ -118,6 +119,7 @@ namespace mta::game_de
                                    public NativeWorldGroundAccess,
                                    public NativeWorldLineAccess,
                                    public NativeWorldAreaAccess,
+                                   public NativeWorldJetpackHeightAccess,
                                    public NativeModelClassificationAccess,
                                    public NativeNamedGarageAccess,
                                    public NativeAnimationBlockAccess,

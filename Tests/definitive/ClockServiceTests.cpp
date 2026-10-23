@@ -129,6 +129,9 @@
 #include "../../Client/game_de/NativeWorldAreaMemory.h"
 #include "../../Client/game_de/CWorldAreaDE.h"
 #include "NativeWorldAreaFixture.h"
+#include "../../Client/game_de/NativeWorldJetpackMemory.h"
+#include "../../Client/game_de/CWorldJetpackHeightDE.h"
+#include "NativeWorldJetpackFixture.h"
 #include "../../Client/game_de/NativeStreamingSceneProfile.h"
 #include "../../Client/game_de/NativeStreamingPriorityCalls.h"
 #include "../../Client/game_de/NativeStreamingPriorityProfile.h"
@@ -228,6 +231,15 @@ namespace world_area_fixture
     }
 }
 #include "WorldAreaFixture.generated.h"
+namespace world_jetpack_height_fixture
+{
+    [[noreturn]] inline void Unqualified(const char* method)
+    {
+        std::fprintf(stderr, "Unqualified world jetpack-height SDK call: %s\n", method);
+        std::abort();
+    }
+}
+#include "WorldJetpackHeightFixture.generated.h"
 namespace ped_pose_fixture
 {
     [[noreturn]] inline void Unqualified()
@@ -2531,6 +2543,7 @@ namespace mta::game_de::NativeImageAccess
 #include "../../Client/game_de/NativeWorldLineCalls.cpp"
 #undef MTA_DE_WORLD_LINE_NATIVE_INVOKE
 #include "../../Client/game_de/NativeWorldAreaMemory.cpp"
+#include "../../Client/game_de/NativeWorldJetpackMemory.cpp"
 #define MTA_DE_MODEL_REFERENCE_EXCHANGE ClockModelReferenceOwnerTest::Exchange
 #include "../../Client/game_de/NativeModelReferenceMemory.cpp"
 #undef MTA_DE_MODEL_REFERENCE_EXCHANGE
@@ -7338,6 +7351,7 @@ namespace
 #include "NativeWorldGroundOwnerTests.inl"
 #include "NativeWorldLineOwnerTests.inl"
 #include "NativeWorldAreaOwnerTests.inl"
+#include "NativeWorldJetpackOwnerTests.inl"
 #include "NativeAnimationBlockOwnerTests.inl"
 #include "NativeAnimationBlockNameOwnerTests.inl"
 #include "NativeAnimationManagerOwnerTests.inl"
@@ -7345,6 +7359,7 @@ namespace
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool worldJetpackOnly = argc == 3 && std::strcmp(argv[2], "--world-jetpack") == 0;
     const bool worldAreaOnly = argc == 3 && std::strcmp(argv[2], "--world-area") == 0;
     const bool worldQueriesOnly = argc == 3 && std::strcmp(argv[2], "--world-queries") == 0;
     const bool worldLineOnly = argc == 3 && std::strcmp(argv[2], "--world-line") == 0;
@@ -7379,9 +7394,18 @@ int main(int argc, char** argv)
     Check((argc == 2 || constructorOnly || pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly || poseOnly ||
            waterOnly || animationOnly || animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly ||
            fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly ||
-           worldLineOnly || worldAreaOnly || worldQueriesOnly) &&
+           worldLineOnly || worldAreaOnly || worldQueriesOnly || worldJetpackOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (worldJetpackOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        // This new guarded getter is independent of historical effect suites.
+        WorldJetpackOwnerFixture::Run(fixture);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (worldQueriesOnly)
     {
         ClockImageFixture fixture;

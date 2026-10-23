@@ -22,6 +22,9 @@ namespace mta::game_de
         NativeNamedGarageMemory(Binding binding, CheckOwner owner) noexcept : binding(binding), owner(owner) {}
         static bool Qualify(Binding&) noexcept;
         static bool Revalidate(const Binding&) noexcept;
+        static bool QualifyGeometry(Binding&) noexcept;
+        static bool RevalidateGeometry(const Binding&) noexcept;
+        ClockResult ReadGeometry(const NativeGarageName&, NativeGarageGeometry&) const noexcept;
         ClockResult ReadType(const NativeGarageName&, std::uint8_t&) const noexcept;
         ClockResult SetType(const NativeGarageName&, std::uint8_t, Receipt* = nullptr) const noexcept;
         ClockResult ReadOpen(const NativeGarageName&, bool&) const noexcept;
@@ -33,8 +36,9 @@ namespace mta::game_de
         // No row address escapes or survives the borrowed owner callback.
         // Only one selected byte may be conditionally replaced. Any entered
         // failure must Stop at the retained owner; accepted effects persist,
-        // with no retry, replay or rollback. Geometry and default16 startup
-        // garage selection remain separately unqualified.
+        // with no retry, replay or rollback. Geometry is read-only coherent
+        // raw binary32 storage; default16 startup garage selection remains
+        // separately unqualified.
     private:
         ClockResult Read(const NativeGarageName&, bool door, std::uint8_t&) const noexcept;
         ClockResult Set(const NativeGarageName&, bool door, std::uint8_t, Receipt*) const noexcept;

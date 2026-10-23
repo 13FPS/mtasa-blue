@@ -17,8 +17,8 @@ foreach ($name in @('TEMP','TMP','VCToolsInstallDir','INCLUDE','LIB','LIBPATH','
 $record = [ordered]@{
     schema='mta_actual_named_garage_sdk_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
-    result=$null;failure=$null;scratchDirectory=$scratchRoot;scratchRemoved=$false;actualNamedGarageSdkSliceTested=$false;
-    scope='Actual four CGarage SDK type/open methods through named owner. Exact copied bounded name, all BYTE types, shared MTA door-state policy, default owner refusal, accepted failure persistence and no replay. Geometry remains abstract, no native row or SDK numeric mapping is manufactured.';
+    result=$null;failure=$null;scratchDirectory=$scratchRoot;scratchRemoved=$false;actualNamedGarageSdkSliceTested=$false;actualNamedGarageGeometrySdkTested=$false;
+    scope='Actual complete eight-property named CGarage SDK through one owner. Four original type/open methods plus all14rawgeometrywords; each getter uses one coherent read, exact field order/alias behavior and preserves caller outputs on refusal. No numeric garage mapping, factory or complete CGarages service is claimed.';
     nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;installationChanged=$false;
     completeGarageReady=$false;completeCGameReady=$false;fullMtaReady=$false;oldBinaryCompatibilityClaimed=$false
 }
@@ -111,8 +111,9 @@ try {
         $record.result.pointerBits = [int]$summary.Groups[2].Value
     }
     $record.actualNamedGarageSdkSliceTested = $text.Contains('Production actual named garage SDK fixture completed')
+    $record.actualNamedGarageGeometrySdkTested = $text.Contains('Production actual named garage geometry SDK fixture completed')
     $record.success = $record.result.test.exitCode -eq 0 -and -not $record.result.test.timedOut -and
-        $record.result.checks -gt 0 -and $record.result.pointerBits -eq 64 -and $record.actualNamedGarageSdkSliceTested
+        $record.result.checks -gt 0 -and $record.result.pointerBits -eq 64 -and $record.actualNamedGarageSdkSliceTested -and $record.actualNamedGarageGeometrySdkTested
     if (-not $record.success) { throw 'Actual garage SDK checks or completion evidence failed.' }
 } catch { AddFailure ($_.Exception.ToString()) }
 finally {

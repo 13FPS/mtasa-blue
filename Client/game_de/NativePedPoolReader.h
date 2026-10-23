@@ -31,10 +31,18 @@ namespace mta::game_de
         static bool Qualify(Binding&) noexcept;
         static bool Revalidate(const Binding&) noexcept;
         ClockResult Resolve(std::uint32_t handle, Value&) const noexcept;
+        // Report a qualified absent handle separately from callback/profile
+        // failure. An absent observation changes only present, never Value;
+        // neither result creates a wrapper, registration or native lease.
+        // Signed-negative handles follow the pinned early native null branch;
+        // out-of-capacity nonnegative indices retain InvalidArgument because
+        // that native consumer proves no bounded null branch for them.
+        ClockResult Probe(std::uint32_t handle, bool& present, Value&) const noexcept;
         ClockResult Recheck(const Value&) const noexcept;
 
     private:
         ClockResult Capture(std::uint32_t handle, Value&) const noexcept;
+        ClockResult CaptureObserved(std::uint32_t handle, bool& present, Value&) const noexcept;
         Binding     binding;
         CheckOwner  owner = nullptr;
     };

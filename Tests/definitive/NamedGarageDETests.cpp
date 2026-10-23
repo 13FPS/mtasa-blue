@@ -10,6 +10,7 @@
 #include <array>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -28,14 +29,12 @@ namespace
     {
     public:
         Garage(NativeNamedGarageAccess& access, const NativeGarageName& name) : CGarageNamedDE(access, name) {}
-        void GetPosition(CVector&) const override { std::abort(); }
-        void GetDirection(float&, float&, float&, float&) const override { std::abort(); }
-        void GetSize(float&, float&, float&) const override { std::abort(); }
-        void GetBoundingBox(float&, float&, float&, float&) const override { std::abort(); }
     };
     struct Owner final : NativeNamedGarageAccess
     {
         std::array<unsigned, 4> calls{};
+        unsigned                geometryReads = 0;
+        NativeGarageGeometry    geometry;
         NativeGarageName        selected{};
         std::uint8_t            type = 0, door = 0;
         ClockResult             result = ClockResult::Ok;
@@ -64,6 +63,14 @@ namespace
                 output = MtaGame::CGarageDoorStatePolicy::IsOpen(door);
             return result;
         }
+        ClockResult ReadNamedGarageGeometry(const NativeGarageName& name, NativeGarageGeometry& output) noexcept override
+        {
+            ++geometryReads;
+            selected = name;
+            if (result != ClockResult::NotInitialized)
+                output = geometry;
+            return result;
+        }
         ClockResult SetNamedGarageOpen(const NativeGarageName& name, bool value) noexcept override
         {
             ++calls[3];
@@ -86,12 +93,108 @@ namespace
         }
         Check(rejected, "SDK owner refusal must throw with exact operation instead of returning cached/false/default state");
     }
+    std::uint32_t Word(const float& value)
+    {
+        std::uint32_t word;
+        std::memcpy(&word, &value, sizeof(word));
+        return word;
+    }
+    void PutWord(float& output, std::uint32_t word)
+    {
+        std::memcpy(&output, &word, sizeof(word));
+    }
+    void GeometryChecks(Owner& owner, CGarage& sdk, const NativeGarageName& identity)
+    {
+        const CGarage&                          constant = sdk;
+        const auto                              properties = owner.calls;
+        constexpr std::array<std::uint32_t, 14> patterns = {0x00000000, 0x80000000, 0x3f800001, 0xc1200000, 0x7f7fffff, 0xff7fffff, 0x7f800000,
+                                                            0xff800000, 0x7fc12345, 0xffc07654, 0x7fa54321, 0x00000001, 0x80000001, 0x00800000};
+        owner.result = ClockResult::Ok;
+        for (std::size_t rotation = 0; rotation != patterns.size(); ++rotation)
+        {
+            for (std::size_t index = 0; index != patterns.size(); ++index)
+                owner.geometry.words[index] = patterns[(index + rotation) % patterns.size()];
+            const auto expected = owner.geometry.words;
+            auto       before = owner.geometryReads;
+            CVector    position;
+            constant.GetPosition(position);
+            Check(owner.geometryReads == before + 1 && owner.selected == identity,
+                  "GetPosition takes one fresh same-name owner observation instead of cached current garage or per-component queries");
+            Check(Word(position.fX) == expected[0] && Word(position.fY) == expected[1] && Word(position.fZ) == expected[2],
+                  "actual SDK origin preserves every binary32 sign/NaN/infinity/subnormal payload without arithmetic");
+            std::array<float, 4> output{};
+            before = owner.geometryReads;
+            constant.GetDirection(output[0], output[1], output[2], output[3]);
+            Check(owner.geometryReads == before + 1 && owner.selected == identity,
+                  "GetDirection reads one coherent same-name tuple before assigning four outputs");
+            for (std::size_t index = 0; index != output.size(); ++index)
+                Check(Word(output[index]) == expected[3 + index], "SDK direction order is Axy then Bxy with exact raw bits");
+            before = owner.geometryReads;
+            constant.GetSize(output[0], output[1], output[2]);
+            Check(owner.geometryReads == before + 1 && owner.selected == identity, "GetSize reads one current named geometry observation");
+            for (std::size_t index = 0; index != 3; ++index)
+                Check(Word(output[index]) == expected[7 + index], "SDK Height/Width/Depth are raw upper-plane/A-length/B-length; no origin subtraction");
+            before = owner.geometryReads;
+            constant.GetBoundingBox(output[0], output[1], output[2], output[3]);
+            Check(owner.geometryReads == before + 1 && owner.selected == identity, "GetBoundingBox takes one fresh same-name read");
+            for (std::size_t index = 0; index != output.size(); ++index)
+                Check(Word(output[index]) == expected[10 + index], "SDK bound order is minX,maxX,minY,maxY without normalization");
+        }
+        float alias = 0;
+        auto  before = owner.geometryReads;
+        constant.GetDirection(alias, alias, alias, alias);
+        Check(Word(alias) == owner.geometry.words[6] && owner.geometryReads == before + 1,
+              "aliased direction outputs preserve actual classic sequential assignment order");
+        before = owner.geometryReads;
+        constant.GetSize(alias, alias, alias);
+        Check(Word(alias) == owner.geometry.words[9] && owner.geometryReads == before + 1,
+              "aliased size outputs finish with depth rather than reordered/cached values");
+        before = owner.geometryReads;
+        constant.GetBoundingBox(alias, alias, alias, alias);
+        Check(Word(alias) == owner.geometry.words[13] && owner.geometryReads == before + 1,
+              "aliased bound outputs finish with back as in actual classic assignment order");
+        for (const auto result : {ClockResult::NotInitialized, ClockResult::InvalidArgument, ClockResult::BindingChanged, ClockResult::ReadFailure,
+                                  ClockResult::Busy, ClockResult::OriginalException, ClockResult::Expired, ClockResult::Stopped})
+        {
+            owner.result = result;
+            CVector position;
+            PutWord(position.fX, 0x7fa12345);
+            PutWord(position.fY, 0x80000000);
+            PutWord(position.fZ, 0xffc54321);
+            std::array<float, 4> output{};
+            for (std::size_t index = 0; index != output.size(); ++index)
+                PutWord(output[index], patterns[index]);
+            before = owner.geometryReads;
+            Refuses([&] { constant.GetPosition(position); }, "GetPosition");
+            Check(Word(position.fX) == 0x7fa12345 && Word(position.fY) == 0x80000000 && Word(position.fZ) == 0xffc54321,
+                  "failed position observation preserves all caller outputs even if owner produced a tuple before final refusal");
+            Refuses([&] { constant.GetDirection(output[0], output[1], output[2], output[3]); }, "GetDirection");
+            Refuses([&] { constant.GetSize(output[0], output[1], output[2]); }, "GetSize");
+            Refuses([&] { constant.GetBoundingBox(output[0], output[1], output[2], output[3]); }, "GetBoundingBox");
+            for (std::size_t index = 0; index != output.size(); ++index)
+                Check(Word(output[index]) == patterns[index], "every refused tuple getter preserves caller output references");
+            Check(owner.geometryReads == before + 4 && owner.selected == identity,
+                  "four refused getters each dispatch once; none retries, falls back or reuses a successful tuple");
+        }
+        NativeNamedGarageAccess absent;
+        Garage                  missing(absent, identity);
+        CVector                 position;
+        std::array<float, 4>    output{};
+        Refuses([&] { missing.GetPosition(position); }, "GetPosition");
+        Refuses([&] { missing.GetDirection(output[0], output[1], output[2], output[3]); }, "GetDirection");
+        Refuses([&] { missing.GetSize(output[0], output[1], output[2]); }, "GetSize");
+        Refuses([&] { missing.GetBoundingBox(output[0], output[1], output[2], output[3]); }, "GetBoundingBox");
+        Check(owner.calls == properties, "all geometry observations preserve unrelated type/open operations and accepted effects");
+        owner.result = ClockResult::Ok;
+    }
+
 }
 int main()
 {
     try
     {
-        static_assert(std::is_abstract_v<CGarageNamedDE> && !std::is_abstract_v<Garage>);
+        static_assert(!std::is_abstract_v<CGarageNamedDE> && !std::is_abstract_v<Garage>);
+        static_assert(!std::is_constructible_v<CGarageNamedDE, NativeNamedGarageAccess&, const NativeGarageName&>);
         Owner            owner;
         NativeGarageName source{{'M', 'i', 'X', 0, 0xa1, 0xb2, 0xc3, 0xd4}};
         const auto       identity = source;
@@ -171,6 +274,8 @@ int main()
         }
         Check(owner.calls == beforeInvalid && owner.type == 0xed && owner.selected == identity,
               "construction and operations on another owner never mutate prior wrapper state");
+        GeometryChecks(owner, *sdk, identity);
+        std::puts("Production actual named garage geometry SDK fixture completed");
         std::puts("Production actual named garage SDK fixture completed");
         std::printf("Passed %u actual named garage SDK checks (%u-bit)\n", checks, static_cast<unsigned>(sizeof(void*) * 8));
         return 0;

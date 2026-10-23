@@ -7,12 +7,16 @@ namespace
 {
     struct NamedGarageOwnerContext
     {
-        NativeGarageName name{'B', 'e', 'T', 'a', 0, 0, 0, 0};
-        CGarage*         sdk = nullptr;
-        ClockResult      result = ClockResult::NotInitialized;
-        unsigned         operation = 0, refusal = 0;
-        std::uint8_t     type = 255, typeOutput = 0xe7;
-        bool             open = true, openOutput = false, threw = false;
+        NativeGarageGeometry geometryOutput;
+        CVector              geometryPosition{123, 456, 789};
+        std::array<float, 4> geometryDirection{}, geometryBounds{};
+        std::array<float, 3> geometrySize{};
+        NativeGarageName     name{'B', 'e', 'T', 'a', 0, 0, 0, 0};
+        CGarage*             sdk = nullptr;
+        ClockResult          result = ClockResult::NotInitialized;
+        unsigned             operation = 0, refusal = 0;
+        std::uint8_t         type = 255, typeOutput = 0xe7;
+        bool                 open = true, openOutput = false, threw = false;
     };
     void NamedGarageOwnerHandler(NativeGameTimingAccess& access, void* opaque)
     {
@@ -59,6 +63,26 @@ namespace
                     break;
                 case 7:
                     context.sdk->SetOpen(context.open);
+                    context.result = ClockResult::Ok;
+                    break;
+                case 8:
+                    context.result = access.ReadNamedGarageGeometry(context.name, context.geometryOutput);
+                    break;
+                case 9:
+                    context.sdk->GetPosition(context.geometryPosition);
+                    context.result = ClockResult::Ok;
+                    break;
+                case 10:
+                    context.sdk->GetDirection(context.geometryDirection[0], context.geometryDirection[1], context.geometryDirection[2],
+                                              context.geometryDirection[3]);
+                    context.result = ClockResult::Ok;
+                    break;
+                case 11:
+                    context.sdk->GetSize(context.geometrySize[0], context.geometrySize[1], context.geometrySize[2]);
+                    context.result = ClockResult::Ok;
+                    break;
+                case 12:
+                    context.sdk->GetBoundingBox(context.geometryBounds[0], context.geometryBounds[1], context.geometryBounds[2], context.geometryBounds[3]);
                     context.result = ClockResult::Ok;
                     break;
                 default:
@@ -155,6 +179,8 @@ namespace
             admit(pin.rva, pin.bytes, pin.size, PAGE_EXECUTE_READ);
         for (const auto& pin : G::Code)
             admit(pin.rva, pin.bytes, pin.size, PAGE_EXECUTE_READ);
+        for (const auto& pin : NativeNamedGarageGeometryProfile::Code)
+            admit(pin.rva, pin.bytes, pin.size, PAGE_EXECUTE_READ);
         for (const auto& pin : NativeGameStateProfile::pins)
             admit(pin.rva, pin.bytes, pin.size, pin.code ? PAGE_EXECUTE_READ : PAGE_READONLY);
         for (const auto& pin : NativeBorrowedGcProfile::pins)
@@ -182,21 +208,22 @@ namespace
         rows[G::RowBytes + G::TypeOffset] = 17;
         rows[2 * G::RowBytes + G::TypeOffset] = 99;
         rows[G::RowBytes + G::DoorStateOffset] = 4;
+        const NativeGarageGeometry expectedGeometry{{0x3f800000u, 0x80000000u, 0x40a00000u, 0x7fc12345u, 0x7fa54321u, 0x7f800000u, 0xff800000u, 0x42c80000u,
+                                                     0x7f7fffffu, 0xff7fffffu, 1u, 0x80000001u, 0x00800000u, 0x80800000u}};
+        std::memcpy(rows.data() + G::RowBytes, expectedGeometry.words.data(), sizeof(expectedGeometry.words));
         admit(G::BankRva, rows.data(), rows.size(), PAGE_READWRITE);
         ClockReaderTestHost::image = fixture.image;
         ClockNamedGarageOwnerTest::nameAddress = fixture.image + G::BankRva + G::RowBytes + G::NameOffset;
         ClockNamedGarageOwnerTest::countAddress = fixture.image + G::CountRva;
+        ClockNamedGarageOwnerTest::geometryAddress = fixture.image + G::BankRva + G::RowBytes;
+        ClockNamedGarageOwnerTest::geometryReadAction = 0;
         ClockNamedGarageOwnerTest::stores = ClockNamedGarageOwnerTest::action = 0;
-        struct PropertyOnlyGarage final : CGarageNamedDE
+        struct NamedGarageOwnerSdk final : CGarageNamedDE
         {
-            PropertyOnlyGarage(NativeNamedGarageAccess& access, const NativeGarageName& name) : CGarageNamedDE(access, name) {}
-            void GetPosition(CVector&) const override { std::abort(); }
-            void GetDirection(float&, float&, float&, float&) const override { std::abort(); }
-            void GetSize(float&, float&, float&) const override { std::abort(); }
-            void GetBoundingBox(float&, float&, float&, float&) const override { std::abort(); }
+            NamedGarageOwnerSdk(NativeNamedGarageAccess& access, const NativeGarageName& name) : CGarageNamedDE(access, name) {}
         };
         NamedGarageOwnerContext context;
-        PropertyOnlyGarage      garage(runtime.access, context.name);
+        NamedGarageOwnerSdk     garage(runtime.access, context.name);
         context.sdk = &garage;
         Check(runtime.access.ReadNamedGarageType(context.name, context.typeOutput) == ClockResult::NotInitialized && context.typeOutput == 0xe7 &&
                   runtime.access.SetNamedGarageOpen(context.name, true) == ClockResult::NotInitialized && !ClockNamedGarageOwnerTest::stores,
@@ -233,6 +260,42 @@ namespace
             invoke();
             Check(context.result == ClockResult::Ok && !context.threw && context.typeOutput == 17 && !runtime.pedReferences.IsRetained(),
                   "actual SDKGetType reacquires the first native name match inside this callback without a ped or SDKordinal conversion");
+            context.operation = 8;
+            context.geometryOutput.words.fill(0xdeadbeefu);
+            invoke();
+            Check(context.result == ClockResult::Ok && context.geometryOutput.words == expectedGeometry.words && !ClockNamedGarageOwnerTest::stores,
+                  "current native owner publishes all14coherent raw geometry words without native writes or an SDKnumericID mapping");
+            context.geometryOutput.words.fill(0xdeadbeefu);
+            const auto outsideGeometry = context.geometryOutput.words;
+            Check(runtime.access.ReadNamedGarageGeometry(context.name, context.geometryOutput) != ClockResult::Ok &&
+                      context.geometryOutput.words == outsideGeometry,
+                  "copied name and geometry output never grant access outside the retained callback");
+            for (unsigned operation = 9; operation != 13; ++operation)
+            {
+                context.operation = operation;
+                invoke();
+                Check(context.result == ClockResult::Ok && !context.threw,
+                      "each actual SDKposition/direction/size/bounds getter dispatches once through the current named owner");
+            }
+            std::array<std::uint32_t, 14> sdkWords{};
+            std::memcpy(sdkWords.data(), &context.geometryPosition, 3 * sizeof(std::uint32_t));
+            std::memcpy(sdkWords.data() + 3, context.geometryDirection.data(), 4 * sizeof(std::uint32_t));
+            std::memcpy(sdkWords.data() + 7, context.geometrySize.data(), 3 * sizeof(std::uint32_t));
+            std::memcpy(sdkWords.data() + 10, context.geometryBounds.data(), 4 * sizeof(std::uint32_t));
+            Check(sdkWords == expectedGeometry.words && sdkWords[7] == 0x42c80000u,
+                  "all8actualSDKproperties preserveNaN/signzero/infinitybits and rawupperZ Height100 rather than subtractingoriginZ5");
+            context.operation = 8;
+            context.geometryOutput.words.fill(0xdeadbeefu);
+            const auto geometrySentinel = context.geometryOutput.words;
+            ClockNamedGarageOwnerTest::geometryReadAction = 1;
+            invoke();
+            Check(context.result == ClockResult::OwnerConflict && context.geometryOutput.words == geometrySentinel && !runtime.stopping.load() &&
+                      fixture.Get<std::uint32_t>(G::BankRva + G::RowBytes + 7 * sizeof(std::uint32_t)) == 0x12345678u && !ClockNamedGarageOwnerTest::stores,
+                  "mixed raw geometry refuses complete output, preserves native progress and does not fabricate a mutation or Stop");
+            invoke();
+            Check(context.result == ClockResult::Ok && context.geometryOutput.words[7] == 0x12345678u,
+                  "fresh same-owner geometry observation may see later native progress without replaying a failed read");
+            fixture.Put(G::BankRva + G::RowBytes, expectedGeometry.words);
             const auto stores = ClockNamedGarageOwnerTest::stores;
             context.typeOutput = 0xe7;
             Check(runtime.access.ReadNamedGarageType(context.name, context.typeOutput) != ClockResult::Ok && context.typeOutput == 0xe7,
@@ -270,13 +333,14 @@ namespace
                 Check(context.result == ClockResult::Ok && context.openOutput == open, "actual named SDK readback preserves MTA door policy");
                 context.operation = 7;
             }
-            context.operation = 0;
+            context.operation = 8;
             for (unsigned refusal = 1; refusal != 5; ++refusal)
             {
                 context.refusal = refusal;
-                context.typeOutput = 0xe7;
+                context.geometryOutput.words.fill(0xdeadbeefu);
+                const auto beforeGeometry = context.geometryOutput.words;
                 invoke();
-                Check(context.result != ClockResult::Ok && context.typeOutput == 0xe7 && !runtime.stopping.load(),
+                Check(context.result != ClockResult::Ok && context.geometryOutput.words == beforeGeometry && !runtime.stopping.load(),
                       "stale callback/admission generation, nested depth and expired lease refuse before any named effect");
             }
             context.refusal = 0;
@@ -307,7 +371,8 @@ namespace
             Check(ClockNamedGarageOwnerTest::stores == 1 && fixture.Get<std::uint8_t>(G::BankRva + G::RowBytes + G::DoorStateOffset) == value,
                   "real callback cleanup never replays or restores persistent named garage intent");
         }
-        ClockNamedGarageOwnerTest::nameAddress = ClockNamedGarageOwnerTest::countAddress = 0;
+        ClockNamedGarageOwnerTest::nameAddress = ClockNamedGarageOwnerTest::countAddress = ClockNamedGarageOwnerTest::geometryAddress = 0;
+        ClockNamedGarageOwnerTest::geometryReadAction = 0;
         ClockNamedGarageOwnerTest::stores = ClockNamedGarageOwnerTest::action = 0;
         for (auto it = saved.rbegin(); it != saved.rend(); ++it)
         {
@@ -316,6 +381,7 @@ namespace
             Check(::VirtualProtect(reinterpret_cast<void*>(fixture.image + it->rva), it->bytes.size(), it->protection, &ignored) != FALSE,
                   "restore only task-owned fixture bytes/protection after owner retirement");
         }
+        std::puts("Production native named garage geometry callback owner fixture completed");
         std::puts("Actual named garage SDK callback owner fixture completed");
         std::puts("Production native named garage callback owner fixture completed");
     }

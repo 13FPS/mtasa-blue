@@ -113,7 +113,7 @@ namespace
                 std::abort();
         }
     }
-    void NativePedPhysicalScalarsOwnedSdk(ClockImageFixture& fixture, bool currentWeaponOnly = false)
+    void NativePedPhysicalScalarsOwnedSdk(ClockImageFixture& fixture, bool currentWeaponOnly = false, bool poolRegistryOnly = false)
     {
         namespace S = NativePedPhysicalScalarsProfile;
         namespace R = NativePedReferenceProfile;
@@ -225,7 +225,7 @@ namespace
                       !NativeServiceAdmission::IsClaimed(NativeServiceAdmission::Category::Clock),
                   "scalar retirement acknowledges native cell storage, hooks and owner admission together");
         };
-        if (!currentWeaponOnly)
+        if (!currentWeaponOnly && !poolRegistryOnly)
         {
             {
                 NativeClockService service;
@@ -321,13 +321,20 @@ namespace
 #include "NativePedCombatOwnerTests.inl"
 #include "NativePedWeaponOwnerTests.inl"
         }
+        if (!poolRegistryOnly)
+        {
 #include "NativePedCurrentWeaponOwnerTests.inl"
+        }
+        if (poolRegistryOnly)
+        {
+#include "NativePoolsPedRegistryOwnerTests.inl"
+        }
         ClockPedPhysicalScalarsOwnerTest::cell = 0;
         ClockPedPhysicalScalarsOwnerTest::loseToken = false;
         ClockReaderTestHost::image = ClockPedReferenceOwnerTest::image = 0;
         for (auto item = saved.rbegin(); item != saved.rend(); ++item)
             fixture.Patch(item->rva, item->bytes.data(), item->bytes.size());
-        if (!currentWeaponOnly)
+        if (!currentWeaponOnly && !poolRegistryOnly)
             std::puts("Production native ped physical scalars callback owner fixture completed");
     }
 }

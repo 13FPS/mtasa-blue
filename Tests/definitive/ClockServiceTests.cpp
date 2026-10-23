@@ -54,6 +54,10 @@
 #include "../../Client/game_de/NativePedCurrentWeaponSlotProfile.h"
 #include "../../Client/game_de/NativeNamedGarageMemory.h"
 #include "../../Client/game_de/NativeNamedGarageProfile.h"
+#include "../../Client/game_de/NativeNamedGarageGeometryProfile.h"
+#include "../../Client/game_de/CPoolsDE.h"
+#include "../../Client/game_de/CPedVitalsDE.h"
+#include <game/CPedIK.h>
 #include "../../Client/game_de/CGarageNamedDE.h"
 #include "../../Client/game_de/NativePedVitalsProfile.h"
 #include "../../Client/game_de/NativePedMetadataMemory.h"
@@ -138,6 +142,8 @@
 #include <tlhelp32.h>
 #include <type_traits>
 #include <vector>
+#include <functional>
+#include "PedPoolRegistryFixture.generated.h"
 
 namespace ClockModelClassificationOwnerTest
 {
@@ -977,9 +983,20 @@ namespace ClockPedWeaponOwnerTest
 }
 namespace ClockNamedGarageOwnerTest
 {
-    std::uintptr_t nameAddress = 0, countAddress = 0;
+    std::uintptr_t nameAddress = 0, countAddress = 0, geometryAddress = 0;
+    unsigned       geometryReadAction = 0;
     unsigned       stores = 0, action = 0;
-    bool           Exchange(std::uintptr_t address, std::uint8_t expected, std::uint8_t target, std::uint8_t& observed, std::uint32_t& exception) noexcept
+    BOOL WINAPI    Read(HANDLE process, LPCVOID address, LPVOID output, SIZE_T bytes, SIZE_T* copied)
+    {
+        const auto result = ::ReadProcessMemory(process, address, output, bytes, copied);
+        if (result && geometryReadAction == 1 && reinterpret_cast<std::uintptr_t>(address) == geometryAddress && bytes == 56)
+        {
+            geometryReadAction = 0;
+            *reinterpret_cast<volatile std::uint32_t*>(geometryAddress + 7 * sizeof(std::uint32_t)) = 0x12345678;
+        }
+        return result;
+    }
+    bool Exchange(std::uintptr_t address, std::uint8_t expected, std::uint8_t target, std::uint8_t& observed, std::uint32_t& exception) noexcept
     {
         ++stores;
         if (action == 4)
@@ -1875,7 +1892,11 @@ namespace mta::game_de::NativeImageAccess
 #include "../../Client/game_de/NativePedFightingStyleMemory.cpp"
 #undef MTA_DE_PED_FIGHTING_STYLE_EXCHANGE
 #define MTA_DE_NAMED_GARAGE_EXCHANGE ClockNamedGarageOwnerTest::Exchange
+#pragma push_macro("ReadProcessMemory")
+#undef ReadProcessMemory
+#define ReadProcessMemory ClockNamedGarageOwnerTest::Read
 #include "../../Client/game_de/NativeNamedGarageMemory.cpp"
+#pragma pop_macro("ReadProcessMemory")
 #undef MTA_DE_NAMED_GARAGE_EXCHANGE
 #include "../../Client/game_de/NativePedWeaponContext.cpp"
 #pragma push_macro("ReadProcessMemory")
@@ -6563,9 +6584,23 @@ int main(int argc, char** argv)
     const bool pedOwnerOnly = argc == 3 && std::strcmp(argv[2], "--ped-owner") == 0;
     const bool currentWeaponOnly = argc == 3 && std::strcmp(argv[2], "--ped-current-weapon") == 0;
     const bool garageNamedOnly = argc == 3 && std::strcmp(argv[2], "--garage-named") == 0;
-    Check((argc == 2 || pedOwnerOnly || currentWeaponOnly || garageNamedOnly) && std::filesystem::path(argv[1]).is_absolute() &&
-              std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
+    const bool garagePoolsOnly = argc == 3 && std::strcmp(argv[2], "--garage-pools") == 0;
+    const bool poolRegistryOnly = argc == 3 && std::strcmp(argv[2], "--ped-pool-registry") == 0;
+    Check((argc == 2 || pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly) &&
+              std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (garagePoolsOnly || poolRegistryOnly)
+    {
+        // One focused current cohort uses the actual named SDK and sole ped
+        // reference owner without replaying unrelated historical owner suites.
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        if (garagePoolsOnly)
+            NativeNamedGaragesOwnedSdk(fixture);
+        NativePedPhysicalScalarsOwnedSdk(fixture, false, true);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (garageNamedOnly)
     {
         // This native name/property fixture supplies all its own admission.

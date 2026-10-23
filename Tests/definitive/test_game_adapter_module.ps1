@@ -296,7 +296,14 @@ $sourceNames += @(
     'Client/game_de/NativeNamedGarageMemory.cpp',
     'Client/game_de/NativeNamedGarageProfile.h',
     'Build/definitive-recovery/mta-native-garage-bank-20261023/named-garage-properties-qualified.json',
-    'Build/definitive-recovery/mta-native-garage-bank-20261023/garage-sdk-mapping-gap.json'
+    'Build/definitive-recovery/mta-native-garage-bank-20261023/garage-sdk-mapping-gap.json',
+    'Client/game_de/NativeNamedGarageGeometryProfile.h',
+    'Client/game_de/CPoolsDE.h',
+    'Client/game_de/CPoolsDE.cpp',
+    'Client/sdk/game/CPedIK.h',
+    'Build/definitive-recovery/mta-native-garage-geometry-proof-20261023/garage-geometry-proof-ready.json',
+    'Build/definitive-recovery/mta-native-named-garage-geometry-20261023/named-garage-geometry-qualified.json',
+    'Build/definitive-recovery/mta-pools-ped-registry-de-20261023/pools-ped-registry-source-ready.json'
 )
 $sourceNames += @(Get-ChildItem -LiteralPath $detoursSourceRoot -File | ForEach-Object {
     [IO.Path]::GetRelativePath($taskRoot, $_.FullName).Replace('\', '/')
@@ -397,6 +404,7 @@ if ((Test-Path -LiteralPath $moduleSource) -and $detoursLibraryExit -eq 0) {
         (Join-Path $taskRoot 'Client/game_de/NativeNamedGarageMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGaragesDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGarageNamedDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CPoolsDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedBikeFlagsMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedShotFlagsMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedOxygenMemory.cpp'),

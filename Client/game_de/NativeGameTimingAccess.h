@@ -132,6 +132,11 @@ namespace mta::game_de
         virtual ClockResult GetWeather(CWeather*&) noexcept { return ClockResult::NotInitialized; }
         // Native script references remain generation-qualified pool handles.
         // These immediate facts are not SDK CPed wrappers or a pool lease.
+        // CPU wrapper associations still need this current native callback.
+        // A qualified absent handle is distinct from a refused observation;
+        // the existing native reference controller alone owns ped lifetime.
+        virtual ClockResult CheckPedPoolAccess() noexcept { return ClockResult::NotInitialized; }
+        virtual ClockResult ProbePedPoolHandle(std::uint32_t, bool&, NativePedPoolReader::Value&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult ResolvePedPoolHandle(std::uint32_t, NativePedPoolReader::Value&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult RecheckPedPoolHandle(const NativePedPoolReader::Value&) noexcept { return ClockResult::NotInitialized; }
         // These are immediate facts and real vector borrows through the same

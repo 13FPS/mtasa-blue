@@ -5,6 +5,7 @@
  ****************************************************************************/
 #include "NativeNamedGarageMemory.h"
 #include "NativeNamedGarageProfile.h"
+#include "NativeNamedGarageGeometryProfile.h"
 #include "NativeImageAccess.h"
 #include "NativeStartGameCalls.h"
 #include "NativeGameStateMemory.h"
@@ -304,5 +305,91 @@ namespace mta::game_de
             return finish(result);
         receipt.verified = true;
         return finish(ClockResult::Ok);
+    }
+    bool NativeNamedGarageMemory::QualifyGeometry(Binding& output) noexcept
+    {
+        Binding next;
+        if (!Qualify(next) || !RevalidateGeometry(next))
+            return false;
+        output = next;
+        return true;
+    }
+    bool NativeNamedGarageMemory::RevalidateGeometry(const Binding& binding) noexcept
+    {
+        namespace P = NativeNamedGarageGeometryProfile;
+        namespace I = NativeImageAccess;
+        if (!Revalidate(binding))
+            return false;
+        IMAGE_DOS_HEADER   dos{};
+        IMAGE_NT_HEADERS64 nt{};
+        if (!I::ReadImage(binding.image, binding.image, &dos, sizeof(dos)) || dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew <= 0 ||
+            static_cast<std::size_t>(dos.e_lfanew) > NativePedPoolProfile::ImageSize - sizeof(nt) ||
+            !I::ReadImage(binding.image, binding.image + static_cast<std::uintptr_t>(dos.e_lfanew), &nt, sizeof(nt)) || nt.Signature != IMAGE_NT_SIGNATURE ||
+            nt.FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 || nt.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC ||
+            nt.OptionalHeader.SizeOfImage != NativePedPoolProfile::ImageSize || nt.FileHeader.SizeOfOptionalHeader < sizeof(IMAGE_OPTIONAL_HEADER64) ||
+            !nt.FileHeader.NumberOfSections || nt.FileHeader.NumberOfSections > 96)
+            return false;
+        const auto at = static_cast<std::uintptr_t>(dos.e_lfanew) + offsetof(IMAGE_NT_HEADERS64, OptionalHeader) + nt.FileHeader.SizeOfOptionalHeader;
+        const auto bytes = static_cast<std::size_t>(nt.FileHeader.NumberOfSections) * sizeof(IMAGE_SECTION_HEADER);
+        std::array<IMAGE_SECTION_HEADER, 96> sections{};
+        if (at > NativePedPoolProfile::ImageSize || bytes > NativePedPoolProfile::ImageSize - at ||
+            !I::ReadImage(binding.image, binding.image + at, sections.data(), bytes))
+            return false;
+        for (const auto& pin : P::Code)
+        {
+            bool contained = false;
+            for (std::size_t i = 0; i != nt.FileHeader.NumberOfSections; ++i)
+                if (I::SectionContains(sections[i], pin.rva, pin.size, IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_WRITE))
+                    contained = true;
+            std::array<unsigned char, P::MaximumPinBytes> actual{};
+            if (!contained || !pin.size || pin.size > actual.size() ||
+                !I::ReadImage(binding.image, binding.image + pin.rva, actual.data(), pin.size, false, true) || std::memcmp(actual.data(), pin.bytes, pin.size))
+                return false;
+        }
+        return true;
+    }
+    ClockResult NativeNamedGarageMemory::ReadGeometry(const NativeGarageName& name, NativeGarageGeometry& output) const noexcept
+    {
+        namespace D = NamedGarageDetail;
+        namespace P = NativeNamedGarageGeometryProfile;
+        if (!D::ValidName(name))
+            return ClockResult::InvalidArgument;
+        auto result = D::Owner(binding, owner);
+        if (result != ClockResult::Ok)
+            return result;
+        if (!RevalidateGeometry(binding))
+            return ClockResult::BindingChanged;
+        D::Value             before, middle, after;
+        NativeGarageGeometry first, second;
+        const auto           copy = [&](std::uintptr_t row, NativeGarageGeometry& value)
+        {
+            SIZE_T copied = 0;
+            return NativeImageAccess::ImagePages(binding.image, row, P::GeometryBytes, true) &&
+                   ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(row), value.words.data(), P::GeometryBytes, &copied) &&
+                   copied == P::GeometryBytes;
+        };
+        if ((result = D::Capture(binding, owner, name, before)) != ClockResult::Ok)
+            return result;
+        if (!copy(before.row, first))
+            return ClockResult::ReadFailure;
+        if ((result = D::Capture(binding, owner, name, middle)) != ClockResult::Ok)
+            return result;
+        if (!D::SameIdentity(before, middle) || before.type != middle.type)
+            return ClockResult::OwnerConflict;
+        if (!copy(middle.row, second))
+            return ClockResult::ReadFailure;
+        if ((result = D::Capture(binding, owner, name, after)) != ClockResult::Ok)
+            return result;
+        if (!D::SameIdentity(middle, after) || middle.type != after.type || first.words != second.words)
+            return ClockResult::OwnerConflict;
+        if (!RevalidateGeometry(binding))
+            return ClockResult::BindingChanged;
+        if ((result = D::Owner(binding, owner)) != ClockResult::Ok)
+            return result;
+        // These are14 raw binary32 storage words, not recomputed shape data.
+        // In particular upperZ remains the classic SDK's raw Height value;
+        // there is no subtraction, normalization, finite test or writable view.
+        output = second;
+        return ClockResult::Ok;
     }
 }

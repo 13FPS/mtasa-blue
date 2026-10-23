@@ -39,6 +39,10 @@ namespace mta::game_de
         const NativePedReferenceToken& ReferenceToken() const noexcept { return reference; }
 
     private:
+        // The abstract pool lookup slice may validate this immutable binding
+        // for a factory-owned borrowed registration. It cannot acquire/release
+        // native cells or turn this abstract ped layer into a complete factory.
+        friend class CPoolsDE;
         static void Require(ClockResult, const char* operation);
         float       Read(NativePedVitalField, const char* operation) const;
         // Copy only immutable CPU identity, never a raw native pointer or a

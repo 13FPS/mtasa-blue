@@ -5,6 +5,11 @@
  ****************************************************************************/
 #include "CGarageNamedDE.h"
 #include <algorithm>
+// The SDK vector header uses shared scalar definitions supplied by the classic
+// precompiled header. The DE service also compiles as its own translation unit.
+#include <SharedUtil.Defines.h>
+#include <CVector.h>
+#include <cstring>
 #include <stdexcept>
 #include <string>
 
@@ -23,6 +28,62 @@ namespace mta::game_de
     {
         if (result != ClockResult::Ok)
             throw std::runtime_error(std::string("DE named garage owner refused ") + operation + ": " + std::to_string(static_cast<unsigned>(result)));
+    }
+
+    namespace
+    {
+        void CopyGarageFloat(float& output, std::uint32_t word) noexcept
+        {
+            static_assert(sizeof(float) == sizeof(word));
+            // These are raw SDK property observations, not calculations. Keep
+            // signed zero, NaN payloads and all native binary32 storage bits.
+            std::memcpy(&output, &word, sizeof(word));
+        }
+    }
+
+    NativeGarageGeometry CGarageNamedDE::ReadGeometry(const char* operation) const
+    {
+        NativeGarageGeometry value;
+        // Finish the same-owner observation before assigning any caller output.
+        // A refusal must not leave a partially changed position/extent tuple.
+        Require(native.ReadNamedGarageGeometry(name, value), operation);
+        return value;
+    }
+
+    void CGarageNamedDE::GetPosition(CVector& position) const
+    {
+        const auto value = ReadGeometry("GetPosition");
+        CopyGarageFloat(position.fX, value.words[0]);
+        CopyGarageFloat(position.fY, value.words[1]);
+        CopyGarageFloat(position.fZ, value.words[2]);
+    }
+
+    void CGarageNamedDE::GetDirection(float& x1, float& y1, float& x2, float& y2) const
+    {
+        const auto value = ReadGeometry("GetDirection");
+        CopyGarageFloat(x1, value.words[3]);
+        CopyGarageFloat(y1, value.words[4]);
+        CopyGarageFloat(x2, value.words[5]);
+        CopyGarageFloat(y2, value.words[6]);
+    }
+
+    void CGarageNamedDE::GetSize(float& height, float& width, float& depth) const
+    {
+        const auto value = ReadGeometry("GetSize");
+        // Actual MTA returns the raw Height field. Native containment proves
+        // that field is an upper Z plane; subtracting origin.z changes the SDK.
+        CopyGarageFloat(height, value.words[7]);
+        CopyGarageFloat(width, value.words[8]);
+        CopyGarageFloat(depth, value.words[9]);
+    }
+
+    void CGarageNamedDE::GetBoundingBox(float& left, float& right, float& front, float& back) const
+    {
+        const auto value = ReadGeometry("GetBoundingBox");
+        CopyGarageFloat(left, value.words[10]);
+        CopyGarageFloat(right, value.words[11]);
+        CopyGarageFloat(front, value.words[12]);
+        CopyGarageFloat(back, value.words[13]);
     }
 
     BYTE CGarageNamedDE::GetType() const

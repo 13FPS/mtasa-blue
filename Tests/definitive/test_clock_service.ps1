@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed')]
+    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -28,6 +28,8 @@ $record['nativePedWeaponInstanceOwnerTested'] = $false
 $record['nativePedCurrentWeaponSlotOwnerTested'] = $false
 $record['nativeNamedGarageOwnerTested'] = $false
 $record['actualNamedGarageSdkOwnerTested'] = $false
+$record['nativeNamedGarageGeometryOwnerTested'] = $false
+$record['nativePoolsPedRegistryOwnerTested'] = $false
 function Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 function RunBounded([string]$Executable,[string[]]$Arguments,[string]$Name,[int]$DeadlineMs) {
     $stdout = Join-Path $outputRoot ($Name + '.log')
@@ -309,6 +311,23 @@ try {
         'Build/definitive-recovery/mta-native-garage-bank-20261023/garage-sdk-mapping-gap.json',
         'Tests/definitive/NativeNamedGarageOwnerTests.inl'
     )
+    $sourceNames += @(
+        'Client/game_de/NativeNamedGarageGeometryProfile.h',
+        'Client/game_de/CPoolsDE.h',
+        'Client/game_de/CPoolsDE.cpp',
+        'Client/game_de/CPedVitalsDE.h',
+        'Client/game_de/CPedVitalsDE.cpp',
+        'Client/sdk/game/CPools.h',
+        'Client/sdk/game/CPed.h',
+        'Client/sdk/game/CPhysical.h',
+        'Client/sdk/game/CEntity.h',
+        'Client/sdk/game/CPedIK.h',
+        'Tests/definitive/Write-PedPoolRegistryFixture.ps1',
+        'Tests/definitive/NativePoolsPedRegistryOwnerTests.inl',
+        'Build/definitive-recovery/mta-native-garage-geometry-proof-20261023/garage-geometry-proof-ready.json',
+        'Build/definitive-recovery/mta-native-named-garage-geometry-20261023/named-garage-geometry-qualified.json',
+        'Build/definitive-recovery/mta-pools-ped-registry-de-20261023/pools-ped-registry-source-ready.json'
+    )
     $sourceNames += @($nativeFiles | ForEach-Object { [IO.Path]::GetRelativePath($taskRoot,$_.FullName).Replace('\','/') })
     $detoursNames = @('detours.cpp','modules.cpp','disasm.cpp','image.cpp','creatwth.cpp')
     $sourceNames += @($detoursNames + @('detours.h') | ForEach-Object { 'vendor/detours/4.0.1/src/' + $_ })
@@ -327,8 +346,14 @@ try {
     $env:TMP = $scratchRoot
     $compiler = Join-Path $env:VCToolsInstallDir 'bin/Hostx64/x64/cl.exe'
     $record.compiler = [ordered]@{path=$compiler;sha256=(Sha $compiler)}
+    . (Join-Path $PSScriptRoot 'Write-PedPoolRegistryFixture.ps1')
+    $generatedFixture = Write-PedPoolRegistryFixture $taskRoot (Join-Path $scratchRoot 'PedPoolRegistryFixture.generated.h')
+    $generatedEvidence = Join-Path $outputRoot 'PedPoolRegistryFixture.generated.h'
+    Copy-Item -LiteralPath $generatedFixture.path -Destination $generatedEvidence
+    $record['pedPoolRegistryGeneratedFixture'] = [ordered]@{path=$generatedEvidence;sha256=(Sha $generatedEvidence);
+        rejectingPedMethods=$generatedFixture.rejectingPedMethods;rejectingPoolMethods=$generatedFixture.rejectingPoolMethods}
     $common = @('/nologo','/std:c++17','/EHsc','/O2','/MD','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN','/DDETOURS_MTA_VM_TRANSACTION_NODES',
-        ('/I'+(Join-Path $taskRoot 'Client/sdk')),('/I'+(Join-Path $taskRoot 'Shared/sdk')),('/I'+(Join-Path $taskRoot 'vendor/detours/4.0.1/src')))
+        ('/I'+(Join-Path $taskRoot 'Client/sdk')),('/I'+(Join-Path $taskRoot 'Shared/sdk')),('/I'+(Join-Path $taskRoot 'vendor/detours/4.0.1/src')),('/I'+$scratchRoot))
     $detoursSources = @($detoursNames | ForEach-Object { Join-Path $taskRoot ('vendor/detours/4.0.1/src/' + $_) })
     $detoursArguments = $common + @('/w','/c') + $detoursSources + @(('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'fixture.pdb')))
     $record.compileRuns += RunBounded $compiler $detoursArguments 'detours-compile' 60000
@@ -365,6 +390,7 @@ try {
         (Join-Path $taskRoot 'Client/game_de/CWantedDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CPlayerInfoDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CRopesDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGaragesDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CGarageNamedDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CPoolsDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CPedVitalsDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CStatsReadDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CStatsDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeWeatherOverridePlan.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeWeatherOverrideProfile.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeWeatherOverrideAtomic.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeWeatherOverrideOwner.cpp'),
@@ -383,14 +409,31 @@ try {
     if ($Scope -eq 'PedOwner') { $fixtureArguments += '--ped-owner' }
     if ($Scope -eq 'PedCurrentWeapon') { $fixtureArguments += '--ped-current-weapon' }
     if ($Scope -eq 'GarageNamed') { $fixtureArguments += '--garage-named' }
+    if ($Scope -eq 'GaragePools') { $fixtureArguments += '--garage-pools' }
+    if ($Scope -eq 'PedPoolRegistry') { $fixtureArguments += '--ped-pool-registry' }
     $record.testRun = RunBounded $executable $fixtureArguments 'test' 60000
     $text = [IO.File]::ReadAllText($record.testRun.stdout) + [IO.File]::ReadAllText($record.testRun.stderr)
     if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
     if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
-    if ($Scope -eq 'GarageNamed') {
+    if ($Scope -eq 'GaragePools') {
         $record.nativeNamedGarageOwnerTested = $text.Contains('Production native named garage callback owner fixture completed')
         $record.actualNamedGarageSdkOwnerTested = $text.Contains('Actual named garage SDK callback owner fixture completed')
-        if (-not ($record.nativeNamedGarageOwnerTested -and $record.actualNamedGarageSdkOwnerTested)) {
+        $record.nativeNamedGarageGeometryOwnerTested = $text.Contains('Production native named garage geometry callback owner fixture completed')
+        $record.nativePoolsPedRegistryOwnerTested = $text.Contains('Production actual native borrowed ped pool registry callback fixture completed')
+        if (-not ($record.nativeNamedGarageOwnerTested -and $record.actualNamedGarageSdkOwnerTested -and
+                  $record.nativeNamedGarageGeometryOwnerTested -and $record.nativePoolsPedRegistryOwnerTested)) {
+            throw 'Current named8properties and borrowed ped pool registry did not finish through their actual SDK/current callback owners.'
+        }
+        $record.productionNativeCallbackTested = $true
+    } elseif ($Scope -eq 'PedPoolRegistry') {
+        $record.nativePoolsPedRegistryOwnerTested = $text.Contains('Production actual native borrowed ped pool registry callback fixture completed')
+        if (-not $record.nativePoolsPedRegistryOwnerTested) { throw 'Actual borrowed ped pool registry owner did not finish.' }
+        $record.productionNativeCallbackTested = $true
+    } elseif ($Scope -eq 'GarageNamed') {
+        $record.nativeNamedGarageOwnerTested = $text.Contains('Production native named garage callback owner fixture completed')
+        $record.actualNamedGarageSdkOwnerTested = $text.Contains('Actual named garage SDK callback owner fixture completed')
+        $record.nativeNamedGarageGeometryOwnerTested = $text.Contains('Production native named garage geometry callback owner fixture completed')
+        if (-not ($record.nativeNamedGarageOwnerTested -and $record.actualNamedGarageSdkOwnerTested -and $record.nativeNamedGarageGeometryOwnerTested)) {
             throw 'Named garage properties did not finish through the actual SDK and retained callback owner.'
         }
         $record.productionNativeCallbackTested = $true
@@ -513,7 +556,8 @@ try {
     if (-not $record.nativePedCurrentWeaponSlotOwnerTested) { throw 'Current weapon slot read did not finish through the real selected-ped callback.' }
     $record.nativeNamedGarageOwnerTested = $text.Contains('Production native named garage callback owner fixture completed')
     $record.actualNamedGarageSdkOwnerTested = $text.Contains('Actual named garage SDK callback owner fixture completed')
-    if (-not ($record.nativeNamedGarageOwnerTested -and $record.actualNamedGarageSdkOwnerTested)) { throw 'Named garage SDK/callback owner did not complete.' }
+    $record.nativeNamedGarageGeometryOwnerTested = $text.Contains('Production native named garage geometry callback owner fixture completed')
+    if (-not ($record.nativeNamedGarageOwnerTested -and $record.actualNamedGarageSdkOwnerTested -and $record.nativeNamedGarageGeometryOwnerTested)) { throw 'Named garage SDK/callback owner did not complete.' }
 
     $record.nativePedWeaponInstanceOwnerTested = $text.Contains('Production native ped weapon instance callback owner fixture completed')
     if (-not $record.nativePedWeaponInstanceOwnerTested) { throw 'Selected ped weapon scalars and actual bank lookup did not execute through the registered token callback owner.' }

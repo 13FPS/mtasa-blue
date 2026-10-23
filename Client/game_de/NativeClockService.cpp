@@ -209,6 +209,9 @@ namespace mta::game_de
             ClockResult GetWeaponInfoSlot(std::size_t slot, CWeaponInfo*& output) noexcept override;
             ClockResult ReadPedWeaponInfo(const NativePedReferenceToken&, std::uint32_t, eWeaponSkill, CWeaponInfo*&) noexcept override;
             ClockResult ReadPedCurrentWeaponSlot(const NativePedReferenceToken&, std::uint32_t&) noexcept override;
+            ClockResult ReadNamedGarageGeometry(const NativeGarageName&, NativeGarageGeometry&) noexcept override;
+            ClockResult CheckPedPoolAccess() noexcept override;
+            ClockResult ProbePedPoolHandle(std::uint32_t, bool&, NativePedPoolReader::Value&) noexcept override;
             ClockResult ReadNamedGarageType(const NativeGarageName&, std::uint8_t&) noexcept override;
             ClockResult SetNamedGarageType(const NativeGarageName&, std::uint8_t) noexcept override;
             ClockResult ReadNamedGarageOpen(const NativeGarageName&, bool&) noexcept override;
@@ -2774,6 +2777,28 @@ namespace mta::game_de
             // grants the unqualified model/actor slot-change lifecycle.
             output = next;
             return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::ReadNamedGarageGeometry(const NativeGarageName& name, NativeGarageGeometry& output) noexcept
+        {
+            // A coherent immediate raw snapshot never grants a writable view,
+            // numeric garage ID mapping or retained row lifetime.
+            return NativeNamedGarageMemory({runtime.image}, &CheckTimingOwner).ReadGeometry(name, output);
+        }
+        ClockResult NativeAccess::CheckPedPoolAccess() noexcept
+        {
+            const auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            return NativePedPoolReader::Revalidate({runtime.image}) ? ClockResult::Ok : ClockResult::BindingChanged;
+        }
+        ClockResult NativeAccess::ProbePedPoolHandle(std::uint32_t handle, bool& present, NativePedPoolReader::Value& output) noexcept
+        {
+            const auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            // Probe separates proved native absence from refusal; a CPU map
+            // never substitutes for the current pool or owns another reference.
+            return NativePedPoolReader({runtime.image}, &CheckTimingOwner).Probe(handle, present, output);
         }
         ClockResult NativeAccess::ReadNamedGarageType(const NativeGarageName& name, std::uint8_t& output) noexcept
         {

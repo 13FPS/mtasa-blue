@@ -334,4 +334,7 @@ int main(int argc, char** argv)
     Check(foreign == ClockResult::WrongThread && output == 0xe7, "callback seam cannot replace genuine native GameThread identity");
     std::printf("Production native named garage property primitive fixture completed\n");
     std::printf("Passed %u native named garage checks (64-bit; no native engine code executed)\n", checks);
+    // Geometry fixtures reuse this scaffold under a renamed entry point, where
+    // C++ no longer supplies main's implicit successful return.
+    return 0;
 }

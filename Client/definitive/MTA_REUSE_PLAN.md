@@ -92,17 +92,33 @@ not need a parallel registry or a cast between differently typed row layouts.
 This removes a classic-only SDK dependency without completing native pool or
 ped factories.
 
+The abstract `CPoolsDE` reuses that registry policy for qualified existing DE
+ped wrappers. Controlled registrations borrow the wrapper's immutable token
+from the same native owner and withdraw the CPU row before wrapper destruction;
+the existing controller continues to own native reference cells. Lookup first
+checks genuine native presence, then the registered wrapper/token identity.
+Qualified missing handles can return null; missing callback authority remains
+an explicit refusal. Fabricated nonnegative handles with the empty-slot bit
+set are unsupported and refuse instead of claiming the native helper returned
+null; signed-negative handles keep its proved early-null behavior.
+Counts, count-only reset and local-client invalidation
+remain MTA bookkeeping. Construction/deletion factories and `GetPools`
+publication are still separate work.
+
 Garage initialization also shares MTA's ordered sixteen-entry policy between
 the actual classic manager and the abstract DE manager. The unused classic
 garage-interface accessor stays on `CGarageSA`, outside the shared SDK, so
-modules must be rebuilt together. Native garage identity, complete properties
-and the DE manager's `GetGarage` factory remain separate prerequisites.
+modules must be rebuilt together. Numeric garage identity and the DE manager's
+`GetGarage` factory remain separate prerequisites.
 
 Named garage type/open access uses the genuine bank's first matching name and
 rechecks its published count and selected row around each operation. The SDK
 slice shares MTA's door-state policy with classic and preserves independent
-byte stores; DE script commands have additional transition effects. Geometry
-and classic numeric-ID mapping remain unqualified, so this does not expose a
+byte stores; DE script commands have additional transition effects. All four
+geometry getters now copy one coherent fourteen-word snapshot, preserving raw
+float bits and MTA's existing upper-Z value for `GetSize`'s height output. The
+named class implements all eight SDK properties with controlled construction.
+Classic numeric-ID mapping remains unqualified, so this does not expose a
 complete garage manager.
 
 These batches have offline primitive, actual SDK/callback-owner and normal

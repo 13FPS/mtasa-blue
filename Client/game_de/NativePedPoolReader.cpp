@@ -115,15 +115,29 @@ namespace mta::game_de
         }
         return true;
     }
-    ClockResult NativePedPoolReader::Capture(std::uint32_t handle, Value& output) const noexcept
+    ClockResult NativePedPoolReader::CaptureObserved(std::uint32_t handle, bool& present, Value& output) const noexcept
     {
         Value next;
         next.handle = handle;
         next.slot = handle >> 8;
+        if (handle > static_cast<std::uint32_t>((std::numeric_limits<std::int32_t>::max)()))
+        {
+            // The pinned signed-handle consumer branches to null for every
+            // negative input before loading the pool root. Probe can report
+            // that exact absence without borrowing a nonexistent pool/header;
+            // Resolve retains its existing explicit invalid-input refusal.
+            present = false;
+            output = next;
+            return ClockResult::Ok;
+        }
         if (!Image::ReadImage(binding.image, binding.image + P::RootRva, &next.pool, sizeof(next.pool), true))
             return ClockResult::ReadFailure;
         if (!next.pool)
-            return ClockResult::NotInitialized;
+        {
+            present = false;
+            output = next;
+            return ClockResult::Ok;
+        }
         if (next.pool % alignof(std::uintptr_t) || !NativePages(next.pool, P::OwnsOffset + 1) || !NativeRead(next.pool + P::ObjectsOffset, next.objects) ||
             !NativeRead(next.pool + P::FlagsOffset, next.flags) || !NativeRead(next.pool + P::CapacityOffset, next.capacity) ||
             !NativeRead(next.pool + P::CursorOffset, next.cursor) || !NativeRead(next.pool + P::OwnsOffset, next.ownsAllocations))
@@ -145,7 +159,14 @@ namespace mta::game_de
         // handles never contain that bit; conservatively reject a crafted
         // free-slot byte even if it happens to compare equal.
         if ((next.generation & P::EmptyBit) || next.generation != static_cast<unsigned char>(handle))
-            return ClockResult::NotInitialized;
+        {
+            // Preserve only root/header/slot-flag observations for absence.
+            // A free or generation-mismatched row never authorizes reading
+            // its object bytes, vtable or any other retired ped data.
+            present = false;
+            output = next;
+            return ClockResult::Ok;
+        }
         if (!Add(next.objects, static_cast<std::size_t>(next.slot) * P::ObjectStride, next.nativePed) || !NativeRead(next.nativePed, next.vtable) ||
             next.vtable % alignof(std::uintptr_t) || !Image::ImagePages(binding.image, next.vtable, sizeof(std::uintptr_t)))
             return ClockResult::ReadFailure;
@@ -154,6 +175,19 @@ namespace mta::game_de
             !Image::ReadImage(binding.image, next.vtable, &next.firstMethod, sizeof(next.firstMethod)) ||
             !Image::ImagePages(binding.image, next.firstMethod, 1, false, true))
             return ClockResult::BindingChanged;
+        present = true;
+        output = next;
+        return ClockResult::Ok;
+    }
+    ClockResult NativePedPoolReader::Capture(std::uint32_t handle, Value& output) const noexcept
+    {
+        Value      next;
+        bool       present = false;
+        const auto result = CaptureObserved(handle, present, next);
+        if (result != ClockResult::Ok)
+            return result;
+        if (!present)
+            return ClockResult::NotInitialized;
         output = next;
         return ClockResult::Ok;
     }
@@ -186,6 +220,46 @@ namespace mta::game_de
         if (checked != ClockResult::Ok)
             return checked;
         output = second;
+        return ClockResult::Ok;
+    }
+    ClockResult NativePedPoolReader::Probe(std::uint32_t handle, bool& present, Value& output) const noexcept
+    {
+        if (!owner)
+            return ClockResult::NotInitialized;
+        auto result = owner();
+        if (result != ClockResult::Ok)
+            return result;
+        if (!Revalidate(binding))
+            return ClockResult::UnsupportedBuild;
+        // Native allocation never publishes an empty-bit handle. A fabricated
+        // nonnegative input can nevertheless equal a free flag in the pinned
+        // helper's whole-byte comparison; refuse that unsupported input rather
+        // than call its potentially nonnull retired slot a genuine null result.
+        // Signed-negative inputs keep the helper's separately proved null path.
+        if (handle <= static_cast<std::uint32_t>((std::numeric_limits<std::int32_t>::max)()) && (handle & P::EmptyBit))
+            return ClockResult::InvalidArgument;
+        Value first, second;
+        bool  firstPresent = false, secondPresent = false;
+        result = CaptureObserved(handle, firstPresent, first);
+        if (result != ClockResult::Ok)
+            return result;
+        result = owner();
+        if (result != ClockResult::Ok)
+            return result;
+        result = CaptureObserved(handle, secondPresent, second);
+        if (result != ClockResult::Ok)
+            return result;
+        // Even absent rows must retain the exact current root/header/flag
+        // observation across bookends; two unrelated failed resolutions are
+        // not proof of a stable native absence.
+        if (firstPresent != secondPresent || !Same(first, second) || !Revalidate(binding))
+            return ClockResult::BindingChanged;
+        result = owner();
+        if (result != ClockResult::Ok)
+            return result;
+        present = secondPresent;
+        if (present)
+            output = second;
         return ClockResult::Ok;
     }
     ClockResult NativePedPoolReader::Recheck(const Value& previous) const noexcept

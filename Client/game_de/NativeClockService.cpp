@@ -48,6 +48,7 @@
 #include "NativeWorldLineCalls.h"
 #include "NativeWorldAreaMemory.h"
 #include "NativeWorldJetpackMemory.h"
+#include "NativeWorldIgnoredEntityMemory.h"
 #include "CWorldLineDE.h"
 #include "NativeAnimationBlockMemory.h"
 #include "NativeAnimationManagerMemory.h"
@@ -234,6 +235,8 @@ namespace mta::game_de
             ClockResult ReadPedVisible(const NativePedReferenceToken&, bool&) noexcept override;
             ClockResult ReadPedOnScreen(const NativePedReferenceToken&, bool&) noexcept override;
             ClockResult GrantPedWeapon(const NativePedReferenceToken&, eWeaponType, std::uint32_t, std::uint32_t&) noexcept override;
+            ClockResult SetWorldIgnoredPed(const NativePedReferenceToken&) noexcept override;
+            ClockResult ClearWorldIgnoredEntity() noexcept override;
             ClockResult SetPedVisible(const NativePedReferenceToken&, bool) noexcept override;
             ClockResult SetPedAreaCode(const NativePedReferenceToken&, std::uint8_t) noexcept override;
             ClockResult RequestStreamingSpecialModel(std::uint32_t, const char*, std::uint32_t) noexcept override;
@@ -402,6 +405,20 @@ namespace mta::game_de
             // address has disappeared from the native reference bank.
             NativePedReferenceController pedReferences;
             std::atomic<std::uint64_t>   referenceGeneration{0};
+            // One native address filter is the only retained pointer intent.
+            // Keep both CAS candidates when an interrupted replacement cannot
+            // be acknowledged, then clear it before either token is released.
+            struct WorldIgnoreJournal
+            {
+                NativePedReferenceToken committedToken{}, pendingToken{};
+                std::uintptr_t          committed = 0, pending = 0;
+            } worldIgnore;
+            std::atomic<std::uint64_t> worldIgnoreGeneration{0};
+            std::atomic<bool>          worldIgnoreRecovery{false};
+            // Only admitted same-thread calls touch the journal. This prevents
+            // reentrant bookkeeping changes; the existing shared native gate
+            // still serializes the actual CAS and is never held across firing.
+            bool worldIgnoreUpdating = false;
             // Only a failed partial XYZ intent owns rollback components. Full
             // vectors persist, and later native edits retire only the precise
             // superseded component rather than permitting a whole-row rewind.
@@ -500,6 +517,11 @@ namespace mta::game_de
         bool              FrameReceiver(void* receiver) noexcept;
 
         constexpr unsigned timingScaleBit = 1, timingMinuteBit = 2, timingPauseBit = 4;
+
+        bool WorldIgnoreRetained() noexcept
+        {
+            return runtime.worldIgnoreGeneration.load() != 0;
+        }
 
         bool WeatherOverrideRetained() noexcept
         {
@@ -2565,13 +2587,174 @@ namespace mta::game_de
             return runtime.pedReferences.Resolve(PedReferenceMemory(), runtime.generation.load(), token, output);
         }
 
+        bool SameWorldIgnoreToken(const NativePedReferenceToken& first, const NativePedReferenceToken& second) noexcept
+        {
+            return first.version && first.version == second.version && first.ownerGeneration == second.ownerGeneration && first.slot == second.slot;
+        }
+
+        struct WorldIgnoreIntent
+        {
+            bool held = false;
+            WorldIgnoreIntent() noexcept
+            {
+                if (!runtime.worldIgnoreUpdating)
+                {
+                    runtime.worldIgnoreUpdating = true;
+                    held = true;
+                }
+            }
+            ~WorldIgnoreIntent()
+            {
+                if (held)
+                    runtime.worldIgnoreUpdating = false;
+            }
+        };
+
+        void ResetWorldIgnoreJournal() noexcept
+        {
+            runtime.worldIgnore = {};
+            runtime.worldIgnoreRecovery.store(false);
+            runtime.worldIgnoreGeneration.store(0);
+        }
+
+        ClockResult CheckWorldIgnoreRecoveryOwner() noexcept
+        {
+            const auto generation = runtime.generation.load();
+            // Nulling our retained comparison filter does not require its old
+            // world or ped to remain alive. It still requires the exact native
+            // callback/image/GT/GC admission; no producer thread may repair it.
+            if (callbackDepth != 1 || GetCurrentThreadId() != runtime.engineThread.load() || !timingCallbackGeneration ||
+                timingCallbackGeneration != generation || runtime.worldIgnoreGeneration.load() != generation ||
+                runtime.admissionGeneration.load() != generation || !runtime.admissionSerial.load())
+                return ClockResult::OwnerConflict;
+            return CheckBinding(false, true) && CheckTimingBinding() ? ClockResult::Ok : ClockResult::BindingChanged;
+        }
+
+        ClockResult RestoreWorldIgnoredEntity() noexcept
+        {
+            if (!WorldIgnoreRetained())
+                return ClockResult::Ok;
+            auto result = CheckWorldIgnoreRecoveryOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            WorldIgnoreIntent intent;
+            if (!intent.held)
+                return ClockResult::Busy;
+            NativeWorldIgnoredEntityMemory::Receipt receipt;
+            result = NativeWorldIgnoredEntityMemory::ClearOwned(runtime.image, runtime.worldIgnore.committed, runtime.worldIgnore.pending,
+                                                                &CheckWorldIgnoreRecoveryOwner, &receipt);
+            if (result == ClockResult::Ok && !receipt.acknowledged)
+                result = ClockResult::RestoreFailure;
+            if (result == ClockResult::Ok && receipt.acknowledged)
+                ResetWorldIgnoreJournal();
+            else
+            {
+                runtime.worldIgnoreRecovery.store(true);
+                runtime.restored.store(false);
+            }
+            return result;
+        }
+
+        // The filter setter appears before the ped mutations. Share their
+        // existing registered-receiver comparison rather than duplicating it.
+        bool SameRegisteredPed(const NativePedPoolReader::Value&, const NativePedPoolReader::Value&) noexcept;
+
+        ClockResult NativeAccess::SetWorldIgnoredPed(const NativePedReferenceToken& token) noexcept
+        {
+            const auto selected = token;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            if (runtime.worldIgnoreRecovery.load())
+                return ClockResult::Busy;
+            WorldIgnoreIntent intent;
+            if (!intent.held)
+                return ClockResult::Busy;
+            NativePedPoolReader::Value before, after;
+            if ((result = ResolvePedReference(selected, before)) != ClockResult::Ok)
+                return result;
+            const auto prior = runtime.worldIgnore;
+            const auto priorGeneration = runtime.worldIgnoreGeneration.load();
+            // Publish possible pointer debt before the only CAS. Even a seam
+            // exception after the effect cannot let End discard its owner.
+            runtime.worldIgnore.pendingToken = selected;
+            runtime.worldIgnore.pending = before.nativePed;
+            runtime.worldIgnoreGeneration.store(runtime.generation.load());
+            runtime.restored.store(false);
+            NativeWorldIgnoredEntityMemory::Receipt receipt;
+            result = NativeWorldIgnoredEntityMemory::Exchange(runtime.image, prior.committed, &before, &CheckTimingOwner, &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = ResolvePedReference(selected, after);
+                if (result == ClockResult::Ok && !SameRegisteredPed(before, after))
+                    result = ClockResult::OwnerConflict;
+            }
+            if (result == ClockResult::Ok && receipt.acknowledged)
+            {
+                runtime.worldIgnore.committedToken = selected;
+                runtime.worldIgnore.committed = before.nativePed;
+                runtime.worldIgnore.pendingToken = {};
+                runtime.worldIgnore.pending = 0;
+                return ClockResult::Ok;
+            }
+            if (!receipt.attempted)
+            {
+                runtime.worldIgnore = prior;
+                runtime.worldIgnoreGeneration.store(priorGeneration);
+                return result;
+            }
+            runtime.worldIgnoreRecovery.store(true);
+            Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            return result == ClockResult::Ok ? ClockResult::RestoreFailure : result;
+        }
+
+        ClockResult NativeAccess::ClearWorldIgnoredEntity() noexcept
+        {
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            WorldIgnoreIntent intent;
+            if (!intent.held || runtime.worldIgnoreRecovery.load())
+                return ClockResult::Busy;
+            NativeWorldIgnoredEntityMemory::Receipt receipt;
+            result = NativeWorldIgnoredEntityMemory::Exchange(runtime.image, runtime.worldIgnore.committed, nullptr, &CheckTimingOwner, &receipt);
+            if (result == ClockResult::Ok && !receipt.acknowledged)
+                result = ClockResult::RestoreFailure;
+            if (result == ClockResult::Ok && receipt.acknowledged)
+                ResetWorldIgnoreJournal();
+            else if (receipt.attempted && WorldIgnoreRetained())
+            {
+                runtime.worldIgnoreRecovery.store(true);
+                runtime.restored.store(false);
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            }
+            return result;
+        }
+
         ClockResult NativeAccess::ReleasePedReference(const NativePedReferenceToken& token) noexcept
         {
+            // Clear acknowledgement can call back before the controller sees
+            // this token. Fix its original CPU identity before those callbacks.
+            const auto selected = token;
             const auto owner = CheckPedReferenceRecoveryOwner();
             if (owner != ClockResult::Ok)
                 return owner;
+            // A registered relation cannot retire while our native filter may
+            // still contain its address, including an uncertain replace side.
+            if (WorldIgnoreRetained() &&
+                (SameWorldIgnoreToken(selected, runtime.worldIgnore.committedToken) || SameWorldIgnoreToken(selected, runtime.worldIgnore.pendingToken)))
+            {
+                if (runtime.worldIgnoreUpdating)
+                    return ClockResult::Busy;
+                const auto cleared = RestoreWorldIgnoredEntity();
+                if (cleared != ClockResult::Ok)
+                {
+                    Stop(cleared);
+                    return cleared;
+                }
+            }
             NativePedReferenceMemory::Receipt receipt;
-            const auto                        result = runtime.pedReferences.Release(PedReferenceMemory(), runtime.generation.load(), token, &receipt);
+            const auto                        result = runtime.pedReferences.Release(PedReferenceMemory(), runtime.generation.load(), selected, &receipt);
             if (!runtime.pedReferences.IsRetained())
                 runtime.referenceGeneration.store(0);
             if ((receipt.entered && result != ClockResult::Ok) || runtime.pedReferences.RecoveryPending())
@@ -4375,9 +4558,15 @@ namespace mta::game_de
                 clean = RecoverWeather();
             if (clean && (runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load()))
                 clean = RecoverWeaponVector();
+            // Clear our opaque entity-address filter before releasing any
+            // native reference cell. A stable foreign replacement proves our
+            // filter absent without a write; unreadable or uncertain cleanup
+            // retains this exact owner and never overwrites a foreign value.
+            if (clean && WorldIgnoreRetained())
+                clean = RestoreWorldIgnoredEntity() == ClockResult::Ok;
             // Unlink may execute native code and VM release. Complete this
             // bounded work before parking peers for clock patch restoration.
-            if (clean && runtime.pedReferences.IsRetained())
+            if (clean && (runtime.pedReferences.IsRetained() || WorldIgnoreRetained()))
                 clean = RestorePedReferences();
             if (clean && !clockChanged && !timingChanged)
             {
@@ -4599,11 +4788,11 @@ namespace mta::game_de
             {
                 if ((runtime.captured.load() && !runtime.restored.load()) || runtime.weatherRecovery.load() || runtime.weatherGeneration.load() ||
                     runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load() || WeatherOverrideRetained() ||
-                    runtime.pedReferences.IsRetained())
+                    (runtime.pedReferences.IsRetained() || WorldIgnoreRetained()))
                     RestoreOriginal();
                 else if (!runtime.captured.load() && !runtime.timingDirty.load() && !runtime.timingRecovery.load() && !runtime.weatherRecovery.load() &&
                          !runtime.weatherGeneration.load() && !runtime.weaponVectorRecovery.load() && !runtime.weaponVectorGeneration.load() &&
-                         !WeatherOverrideRetained() && !runtime.pedReferences.IsRetained())
+                         !WeatherOverrideRetained() && !(runtime.pedReferences.IsRetained() || WorldIgnoreRetained()))
                     runtime.restored.store(true);
             }
             if (runtime.peersRetained.load() && !RetryPeerHoldsBounded())
@@ -4691,7 +4880,7 @@ namespace mta::game_de
                 {
                     if ((runtime.captured.load() && !runtime.restored.load()) || runtime.timingDirty.load() || runtime.timingRecovery.load() ||
                         runtime.weatherRecovery.load() || runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() ||
-                        runtime.weaponVectorGeneration.load() || WeatherOverrideRetained() || runtime.pedReferences.IsRetained())
+                        runtime.weaponVectorGeneration.load() || WeatherOverrideRetained() || (runtime.pedReferences.IsRetained() || WorldIgnoreRetained()))
                         RestoreOriginal();
                     else
                     {
@@ -5283,7 +5472,8 @@ namespace mta::game_de
                     (runtime.inFlight.load() || !runtime.restored.load() || runtime.patchInstalled.load() || runtime.patchRecovery.load() ||
                      runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() || runtime.weatherRecovery.load() ||
                      runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load() ||
-                     WeatherOverrideRetained() || runtime.pedReferences.IsRetained() || runtime.peersRetained.load() || runtime.protectionPending.load()))
+                     WeatherOverrideRetained() || (runtime.pedReferences.IsRetained() || WorldIgnoreRetained()) || runtime.peersRetained.load() ||
+                     runtime.protectionPending.load()))
                     ready = false;
                 if (ready && !runtime.frameMode)
                     ready = (install ? DetourAttach : DetourDetach)(reinterpret_cast<PVOID*>(&runtime.originalContinuation),
@@ -5371,12 +5561,12 @@ namespace mta::game_de
             next.active = runtime.active.load();
             next.ready = runtime.ready.load() && !runtime.timingRecovery.load() && !runtime.weatherRecovery.load() && !runtime.weatherGeneration.load() &&
                          !runtime.weaponVectorRecovery.load() && !runtime.weaponVectorGeneration.load() && !WeatherOverridePending() &&
-                         !runtime.pedReferences.RecoveryPending();
+                         !runtime.pedReferences.RecoveryPending() && !runtime.worldIgnoreRecovery.load();
             next.stopping = runtime.stopping.load();
             next.restored = runtime.restored.load() && !runtime.timingDirty.load() && !runtime.timingRecovery.load() && !runtime.weatherRecovery.load() &&
                             !runtime.weatherSuperseded.load() && !runtime.weatherGeneration.load() && !runtime.weaponVectorRecovery.load() &&
                             !runtime.weaponVectorGeneration.load() && !runtime.weaponVectorSuperseded.load() && !WeatherOverrideRetained() &&
-                            !runtime.weatherOverrideSuperseded.load() && !runtime.pedReferences.IsRetained();
+                            !runtime.weatherOverrideSuperseded.load() && !(runtime.pedReferences.IsRetained() || WorldIgnoreRetained());
             next.frozen = runtime.patchInstalled.load();
             next.modulePinned = runtime.modulePinned.load();
             next.failure = runtime.failure.load();
@@ -5400,7 +5590,8 @@ namespace mta::game_de
             next.dataRecoveryPending = runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() ||
                                        runtime.weatherRecovery.load() || runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() ||
                                        runtime.weaponVectorGeneration.load() || WeatherOverridePending() || runtime.pedReferences.RecoveryPending() ||
-                                       (runtime.stopping.load() && runtime.pedReferences.IsRetained());
+                                       runtime.worldIgnoreRecovery.load() ||
+                                       (runtime.stopping.load() && (runtime.pedReferences.IsRetained() || WorldIgnoreRetained()));
             next.protectionRestorePending = runtime.protectionPending.load();
             state = next;
             return true;
@@ -5511,8 +5702,8 @@ namespace mta::game_de
             runtime.inFlight.load() || runtime.captured.load() || runtime.patchInstalled.load() || runtime.patchRecovery.load() ||
             runtime.protectionPending.load() || runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() ||
             runtime.weatherRecovery.load() || runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() ||
-            runtime.weaponVectorGeneration.load() || WeatherOverrideRetained() || runtime.pedReferences.IsRetained() || runtime.peersRetained.load() ||
-            runtime.admissionSerial.load() || runtime.generation.load() == (std::numeric_limits<std::uint64_t>::max)())
+            runtime.weaponVectorGeneration.load() || WeatherOverrideRetained() || (runtime.pedReferences.IsRetained() || WorldIgnoreRetained()) ||
+            runtime.peersRetained.load() || runtime.admissionSerial.load() || runtime.generation.load() == (std::numeric_limits<std::uint64_t>::max)())
             return false;
         Admission::Token claim;
         if (!Admission::TryAcquire(Admission::Category::Clock, claim))
@@ -5568,6 +5759,8 @@ namespace mta::game_de
         runtime.playerInfoGeneration = 0;
         runtime.ropesMemory.Reset();
         runtime.ropesGeneration = 0;
+        ResetWorldIgnoreJournal();
+        runtime.worldIgnoreUpdating = false;
         runtime.weaponVectorJournal = {};
         runtime.weaponVectorSlot = 0;
         runtime.weaponVectorFrameReceiver = 0;
@@ -5638,7 +5831,8 @@ namespace mta::game_de
             !runtime.captured.load() && !runtime.patchInstalled.load() && !runtime.patchRecovery.load() && !runtime.protectionPending.load() &&
             !runtime.dataRecovery.load() && !runtime.peersRetained.load() && !runtime.timingDirty.load() && !runtime.timingRecovery.load() &&
             !runtime.weatherRecovery.load() && !runtime.weatherGeneration.load() && !runtime.weaponVectorRecovery.load() &&
-            !runtime.weaponVectorGeneration.load() && !WeatherOverrideRetained() && !runtime.pedReferences.IsRetained() && !runtime.peerBusy.load())
+            !runtime.weaponVectorGeneration.load() && !WeatherOverrideRetained() && !(runtime.pedReferences.IsRetained() || WorldIgnoreRetained()) &&
+            !runtime.peerBusy.load())
         {
             if (ReleaseAdmission(generation))
             {
@@ -5753,7 +5947,8 @@ namespace mta::game_de
         if ((runtime.captured.load() && !runtime.restored.load()) || runtime.patchInstalled.load() || runtime.patchRecovery.load() ||
             runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() || runtime.weatherRecovery.load() ||
             runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load() || WeatherOverrideRetained() ||
-            runtime.pedReferences.IsRetained() || runtime.inFlight.load() || runtime.peersRetained.load() || runtime.protectionPending.load())
+            (runtime.pedReferences.IsRetained() || WorldIgnoreRetained()) || runtime.inFlight.load() || runtime.peersRetained.load() ||
+            runtime.protectionPending.load())
             return false;
         const bool clean = (!runtime.hooked.load() && !runtime.timerHooked.load() && !runtime.frameHooked.load()) || ChangeHooks(false);
         if (clean)
@@ -5797,6 +5992,7 @@ namespace mta::game_de
                 (runtime.captured.load() && !runtime.restored.load()) || runtime.patchInstalled.load() || runtime.patchRecovery.load() ||
                 runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() || runtime.weatherRecovery.load() ||
                 runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load() || WeatherOverrideRetained() ||
-                runtime.pedReferences.IsRetained() || runtime.peersRetained.load() || runtime.protectionPending.load() || runtime.admissionSerial.load());
+                (runtime.pedReferences.IsRetained() || WorldIgnoreRetained()) || runtime.peersRetained.load() || runtime.protectionPending.load() ||
+                runtime.admissionSerial.load());
     }
 }

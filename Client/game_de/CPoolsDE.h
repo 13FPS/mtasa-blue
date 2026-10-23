@@ -76,6 +76,10 @@ namespace mta::game_de
         // The exact CPU wrapper identity selects one existing controlled row;
         // its current token/owner still admits the nullable client association.
         ClockResult ReadPedClientEntity(CPed* wrapper, CClientEntity*&) noexcept;
+        // Select the same controlled row by exact CPU wrapper identity. The
+        // copied token adds no registration and exposes no native pointer;
+        // its consumer still needs current native callback admission.
+        ClockResult ReadBorrowedPedReference(CPed* wrapper, NativePedReferenceToken&) noexcept;
 
         CPoolsDE(const CPoolsDE&) = delete;
         CPoolsDE& operator=(const CPoolsDE&) = delete;

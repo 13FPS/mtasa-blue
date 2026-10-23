@@ -139,6 +139,9 @@
 #include "../../Client/game_de/CWorldAreaDE.h"
 #include "NativeWorldAreaFixture.h"
 #include "../../Client/game_de/NativeWorldJetpackMemory.h"
+#include "../../Client/game_de/NativeWorldIgnoredEntityMemory.h"
+#include "../../Client/game_de/CWorldIgnoreEntityDE.h"
+#include "NativeWorldIgnoredEntityFixture.h"
 #include "../../Client/game_de/CWorldJetpackHeightDE.h"
 #include "NativeWorldJetpackFixture.h"
 #include "../../Client/game_de/NativeStreamingSceneProfile.h"
@@ -340,6 +343,15 @@ namespace ped_give_weapon_fixture
     }
 }
 #include "PedGiveWeaponFixture.generated.h"
+namespace world_ignore_entity_fixture
+{
+    [[noreturn]] inline void Unqualified(const char* method)
+    {
+        std::fprintf(stderr, "Unqualified world ignored-entity SDK call: %s\n", method);
+        std::abort();
+    }
+}
+#include "WorldIgnoreEntityFixture.generated.h"
 
 namespace ClockModelClassificationOwnerTest
 {
@@ -2695,8 +2707,41 @@ namespace mta::game_de::NativeImageAccess
 #define MTA_DE_WORLD_LINE_NATIVE_INVOKE ClockWorldLineOwnerTest::Invoke
 #include "../../Client/game_de/NativeWorldLineCalls.cpp"
 #undef MTA_DE_WORLD_LINE_NATIVE_INVOKE
+namespace ClockWorldIgnoreOwnerTest
+{
+    std::uintptr_t image = 0, address = 0, expected = 0, desired = 0;
+    unsigned       calls = 0, scenario = 0, unregistersAtCas = 0;
+    DWORD          priorProtection = PAGE_READWRITE;
+    bool           protectionChanged = false;
+    void (*reenter)() noexcept = nullptr;
+    mta::game_de::NativePedReferenceToken selected{};
+    // Substitute only the final OS CAS in the owned image. All actual image,
+    // thread/world/ped checks, publication and journal code remain production.
+    void* Compare(void* volatile* target, void* next, void* prior) noexcept
+    {
+        ++calls;
+        address = reinterpret_cast<std::uintptr_t>(target);
+        expected = reinterpret_cast<std::uintptr_t>(prior);
+        desired = reinterpret_cast<std::uintptr_t>(next);
+        unregistersAtCas = ClockPedReferenceOwnerTest::unregisters;
+        if (reenter)
+            reenter();
+        auto* old = InterlockedCompareExchangePointer(target, next, prior);
+        if (next && scenario == 1)
+            protectionChanged = VirtualProtect(reinterpret_cast<void*>(address), sizeof(void*), PAGE_NOACCESS, &priorProtection) != FALSE;
+        if (next && scenario == 2)
+            *reinterpret_cast<std::uint32_t*>(image + mta::game_de::NativeGameStateProfile::stateRva) = 0;
+        return old;
+    }
+}
+
 #include "../../Client/game_de/NativeWorldAreaMemory.cpp"
 #include "../../Client/game_de/NativeWorldJetpackMemory.cpp"
+#pragma push_macro("InterlockedCompareExchangePointer")
+#undef InterlockedCompareExchangePointer
+#define InterlockedCompareExchangePointer ClockWorldIgnoreOwnerTest::Compare
+#include "../../Client/game_de/NativeWorldIgnoredEntityMemory.cpp"
+#pragma pop_macro("InterlockedCompareExchangePointer")
 #define MTA_DE_PED_ONSCREEN_NATIVE_INVOKE ClockPedOnScreenOwnerTest::Invoke
 #include "../../Client/game_de/NativePedOnScreenCalls.cpp"
 #undef MTA_DE_PED_ONSCREEN_NATIVE_INVOKE
@@ -7513,6 +7558,7 @@ namespace
 #include "NativeWorldJetpackOwnerTests.inl"
 #include "NativePedOnScreenOwnerTests.inl"
 #include "NativePedWeaponGrantOwnerTests.inl"
+#include "NativeWorldIgnoreEntityOwnerTests.inl"
 #include "NativeAnimationBlockOwnerTests.inl"
 #include "NativeAnimationBlockNameOwnerTests.inl"
 #include "NativeAnimationManagerOwnerTests.inl"
@@ -7520,6 +7566,7 @@ namespace
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool worldIgnoreOnly = argc == 3 && std::strcmp(argv[2], "--world-ignore-entity") == 0;
     const bool pedWeaponGrantOnly = argc == 3 && std::strcmp(argv[2], "--ped-weapon-grant") == 0;
     const bool pedOnScreenOnly = argc == 3 && std::strcmp(argv[2], "--ped-on-screen") == 0;
     const bool worldJetpackOnly = argc == 3 && std::strcmp(argv[2], "--world-jetpack") == 0;
@@ -7557,9 +7604,17 @@ int main(int argc, char** argv)
     Check((argc == 2 || constructorOnly || pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly || poseOnly ||
            waterOnly || animationOnly || animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly ||
            fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly ||
-           worldLineOnly || worldAreaOnly || worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly) &&
+           worldLineOnly || worldAreaOnly || worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (worldIgnoreOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        WorldIgnoreEntityOwnerFixture::Run(fixture);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (pedWeaponGrantOnly)
     {
         ClockImageFixture fixture;

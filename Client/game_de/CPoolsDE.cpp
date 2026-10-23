@@ -297,6 +297,51 @@ namespace mta::game_de
         output = client;
         return ClockResult::Ok;
     }
+    ClockResult CPoolsDE::ReadBorrowedPedReference(CPed* wrapper, NativePedReferenceToken& output) noexcept
+    {
+        auto result = pedRegistryOwner.CheckPedPoolAccess();
+        if (result != ClockResult::Ok)
+            return result;
+        // This search compares CPU pointer identity without dereferencing a
+        // foreign wrapper, trusting StoredPointer, or creating another row.
+        auto* const row = MtaGame::CPedRegistryPolicy::FindByWrapper(pedLinks, wrapper);
+        if (!row)
+        {
+            result = pedRegistryOwner.CheckPedPoolAccess();
+            if (result != ClockResult::Ok)
+                return result;
+            return MtaGame::CPedRegistryPolicy::FindByWrapper(pedLinks, wrapper) ? ClockResult::BindingChanged : ClockResult::NotInitialized;
+        }
+        const auto                 index = static_cast<std::size_t>(row - pedLinks.data());
+        const auto                 version = pedControls[index].version;
+        const auto                 selected = pedControls[index].reference;
+        auto* const                client = row->pClientEntity;
+        NativePedPoolReader::Value before, after;
+        result = ReadControlled(index, before);
+        if (result != ClockResult::Ok)
+            return result;
+        result = pedRegistryOwner.RecheckPedPoolHandle(before);
+        if (result != ClockResult::Ok)
+            return result;
+        result = ReadControlled(index, after);
+        if (result != ClockResult::Ok)
+            return result;
+        if (!Same(before, after))
+            return ClockResult::BindingChanged;
+        result = pedRegistryOwner.CheckPedPoolAccess();
+        if (result != ClockResult::Ok)
+            return result;
+        result = pedRegistryOwner.RecheckPedPoolHandle(after);
+        if (result != ClockResult::Ok)
+            return result;
+        const auto current = pedControls[index].reference;
+        if (!Matches(index) || pedControls[index].version != version || row->pEntity != wrapper || row->pClientEntity != client ||
+            current.version != selected.version || current.ownerGeneration != selected.ownerGeneration || current.slot != selected.slot ||
+            MtaGame::CPedRegistryPolicy::FindByWrapper(pedLinks, wrapper) != row)
+            return ClockResult::BindingChanged;
+        output = selected;
+        return ClockResult::Ok;
+    }
     void CPoolsDE::Require(ClockResult result, const char* operation)
     {
         if (result != ClockResult::Ok)

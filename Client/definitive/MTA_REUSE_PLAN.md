@@ -5,6 +5,23 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+`CWorldIgnoreEntityDE` implements shooter exclusion for current registered peds
+through the existing controlled `CPoolsDE` registry. It copies a qualified token
+without exposing a classic native interface or creating another registry. Null
+requests explicitly clear the owned filter; unsupported entity kinds remain
+unavailable. The DE sector consumer compares a genuine pointer-sized ignored
+entity global, so the adapter uses a guarded pointer compare/exchange rather
+than changing collision policy or reproducing line-of-sight logic.
+
+One runtime journal covers committed and uncertain pending pointer effects.
+Matching reference release and runtime End must acknowledge the filter's
+absence before retiring its registered cell. Cleanup clears only an owned
+candidate and preserves a foreign replacement; a stable foreign value proves
+our debt absent without proving the whole filter is null. Explicit SDK clear
+still refuses that foreign state. Unreadable or uncertain cleanup retains the
+existing reference and runtime debt for retry. No native auto-clear behavior or
+complete entity factory is assumed.
+
 The firing batch shares the actual `CWeaponSA::FireBullet` itinerary with
 abstract `CWeaponFireBulletDE`. Its supported weapon set, shooter exclusion,
 fresh pre/post handler reads, stat lookup after the pre callback, transformed

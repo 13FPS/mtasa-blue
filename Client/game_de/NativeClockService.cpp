@@ -39,6 +39,7 @@
 #include "NativePedAreaMemory.h"
 #include "NativePedFireMemory.h"
 #include "NativePedCollisionMemory.h"
+#include "NativePedGogglesMemory.h"
 #include "NativeStreamingSpecialModelCalls.h"
 #include "NativeAnimationBlockMemory.h"
 #include "NativeAnimationManagerMemory.h"
@@ -217,6 +218,7 @@ namespace mta::game_de
             ClockResult ReadPedAreaCode(const NativePedReferenceToken&, std::uint8_t&) noexcept override;
             ClockResult ReadPedOnFire(const NativePedReferenceToken&, bool&) noexcept override;
             ClockResult SetPedUsesCollision(const NativePedReferenceToken&, bool) noexcept override;
+            ClockResult ReadPedWearingGoggles(const NativePedReferenceToken&, bool&) noexcept override;
             ClockResult SetPedAreaCode(const NativePedReferenceToken&, std::uint8_t) noexcept override;
             ClockResult RequestStreamingSpecialModel(std::uint32_t, const char*, std::uint32_t) noexcept override;
             ClockResult SetPedInWaterFlags(const NativePedReferenceToken&, bool) noexcept override;
@@ -3588,6 +3590,33 @@ namespace mta::game_de
             if (receipt.entered && result != ClockResult::Ok)
                 Stop(result);
             return result;
+        }
+
+        ClockResult NativeAccess::ReadPedWearingGoggles(const NativePedReferenceToken& token, bool& output) noexcept
+        {
+            const auto selected = token;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedPoolReader::Value before, after;
+            if ((result = ResolvePedReference(selected, before)) != ClockResult::Ok)
+                return result;
+            bool next = false;
+            if ((result = NativePedGogglesMemory({runtime.image}, &CheckTimingOwner).ReadWearingGoggles(before, next)) != ClockResult::Ok)
+                return result;
+            result = ResolvePedReference(selected, after);
+            if (result == ClockResult::Ok && !SameRegisteredPed(before, after))
+                result = ClockResult::OwnerConflict;
+            // Presence conveys no ownership of the associated actor or vision
+            // state. Initial/read-only refusal means no bool; only a successful
+            // observation losing its admitted relation retires this Runtime.
+            if (result != ClockResult::Ok)
+            {
+                Stop(result);
+                return result;
+            }
+            output = next;
+            return ClockResult::Ok;
         }
 
         ClockResult NativeAccess::ReadPedAreaCode(const NativePedReferenceToken& token, std::uint8_t& output) noexcept

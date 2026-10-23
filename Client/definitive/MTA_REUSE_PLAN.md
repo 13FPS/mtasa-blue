@@ -281,6 +281,15 @@ hook and task-manager implementation remain mandatory factory dependencies;
 this composition does not fabricate native task ownership or query another
 priority as a substitute.
 
+`CPedGogglesDE` adds MTA's const `IsWearingGoggles` predicate to that borrowed
+chain. It observes only the native goggles-object association, independently
+identified by the named removal command, its direct clearing routine and the
+common ped constructor. Two coherent snapshots and the retained owner's
+registered-ped checks precede publication. No target object is dereferenced or
+exported; vision effects, removal and the remaining ped factory are separate
+dependencies. An unavailable owner raises the existing service failure rather
+than silently reporting that the ped has no goggles.
+
 MTA's `CreateWeaponStat` factory also shares its existing defaults and flag
 transition policy between classic and DE. The complete owned `CWeaponStat`
 contains custom CPU data, as the classic unlisted factory does; its mutable

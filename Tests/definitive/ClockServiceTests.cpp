@@ -34,6 +34,9 @@
 #include "../../Client/game_de/NativePedCollisionProfile.h"
 #include "../../Client/game_de/CPedCollisionDE.h"
 #include "../../Client/game_de/CPedTasksDE.h"
+#include "../../Client/game_de/CPedGogglesDE.h"
+#include "../../Client/game_de/NativePedGogglesMemory.h"
+#include "../../Client/game_de/NativePedGogglesProfile.h"
 #include "../../Client/game_de/NativePedAreaProfile.h"
 #include "../../Client/game_de/CPedAreaDE.h"
 #include "../../Client/game_de/NativeStreamingSpecialModelCalls.h"
@@ -231,6 +234,15 @@ namespace ped_tasks_fixture
     }
 }
 #include "PedTasksFixture.generated.h"
+namespace ped_goggles_fixture
+{
+    [[noreturn]] void Unqualified(const char* method) noexcept
+    {
+        std::fprintf(stderr, "Unexpected unqualified goggles owner fixture call: %s\n", method);
+        std::abort();
+    }
+}
+#include "PedGogglesFixture.generated.h"
 
 namespace ClockModelClassificationOwnerTest
 {
@@ -936,6 +948,44 @@ namespace ClockPedFireOwnerTest
         if (selected)
         {
             ++reads;
+            if (changeAfter && reads == changeAfter)
+                std::memcpy(reinterpret_cast<void*>(watched), &replacement, sizeof(replacement));
+            if (loseToken && reads == 2)
+            {
+                loseToken = false;
+                const std::uintptr_t zero = 0;
+                std::memcpy(reinterpret_cast<void*>(cell), &zero, sizeof(zero));
+            }
+        }
+        return TRUE;
+    }
+}
+namespace ClockPedGogglesOwnerTest
+{
+    std::uintptr_t                         watched = 0, replacement = 0, cell = 0;
+    unsigned                               reads = 0, changeAfter = 0;
+    bool                                   failNext = false, loseToken = false;
+    mta::game_de::NativePedReferenceToken* callerToken = nullptr;
+    BOOL WINAPI                            Read(HANDLE process, LPCVOID source, LPVOID destination, SIZE_T bytes, SIZE_T* copied)
+    {
+        const bool selected = reinterpret_cast<std::uintptr_t>(source) == watched && bytes == sizeof(std::uintptr_t);
+        if (selected && failNext)
+        {
+            failNext = false;
+            if (copied)
+                *copied = 0;
+            return FALSE;
+        }
+        if (!::ReadProcessMemory(process, source, destination, bytes, copied))
+            return FALSE;
+        if (selected)
+        {
+            ++reads;
+            if (callerToken)
+            {
+                ++callerToken->version;
+                callerToken = nullptr;
+            }
             if (changeAfter && reads == changeAfter)
                 std::memcpy(reinterpret_cast<void*>(watched), &replacement, sizeof(replacement));
             if (loseToken && reads == 2)
@@ -2349,6 +2399,10 @@ namespace mta::game_de::NativeImageAccess
 #include "../../Client/game_de/NativePedOxygenMemory.cpp"
 #undef MTA_DE_PED_OXYGEN_EXCHANGE
 #define MTA_DE_PED_DUCKING_EXCHANGE ClockPedDuckingSetterOwnerTest::Exchange
+#pragma push_macro("ReadProcessMemory")
+#define ReadProcessMemory ClockPedGogglesOwnerTest::Read
+#include "../../Client/game_de/NativePedGogglesMemory.cpp"
+#pragma pop_macro("ReadProcessMemory")
 #include "../../Client/game_de/NativePedDuckingMemory.cpp"
 #undef MTA_DE_PED_DUCKING_EXCHANGE
 #define MTA_DE_PED_BIKE_FLAGS_EXCHANGE ClockPedFlagsOwnerTest::ExchangeBike
@@ -7061,6 +7115,7 @@ namespace
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool gogglesOnly = argc == 3 && std::strcmp(argv[2], "--ped-goggles") == 0;
     const bool duckingSetterOnly = argc == 3 && std::strcmp(argv[2], "--ducking-setter") == 0;
     const bool fireCollisionOnly = argc == 3 && std::strcmp(argv[2], "--fire-collision") == 0;
     const bool fireOnly = argc == 3 && std::strcmp(argv[2], "--ped-fire") == 0;
@@ -7087,9 +7142,17 @@ int main(int argc, char** argv)
     const bool poolRegistryOnly = argc == 3 && std::strcmp(argv[2], "--ped-pool-registry") == 0;
     Check((argc == 2 || constructorOnly || pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly || poseOnly ||
            waterOnly || animationOnly || animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly ||
-           fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly) &&
+           fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly || gogglesOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (gogglesOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        NativePedPhysicalScalarsOwnedSdk(fixture, false, false, false, false, false, false, 0, false, true);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (duckingSetterOnly)
     {
         ClockImageFixture fixture;

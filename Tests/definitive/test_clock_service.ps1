@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter')]
+    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -26,6 +26,8 @@ $record['runScope'] = $Scope
 $record['nativePedOwnerSliceTested'] = $false
 $record['nativePedWaterTaskOwnerTested'] = $false
 $record['actualPedWaterTaskOwnerTested'] = $false
+$record['nativePedGogglesOwnerTested'] = $false
+$record['actualPedGogglesSdkOwnerTested'] = $false
 $record['nativePedDuckingSetterOwnerTested'] = $false
 $record['actualPedDuckingSetterSdkOwnerTested'] = $false
 $record['nativePedFireOwnerTested'] = $false
@@ -128,6 +130,7 @@ try {
         'Tests/definitive/NativeRopesOwnerTests.inl',
         'Client/game_de/NativePedTransformReader.h','Client/game_de/NativePedTransformReader.cpp','Client/game_de/NativePedTransformProfile.h',
         'Client/game_de/NativeAnimationManagerAccess.h','Client/game_de/NativeAnimationManagerMemory.h','Client/game_de/NativeAnimationManagerMemory.cpp','Client/game_de/NativeAnimationManagerProfile.h','Client/game_de/CAnimManagerDE.h','Client/game_de/CAnimManagerDE.cpp','Client/sdk/game/CAnimManager.h',
+        'Client/game_de/NativePedGogglesAccess.h','Client/game_de/NativePedGogglesMemory.h','Client/game_de/NativePedGogglesMemory.cpp','Client/game_de/NativePedGogglesProfile.h','Client/game_de/CPedGogglesDE.h','Client/game_de/CPedGogglesDE.cpp',
         'Client/game_de/CPedTasksDE.h','Client/game_de/CPedTasksDE.cpp','Client/sdk/game/CPedTaskPolicy.h','Client/sdk/game/CPedIntelligence.h','Client/sdk/game/CTaskManager.h','Client/sdk/game/Task.h','Client/sdk/game/TaskTypes.h',
         'Client/sdk/game/CEntityFirePolicy.h','Client/game_de/NativePedFireAccess.h','Client/game_de/NativePedFireMemory.h','Client/game_de/NativePedFireMemory.cpp','Client/game_de/NativePedFireProfile.h','Client/game_de/CPedFireDE.h','Client/game_de/CPedFireDE.cpp','Client/game_de/NativePedCollisionAccess.h','Client/game_de/NativePedCollisionMemory.h','Client/game_de/NativePedCollisionMemory.cpp','Client/game_de/NativePedCollisionProfile.h','Client/game_de/CPedCollisionDE.h','Client/game_de/CPedCollisionDE.cpp',
         'Client/game_de/NativePedAreaAccess.h','Client/game_de/NativePedAreaMemory.h','Client/game_de/NativePedAreaMemory.cpp','Client/game_de/NativePedAreaProfile.h','Client/game_de/CPedAreaDE.h','Client/game_de/CPedAreaDE.cpp','Client/game_de/NativeStreamingSpecialModelCalls.h','Client/game_de/NativeStreamingSpecialModelCalls.cpp','Client/game_de/NativeStreamingSpecialModelProfile.h','Client/game_de/NativeStreamingFileIdsProfile.h','Client/game_de/NativeStreamingRemoveAdmission.h','Client/game_de/NativeStreamingRemoveMemory.h','Client/game_de/NativeModelReferenceHeap.h',
@@ -357,6 +360,7 @@ try {
         'Build/definitive-recovery/mta-native-named-garage-geometry-20261023/named-garage-geometry-qualified.json',
         'Build/definitive-recovery/mta-pools-ped-registry-de-20261023/pools-ped-registry-source-ready.json'
     )
+    $sourceNames += @('Tests/definitive/NativePedGogglesOwnerTests.inl','Tests/definitive/Write-PedGogglesFixture.ps1')
     $sourceNames += @('Tests/definitive/NativePedDuckingSetterOwnerTests.inl','Tests/definitive/Write-PedTasksFixture.ps1')
     $sourceNames += @('Tests/definitive/NativePedFireCollisionOwnerTests.inl','Tests/definitive/Write-PedFireFixture.ps1','Tests/definitive/Write-PedCollisionFixture.ps1')
     $sourceNames += @('Tests/definitive/NativePedAreaOwnerTests.inl','Tests/definitive/NativeStreamingSpecialModelOwnerTests.inl','Tests/definitive/Write-PedAreaFixture.ps1')
@@ -419,6 +423,11 @@ try {
     $tasksEvidence = Join-Path $outputRoot 'PedTasksFixture.generated.h'
     Copy-Item -LiteralPath $tasksFixture.path -Destination $tasksEvidence
     $record['pedTasksGeneratedFixture'] = [ordered]@{path=$tasksEvidence;sha256=(Sha $tasksEvidence);rejectingOverrides=$tasksFixture.rejectingOverrides}
+    . (Join-Path $PSScriptRoot 'Write-PedGogglesFixture.ps1')
+    $gogglesFixture = Write-PedGogglesFixture $taskRoot (Join-Path $scratchRoot 'PedGogglesFixture.generated.h')
+    $gogglesEvidence = Join-Path $outputRoot 'PedGogglesFixture.generated.h'
+    Copy-Item -LiteralPath $gogglesFixture.path -Destination $gogglesEvidence
+    $record['pedGogglesGeneratedFixture'] = [ordered]@{path=$gogglesEvidence;sha256=(Sha $gogglesEvidence);rejectingOverrides=$gogglesFixture.rejectingOverrides}
     $common = @('/nologo','/std:c++17','/EHsc','/O2','/MD','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN','/DDETOURS_MTA_VM_TRANSACTION_NODES',
         ('/I'+(Join-Path $taskRoot 'Client/sdk')),('/I'+(Join-Path $taskRoot 'Shared/sdk')),('/I'+(Join-Path $taskRoot 'vendor/detours/4.0.1/src')),('/I'+$scratchRoot))
     $detoursSources = @($detoursNames | ForEach-Object { Join-Path $taskRoot ('vendor/detours/4.0.1/src/' + $_) })
@@ -475,6 +484,7 @@ try {
         (Join-Path $taskRoot 'Client/game_de/CPedFireDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CPedCollisionDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CPedTasksDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CPedGogglesDE.cpp'),
         # The new owner scope instantiates the actual SDK streaming receiver;
         # link its production implementation rather than a fixture substitute.
         (Join-Path $taskRoot 'Client/game_de/CStreamingDE.cpp'),
@@ -499,6 +509,7 @@ try {
     # The cumulative callback fixture includes current owner and retirement cases.
     # Keep it bounded while allowing the full set to finish on a busy build host.
     $fixtureArguments = @($outputRoot)
+    if ($Scope -eq 'PedGoggles') { $fixtureArguments += '--ped-goggles' }
     if ($Scope -eq 'DuckingSetter') { $fixtureArguments += '--ducking-setter' }
     if ($Scope -eq 'FireCollision') { $fixtureArguments += '--fire-collision' }
     if ($Scope -eq 'PedFire') { $fixtureArguments += '--ped-fire' }
@@ -555,7 +566,12 @@ try {
         if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
         if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
     }
-    if ($Scope -eq 'DuckingSetter') {
+    if ($Scope -eq 'PedGoggles') {
+        $record.nativePedGogglesOwnerTested = $text.Contains('Production native registered goggles callback owner fixture completed')
+        $record.actualPedGogglesSdkOwnerTested = $text.Contains('Production actual ped goggles SDK callback fixture completed')
+        if (-not ($record.nativePedGogglesOwnerTested -and $record.actualPedGogglesSdkOwnerTested)) { throw 'New native/actual SDK goggles query owner did not complete.' }
+        $record.productionNativeCallbackTested = $true
+    } elseif ($Scope -eq 'DuckingSetter') {
         $record.nativePedDuckingSetterOwnerTested = $text.Contains('Production native registered ducking setter callback owner fixture completed')
         $record.actualPedDuckingSetterSdkOwnerTested = $text.Contains('Production actual ped ducking setter SDK callback fixture completed')
         if (-not ($record.nativePedDuckingSetterOwnerTested -and $record.actualPedDuckingSetterSdkOwnerTested)) { throw 'New native/actual SDK ducking setter owner did not complete.' }

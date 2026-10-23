@@ -36,6 +36,8 @@
 #include <game/CWeaponStartupPolicy.h>
 #include <game/CGameInitializationPolicy.h>
 #include <game/CGameResetPolicy.h>
+#include <game/CGameWorldPolicy.h>
+#include <cstring>
 #include <game/CGameModelPreparationPolicy.h>
 #include <game/CWorldCheatPolicy.h>
 #include "CGaragesSA.h"
@@ -951,64 +953,37 @@ void CGameSA::GetShaderReplacementStats(SShaderReplacementStats& outStats)
 
 void CGameSA::RemoveGameWorld()
 {
-    m_pIplStore->SetDynamicIplStreamingEnabled(false);
-
-    m_pCoverManager->RemoveAllCovers();
-    m_pPlantManager->RemoveAllPlants();
-
-    // Remove all shadows in CStencilShadowObjects::dtorAll
-    ((void* (*)())0x711390)();
-
-    m_Pools->GetDummyPool().RemoveAllWithBackup();
-    m_Pools->GetBuildingsPool().RemoveAllWithBackup();
-
-    static_cast<CBuildingRemovalSA*>(m_pBuildingRemoval)->DropCaches();
-
-    m_isGameWorldRemoved = true;
+    // Share the existing backup order, including the final phase commit; the
+    // native operations and classic typed services remain the actual owners.
+    MtaGame::CGameWorldPolicy::Remove([this] { m_pIplStore->SetDynamicIplStreamingEnabled(false); }, [this] { m_pCoverManager->RemoveAllCovers(); },
+                                      [this] { m_pPlantManager->RemoveAllPlants(); }, [] { ((void* (*)())0x711390)(); },
+                                      [this] { m_Pools->GetDummyPool().RemoveAllWithBackup(); }, [this] { m_Pools->GetBuildingsPool().RemoveAllWithBackup(); },
+                                      [this] { static_cast<CBuildingRemovalSA*>(m_pBuildingRemoval)->DropCaches(); },
+                                      [this](bool removed) { m_isGameWorldRemoved = removed; });
 }
 
 void CGameSA::RestoreGameWorld()
 {
-    m_Pools->GetBuildingsPool().RestoreBackup();
-    m_Pools->GetDummyPool().RestoreBackup();
-
-    m_pIplStore->SetDynamicIplStreamingEnabled(true, [](CIplSAInterface* ipl) { return memcmp("barriers", ipl->name, 8) != 0; });
-    m_isGameWorldRemoved = false;
+    MtaGame::CGameWorldPolicy::Restore([this] { m_Pools->GetBuildingsPool().RestoreBackup(); }, [this] { m_Pools->GetDummyPool().RestoreBackup(); },
+                                       [this](MtaGame::CGameWorldPolicy::IplFilter filter)
+                                       {
+                                           m_pIplStore->SetDynamicIplStreamingEnabled(true,
+                                                                                      [filter](CIplSAInterface* ipl)
+                                                                                      {
+                                                                                          MtaGame::CGameWorldPolicy::IplName name;
+                                                                                          std::memcpy(name.data(), ipl->name, name.size());
+                                                                                          return filter(name);
+                                                                                      });
+                                       },
+                                       [this](bool removed) { m_isGameWorldRemoved = removed; });
 }
 
 bool CGameSA::SetBuildingPoolSize(size_t size)
 {
-    // The underlying GTA pool stores its capacity as a signed integer.
-    if (size > static_cast<size_t>(std::numeric_limits<int>::max()))
-        return false;
-
-    const bool shouldRemoveWorld = !m_isGameWorldRemoved;
-
-    const int iCurrentBuildingPoolSize = m_Pools->GetBuildingsPool().GetSize();
-    if (iCurrentBuildingPoolSize >= 0 && static_cast<size_t>(iCurrentBuildingPoolSize) == size)
-    {
-        // Keep same-size behavior unchanged while world is active.
-        // If world is already removed, skip no-op resize and only drop caches.
-        if (!shouldRemoveWorld)
-        {
-            static_cast<CBuildingRemovalSA*>(m_pBuildingRemoval)->DropCaches();
-            return true;
-        }
-
-        // World is active here, so continue with remove and restore flow.
-    }
-
-    if (shouldRemoveWorld)
-        RemoveGameWorld();
-    else
-        static_cast<CBuildingRemovalSA*>(m_pBuildingRemoval)->DropCaches();
-
-    bool status = m_Pools->GetBuildingsPool().Resize(size);
-
-    if (shouldRemoveWorld)
-        RestoreGameWorld();
-
-    return status;
+    return MtaGame::CGameWorldPolicy::SetBuildingPoolSize(
+        size, m_isGameWorldRemoved, [this] { return m_Pools->GetBuildingsPool().GetSize(); }, [this] { RemoveGameWorld(); },
+        [this] { static_cast<CBuildingRemovalSA*>(m_pBuildingRemoval)->DropCaches(); },
+        [this](int capacity) { return m_Pools->GetBuildingsPool().Resize(capacity); }, [this] { RestoreGameWorld(); });
 }
 
 // Ensure models have the default lod distances

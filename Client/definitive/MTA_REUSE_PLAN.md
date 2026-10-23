@@ -380,6 +380,16 @@ services and requires the remaining native restoration operations explicitly.
 Repeated calls retain MTA's behavior; a failed effect propagates with its
 already applied prefix, without replay or a successful placeholder.
 
+`CGameWorldDE` shares MTA's world removal, restoration and building-pool resize
+policy with the classic caller. It uses the common building/dummy pools and
+commits the removed-state flag only after each complete native sequence. The
+IPL restore filter compares the exact eight copied name bytes against
+`barriers`. Active same-size requests retain remove/resize/restore, removed
+same-size requests only drop caches, and a false resize result still restores
+an active world. Oversize requests fail before native admission. Native IPL,
+cover, plant, shadow and cache operations remain required backend effects;
+this orchestration does not qualify those operations or complete `CGame`.
+
 Their special-character and broken-model stages also consume the same ordered
 44 named assignments and two collision substitutions. Classic retains its
 direct model-array receiver and conditional collision-pointer copy. DE calls

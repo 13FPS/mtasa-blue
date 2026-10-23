@@ -375,6 +375,7 @@ try {
     $sourceNames += @('Client/game_de/NativeWeaponConstructorProgress.h','Tests/definitive/NativeGameConstructorWeaponOwnerTests.inl',
         'Client/sdk/game/CWeaponStartupPolicy.h')
     $sourceNames += @('Client/game_de/NativeGameConstructorServices.h','Client/game_de/CGameDE.h','Client/game_de/CGameDE.cpp','Client/game_de/CGameWeaponInfoDE.h','Client/game_de/CGameWeaponInfoDE.cpp','Client/game_de/CWeaponStatFactoryDE.h','Client/game_de/CWeaponStatFactoryDE.cpp','Client/game_de/CKeyGenDE.h','Client/game_de/CKeyGenDE.cpp','Client/game_de/CAsyncLoadingDE.h','Client/game_de/CAsyncLoadingDE.cpp','Client/game_de/NativeDataFileNamesReader.h','Client/game_de/NativeDataFileNamesReader.cpp','Client/game_de/NativeDataFileNamesProfile.h','Client/game_de/NativeStreamingFileIdsReader.h','Client/game_de/NativeStreamingFileIdsReader.cpp','Client/game_de/NativeGameStateReader.h','Client/game_de/NativeGameStateReader.cpp','Client/game_de/CGameResetDE.h','Client/game_de/CGameResetDE.cpp','Client/sdk/game/CGameResetPolicy.h','Client/sdk/game/CWeaponInfoIndexPolicy.h','Client/sdk/game/CKeyGen.h','Tests/definitive/NativeGameConstructorServicesOwnerTests.inl','Tests/definitive/Write-GameConstructorServicesFixture.ps1')
+$sourceNames += @('Client/game_de/CGameWorldDE.h','Client/game_de/CGameWorldDE.cpp','Client/sdk/game/CGameWorldPolicy.h')
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
     })
@@ -506,6 +507,7 @@ try {
         (Join-Path $taskRoot 'Client/game_de/NativeGameStateReader.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeDataFileNamesReader.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGameResetDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CGameWorldDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CAnimBlockDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CAnimManagerDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CAnimBlockRequestDE.cpp'),

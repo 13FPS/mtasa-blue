@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack')]
+    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -36,6 +36,8 @@ $record['nativeWorldLineOwnerTested'] = $false
 $record['actualWorldLineSdkOwnerTested'] = $false
 $record['nativeWorldGroundOwnerTested'] = $false
 $record['actualWorldGroundSdkOwnerTested'] = $false
+$record['nativePedOnScreenOwnerTested'] = $false
+$record['actualPedOnScreenSdkOwnerTested'] = $false
 $record['nativePedVisibilityOwnerTested'] = $false
 $record['actualPedVisibilitySdkOwnerTested'] = $false
 $record['nativePedGogglesOwnerTested'] = $false
@@ -393,6 +395,8 @@ $sourceNames += @('Client/game_de/NativeWorldGroundAccess.h','Client/game_de/CWo
 $sourceNames += @('Client/game_de/NativeWorldLineAccess.h','Client/game_de/CWorldLineDE.h','Client/game_de/CWorldLineDE.cpp','Client/game_de/NativeWorldLineCalls.h','Client/game_de/NativeWorldLineCalls.cpp','Client/game_de/NativeWorldLineProfile.h')
 $sourceNames += @('Client/game_de/NativeWorldAreaAccess.h','Client/game_de/CWorldAreaDE.h','Client/game_de/CWorldAreaDE.cpp','Client/game_de/NativeWorldAreaMemory.h','Client/game_de/NativeWorldAreaMemory.cpp','Client/game_de/NativeWorldAreaProfile.h')
 $sourceNames += @('Client/game_de/NativeWorldJetpackHeightAccess.h','Client/game_de/CWorldJetpackHeightDE.h','Client/game_de/CWorldJetpackHeightDE.cpp','Client/game_de/NativeWorldJetpackMemory.h','Client/game_de/NativeWorldJetpackMemory.cpp','Client/game_de/NativeWorldJetpackProfile.h')
+$sourceNames += @('Client/game_de/NativePedOnScreenAccess.h','Client/game_de/CPedOnScreenDE.h','Client/game_de/CPedOnScreenDE.cpp','Client/game_de/NativePedOnScreenCalls.h','Client/game_de/NativePedOnScreenCalls.cpp','Client/game_de/NativePedOnScreenProfile.h')
+    $sourceNames += @('Tests/definitive/NativePedOnScreenFixture.h','Tests/definitive/NativePedOnScreenOwnerTests.inl','Tests/definitive/Write-PedOnScreenFixture.ps1')
     $sourceNames += @('Tests/definitive/NativeWorldJetpackFixture.h','Tests/definitive/NativeWorldJetpackOwnerTests.inl','Tests/definitive/Write-WorldJetpackHeightFixture.ps1')
     $sourceNames += @('Tests/definitive/NativeWorldAreaFixture.h','Tests/definitive/NativeWorldAreaOwnerTests.inl','Tests/definitive/Write-WorldAreaFixture.ps1')
     $sourceNames += @('Tests/definitive/NativeWorldLineFixture.h','Tests/definitive/NativeWorldLineOwnerTests.inl','Tests/definitive/Write-WorldLineFixture.ps1')
@@ -448,6 +452,11 @@ $sourceNames += @('Client/game_de/NativeWorldJetpackHeightAccess.h','Client/game
     $tasksEvidence = Join-Path $outputRoot 'PedTasksFixture.generated.h'
     Copy-Item -LiteralPath $tasksFixture.path -Destination $tasksEvidence
     $record['pedTasksGeneratedFixture'] = [ordered]@{path=$tasksEvidence;sha256=(Sha $tasksEvidence);rejectingOverrides=$tasksFixture.rejectingOverrides}
+    . (Join-Path $PSScriptRoot 'Write-PedOnScreenFixture.ps1')
+    $onScreenFixture = Write-PedOnScreenFixture $taskRoot (Join-Path $scratchRoot 'PedOnScreenFixture.generated.h')
+    $onScreenEvidence = Join-Path $outputRoot 'PedOnScreenFixture.generated.h'
+    Copy-Item -LiteralPath $onScreenFixture.path -Destination $onScreenEvidence
+    $record['pedOnScreenGeneratedFixture'] = [ordered]@{path=$onScreenEvidence;sha256=(Sha $onScreenEvidence);rejectingOverrides=$onScreenFixture.rejectingOverrides}
     . (Join-Path $PSScriptRoot 'Write-PedVisibilityFixture.ps1')
     $visibilityFixture = Write-PedVisibilityFixture $taskRoot (Join-Path $scratchRoot 'PedVisibilityFixture.generated.h')
     $visibilityEvidence = Join-Path $outputRoot 'PedVisibilityFixture.generated.h'
@@ -541,6 +550,7 @@ $sourceNames += @('Client/game_de/NativeWorldJetpackHeightAccess.h','Client/game
         (Join-Path $taskRoot 'Client/game_de/CPedTasksDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CPedGogglesDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CPedVisibilityDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CPedOnScreenDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CWorldGroundDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CWorldLineDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CWorldAreaDE.cpp'),
@@ -586,6 +596,7 @@ $sourceNames += @('Client/game_de/NativeWorldJetpackHeightAccess.h','Client/game
     if ($Scope -eq 'WorldLine') { $fixtureArguments += '--world-line' }
     if ($Scope -eq 'WorldGround') { $fixtureArguments += '--world-ground' }
     if ($Scope -eq 'ConstructorServices') { $fixtureArguments += '--constructor-services' }
+    if ($Scope -eq 'PedOnScreen') { $fixtureArguments += '--ped-on-screen' }
     if ($Scope -eq 'PedVisibility') { $fixtureArguments += '--ped-visibility' }
     if ($Scope -eq 'PedGoggles') { $fixtureArguments += '--ped-goggles' }
     if ($Scope -eq 'DuckingSetter') { $fixtureArguments += '--ducking-setter' }
@@ -644,7 +655,12 @@ $sourceNames += @('Client/game_de/NativeWorldJetpackHeightAccess.h','Client/game
         if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
         if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
     }
-    if ($Scope -eq 'WorldJetpack') {
+    if ($Scope -eq 'PedOnScreen') {
+        $record.nativePedOnScreenOwnerTested = $text.Contains('Production native registered on-screen callback owner fixture completed')
+        $record.actualPedOnScreenSdkOwnerTested = $text.Contains('Production actual CEntity CPed on-screen SDK callback fixture completed')
+        if (-not ($record.nativePedOnScreenOwnerTested -and $record.actualPedOnScreenSdkOwnerTested)) { throw 'New native/actual SDK on-screen owner did not complete.' }
+        $record.productionNativeCallbackTested = $true
+    } elseif ($Scope -eq 'WorldJetpack') {
         $record.nativeWorldJetpackHeightOwnerTested = $text.Contains('Production native jetpack-height guarded callback owner fixture completed')
         $record.actualWorldJetpackHeightSdkOwnerTested = $text.Contains('Production actual CWorld jetpack-height SDK callback fixture completed')
         if (-not ($record.nativeWorldJetpackHeightOwnerTested -and $record.actualWorldJetpackHeightSdkOwnerTested)) { throw 'New native/actual SDK jetpack-height getter owner did not complete.' }

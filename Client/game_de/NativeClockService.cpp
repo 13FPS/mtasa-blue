@@ -41,6 +41,7 @@
 #include "NativePedCollisionMemory.h"
 #include "NativePedGogglesMemory.h"
 #include "NativePedVisibilityMemory.h"
+#include "NativePedOnScreenCalls.h"
 #include "NativeStreamingSpecialModelCalls.h"
 #include "NativeWorldGroundCalls.h"
 #include "NativeWorldLineCalls.h"
@@ -230,6 +231,7 @@ namespace mta::game_de
             ClockResult SetPedUsesCollision(const NativePedReferenceToken&, bool) noexcept override;
             ClockResult ReadPedWearingGoggles(const NativePedReferenceToken&, bool&) noexcept override;
             ClockResult ReadPedVisible(const NativePedReferenceToken&, bool&) noexcept override;
+            ClockResult ReadPedOnScreen(const NativePedReferenceToken&, bool&) noexcept override;
             ClockResult SetPedVisible(const NativePedReferenceToken&, bool) noexcept override;
             ClockResult SetPedAreaCode(const NativePedReferenceToken&, std::uint8_t) noexcept override;
             ClockResult RequestStreamingSpecialModel(std::uint32_t, const char*, std::uint32_t) noexcept override;
@@ -3750,6 +3752,37 @@ namespace mta::game_de
             }
             output = next;
             return ClockResult::Ok;
+        }
+
+        ClockResult NativeAccess::ReadPedOnScreen(const NativePedReferenceToken& token, bool& output) noexcept
+        {
+            // Fix the registered receiver before callbacks. The native bound
+            // helpers may resolve lazy assets, so this is one admitted native
+            // operation rather than a raw-visible flag or cached camera fact.
+            const auto selected = token;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedPoolReader::Value before, after;
+            if ((result = ResolvePedReference(selected, before)) != ClockResult::Ok)
+                return result;
+            bool                            next = false;
+            NativePedOnScreenCalls::Receipt receipt;
+            result = NativePedOnScreenCalls::Read(runtime.image, before, next, &CheckTimingOwner, &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = ResolvePedReference(selected, after);
+                if (result == ClockResult::Ok && !SameRegisteredPed(before, after))
+                    result = ClockResult::OwnerConflict;
+            }
+            // Native owns every radius/center/camera effect. An entered fault
+            // or lost final registered relation retires this same owner with
+            // its native-cell debt intact, without replay or rollback.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            if (result == ClockResult::Ok)
+                output = next;
+            return result;
         }
 
         ClockResult NativeAccess::ReadPedVisible(const NativePedReferenceToken& token, bool& output) noexcept

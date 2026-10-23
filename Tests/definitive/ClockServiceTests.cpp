@@ -40,6 +40,9 @@
 #include "../../Client/game_de/CPedVisibilityDE.h"
 #include "../../Client/game_de/NativePedVisibilityMemory.h"
 #include "../../Client/game_de/NativePedVisibilityProfile.h"
+#include "../../Client/game_de/CPedOnScreenDE.h"
+#include "../../Client/game_de/NativePedOnScreenCalls.h"
+#include "NativePedOnScreenFixture.h"
 #include "../../Client/game_de/NativePedAreaProfile.h"
 #include "../../Client/game_de/CPedAreaDE.h"
 #include "../../Client/game_de/NativeStreamingSpecialModelCalls.h"
@@ -313,6 +316,15 @@ namespace ped_visibility_fixture
     }
 }
 #include "PedVisibilityFixture.generated.h"
+namespace ped_on_screen_fixture
+{
+    [[noreturn]] inline void Unqualified(const char* method)
+    {
+        std::fprintf(stderr, "Unqualified ped on-screen SDK call: %s\n", method);
+        std::abort();
+    }
+}
+#include "PedOnScreenFixture.generated.h"
 
 namespace ClockModelClassificationOwnerTest
 {
@@ -1148,6 +1160,90 @@ namespace ClockPedGogglesOwnerTest
         return TRUE;
     }
 }
+namespace ClockPedOnScreenOwnerTest
+{
+    namespace Calls = mta::game_de::NativePedOnScreenCalls;
+    std::uintptr_t                         image = 0, ped = 0, cell = 0;
+    std::array<unsigned, 3>                calls{};
+    unsigned                               scenario = 0;
+    bool                                   nativeValue = false;
+    mta::game_de::NativePedReferenceToken  selected;
+    mta::game_de::NativePedReferenceToken* callerToken = nullptr;
+    void (*reenter)() noexcept = nullptr;
+    const std::array<float, 3> centerValue{1.25f, -2.5f, 3.75f};
+    mta::game_de::ClockResult  Invoke(Calls::RadiusFunction function, std::uintptr_t receiver, float& radius, std::uint32_t& exception) noexcept
+    {
+        ++calls[0];
+        std::fprintf(stderr, "OnScreen Radius entry: fn=%llx expected=%llx receiver=%llx ped=%llx image=%llx calls=%u,%u,%u scenario=%u\n",
+                     static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(function)),
+                     static_cast<unsigned long long>(image + mta::game_de::NativePedOnScreenProfile::RadiusRva), static_cast<unsigned long long>(receiver),
+                     static_cast<unsigned long long>(ped), static_cast<unsigned long long>(image), calls[0], calls[1], calls[2], scenario);
+        if (reinterpret_cast<std::uintptr_t>(function) != image + mta::game_de::NativePedOnScreenProfile::RadiusRva || receiver != ped)
+            std::abort();
+        if (callerToken)
+        {
+            ++callerToken->version;
+            callerToken = nullptr;
+        }
+        if (reenter)
+            reenter();
+        radius = 8.5f;
+        if (scenario == 1)
+        {
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return mta::game_de::ClockResult::OriginalException;
+        }
+        return mta::game_de::ClockResult::Ok;
+    }
+    mta::game_de::ClockResult Invoke(Calls::CenterFunction function, std::uintptr_t receiver, CVector& center, CVector*& returned,
+                                     std::uint32_t& exception) noexcept
+    {
+        ++calls[1];
+        std::fprintf(stderr, "OnScreen Center entry: fn=%llx expected=%llx receiver=%llx ped=%llx image=%llx calls=%u,%u,%u scenario=%u\n",
+                     static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(function)),
+                     static_cast<unsigned long long>(image + mta::game_de::NativePedOnScreenProfile::CenterRva), static_cast<unsigned long long>(receiver),
+                     static_cast<unsigned long long>(ped), static_cast<unsigned long long>(image), calls[0], calls[1], calls[2], scenario);
+        if (reinterpret_cast<std::uintptr_t>(function) != image + mta::game_de::NativePedOnScreenProfile::CenterRva || receiver != ped)
+            std::abort();
+        std::memcpy(&center, centerValue.data(), sizeof(center));
+        returned = &center;
+        if (scenario == 2)
+        {
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return mta::game_de::ClockResult::OriginalException;
+        }
+        return mta::game_de::ClockResult::Ok;
+    }
+    mta::game_de::ClockResult Invoke(Calls::ScreenFunction function, std::uintptr_t camera, const CVector& center, float radius, bool& value,
+                                     std::uint32_t& exception) noexcept
+    {
+        ++calls[2];
+        std::fprintf(
+            stderr,
+            "OnScreen Screen entry: fn=%llx expected=%llx camera=%llx expectedCamera=%llx image=%llx radius=%g center=%g,%g,%g calls=%u,%u,%u scenario=%u\n",
+            static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(function)),
+            static_cast<unsigned long long>(image + mta::game_de::NativePedOnScreenProfile::ScreenRva), static_cast<unsigned long long>(camera),
+            static_cast<unsigned long long>(image + mta::game_de::NativePedOnScreenProfile::CameraRva), static_cast<unsigned long long>(image),
+            static_cast<double>(radius), static_cast<double>(center.fX), static_cast<double>(center.fY), static_cast<double>(center.fZ), calls[0], calls[1],
+            calls[2], scenario);
+        if (reinterpret_cast<std::uintptr_t>(function) != image + mta::game_de::NativePedOnScreenProfile::ScreenRva ||
+            camera != image + mta::game_de::NativePedOnScreenProfile::CameraRva || radius != 8.5f || std::memcmp(&center, centerValue.data(), sizeof(center)))
+            std::abort();
+        value = nativeValue;
+        if (scenario == 3)
+        {
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return mta::game_de::ClockResult::OriginalException;
+        }
+        if (scenario == 4)
+        {
+            const std::uintptr_t zero = 0;
+            std::memcpy(reinterpret_cast<void*>(cell), &zero, sizeof(zero));
+        }
+        return mta::game_de::ClockResult::Ok;
+    }
+}
+
 namespace ClockPedVisibilityOwnerTest
 {
     std::uintptr_t                         watched = 0, cell = 0;
@@ -2544,6 +2640,9 @@ namespace mta::game_de::NativeImageAccess
 #undef MTA_DE_WORLD_LINE_NATIVE_INVOKE
 #include "../../Client/game_de/NativeWorldAreaMemory.cpp"
 #include "../../Client/game_de/NativeWorldJetpackMemory.cpp"
+#define MTA_DE_PED_ONSCREEN_NATIVE_INVOKE ClockPedOnScreenOwnerTest::Invoke
+#include "../../Client/game_de/NativePedOnScreenCalls.cpp"
+#undef MTA_DE_PED_ONSCREEN_NATIVE_INVOKE
 #define MTA_DE_MODEL_REFERENCE_EXCHANGE ClockModelReferenceOwnerTest::Exchange
 #include "../../Client/game_de/NativeModelReferenceMemory.cpp"
 #undef MTA_DE_MODEL_REFERENCE_EXCHANGE
@@ -7352,6 +7451,7 @@ namespace
 #include "NativeWorldLineOwnerTests.inl"
 #include "NativeWorldAreaOwnerTests.inl"
 #include "NativeWorldJetpackOwnerTests.inl"
+#include "NativePedOnScreenOwnerTests.inl"
 #include "NativeAnimationBlockOwnerTests.inl"
 #include "NativeAnimationBlockNameOwnerTests.inl"
 #include "NativeAnimationManagerOwnerTests.inl"
@@ -7359,6 +7459,7 @@ namespace
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool pedOnScreenOnly = argc == 3 && std::strcmp(argv[2], "--ped-on-screen") == 0;
     const bool worldJetpackOnly = argc == 3 && std::strcmp(argv[2], "--world-jetpack") == 0;
     const bool worldAreaOnly = argc == 3 && std::strcmp(argv[2], "--world-area") == 0;
     const bool worldQueriesOnly = argc == 3 && std::strcmp(argv[2], "--world-queries") == 0;
@@ -7394,9 +7495,17 @@ int main(int argc, char** argv)
     Check((argc == 2 || constructorOnly || pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly || poseOnly ||
            waterOnly || animationOnly || animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly ||
            fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly ||
-           worldLineOnly || worldAreaOnly || worldQueriesOnly || worldJetpackOnly) &&
+           worldLineOnly || worldAreaOnly || worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (pedOnScreenOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        PedOnScreenOwnerFixture::Run(fixture);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (worldJetpackOnly)
     {
         ClockImageFixture fixture;

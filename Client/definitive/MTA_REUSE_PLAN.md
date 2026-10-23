@@ -348,6 +348,15 @@ these SDK methods. Owner loss preserves output or accepted effects and follows
 the existing retirement path without retry. This does not implement the other
 rendering methods or complete the ped factory.
 
+`CPedOnScreenDE` implements the inherited `CEntity::IsOnScreen` query through
+the supported DE command's native radius, bound-center and camera-predicate
+sequence. One serialized operation holds the current registered ped and world
+owner, calls each genuine component once, and keeps its intermediate values
+local. The final native boolean is published only after the ped, model and
+world bookends still agree. Native lazy geometry effects remain owned by the
+engine; entered failure stops the owner without rollback or replay. The wider
+ped factory and separate `IsFullyVisible` method remain prerequisites.
+
 MTA's `CreateWeaponStat` factory also shares its existing defaults and flag
 transition policy between classic and DE. The complete owned `CWeaponStat`
 contains custom CPU data, as the classic unlisted factory does; its mutable

@@ -42,6 +42,7 @@
 #include "NativePedGogglesMemory.h"
 #include "NativePedVisibilityMemory.h"
 #include "NativeStreamingSpecialModelCalls.h"
+#include "NativeWorldGroundCalls.h"
 #include "NativeAnimationBlockMemory.h"
 #include "NativeAnimationManagerMemory.h"
 #include "NativePedVelocityMemory.h"
@@ -173,6 +174,7 @@ namespace mta::game_de
             ClockResult RequestStreamingModel(std::uint32_t, std::uint32_t) noexcept override;
             ClockResult LoadStreamingModels(bool) noexcept override;
             ClockResult LoadStreamingScene(const CVector*) noexcept override;
+            ClockResult FindWorldGroundZ(const CVector&, float&) noexcept override;
             ClockResult ReadStreamingModelGroups(NativeStreamingModelGroupsReader::Value&) noexcept override;
             ClockResult ReadModelArchiveAllocated(std::uint32_t, bool&) noexcept override;
             ClockResult RemoveStreamingModel(std::uint32_t) noexcept override;
@@ -3342,6 +3344,24 @@ namespace mta::game_de
             const auto                      result = NativeModelArchiveReader({runtime.image}, &CheckTimingOwner).Read(model, value);
             if (result == ClockResult::Ok)
                 output = value.allocatedInArchive;
+            return result;
+        }
+        ClockResult NativeAccess::FindWorldGroundZ(const CVector& position, float& output) noexcept
+        {
+            // Snapshot before any owner/read callback. The whole native query
+            // owns its scan counters, sector entities and lazy matrix effects;
+            // no adapter entity token, temporary world or script is substituted.
+            const CVector                   intent = position;
+            float                           height = 0;
+            NativeWorldGroundCalls::Receipt receipt;
+            const auto                      result = NativeWorldGroundCalls::Find(runtime.image, intent, height, &CheckTimingOwner, &receipt);
+            // An entered query may have advanced scan IDs or native matrices
+            // before a lost acknowledgement. Retire this exact owner without
+            // retrying the query or restoring engine-owned state.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            if (result == ClockResult::Ok)
+                output = height;
             return result;
         }
         ClockResult NativeAccess::LoadStreamingScene(const CVector* position) noexcept

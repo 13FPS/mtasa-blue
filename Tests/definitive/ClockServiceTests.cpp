@@ -120,6 +120,9 @@
 #include "../../Client/game_de/NativeStreamingLoadAllCalls.h"
 #include "../../Client/game_de/NativeStreamingLoadAllProfile.h"
 #include "../../Client/game_de/NativeStreamingSceneCalls.h"
+#include "../../Client/game_de/NativeWorldGroundCalls.h"
+#include "../../Client/game_de/CWorldGroundDE.h"
+#include "NativeWorldGroundFixture.h"
 #include "../../Client/game_de/NativeStreamingSceneProfile.h"
 #include "../../Client/game_de/NativeStreamingPriorityCalls.h"
 #include "../../Client/game_de/NativeStreamingPriorityProfile.h"
@@ -192,6 +195,15 @@ namespace constructor_services_fixture
     }
 }
 #include "GameConstructorServicesFixture.generated.h"
+namespace world_ground_fixture
+{
+    [[noreturn]] inline void Unqualified(const char* method)
+    {
+        std::fprintf(stderr, "Unqualified world ground SDK call: %s\n", method);
+        std::abort();
+    }
+}
+#include "WorldGroundFixture.generated.h"
 namespace ped_pose_fixture
 {
     [[noreturn]] inline void Unqualified()
@@ -421,6 +433,46 @@ namespace ClockStreamingLoadAllOwnerTest
         }
         if (scenario == 3 && reenter)
             nested = reenter();
+        return mta::game_de::ClockResult::Ok;
+    }
+}
+namespace ClockWorldGroundOwnerTest
+{
+    using NativeFunction = mta::game_de::NativeWorldGroundCalls::NativeFunction;
+    std::uintptr_t image = 0, level = 0, entry = 0;
+    unsigned       calls = 0, effects = 0, scenario = 0;
+    CVector        received;
+    const CVector* source = nullptr;
+    bool           copied = false;
+    void (*reenter)() noexcept = nullptr;
+    mta::game_de::ClockResult nested = mta::game_de::ClockResult::Ok;
+    mta::game_de::ClockResult Invoke(NativeFunction function, const CVector& position, bool* found, std::uintptr_t* entity, CVector* normal, float& output,
+                                     std::uint32_t& exception) noexcept
+    {
+        ++calls;
+        ++effects;
+        entry = reinterpret_cast<std::uintptr_t>(function) - image;
+        received = position;
+        copied = &position != source;
+        if (!found || entity || normal)
+            std::abort();
+        *found = true;
+        constexpr std::uint32_t heightBits = 0x42f68001;
+        std::memcpy(&output, &heightBits, sizeof(output));
+        // This seam observes a single native entry and accepted effect; it
+        // does not implement sector intersection or native matrix allocation.
+        if (scenario == 1)
+        {
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return mta::game_de::ClockResult::OriginalException;
+        }
+        if (scenario == 2)
+        {
+            const std::uintptr_t zero = 0;
+            std::memcpy(reinterpret_cast<void*>(level + 0xd0), &zero, sizeof(zero));
+        }
+        if (scenario == 3 && reenter)
+            reenter();
         return mta::game_de::ClockResult::Ok;
     }
 }
@@ -2407,6 +2459,10 @@ namespace mta::game_de::NativeImageAccess
 #include "../../Client/game_de/NativeModelArchiveReader.cpp"
 #include "../../Client/game_de/NativeStreamingModelGroupsReader.cpp"
 #include "../../Client/game_de/NativeStreamingCompletionContext.cpp"
+#include "../../Client/game_de/NativeWorldGroundContext.cpp"
+#define MTA_DE_WORLD_GROUND_NATIVE_INVOKE ClockWorldGroundOwnerTest::Invoke
+#include "../../Client/game_de/NativeWorldGroundCalls.cpp"
+#undef MTA_DE_WORLD_GROUND_NATIVE_INVOKE
 #define MTA_DE_MODEL_REFERENCE_EXCHANGE ClockModelReferenceOwnerTest::Exchange
 #include "../../Client/game_de/NativeModelReferenceMemory.cpp"
 #undef MTA_DE_MODEL_REFERENCE_EXCHANGE
@@ -7211,6 +7267,7 @@ namespace
 
 #include "NativeGameConstructorWeaponOwnerTests.inl"
 #include "NativeGameConstructorServicesOwnerTests.inl"
+#include "NativeWorldGroundOwnerTests.inl"
 #include "NativeAnimationBlockOwnerTests.inl"
 #include "NativeAnimationBlockNameOwnerTests.inl"
 #include "NativeAnimationManagerOwnerTests.inl"
@@ -7218,6 +7275,7 @@ namespace
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool worldGroundOnly = argc == 3 && std::strcmp(argv[2], "--world-ground") == 0;
     const bool constructorServicesOnly = argc == 3 && std::strcmp(argv[2], "--constructor-services") == 0;
     const bool visibilityOnly = argc == 3 && std::strcmp(argv[2], "--ped-visibility") == 0;
     const bool gogglesOnly = argc == 3 && std::strcmp(argv[2], "--ped-goggles") == 0;
@@ -7245,11 +7303,20 @@ int main(int argc, char** argv)
     const bool waterOnly = orientationWithWater || (argc == 3 && std::strcmp(argv[2], "--ped-water") == 0);
     const bool poseOnly = argc == 3 && std::strcmp(argv[2], "--ped-pose") == 0;
     const bool poolRegistryOnly = argc == 3 && std::strcmp(argv[2], "--ped-pool-registry") == 0;
-    Check((argc == 2 || constructorOnly || pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly || poseOnly ||
-           waterOnly || animationOnly || animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly ||
-           fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly) &&
-              std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
-          "durable fixture evidence is restricted to the explicit owned executable output directory");
+    Check(
+        (argc == 2 || constructorOnly || pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly || poseOnly || waterOnly ||
+         animationOnly || animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly ||
+         fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly) &&
+            std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
+        "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (worldGroundOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        WorldGroundOwnerFixture::Run(fixture);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (constructorServicesOnly)
     {
         ClockImageFixture fixture;

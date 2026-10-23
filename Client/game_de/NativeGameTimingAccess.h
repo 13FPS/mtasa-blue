@@ -39,6 +39,7 @@
 #include "NativeModelBankReader.h"
 #include "NativeModelReferenceRelease.h"
 #include "NativeStreamingModelAccess.h"
+#include "NativeWorldGroundAccess.h"
 #include "NativeModelClassificationAccess.h"
 #include "NativePedPhysicalScalarsAccess.h"
 #include "NativePedRotationAccess.h"
@@ -112,6 +113,7 @@ namespace mta::game_de
                                    public NativePedCurrentWeaponSlotAccess,
                                    public NativeTaskRemovalAccess,
                                    public NativeStreamingModelAccess,
+                                   public NativeWorldGroundAccess,
                                    public NativeModelClassificationAccess,
                                    public NativeNamedGarageAccess,
                                    public NativeAnimationBlockAccess,

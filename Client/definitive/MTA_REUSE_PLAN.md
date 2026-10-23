@@ -105,6 +105,16 @@ does not establish MTA's separate synchronous `LoadSceneCollision` contract.
 Streaming memory bytes and the classic paired-buffer protocol also remain
 unmapped; model counts and provider extents cannot stand in for those services.
 
+`CWorldGroundDE::FindGroundZFor3DPosition` enters DE's genuine scalar ground
+query through that same loaded-world owner and native-call serialization gate.
+It copies MTA's XYZ intent and returns the accepted native height, including
+the native zero result for a miss; refusal raises a service error. Current
+sector and matrix-list readiness are checked around the call. The engine owns
+its scan-ID wrapping and lazy matrix allocation, so valid list transitions
+remain accepted. Entered failure preserves those effects and stops the owner
+without rollback or replay. The remaining world SDK methods and complete
+`GetWorld` factory stay separate prerequisites.
+
 Ordinary `RemoveModel` uses DE's genuine removal entry for the qualified idle
 and loaded-model branches, including current streaming links and asset owners.
 The direct streaming operation leaves the separate model reference untouched;

@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices')]
+    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -28,6 +28,8 @@ $record['actualGameConstructorServicesSdkOwnerTested'] = $false
 $record['nativePedOwnerSliceTested'] = $false
 $record['nativePedWaterTaskOwnerTested'] = $false
 $record['actualPedWaterTaskOwnerTested'] = $false
+$record['nativeWorldGroundOwnerTested'] = $false
+$record['actualWorldGroundSdkOwnerTested'] = $false
 $record['nativePedVisibilityOwnerTested'] = $false
 $record['actualPedVisibilitySdkOwnerTested'] = $false
 $record['nativePedGogglesOwnerTested'] = $false
@@ -381,6 +383,8 @@ try {
     $sourceNames += @('Client/game_de/NativeGameConstructorServices.h','Client/game_de/CGameDE.h','Client/game_de/CGameDE.cpp','Client/game_de/CGameWeaponInfoDE.h','Client/game_de/CGameWeaponInfoDE.cpp','Client/game_de/CWeaponStatFactoryDE.h','Client/game_de/CWeaponStatFactoryDE.cpp','Client/game_de/CKeyGenDE.h','Client/game_de/CKeyGenDE.cpp','Client/game_de/CAsyncLoadingDE.h','Client/game_de/CAsyncLoadingDE.cpp','Client/game_de/NativeDataFileNamesReader.h','Client/game_de/NativeDataFileNamesReader.cpp','Client/game_de/NativeDataFileNamesProfile.h','Client/game_de/NativeStreamingFileIdsReader.h','Client/game_de/NativeStreamingFileIdsReader.cpp','Client/game_de/NativeGameStateReader.h','Client/game_de/NativeGameStateReader.cpp','Client/game_de/CGameResetDE.h','Client/game_de/CGameResetDE.cpp','Client/sdk/game/CGameResetPolicy.h','Client/sdk/game/CWeaponInfoIndexPolicy.h','Client/sdk/game/CKeyGen.h','Tests/definitive/NativeGameConstructorServicesOwnerTests.inl','Tests/definitive/Write-GameConstructorServicesFixture.ps1')
 $sourceNames += @('Client/game_de/CGameWorldDE.h','Client/game_de/CGameWorldDE.cpp','Client/sdk/game/CGameWorldPolicy.h')
 $sourceNames += @('Client/sdk/game/CAudioContainerFiles.h','Client/sdk/game/CAudioContainerFiles.cpp','Client/sdk/game/CAudioContainer.h')
+$sourceNames += @('Client/game_de/NativeWorldGroundAccess.h','Client/game_de/CWorldGroundDE.h','Client/game_de/CWorldGroundDE.cpp','Client/game_de/NativeWorldGroundCalls.h','Client/game_de/NativeWorldGroundCalls.cpp','Client/game_de/NativeWorldGroundContext.h','Client/game_de/NativeWorldGroundContext.cpp','Client/game_de/NativeWorldGroundProfile.h','Client/sdk/game/CWorld.h','Shared/sdk/CVector2D.h')
+    $sourceNames += @('Tests/definitive/NativeWorldGroundFixture.h','Tests/definitive/NativeWorldGroundOwnerTests.inl','Tests/definitive/Write-WorldGroundFixture.ps1')
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
     })
@@ -442,6 +446,11 @@ $sourceNames += @('Client/sdk/game/CAudioContainerFiles.h','Client/sdk/game/CAud
     $gogglesEvidence = Join-Path $outputRoot 'PedGogglesFixture.generated.h'
     Copy-Item -LiteralPath $gogglesFixture.path -Destination $gogglesEvidence
     $record['pedGogglesGeneratedFixture'] = [ordered]@{path=$gogglesEvidence;sha256=(Sha $gogglesEvidence);rejectingOverrides=$gogglesFixture.rejectingOverrides}
+    . (Join-Path $PSScriptRoot 'Write-WorldGroundFixture.ps1')
+    $groundFixture = Write-WorldGroundFixture $taskRoot (Join-Path $scratchRoot 'WorldGroundFixture.generated.h')
+    $groundEvidence = Join-Path $outputRoot 'WorldGroundFixture.generated.h'
+    Copy-Item -LiteralPath $groundFixture.path -Destination $groundEvidence
+    $record['worldGroundGeneratedFixture'] = [ordered]@{path=$groundEvidence;sha256=(Sha $groundEvidence);rejectingOverrides=$groundFixture.rejectingOverrides}
     . (Join-Path $PSScriptRoot 'Write-GameConstructorServicesFixture.ps1')
     $constructorFixture = Write-GameConstructorServicesFixture $taskRoot (Join-Path $scratchRoot 'GameConstructorServicesFixture.generated.h')
     $constructorEvidence = Join-Path $outputRoot 'GameConstructorServicesFixture.generated.h'
@@ -505,6 +514,7 @@ $sourceNames += @('Client/sdk/game/CAudioContainerFiles.h','Client/sdk/game/CAud
         (Join-Path $taskRoot 'Client/game_de/CPedTasksDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CPedGogglesDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CPedVisibilityDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CWorldGroundDE.cpp'),
         # The new owner scope instantiates the actual SDK streaming receiver;
         # link its production implementation rather than a fixture substitute.
         (Join-Path $taskRoot 'Client/game_de/CStreamingDE.cpp'),
@@ -540,6 +550,7 @@ $sourceNames += @('Client/sdk/game/CAudioContainerFiles.h','Client/sdk/game/CAud
     # The cumulative callback fixture includes current owner and retirement cases.
     # Keep it bounded while allowing the full set to finish on a busy build host.
     $fixtureArguments = @($outputRoot)
+    if ($Scope -eq 'WorldGround') { $fixtureArguments += '--world-ground' }
     if ($Scope -eq 'ConstructorServices') { $fixtureArguments += '--constructor-services' }
     if ($Scope -eq 'PedVisibility') { $fixtureArguments += '--ped-visibility' }
     if ($Scope -eq 'PedGoggles') { $fixtureArguments += '--ped-goggles' }
@@ -599,7 +610,12 @@ $sourceNames += @('Client/sdk/game/CAudioContainerFiles.h','Client/sdk/game/CAud
         if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
         if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
     }
-    if ($Scope -eq 'ConstructorServices') {
+    if ($Scope -eq 'WorldGround') {
+        $record.nativeWorldGroundOwnerTested = $text.Contains('Production native whole ground query callback owner fixture completed')
+        $record.actualWorldGroundSdkOwnerTested = $text.Contains('Production actual CWorld ground query SDK callback fixture completed')
+        if (-not ($record.nativeWorldGroundOwnerTested -and $record.actualWorldGroundSdkOwnerTested)) { throw 'New native/actual SDK ground query owner did not complete.' }
+        $record.productionNativeCallbackTested = $true
+    } elseif ($Scope -eq 'ConstructorServices') {
         $record.nativeGameConstructorServicesOwnerTested = $text.Contains('Production native constructor service bundle callback owner fixture completed')
         $record.actualGameConstructorServicesSdkOwnerTested = $text.Contains('Production actual prepared constructor service bundle SDK fixture completed')
         if (-not ($record.nativeGameConstructorServicesOwnerTested -and $record.actualGameConstructorServicesSdkOwnerTested)) { throw 'New native/actual SDK constructor-service bundle owner did not complete.' }

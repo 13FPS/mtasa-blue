@@ -318,6 +318,7 @@ $sourceNames += @(Get-ChildItem -LiteralPath $detoursSourceRoot -File | ForEach-
 $sourceNames += @('Client/game_de/NativeGameConstructorServices.h','Client/game_de/CGameDE.h','Client/game_de/CGameDE.cpp','Client/game_de/CGameWeaponInfoDE.h','Client/game_de/CGameWeaponInfoDE.cpp','Client/game_de/CWeaponStatFactoryDE.h','Client/game_de/CWeaponStatFactoryDE.cpp','Client/game_de/CKeyGenDE.h','Client/game_de/CKeyGenDE.cpp','Client/game_de/CAsyncLoadingDE.h','Client/game_de/CAsyncLoadingDE.cpp','Client/game_de/NativeDataFileNamesReader.h','Client/game_de/NativeDataFileNamesReader.cpp','Client/game_de/NativeDataFileNamesProfile.h','Client/game_de/NativeStreamingFileIdsReader.h','Client/game_de/NativeStreamingFileIdsReader.cpp','Client/game_de/NativeGameStateReader.h','Client/game_de/NativeGameStateReader.cpp','Client/game_de/CGameResetDE.h','Client/game_de/CGameResetDE.cpp','Client/sdk/game/CGameResetPolicy.h')
 $sourceNames += @('Client/game_de/CGameWorldDE.h','Client/game_de/CGameWorldDE.cpp','Client/sdk/game/CGameWorldPolicy.h')
 $sourceNames += @('Client/sdk/game/CAudioContainerFiles.h','Client/sdk/game/CAudioContainerFiles.cpp','Client/sdk/game/CAudioContainer.h')
+$sourceNames += @('Client/game_de/NativeWorldGroundAccess.h','Client/game_de/CWorldGroundDE.h','Client/game_de/CWorldGroundDE.cpp','Client/game_de/NativeWorldGroundCalls.h','Client/game_de/NativeWorldGroundCalls.cpp','Client/game_de/NativeWorldGroundContext.h','Client/game_de/NativeWorldGroundContext.cpp','Client/game_de/NativeWorldGroundProfile.h','Client/sdk/game/CWorld.h','Shared/sdk/CVector2D.h')
 $sourceHashes = @($sourceNames | ForEach-Object {
     $taskPath = Join-Path $taskRoot $_
     [ordered]@{ path=$_; exists=(Test-Path -LiteralPath $taskPath); sha256=$(if (Test-Path -LiteralPath $taskPath) {
@@ -431,6 +432,7 @@ if ((Test-Path -LiteralPath $moduleSource) -and $detoursLibraryExit -eq 0) {
         (Join-Path $taskRoot 'Client/game_de/CPedTasksDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CPedGogglesDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CPedVisibilityDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CWorldGroundDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGameInitializationDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGameResetDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGameWorldDE.cpp'),
@@ -452,6 +454,8 @@ if ((Test-Path -LiteralPath $moduleSource) -and $detoursLibraryExit -eq 0) {
         (Join-Path $taskRoot 'Client/game_de/NativePedVisibilityMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedRotationMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeStreamingSceneCalls.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativeWorldGroundContext.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativeWorldGroundCalls.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedPhysicalScalarsMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedIntelligenceReader.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeTaskPoolReader.cpp'),

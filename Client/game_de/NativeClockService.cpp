@@ -42,6 +42,7 @@
 #include "NativePedGogglesMemory.h"
 #include "NativePedVisibilityMemory.h"
 #include "NativePedOnScreenCalls.h"
+#include "NativePedWeaponGrantCalls.h"
 #include "NativeStreamingSpecialModelCalls.h"
 #include "NativeWorldGroundCalls.h"
 #include "NativeWorldLineCalls.h"
@@ -232,6 +233,7 @@ namespace mta::game_de
             ClockResult ReadPedWearingGoggles(const NativePedReferenceToken&, bool&) noexcept override;
             ClockResult ReadPedVisible(const NativePedReferenceToken&, bool&) noexcept override;
             ClockResult ReadPedOnScreen(const NativePedReferenceToken&, bool&) noexcept override;
+            ClockResult GrantPedWeapon(const NativePedReferenceToken&, eWeaponType, std::uint32_t, std::uint32_t&) noexcept override;
             ClockResult SetPedVisible(const NativePedReferenceToken&, bool) noexcept override;
             ClockResult SetPedAreaCode(const NativePedReferenceToken&, std::uint8_t) noexcept override;
             ClockResult RequestStreamingSpecialModel(std::uint32_t, const char*, std::uint32_t) noexcept override;
@@ -3752,6 +3754,38 @@ namespace mta::game_de
             }
             output = next;
             return ClockResult::Ok;
+        }
+
+        ClockResult NativeAccess::GrantPedWeapon(const NativePedReferenceToken& token, eWeaponType type, std::uint32_t ammo, std::uint32_t& output) noexcept
+        {
+            // Model preparation belongs to the existing SDK itinerary. Fix
+            // its original registered receiver, then reuse the real bound
+            // weapon reader and fresh native preloaded-model admission here.
+            const auto selected = token;
+            auto       result = RequireWeaponReader(&CheckTimingOwner);
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedPoolReader::Value before, after;
+            if ((result = ResolvePedReference(selected, before)) != ClockResult::Ok)
+                return result;
+            std::uint32_t                      slot = 0;
+            NativePedWeaponGrantCalls::Receipt receipt;
+            result = NativePedWeaponGrantCalls::Grant(runtime.image, before, runtime.weaponWriterReader, static_cast<std::uint32_t>(type), ammo, slot,
+                                                      &CheckTimingOwner, &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = ResolvePedReference(selected, after);
+                if (result == ClockResult::Ok && !SameRegisteredPed(before, after))
+                    result = ClockResult::OwnerConflict;
+            }
+            // Native grant owns ammo/model/FX effects and its returned slot.
+            // An entered fault or lost registered acknowledgement stops this
+            // owner with its cell debt intact, without retry, equip or rollback.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            if (result == ClockResult::Ok)
+                output = slot;
+            return result;
         }
 
         ClockResult NativeAccess::ReadPedOnScreen(const NativePedReferenceToken& token, bool& output) noexcept

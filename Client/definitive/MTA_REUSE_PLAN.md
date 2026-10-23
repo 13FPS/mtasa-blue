@@ -5,6 +5,22 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+The October 23 weapon-grant batch shares the actual `CPedSA::GiveWeapon`
+sequence with abstract `CPedGiveWeaponDE`: weapon-info lookup, typed blocking
+model request and custom-model preparation, satchel/detonator recursion, one
+native grant, then lookup of the existing wrapper for the returned slot. It
+preserves raw ammo, nullable preparation branches and exception prefixes. Giving
+a weapon does not implicitly equip it. Both `GetWeapon` overloads and complete
+model services remain required dependencies; this supplies no wrapper factory.
+
+The DE grant enters the genuine qualified engine operation through the current
+registered ped and the existing weapon-info reader. Current game-thread/world,
+GC and preloaded model admission precede entry. Native code owns slot selection,
+ammo handling, old-model release, attachments and goggles effects. Postflight
+rechecks stable receiver and world authority while accepting those legitimate
+changes. A failed entered prefix stops its owner without retry or rollback.
+These offline checks do not publish a complete weapon bank or full MTA startup.
+
 The October 22 startup work reuses MTA's task-wrapper selection, ordered
 registry retirement and model request/reference sequencing in shared SDK
 policies consumed by the actual classic callers. DE observes the native ped

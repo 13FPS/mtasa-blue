@@ -15,6 +15,7 @@
 #include <game/CPedFightingStylePolicy.h>
 #include <game/CPedWeaponStatPolicy.h>
 #include <game/CPedTaskPolicy.h>
+#include <game/CPedGiveWeaponPolicy.h>
 #include "CVisibilityPluginsSA.h"
 #include "CPedModelInfoSA.h"
 #include "CPlayerInfoSA.h"
@@ -251,31 +252,20 @@ void CPedSA::Respawn(CVector* position, bool cameraCut)
 
 CWeapon* CPedSA::GiveWeapon(eWeaponType weaponType, std::uint32_t ammo, eWeaponSkill skill)
 {
-    // Load weapon model
-    if (weaponType != WEAPONTYPE_UNARMED)
-    {
-        CWeaponInfo* weaponInfo = pGame->GetWeaponInfo(weaponType, skill);
-        if (weaponInfo)
+    // Share MTA's model preparation and recursive detonator order. Genuine
+    // game/model services, this native ped and its existing wrapper bank keep
+    // their current lifetime and each actual service lookup stays here.
+    return MtaGame::CPedGiveWeaponPolicy::Give(
+        weaponType, ammo, skill, WEAPONTYPE_UNARMED, WEAPONTYPE_REMOTE_SATCHEL_CHARGE, BLOCKING,
+        [](eWeaponType type, eWeaponSkill requestedSkill) { return pGame->GetWeaponInfo(type, requestedSkill); },
+        [](std::uint32_t model) { return pGame->GetModelInfo(model); }, [this] { GiveWeapon(WEAPONTYPE_DETONATOR, 1, WEAPONSKILL_STD); },
+        [this](eWeaponType type, std::uint32_t amount)
         {
-            CModelInfo* modelInfo = pGame->GetModelInfo(static_cast<std::uint32_t>(weaponInfo->GetModel()));
-            if (modelInfo)
-            {
-                modelInfo->Request(BLOCKING, "CPedSA::GiveWeapon");
-                modelInfo->MakeCustomModel();
-            }
-
-            // If the weapon is satchels, load the detonator too
-            if (weaponType == WEAPONTYPE_REMOTE_SATCHEL_CHARGE)
-                GiveWeapon(WEAPONTYPE_DETONATOR, 1, WEAPONSKILL_STD);
-        }
-    }
-
-    // eWeaponType __thiscall CPed::GiveWeapon(CPed *this, eWeaponType weaponID, signed int ammo, int a4)
-    // Last argument is unused
-    eWeaponSlot weaponSlot =
-        ((eWeaponSlot(__thiscall*)(CEntitySAInterface*, eWeaponType, std::uint32_t, int))FUNC_GiveWeapon)(m_pInterface, weaponType, ammo, 1);
-
-    return GetWeapon(weaponSlot);
+            // The original native fourth argument remains1 and unused; skill
+            // belongs to model preparation, not an invented grant argument.
+            return ((eWeaponSlot(__thiscall*)(CEntitySAInterface*, eWeaponType, std::uint32_t, int))FUNC_GiveWeapon)(m_pInterface, type, amount, 1);
+        },
+        [this](eWeaponSlot slot) { return GetWeapon(slot); });
 }
 
 CWeapon* CPedSA::GetWeapon(eWeaponType weaponType) const

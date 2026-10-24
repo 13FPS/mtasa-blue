@@ -310,7 +310,7 @@ namespace
         std::puts("Shared animation block request ref ordering fixture completed");
     }
 }
-static_assert(std::is_abstract_v<CAnimBlockDE> && std::is_abstract_v<CAnimBlockRequestDE>);
+static_assert(std::is_abstract_v<CAnimBlockDE> && !std::is_abstract_v<CAnimBlockRequestDE>);
 static_assert(std::is_same_v<decltype(&CAnimBlockRequestDE::AddRef), void (CAnimBlockDE::*)()>);
 static_assert(std::is_same_v<decltype(&CAnimBlockRequestDE::GetRefs), unsigned short (CAnimBlockDE::*)()>);
 int main()

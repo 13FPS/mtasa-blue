@@ -12,9 +12,9 @@ class CStreaming;
 
 namespace mta::game_de
 {
-    // AddRef/GetRefs reuse the same inherited native counter owner. Missing
-    // raw-interface/hierarchy and game factories remain mandatory; this slice
-    // does not publish a complete animation block or game implementation.
+    // The concrete CPU facade borrows a real native owner and game provider.
+    // Its Request keeps the actual SDK service obligations; constructing it
+    // supplies no complete game or animation-manager capability by itself.
     class CAnimBlockRequestDE : public CAnimBlockDE
     {
     public:
@@ -27,10 +27,13 @@ namespace mta::game_de
         }
 
     private:
+        // Keep construction tied to an explicitly configured same-backend
+        // manager while allowing derived CPU-only lifetime witnesses in tests.
+        friend class CAnimManagerDE;
         CStreaming& RequireStreaming();
         // The same actual game and native block owner must outlive the facade;
         // request orchestration creates no second native owner or ref counter.
         CGame& game;
     };
-    static_assert(std::is_abstract_v<CAnimBlockRequestDE> && std::is_base_of_v<CAnimBlock, CAnimBlockRequestDE>);
+    static_assert(!std::is_abstract_v<CAnimBlockRequestDE> && std::is_base_of_v<CAnimBlock, CAnimBlockRequestDE> && std::has_virtual_destructor_v<CAnimBlock>);
 }

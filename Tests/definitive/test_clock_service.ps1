@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs')]
+    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -37,6 +37,9 @@ $record['actualWorldLineSdkOwnerTested'] = $false
 $record['nativeWorldGroundOwnerTested'] = $false
 $record['actualWorldGroundSdkOwnerTested'] = $false
 $record['nativePedWeaponGrantOwnerTested'] = $false
+$record['actualAnimationBlockFactorySdkOwnerTested'] = $false
+$record['nativeAnimationBlockFactoryOwnerTested'] = $false
+$record['opaqueAnimationBlockRoundtripOwnerTested'] = $false
 $record['nativeAnimationBlockRefsOwnerTested'] = $false
 $record['actualAnimationBlockRefsSdkOwnerTested'] = $false
 $record['sharedAnimBlockRequestRefPolicyOwnerTested'] = $false
@@ -399,6 +402,7 @@ try {
     $sourceNames += @('Tests/definitive/NativePedFireCollisionOwnerTests.inl','Tests/definitive/Write-PedFireFixture.ps1','Tests/definitive/Write-PedCollisionFixture.ps1')
     $sourceNames += @('Tests/definitive/NativePedAreaOwnerTests.inl','Tests/definitive/NativeStreamingSpecialModelOwnerTests.inl','Tests/definitive/Write-PedAreaFixture.ps1')
     $sourceNames += @('Tests/definitive/NativePedPoseOwnerTests.inl','Tests/definitive/Write-PedPoseFixture.ps1')
+    $sourceNames += @('Client/game_de/NativeAnimationBlockFactoryMemory.h','Client/game_de/NativeAnimationBlockFactoryMemory.cpp','Client/game_de/NativeAnimationBlockHierarchyProfile.h','Tests/definitive/NativeAnimationBlockFactoryFixture.h','Tests/definitive/NativeAnimationBlockFactoryOwnerTests.inl','Tests/definitive/Write-AnimationBlockFactoryFixture.ps1','Tests/definitive/Write-AnimationManagerFixture.ps1','Client/sdk/game/CAnimBlock.h')
     $sourceNames += @('Client/game_de/NativeAnimationBlockRefMemory.h','Client/game_de/NativeAnimationBlockRefMemory.cpp','Client/game_de/NativeAnimationBlockRefProfile.h','Tests/definitive/NativeAnimationBlockRefFixture.h','Tests/definitive/NativeAnimationBlockRefsOwnerTests.inl','Tests/definitive/Write-AnimBlockRefsFixture.ps1','Tests/definitive/AnimBlockNameDETests.cpp')
     $sourceNames += @('Tests/definitive/NativeAnimationBlockOwnerTests.inl','Tests/definitive/NativeAnimationBlockNameOwnerTests.inl','Tests/definitive/NativeAnimationManagerOwnerTests.inl','Tests/definitive/AnimationManagerOwnerFixture.h')
     $sourceNames += @('Tests/definitive/NativePedOrientationOwnerTests.inl','Tests/definitive/Write-PedOrientationFixture.ps1','Tests/definitive/NativePedWaterOwnerTests.inl','Tests/definitive/NativePedWaterTaskOwnerTests.inl','Tests/definitive/Write-PedWaterFixture.ps1')
@@ -559,6 +563,12 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
     Copy-Item -LiteralPath $refsFixture.path -Destination $refsEvidence
     $record['animationBlockRefsSdkFixture'] = $refsFixture
     $record.animationBlockRefsSdkFixture.path = $refsEvidence
+    . (Join-Path $PSScriptRoot 'Write-AnimationBlockFactoryFixture.ps1')
+    $blockFactoryFixture = Write-AnimationBlockFactoryFixture $taskRoot (Join-Path $scratchRoot 'AnimationBlockFactoryManager.generated.h')
+    $blockFactoryEvidence = Join-Path $outputRoot 'AnimationBlockFactoryManager.generated.h'
+    Copy-Item -LiteralPath $blockFactoryFixture.path -Destination $blockFactoryEvidence
+    $record['animationBlockFactoryManagerFixture'] = $blockFactoryFixture
+    $record.animationBlockFactoryManagerFixture.path = $blockFactoryEvidence
     # This generator makes the shared Rebuild leaf extendable. Run it last
     # and refresh the actual durable siblings; an earlier hash must not name
     # bytes subsequently overwritten by another strict-fixture generator.
@@ -686,6 +696,7 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
     if ($Scope -eq 'WorldLine') { $fixtureArguments += '--world-line' }
     if ($Scope -eq 'WorldGround') { $fixtureArguments += '--world-ground' }
     if ($Scope -eq 'ConstructorServices') { $fixtureArguments += '--constructor-services' }
+    if ($Scope -eq 'AnimationBlockFactory') { $fixtureArguments += '--animation-block-factory' }
     if ($Scope -eq 'AnimationBlockRefs') { $fixtureArguments += '--animation-block-refs' }
     if ($Scope -eq 'PlayerNativePrerequisites') { $fixtureArguments += '--player-native-prerequisites' }
     if ($Scope -eq 'PedMoveAnim') { $fixtureArguments += '--ped-move-anim' }
@@ -754,7 +765,13 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
         if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
     }
-    if ($Scope -eq 'AnimationBlockRefs') {
+    if ($Scope -eq 'AnimationBlockFactory') {
+        $record['actualAnimationBlockFactorySdkOwnerTested'] = $text.Contains('Production actual animation block factory SDK owner fixture completed')
+        $record['nativeAnimationBlockFactoryOwnerTested'] = $text.Contains('Production native animation block factory owner fixture completed')
+        $record['opaqueAnimationBlockRoundtripOwnerTested'] = $text.Contains('Production opaque animation block roundtrip owner fixture completed')
+        if (-not ($record.actualAnimationBlockFactorySdkOwnerTested -and $record.nativeAnimationBlockFactoryOwnerTested -and $record.opaqueAnimationBlockRoundtripOwnerTested)) { throw 'New native/SDK/opaque block factory owner observations did not complete.' }
+        $record.productionNativeCallbackTested = $true
+    } elseif ($Scope -eq 'AnimationBlockRefs') {
         $record['nativeAnimationBlockRefsOwnerTested'] = $text.Contains('Production native animation block reference owner fixture completed')
         $record['actualAnimationBlockRefsSdkOwnerTested'] = $text.Contains('Production actual animation block reference SDK callback fixture completed')
         $record['sharedAnimBlockRequestRefPolicyOwnerTested'] = $text.Contains('Production shared animation request policy native reference owner ordering completed')

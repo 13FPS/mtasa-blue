@@ -67,6 +67,9 @@
 #include <utility>
 #include "../../Client/game_de/NativeAnimationBlockMemory.h"
 #include "../../Client/game_de/NativeAnimationBlockRefMemory.h"
+#include "../../Client/game_de/NativeAnimationBlockFactoryMemory.h"
+#include "../../Client/game_de/CAnimBlockRequestDE.h"
+#include "NativeAnimationBlockFactoryFixture.h"
 #include "../../Client/game_de/NativeAnimationBlockRefProfile.h"
 #include "NativeAnimationBlockRefFixture.h"
 #include <game/CAnimBlockRequestPolicy.h>
@@ -3224,6 +3227,9 @@ namespace ClockWorldIgnoreOwnerTest
 #undef ReadImage
 #define ReadImage AnimationManagerOwnerFixtureReadImage
 #include "../../Client/game_de/NativeAnimationManagerMemory.cpp"
+#undef ReadImage
+#define ReadImage AnimationBlockOwnerFixtureReadImage
+#include "../../Client/game_de/NativeAnimationBlockFactoryMemory.cpp"
 #undef ReadImage
 #undef MTA_DE_PED_WATER_FLAGS_EXCHANGE
 #define MTA_DE_PED_PLACEMENT_EXCHANGE ClockPedPhysicalScalarsOwnerTest::Exchange
@@ -7970,12 +7976,15 @@ namespace
 #include "NativeAnimationBlockOwnerTests.inl"
 #include "AnimBlockRefsFixture.generated.h"
 #include "NativeAnimationBlockRefsOwnerTests.inl"
+#include "AnimationBlockFactoryManager.generated.h"
+#include "NativeAnimationBlockFactoryOwnerTests.inl"
 #include "NativeAnimationBlockNameOwnerTests.inl"
 #include "NativeAnimationManagerOwnerTests.inl"
 
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool animationBlockFactoryOnly = argc == 3 && std::strcmp(argv[2], "--animation-block-factory") == 0;
     const bool animationBlockRefsOnly = argc == 3 && std::strcmp(argv[2], "--animation-block-refs") == 0;
     const bool playerNativePrerequisitesOnly = argc == 3 && std::strcmp(argv[2], "--player-native-prerequisites") == 0;
     const bool pedMoveAnimOnly = argc == 3 && std::strcmp(argv[2], "--ped-move-anim") == 0;
@@ -8023,9 +8032,17 @@ int main(int argc, char** argv)
            fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly ||
            worldLineOnly || worldAreaOnly || worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly ||
            cameraSphereOnly || pedWeaponClearOnly || pedClothesOnly || pedRebuildOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly ||
-           animationBlockRefsOnly) &&
+           animationBlockRefsOnly || animationBlockFactoryOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (animationBlockFactoryOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        NativeAnimationBlocksOwnedSdk(fixture, &AnimationBlockFactoryOwnerFixture::RunPrepared);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (animationBlockRefsOnly)
     {
         ClockImageFixture fixture;

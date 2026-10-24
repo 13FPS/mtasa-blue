@@ -325,7 +325,7 @@ namespace
         Scenario() { game.streaming = &streaming; }
     };
     static_assert(!std::is_abstract_v<Block> && std::is_base_of_v<CAnimBlock, Block>);
-    static_assert(std::is_abstract_v<CAnimBlockRequestDE>);
+    static_assert(!std::is_abstract_v<CAnimBlockRequestDE>);
 
     void SdkChecks()
     {

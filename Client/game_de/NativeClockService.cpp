@@ -58,6 +58,7 @@
 #include "CWorldLineDE.h"
 #include "NativeAnimationBlockMemory.h"
 #include "NativeAnimationBlockRefMemory.h"
+#include "NativeAnimationBlockFactoryMemory.h"
 #include "NativeAnimationManagerMemory.h"
 #include "NativePedVelocityMemory.h"
 #include "NativePedReferenceController.h"
@@ -237,6 +238,9 @@ namespace mta::game_de
             ClockResult ReadAnimationBlockName(const NativeAnimationBlockIdentity&, char*&) noexcept override;
             ClockResult ReadAnimationBlockRefs(const NativeAnimationBlockIdentity&, std::uint16_t&) noexcept override;
             ClockResult AddAnimationBlockRef(const NativeAnimationBlockIdentity&) noexcept override;
+            ClockResult ReadAnimationBlockIdentity(std::uint64_t, std::uint32_t, NativeAnimationBlockIdentity&) noexcept override;
+            ClockResult ReadAnimationBlockInterfaceIdentity(std::uint64_t, std::uintptr_t, NativeAnimationBlockIdentity&) noexcept override;
+            ClockResult ReadAnimationBlockHierarchy(const NativeAnimationBlockIdentity&, std::size_t, std::uintptr_t&) noexcept override;
             ClockResult ReadAnimationManagerCounts(std::uint64_t, NativeAnimationManagerCounts&) noexcept override;
             ClockResult FindAnimationBlockIndex(std::uint64_t, const NativeAnimationBlockName&, std::int32_t&) noexcept override;
             ClockResult ReadPedInWater(const NativePedReferenceToken&, bool&) noexcept override;
@@ -4294,6 +4298,77 @@ namespace mta::game_de
             return result;
         }
 
+        ClockResult NativeAccess::ReadAnimationBlockIdentity(std::uint64_t ownerGeneration, std::uint32_t index, NativeAnimationBlockIdentity& output) noexcept
+        {
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto generation = runtime.generation.load();
+            if (!ownerGeneration || ownerGeneration != generation)
+                return ClockResult::OwnerConflict;
+            NativeAnimationBlockIdentity next;
+            result = NativeAnimationBlockFactoryMemory({runtime.image}, &CheckTimingOwner).ReadIdentity(index, next);
+            if (result != ClockResult::Ok)
+                return result;
+            if ((result = CheckTimingOwner()) != ClockResult::Ok)
+                return result;
+            if (runtime.generation.load() != generation || next.index != index)
+                return ClockResult::OwnerConflict;
+            // A current lookup issues CPU affinity only after native identity
+            // and this controller's generation survive both observations.
+            next.ownerGeneration = generation;
+            output = next;
+            return ClockResult::Ok;
+        }
+
+        ClockResult NativeAccess::ReadAnimationBlockInterfaceIdentity(std::uint64_t ownerGeneration, std::uintptr_t locator,
+                                                                      NativeAnimationBlockIdentity& output) noexcept
+        {
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto generation = runtime.generation.load();
+            if (!ownerGeneration || ownerGeneration != generation)
+                return ClockResult::OwnerConflict;
+            NativeAnimationBlockIdentity next;
+            result = NativeAnimationBlockFactoryMemory({runtime.image}, &CheckTimingOwner).ResolveInterface(locator, next);
+            if (result != ClockResult::Ok)
+                return result;
+            if ((result = CheckTimingOwner()) != ClockResult::Ok)
+                return result;
+            if (runtime.generation.load() != generation)
+                return ClockResult::OwnerConflict;
+            // The opaque address is a current lookup locator, never a lease
+            // or permission to revive an old issued SDK receiver. New wrappers
+            // receive this generation; old wrappers keep their expired one.
+            next.ownerGeneration = generation;
+            output = next;
+            return ClockResult::Ok;
+        }
+
+        ClockResult NativeAccess::ReadAnimationBlockHierarchy(const NativeAnimationBlockIdentity& expected, std::size_t index, std::uintptr_t& output) noexcept
+        {
+            const auto identity = expected;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto generation = runtime.generation.load();
+            if (!identity.ownerGeneration || identity.ownerGeneration != generation)
+                return ClockResult::OwnerConflict;
+            std::uintptr_t next = 0;
+            result = NativeAnimationBlockFactoryMemory({runtime.image}, &CheckTimingOwner).ReadHierarchy(identity, index, next);
+            if (result != ClockResult::Ok)
+                return result;
+            if ((result = CheckTimingOwner()) != ClockResult::Ok)
+                return result;
+            if (runtime.generation.load() != generation)
+                return ClockResult::OwnerConflict;
+            // A loaded row is an immediate native borrow. The genuine unloaded
+            // result remains null even for SIZE_MAX; no index truncation, SA
+            // structure interpretation or persistent hierarchy lease is added.
+            output = next;
+            return ClockResult::Ok;
+        }
         ClockResult NativeAccess::ReadAnimationBlockRefs(const NativeAnimationBlockIdentity& expected, std::uint16_t& output) noexcept
         {
             // Capture caller intent before admission callbacks. Mutating the

@@ -6,6 +6,7 @@
 #pragma once
 #include "NativePedPoolReader.h"
 #include <array>
+#include <cstddef>
 #include <cstdint>
 namespace mta::game_de
 {
@@ -29,6 +30,12 @@ namespace mta::game_de
     {
     public:
         virtual ~NativeAnimationBlockAccess() = default;
+        // Return only a freshly qualified hierarchy locator. The legacy SDK
+        // pointer tag adds no classic layout or native lifetime guarantee.
+        virtual ClockResult ReadAnimationBlockHierarchy(const NativeAnimationBlockIdentity&, std::size_t, std::uintptr_t&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
         // Counter ownership remains with the current native block. These
         // operations neither create a block nor own a classic raw interface.
         virtual ClockResult ReadAnimationBlockRefs(const NativeAnimationBlockIdentity&, std::uint16_t&) noexcept { return ClockResult::NotInitialized; }

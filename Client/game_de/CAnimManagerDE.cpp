@@ -4,6 +4,8 @@
  * PURPOSE: Preserve native counter and missing-name facts without fallback
  ****************************************************************************/
 #include "CAnimManagerDE.h"
+#include "CAnimBlockRequestDE.h"
+#include <algorithm>
 #include <game/CAnimGatewayNames.h>
 #include <stdexcept>
 #include <string>
@@ -11,11 +13,102 @@ namespace mta::game_de
 {
     namespace
     {
+        NativeAnimationBlockName CopyName(const char* name)
+        {
+            if (!name)
+                throw std::invalid_argument("DE animation block lookup requires a name");
+            NativeAnimationBlockName copied{};
+            for (std::size_t i = 0; i != copied.size(); ++i)
+            {
+                copied[i] = static_cast<unsigned char>(name[i]);
+                if (!copied[i])
+                    return copied;
+            }
+            throw std::invalid_argument("DE animation block lookup requires a terminated name within16bytes");
+        }
+        bool SameName(const NativeAnimationBlockName& query, const NativeAnimationBlockName& actual) noexcept
+        {
+            // The pinned native lookup folds ASCII only; equal high bytes
+            // remain valid and a mismatch containing high bytes never folds.
+            const auto fold = [](unsigned char value) { return value >= 'A' && value <= 'Z' ? value + ('a' - 'A') : value; };
+            for (std::size_t i = 0; i != query.size(); ++i)
+            {
+                if (query[i] != actual[i] && ((query[i] | actual[i]) & 0x80 || fold(query[i]) != fold(actual[i])))
+                    return false;
+                if (!query[i])
+                    return true;
+            }
+            return false;
+        }
         void Require(ClockResult result, const char* operation)
         {
             if (result != ClockResult::Ok)
                 throw std::runtime_error(std::string("DE animation manager owner refused ") + operation + ": " + std::to_string(static_cast<unsigned>(result)));
         }
+    }
+    CAnimManagerDE::CAnimManagerDE(NativeAnimationManagerAccess& manager, NativeAnimationBlockAccess& blocks, CGame& game, std::uint64_t generation)
+        : native(manager), ownerGeneration(generation), blockAccess(&blocks), gameProvider(&game)
+    {
+        // Both polymorphic references must be subobjects of one CPU service
+        // owner. A coincidental native image or callback generation cannot
+        // make two independent owners interchangeable for a factory product.
+        if (dynamic_cast<void*>(&manager) != dynamic_cast<void*>(&blocks))
+            throw std::invalid_argument("DE animation factory requires one native owner for manager and blocks");
+    }
+    void CAnimManagerDE::RequireFactory(const char* operation) const
+    {
+        if (!blockAccess || !gameProvider)
+            Require(ClockResult::NotInitialized, operation);
+    }
+    std::unique_ptr<CAnimBlock> CAnimManagerDE::MakeBlock(const NativeAnimationBlockIdentity& identity, const char* operation)
+    {
+        RequireFactory(operation);
+        if (identity.ownerGeneration != ownerGeneration || std::find(identity.name.begin(), identity.name.end(), 0) == identity.name.end())
+            Require(ClockResult::BindingChanged, operation);
+        // This one allocation owns only the CPU facade. Native block refs,
+        // loaded state and the borrowed game remain unchanged on destruction.
+        return std::unique_ptr<CAnimBlock>(new CAnimBlockRequestDE(*blockAccess, identity, *gameProvider));
+    }
+    std::unique_ptr<CAnimBlock> CAnimManagerDE::GetAnimationBlock(int index)
+    {
+        RequireFactory("GetAnimationBlock");
+        if (index < 0)
+            Require(ClockResult::InvalidArgument, "GetAnimationBlock");
+        NativeAnimationBlockIdentity identity;
+        Require(native.ReadAnimationBlockIdentity(ownerGeneration, static_cast<std::uint32_t>(index), identity), "GetAnimationBlock");
+        if (identity.index != static_cast<std::uint32_t>(index))
+            Require(ClockResult::BindingChanged, "GetAnimationBlock");
+        // The current native row, rather than a name lookup or cached count,
+        // supplies the exact identity for this integer factory overload too.
+        return MakeBlock(identity, "GetAnimationBlock");
+    }
+    std::unique_ptr<CAnimBlock> CAnimManagerDE::GetAnimationBlock(const char* name)
+    {
+        const auto query = CopyName(name);
+        RequireFactory("GetAnimationBlock");
+        std::int32_t index = -1;
+        Require(native.FindAnimationBlockIndex(ownerGeneration, query, index), "GetAnimationBlock");
+        if (index == -1)
+            return nullptr;
+        if (index < -1)
+            Require(ClockResult::BindingChanged, "GetAnimationBlock");
+        NativeAnimationBlockIdentity identity;
+        Require(native.ReadAnimationBlockIdentity(ownerGeneration, static_cast<std::uint32_t>(index), identity), "GetAnimationBlock");
+        if (identity.index != static_cast<std::uint32_t>(index) || !SameName(query, identity.name))
+            Require(ClockResult::BindingChanged, "GetAnimationBlock");
+        // Preserve the actual selected row's complete mutable16-byte name,
+        // not the query's case-fold spelling or a fabricated zero-filled tail.
+        return MakeBlock(identity, "GetAnimationBlock");
+    }
+    std::unique_ptr<CAnimBlock> CAnimManagerDE::GetAnimBlock(CAnimBlockSAInterface* tag)
+    {
+        // Classic's null clone path never queries a game or native service.
+        if (!tag)
+            return nullptr;
+        RequireFactory("GetAnimBlock");
+        NativeAnimationBlockIdentity identity;
+        Require(native.ReadAnimationBlockInterfaceIdentity(ownerGeneration, reinterpret_cast<std::uintptr_t>(tag), identity), "GetAnimBlock");
+        return MakeBlock(identity, "GetAnimBlock");
     }
     NativeAnimationManagerCounts CAnimManagerDE::Read(const char* operation) const
     {
@@ -44,18 +137,7 @@ namespace mta::game_de
     }
     int CAnimManagerDE::GetAnimationBlockIndex(const char* name)
     {
-        if (!name)
-            throw std::invalid_argument("DE animation block lookup requires a name");
-        NativeAnimationBlockName copied{};
-        std::size_t              i = 0;
-        for (; i != copied.size(); ++i)
-        {
-            copied[i] = static_cast<unsigned char>(name[i]);
-            if (!copied[i])
-                break;
-        }
-        if (i == copied.size())
-            throw std::invalid_argument("DE animation block lookup requires a terminated name within16bytes");
+        const auto   copied = CopyName(name);
         std::int32_t index = -1;
         Require(native.FindAnimationBlockIndex(ownerGeneration, copied, index), "GetAnimationBlockIndex");
         if (index < -1)

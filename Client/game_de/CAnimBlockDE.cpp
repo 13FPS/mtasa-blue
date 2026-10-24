@@ -25,6 +25,31 @@ namespace mta::game_de
             throw std::runtime_error("DE animation block owner returned another or unrepresentable index");
         return value;
     }
+    CAnimBlockSAInterface* CAnimBlockDE::GetInterface()
+    {
+        const auto expected = identity;
+        char*      address = nullptr;
+        const auto result = native.ReadAnimationBlockName(expected, address);
+        if (result != ClockResult::Ok)
+            throw std::runtime_error("DE animation block owner refused GetInterface: " + std::to_string(static_cast<unsigned>(result)));
+        if (!address)
+            throw std::runtime_error("DE animation block owner returned no native interface");
+        // The common SDK only roundtrips this legacy tag to the same backend.
+        // GetName already qualifies this actual rowbase. The cast neither
+        // applies classic structure layout nor extends the current borrow.
+        return reinterpret_cast<CAnimBlockSAInterface*>(address);
+    }
+    CAnimBlendHierarchySAInterface* CAnimBlockDE::GetAnimationHierarchyInterface(std::size_t animation)
+    {
+        const auto     expected = identity;
+        std::uintptr_t address = 0;
+        const auto     result = native.ReadAnimationBlockHierarchy(expected, animation, address);
+        if (result != ClockResult::Ok)
+            throw std::runtime_error("DE animation block owner refused GetAnimationHierarchyInterface: " + std::to_string(static_cast<unsigned>(result)));
+        // The native owner preserves unloaded/null before range checks and
+        // qualifies DE's own40-byte row. No classic sizeof or fields are read.
+        return address ? reinterpret_cast<CAnimBlendHierarchySAInterface*>(address) : nullptr;
+    }
     char* CAnimBlockDE::GetName()
     {
         char*      value = nullptr;

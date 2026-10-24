@@ -13,13 +13,15 @@ namespace mta::game_de
     class CAnimBlockDE : public CAnimBlock
     {
     public:
-        char*          GetName() override;
-        int            GetIndex() override;
-        void           AddRef() override;
-        unsigned short GetRefs() override;
-        bool           IsLoaded() override;
-        int            GetIDOffset() override;
-        std::size_t    GetAnimationCount() override;
+        CAnimBlockSAInterface*          GetInterface() override;
+        CAnimBlendHierarchySAInterface* GetAnimationHierarchyInterface(std::size_t) override;
+        char*                           GetName() override;
+        int                             GetIndex() override;
+        void                            AddRef() override;
+        unsigned short                  GetRefs() override;
+        bool                            IsLoaded() override;
+        int                             GetIDOffset() override;
+        std::size_t                     GetAnimationCount() override;
 
     protected:
         CAnimBlockDE(NativeAnimationBlockAccess&, const NativeAnimationBlockIdentity&);
@@ -29,8 +31,8 @@ namespace mta::game_de
         NativeAnimationBlockAccess&        native;
         const NativeAnimationBlockIdentity identity;
     };
-    // Requests and classic raw interfaces retain their genuine contracts.
-    // Observing/incrementing this native counter does not create a block,
-    // supply manager removal semantics or publish a complete factory.
+    // Legacy pointer types are opaque same-backend locators, never SA layout
+    // promises or native leases. Request still requires its real game provider;
+    // the base remains abstract rather than fabricating that dependency.
     static_assert(std::is_abstract_v<CAnimBlockDE> && std::is_base_of_v<CAnimBlock, CAnimBlockDE>);
 }

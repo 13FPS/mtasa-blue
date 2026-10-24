@@ -5,6 +5,27 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+The animation block facade now supplies its genuine opaque interface and
+hierarchy borrows. The legacy SA-named forward tags do not assert SA data
+layout: common clients pass them back into the same backend. Current native
+name/index/generation checks qualify the row; a loaded hierarchy also needs
+the proved 40-byte row, owning block and current range. Unloaded blocks return
+null before hierarchy index arithmetic, including a full-width `SIZE_MAX`.
+
+Name, integer and opaque-address block factories create ordinary CPU facades
+over those existing rows. They require matching native providers and an
+explicit borrowed game for the existing request itinerary. They acquire no
+native references or storage. Fresh opaque lookup issues a current receiver;
+an old issued receiver keeps its expired generation. Remaining animation
+manager and game providers still require their actual implementations.
+
+`CAnimBlock` also needs a virtual destructor for the SDK's existing
+`std::unique_ptr<CAnimBlock>` ownership. The declaration is appended after the
+existing virtual operations; SDK consumers must be rebuilt together. CPU
+destruction releases only the facade and never removes animation references.
+This shared SDK change requires current classic/client compilation and ABI
+checks; historical Core and gameplay evidence does not become a fresh build.
+
 `CAnimBlockDE` now keeps MTA's actual inline `AddRef`/`GetRefs` policy on the
 same source-proved native block reference WORD at `block+0x12`. The existing
 name/index/callback-generation and game-thread/GC owner qualifies each borrow.

@@ -33,4 +33,10 @@ public:
     virtual size_t                          GetAnimationCount() = 0;
     virtual void                            Request(EModelRequestType requestType, bool bAllowBlockingFail = false) = 0;
     virtual CAnimBlendHierarchySAInterface* GetAnimationHierarchyInterface(size_t iAnimation) = 0;
+
+    // Animation-manager factories return unique_ptr<CAnimBlock> owning a
+    // backend facade. Polymorphic destruction must retire that CPU facade
+    // correctly; it does not release an engine animation-block reference.
+    // This deliberately changes the shared ABI and requires rebuilt consumers.
+    virtual ~CAnimBlock() = default;
 };

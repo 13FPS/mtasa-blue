@@ -45,6 +45,7 @@
 #include "NativePedWeaponGrantCalls.h"
 #include "NativePedWeaponClearCalls.h"
 #include "NativePedClothesCalls.h"
+#include "NativePedRebuildCalls.h"
 #include "NativeStreamingSpecialModelCalls.h"
 #include "NativeWorldGroundCalls.h"
 #include "NativeWorldLineCalls.h"
@@ -241,6 +242,7 @@ namespace mta::game_de
             ClockResult GrantPedWeapon(const NativePedReferenceToken&, eWeaponType, std::uint32_t, std::uint32_t&) noexcept override;
             ClockResult ClearPedWeapon(const NativePedReferenceToken&, eWeaponType) noexcept override;
             ClockResult SetPedClothes(const NativePedReferenceToken&, const char*, const char*, std::uint8_t) noexcept override;
+            ClockResult RebuildPed(const NativePedReferenceToken&) noexcept override;
             ClockResult SetWorldIgnoredPed(const NativePedReferenceToken&) noexcept override;
             ClockResult ClearWorldIgnoredEntity() noexcept override;
             ClockResult SetPedVisible(const NativePedReferenceToken&, bool) noexcept override;
@@ -3967,6 +3969,34 @@ namespace mta::game_de
             }
             output = next;
             return ClockResult::Ok;
+        }
+
+        ClockResult NativeAccess::RebuildPed(const NativePedReferenceToken& token) noexcept
+        {
+            // Keep MTA's separate rebuild operation on this same registered
+            // local player. The whole genuine DE entry owns its render-list,
+            // model-reference and clothes/stat effects; it takes only the ped.
+            const auto selected = token;
+            auto       result = RequirePlayerInfo();
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedPoolReader::Value before, after;
+            if ((result = ResolvePedReference(selected, before)) != ClockResult::Ok)
+                return result;
+            NativePedRebuildCalls::Receipt receipt;
+            result = NativePedRebuildCalls::Rebuild(runtime.image, before, runtime.playerInfo, &CheckPlayerInfoOwner, &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = ResolvePedReference(selected, after);
+                if (result == ClockResult::Ok && !SameRegisteredPed(before, after))
+                    result = ClockResult::OwnerConflict;
+            }
+            // A rebuild can already have retired the old render receiver.
+            // Preserve its effects and the owner's cell debt after a lost
+            // acknowledgement; replay and whole-object rollback are invalid.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
         }
 
         ClockResult NativeAccess::SetPedClothes(const NativePedReferenceToken& token, const char* texture, const char* model, std::uint8_t texturePart) noexcept

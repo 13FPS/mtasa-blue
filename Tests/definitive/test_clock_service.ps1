@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes')]
+    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -37,6 +37,8 @@ $record['actualWorldLineSdkOwnerTested'] = $false
 $record['nativeWorldGroundOwnerTested'] = $false
 $record['actualWorldGroundSdkOwnerTested'] = $false
 $record['nativePedWeaponGrantOwnerTested'] = $false
+$record['nativePedRebuildOwnerTested'] = $false
+$record['actualPedRebuildSdkOwnerTested'] = $false
 $record['nativePedClothesOwnerTested'] = $false
 $record['actualPedClothesSdkOwnerTested'] = $false
 $record['nativePedWeaponClearOwnerTested'] = $false
@@ -420,6 +422,7 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
     $sourceNames += @('Tests/definitive/NativeCameraSphereVisibleFixture.h','Tests/definitive/NativeCameraSphereVisibleOwnerTests.inl','Tests/definitive/Write-CameraSphereVisibleFixture.ps1')
     $sourceNames += @('Tests/definitive/NativePedWeaponClearFixture.h','Tests/definitive/NativePedWeaponClearOwnerTests.inl','Tests/definitive/Write-PedClearWeaponFixture.ps1')
     $sourceNames += @('Client/game_de/NativePedClothesAccess.h','Client/game_de/CPedClothesDE.h','Client/game_de/CPedClothesDE.cpp','Client/game_de/NativePedClothesCalls.h','Client/game_de/NativePedClothesCalls.cpp','Client/game_de/NativePedClothesProfile.h','Client/game_de/NativeNameConstructionContext.h','Tests/definitive/NativePedClothesFixture.h','Tests/definitive/NativePedClothesOwnerTests.inl','Tests/definitive/Write-PedClothesFixture.ps1')
+    $sourceNames += @('Client/game_de/NativePedRebuildAccess.h','Client/game_de/CPedRebuildDE.h','Client/game_de/CPedRebuildDE.cpp','Client/game_de/NativePedRebuildCalls.h','Client/game_de/NativePedRebuildCalls.cpp','Client/game_de/NativePedRebuildProfile.h','Tests/definitive/NativePedRebuildFixture.h','Tests/definitive/NativePedRebuildOwnerTests.inl','Tests/definitive/Write-PedRebuildFixture.ps1')
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
     })
@@ -481,6 +484,11 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
     $ignoreEvidence = Join-Path $outputRoot 'WorldIgnoreEntityFixture.generated.h'
     Copy-Item -LiteralPath $ignoreFixture.path -Destination $ignoreEvidence
     $record['worldIgnoreGeneratedFixture'] = [ordered]@{path=$ignoreEvidence;sha256=(Sha $ignoreEvidence)}
+    . (Join-Path $PSScriptRoot 'Write-PedRebuildFixture.ps1')
+    $rebuildFixture = Write-PedRebuildFixture $taskRoot (Join-Path $scratchRoot 'PedRebuildFixture.generated.h')
+    $rebuildEvidence = Join-Path $outputRoot 'PedRebuildFixture.generated.h'
+    Copy-Item -LiteralPath $rebuildFixture.path -Destination $rebuildEvidence
+    $record['pedRebuildGeneratedFixture'] = [ordered]@{path=$rebuildEvidence;sha256=(Sha $rebuildEvidence)}
     . (Join-Path $PSScriptRoot 'Write-PedClothesFixture.ps1')
     $clothesFixture = Write-PedClothesFixture $taskRoot (Join-Path $scratchRoot 'PedClothesFixture.generated.h')
     $clothesEvidence = Join-Path $outputRoot 'PedClothesFixture.generated.h'
@@ -598,6 +606,7 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         (Join-Path $taskRoot 'Client/game_de/CPedGiveWeaponDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CPedClearWeaponDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CPedClothesDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CPedRebuildDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CWorldGroundDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CWorldLineDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CWorldAreaDE.cpp'),
@@ -645,6 +654,7 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
     if ($Scope -eq 'WorldLine') { $fixtureArguments += '--world-line' }
     if ($Scope -eq 'WorldGround') { $fixtureArguments += '--world-ground' }
     if ($Scope -eq 'ConstructorServices') { $fixtureArguments += '--constructor-services' }
+    if ($Scope -eq 'PedRebuild') { $fixtureArguments += '--ped-rebuild' }
     if ($Scope -eq 'PedClothes') { $fixtureArguments += '--ped-clothes' }
     if ($Scope -eq 'PedWeaponClear') { $fixtureArguments += '--ped-weapon-clear' }
     if ($Scope -eq 'PedWeaponGrant') { $fixtureArguments += '--ped-weapon-grant' }
@@ -709,7 +719,12 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
         if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
     }
-    if ($Scope -eq 'PedClothes') {
+    if ($Scope -eq 'PedRebuild') {
+        $record.nativePedRebuildOwnerTested = $text.Contains('Production native registered rebuild callback owner fixture completed')
+        $record.actualPedRebuildSdkOwnerTested = $text.Contains('Production actual CPed rebuild SDK callback fixture completed')
+        if (-not ($record.nativePedRebuildOwnerTested -and $record.actualPedRebuildSdkOwnerTested)) { throw 'New native/actual SDK rebuild owner did not complete.' }
+        $record.productionNativeCallbackTested = $true
+    } elseif ($Scope -eq 'PedClothes') {
         $record.nativePedClothesOwnerTested = $text.Contains('Production native registered clothes callback owner fixture completed')
         $record.actualPedClothesSdkOwnerTested = $text.Contains('Production actual CPed clothes SDK callback fixture completed')
         if (-not ($record.nativePedClothesOwnerTested -and $record.actualPedClothesSdkOwnerTested)) { throw 'New native/actual SDK clothes owner did not complete.' }

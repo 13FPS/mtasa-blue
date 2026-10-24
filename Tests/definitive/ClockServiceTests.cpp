@@ -51,6 +51,9 @@
 #include "../../Client/game_de/CPedClothesDE.h"
 #include "../../Client/game_de/NativePedClothesCalls.h"
 #include "NativePedClothesFixture.h"
+#include "../../Client/game_de/CPedRebuildDE.h"
+#include "../../Client/game_de/NativePedRebuildCalls.h"
+#include "NativePedRebuildFixture.h"
 #include "NativePedWeaponGrantFixture.h"
 #include <game/CGame.h>
 #include <game/CModelInfo.h>
@@ -370,6 +373,50 @@ namespace ped_clothes_fixture
     }
 }
 #include "PedClothesFixture.generated.h"
+namespace ped_rebuild_fixture
+{
+    using ped_clothes_fixture::Unqualified;
+}
+#include "PedRebuildFixture.generated.h"
+namespace ClockPedRebuildOwnerTest
+{
+    using NativeFunction = mta::game_de::NativePedRebuildCalls::NativeFunction;
+    std::uintptr_t                         image = 0, ped = 0, cell = 0, entry = 0, receivedPed = 0;
+    unsigned                               calls = 0, effects = 0, scenario = 0;
+    mta::game_de::NativePedReferenceToken  selected;
+    mta::game_de::NativePedReferenceToken* callerToken = nullptr;
+    void (*reenter)() noexcept = nullptr;
+    void (*afterNative)(void*) noexcept = nullptr;
+    void*                     afterContext = nullptr;
+    mta::game_de::ClockResult Invoke(NativeFunction function, std::uintptr_t receiver, std::uint32_t& exception) noexcept
+    {
+        ++calls;
+        ++effects;
+        entry = reinterpret_cast<std::uintptr_t>(function);
+        receivedPed = receiver;
+        if (callerToken)
+        {
+            ++callerToken->version;
+            callerToken = nullptr;
+        }
+        if (reenter)
+            reenter();
+        if (afterNative)
+            afterNative(afterContext);
+        if (scenario == 1)
+        {
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return mta::game_de::ClockResult::OriginalException;
+        }
+        if (scenario == 2)
+        {
+            const std::uintptr_t zero = 0;
+            std::memcpy(reinterpret_cast<void*>(cell), &zero, sizeof(zero));
+        }
+        return mta::game_de::ClockResult::Ok;
+    }
+}
+
 namespace ClockPedClothesOwnerTest
 {
     using NativeFunction = mta::game_de::NativePedClothesCalls::NativeFunction;
@@ -2931,6 +2978,9 @@ namespace ClockWorldIgnoreOwnerTest
 #define MTA_DE_PED_CLOTHES_NATIVE_INVOKE ClockPedClothesOwnerTest::Invoke
 #include "../../Client/game_de/NativePedClothesCalls.cpp"
 #undef MTA_DE_PED_CLOTHES_NATIVE_INVOKE
+#define MTA_DE_PED_REBUILD_NATIVE_INVOKE ClockPedRebuildOwnerTest::Invoke
+#include "../../Client/game_de/NativePedRebuildCalls.cpp"
+#undef MTA_DE_PED_REBUILD_NATIVE_INVOKE
 #define MTA_DE_MODEL_REFERENCE_EXCHANGE ClockModelReferenceOwnerTest::Exchange
 #include "../../Client/game_de/NativeModelReferenceMemory.cpp"
 #undef MTA_DE_MODEL_REFERENCE_EXCHANGE
@@ -7743,6 +7793,7 @@ namespace
 #include "NativePedWeaponGrantOwnerTests.inl"
 #include "NativePedWeaponClearOwnerTests.inl"
 #include "NativePedClothesOwnerTests.inl"
+#include "NativePedRebuildOwnerTests.inl"
 #include "NativeWorldIgnoreEntityOwnerTests.inl"
 #include "NativeCameraSphereVisibleOwnerTests.inl"
 #include "NativeAnimationBlockOwnerTests.inl"
@@ -7752,6 +7803,7 @@ namespace
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool pedRebuildOnly = argc == 3 && std::strcmp(argv[2], "--ped-rebuild") == 0;
     const bool pedClothesOnly = argc == 3 && std::strcmp(argv[2], "--ped-clothes") == 0;
     const bool pedWeaponClearOnly = argc == 3 && std::strcmp(argv[2], "--ped-weapon-clear") == 0;
     const bool cameraSphereOnly = argc == 3 && std::strcmp(argv[2], "--camera-sphere-visible") == 0;
@@ -7794,9 +7846,17 @@ int main(int argc, char** argv)
            waterOnly || animationOnly || animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly ||
            fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly ||
            worldLineOnly || worldAreaOnly || worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly ||
-           cameraSphereOnly || pedWeaponClearOnly || pedClothesOnly) &&
+           cameraSphereOnly || pedWeaponClearOnly || pedClothesOnly || pedRebuildOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (pedRebuildOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        PedRebuildOwnerFixture::Run(fixture);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (pedClothesOnly)
     {
         ClockImageFixture fixture;

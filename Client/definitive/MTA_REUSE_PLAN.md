@@ -5,6 +5,29 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+The next borrowed ped layer keeps MTA's actual `RebuildPlayer` operation
+separate from clothing descriptor edits. The supported local CJ path uses the
+genuine DE whole rebuild entry and its one native ped argument. Classic's
+additional `false` argument is not an extra DE ABI parameter; the DE entry
+reads the current native fat/muscle stats itself.
+
+The existing registered owner qualifies the current local player, model and
+loaded storage, clothing descriptor, render receiver, owned container and
+reciprocal head relation before entering once. Native code owns retirement and
+replacement of render objects, model references, tasks, stats and descriptor
+copy effects. A fresh post-call receiver is expected; it must not be compared
+for equality with the retired receiver. Entered failure stops the same owner
+without replay or whole-object rollback. Remote stats swapping and full player
+or renderer factories remain separate requirements.
+
+The player-interface composition also supplies `GetWanted` from an explicitly
+provided nullable CPU SDK association, matching MTA's initialized cached-pointer
+getter. It neither resolves global player data nor owns or deletes that view.
+The enclosing factory must choose and retain the correct association. This
+does not infer a null value for legacy remote objects with an uninitialized
+field, and does not grant a native wanted lease or complete player factory.
+
+
 The DE ped service chain now shares a virtual `CPed` base, following the actual
 classic `CPedSA` and common `CPlayerPed` inheritance. A player that combines the
 existing DE services with MTA's player interface therefore has one ped identity

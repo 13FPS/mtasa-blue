@@ -21,9 +21,9 @@ $record = [ordered]@{
     schema='mta_ped_player_shared_base_de_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     generatedFixture=$null;result=$null;failure=$null;scratchDirectory=$scratchRoot;scratchRemoved=$false;
-    scope='Actual CPlayerPed plus complete rejecting test-only leaf over the current CPedClearWeaponDE chain: one CPed/physical/entity identity, sibling RTTI, existing vitals and ClearWeapon owner dispatch, shared StoredPointer/type and explicit refusal. The historical ClearWeapon main is renamed and never invoked. No native player creation, complete production player or CGame factory is claimed.';
+    scope='Actual CPlayerPedWantedDE plus current CPedRebuildDE implementation ancestry: shared CPed/physical/entity identity, sibling RTTI, existing vitals/clear dispatch and bookkeeping; explicit nullable borrowed wanted association with no wanted-method, native or ownership side effects. Historical feature mains never execute; no native player or CGame factory is claimed.';
     nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;installationChanged=$false;
-    completeCGameReady=$false;fullMtaReady=$false;completePedReady=$false;completePoolsReady=$false;nativeRepairQualified=$false;actualSharedPlayerPedBaseSdkTested=$false
+    completeCGameReady=$false;fullMtaReady=$false;completePedReady=$false;completePoolsReady=$false;nativeRepairQualified=$false;actualSharedPlayerPedBaseSdkTested=$false;actualPlayerWantedAssociationSdkTested=$false
 }
 
 function Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
@@ -70,11 +70,11 @@ function RunOwned([string]$Executable,[string[]]$Arguments,[string]$Directory,[s
 . (Join-Path $PSScriptRoot 'Write-PedClearWeaponFixture.ps1')
 
 try {
-    $productionSources = @('Client/game_de/CPedVitalsDE.cpp','Client/game_de/CPedMetadataDE.cpp','Client/game_de/CPedMutationDE.cpp','Client/game_de/CPedPhysicsDE.cpp','Client/game_de/CPedRotationDE.cpp','Client/game_de/CPedStateDE.cpp','Client/game_de/CPedFlagsDE.cpp','Client/game_de/CPedBehaviorDE.cpp','Client/game_de/CPedCombatDE.cpp','Client/game_de/CPedWeaponSelectionDE.cpp','Client/game_de/CPedPoseDE.cpp','Client/game_de/CPedWeaponStatsDE.cpp','Client/game_de/CPedWaterDE.cpp','Client/game_de/CPedOrientationDE.cpp','Client/game_de/CPedAreaDE.cpp','Client/game_de/CPedFireDE.cpp','Client/game_de/CPedCollisionDE.cpp','Client/game_de/CPedTasksDE.cpp','Client/game_de/CPedGogglesDE.cpp','Client/game_de/CPedVisibilityDE.cpp','Client/game_de/CPedOnScreenDE.cpp','Client/game_de/CPedGiveWeaponDE.cpp','Client/game_de/CPedClearWeaponDE.cpp')
+    $productionSources = @('Client/game_de/CPedVitalsDE.cpp','Client/game_de/CPedMetadataDE.cpp','Client/game_de/CPedMutationDE.cpp','Client/game_de/CPedPhysicsDE.cpp','Client/game_de/CPedRotationDE.cpp','Client/game_de/CPedStateDE.cpp','Client/game_de/CPedFlagsDE.cpp','Client/game_de/CPedBehaviorDE.cpp','Client/game_de/CPedCombatDE.cpp','Client/game_de/CPedWeaponSelectionDE.cpp','Client/game_de/CPedPoseDE.cpp','Client/game_de/CPedWeaponStatsDE.cpp','Client/game_de/CPedWaterDE.cpp','Client/game_de/CPedOrientationDE.cpp','Client/game_de/CPedAreaDE.cpp','Client/game_de/CPedFireDE.cpp','Client/game_de/CPedCollisionDE.cpp','Client/game_de/CPedTasksDE.cpp','Client/game_de/CPedGogglesDE.cpp','Client/game_de/CPedVisibilityDE.cpp','Client/game_de/CPedOnScreenDE.cpp','Client/game_de/CPedGiveWeaponDE.cpp','Client/game_de/CPedClearWeaponDE.cpp','Client/game_de/CPedClothesDE.cpp','Client/game_de/CPedRebuildDE.cpp')
     # Track only the actual local include graph of this SDK fixture and its
     # linked inherited implementation. Native tests and classic callers have
     # their own receipts and are not silently claimed by this forwarding test.
-    $sourceNames = $productionSources + @('Tests/definitive/PedPlayerSharedBaseDETests.cpp','Tests/definitive/Write-PedClearWeaponFixture.ps1',
+    $sourceNames = $productionSources + @('Tests/definitive/PedPlayerSharedBaseDETests.cpp','Tests/definitive/Write-PedClearWeaponFixture.ps1','Tests/definitive/Write-PedClothesFixture.ps1','Tests/definitive/Write-PedRebuildFixture.ps1',
         [IO.Path]::GetRelativePath($taskRoot,$PSCommandPath).Replace('\','/'))
     $pending = [Collections.Generic.Queue[string]]::new()
     foreach($source in $sourceNames){$pending.Enqueue($source)}
@@ -105,18 +105,25 @@ try {
     })
     $generated = Join-Path $scratchRoot 'PedClearWeaponFixture.generated.h'
     $record.generatedFixture = Write-PedClearWeaponFixture $taskRoot $generated
-    # Extend only this generated rejecting test leaf. Production remains
-    # abstract; the existing generator and historical tests are unchanged.
-    $fixtureText = [IO.File]::ReadAllText($generated)
-    $sealedLeaf = 'class PedClearWeaponFixture final : public mta::game_de::CPedClearWeaponDE'
-    if ([regex]::Matches($fixtureText,[regex]::Escape($sealedLeaf)).Count -ne 1) { throw 'Existing strict ped fixture leaf changed.' }
-    [IO.File]::WriteAllText($generated,$fixtureText.Replace($sealedLeaf,'class PedClearWeaponFixture : public mta::game_de::CPedClearWeaponDE'),[Text.UTF8Encoding]::new($false))
-    $record.generatedFixture['sha256'] = Sha $generated
-    $record.generatedFixture['testOnlyExtendableLeaf'] = $true
     $durableGenerated = Join-Path $outputRoot 'PedClearWeaponFixture.generated.h'
     Copy-Item -LiteralPath $generated -Destination $durableGenerated
     $record.generatedFixture['durablePath']=$durableGenerated
     $record.generatedFixture['durableSha256']=Sha $durableGenerated
+    . (Join-Path $PSScriptRoot 'Write-PedRebuildFixture.ps1')
+    $rebuildGenerated = Join-Path $scratchRoot 'PedRebuildFixture.generated.h'
+    $rebuildFixture = Write-PedRebuildFixture $taskRoot $rebuildGenerated
+    # Only the generated rejecting leaf is extendable for this actual player
+    # composition. No production partial layer becomes a rejecting factory.
+    $rebuildText = [IO.File]::ReadAllText($rebuildGenerated)
+    $sealedRebuild = 'class PedRebuildFixture final : public mta::game_de::CPedRebuildDE'
+    if ([regex]::Matches($rebuildText,[regex]::Escape($sealedRebuild)).Count -ne 1) { throw 'Existing strict rebuild leaf changed.' }
+    [IO.File]::WriteAllText($rebuildGenerated,$rebuildText.Replace($sealedRebuild,'class PedRebuildFixture : public mta::game_de::CPedRebuildDE'),[Text.UTF8Encoding]::new($false))
+    $rebuildEvidence = Join-Path $outputRoot 'PedRebuildFixture.generated.h'
+    Copy-Item -LiteralPath $rebuildGenerated -Destination $rebuildEvidence
+    $clothesEvidence = Join-Path $outputRoot 'PedClothesFixture.generated.h'
+    Copy-Item -LiteralPath (Join-Path $scratchRoot 'PedClothesFixture.generated.h') -Destination $clothesEvidence
+    $record['playerRebuildGeneratedFixture'] = [ordered]@{path=$rebuildEvidence;sha256=(Sha $rebuildEvidence);testOnlyExtendableLeaf=$true;
+        parent=@{path=$clothesEvidence;sha256=(Sha $clothesEvidence)};rejectingPedOverrides=$rebuildFixture.rejectingPedOverrides}
     $env:TEMP = $scratchRoot
     $env:TMP = $scratchRoot
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
@@ -156,7 +163,8 @@ try {
     $record.success = $record.result.test.exitCode -eq 0 -and -not $record.result.test.timedOut -and
         $record.result.checks -gt 0 -and $record.result.pointerBits -eq $expectedPointerBits
     $record.actualSharedPlayerPedBaseSdkTested = $record.success -and [IO.File]::ReadAllText($record.result.test.stdout).Contains('Actual shared player CPed base fixture completed')
-    $record.success = $record.success -and $record.actualSharedPlayerPedBaseSdkTested
+    $record.actualPlayerWantedAssociationSdkTested = $record.success -and [IO.File]::ReadAllText($record.result.test.stdout).Contains('Actual borrowed player wanted association fixture completed')
+    $record.success = $record.success -and $record.actualSharedPlayerPedBaseSdkTested -and $record.actualPlayerWantedAssociationSdkTested
     if (-not $record.success) { throw 'Actual shared player CPed base checks failed or summary evidence was missing.' }
 } catch { AddFailure ($_.Exception.ToString()) }
 finally {

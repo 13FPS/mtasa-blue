@@ -6,6 +6,8 @@
 #pragma once
 #include "NativeCustomAnimSequenceStorage.h"
 #include "NativeAnimationSequenceRowCalls.h"
+#include "NativeAnimationSequenceCopyCalls.h"
+#include "NativeAnimationSequenceFrameViewCalls.h"
 #include "NativeAnimationSequenceAccess.h"
 #include "NativeAnimationSequenceLogicalState.h"
 #include <atomic>
@@ -19,6 +21,7 @@ namespace mta::game_de
         using Storage = NativeCustomAnimSequenceStorage;
         using Receipt = NativeCustomAnimSequenceStorageCalls::Receipt;
         using RowReceipt = NativeAnimationSequenceRowCalls::Receipt;
+        using CopyReceipt = NativeAnimationSequenceCopyCalls::Receipt;
         using CheckOwner = NativeCustomAnimSequenceStorageCalls::CheckOwner;
         using InvokeMalloc = NativeCustomAnimSequenceStorageCalls::InvokeMalloc;
         using InvokeFree = NativeCustomAnimSequenceStorageCalls::InvokeFree;
@@ -48,6 +51,10 @@ namespace mta::game_de
         ClockResult SetSequenceBoneTag(std::uintptr_t, const NativeAnimationSequenceReferenceToken&, std::int32_t, CheckOwner, RowReceipt* = nullptr) noexcept;
         ClockResult ReadSequence(std::uintptr_t, const NativeAnimationSequenceReferenceToken&, CheckOwner, NativeAnimationSequenceValues&) noexcept;
         ClockResult ReadSequenceHash(std::uintptr_t, const NativeAnimationSequenceReferenceToken&, CheckOwner, std::uint32_t&) noexcept;
+        ClockResult CopySequenceProperties(std::uintptr_t, const NativeAnimationSequenceReferenceToken&, std::uintptr_t, CheckOwner,
+                                           CopyReceipt* = nullptr) noexcept;
+        ClockResult ReadSequenceFrame(std::uintptr_t, const NativeAnimationSequenceReferenceToken&, std::size_t, std::uint32_t, CheckOwner,
+                                      std::uintptr_t&) noexcept;
         // This is private-owner bookkeeping for a future qualified hierarchy
         // attachment, not a public raw-pointer adoption or detachment API.
         ClockResult PinPublication(std::uint64_t generation, std::uintptr_t issuedTag, std::uintptr_t hierarchyAffinity) noexcept;

@@ -16,6 +16,8 @@ namespace mta::game_de
     public:
         void                           Initialize() override;
         void                           SetBoneTag(std::int32_t) override;
+        void                           CopySequenceProperties(CAnimBlendSequenceSAInterface*) override;
+        void*                          GetKeyFrame(std::size_t, std::uint32_t) override;
         std::uint32_t                  GetHash() override;
         std::uint16_t                  GetBoneTag() override;
         BYTE*                          GetKeyFrames() override;
@@ -35,7 +37,7 @@ namespace mta::game_de
         const NativeAnimationSequenceReferenceToken reference;
     };
 
-    // The ambiguous name/frame assignment, copying and frame-view contracts
-    // remain genuine pure operations. No complete custom factory is exposed.
+    // General name/frame assignment remain genuine pure operations. These
+    // qualified row operations do not expose a complete custom factory.
     static_assert(std::is_abstract_v<CAnimBlendSequenceDE> && std::is_base_of_v<CAnimBlendSequence, CAnimBlendSequenceDE>);
 }

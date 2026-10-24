@@ -80,4 +80,25 @@ namespace mta::game_de
         // It neither applies SA's layout nor extends the current borrow.
         return reinterpret_cast<CAnimBlendSequenceSAInterface*>(Read("GetInterface").interfaceAddress);
     }
+    void CAnimBlendSequenceDE::CopySequenceProperties(CAnimBlendSequenceSAInterface* source)
+    {
+        // The same owner admits both current rows and transfers its logical
+        // metadata after accepted stores. Never adopt or free aliased frames.
+        const auto token = reference;
+        const auto locator = reinterpret_cast<std::uintptr_t>(source);
+        Require(native.CopyAnimationSequenceProperties(token, locator), "CopySequenceProperties");
+    }
+
+    void* CAnimBlendSequenceDE::GetKeyFrame(std::size_t index, std::uint32_t stride)
+    {
+        // Preserve source byte-arithmetic inputs in full, including zero
+        // stride with a large index. Only the owner knows the current extent.
+        const auto     token = reference;
+        const auto     frameIndex = index;
+        const auto     frameStride = stride;
+        std::uintptr_t value = 0;
+        Require(native.ReadAnimationSequenceFrame(token, frameIndex, frameStride, value), "GetKeyFrame");
+        return reinterpret_cast<void*>(value);
+    }
+
 }

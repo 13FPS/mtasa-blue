@@ -46,5 +46,17 @@ namespace mta::game_de
         {
             return ClockResult::NotInitialized;
         }
+        // The same owner admits both issued rows and preserves accepted raw
+        // copies across lost acknowledgement. No wrapper adopts their frames.
+        virtual ClockResult CopyAnimationSequenceProperties(const NativeAnimationSequenceReferenceToken&, std::uintptr_t) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
+        // Full host-width index and original DWORD stride are owner inputs.
+        // The owner checks actual frame bytes, never an inferred WORD count.
+        virtual ClockResult ReadAnimationSequenceFrame(const NativeAnimationSequenceReferenceToken&, std::size_t, std::uint32_t, std::uintptr_t&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
     };
 }

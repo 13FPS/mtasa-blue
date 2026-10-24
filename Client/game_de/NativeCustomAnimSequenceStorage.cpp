@@ -8,6 +8,8 @@
 #include "NativeStreamingCompletionContext.h"
 #include "NativeAnimationSequenceRowCalls.h"
 #include "NativeAnimationSequenceRowProfile.h"
+#include "NativeAnimationSequenceCopyCalls.h"
+#include "NativeAnimationSequenceFrameViewCalls.h"
 #include <intrin.h>
 #include <array>
 #include <cstring>
@@ -106,6 +108,22 @@ namespace mta::game_de
                     return ClockResult::Ok;
                 }
                 return ClockResult::InvalidArgument;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                exception = GetExceptionCode();
+                return ClockResult::OriginalException;
+            }
+        }
+        // The real CPU copy stays available to injection hooks. Captured
+        // source bytes never alias this admitted destination row.
+        ClockResult CopyRow(std::uintptr_t target, const NativeAnimationSequenceCopyCalls::Record& source, std::uint32_t& exception) noexcept
+        {
+            static_assert(NativeAnimationSequenceCopyCalls::Record{}.bytes.size() == Profile::RowBytes);
+            __try
+            {
+                std::memcpy(reinterpret_cast<void*>(target), source.bytes.data(), source.bytes.size());
+                return ClockResult::Ok;
             }
             __except (EXCEPTION_EXECUTE_HANDLER)
             {
@@ -573,6 +591,144 @@ namespace mta::game_de
                 return result;
             return RowResourceShape(storage, generation, Kind::KeyFrames);
         }
+        static ClockResult CaptureWholeRow(std::uintptr_t image, const Storage& storage, std::uint64_t generation, std::size_t index, CheckOwner owner,
+                                           NativeAnimationSequenceCopyCalls::Record& output, std::uintptr_t& row) noexcept
+        {
+            namespace Detail = CustomAnimSequenceStorageDetail;
+            NativeAnimationSequenceRowCalls::Value   first, second, final;
+            NativeAnimationSequenceCopyCalls::Record bytes, after;
+            auto                                     result = CaptureRow(image, storage, generation, index, owner, first);
+            if (result != ClockResult::Ok)
+                return result;
+            if (!Detail::Heap::M::Copy(first.row, bytes.bytes.data(), bytes.bytes.size()))
+                return ClockResult::ReadFailure;
+            if ((result = CaptureRow(image, storage, generation, index, owner, second)) != ClockResult::Ok)
+                return result;
+            if (!Detail::SameRow(first, second))
+                return ClockResult::OwnerConflict;
+            if (!Detail::Heap::M::Copy(second.row, after.bytes.data(), after.bytes.size()))
+                return ClockResult::ReadFailure;
+            if (bytes.bytes != after.bytes)
+                return ClockResult::OwnerConflict;
+            if ((result = CaptureRow(image, storage, generation, index, owner, final)) != ClockResult::Ok)
+                return result;
+            if (!Detail::SameRow(second, final))
+                return ClockResult::OwnerConflict;
+            output = after;
+            row = final.row;
+            return ClockResult::Ok;
+        }
+        static ClockResult CopySequence(std::uintptr_t image, Storage& target, std::size_t targetIndex, const Storage& source, std::size_t sourceIndex,
+                                        std::uint64_t generation, CheckOwner owner, NativeAnimationSequenceCopyCalls::Receipt* output,
+                                        NativeAnimationSequenceCopyCalls::Write write) noexcept
+        {
+            namespace Detail = CustomAnimSequenceStorageDetail;
+            namespace Copy = NativeAnimationSequenceCopyCalls;
+            Copy::Receipt receipt;
+            const auto    finish = [&](ClockResult result)
+            {
+                if (receipt.entered && result != ClockResult::Ok)
+                    target.state.store(State::FaultDebt, std::memory_order_release);
+                if (output)
+                    *output = receipt;
+                return result;
+            };
+            if (!Detail::Context::TryEnter())
+                return finish(ClockResult::Busy);
+            Detail::Context::Scope scope;
+            // One current native heap must qualify both actual private arrays.
+            // Matching readable addresses never substitute for these records.
+            if (target.origin.authority != source.origin.authority || target.origin.authorityVtable != source.origin.authorityVtable)
+                return finish(ClockResult::BindingChanged);
+            Copy::Record intent, before;
+            auto         result = CaptureWholeRow(image, source, generation, sourceIndex, owner, intent, receipt.sourceRow);
+            if (result != ClockResult::Ok ||
+                (result = CaptureWholeRow(image, target, generation, targetIndex, owner, before, receipt.targetRow)) != ClockResult::Ok)
+                return finish(result);
+            if (receipt.sourceRow == receipt.targetRow)
+            {
+                receipt.selfCopy = receipt.verified = true;
+                return finish(ClockResult::Ok);
+            }
+            if (!Detail::Heap::M::PrivateWritable(receipt.targetRow, Detail::Profile::RowBytes))
+                return finish(ClockResult::WriteFailure);
+#if defined(MTA_DE_ANIMATION_SEQUENCE_COPY_WRITE)
+            const auto entry = write ? write : &MTA_DE_ANIMATION_SEQUENCE_COPY_WRITE;
+#else
+            const auto entry = write ? write : &Detail::CopyRow;
+#endif
+            receipt.entered = true;
+            result = entry(receipt.targetRow, intent, receipt.exceptionCode);
+            // This flag acknowledges the complete raw80 copy, independent of
+            // subsequent owner/read refusal. The controller commits copied
+            // logical metadata on this flag; it never frees any alias here.
+            receipt.rawCopied = result == ClockResult::Ok;
+            if (result != ClockResult::Ok)
+                return finish(result);
+            Copy::Record   after;
+            std::uintptr_t row = 0;
+            if ((result = CaptureWholeRow(image, target, generation, targetIndex, owner, after, row)) != ClockResult::Ok)
+                return finish(result);
+            if (row != receipt.targetRow || after.bytes != intent.bytes)
+                return finish(ClockResult::BindingChanged);
+            if ((result = RowResourceShape(source, generation, Kind::SequenceArray)) != ClockResult::Ok)
+                return finish(result);
+            receipt.verified = true;
+            return finish(ClockResult::Ok);
+        }
+        static ClockResult ReadSequenceFrame(std::uintptr_t image, const Storage& array, std::uint64_t generation, std::size_t rowIndex, const Storage& frames,
+                                             std::size_t frameIndex, std::uint32_t stride, CheckOwner owner, std::uintptr_t& output) noexcept
+        {
+            namespace Detail = CustomAnimSequenceStorageDetail;
+            if (!owner)
+                return ClockResult::NotInitialized;
+            auto result = RowResourceShape(array, generation, Kind::SequenceArray);
+            if (result != ClockResult::Ok || (result = RowResourceShape(frames, generation, Kind::KeyFrames)) != ClockResult::Ok)
+                return result;
+            if (array.origin.authority != frames.origin.authority || array.origin.authorityVtable != frames.origin.authorityVtable)
+                return ClockResult::BindingChanged;
+            if (!Detail::Context::TryEnter())
+                return ClockResult::Busy;
+            Detail::Context::Scope                 scope;
+            NativeAnimationSequenceRowCalls::Value first, after;
+            if ((result = CaptureRow(image, array, generation, rowIndex, owner, first)) != ClockResult::Ok)
+                return result;
+            if (!first.keyFrames)
+                return ClockResult::NotInitialized;
+            if (!Detail::Heap::M::PrivateWritable(frames.base, frames.bytes))
+                return ClockResult::BindingChanged;
+            if (first.keyFrames < frames.base || first.keyFrames - frames.base >= frames.bytes)
+                return ClockResult::InvalidArgument;
+            // Source arithmetic is full size_t times uint32, with no logical
+            // WORD frame-count clamp or native frame-format interpretation.
+            if (stride && frameIndex > (std::numeric_limits<std::size_t>::max)() / stride)
+                return ClockResult::InvalidArgument;
+            const auto offset = frameIndex * static_cast<std::size_t>(stride);
+            if (offset > (std::numeric_limits<std::uintptr_t>::max)() - first.keyFrames)
+                return ClockResult::InvalidArgument;
+            const auto selected = first.keyFrames + offset;
+            if (selected < frames.base || selected - frames.base >= frames.bytes)
+                return ClockResult::InvalidArgument;
+            if (stride && static_cast<std::size_t>(stride) > frames.bytes - (selected - frames.base))
+                return ClockResult::InvalidArgument;
+            if ((result = CaptureRow(image, array, generation, rowIndex, owner, after)) != ClockResult::Ok)
+                return result;
+            if (after.row != first.row || after.keyFrames != first.keyFrames)
+                return ClockResult::OwnerConflict;
+            // CaptureRow requalified the actual current heap. Equal original
+            // authorities plus this frame's live/private extent prove the
+            // coupled view without reading a single keyframe payload byte.
+            if ((result = RowResourceShape(frames, generation, Kind::KeyFrames)) != ClockResult::Ok)
+                return result;
+            if (!Detail::Heap::M::PrivateWritable(frames.base, frames.bytes))
+                return ClockResult::BindingChanged;
+            if ((result = Detail::Context::Owner(image, owner)) != ClockResult::Ok ||
+                (result = RowResourceShape(array, generation, Kind::SequenceArray)) != ClockResult::Ok ||
+                (result = RowResourceShape(frames, generation, Kind::KeyFrames)) != ClockResult::Ok)
+                return result;
+            output = selected;
+            return ClockResult::Ok;
+        }
         static ClockResult PinPublication(Storage& storage, std::uint64_t generation, std::uintptr_t affinity) noexcept
         {
             if (!affinity || !generation || generation != storage.generation)
@@ -641,6 +797,22 @@ namespace mta::game_de
         ClockResult CheckFramePointer(std::uintptr_t image, const Storage& storage, std::uint64_t generation, std::uintptr_t pointer, CheckOwner owner) noexcept
         {
             return NativeCustomAnimSequenceStorageAccess::CheckFramePointer(image, storage, generation, pointer, owner);
+        }
+    }
+    namespace NativeAnimationSequenceCopyCalls
+    {
+        ClockResult Copy(std::uintptr_t image, Storage& target, std::size_t targetIndex, const Storage& source, std::size_t sourceIndex,
+                         std::uint64_t generation, CheckOwner owner, Receipt* output, Write write) noexcept
+        {
+            return NativeCustomAnimSequenceStorageAccess::CopySequence(image, target, targetIndex, source, sourceIndex, generation, owner, output, write);
+        }
+    }
+    namespace NativeAnimationSequenceFrameViewCalls
+    {
+        ClockResult Read(std::uintptr_t image, const Storage& array, std::uint64_t generation, std::size_t rowIndex, const Storage& frames,
+                         std::size_t frameIndex, std::uint32_t stride, CheckOwner owner, std::uintptr_t& output) noexcept
+        {
+            return NativeCustomAnimSequenceStorageAccess::ReadSequenceFrame(image, array, generation, rowIndex, frames, frameIndex, stride, owner, output);
         }
     }
 }

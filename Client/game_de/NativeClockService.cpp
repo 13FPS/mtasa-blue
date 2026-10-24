@@ -245,6 +245,8 @@ namespace mta::game_de
             ClockResult SetAnimationSequenceBoneTag(const NativeAnimationSequenceReferenceToken&, std::int32_t) noexcept override;
             ClockResult ReadAnimationSequence(const NativeAnimationSequenceReferenceToken&, NativeAnimationSequenceValues&) noexcept override;
             ClockResult ReadAnimationSequenceHash(const NativeAnimationSequenceReferenceToken&, std::uint32_t&) noexcept override;
+            ClockResult CopyAnimationSequenceProperties(const NativeAnimationSequenceReferenceToken&, std::uintptr_t) noexcept override;
+            ClockResult ReadAnimationSequenceFrame(const NativeAnimationSequenceReferenceToken&, std::size_t, std::uint32_t, std::uintptr_t&) noexcept override;
             ClockResult AllocateAnimationKeyFrames(std::uint64_t, std::uint32_t, std::uintptr_t&) noexcept override;
             ClockResult FreeAnimationKeyFrames(std::uint64_t, std::uintptr_t) noexcept override;
             ClockResult AllocateAnimationSequences(std::uint64_t, std::size_t, std::uintptr_t&) noexcept override;
@@ -2778,6 +2780,40 @@ namespace mta::game_de
                 return result;
             std::uint32_t next = 0;
             result = runtime.customSequences.ReadSequenceHash(runtime.image, request, &CheckTimingOwner, next);
+            if (result == ClockResult::Ok)
+                result = CheckCustomSequenceRequest(request);
+            if (result == ClockResult::Ok)
+                output = next;
+            return result;
+        }
+
+        ClockResult NativeAccess::CopyAnimationSequenceProperties(const NativeAnimationSequenceReferenceToken& token, std::uintptr_t sourceRow) noexcept
+        {
+            const auto request = token;
+            const auto source = sourceRow;
+            auto       result = CheckCustomSequenceRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            NativeCustomAnimSequenceController::CopyReceipt receipt;
+            result = runtime.customSequences.CopySequenceProperties(runtime.image, request, source, &CheckTimingOwner, &receipt);
+            PublishCustomAnimationSequenceDebt(request.ownerGeneration);
+            if (result == ClockResult::Ok)
+                result = CheckCustomSequenceRequest(request);
+            if ((receipt.entered && result != ClockResult::Ok) || runtime.customSequences.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            return result;
+        }
+        ClockResult NativeAccess::ReadAnimationSequenceFrame(const NativeAnimationSequenceReferenceToken& token, std::size_t frameIndex, std::uint32_t stride,
+                                                             std::uintptr_t& output) noexcept
+        {
+            const auto request = token;
+            const auto requestedIndex = frameIndex;
+            const auto requestedStride = stride;
+            auto       result = CheckCustomSequenceRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            std::uintptr_t next = 0;
+            result = runtime.customSequences.ReadSequenceFrame(runtime.image, request, requestedIndex, requestedStride, &CheckTimingOwner, next);
             if (result == ClockResult::Ok)
                 result = CheckCustomSequenceRequest(request);
             if (result == ClockResult::Ok)

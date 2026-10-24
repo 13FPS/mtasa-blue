@@ -4,6 +4,7 @@
  * PURPOSE: Retain native sequence storage across failed publication and End
  ****************************************************************************/
 #include "NativeCustomAnimSequenceController.h"
+#include "NativeCustomAnimSequenceStorageProfile.h"
 #include <algorithm>
 #include <iterator>
 #include <limits>
@@ -307,6 +308,104 @@ namespace mta::game_de
         if (receipt)
             *receipt = local;
         return result;
+    }
+    ClockResult NativeCustomAnimSequenceController::CopySequenceProperties(std::uintptr_t image, const NativeAnimationSequenceReferenceToken& token,
+                                                                           std::uintptr_t sourceRow, CheckOwner owner, CopyReceipt* receipt) noexcept
+    {
+        const auto request = token;
+        const auto sourceAddress = sourceRow;
+        if (receipt)
+            *receipt = {};
+        if (operation.test_and_set(std::memory_order_acquire))
+            return ClockResult::Busy;
+        const CustomAnimSequenceControllerDetail::Operation held{operation};
+        if (!owner)
+            return ClockResult::NotInitialized;
+        auto result = owner();
+        if (result != ClockResult::Ok)
+            return result;
+        auto      targetEntry = entries.end();
+        RowState* targetState = nullptr;
+        if ((result = SelectRow(request, targetEntry, targetState)) != ClockResult::Ok)
+            return result;
+        NativeAnimationSequenceReferenceToken sourceToken;
+        for (const auto& candidate : entries)
+        {
+            const auto& storage = candidate.storage;
+            if (!candidate.issued || storage.OwnerGeneration() != request.ownerGeneration || storage.GetKind() != Storage::Kind::SequenceArray ||
+                storage.GetState() != Storage::State::LiveUnpublished || sourceAddress < storage.IssuedTag())
+                continue;
+            const auto displacement = sourceAddress - storage.IssuedTag();
+            if (displacement % NativeCustomAnimSequenceStorageProfile::RowBytes)
+                continue;
+            const auto index = displacement / NativeCustomAnimSequenceStorageProfile::RowBytes;
+            if (index < storage.Capacity())
+            {
+                sourceToken = {request.ownerGeneration, storage.IssuedTag(), index};
+                break;
+            }
+        }
+        if (!sourceToken.firstTag)
+            return ClockResult::BindingChanged;
+        auto      sourceEntry = entries.end();
+        RowState* sourceState = nullptr;
+        if ((result = SelectRow(sourceToken, sourceEntry, sourceState)) != ClockResult::Ok)
+            return result;
+        // The logical union follows the same full property copy. Reserve both
+        // CPU row nodes before entry, and retain overwritten/aliased frame
+        // journals instead of interpreting shallow copy as native retirement.
+        const auto  logical = sourceState->logical;
+        CopyReceipt local;
+        result = NativeAnimationSequenceCopyCalls::Copy(image, targetEntry->storage, request.index, sourceEntry->storage, sourceToken.index,
+                                                        request.ownerGeneration, owner, &local);
+        if (local.rawCopied || (result == ClockResult::Ok && local.selfCopy))
+            targetState->logical = logical;
+        Publish();
+        if (receipt)
+            *receipt = local;
+        return result;
+    }
+    ClockResult NativeCustomAnimSequenceController::ReadSequenceFrame(std::uintptr_t image, const NativeAnimationSequenceReferenceToken& token,
+                                                                      std::size_t frameIndex, std::uint32_t stride, CheckOwner owner,
+                                                                      std::uintptr_t& output) noexcept
+    {
+        const auto request = token;
+        const auto requestedIndex = frameIndex;
+        const auto requestedStride = stride;
+        if (operation.test_and_set(std::memory_order_acquire))
+            return ClockResult::Busy;
+        const CustomAnimSequenceControllerDetail::Operation held{operation};
+        if (!owner)
+            return ClockResult::NotInitialized;
+        auto result = owner();
+        if (result != ClockResult::Ok)
+            return result;
+        auto      array = entries.end();
+        RowState* state = nullptr;
+        if ((result = SelectRow(request, array, state)) != ClockResult::Ok)
+            return result;
+        NativeAnimationSequenceRowCalls::Value physical;
+        result = NativeAnimationSequenceRowCalls::Read(image, array->storage, request.ownerGeneration, request.index, owner, physical);
+        if (result != ClockResult::Ok)
+            return result;
+        for (const auto& candidate : entries)
+        {
+            const auto& frames = candidate.storage;
+            if (!candidate.issued || frames.OwnerGeneration() != request.ownerGeneration || frames.GetKind() != Storage::Kind::KeyFrames ||
+                frames.GetState() != Storage::State::LiveUnpublished || physical.keyFrames < frames.IssuedTag() ||
+                physical.keyFrames - frames.IssuedTag() >= frames.ByteSize())
+                continue;
+            // The native helper qualifies the array and exact frame record in
+            // one shared epoch, preserving full arithmetic widths. No local
+            // WORD count clamp or payload read can change MTA's byte request.
+            std::uintptr_t next = 0;
+            result = NativeAnimationSequenceFrameViewCalls::Read(image, array->storage, request.ownerGeneration, request.index, frames, requestedIndex,
+                                                                 requestedStride, owner, next);
+            if (result == ClockResult::Ok)
+                output = next;
+            return result;
+        }
+        return ClockResult::BindingChanged;
     }
     ClockResult NativeCustomAnimSequenceController::PinPublication(std::uint64_t generation, std::uintptr_t issuedTag,
                                                                    std::uintptr_t hierarchyAffinity) noexcept

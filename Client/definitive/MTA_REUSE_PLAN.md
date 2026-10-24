@@ -5,8 +5,8 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
-The actual DE sequence facade implements the qualified initialization,
-bone-tag and scalar/pointer observations through the existing allocation
+The actual DE sequence facade implements qualified initialization, bone-tag,
+property-copy and scalar/frame observations through the existing allocation
 owner. A row token keeps the original array tag, full-width index and owner
 generation. Per-row logical union state belongs to that array record, so
 different facades observe the same state. Fresh initialization defines only
@@ -19,9 +19,17 @@ selector. Sequence-row capacity and frame-buffer byte size remain different
 quantities. A nonnull frame observation needs a live issued buffer with the
 same generation and original heap, followed by a coherent final row read.
 
-The facade remains abstract. General name/frame assignment, whole-property
-copying and indexed frame views still need their actual native contracts;
-custom factories and hierarchy publication are separate work. Private row
+Whole-property copying transfers the complete 80-byte backend record and its
+logical union between current private rows. It keeps overwritten and aliased
+frame journals; a self-copy uses no overlapping memory store. A completed raw
+copy stays acknowledged after a later refusal and is never replayed or undone.
+Frame views preserve the full `size_t` index and `uint32_t` stride, including
+zero stride, and qualify the requested span through the exact current frame
+allocation without reading payload or imposing a narrowed row-count limit.
+
+The facade remains abstract. General name/frame assignment still needs its
+actual native contracts; custom factories and hierarchy publication are
+separate work. Private row
 operations preserve the allocation journals and do not detach a published
 hierarchy or reinterpret a C++ wrapper's destruction as native retirement.
 

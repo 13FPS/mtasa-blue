@@ -94,6 +94,7 @@ try{
         'Client/game_de/NativeStreamingSpecialModelCalls.h',
         'Client/game_de/NativeStreamingSpecialModelCalls.cpp',
         'Client/game_de/NativeStreamingSpecialModelProfile.h',
+        'Client/game_de/NativeNameConstructionContext.h',
         'Client/game_de/NativeStreamingCompletionContext.h',
         'Client/game_de/NativeStreamingCompletionContext.cpp',
         'Client/game_de/NativeStreamingLoadAllProfile.h',

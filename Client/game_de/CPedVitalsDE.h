@@ -24,7 +24,10 @@ namespace mta::game_de
     // These genuine SDK methods retain their own contracts. The enclosing
     // future ped/pool owner must supply every remaining CPed method and own
     // registration retirement before this layer can be a usable SDK object.
-    class CPedVitalsDE : public CPed
+    // CPlayerPed and classic CPedSA share one virtual CPed base. Keep the
+    // DE implementation chain compatible with that same composition: a
+    // separate CPed subobject would make common player identity ambiguous.
+    class CPedVitalsDE : public virtual CPed
     {
     public:
         float GetHealth() const override;

@@ -5,6 +5,30 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+The DE ped service chain now shares a virtual `CPed` base, following the actual
+classic `CPedSA` and common `CPlayerPed` inheritance. A player that combines the
+existing DE services with MTA's player interface therefore has one ped identity
+and one set of service state, rather than two incompatible ped subobjects.
+This fixes the composition needed by a future player wrapper; it supplies no
+missing player methods or complete factory by itself.
+
+`CPedClothesDE` implements MTA's existing `SetClothesTextureAndModel` operation.
+It preserves the original int-to-byte conversion and nullable texture/model
+names. The native owner uses the existing registered ped and checked local
+player identity, then calls the genuine DE clothes descriptor setter once.
+A null clothes descriptor returns before reading names or checking the part.
+For a present descriptor, the qualified native subset is parts 0 through 17
+with bounded nullable ASCII names. Null and empty names remain distinct.
+The native method owns its name-cache and descriptor changes; it does not
+rebuild the player. Entered failures stop the same owner without replay or
+whole-object rollback.
+
+The local-player restriction is deliberate: the verified native constructor
+uses the global player-data row. It does not qualify MTA's separate remote
+player-data, clothes or controller ownership. Those genuine factory operations
+and full game startup remain unfinished, and the installed trial is unchanged.
+
+
 The actual `CClientPed::GetTargetedEntity` path now resolves an already common
 ped wrapper through `CPools::GetPedClientEntity`. Player targeting already
 selects the same pool's canonical wrapper; its current client association can

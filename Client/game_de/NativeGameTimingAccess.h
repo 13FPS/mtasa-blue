@@ -35,6 +35,7 @@
 #include "NativePedOnScreenAccess.h"
 #include "NativePedWeaponGrantAccess.h"
 #include "NativePedWeaponClearAccess.h"
+#include "NativePedClothesAccess.h"
 #include "NativePedObservationAccess.h"
 #include "NativePedIntelligenceReader.h"
 #include "NativeTaskPoolReader.h"
@@ -109,6 +110,7 @@ namespace mta::game_de
                                    public NativePedOnScreenAccess,
                                    public NativePedWeaponGrantAccess,
                                    public NativePedWeaponClearAccess,
+                                   public NativePedClothesAccess,
                                    public NativePedObservationAccess,
                                    public NativePedPhysicalScalarsAccess,
                                    public NativePedRotationAccess,

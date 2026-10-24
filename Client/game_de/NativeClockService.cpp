@@ -44,6 +44,7 @@
 #include "NativePedOnScreenCalls.h"
 #include "NativePedWeaponGrantCalls.h"
 #include "NativePedWeaponClearCalls.h"
+#include "NativePedClothesCalls.h"
 #include "NativeStreamingSpecialModelCalls.h"
 #include "NativeWorldGroundCalls.h"
 #include "NativeWorldLineCalls.h"
@@ -239,6 +240,7 @@ namespace mta::game_de
             ClockResult ReadPedOnScreen(const NativePedReferenceToken&, bool&) noexcept override;
             ClockResult GrantPedWeapon(const NativePedReferenceToken&, eWeaponType, std::uint32_t, std::uint32_t&) noexcept override;
             ClockResult ClearPedWeapon(const NativePedReferenceToken&, eWeaponType) noexcept override;
+            ClockResult SetPedClothes(const NativePedReferenceToken&, const char*, const char*, std::uint8_t) noexcept override;
             ClockResult SetWorldIgnoredPed(const NativePedReferenceToken&) noexcept override;
             ClockResult ClearWorldIgnoredEntity() noexcept override;
             ClockResult SetPedVisible(const NativePedReferenceToken&, bool) noexcept override;
@@ -3965,6 +3967,37 @@ namespace mta::game_de
             }
             output = next;
             return ClockResult::Ok;
+        }
+
+        ClockResult NativeAccess::SetPedClothes(const NativePedReferenceToken& token, const char* texture, const char* model, std::uint8_t texturePart) noexcept
+        {
+            // Reuse the existing loaded local-player identity and registered
+            // ped lease. Writable private player data does not establish the
+            // remote ownership needed by the future full player factory.
+            const auto selected = token;
+            auto       result = RequirePlayerInfo();
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedPoolReader::Value before, after;
+            if ((result = ResolvePedReference(selected, before)) != ClockResult::Ok)
+                return result;
+            NativePedClothesCalls::Receipt receipt;
+            // The primitive preserves the real null-clothes early return
+            // before examining names, then copies nullable names immediately
+            // before its one genuine synchronous setter. It never rebuilds.
+            result = NativePedClothesCalls::Set(runtime.image, before, runtime.playerInfo, texture, model, texturePart, &CheckPlayerInfoOwner, &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = ResolvePedReference(selected, after);
+                if (result == ClockResult::Ok && !SameRegisteredPed(before, after))
+                    result = ClockResult::OwnerConflict;
+            }
+            // Descriptor/name-cache effects belong to the native call. An
+            // entered fault or lost acknowledgement stops this same owner;
+            // keep its reference debt for retirement, without replay or undo.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
         }
 
         ClockResult NativeAccess::ClearPedWeapon(const NativePedReferenceToken& token, eWeaponType type) noexcept

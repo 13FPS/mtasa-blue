@@ -163,6 +163,8 @@ public:
     const char* GetGateWayBlockName() const;
     const char* GetGateWayAnimationName() const;
 
-    bool IsValidGroup(std::uint32_t uiAnimGroup) const;
-    bool IsValidAnim(std::uint32_t uiAnimGroup, std::uint32_t uiAnimID) const;
+    bool                           IsValidGroup(std::uint32_t uiAnimGroup) const;
+    bool                           IsValidAnim(std::uint32_t uiAnimGroup, std::uint32_t uiAnimID) const;
+    CAnimBlendSequenceSAInterface* AllocateCustomAnimSequences(size_t capacity) override;
+    void                           FreeCustomAnimSequences(CAnimBlendSequenceSAInterface* sequences) override;
 };

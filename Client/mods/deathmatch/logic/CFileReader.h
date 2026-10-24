@@ -11,6 +11,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 
 class CFileReader
 {
@@ -39,6 +40,10 @@ public:
     void ReadBytes(void* pDestination, const std::uint32_t u32BytesToRead);
     void ReadStringNullTerminated(char* pDestination, const std::uint32_t u32BytesToRead);
     void SkipBytes(const std::uint32_t u32BytesToSkip);
+
+    // Read-only size observation lets IFP reject an unrepresentable loaded
+    // buffer without changing the legacy read behavior of other formats.
+    std::size_t GetLoadedBytesCount() const noexcept { return m_buffer.size(); }
 
     std::uint32_t GetRemainingBytesCount() const noexcept
     {

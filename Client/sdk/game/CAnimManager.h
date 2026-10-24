@@ -134,4 +134,9 @@ public:
 
     virtual bool IsValidGroup(std::uint32_t uiAnimGroup) const = 0;
     virtual bool IsValidAnim(std::uint32_t uiAnimGroup, std::uint32_t uiAnimID) const = 0;
+    // Custom parsers own logical sequence counts, while the backend owns its
+    // native row layout, initialized allocation capacity and array cookie.
+    // Free only releases array storage; keyframe ownership stays explicit.
+    virtual CAnimBlendSequenceSAInterface* AllocateCustomAnimSequences(size_t capacity) = 0;
+    virtual void                           FreeCustomAnimSequences(CAnimBlendSequenceSAInterface* sequences) = 0;
 };

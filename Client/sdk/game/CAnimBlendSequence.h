@@ -28,4 +28,7 @@ public:
     virtual bool                           IsBigChunkForAllSequences() = 0;
     virtual void                           CopySequenceProperties(CAnimBlendSequenceSAInterface* pAnimSequenceInterface) = 0;
     virtual CAnimBlendSequenceSAInterface* GetInterface() = 0;
+    // Managers return unique_ptr<Base> facades. Polymorphic destruction owns
+    // only the CPU wrapper; native animation storage keeps its explicit owner.
+    virtual ~CAnimBlendSequence() = default;
 };

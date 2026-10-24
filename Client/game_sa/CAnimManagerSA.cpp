@@ -14,6 +14,7 @@
 #include "CAnimBlendAssociationSA.h"
 #include "CAnimBlendHierarchySA.h"
 #include "CAnimBlendSequenceSA.h"
+#include "CAnimSequenceStorageSA.h"
 #include "CAnimBlockSA.h"
 #include "CAnimManagerSA.h"
 #include <game/CAnimGatewayNames.h>
@@ -984,4 +985,14 @@ bool CAnimManagerSA::IsValidAnim(std::uint32_t uiAnimGroup, std::uint32_t uiAnim
     // We check the interface and sAnimID, if AnimID is not in GTA:SA, it will differ from our indicators in sAnimID
     const auto pInterface = pAnim->GetInterface();
     return pInterface && pInterface->sAnimID == uiAnimID;
+}
+
+CAnimBlendSequenceSAInterface* CAnimManagerSA::AllocateCustomAnimSequences(size_t capacity)
+{
+    return MtaGame::CAnimSequenceStorageSA::Allocate(capacity);
+}
+
+void CAnimManagerSA::FreeCustomAnimSequences(CAnimBlendSequenceSAInterface* sequences)
+{
+    MtaGame::CAnimSequenceStorageSA::Free(sequences);
 }

@@ -5,6 +5,36 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+Custom IFP sequence storage belongs to the animation backend. The common
+manager now has an explicit allocation/free pair: it returns the first opaque
+sequence tag, initializes every capacity row and owns its row size, alignment
+and array prefix. Logical hierarchy counts stay separate from allocation
+capacity. The classic implementation reuses its actual sequence declarations
+and initialization policy; storage release does not free keyframes.
+
+The existing MTA IFP parser now uses that storage contract for ANPK, ANP2 and
+ANP3. It keeps bone mapping, dummy frames and frame conversion in common code.
+A new load is prepared separately and published only after success, so a bad
+read cannot replace an existing shared animation set. Temporary sequences own
+their interfaces and frames until transfer; duplicate bones and failed reads
+release their old owners. Cleanup uses initialized capacity, distinguishes
+shared chunk bases from interior slices and calls the same backend that made
+the allocation. Byte/count checks are local to IFP; the shared file reader
+only adds an observation of its loaded byte count.
+
+Hierarchy and sequence SDK facades also have appended virtual destructors for
+their existing `std::unique_ptr<Base>` owners. These destroy CPU wrappers only.
+The common hierarchy time getter may report a refused DE borrow by exception;
+the existing classic override keeps its stronger `noexcept` raw read. SDK
+consumers must be rebuilt together; old binary compatibility is not assumed.
+
+The saved DE loader and complete cleanup/postprocessing bodies establish its
+40-byte hierarchies, 80-byte sequence rows, eight-byte allocation prefix and
+compressed/uncompressed frame layouts. Calculating total time also converts
+absolute frame timestamps to deltas, so it requires one genuine call without
+automatic replay after a lost acknowledgement. These proofs do not complete
+the DE sequence factories or authorize adopting arbitrary raw allocations.
+
 The animation block facade now supplies its genuine opaque interface and
 hierarchy borrows. The legacy SA-named forward tags do not assert SA data
 layout: common clients pass them back into the same backend. Current native
@@ -36,8 +66,9 @@ owner without retrying the increment or restoring the previous count.
 Unloaded current blocks remain valid: MTA's shared request policy adds its
 reference before loading. The focused integration checks that ordering with
 the actual SDK methods and instrumented request/load boundaries. It does not
-publish the missing game/model/streaming providers, raw hierarchy interfaces,
-manager removal operations or a complete animation-block factory.
+publish the missing game/model/streaming providers or manager removal
+operations. The borrowed block factories and opaque hierarchy observations
+are described above; neither grants native storage ownership.
 
 `CPlayerPedMoveAnimDE` implements MTA's actual `GetMoveAnim` through the
 registered native ped owner. It reads the current movement-group DWORD at

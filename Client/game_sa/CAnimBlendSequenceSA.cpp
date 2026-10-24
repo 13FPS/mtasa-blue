@@ -11,13 +11,11 @@
 
 #include "StdInc.h"
 #include "CAnimBlendSequenceSA.h"
+#include "CAnimSequenceStorageSA.h"
 
 void CAnimBlendSequenceSA::Initialize()
 {
-    m_pInterface->m_boneId = -1;
-    m_pInterface->sFlags = 0;
-    m_pInterface->sNumKeyFrames = 0;
-    m_pInterface->pKeyFrames = 0;
+    MtaGame::CAnimSequenceStorageSA::Initialize(*m_pInterface);
 }
 
 void CAnimBlendSequenceSA::SetName(const char* szName)

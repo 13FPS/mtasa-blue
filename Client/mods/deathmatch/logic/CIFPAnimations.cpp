@@ -13,6 +13,8 @@
 #include <game/CAnimBlendSequence.h>
 #include <game/CAnimManager.h>
 
+#include "CIFPAnimationStorage.h"
+
 CIFPAnimations::~CIFPAnimations()
 {
     DeleteAnimations();
@@ -20,30 +22,9 @@ CIFPAnimations::~CIFPAnimations()
 
 void CIFPAnimations::DeleteAnimations()
 {
-    CAnimManager* pAnimManager = g_pGame->GetAnimManager();
-    for (auto& Animation : vecAnimations)
-    {
-        for (unsigned short SequenceIndex = 0; SequenceIndex < Animation.pHierarchy->GetNumSequences(); SequenceIndex++)
-        {
-            pAnimManager->RemoveFromUncompressedCache(Animation.pHierarchy->GetInterface());
-            auto  pAnimationSequence = pAnimManager->GetCustomAnimBlendSequence(Animation.pHierarchy->GetSequence(SequenceIndex));
-            void* pKeyFrames = pAnimationSequence->GetKeyFrames();
-            if (!pAnimationSequence->IsBigChunkForAllSequences())
-            {
-                pAnimManager->FreeKeyFramesMemory(pKeyFrames);
-            }
-            else
-            {
-                if (SequenceIndex == 0)
-                {
-                    // All frames of all sequences are allocated on one memory block, so free that one
-                    // and break the loop
-                    pAnimManager->FreeKeyFramesMemory(pKeyFrames);
-                    break;
-                }
-            }
-        }
-        delete Animation.pSequencesMemory;
-        pAnimManager->DeleteCustomAnimHierarchyInterface(Animation.pHierarchy->GetInterface());
-    }
+    // Storage capacity is valid even when parsing stopped before publishing
+    // the final logical count. Unvisited vector entries and null rows are safe.
+    for (auto& animation : vecAnimations)
+        MtaGame::IfpStorage::DestroyAnimation(manager, animation);
+    vecAnimations.clear();
 }

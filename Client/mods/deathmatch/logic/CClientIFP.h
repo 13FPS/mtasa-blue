@@ -11,6 +11,9 @@
 #pragma once
 
 #include <bitset>
+#include <map>
+#include "CIFPAnimationStorage.h"
+#include "CIFPReadGuard.h"
 #include "CClientEntity.h"
 #include "CFileReader.h"
 // CIFPAnimations owns hierarchy wrappers too; declare the real SDK interface
@@ -24,8 +27,8 @@ class CAnimBlendSequence;
 class CClientIFP final : public CClientEntity, CFileReader
 {
 public:
-    typedef CIFPAnimations::SAnimation                           SAnimation;
-    typedef std::map<DWORD, std::unique_ptr<CAnimBlendSequence>> SequenceMapType;
+    typedef CIFPAnimations::SAnimation                                        SAnimation;
+    typedef std::map<DWORD, MtaGame::IfpStorage::SequenceOwner<CAnimManager>> SequenceMapType;
 
     struct SBase
     {
@@ -241,6 +244,7 @@ public:
     };
 
     CClientIFP(class CClientManager* pManager, ElementID ID);
+    CClientIFP(class CClientManager* pManager, ElementID ID, CAnimManager& animationManager);
     virtual eClientEntityType GetType() const { return CCLIENTIFP; }
 
     void MarkAsUnloading() { m_bUnloading = true; }
@@ -261,6 +265,30 @@ public:
     void SetPosition(const CVector& vecPosition) {};
 
 private:
+    // Only IFP shadows the legacy reader operations. Other formats keep the
+    // existing CFileReader behavior; every IFP byte/count is checked locally.
+    void ReadBytes(void* destination, std::size_t bytes)
+    {
+        MtaGame::IfpRead::RequireBytes(bytes, GetRemainingBytesCount());
+        CFileReader::ReadBytes(destination, static_cast<std::uint32_t>(bytes));
+    }
+    template <class T>
+    void ReadBuffer(T* destination)
+    {
+        ReadBytes(destination, sizeof(T));
+    }
+    void SkipBytes(std::size_t bytes)
+    {
+        MtaGame::IfpRead::RequireBytes(bytes, GetRemainingBytesCount());
+        CFileReader::SkipBytes(static_cast<std::uint32_t>(bytes));
+    }
+    void ReadStringNullTerminated(char* destination, std::size_t bytes)
+    {
+        if (!bytes)
+            throw std::runtime_error("Empty IFP string chunk");
+        MtaGame::IfpRead::RequireBytes(bytes, GetRemainingBytesCount());
+        CFileReader::ReadStringNullTerminated(destination, static_cast<std::uint32_t>(bytes));
+    }
     bool ReadIFPByVersion();
     void ReadIFPVersion1();
     void ReadIFPVersion2(bool bAnp3);
@@ -297,13 +325,13 @@ private:
         ReadBytes(pKeyFrames, iSizeInBytes);
     }
 
-    void  InitializeAnimationHierarchy(std::unique_ptr<CAnimBlendHierarchy>& pAnimationHierarchy, const SString& strAnimationName,
-                                       const std::int32_t& iSequences);
-    void  InitializeAnimationSequence(std::unique_ptr<CAnimBlendSequence>& pAnimationSequence, const SString& strName, const std::int32_t& iBoneID);
-    void  PreProcessAnimationHierarchy(std::unique_ptr<CAnimBlendHierarchy>& pAnimationHierarchy);
-    void  MoveSequencesWithDummies(std::unique_ptr<CAnimBlendHierarchy>&                 pAnimationHierarchy,
-                                   std::map<DWORD, std::unique_ptr<CAnimBlendSequence>>& mapOfSequences, std::bitset<64>& outAnimatedBonesMask);
-    BYTE* AllocateSequencesMemory(std::unique_ptr<CAnimBlendHierarchy>& pAnimationHierarchy);
+    void InitializeAnimationHierarchy(std::unique_ptr<CAnimBlendHierarchy>& pAnimationHierarchy, const SString& strAnimationName,
+                                      const std::int32_t& iSequences);
+    void InitializeAnimationSequence(std::unique_ptr<CAnimBlendSequence>& pAnimationSequence, const SString& strName, const std::int32_t& iBoneID);
+    void PreProcessAnimationHierarchy(std::unique_ptr<CAnimBlendHierarchy>& pAnimationHierarchy);
+    void MoveSequencesWithDummies(std::unique_ptr<CAnimBlendHierarchy>& pAnimationHierarchy, SequenceMapType& mapOfSequences,
+                                  std::bitset<64>& outAnimatedBonesMask);
+    void AllocateSequencesMemory(SAnimation& animation);
 
     void    InsertAnimationDummySequence(std::unique_ptr<CAnimBlendSequence>& pAnimationSequence, const SString& BoneName, const DWORD& dwBoneID);
     void    CopyDummyKeyFrameByBoneID(BYTE* pKeyFrames, DWORD dwBoneID);

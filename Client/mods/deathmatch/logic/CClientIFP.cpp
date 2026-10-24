@@ -12,15 +12,24 @@
 #include <game/CAnimBlendHierarchy.h>
 #include <game/CAnimBlendSequence.h>
 #include <game/CAnimManager.h>
+#include "CIFPAnimationStorage.h"
+#include "CIFPReadGuard.h"
+#include <limits>
+#include <new>
 
-CClientIFP::CClientIFP(class CClientManager* pManager, ElementID ID) : CClientEntity(ID)
+CClientIFP::CClientIFP(class CClientManager* pManager, ElementID ID) : CClientIFP(pManager, ID, *g_pGame->GetAnimManager())
+{
+}
+
+CClientIFP::CClientIFP(class CClientManager* pManager, ElementID ID, CAnimManager& animationManager) : CClientEntity(ID)
 {
     // Init
     SetSmartPointer(true);
     m_pManager = pManager;
     SetTypeName("IFP");
-    m_pIFPAnimations = std::make_shared<CIFPAnimations>();
-    m_pAnimManager = g_pGame->GetAnimManager();
+    m_pAnimManager = &animationManager;
+    m_pIFPAnimations = std::make_shared<CIFPAnimations>(*m_pAnimManager);
+    m_pVecAnimations = &m_pIFPAnimations->vecAnimations;
     m_bVersion1 = false;
     m_bUnloading = false;
     m_u32Hashkey = 0;
@@ -41,31 +50,41 @@ void CClientIFP::Unlink()
 
 bool CClientIFP::Load(SString blockName, bool isRawData, SString input)
 {
-    m_strBlockName = std::move(blockName);
-    m_pVecAnimations = &m_pIFPAnimations->vecAnimations;
-
-    if (isRawData)
-    {
-        if (!CFileReader::LoadFromBuffer(std::move(input)))
-            return false;
-    }
-    else
-    {
-        if (!CFileReader::LoadFromFile(std::move(input)))
-            return false;
-    }
-
-    bool success = ReadIFPByVersion();
-
-    if (success)
-    {
-        m_u32Hashkey = HashString(m_strBlockName.ToLower());
-    }
-
-    // We are freeing the file reader memory because we don't need to read it anymore.
-    // This function does not unload IFP, to unload ifp, use destroyElement from Lua
+    // A retry must not inherit an old offset or ANPK version bit. Public
+    // animation lookups keep using the old published set until full success.
     FreeFileReaderMemory();
-
+    m_bVersion1 = false;
+    bool                            success = false;
+    std::shared_ptr<CIFPAnimations> candidate;
+    try
+    {
+        candidate = std::make_shared<CIFPAnimations>(*m_pAnimManager);
+        m_pVecAnimations = &candidate->vecAnimations;
+        if (isRawData)
+            MtaGame::IfpRead::RequireBytes(input.size(), (std::numeric_limits<std::uint32_t>::max)());
+        const bool loaded = isRawData ? CFileReader::LoadFromBuffer(std::move(input)) : CFileReader::LoadFromFile(std::move(input));
+        if (loaded)
+        {
+            MtaGame::IfpRead::RequireBytes(GetLoadedBytesCount(), (std::numeric_limits<std::uint32_t>::max)());
+            success = ReadIFPByVersion();
+        }
+        if (success)
+        {
+            const auto hash = HashString(blockName.ToLower());
+            m_strBlockName.swap(blockName);
+            m_u32Hashkey = hash;
+            m_pIFPAnimations.swap(candidate);
+        }
+    }
+    catch (const std::exception&)
+    {
+        success = false;
+    }
+    m_pVecAnimations = &m_pIFPAnimations->vecAnimations;
+    FreeFileReaderMemory();
+    // A failed candidate releases only its own arrays/interfaces/frames. The
+    // old shared set can remain retained by existing animation associations.
+    candidate.reset();
     return success;
 }
 
@@ -98,11 +117,14 @@ bool CClientIFP::ReadIFPByVersion()
 
 void CClientIFP::ReadIFPVersion1()
 {
-    SInfo Info;
+    SInfo Info{};
     ReadHeaderVersion1(Info);
 
-    m_pVecAnimations->resize(Info.Entries);
-    for (auto& Animation : m_pIFPAnimations->vecAnimations)
+    if (Info.Entries < 0)
+        throw std::runtime_error("Negative IFP animation count");
+    MtaGame::IfpRead::RequireBytes(MtaGame::IfpRead::Product(static_cast<std::size_t>(Info.Entries), sizeof(SBase)), GetRemainingBytesCount());
+    m_pVecAnimations->resize(static_cast<std::size_t>(Info.Entries));
+    for (auto& Animation : *m_pVecAnimations)
     {
         ReadAnimationNameVersion1(Animation);
 
@@ -111,10 +133,8 @@ void CClientIFP::ReadIFPVersion1()
 
         Animation.pHierarchy = m_pAnimManager->GetCustomAnimBlendHierarchy();
         InitializeAnimationHierarchy(Animation.pHierarchy, Animation.Name, Dgan.Info.Entries);
-        Animation.pSequencesMemory = AllocateSequencesMemory(Animation.pHierarchy);
-        Animation.pHierarchy->SetSequences(reinterpret_cast<CAnimBlendSequenceSAInterface*>(Animation.pSequencesMemory + 4));
-
-        *(DWORD*)Animation.pSequencesMemory = ReadSequencesWithDummies(Animation.pHierarchy, Animation.AnimatedBonesMask);
+        AllocateSequencesMemory(Animation);
+        ReadSequencesWithDummies(Animation.pHierarchy, Animation.AnimatedBonesMask);
         PreProcessAnimationHierarchy(Animation.pHierarchy);
     }
 }
@@ -124,8 +144,13 @@ void CClientIFP::ReadIFPVersion2(bool bAnp3)
     SIFPHeaderV2 Header;
     ReadBuffer<SIFPHeaderV2>(&Header);
 
-    m_pVecAnimations->resize(Header.TotalAnimations);
-    for (auto& Animation : m_pIFPAnimations->vecAnimations)
+    if (Header.TotalAnimations < 0)
+        throw std::runtime_error("Negative IFP animation count");
+    MtaGame::IfpRead::RequireBytes(
+        MtaGame::IfpRead::Product(static_cast<std::size_t>(Header.TotalAnimations), sizeof(SAnimationHeaderV2::Name) + sizeof(std::int32_t)),
+        GetRemainingBytesCount());
+    m_pVecAnimations->resize(static_cast<std::size_t>(Header.TotalAnimations));
+    for (auto& Animation : *m_pVecAnimations)
     {
         SAnimationHeaderV2 AnimationNode;
         ReadAnimationHeaderVersion2(AnimationNode, bAnp3);
@@ -135,10 +160,8 @@ void CClientIFP::ReadIFPVersion2(bool bAnp3)
         Animation.pHierarchy = m_pAnimManager->GetCustomAnimBlendHierarchy();
         InitializeAnimationHierarchy(Animation.pHierarchy, AnimationNode.Name, AnimationNode.TotalObjects);
 
-        Animation.pSequencesMemory = AllocateSequencesMemory(Animation.pHierarchy);
-        Animation.pHierarchy->SetSequences(reinterpret_cast<CAnimBlendSequenceSAInterface*>(Animation.pSequencesMemory + 4));
-
-        *(DWORD*)Animation.pSequencesMemory = ReadSequencesWithDummies(Animation.pHierarchy, Animation.AnimatedBonesMask);
+        AllocateSequencesMemory(Animation);
+        ReadSequencesWithDummies(Animation.pHierarchy, Animation.AnimatedBonesMask);
         PreProcessAnimationHierarchy(Animation.pHierarchy);
     }
 }
@@ -190,12 +213,17 @@ WORD CClientIFP::ReadSequencesVersion1(std::unique_ptr<CAnimBlendHierarchy>& pAn
         {
             pAnimationSequence = m_pAnimManager->GetCustomAnimBlendSequence();
         }
-        InitializeAnimationSequence(pAnimationSequence, Anim.Name, iBoneID);
+        MtaGame::IfpStorage::SequenceOwner<CAnimManager> owner(*m_pAnimManager, std::move(pAnimationSequence), !bUnknownSequence);
+        auto&                                            sequence = owner.Get();
+        if (!sequence)
+            throw std::runtime_error("IFP backend returned no sequence");
+        InitializeAnimationSequence(sequence, Anim.Name, iBoneID);
+        owner.MarkInitialized();
 
         eFrameType iFrameType = ReadKfrm();
-        if ((ReadSequenceKeyFrames(pAnimationSequence, iFrameType, Anim.Frames)) && (!bUnknownSequence))
+        if ((ReadSequenceKeyFrames(sequence, iFrameType, Anim.Frames)) && (!bUnknownSequence))
         {
-            MapOfSequences[iBoneID] = std::move(pAnimationSequence);
+            MapOfSequences.insert_or_assign(iBoneID, std::move(owner));
         }
     }
     return wUnknownSequences;
@@ -223,12 +251,17 @@ WORD CClientIFP::ReadSequencesVersion2(std::unique_ptr<CAnimBlendHierarchy>& pAn
         {
             pAnimationSequence = m_pAnimManager->GetCustomAnimBlendSequence();
         }
-        InitializeAnimationSequence(pAnimationSequence, ObjectNode.Name, ObjectNode.BoneID);
+        MtaGame::IfpStorage::SequenceOwner<CAnimManager> owner(*m_pAnimManager, std::move(pAnimationSequence), !bUnknownSequence);
+        auto&                                            sequence = owner.Get();
+        if (!sequence)
+            throw std::runtime_error("IFP backend returned no sequence");
+        InitializeAnimationSequence(sequence, ObjectNode.Name, ObjectNode.BoneID);
+        owner.MarkInitialized();
 
         eFrameType iFrameType = static_cast<eFrameType>(ObjectNode.FrameType);
-        if ((ReadSequenceKeyFrames(pAnimationSequence, iFrameType, ObjectNode.TotalFrames)) && (!bUnknownSequence))
+        if ((ReadSequenceKeyFrames(sequence, iFrameType, ObjectNode.TotalFrames)) && (!bUnknownSequence))
         {
-            MapOfSequences[ObjectNode.BoneID] = std::move(pAnimationSequence);
+            MapOfSequences.insert_or_assign(ObjectNode.BoneID, std::move(owner));
         }
     }
     return wUnknownSequences;
@@ -241,7 +274,11 @@ std::int32_t CClientIFP::ReadSequenceVersion1(SAnim& Anim)
     RoundSize(Cpan.Base.Size);
     ReadBytes(&Anim, sizeof(SBase));
     RoundSize(Anim.Base.Size);
+    if (Anim.Base.Size > sizeof(SAnim) - sizeof(SBase) || Anim.Base.Size < sizeof(Anim.Name) + sizeof(Anim.Frames))
+        throw std::runtime_error("Invalid IFP sequence chunk size");
+    std::memset(&Anim.Name, 0, sizeof(SAnim) - sizeof(SBase));
     ReadBytes(&Anim.Name, Anim.Base.Size);
+    Anim.Name[sizeof(Anim.Name) - 1] = '\0';
 
     SString      strBoneName = ConvertStringToKey(Anim.Name, true);
     std::int32_t iBoneID = GetBoneIDFromName(strBoneName);
@@ -254,6 +291,7 @@ std::int32_t CClientIFP::ReadSequenceVersion1(SAnim& Anim)
 void CClientIFP::ReadSequenceVersion2(SSequenceHeaderV2& ObjectNode)
 {
     ReadBuffer<SSequenceHeaderV2>(&ObjectNode);
+    ObjectNode.Name[sizeof(ObjectNode.Name) - 1] = '\0';
     SString strBoneName = ConvertStringToKey(ObjectNode.Name);
     SString strCorrectBoneName;
     if (ObjectNode.BoneID == eBoneType::UNKNOWN)
@@ -275,23 +313,29 @@ void CClientIFP::ReadSequenceVersion2(SSequenceHeaderV2& ObjectNode)
 
 bool CClientIFP::ReadSequenceKeyFrames(std::unique_ptr<CAnimBlendSequence>& pAnimationSequence, eFrameType iFrameType, const std::int32_t& cFrames)
 {
-    if (cFrames <= 0)
+    if (cFrames < 0)
+        throw std::runtime_error("Negative IFP frame count");
+    if (cFrames == 0)
         return false;
 
     size_t iCompressedFrameSize = GetSizeOfCompressedFrame(iFrameType);
     size_t iSourceFrameSize = GetSourceFrameDataSize(iFrameType);
     if (iCompressedFrameSize == 0 || iSourceFrameSize == 0)
-        return false;
+        throw std::runtime_error("Unsupported IFP frame type");
+    const auto sourceBytes = MtaGame::IfpRead::Product(static_cast<std::size_t>(cFrames), iSourceFrameSize);
+    const auto compressedBytes = MtaGame::IfpRead::Product(static_cast<std::size_t>(cFrames), iCompressedFrameSize);
+    MtaGame::IfpRead::RequireBytes(sourceBytes, GetRemainingBytesCount());
 
-    BYTE* pKeyFrames = m_pAnimManager->AllocateKeyFramesMemory(iCompressedFrameSize * cFrames);
+    BYTE* pKeyFrames = m_pAnimManager->AllocateKeyFramesMemory(static_cast<std::uint32_t>(compressedBytes));
     if (!pKeyFrames)
     {
         // Advance stream past frame data to keep subsequent reads aligned
-        SkipBytes(static_cast<std::uint32_t>(iSourceFrameSize * cFrames));
+        SkipBytes(sourceBytes);
         return false;
     }
 
-    pAnimationSequence->SetKeyFrames(cFrames, IsKeyFramesTypeRoot(iFrameType), m_kbAllKeyFramesCompressed, pKeyFrames);
+    MtaGame::IfpStorage::AttachFrames(*m_pAnimManager, *pAnimationSequence, static_cast<std::size_t>(cFrames), IsKeyFramesTypeRoot(iFrameType),
+                                      m_kbAllKeyFramesCompressed, pKeyFrames);
     ReadKeyFramesAsCompressed(pAnimationSequence, iFrameType, cFrames);
     return true;
 }
@@ -303,6 +347,8 @@ void CClientIFP::ReadHeaderVersion1(SInfo& Info)
     RoundSize(OffsetEOF);
     ReadBytes(&Info, sizeof(SBase));
     RoundSize(Info.Base.Size);
+    if (Info.Base.Size < sizeof(Info.Entries) || Info.Base.Size > sizeof(SInfo) - sizeof(SBase))
+        throw std::runtime_error("Invalid IFP INFO chunk size");
     ReadBytes(&Info.Entries, Info.Base.Size);
 }
 
@@ -313,6 +359,8 @@ void CClientIFP::ReadAnimationNameVersion1(SAnimation& IfpAnimation)
     RoundSize(Name.Base.Size);
 
     char szAnimationName[24];
+    if (Name.Base.Size > sizeof(szAnimationName))
+        throw std::runtime_error("Invalid IFP animation name size");
     ReadStringNullTerminated(szAnimationName, Name.Base.Size);
     IfpAnimation.Name = szAnimationName;
     IfpAnimation.uiNameHash = HashString(IfpAnimation.Name.ToLower());
@@ -323,6 +371,8 @@ void CClientIFP::ReadDgan(SDgan& Dgan)
     ReadBytes(&Dgan, sizeof(SBase) * 2);
     RoundSize(Dgan.Base.Size);
     RoundSize(Dgan.Info.Base.Size);
+    if (Dgan.Info.Base.Size < sizeof(Dgan.Info.Entries) || Dgan.Info.Base.Size > sizeof(SInfo) - sizeof(SBase))
+        throw std::runtime_error("Invalid IFP DGAN INFO size");
     ReadBytes(&Dgan.Info.Entries, Dgan.Info.Base.Size);
 }
 
@@ -489,6 +539,9 @@ size_t CClientIFP::GetSourceFrameDataSize(eFrameType iFrameType)
 void CClientIFP::InitializeAnimationHierarchy(std::unique_ptr<CAnimBlendHierarchy>& pAnimationHierarchy, const SString& strAnimationName,
                                               const std::int32_t& iSequences)
 {
+    MtaGame::IfpRead::SequenceCapacity(iSequences);
+    if (!pAnimationHierarchy)
+        throw std::runtime_error("IFP backend returned no hierarchy");
     pAnimationHierarchy->Initialize();
     pAnimationHierarchy->SetName(strAnimationName);
     pAnimationHierarchy->SetNumSequences(static_cast<unsigned short>(iSequences));
@@ -525,10 +578,9 @@ void CClientIFP::MoveSequencesWithDummies(std::unique_ptr<CAnimBlendHierarchy>& 
         auto it = mapOfSequences.find(BoneID);
         if (it != mapOfSequences.end())
         {
-            auto pMapAnimSequenceInterface = it->second->GetInterface();
-            pAnimationSequence->CopySequenceProperties(pMapAnimSequenceInterface);
-            // Delete the interface because we are moving, not copying
-            m_pAnimManager->DeleteCustomAnimSequenceInterface(pMapAnimSequenceInterface);
+            // The detached guard transfers the frame pointer before deleting
+            // its source interface. Failed copies retain one cleanup owner.
+            it->second.TransferTo(*pAnimationSequence);
             outAnimatedBonesMask.set(SequenceIndex);
         }
         else
@@ -538,10 +590,16 @@ void CClientIFP::MoveSequencesWithDummies(std::unique_ptr<CAnimBlendHierarchy>& 
     }
 }
 
-BYTE* CClientIFP::AllocateSequencesMemory(std::unique_ptr<CAnimBlendHierarchy>& pAnimationHierarchy)
+void CClientIFP::AllocateSequencesMemory(SAnimation& animation)
 {
-    const WORD cMaxSequences = m_kcIFPSequences + pAnimationHierarchy->GetNumSequences();
-    return static_cast<BYTE*>(operator new(12 * cMaxSequences + 4));
+    const auto capacity = MtaGame::IfpRead::SequenceCapacity(animation.pHierarchy->GetNumSequences());
+    auto*      sequences = m_pAnimManager->AllocateCustomAnimSequences(capacity);
+    if (!sequences)
+        throw std::bad_alloc();
+    animation.pSequences = sequences;
+    animation.sequenceCapacity = capacity;
+    animation.pHierarchy->SetSequences(sequences);
+    animation.sequencesAttached = true;
 }
 
 CClientIFP::eFrameType CClientIFP::GetFrameTypeFromFourCC(const char* szFourCC)
@@ -586,7 +644,7 @@ void CClientIFP::InsertAnimationDummySequence(std::unique_ptr<CAnimBlendSequence
     if (!pKeyFrames)
         return;
 
-    pAnimationSequence->SetKeyFrames(cKeyFrames, bHasTranslationValues, m_kbAllKeyFramesCompressed, pKeyFrames);
+    MtaGame::IfpStorage::AttachFrames(*m_pAnimManager, *pAnimationSequence, cKeyFrames, bHasTranslationValues, m_kbAllKeyFramesCompressed, pKeyFrames);
     CopyDummyKeyFrameByBoneID(pKeyFrames, dwBoneID);
 }
 
@@ -833,10 +891,7 @@ SString CClientIFP::ConvertStringToKey(const SString& strBoneName, bool isANPK)
 
 constexpr void CClientIFP::RoundSize(std::uint32_t& u32Size)
 {
-    if (u32Size & 3)
-    {
-        u32Size += 4 - (u32Size & 3);
-    }
+    u32Size = MtaGame::IfpRead::Padded(u32Size);
 }
 
 constexpr bool CClientIFP::IsKeyFramesTypeRoot(eFrameType iFrameType)
@@ -1372,9 +1427,9 @@ SString CClientIFP::GetCorrectBoneNameFromName(const SString& strBoneName)
 CAnimBlendHierarchySAInterface* CClientIFP::GetAnimationHierarchy(const SString& strAnimationName)
 {
     const unsigned int uiAnimationNameHash = HashString(strAnimationName.ToLower());
-    auto               it = std::find_if(m_pVecAnimations->begin(), m_pVecAnimations->end(),
+    auto               it = std::find_if(m_pIFPAnimations->vecAnimations.begin(), m_pIFPAnimations->vecAnimations.end(),
                                          [&uiAnimationNameHash](SAnimation const& Animation) { return Animation.uiNameHash == uiAnimationNameHash; });
-    if (it != m_pVecAnimations->end())
+    if (it != m_pIFPAnimations->vecAnimations.end())
     {
         return it->pHierarchy->GetInterface();
     }
@@ -1384,9 +1439,9 @@ CAnimBlendHierarchySAInterface* CClientIFP::GetAnimationHierarchy(const SString&
 std::bitset<64> CClientIFP::GetAnimatedBonesMask(const SString& strAnimationName)
 {
     const unsigned int uiAnimationNameHash = HashString(strAnimationName.ToLower());
-    auto               it = std::find_if(m_pVecAnimations->begin(), m_pVecAnimations->end(),
+    auto               it = std::find_if(m_pIFPAnimations->vecAnimations.begin(), m_pIFPAnimations->vecAnimations.end(),
                                          [&uiAnimationNameHash](SAnimation const& Animation) { return Animation.uiNameHash == uiAnimationNameHash; });
-    if (it != m_pVecAnimations->end())
+    if (it != m_pIFPAnimations->vecAnimations.end())
     {
         return it->AnimatedBonesMask;
     }

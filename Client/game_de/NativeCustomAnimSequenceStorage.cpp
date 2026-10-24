@@ -136,13 +136,15 @@ namespace mta::game_de
     {
         using Storage = NativeCustomAnimSequenceStorage;
         using State = Storage::State;
+        using Kind = Storage::Kind;
         using Receipt = NativeCustomAnimSequenceStorageCalls::Receipt;
         using CheckOwner = NativeCustomAnimSequenceStorageCalls::CheckOwner;
-        static ClockResult Allocate(std::uintptr_t image, Storage& storage, std::uint64_t generation, std::size_t capacity, CheckOwner owner, Receipt* output,
-                                    NativeCustomAnimSequenceStorageCalls::InvokeMalloc invoke) noexcept
+        static ClockResult Allocate(std::uintptr_t image, Storage& storage, std::uint64_t generation, std::size_t amount, CheckOwner owner, Receipt* output,
+                                    NativeCustomAnimSequenceStorageCalls::InvokeMalloc invoke, Kind kind) noexcept
         {
             namespace Detail = CustomAnimSequenceStorageDetail;
-            Receipt receipt;
+            const auto capacity = kind == Kind::SequenceArray ? amount : 0;
+            Receipt    receipt;
             receipt.generation = generation;
             receipt.capacity = capacity;
             bool       reserved = false;
@@ -155,12 +157,13 @@ namespace mta::game_de
                     *output = receipt;
                 return result;
             };
-            if (!capacity)
+            if (!amount)
             {
                 receipt.verified = true;
                 return finish(ClockResult::Ok);
             }
-            if (!generation || capacity > ((std::numeric_limits<std::size_t>::max)() - Detail::Profile::CookieBytes) / Detail::Profile::RowBytes)
+            if (!generation || (kind == Kind::SequenceArray &&
+                                capacity > ((std::numeric_limits<std::size_t>::max)() - Detail::Profile::CookieBytes) / Detail::Profile::RowBytes))
                 return finish(ClockResult::InvalidArgument);
             State expected = State::Empty;
             if (!storage.state.compare_exchange_strong(expected, State::Preparing, std::memory_order_acq_rel))
@@ -172,8 +175,9 @@ namespace mta::game_de
             auto                   result = Detail::Capture(image, owner, storage.origin);
             if (result != ClockResult::Ok)
                 return finish(result);
+            storage.kind = kind;
             storage.capacity = capacity;
-            storage.bytes = Detail::Profile::CookieBytes + capacity * Detail::Profile::RowBytes;
+            storage.bytes = kind == Kind::SequenceArray ? Detail::Profile::CookieBytes + capacity * Detail::Profile::RowBytes : amount;
             storage.generation = generation;
             receipt.bytes = storage.bytes;
             receipt.heap = storage.origin.current;
@@ -200,7 +204,18 @@ namespace mta::game_de
             if (!base)
             {
                 storage.state.store(State::Released, std::memory_order_release);
-                return finish(ClockResult::WriteFailure);
+                if (kind == Kind::SequenceArray)
+                    return finish(ClockResult::WriteFailure);
+                // MTA's frame allocator is nullable. A real null return owns
+                // no storage, but still needs the same actual owner/heap
+                // acknowledgement before it can become a successful null.
+                Detail::Heap::Value after;
+                if ((result = Detail::Capture(image, owner, after)) != ClockResult::Ok)
+                    return finish(result);
+                if (!Detail::Heap::Same(storage.origin, after))
+                    return finish(ClockResult::BindingChanged);
+                receipt.verified = true;
+                return finish(ClockResult::Ok);
             }
             // Retain a known returned allocation before any fallible post-call
             // observation. A lost acknowledgement cannot erase its authority.
@@ -211,19 +226,27 @@ namespace mta::game_de
             if (base % alignof(std::uintptr_t) || storage.bytes > (std::numeric_limits<std::uintptr_t>::max)() - base ||
                 !Detail::Heap::M::PrivateWritable(base, storage.bytes))
                 return finish(ClockResult::WriteFailure);
-            storage.tag = base + Detail::Profile::CookieBytes;
-            if ((result = Detail::InitializeArray(base, capacity, receipt.exceptionCode)) != ClockResult::Ok)
-                return finish(result);
-            storage.effects |= Detail::Initialized;
-            receipt.initialized = true;
+            storage.tag = kind == Kind::SequenceArray ? base + Detail::Profile::CookieBytes : base;
+            if (kind == Kind::SequenceArray)
+            {
+                if ((result = Detail::InitializeArray(base, capacity, receipt.exceptionCode)) != ClockResult::Ok)
+                    return finish(result);
+                storage.effects |= Detail::Initialized;
+                receipt.initialized = true;
+            }
+            // Frame buffers return the original native allocation directly.
+            // Their payload has no sequence cookie or initialization promise.
             Detail::Heap::Value after;
             if ((result = Detail::Capture(image, owner, after)) != ClockResult::Ok)
                 return finish(result);
             if (!Detail::Heap::Same(storage.origin, after))
                 return finish(ClockResult::BindingChanged);
-            std::uint64_t cookie = 0;
-            if (!Detail::Heap::M::Copy(base, &cookie, sizeof(cookie)) || cookie != capacity)
-                return finish(ClockResult::BindingChanged);
+            if (kind == Kind::SequenceArray)
+            {
+                std::uint64_t cookie = 0;
+                if (!Detail::Heap::M::Copy(base, &cookie, sizeof(cookie)) || cookie != capacity)
+                    return finish(ClockResult::BindingChanged);
+            }
             if ((result = Detail::Context::Owner(image, owner)) != ClockResult::Ok)
                 return finish(result);
             storage.state.store(State::LiveUnpublished, std::memory_order_release);
@@ -232,7 +255,7 @@ namespace mta::game_de
             return finish(ClockResult::Ok);
         }
         static ClockResult FreeStorage(std::uintptr_t image, Storage& storage, std::uint64_t generation, CheckOwner owner, Receipt* output,
-                                       NativeCustomAnimSequenceStorageCalls::InvokeFree invoke) noexcept
+                                       NativeCustomAnimSequenceStorageCalls::InvokeFree invoke, Kind kind) noexcept
         {
             namespace Detail = CustomAnimSequenceStorageDetail;
             Receipt receipt;
@@ -248,7 +271,7 @@ namespace mta::game_de
                     *output = receipt;
                 return result;
             };
-            if (!generation || generation != storage.generation)
+            if (!generation || generation != storage.generation || kind != storage.kind)
                 return finish(ClockResult::OwnerConflict);
             if (!storage.CanFreeStorage())
                 return finish(ClockResult::OwnerConflict);
@@ -268,14 +291,14 @@ namespace mta::game_de
             if (current.authority != storage.origin.authority || current.authorityVtable != storage.origin.authorityVtable ||
                 !Detail::Heap::M::PrivateWritable(storage.base, storage.bytes))
                 return finish(ClockResult::BindingChanged);
-            if (storage.effects & Detail::Initialized)
+            if (kind == Kind::SequenceArray && (storage.effects & Detail::Initialized))
             {
                 std::uint64_t cookie = 0;
                 if (!Detail::Heap::M::Copy(storage.base, &cookie, sizeof(cookie)) || cookie != storage.capacity)
                     return finish(ClockResult::BindingChanged);
             }
-            // The capacity observation is the last fallible storage read.
-            // Recheck the existing owner/GT/GC fence before committing free.
+            // Recheck the existing owner/GT/GC fence after the last storage
+            // observation. Frames have no cookie or payload read here.
             if ((result = Detail::Context::Owner(image, owner)) != ClockResult::Ok)
                 return finish(result);
             // Partial unpublished initialization can still be retired through
@@ -331,16 +354,36 @@ namespace mta::game_de
         ClockResult Allocate(std::uintptr_t image, NativeCustomAnimSequenceStorage& storage, std::uint64_t generation, std::size_t capacity, CheckOwner owner,
                              Receipt* output, InvokeMalloc invoke) noexcept
         {
-            return NativeCustomAnimSequenceStorageAccess::Allocate(image, storage, generation, capacity, owner, output, invoke);
+            return NativeCustomAnimSequenceStorageAccess::Allocate(image, storage, generation, capacity, owner, output, invoke,
+                                                                   NativeCustomAnimSequenceStorage::Kind::SequenceArray);
         }
         ClockResult FreeStorage(std::uintptr_t image, NativeCustomAnimSequenceStorage& storage, std::uint64_t generation, CheckOwner owner, Receipt* output,
                                 InvokeFree invoke) noexcept
         {
-            return NativeCustomAnimSequenceStorageAccess::FreeStorage(image, storage, generation, owner, output, invoke);
+            return NativeCustomAnimSequenceStorageAccess::FreeStorage(image, storage, generation, owner, output, invoke,
+                                                                      NativeCustomAnimSequenceStorage::Kind::SequenceArray);
         }
         ClockResult PinPublication(NativeCustomAnimSequenceStorage& storage, std::uint64_t generation, std::uintptr_t affinity) noexcept
         {
             return NativeCustomAnimSequenceStorageAccess::PinPublication(storage, generation, affinity);
+        }
+    }
+    namespace NativeAnimationKeyFrameStorageCalls
+    {
+        ClockResult Allocate(std::uintptr_t image, NativeCustomAnimSequenceStorage& storage, std::uint64_t generation, std::uint32_t bytes, CheckOwner owner,
+                             Receipt* output, InvokeMalloc invoke) noexcept
+        {
+            // The SDK's full uint32 request widens exactly to native size_t;
+            // no multiplication, header or narrowing can overflow it here.
+            static_assert(sizeof(std::size_t) >= sizeof(std::uint32_t));
+            return NativeCustomAnimSequenceStorageAccess::Allocate(image, storage, generation, static_cast<std::size_t>(bytes), owner, output, invoke,
+                                                                   NativeCustomAnimSequenceStorage::Kind::KeyFrames);
+        }
+        ClockResult FreeStorage(std::uintptr_t image, NativeCustomAnimSequenceStorage& storage, std::uint64_t generation, CheckOwner owner, Receipt* output,
+                                InvokeFree invoke) noexcept
+        {
+            return NativeCustomAnimSequenceStorageAccess::FreeStorage(image, storage, generation, owner, output, invoke,
+                                                                      NativeCustomAnimSequenceStorage::Kind::KeyFrames);
         }
     }
 }

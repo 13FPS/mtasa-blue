@@ -32,6 +32,12 @@ namespace mta::game_de
                              InvokeMalloc = nullptr) noexcept;
         ClockResult FreeStorage(std::uintptr_t image, std::uint64_t generation, std::uintptr_t issuedTag, CheckOwner, Receipt* = nullptr,
                                 InvokeFree = nullptr) noexcept;
+        // Frame bytes have no sequence cookie; the issued tag is the original
+        // allocation base. Both resource kinds stay on this one native owner.
+        ClockResult AllocateFrames(std::uintptr_t image, std::uint64_t generation, std::uint32_t bytes, CheckOwner, std::uintptr_t& output, Receipt* = nullptr,
+                                   InvokeMalloc = nullptr) noexcept;
+        ClockResult FreeFrames(std::uintptr_t image, std::uint64_t generation, std::uintptr_t issuedBase, CheckOwner, Receipt* = nullptr,
+                               InvokeFree = nullptr) noexcept;
         ClockResult Retire(std::uintptr_t image, std::uint64_t generation, std::size_t budget, CheckOwner cleanupOwner, RetireProgress&,
                            InvokeFree = nullptr) noexcept;
         // This is private-owner bookkeeping for a future qualified hierarchy
@@ -52,10 +58,12 @@ namespace mta::game_de
         };
         using Entries = std::list<Entry>;
         Entries::iterator Find(std::uint64_t generation, std::uintptr_t issuedTag) noexcept;
-        void              Publish() noexcept;
-        Entries           entries;
-        std::uint64_t     ownerGeneration = 0;
-        bool              stopping = false;
+        ClockResult   AllocateResource(std::uintptr_t, std::uint64_t, std::size_t, Storage::Kind, CheckOwner, std::uintptr_t&, Receipt*, InvokeMalloc) noexcept;
+        ClockResult   FreeResource(std::uintptr_t, std::uint64_t, std::uintptr_t, Storage::Kind, CheckOwner, Receipt*, InvokeFree) noexcept;
+        void          Publish() noexcept;
+        Entries       entries;
+        std::uint64_t ownerGeneration = 0;
+        bool          stopping = false;
         std::atomic_flag  operation = ATOMIC_FLAG_INIT;
         std::atomic<bool> retained{false}, recovery{false};
     };

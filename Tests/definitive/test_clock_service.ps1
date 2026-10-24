@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage')]
+    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -37,6 +37,10 @@ $record['actualWorldLineSdkOwnerTested'] = $false
 $record['nativeWorldGroundOwnerTested'] = $false
 $record['actualWorldGroundSdkOwnerTested'] = $false
 $record['nativePedWeaponGrantOwnerTested'] = $false
+$record['nativeCustomAnimationResourcesOwnerTested'] = $false
+$record['nativeCustomAnimationResourcesEndTested'] = $false
+$record['nativeCustomAnimationResourcesRetainedLifetimeTested'] = $false
+$record['actualCustomAnimationStorageSdkOwnerTested'] = $false
 $record['nativeCustomSequenceStorageOwnerTested'] = $false
 $record['nativeCustomSequenceStorageEndTested'] = $false
 $record['nativeCustomSequenceStorageRetainedLifetimeTested'] = $false
@@ -407,6 +411,7 @@ try {
     $sourceNames += @('Tests/definitive/NativePedFireCollisionOwnerTests.inl','Tests/definitive/Write-PedFireFixture.ps1','Tests/definitive/Write-PedCollisionFixture.ps1')
     $sourceNames += @('Tests/definitive/NativePedAreaOwnerTests.inl','Tests/definitive/NativeStreamingSpecialModelOwnerTests.inl','Tests/definitive/Write-PedAreaFixture.ps1')
     $sourceNames += @('Tests/definitive/NativePedPoseOwnerTests.inl','Tests/definitive/Write-PedPoseFixture.ps1')
+    $sourceNames += @('Tests/definitive/NativeCustomAnimationResourcesOwnerTests.inl','Tests/definitive/Write-AnimationSequenceStorageFixture.ps1')
     $sourceNames += @('Client/game_de/NativeAnimationSequenceStorageAccess.h','Client/game_de/NativeCustomAnimSequenceController.h','Client/game_de/NativeCustomAnimSequenceController.cpp','Client/game_de/NativeCustomAnimSequenceStorage.h','Client/game_de/NativeCustomAnimSequenceStorage.cpp','Client/game_de/NativeCustomAnimSequenceStorageProfile.h','Tests/definitive/NativeCustomAnimSequenceStorageFixture.h','Tests/definitive/NativeCustomSequenceStorageOwnerTests.inl')
     $sourceNames += @('Client/game_de/NativeAnimationBlockFactoryMemory.h','Client/game_de/NativeAnimationBlockFactoryMemory.cpp','Client/game_de/NativeAnimationBlockHierarchyProfile.h','Tests/definitive/NativeAnimationBlockFactoryFixture.h','Tests/definitive/NativeAnimationBlockFactoryOwnerTests.inl','Tests/definitive/Write-AnimationBlockFactoryFixture.ps1','Tests/definitive/Write-AnimationManagerFixture.ps1','Client/sdk/game/CAnimBlock.h')
     $sourceNames += @('Client/game_de/NativeAnimationBlockRefMemory.h','Client/game_de/NativeAnimationBlockRefMemory.cpp','Client/game_de/NativeAnimationBlockRefProfile.h','Tests/definitive/NativeAnimationBlockRefFixture.h','Tests/definitive/NativeAnimationBlockRefsOwnerTests.inl','Tests/definitive/Write-AnimBlockRefsFixture.ps1','Tests/definitive/AnimBlockNameDETests.cpp')
@@ -575,6 +580,12 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
     Copy-Item -LiteralPath $blockFactoryFixture.path -Destination $blockFactoryEvidence
     $record['animationBlockFactoryManagerFixture'] = $blockFactoryFixture
     $record.animationBlockFactoryManagerFixture.path = $blockFactoryEvidence
+    . (Join-Path $PSScriptRoot 'Write-AnimationSequenceStorageFixture.ps1')
+    $animationStorageFixture = Write-AnimationSequenceStorageFixture $taskRoot (Join-Path $scratchRoot 'AnimationSequenceStorageManager.generated.h')
+    $animationStorageEvidence = Join-Path $outputRoot 'AnimationSequenceStorageManager.generated.h'
+    Copy-Item -LiteralPath $animationStorageFixture.path -Destination $animationStorageEvidence
+    $record['animationSequenceStorageManagerFixture'] = $animationStorageFixture
+    $record.animationSequenceStorageManagerFixture.path = $animationStorageEvidence
     # This generator makes the shared Rebuild leaf extendable. Run it last
     # and refresh the actual durable siblings; an earlier hash must not name
     # bytes subsequently overwritten by another strict-fixture generator.
@@ -734,7 +745,34 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
     if ($Scope -eq 'GarageNamed') { $fixtureArguments += '--garage-named' }
     if ($Scope -eq 'GaragePools') { $fixtureArguments += '--garage-pools' }
     if ($Scope -eq 'PedPoolRegistry') { $fixtureArguments += '--ped-pool-registry' }
-    if ($Scope -eq 'CustomSequenceStorage') {
+    if ($Scope -eq 'CustomAnimationResources') {
+        # Unknown entered effects retain the actual global journal until the
+        # ordinary host process exits. Compile once, isolate those cases rather
+        # than erase owner debt to make a following scenario fit.
+        $record['testRuns'] = @()
+        $record['testScenarioExecutables'] = @()
+        $texts = @()
+        foreach ($scenario in @('success','unknown-allocate','unknown-free')) {
+            $scenarioRoot = Join-Path $outputRoot ('scenario-custom-animation-resources-'+$scenario)
+            [IO.Directory]::CreateDirectory($scenarioRoot) | Out-Null
+            $scenarioExecutable = Join-Path $scenarioRoot ([IO.Path]::GetFileName($executable))
+            if (Test-Path -LiteralPath $scenarioExecutable) { throw 'Scenario executable already exists; preserve prior evidence.' }
+            Copy-Item -LiteralPath $executable -Destination $scenarioExecutable
+            $scenarioSha = Sha $scenarioExecutable
+            if ($scenarioSha -cne (Sha $executable)) { throw 'Copied custom sequence scenario differs from the once-compiled test binary.' }
+            $record.testScenarioExecutables += @{scenario=$scenario;path=$scenarioExecutable;sha256=$scenarioSha;directory=$scenarioRoot}
+            $run = RunBounded $scenarioExecutable @($scenarioRoot,('--custom-animation-resources-'+$scenario)) ('test-custom-animation-resources-'+$scenario) 60000
+            $record.testRuns += $run
+            $part = [IO.File]::ReadAllText($run.stdout) + [IO.File]::ReadAllText($run.stderr)
+            if ($run.exitCode -ne 0 -or $run.timedOut -or $part -notmatch 'Passed (\d+) production clock service checks') {
+                throw "Mixed custom animation resource $scenario fixture failed."
+            }
+            $record.checks += [int]$Matches[1]
+            $texts += $part
+        }
+        $record.testRun = $record.testRuns[-1]
+        $text = $texts -join [Environment]::NewLine
+    } elseif ($Scope -eq 'CustomSequenceStorage') {
         # Unknown entered effects retain the actual global journal until the
         # ordinary host process exits. Compile once, isolate those cases rather
         # than erase owner debt to make a following scenario fit.
@@ -798,7 +836,15 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
         if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
     }
-    if ($Scope -eq 'CustomSequenceStorage') {
+    if ($Scope -eq 'CustomAnimationResources') {
+        $record['nativeCustomAnimationResourcesOwnerTested'] = $text.Contains('Production mixed custom animation resources callback owner fixture completed')
+        $record['nativeCustomAnimationResourcesEndTested'] = $text.Contains('Production mixed custom animation resources natural End fixture completed')
+        $record['nativeCustomAnimationResourcesRetainedLifetimeTested'] = $text.Contains('Production mixed custom animation resources unknown frame allocation lifetime retained') -and $text.Contains('Production mixed custom animation resources unknown frame free lifetime retained')
+        if (-not ($record.nativeCustomAnimationResourcesOwnerTested -and $record.nativeCustomAnimationResourcesEndTested -and $record.nativeCustomAnimationResourcesRetainedLifetimeTested)) { throw 'New native custom sequence storage owner/End/retained-lifetime observations did not complete.' }
+        $record['actualCustomAnimationStorageSdkOwnerTested'] = $text.Contains('Production actual custom animation storage SDK callback fixture completed')
+        if (-not $record.actualCustomAnimationStorageSdkOwnerTested) { throw 'Actual mixed animation storage SDK callback dispatch did not complete.' }
+        $record.productionNativeCallbackTested = $true
+    } elseif ($Scope -eq 'CustomSequenceStorage') {
         $record['nativeCustomSequenceStorageOwnerTested'] = $text.Contains('Production native custom sequence storage callback owner fixture completed')
         $record['nativeCustomSequenceStorageEndTested'] = $text.Contains('Production native custom sequence storage natural End fixture completed')
         $record['nativeCustomSequenceStorageRetainedLifetimeTested'] = $text.Contains('Production native custom sequence storage unknown allocation lifetime retained') -and $text.Contains('Production native custom sequence storage unknown free lifetime retained')

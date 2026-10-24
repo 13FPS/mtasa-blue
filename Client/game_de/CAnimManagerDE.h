@@ -18,6 +18,8 @@ namespace mta::game_de
     class CAnimManagerDE : public CAnimManager
     {
     public:
+        BYTE*                          AllocateKeyFramesMemory(std::uint32_t) override;
+        void                           FreeKeyFramesMemory(void*) override;
         CAnimBlendSequenceSAInterface* AllocateCustomAnimSequences(std::size_t) override;
         void                           FreeCustomAnimSequences(CAnimBlendSequenceSAInterface*) override;
         std::unique_ptr<CAnimBlock>    GetAnimationBlock(int) override;

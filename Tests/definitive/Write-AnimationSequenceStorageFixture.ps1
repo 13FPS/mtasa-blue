@@ -5,7 +5,8 @@ function Write-AnimationSequenceStorageFixture([string]$RepositoryRoot,[string]$
     $text=[IO.File]::ReadAllText((Join-Path $RepositoryRoot $source))
     $text=[regex]::Replace($text,'(?s)/\*.*?\*/|//[^\r\n]*','')
     $implemented=@('GetAnimationBlock','GetAnimBlock','GetNumAnimations','GetNumAnimBlocks','GetAnimationBlockIndex',
-        'GetGateWayBlockName','GetGateWayAnimationName','AllocateCustomAnimSequences','FreeCustomAnimSequences')
+        'GetGateWayBlockName','GetGateWayAnimationName','AllocateCustomAnimSequences','FreeCustomAnimSequences',
+        'AllocateKeyFramesMemory','FreeKeyFramesMemory')
     $methods=@(foreach($match in [regex]::Matches($text,'virtual\s+(?<signature>[^;{}]+);')) {
         $signature=$match.Groups['signature'].Value.Trim()
         if($signature -notmatch '=\s*0\s*$'){continue}

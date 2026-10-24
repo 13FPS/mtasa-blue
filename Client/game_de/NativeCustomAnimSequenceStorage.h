@@ -15,6 +15,11 @@ namespace mta::game_de
     class NativeCustomAnimSequenceStorage final
     {
     public:
+        enum class Kind : std::uint32_t
+        {
+            SequenceArray,
+            KeyFrames
+        };
         enum class State : std::uint32_t
         {
             Empty,
@@ -41,6 +46,7 @@ namespace mta::game_de
         // These bookkeeping views are for the serialized owning controller,
         // not native address publication or cross-thread object observation.
         std::uintptr_t IssuedTag() const noexcept { return tag; }
+        Kind           GetKind() const noexcept { return kind; }
         std::size_t    Capacity() const noexcept { return capacity; }
         std::uint64_t  OwnerGeneration() const noexcept { return generation; }
         std::uintptr_t PublicationAffinity() const noexcept { return hierarchyAffinity; }
@@ -52,6 +58,7 @@ namespace mta::game_de
         std::size_t                     capacity = 0, bytes = 0;
         std::uint64_t                   generation = 0;
         std::uint32_t                   effects = 0;
+        Kind                            kind{Kind::SequenceArray};
         std::atomic<State>              state{State::Empty};
     };
     namespace NativeCustomAnimSequenceStorageCalls
@@ -81,5 +88,19 @@ namespace mta::game_de
         // The runtime maps trusted caller-owned currently issued/unfreed tags
         // to these records. A raw tag pair carries no serial capability: do
         // not promise stale-pointer ABA detection if an address is reissued.
+    }
+    namespace NativeAnimationKeyFrameStorageCalls
+    {
+        using CheckOwner = NativeCustomAnimSequenceStorageCalls::CheckOwner;
+        using Receipt = NativeCustomAnimSequenceStorageCalls::Receipt;
+        using InvokeMalloc = NativeCustomAnimSequenceStorageCalls::InvokeMalloc;
+        using InvokeFree = NativeCustomAnimSequenceStorageCalls::InvokeFree;
+        // Frames share the same issued-record/heap lifetime, but return the
+        // original base directly. They have no array cookie, row initializer
+        // or native keyframe-format/payload-initialization claim.
+        ClockResult Allocate(std::uintptr_t image, NativeCustomAnimSequenceStorage&, std::uint64_t generation, std::uint32_t bytes, CheckOwner,
+                             Receipt* = nullptr, InvokeMalloc = nullptr) noexcept;
+        ClockResult FreeStorage(std::uintptr_t image, NativeCustomAnimSequenceStorage&, std::uint64_t generation, CheckOwner, Receipt* = nullptr,
+                                InvokeFree = nullptr) noexcept;
     }
 }

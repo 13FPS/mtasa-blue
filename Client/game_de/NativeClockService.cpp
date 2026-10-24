@@ -236,6 +236,8 @@ namespace mta::game_de
             ClockResult ReadPedCenterOfMass(const NativePedReferenceToken&, CVector&) noexcept override;
             ClockResult SetPedCenterOfMass(const NativePedReferenceToken&, const CVector&) noexcept override;
             ClockResult SetPedOrientation(const NativePedReferenceToken&, const CVector&) noexcept override;
+            ClockResult AllocateAnimationKeyFrames(std::uint64_t, std::uint32_t, std::uintptr_t&) noexcept override;
+            ClockResult FreeAnimationKeyFrames(std::uint64_t, std::uintptr_t) noexcept override;
             ClockResult AllocateAnimationSequences(std::uint64_t, std::size_t, std::uintptr_t&) noexcept override;
             ClockResult FreeAnimationSequences(std::uint64_t, std::uintptr_t) noexcept override;
             ClockResult ReadAnimationBlock(const NativeAnimationBlockIdentity&, NativeAnimationBlockValues&) noexcept override;
@@ -2611,6 +2613,52 @@ namespace mta::game_de
             }
             else
                 runtime.customSequenceGeneration.store(0);
+        }
+
+        // The actual MTA frame allocator is nullable. A verified native
+        // null result remains a soft allocation failure; only refused or lost
+        // acknowledgement stops this owner. Arrays and frames share one debt
+        // journal and the same natural cleanup/admission lifetime.
+        ClockResult NativeAccess::AllocateAnimationKeyFrames(std::uint64_t generation, std::uint32_t bytes, std::uintptr_t& output) noexcept
+        {
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto current = runtime.generation.load();
+            const auto retained = runtime.customSequenceGeneration.load();
+            if (!generation || generation != current || (retained && retained != generation))
+                return ClockResult::OwnerConflict;
+            runtime.customSequenceGeneration.store(generation);
+            NativeCustomAnimSequenceController::Receipt receipt;
+            std::uintptr_t                              next = 0;
+            result = runtime.customSequences.AllocateFrames(runtime.image, generation, bytes, &CheckTimingOwner, next, &receipt);
+            PublishCustomAnimationSequenceDebt(generation);
+            if (result == ClockResult::Ok)
+                result = CheckTimingOwner();
+            if ((receipt.entered && result != ClockResult::Ok) || runtime.customSequences.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            if (result == ClockResult::Ok)
+                output = next;
+            return result;
+        }
+
+        ClockResult NativeAccess::FreeAnimationKeyFrames(std::uint64_t generation, std::uintptr_t issuedTag) noexcept
+        {
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto current = runtime.generation.load();
+            const auto retained = runtime.customSequenceGeneration.load();
+            if (!generation || generation != current || (retained && retained != generation))
+                return ClockResult::OwnerConflict;
+            NativeCustomAnimSequenceController::Receipt receipt;
+            result = runtime.customSequences.FreeFrames(runtime.image, generation, issuedTag, &CheckTimingOwner, &receipt);
+            PublishCustomAnimationSequenceDebt(generation);
+            if (result == ClockResult::Ok)
+                result = CheckTimingOwner();
+            if ((receipt.entered && result != ClockResult::Ok) || runtime.customSequences.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            return result;
         }
 
         ClockResult NativeAccess::AllocateAnimationSequences(std::uint64_t generation, std::size_t capacity, std::uintptr_t& output) noexcept

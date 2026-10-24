@@ -1,6 +1,6 @@
 #!/usr/bin/env pwsh
 #requires -Version 7.0
-# Compile only actual custom sequence storage SDK dispatch on both CPU pointer widths.
+# Compile actual current four-method animation storage SDK dispatch on both CPU pointer widths.
 [CmdletBinding()]
 param()
 
@@ -17,12 +17,13 @@ foreach ($name in @('TEMP','TMP','VCToolsInstallDir','INCLUDE','LIB','LIBPATH','
     $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name,'Process')
 }
 $record = [ordered]@{
-    schema='mta_anim_sequence_storage_de_tests_v1';directory=$outputRoot;success=$false;
+    schema='mta_anim_animation_storage_de_tests_v2';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     results=@();failure=$null;scratchDirectory=$scratchRoot;scratchFilesRemaining=$null;scratchRemoved=$false;
-    scope='Only actual inherited CAnimManagerDE custom sequence storage Allocate/Free SDK dispatch, full size_t/copied generation, zero/null owner admission, same-complete-provider constructor, refusal propagation, malformed output rejection and exact CPU facade destruction. Remaining mandatory manager methods derive rejecting fixture bodies from the actual SDK; no CGame fixture, native code, fake complete product or old tests.';
+    scope='Actual current four-method CAnimManagerDE storage SDK dispatch: exact uint32 frame bytes/nullable successful pointer, full uintptr frame base, copied generation, zero/null owner admission, provider identity/refusals, interleaved array+frame service calls and CPU-only facade destruction. Strict generated 54 remaining manager methods abort. New frame cases and joint array path only; former 86 array-only cases remain historical, not replayed. No CGame provider/native engine/complete manager.';
     ownedBuffersOnly=$true;nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;
-    completeAnimationManagerReady=$false;fullMtaReady=$false;installationChanged=$false
+    completeAnimationManagerReady=$false;fullMtaReady=$false;installationChanged=$false;
+    actualAnimationKeyFrameStorageSdkTested=$false;actualAnimationStorageFourMethodSdkTested=$false
 
 }
 
@@ -80,9 +81,9 @@ try {
     $productionSources=@('Client/game_de/CAnimManagerDE.cpp','Client/game_de/CAnimBlockDE.cpp','Client/game_de/CAnimBlockRequestDE.cpp')
     $sourceNames=$productionSources+@('Tests/definitive/AnimSequenceStorageDETests.cpp','Tests/definitive/Write-AnimationSequenceStorageFixture.ps1',
         'Tests/definitive/test_anim_sequence_storage_de.ps1',
-        'Build/definitive-recovery/mta-custom-sequence-sdk-bridge-20261024/custom-sequence-storage-access-source-ready.json',
-        'Build/definitive-recovery/mta-custom-sequence-sdk-bridge-20261024/custom-sequence-manager-bridge-source-ready.json',
-        'Build/definitive-recovery/mta-custom-sequence-sdk-bridge-20261024/custom-sequence-storage-sdk-tests-source-ready.json')
+        'Build/definitive-recovery/mta-animation-keyframe-storage-sdk-20261024/animation-keyframe-storage-sdk-source-ready.json',
+        'Build/definitive-recovery/mta-animation-keyframe-storage-sdk-tests-20261024/keyframe-storage-sdk-fixture-source-ready.json',
+        'Build/definitive-recovery/mta-animation-keyframe-storage-sdk-tests-20261024/keyframe-storage-sdk-tests-source-ready.json')
     $pending=[Collections.Generic.Queue[string]]::new()
     $seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach($name in $sourceNames){$pending.Enqueue($name)}
@@ -148,25 +149,29 @@ try {
             (Join-Path $taskRoot 'Client/game_de/CAnimBlockDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimBlockRequestDE.cpp'),
             ('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'compiler.pdb')),('/Fe'+$executable))
         $result = [ordered]@{architecture=$architecture;environment=$environmentResult;compile=$null;test=$null;
-            checks=0;pointerBits=$null;executable=$executable;executableSha256=$null;actualAnimationSequenceStorageSdkTested=$false}
+            checks=0;pointerBits=$null;executable=$executable;executableSha256=$null;actualAnimationSequenceStorageSdkTested=$false;actualAnimationKeyFrameStorageSdkTested=$false;actualAnimationStorageFourMethodSdkTested=$false}
         $record.results += $result
         $result.compile = RunOwned $compiler $arguments $directory 'compile' 60000
         if ($result.compile.exitCode -ne 0 -or $result.compile.timedOut) { throw "$architecture actual custom sequence storage SDK fixture compilation failed." }
         $result.executableSha256 = Sha $executable
         $result.test = RunOwned $executable @() $directory 'test' 10000
         $text = [IO.File]::ReadAllText($result.test.stdout)
-        $summary = [regex]::Match($text.TrimEnd(), '(?:^|\r?\n)Passed (\d+) custom sequence storage SDK checks \((\d+)-bit; no native engine code executed\)$')
+        $summary = [regex]::Match($text.TrimEnd(), '(?:^|\r?\n)Passed (\d+) custom animation storage SDK checks \((\d+)-bit; no native engine code executed\)$')
         if ($summary.Success) {
             $result.checks = [int]$summary.Groups[1].Value
             $result.pointerBits = [int]$summary.Groups[2].Value
         }
         $result.actualAnimationSequenceStorageSdkTested = $text.Contains('Actual custom animation sequence storage SDK fixture completed')
+        $result.actualAnimationKeyFrameStorageSdkTested=$text.Contains('Actual animation keyframe storage SDK fixture completed')
+        $result.actualAnimationStorageFourMethodSdkTested=$text.Contains('Actual animation storage four-method SDK fixture completed')
         $expectedBits = if ($architecture -eq 'x86') { 32 } else { 64 }
-        if ($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -le 0 -or $result.pointerBits -ne $expectedBits -or -not $result.actualAnimationSequenceStorageSdkTested) {
-            throw "$architecture actual custom sequence storage SDK checks failed or summary/pointer-width evidence was missing."
+        if ($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -le 0 -or $result.pointerBits -ne $expectedBits -or -not $result.actualAnimationSequenceStorageSdkTested -or -not $result.actualAnimationKeyFrameStorageSdkTested -or -not $result.actualAnimationStorageFourMethodSdkTested) {
+            throw "$architecture actual four-method animation storage SDK checks failed or summary/pointer-width evidence was missing."
         }
     }
-    $record.success = $record.results.Count -eq 2
+    $record.actualAnimationKeyFrameStorageSdkTested=@($record.results|Where-Object{-not $_.actualAnimationKeyFrameStorageSdkTested}).Count -eq 0
+    $record.actualAnimationStorageFourMethodSdkTested=@($record.results|Where-Object{-not $_.actualAnimationStorageFourMethodSdkTested}).Count -eq 0
+    $record.success = $record.results.Count -eq 2 -and $record.actualAnimationKeyFrameStorageSdkTested -and $record.actualAnimationStorageFourMethodSdkTested
 } catch { AddFailure ($_.Exception.ToString()) }
 finally {
     foreach ($name in $previousEnvironment.Keys) {
@@ -204,4 +209,4 @@ finally {
     $record | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $outputRoot 'test-result.json') -Encoding utf8NoBOM
 }
 [ordered]@{success=$record.success;receipt=(Join-Path $outputRoot 'test-result.json');failure=$record.failure} | ConvertTo-Json -Compress
-if (-not $record.success) { throw "Actual custom sequence storage SDK checks failed; see $outputRoot" }
+if (-not $record.success) { throw "Actual four-method animation storage SDK checks failed; see $outputRoot" }

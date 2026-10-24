@@ -5,6 +5,20 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+The native animation owner also supplies MTA's existing keyframe allocation
+and free methods. They share the sequence array transaction, qualified heap
+and runtime journal, with an explicit resource kind to reject the wrong free
+route. Frame buffers return the original allocation base, have no array
+prefix, and leave payload bytes to MTA's parser. The complete `uint32_t` byte
+request is preserved. A null native allocation remains MTA's ordinary soft
+failure only after owner/heap acknowledgement; it does not become a successful
+buffer or an unacknowledged native effect.
+
+Both array and frame resources use the same callback-generation, End and
+module-retirement gates. The actual four manager SDK methods dispatch through
+that same owner. Complete hierarchy/sequence factories and their engine
+publication/retirement still require their own implementation.
+
 DE's custom sequence array service now uses the genuine current native heap
 to allocate `80 * capacity + 8` bytes and initialize every capacity row. Its
 storage-only free uses the original allocation base and preserves independent
@@ -19,8 +33,7 @@ fallible acknowledgement; unknown entered effects are never replayed. End,
 new startup, callback removal and module retirement retain that journal until
 its resources are discharged. Published arrays are conservatively pinned;
 there is no generic detach or raw-pointer adoption operation. Actual hierarchy
-attachment, frame allocation and complete custom sequence factories remain
-separate requirements.
+attachment and complete custom sequence factories remain separate requirements.
 
 Custom IFP sequence storage belongs to the animation backend. The common
 manager now has an explicit allocation/free pair: it returns the first opaque

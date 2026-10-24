@@ -95,6 +95,29 @@ namespace mta::game_de
         const auto issuedTag = reinterpret_cast<std::uintptr_t>(tag);
         Require(storageAccess->FreeAnimationSequences(generation, issuedTag), "FreeCustomAnimSequences");
     }
+    BYTE* CAnimManagerDE::AllocateKeyFramesMemory(std::uint32_t bytes)
+    {
+        if (!storageAccess)
+            Require(ClockResult::NotInitialized, "AllocateKeyFramesMemory");
+        const auto     generation = ownerGeneration;
+        const auto     requestedBytes = bytes;
+        std::uintptr_t address = 0;
+        Require(storageAccess->AllocateAnimationKeyFrames(generation, requestedBytes, address), "AllocateKeyFramesMemory");
+        // Actual MTA callers handle an allocator's null result. The owner
+        // admits that fact separately from a binding/read/write refusal;
+        // array-specific nonzero/null rules must not replace this contract.
+        return reinterpret_cast<BYTE*>(address);
+    }
+    void CAnimManagerDE::FreeKeyFramesMemory(void* frames)
+    {
+        if (!storageAccess)
+            Require(ClockResult::NotInitialized, "FreeKeyFramesMemory");
+        // Null still reaches current-owner admission. The SDK adds neither
+        // allocation adoption nor frame ownership to CPU facade destruction.
+        const auto generation = ownerGeneration;
+        const auto address = reinterpret_cast<std::uintptr_t>(frames);
+        Require(storageAccess->FreeAnimationKeyFrames(generation, address), "FreeKeyFramesMemory");
+    }
     void CAnimManagerDE::RequireFactory(const char* operation) const
     {
         if (!blockAccess || !gameProvider)

@@ -7991,10 +7991,16 @@ namespace
 #include "NativeAnimationManagerOwnerTests.inl"
 
 #include "NativeCustomSequenceStorageOwnerTests.inl"
+#include "AnimationSequenceStorageManager.generated.h"
+#include "NativeCustomAnimationResourcesOwnerTests.inl"
 
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool customAnimationResourcesSuccess = argc == 3 && std::strcmp(argv[2], "--custom-animation-resources-success") == 0;
+    const bool customAnimationResourcesUnknownAllocate = argc == 3 && std::strcmp(argv[2], "--custom-animation-resources-unknown-allocate") == 0;
+    const bool customAnimationResourcesUnknownFree = argc == 3 && std::strcmp(argv[2], "--custom-animation-resources-unknown-free") == 0;
+    const bool customAnimationResourcesOnly = customAnimationResourcesSuccess || customAnimationResourcesUnknownAllocate || customAnimationResourcesUnknownFree;
     const bool customSequenceStorageSuccess = argc == 3 && std::strcmp(argv[2], "--custom-sequence-storage-success") == 0;
     const bool customSequenceStorageUnknownAllocate = argc == 3 && std::strcmp(argv[2], "--custom-sequence-storage-unknown-allocate") == 0;
     const bool customSequenceStorageUnknownFree = argc == 3 && std::strcmp(argv[2], "--custom-sequence-storage-unknown-free") == 0;
@@ -8047,9 +8053,17 @@ int main(int argc, char** argv)
            fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly ||
            worldLineOnly || worldAreaOnly || worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly ||
            cameraSphereOnly || pedWeaponClearOnly || pedClothesOnly || pedRebuildOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly ||
-           animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly) &&
+           animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (customAnimationResourcesOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        CustomAnimationResourcesOwnerFixture::Run(fixture, customAnimationResourcesUnknownAllocate ? 1u : customAnimationResourcesUnknownFree ? 2u : 0u);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (customSequenceStorageOnly)
     {
         ClockImageFixture fixture;

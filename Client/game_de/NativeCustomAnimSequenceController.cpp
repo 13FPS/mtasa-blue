@@ -6,6 +6,7 @@
 #include "NativeCustomAnimSequenceController.h"
 #include <algorithm>
 #include <iterator>
+#include <limits>
 #include <new>
 
 namespace mta::game_de
@@ -41,6 +42,16 @@ namespace mta::game_de
     ClockResult NativeCustomAnimSequenceController::Allocate(std::uintptr_t image, std::uint64_t generation, std::size_t capacity, CheckOwner owner,
                                                              std::uintptr_t& output, Receipt* receipt, InvokeMalloc invoke) noexcept
     {
+        return AllocateResource(image, generation, capacity, Storage::Kind::SequenceArray, owner, output, receipt, invoke);
+    }
+    ClockResult NativeCustomAnimSequenceController::AllocateFrames(std::uintptr_t image, std::uint64_t generation, std::uint32_t bytes, CheckOwner owner,
+                                                                   std::uintptr_t& output, Receipt* receipt, InvokeMalloc invoke) noexcept
+    {
+        return AllocateResource(image, generation, bytes, Storage::Kind::KeyFrames, owner, output, receipt, invoke);
+    }
+    ClockResult NativeCustomAnimSequenceController::AllocateResource(std::uintptr_t image, std::uint64_t generation, std::size_t amount, Storage::Kind kind,
+                                                                     CheckOwner owner, std::uintptr_t& output, Receipt* receipt, InvokeMalloc invoke) noexcept
+    {
         if (receipt)
             *receipt = {};
         if (operation.test_and_set(std::memory_order_acquire))
@@ -50,10 +61,12 @@ namespace mta::game_de
             return ClockResult::OwnerConflict;
         if (!owner)
             return ClockResult::NotInitialized;
+        if (kind == Storage::Kind::KeyFrames && amount > (std::numeric_limits<std::uint32_t>::max)())
+            return ClockResult::InvalidArgument;
         auto result = owner();
         if (result != ClockResult::Ok)
             return result;
-        if (!capacity)
+        if (!amount)
         {
             output = 0;
             return ClockResult::Ok;
@@ -72,7 +85,10 @@ namespace mta::game_de
         retained.store(true, std::memory_order_release);
         auto    entry = std::prev(entries.end());
         Receipt local;
-        result = NativeCustomAnimSequenceStorageCalls::Allocate(image, entry->storage, generation, capacity, owner, &local, invoke);
+        result =
+            kind == Storage::Kind::SequenceArray
+                ? NativeCustomAnimSequenceStorageCalls::Allocate(image, entry->storage, generation, amount, owner, &local, invoke)
+                : NativeAnimationKeyFrameStorageCalls::Allocate(image, entry->storage, generation, static_cast<std::uint32_t>(amount), owner, &local, invoke);
         if (result == ClockResult::Ok && local.readyTag)
             entry->issued = true;
         if (entry->storage.CanDiscard())
@@ -86,6 +102,16 @@ namespace mta::game_de
     }
     ClockResult NativeCustomAnimSequenceController::FreeStorage(std::uintptr_t image, std::uint64_t generation, std::uintptr_t issuedTag, CheckOwner owner,
                                                                 Receipt* receipt, InvokeFree invoke) noexcept
+    {
+        return FreeResource(image, generation, issuedTag, Storage::Kind::SequenceArray, owner, receipt, invoke);
+    }
+    ClockResult NativeCustomAnimSequenceController::FreeFrames(std::uintptr_t image, std::uint64_t generation, std::uintptr_t issuedBase, CheckOwner owner,
+                                                               Receipt* receipt, InvokeFree invoke) noexcept
+    {
+        return FreeResource(image, generation, issuedBase, Storage::Kind::KeyFrames, owner, receipt, invoke);
+    }
+    ClockResult NativeCustomAnimSequenceController::FreeResource(std::uintptr_t image, std::uint64_t generation, std::uintptr_t issuedTag, Storage::Kind kind,
+                                                                 CheckOwner owner, Receipt* receipt, InvokeFree invoke) noexcept
     {
         if (receipt)
             *receipt = {};
@@ -102,10 +128,12 @@ namespace mta::game_de
         if (!issuedTag)
             return ClockResult::Ok;
         auto entry = Find(generation, issuedTag);
-        if (entry == entries.end())
+        if (entry == entries.end() || entry->storage.GetKind() != kind)
             return ClockResult::BindingChanged;
         Receipt    local;
-        const auto result = NativeCustomAnimSequenceStorageCalls::FreeStorage(image, entry->storage, generation, owner, &local, invoke);
+        const auto result = kind == Storage::Kind::SequenceArray
+                                ? NativeCustomAnimSequenceStorageCalls::FreeStorage(image, entry->storage, generation, owner, &local, invoke)
+                                : NativeAnimationKeyFrameStorageCalls::FreeStorage(image, entry->storage, generation, owner, &local, invoke);
         // A returned native free is already consumed even if its post-call
         // acknowledgement failed. Erasing that released record cannot replay
         // free or infer anything by probing a possibly reused native address.
@@ -167,7 +195,9 @@ namespace mta::game_de
             }
             ++progress.attempted;
             Receipt receipt;
-            result = NativeCustomAnimSequenceStorageCalls::FreeStorage(image, entry->storage, generation, owner, &receipt, invoke);
+            result = entry->storage.GetKind() == Storage::Kind::SequenceArray
+                         ? NativeCustomAnimSequenceStorageCalls::FreeStorage(image, entry->storage, generation, owner, &receipt, invoke)
+                         : NativeAnimationKeyFrameStorageCalls::FreeStorage(image, entry->storage, generation, owner, &receipt, invoke);
             if (entry->storage.CanDiscard())
             {
                 entry = entries.erase(entry);

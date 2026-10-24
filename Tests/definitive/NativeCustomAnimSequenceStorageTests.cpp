@@ -353,4 +353,7 @@ int main(int argc, char** argv)
     Fixture::active = nullptr;
     std::printf("Passed %u native custom sequence storage checks (64-bit; no native engine code executed)\n", checks);
     std::puts("Production custom sequence storage fixture completed");
+    // The frame fixture includes this main under a different name; only the
+    // real entry point has an implicit zero return in the language.
+    return 0;
 }

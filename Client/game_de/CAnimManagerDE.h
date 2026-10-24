@@ -18,6 +18,9 @@ namespace mta::game_de
     class CAnimManagerDE : public CAnimManager
     {
     public:
+        void                           AddAnimBlockRef(int) override;
+        int                            GetNumRefsToAnimBlock(int) override;
+        void                           RemoveAnimBlockRefWithoutDelete(int) override;
         BYTE*                          AllocateKeyFramesMemory(std::uint32_t) override;
         void                           FreeKeyFramesMemory(void*) override;
         CAnimBlendSequenceSAInterface* AllocateCustomAnimSequences(std::size_t) override;
@@ -33,6 +36,9 @@ namespace mta::game_de
 
     protected:
         CAnimManagerDE(NativeAnimationManagerAccess& value, std::uint64_t generation) noexcept : native(value), ownerGeneration(generation) {}
+        // Integer counters need only the same borrowed native owner, not a
+        // game, a streaming provider or permission to publish block facades.
+        CAnimManagerDE(NativeAnimationManagerAccess&, NativeAnimationBlockAccess&, std::uint64_t);
         // Factory products borrow these exact providers. They must outlive
         // every returned block; no global game or second native owner is used.
         CAnimManagerDE(NativeAnimationManagerAccess&, NativeAnimationBlockAccess&, CGame&, std::uint64_t);
@@ -42,6 +48,7 @@ namespace mta::game_de
         CAnimManagerDE(NativeAnimationManagerAccess&, NativeAnimationBlockAccess&, NativeAnimationSequenceStorageAccess&, CGame&, std::uint64_t);
 
     private:
+        NativeAnimationBlockIdentity          ReadCounterIdentity(int, const char*) const;
         void                                  RequireFactory(const char*) const;
         std::unique_ptr<CAnimBlock>           MakeBlock(const NativeAnimationBlockIdentity&, const char*);
         NativeAnimationManagerCounts          Read(const char*) const;

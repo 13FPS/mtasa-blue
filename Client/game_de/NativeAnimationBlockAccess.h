@@ -47,5 +47,10 @@ namespace mta::game_de
         {
             return ClockResult::NotInitialized;
         }
+        // The integer manager channel preserves raw16 affinity, including
+        // nonterminated names. It does not publish a name or block facade.
+        virtual ClockResult ReadAnimationBlockCounterRefs(const NativeAnimationBlockIdentity&, std::uint16_t&) noexcept { return ClockResult::NotInitialized; }
+        virtual ClockResult AddAnimationBlockCounterRef(const NativeAnimationBlockIdentity&) noexcept { return ClockResult::NotInitialized; }
+        virtual ClockResult RemoveAnimationBlockRefWithoutDelete(const NativeAnimationBlockIdentity&) noexcept { return ClockResult::NotInitialized; }
     };
 }

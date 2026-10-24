@@ -34,5 +34,11 @@ namespace mta::game_de
         {
             return ClockResult::NotInitialized;
         }
+        // Integer reference operations use raw16 name affinity, not the
+        // separate factory/name API's C-string admission contract.
+        virtual ClockResult ReadAnimationBlockCounterIdentity(std::uint64_t, std::uint32_t, NativeAnimationBlockIdentity&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
     };
 }

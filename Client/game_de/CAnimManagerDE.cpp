@@ -6,6 +6,7 @@
 #include "CAnimManagerDE.h"
 #include "CAnimBlockRequestDE.h"
 #include <algorithm>
+#include <cstring>
 #include <game/CAnimGatewayNames.h>
 #include <stdexcept>
 #include <string>
@@ -45,6 +46,12 @@ namespace mta::game_de
             if (result != ClockResult::Ok)
                 throw std::runtime_error(std::string("DE animation manager owner refused ") + operation + ": " + std::to_string(static_cast<unsigned>(result)));
         }
+    }
+    CAnimManagerDE::CAnimManagerDE(NativeAnimationManagerAccess& manager, NativeAnimationBlockAccess& blocks, std::uint64_t generation)
+        : native(manager), ownerGeneration(generation), blockAccess(&blocks)
+    {
+        if (dynamic_cast<void*>(&manager) != dynamic_cast<void*>(&blocks))
+            throw std::invalid_argument("DE animation references require one native owner for manager and blocks");
     }
     CAnimManagerDE::CAnimManagerDE(NativeAnimationManagerAccess& manager, NativeAnimationBlockAccess& blocks, CGame& game, std::uint64_t generation)
         : native(manager), ownerGeneration(generation), blockAccess(&blocks), gameProvider(&game)
@@ -117,6 +124,48 @@ namespace mta::game_de
         const auto generation = ownerGeneration;
         const auto address = reinterpret_cast<std::uintptr_t>(frames);
         Require(storageAccess->FreeAnimationKeyFrames(generation, address), "FreeKeyFramesMemory");
+    }
+    NativeAnimationBlockIdentity CAnimManagerDE::ReadCounterIdentity(int index, const char* operation) const
+    {
+        if (!blockAccess)
+            Require(ClockResult::NotInitialized, operation);
+        static_assert(sizeof(int) == sizeof(std::int32_t));
+        const int requestedIndex = index;
+        if (requestedIndex < 0)
+            Require(ClockResult::InvalidArgument, operation);
+        const auto                   generation = ownerGeneration;
+        const auto                   ordinal = static_cast<std::uint32_t>(requestedIndex);
+        NativeAnimationBlockIdentity identity;
+        Require(native.ReadAnimationBlockCounterIdentity(generation, ordinal, identity), operation);
+        if (identity.index != ordinal || identity.ownerGeneration != generation)
+            Require(ClockResult::BindingChanged, operation);
+        // This is raw16 affinity, not a C-string lookup or factory identity.
+        // Native counter admission owns current row/count/name coherence.
+        return identity;
+    }
+    void CAnimManagerDE::AddAnimBlockRef(int index)
+    {
+        const auto identity = ReadCounterIdentity(index, "AddAnimBlockRef");
+        Require(blockAccess->AddAnimationBlockCounterRef(identity), "AddAnimBlockRef");
+    }
+    int CAnimManagerDE::GetNumRefsToAnimBlock(int index)
+    {
+        const auto    identity = ReadCounterIdentity(index, "GetNumRefsToAnimBlock");
+        std::uint16_t bits = 0;
+        Require(blockAccess->ReadAnimationBlockCounterRefs(identity, bits), "GetNumRefsToAnimBlock");
+        // The addressed manager getter promotes a signed int16 field, unlike
+        // CAnimBlock::GetRefs which deliberately exposes raw unsigned16 bits.
+        std::int16_t value = 0;
+        static_assert(sizeof(value) == sizeof(bits));
+        std::memcpy(&value, &bits, sizeof(value));
+        return value;
+    }
+    void CAnimManagerDE::RemoveAnimBlockRefWithoutDelete(int index)
+    {
+        const auto identity = ReadCounterIdentity(index, "RemoveAnimBlockRefWithoutDelete");
+        // Genuine original policy decrements modulo16 even at zero. Cleanup,
+        // unload and the distinct RemoveAnimBlockRef remain separate APIs.
+        Require(blockAccess->RemoveAnimationBlockRefWithoutDelete(identity), "RemoveAnimBlockRefWithoutDelete");
     }
     void CAnimManagerDE::RequireFactory(const char* operation) const
     {

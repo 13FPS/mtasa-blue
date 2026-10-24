@@ -242,6 +242,10 @@ namespace mta::game_de
             ClockResult FreeAnimationSequences(std::uint64_t, std::uintptr_t) noexcept override;
             ClockResult ReadAnimationBlock(const NativeAnimationBlockIdentity&, NativeAnimationBlockValues&) noexcept override;
             ClockResult ReadAnimationBlockName(const NativeAnimationBlockIdentity&, char*&) noexcept override;
+            ClockResult ReadAnimationBlockCounterIdentity(std::uint64_t, std::uint32_t, NativeAnimationBlockIdentity&) noexcept override;
+            ClockResult ReadAnimationBlockCounterRefs(const NativeAnimationBlockIdentity&, std::uint16_t&) noexcept override;
+            ClockResult AddAnimationBlockCounterRef(const NativeAnimationBlockIdentity&) noexcept override;
+            ClockResult RemoveAnimationBlockRefWithoutDelete(const NativeAnimationBlockIdentity&) noexcept override;
             ClockResult ReadAnimationBlockRefs(const NativeAnimationBlockIdentity&, std::uint16_t&) noexcept override;
             ClockResult AddAnimationBlockRef(const NativeAnimationBlockIdentity&) noexcept override;
             ClockResult ReadAnimationBlockIdentity(std::uint64_t, std::uint32_t, NativeAnimationBlockIdentity&) noexcept override;
@@ -4436,6 +4440,95 @@ namespace mta::game_de
                 Stop(result);
             // Names/cache growth, removal and asynchronous request prefixes
             // remain accepted native effects even if acknowledgement is lost.
+            return result;
+        }
+
+        ClockResult NativeAccess::ReadAnimationBlockCounterIdentity(std::uint64_t ownerGeneration, std::uint32_t index,
+                                                                    NativeAnimationBlockIdentity& output) noexcept
+        {
+            const auto requestedGeneration = ownerGeneration;
+            const auto ordinal = index;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto generation = runtime.generation.load();
+            if (!requestedGeneration || requestedGeneration != generation)
+                return ClockResult::OwnerConflict;
+            NativeAnimationBlockIdentity next;
+            result = NativeAnimationBlockRefMemory({runtime.image}, &CheckTimingOwner).ReadCounterIdentity(ordinal, next);
+            if (result != ClockResult::Ok)
+                return result;
+            if ((result = CheckTimingOwner()) != ClockResult::Ok)
+                return result;
+            if (runtime.generation.load() != generation || next.index != ordinal)
+                return ClockResult::OwnerConflict;
+            // The raw native lookup intentionally supplies no CPU affinity itself.
+            next.ownerGeneration = generation;
+            output = next;
+            return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::ReadAnimationBlockCounterRefs(const NativeAnimationBlockIdentity& expected, std::uint16_t& output) noexcept
+        {
+            const auto identity = expected;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto generation = runtime.generation.load();
+            if (!identity.ownerGeneration || identity.ownerGeneration != generation)
+                return ClockResult::OwnerConflict;
+            std::uint16_t next = 0;
+            result = NativeAnimationBlockRefMemory({runtime.image}, &CheckTimingOwner).ReadCounter(identity, next);
+            if (result != ClockResult::Ok)
+                return result;
+            if ((result = CheckTimingOwner()) != ClockResult::Ok)
+                return result;
+            if (runtime.generation.load() != generation)
+                return ClockResult::OwnerConflict;
+            output = next;
+            return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::AddAnimationBlockCounterRef(const NativeAnimationBlockIdentity& expected) noexcept
+        {
+            const auto identity = expected;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto generation = runtime.generation.load();
+            if (!identity.ownerGeneration || identity.ownerGeneration != generation)
+                return ClockResult::OwnerConflict;
+            NativeAnimationBlockRefMemory::Receipt receipt;
+            result = NativeAnimationBlockRefMemory({runtime.image}, &CheckTimingOwner).AddCounter(identity, &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = CheckTimingOwner();
+                if (result == ClockResult::Ok && runtime.generation.load() != generation)
+                    result = ClockResult::OwnerConflict;
+            }
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+        ClockResult NativeAccess::RemoveAnimationBlockRefWithoutDelete(const NativeAnimationBlockIdentity& expected) noexcept
+        {
+            const auto identity = expected;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto generation = runtime.generation.load();
+            if (!identity.ownerGeneration || identity.ownerGeneration != generation)
+                return ClockResult::OwnerConflict;
+            NativeAnimationBlockRefMemory::Receipt receipt;
+            result = NativeAnimationBlockRefMemory({runtime.image}, &CheckTimingOwner).RemoveWithoutDelete(identity, &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = CheckTimingOwner();
+                if (result == ClockResult::Ok && runtime.generation.load() != generation)
+                    result = ClockResult::OwnerConflict;
+            }
+            // Acknowledgement loss may follow an accepted persistent WORD decrement.
+            // Stop this owner; never replay or restore the old whole counter value.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
             return result;
         }
 

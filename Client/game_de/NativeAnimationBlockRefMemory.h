@@ -23,6 +23,15 @@ namespace mta::game_de
         NativeAnimationBlockRefMemory(Binding binding, CheckOwner owner) noexcept : binding(binding), owner(owner) {}
         static bool Revalidate(const Binding&) noexcept;
         ClockResult Read(const NativeAnimationBlockIdentity&, std::uint16_t&) const noexcept;
+        // Integer manager operations use all sixteen name bytes as current
+        // row affinity, not as a C string. Native observations never issue a
+        // CPU owner generation; only the enclosing runtime may stamp one.
+        ClockResult ReadCounterIdentity(std::uint32_t, NativeAnimationBlockIdentity&) const noexcept;
+        ClockResult ReadCounter(const NativeAnimationBlockIdentity&, std::uint16_t&) const noexcept;
+        ClockResult AddCounter(const NativeAnimationBlockIdentity&, Receipt* = nullptr, Exchange = nullptr) const noexcept;
+        // Addressed classic4D3FF0 is unconditional WORD decrement, including
+        // zero toFFFF. It does not unload/delete or saturate the counter.
+        ClockResult RemoveWithoutDelete(const NativeAnimationBlockIdentity&, Receipt* = nullptr, Exchange = nullptr) const noexcept;
         // Actual MTA AddRef is ushort ++, including its modulo-65536 result.
         // Loading is not a prerequisite: Request acquires its ref before load.
         // Exactly one conditional write is attempted. An entered failure must
@@ -30,7 +39,13 @@ namespace mta::game_de
         ClockResult Add(const NativeAnimationBlockIdentity&, Receipt* = nullptr, Exchange = nullptr) const noexcept;
 
     private:
-        Binding    binding;
-        CheckOwner owner = nullptr;
+        enum class IdentityPolicy
+        {
+            Named,
+            Counter
+        };
+        ClockResult Adjust(const NativeAnimationBlockIdentity&, IdentityPolicy, int direction, Receipt*, Exchange) const noexcept;
+        Binding     binding;
+        CheckOwner  owner = nullptr;
     };
 }

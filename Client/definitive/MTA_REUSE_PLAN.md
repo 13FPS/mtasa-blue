@@ -5,6 +5,20 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+The actual animation manager's integer reference methods now keep MTA's
+original distinction: `GetNumRefsToAnimBlock` promotes a signed 16-bit value,
+while `CAnimBlock::GetRefs` exposes the same bits as unsigned. Manager AddRef
+increments the native WORD; removal without deletion decrements it
+unconditionally, including `0 -> 65535`. It does not load or unload a block.
+
+Those integer operations use a separate current counter identity/read/write
+channel. The complete raw 16-byte name supplies row affinity without a string
+operation. Existing named block factories and getters keep their C-string
+guards. Both paths use the same native bank, current callback generation and
+one conditional WORD write, with no replay or count rewind after lost
+acknowledgement. Destructive removal remains separate; the saved IFP unload
+loop is an internal fragment, not a standalone block-index call target.
+
 The native animation owner also supplies MTA's existing keyframe allocation
 and free methods. They share the sequence array transaction, qualified heap
 and runtime journal, with an explicit resource kind to reject the wrong free

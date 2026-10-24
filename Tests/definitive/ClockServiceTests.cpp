@@ -2705,11 +2705,13 @@ namespace ClockAnimationBlockRefOwnerTest
     unsigned                                    wordReads = 0, failWordAt = 0, exchanges = 0, scenario = 0;
     mta::game_de::NativeAnimationBlockIdentity* callerIdentity = nullptr;
     bool                                        changeCaller = false;
-    void                                        Reset() noexcept
+    void (*afterAccepted)() noexcept = nullptr;
+    void Reset() noexcept
     {
         wordReads = failWordAt = exchanges = scenario = 0;
         callerIdentity = nullptr;
         changeCaller = false;
+        afterAccepted = nullptr;
     }
     mta::game_de::ClockResult Exchange(std::uintptr_t at, std::uint16_t expected, std::uint16_t target, std::uint16_t& observed,
                                        std::uint32_t& exception) noexcept
@@ -2738,6 +2740,11 @@ namespace ClockAnimationBlockRefOwnerTest
                 *reinterpret_cast<unsigned char*>(ClockAnimationOwnerTest::row) ^= 1;
             if (scenario == 3)
                 ClockAnimationOwnerTest::failNext = true;
+            if (const auto after = afterAccepted)
+            {
+                afterAccepted = nullptr;
+                after();
+            }
         }
         return mta::game_de::ClockResult::Ok;
     }
@@ -7993,10 +8000,13 @@ namespace
 #include "NativeCustomSequenceStorageOwnerTests.inl"
 #include "AnimationSequenceStorageManager.generated.h"
 #include "NativeCustomAnimationResourcesOwnerTests.inl"
+#include "AnimationManagerRefs.generated.h"
+#include "NativeAnimationManagerRefsOwnerTests.inl"
 
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool animationManagerRefsOnly = argc == 3 && std::strcmp(argv[2], "--animation-manager-refs") == 0;
     const bool customAnimationResourcesSuccess = argc == 3 && std::strcmp(argv[2], "--custom-animation-resources-success") == 0;
     const bool customAnimationResourcesUnknownAllocate = argc == 3 && std::strcmp(argv[2], "--custom-animation-resources-unknown-allocate") == 0;
     const bool customAnimationResourcesUnknownFree = argc == 3 && std::strcmp(argv[2], "--custom-animation-resources-unknown-free") == 0;
@@ -8053,9 +8063,17 @@ int main(int argc, char** argv)
            fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly ||
            worldLineOnly || worldAreaOnly || worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly ||
            cameraSphereOnly || pedWeaponClearOnly || pedClothesOnly || pedRebuildOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly ||
-           animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly) &&
+           animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (animationManagerRefsOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        NativeAnimationBlocksOwnedSdk(fixture, &AnimationManagerRefsOwnerFixture::RunPrepared);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (customAnimationResourcesOnly)
     {
         ClockImageFixture fixture;

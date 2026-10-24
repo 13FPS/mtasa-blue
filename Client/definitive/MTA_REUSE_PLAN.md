@@ -5,6 +5,25 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+`CPlayerPedMoveAnimDE` implements MTA's actual `GetMoveAnim` through the
+registered native ped owner. It reads the current movement-group DWORD at
+`ped+0x6e0`, preserves the signed 32-bit payload and applies the same `eMoveAnim`
+cast as classic. `GetCustomMoveAnim` remains separate MTA-owned bookkeeping.
+`SetMoveAnim` stays pure until its actual block-reference policy, loaded
+movement associations, native reapply call and anti-override hooks are
+qualified together; the getter adds no movement or animation writes.
+
+The clothes-initialization prerequisite also follows actual MTA ownership.
+The caller owns an unattached `NativeClothesDescriptorStorage` with an exact
+`0xe8`-byte descriptor prefix. The existing native owner qualifies the current
+GT/GC/world and name-cache context, then calls genuine `10390b0(descriptor)`
+once. Native code initializes the descriptor and owns the accepted shared
+name-cache effects. A pre-entry refusal may retry; an entered failure cannot
+replay and stops the owning runtime. The unattached CPU object remains safe
+for its ordinary owner to destroy because the initializer does not publish
+its address. This adds no descriptor allocation or free through the native
+heap, native player-data attachment, remote-player lifetime or complete
+`CGame`/pool factory.
 The next borrowed ped layer keeps MTA's actual `RebuildPlayer` operation
 separate from clothing descriptor edits. The supported local CJ path uses the
 genuine DE whole rebuild entry and its one native ped argument. Classic's

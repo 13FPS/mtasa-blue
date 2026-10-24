@@ -37,6 +37,8 @@
 #include "NativePedWeaponClearAccess.h"
 #include "NativePedClothesAccess.h"
 #include "NativePedRebuildAccess.h"
+#include "NativePedMoveAnimAccess.h"
+#include "NativeClothesDescriptorCalls.h"
 #include "NativePedObservationAccess.h"
 #include "NativePedIntelligenceReader.h"
 #include "NativeTaskPoolReader.h"
@@ -113,6 +115,7 @@ namespace mta::game_de
                                    public NativePedWeaponClearAccess,
                                    public NativePedClothesAccess,
                                    public NativePedRebuildAccess,
+                                   public NativePedMoveAnimAccess,
                                    public NativePedObservationAccess,
                                    public NativePedPhysicalScalarsAccess,
                                    public NativePedRotationAccess,
@@ -161,6 +164,9 @@ namespace mta::game_de
         // Match actual CWeapon::GetInfo by selecting the stable MTA bank from
         // this registered ped's current inline type. Invalid SDK mapping is a
         // qualified null result; callback or lifetime failure remains refusal.
+        // Prepare module-owned unattached storage through this callback owner.
+        // No native pointer or complete player factory is published here.
+        virtual ClockResult InitializePedClothesDescriptor(NativeClothesDescriptorStorage&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult ReadPedWeaponInfo(const NativePedReferenceToken&, std::uint32_t, eWeaponSkill, CWeaponInfo*&) noexcept
         {
             return ClockResult::NotInitialized;

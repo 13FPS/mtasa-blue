@@ -46,6 +46,8 @@
 #include "NativePedWeaponClearCalls.h"
 #include "NativePedClothesCalls.h"
 #include "NativePedRebuildCalls.h"
+#include "NativePedMoveAnimReader.h"
+#include "NativeClothesDescriptorCalls.h"
 #include "NativeStreamingSpecialModelCalls.h"
 #include "NativeWorldGroundCalls.h"
 #include "NativeWorldLineCalls.h"
@@ -177,6 +179,8 @@ namespace mta::game_de
             ClockResult ReadPedVital(const NativePedReferenceToken&, NativePedVitalField, float&) noexcept override;
             ClockResult SetPedVital(const NativePedReferenceToken&, NativePedVitalField, float) noexcept override;
             ClockResult ReadPedMetadata(const NativePedReferenceToken&, NativePedMetadata&) noexcept override;
+            ClockResult ReadPedMoveAnim(const NativePedReferenceToken&, std::int32_t&) noexcept override;
+            ClockResult InitializePedClothesDescriptor(NativeClothesDescriptorStorage&) noexcept override;
             ClockResult ReadReferencedPedIntelligence(const NativePedReferenceToken&, NativePedIntelligenceReader::Value&) noexcept override;
             ClockResult ReadTaskPoolEntry(std::uintptr_t, NativeTaskPoolReader::Value&) noexcept override;
             ClockResult RemoveReferencedPedSecondaryTask(const NativePedReferenceToken&, int) noexcept override;
@@ -3727,6 +3731,52 @@ namespace mta::game_de
             // known native implementations. Native deletion is inlined and
             // generation bits can wrap: this never publishes a cached CTask.
             return NativeTaskPoolReader({runtime.image}, &CheckTimingOwner).Read(task, output);
+        }
+        ClockResult NativeAccess::InitializePedClothesDescriptor(NativeClothesDescriptorStorage& storage) noexcept
+        {
+            const auto owner = CheckTimingOwner();
+            if (owner != ClockResult::Ok)
+                return owner;
+            NativeClothesDescriptorCalls::Receipt receipt;
+            const auto                            result = NativeClothesDescriptorCalls::Initialize(runtime.image, storage, &CheckTimingOwner, &receipt);
+            // The initializer may have changed shared names/cache state before
+            // acknowledgement is lost. Keep those native effects and stop the
+            // same owner without replay. The descriptor never escapes to native
+            // children, so its unattached CPU lifetime creates no release debt.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+        ClockResult NativeAccess::ReadPedMoveAnim(const NativePedReferenceToken& token, std::int32_t& output) noexcept
+        {
+            // Borrow the same registered ped for both bookends. A caller may
+            // mutate its own argument from an owner callback, so copy intent
+            // before the first admission rather than resolving that argument twice.
+            const auto intent = token;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedPoolReader::Value before, after;
+            result = ResolvePedReference(intent, before);
+            if (result != ClockResult::Ok)
+                return result;
+            std::int32_t next = 0;
+            result = NativePedMoveAnimReader({runtime.image}, &CheckTimingOwner).Read(before, next);
+            if (result != ClockResult::Ok)
+                return result;
+            result = ResolvePedReference(intent, after);
+            if (result != ClockResult::Ok)
+                return result;
+            if (!SameRegisteredPed(before, after))
+                return ClockResult::OwnerConflict;
+            result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            // MTA reads the current native group directly. Custom animation
+            // intent, range checks, loading and reapplication belong to its
+            // separate setter policy and must not replace this observation.
+            output = next;
+            return ClockResult::Ok;
         }
         ClockResult NativeAccess::ReadPedMetadata(const NativePedReferenceToken& token, NativePedMetadata& output) noexcept
         {

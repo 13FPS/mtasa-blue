@@ -78,6 +78,11 @@
 #include "../../Client/game_de/NativePedVelocityMemory.h"
 #include "../../Client/game_de/NativePedVelocityProfile.h"
 #include "../../Client/game_de/NativePedObservationAccess.h"
+#include "../../Client/game_de/NativePedMoveAnimReader.h"
+#include "../../Client/game_de/NativePedMoveAnimProfile.h"
+#include "../../Client/game_de/CPlayerPedMoveAnimDE.h"
+#include "../../Client/game_de/NativeClothesDescriptorCalls.h"
+#include "NativeClothesDescriptorFixture.h"
 #include "../../Client/game_de/NativePedReferenceMemory.h"
 #include "../../Client/game_de/NativePedReferenceProfile.h"
 #include "../../Client/game_de/NativePedReferenceController.h"
@@ -378,6 +383,15 @@ namespace ped_rebuild_fixture
     using ped_clothes_fixture::Unqualified;
 }
 #include "PedRebuildFixture.generated.h"
+namespace player_move_anim_fixture
+{
+    [[noreturn]] inline void Unqualified(const char* method) noexcept
+    {
+        std::fprintf(stderr, "FAIL: unrelated SDK player method: %s\n", method);
+        std::abort();
+    }
+}
+#include "PlayerMoveAnimFixture.generated.h"
 namespace ClockPedRebuildOwnerTest
 {
     using NativeFunction = mta::game_de::NativePedRebuildCalls::NativeFunction;
@@ -1281,6 +1295,90 @@ namespace ClockPedIntelligenceOwnerTest
             // native prefix copy. The qualified ped/intelligence remain live.
             std::memcpy(reinterpret_cast<void*>(cell), &zero, sizeof(zero));
             ++invalidations;
+        }
+        return result;
+    }
+}
+
+namespace ClockModuleClothesInitializerTest
+{
+    std::uintptr_t                                image = 0, entry = 0, descriptor = 0;
+    unsigned                                      calls = 0, effects = 0, scenario = 0;
+    mta::game_de::NativeClothesDescriptorStorage* nested = nullptr;
+    mta::game_de::ClockResult (*reenter)(mta::game_de::NativeClothesDescriptorStorage&) noexcept = nullptr;
+    mta::game_de::ClockResult nestedResult = mta::game_de::ClockResult::NotInitialized;
+    void (*after)(void*) noexcept = nullptr;
+    void*                     opaque = nullptr;
+    mta::game_de::ClockResult Invoke(mta::game_de::NativeClothesDescriptorCalls::NativeFunction function, std::uintptr_t storage,
+                                     std::uint32_t& exception) noexcept
+    {
+        ++calls;
+        entry = reinterpret_cast<std::uintptr_t>(function);
+        descriptor = storage;
+        // Substitute only the final native invocation, with the exact proved
+        // descriptor footprint. The genuine owner/world/name guards still run.
+        std::memset(reinterpret_cast<void*>(storage), 0, mta::game_de::NativeClothesDescriptorProfile::DescriptorBytes);
+        ++effects;
+        if (nested && reenter)
+            nestedResult = reenter(*nested);
+        if (after)
+            after(opaque);
+        if (scenario == 1)
+        {
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return mta::game_de::ClockResult::OriginalException;
+        }
+        if (scenario == 2)
+        {
+            const LONG active = 1;
+            std::memcpy(reinterpret_cast<void*>(image + mta::game_de::NativeBorrowedGcProfile::markerRva), &active, sizeof(active));
+        }
+        return mta::game_de::ClockResult::Ok;
+    }
+}
+
+namespace ClockPedMoveAnimOwnerTest
+{
+    std::uintptr_t                         address = 0, cell = 0, flagAddress = 0;
+    unsigned                               reads = 0, failAt = 0, changeAt = 0, recycleAt = 0, loseAt = 0;
+    std::int32_t                           replacement = 0;
+    mta::game_de::NativePedReferenceToken* callerToken = nullptr;
+    bool                                   changeCaller = false;
+    void                                   Reset() noexcept
+    {
+        reads = failAt = changeAt = recycleAt = loseAt = 0;
+        callerToken = nullptr;
+        changeCaller = false;
+    }
+    BOOL WINAPI Read(HANDLE process, LPCVOID source, LPVOID destination, SIZE_T bytes, SIZE_T* copied)
+    {
+        const bool selected = reinterpret_cast<std::uintptr_t>(source) == address && bytes == sizeof(std::int32_t);
+        if (selected && ++reads == failAt)
+        {
+            if (copied)
+                *copied = 0;
+            SetLastError(ERROR_PARTIAL_COPY);
+            return FALSE;
+        }
+        const auto result = ::ReadProcessMemory(process, source, destination, bytes, copied);
+        if (result && selected)
+        {
+            // Damage only the exact live fixture buffers after the real OS
+            // copy. All native identity and registered-cell bookends remain.
+            if (reads == changeAt)
+                std::memcpy(reinterpret_cast<void*>(address), &replacement, sizeof(replacement));
+            if (reads == recycleAt)
+                *reinterpret_cast<unsigned char*>(flagAddress) = 2;
+            if (reads == loseAt)
+            {
+                const std::uintptr_t zero = 0;
+                std::memcpy(reinterpret_cast<void*>(cell), &zero, sizeof(zero));
+            }
+            if (changeCaller && callerToken)
+            {
+                changeCaller = false;
+                ++callerToken->version;
+            }
         }
         return result;
     }
@@ -2898,6 +2996,10 @@ namespace mta::game_de::NativeImageAccess
 #include "../../Client/game_de/NativePedReferenceMemory.cpp"
 #include "../../Client/game_de/NativePedMetadataMemory.cpp"
 #pragma push_macro("ReadProcessMemory")
+#define ReadProcessMemory ClockPedMoveAnimOwnerTest::Read
+#include "../../Client/game_de/NativePedMoveAnimReader.cpp"
+#pragma pop_macro("ReadProcessMemory")
+#pragma push_macro("ReadProcessMemory")
 #define ReadProcessMemory ClockPedIntelligenceOwnerTest::Read
 #include "../../Client/game_de/NativePedIntelligenceReader.cpp"
 #pragma pop_macro("ReadProcessMemory")
@@ -2981,6 +3083,9 @@ namespace ClockWorldIgnoreOwnerTest
 #define MTA_DE_PED_REBUILD_NATIVE_INVOKE ClockPedRebuildOwnerTest::Invoke
 #include "../../Client/game_de/NativePedRebuildCalls.cpp"
 #undef MTA_DE_PED_REBUILD_NATIVE_INVOKE
+#define MTA_DE_CLOTHES_DESCRIPTOR_NATIVE_INVOKE ClockModuleClothesInitializerTest::Invoke
+#include "../../Client/game_de/NativeClothesDescriptorCalls.cpp"
+#undef MTA_DE_CLOTHES_DESCRIPTOR_NATIVE_INVOKE
 #define MTA_DE_MODEL_REFERENCE_EXCHANGE ClockModelReferenceOwnerTest::Exchange
 #include "../../Client/game_de/NativeModelReferenceMemory.cpp"
 #undef MTA_DE_MODEL_REFERENCE_EXCHANGE
@@ -7786,6 +7891,10 @@ namespace
 #include "NativeGameConstructorWeaponOwnerTests.inl"
 #include "NativeGameConstructorServicesOwnerTests.inl"
 #include "NativeWorldGroundOwnerTests.inl"
+// These fixtures reuse the existing callback, image writer and retirement
+// helpers; define those helpers before their new consumers.
+#include "NativePedMoveAnimOwnerTests.inl"
+#include "NativeModuleClothesInitializerOwnerTests.inl"
 #include "NativeWorldLineOwnerTests.inl"
 #include "NativeWorldAreaOwnerTests.inl"
 #include "NativeWorldJetpackOwnerTests.inl"
@@ -7803,6 +7912,8 @@ namespace
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool playerNativePrerequisitesOnly = argc == 3 && std::strcmp(argv[2], "--player-native-prerequisites") == 0;
+    const bool pedMoveAnimOnly = argc == 3 && std::strcmp(argv[2], "--ped-move-anim") == 0;
     const bool pedRebuildOnly = argc == 3 && std::strcmp(argv[2], "--ped-rebuild") == 0;
     const bool pedClothesOnly = argc == 3 && std::strcmp(argv[2], "--ped-clothes") == 0;
     const bool pedWeaponClearOnly = argc == 3 && std::strcmp(argv[2], "--ped-weapon-clear") == 0;
@@ -7846,9 +7957,26 @@ int main(int argc, char** argv)
            waterOnly || animationOnly || animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly ||
            fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly ||
            worldLineOnly || worldAreaOnly || worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly ||
-           cameraSphereOnly || pedWeaponClearOnly || pedClothesOnly || pedRebuildOnly) &&
+           cameraSphereOnly || pedWeaponClearOnly || pedClothesOnly || pedRebuildOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (playerNativePrerequisitesOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        PedMoveAnimOwnerFixture::Run(fixture);
+        ModuleClothesInitializerOwnerFixture::Run(fixture);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (pedMoveAnimOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        PedMoveAnimOwnerFixture::Run(fixture);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (pedRebuildOnly)
     {
         ClockImageFixture fixture;

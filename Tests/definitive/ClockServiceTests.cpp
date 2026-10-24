@@ -66,6 +66,10 @@
 #include "../../Client/game_de/CStreamingDE.h"
 #include <utility>
 #include "../../Client/game_de/NativeAnimationBlockMemory.h"
+#include "../../Client/game_de/NativeAnimationBlockRefMemory.h"
+#include "../../Client/game_de/NativeAnimationBlockRefProfile.h"
+#include "NativeAnimationBlockRefFixture.h"
+#include <game/CAnimBlockRequestPolicy.h>
 #include "../../Client/game_de/NativeAnimationBlockProfile.h"
 #include "../../Client/game_de/NativeAnimationManagerMemory.h"
 #include "../../Client/game_de/NativeAnimationManagerProfile.h"
@@ -2689,6 +2693,50 @@ namespace ClockAnimationOwnerTest
     }
 }
 
+namespace ClockAnimationBlockRefOwnerTest
+{
+    std::uintptr_t                              address = 0;
+    unsigned                                    wordReads = 0, failWordAt = 0, exchanges = 0, scenario = 0;
+    mta::game_de::NativeAnimationBlockIdentity* callerIdentity = nullptr;
+    bool                                        changeCaller = false;
+    void                                        Reset() noexcept
+    {
+        wordReads = failWordAt = exchanges = scenario = 0;
+        callerIdentity = nullptr;
+        changeCaller = false;
+    }
+    mta::game_de::ClockResult Exchange(std::uintptr_t at, std::uint16_t expected, std::uint16_t target, std::uint16_t& observed,
+                                       std::uint32_t& exception) noexcept
+    {
+        ++exchanges;
+        SHORT compare = 0, desired = 0;
+        std::memcpy(&compare, &expected, sizeof(compare));
+        std::memcpy(&desired, &target, sizeof(desired));
+        const auto previous = InterlockedCompareExchange16(reinterpret_cast<volatile SHORT*>(at), desired, compare);
+        std::memcpy(&observed, &previous, sizeof(observed));
+        if (observed == expected)
+        {
+            // Only damage the actual published fixture buffers after the real
+            // one-shot CAS. All current block and callback bookends remain.
+            if (changeCaller && callerIdentity)
+            {
+                changeCaller = false;
+                ++callerIdentity->index;
+            }
+            if (scenario == 1)
+            {
+                exception = EXCEPTION_ACCESS_VIOLATION;
+                return mta::game_de::ClockResult::OriginalException;
+            }
+            if (scenario == 2)
+                *reinterpret_cast<unsigned char*>(ClockAnimationOwnerTest::row) ^= 1;
+            if (scenario == 3)
+                ClockAnimationOwnerTest::failNext = true;
+        }
+        return mta::game_de::ClockResult::Ok;
+    }
+}
+
 namespace ClockAnimationManagerOwnerTest
 {
     std::uintptr_t watched = 0, changedAddress = 0;
@@ -2825,6 +2873,15 @@ namespace mta::game_de::NativeImageAccess
             }
         }
         return true;
+    }
+
+    bool AnimationBlockRefOwnerFixtureReadImage(std::uintptr_t image, std::uintptr_t address, void* destination, std::size_t bytes, bool writable = false,
+                                                bool executable = false) noexcept
+    {
+        const bool selected = address == ClockAnimationBlockRefOwnerTest::address && bytes == sizeof(std::uint16_t);
+        if (selected && ++ClockAnimationBlockRefOwnerTest::wordReads == ClockAnimationBlockRefOwnerTest::failWordAt)
+            return false;
+        return ReadImage(image, address, destination, bytes, writable, executable);
     }
 
     bool AnimationManagerOwnerFixtureReadImage(std::uintptr_t image, std::uintptr_t address, void* destination, std::size_t bytes, bool writable = false,
@@ -3159,6 +3216,11 @@ namespace ClockWorldIgnoreOwnerTest
 // identity, current callback and the shipping reader's bookends stay intact.
 #define ReadImage AnimationBlockOwnerFixtureReadImage
 #include "../../Client/game_de/NativeAnimationBlockMemory.cpp"
+#undef ReadImage
+#define ReadImage                           AnimationBlockRefOwnerFixtureReadImage
+#define MTA_DE_ANIMATION_BLOCK_REF_EXCHANGE ClockAnimationBlockRefOwnerTest::Exchange
+#include "../../Client/game_de/NativeAnimationBlockRefMemory.cpp"
+#undef MTA_DE_ANIMATION_BLOCK_REF_EXCHANGE
 #undef ReadImage
 #define ReadImage AnimationManagerOwnerFixtureReadImage
 #include "../../Client/game_de/NativeAnimationManagerMemory.cpp"
@@ -7906,12 +7968,15 @@ namespace
 #include "NativeWorldIgnoreEntityOwnerTests.inl"
 #include "NativeCameraSphereVisibleOwnerTests.inl"
 #include "NativeAnimationBlockOwnerTests.inl"
+#include "AnimBlockRefsFixture.generated.h"
+#include "NativeAnimationBlockRefsOwnerTests.inl"
 #include "NativeAnimationBlockNameOwnerTests.inl"
 #include "NativeAnimationManagerOwnerTests.inl"
 
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool animationBlockRefsOnly = argc == 3 && std::strcmp(argv[2], "--animation-block-refs") == 0;
     const bool playerNativePrerequisitesOnly = argc == 3 && std::strcmp(argv[2], "--player-native-prerequisites") == 0;
     const bool pedMoveAnimOnly = argc == 3 && std::strcmp(argv[2], "--ped-move-anim") == 0;
     const bool pedRebuildOnly = argc == 3 && std::strcmp(argv[2], "--ped-rebuild") == 0;
@@ -7957,9 +8022,18 @@ int main(int argc, char** argv)
            waterOnly || animationOnly || animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly ||
            fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly ||
            worldLineOnly || worldAreaOnly || worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly ||
-           cameraSphereOnly || pedWeaponClearOnly || pedClothesOnly || pedRebuildOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly) &&
+           cameraSphereOnly || pedWeaponClearOnly || pedClothesOnly || pedRebuildOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly ||
+           animationBlockRefsOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (animationBlockRefsOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        NativeAnimationBlocksOwnedSdk(fixture, &AnimationBlockRefsOwnerFixture::RunPrepared);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (playerNativePrerequisitesOnly)
     {
         ClockImageFixture fixture;

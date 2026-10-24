@@ -5,6 +5,19 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+`CAnimBlockDE` now keeps MTA's actual inline `AddRef`/`GetRefs` policy on the
+same source-proved native block reference WORD at `block+0x12`. The existing
+name/index/callback-generation and game-thread/GC owner qualifies each borrow.
+An increment makes one conditional 16-bit write, preserves unsigned wrap,
+and accepts later native reference progress. Lost acknowledgement stops that
+owner without retrying the increment or restoring the previous count.
+
+Unloaded current blocks remain valid: MTA's shared request policy adds its
+reference before loading. The focused integration checks that ordering with
+the actual SDK methods and instrumented request/load boundaries. It does not
+publish the missing game/model/streaming providers, raw hierarchy interfaces,
+manager removal operations or a complete animation-block factory.
+
 `CPlayerPedMoveAnimDE` implements MTA's actual `GetMoveAnim` through the
 registered native ped owner. It reads the current movement-group DWORD at
 `ped+0x6e0`, preserves the signed 32-bit payload and applies the same `eMoveAnim`

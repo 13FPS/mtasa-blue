@@ -29,6 +29,10 @@ namespace mta::game_de
     {
     public:
         virtual ~NativeAnimationBlockAccess() = default;
+        // Counter ownership remains with the current native block. These
+        // operations neither create a block nor own a classic raw interface.
+        virtual ClockResult ReadAnimationBlockRefs(const NativeAnimationBlockIdentity&, std::uint16_t&) noexcept { return ClockResult::NotInitialized; }
+        virtual ClockResult AddAnimationBlockRef(const NativeAnimationBlockIdentity&) noexcept { return ClockResult::NotInitialized; }
         // Borrow within the freshly admitted current callback.
         // This is the actual mutable image-bank name, not a stable CPU copy.
         virtual ClockResult ReadAnimationBlockName(const NativeAnimationBlockIdentity&, char*&) noexcept { return ClockResult::NotInitialized; }

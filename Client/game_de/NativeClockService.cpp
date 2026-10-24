@@ -57,6 +57,7 @@
 #include "NativeCameraSphereVisibleCalls.h"
 #include "CWorldLineDE.h"
 #include "NativeAnimationBlockMemory.h"
+#include "NativeAnimationBlockRefMemory.h"
 #include "NativeAnimationManagerMemory.h"
 #include "NativePedVelocityMemory.h"
 #include "NativePedReferenceController.h"
@@ -234,6 +235,8 @@ namespace mta::game_de
             ClockResult SetPedOrientation(const NativePedReferenceToken&, const CVector&) noexcept override;
             ClockResult ReadAnimationBlock(const NativeAnimationBlockIdentity&, NativeAnimationBlockValues&) noexcept override;
             ClockResult ReadAnimationBlockName(const NativeAnimationBlockIdentity&, char*&) noexcept override;
+            ClockResult ReadAnimationBlockRefs(const NativeAnimationBlockIdentity&, std::uint16_t&) noexcept override;
+            ClockResult AddAnimationBlockRef(const NativeAnimationBlockIdentity&) noexcept override;
             ClockResult ReadAnimationManagerCounts(std::uint64_t, NativeAnimationManagerCounts&) noexcept override;
             ClockResult FindAnimationBlockIndex(std::uint64_t, const NativeAnimationBlockName&, std::int32_t&) noexcept override;
             ClockResult ReadPedInWater(const NativePedReferenceToken&, bool&) noexcept override;
@@ -4291,6 +4294,54 @@ namespace mta::game_de
             return result;
         }
 
+        ClockResult NativeAccess::ReadAnimationBlockRefs(const NativeAnimationBlockIdentity& expected, std::uint16_t& output) noexcept
+        {
+            // Capture caller intent before admission callbacks. Mutating the
+            // caller's own argument cannot redirect this operation or revive
+            // a receiver issued by an earlier controller generation.
+            const auto identity = expected;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto generation = runtime.generation.load();
+            if (!identity.ownerGeneration || identity.ownerGeneration != generation)
+                return ClockResult::OwnerConflict;
+            std::uint16_t next = 0;
+            result = NativeAnimationBlockRefMemory({runtime.image}, &CheckTimingOwner).Read(identity, next);
+            if (result != ClockResult::Ok)
+                return result;
+            if ((result = CheckTimingOwner()) != ClockResult::Ok)
+                return result;
+            if (runtime.generation.load() != generation)
+                return ClockResult::OwnerConflict;
+            output = next;
+            return ClockResult::Ok;
+        }
+
+        ClockResult NativeAccess::AddAnimationBlockRef(const NativeAnimationBlockIdentity& expected) noexcept
+        {
+            const auto identity = expected;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto generation = runtime.generation.load();
+            if (!identity.ownerGeneration || identity.ownerGeneration != generation)
+                return ClockResult::OwnerConflict;
+            NativeAnimationBlockRefMemory::Receipt receipt;
+            result = NativeAnimationBlockRefMemory({runtime.image}, &CheckTimingOwner).Add(identity, &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = CheckTimingOwner();
+                if (result == ClockResult::Ok && runtime.generation.load() != generation)
+                    result = ClockResult::OwnerConflict;
+            }
+            // AddRef is persistent MTA intent, including unsigned-short wrap.
+            // Lost acknowledgement may follow an accepted increment; stop the
+            // same owner without a second increment or whole-count rollback.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
         ClockResult NativeAccess::ReadAnimationBlock(const NativeAnimationBlockIdentity& expected, NativeAnimationBlockValues& output) noexcept
         {
             auto result = CheckTimingOwner();

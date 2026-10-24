@@ -13,11 +13,13 @@ namespace mta::game_de
     class CAnimBlockDE : public CAnimBlock
     {
     public:
-        char*       GetName() override;
-        int         GetIndex() override;
-        bool        IsLoaded() override;
-        int         GetIDOffset() override;
-        std::size_t GetAnimationCount() override;
+        char*          GetName() override;
+        int            GetIndex() override;
+        void           AddRef() override;
+        unsigned short GetRefs() override;
+        bool           IsLoaded() override;
+        int            GetIDOffset() override;
+        std::size_t    GetAnimationCount() override;
 
     protected:
         CAnimBlockDE(NativeAnimationBlockAccess&, const NativeAnimationBlockIdentity&);
@@ -27,7 +29,8 @@ namespace mta::game_de
         NativeAnimationBlockAccess&        native;
         const NativeAnimationBlockIdentity identity;
     };
-    // Native refs/requests and classic raw interfaces still require their real
-    // contracts. A borrowed name and metadata are not a complete factory.
+    // Requests and classic raw interfaces retain their genuine contracts.
+    // Observing/incrementing this native counter does not create a block,
+    // supply manager removal semantics or publish a complete factory.
     static_assert(std::is_abstract_v<CAnimBlockDE> && std::is_base_of_v<CAnimBlock, CAnimBlockDE>);
 }

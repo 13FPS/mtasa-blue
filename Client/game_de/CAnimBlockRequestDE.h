@@ -12,8 +12,9 @@ class CStreaming;
 
 namespace mta::game_de
 {
-    // AddRef and all missing native animation ownership/interface operations
-    // remain pure. This slice does not publish a complete animation factory.
+    // AddRef/GetRefs reuse the same inherited native counter owner. Missing
+    // raw-interface/hierarchy and game factories remain mandatory; this slice
+    // does not publish a complete animation block or game implementation.
     class CAnimBlockRequestDE : public CAnimBlockDE
     {
     public:

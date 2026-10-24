@@ -37,6 +37,26 @@ namespace mta::game_de
         // would falsely hide native edits and invent a longer-lived name.
         return value;
     }
+    void CAnimBlockDE::AddRef()
+    {
+        // Actual CAnimBlockSA increments its ushort directly. The native
+        // owner owns the exact persistent WORD effect, including wrap; the
+        // wrapper adds no loaded check, CPU ref cache, retry or inverse write.
+        const auto expected = identity;
+        const auto result = native.AddAnimationBlockRef(expected);
+        if (result != ClockResult::Ok)
+            throw std::runtime_error("DE animation block owner refused AddRef: " + std::to_string(static_cast<unsigned>(result)));
+    }
+    unsigned short CAnimBlockDE::GetRefs()
+    {
+        const auto    expected = identity;
+        std::uint16_t value;
+        const auto    result = native.ReadAnimationBlockRefs(expected, value);
+        if (result != ClockResult::Ok)
+            throw std::runtime_error("DE animation block owner refused GetRefs: " + std::to_string(static_cast<unsigned>(result)));
+        static_assert(sizeof(unsigned short) == sizeof(value));
+        return value;
+    }
     int CAnimBlockDE::GetIndex()
     {
         return static_cast<int>(Read("GetIndex").index);

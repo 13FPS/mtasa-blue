@@ -78,7 +78,7 @@ function RunOwned([string]$Executable,[string[]]$Arguments,[string]$Directory,[s
 }
 
 try {
-    $productionSources=@('Client/game_de/CAnimManagerDE.cpp','Client/game_de/CAnimBlockDE.cpp','Client/game_de/CAnimBlockRequestDE.cpp')
+    $productionSources=@('Client/game_de/CAnimManagerDE.cpp','Client/game_de/CAnimBlockDE.cpp','Client/game_de/CAnimBlockRequestDE.cpp','Client/game_de/CKeyGenDE.cpp')
     $sourceNames=$productionSources+@('Tests/definitive/AnimSequenceStorageDETests.cpp','Tests/definitive/Write-AnimationSequenceStorageFixture.ps1',
         'Tests/definitive/test_anim_sequence_storage_de.ps1',
         'Build/definitive-recovery/mta-animation-keyframe-storage-sdk-20261024/animation-keyframe-storage-sdk-source-ready.json',
@@ -147,6 +147,7 @@ try {
             ('/I'+(Join-Path $taskRoot 'Shared/sdk')),('/I'+(Join-Path $taskRoot 'Client/sdk')),('/I'+$scratchRoot),
             (Join-Path $PSScriptRoot 'AnimSequenceStorageDETests.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimManagerDE.cpp'),
             (Join-Path $taskRoot 'Client/game_de/CAnimBlockDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimBlockRequestDE.cpp'),
+            (Join-Path $taskRoot 'Client/game_de/CKeyGenDE.cpp'),
             ('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'compiler.pdb')),('/Fe'+$executable))
         $result = [ordered]@{architecture=$architecture;environment=$environmentResult;compile=$null;test=$null;
             checks=0;pointerBits=$null;executable=$executable;executableSha256=$null;actualAnimationSequenceStorageSdkTested=$false;actualAnimationKeyFrameStorageSdkTested=$false;actualAnimationStorageFourMethodSdkTested=$false}

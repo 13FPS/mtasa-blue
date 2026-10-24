@@ -40,5 +40,8 @@ namespace mta::game_de
         {
             return ClockResult::NotInitialized;
         }
+        // The hierarchy tag is only a caller locator. The runtime qualifies
+        // its current raw hash cell; no factory, string or FName is created.
+        virtual ClockResult ReadAnimationHierarchyHash(std::uint64_t, std::uintptr_t, std::uint32_t&) noexcept { return ClockResult::NotInitialized; }
     };
 }

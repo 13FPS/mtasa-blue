@@ -5,6 +5,7 @@
  ****************************************************************************/
 #include "CAnimManagerDE.h"
 #include "CAnimBlockRequestDE.h"
+#include "CKeyGenDE.h"
 #include <algorithm>
 #include <cstring>
 #include <game/CAnimGatewayNames.h>
@@ -221,6 +222,18 @@ namespace mta::game_de
         NativeAnimationBlockIdentity identity;
         Require(native.ReadAnimationBlockInterfaceIdentity(ownerGeneration, reinterpret_cast<std::uintptr_t>(tag), identity), "GetAnimBlock");
         return MakeBlock(identity, "GetAnimBlock");
+    }
+    bool CAnimManagerDE::isGateWayAnimationHierarchy(CAnimBlendHierarchySAInterface* hierarchy)
+    {
+        const auto    generation = ownerGeneration;
+        const auto    locator = reinterpret_cast<std::uintptr_t>(hierarchy);
+        std::uint32_t actualHash = 0;
+        Require(native.ReadAnimationHierarchyHash(generation, locator, actualHash), "isGateWayAnimationHierarchy");
+        // Actual MTA compares its authored gateway key with this raw hash.
+        // The existing key service is pure CPU policy, not the native name
+        // interning helper, and the opaque pointer is never dereferenced here.
+        CKeyGenDE keys;
+        return keys.GetUppercaseKey(MtaGame::CAnimGatewayNames::GetAnimationName()) == actualHash;
     }
     NativeAnimationManagerCounts CAnimManagerDE::Read(const char* operation) const
     {

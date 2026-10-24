@@ -59,6 +59,7 @@
 #include "NativeAnimationBlockMemory.h"
 #include "NativeAnimationBlockRefMemory.h"
 #include "NativeAnimationBlockFactoryMemory.h"
+#include "NativeAnimationHierarchyHashMemory.h"
 #include "NativeAnimationSequenceStorageAccess.h"
 #include "NativeCustomAnimSequenceController.h"
 #include "NativeAnimationManagerMemory.h"
@@ -242,6 +243,7 @@ namespace mta::game_de
             ClockResult FreeAnimationSequences(std::uint64_t, std::uintptr_t) noexcept override;
             ClockResult ReadAnimationBlock(const NativeAnimationBlockIdentity&, NativeAnimationBlockValues&) noexcept override;
             ClockResult ReadAnimationBlockName(const NativeAnimationBlockIdentity&, char*&) noexcept override;
+            ClockResult ReadAnimationHierarchyHash(std::uint64_t, std::uintptr_t, std::uint32_t&) noexcept override;
             ClockResult ReadAnimationBlockCounterIdentity(std::uint64_t, std::uint32_t, NativeAnimationBlockIdentity&) noexcept override;
             ClockResult ReadAnimationBlockCounterRefs(const NativeAnimationBlockIdentity&, std::uint16_t&) noexcept override;
             ClockResult AddAnimationBlockCounterRef(const NativeAnimationBlockIdentity&) noexcept override;
@@ -4441,6 +4443,31 @@ namespace mta::game_de
             // Names/cache growth, removal and asynchronous request prefixes
             // remain accepted native effects even if acknowledgement is lost.
             return result;
+        }
+
+        ClockResult NativeAccess::ReadAnimationHierarchyHash(std::uint64_t ownerGeneration, std::uintptr_t locator, std::uint32_t& output) noexcept
+        {
+            const auto requestedGeneration = ownerGeneration;
+            const auto address = locator;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto generation = runtime.generation.load();
+            if (!requestedGeneration || requestedGeneration != generation)
+                return ClockResult::OwnerConflict;
+            std::uint32_t next = 0;
+            result = NativeAnimationHierarchyHashMemory({runtime.image}, &CheckTimingOwner).Read(address, next);
+            if (result != ClockResult::Ok)
+                return result;
+            if ((result = CheckTimingOwner()) != ClockResult::Ok)
+                return result;
+            if (runtime.generation.load() != generation)
+                return ClockResult::OwnerConflict;
+            // This borrows one current image-bank hash cell, not hierarchy
+            // children, a loaded animation or a persistent native lease.
+            // A read-only refusal does not stop this callback owner.
+            output = next;
+            return ClockResult::Ok;
         }
 
         ClockResult NativeAccess::ReadAnimationBlockCounterIdentity(std::uint64_t ownerGeneration, std::uint32_t index,

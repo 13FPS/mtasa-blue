@@ -78,6 +78,7 @@ function RunOwned([string]$Executable,[string[]]$Arguments,[string]$Directory,[s
 
 try {
     $sourceNames = @('Client/game_de/CAnimManagerDE.h','Client/game_de/CAnimManagerDE.cpp','Client/game_de/NativeAnimationManagerAccess.h',
+        'Client/game_de/CKeyGenDE.h','Client/game_de/CKeyGenDE.cpp','Client/sdk/game/CKeyGen.h',
         'Client/game_de/NativeAnimationBlockAccess.h','Client/game_de/NativePedPoolReader.h','Client/game_de/NativePedPoolProfile.h',
         'Client/sdk/game/CAnimManager.h','Client/sdk/game/CAnimBlock.h','Client/sdk/game/CAnimBlendHierarchy.h',
         'Client/sdk/game/CAnimBlendAssociation.h','Client/sdk/game/CAnimBlendStaticAssociation.h','Client/sdk/game/CAnimBlendAssocGroup.h',
@@ -131,6 +132,7 @@ try {
         $arguments = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/MD','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN',
             ('/I'+(Join-Path $taskRoot 'Shared/sdk')),('/I'+(Join-Path $taskRoot 'Client/sdk')),('/I'+$scratchRoot),
             (Join-Path $PSScriptRoot 'AnimManagerDETests.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimManagerDE.cpp'),
+            (Join-Path $taskRoot 'Client/game_de/CKeyGenDE.cpp'),
             ('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'compiler.pdb')),('/Fe'+$executable))
         $result = [ordered]@{architecture=$architecture;environment=$environmentResult;compile=$null;test=$null;
             checks=0;pointerBits=$null;executable=$executable;executableSha256=$null;actualAnimationManagerObservationSdkTested=$false}

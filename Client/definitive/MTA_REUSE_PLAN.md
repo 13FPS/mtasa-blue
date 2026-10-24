@@ -5,6 +5,19 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+The gateway animation query now reuses MTA's original equality policy and
+existing uppercase key generator. The SDK asks the current owner for the raw
+hierarchy hash; an observed mismatch returns false, while a refused observation
+remains an error. It does not intern a name, invoke the native name cache or
+construct a hierarchy facade.
+
+The DE reader accepts only an aligned row in the actual hierarchy image bank,
+within the current highwater mark and its owning block's current range. Two
+coherent observations fence the raw hash with row, range, image and callback
+ownership checks. Native unload preserves those hash and range fields, so the
+hash-only query needs no loaded flag or C-string predicate. It grants no lease
+over sequence/cache children and accepts no arbitrary custom allocation.
+
 The actual animation manager's integer reference methods now keep MTA's
 original distinction: `GetNumRefsToAnimBlock` promotes a signed 16-bit value,
 while `CAnimBlock::GetRefs` exposes the same bits as unsigned. Manager AddRef

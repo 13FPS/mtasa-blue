@@ -68,6 +68,9 @@
 #include "../../Client/game_de/NativeAnimationBlockMemory.h"
 #include "../../Client/game_de/NativeAnimationBlockRefMemory.h"
 #include "../../Client/game_de/NativeAnimationBlockFactoryMemory.h"
+#include "../../Client/game_de/NativeAnimationHierarchyHashMemory.h"
+#include "../../Client/game_de/CKeyGenDE.h"
+#include <game/CAnimGatewayNames.h>
 #include "../../Client/game_de/CAnimBlockRequestDE.h"
 #include "NativeAnimationBlockFactoryFixture.h"
 #include "NativeCustomAnimSequenceStorageFixture.h"
@@ -2750,6 +2753,18 @@ namespace ClockAnimationBlockRefOwnerTest
     }
 }
 
+namespace ClockAnimationHierarchyHashOwnerTest
+{
+    std::uintptr_t address = 0;
+    unsigned       reads = 0, failAt = 0;
+    void (*afterRead)() noexcept = nullptr;
+    void Reset() noexcept
+    {
+        reads = failAt = 0;
+        afterRead = nullptr;
+    }
+}
+
 namespace ClockAnimationManagerOwnerTest
 {
     std::uintptr_t watched = 0, changedAddress = 0;
@@ -2895,6 +2910,24 @@ namespace mta::game_de::NativeImageAccess
         if (selected && ++ClockAnimationBlockRefOwnerTest::wordReads == ClockAnimationBlockRefOwnerTest::failWordAt)
             return false;
         return ReadImage(image, address, destination, bytes, writable, executable);
+    }
+
+    bool AnimationHierarchyHashOwnerFixtureReadImage(std::uintptr_t image, std::uintptr_t address, void* destination, std::size_t bytes, bool writable = false,
+                                                     bool executable = false) noexcept
+    {
+        namespace Host = ClockAnimationHierarchyHashOwnerTest;
+        const bool selected = address == Host::address && bytes == sizeof(std::uint32_t);
+        if (selected && ++Host::reads == Host::failAt)
+            return false;
+        if (!ReadImage(image, address, destination, bytes, writable, executable))
+            return false;
+        if (selected && Host::afterRead)
+        {
+            const auto action = Host::afterRead;
+            Host::afterRead = nullptr;
+            action();
+        }
+        return true;
     }
 
     bool AnimationManagerOwnerFixtureReadImage(std::uintptr_t image, std::uintptr_t address, void* destination, std::size_t bytes, bool writable = false,
@@ -3240,6 +3273,9 @@ namespace ClockWorldIgnoreOwnerTest
 #undef ReadImage
 #define ReadImage AnimationBlockOwnerFixtureReadImage
 #include "../../Client/game_de/NativeAnimationBlockFactoryMemory.cpp"
+#undef ReadImage
+#define ReadImage AnimationHierarchyHashOwnerFixtureReadImage
+#include "../../Client/game_de/NativeAnimationHierarchyHashMemory.cpp"
 #undef ReadImage
 #define MTA_DE_CUSTOM_ANIM_SEQUENCE_MALLOC_INVOKE ::NativeCustomAnimSequenceStorageFixture::Malloc
 #define MTA_DE_CUSTOM_ANIM_SEQUENCE_FREE_INVOKE   ::NativeCustomAnimSequenceStorageFixture::Free
@@ -8002,10 +8038,13 @@ namespace
 #include "NativeCustomAnimationResourcesOwnerTests.inl"
 #include "AnimationManagerRefs.generated.h"
 #include "NativeAnimationManagerRefsOwnerTests.inl"
+#include "AnimationGateway.generated.h"
+#include "NativeAnimationGatewayOwnerTests.inl"
 
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool animationGatewayOnly = argc == 3 && std::strcmp(argv[2], "--animation-gateway") == 0;
     const bool animationManagerRefsOnly = argc == 3 && std::strcmp(argv[2], "--animation-manager-refs") == 0;
     const bool customAnimationResourcesSuccess = argc == 3 && std::strcmp(argv[2], "--custom-animation-resources-success") == 0;
     const bool customAnimationResourcesUnknownAllocate = argc == 3 && std::strcmp(argv[2], "--custom-animation-resources-unknown-allocate") == 0;
@@ -8063,9 +8102,18 @@ int main(int argc, char** argv)
            fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly ||
            worldLineOnly || worldAreaOnly || worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly ||
            cameraSphereOnly || pedWeaponClearOnly || pedClothesOnly || pedRebuildOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly ||
-           animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly) &&
+           animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly ||
+           animationGatewayOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (animationGatewayOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        NativeAnimationBlocksOwnedSdk(fixture, &AnimationGatewayOwnerFixture::RunPrepared);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (animationManagerRefsOnly)
     {
         ClockImageFixture fixture;

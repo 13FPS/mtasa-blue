@@ -18,6 +18,7 @@ namespace mta::game_de
     class CAnimManagerDE : public CAnimManager
     {
     public:
+        bool                           isGateWayAnimationHierarchy(CAnimBlendHierarchySAInterface*) override;
         void                           AddAnimBlockRef(int) override;
         int                            GetNumRefsToAnimBlock(int) override;
         void                           RemoveAnimBlockRefWithoutDelete(int) override;

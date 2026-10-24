@@ -83,7 +83,7 @@ function InterfaceMethods([string]$RelativePath) {
 
 
 try {
-    $productionSources = @('Client/game_de/CAnimBlockDE.cpp','Client/game_de/CAnimBlockRequestDE.cpp','Client/game_de/CAnimManagerDE.cpp')
+    $productionSources = @('Client/game_de/CAnimBlockDE.cpp','Client/game_de/CAnimBlockRequestDE.cpp','Client/game_de/CAnimManagerDE.cpp','Client/game_de/CKeyGenDE.cpp')
     # Track only the actual local include graph of this SDK fixture and its
     # linked inherited implementation. Native tests and classic callers have
     # their own receipts and are not silently claimed by this forwarding test.

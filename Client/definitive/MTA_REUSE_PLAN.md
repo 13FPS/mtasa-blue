@@ -5,6 +5,19 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+The actual `CClientPed::GetTargetedEntity` path now resolves an already common
+ped wrapper through `CPools::GetPedClientEntity`. Player targeting already
+selects the same pool's canonical wrapper; its current client association can
+therefore be read directly without exposing a classic native interface. The
+outer player check, single target query, lazy pool lookup for present targets
+and existing non-ped fallback retain their original order. `GetStoredPointer`
+is separate bookkeeping and is not used for this association.
+
+This change uses the existing classic registry and the controlled DE registry.
+It neither creates a new registry nor supplies the missing target-entity or
+complete-game factory. The unchanged native backend remains historical tested
+evidence; this batch validates actual common-client compilation and dispatch.
+
 The borrowed ped layer now implements MTA's actual `CPed::ClearWeapon`
 operation. It snapshots the existing registered token and forwards the original
 weapon type to one genuine DE native call. This operation does not require a

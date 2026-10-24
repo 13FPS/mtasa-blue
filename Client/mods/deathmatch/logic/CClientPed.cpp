@@ -9,6 +9,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include "CPedTargetClientLookup.h"
 #include <CPedPositionInterpolation.h>
 #include <game/CAEVehicleAudioEntity.h>
 #include <game/CAnimBlendAssocGroup.h>
@@ -5680,11 +5681,7 @@ CClientEntity* CClientPed::GetTargetedEntity()
     if (m_pPlayerPed)
     {
         CEntity* pEntity = m_pPlayerPed->GetTargetedEntity();
-        if (pEntity)
-        {
-            CPools* pPools = g_pGame->GetPools();
-            pReturn = pPools->GetClientEntity((DWORD*)pEntity->GetInterface());
-        }
+        pReturn = MtaClient::ResolveTargetClient(pEntity, [] { return g_pGame->GetPools(); });
     }
     return pReturn;
 }

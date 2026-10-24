@@ -5,6 +5,9 @@
  ****************************************************************************/
 #pragma once
 #include "NativeCustomAnimSequenceStorage.h"
+#include "NativeAnimationSequenceRowCalls.h"
+#include "NativeAnimationSequenceAccess.h"
+#include "NativeAnimationSequenceLogicalState.h"
 #include <atomic>
 #include <list>
 
@@ -15,6 +18,7 @@ namespace mta::game_de
     public:
         using Storage = NativeCustomAnimSequenceStorage;
         using Receipt = NativeCustomAnimSequenceStorageCalls::Receipt;
+        using RowReceipt = NativeAnimationSequenceRowCalls::Receipt;
         using CheckOwner = NativeCustomAnimSequenceStorageCalls::CheckOwner;
         using InvokeMalloc = NativeCustomAnimSequenceStorageCalls::InvokeMalloc;
         using InvokeFree = NativeCustomAnimSequenceStorageCalls::InvokeFree;
@@ -40,6 +44,10 @@ namespace mta::game_de
                                InvokeFree = nullptr) noexcept;
         ClockResult Retire(std::uintptr_t image, std::uint64_t generation, std::size_t budget, CheckOwner cleanupOwner, RetireProgress&,
                            InvokeFree = nullptr) noexcept;
+        ClockResult InitializeSequence(std::uintptr_t, const NativeAnimationSequenceReferenceToken&, CheckOwner, RowReceipt* = nullptr) noexcept;
+        ClockResult SetSequenceBoneTag(std::uintptr_t, const NativeAnimationSequenceReferenceToken&, std::int32_t, CheckOwner, RowReceipt* = nullptr) noexcept;
+        ClockResult ReadSequence(std::uintptr_t, const NativeAnimationSequenceReferenceToken&, CheckOwner, NativeAnimationSequenceValues&) noexcept;
+        ClockResult ReadSequenceHash(std::uintptr_t, const NativeAnimationSequenceReferenceToken&, CheckOwner, std::uint32_t&) noexcept;
         // This is private-owner bookkeeping for a future qualified hierarchy
         // attachment, not a public raw-pointer adoption or detachment API.
         ClockResult PinPublication(std::uint64_t generation, std::uintptr_t issuedTag, std::uintptr_t hierarchyAffinity) noexcept;
@@ -51,15 +59,28 @@ namespace mta::game_de
         bool RecoveryPending() const noexcept { return recovery.load(std::memory_order_acquire); }
 
     private:
+        struct RowState
+        {
+            explicit RowState(std::size_t value) noexcept : index(value) { logical.Initialize(); }
+            std::size_t                         index;
+            NativeAnimationSequenceLogicalState logical;
+        };
         struct Entry
         {
             Storage storage;
-            bool    issued = false;
+            // Logical state belongs to the allocation, not a CPU facade.
+            // Reserve a lazy row node before a qualified write can enter.
+            std::list<RowState> rows;
+            bool                issued = false;
         };
         using Entries = std::list<Entry>;
         Entries::iterator Find(std::uint64_t generation, std::uintptr_t issuedTag) noexcept;
         ClockResult   AllocateResource(std::uintptr_t, std::uint64_t, std::size_t, Storage::Kind, CheckOwner, std::uintptr_t&, Receipt*, InvokeMalloc) noexcept;
         ClockResult   FreeResource(std::uintptr_t, std::uint64_t, std::uintptr_t, Storage::Kind, CheckOwner, Receipt*, InvokeFree) noexcept;
+        ClockResult   SelectRow(const NativeAnimationSequenceReferenceToken&, Entries::iterator&, RowState*&) noexcept;
+        ClockResult   ReadSequenceValue(std::uintptr_t, const NativeAnimationSequenceReferenceToken&, CheckOwner, NativeAnimationSequenceValues*,
+                                        std::uint32_t*) noexcept;
+        ClockResult   CheckSequenceFramePointer(std::uintptr_t, std::uint64_t, std::uintptr_t, CheckOwner) noexcept;
         void          Publish() noexcept;
         Entries       entries;
         std::uint64_t ownerGeneration = 0;

@@ -144,6 +144,170 @@ namespace mta::game_de
             *receipt = local;
         return result;
     }
+    ClockResult NativeCustomAnimSequenceController::SelectRow(const NativeAnimationSequenceReferenceToken& token, Entries::iterator& entry,
+                                                              RowState*& row) noexcept
+    {
+        if (!token.ownerGeneration || ownerGeneration != token.ownerGeneration || stopping)
+            return ClockResult::OwnerConflict;
+        entry = Find(token.ownerGeneration, token.firstTag);
+        if (entry == entries.end() || entry->storage.GetKind() != Storage::Kind::SequenceArray ||
+            entry->storage.GetState() != Storage::State::LiveUnpublished || token.index >= entry->storage.Capacity())
+            return ClockResult::BindingChanged;
+        for (auto& value : entry->rows)
+            if (value.index == token.index)
+            {
+                row = &value;
+                return ClockResult::Ok;
+            }
+        try
+        {
+            // Allocation initialized every capacity row. Its logical union
+            // starts low-defined, even if the first observation comes later.
+            entry->rows.emplace_back(token.index);
+            row = &entry->rows.back();
+        }
+        catch (...)
+        {
+            return ClockResult::ReadFailure;
+        }
+        return ClockResult::Ok;
+    }
+    ClockResult NativeCustomAnimSequenceController::CheckSequenceFramePointer(std::uintptr_t image, std::uint64_t generation, std::uintptr_t pointer,
+                                                                              CheckOwner owner) noexcept
+    {
+        if (!pointer)
+            return ClockResult::Ok;
+        for (const auto& entry : entries)
+        {
+            const auto& storage = entry.storage;
+            if (!entry.issued || storage.OwnerGeneration() != generation || storage.GetKind() != Storage::Kind::KeyFrames ||
+                storage.GetState() != Storage::State::LiveUnpublished || pointer < storage.IssuedTag())
+                continue;
+            const auto displacement = pointer - storage.IssuedTag();
+            if (displacement < storage.ByteSize())
+                // Pointer observation alone grants no frame-format/count
+                // guarantee and cannot extend the allocation's lifetime.
+                return NativeAnimationSequenceRowCalls::CheckFramePointer(image, storage, generation, pointer, owner);
+        }
+        return ClockResult::BindingChanged;
+    }
+    ClockResult NativeCustomAnimSequenceController::ReadSequenceValue(std::uintptr_t image, const NativeAnimationSequenceReferenceToken& token,
+                                                                      CheckOwner owner, NativeAnimationSequenceValues* output, std::uint32_t* hash) noexcept
+    {
+        const auto request = token;
+        if (operation.test_and_set(std::memory_order_acquire))
+            return ClockResult::Busy;
+        const CustomAnimSequenceControllerDetail::Operation held{operation};
+        if (!owner)
+            return ClockResult::NotInitialized;
+        auto result = owner();
+        if (result != ClockResult::Ok)
+            return result;
+        auto      entry = entries.end();
+        RowState* row = nullptr;
+        if ((result = SelectRow(request, entry, row)) != ClockResult::Ok)
+            return result;
+        NativeAnimationSequenceRowCalls::Value physical;
+        result = NativeAnimationSequenceRowCalls::Read(image, entry->storage, request.ownerGeneration, request.index, owner, physical);
+        if (result != ClockResult::Ok)
+            return result;
+        if (hash)
+        {
+            std::uint32_t next = 0;
+            if (!row->logical.TryReadHash(next))
+                return ClockResult::NotInitialized;
+            *hash = next;
+            return ClockResult::Ok;
+        }
+        if ((result = CheckSequenceFramePointer(image, request.ownerGeneration, physical.keyFrames, owner)) != ClockResult::Ok)
+            return result;
+        if (physical.keyFrames)
+        {
+            // Frame qualification has its own owner/heap observations. A
+            // final row bookend must still describe that same pointer and
+            // scalar snapshot before the compound view can be published.
+            NativeAnimationSequenceRowCalls::Value after;
+            result = NativeAnimationSequenceRowCalls::Read(image, entry->storage, request.ownerGeneration, request.index, owner, after);
+            if (result != ClockResult::Ok)
+                return result;
+            if (physical.row != after.row || physical.keyFrames != after.keyFrames || physical.boneTag != after.boneTag || physical.flags != after.flags ||
+                physical.frameCount != after.frameCount)
+                return ClockResult::BindingChanged;
+        }
+        std::uint16_t bone = 0;
+        if (!row->logical.TryReadBoneTag(bone))
+            return ClockResult::NotInitialized;
+        const NativeAnimationSequenceValues next{physical.row, physical.keyFrames, physical.frameCount, bone, (physical.flags & 8) != 0};
+        *output = next;
+        return ClockResult::Ok;
+    }
+    ClockResult NativeCustomAnimSequenceController::ReadSequence(std::uintptr_t image, const NativeAnimationSequenceReferenceToken& token, CheckOwner owner,
+                                                                 NativeAnimationSequenceValues& output) noexcept
+    {
+        return ReadSequenceValue(image, token, owner, &output, nullptr);
+    }
+    ClockResult NativeCustomAnimSequenceController::ReadSequenceHash(std::uintptr_t image, const NativeAnimationSequenceReferenceToken& token, CheckOwner owner,
+                                                                     std::uint32_t& output) noexcept
+    {
+        return ReadSequenceValue(image, token, owner, nullptr, &output);
+    }
+    ClockResult NativeCustomAnimSequenceController::InitializeSequence(std::uintptr_t image, const NativeAnimationSequenceReferenceToken& token,
+                                                                       CheckOwner owner, RowReceipt* receipt) noexcept
+    {
+        const auto request = token;
+        if (receipt)
+            *receipt = {};
+        if (operation.test_and_set(std::memory_order_acquire))
+            return ClockResult::Busy;
+        const CustomAnimSequenceControllerDetail::Operation held{operation};
+        if (!owner)
+            return ClockResult::NotInitialized;
+        auto result = owner();
+        if (result != ClockResult::Ok)
+            return result;
+        auto      entry = entries.end();
+        RowState* row = nullptr;
+        if ((result = SelectRow(request, entry, row)) != ClockResult::Ok)
+            return result;
+        RowReceipt local;
+        result = NativeAnimationSequenceRowCalls::Initialize(image, entry->storage, request.ownerGeneration, request.index, owner, &local);
+        // A completed physical assignment remains accepted after lost
+        // acknowledgement. Keep logical state and all allocation journals;
+        // the runtime stops rather than replaying or rewinding the write.
+        if (local.accepted)
+            row->logical.Initialize();
+        Publish();
+        if (receipt)
+            *receipt = local;
+        return result;
+    }
+    ClockResult NativeCustomAnimSequenceController::SetSequenceBoneTag(std::uintptr_t image, const NativeAnimationSequenceReferenceToken& token,
+                                                                       std::int32_t value, CheckOwner owner, RowReceipt* receipt) noexcept
+    {
+        const auto request = token;
+        if (receipt)
+            *receipt = {};
+        if (operation.test_and_set(std::memory_order_acquire))
+            return ClockResult::Busy;
+        const CustomAnimSequenceControllerDetail::Operation held{operation};
+        if (!owner)
+            return ClockResult::NotInitialized;
+        auto result = owner();
+        if (result != ClockResult::Ok)
+            return result;
+        auto      entry = entries.end();
+        RowState* row = nullptr;
+        if ((result = SelectRow(request, entry, row)) != ClockResult::Ok)
+            return result;
+        RowReceipt local;
+        result = NativeAnimationSequenceRowCalls::SetBoneTag(image, entry->storage, request.ownerGeneration, request.index, value, owner, &local);
+        if (local.accepted)
+            row->logical.SetBoneTag(value);
+        Publish();
+        if (receipt)
+            *receipt = local;
+        return result;
+    }
     ClockResult NativeCustomAnimSequenceController::PinPublication(std::uint64_t generation, std::uintptr_t issuedTag,
                                                                    std::uintptr_t hierarchyAffinity) noexcept
     {

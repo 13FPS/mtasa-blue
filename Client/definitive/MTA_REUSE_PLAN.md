@@ -5,6 +5,26 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+The actual DE sequence facade implements the qualified initialization,
+bone-tag and scalar/pointer observations through the existing allocation
+owner. A row token keeps the original array tag, full-width index and owner
+generation. Per-row logical union state belongs to that array record, so
+different facades observe the same state. Fresh initialization defines only
+the low WORD; an undefined full hash is refused rather than filled from DE's
+separate native name or fabricated upper bytes.
+
+Bone assignment retains the full signed input until the original `-1` no-op
+check, then narrows other values to the native WORD and sets the proved bone
+selector. Sequence-row capacity and frame-buffer byte size remain different
+quantities. A nonnull frame observation needs a live issued buffer with the
+same generation and original heap, followed by a coherent final row read.
+
+The facade remains abstract. General name/frame assignment, whole-property
+copying and indexed frame views still need their actual native contracts;
+custom factories and hierarchy publication are separate work. Private row
+operations preserve the allocation journals and do not detach a published
+hierarchy or reinterpret a C++ wrapper's destruction as native retirement.
+
 The gateway animation query now reuses MTA's original equality policy and
 existing uppercase key generator. The SDK asks the current owner for the raw
 hierarchy hash; an observed mismatch returns false, while a refused observation

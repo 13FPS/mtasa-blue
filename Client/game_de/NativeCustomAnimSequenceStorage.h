@@ -48,6 +48,9 @@ namespace mta::game_de
         std::uintptr_t IssuedTag() const noexcept { return tag; }
         Kind           GetKind() const noexcept { return kind; }
         std::size_t    Capacity() const noexcept { return capacity; }
+        // Sequence capacity counts rows; frame buffers have capacity zero.
+        // Serialized owner checks need the actual allocation byte extent.
+        std::size_t    ByteSize() const noexcept { return bytes; }
         std::uint64_t  OwnerGeneration() const noexcept { return generation; }
         std::uintptr_t PublicationAffinity() const noexcept { return hierarchyAffinity; }
 

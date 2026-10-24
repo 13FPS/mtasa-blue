@@ -74,6 +74,9 @@
 #include "../../Client/game_de/CAnimBlockRequestDE.h"
 #include "NativeAnimationBlockFactoryFixture.h"
 #include "NativeCustomAnimSequenceStorageFixture.h"
+#include "../../Client/game_de/NativeAnimationSequenceRowCalls.h"
+#include "../../Client/game_de/NativeAnimationSequenceRowProfile.h"
+#include "AnimationSequenceDEFixture.h"
 #include "../../Client/game_de/NativeAnimationSequenceStorageAccess.h"
 #include <cstdlib>
 #include "../../Client/game_de/NativeAnimationBlockRefProfile.h"
@@ -2753,6 +2756,16 @@ namespace ClockAnimationBlockRefOwnerTest
     }
 }
 
+namespace ClockSequenceRowOwnerTest
+{
+    namespace Rows = mta::game_de::NativeAnimationSequenceRowCalls;
+    unsigned                                             writes = 0, mode = 0;
+    std::uintptr_t                                       row = 0;
+    mta::game_de::NativeAnimationSequenceReferenceToken* caller = nullptr;
+    void (*afterFrame)() noexcept = nullptr;
+    mta::game_de::ClockResult Write(std::uintptr_t, Rows::Operation, const Rows::Value&, std::uint32_t&) noexcept;
+}
+
 namespace ClockAnimationHierarchyHashOwnerTest
 {
     std::uintptr_t address = 0;
@@ -3279,7 +3292,59 @@ namespace ClockWorldIgnoreOwnerTest
 #undef ReadImage
 #define MTA_DE_CUSTOM_ANIM_SEQUENCE_MALLOC_INVOKE ::NativeCustomAnimSequenceStorageFixture::Malloc
 #define MTA_DE_CUSTOM_ANIM_SEQUENCE_FREE_INVOKE   ::NativeCustomAnimSequenceStorageFixture::Free
+#define MTA_DE_ANIMATION_SEQUENCE_ROW_WRITE       ClockSequenceRowOwnerTest::Write
+#define CheckFramePointer                         ClockRowsOriginalFrameQualifier
 #include "../../Client/game_de/NativeCustomAnimSequenceStorage.cpp"
+#undef CheckFramePointer
+#undef MTA_DE_ANIMATION_SEQUENCE_ROW_WRITE
+
+namespace mta::game_de::NativeAnimationSequenceRowCalls
+{
+    ClockResult CheckFramePointer(std::uintptr_t image, const Storage& storage, std::uint64_t generation, std::uintptr_t pointer, CheckOwner owner) noexcept
+    {
+        const auto result = ClockRowsOriginalFrameQualifier(image, storage, generation, pointer, owner);
+        if (result == ClockResult::Ok && ClockSequenceRowOwnerTest::afterFrame)
+        {
+            const auto after = ClockSequenceRowOwnerTest::afterFrame;
+            ClockSequenceRowOwnerTest::afterFrame = nullptr;
+            after();
+        }
+        return result;
+    }
+}
+namespace ClockSequenceRowOwnerTest
+{
+    mta::game_de::ClockResult Write(std::uintptr_t rowAddress, Rows::Operation operation, const Rows::Value& target, std::uint32_t& exception) noexcept
+    {
+        ++writes;
+        const auto result = mta::game_de::CustomAnimSequenceStorageDetail::WriteRow(rowAddress, operation, target, exception);
+        if (result != mta::game_de::ClockResult::Ok)
+            return result;
+        if (mode == 3 && caller)
+        {
+            caller->ownerGeneration = 0;
+            caller->firstTag = 1;
+            caller->index = (std::numeric_limits<std::size_t>::max)();
+        }
+        if (mode == 1 || mode == 2)
+        {
+            const LONG gc = 1;
+            SIZE_T     written = 0;
+            if (!::WriteProcessMemory(GetCurrentProcess(),
+                                      reinterpret_cast<void*>(ClockReaderTestHost::image + mta::game_de::NativeBorrowedGcProfile::markerRva), &gc, sizeof(gc),
+                                      &written) ||
+                written != sizeof(gc))
+                std::abort();
+        }
+        if (mode == 1)
+        {
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return mta::game_de::ClockResult::OriginalException;
+        }
+        return result;
+    }
+}
+
 #undef MTA_DE_CUSTOM_ANIM_SEQUENCE_FREE_INVOKE
 #undef MTA_DE_CUSTOM_ANIM_SEQUENCE_MALLOC_INVOKE
 #include "../../Client/game_de/NativeCustomAnimSequenceController.cpp"
@@ -8040,10 +8105,12 @@ namespace
 #include "NativeAnimationManagerRefsOwnerTests.inl"
 #include "AnimationGateway.generated.h"
 #include "NativeAnimationGatewayOwnerTests.inl"
+#include "NativeCustomAnimationSequenceOwnerTests.inl"
 
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool customAnimationSequenceOnly = argc == 3 && std::strcmp(argv[2], "--custom-animation-sequence") == 0;
     const bool animationGatewayOnly = argc == 3 && std::strcmp(argv[2], "--animation-gateway") == 0;
     const bool animationManagerRefsOnly = argc == 3 && std::strcmp(argv[2], "--animation-manager-refs") == 0;
     const bool customAnimationResourcesSuccess = argc == 3 && std::strcmp(argv[2], "--custom-animation-resources-success") == 0;
@@ -8103,9 +8170,17 @@ int main(int argc, char** argv)
            worldLineOnly || worldAreaOnly || worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly ||
            cameraSphereOnly || pedWeaponClearOnly || pedClothesOnly || pedRebuildOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly ||
            animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly ||
-           animationGatewayOnly) &&
+           animationGatewayOnly || customAnimationSequenceOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (customAnimationSequenceOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        CustomAnimationSequenceOwnerFixture::Run(fixture);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (animationGatewayOnly)
     {
         ClockImageFixture fixture;

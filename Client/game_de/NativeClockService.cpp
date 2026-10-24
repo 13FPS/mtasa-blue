@@ -254,6 +254,8 @@ namespace mta::game_de
             ClockResult ReadAnimationHierarchySequences(const NativeAnimationHierarchyReferenceToken&, std::uintptr_t&) noexcept override;
             ClockResult ReadAnimationHierarchySequence(const NativeAnimationHierarchyReferenceToken&, std::uint32_t, std::uintptr_t&) noexcept override;
             ClockResult SetAnimationSequenceName(const NativeAnimationSequenceReferenceToken&, const NativeAnimationSequenceName&) noexcept override;
+            ClockResult PrepareFreshCompressedAnimationSequence(const NativeAnimationSequenceReferenceToken&, std::size_t, bool,
+                                                                std::uintptr_t) noexcept override;
             ClockResult AllocateAnimationKeyFrames(std::uint64_t, std::uint32_t, std::uintptr_t&) noexcept override;
             ClockResult FreeAnimationKeyFrames(std::uint64_t, std::uintptr_t) noexcept override;
             ClockResult AllocateAnimationSequences(std::uint64_t, std::size_t, std::uintptr_t&) noexcept override;
@@ -2894,6 +2896,27 @@ namespace mta::game_de
                 return result;
             NativeCustomAnimSequenceController::NameReceipt receipt;
             result = runtime.customSequences.SetSequenceName(runtime.image, request, copiedName, &CheckTimingOwner, &receipt);
+            PublishCustomAnimationSequenceDebt(request.ownerGeneration);
+            if (result == ClockResult::Ok)
+                result = CheckCustomSequenceRequest(request);
+            if ((receipt.entered && result != ClockResult::Ok) || runtime.customSequences.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            return result;
+        }
+
+        ClockResult NativeAccess::PrepareFreshCompressedAnimationSequence(const NativeAnimationSequenceReferenceToken& token, std::size_t count, bool root,
+                                                                          std::uintptr_t originalFrameBase) noexcept
+        {
+            const auto request = token;
+            const auto requestedCount = count;
+            const auto requestedRoot = root;
+            const auto requestedBase = originalFrameBase;
+            auto       result = CheckCustomSequenceRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            NativeCustomAnimSequenceController::FrameBindReceipt receipt;
+            result = runtime.customSequences.PrepareFreshCompressedSequence(runtime.image, request, requestedCount, requestedRoot, requestedBase,
+                                                                            &CheckTimingOwner, &receipt);
             PublishCustomAnimationSequenceDebt(request.ownerGeneration);
             if (result == ClockResult::Ok)
                 result = CheckCustomSequenceRequest(request);

@@ -66,5 +66,13 @@ namespace mta::game_de
         {
             return ClockResult::NotInitialized;
         }
+        // This private prepublication transaction is intentionally separate
+        // from general SetKeyFrames. The owner admits fresh rows and their
+        // exact issued frame base, validates full count/span, then commits
+        // fields without allocation, payload initialization or child cleanup.
+        virtual ClockResult PrepareFreshCompressedAnimationSequence(const NativeAnimationSequenceReferenceToken&, std::size_t, bool, std::uintptr_t) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
     };
 }

@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName')]
+    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -37,6 +37,8 @@ $record['actualWorldLineSdkOwnerTested'] = $false
 $record['nativeWorldGroundOwnerTested'] = $false
 $record['actualWorldGroundSdkOwnerTested'] = $false
 $record['nativePedWeaponGrantOwnerTested'] = $false
+$record['nativeFreshCompressedSequenceOwnerTested']=$false
+$record['actualFreshCompressedSequenceServiceOwnerTested']=$false
 $record['nativeCustomAnimationSequenceNameOwnerTested']=$false
 $record['actualCustomAnimationSequenceNameSdkOwnerTested']=$false
 $record['nativeAnimationHierarchyBankOwnerTested']=$false
@@ -427,6 +429,7 @@ try {
     $sourceNames += @('Client/game_de/NativeAnimationSequenceCopyCalls.h','Client/game_de/NativeAnimationSequenceFrameViewCalls.h','Tests/definitive/NativeCustomAnimationSequenceCopyFrameOwnerTests.inl')
     $sourceNames += @('Client/game_de/NativeAnimationHierarchyAccess.h','Client/game_de/NativeAnimationHierarchyMemory.h','Client/game_de/NativeAnimationHierarchyMemory.cpp','Client/game_de/NativeAnimationHierarchyOrigin.h','Client/game_de/NativeAnimationHierarchyReadProfile.h','Client/game_de/CAnimBlendHierarchyDE.h','Client/game_de/CAnimBlendHierarchyDE.cpp','Tests/definitive/AnimationHierarchyDEFixture.h','Tests/definitive/NativeAnimationHierarchyBankOwnerTests.inl')
     $sourceNames += @('Client/game_de/NativeAnimationSequenceName.h','Client/game_de/NativeAnimationSequenceName.cpp','Client/game_de/NativeAnimationSequenceNameCalls.h','Client/game_de/NativeAnimationSequenceNameProfile.h','Tests/definitive/NativeCustomAnimationSequenceNameOwnerTests.inl')
+    $sourceNames += @('Client/game_de/NativeAnimationSequenceFrameBindCalls.h','Client/game_de/NativeAnimationSequenceFrameBindProfile.h','Tests/definitive/NativeFreshCompressedSequenceOwnerTests.inl')
     $sourceNames += @('Client/game_de/NativeAnimationHierarchyHashMemory.h','Client/game_de/NativeAnimationHierarchyHashMemory.cpp','Tests/definitive/NativeAnimationGatewayOwnerTests.inl','Tests/definitive/Write-AnimationGatewayFixture.ps1')
     $sourceNames += @('Tests/definitive/NativeAnimationManagerRefsOwnerTests.inl','Tests/definitive/Write-AnimationManagerRefsFixture.ps1')
     $sourceNames += @('Tests/definitive/NativeCustomAnimationResourcesOwnerTests.inl','Tests/definitive/Write-AnimationSequenceStorageFixture.ps1')
@@ -749,6 +752,7 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
     if ($Scope -eq 'WorldLine') { $fixtureArguments += '--world-line' }
     if ($Scope -eq 'WorldGround') { $fixtureArguments += '--world-ground' }
     if ($Scope -eq 'ConstructorServices') { $fixtureArguments += '--constructor-services' }
+    if ($Scope -eq 'FreshCompressedSequence') { $fixtureArguments += '--fresh-compressed-sequence' }
     if ($Scope -eq 'CustomAnimationSequenceName') { $fixtureArguments += '--custom-animation-sequence-name' }
     if ($Scope -eq 'AnimationHierarchyBank') { $fixtureArguments += '--animation-hierarchy-bank' }
     if ($Scope -eq 'CustomAnimationSequenceCopyFrame') { $fixtureArguments += '--custom-animation-sequence-copy-frame' }
@@ -878,7 +882,12 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
         if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
     }
-    if($Scope -eq 'CustomAnimationSequenceName'){
+    if($Scope -eq 'FreshCompressedSequence'){
+        $record.nativeFreshCompressedSequenceOwnerTested=$text.Contains('Production native fresh compressed sequence owner fixture completed')
+        $record.actualFreshCompressedSequenceServiceOwnerTested=$text.Contains('Production actual fresh compressed sequence service owner fixture completed')
+        if(-not($record.nativeFreshCompressedSequenceOwnerTested -and $record.actualFreshCompressedSequenceServiceOwnerTested)){throw 'New private fresh compressed service owner slice did not complete.'}
+        $record.productionNativeCallbackTested=$true
+    } elseif($Scope -eq 'CustomAnimationSequenceName'){
         $record.nativeCustomAnimationSequenceNameOwnerTested=$text.Contains('Production native custom animation sequence name owner fixture completed')
         $record.actualCustomAnimationSequenceNameSdkOwnerTested=$text.Contains('Production actual custom animation sequence name SDK owner fixture completed')
         if(-not($record.nativeCustomAnimationSequenceNameOwnerTested -and $record.actualCustomAnimationSequenceNameSdkOwnerTested)){throw 'New sequence name actual owner/SDK slice did not complete.'}

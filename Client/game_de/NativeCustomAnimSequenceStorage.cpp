@@ -12,6 +12,8 @@
 #include "NativeAnimationSequenceFrameViewCalls.h"
 #include "NativeAnimationSequenceNameCalls.h"
 #include "NativeAnimationSequenceNameProfile.h"
+#include "NativeAnimationSequenceFrameBindCalls.h"
+#include "NativeAnimationSequenceFrameBindProfile.h"
 #include <intrin.h>
 #include <array>
 #include <cstring>
@@ -158,6 +160,36 @@ namespace mta::game_de
                 std::memcpy(reinterpret_cast<void*>(row), name.data(), terminatedBytes);
                 if (projectBone)
                     std::memcpy(reinterpret_cast<void*>(row + Profile::BoneOffset), &boneTag, sizeof(boneTag));
+                return ClockResult::Ok;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                exception = GetExceptionCode();
+                return ClockResult::OriginalException;
+            }
+        }
+        bool FrameBindProfileMatches(std::uintptr_t image) noexcept
+        {
+            namespace BindProfile = NativeAnimationSequenceFrameBindProfile;
+            for (const auto& pin : BindProfile::Code)
+            {
+                std::array<unsigned char, BindProfile::MaximumPinBytes> actual{};
+                if (!pin.size || pin.size > actual.size() || !Image::ReadImage(image, image + pin.rva, actual.data(), pin.size, false, true) ||
+                    std::memcmp(actual.data(), pin.bytes, pin.size))
+                    return false;
+            }
+            return true;
+        }
+        // This is only the restricted private compressed builder's CPU
+        // writer. It does not implement the general SDK SetKeyFrames policy.
+        // Keep it available for safe actual owned-buffer test delegation.
+        ClockResult WriteCompressedFrames(std::uintptr_t row, const NativeAnimationSequenceRowCalls::Value& target, std::uint32_t& exception) noexcept
+        {
+            __try
+            {
+                std::memcpy(reinterpret_cast<void*>(row + Profile::FlagsOffset), &target.flags, sizeof(target.flags));
+                std::memcpy(reinterpret_cast<void*>(row + Profile::FrameCountOffset), &target.frameCount, sizeof(target.frameCount));
+                std::memcpy(reinterpret_cast<void*>(row + Profile::FramePointerOffset), &target.keyFrames, sizeof(target.keyFrames));
                 return ClockResult::Ok;
             }
             __except (EXCEPTION_EXECUTE_HANDLER)
@@ -797,6 +829,137 @@ namespace mta::game_de
             receipt.verified = true;
             return finish(ClockResult::Ok);
         }
+        static ClockResult CaptureFrameBuffer(std::uintptr_t image, const Storage& frames, std::uint64_t generation, CheckOwner owner,
+                                              CustomAnimSequenceStorageDetail::Heap::Value& output) noexcept
+        {
+            namespace Detail = CustomAnimSequenceStorageDetail;
+            auto result = RowResourceShape(frames, generation, Kind::KeyFrames);
+            if (result != ClockResult::Ok)
+                return result;
+            Detail::Heap::Value first, second;
+            if ((result = Detail::Capture(image, owner, first)) != ClockResult::Ok)
+                return result;
+            if (first.authority != frames.origin.authority || first.authorityVtable != frames.origin.authorityVtable ||
+                !Detail::Heap::M::PrivateWritable(frames.base, frames.bytes))
+                return ClockResult::BindingChanged;
+            // The issued frame's exact original authority and private extent
+            // are requalified without reading or initializing any payload.
+            if ((result = Detail::Capture(image, owner, second)) != ClockResult::Ok)
+                return result;
+            if (!Detail::Heap::Same(first, second) || !Detail::Heap::M::PrivateWritable(frames.base, frames.bytes))
+                return ClockResult::BindingChanged;
+            if ((result = Detail::Context::Owner(image, owner)) != ClockResult::Ok ||
+                (result = RowResourceShape(frames, generation, Kind::KeyFrames)) != ClockResult::Ok)
+                return result;
+            output = second;
+            return ClockResult::Ok;
+        }
+        static ClockResult AttachCompressedFrames(std::uintptr_t image, Storage& array, std::uint64_t generation, std::size_t rowIndex, const Storage& frames,
+                                                  std::size_t count, bool root, CheckOwner owner, NativeAnimationSequenceFrameBindCalls::Receipt* output,
+                                                  NativeAnimationSequenceFrameBindCalls::Write write) noexcept
+        {
+            namespace Detail = CustomAnimSequenceStorageDetail;
+            namespace Bind = NativeAnimationSequenceFrameBindCalls;
+            namespace BindProfile = NativeAnimationSequenceFrameBindProfile;
+            const auto    requestedCount = count;
+            const auto    requestedRoot = root;
+            Bind::Receipt receipt;
+            receipt.count = requestedCount;
+            const auto finish = [&](ClockResult result)
+            {
+                // A failed entered metadata write never discards either
+                // allocation record. Only known storage-only cleanup remains;
+                // the row cannot replay after this uncertain transaction.
+                if (receipt.entered && result != ClockResult::Ok)
+                    array.state.store(State::FaultDebt, std::memory_order_release);
+                if (output)
+                    *output = receipt;
+                return result;
+            };
+            const auto stride = requestedRoot ? BindProfile::RootStride : BindProfile::ChildStride;
+            if (!requestedCount || requestedCount > (std::numeric_limits<std::size_t>::max)() / stride)
+                return finish(ClockResult::InvalidArgument);
+            receipt.bytes = requestedCount * stride;
+            if (receipt.bytes > (std::numeric_limits<std::uint32_t>::max)())
+                return finish(ClockResult::InvalidArgument);
+            if (!owner)
+                return finish(ClockResult::NotInitialized);
+            auto result = RowResourceShape(array, generation, Kind::SequenceArray);
+            if (result != ClockResult::Ok || (result = RowResourceShape(frames, generation, Kind::KeyFrames)) != ClockResult::Ok)
+                return finish(result);
+            if (array.origin.authority != frames.origin.authority || array.origin.authorityVtable != frames.origin.authorityVtable)
+                return finish(ClockResult::BindingChanged);
+            if (receipt.bytes > frames.bytes)
+                return finish(ClockResult::InvalidArgument);
+            if (!Detail::Context::TryEnter())
+                return finish(ClockResult::Busy);
+            Detail::Context::Scope scope;
+            if (!Detail::FrameBindProfileMatches(image))
+                return finish(ClockResult::BindingChanged);
+            Detail::Heap::Value firstHeap, secondHeap;
+            if ((result = CaptureFrameBuffer(image, frames, generation, owner, firstHeap)) != ClockResult::Ok)
+                return finish(result);
+            Bind::Record   first;
+            std::uintptr_t firstRow = 0;
+            if ((result = CaptureWholeRow(image, array, generation, rowIndex, owner, first, firstRow)) != ClockResult::Ok ||
+                (result = CaptureFrameBuffer(image, frames, generation, owner, secondHeap)) != ClockResult::Ok ||
+                (result = CaptureWholeRow(image, array, generation, rowIndex, owner, receipt.before, receipt.row)) != ClockResult::Ok)
+                return finish(result);
+            if (!Detail::Heap::Same(firstHeap, secondHeap) || firstRow != receipt.row || first.bytes != receipt.before.bytes)
+                return finish(ClockResult::OwnerConflict);
+            NativeAnimationSequenceRowCalls::Value target;
+            target.row = receipt.row;
+            std::memcpy(&target.boneTag, receipt.before.bytes.data() + Detail::Profile::BoneOffset, sizeof(target.boneTag));
+            std::memcpy(&target.flags, receipt.before.bytes.data() + Detail::Profile::FlagsOffset, sizeof(target.flags));
+            std::memcpy(&target.frameCount, receipt.before.bytes.data() + Detail::Profile::FrameCountOffset, sizeof(target.frameCount));
+            std::memcpy(&target.keyFrames, receipt.before.bytes.data() + Detail::Profile::FramePointerOffset, sizeof(target.keyFrames));
+            // Only Initialize -> Name -> optional Bone is admitted. This
+            // avoids inventing original false/replacement/compression rules.
+            if (target.keyFrames || target.frameCount || (target.flags & ~std::uint16_t{0x10}))
+                return finish(ClockResult::InvalidArgument);
+            if ((result = RowResourceShape(frames, generation, Kind::KeyFrames)) != ClockResult::Ok)
+                return finish(result);
+            if (!Detail::Heap::M::PrivateWritable(frames.base, frames.bytes) || !Detail::FrameBindProfileMatches(image))
+                return finish(ClockResult::BindingChanged);
+            receipt.frames = frames.base;
+            target.flags = static_cast<std::uint16_t>(target.flags | 0x05u | (requestedRoot ? 0x02u : 0u));
+            // Full source count already qualified the allocation byte span;
+            // only this actual native field deliberately narrows to WORD.
+            target.frameCount = static_cast<std::uint16_t>(requestedCount);
+            target.keyFrames = receipt.frames;
+            auto expected = receipt.before;
+            std::memcpy(expected.bytes.data() + Detail::Profile::FlagsOffset, &target.flags, sizeof(target.flags));
+            std::memcpy(expected.bytes.data() + Detail::Profile::FrameCountOffset, &target.frameCount, sizeof(target.frameCount));
+            std::memcpy(expected.bytes.data() + Detail::Profile::FramePointerOffset, &target.keyFrames, sizeof(target.keyFrames));
+            if (!Detail::Heap::M::PrivateWritable(receipt.row, Detail::Profile::RowBytes))
+                return finish(ClockResult::WriteFailure);
+#if defined(MTA_DE_ANIMATION_SEQUENCE_FRAME_BIND_WRITE)
+            const auto entry = write ? write : &MTA_DE_ANIMATION_SEQUENCE_FRAME_BIND_WRITE;
+#else
+            const auto entry = write ? write : &Detail::WriteCompressedFrames;
+#endif
+            receipt.entered = true;
+            result = entry(receipt.row, target, receipt.exceptionCode);
+            receipt.accepted = result == ClockResult::Ok;
+            if (result != ClockResult::Ok)
+                return finish(result);
+            Detail::Heap::Value afterHeap;
+            if ((result = CaptureFrameBuffer(image, frames, generation, owner, afterHeap)) != ClockResult::Ok)
+                return finish(result);
+            std::uintptr_t afterRow = 0;
+            if ((result = CaptureWholeRow(image, array, generation, rowIndex, owner, receipt.after, afterRow)) != ClockResult::Ok)
+                return finish(result);
+            if (!Detail::Heap::Same(firstHeap, afterHeap) || afterRow != receipt.row || receipt.after.bytes != expected.bytes ||
+                !Detail::FrameBindProfileMatches(image))
+                return finish(ClockResult::BindingChanged);
+            if (!Detail::Heap::M::PrivateWritable(frames.base, frames.bytes))
+                return finish(ClockResult::BindingChanged);
+            if ((result = RowResourceShape(frames, generation, Kind::KeyFrames)) != ClockResult::Ok ||
+                (result = Detail::Context::Owner(image, owner)) != ClockResult::Ok)
+                return finish(result);
+            receipt.verified = true;
+            return finish(ClockResult::Ok);
+        }
         static ClockResult ReadSequenceFrame(std::uintptr_t image, const Storage& array, std::uint64_t generation, std::size_t rowIndex, const Storage& frames,
                                              std::size_t frameIndex, std::uint32_t stride, CheckOwner owner, std::uintptr_t& output) noexcept
         {
@@ -934,6 +1097,14 @@ namespace mta::game_de
                         CheckOwner owner, Receipt* output, Write write) noexcept
         {
             return NativeCustomAnimSequenceStorageAccess::SetSequenceName(image, storage, generation, index, name, logicalHash, owner, output, write);
+        }
+    }
+    namespace NativeAnimationSequenceFrameBindCalls
+    {
+        ClockResult AttachCompressed(std::uintptr_t image, Storage& array, std::uint64_t generation, std::size_t rowIndex, const Storage& frames,
+                                     std::size_t count, bool root, CheckOwner owner, Receipt* output, Write write) noexcept
+        {
+            return NativeCustomAnimSequenceStorageAccess::AttachCompressedFrames(image, array, generation, rowIndex, frames, count, root, owner, output, write);
         }
     }
     namespace NativeAnimationSequenceFrameViewCalls

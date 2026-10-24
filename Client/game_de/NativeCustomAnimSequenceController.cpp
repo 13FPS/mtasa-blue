@@ -441,6 +441,42 @@ namespace mta::game_de
             *receipt = local;
         return result;
     }
+    ClockResult NativeCustomAnimSequenceController::PrepareFreshCompressedSequence(std::uintptr_t image, const NativeAnimationSequenceReferenceToken& token,
+                                                                                   std::size_t count, bool root, std::uintptr_t originalFrameBase,
+                                                                                   CheckOwner owner, FrameBindReceipt* receipt) noexcept
+    {
+        const auto request = token;
+        const auto requestedCount = count;
+        const auto requestedRoot = root;
+        const auto requestedBase = originalFrameBase;
+        if (receipt)
+            *receipt = {};
+        if (operation.test_and_set(std::memory_order_acquire))
+            return ClockResult::Busy;
+        const CustomAnimSequenceControllerDetail::Operation held{operation};
+        if (!owner)
+            return ClockResult::NotInitialized;
+        auto result = owner();
+        if (result != ClockResult::Ok)
+            return result;
+        auto      array = entries.end();
+        RowState* state = nullptr;
+        if ((result = SelectRow(request, array, state)) != ClockResult::Ok)
+            return result;
+        auto frames = Find(request.ownerGeneration, requestedBase);
+        if (frames == entries.end() || frames->storage.GetKind() != Storage::Kind::KeyFrames || frames->storage.GetState() != Storage::State::LiveUnpublished)
+            return ClockResult::BindingChanged;
+        // This restricted builder links existing private records only. It
+        // does not implement the general setter, publish to GTA, infer shared
+        // bit08 from a pointer or transfer either allocation's free authority.
+        FrameBindReceipt local;
+        result = NativeAnimationSequenceFrameBindCalls::AttachCompressed(image, array->storage, request.ownerGeneration, request.index, frames->storage,
+                                                                         requestedCount, requestedRoot, owner, &local);
+        Publish();
+        if (receipt)
+            *receipt = local;
+        return result;
+    }
     ClockResult NativeCustomAnimSequenceController::PinPublication(std::uint64_t generation, std::uintptr_t issuedTag,
                                                                    std::uintptr_t hierarchyAffinity) noexcept
     {

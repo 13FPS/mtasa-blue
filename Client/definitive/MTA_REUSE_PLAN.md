@@ -5,6 +5,19 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+An explicit private builder now prepares fresh compressed sequence frames on
+the same allocation owner. It requires a fresh row, the exact original owned
+frame base and a checked full-width count times the 10/16-byte compressed
+stride. Only after the real buffer extent passes does the stored native count
+narrow to WORD. It sets the proved rotation/root/compression fields and keeps
+name, bone, unrelated bytes and both allocation journals intact.
+
+The builder does not infer shared-memory bit08 from a supplied pointer, read
+or initialize payload, allocate/free buffers, or publish to the engine. It is
+separate from the general `SetKeyFrames` operation, which remains pure while
+its original removed compression condition is unresolved. Entered failure
+retains cleanup authority and prevents replay.
+
 Private sequence naming preserves raw NUL-terminated spelling within the
 native 64-byte field; overlong names are refused without truncation. The
 logical hash uses classic ASCII-only normalization and the existing raw key

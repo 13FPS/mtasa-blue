@@ -81,6 +81,8 @@
 #include "../../Client/game_de/NativeAnimationSequenceRowProfile.h"
 #include "../../Client/game_de/NativeAnimationSequenceCopyCalls.h"
 #include "../../Client/game_de/NativeAnimationSequenceNameCalls.h"
+#include "../../Client/game_de/NativeAnimationSequenceFrameBindCalls.h"
+#include "../../Client/game_de/NativeAnimationSequenceFrameBindProfile.h"
 #include "../../Client/game_de/NativeAnimationSequenceNameProfile.h"
 #include "../../Client/game_de/NativeAnimationSequenceFrameViewCalls.h"
 #include "AnimationSequenceDEFixture.h"
@@ -2763,6 +2765,14 @@ namespace ClockAnimationBlockRefOwnerTest
     }
 }
 
+namespace ClockFreshCompressedSequenceOwnerTest
+{
+    namespace Bind = mta::game_de::NativeAnimationSequenceFrameBindCalls;
+    unsigned                                             writes = 0, mode = 0;
+    mta::game_de::NativeAnimationSequenceReferenceToken* caller = nullptr;
+    mta::game_de::ClockResult                            Write(std::uintptr_t, const Bind::Value&, std::uint32_t&) noexcept;
+}
+
 namespace ClockSequenceNameOwnerTest
 {
     namespace Calls = mta::game_de::NativeAnimationSequenceNameCalls;
@@ -3370,17 +3380,19 @@ namespace ClockAnimationHierarchyBankOwnerTest
     }
 }
 
-#define MTA_DE_CUSTOM_ANIM_SEQUENCE_MALLOC_INVOKE ::NativeCustomAnimSequenceStorageFixture::Malloc
-#define MTA_DE_CUSTOM_ANIM_SEQUENCE_FREE_INVOKE   ::NativeCustomAnimSequenceStorageFixture::Free
-#define MTA_DE_ANIMATION_SEQUENCE_ROW_WRITE       ClockSequenceRowOwnerTest::Write
-#define MTA_DE_ANIMATION_SEQUENCE_COPY_WRITE      ClockSequenceCopyFrameOwnerTest::Write
-#define MTA_DE_ANIMATION_SEQUENCE_NAME_WRITE      ClockSequenceNameOwnerTest::Write
-#define CheckFramePointer                         ClockRowsOriginalFrameQualifier
+#define MTA_DE_CUSTOM_ANIM_SEQUENCE_MALLOC_INVOKE  ::NativeCustomAnimSequenceStorageFixture::Malloc
+#define MTA_DE_CUSTOM_ANIM_SEQUENCE_FREE_INVOKE    ::NativeCustomAnimSequenceStorageFixture::Free
+#define MTA_DE_ANIMATION_SEQUENCE_ROW_WRITE        ClockSequenceRowOwnerTest::Write
+#define MTA_DE_ANIMATION_SEQUENCE_COPY_WRITE       ClockSequenceCopyFrameOwnerTest::Write
+#define MTA_DE_ANIMATION_SEQUENCE_NAME_WRITE       ClockSequenceNameOwnerTest::Write
+#define MTA_DE_ANIMATION_SEQUENCE_FRAME_BIND_WRITE ClockFreshCompressedSequenceOwnerTest::Write
+#define CheckFramePointer                          ClockRowsOriginalFrameQualifier
 #include "../../Client/game_de/NativeCustomAnimSequenceStorage.cpp"
 #undef CheckFramePointer
 #undef MTA_DE_ANIMATION_SEQUENCE_ROW_WRITE
 #undef MTA_DE_ANIMATION_SEQUENCE_COPY_WRITE
 #undef MTA_DE_ANIMATION_SEQUENCE_NAME_WRITE
+#undef MTA_DE_ANIMATION_SEQUENCE_FRAME_BIND_WRITE
 
 namespace mta::game_de::NativeAnimationSequenceRowCalls
 {
@@ -3481,6 +3493,39 @@ namespace ClockSequenceNameOwnerTest
             }
             if (callerName)
                 callerName->fill('X');
+        }
+        if (mode == 1 || mode == 2)
+        {
+            const LONG gc = 1;
+            SIZE_T     written = 0;
+            if (!::WriteProcessMemory(GetCurrentProcess(),
+                                      reinterpret_cast<void*>(ClockReaderTestHost::image + mta::game_de::NativeBorrowedGcProfile::markerRva), &gc, sizeof(gc),
+                                      &written) ||
+                written != sizeof(gc))
+                std::abort();
+        }
+        if (mode == 1)
+        {
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return mta::game_de::ClockResult::OriginalException;
+        }
+        return result;
+    }
+}
+
+namespace ClockFreshCompressedSequenceOwnerTest
+{
+    mta::game_de::ClockResult Write(std::uintptr_t row, const Bind::Value& target, std::uint32_t& exception) noexcept
+    {
+        ++writes;
+        const auto result = mta::game_de::CustomAnimSequenceStorageDetail::WriteCompressedFrames(row, target, exception);
+        if (result != mta::game_de::ClockResult::Ok)
+            return result;
+        if (mode == 3 && caller)
+        {
+            caller->ownerGeneration = 0;
+            caller->firstTag = 1;
+            caller->index = (std::numeric_limits<std::size_t>::max)();
         }
         if (mode == 1 || mode == 2)
         {
@@ -8265,10 +8310,12 @@ namespace
 #include "NativeCustomAnimationSequenceOwnerTests.inl"
 #include "NativeCustomAnimationSequenceCopyFrameOwnerTests.inl"
 #include "NativeCustomAnimationSequenceNameOwnerTests.inl"
+#include "NativeFreshCompressedSequenceOwnerTests.inl"
 
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool freshCompressedSequenceOnly = argc == 3 && std::strcmp(argv[2], "--fresh-compressed-sequence") == 0;
     const bool customAnimationSequenceNameOnly = argc == 3 && std::strcmp(argv[2], "--custom-animation-sequence-name") == 0;
     const bool animationHierarchyBankOnly = argc == 3 && std::strcmp(argv[2], "--animation-hierarchy-bank") == 0;
     const bool customAnimationSequenceCopyFrameOnly = argc == 3 && std::strcmp(argv[2], "--custom-animation-sequence-copy-frame") == 0;
@@ -8333,9 +8380,17 @@ int main(int argc, char** argv)
            cameraSphereOnly || pedWeaponClearOnly || pedClothesOnly || pedRebuildOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly ||
            animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly ||
            animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly || animationHierarchyBankOnly ||
-           customAnimationSequenceNameOnly) &&
+           customAnimationSequenceNameOnly || freshCompressedSequenceOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (freshCompressedSequenceOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        FreshCompressedSequenceOwnerFixture::Run(fixture);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (customAnimationSequenceNameOnly)
     {
         ClockImageFixture fixture;

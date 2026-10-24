@@ -65,6 +65,7 @@
 #include "NativeAnimationHierarchyAccess.h"
 #include "NativeAnimationHierarchyMemory.h"
 #include "NativeCustomAnimSequenceController.h"
+#include "NativePrivateAnimationHierarchyController.h"
 #include "NativeAnimationManagerMemory.h"
 #include "NativePedVelocityMemory.h"
 #include "NativePedReferenceController.h"
@@ -250,6 +251,9 @@ namespace mta::game_de
             ClockResult ReadAnimationSequenceHash(const NativeAnimationSequenceReferenceToken&, std::uint32_t&) noexcept override;
             ClockResult CopyAnimationSequenceProperties(const NativeAnimationSequenceReferenceToken&, std::uintptr_t) noexcept override;
             ClockResult ReadAnimationSequenceFrame(const NativeAnimationSequenceReferenceToken&, std::size_t, std::uint32_t, std::uintptr_t&) noexcept override;
+            ClockResult CreatePrivateAnimationHierarchy(std::uint64_t, NativeAnimationHierarchyReferenceToken&) noexcept override;
+            ClockResult InitializePrivateAnimationHierarchy(const NativeAnimationHierarchyReferenceToken&) noexcept override;
+            ClockResult DestroyPrivateAnimationHierarchy(const NativeAnimationHierarchyReferenceToken&) noexcept override;
             ClockResult ReadAnimationHierarchy(const NativeAnimationHierarchyReferenceToken&, NativeAnimationHierarchyValues&) noexcept override;
             ClockResult ReadAnimationHierarchySequences(const NativeAnimationHierarchyReferenceToken&, std::uintptr_t&) noexcept override;
             ClockResult ReadAnimationHierarchySequence(const NativeAnimationHierarchyReferenceToken&, std::uint32_t, std::uintptr_t&) noexcept override;
@@ -459,7 +463,10 @@ namespace mta::game_de
             // publication fails. No producer/destructor may free them or
             // discard unknown entered effects while removing the callback.
             NativeCustomAnimSequenceController customSequences;
-            std::atomic<std::uint64_t>         customSequenceGeneration{0};
+            // Empty module-owned hierarchy interfaces share this callback debt
+            // group; no native publication or child-release authority is implied.
+            NativePrivateAnimationHierarchyController privateHierarchies;
+            std::atomic<std::uint64_t>                customSequenceGeneration{0};
             // One native address filter is the only retained pointer intent.
             // Keep both CAS candidates when an interrupted replacement cannot
             // be acknowledged, then clear it before either token is released.
@@ -580,7 +587,8 @@ namespace mta::game_de
 
         bool NativeLifetimeRetained() noexcept
         {
-            return runtime.pedReferences.IsRetained() || WorldIgnoreRetained() || runtime.customSequences.IsRetained();
+            return runtime.pedReferences.IsRetained() || WorldIgnoreRetained() || runtime.customSequences.IsRetained() ||
+                   runtime.privateHierarchies.IsRetained();
         }
 
         bool WeatherOverrideRetained() noexcept
@@ -2631,7 +2639,7 @@ namespace mta::game_de
 
         void PublishCustomAnimationSequenceDebt(std::uint64_t generation) noexcept
         {
-            if (runtime.customSequences.IsRetained())
+            if (runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained())
             {
                 runtime.customSequenceGeneration.store(generation);
                 runtime.restored.store(false);
@@ -2837,6 +2845,61 @@ namespace mta::game_de
                 return result;
             return request.ownerGeneration && request.ownerGeneration == runtime.generation.load() ? ClockResult::Ok : ClockResult::OwnerConflict;
         }
+        ClockResult NativeAccess::CreatePrivateAnimationHierarchy(std::uint64_t generation, NativeAnimationHierarchyReferenceToken& output) noexcept
+        {
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto retained = runtime.customSequenceGeneration.load();
+            if (!generation || generation != runtime.generation.load() || (retained && retained != generation))
+                return ClockResult::OwnerConflict;
+            NativeAnimationHierarchyReferenceToken             next;
+            NativePrivateAnimationHierarchyController::Receipt receipt;
+            result = runtime.privateHierarchies.Create(runtime.image, generation, &CheckTimingOwner, next, &receipt);
+            PublishCustomAnimationSequenceDebt(generation);
+            if (result == ClockResult::Ok)
+                result = CheckAnimationHierarchyRequest(next);
+            if (result == ClockResult::Ok)
+                output = next;
+            // A failed acknowledgement must not discard an issued CPU record.
+            // The same natural owner retires it exactly once during End.
+            if ((receipt.entered && result != ClockResult::Ok) || runtime.privateHierarchies.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            return result;
+        }
+
+        ClockResult NativeAccess::InitializePrivateAnimationHierarchy(const NativeAnimationHierarchyReferenceToken& token) noexcept
+        {
+            const auto request = token;
+            auto       result = CheckAnimationHierarchyRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            NativePrivateAnimationHierarchyController::Receipt receipt;
+            result = runtime.privateHierarchies.Initialize(runtime.image, request, &CheckTimingOwner, &receipt);
+            PublishCustomAnimationSequenceDebt(request.ownerGeneration);
+            if (result == ClockResult::Ok)
+                result = CheckAnimationHierarchyRequest(request);
+            if ((receipt.entered && result != ClockResult::Ok) || runtime.privateHierarchies.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            return result;
+        }
+
+        ClockResult NativeAccess::DestroyPrivateAnimationHierarchy(const NativeAnimationHierarchyReferenceToken& token) noexcept
+        {
+            const auto request = token;
+            auto       result = CheckAnimationHierarchyRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            NativePrivateAnimationHierarchyController::Receipt receipt;
+            result = runtime.privateHierarchies.Destroy(runtime.image, request, &CheckTimingOwner, &receipt);
+            PublishCustomAnimationSequenceDebt(request.ownerGeneration);
+            if (result == ClockResult::Ok)
+                result = CheckAnimationHierarchyRequest(request);
+            if ((receipt.entered && result != ClockResult::Ok) || runtime.privateHierarchies.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            return result;
+        }
+
         ClockResult NativeAccess::ReadAnimationHierarchy(const NativeAnimationHierarchyReferenceToken& token, NativeAnimationHierarchyValues& output) noexcept
         {
             const auto request = token;
@@ -2845,7 +2908,15 @@ namespace mta::game_de
                 return result;
             NativeAnimationHierarchyValues next;
             NativeAnimationHierarchyMemory memory({runtime.image}, &CheckTimingOwner);
-            result = memory.Read(request.locator, next);
+            if (runtime.privateHierarchies.Owns(request))
+            {
+                result = runtime.privateHierarchies.Read(runtime.image, request, &CheckTimingOwner, next);
+                PublishCustomAnimationSequenceDebt(request.ownerGeneration);
+                if (runtime.privateHierarchies.RecoveryPending())
+                    Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            }
+            else
+                result = memory.Read(request.locator, next);
             if (result == ClockResult::Ok)
                 result = CheckAnimationHierarchyRequest(request);
             // Read-only refusal publishes no partial value and cannot turn a
@@ -2862,7 +2933,15 @@ namespace mta::game_de
                 return result;
             std::uintptr_t                 next = 0;
             NativeAnimationHierarchyMemory memory({runtime.image}, &CheckTimingOwner);
-            result = memory.ReadSequences(request.locator, next);
+            if (runtime.privateHierarchies.Owns(request))
+            {
+                result = runtime.privateHierarchies.ReadSequences(runtime.image, request, &CheckTimingOwner, next);
+                PublishCustomAnimationSequenceDebt(request.ownerGeneration);
+                if (runtime.privateHierarchies.RecoveryPending())
+                    Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            }
+            else
+                result = memory.ReadSequences(request.locator, next);
             if (result == ClockResult::Ok)
                 result = CheckAnimationHierarchyRequest(request);
             if (result == ClockResult::Ok)
@@ -2879,7 +2958,15 @@ namespace mta::game_de
                 return result;
             std::uintptr_t                 next = 0;
             NativeAnimationHierarchyMemory memory({runtime.image}, &CheckTimingOwner);
-            result = memory.ReadSequence(request.locator, requestedIndex, next);
+            if (runtime.privateHierarchies.Owns(request))
+            {
+                result = runtime.privateHierarchies.ReadSequence(runtime.image, request, requestedIndex, &CheckTimingOwner, next);
+                PublishCustomAnimationSequenceDebt(request.ownerGeneration);
+                if (runtime.privateHierarchies.RecoveryPending())
+                    Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            }
+            else
+                result = memory.ReadSequence(request.locator, requestedIndex, next);
             if (result == ClockResult::Ok)
                 result = CheckAnimationHierarchyRequest(request);
             if (result == ClockResult::Ok)
@@ -2927,10 +3014,22 @@ namespace mta::game_de
 
         bool RestoreCustomAnimationSequences() noexcept
         {
-            if (!runtime.customSequences.IsRetained())
+            if (!runtime.customSequences.IsRetained() && !runtime.privateHierarchies.IsRetained())
                 return true;
             if (CheckCustomAnimationSequenceRecoveryOwner() != ClockResult::Ok)
                 return false;
+            // Retire only acknowledged empty, never-published CPU receivers.
+            // Unknown children/cache or an irreversible publication pin retain
+            // this owner instead of being mistaken for a native detach.
+            if (runtime.privateHierarchies.IsRetained())
+            {
+                NativePrivateAnimationHierarchyController::RetireProgress privateProgress;
+                const auto privateResult = runtime.privateHierarchies.RetireEmpty(runtime.image, runtime.generation.load(), 32,
+                                                                                  &CheckCustomAnimationSequenceRecoveryOwner, privateProgress);
+                PublishCustomAnimationSequenceDebt(runtime.generation.load());
+                if (privateResult != ClockResult::Ok || runtime.privateHierarchies.IsRetained())
+                    return false;
+            }
             NativeCustomAnimSequenceController::RetireProgress progress;
             const auto                                         result =
                 runtime.customSequences.Retire(runtime.image, runtime.generation.load(), 32, &CheckCustomAnimationSequenceRecoveryOwner, progress);
@@ -5342,7 +5441,7 @@ namespace mta::game_de
             // bounded work before parking peers for clock patch restoration.
             if (clean && (runtime.pedReferences.IsRetained() || WorldIgnoreRetained()))
                 clean = RestorePedReferences();
-            if (clean && runtime.customSequences.IsRetained())
+            if (clean && (runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained()))
                 clean = RestoreCustomAnimationSequences();
             if (clean && !clockChanged && !timingChanged)
             {
@@ -6335,7 +6434,8 @@ namespace mta::game_de
             next.active = runtime.active.load();
             next.ready = runtime.ready.load() && !runtime.timingRecovery.load() && !runtime.weatherRecovery.load() && !runtime.weatherGeneration.load() &&
                          !runtime.weaponVectorRecovery.load() && !runtime.weaponVectorGeneration.load() && !WeatherOverridePending() &&
-                         !runtime.pedReferences.RecoveryPending() && !runtime.worldIgnoreRecovery.load() && !runtime.customSequences.RecoveryPending();
+                         !runtime.pedReferences.RecoveryPending() && !runtime.worldIgnoreRecovery.load() && !runtime.customSequences.RecoveryPending() &&
+                         !runtime.privateHierarchies.RecoveryPending();
             next.stopping = runtime.stopping.load();
             next.restored = runtime.restored.load() && !runtime.timingDirty.load() && !runtime.timingRecovery.load() && !runtime.weatherRecovery.load() &&
                             !runtime.weatherSuperseded.load() && !runtime.weatherGeneration.load() && !runtime.weaponVectorRecovery.load() &&

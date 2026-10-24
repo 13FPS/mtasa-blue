@@ -21,6 +21,9 @@ namespace mta::game_de
         std::uint16_t  sequenceCount = 0;
         std::uint8_t   runningCompressed = 0;
         std::int32_t   blockId = 0;
+        // Bank hashes are defined. Fresh private storage explicitly reports
+        // unknown until a supported name operation defines its original bits.
+        bool hashDefined = true;
     };
     class NativeAnimationHierarchyAccess
     {
@@ -42,5 +45,14 @@ namespace mta::game_de
         {
             return ClockResult::NotInitialized;
         }
+        // These private CPU40 operations do not expose a general MTA factory.
+        // Only the same current owner may create, initialize or retire its
+        // neverpublished empty/cache-free records; children remain separate.
+        virtual ClockResult CreatePrivateAnimationHierarchy(std::uint64_t, NativeAnimationHierarchyReferenceToken&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
+        virtual ClockResult InitializePrivateAnimationHierarchy(const NativeAnimationHierarchyReferenceToken&) noexcept { return ClockResult::NotInitialized; }
+        virtual ClockResult DestroyPrivateAnimationHierarchy(const NativeAnimationHierarchyReferenceToken&) noexcept { return ClockResult::NotInitialized; }
     };
 }

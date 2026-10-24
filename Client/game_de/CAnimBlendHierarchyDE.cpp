@@ -19,6 +19,13 @@ namespace mta::game_de
                                          std::to_string(static_cast<unsigned>(result)));
         }
     }
+    void CAnimBlendHierarchyDE::Initialize()
+    {
+        // Only the owner knows whether this is an issued, empty private
+        // record. A borrowed bank hierarchy cannot be reset through this API.
+        const auto token = reference;
+        Require(native.InitializePrivateAnimationHierarchy(token), "Initialize");
+    }
     NativeAnimationHierarchyValues CAnimBlendHierarchyDE::Read(const char* operation) const
     {
         const auto                     token = reference;
@@ -83,6 +90,10 @@ namespace mta::game_de
     unsigned int CAnimBlendHierarchyDE::GetNameHashKey()
     {
         static_assert(sizeof(unsigned int) == sizeof(std::uint32_t));
-        return Read("GetNameHashKey").hash;
+        const auto value = Read("GetNameHashKey");
+        // Original Initialize preserves the hash. An unassigned private hash
+        // cannot become a fabricated zero, while unrelated fields remain usable.
+        Require(value.hashDefined ? ClockResult::Ok : ClockResult::NotInitialized, "GetNameHashKey");
+        return value.hash;
     }
 }

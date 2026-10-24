@@ -5,6 +5,18 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+Private hierarchy creation and initialization reuse MTA's plain interface
+allocation policy and its existing hierarchy getters. The DE receiver has a
+40-byte native view; initialization clears the proved fields while preserving
+the undefined hash and alignment bytes. Reading the unknown name hash refuses
+that field without hiding valid time, block, count or interface observations.
+
+These records share the existing callback generation and cleanup debt group.
+Only a known empty receiver that has never been published can be deleted;
+unknown children, cache links or publication intent retain its owner. This
+slice supplies no child attachment, native destructor or complete hierarchy
+factory. The common parser's child-detachment protocol remains separate work.
+
 An explicit private builder now prepares fresh compressed sequence frames on
 the same allocation owner. It requires a fresh row, the exact original owned
 frame base and a checked full-width count times the 10/16-byte compressed

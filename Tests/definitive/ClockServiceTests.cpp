@@ -70,6 +70,9 @@
 #include "../../Client/game_de/NativeAnimationBlockFactoryMemory.h"
 #include "../../Client/game_de/NativeAnimationHierarchyHashMemory.h"
 #include "../../Client/game_de/NativeAnimationHierarchyMemory.h"
+#include "../../Client/game_de/NativePrivateAnimationHierarchyStorage.h"
+#include "../../Client/game_de/NativePrivateAnimationHierarchyController.h"
+#include "PrivateHierarchyProfile.generated.h"
 #include "../../Client/game_de/NativeAnimationHierarchyReadProfile.h"
 #include "AnimationHierarchyDEFixture.h"
 #include "../../Client/game_de/CKeyGenDE.h"
@@ -8311,10 +8314,16 @@ namespace
 #include "NativeCustomAnimationSequenceCopyFrameOwnerTests.inl"
 #include "NativeCustomAnimationSequenceNameOwnerTests.inl"
 #include "NativeFreshCompressedSequenceOwnerTests.inl"
+#include "NativePrivateHierarchyOwnerTests.inl"
 
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool privateHierarchyPublished = argc == 3 && std::strcmp(argv[2], "--private-hierarchy-published") == 0;
+    const bool privateHierarchyPointer = argc == 3 && std::strcmp(argv[2], "--private-hierarchy-pointer") == 0;
+    const bool privateHierarchyCache = argc == 3 && std::strcmp(argv[2], "--private-hierarchy-cache") == 0;
+    const bool privateHierarchyOnly = privateHierarchyPublished || privateHierarchyPointer || privateHierarchyCache ||
+                                      (argc == 3 && std::strcmp(argv[2], "--private-hierarchy-success") == 0);
     const bool freshCompressedSequenceOnly = argc == 3 && std::strcmp(argv[2], "--fresh-compressed-sequence") == 0;
     const bool customAnimationSequenceNameOnly = argc == 3 && std::strcmp(argv[2], "--custom-animation-sequence-name") == 0;
     const bool animationHierarchyBankOnly = argc == 3 && std::strcmp(argv[2], "--animation-hierarchy-bank") == 0;
@@ -8380,9 +8389,18 @@ int main(int argc, char** argv)
            cameraSphereOnly || pedWeaponClearOnly || pedClothesOnly || pedRebuildOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly ||
            animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly ||
            animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly || animationHierarchyBankOnly ||
-           customAnimationSequenceNameOnly || freshCompressedSequenceOnly) &&
+           customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (privateHierarchyOnly)
+    {
+        PrivateHierarchyOwnerFixture::scenario = privateHierarchyPublished ? 1u : privateHierarchyPointer ? 2u : privateHierarchyCache ? 3u : 0u;
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        NativeAnimationBlocksOwnedSdk(fixture, &PrivateHierarchyOwnerFixture::Prepared);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (freshCompressedSequenceOnly)
     {
         ClockImageFixture fixture;

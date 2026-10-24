@@ -70,6 +70,9 @@
 #include "../../Client/game_de/NativeAnimationBlockFactoryMemory.h"
 #include "../../Client/game_de/CAnimBlockRequestDE.h"
 #include "NativeAnimationBlockFactoryFixture.h"
+#include "NativeCustomAnimSequenceStorageFixture.h"
+#include "../../Client/game_de/NativeAnimationSequenceStorageAccess.h"
+#include <cstdlib>
 #include "../../Client/game_de/NativeAnimationBlockRefProfile.h"
 #include "NativeAnimationBlockRefFixture.h"
 #include <game/CAnimBlockRequestPolicy.h>
@@ -3231,6 +3234,12 @@ namespace ClockWorldIgnoreOwnerTest
 #define ReadImage AnimationBlockOwnerFixtureReadImage
 #include "../../Client/game_de/NativeAnimationBlockFactoryMemory.cpp"
 #undef ReadImage
+#define MTA_DE_CUSTOM_ANIM_SEQUENCE_MALLOC_INVOKE ::NativeCustomAnimSequenceStorageFixture::Malloc
+#define MTA_DE_CUSTOM_ANIM_SEQUENCE_FREE_INVOKE   ::NativeCustomAnimSequenceStorageFixture::Free
+#include "../../Client/game_de/NativeCustomAnimSequenceStorage.cpp"
+#undef MTA_DE_CUSTOM_ANIM_SEQUENCE_FREE_INVOKE
+#undef MTA_DE_CUSTOM_ANIM_SEQUENCE_MALLOC_INVOKE
+#include "../../Client/game_de/NativeCustomAnimSequenceController.cpp"
 #undef MTA_DE_PED_WATER_FLAGS_EXCHANGE
 #define MTA_DE_PED_PLACEMENT_EXCHANGE ClockPedPhysicalScalarsOwnerTest::Exchange
 #include "../../Client/game_de/NativePedPlacementMemory.cpp"
@@ -7981,9 +7990,15 @@ namespace
 #include "NativeAnimationBlockNameOwnerTests.inl"
 #include "NativeAnimationManagerOwnerTests.inl"
 
+#include "NativeCustomSequenceStorageOwnerTests.inl"
+
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool customSequenceStorageSuccess = argc == 3 && std::strcmp(argv[2], "--custom-sequence-storage-success") == 0;
+    const bool customSequenceStorageUnknownAllocate = argc == 3 && std::strcmp(argv[2], "--custom-sequence-storage-unknown-allocate") == 0;
+    const bool customSequenceStorageUnknownFree = argc == 3 && std::strcmp(argv[2], "--custom-sequence-storage-unknown-free") == 0;
+    const bool customSequenceStorageOnly = customSequenceStorageSuccess || customSequenceStorageUnknownAllocate || customSequenceStorageUnknownFree;
     const bool animationBlockFactoryOnly = argc == 3 && std::strcmp(argv[2], "--animation-block-factory") == 0;
     const bool animationBlockRefsOnly = argc == 3 && std::strcmp(argv[2], "--animation-block-refs") == 0;
     const bool playerNativePrerequisitesOnly = argc == 3 && std::strcmp(argv[2], "--player-native-prerequisites") == 0;
@@ -8032,9 +8047,17 @@ int main(int argc, char** argv)
            fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly ||
            worldLineOnly || worldAreaOnly || worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly ||
            cameraSphereOnly || pedWeaponClearOnly || pedClothesOnly || pedRebuildOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly ||
-           animationBlockRefsOnly || animationBlockFactoryOnly) &&
+           animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (customSequenceStorageOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        CustomSequenceStorageOwnerFixture::Run(fixture, customSequenceStorageUnknownAllocate ? 1u : customSequenceStorageUnknownFree ? 2u : 0u);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (animationBlockFactoryOnly)
     {
         ClockImageFixture fixture;

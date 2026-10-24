@@ -55,6 +55,46 @@ namespace mta::game_de
         if (dynamic_cast<void*>(&manager) != dynamic_cast<void*>(&blocks))
             throw std::invalid_argument("DE animation factory requires one native owner for manager and blocks");
     }
+    CAnimManagerDE::CAnimManagerDE(NativeAnimationManagerAccess& manager, NativeAnimationSequenceStorageAccess& storage, std::uint64_t generation)
+        : native(manager), ownerGeneration(generation), storageAccess(&storage)
+    {
+        if (dynamic_cast<void*>(&manager) != dynamic_cast<void*>(&storage))
+            throw std::invalid_argument("DE custom animation storage requires one native owner for manager and storage");
+    }
+    CAnimManagerDE::CAnimManagerDE(NativeAnimationManagerAccess& manager, NativeAnimationBlockAccess& blocks, NativeAnimationSequenceStorageAccess& storage,
+                                   CGame& game, std::uint64_t generation)
+        : CAnimManagerDE(manager, blocks, game, generation)
+    {
+        if (dynamic_cast<void*>(&manager) != dynamic_cast<void*>(&storage))
+            throw std::invalid_argument("DE custom animation storage requires one native owner for manager and storage");
+        storageAccess = &storage;
+    }
+    CAnimBlendSequenceSAInterface* CAnimManagerDE::AllocateCustomAnimSequences(std::size_t capacity)
+    {
+        if (!storageAccess)
+            Require(ClockResult::NotInitialized, "AllocateCustomAnimSequences");
+        // Zero capacity still dispatches: only the current admitted runtime
+        // may authorize even a null result for this borrowed generation.
+        const auto     generation = ownerGeneration;
+        std::uintptr_t tag = 0;
+        Require(storageAccess->AllocateAnimationSequences(generation, capacity, tag), "AllocateCustomAnimSequences");
+        if (capacity && !tag)
+            Require(ClockResult::WriteFailure, "AllocateCustomAnimSequences");
+        if (!capacity && tag)
+            Require(ClockResult::BindingChanged, "AllocateCustomAnimSequences");
+        return reinterpret_cast<CAnimBlendSequenceSAInterface*>(tag);
+    }
+    void CAnimManagerDE::FreeCustomAnimSequences(CAnimBlendSequenceSAInterface* tag)
+    {
+        if (!storageAccess)
+            Require(ClockResult::NotInitialized, "FreeCustomAnimSequences");
+        // The real controller maps only its currently issued, unfreed first
+        // tags to retained records. A raw SDK tag adds no serial/ABA promise,
+        // native bank adoption, frame cleanup or destructor-owned retirement.
+        const auto generation = ownerGeneration;
+        const auto issuedTag = reinterpret_cast<std::uintptr_t>(tag);
+        Require(storageAccess->FreeAnimationSequences(generation, issuedTag), "FreeCustomAnimSequences");
+    }
     void CAnimManagerDE::RequireFactory(const char* operation) const
     {
         if (!blockAccess || !gameProvider)

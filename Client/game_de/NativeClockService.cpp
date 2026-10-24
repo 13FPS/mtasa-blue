@@ -59,6 +59,8 @@
 #include "NativeAnimationBlockMemory.h"
 #include "NativeAnimationBlockRefMemory.h"
 #include "NativeAnimationBlockFactoryMemory.h"
+#include "NativeAnimationSequenceStorageAccess.h"
+#include "NativeCustomAnimSequenceController.h"
 #include "NativeAnimationManagerMemory.h"
 #include "NativePedVelocityMemory.h"
 #include "NativePedReferenceController.h"
@@ -147,7 +149,7 @@ namespace mta::game_de
         constexpr std::size_t    atomicPatchOffset = Profile::patchRva - atomicPatchRva;
         static_assert(atomicPatchOffset + Profile::originalPatch.size() <= sizeof(LONG64));
 
-        class NativeAccess final : public NativeClockAccess, public NativeGameTimingAccess
+        class NativeAccess final : public NativeClockAccess, public NativeGameTimingAccess, public NativeAnimationSequenceStorageAccess
         {
         public:
             ClockResult Read(ClockValues& values) noexcept override;
@@ -234,6 +236,8 @@ namespace mta::game_de
             ClockResult ReadPedCenterOfMass(const NativePedReferenceToken&, CVector&) noexcept override;
             ClockResult SetPedCenterOfMass(const NativePedReferenceToken&, const CVector&) noexcept override;
             ClockResult SetPedOrientation(const NativePedReferenceToken&, const CVector&) noexcept override;
+            ClockResult AllocateAnimationSequences(std::uint64_t, std::size_t, std::uintptr_t&) noexcept override;
+            ClockResult FreeAnimationSequences(std::uint64_t, std::uintptr_t) noexcept override;
             ClockResult ReadAnimationBlock(const NativeAnimationBlockIdentity&, NativeAnimationBlockValues&) noexcept override;
             ClockResult ReadAnimationBlockName(const NativeAnimationBlockIdentity&, char*&) noexcept override;
             ClockResult ReadAnimationBlockRefs(const NativeAnimationBlockIdentity&, std::uint16_t&) noexcept override;
@@ -424,6 +428,11 @@ namespace mta::game_de
             // address has disappeared from the native reference bank.
             NativePedReferenceController pedReferences;
             std::atomic<std::uint64_t>   referenceGeneration{0};
+            // Native buffers remain with this runtime even if their SDK
+            // publication fails. No producer/destructor may free them or
+            // discard unknown entered effects while removing the callback.
+            NativeCustomAnimSequenceController customSequences;
+            std::atomic<std::uint64_t>         customSequenceGeneration{0};
             // One native address filter is the only retained pointer intent.
             // Keep both CAS candidates when an interrupted replacement cannot
             // be acknowledged, then clear it before either token is released.
@@ -540,6 +549,11 @@ namespace mta::game_de
         bool WorldIgnoreRetained() noexcept
         {
             return runtime.worldIgnoreGeneration.load() != 0;
+        }
+
+        bool NativeLifetimeRetained() noexcept
+        {
+            return runtime.pedReferences.IsRetained() || WorldIgnoreRetained() || runtime.customSequences.IsRetained();
         }
 
         bool WeatherOverrideRetained() noexcept
@@ -2573,6 +2587,85 @@ namespace mta::game_de
         NativePedReferenceMemory PedReferenceMemory() noexcept
         {
             return NativePedReferenceMemory({runtime.image}, &CheckTimingOwner, &CheckPedReferenceRecoveryOwner, runtime.generation.load());
+        }
+
+        ClockResult CheckCustomAnimationSequenceRecoveryOwner() noexcept
+        {
+            const auto generation = runtime.generation.load();
+            // End revokes SDK borrowing, not this exact natural callback's
+            // duty to release known-unpublished allocations. Keep GT/GC,
+            // image, admission and original cleanup generation checks.
+            if (callbackDepth != 1 || GetCurrentThreadId() != runtime.engineThread.load() || !timingCallbackGeneration ||
+                timingCallbackGeneration != generation || runtime.customSequenceGeneration.load() != generation ||
+                runtime.admissionGeneration.load() != generation || !runtime.admissionSerial.load())
+                return ClockResult::OwnerConflict;
+            return CheckBinding(false, true) && CheckTimingBinding() ? ClockResult::Ok : ClockResult::BindingChanged;
+        }
+
+        void PublishCustomAnimationSequenceDebt(std::uint64_t generation) noexcept
+        {
+            if (runtime.customSequences.IsRetained())
+            {
+                runtime.customSequenceGeneration.store(generation);
+                runtime.restored.store(false);
+            }
+            else
+                runtime.customSequenceGeneration.store(0);
+        }
+
+        ClockResult NativeAccess::AllocateAnimationSequences(std::uint64_t generation, std::size_t capacity, std::uintptr_t& output) noexcept
+        {
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto current = runtime.generation.load();
+            const auto retained = runtime.customSequenceGeneration.load();
+            if (!generation || generation != current || (retained && retained != generation))
+                return ClockResult::OwnerConflict;
+            runtime.customSequenceGeneration.store(generation);
+            NativeCustomAnimSequenceController::Receipt receipt;
+            std::uintptr_t                              next = 0;
+            result = runtime.customSequences.Allocate(runtime.image, generation, capacity, &CheckTimingOwner, next, &receipt);
+            PublishCustomAnimationSequenceDebt(generation);
+            if (result == ClockResult::Ok)
+                result = CheckTimingOwner();
+            if ((receipt.entered && result != ClockResult::Ok) || runtime.customSequences.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            if (result == ClockResult::Ok)
+                output = next;
+            return result;
+        }
+
+        ClockResult NativeAccess::FreeAnimationSequences(std::uint64_t generation, std::uintptr_t issuedTag) noexcept
+        {
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto current = runtime.generation.load();
+            const auto retained = runtime.customSequenceGeneration.load();
+            if (!generation || generation != current || (retained && retained != generation))
+                return ClockResult::OwnerConflict;
+            NativeCustomAnimSequenceController::Receipt receipt;
+            result = runtime.customSequences.FreeStorage(runtime.image, generation, issuedTag, &CheckTimingOwner, &receipt);
+            PublishCustomAnimationSequenceDebt(generation);
+            if (result == ClockResult::Ok)
+                result = CheckTimingOwner();
+            if ((receipt.entered && result != ClockResult::Ok) || runtime.customSequences.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            return result;
+        }
+
+        bool RestoreCustomAnimationSequences() noexcept
+        {
+            if (!runtime.customSequences.IsRetained())
+                return true;
+            if (CheckCustomAnimationSequenceRecoveryOwner() != ClockResult::Ok)
+                return false;
+            NativeCustomAnimSequenceController::RetireProgress progress;
+            const auto                                         result =
+                runtime.customSequences.Retire(runtime.image, runtime.generation.load(), 32, &CheckCustomAnimationSequenceRecoveryOwner, progress);
+            PublishCustomAnimationSequenceDebt(runtime.generation.load());
+            return result == ClockResult::Ok && !runtime.customSequences.IsRetained();
         }
 
         ClockResult NativeAccess::AcquirePedReference(std::uint32_t handle, NativePedReferenceToken& output) noexcept
@@ -4865,6 +4958,8 @@ namespace mta::game_de
             // bounded work before parking peers for clock patch restoration.
             if (clean && (runtime.pedReferences.IsRetained() || WorldIgnoreRetained()))
                 clean = RestorePedReferences();
+            if (clean && runtime.customSequences.IsRetained())
+                clean = RestoreCustomAnimationSequences();
             if (clean && !clockChanged && !timingChanged)
             {
                 ClockValues current;
@@ -5084,12 +5179,11 @@ namespace mta::game_de
             if (runtime.stopping.load())
             {
                 if ((runtime.captured.load() && !runtime.restored.load()) || runtime.weatherRecovery.load() || runtime.weatherGeneration.load() ||
-                    runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load() || WeatherOverrideRetained() ||
-                    (runtime.pedReferences.IsRetained() || WorldIgnoreRetained()))
+                    runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load() || WeatherOverrideRetained() || NativeLifetimeRetained())
                     RestoreOriginal();
                 else if (!runtime.captured.load() && !runtime.timingDirty.load() && !runtime.timingRecovery.load() && !runtime.weatherRecovery.load() &&
                          !runtime.weatherGeneration.load() && !runtime.weaponVectorRecovery.load() && !runtime.weaponVectorGeneration.load() &&
-                         !WeatherOverrideRetained() && !(runtime.pedReferences.IsRetained() || WorldIgnoreRetained()))
+                         !WeatherOverrideRetained() && !NativeLifetimeRetained())
                     runtime.restored.store(true);
             }
             if (runtime.peersRetained.load() && !RetryPeerHoldsBounded())
@@ -5177,7 +5271,7 @@ namespace mta::game_de
                 {
                     if ((runtime.captured.load() && !runtime.restored.load()) || runtime.timingDirty.load() || runtime.timingRecovery.load() ||
                         runtime.weatherRecovery.load() || runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() ||
-                        runtime.weaponVectorGeneration.load() || WeatherOverrideRetained() || (runtime.pedReferences.IsRetained() || WorldIgnoreRetained()))
+                        runtime.weaponVectorGeneration.load() || WeatherOverrideRetained() || NativeLifetimeRetained())
                         RestoreOriginal();
                     else
                     {
@@ -5769,8 +5863,7 @@ namespace mta::game_de
                     (runtime.inFlight.load() || !runtime.restored.load() || runtime.patchInstalled.load() || runtime.patchRecovery.load() ||
                      runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() || runtime.weatherRecovery.load() ||
                      runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load() ||
-                     WeatherOverrideRetained() || (runtime.pedReferences.IsRetained() || WorldIgnoreRetained()) || runtime.peersRetained.load() ||
-                     runtime.protectionPending.load()))
+                     WeatherOverrideRetained() || NativeLifetimeRetained() || runtime.peersRetained.load() || runtime.protectionPending.load()))
                     ready = false;
                 if (ready && !runtime.frameMode)
                     ready = (install ? DetourAttach : DetourDetach)(reinterpret_cast<PVOID*>(&runtime.originalContinuation),
@@ -5858,12 +5951,12 @@ namespace mta::game_de
             next.active = runtime.active.load();
             next.ready = runtime.ready.load() && !runtime.timingRecovery.load() && !runtime.weatherRecovery.load() && !runtime.weatherGeneration.load() &&
                          !runtime.weaponVectorRecovery.load() && !runtime.weaponVectorGeneration.load() && !WeatherOverridePending() &&
-                         !runtime.pedReferences.RecoveryPending() && !runtime.worldIgnoreRecovery.load();
+                         !runtime.pedReferences.RecoveryPending() && !runtime.worldIgnoreRecovery.load() && !runtime.customSequences.RecoveryPending();
             next.stopping = runtime.stopping.load();
             next.restored = runtime.restored.load() && !runtime.timingDirty.load() && !runtime.timingRecovery.load() && !runtime.weatherRecovery.load() &&
                             !runtime.weatherSuperseded.load() && !runtime.weatherGeneration.load() && !runtime.weaponVectorRecovery.load() &&
                             !runtime.weaponVectorGeneration.load() && !runtime.weaponVectorSuperseded.load() && !WeatherOverrideRetained() &&
-                            !runtime.weatherOverrideSuperseded.load() && !(runtime.pedReferences.IsRetained() || WorldIgnoreRetained());
+                            !runtime.weatherOverrideSuperseded.load() && !NativeLifetimeRetained();
             next.frozen = runtime.patchInstalled.load();
             next.modulePinned = runtime.modulePinned.load();
             next.failure = runtime.failure.load();
@@ -5887,8 +5980,7 @@ namespace mta::game_de
             next.dataRecoveryPending = runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() ||
                                        runtime.weatherRecovery.load() || runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() ||
                                        runtime.weaponVectorGeneration.load() || WeatherOverridePending() || runtime.pedReferences.RecoveryPending() ||
-                                       runtime.worldIgnoreRecovery.load() ||
-                                       (runtime.stopping.load() && (runtime.pedReferences.IsRetained() || WorldIgnoreRetained()));
+                                       runtime.worldIgnoreRecovery.load() || (runtime.stopping.load() && NativeLifetimeRetained());
             next.protectionRestorePending = runtime.protectionPending.load();
             state = next;
             return true;
@@ -5999,8 +6091,8 @@ namespace mta::game_de
             runtime.inFlight.load() || runtime.captured.load() || runtime.patchInstalled.load() || runtime.patchRecovery.load() ||
             runtime.protectionPending.load() || runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() ||
             runtime.weatherRecovery.load() || runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() ||
-            runtime.weaponVectorGeneration.load() || WeatherOverrideRetained() || (runtime.pedReferences.IsRetained() || WorldIgnoreRetained()) ||
-            runtime.peersRetained.load() || runtime.admissionSerial.load() || runtime.generation.load() == (std::numeric_limits<std::uint64_t>::max)())
+            runtime.weaponVectorGeneration.load() || WeatherOverrideRetained() || NativeLifetimeRetained() || runtime.peersRetained.load() ||
+            runtime.admissionSerial.load() || runtime.generation.load() == (std::numeric_limits<std::uint64_t>::max)())
             return false;
         Admission::Token claim;
         if (!Admission::TryAcquire(Admission::Category::Clock, claim))
@@ -6128,8 +6220,7 @@ namespace mta::game_de
             !runtime.captured.load() && !runtime.patchInstalled.load() && !runtime.patchRecovery.load() && !runtime.protectionPending.load() &&
             !runtime.dataRecovery.load() && !runtime.peersRetained.load() && !runtime.timingDirty.load() && !runtime.timingRecovery.load() &&
             !runtime.weatherRecovery.load() && !runtime.weatherGeneration.load() && !runtime.weaponVectorRecovery.load() &&
-            !runtime.weaponVectorGeneration.load() && !WeatherOverrideRetained() && !(runtime.pedReferences.IsRetained() || WorldIgnoreRetained()) &&
-            !runtime.peerBusy.load())
+            !runtime.weaponVectorGeneration.load() && !WeatherOverrideRetained() && !NativeLifetimeRetained() && !runtime.peerBusy.load())
         {
             if (ReleaseAdmission(generation))
             {
@@ -6244,8 +6335,7 @@ namespace mta::game_de
         if ((runtime.captured.load() && !runtime.restored.load()) || runtime.patchInstalled.load() || runtime.patchRecovery.load() ||
             runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() || runtime.weatherRecovery.load() ||
             runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load() || WeatherOverrideRetained() ||
-            (runtime.pedReferences.IsRetained() || WorldIgnoreRetained()) || runtime.inFlight.load() || runtime.peersRetained.load() ||
-            runtime.protectionPending.load())
+            NativeLifetimeRetained() || runtime.inFlight.load() || runtime.peersRetained.load() || runtime.protectionPending.load())
             return false;
         const bool clean = (!runtime.hooked.load() && !runtime.timerHooked.load() && !runtime.frameHooked.load()) || ChangeHooks(false);
         if (clean)
@@ -6275,6 +6365,7 @@ namespace mta::game_de
             runtime.ropesMemory.Reset();
             runtime.ropesGeneration = 0;
             runtime.referenceGeneration.store(0);
+            runtime.customSequenceGeneration.store(0);
             runtime.weatherOverrideGeneration.store(0);
         }
         ReadState(finalState);
@@ -6289,7 +6380,6 @@ namespace mta::game_de
                 (runtime.captured.load() && !runtime.restored.load()) || runtime.patchInstalled.load() || runtime.patchRecovery.load() ||
                 runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() || runtime.weatherRecovery.load() ||
                 runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load() || WeatherOverrideRetained() ||
-                (runtime.pedReferences.IsRetained() || WorldIgnoreRetained()) || runtime.peersRetained.load() || runtime.protectionPending.load() ||
-                runtime.admissionSerial.load());
+                NativeLifetimeRetained() || runtime.peersRetained.load() || runtime.protectionPending.load() || runtime.admissionSerial.load());
     }
 }

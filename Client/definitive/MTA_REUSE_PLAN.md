@@ -5,6 +5,23 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+DE's custom sequence array service now uses the genuine current native heap
+to allocate `80 * capacity + 8` bytes and initialize every capacity row. Its
+storage-only free uses the original allocation base and preserves independent
+frame ownership. The actual animation-manager SDK delegates through an
+explicit service on the same complete native owner, including zero/null
+requests and current callback-generation checks.
+
+The existing runtime owns each allocation journal before entering GTA. Known
+unpublished allocations survive failed output acknowledgement and can retire
+on the original cleanup callback. A returned free is consumed before any
+fallible acknowledgement; unknown entered effects are never replayed. End,
+new startup, callback removal and module retirement retain that journal until
+its resources are discharged. Published arrays are conservatively pinned;
+there is no generic detach or raw-pointer adoption operation. Actual hierarchy
+attachment, frame allocation and complete custom sequence factories remain
+separate requirements.
+
 Custom IFP sequence storage belongs to the animation backend. The common
 manager now has an explicit allocation/free pair: it returns the first opaque
 sequence tag, initializes every capacity row and owns its row size, alignment

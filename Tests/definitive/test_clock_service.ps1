@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory')]
+    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -37,6 +37,11 @@ $record['actualWorldLineSdkOwnerTested'] = $false
 $record['nativeWorldGroundOwnerTested'] = $false
 $record['actualWorldGroundSdkOwnerTested'] = $false
 $record['nativePedWeaponGrantOwnerTested'] = $false
+$record['nativeCustomSequenceStorageOwnerTested'] = $false
+$record['nativeCustomSequenceStorageEndTested'] = $false
+$record['nativeCustomSequenceStorageRetainedLifetimeTested'] = $false
+$record['customSequenceStorageShippingModulePinAcquisitionTested'] = $false
+$record['customSequenceStorageFourSlotLimitTested'] = $false
 $record['actualAnimationBlockFactorySdkOwnerTested'] = $false
 $record['nativeAnimationBlockFactoryOwnerTested'] = $false
 $record['opaqueAnimationBlockRoundtripOwnerTested'] = $false
@@ -402,6 +407,7 @@ try {
     $sourceNames += @('Tests/definitive/NativePedFireCollisionOwnerTests.inl','Tests/definitive/Write-PedFireFixture.ps1','Tests/definitive/Write-PedCollisionFixture.ps1')
     $sourceNames += @('Tests/definitive/NativePedAreaOwnerTests.inl','Tests/definitive/NativeStreamingSpecialModelOwnerTests.inl','Tests/definitive/Write-PedAreaFixture.ps1')
     $sourceNames += @('Tests/definitive/NativePedPoseOwnerTests.inl','Tests/definitive/Write-PedPoseFixture.ps1')
+    $sourceNames += @('Client/game_de/NativeAnimationSequenceStorageAccess.h','Client/game_de/NativeCustomAnimSequenceController.h','Client/game_de/NativeCustomAnimSequenceController.cpp','Client/game_de/NativeCustomAnimSequenceStorage.h','Client/game_de/NativeCustomAnimSequenceStorage.cpp','Client/game_de/NativeCustomAnimSequenceStorageProfile.h','Tests/definitive/NativeCustomAnimSequenceStorageFixture.h','Tests/definitive/NativeCustomSequenceStorageOwnerTests.inl')
     $sourceNames += @('Client/game_de/NativeAnimationBlockFactoryMemory.h','Client/game_de/NativeAnimationBlockFactoryMemory.cpp','Client/game_de/NativeAnimationBlockHierarchyProfile.h','Tests/definitive/NativeAnimationBlockFactoryFixture.h','Tests/definitive/NativeAnimationBlockFactoryOwnerTests.inl','Tests/definitive/Write-AnimationBlockFactoryFixture.ps1','Tests/definitive/Write-AnimationManagerFixture.ps1','Client/sdk/game/CAnimBlock.h')
     $sourceNames += @('Client/game_de/NativeAnimationBlockRefMemory.h','Client/game_de/NativeAnimationBlockRefMemory.cpp','Client/game_de/NativeAnimationBlockRefProfile.h','Tests/definitive/NativeAnimationBlockRefFixture.h','Tests/definitive/NativeAnimationBlockRefsOwnerTests.inl','Tests/definitive/Write-AnimBlockRefsFixture.ps1','Tests/definitive/AnimBlockNameDETests.cpp')
     $sourceNames += @('Tests/definitive/NativeAnimationBlockOwnerTests.inl','Tests/definitive/NativeAnimationBlockNameOwnerTests.inl','Tests/definitive/NativeAnimationManagerOwnerTests.inl','Tests/definitive/AnimationManagerOwnerFixture.h')
@@ -728,7 +734,34 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
     if ($Scope -eq 'GarageNamed') { $fixtureArguments += '--garage-named' }
     if ($Scope -eq 'GaragePools') { $fixtureArguments += '--garage-pools' }
     if ($Scope -eq 'PedPoolRegistry') { $fixtureArguments += '--ped-pool-registry' }
-    if ($Scope -eq 'ConstructorWeapons') {
+    if ($Scope -eq 'CustomSequenceStorage') {
+        # Unknown entered effects retain the actual global journal until the
+        # ordinary host process exits. Compile once, isolate those cases rather
+        # than erase owner debt to make a following scenario fit.
+        $record['testRuns'] = @()
+        $record['testScenarioExecutables'] = @()
+        $texts = @()
+        foreach ($scenario in @('success','unknown-allocate','unknown-free')) {
+            $scenarioRoot = Join-Path $outputRoot ('scenario-custom-sequence-'+$scenario)
+            [IO.Directory]::CreateDirectory($scenarioRoot) | Out-Null
+            $scenarioExecutable = Join-Path $scenarioRoot ([IO.Path]::GetFileName($executable))
+            if (Test-Path -LiteralPath $scenarioExecutable) { throw 'Scenario executable already exists; preserve prior evidence.' }
+            Copy-Item -LiteralPath $executable -Destination $scenarioExecutable
+            $scenarioSha = Sha $scenarioExecutable
+            if ($scenarioSha -cne (Sha $executable)) { throw 'Copied custom sequence scenario differs from the once-compiled test binary.' }
+            $record.testScenarioExecutables += @{scenario=$scenario;path=$scenarioExecutable;sha256=$scenarioSha;directory=$scenarioRoot}
+            $run = RunBounded $scenarioExecutable @($scenarioRoot,('--custom-sequence-storage-'+$scenario)) ('test-custom-sequence-'+$scenario) 60000
+            $record.testRuns += $run
+            $part = [IO.File]::ReadAllText($run.stdout) + [IO.File]::ReadAllText($run.stderr)
+            if ($run.exitCode -ne 0 -or $run.timedOut -or $part -notmatch 'Passed (\d+) production clock service checks') {
+                throw "Custom sequence storage $scenario fixture failed."
+            }
+            $record.checks += [int]$Matches[1]
+            $texts += $part
+        }
+        $record.testRun = $record.testRuns[-1]
+        $text = $texts -join [Environment]::NewLine
+    } elseif ($Scope -eq 'ConstructorWeapons') {
         # Compile once; each new ordinary-host process owns a fresh one-shot
         # production manager. Historical Clock/weather/ped suites are skipped.
         $record['testRuns'] = @()
@@ -765,7 +798,13 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
         if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
     }
-    if ($Scope -eq 'AnimationBlockFactory') {
+    if ($Scope -eq 'CustomSequenceStorage') {
+        $record['nativeCustomSequenceStorageOwnerTested'] = $text.Contains('Production native custom sequence storage callback owner fixture completed')
+        $record['nativeCustomSequenceStorageEndTested'] = $text.Contains('Production native custom sequence storage natural End fixture completed')
+        $record['nativeCustomSequenceStorageRetainedLifetimeTested'] = $text.Contains('Production native custom sequence storage unknown allocation lifetime retained') -and $text.Contains('Production native custom sequence storage unknown free lifetime retained')
+        if (-not ($record.nativeCustomSequenceStorageOwnerTested -and $record.nativeCustomSequenceStorageEndTested -and $record.nativeCustomSequenceStorageRetainedLifetimeTested)) { throw 'New native custom sequence storage owner/End/retained-lifetime observations did not complete.' }
+        $record.productionNativeCallbackTested = $true
+    } elseif ($Scope -eq 'AnimationBlockFactory') {
         $record['actualAnimationBlockFactorySdkOwnerTested'] = $text.Contains('Production actual animation block factory SDK owner fixture completed')
         $record['nativeAnimationBlockFactoryOwnerTested'] = $text.Contains('Production native animation block factory owner fixture completed')
         $record['opaqueAnimationBlockRoundtripOwnerTested'] = $text.Contains('Production opaque animation block roundtrip owner fixture completed')

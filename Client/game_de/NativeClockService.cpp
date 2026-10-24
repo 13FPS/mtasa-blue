@@ -62,6 +62,8 @@
 #include "NativeAnimationHierarchyHashMemory.h"
 #include "NativeAnimationSequenceStorageAccess.h"
 #include "NativeAnimationSequenceAccess.h"
+#include "NativeAnimationHierarchyAccess.h"
+#include "NativeAnimationHierarchyMemory.h"
 #include "NativeCustomAnimSequenceController.h"
 #include "NativeAnimationManagerMemory.h"
 #include "NativePedVelocityMemory.h"
@@ -154,7 +156,8 @@ namespace mta::game_de
         class NativeAccess final : public NativeClockAccess,
                                    public NativeGameTimingAccess,
                                    public NativeAnimationSequenceStorageAccess,
-                                   public NativeAnimationSequenceAccess
+                                   public NativeAnimationSequenceAccess,
+                                   public NativeAnimationHierarchyAccess
         {
         public:
             ClockResult Read(ClockValues& values) noexcept override;
@@ -247,6 +250,9 @@ namespace mta::game_de
             ClockResult ReadAnimationSequenceHash(const NativeAnimationSequenceReferenceToken&, std::uint32_t&) noexcept override;
             ClockResult CopyAnimationSequenceProperties(const NativeAnimationSequenceReferenceToken&, std::uintptr_t) noexcept override;
             ClockResult ReadAnimationSequenceFrame(const NativeAnimationSequenceReferenceToken&, std::size_t, std::uint32_t, std::uintptr_t&) noexcept override;
+            ClockResult ReadAnimationHierarchy(const NativeAnimationHierarchyReferenceToken&, NativeAnimationHierarchyValues&) noexcept override;
+            ClockResult ReadAnimationHierarchySequences(const NativeAnimationHierarchyReferenceToken&, std::uintptr_t&) noexcept override;
+            ClockResult ReadAnimationHierarchySequence(const NativeAnimationHierarchyReferenceToken&, std::uint32_t, std::uintptr_t&) noexcept override;
             ClockResult AllocateAnimationKeyFrames(std::uint64_t, std::uint32_t, std::uintptr_t&) noexcept override;
             ClockResult FreeAnimationKeyFrames(std::uint64_t, std::uintptr_t) noexcept override;
             ClockResult AllocateAnimationSequences(std::uint64_t, std::size_t, std::uintptr_t&) noexcept override;
@@ -2816,6 +2822,63 @@ namespace mta::game_de
             result = runtime.customSequences.ReadSequenceFrame(runtime.image, request, requestedIndex, requestedStride, &CheckTimingOwner, next);
             if (result == ClockResult::Ok)
                 result = CheckCustomSequenceRequest(request);
+            if (result == ClockResult::Ok)
+                output = next;
+            return result;
+        }
+
+        ClockResult CheckAnimationHierarchyRequest(const NativeAnimationHierarchyReferenceToken& request) noexcept
+        {
+            const auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            return request.ownerGeneration && request.ownerGeneration == runtime.generation.load() ? ClockResult::Ok : ClockResult::OwnerConflict;
+        }
+        ClockResult NativeAccess::ReadAnimationHierarchy(const NativeAnimationHierarchyReferenceToken& token, NativeAnimationHierarchyValues& output) noexcept
+        {
+            const auto request = token;
+            auto       result = CheckAnimationHierarchyRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            NativeAnimationHierarchyValues next;
+            NativeAnimationHierarchyMemory memory({runtime.image}, &CheckTimingOwner);
+            result = memory.Read(request.locator, next);
+            if (result == ClockResult::Ok)
+                result = CheckAnimationHierarchyRequest(request);
+            // Read-only refusal publishes no partial value and cannot turn a
+            // failed borrow into Stop, a new lease or a synthetic empty row.
+            if (result == ClockResult::Ok)
+                output = next;
+            return result;
+        }
+        ClockResult NativeAccess::ReadAnimationHierarchySequences(const NativeAnimationHierarchyReferenceToken& token, std::uintptr_t& output) noexcept
+        {
+            const auto request = token;
+            auto       result = CheckAnimationHierarchyRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            std::uintptr_t                 next = 0;
+            NativeAnimationHierarchyMemory memory({runtime.image}, &CheckTimingOwner);
+            result = memory.ReadSequences(request.locator, next);
+            if (result == ClockResult::Ok)
+                result = CheckAnimationHierarchyRequest(request);
+            if (result == ClockResult::Ok)
+                output = next;
+            return result;
+        }
+        ClockResult NativeAccess::ReadAnimationHierarchySequence(const NativeAnimationHierarchyReferenceToken& token, std::uint32_t index,
+                                                                 std::uintptr_t& output) noexcept
+        {
+            const auto request = token;
+            const auto requestedIndex = index;
+            auto       result = CheckAnimationHierarchyRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            std::uintptr_t                 next = 0;
+            NativeAnimationHierarchyMemory memory({runtime.image}, &CheckTimingOwner);
+            result = memory.ReadSequence(request.locator, requestedIndex, next);
+            if (result == ClockResult::Ok)
+                result = CheckAnimationHierarchyRequest(request);
             if (result == ClockResult::Ok)
                 output = next;
             return result;

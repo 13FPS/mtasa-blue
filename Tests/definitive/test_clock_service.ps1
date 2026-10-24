@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame')]
+    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -37,6 +37,8 @@ $record['actualWorldLineSdkOwnerTested'] = $false
 $record['nativeWorldGroundOwnerTested'] = $false
 $record['actualWorldGroundSdkOwnerTested'] = $false
 $record['nativePedWeaponGrantOwnerTested'] = $false
+$record['nativeAnimationHierarchyBankOwnerTested']=$false
+$record['actualAnimationHierarchyBankSdkOwnerTested']=$false
 $record['nativeCustomAnimationSequenceCopyFrameOwnerTested']=$false
 $record['actualCustomAnimationSequenceCopyFrameSdkOwnerTested']=$false
 $record['nativeCustomAnimationSequenceOwnerTested']=$false
@@ -421,6 +423,7 @@ try {
     $sourceNames += @('Tests/definitive/NativePedPoseOwnerTests.inl','Tests/definitive/Write-PedPoseFixture.ps1')
     $sourceNames += @('Client/game_de/NativeAnimationSequenceAccess.h','Client/game_de/NativeAnimationSequenceLogicalState.h','Client/game_de/NativeAnimationSequenceRowCalls.h','Client/game_de/NativeAnimationSequenceRowProfile.h','Client/game_de/CAnimBlendSequenceDE.h','Client/game_de/CAnimBlendSequenceDE.cpp','Tests/definitive/AnimationSequenceDEFixture.h','Tests/definitive/NativeCustomAnimationSequenceOwnerTests.inl')
     $sourceNames += @('Client/game_de/NativeAnimationSequenceCopyCalls.h','Client/game_de/NativeAnimationSequenceFrameViewCalls.h','Tests/definitive/NativeCustomAnimationSequenceCopyFrameOwnerTests.inl')
+    $sourceNames += @('Client/game_de/NativeAnimationHierarchyAccess.h','Client/game_de/NativeAnimationHierarchyMemory.h','Client/game_de/NativeAnimationHierarchyMemory.cpp','Client/game_de/NativeAnimationHierarchyOrigin.h','Client/game_de/NativeAnimationHierarchyReadProfile.h','Client/game_de/CAnimBlendHierarchyDE.h','Client/game_de/CAnimBlendHierarchyDE.cpp','Tests/definitive/AnimationHierarchyDEFixture.h','Tests/definitive/NativeAnimationHierarchyBankOwnerTests.inl')
     $sourceNames += @('Client/game_de/NativeAnimationHierarchyHashMemory.h','Client/game_de/NativeAnimationHierarchyHashMemory.cpp','Tests/definitive/NativeAnimationGatewayOwnerTests.inl','Tests/definitive/Write-AnimationGatewayFixture.ps1')
     $sourceNames += @('Tests/definitive/NativeAnimationManagerRefsOwnerTests.inl','Tests/definitive/Write-AnimationManagerRefsFixture.ps1')
     $sourceNames += @('Tests/definitive/NativeCustomAnimationResourcesOwnerTests.inl','Tests/definitive/Write-AnimationSequenceStorageFixture.ps1')
@@ -715,6 +718,7 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         (Join-Path $taskRoot 'Client/game_de/CGameWorldDE.cpp'),
         (Join-Path $taskRoot 'Client/sdk/game/CAudioContainerFiles.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CAnimBlendSequenceDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CAnimBlendHierarchyDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CAnimBlockDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CAnimManagerDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CAnimBlockRequestDE.cpp'),
@@ -741,6 +745,7 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
     if ($Scope -eq 'WorldLine') { $fixtureArguments += '--world-line' }
     if ($Scope -eq 'WorldGround') { $fixtureArguments += '--world-ground' }
     if ($Scope -eq 'ConstructorServices') { $fixtureArguments += '--constructor-services' }
+    if ($Scope -eq 'AnimationHierarchyBank') { $fixtureArguments += '--animation-hierarchy-bank' }
     if ($Scope -eq 'CustomAnimationSequenceCopyFrame') { $fixtureArguments += '--custom-animation-sequence-copy-frame' }
     if ($Scope -eq 'CustomAnimationSequence') { $fixtureArguments += '--custom-animation-sequence' }
     if ($Scope -eq 'AnimationGateway') { $fixtureArguments += '--animation-gateway' }
@@ -868,7 +873,12 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
         if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
     }
-    if($Scope -eq 'CustomAnimationSequenceCopyFrame'){
+    if($Scope -eq 'AnimationHierarchyBank'){
+        $record.nativeAnimationHierarchyBankOwnerTested=$text.Contains('Production native animation hierarchy bank owner fixture completed')
+        $record.actualAnimationHierarchyBankSdkOwnerTested=$text.Contains('Production actual animation hierarchy bank SDK owner fixture completed')
+        if(-not($record.nativeAnimationHierarchyBankOwnerTested -and $record.actualAnimationHierarchyBankSdkOwnerTested)){throw 'New hierarchy bank actual owner/SDK slice did not complete.'}
+        $record.productionNativeCallbackTested=$true
+    } elseif($Scope -eq 'CustomAnimationSequenceCopyFrame'){
         $record.nativeCustomAnimationSequenceCopyFrameOwnerTested=$text.Contains('Production native custom animation sequence copy/frame owner fixture completed')
         $record.actualCustomAnimationSequenceCopyFrameSdkOwnerTested=$text.Contains('Production actual custom animation sequence copy/frame SDK owner fixture completed')
         if(-not($record.nativeCustomAnimationSequenceCopyFrameOwnerTested -and $record.actualCustomAnimationSequenceCopyFrameSdkOwnerTested)){throw 'New custom sequence copy/frame actual owner/SDK slice did not complete.'}

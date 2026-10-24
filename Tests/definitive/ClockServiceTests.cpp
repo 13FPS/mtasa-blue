@@ -69,6 +69,9 @@
 #include "../../Client/game_de/NativeAnimationBlockRefMemory.h"
 #include "../../Client/game_de/NativeAnimationBlockFactoryMemory.h"
 #include "../../Client/game_de/NativeAnimationHierarchyHashMemory.h"
+#include "../../Client/game_de/NativeAnimationHierarchyMemory.h"
+#include "../../Client/game_de/NativeAnimationHierarchyReadProfile.h"
+#include "AnimationHierarchyDEFixture.h"
 #include "../../Client/game_de/CKeyGenDE.h"
 #include <game/CAnimGatewayNames.h>
 #include "../../Client/game_de/CAnimBlockRequestDE.h"
@@ -2776,6 +2779,20 @@ namespace ClockSequenceRowOwnerTest
     mta::game_de::ClockResult Write(std::uintptr_t, Rows::Operation, const Rows::Value&, std::uint32_t&) noexcept;
 }
 
+namespace ClockAnimationHierarchyBankOwnerTest
+{
+    std::uintptr_t locator = 0, cookie = 0;
+    unsigned       scalarReads = 0, failScalar = 0, childReads = 0, failChild = 0;
+    void (*afterScalar)() noexcept = nullptr;
+    void (*afterChild)() noexcept = nullptr;
+    bool Copy(std::uintptr_t, void*, std::size_t) noexcept;
+    void Reset() noexcept
+    {
+        scalarReads = failScalar = childReads = failChild = 0;
+        afterScalar = afterChild = nullptr;
+    }
+}
+
 namespace ClockAnimationHierarchyHashOwnerTest
 {
     std::uintptr_t address = 0;
@@ -2972,6 +2989,24 @@ namespace mta::game_de::NativeImageAccess
                 ClockAnimationManagerOwnerTest::afterRead = nullptr;
                 after();
             }
+        }
+        return true;
+    }
+
+    bool AnimationHierarchyBankOwnerFixtureReadImage(std::uintptr_t image, std::uintptr_t address, void* output, std::size_t bytes, bool writable = false,
+                                                     bool executable = false) noexcept
+    {
+        namespace Host = ClockAnimationHierarchyBankOwnerTest;
+        const bool selected = address == Host::locator && bytes == 28;
+        if (selected && ++Host::scalarReads == Host::failScalar)
+            return false;
+        if (!ReadImage(image, address, output, bytes, writable, executable))
+            return false;
+        if (selected && Host::afterScalar)
+        {
+            const auto after = Host::afterScalar;
+            Host::afterScalar = nullptr;
+            after();
         }
         return true;
     }
@@ -3300,6 +3335,30 @@ namespace ClockWorldIgnoreOwnerTest
 #define ReadImage AnimationHierarchyHashOwnerFixtureReadImage
 #include "../../Client/game_de/NativeAnimationHierarchyHashMemory.cpp"
 #undef ReadImage
+#define ReadImage                       AnimationHierarchyBankOwnerFixtureReadImage
+#define MTA_DE_ANIMATION_HIERARCHY_COPY ClockAnimationHierarchyBankOwnerTest::Copy
+#include "../../Client/game_de/NativeAnimationHierarchyMemory.cpp"
+#undef MTA_DE_ANIMATION_HIERARCHY_COPY
+#undef ReadImage
+namespace ClockAnimationHierarchyBankOwnerTest
+{
+    bool Copy(std::uintptr_t source, void* target, std::size_t bytes) noexcept
+    {
+        const bool selected = source == cookie && bytes == 8;
+        if (selected && ++childReads == failChild)
+            return false;
+        if (!mta::game_de::AnimationHierarchyReadDetail::Copy(source, target, bytes))
+            return false;
+        if (selected && afterChild)
+        {
+            const auto after = afterChild;
+            afterChild = nullptr;
+            after();
+        }
+        return true;
+    }
+}
+
 #define MTA_DE_CUSTOM_ANIM_SEQUENCE_MALLOC_INVOKE ::NativeCustomAnimSequenceStorageFixture::Malloc
 #define MTA_DE_CUSTOM_ANIM_SEQUENCE_FREE_INVOKE   ::NativeCustomAnimSequenceStorageFixture::Free
 #define MTA_DE_ANIMATION_SEQUENCE_ROW_WRITE       ClockSequenceRowOwnerTest::Write
@@ -8150,12 +8209,14 @@ namespace
 #include "NativeAnimationManagerRefsOwnerTests.inl"
 #include "AnimationGateway.generated.h"
 #include "NativeAnimationGatewayOwnerTests.inl"
+#include "NativeAnimationHierarchyBankOwnerTests.inl"
 #include "NativeCustomAnimationSequenceOwnerTests.inl"
 #include "NativeCustomAnimationSequenceCopyFrameOwnerTests.inl"
 
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool animationHierarchyBankOnly = argc == 3 && std::strcmp(argv[2], "--animation-hierarchy-bank") == 0;
     const bool customAnimationSequenceCopyFrameOnly = argc == 3 && std::strcmp(argv[2], "--custom-animation-sequence-copy-frame") == 0;
     const bool customAnimationSequenceOnly = argc == 3 && std::strcmp(argv[2], "--custom-animation-sequence") == 0;
     const bool animationGatewayOnly = argc == 3 && std::strcmp(argv[2], "--animation-gateway") == 0;
@@ -8217,9 +8278,17 @@ int main(int argc, char** argv)
            worldLineOnly || worldAreaOnly || worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly ||
            cameraSphereOnly || pedWeaponClearOnly || pedClothesOnly || pedRebuildOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly ||
            animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly ||
-           animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly) &&
+           animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly || animationHierarchyBankOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (animationHierarchyBankOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        NativeAnimationBlocksOwnedSdk(fixture, &AnimationHierarchyBankOwnerFixture::RunPrepared);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (customAnimationSequenceCopyFrameOnly)
     {
         ClockImageFixture fixture;

@@ -52,6 +52,8 @@ try{
         'Client/game_de/NativeAnimationBlockProfile.h','Tests/definitive/NativeAnimationBlockTests.cpp',
         'Client/game_de/NativeAnimationManagerAccess.h','Client/game_de/NativeAnimationManagerMemory.h','Client/game_de/NativeAnimationManagerMemory.cpp','Client/game_de/NativeAnimationManagerProfile.h',
         'Client/game_de/NativeAnimationBlockFactoryMemory.h','Client/game_de/NativeAnimationBlockFactoryMemory.cpp','Client/game_de/NativeAnimationBlockHierarchyProfile.h',
+        'Client/game_de/NativeAnimationHierarchyHashMemory.h','Client/game_de/NativeAnimationHierarchyHashMemory.cpp',
+        'Client/game_de/NativeAnimationHierarchyOrigin.h','Tests/definitive/NativeAnimationBlockFactoryTests.cpp',
         'Tests/definitive/NativeAnimationBlockFactoryFixture.h','Tests/definitive/NativeAnimationHierarchyHashTests.cpp','Tests/definitive/test_native_animation_hierarchy_hash.ps1',
         'Build/definitive-recovery/mta-animation-block-hierarchy-borrow-plan-20261024/animation-block-hierarchy-borrow-plan-qualified.json',
         'Build/definitive-recovery/mta-native-animation-manager-observation-20261023/animation-manager-qualified.json',

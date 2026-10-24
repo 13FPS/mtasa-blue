@@ -5,6 +5,19 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+The native-bank hierarchy facade supplies the nine existing read operations
+through the current callback owner. Scalar snapshots preserve raw hash, WORD
+count, compressed byte, signed block ID and float representation. `IsCustom`
+uses the actual block-ID comparison; a refused borrow does not become false.
+
+Sequence-pointer reads use a separate channel over the genuine current
+parent, native array cookie and checked private span. The full allocation
+capacity remains independent of the logical WORD count, and indexed borrows
+retain the SDK's full DWORD index. These observations grant no child lifetime
+or free authority. The shared origin guard also serves the existing gateway
+hash reader while preserving its two DWORD payload observations. Hierarchy
+mutation and complete factories remain separate requirements.
+
 The actual DE sequence facade implements qualified initialization, bone-tag,
 property-copy and scalar/frame observations through the existing allocation
 owner. A row token keeps the original array tag, full-width index and owner

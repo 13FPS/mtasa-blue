@@ -10,6 +10,8 @@
 #include "NativeAnimationSequenceRowProfile.h"
 #include "NativeAnimationSequenceCopyCalls.h"
 #include "NativeAnimationSequenceFrameViewCalls.h"
+#include "NativeAnimationSequenceNameCalls.h"
+#include "NativeAnimationSequenceNameProfile.h"
 #include <intrin.h>
 #include <array>
 #include <cstring>
@@ -123,6 +125,39 @@ namespace mta::game_de
             __try
             {
                 std::memcpy(reinterpret_cast<void*>(target), source.bytes.data(), source.bytes.size());
+                return ClockResult::Ok;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                exception = GetExceptionCode();
+                return ClockResult::OriginalException;
+            }
+        }
+        bool NameProfileMatches(std::uintptr_t image) noexcept
+        {
+            namespace NameProfile = NativeAnimationSequenceNameProfile;
+            for (const auto& pin : NameProfile::Code)
+            {
+                std::array<unsigned char, NameProfile::MaximumPinBytes> actual{};
+                if (!pin.size || pin.size > actual.size() || !Image::ReadImage(image, image + pin.rva, actual.data(), pin.size, false, true) ||
+                    std::memcmp(actual.data(), pin.bytes, pin.size))
+                    return false;
+            }
+            return true;
+        }
+        // The actual safe owned-buffer writer remains available to test
+        // hooks. Only the bounded terminated spelling and selected bone are
+        // stores; existing padding, flag bits and frame aliases stay intact.
+        ClockResult WriteName(std::uintptr_t row, const NativeAnimationSequenceName& name, std::size_t terminatedBytes, bool projectBone, std::uint16_t boneTag,
+                              std::uint32_t& exception) noexcept
+        {
+            if (!terminatedBytes || terminatedBytes > name.size())
+                return ClockResult::InvalidArgument;
+            __try
+            {
+                std::memcpy(reinterpret_cast<void*>(row), name.data(), terminatedBytes);
+                if (projectBone)
+                    std::memcpy(reinterpret_cast<void*>(row + Profile::BoneOffset), &boneTag, sizeof(boneTag));
                 return ClockResult::Ok;
             }
             __except (EXCEPTION_EXECUTE_HANDLER)
@@ -676,6 +711,92 @@ namespace mta::game_de
             receipt.verified = true;
             return finish(ClockResult::Ok);
         }
+        static ClockResult CaptureNamedRow(std::uintptr_t image, const Storage& storage, std::uint64_t generation, std::size_t index, CheckOwner owner,
+                                           NativeAnimationSequenceNameCalls::Record& output, std::uintptr_t& row) noexcept
+        {
+            namespace Detail = CustomAnimSequenceStorageDetail;
+            if (!Detail::NameProfileMatches(image))
+                return ClockResult::BindingChanged;
+            NativeAnimationSequenceNameCalls::Record next;
+            std::uintptr_t                           nextRow = 0;
+            auto                                     result = CaptureWholeRow(image, storage, generation, index, owner, next, nextRow);
+            if (result != ClockResult::Ok)
+                return result;
+            if (!Detail::NameProfileMatches(image))
+                return ClockResult::BindingChanged;
+            if ((result = Detail::Context::Owner(image, owner)) != ClockResult::Ok)
+                return result;
+            output = next;
+            row = nextRow;
+            return ClockResult::Ok;
+        }
+        static ClockResult SetSequenceName(std::uintptr_t image, Storage& storage, std::uint64_t generation, std::size_t index,
+                                           const NativeAnimationSequenceName& name, std::uint32_t logicalHash, CheckOwner owner,
+                                           NativeAnimationSequenceNameCalls::Receipt* output, NativeAnimationSequenceNameCalls::Write write) noexcept
+        {
+            namespace Detail = CustomAnimSequenceStorageDetail;
+            namespace NameCalls = NativeAnimationSequenceNameCalls;
+            // These copied CPU inputs are the entire intent. Owner callbacks
+            // cannot change the spelling/hash subsequently applied to the row.
+            const auto         intent = name;
+            const auto         hash = logicalHash;
+            NameCalls::Receipt receipt;
+            const auto         finish = [&](ClockResult result)
+            {
+                if (receipt.entered && result != ClockResult::Ok)
+                    storage.state.store(State::FaultDebt, std::memory_order_release);
+                if (output)
+                    *output = receipt;
+                return result;
+            };
+            std::size_t length = 0;
+            if (!NativeAnimationSequenceNamePolicy::Length(intent, length))
+                return finish(ClockResult::InvalidArgument);
+            if (!owner)
+                return finish(ClockResult::NotInitialized);
+            if (!Detail::Context::TryEnter())
+                return finish(ClockResult::Busy);
+            Detail::Context::Scope scope;
+            NameCalls::Record      first;
+            std::uintptr_t         firstRow = 0;
+            auto                   result = CaptureNamedRow(image, storage, generation, index, owner, first, firstRow);
+            if (result != ClockResult::Ok ||
+                (result = CaptureNamedRow(image, storage, generation, index, owner, receipt.before, receipt.row)) != ClockResult::Ok)
+                return finish(result);
+            if (firstRow != receipt.row || first.bytes != receipt.before.bytes)
+                return finish(ClockResult::OwnerConflict);
+            std::uint16_t flags = 0;
+            std::memcpy(&flags, receipt.before.bytes.data() + Detail::Profile::FlagsOffset, sizeof(flags));
+            const bool projectBone = (flags & 0x10u) != 0;
+            const auto bone = static_cast<std::uint16_t>(hash);
+            const auto terminatedBytes = length + 1;
+            auto       expected = receipt.before;
+            std::memcpy(expected.bytes.data(), intent.data(), terminatedBytes);
+            if (projectBone)
+                std::memcpy(expected.bytes.data() + Detail::Profile::BoneOffset, &bone, sizeof(bone));
+            if (!Detail::Heap::M::PrivateWritable(receipt.row, Detail::Profile::RowBytes))
+                return finish(ClockResult::WriteFailure);
+#if defined(MTA_DE_ANIMATION_SEQUENCE_NAME_WRITE)
+            const auto entry = write ? write : &MTA_DE_ANIMATION_SEQUENCE_NAME_WRITE;
+#else
+            const auto entry = write ? write : &Detail::WriteName;
+#endif
+            receipt.entered = true;
+            result = entry(receipt.row, intent, terminatedBytes, projectBone, bone, receipt.exceptionCode);
+            // This acknowledgement survives later owner/read failure. The
+            // controller must commit its classic logical union on acceptance;
+            // no frame/allocation journal is removed and no write is replayed.
+            receipt.rawWritten = receipt.accepted = result == ClockResult::Ok;
+            if (result != ClockResult::Ok)
+                return finish(result);
+            std::uintptr_t afterRow = 0;
+            if ((result = CaptureNamedRow(image, storage, generation, index, owner, receipt.after, afterRow)) != ClockResult::Ok)
+                return finish(result);
+            if (afterRow != receipt.row || receipt.after.bytes != expected.bytes)
+                return finish(ClockResult::BindingChanged);
+            receipt.verified = true;
+            return finish(ClockResult::Ok);
+        }
         static ClockResult ReadSequenceFrame(std::uintptr_t image, const Storage& array, std::uint64_t generation, std::size_t rowIndex, const Storage& frames,
                                              std::size_t frameIndex, std::uint32_t stride, CheckOwner owner, std::uintptr_t& output) noexcept
         {
@@ -805,6 +926,14 @@ namespace mta::game_de
                          std::uint64_t generation, CheckOwner owner, Receipt* output, Write write) noexcept
         {
             return NativeCustomAnimSequenceStorageAccess::CopySequence(image, target, targetIndex, source, sourceIndex, generation, owner, output, write);
+        }
+    }
+    namespace NativeAnimationSequenceNameCalls
+    {
+        ClockResult Set(std::uintptr_t image, Storage& storage, std::uint64_t generation, std::size_t index, const Name& name, std::uint32_t logicalHash,
+                        CheckOwner owner, Receipt* output, Write write) noexcept
+        {
+            return NativeCustomAnimSequenceStorageAccess::SetSequenceName(image, storage, generation, index, name, logicalHash, owner, output, write);
         }
     }
     namespace NativeAnimationSequenceFrameViewCalls

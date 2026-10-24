@@ -5,6 +5,20 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+Private sequence naming preserves raw NUL-terminated spelling within the
+native 64-byte field; overlong names are refused without truncation. The
+logical hash uses classic ASCII-only normalization and the existing raw key
+generator, independent of DE's CRT locale. Only the name prefix through its
+terminator is stored; unused native name bytes, flags and frame fields remain
+intact. If the bone selector is active, the source union's new low WORD is
+also projected into DE's separate physical bone field.
+
+This operation uses the existing private allocation journal and shared row
+state. It does not run the association initializer, name matcher, fallback
+name-pool machinery or a cache update. Accepted stores remain acknowledged
+after a later refusal, with no replay or rollback. General frame assignment
+remains pure; naming does not complete a custom factory or native publication.
+
 The native-bank hierarchy facade supplies the nine existing read operations
 through the current callback owner. Scalar snapshots preserve raw hash, WORD
 count, compressed byte, signed block ID and float representation. `IsCustom`
@@ -40,8 +54,8 @@ Frame views preserve the full `size_t` index and `uint32_t` stride, including
 zero stride, and qualify the requested span through the exact current frame
 allocation without reading payload or imposing a narrowed row-count limit.
 
-The facade remains abstract. General name/frame assignment still needs its
-actual native contracts; custom factories and hierarchy publication are
+The facade remains abstract. General frame assignment still needs its
+actual native contract; custom factories and hierarchy publication are
 separate work. Private row
 operations preserve the allocation journals and do not detach a published
 hierarchy or reinterpret a C++ wrapper's destruction as native retirement.

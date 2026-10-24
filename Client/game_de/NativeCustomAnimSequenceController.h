@@ -7,6 +7,7 @@
 #include "NativeCustomAnimSequenceStorage.h"
 #include "NativeAnimationSequenceRowCalls.h"
 #include "NativeAnimationSequenceCopyCalls.h"
+#include "NativeAnimationSequenceNameCalls.h"
 #include "NativeAnimationSequenceFrameViewCalls.h"
 #include "NativeAnimationSequenceAccess.h"
 #include "NativeAnimationSequenceLogicalState.h"
@@ -22,6 +23,7 @@ namespace mta::game_de
         using Receipt = NativeCustomAnimSequenceStorageCalls::Receipt;
         using RowReceipt = NativeAnimationSequenceRowCalls::Receipt;
         using CopyReceipt = NativeAnimationSequenceCopyCalls::Receipt;
+        using NameReceipt = NativeAnimationSequenceNameCalls::Receipt;
         using CheckOwner = NativeCustomAnimSequenceStorageCalls::CheckOwner;
         using InvokeMalloc = NativeCustomAnimSequenceStorageCalls::InvokeMalloc;
         using InvokeFree = NativeCustomAnimSequenceStorageCalls::InvokeFree;
@@ -55,6 +57,8 @@ namespace mta::game_de
                                            CopyReceipt* = nullptr) noexcept;
         ClockResult ReadSequenceFrame(std::uintptr_t, const NativeAnimationSequenceReferenceToken&, std::size_t, std::uint32_t, CheckOwner,
                                       std::uintptr_t&) noexcept;
+        ClockResult SetSequenceName(std::uintptr_t, const NativeAnimationSequenceReferenceToken&, const NativeAnimationSequenceName&, CheckOwner,
+                                    NameReceipt* = nullptr) noexcept;
         // This is private-owner bookkeeping for a future qualified hierarchy
         // attachment, not a public raw-pointer adoption or detachment API.
         ClockResult PinPublication(std::uint64_t generation, std::uintptr_t issuedTag, std::uintptr_t hierarchyAffinity) noexcept;

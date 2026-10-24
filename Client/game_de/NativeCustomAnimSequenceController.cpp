@@ -407,6 +407,40 @@ namespace mta::game_de
         }
         return ClockResult::BindingChanged;
     }
+    ClockResult NativeCustomAnimSequenceController::SetSequenceName(std::uintptr_t image, const NativeAnimationSequenceReferenceToken& token,
+                                                                    const NativeAnimationSequenceName& name, CheckOwner owner, NameReceipt* receipt) noexcept
+    {
+        const auto request = token;
+        const auto copiedName = name;
+        if (receipt)
+            *receipt = {};
+        if (operation.test_and_set(std::memory_order_acquire))
+            return ClockResult::Busy;
+        const CustomAnimSequenceControllerDetail::Operation held{operation};
+        if (!owner)
+            return ClockResult::NotInitialized;
+        auto result = owner();
+        if (result != ClockResult::Ok)
+            return result;
+        auto      entry = entries.end();
+        RowState* state = nullptr;
+        if ((result = SelectRow(request, entry, state)) != ClockResult::Ok)
+            return result;
+        std::uint32_t hash = 0;
+        // Reuse the original source's byte normalization and existing raw
+        // key generator. Physical name spelling stays independent of that
+        // logical union, and no native name cache or matcher runs here.
+        if (!NativeAnimationSequenceNamePolicy::Hash(copiedName, hash))
+            return ClockResult::InvalidArgument;
+        NameReceipt local;
+        result = NativeAnimationSequenceNameCalls::Set(image, entry->storage, request.ownerGeneration, request.index, copiedName, hash, owner, &local);
+        if (local.accepted)
+            state->logical.SetNameHash(hash);
+        Publish();
+        if (receipt)
+            *receipt = local;
+        return result;
+    }
     ClockResult NativeCustomAnimSequenceController::PinPublication(std::uint64_t generation, std::uintptr_t issuedTag,
                                                                    std::uintptr_t hierarchyAffinity) noexcept
     {

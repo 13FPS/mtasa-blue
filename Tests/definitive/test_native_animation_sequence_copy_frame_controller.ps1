@@ -38,7 +38,7 @@ function RunOwned([string]$exe,[string[]]$arguments,[string]$directory,[string]$
 try{
     $pending=[Collections.Generic.Queue[string]]::new()
     $seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-    foreach($name in @('Tests/definitive/NativeAnimationSequenceCopyFrameControllerTests.cpp','Tests/definitive/test_native_animation_sequence_copy_frame_controller.ps1')){$pending.Enqueue($name)}
+    foreach($name in @('Tests/definitive/NativeAnimationSequenceCopyFrameControllerTests.cpp','Tests/definitive/test_native_animation_sequence_copy_frame_controller.ps1','Client/game_de/NativeAnimationSequenceName.cpp','Client/game_de/CKeyGenDE.cpp')){$pending.Enqueue($name)}
     while($pending.Count){
         $name=$pending.Dequeue()
         if(-not $seen.Add($name)){continue}
@@ -53,6 +53,7 @@ try{
         }
     }
     $names=@($seen)+@(
+        'Build/definitive-recovery/mta-animation-sequence-name-sdk-20261024/animation-sequence-name-policy-source-ready.json',
         'Build/definitive-recovery/mta-animation-sequence-copy-frame-plan-20261024/copy-frame-api-plan-source-ready.json',
         'Build/definitive-recovery/mta-animation-sequence-copy-frame-plan-20261024/copy-frame-native-source-ready.json',
         'Build/definitive-recovery/mta-animation-sequence-copy-frame-owner-20261024/animation-sequence-copy-frame-owner-source-ready.json',
@@ -72,7 +73,7 @@ try{
     $compiler=Join-Path $env:VCToolsInstallDir 'bin/Hostx64/x64/cl.exe'
     $exe=Join-Path $output 'native-animation-sequence-copy-frame-controller-tests.exe'
     $arguments=@('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/MD','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN',('/I'+(Join-Path $root 'Shared/sdk')),
-        ('/I'+(Join-Path $root 'Client/sdk')),(Join-Path $PSScriptRoot 'NativeAnimationSequenceCopyFrameControllerTests.cpp'),('/Fo'+$scratch+'\'),('/Fd'+(Join-Path $scratch 'compiler.pdb')),
+        ('/I'+(Join-Path $root 'Client/sdk')),(Join-Path $PSScriptRoot 'NativeAnimationSequenceCopyFrameControllerTests.cpp'),(Join-Path $root 'Client/game_de/NativeAnimationSequenceName.cpp'),(Join-Path $root 'Client/game_de/CKeyGenDE.cpp'),('/Fo'+$scratch+'\'),('/Fd'+(Join-Path $scratch 'compiler.pdb')),
         ('/Fe'+$exe),'/link','bcrypt.lib')
     $compile=RunOwned $compiler $arguments $output 'compile' 120000
     if($compile.exitCode -ne 0 -or $compile.timedOut){throw 'Actual sequence copy/frame controller fixture compilation failed'}

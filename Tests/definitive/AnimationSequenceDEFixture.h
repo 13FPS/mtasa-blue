@@ -1,7 +1,7 @@
 /****************************************************************************
  * PROJECT: Multi Theft Auto
  * LICENSE: See LICENSE in the repository root
- * PURPOSE: Reject only the two remaining abstract custom sequence operations
+ * PURPOSE: Reject the remaining abstract custom sequence frame assignment
  ****************************************************************************/
 #pragma once
 #include "../../Client/game_de/CAnimBlendSequenceDE.h"
@@ -19,7 +19,6 @@ namespace animation_sequence_fixture
 
         // These methods are genuine unqualified leaves. Executing one would
         // invalidate this fixture rather than manufacture a usable factory.
-        void SetName(const char*) override { std::abort(); }
         void SetKeyFrames(std::size_t, bool, bool, void*) override { std::abort(); }
     };
     static_assert(!std::is_abstract_v<AnimationSequenceReceiver>);

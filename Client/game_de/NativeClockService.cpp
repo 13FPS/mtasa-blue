@@ -253,6 +253,7 @@ namespace mta::game_de
             ClockResult ReadAnimationHierarchy(const NativeAnimationHierarchyReferenceToken&, NativeAnimationHierarchyValues&) noexcept override;
             ClockResult ReadAnimationHierarchySequences(const NativeAnimationHierarchyReferenceToken&, std::uintptr_t&) noexcept override;
             ClockResult ReadAnimationHierarchySequence(const NativeAnimationHierarchyReferenceToken&, std::uint32_t, std::uintptr_t&) noexcept override;
+            ClockResult SetAnimationSequenceName(const NativeAnimationSequenceReferenceToken&, const NativeAnimationSequenceName&) noexcept override;
             ClockResult AllocateAnimationKeyFrames(std::uint64_t, std::uint32_t, std::uintptr_t&) noexcept override;
             ClockResult FreeAnimationKeyFrames(std::uint64_t, std::uintptr_t) noexcept override;
             ClockResult AllocateAnimationSequences(std::uint64_t, std::size_t, std::uintptr_t&) noexcept override;
@@ -2881,6 +2882,23 @@ namespace mta::game_de
                 result = CheckAnimationHierarchyRequest(request);
             if (result == ClockResult::Ok)
                 output = next;
+            return result;
+        }
+
+        ClockResult NativeAccess::SetAnimationSequenceName(const NativeAnimationSequenceReferenceToken& token, const NativeAnimationSequenceName& name) noexcept
+        {
+            const auto request = token;
+            const auto copiedName = name;
+            auto       result = CheckCustomSequenceRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            NativeCustomAnimSequenceController::NameReceipt receipt;
+            result = runtime.customSequences.SetSequenceName(runtime.image, request, copiedName, &CheckTimingOwner, &receipt);
+            PublishCustomAnimationSequenceDebt(request.ownerGeneration);
+            if (result == ClockResult::Ok)
+                result = CheckCustomSequenceRequest(request);
+            if ((receipt.entered && result != ClockResult::Ok) || runtime.customSequences.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
             return result;
         }
 

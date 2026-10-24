@@ -101,4 +101,15 @@ namespace mta::game_de
         return reinterpret_cast<void*>(value);
     }
 
+    void CAnimBlendSequenceDE::SetName(const char* text)
+    {
+        // Native matching consumes the raw spelling. Capture it before the
+        // callback; only the owner computes classic logical hash/projection.
+        const auto                  token = reference;
+        NativeAnimationSequenceName value;
+        if (!NativeAnimationSequenceNamePolicy::Copy(text, value))
+            throw std::invalid_argument("DE custom animation sequence SetName requires a nonnull NUL-terminated name within64 bytes");
+        Require(native.SetAnimationSequenceName(token, value), "SetName");
+    }
+
 }

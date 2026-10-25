@@ -18,6 +18,7 @@ namespace mta::game_de::NativeAnimationSequenceCopyCalls
     struct Receipt
     {
         std::uintptr_t sourceRow = 0, targetRow = 0;
+        Record         copiedRecord{};
         // The actual raw-copy intent's qualified physical fields let the
         // controller transfer accepted format metadata without trusting a
         // separate pre-read that could differ before the copied snapshot.

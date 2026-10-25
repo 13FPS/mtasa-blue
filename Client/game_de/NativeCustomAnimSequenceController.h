@@ -15,6 +15,7 @@
 #include "NativeAnimationSequenceDependencyCalls.h"
 #include "NativeAnimationSequencePayloadCalls.h"
 #include "NativeCustomAnimationCleanupAccess.h"
+#include "NativeCustomAnimationSequenceOperationAccess.h"
 #include "NativePrivateAnimationHierarchyStorage.h"
 #include <atomic>
 #include <list>
@@ -72,6 +73,17 @@ namespace mta::game_de
         ClockResult ResumePendingCleanups(std::uintptr_t, std::uint64_t, NativePrivateAnimationHierarchyController&, std::size_t, CheckOwner,
                                           CleanupProgress&) noexcept;
         bool        HasPendingCleanup() const noexcept;
+        ClockResult AllocateStandaloneSequence(std::uintptr_t, std::uint64_t, CheckOwner, NativeAnimationSequenceReferenceToken&, Receipt* = nullptr,
+                                               InvokeMalloc = nullptr) noexcept;
+        ClockResult ResolveStandaloneSequence(std::uintptr_t, std::uint64_t, std::uintptr_t, CheckOwner, NativeAnimationSequenceReferenceToken&) noexcept;
+        ClockResult BeginSequenceCleanup(std::uintptr_t, const NativeAnimationSequenceReferenceToken&, NativePrivateAnimationHierarchyController&, CheckOwner,
+                                         NativeCustomAnimationSequenceOperationBeginReceipt&) noexcept;
+        ClockResult BeginSequenceTransfer(std::uintptr_t, const NativeAnimationSequenceReferenceToken&, const NativeAnimationSequenceReferenceToken&,
+                                          NativePrivateAnimationHierarchyController&, CheckOwner, NativeCustomAnimationSequenceOperationBeginReceipt&) noexcept;
+        ClockResult BeginFrameAttachment(std::uintptr_t, const NativeAnimationSequenceReferenceToken&, std::size_t, bool, bool, std::uintptr_t,
+                                         NativePrivateAnimationHierarchyController&, CheckOwner, NativeCustomAnimationSequenceOperationBeginReceipt&) noexcept;
+        ClockResult ResumeSequenceOperation(std::uintptr_t, const NativeCustomAnimationSequenceOperationToken&, NativePrivateAnimationHierarchyController&,
+                                            std::size_t, CheckOwner, SCustomAnimationSequenceResult&) noexcept;
         NativeCustomAnimSequenceController() noexcept = default;
         NativeCustomAnimSequenceController(const NativeCustomAnimSequenceController&) = delete;
         NativeCustomAnimSequenceController& operator=(const NativeCustomAnimSequenceController&) = delete;
@@ -150,6 +162,18 @@ namespace mta::game_de
             DetachAccepted,
             Uncertain
         };
+        enum class SequencePurpose : std::uint32_t
+        {
+            ArrayRows,
+            StandaloneSequence
+        };
+        enum class CommandKind : std::uint32_t
+        {
+            AnimationCleanup,
+            SequenceCleanup,
+            SequenceTransfer,
+            FrameAttachment
+        };
         struct Entry;
         enum class CleanupStage : std::uint32_t
         {
@@ -171,6 +195,17 @@ namespace mta::game_de
         struct CleanupRecord
         {
             NativeCustomAnimationCleanupRequest        request{};
+            CommandKind                                commandKind{CommandKind::AnimationCleanup};
+            NativeAnimationSequenceReferenceToken      source{}, target{};
+            Entry*                                     targetEntry = nullptr;
+            std::size_t                                frameCount = 0;
+            std::uintptr_t                             originalFrames = 0;
+            bool                                       rootFrames = false, compressedFrames = false;
+            bool                                       cancelRequested = false, writerAcknowledged = false, targetObligationAdded = false;
+            std::shared_ptr<CleanupResource>           transferFrame;
+            CopyReceipt                                copy{};
+            FrameBindReceipt                           attachment{};
+            SCustomAnimationSequenceResult             sequenceResult{};
             NativeCustomAnimationCleanupToken          token{};
             NativePrivateAnimationHierarchyController* hierarchyOwner = nullptr;
             Entry*                                     array = nullptr;
@@ -221,8 +256,13 @@ namespace mta::game_de
         };
         struct Entry
         {
-            Storage       storage;
-            std::uint64_t issue = 0;
+            Storage         storage;
+            std::uint64_t   issue = 0;
+            SequencePurpose purpose{SequencePurpose::ArrayRows};
+            std::uint64_t   operationOwner = 0;
+            // Accepted/transferred buffers remain lifetime obligations even
+            // when Initialize or a later full row copy replaces their field.
+            std::vector<std::shared_ptr<CleanupResource>> frameObligations;
             // Logical state belongs to the allocation, not a CPU facade.
             // Reserve a lazy row node before a qualified write can enter.
             std::list<RowState>                rows;
@@ -236,12 +276,13 @@ namespace mta::game_de
         };
         using Entries = std::list<Entry>;
         Entries::iterator Find(std::uint64_t generation, std::uintptr_t issuedTag) noexcept;
-        ClockResult AllocateResource(std::uintptr_t, std::uint64_t, std::size_t, Storage::Kind, CheckOwner, std::uintptr_t&, Receipt*, InvokeMalloc) noexcept;
-        ClockResult FreeResource(std::uintptr_t, std::uint64_t, std::uintptr_t, Storage::Kind, CheckOwner, Receipt*, InvokeFree) noexcept;
-        ClockResult SelectRow(const NativeAnimationSequenceReferenceToken&, Entries::iterator&, RowState*&) noexcept;
-        ClockResult ReadSequenceValue(std::uintptr_t, const NativeAnimationSequenceReferenceToken&, CheckOwner, NativeAnimationSequenceValues*,
-                                      std::uint32_t*) noexcept;
-        ClockResult CheckSequenceFramePointer(std::uintptr_t, std::uint64_t, std::uintptr_t, CheckOwner) noexcept;
+        ClockResult       AllocateResource(std::uintptr_t, std::uint64_t, std::size_t, Storage::Kind, CheckOwner, std::uintptr_t&, Receipt*, InvokeMalloc,
+                                           SequencePurpose = SequencePurpose::ArrayRows) noexcept;
+        ClockResult       FreeResource(std::uintptr_t, std::uint64_t, std::uintptr_t, Storage::Kind, CheckOwner, Receipt*, InvokeFree) noexcept;
+        ClockResult       SelectRow(const NativeAnimationSequenceReferenceToken&, Entries::iterator&, RowState*&) noexcept;
+        ClockResult       ReadSequenceValue(std::uintptr_t, const NativeAnimationSequenceReferenceToken&, CheckOwner, NativeAnimationSequenceValues*,
+                                            std::uint32_t*) noexcept;
+        ClockResult       CheckSequenceFramePointer(std::uintptr_t, std::uint64_t, std::uintptr_t, CheckOwner) noexcept;
         struct PayloadVisitContext
         {
             NativeCustomAnimSequenceController* self;
@@ -265,6 +306,13 @@ namespace mta::game_de
                                          CheckOwner, FrameBindReceipt*) noexcept;
         bool        CurrentFrameDescriptor(const FrameDescriptor&) const noexcept;
         void        ForgetFrameAuthority(const Storage&) noexcept;
+        ClockResult BeginCleanupImpl(std::uintptr_t, const NativeCustomAnimationCleanupRequest&, NativePrivateAnimationHierarchyController&, CheckOwner,
+                                     NativeCustomAnimationCleanupBeginReceipt&, SequencePurpose, CommandKind, bool alreadyHeld = false) noexcept;
+        ClockResult BeginSequenceCommand(CommandKind, const NativeAnimationSequenceReferenceToken&, const NativeAnimationSequenceReferenceToken&, std::size_t,
+                                         bool, bool, std::uintptr_t, NativePrivateAnimationHierarchyController&,
+                                         NativeCustomAnimationSequenceOperationBeginReceipt&) noexcept;
+        ClockResult ReserveFrameObligation(Entry&, Entry&, std::shared_ptr<CleanupResource>&, bool&) noexcept;
+        void        RecordResourceReceipt(Entry&, const Receipt&) noexcept;
         static ClockResult ResolveCleanupFrame(std::size_t, const NativeAnimationSequenceRowCalls::Value&, const Storage*&, void*) noexcept;
         static ClockResult VerifyCleanupAction(Storage&, const NativeAnimationSequenceDependencyCalls::Epoch&, void*) noexcept;
         bool               CleanupResourceBlocked(const CleanupResource&) const noexcept;

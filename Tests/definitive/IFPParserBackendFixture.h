@@ -7,6 +7,8 @@
 #include "StdInc.h"
 #include "CAnimSequenceStorageSA.h"
 #include "CCustomAnimationCleanupSA.h"
+#include "CCustomAnimationSequenceOperationSA.h"
+#include "ClassicAnimationOperationEntries.generated.h"
 #include "CAnimBlendHierarchySA.h"
 #include <game/CAnimBlock.h>
 #include <game/CAnimBlendAssociation.h>
@@ -76,7 +78,7 @@ namespace ifp_parser_tests
         void*                          GetKeyFrame(std::size_t index, std::uint32_t size) override;
         std::uint32_t                  GetHash() override { return row.m_hash; }
         std::uint16_t                  GetBoneTag() override { return row.m_boneId; }
-        BYTE*                          GetKeyFrames() override { return row.pKeyFrames; }
+        BYTE*                          GetKeyFrames() override;
         unsigned short                 GetKeyFramesCount() override { return row.sNumKeyFrames; }
         bool                           IsBigChunkForAllSequences() override { return (row.sFlags & 8) != 0; }
         void                           CopySequenceProperties(CAnimBlendSequenceSAInterface* source) override;
@@ -89,7 +91,10 @@ namespace ifp_parser_tests
     class Manager final : public CAnimManager
     {
     public:
-        explicit Manager(bool alternate = false) : alternateLayout(alternate), cleanupOwner(std::make_shared<MtaGame::CustomAnimationCleanupSA::Owner>(*this))
+        explicit Manager(bool alternate = false)
+            : alternateLayout(alternate),
+              cleanupOwner(std::make_shared<MtaGame::CustomAnimationCleanupSA::Owner>(*this)),
+              sequenceOwner(std::make_shared<MtaGame::CustomAnimationSequenceSA::Owner>(*this, &Manager::WriteNativeFrames))
         {
         }
         std::set<CAnimBlendHierarchySAInterface*>             hierarchies;
@@ -129,6 +134,111 @@ namespace ifp_parser_tests
         std::size_t                                               cleanupBegins = 0, cleanupResumes = 0, cleanupTicketDrops = 0;
         std::size_t                                               cleanupGatheredCapacity = 0;
         bool cleanupPause = false, cleanupBeginThrow = false, cleanupUnknownDisposition = false, cleanupThrowAfterFrame = false;
+        std::shared_ptr<MtaGame::CustomAnimationSequenceSA::Owner>  sequenceOwner;
+        std::shared_ptr<MtaGame::CustomAnimationSequenceSA::Owner>& customSequenceOwner = sequenceOwner;
+        std::size_t                         typedCleanupBegins = 0, typedTransferBegins = 0, typedAttachmentBegins = 0, typedResumes = 0, frameGetterCalls = 0;
+        bool                                nativeUnknownAttachment = false, operationPause = false;
+        std::size_t                         nativeFrameWrites = 0;
+        inline static thread_local Manager* executing = nullptr;
+        struct NativeScope
+        {
+            explicit NativeScope(Manager& manager) noexcept : previous(executing) { executing = &manager; }
+            ~NativeScope() { executing = previous; }
+            Manager* previous;
+        };
+        static void WriteNativeFrames(CAnimBlendSequenceSAInterface* row, std::size_t count, bool root, bool compressed, void* frames)
+        {
+            if (!executing || !executing->Owns(row))
+                Unexpected();
+            // Substitute only the actual classic native setter entry. The
+            // real SA operation helper owns every claim, receipt and retry.
+            ++executing->nativeFrameWrites;
+            row->sNumKeyFrames = static_cast<std::uint16_t>(count);
+            row->sFlags = static_cast<unsigned short>((row->sFlags & ~7u) | 1u | (root ? 2u : 0u) | (compressed ? 4u : 0u));
+            row->pKeyFrames = static_cast<BYTE*>(frames);
+            executing->RecordPopulation(row);
+            if (executing->nativeUnknownAttachment)
+                throw std::runtime_error("injected native setter acknowledgement unknown");
+        }
+        class OperationTicket final : public CCustomAnimationSequenceOperation
+        {
+        public:
+            OperationTicket(Manager& owner, bool lateRefusal, CAnimBlendSequenceSAInterface* destination) noexcept
+                : owner(owner), lateRefusal(lateRefusal), destination(destination)
+            {
+            }
+            void                           Adopt(std::unique_ptr<CCustomAnimationSequenceOperation> value) noexcept { actual = std::move(value); }
+            SCustomAnimationSequenceResult Resume() noexcept override
+            {
+                ++owner.typedResumes;
+                if (owner.operationPause)
+                    return {};
+                NativeScope scope(owner);
+                auto        result = actual->Resume();
+                if (result.status == ECustomAnimationSequenceStatus::Complete && result.disposition == ECustomAnimationSequenceDisposition::SourceTransferred &&
+                    destination && !recorded)
+                {
+                    owner.RecordPopulation(destination);
+                    recorded = true;
+                }
+                if (lateRefusal && result.status == ECustomAnimationSequenceStatus::Complete && !withheld)
+                {
+                    withheld = true;
+                    return {ECustomAnimationSequenceStatus::Refused, ECustomAnimationSequenceDisposition::Unresolved};
+                }
+                return result;
+            }
+
+        private:
+            Manager&                                           owner;
+            bool                                               lateRefusal, withheld = false, recorded = false;
+            CAnimBlendSequenceSAInterface*                     destination;
+            std::unique_ptr<CCustomAnimationSequenceOperation> actual;
+        };
+        std::unique_ptr<CCustomAnimationSequenceOperation> BeginCustomAnimationSequenceCleanup(const SCustomAnimationSequenceCleanupRequest& request) override
+        {
+            const auto copied = request;
+            if (copied.origin != this || !copied.source)
+                Unexpected();
+            ++typedCleanupBegins;
+            auto ticket = std::make_unique<OperationTicket>(*this, false, nullptr);
+            ticket->Adopt(
+                MtaGame::CustomAnimationSequenceSA::Begin(sequenceOwner, MtaGame::CustomAnimationSequenceSA::Kind::Cleanup, copied.source->GetInterface()));
+            return ticket;
+        }
+        std::unique_ptr<CCustomAnimationSequenceOperation> BeginCustomAnimationSequenceTransfer(const SCustomAnimationSequenceTransferRequest& request) override
+        {
+            const auto copied = request;
+            if (copied.origin != this || !copied.source || !copied.destination)
+                Unexpected();
+            ++typedTransferBegins;
+            ++copyAttempts;
+            const bool fail = failCopyAt && copyAttempts == failCopyAt;
+            if (fail && !copyFailureAfterWrite)
+                throw std::runtime_error("injected preaccept transfer refusal");
+            auto* destination = copied.destination->GetInterface();
+            auto  ticket = std::make_unique<OperationTicket>(*this, fail, destination);
+            ticket->Adopt(MtaGame::CustomAnimationSequenceSA::Begin(sequenceOwner, MtaGame::CustomAnimationSequenceSA::Kind::Transfer,
+                                                                    copied.source->GetInterface(), destination));
+            return ticket;
+        }
+        std::unique_ptr<CCustomAnimationSequenceOperation> BeginCustomAnimationFrameAttachment(const SCustomAnimationFrameAttachmentRequest& request) override
+        {
+            const auto copied = request;
+            if (copied.origin != this || !copied.target)
+                Unexpected();
+            ++typedAttachmentBegins;
+            ++attachAttempts;
+            const bool fail = failAttachAt && attachAttempts == failAttachAt;
+            if (fail && !attachFailureAfterWrite)
+                throw std::runtime_error("injected preaccept attachment refusal");
+            auto ticket = std::make_unique<OperationTicket>(*this, fail, nullptr);
+            ticket->Adopt(MtaGame::CustomAnimationSequenceSA::Begin(sequenceOwner, MtaGame::CustomAnimationSequenceSA::Kind::Attachment,
+                                                                    copied.target->GetInterface(), nullptr, copied.count, copied.root, copied.compressed,
+                                                                    copied.originalFrames));
+            return ticket;
+        }
+
         class CleanupTicket final : public CCustomAnimationCleanup
         {
         public:
@@ -139,7 +249,8 @@ namespace ifp_parser_tests
                 ++manager.cleanupResumes;
                 if (manager.cleanupPause)
                     return {ECustomAnimationCleanupStatus::Pending, ECustomAnimationCleanupDisposition::Unresolved};
-                auto result = actual->Resume();
+                NativeScope scope(manager);
+                auto        result = actual->Resume();
                 // Cleanup rows now belong to the actual backend snapshot,
                 // independently of parser factory calls before attachment.
                 for (const auto& record : manager.cleanupOwner->records)
@@ -154,7 +265,7 @@ namespace ifp_parser_tests
             Manager&                                 manager;
             std::unique_ptr<CCustomAnimationCleanup> actual;
         };
-        bool                                     HasPendingCustomAnimationCleanup() const noexcept override { return cleanupOwner->HasPending(); }
+        bool HasPendingCustomAnimationCleanup() const noexcept override { return cleanupOwner->HasPending() || sequenceOwner->HasPending(); }
         std::unique_ptr<CCustomAnimationCleanup> BeginCustomAnimationCleanup(const SCustomAnimationCleanupRequest& request) override
         {
             ++cleanupBegins;
@@ -162,6 +273,14 @@ namespace ifp_parser_tests
                 throw std::bad_alloc();
             auto* hierarchy = request.hierarchy ? request.hierarchy->GetInterface() : nullptr;
             auto  actual = MtaGame::CustomAnimationCleanupSA::Begin(cleanupOwner, request, hierarchy);
+            for (auto& record : cleanupOwner->records)
+                if (record->hierarchy == hierarchy && record->sequences == request.originalArray && !record->gathered)
+                {
+                    record->frameContext = sequenceOwner.get();
+                    record->identifyFrame = &MtaGame::CustomAnimationSequenceSA::IdentifyFrame;
+                    record->releaseFrame = &MtaGame::CustomAnimationSequenceSA::ReleaseFrame;
+                    record->extraFrames = MtaGame::CustomAnimationSequenceSA::SnapshotArrayFrames(*sequenceOwner, request.originalArray);
+                }
             if (alternateLayout && request.originalArray)
             {
                 // The existing opaque layout is instrumentation, not DE. Adapt
@@ -189,6 +308,14 @@ namespace ifp_parser_tests
                     record->gathered = true;
                 }
             }
+            for (auto& record : cleanupOwner->records)
+                if (record->hierarchy == hierarchy && record->sequences == request.originalArray)
+                {
+                    if (!record->gathered)
+                        MtaGame::CustomAnimationCleanupSA::Gather(*record);
+                    MtaGame::CustomAnimationSequenceSA::CloseArrayClaims(*sequenceOwner, request.originalArray);
+                    break;
+                }
             return std::make_unique<CleanupTicket>(*this, std::move(actual));
         }
         std::map<CAnimBlendSequenceSAInterface*, BYTE*> alternateAllocations;
@@ -200,6 +327,8 @@ namespace ifp_parser_tests
         {
             if (!Empty())
                 Unexpected();
+            cleanupOwner->liveOrigin = nullptr;
+            sequenceOwner->manager = nullptr;
         }
         std::size_t Capacity(CAnimBlendSequenceSAInterface* first) const
         {
@@ -283,6 +412,7 @@ namespace ifp_parser_tests
         {
             auto* row = new CAnimBlendSequenceSAInterface{};
             detached.insert(row);
+            MtaGame::CustomAnimationSequenceSA::RegisterStandalone(*sequenceOwner, row);
             ++detachedAllocations;
             return std::make_unique<Sequence>(*this, *row);
         }
@@ -320,6 +450,10 @@ namespace ifp_parser_tests
             if (!attached)
                 ++atBeforeAttachment;
             events.push_back({EventKind::Lookup, original, index, attached});
+            const auto array = MtaGame::CustomAnimationSequenceSA::FindArray(*sequenceOwner, original);
+            if (!array)
+                Unexpected();
+            MtaGame::CustomAnimationSequenceSA::RegisterBorrowedRow(*sequenceOwner, array, current);
             return GetCustomAnimBlendSequence(current);
         }
         void DeleteCustomAnimHierarchyInterface(CAnimBlendHierarchySAInterface* row) override
@@ -330,14 +464,16 @@ namespace ifp_parser_tests
             events.push_back({EventKind::DeleteHierarchy, row->pSequences, 0, row->pSequences != nullptr});
             delete row;
         }
-        void DeleteCustomAnimSequenceInterface(CAnimBlendSequenceSAInterface* row) override
+        void DeleteCustomAnimSequenceInterface(CAnimBlendSequenceSAInterface* pInterface) override;
+        void NativeDeleteStandaloneEntry(CAnimBlendSequenceSAInterface* row)
         {
             if (!row || detached.erase(row) != 1)
                 Unexpected();
             ++detachedFrees;
             delete row;
         }
-        CAnimBlendSequenceSAInterface* AllocateCustomAnimSequences(std::size_t capacity) override
+        CAnimBlendSequenceSAInterface* AllocateCustomAnimSequences(size_t capacity) override;
+        CAnimBlendSequenceSAInterface* NativeAllocateArrayEntry(std::size_t capacity)
         {
             if (failArrayAt && arrayAllocations + 1 == failArrayAt)
                 throw std::bad_alloc();
@@ -372,7 +508,8 @@ namespace ifp_parser_tests
             }
             return row;
         }
-        void FreeCustomAnimSequences(CAnimBlendSequenceSAInterface* row) override
+        void FreeCustomAnimSequences(CAnimBlendSequenceSAInterface* sequences) override;
+        void NativeFreeArrayEntry(CAnimBlendSequenceSAInterface* row)
         {
             if (!row || arrays.erase(row) != 1)
                 Unexpected();
@@ -390,8 +527,11 @@ namespace ifp_parser_tests
             else
                 MtaGame::CAnimSequenceStorageSA::Free(row);
         }
-        BYTE* AllocateKeyFramesMemory(std::uint32_t bytes) override
+        BYTE* AllocateKeyFramesMemory(uint32_t u32BytesToAllocate) override;
+        BYTE* NativeAllocateEntry(std::uint32_t bytes, DWORD entry)
         {
+            if (entry != FUNC_CAnimManager_AllocateKeyFramesMemory)
+                Unexpected();
             ++frameAttempts;
             if (failFrameAt && frameAttempts == failFrameAt)
                 return nullptr;
@@ -404,8 +544,11 @@ namespace ifp_parser_tests
             ++frameAllocations;
             return row;
         }
-        void FreeKeyFramesMemory(void* pointer) override
+        void FreeKeyFramesMemory(void* pKeyFrames) override;
+        void NativeFreeEntry(void* pointer, DWORD entry)
         {
+            if (entry != FUNC_CAnimManager_FreeKeyFramesMemory)
+                Unexpected();
             auto*      row = static_cast<BYTE*>(pointer);
             const auto found = frames.find(row);
             if (!row || found == frames.end())
@@ -447,6 +590,8 @@ namespace ifp_parser_tests
         }
 #include "IFPManagerRejectors.generated.inl"
     };
+#include "ClassicAnimationOperationBridge.generated.inl"
+#include "ClassicAnimationArrayBridge.generated.inl"
     // Observe the actual publication point rather than treating allocation
     // or an initialized capacity row as completed parser construction.
     inline void Hierarchy::SetSequences(CAnimBlendSequenceSAInterface* value)
@@ -472,7 +617,9 @@ namespace ifp_parser_tests
     }
     inline void Sequence::Initialize()
     {
+        MtaGame::CustomAnimationSequenceSA::BeforeInitialize(*owner.sequenceOwner, &row);
         MtaGame::CAnimSequenceStorageSA::Initialize(row);
+        MtaGame::CustomAnimationSequenceSA::Initialized(*owner.sequenceOwner, &row);
         owner.RecordPopulation(&row);
     }
     inline CAnimBlendSequenceSAInterface* Hierarchy::GetSequence(DWORD index)
@@ -496,6 +643,11 @@ namespace ifp_parser_tests
         owner.RecordPopulation(&row);
         if (fail)
             throw std::runtime_error("injected entered attachment refusal");
+    }
+    inline BYTE* Sequence::GetKeyFrames()
+    {
+        ++owner.frameGetterCalls;
+        return row.pKeyFrames;
     }
     inline void* Sequence::GetKeyFrame(std::size_t index, std::uint32_t size)
     {

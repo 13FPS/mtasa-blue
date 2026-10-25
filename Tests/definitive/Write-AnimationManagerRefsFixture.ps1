@@ -18,10 +18,10 @@ function Write-AnimationManagerRefsFixture([string]$RepositoryRoot,[string]$Outp
             [regex]::Replace($signature,'\s+',' ')
         }
     })
-    if($methods.Count -ne 54 -or @($methods|Where-Object {$_ -match '\bGetCustomAnimBlendSequenceAt\s*\('}).Count -ne 1){throw 'Remaining actual manager reference fixture methods changed'}
-    # These fixtures do not test cleanup. Keep both required operations as
-    # explicit abortors so no fallback can falsely authorize owner teardown.
-    foreach($required in @('BeginCustomAnimationCleanup','HasPendingCustomAnimationCleanup')) {
+    if($methods.Count -ne 57 -or @($methods|Where-Object {$_ -match '\bGetCustomAnimBlendSequenceAt\s*\('}).Count -ne 1){throw 'Remaining actual manager reference fixture methods changed'}
+    # These fixtures do not test cleanup/standalone owner operations. Keep
+    # required abortors so a missing receipt can never authorize teardown.
+    foreach($required in @('BeginCustomAnimationCleanup','HasPendingCustomAnimationCleanup','BeginCustomAnimationSequenceCleanup','BeginCustomAnimationSequenceTransfer','BeginCustomAnimationFrameAttachment')) {
         if(@($methods|Where-Object {$_ -match ('\b'+$required+'\s*\(')}).Count -ne 1) {
             throw ('Missing required rejecting cleanup operation: '+$required)
         }

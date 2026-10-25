@@ -20,7 +20,7 @@ $record=[ordered]@{
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     result=$null;checks=0;failure=$null;scratchDirectory=$scratchRoot;scratchRemoved=$false;
     generatedFixture=$null;actualHeadersConsumed=@();
-    actualCommonIfpParserRuntimeTested=$false;actualIfpOwnershipFailurePathsTested=$false;actualIfpOpaqueLayoutVariantsTested=$false;actualIfpDetachedConstructionTested=$false;actualIfpUnattachedCleanupTested=$false;actualIfpDurableCleanupTicketTested=$false;actualIfpCleanupAcknowledgementRetentionTested=$false;
+    actualCommonIfpParserRuntimeTested=$false;actualIfpOwnershipFailurePathsTested=$false;actualIfpOpaqueLayoutVariantsTested=$false;actualIfpDetachedConstructionTested=$false;actualIfpUnattachedCleanupTested=$false;actualIfpDurableCleanupTicketTested=$false;actualIfpCleanupAcknowledgementRetentionTested=$false;actualCommonTypedSequenceOperations=$false;
     scope='Actual common CClientIFP/CIFPAnimations/CFileReader TUs and unchanged actual class headers, x86 CPU runtime; only unrelated entity/string/game shell substituted. Genuine classic storage12/4 At and instrumented opaque80/8 owned-array views share the same parser; actual SA cleanup journal owns release policy, with opaque instrumentation adapting owned row observations to its Gather. This affected module reruns codec/transaction paths plus construction-before-hierarchy-attach and failure-before-attach cleanup; no other old suites replay. No duplicated parser or cleanup model, native engine execution or concrete DE factory claim.';
     nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;installationChanged=$false;
     classDeclarationsMirrored=$false;completeCGameReady=$false;completeNativeDEAnimationFactoryReady=$false;fullMtaReady=$false
@@ -72,6 +72,7 @@ try {
     $productionSources=@('Client/mods/deathmatch/logic/CClientIFP.cpp','Client/mods/deathmatch/logic/CIFPAnimations.cpp','Client/mods/deathmatch/logic/CFileReader.cpp')
     $sourceNames=$productionSources+@('Tests/definitive/IFPParserRuntimeTests.cpp','Tests/definitive/IFPParserBackendFixture.h',
         'Tests/definitive/IFPParserEnvironment.h','Tests/definitive/Write-IFPParserFixture.ps1',
+        'Tests/definitive/Write-ClassicAnimationOperationBridge.ps1','Tests/definitive/Write-ClassicAnimationArrayBridge.ps1',
         'Client/mods/deathmatch/logic/CClientIFP.h','Client/mods/deathmatch/logic/CIFPAnimations.h','Client/mods/deathmatch/logic/CFileReader.h',
         [IO.Path]::GetRelativePath($taskRoot,$PSCommandPath).Replace('\','/'))
     $pending=[Collections.Generic.Queue[string]]::new()
@@ -102,6 +103,9 @@ try {
     [void]$observed.Add('Shared/sdk/SharedUtil.Hash.hpp')
     $record.sourceHashes=@($observed|Sort-Object|ForEach-Object{[ordered]@{path=$_;sha256=(Sha(Join-Path $taskRoot $_))}})
     $record.generatedFixture=Write-IFPParserFixture $taskRoot $scratchRoot
+    foreach($input in $record.generatedFixture.sourceInputs) {
+        if($input.path -notin @($record.sourceHashes|ForEach-Object{$_.path})) {$record.sourceHashes+=@($input)}
+    }
     $record.generatedFixture['durableFiles']=@($record.generatedFixture.files|ForEach-Object{
         $destination=Join-Path $outputRoot ([IO.Path]::GetFileName($_.path));Copy-Item -LiteralPath $_.path -Destination $destination
         [ordered]@{path=$destination;sha256=(Sha $destination)}
@@ -129,7 +133,7 @@ try {
         ('/I'+(Join-Path $taskRoot 'Client/mods/deathmatch/logic')),(Join-Path $PSScriptRoot 'IFPParserRuntimeTests.cpp'))+
         @($productionSources|ForEach-Object{Join-Path $taskRoot $_})+
         @(('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'compiler.pdb')),('/Fe'+$executable))
-    $record.result=[ordered]@{architecture='x86';environment=$environmentResult;compile=$null;test=$null;retainedCleanup=$null;executableSha256=$null;checks=0;retainedChecks=0;pointerBits=$null}
+    $record.result=[ordered]@{architecture='x86';environment=$environmentResult;compile=$null;test=$null;retainedCleanup=$null;retainedSequence=$null;executableSha256=$null;checks=0;retainedChecks=0;retainedSequenceChecks=0;pointerBits=$null}
     $record.result.compile=RunOwned $compiler $arguments $outputRoot 'compile' 60000
     if($record.result.compile.exitCode -ne 0 -or $record.result.compile.timedOut){throw 'Actual common IFP fixture compilation failed'}
     $includeLog=[IO.File]::ReadAllText($record.result.compile.stdout)
@@ -142,7 +146,7 @@ try {
     foreach($relative in @('Client/mods/deathmatch/logic/CClientIFP.h','Client/mods/deathmatch/logic/CIFPAnimations.h',
         'Client/mods/deathmatch/logic/CFileReader.h','Client/mods/deathmatch/logic/CIFPAnimationStorage.h',
         'Client/mods/deathmatch/logic/CIFPReadGuard.h','Client/sdk/game/CAnimManager.h','Client/game_sa/CAnimSequenceStorageSA.h','Client/game_sa/CCustomAnimationCleanupSA.h',
-        'Client/sdk/game/CCustomAnimationCleanup.h')){
+        'Client/sdk/game/CCustomAnimationCleanup.h','Client/game_sa/CCustomAnimationSequenceOperationSA.h','Client/sdk/game/CCustomAnimationSequenceOperation.h')){
         $actual=[IO.Path]::GetFullPath((Join-Path $taskRoot $relative))
         if(-not $consumed.Contains($actual)){throw "Compiler did not consume exact actual header: $relative"}
         $record.actualHeadersConsumed+=@([ordered]@{path=$relative;sha256=(Sha $actual)})
@@ -170,12 +174,19 @@ try {
     $record.actualIfpCleanupAcknowledgementRetentionTested=$record.result.retainedCleanup.exitCode -eq 0 -and
         -not $record.result.retainedCleanup.timedOut -and $record.result.retainedChecks -gt 0 -and
         $retainedOutput.Contains('Actual common IFP cleanup acknowledgement retention fixture completed')
-    $record.checks=$record.result.checks+$record.result.retainedChecks
+    $record.result.retainedSequence=RunOwned $executable @('--retained-sequence') $outputRoot 'retained-sequence' 15000
+    $sequenceOutput=[IO.File]::ReadAllText($record.result.retainedSequence.stdout)
+    $sequenceSummary=[regex]::Match($sequenceOutput,'Passed (\d+) retained common sequence operation checks')
+    if($sequenceSummary.Success){$record.result.retainedSequenceChecks=[int]$sequenceSummary.Groups[1].Value}
+    $record.actualCommonTypedSequenceOperations=$stdout.Contains('Actual common typed sequence operations fixture completed') -and
+        $record.result.retainedSequence.exitCode -eq 0 -and -not $record.result.retainedSequence.timedOut -and
+        $record.result.retainedSequenceChecks -gt 0 -and $sequenceOutput.Contains('Actual common unknown sequence operation retention fixture completed')
+    $record.checks=$record.result.checks+$record.result.retainedChecks+$record.result.retainedSequenceChecks
     $record.success=$record.result.test.exitCode -eq 0 -and -not $record.result.test.timedOut -and $record.checks -gt 0 -and
         $record.result.pointerBits -eq 32 -and $record.actualCommonIfpParserRuntimeTested -and
         $record.actualIfpOpaqueLayoutVariantsTested -and $record.actualIfpOwnershipFailurePathsTested -and
         $record.actualIfpDetachedConstructionTested -and $record.actualIfpUnattachedCleanupTested -and
-        $record.actualIfpDurableCleanupTicketTested -and $record.actualIfpCleanupAcknowledgementRetentionTested
+        $record.actualIfpDurableCleanupTicketTested -and $record.actualIfpCleanupAcknowledgementRetentionTested -and $record.actualCommonTypedSequenceOperations
     if(-not $record.success){throw 'Actual common IFP runtime/evidence failed'}
 } catch { AddFailure ($_.Exception.ToString()) }
 finally {

@@ -13,6 +13,7 @@
 #include <game/CAnimGatewayNames.h>
 #include <stdexcept>
 #include <exception>
+#include <new>
 #include <string>
 namespace mta::game_de
 {
@@ -88,6 +89,60 @@ namespace mta::game_de
             NativeCustomAnimationCleanupView    view;
             bool                                accepted = false;
         };
+        class CustomAnimationSequenceOperationDE final : public CCustomAnimationSequenceOperation
+        {
+        public:
+            CustomAnimationSequenceOperationDE(NativeCustomAnimationSequenceOperationAccess& owner, std::uint64_t generation,
+                                               ECustomAnimationSequenceDisposition expected) noexcept
+                : owner(owner), generation(generation), expected(expected)
+            {
+            }
+            void Adopt(NativeCustomAnimationCleanupView&& issued, bool admitted) noexcept
+            {
+                view = std::move(issued);
+                accepted = admitted;
+            }
+            SCustomAnimationSequenceResult Resume() noexcept override
+            {
+                constexpr SCustomAnimationSequenceResult refused{ECustomAnimationSequenceStatus::Refused, ECustomAnimationSequenceDisposition::Unresolved};
+                const auto                               token = view.Token();
+                if (!accepted || !view.IsIssued() || !generation || token.generation != generation || !token.command)
+                    return refused;
+                SCustomAnimationSequenceResult result;
+                if (owner.ResumePrivateAnimationSequenceOperation(token, result) != ClockResult::Ok)
+                    return refused;
+                // A provably unentered Copy cancellation disposes the source
+                // through that same original transfer journal. Return its exact
+                // SourceReleased receipt without claiming a successful transfer;
+                // the common caller still requires SourceTransferred to proceed.
+                const bool cancellation = expected == ECustomAnimationSequenceDisposition::SourceTransferred &&
+                                          result.disposition == ECustomAnimationSequenceDisposition::SourceReleased;
+                if (result.disposition != ECustomAnimationSequenceDisposition::Unresolved && result.disposition != expected && !cancellation)
+                    return refused;
+                switch (result.status)
+                {
+                    case ECustomAnimationSequenceStatus::Complete:
+                        return result.disposition == expected || cancellation ? result : refused;
+                    case ECustomAnimationSequenceStatus::Pending:
+                    case ECustomAnimationSequenceStatus::Refused:
+                        return result;
+                    default:
+                        return refused;
+                }
+            }
+            // The actual journal owns resources and accepted effects. This
+            // facade's destruction only releases its CPU code-lifetime view.
+        private:
+            NativeCustomAnimationSequenceOperationAccess& owner;
+            const std::uint64_t                           generation;
+            const ECustomAnimationSequenceDisposition     expected;
+            NativeCustomAnimationCleanupView              view;
+            bool                                          accepted = false;
+        };
+        struct DeleteSequenceFacadeStorage
+        {
+            void operator()(void* value) const noexcept { ::operator delete(value); }
+        };
         void Require(ClockResult result, const char* operation)
         {
             if (result != ClockResult::Ok)
@@ -135,6 +190,7 @@ namespace mta::game_de
         // Cross-cast only from the already matched complete CPU owner. Old
         // observation constructors never silently acquire teardown authority.
         cleanupAccess = dynamic_cast<NativeCustomAnimationCleanupAccess*>(&manager);
+        sequenceOperationAccess = dynamic_cast<NativeCustomAnimationSequenceOperationAccess*>(&manager);
     }
     std::unique_ptr<CCustomAnimationCleanup> CAnimManagerDE::BeginCustomAnimationCleanup(const SCustomAnimationCleanupRequest& request)
     {
@@ -169,8 +225,123 @@ namespace mta::game_de
     {
         // Missing/busy proof is retention, including partial observation-only
         // receivers. The actual owner counts commands and live completed views.
-        return !cleanupAccess || cleanupAccess->HasPendingPrivateAnimationCleanup();
+        return !cleanupAccess || cleanupAccess->HasPendingPrivateAnimationCleanup() ||
+               (sequenceOperationAccess && sequenceOperationAccess->HasPendingPrivateAnimationSequenceOperations());
     }
+    NativeAnimationSequenceReferenceToken CAnimManagerDE::SequenceOperationIdentity(CAnimBlendSequence* value, const char* operation) const
+    {
+        if (!sequenceOperationAccess || !sequenceAccess)
+            Require(ClockResult::NotInitialized, operation);
+        auto* sequence = dynamic_cast<CAnimBlendSequenceDE*>(value);
+        if (!sequence || dynamic_cast<void*>(&sequence->native) != dynamic_cast<void*>(&native))
+            throw std::invalid_argument("DE sequence operation requires its same-owner issued facade");
+        // Read immutable CPU identity while the caller lends the facade.
+        // No native getter can decide whether a prior write was accepted.
+        const auto reference = sequence->reference;
+        if (!ownerGeneration || reference.ownerGeneration != ownerGeneration || !reference.firstTag)
+            Require(ClockResult::BindingChanged, operation);
+        return reference;
+    }
+
+    std::unique_ptr<CAnimBlendSequence> CAnimManagerDE::GetCustomAnimBlendSequence()
+    {
+        if (!sequenceOperationAccess || !sequenceAccess || !ownerGeneration)
+            Require(ClockResult::NotInitialized, "GetCustomAnimBlendSequence");
+        // Allocate the CPU facade storage first. Its noexcept placement
+        // constructor cannot strand a newly accepted native allocation if
+        // the CPU allocator fails, and no guessed cleanup is needed here.
+        std::unique_ptr<void, DeleteSequenceFacadeStorage> memory(::operator new(sizeof(CAnimBlendSequenceDE)));
+        NativeAnimationSequenceReferenceToken              reference;
+        Require(sequenceOperationAccess->AllocatePrivateStandaloneAnimationSequence(ownerGeneration, reference), "GetCustomAnimBlendSequence");
+        if (!reference.firstTag)
+            throw std::bad_alloc();
+        if (reference.ownerGeneration != ownerGeneration || reference.index)
+            Require(ClockResult::BindingChanged, "GetCustomAnimBlendSequence");
+        auto* facade = ::new (memory.get()) CAnimBlendSequenceDE(*sequenceAccess, reference);
+        memory.release();
+        return std::unique_ptr<CAnimBlendSequence>(facade);
+    }
+
+    std::unique_ptr<CAnimBlendSequence> CAnimManagerDE::GetCustomAnimBlendSequence(CAnimBlendSequenceSAInterface* raw)
+    {
+        if (!raw)
+            return nullptr;
+        if (!sequenceOperationAccess || !sequenceAccess || !ownerGeneration)
+            Require(ClockResult::NotInitialized, "GetCustomAnimBlendSequence");
+        const auto                            locator = reinterpret_cast<std::uintptr_t>(raw);
+        NativeAnimationSequenceReferenceToken reference;
+        Require(sequenceOperationAccess->ResolvePrivateStandaloneAnimationSequence(ownerGeneration, locator, reference), "GetCustomAnimBlendSequence");
+        if (reference.ownerGeneration != ownerGeneration || reference.firstTag != locator || reference.index)
+            Require(ClockResult::BindingChanged, "GetCustomAnimBlendSequence");
+        // A borrowed clone never changes the original resource's ownership.
+        return std::unique_ptr<CAnimBlendSequence>(new CAnimBlendSequenceDE(*sequenceAccess, reference));
+    }
+
+    std::unique_ptr<CCustomAnimationSequenceOperation> CAnimManagerDE::BeginCustomAnimationSequenceCleanup(
+        const SCustomAnimationSequenceCleanupRequest& request)
+    {
+        const auto copied = request;
+        if (copied.origin != this)
+            throw std::invalid_argument("DE sequence cleanup requires the creating manager");
+        const auto source = SequenceOperationIdentity(copied.source, "BeginCustomAnimationSequenceCleanup");
+        auto       ticket = std::make_unique<CustomAnimationSequenceOperationDE>(*sequenceOperationAccess, ownerGeneration,
+                                                                                 ECustomAnimationSequenceDisposition::SourceReleased);
+        NativeCustomAnimationSequenceOperationBeginReceipt receipt;
+        const auto                                         result = sequenceOperationAccess->BeginPrivateAnimationSequenceCleanup(source, receipt);
+        if (receipt.accepted || receipt.view.IsIssued())
+        {
+            ticket->Adopt(std::move(receipt.view), receipt.accepted);
+            return ticket;
+        }
+        Require(result, "BeginCustomAnimationSequenceCleanup");
+        Require(ClockResult::BindingChanged, "BeginCustomAnimationSequenceCleanup");
+        return nullptr;
+    }
+
+    std::unique_ptr<CCustomAnimationSequenceOperation> CAnimManagerDE::BeginCustomAnimationSequenceTransfer(
+        const SCustomAnimationSequenceTransferRequest& request)
+    {
+        const auto copied = request;
+        if (copied.origin != this)
+            throw std::invalid_argument("DE sequence transfer requires the creating manager");
+        const auto source = SequenceOperationIdentity(copied.source, "BeginCustomAnimationSequenceTransfer");
+        const auto destination = SequenceOperationIdentity(copied.destination, "BeginCustomAnimationSequenceTransfer");
+        auto       ticket = std::make_unique<CustomAnimationSequenceOperationDE>(*sequenceOperationAccess, ownerGeneration,
+                                                                                 ECustomAnimationSequenceDisposition::SourceTransferred);
+        NativeCustomAnimationSequenceOperationBeginReceipt receipt;
+        const auto result = sequenceOperationAccess->BeginPrivateAnimationSequenceTransfer(source, destination, receipt);
+        if (receipt.accepted || receipt.view.IsIssued())
+        {
+            ticket->Adopt(std::move(receipt.view), receipt.accepted);
+            return ticket;
+        }
+        Require(result, "BeginCustomAnimationSequenceTransfer");
+        Require(ClockResult::BindingChanged, "BeginCustomAnimationSequenceTransfer");
+        return nullptr;
+    }
+
+    std::unique_ptr<CCustomAnimationSequenceOperation> CAnimManagerDE::BeginCustomAnimationFrameAttachment(
+        const SCustomAnimationFrameAttachmentRequest& request)
+    {
+        const auto copied = request;
+        if (copied.origin != this)
+            throw std::invalid_argument("DE frame attachment requires the creating manager");
+        const auto target = SequenceOperationIdentity(copied.target, "BeginCustomAnimationFrameAttachment");
+        auto       ticket = std::make_unique<CustomAnimationSequenceOperationDE>(*sequenceOperationAccess, ownerGeneration,
+                                                                                 ECustomAnimationSequenceDisposition::FramesAttached);
+        NativeCustomAnimationSequenceOperationBeginReceipt receipt;
+        const auto result = sequenceOperationAccess->BeginPrivateAnimationFrameAttachment(target, copied.count, copied.root, copied.compressed,
+                                                                                          reinterpret_cast<std::uintptr_t>(copied.originalFrames), receipt);
+        if (receipt.accepted || receipt.view.IsIssued())
+        {
+            ticket->Adopt(std::move(receipt.view), receipt.accepted);
+            return ticket;
+        }
+        Require(result, "BeginCustomAnimationFrameAttachment");
+        Require(ClockResult::BindingChanged, "BeginCustomAnimationFrameAttachment");
+        return nullptr;
+    }
+
     std::unique_ptr<CAnimBlendHierarchy> CAnimManagerDE::GetCustomAnimBlendHierarchy()
     {
         if (!hierarchyAccess)

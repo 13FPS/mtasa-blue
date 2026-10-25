@@ -222,7 +222,7 @@ WORD CClientIFP::ReadSequencesVersion1(SAnimation& animation, SequenceMapType& M
         owner.MarkInitialized();
 
         eFrameType iFrameType = ReadKfrm();
-        if ((ReadSequenceKeyFrames(sequence, iFrameType, Anim.Frames)) && (!bUnknownSequence))
+        if ((ReadSequenceKeyFrames(owner, iFrameType, Anim.Frames)) && (!bUnknownSequence))
         {
             MapOfSequences.insert_or_assign(iBoneID, std::move(owner));
         }
@@ -259,7 +259,7 @@ WORD CClientIFP::ReadSequencesVersion2(SAnimation& animation, SequenceMapType& M
         owner.MarkInitialized();
 
         eFrameType iFrameType = static_cast<eFrameType>(ObjectNode.FrameType);
-        if ((ReadSequenceKeyFrames(sequence, iFrameType, ObjectNode.TotalFrames)) && (!bUnknownSequence))
+        if ((ReadSequenceKeyFrames(owner, iFrameType, ObjectNode.TotalFrames)) && (!bUnknownSequence))
         {
             MapOfSequences.insert_or_assign(ObjectNode.BoneID, std::move(owner));
         }
@@ -311,8 +311,9 @@ void CClientIFP::ReadSequenceVersion2(SSequenceHeaderV2& ObjectNode)
     strncpy(ObjectNode.Name, strCorrectBoneName, strCorrectBoneName.size() + 1);
 }
 
-bool CClientIFP::ReadSequenceKeyFrames(std::unique_ptr<CAnimBlendSequence>& pAnimationSequence, eFrameType iFrameType, const std::int32_t& cFrames)
+bool CClientIFP::ReadSequenceKeyFrames(MtaGame::IfpStorage::SequenceOwner<CAnimManager>& owner, eFrameType iFrameType, const std::int32_t& cFrames)
 {
+    auto& pAnimationSequence = owner.Get();
     if (cFrames < 0)
         throw std::runtime_error("Negative IFP frame count");
     if (cFrames == 0)
@@ -335,7 +336,7 @@ bool CClientIFP::ReadSequenceKeyFrames(std::unique_ptr<CAnimBlendSequence>& pAni
     }
 
     MtaGame::IfpStorage::AttachFrames(*m_pAnimManager, *pAnimationSequence, static_cast<std::size_t>(cFrames), IsKeyFramesTypeRoot(iFrameType),
-                                      m_kbAllKeyFramesCompressed, pKeyFrames);
+                                      m_kbAllKeyFramesCompressed, pKeyFrames, &owner.FrameOperation());
     ReadKeyFramesAsCompressed(pAnimationSequence, iFrameType, cFrames);
     return true;
 }
@@ -585,7 +586,8 @@ void CClientIFP::MoveSequencesWithDummies(SAnimation& animation, SequenceMapType
         }
         else
         {
-            InsertAnimationDummySequence(pAnimationSequence, BoneName, BoneID);
+            MtaGame::IfpStorage::SequenceOwner<CAnimManager> dummy(*m_pAnimManager, std::move(pAnimationSequence), false);
+            InsertAnimationDummySequence(dummy, BoneName, BoneID);
         }
     }
 }
@@ -626,8 +628,9 @@ CClientIFP::eFrameType CClientIFP::GetFrameTypeFromFourCC(const char* szFourCC)
     return eFrameType::UNKNOWN_FRAME;
 }
 
-void CClientIFP::InsertAnimationDummySequence(std::unique_ptr<CAnimBlendSequence>& pAnimationSequence, const SString& BoneName, const DWORD& dwBoneID)
+void CClientIFP::InsertAnimationDummySequence(MtaGame::IfpStorage::SequenceOwner<CAnimManager>& owner, const SString& BoneName, const DWORD& dwBoneID)
 {
+    auto& pAnimationSequence = owner.Get();
     InitializeAnimationSequence(pAnimationSequence, BoneName, dwBoneID);
 
     bool bRootBone = dwBoneID == eBoneType::NORMAL;
@@ -650,7 +653,8 @@ void CClientIFP::InsertAnimationDummySequence(std::unique_ptr<CAnimBlendSequence
     if (!pKeyFrames)
         return;
 
-    MtaGame::IfpStorage::AttachFrames(*m_pAnimManager, *pAnimationSequence, cKeyFrames, bHasTranslationValues, m_kbAllKeyFramesCompressed, pKeyFrames);
+    MtaGame::IfpStorage::AttachFrames(*m_pAnimManager, *pAnimationSequence, cKeyFrames, bHasTranslationValues, m_kbAllKeyFramesCompressed, pKeyFrames,
+                                      &owner.FrameOperation());
     CopyDummyKeyFrameByBoneID(pKeyFrames, dwBoneID);
 }
 

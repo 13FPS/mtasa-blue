@@ -12,10 +12,15 @@
 #include "StdInc.h"
 #include "CAnimBlendSequenceSA.h"
 #include "CAnimSequenceStorageSA.h"
+#include "CCustomAnimationSequenceOperationSA.h"
 
 void CAnimBlendSequenceSA::Initialize()
 {
+    if (customOwner)
+        MtaGame::CustomAnimationSequenceSA::BeforeInitialize(*customOwner, m_pInterface);
     MtaGame::CAnimSequenceStorageSA::Initialize(*m_pInterface);
+    if (customOwner)
+        MtaGame::CustomAnimationSequenceSA::Initialized(*customOwner, m_pInterface);
 }
 
 void CAnimBlendSequenceSA::SetName(const char* szName)

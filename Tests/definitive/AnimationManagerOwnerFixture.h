@@ -81,4 +81,17 @@ public:
     // operations must reject visibly, not pretend debt or tickets completed.
     std::unique_ptr<CCustomAnimationCleanup> BeginCustomAnimationCleanup(const SCustomAnimationCleanupRequest&) override { Unsupported(); }
     bool                                     HasPendingCustomAnimationCleanup() const noexcept override { Unsupported(); }
+    // Unselected standalone operations cannot fabricate accepted ownership.
+    std::unique_ptr<CCustomAnimationSequenceOperation> BeginCustomAnimationSequenceCleanup(const SCustomAnimationSequenceCleanupRequest&) override
+    {
+        Unsupported();
+    }
+    std::unique_ptr<CCustomAnimationSequenceOperation> BeginCustomAnimationSequenceTransfer(const SCustomAnimationSequenceTransferRequest&) override
+    {
+        Unsupported();
+    }
+    std::unique_ptr<CCustomAnimationSequenceOperation> BeginCustomAnimationFrameAttachment(const SCustomAnimationFrameAttachmentRequest&) override
+    {
+        Unsupported();
+    }
 };

@@ -11,10 +11,12 @@
 #include <game/CAnimBlendSequence.h>
 #include <game/CAnimManager.h>
 #include <game/CCustomAnimationCleanup.h>
+#include <game/CCustomAnimationSequenceOperation.h>
 #include <memory>
 #include <limits>
 #include <stdexcept>
 #include <utility>
+#include <exception>
 namespace MtaGame::IfpStorage
 {
     template <class Manager>
@@ -29,7 +31,12 @@ namespace MtaGame::IfpStorage
         SequenceOwner(const SequenceOwner&) = delete;
         SequenceOwner& operator=(const SequenceOwner&) = delete;
         SequenceOwner(SequenceOwner&& other) noexcept
-            : manager(other.manager), sequence(std::move(other.sequence)), ownsInterface(other.ownsInterface), initialized(other.initialized)
+            : manager(other.manager),
+              sequence(std::move(other.sequence)),
+              operation(std::move(other.operation)),
+              frameOperation(std::move(other.frameOperation)),
+              ownsInterface(other.ownsInterface),
+              initialized(other.initialized)
         {
             other.ownsInterface = false;
         }
@@ -40,73 +47,135 @@ namespace MtaGame::IfpStorage
                 Reset();
                 manager = other.manager;
                 sequence = std::move(other.sequence);
+                operation = std::move(other.operation);
+                frameOperation = std::move(other.frameOperation);
                 ownsInterface = other.ownsInterface;
                 initialized = other.initialized;
                 other.ownsInterface = false;
             }
             return *this;
         }
-        ~SequenceOwner() { Reset(); }
-        std::unique_ptr<CAnimBlendSequence>& Get() noexcept { return sequence; }
-        void                                 MarkInitialized() noexcept { initialized = true; }
-        void                                 TransferTo(CAnimBlendSequence& destination)
+        ~SequenceOwner()
         {
-            auto* frames = sequence->GetKeyFrames();
-            try
+            Reset();
+            // Even when cleanup is pending, dispose only the CPU facade while
+            // accepted operation views still retain its backend code lifetime.
+            sequence.reset();
+        }
+        std::unique_ptr<CAnimBlendSequence>&                Get() noexcept { return sequence; }
+        void                                                MarkInitialized() noexcept { initialized = true; }
+        std::unique_ptr<CCustomAnimationSequenceOperation>& FrameOperation() noexcept { return frameOperation; }
+        void                                                TransferTo(CAnimBlendSequence& destination)
+        {
+            if (!manager || !sequence || !ownsInterface)
+                throw std::logic_error("IFP transfer requires its owned standalone source");
+            if (frameOperation)
             {
-                destination.CopySequenceProperties(sequence->GetInterface());
+                const auto frameResult = frameOperation->Resume();
+                if (frameResult.status != ECustomAnimationSequenceStatus::Complete ||
+                    frameResult.disposition != ECustomAnimationSequenceDisposition::FramesAttached)
+                    throw std::runtime_error("IFP source frame construction acknowledgement is pending or refused");
+                frameOperation.reset();
             }
-            catch (...)
-            {
-                // A setter can report failure after publishing its pointer.
-                // Retain that accepted destination ownership, never free it
-                // through both the detached source and the hierarchy array.
-                if (frames && destination.GetKeyFrames() == frames)
-                    initialized = false;
-                throw;
-            }
-            initialized = false;
-            auto* native = sequence->GetInterface();
+            if (!operation)
+                operation = manager->BeginCustomAnimationSequenceTransfer({manager, sequence.get(), &destination});
+            if (!operation)
+                throw std::runtime_error("IFP backend did not accept sequence transfer");
+            const auto result = operation->Resume();
+            if (result.status != ECustomAnimationSequenceStatus::Complete || result.disposition != ECustomAnimationSequenceDisposition::SourceTransferred)
+                throw std::runtime_error("IFP sequence transfer acknowledgement is pending or refused");
+            // The backend moved only acknowledged frame ownership and retired
+            // the source interface. Keep the CPU view until its facade is gone.
             ownsInterface = false;
-            manager->DeleteCustomAnimSequenceInterface(native);
+            initialized = false;
+            sequence.reset();
+            operation.reset();
         }
 
     private:
-        void Reset()
+        void Reset() noexcept
         {
+            // Resume the accepted assignment first. Standalone cleanup can
+            // then cancel a pre-entry assignment or wait for its real ACK;
+            // no getter or fresh source lookup substitutes for that ticket.
+            if (frameOperation)
+            {
+                const auto result = frameOperation->Resume();
+                if (result.status == ECustomAnimationSequenceStatus::Complete && result.disposition == ECustomAnimationSequenceDisposition::FramesAttached)
+                    frameOperation.reset();
+            }
             if (sequence && ownsInterface)
             {
-                auto* native = sequence->GetInterface();
-                auto* frames = initialized ? sequence->GetKeyFrames() : nullptr;
-                ownsInterface = false;
-                if (frames)
-                    manager->FreeKeyFramesMemory(frames);
-                manager->DeleteCustomAnimSequenceInterface(native);
+                try
+                {
+                    if (!operation)
+                        operation = manager->BeginCustomAnimationSequenceCleanup({manager, sequence.get(), initialized});
+                    if (!operation)
+                        return;
+                    const auto result = operation->Resume();
+                    if (result.status != ECustomAnimationSequenceStatus::Complete ||
+                        (result.disposition != ECustomAnimationSequenceDisposition::SourceReleased &&
+                         result.disposition != ECustomAnimationSequenceDisposition::SourceTransferred))
+                        return;
+                    ownsInterface = false;
+                    initialized = false;
+                }
+                catch (...)
+                {
+                    // The factory's original owner reservation and any accepted
+                    // command retain the resources if this last CPU guard dies.
+                    return;
+                }
             }
             sequence.reset();
+            operation.reset();
+            frameOperation.reset();
         }
-        Manager*                            manager = nullptr;
-        std::unique_ptr<CAnimBlendSequence> sequence;
-        bool                                ownsInterface = false, initialized = false;
+        Manager*                                           manager = nullptr;
+        std::unique_ptr<CAnimBlendSequence>                sequence;
+        std::unique_ptr<CCustomAnimationSequenceOperation> operation;
+        std::unique_ptr<CCustomAnimationSequenceOperation> frameOperation;
+        bool                                               ownsInterface = false, initialized = false;
     };
 
     template <class Manager>
-    void AttachFrames(Manager& manager, CAnimBlendSequence& sequence, std::size_t count, bool root, bool compressed, BYTE* frames)
+    void AttachFrames(Manager& manager, CAnimBlendSequence& sequence, std::size_t count, bool root, bool compressed, BYTE* frames,
+                      std::unique_ptr<CCustomAnimationSequenceOperation>* retained = nullptr)
     {
+        std::unique_ptr<CCustomAnimationSequenceOperation> local;
+        auto&                                              operation = retained ? *retained : local;
+        if (operation)
+            throw std::logic_error("IFP frame assignment already has an accepted operation");
         try
         {
-            sequence.SetKeyFrames(count, root, compressed, frames);
-            if (sequence.GetKeyFrames() != frames)
-                throw std::runtime_error("IFP backend did not attach supplied keyframes");
+            operation = manager.BeginCustomAnimationFrameAttachment({&manager, &sequence, count, root, compressed, frames});
+            if (!operation)
+                throw std::runtime_error("IFP backend did not accept original-frame assignment");
         }
         catch (...)
         {
-            // Once published, the row's existing owner performs cleanup.
-            // Before publication this allocation is still the caller's.
-            if (sequence.GetKeyFrames() != frames)
-                manager.FreeKeyFramesMemory(frames);
+            // Throw/null guarantees no operation claim was accepted. Explicitly
+            // release this original allocation once; its actual owner records
+            // returned versus entered/unknown free, with no getter inference.
+            if (frames)
+            {
+                try
+                {
+                    manager.FreeKeyFramesMemory(frames);
+                }
+                catch (...)
+                {
+                    std::throw_with_nested(std::runtime_error("IFP frame assignment admission failed; owner release acknowledgement refused"));
+                }
+            }
             throw;
         }
+        const auto result = operation->Resume();
+        if (result.status != ECustomAnimationSequenceStatus::Complete || result.disposition != ECustomAnimationSequenceDisposition::FramesAttached)
+            throw std::runtime_error("IFP original-frame assignment acknowledgement is pending or refused");
+        // Once accepted, this command's owner retains the original frame even
+        // if binding/postflight fails. Never free it from a pointer comparison.
+        operation.reset();
     }
 
     template <class Manager, class Animation>

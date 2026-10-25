@@ -541,11 +541,166 @@ namespace
         // its test address space after the module-lifetime predicate is proved.
         std::_Exit(0);
     }
+    void TypedSequenceOwnership()
+    {
+        Phase("actual typed standalone cleanup, transfer and supplied-frame ownership");
+        for (const bool alternate : {false, true})
+        {
+            Manager manager(alternate);
+            {
+                CClientIFP ifp(nullptr, 30, manager);
+                Check(ifp.Load("typed", true, MakeFile("ANP3", {{0, "Normal", 1024}, {0, "Normal", 2048}, {-1, "unknown", 3072}}).Buffer()));
+                Check(manager.typedAttachmentBegins > 0 && manager.typedTransferBegins == 1 && manager.typedCleanupBegins > 0);
+                Check(manager.typedResumes >= manager.typedAttachmentBegins + manager.typedTransferBegins);
+                // ANP3's actual ReadCompressedFrames performs one payload
+                // borrow for each of these three input rows. Any additional
+                // ownership probe would exceed this exact expected count.
+                Check(manager.frameGetterCalls == 3 && manager.nativeFrameWrites == manager.typedAttachmentBegins);
+            }
+            Balanced(manager);
+            Check(!manager.HasPendingCustomAnimationCleanup());
+        }
+        for (const bool alternate : {false, true})
+        {
+            Manager        manager(alternate);
+            CIFPAnimations animations(manager);
+            animations.vecAnimations.emplace_back();
+            auto& animation = animations.vecAnimations.back();
+            animation.pHierarchy = manager.GetCustomAnimBlendHierarchy();
+            animation.pHierarchy->Initialize();
+            animation.pSequences = manager.AllocateCustomAnimSequences(1);
+            animation.sequenceCapacity = 1;
+            auto target = manager.GetCustomAnimBlendSequenceAt(animation.pSequences, 0);
+            auto source = manager.GetCustomAnimBlendSequence();
+            source->Initialize();
+            source->SetName("Normal");
+            source->SetBoneTag(0);
+            auto* original = manager.AllocateKeyFramesMemory(16);
+            {
+                MtaGame::IfpStorage::SequenceOwner<CAnimManager> guard(manager, std::move(source), true);
+                guard.MarkInitialized();
+                MtaGame::IfpStorage::AttachFrames(manager, *guard.Get(), 1, true, true, original, &guard.FrameOperation());
+                manager.failCopyAt = manager.copyAttempts + 1;
+                manager.copyFailureAfterWrite = true;
+                bool refused = false;
+                try
+                {
+                    guard.TransferTo(*target);
+                }
+                catch (const std::runtime_error&)
+                {
+                    refused = true;
+                }
+                Check(refused && guard.Get() && manager.detached.empty());
+                Check(manager.copyAttempts == 1 && manager.typedTransferBegins == 1 && manager.frameFrees == 0);
+            }
+            // Reset reuses the saved transfer receipt after its source Entry
+            // was consumed. It never performs a new source getter or Begin.
+            Check(manager.typedCleanupBegins == 0 && manager.copyAttempts == 1 && manager.frameGetterCalls == 0);
+            target.reset();
+            Check(animations.DeleteAnimations());
+            Balanced(manager);
+        }
+        {
+            Manager manager;
+            manager.operationPause = true;
+            auto source = manager.GetCustomAnimBlendSequence();
+            source->Initialize();
+            source->SetName("Normal");
+            auto* original = manager.AllocateKeyFramesMemory(16);
+            {
+                MtaGame::IfpStorage::SequenceOwner<CAnimManager> guard(manager, std::move(source), true);
+                guard.MarkInitialized();
+                bool pending = false;
+                try
+                {
+                    MtaGame::IfpStorage::AttachFrames(manager, *guard.Get(), 1, true, true, original, &guard.FrameOperation());
+                }
+                catch (const std::runtime_error&)
+                {
+                    pending = true;
+                }
+                Check(pending && guard.FrameOperation() && manager.nativeFrameWrites == 0);
+            }
+            Check(manager.typedCleanupBegins == 1 && manager.sequenceOwner->commands.size() == 2 && manager.sequenceOwner->views == 0);
+            Check(manager.HasPendingCustomAnimationCleanup() && manager.frameFrees == 0 && manager.detachedFrees == 0);
+            manager.operationPause = false;
+            Manager::NativeScope scope(manager);
+            const auto           cleanup = manager.sequenceOwner->commands.back();
+            Check(cleanup->kind == MtaGame::CustomAnimationSequenceSA::Kind::Cleanup);
+            const auto result = MtaGame::CustomAnimationSequenceSA::Resume(*manager.sequenceOwner, *cleanup);
+            Check(result.status == ECustomAnimationSequenceStatus::Complete && result.disposition == ECustomAnimationSequenceDisposition::SourceReleased);
+            Check(manager.nativeFrameWrites == 0 && manager.frameFrees == 1 && manager.detachedFrees == 1);
+            Balanced(manager);
+            Check(!manager.HasPendingCustomAnimationCleanup());
+        }
+        {
+            Manager        manager(true);
+            CIFPAnimations animations(manager);
+            animations.vecAnimations.emplace_back();
+            auto& animation = animations.vecAnimations.back();
+            animation.pHierarchy = manager.GetCustomAnimBlendHierarchy();
+            animation.pHierarchy->Initialize();
+            animation.pSequences = manager.AllocateCustomAnimSequences(2);
+            animation.sequenceCapacity = 2;
+            auto* original = manager.AllocateKeyFramesMemory(16);
+            for (DWORD index = 0; index != 2; ++index)
+            {
+                auto row = manager.GetCustomAnimBlendSequenceAt(animation.pSequences, index);
+                row->Initialize();
+                MtaGame::IfpStorage::SequenceOwner<CAnimManager> guard(manager, std::move(row), false);
+                MtaGame::IfpStorage::AttachFrames(manager, *guard.Get(), 1, true, true, original, &guard.FrameOperation());
+            }
+            Check(manager.frameFrees == 0 && manager.nativeFrameWrites == 2);
+            Check(animations.DeleteAnimations());
+            Check(manager.frameFrees == 1 && manager.frameGetterCalls == 0);
+            Balanced(manager);
+        }
+        std::puts("Actual common typed sequence operations fixture completed");
+    }
+    void RetainedSequenceOperation()
+    {
+        Phase("unknown entered standalone assignment retains original owner without replay");
+        auto* manager = new Manager;
+        manager->nativeUnknownAttachment = true;
+        auto source = manager->GetCustomAnimBlendSequence();
+        source->Initialize();
+        source->SetName("Normal");
+        auto* original = manager->AllocateKeyFramesMemory(16);
+        {
+            MtaGame::IfpStorage::SequenceOwner<CAnimManager> guard(*manager, std::move(source), true);
+            guard.MarkInitialized();
+            bool refused = false;
+            try
+            {
+                MtaGame::IfpStorage::AttachFrames(*manager, *guard.Get(), 1, true, true, original, &guard.FrameOperation());
+            }
+            catch (const std::runtime_error&)
+            {
+                refused = true;
+            }
+            Check(refused && guard.FrameOperation() && manager->nativeFrameWrites == 1);
+        }
+        Check(manager->typedAttachmentBegins == 1 && manager->typedCleanupBegins == 1);
+        Check(manager->sequenceOwner->views == 0 && manager->HasPendingCustomAnimationCleanup());
+        Check(manager->frames.size() == 1 && manager->detached.size() == 1 && manager->frameFrees == 0 && manager->detachedFrees == 0);
+        Manager::NativeScope scope(*manager);
+        const auto           cleanup = manager->sequenceOwner->commands.back();
+        const auto           result = MtaGame::CustomAnimationSequenceSA::Resume(*manager->sequenceOwner, *cleanup);
+        Check(result.status == ECustomAnimationSequenceStatus::Refused && manager->nativeFrameWrites == 1);
+        Check(manager->frameFrees == 0 && manager->detachedFrees == 0 && manager->frameGetterCalls == 0);
+        std::puts("Actual common unknown sequence operation retention fixture completed");
+        std::printf("Passed %u retained common sequence operation checks (owner retained until owned process exit)\n", checks);
+        std::fflush(stdout);
+        std::_Exit(0);
+    }
 }
 int main(int argc, char** argv)
 {
     if (argc == 2 && std::strcmp(argv[1], "--retained-cleanup") == 0)
         RetainedReleaseAcknowledgement();
+    if (argc == 2 && std::strcmp(argv[1], "--retained-sequence") == 0)
+        RetainedSequenceOperation();
     NormalFormats();
     TruncatedAndMalformed();
     ResourceFailures();
@@ -553,6 +708,7 @@ int main(int argc, char** argv)
     DetachedConstruction();
     DetachedFailureCleanup();
     DurableCleanupProgress();
+    TypedSequenceOwnership();
     std::puts("Actual common IFP parser, transaction and cleanup fixture completed");
     std::printf("Passed %u actual common IFP runtime checks (%zu-bit; test animation environment, no native engine code)\n", checks, sizeof(void*) * 8);
     return 0;

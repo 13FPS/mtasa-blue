@@ -10,6 +10,7 @@
 #include <game/CCustomAnimationCleanup.h>
 #include <algorithm>
 #include <limits>
+#include <map>
 #include <memory>
 #include <set>
 #include <stdexcept>
@@ -35,10 +36,12 @@ namespace MtaGame::CustomAnimationCleanupSA
         Entered,
         Returned
     };
+    using FrameIdentity = std::shared_ptr<void>;
     struct Release
     {
-        void*    address = nullptr;
-        Progress progress = Progress::Waiting;
+        void*         address = nullptr;
+        Progress      progress = Progress::Waiting;
+        FrameIdentity identity;
     };
     struct Record
     {
@@ -55,6 +58,12 @@ namespace MtaGame::CustomAnimationCleanupSA
         Release                         shared;
         Release                         outer;
         std::vector<Release>            individuals;
+        // Snapshot actual original frame records before array claims can
+        // close. Historical identity survives native free/address reuse.
+        std::vector<Release> extraFrames;
+        void*                frameContext = nullptr;
+        FrameIdentity (*identifyFrame)(void*, void*) noexcept = nullptr;
+        ECustomAnimationCleanupStatus (*releaseFrame)(void*, const FrameIdentity&, void*) noexcept = nullptr;
     };
     struct Owner
     {
@@ -146,14 +155,45 @@ namespace MtaGame::CustomAnimationCleanupSA
         else if (record.capacity)
             throw std::runtime_error("Classic cleanup has capacity without storage");
         individuals.erase(shared);
+        std::map<void*, Release> originals;
+        const auto               merge = [&](void* address, const FrameIdentity& identity)
+        {
+            if (!address)
+                return;
+            auto found = originals.find(address);
+            if (found == originals.end())
+                originals.emplace(address, Release{address, Progress::Waiting, identity});
+            else if (found->second.identity && identity && (found->second.identity.owner_before(identity) || identity.owner_before(found->second.identity)))
+                throw std::runtime_error("Classic cleanup original frame identity changed");
+            else if (!found->second.identity)
+                found->second.identity = identity;
+        };
+        // Extra records are actual backend originals, including a historical
+        // frame which no physical row currently names. Their opaque identities
+        // carry the real free ACK; generic progress cannot invent completion.
+        for (const auto& frames : record.extraFrames)
+            merge(frames.address, frames.identity);
+        for (auto* address : individuals)
+            merge(address, {});
+        merge(shared, {});
+        for (auto& original : originals)
+            if (record.identifyFrame)
+                merge(original.first, record.identifyFrame(record.frameContext, original.first));
         std::vector<Release> snapshot;
-        snapshot.reserve(individuals.size());
-        for (auto* frames : individuals)
-            snapshot.push_back({frames, Progress::Waiting});
-        // All potentially allocating observations finish before cache or
-        // release entry. A failed gather can safely retry from the source.
+        snapshot.reserve(originals.size());
+        Release sharedSnapshot;
+        for (const auto& original : originals)
+        {
+            if (original.first == shared)
+                sharedSnapshot = original.second;
+            else
+                snapshot.push_back(original.second);
+        }
+        // All potentially allocating observations and frame identities finish
+        // before cache/release entry or removal of the array's owner claims.
+        // A failed gather leaves the original request available for retry.
         record.individuals.swap(snapshot);
-        record.shared.address = shared;
+        record.shared = std::move(sharedSnapshot);
         record.array.address = record.sequences;
         record.outer.address = record.hierarchy;
         record.gathered = true;
@@ -172,6 +212,34 @@ namespace MtaGame::CustomAnimationCleanupSA
         operation();
         progress = Progress::Returned;
         return true;
+    }
+
+    inline ECustomAnimationCleanupStatus RunFrame(Record& record, Release& frame, CAnimManager& manager)
+    {
+        if (frame.progress == Progress::Returned)
+            return ECustomAnimationCleanupStatus::Complete;
+        if (frame.progress == Progress::Entered)
+            return ECustomAnimationCleanupStatus::Refused;
+        if (frame.identity)
+        {
+            if (!record.releaseFrame)
+                return ECustomAnimationCleanupStatus::Refused;
+            // The same SA allocation owner arbitrates related participants
+            // and remembers entered/returned release. Pending is a known
+            // wait, and calling this callback again never retries a raw free.
+            const auto status = record.releaseFrame(record.frameContext, frame.identity, frame.address);
+            if (status == ECustomAnimationCleanupStatus::Complete)
+                frame.progress = Progress::Returned;
+            if (status == ECustomAnimationCleanupStatus::Complete || status == ECustomAnimationCleanupStatus::Pending ||
+                status == ECustomAnimationCleanupStatus::Refused)
+                return status;
+            return ECustomAnimationCleanupStatus::Refused;
+        }
+        // Existing source-owned buffers and the strict isolated classic
+        // receiver have no shared frame producer; retain their exact prior
+        // entered/returned void boundary instead of fabricating an identity.
+        return Run(frame.progress, [&] { manager.FreeKeyFramesMemory(frame.address); }) ? ECustomAnimationCleanupStatus::Complete
+                                                                                        : ECustomAnimationCleanupStatus::Refused;
     }
 
     inline SCustomAnimationCleanupResult Resume(Owner& owner, Record& record) noexcept
@@ -198,13 +266,20 @@ namespace MtaGame::CustomAnimationCleanupSA
                 !Run(record.cache, [&] { manager.RemoveFromUncompressedCache(record.hierarchy); }))
                 return {ECustomAnimationCleanupStatus::Refused, disposition};
             for (auto& frames : record.individuals)
-                if (!Run(frames.progress, [&] { manager.FreeKeyFramesMemory(frames.address); }))
-                    return {ECustomAnimationCleanupStatus::Refused, disposition};
+            {
+                const auto status = RunFrame(record, frames, manager);
+                if (status != ECustomAnimationCleanupStatus::Complete)
+                    return {status, disposition};
+            }
             if (record.array.address &&
                 !Run(record.array.progress, [&] { manager.FreeCustomAnimSequences(static_cast<CAnimBlendSequenceSAInterface*>(record.array.address)); }))
                 return {ECustomAnimationCleanupStatus::Refused, disposition};
-            if (record.shared.address && !Run(record.shared.progress, [&] { manager.FreeKeyFramesMemory(record.shared.address); }))
-                return {ECustomAnimationCleanupStatus::Refused, disposition};
+            if (record.shared.address)
+            {
+                const auto status = RunFrame(record, record.shared, manager);
+                if (status != ECustomAnimationCleanupStatus::Complete)
+                    return {status, disposition};
+            }
             if (record.outer.address &&
                 !Run(record.outer.progress,
                      [&] { manager.DeleteCustomAnimHierarchyInterface(static_cast<CAnimBlendHierarchySAInterface*>(record.outer.address)); }))

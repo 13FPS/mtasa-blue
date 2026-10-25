@@ -23,7 +23,7 @@ $record = [ordered]@{
     scope='Actual game_sa journal helper, actual classic storage rows/cookie and shared08 interior rule. Strict operation receiver substitutes only cache/free entry; tests gather-before-effect, dedup/order, entered-unknown no replay, ticket OOM reservation, reentrancy and creator-close. No native engine calls or full Game/DE factory claim.';
     ownedBuffersOnly=$true;nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;
     completeAnimationHierarchyReady=$false;fullMtaReady=$false;installationChanged=$false;
-    actualClassicAnimationCleanupTicketTested=$false
+    actualClassicOperationOwnership=$false;actualClassicAnimationCleanupTicketTested=$false
 
 }
 
@@ -79,9 +79,10 @@ function RunOwned([string]$Executable,[string[]]$Arguments,[string]$Directory,[s
 
 try {
     $sourceNames=@('Tests/definitive/ClassicAnimationCleanupTicketTests.cpp','Tests/definitive/test_classic_animation_cleanup_ticket.ps1',
-        'Build/definitive-recovery/mta-ifp-cleanup-sdk-sa-20261025/cleanup-sdk-transport-source-ready.json',
-        'Build/definitive-recovery/mta-ifp-cleanup-sdk-sa-20261025/cleanup-sa-journal-source-ready.json',
-        'Build/definitive-recovery/mta-ifp-cleanup-sa-creator-fence-20261025/cleanup-sa-creator-fence-source-ready.json')
+        'Tests/definitive/Write-ClassicAnimationOperationBridge.ps1',
+        'Build/definitive-recovery/mta-standalone-sequence-ownership-20261025/standalone-sequence-transport-source-ready.json',
+        'Build/definitive-recovery/mta-standalone-sequence-ownership-20261025/standalone-sequence-sa-source-ready.json',
+        'Build/definitive-recovery/mta-standalone-animation-owner-batch-20261025/classic-hierarchy-frame-receipts-source-ready.json')
     $pending=[Collections.Generic.Queue[string]]::new()
     $seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach($name in $sourceNames){$pending.Enqueue($name)}
@@ -101,6 +102,12 @@ try {
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
     })
+    . (Join-Path $PSScriptRoot 'Write-ClassicAnimationOperationBridge.ps1')
+    $record['actualManagerBridge']=Write-ClassicAnimationOperationBridge $taskRoot $scratchRoot 'classic'
+    foreach($input in $record.actualManagerBridge.sourceInputs) {$record.sourceHashes+=@($input)}
+    foreach($path in @($record.actualManagerBridge.path,$record.actualManagerBridge.constantPath)) {
+        Copy-Item -LiteralPath $path -Destination (Join-Path $outputRoot ([IO.Path]::GetFileName($path)))
+    }
     $sdkPath=Join-Path $taskRoot 'Client/sdk/game/CAnimManager.h'
     $sdkText=[regex]::Replace([IO.File]::ReadAllText($sdkPath),'(?s)/\*.*?\*/|//[^\r\n]*','')
     $provided=@();$rejecting=@(foreach($match in [regex]::Matches($sdkText,'virtual\s+(?<signature>[^;{}]+);')){
@@ -163,7 +170,7 @@ try {
             (Join-Path $PSScriptRoot 'ClassicAnimationCleanupTicketTests.cpp'),
             ('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'compiler.pdb')),('/Fe'+$executable))
         $result = [ordered]@{architecture=$architecture;environment=$environmentResult;compile=$null;test=$null;
-            checks=0;pointerBits=$null;executable=$executable;executableSha256=$null;actualClassicAnimationCleanupTicketTested=$false}
+            checks=0;pointerBits=$null;executable=$executable;executableSha256=$null;actualClassicAnimationCleanupTicketTested=$false;actualClassicOperationOwnership=$false}
         $record.results += $result
         $result.compile = RunOwned $compiler $arguments $directory 'compile' 60000
         if ($result.compile.exitCode -ne 0 -or $result.compile.timedOut) { throw "$architecture actual classic cleanup helper fixture compilation failed." }
@@ -176,14 +183,16 @@ try {
             $result.pointerBits = 32
         }
         $result.actualClassicAnimationCleanupTicketTested=$text.Contains('actual classic cleanup journal checks')
+        $result.actualClassicOperationOwnership=$text.Contains('Actual classic operation ownership fixture completed')
         $expectedBits = if ($architecture -eq 'x86') { 32 } else { 64 }
-        if ($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -le 0 -or $result.pointerBits -ne $expectedBits -or -not $result.actualClassicAnimationCleanupTicketTested) {
+        if ($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -le 0 -or $result.pointerBits -ne $expectedBits -or -not $result.actualClassicAnimationCleanupTicketTested -or -not $result.actualClassicOperationOwnership) {
             throw "$architecture actual classic cleanup journal checks failed or summary/pointer-width evidence was missing."
         }
     }
     $record.actualClassicAnimationCleanupTicketTested=@($record.results|Where-Object{-not $_.actualClassicAnimationCleanupTicketTested}).Count -eq 0
 
-    $record.success = $record.results.Count -eq 1 -and $record.actualClassicAnimationCleanupTicketTested
+    $record.actualClassicOperationOwnership=@($record.results|Where-Object{-not $_.actualClassicOperationOwnership}).Count -eq 0
+    $record.success = $record.results.Count -eq 1 -and $record.actualClassicAnimationCleanupTicketTested -and $record.actualClassicOperationOwnership
 } catch { AddFailure ($_.Exception.ToString()) }
 finally {
     foreach ($name in $previousEnvironment.Keys) {

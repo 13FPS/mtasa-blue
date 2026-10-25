@@ -31,7 +31,18 @@ extern CGameSA* pGame;
 // but I've tested with this one mostly, so let's stick to this.
 static const char* const kGateWayAnimationName = MtaGame::CAnimGatewayNames::GetAnimationName();
 
-CAnimManagerSA::CAnimManagerSA() : customCleanupOwner(std::make_shared<MtaGame::CustomAnimationCleanupSA::Owner>(*this))
+namespace
+{
+    void AttachClassicFrames(CAnimBlendSequenceSAInterface* row, std::size_t count, bool root, bool compressed, void* frames)
+    {
+        // Invoke the actual classic implementation. Do not recreate its
+        // original compression predicate or infer ownership from pointer reads.
+        CAnimBlendSequenceSA(row).SetKeyFrames(count, root, compressed, frames);
+    }
+}
+CAnimManagerSA::CAnimManagerSA()
+    : customCleanupOwner(std::make_shared<MtaGame::CustomAnimationCleanupSA::Owner>(*this)),
+      customSequenceOwner(std::make_shared<MtaGame::CustomAnimationSequenceSA::Owner>(*this, &AttachClassicFrames))
 {
 }
 
@@ -40,6 +51,7 @@ CAnimManagerSA::~CAnimManagerSA()
     // Core must check HasPending before destroying the Game/manager or
     // unloading game_sa. This is only a defensive post-lifetime fence.
     customCleanupOwner->liveOrigin = nullptr;
+    customSequenceOwner->manager = nullptr;
 }
 
 void CAnimManagerSA::Initialize()
@@ -694,6 +706,9 @@ void CAnimManagerSA::RemoveLastAnimFile()
 
 BYTE* CAnimManagerSA::AllocateKeyFramesMemory(uint32_t u32BytesToAllocate)
 {
+    MtaGame::CustomAnimationSequenceSA::CallGuard call(*customSequenceOwner);
+    const auto                                    issued = MtaGame::CustomAnimationSequenceSA::ReserveFrame(*customSequenceOwner);
+    issued->entered = true;
     BYTE* pKeyFrames = nullptr;
     DWORD dwFunc = FUNC_CAnimManager_AllocateKeyFramesMemory;
     // clang-format off
@@ -705,11 +720,29 @@ BYTE* CAnimManagerSA::AllocateKeyFramesMemory(uint32_t u32BytesToAllocate)
         mov     pKeyFrames, eax
     }
     // clang-format on
+    issued->address = pKeyFrames;
+    issued->returned = true;
     return pKeyFrames;
 }
 
 void CAnimManagerSA::FreeKeyFramesMemory(void* pKeyFrames)
 {
+    MtaGame::CustomAnimationSequenceSA::CallGuard              call(*customSequenceOwner, true);
+    std::shared_ptr<MtaGame::CustomAnimationSequenceSA::Frame> issued;
+    for (auto it = customSequenceOwner->frames.rbegin(); it != customSequenceOwner->frames.rend(); ++it)
+        if ((*it)->address == pKeyFrames && (*it)->returned)
+        {
+            issued = *it;
+            break;
+        }
+    if (issued)
+    {
+        if (issued->release == MtaGame::CustomAnimationSequenceSA::Progress::Returned)
+            return;  // Saved per-original ACK, not absence or address guessing.
+        if (issued->fault || !issued->participants.empty() || issued->release == MtaGame::CustomAnimationSequenceSA::Progress::Entered)
+            throw std::runtime_error("Classic original frame has a live claim or unknown release");
+        issued->release = MtaGame::CustomAnimationSequenceSA::Progress::Entered;
+    }
     DWORD dwFunc = FUNC_CAnimManager_FreeKeyFramesMemory;
     // clang-format off
     __asm
@@ -719,6 +752,8 @@ void CAnimManagerSA::FreeKeyFramesMemory(void* pKeyFrames)
         add     esp, 0x4
     }
     // clang-format on
+    if (issued) issued->release = MtaGame::CustomAnimationSequenceSA::Progress::Returned;
+    MtaGame::CustomAnimationSequenceSA::Pump(*customSequenceOwner);
 }
 
 bool CAnimManagerSA::HasAnimGroupLoaded(AssocGroupId groupID)
@@ -924,7 +959,8 @@ std::unique_ptr<CAnimBlendSequence> CAnimManagerSA::GetCustomAnimBlendSequence(C
 {
     if (pInterface)
     {
-        return std::make_unique<CAnimBlendSequenceSA>(pInterface);
+        auto row = MtaGame::CustomAnimationSequenceSA::FindRow(*customSequenceOwner, pInterface);
+        return std::make_unique<CAnimBlendSequenceSA>(pInterface, row ? customSequenceOwner.get() : nullptr);
     }
     return nullptr;
 }
@@ -948,8 +984,20 @@ std::unique_ptr<CAnimBlendHierarchy> CAnimManagerSA::GetCustomAnimBlendHierarchy
 
 std::unique_ptr<CAnimBlendSequence> CAnimManagerSA::GetCustomAnimBlendSequence()
 {
-    auto pInterface = new CAnimBlendSequenceSAInterface;
-    return std::make_unique<CAnimBlendSequenceSA>(pInterface);
+    MtaGame::CustomAnimationSequenceSA::CallGuard  call(*customSequenceOwner);
+    std::unique_ptr<CAnimBlendSequenceSAInterface> pInterface(new CAnimBlendSequenceSAInterface);
+    const auto                                     row = MtaGame::CustomAnimationSequenceSA::RegisterStandalone(*customSequenceOwner, pInterface.get());
+    try
+    {
+        auto facade = std::make_unique<CAnimBlendSequenceSA>(pInterface.get(), customSequenceOwner.get());
+        pInterface.release();
+        return facade;
+    }
+    catch (...)
+    {
+        row->release = MtaGame::CustomAnimationSequenceSA::Progress::Returned;
+        throw;
+    }
 }
 
 void CAnimManagerSA::DeleteCustomAnimHierarchyInterface(CAnimBlendHierarchySAInterface* pInterface)
@@ -982,7 +1030,24 @@ void CAnimManagerSA::DeleteCustomAnimHierarchyInterface(CAnimBlendHierarchySAInt
 
 void CAnimManagerSA::DeleteCustomAnimSequenceInterface(CAnimBlendSequenceSAInterface* pInterface)
 {
+    MtaGame::CustomAnimationSequenceSA::CallGuard call(*customSequenceOwner, true);
+    auto                                          row = MtaGame::CustomAnimationSequenceSA::FindRow(*customSequenceOwner, pInterface);
+    if (row)
+    {
+        if (!row->standalone || row->fault || row->release == MtaGame::CustomAnimationSequenceSA::Progress::Entered)
+            throw std::runtime_error("Classic interface release requires its exact standalone issuance");
+        if (const auto pending = row->pending.lock(); pending && !pending->terminal && !pending->active)
+            throw std::runtime_error("Classic interface has an accepted owner command");
+        row->release = MtaGame::CustomAnimationSequenceSA::Progress::Entered;
+    }
+    // Preserve actual SA raw-delete semantics: frame storage is independent.
     delete pInterface;
+    if (row)
+    {
+        row->release = MtaGame::CustomAnimationSequenceSA::Progress::Returned;
+        for (const auto& frame : row->historical)
+            frame->participants.erase(row.get());
+    }
 }
 
 bool CAnimManagerSA::isGateWayAnimationHierarchy(CAnimBlendHierarchySAInterface* pInterface)
@@ -1026,18 +1091,48 @@ bool CAnimManagerSA::IsValidAnim(std::uint32_t uiAnimGroup, std::uint32_t uiAnim
 
 CAnimBlendSequenceSAInterface* CAnimManagerSA::AllocateCustomAnimSequences(size_t capacity)
 {
-    return MtaGame::CAnimSequenceStorageSA::Allocate(capacity);
+    MtaGame::CustomAnimationSequenceSA::CallGuard call(*customSequenceOwner);
+    auto*                                         sequences = MtaGame::CAnimSequenceStorageSA::Allocate(capacity);
+    try
+    {
+        MtaGame::CustomAnimationSequenceSA::RegisterArray(*customSequenceOwner, sequences, capacity);
+    }
+    catch (...)
+    {
+        MtaGame::CAnimSequenceStorageSA::Free(sequences);
+        throw;
+    }
+    return sequences;
 }
 
 void CAnimManagerSA::FreeCustomAnimSequences(CAnimBlendSequenceSAInterface* sequences)
 {
+    MtaGame::CustomAnimationSequenceSA::CallGuard call(*customSequenceOwner, true);
+    const auto                                    array = MtaGame::CustomAnimationSequenceSA::FindArray(*customSequenceOwner, sequences);
+    if (array && !array->closing)
+    {
+        for (const auto& row : customSequenceOwner->rows)
+            if (row->array == array)
+                if (const auto pending = row->pending.lock(); pending && !pending->terminal)
+                    throw std::runtime_error("Classic array has an accepted construction command");
+        // Storage-only release drops only the rows' own claims. Original
+        // frames remain independent live allocations until explicit release.
+        MtaGame::CustomAnimationSequenceSA::CloseArrayClaims(*customSequenceOwner, sequences);
+    }
     MtaGame::CAnimSequenceStorageSA::Free(sequences);
+    if (array)
+        array->released = true;
+    MtaGame::CustomAnimationSequenceSA::Pump(*customSequenceOwner);
 }
 
 std::unique_ptr<CAnimBlendSequence> CAnimManagerSA::GetCustomAnimBlendSequenceAt(CAnimBlendSequenceSAInterface* originalArray, DWORD index)
 {
     static_assert(sizeof(index) == sizeof(std::uint32_t));
-    return GetCustomAnimBlendSequence(MtaGame::CAnimSequenceStorageSA::At(originalArray, static_cast<std::uint32_t>(index)));
+    auto* row = MtaGame::CAnimSequenceStorageSA::At(originalArray, static_cast<std::uint32_t>(index));
+    if (row)
+        if (const auto array = MtaGame::CustomAnimationSequenceSA::FindArray(*customSequenceOwner, originalArray))
+            MtaGame::CustomAnimationSequenceSA::RegisterBorrowedRow(*customSequenceOwner, array, row);
+    return GetCustomAnimBlendSequence(row);
 }
 
 std::unique_ptr<CCustomAnimationCleanup> CAnimManagerSA::BeginCustomAnimationCleanup(const SCustomAnimationCleanupRequest& request)
@@ -1054,10 +1149,61 @@ std::unique_ptr<CCustomAnimationCleanup> CAnimManagerSA::BeginCustomAnimationCle
         // interface. Copy it during Begin; never retain the CPU facade.
         hierarchy = classic->GetInterface();
     }
-    return MtaGame::CustomAnimationCleanupSA::Begin(customCleanupOwner, request, hierarchy);
+    auto ticket = MtaGame::CustomAnimationCleanupSA::Begin(customCleanupOwner, request, hierarchy);
+    for (const auto& record : customCleanupOwner->records)
+        if (record->hierarchy == hierarchy && record->sequences == request.originalArray && !record->complete)
+        {
+            if (!record->gathered)
+            {
+                record->frameContext = customSequenceOwner.get();
+                record->identifyFrame = &MtaGame::CustomAnimationSequenceSA::IdentifyFrame;
+                record->releaseFrame = &MtaGame::CustomAnimationSequenceSA::ReleaseFrame;
+                record->extraFrames = MtaGame::CustomAnimationSequenceSA::SnapshotArrayFrames(*customSequenceOwner, request.originalArray);
+                MtaGame::CustomAnimationCleanupSA::Gather(*record);
+                // The exact original identities are now immutable in the H
+                // ticket, before another related owner can release/reuse one.
+                MtaGame::CustomAnimationSequenceSA::CloseArrayClaims(*customSequenceOwner, request.originalArray);
+            }
+            break;
+        }
+    return ticket;
 }
 
 bool CAnimManagerSA::HasPendingCustomAnimationCleanup() const noexcept
 {
-    return !customCleanupOwner || customCleanupOwner->HasPending();
+    return !customCleanupOwner || !customSequenceOwner || customCleanupOwner->HasPending() || customSequenceOwner->HasPending();
+}
+
+std::unique_ptr<CCustomAnimationSequenceOperation> CAnimManagerSA::BeginCustomAnimationSequenceCleanup(const SCustomAnimationSequenceCleanupRequest& request)
+{
+    const auto copied = request;
+    if (copied.origin != this)
+        throw std::invalid_argument("Classic sequence cleanup requires the creating manager");
+    auto* source = dynamic_cast<CAnimBlendSequenceSA*>(copied.source);
+    if (!source)
+        throw std::invalid_argument("Classic cleanup requires its actual sequence facade");
+    return MtaGame::CustomAnimationSequenceSA::Begin(customSequenceOwner, MtaGame::CustomAnimationSequenceSA::Kind::Cleanup, source->GetInterface());
+}
+std::unique_ptr<CCustomAnimationSequenceOperation> CAnimManagerSA::BeginCustomAnimationSequenceTransfer(const SCustomAnimationSequenceTransferRequest& request)
+{
+    const auto copied = request;
+    if (copied.origin != this)
+        throw std::invalid_argument("Classic sequence transfer requires the creating manager");
+    auto* source = dynamic_cast<CAnimBlendSequenceSA*>(copied.source);
+    auto* target = dynamic_cast<CAnimBlendSequenceSA*>(copied.destination);
+    if (!source || !target)
+        throw std::invalid_argument("Classic transfer requires actual source and target facades");
+    return MtaGame::CustomAnimationSequenceSA::Begin(customSequenceOwner, MtaGame::CustomAnimationSequenceSA::Kind::Transfer, source->GetInterface(),
+                                                     target->GetInterface());
+}
+std::unique_ptr<CCustomAnimationSequenceOperation> CAnimManagerSA::BeginCustomAnimationFrameAttachment(const SCustomAnimationFrameAttachmentRequest& request)
+{
+    const auto copied = request;
+    if (copied.origin != this)
+        throw std::invalid_argument("Classic frame assignment requires the creating manager");
+    auto* target = dynamic_cast<CAnimBlendSequenceSA*>(copied.target);
+    if (!target)
+        throw std::invalid_argument("Classic assignment requires its actual target facade");
+    return MtaGame::CustomAnimationSequenceSA::Begin(customSequenceOwner, MtaGame::CustomAnimationSequenceSA::Kind::Attachment, target->GetInterface(), nullptr,
+                                                     copied.count, copied.root, copied.compressed, copied.originalFrames);
 }

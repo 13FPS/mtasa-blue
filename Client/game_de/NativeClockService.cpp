@@ -67,6 +67,7 @@
 #include "NativeCustomAnimSequenceController.h"
 #include "NativePrivateAnimationHierarchyController.h"
 #include "NativeCustomAnimationCleanupAccess.h"
+#include "NativeCustomAnimationSequenceOperationAccess.h"
 #include "NativeAnimationManagerMemory.h"
 #include "NativePedVelocityMemory.h"
 #include "NativePedReferenceController.h"
@@ -160,12 +161,24 @@ namespace mta::game_de
                                    public NativeAnimationSequenceStorageAccess,
                                    public NativeAnimationSequenceAccess,
                                    public NativeAnimationHierarchyAccess,
-                                   public NativeCustomAnimationCleanupAccess
+                                   public NativeCustomAnimationCleanupAccess,
+                                   public NativeCustomAnimationSequenceOperationAccess
         {
         public:
             ClockResult BeginPrivateAnimationCleanup(const NativeCustomAnimationCleanupRequest&, NativeCustomAnimationCleanupBeginReceipt&) noexcept override;
             ClockResult ResumePrivateAnimationCleanup(const NativeCustomAnimationCleanupToken&, SCustomAnimationCleanupResult&) noexcept override;
             bool        HasPendingPrivateAnimationCleanup() const noexcept override;
+            ClockResult AllocatePrivateStandaloneAnimationSequence(std::uint64_t, NativeAnimationSequenceReferenceToken&) noexcept override;
+            ClockResult ResolvePrivateStandaloneAnimationSequence(std::uint64_t, std::uintptr_t, NativeAnimationSequenceReferenceToken&) noexcept override;
+            ClockResult BeginPrivateAnimationSequenceCleanup(const NativeAnimationSequenceReferenceToken&,
+                                                             NativeCustomAnimationSequenceOperationBeginReceipt&) noexcept override;
+            ClockResult BeginPrivateAnimationSequenceTransfer(const NativeAnimationSequenceReferenceToken&, const NativeAnimationSequenceReferenceToken&,
+                                                              NativeCustomAnimationSequenceOperationBeginReceipt&) noexcept override;
+            ClockResult BeginPrivateAnimationFrameAttachment(const NativeAnimationSequenceReferenceToken&, std::size_t, bool, bool, std::uintptr_t,
+                                                             NativeCustomAnimationSequenceOperationBeginReceipt&) noexcept override;
+            ClockResult ResumePrivateAnimationSequenceOperation(const NativeCustomAnimationSequenceOperationToken&,
+                                                                SCustomAnimationSequenceResult&) noexcept override;
+            bool        HasPendingPrivateAnimationSequenceOperations() const noexcept override;
             ClockResult Read(ClockValues& values) noexcept override;
             ClockResult Set(std::uint8_t hour, std::uint8_t minute) noexcept override;
             ClockResult Freeze(bool frozen) noexcept override;
@@ -3327,6 +3340,131 @@ namespace mta::game_de
         bool NativeAccess::HasPendingPrivateAnimationCleanup() const noexcept
         {
             // Live records and completed CPU views both keep backend code alive.
+            return runtime.customSequences.HasPendingCleanup() || runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained();
+        }
+
+        ClockResult NativeAccess::AllocatePrivateStandaloneAnimationSequence(std::uint64_t generation, NativeAnimationSequenceReferenceToken& output) noexcept
+        {
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto retained = runtime.customSequenceGeneration.load();
+            if (!generation || generation != runtime.generation.load() || (retained && retained != generation))
+                return ClockResult::OwnerConflict;
+            runtime.customSequenceGeneration.store(generation);
+            NativeCustomAnimSequenceController::Receipt receipt;
+            NativeAnimationSequenceReferenceToken       next;
+            // The owning allocator records Standalone explicitly. Neither a
+            // raw row pointer nor an array capacity of one grants this role.
+            result = runtime.customSequences.AllocateStandaloneSequence(runtime.image, generation, &CheckTimingOwner, next, &receipt);
+            PublishCustomAnimationSequenceDebt(generation);
+            if (result == ClockResult::Ok)
+                result = CheckTimingOwner();
+            if ((receipt.entered && result != ClockResult::Ok) || runtime.customSequences.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            if (result == ClockResult::Ok)
+                output = next;
+            return result;
+        }
+
+        ClockResult NativeAccess::ResolvePrivateStandaloneAnimationSequence(std::uint64_t generation, std::uintptr_t locator,
+                                                                            NativeAnimationSequenceReferenceToken& output) noexcept
+        {
+            const NativeAnimationSequenceReferenceToken request{generation, locator, 0};
+            auto                                        result = CheckCustomSequenceRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            NativeAnimationSequenceReferenceToken next;
+            result = runtime.customSequences.ResolveStandaloneSequence(runtime.image, generation, locator, &CheckTimingOwner, next);
+            PublishCustomAnimationSequenceDebt(generation);
+            if (result == ClockResult::Ok)
+                result = CheckCustomSequenceRequest(request);
+            if (runtime.customSequences.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            if (result == ClockResult::Ok)
+                output = next;
+            return result;
+        }
+
+        ClockResult FinishSequenceOperationBegin(std::uint64_t generation, ClockResult result, NativeCustomAnimationSequenceOperationBeginReceipt& next,
+                                                 NativeCustomAnimationSequenceOperationBeginReceipt& output) noexcept
+        {
+            PublishCustomAnimationSequenceDebt(generation);
+            if (result == ClockResult::Ok)
+                result = CheckCleanupProducer(generation);
+            // Accepted intent belongs to the actual Q journal. A late producer
+            // refusal must still return its preallocated CPU view to the caller.
+            if (next.accepted || next.view.IsIssued() || result == ClockResult::Ok)
+                output = std::move(next);
+            if (runtime.customSequences.RecoveryPending() || runtime.privateHierarchies.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            return result;
+        }
+
+        ClockResult NativeAccess::BeginPrivateAnimationSequenceCleanup(const NativeAnimationSequenceReferenceToken&        value,
+                                                                       NativeCustomAnimationSequenceOperationBeginReceipt& output) noexcept
+        {
+            const auto source = value;
+            auto       result = CheckCleanupProducer(source.ownerGeneration);
+            if (result != ClockResult::Ok)
+                return result;
+            NativeCustomAnimationSequenceOperationBeginReceipt next;
+            result = runtime.customSequences.BeginSequenceCleanup(runtime.image, source, runtime.privateHierarchies, &CheckTimingOwner, next);
+            return FinishSequenceOperationBegin(source.ownerGeneration, result, next, output);
+        }
+
+        ClockResult NativeAccess::BeginPrivateAnimationSequenceTransfer(const NativeAnimationSequenceReferenceToken&        sourceValue,
+                                                                        const NativeAnimationSequenceReferenceToken&        destinationValue,
+                                                                        NativeCustomAnimationSequenceOperationBeginReceipt& output) noexcept
+        {
+            const auto source = sourceValue;
+            const auto destination = destinationValue;
+            auto       result = CheckCleanupProducer(source.ownerGeneration);
+            if (result != ClockResult::Ok)
+                return result;
+            if (destination.ownerGeneration != source.ownerGeneration)
+                return ClockResult::OwnerConflict;
+            NativeCustomAnimationSequenceOperationBeginReceipt next;
+            result = runtime.customSequences.BeginSequenceTransfer(runtime.image, source, destination, runtime.privateHierarchies, &CheckTimingOwner, next);
+            return FinishSequenceOperationBegin(source.ownerGeneration, result, next, output);
+        }
+
+        ClockResult NativeAccess::BeginPrivateAnimationFrameAttachment(const NativeAnimationSequenceReferenceToken& value, std::size_t count, bool root,
+                                                                       bool compressed, std::uintptr_t originalFrames,
+                                                                       NativeCustomAnimationSequenceOperationBeginReceipt& output) noexcept
+        {
+            const auto target = value;
+            auto       result = CheckCleanupProducer(target.ownerGeneration);
+            if (result != ClockResult::Ok)
+                return result;
+            NativeCustomAnimationSequenceOperationBeginReceipt next;
+            result = runtime.customSequences.BeginFrameAttachment(runtime.image, target, count, root, compressed, originalFrames, runtime.privateHierarchies,
+                                                                  &CheckTimingOwner, next);
+            return FinishSequenceOperationBegin(target.ownerGeneration, result, next, output);
+        }
+
+        ClockResult NativeAccess::ResumePrivateAnimationSequenceOperation(const NativeCustomAnimationSequenceOperationToken& value,
+                                                                          SCustomAnimationSequenceResult&                    output) noexcept
+        {
+            const auto token = value;
+            if (!token.generation || token.generation != runtime.generation.load() || token.generation != runtime.customSequenceGeneration.load())
+                return ClockResult::OwnerConflict;
+            SCustomAnimationSequenceResult next;
+            // A matching completed command is a CPU receipt. Unfinished work
+            // performs its native admission inside the same controller/pump.
+            const auto result = runtime.customSequences.ResumeSequenceOperation(runtime.image, token, runtime.privateHierarchies, 32, &CheckTimingOwner, next);
+            PublishCustomAnimationSequenceDebt(token.generation);
+            if (runtime.customSequences.RecoveryPending() || runtime.privateHierarchies.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            if (result == ClockResult::Ok)
+                output = next;
+            return result;
+        }
+
+        bool NativeAccess::HasPendingPrivateAnimationSequenceOperations() const noexcept
+        {
+            // The existing owner includes both command families and every live
+            // completed view. Existing active/End pumps and module gates apply.
             return runtime.customSequences.HasPendingCleanup() || runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained();
         }
 

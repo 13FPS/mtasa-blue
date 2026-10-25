@@ -5,6 +5,25 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+Standalone sequence construction now has three required owner operations:
+original-frame attachment, source cleanup and Copy transfer. The actual common
+parser retains their CPU tickets across interrupted construction. TransferTo
+requires an explicit SourceTransferred receipt; Reset can also consume the same
+command's SourceReleased receipt after a provably unentered Copy cancellation.
+Pending frame assignment keeps a separate ticket while source cleanup joins
+its owner. Pointer equality and another native getter no longer decide who may
+free accepted frame data.
+
+DE issues the Standalone role through its actual allocation owner; a raw row or
+capacity of one cannot create it. Factory facade memory is reserved before
+native allocation, and operation facades adopt accepted views even after a
+late refusal. The same existing journal, active callback pump and teardown
+gates retain historical frame obligations and completed CPU views. Classic SA
+shares original frame identities between sequence operations and hierarchy
+cleanup. Raw interface-only deletion remains pure on the partial DE manager:
+mapping it to frame cleanup would change MTA's source behavior. These paths
+do not advertise a complete manager, full parser exposure or CGame readiness.
+
 Animation cleanup now stays with its backend through a required ticket.
 Classic SA reserves its owner journal before exposing a hierarchy, gathers
 the original full-capacity rows before effects, and remembers each returned

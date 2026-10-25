@@ -30,10 +30,19 @@ public:
     BYTE*          pKeyFrames;
 };
 
+namespace MtaGame::CustomAnimationSequenceSA
+{
+    struct Owner;
+}
+
 class CAnimBlendSequenceSA : public CAnimBlendSequence
 {
 public:
     CAnimBlendSequenceSA(CAnimBlendSequenceSAInterface* pInterface) { m_pInterface = pInterface; }
+    CAnimBlendSequenceSA(CAnimBlendSequenceSAInterface* pInterface, MtaGame::CustomAnimationSequenceSA::Owner* owner)
+        : m_pInterface(pInterface), customOwner(owner)
+    {
+    }
     void                           Initialize();
     void                           SetName(const char* szName);
     void                           SetBoneTag(int32_t i32BoneID);
@@ -48,5 +57,6 @@ public:
     CAnimBlendSequenceSAInterface* GetInterface() { return m_pInterface; }
 
 protected:
-    CAnimBlendSequenceSAInterface* m_pInterface;
+    CAnimBlendSequenceSAInterface*             m_pInterface;
+    MtaGame::CustomAnimationSequenceSA::Owner* customOwner = nullptr;
 };

@@ -13,6 +13,7 @@
 
 #include <game/CAnimManager.h>
 #include "CCustomAnimationCleanupSA.h"
+#include "CCustomAnimationSequenceOperationSA.h"
 #include <game/CAnimBlendAssociation.h>
 #include <game/CAnimBlendHierarchy.h>
 #include <game/CAnimBlock.h>
@@ -164,17 +165,25 @@ public:
     const char* GetGateWayBlockName() const;
     const char* GetGateWayAnimationName() const;
 
-    bool                                     IsValidGroup(std::uint32_t uiAnimGroup) const;
-    bool                                     IsValidAnim(std::uint32_t uiAnimGroup, std::uint32_t uiAnimID) const;
-    CAnimBlendSequenceSAInterface*           AllocateCustomAnimSequences(size_t capacity) override;
-    void                                     FreeCustomAnimSequences(CAnimBlendSequenceSAInterface* sequences) override;
-    std::unique_ptr<CAnimBlendSequence>      GetCustomAnimBlendSequenceAt(CAnimBlendSequenceSAInterface* originalArray, DWORD index) override;
-    std::unique_ptr<CCustomAnimationCleanup> BeginCustomAnimationCleanup(const SCustomAnimationCleanupRequest&) override;
-    bool                                     HasPendingCustomAnimationCleanup() const noexcept override;
+    bool                                               IsValidGroup(std::uint32_t uiAnimGroup) const;
+    bool                                               IsValidAnim(std::uint32_t uiAnimGroup, std::uint32_t uiAnimID) const;
+    CAnimBlendSequenceSAInterface*                     AllocateCustomAnimSequences(size_t capacity) override;
+    void                                               FreeCustomAnimSequences(CAnimBlendSequenceSAInterface* sequences) override;
+    std::unique_ptr<CAnimBlendSequence>                GetCustomAnimBlendSequenceAt(CAnimBlendSequenceSAInterface* originalArray, DWORD index) override;
+    std::unique_ptr<CCustomAnimationCleanup>           BeginCustomAnimationCleanup(const SCustomAnimationCleanupRequest&) override;
+    bool                                               HasPendingCustomAnimationCleanup() const noexcept override;
+    std::unique_ptr<CCustomAnimationSequenceOperation> BeginCustomAnimationSequenceCleanup(const SCustomAnimationSequenceCleanupRequest&) override;
+    std::unique_ptr<CCustomAnimationSequenceOperation> BeginCustomAnimationSequenceTransfer(const SCustomAnimationSequenceTransferRequest&) override;
+    std::unique_ptr<CCustomAnimationSequenceOperation> BeginCustomAnimationFrameAttachment(const SCustomAnimationFrameAttachmentRequest&) override;
     // Game termination closes admission before checking pending debt. Existing
     // tickets retain their exact manager and may finish; no new owner is born.
-    void CloseCustomAnimationCleanup() noexcept { customCleanupOwner->creatorClosed = true; }
+    void CloseCustomAnimationCleanup() noexcept
+    {
+        customCleanupOwner->creatorClosed = true;
+        customSequenceOwner->closed = true;
+    }
 
 private:
-    std::shared_ptr<MtaGame::CustomAnimationCleanupSA::Owner> customCleanupOwner;
+    std::shared_ptr<MtaGame::CustomAnimationCleanupSA::Owner>  customCleanupOwner;
+    std::shared_ptr<MtaGame::CustomAnimationSequenceSA::Owner> customSequenceOwner;
 };

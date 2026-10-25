@@ -8,6 +8,7 @@
 #include "NativeAnimationSequenceFactoryCalls.h"
 #include "NativePrivateAnimationHierarchyController.h"
 #include "NativeAnimationSequenceCleanupCalls.h"
+#include "NativeAnimationSequenceOperationCalls.h"
 #include <tuple>
 #include <algorithm>
 #include <iterator>
@@ -18,6 +19,15 @@ namespace mta::game_de
 {
     namespace CustomAnimSequenceControllerDetail
     {
+        struct OptionalOperation
+        {
+            std::atomic_flag* value;
+            ~OptionalOperation()
+            {
+                if (value)
+                    value->clear(std::memory_order_release);
+            }
+        };
         struct Operation
         {
             std::atomic_flag& value;
@@ -110,7 +120,8 @@ namespace mta::game_de
         if (checked != ClockResult::Ok)
             return checked;
         const auto array = Find(requestedGeneration, requestedArray);
-        if (array == entries.end() || array->cleanupOwner || array->storage.GetKind() != Storage::Kind::SequenceArray)
+        if (array == entries.end() || array->cleanupOwner || array->operationOwner || array->purpose != SequencePurpose::ArrayRows ||
+            array->storage.GetKind() != Storage::Kind::SequenceArray)
             return ClockResult::BindingChanged;
         std::size_t capacity = 0;
         const auto  result = NativeAnimationSequenceFactoryCalls::ReadCapacity(image, array->storage, requestedGeneration, owner, capacity);
@@ -133,7 +144,8 @@ namespace mta::game_de
         return AllocateResource(image, generation, bytes, Storage::Kind::KeyFrames, owner, output, receipt, invoke);
     }
     ClockResult NativeCustomAnimSequenceController::AllocateResource(std::uintptr_t image, std::uint64_t generation, std::size_t amount, Storage::Kind kind,
-                                                                     CheckOwner owner, std::uintptr_t& output, Receipt* receipt, InvokeMalloc invoke) noexcept
+                                                                     CheckOwner owner, std::uintptr_t& output, Receipt* receipt, InvokeMalloc invoke,
+                                                                     SequencePurpose purpose) noexcept
     {
         if (receipt)
             *receipt = {};
@@ -170,6 +182,7 @@ namespace mta::game_de
         retained.store(true, std::memory_order_release);
         auto entry = std::prev(entries.end());
         entry->issue = ++nextResourceIssue;
+        entry->purpose = purpose;
         Receipt local;
         result =
             kind == Storage::Kind::SequenceArray
@@ -219,12 +232,17 @@ namespace mta::game_de
         auto entry = Find(generation, issuedTag);
         if (entry == entries.end() || entry->storage.GetKind() != kind)
             return ClockResult::BindingChanged;
-        if (entry->cleanupOwner || (entry->cleanupAck && entry->cleanupAck->claims) || entry->privateDependency || entry->privateHolds)
+        if (kind == Storage::Kind::SequenceArray && entry->purpose != SequencePurpose::ArrayRows)
+            return ClockResult::BindingChanged;
+        if (entry->operationOwner || entry->cleanupOwner || (entry->cleanupAck && entry->cleanupAck->claims) || entry->privateDependency || entry->privateHolds)
+            return ClockResult::OwnerConflict;
+        if (kind == Storage::Kind::KeyFrames && entry->cleanupAck && CleanupResourceBlocked(*entry->cleanupAck))
             return ClockResult::OwnerConflict;
         Receipt    local;
         const auto result = kind == Storage::Kind::SequenceArray
                                 ? NativeCustomAnimSequenceStorageCalls::FreeStorage(image, entry->storage, generation, owner, &local, invoke)
                                 : NativeAnimationKeyFrameStorageCalls::FreeStorage(image, entry->storage, generation, owner, &local, invoke);
+        RecordResourceReceipt(*entry, local);
         // A returned native free is already consumed even if its post-call
         // acknowledgement failed. Erasing that released record cannot replay
         // free or infer anything by probing a possibly reused native address.
@@ -245,7 +263,8 @@ namespace mta::game_de
             return ClockResult::OwnerConflict;
         entry = Find(token.ownerGeneration, token.firstTag);
         if (entry == entries.end() || entry->storage.GetKind() != Storage::Kind::SequenceArray ||
-            entry->storage.GetState() != Storage::State::LiveUnpublished || entry->cleanupOwner || token.index >= entry->storage.Capacity())
+            entry->storage.GetState() != Storage::State::LiveUnpublished || entry->cleanupOwner || entry->operationOwner ||
+            token.index >= entry->storage.Capacity())
             return ClockResult::BindingChanged;
         for (auto& value : entry->rows)
             if (value.index == token.index)
@@ -498,9 +517,19 @@ namespace mta::game_de
         for (const auto& resource : entries)
             if (&resource.storage == frames.record && resource.cleanupAck && resource.cleanupAck->claims)
                 return ClockResult::OwnerConflict;
+        std::shared_ptr<CleanupResource> obligation;
+        bool                             obligationAdded = false;
+        if (frames.record)
+        {
+            const auto nativeFrame = std::find_if(entries.begin(), entries.end(), [&](const Entry& e) { return &e.storage == frames.record; });
+            if (nativeFrame == entries.end() || (result = ReserveFrameObligation(*targetEntry, *nativeFrame, obligation, obligationAdded)) != ClockResult::Ok)
+                return nativeFrame == entries.end() ? ClockResult::BindingChanged : result;
+        }
         CopyReceipt local;
         result = NativeAnimationSequenceCopyCalls::Copy(image, targetEntry->storage, request.index, sourceEntry->storage, sourceToken.index,
                                                         request.ownerGeneration, owner, &local);
+        if (obligationAdded && !local.entered && !local.selfCopy)
+            targetEntry->frameObligations.pop_back();
         if (local.rawCopied || (result == ClockResult::Ok && local.selfCopy))
         {
             targetState->logical = logical;
@@ -635,11 +664,17 @@ namespace mta::game_de
         // This restricted builder links existing private records only. It
         // does not implement the general setter, publish to GTA, infer shared
         // bit08 from a pointer or transfer either allocation's free authority.
+        std::shared_ptr<CleanupResource> obligation;
+        bool                             obligationAdded = false;
+        if ((result = ReserveFrameObligation(*array, *frames, obligation, obligationAdded)) != ClockResult::Ok)
+            return result;
         FrameBindReceipt local;
         result = requestedCompressed ? NativeAnimationSequenceFrameBindCalls::AttachCompressed(image, array->storage, request.ownerGeneration, request.index,
                                                                                                frames->storage, requestedCount, requestedRoot, owner, &local)
                                      : NativeAnimationSequenceFrameBindCalls::AttachUncompressed(image, array->storage, request.ownerGeneration, request.index,
                                                                                                  frames->storage, requestedCount, requestedRoot, owner, &local);
+        if (obligationAdded && !local.entered)
+            array->frameObligations.pop_back();
         if (local.accepted)
             state->frames = {requestedCompressed ? FrameFormat::Compressed : FrameFormat::Uncompressed, &frames->storage, requestedBase, requestedCount,
                              requestedRoot};
@@ -763,7 +798,7 @@ namespace mta::game_de
         auto array = Find(key.ownerGeneration, key.arrayTag);
         if (array == entries.end() || array->storage.GetKind() != Storage::Kind::SequenceArray || array->storage.GetState() != Storage::State::LiveUnpublished)
             return ClockResult::BindingChanged;
-        if (array->cleanupOwner)
+        if (array->cleanupOwner || array->operationOwner || array->purpose == SequencePurpose::StandaloneSequence)
             return ClockResult::OwnerConflict;
         if (actualCapacity)
             capacity = array->storage.Capacity();
@@ -943,7 +978,7 @@ namespace mta::game_de
         if (!generation || ownerGeneration != generation || stopping)
             return ClockResult::OwnerConflict;
         auto entry = Find(generation, issuedTag);
-        if (entry == entries.end() || entry->cleanupOwner || (entry->cleanupAck && entry->cleanupAck->claims))
+        if (entry == entries.end() || entry->operationOwner || entry->cleanupOwner || (entry->cleanupAck && entry->cleanupAck->claims))
             return ClockResult::BindingChanged;
         const auto result = NativeCustomAnimSequenceStorageCalls::PinPublication(entry->storage, generation, hierarchyAffinity);
         if (result == ClockResult::Ok && entry->privateDependency)
@@ -971,7 +1006,8 @@ namespace mta::game_de
         for (auto entry = entries.begin(); entry != entries.end() && progress.scanned != limit;)
         {
             ++progress.scanned;
-            if (entry->cleanupOwner || (entry->cleanupAck && entry->cleanupAck->claims) || entry->privateDependency || entry->privateHolds)
+            if (entry->operationOwner || entry->cleanupOwner || (entry->cleanupAck && entry->cleanupAck->claims) || entry->privateDependency ||
+                entry->privateHolds)
             {
                 auto preserved = entry++;
                 entries.splice(entries.end(), entries, preserved);
@@ -982,6 +1018,12 @@ namespace mta::game_de
                 ForgetFrameAuthority(entry->storage);
                 entry = entries.erase(entry);
                 ++progress.released;
+                continue;
+            }
+            if (entry->storage.GetKind() == Storage::Kind::KeyFrames && entry->cleanupAck && CleanupResourceBlocked(*entry->cleanupAck))
+            {
+                auto preserved = entry++;
+                entries.splice(entries.end(), entries, preserved);
                 continue;
             }
             if (!entry->storage.CanFreeStorage())
@@ -997,6 +1039,7 @@ namespace mta::game_de
             result = entry->storage.GetKind() == Storage::Kind::SequenceArray
                          ? NativeCustomAnimSequenceStorageCalls::FreeStorage(image, entry->storage, generation, owner, &receipt, invoke)
                          : NativeAnimationKeyFrameStorageCalls::FreeStorage(image, entry->storage, generation, owner, &receipt, invoke);
+            RecordResourceReceipt(*entry, receipt);
             if (entry->storage.CanDiscard())
             {
                 ForgetFrameAuthority(entry->storage);
@@ -1038,9 +1081,16 @@ namespace mta::game_de
         // This runs only after a qualified callback check. A CPU view's last
         // destructor merely sets a dirty hint; it never prunes native owners.
     }
-    ClockResult NativeCustomAnimSequenceController::BeginCleanup(std::uintptr_t, const NativeCustomAnimationCleanupRequest& value,
-                                                                 NativePrivateAnimationHierarchyController& hierarchyOwner, CheckOwner,
-                                                                 NativeCustomAnimationCleanupBeginReceipt&  output) noexcept
+    ClockResult NativeCustomAnimSequenceController::BeginCleanup(std::uintptr_t image, const NativeCustomAnimationCleanupRequest& value,
+                                                                 NativePrivateAnimationHierarchyController& hierarchyOwner, CheckOwner owner,
+                                                                 NativeCustomAnimationCleanupBeginReceipt& output) noexcept
+    {
+        return BeginCleanupImpl(image, value, hierarchyOwner, owner, output, SequencePurpose::ArrayRows, CommandKind::AnimationCleanup);
+    }
+    ClockResult NativeCustomAnimSequenceController::BeginCleanupImpl(std::uintptr_t, const NativeCustomAnimationCleanupRequest& value,
+                                                                     NativePrivateAnimationHierarchyController& hierarchyOwner, CheckOwner,
+                                                                     NativeCustomAnimationCleanupBeginReceipt& output, SequencePurpose purpose,
+                                                                     CommandKind kind, bool alreadyHeld) noexcept
     {
         const auto request = value;
         output = {};
@@ -1048,9 +1098,9 @@ namespace mta::game_de
             (request.hierarchy.locator ? request.hierarchy.ownerGeneration != request.generation : request.hierarchy.ownerGeneration != 0) ||
             (!request.originalArray && request.capacity) || (request.originalArray && !request.capacity))
             return ClockResult::InvalidArgument;
-        if (operation.test_and_set(std::memory_order_acquire))
+        if (!alreadyHeld && operation.test_and_set(std::memory_order_acquire))
             return ClockResult::Busy;
-        const CustomAnimSequenceControllerDetail::Operation held{operation};
+        const CustomAnimSequenceControllerDetail::OptionalOperation held{alreadyHeld ? nullptr : &operation};
         if ((ownerGeneration && ownerGeneration != request.generation) || hierarchyOwner.sequences != this)
             return ClockResult::OwnerConflict;
         std::uint64_t hierarchyIssue = 0;
@@ -1068,11 +1118,15 @@ namespace mta::game_de
             if (p.generation != request.generation || p.hierarchy.locator != request.hierarchy.locator || previous->hierarchyIssue != hierarchyIssue ||
                 previous->arrayIssue != arrayIssue || (!request.hierarchy.locator && p.originalArray != request.originalArray))
                 continue;
+            if (previous->commandKind == CommandKind::FrameAttachment)
+                continue;
             if (previous->complete || p.originalArray != request.originalArray || p.capacity != request.capacity || previous->hierarchyOwner != &hierarchyOwner)
                 return ClockResult::OwnerConflict;
             const auto views = previous->lifetime->views.load(std::memory_order_acquire);
             if (views == (std::numeric_limits<std::size_t>::max)())
                 return ClockResult::OwnerConflict;
+            if (kind == CommandKind::SequenceCleanup && previous->commandKind == CommandKind::SequenceTransfer)
+                previous->cancelRequested = true;
             previous->lifetime->views.fetch_add(1, std::memory_order_acq_rel);
             output.view = NativeCustomAnimationCleanupView(previous->lifetime);
             output.accepted = true;
@@ -1081,15 +1135,17 @@ namespace mta::game_de
         if (nextCleanupCommand == (std::numeric_limits<std::uint64_t>::max)())
             return ClockResult::OwnerConflict;
 
-        if (request.originalArray &&
-            (array == entries.end() || array->storage.GetKind() != Storage::Kind::SequenceArray ||
-             array->storage.GetState() != Storage::State::LiveUnpublished || array->storage.Capacity() != request.capacity || array->cleanupOwner))
+        if (request.originalArray && (array == entries.end() || array->storage.GetKind() != Storage::Kind::SequenceArray ||
+                                      (purpose == SequencePurpose::StandaloneSequence ? !array->storage.CanFreeStorage()
+                                                                                      : array->storage.GetState() != Storage::State::LiveUnpublished) ||
+                                      array->purpose != purpose || array->storage.Capacity() != request.capacity || array->cleanupOwner))
             return ClockResult::BindingChanged;
         std::shared_ptr<CleanupRecord> record;
         try
         {
             record = std::make_shared<CleanupRecord>();
             record->request = request;
+            record->commandKind = kind;
             record->hierarchyIssue = hierarchyIssue;
             record->arrayIssue = arrayIssue;
             record->token = {request.generation, nextCleanupCommand + 1};
@@ -1129,6 +1185,9 @@ namespace mta::game_de
                     record->frames.push_back(std::move(ack));
                     return true;
                 };
+                for (const auto& obligation : array->frameObligations)
+                    if (obligation->stage != CleanupStage::Returned && (!obligation->live || !addFrame(obligation->live)))
+                        return ClockResult::BindingChanged;
                 for (const auto& row : array->rows)
                 {
                     if (!row.frames.record)
@@ -1163,6 +1222,10 @@ namespace mta::game_de
         ++nextCleanupCommand;
         if (array != entries.end())
         {
+            if (array->operationOwner)
+                for (const auto& pending : cleanups)
+                    if (pending->token.command == array->operationOwner)
+                        pending->cancelRequested = true;
             array->cleanupOwner = record->token.command;
             array->cleanupAck = record->arrayAck;
             ++record->arrayAck->claims;
@@ -1242,6 +1305,8 @@ namespace mta::game_de
         {
             if (entry.storage.GetKind() != Storage::Kind::SequenceArray || entry.cleanupOwner)
                 continue;
+            if (std::find(entry.frameObligations.begin(), entry.frameObligations.end(), ack.live->cleanupAck) != entry.frameObligations.end())
+                return true;
             for (const auto& row : entry.rows)
                 if (row.frames.record == &ack.live->storage)
                     return true;
@@ -1301,12 +1366,25 @@ namespace mta::game_de
                 output.status = ECustomAnimationCleanupStatus::Refused;
             return status;
         };
+        if (record->commandKind == CommandKind::FrameAttachment || (record->commandKind == CommandKind::SequenceTransfer && !record->writerAcknowledged))
+            return ClockResult::Busy;
         if (!record->snapshotVerified)
         {
             if (operation.test_and_set(std::memory_order_acquire))
                 return ClockResult::Busy;
             const CustomAnimSequenceControllerDetail::Operation held{operation};
-            if (record->array)
+            if (record->array && record->array->operationOwner && record->array->operationOwner != token.command)
+                return ClockResult::Ok;
+            if (record->array && record->array->purpose == SequencePurpose::StandaloneSequence)
+            {
+                if (record->array->privateDependency || record->request.hierarchy.locator)
+                    return ClockResult::OwnerConflict;
+                const auto checked = NativeAnimationSequenceOperationCalls::QualifyStandaloneRetirement(image, record->array->storage, token.generation, owner);
+                if (checked != ClockResult::Ok)
+                    return checked;
+                record->snapshotVerified = record->dependencyReleased = true;
+            }
+            else if (record->array)
             {
                 std::tuple<NativeCustomAnimSequenceController*, CleanupRecord*, CheckOwner> context{this, record.get(), owner};
                 const auto checked = NativeAnimationSequenceCleanupCalls::WithArray(image, record->array->storage, token.generation, owner,
@@ -1466,6 +1544,13 @@ namespace mta::game_de
         }
         output.status = ECustomAnimationCleanupStatus::Complete;
         output.disposition = ECustomAnimationCleanupDisposition::PrivateDetached;
+        if (record->commandKind != CommandKind::AnimationCleanup)
+        {
+            record->sequenceResult.status = ECustomAnimationSequenceStatus::Complete;
+            record->sequenceResult.disposition = record->commandKind == CommandKind::SequenceTransfer && record->copy.rawCopied
+                                                     ? ECustomAnimationSequenceDisposition::SourceTransferred
+                                                     : ECustomAnimationSequenceDisposition::SourceReleased;
+        }
         Publish();
         return ClockResult::Ok;
     }
@@ -1517,13 +1602,31 @@ namespace mta::game_de
         ClockResult first = ClockResult::Ok;
         for (const auto& token : pending)
         {
-            SCustomAnimationCleanupResult result;
+            CommandKind kind = CommandKind::AnimationCleanup;
+            if (operation.test_and_set(std::memory_order_acquire))
+                return ClockResult::Busy;
+            {
+                const CustomAnimSequenceControllerDetail::Operation held{operation};
+                for (const auto& record : cleanups)
+                    if (record->token.command == token.command && record->token.generation == token.generation)
+                        kind = record->commandKind;
+            }
             ++output.attempted;
-            const auto status = ResumeCleanup(image, token, hierarchyOwner, 1, owner, result);
-            if (result.status == ECustomAnimationCleanupStatus::Complete)
-                ++output.released;
-            if (result.status == ECustomAnimationCleanupStatus::Refused)
-                output.unknown = true;
+            ClockResult status;
+            if (kind == CommandKind::AnimationCleanup)
+            {
+                SCustomAnimationCleanupResult result;
+                status = ResumeCleanup(image, token, hierarchyOwner, 1, owner, result);
+                if (result.status == ECustomAnimationCleanupStatus::Complete)
+                    ++output.released;
+            }
+            else
+            {
+                SCustomAnimationSequenceResult result;
+                status = ResumeSequenceOperation(image, token, hierarchyOwner, 1, owner, result);
+                if (result.status == ECustomAnimationSequenceStatus::Complete)
+                    ++output.released;
+            }
             if (status != ClockResult::Ok && first == ClockResult::Ok)
             {
                 first = status;
@@ -1544,6 +1647,458 @@ namespace mta::game_de
         // Ordinary shared-holder waiting stays Ok/Pending. Root's End drainer
         // may retire unclaimed H/Q records before resuming this ticket again.
         return first;
+    }
+
+    ClockResult NativeCustomAnimSequenceController::AllocateStandaloneSequence(std::uintptr_t image, std::uint64_t generation, CheckOwner owner,
+                                                                               NativeAnimationSequenceReferenceToken& output, Receipt* receipt,
+                                                                               InvokeMalloc invoke) noexcept
+    {
+        std::uintptr_t tag = 0;
+        const auto     result =
+            AllocateResource(image, generation, 1, Storage::Kind::SequenceArray, owner, tag, receipt, invoke, SequencePurpose::StandaloneSequence);
+        if (result == ClockResult::Ok)
+            output = {generation, tag, 0};
+        return result;
+    }
+    ClockResult NativeCustomAnimSequenceController::ResolveStandaloneSequence(std::uintptr_t image, std::uint64_t generation, std::uintptr_t locator,
+                                                                              CheckOwner owner, NativeAnimationSequenceReferenceToken& output) noexcept
+    {
+        const auto requestedGeneration = generation;
+        const auto requestedLocator = locator;
+        if (operation.test_and_set(std::memory_order_acquire))
+            return ClockResult::Busy;
+        const CustomAnimSequenceControllerDetail::Operation held{operation};
+        if (!requestedGeneration || requestedGeneration != ownerGeneration || !owner)
+            return ClockResult::OwnerConflict;
+        const auto entry = Find(requestedGeneration, requestedLocator);
+        if (entry == entries.end() || entry->purpose != SequencePurpose::StandaloneSequence || entry->cleanupOwner || entry->operationOwner ||
+            entry->storage.GetKind() != Storage::Kind::SequenceArray || entry->storage.Capacity() != 1)
+            return ClockResult::BindingChanged;
+        std::size_t capacity = 0;
+        const auto  result = NativeAnimationSequenceFactoryCalls::ReadCapacity(image, entry->storage, requestedGeneration, owner, capacity);
+        if (result != ClockResult::Ok)
+            return result;
+        if (capacity != 1)
+            return ClockResult::BindingChanged;
+        output = {requestedGeneration, requestedLocator, 0};
+        return ClockResult::Ok;
+    }
+    ClockResult NativeCustomAnimSequenceController::ReserveFrameObligation(Entry& array, Entry& frame, std::shared_ptr<CleanupResource>& output,
+                                                                           bool& added) noexcept
+    {
+        added = false;
+        if (!frame.issued || frame.storage.GetKind() != Storage::Kind::KeyFrames || frame.storage.GetState() != Storage::State::LiveUnpublished ||
+            frame.storage.OwnerGeneration() != array.storage.OwnerGeneration())
+            return ClockResult::BindingChanged;
+        try
+        {
+            auto ack = frame.cleanupAck;
+            if (!ack)
+            {
+                ack = std::make_shared<CleanupResource>();
+                ack->live = &frame;
+                ack->kind = Storage::Kind::KeyFrames;
+                ack->generation = frame.storage.OwnerGeneration();
+                ack->tag = frame.storage.IssuedTag();
+            }
+            if (ack->stage != CleanupStage::Prepared || ack->live != &frame)
+                return ClockResult::OwnerConflict;
+            if (std::find(array.frameObligations.begin(), array.frameObligations.end(), ack) == array.frameObligations.end())
+            {
+                array.frameObligations.push_back(ack);
+                added = true;
+            }
+            frame.cleanupAck = ack;
+            output = std::move(ack);
+            return ClockResult::Ok;
+        }
+        catch (...)
+        {
+            return ClockResult::WriteFailure;
+        }
+    }
+    void NativeCustomAnimSequenceController::RecordResourceReceipt(Entry& entry, const Receipt& receipt) noexcept
+    {
+        if (!entry.cleanupAck || (!receipt.entered && !receipt.released))
+            return;
+        auto& ack = *entry.cleanupAck;
+        ack.receipt = receipt;
+        if (receipt.released)
+        {
+            ack.stage = CleanupStage::Returned;
+            ack.live = nullptr;
+        }
+        else if (receipt.entered)
+            ack.stage = CleanupStage::Unknown;
+        // A returned actual primitive is the proof, even on lost postflight.
+        // Historical row obligations never infer consumption from a map miss.
+    }
+    ClockResult NativeCustomAnimSequenceController::BeginSequenceCleanup(std::uintptr_t image, const NativeAnimationSequenceReferenceToken& value,
+                                                                         NativePrivateAnimationHierarchyController& hierarchyOwner, CheckOwner owner,
+                                                                         NativeCustomAnimationSequenceOperationBeginReceipt& output) noexcept
+    {
+        const auto source = value;
+        if (!source.ownerGeneration || !source.firstTag || source.index)
+            return ClockResult::InvalidArgument;
+        NativeCustomAnimationCleanupRequest request;
+        request.generation = source.ownerGeneration;
+        request.originalArray = source.firstTag;
+        request.capacity = 1;
+        return BeginCleanupImpl(image, request, hierarchyOwner, owner, output, SequencePurpose::StandaloneSequence, CommandKind::SequenceCleanup);
+    }
+
+    ClockResult NativeCustomAnimSequenceController::BeginSequenceTransfer(std::uintptr_t, const NativeAnimationSequenceReferenceToken& source,
+                                                                          const NativeAnimationSequenceReferenceToken&        target,
+                                                                          NativePrivateAnimationHierarchyController&          h, CheckOwner,
+                                                                          NativeCustomAnimationSequenceOperationBeginReceipt& output) noexcept
+    {
+        return BeginSequenceCommand(CommandKind::SequenceTransfer, source, target, 0, false, false, 0, h, output);
+    }
+    ClockResult NativeCustomAnimSequenceController::BeginFrameAttachment(std::uintptr_t, const NativeAnimationSequenceReferenceToken& target, std::size_t count,
+                                                                         bool root, bool compressed, std::uintptr_t frames,
+                                                                         NativePrivateAnimationHierarchyController&          h, CheckOwner,
+                                                                         NativeCustomAnimationSequenceOperationBeginReceipt& output) noexcept
+    {
+        return BeginSequenceCommand(CommandKind::FrameAttachment, {}, target, count, root, compressed, frames, h, output);
+    }
+    ClockResult NativeCustomAnimSequenceController::BeginSequenceCommand(CommandKind kind, const NativeAnimationSequenceReferenceToken& sourceValue,
+                                                                         const NativeAnimationSequenceReferenceToken& targetValue, std::size_t count, bool root,
+                                                                         bool compressed, std::uintptr_t frames, NativePrivateAnimationHierarchyController& h,
+                                                                         NativeCustomAnimationSequenceOperationBeginReceipt& output) noexcept
+    {
+        const auto source = sourceValue;
+        const auto target = targetValue;
+        output = {};
+        if (!target.ownerGeneration || !target.firstTag || (kind != CommandKind::SequenceTransfer && kind != CommandKind::FrameAttachment))
+            return ClockResult::InvalidArgument;
+        if (kind == CommandKind::SequenceTransfer &&
+            (source.ownerGeneration != target.ownerGeneration || !source.firstTag || source.index || source.firstTag == target.firstTag))
+            return ClockResult::InvalidArgument;
+        if (operation.test_and_set(std::memory_order_acquire))
+            return ClockResult::Busy;
+        const CustomAnimSequenceControllerDetail::Operation held{operation};
+        if (ownerGeneration != target.ownerGeneration || h.sequences != this || stopping)
+            return ClockResult::OwnerConflict;
+        auto destination = Find(target.ownerGeneration, target.firstTag);
+        if (destination == entries.end() || destination->storage.GetKind() != Storage::Kind::SequenceArray ||
+            destination->storage.GetState() != Storage::State::LiveUnpublished || target.index >= destination->storage.Capacity() ||
+            destination->cleanupOwner || destination->privateDependency)
+            return ClockResult::BindingChanged;
+        if (destination->operationOwner)
+        {
+            for (const auto& previous : cleanups)
+                if (previous->token.command == destination->operationOwner && previous->commandKind == kind &&
+                    previous->source.ownerGeneration == source.ownerGeneration && previous->source.firstTag == source.firstTag &&
+                    previous->source.index == source.index && previous->target.firstTag == target.firstTag && previous->target.index == target.index &&
+                    previous->frameCount == count && previous->rootFrames == root && previous->compressedFrames == compressed &&
+                    previous->originalFrames == frames && !previous->complete)
+                {
+                    if (previous->lifetime->views.load(std::memory_order_acquire) == (std::numeric_limits<std::size_t>::max)())
+                        return ClockResult::OwnerConflict;
+                    previous->lifetime->views.fetch_add(1, std::memory_order_acq_rel);
+                    output.view = NativeCustomAnimationCleanupView(previous->lifetime);
+                    output.accepted = true;
+                    return ClockResult::Ok;
+                }
+            return ClockResult::OwnerConflict;
+        }
+        auto original = kind == CommandKind::SequenceTransfer ? Find(source.ownerGeneration, source.firstTag) : entries.end();
+        if (kind == CommandKind::SequenceTransfer &&
+            (original == entries.end() || original->purpose != SequencePurpose::StandaloneSequence ||
+             original->storage.GetState() != Storage::State::LiveUnpublished || original->cleanupOwner || original->operationOwner ||
+             original->privateDependency || destination->purpose != SequencePurpose::ArrayRows))
+            return ClockResult::BindingChanged;
+        RowState* targetState = nullptr;
+        RowState* sourceState = nullptr;
+        auto      checked = SelectRow(target, destination, targetState);
+        if (checked != ClockResult::Ok)
+            return checked;
+        if (kind == CommandKind::SequenceTransfer && (checked = SelectRow(source, original, sourceState)) != ClockResult::Ok)
+            return checked;
+        auto frame = entries.end();
+        if (kind == CommandKind::FrameAttachment)
+        {
+            const std::size_t stride = compressed ? (root ? 16u : 10u) : (root ? 32u : 20u);
+            frame = Find(target.ownerGeneration, frames);
+            if (!frames || !count || frame == entries.end() || frame->storage.GetKind() != Storage::Kind::KeyFrames ||
+                frame->storage.GetState() != Storage::State::LiveUnpublished || count > frame->storage.ByteSize() / stride ||
+                (frame->cleanupAck && frame->cleanupAck->claims))
+                return ClockResult::InvalidArgument;
+        }
+        else if (sourceState->frames.record)
+        {
+            frame = std::find_if(entries.begin(), entries.end(), [&](const Entry& e) { return &e.storage == sourceState->frames.record; });
+            if (frame == entries.end() || !CurrentFrameDescriptor(sourceState->frames))
+                return ClockResult::BindingChanged;
+        }
+        std::shared_ptr<CleanupResource> obligation;
+        bool                             added = false;
+        if (frame != entries.end() && (checked = ReserveFrameObligation(*destination, *frame, obligation, added)) != ClockResult::Ok)
+            return checked;
+        std::shared_ptr<CleanupRecord> record;
+        if (kind == CommandKind::SequenceTransfer)
+        {
+            NativeCustomAnimationCleanupRequest request;
+            request.generation = source.ownerGeneration;
+            request.originalArray = source.firstTag;
+            request.capacity = 1;
+            checked = BeginCleanupImpl(0, request, h, nullptr, output, SequencePurpose::StandaloneSequence, kind, true);
+            if (!output.accepted)
+            {
+                if (added)
+                    destination->frameObligations.pop_back();
+                return checked;
+            }
+            for (const auto& current : cleanups)
+                if (current->token.command == output.view.Token().command)
+                    record = current;
+        }
+        else
+        {
+            if (nextCleanupCommand == (std::numeric_limits<std::uint64_t>::max)())
+            {
+                if (added)
+                    destination->frameObligations.pop_back();
+                return ClockResult::OwnerConflict;
+            }
+            try
+            {
+                record = std::make_shared<CleanupRecord>();
+                record->commandKind = kind;
+                record->token = {target.ownerGeneration, nextCleanupCommand + 1};
+                record->lifetime = std::shared_ptr<NativeCustomAnimationCleanupLifetime>(new NativeCustomAnimationCleanupLifetime(record->token));
+                record->array = &*destination;
+                record->arrayIssue = destination->issue;
+                record->request.generation = target.ownerGeneration;
+                record->request.originalArray = target.firstTag;
+                record->request.capacity = destination->storage.Capacity();
+                record->frames.push_back(obligation);
+                cleanups.push_back(record);
+            }
+            catch (...)
+            {
+                if (added)
+                    destination->frameObligations.pop_back();
+                return ClockResult::WriteFailure;
+            }
+            ++nextCleanupCommand;
+            ++obligation->claims;
+            output.view = NativeCustomAnimationCleanupView(record->lifetime);
+            output.accepted = true;
+        }
+        record->hierarchyOwner = &h;
+        record->source = source;
+        record->target = target;
+        record->targetEntry = &*destination;
+        record->frameCount = count;
+        record->rootFrames = root;
+        record->compressedFrames = compressed;
+        record->originalFrames = frames;
+        record->targetObligationAdded = added;
+        record->transferFrame = obligation;
+        destination->operationOwner = record->token.command;
+        if (original != entries.end())
+            original->operationOwner = record->token.command;
+        Publish();
+        return checked;
+    }
+    ClockResult NativeCustomAnimSequenceController::ResumeSequenceOperation(std::uintptr_t image, const NativeCustomAnimationSequenceOperationToken& value,
+                                                                            NativePrivateAnimationHierarchyController& h, std::size_t budget, CheckOwner owner,
+                                                                            SCustomAnimationSequenceResult& output) noexcept
+    {
+        const auto token = value;
+        output = {};
+        std::shared_ptr<CleanupRecord> record;
+        {
+            if (operation.test_and_set(std::memory_order_acquire))
+                return ClockResult::Busy;
+            const CustomAnimSequenceControllerDetail::Operation held{operation};
+            if (!token.generation || ownerGeneration != token.generation || !token.command)
+                return ClockResult::OwnerConflict;
+            for (const auto& current : cleanups)
+                if (current->token.generation == token.generation && current->token.command == token.command)
+                    record = current;
+            if (!record || record->hierarchyOwner != &h || record->commandKind == CommandKind::AnimationCleanup)
+                return ClockResult::BindingChanged;
+            if (record->complete)
+            {
+                output = record->sequenceResult;
+                return ClockResult::Ok;
+            }
+            if (record->refused)
+            {
+                output.status = ECustomAnimationSequenceStatus::Refused;
+                return ClockResult::OwnerConflict;
+            }
+            if (!owner)
+                return ClockResult::NotInitialized;
+            const auto qualified = owner();
+            if (qualified != ClockResult::Ok)
+                return qualified;
+            if (record->resuming.exchange(true, std::memory_order_acq_rel))
+                return ClockResult::Busy;
+            struct Scope
+            {
+                std::atomic<bool>& value;
+                ~Scope() { value.store(false, std::memory_order_release); }
+            } scope{record->resuming};
+            if (record->commandKind != CommandKind::SequenceCleanup && !record->writerAcknowledged)
+            {
+                auto* target = record->targetEntry;
+                if (!target || target->operationOwner != token.command || target->issue == 0 || target->privateDependency)
+                    return ClockResult::BindingChanged;
+                RowState* targetState = nullptr;
+                for (auto& row : target->rows)
+                    if (row.index == record->target.index)
+                        targetState = &row;
+                if (!targetState)
+                    return ClockResult::BindingChanged;
+                const bool binding = record->commandKind == CommandKind::FrameAttachment;
+                const bool entered = binding ? record->attachment.entered : record->copy.entered;
+                const bool accepted = binding ? record->attachment.accepted : record->copy.rawCopied;
+                if (record->cancelRequested && !entered)
+                {
+                    if (!binding && record->targetObligationAdded && record->transferFrame)
+                        target->frameObligations.erase(std::remove(target->frameObligations.begin(), target->frameObligations.end(), record->transferFrame),
+                                                       target->frameObligations.end());
+                    target->operationOwner = 0;
+                    record->writerAcknowledged = true;
+                    if (binding)
+                    {
+                        // Cancellation follows an explicit source cleanup
+                        // intent, never CPU-view destruction or raw pointer0.
+                        --record->frames.front()->claims;
+                        record->complete = true;
+                        record->sequenceResult.status = ECustomAnimationSequenceStatus::Refused;
+                        output = record->sequenceResult;
+                        Publish();
+                        return ClockResult::Ok;
+                    }
+                }
+                else if (entered && !accepted)
+                {
+                    record->refused = true;
+                    output.status = ECustomAnimationSequenceStatus::Refused;
+                    Publish();
+                    return ClockResult::OwnerConflict;
+                }
+                else
+                {
+                    ClockResult status = ClockResult::Ok;
+                    if (!entered && binding)
+                    {
+                        const auto frame = Find(token.generation, record->originalFrames);
+                        if (frame == entries.end() || frame->cleanupAck != record->frames.front())
+                            return ClockResult::BindingChanged;
+                        status = record->compressedFrames
+                                     ? NativeAnimationSequenceFrameBindCalls::AttachCompressed(image, target->storage, token.generation, record->target.index,
+                                                                                               frame->storage, record->frameCount, record->rootFrames, owner,
+                                                                                               &record->attachment)
+                                     : NativeAnimationSequenceFrameBindCalls::AttachUncompressed(image, target->storage, token.generation, record->target.index,
+                                                                                                 frame->storage, record->frameCount, record->rootFrames, owner,
+                                                                                                 &record->attachment);
+                        if (record->attachment.accepted)
+                            targetState->frames = {record->compressedFrames ? FrameFormat::Compressed : FrameFormat::Uncompressed, &frame->storage,
+                                                   record->originalFrames, record->frameCount, record->rootFrames};
+                    }
+                    else if (!entered)
+                    {
+                        RowState* sourceState = nullptr;
+                        for (auto& row : record->array->rows)
+                            if (row.index == 0)
+                                sourceState = &row;
+                        if (!sourceState)
+                            return ClockResult::BindingChanged;
+                        const auto logical = sourceState->logical;
+                        const auto format = sourceState->frames;
+                        status = NativeAnimationSequenceCopyCalls::Copy(image, target->storage, record->target.index, record->array->storage, 0,
+                                                                        token.generation, owner, &record->copy);
+                        if (record->copy.rawCopied)
+                        {
+                            targetState->logical = logical;
+                            targetState->frames = format.Matches(record->copy.sourceValue) && CurrentFrameDescriptor(format) ? format : FrameDescriptor{};
+                            if (record->copy.sourceValue.keyFrames && !targetState->frames.record)
+                            {
+                                record->refused = true;
+                                Publish();
+                                return ClockResult::BindingChanged;
+                            }
+                            // The exact accepted copy transfers only its
+                            // actual current frame, not every historical
+                            // buffer previously owned by this source row.
+                            for (auto item = record->frames.begin(); item != record->frames.end();)
+                                if ((*item)->tag == record->copy.sourceValue.keyFrames)
+                                {
+                                    const auto ack = *item;
+                                    --ack->claims;
+                                    record->array->frameObligations.erase(
+                                        std::remove(record->array->frameObligations.begin(), record->array->frameObligations.end(), ack),
+                                        record->array->frameObligations.end());
+                                    item = record->frames.erase(item);
+                                }
+                                else
+                                    ++item;
+                        }
+                    }
+                    const bool nowEntered = binding ? record->attachment.entered : record->copy.entered;
+                    const bool nowAccepted = binding ? record->attachment.accepted : record->copy.rawCopied;
+                    if (nowEntered && !nowAccepted)
+                        record->refused = true;
+                    if (status != ClockResult::Ok)
+                    {
+                        if (record->refused)
+                            output.status = ECustomAnimationSequenceStatus::Refused;
+                        Publish();
+                        return status;
+                    }
+                    if (!nowAccepted)
+                        return ClockResult::Ok;
+                    if (entered)
+                    {
+                        // Only a previously returned complete CPU store reaches
+                        // this read-only exact80-byte acknowledgement. Unknown
+                        // writes never acquire replay/rollback permission.
+                        if (record->transferFrame && record->transferFrame->live)
+                        {
+                            const auto& frame = record->transferFrame->live->storage;
+                            status = NativeAnimationSequenceRowCalls::CheckFramePointer(image, frame, token.generation, record->transferFrame->tag, owner);
+                            if (status != ClockResult::Ok)
+                                return status;
+                        }
+                        const auto& intent = binding ? record->attachment.intended : record->copy.copiedRecord;
+                        status = NativeAnimationSequenceOperationCalls::AcknowledgeAcceptedRow(image, target->storage, token.generation, record->target.index,
+                                                                                               intent, binding, owner);
+                        if (status != ClockResult::Ok)
+                            return status;
+                    }
+                    record->writerAcknowledged = true;
+                    target->operationOwner = 0;
+                    if (binding)
+                    {
+                        --record->frames.front()->claims;
+                        record->complete = true;
+                        record->sequenceResult.status = ECustomAnimationSequenceStatus::Complete;
+                        record->sequenceResult.disposition = ECustomAnimationSequenceDisposition::FramesAttached;
+                        output = record->sequenceResult;
+                        Publish();
+                        return ClockResult::Ok;
+                    }
+                }
+                if (record->array)
+                    record->array->operationOwner = 0;
+                Publish();
+            }
+        }
+        // Sequence cleanup and a completed/cancelled copy use exactly the
+        // original per-resource cleanup journal. No new raw lookup, source
+        // getter, Frame free or generation-wide retirement is fabricated.
+        SCustomAnimationCleanupResult cleanup;
+        const auto                    status = ResumeCleanup(image, token, h, budget, owner, cleanup);
+        if (cleanup.status == ECustomAnimationCleanupStatus::Complete)
+            output = record->sequenceResult;
+        else if (cleanup.status == ECustomAnimationCleanupStatus::Refused)
+            output.status = ECustomAnimationSequenceStatus::Refused;
+        return status;
     }
 
 }

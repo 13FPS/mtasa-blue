@@ -12,7 +12,8 @@ function Write-IFPParserFixture([string]$Root,[string]$Directory) {
     $manager=[regex]::Replace($manager,'(?s)/\*.*?\*/|//[^\r\n]*','')
     $allowed=@('GetCustomAnimBlendHierarchy','GetCustomAnimBlendSequence','GetCustomAnimBlendSequenceAt','DeleteCustomAnimHierarchyInterface',
         'DeleteCustomAnimSequenceInterface','AllocateKeyFramesMemory','FreeKeyFramesMemory','AllocateCustomAnimSequences',
-        'FreeCustomAnimSequences','RemoveFromUncompressedCache','BeginCustomAnimationCleanup','HasPendingCustomAnimationCleanup')
+        'FreeCustomAnimSequences','RemoveFromUncompressedCache','BeginCustomAnimationCleanup','HasPendingCustomAnimationCleanup',
+        'BeginCustomAnimationSequenceCleanup','BeginCustomAnimationSequenceTransfer','BeginCustomAnimationFrameAttachment')
     $rejectors=@('#pragma warning(push)','#pragma warning(disable : 4100)')
     foreach($match in [regex]::Matches($manager,'virtual\s+(?<signature>[^;{}]+);')) {
         $signature=[regex]::Replace($match.Groups['signature'].Value,'\s*=\s*0\s*$','').Trim()
@@ -52,9 +53,17 @@ function Write-IFPParserFixture([string]$Root,[string]$Directory) {
         '#pragma include_alias(<SString.h>, <IFPParserEnvironment.h>)',
         '#pragma warning(push)','#pragma warning(disable : 4100)',
         '#include "CIFPAnimations.h"','#include "CClientIFP.h"','#pragma warning(pop)'),[Text.UTF8Encoding]::new($false))
-    [ordered]@{sourceInputs=$records;includeAliases=@('CClientEntity.h->IFPParserEnvironment.h','<SString.h>-><IFPParserEnvironment.h>');
+    . (Join-Path $Root 'Tests/definitive/Write-ClassicAnimationOperationBridge.ps1')
+    $actualBridge=Write-ClassicAnimationOperationBridge $Root $Directory 'common'
+    . (Join-Path $Root 'Tests/definitive/Write-ClassicAnimationArrayBridge.ps1')
+    $actualArrayBridge=Write-ClassicAnimationArrayBridge $Root $Directory
+    $records+=@($actualArrayBridge.sourceInputs)
+    $records+=@([ordered]@{path='Tests/definitive/Write-ClassicAnimationArrayBridge.ps1';sha256=(Get-FileHash -LiteralPath (Join-Path $Root 'Tests/definitive/Write-ClassicAnimationArrayBridge.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()})
+    $records+=@($actualBridge.sourceInputs)
+    $records+=@([ordered]@{path='Tests/definitive/Write-ClassicAnimationOperationBridge.ps1';sha256=(Get-FileHash -LiteralPath (Join-Path $Root 'Tests/definitive/Write-ClassicAnimationOperationBridge.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()})
+    [ordered]@{actualArrayBridge=$actualArrayBridge;actualManagerBridge=$actualBridge;sourceInputs=$records;includeAliases=@('CClientEntity.h->IFPParserEnvironment.h','<SString.h>-><IFPParserEnvironment.h>');
         actualCommonHeadersIncluded=$true;unrelatedClientShellOnly=$true;classDeclarationsMirrored=$false;parserBodiesMirrored=$false;
-        files=@('StdInc.h','IFPHash.generated.h','IFPManagerRejectors.generated.inl'|ForEach-Object{
+        files=@('StdInc.h','IFPHash.generated.h','IFPManagerRejectors.generated.inl','ClassicAnimationOperationBridge.generated.inl','ClassicAnimationOperationEntries.generated.h','ClassicAnimationArrayBridge.generated.inl'|ForEach-Object{
             $path=Join-Path $Directory $_;[ordered]@{path=$path;sha256=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()}
         })}
 }

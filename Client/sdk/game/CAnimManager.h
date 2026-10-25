@@ -13,6 +13,7 @@
 
 #include <memory>
 #include "CCustomAnimationCleanup.h"
+#include "CCustomAnimationSequenceOperation.h"
 
 // Get correct values
 #define MAX_ANIM_GROUPS 200
@@ -150,4 +151,10 @@ public:
     // Teardown must retain both this owner and its module while commands or
     // CPU ticket vtables remain live; a default false would lose that debt.
     virtual bool HasPendingCustomAnimationCleanup() const noexcept = 0;
+    // Standalone source release, accepted Copy transfer and supplied-frame
+    // binding need their own receipts. Getter equality or capacity one is not
+    // authority to free a resource after an entered/unknown operation.
+    virtual std::unique_ptr<CCustomAnimationSequenceOperation> BeginCustomAnimationSequenceCleanup(const SCustomAnimationSequenceCleanupRequest&) = 0;
+    virtual std::unique_ptr<CCustomAnimationSequenceOperation> BeginCustomAnimationSequenceTransfer(const SCustomAnimationSequenceTransferRequest&) = 0;
+    virtual std::unique_ptr<CCustomAnimationSequenceOperation> BeginCustomAnimationFrameAttachment(const SCustomAnimationFrameAttachmentRequest&) = 0;
 };

@@ -306,7 +306,7 @@ private:
     CClientIFP::eFrameType ReadKfrm();
     void                   ReadAnimationHeaderVersion2(SAnimationHeaderV2& AnimationNode, bool bAnp3);
 
-    bool ReadSequenceKeyFrames(std::unique_ptr<CAnimBlendSequence>& pAnimationSequence, eFrameType iFrameType, const std::int32_t& cFrames);
+    bool ReadSequenceKeyFrames(MtaGame::IfpStorage::SequenceOwner<CAnimManager>& owner, eFrameType iFrameType, const std::int32_t& cFrames);
     void ReadKeyFramesAsCompressed(std::unique_ptr<CAnimBlendSequence>& pAnimationSequence, eFrameType iFrameType, const std::int32_t& cFrames);
     void ReadKrtsFramesAsCompressed(std::unique_ptr<CAnimBlendSequence>& pAnimationSequence, const std::int32_t& cFrames);
     void ReadKrt0FramesAsCompressed(std::unique_ptr<CAnimBlendSequence>& pAnimationSequence, const std::int32_t& cFrames);
@@ -333,7 +333,7 @@ private:
     void AllocateSequencesMemory(SAnimation& animation);
     void AttachSequencesMemory(SAnimation& animation);
 
-    void    InsertAnimationDummySequence(std::unique_ptr<CAnimBlendSequence>& pAnimationSequence, const SString& BoneName, const DWORD& dwBoneID);
+    void    InsertAnimationDummySequence(MtaGame::IfpStorage::SequenceOwner<CAnimManager>& owner, const SString& BoneName, const DWORD& dwBoneID);
     void    CopyDummyKeyFrameByBoneID(BYTE* pKeyFrames, DWORD dwBoneID);
     SString ConvertStringToKey(const SString& strBoneName, bool isANPK = false);
 

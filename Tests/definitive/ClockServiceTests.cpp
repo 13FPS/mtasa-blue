@@ -8373,10 +8373,30 @@ namespace
 #include "NativePrivateAnimationFactoryOwnerTests.inl"
 #include "NativeCustomAnimationCleanupControllerTests.inl"
 #include "NativeCustomAnimationCleanupOwnerTests.inl"
+#include "NativeStandaloneSequenceOperationsTests.inl"
+
+// The strict receiver must execute the production typed tickets. Keeping the
+// raw interface-only delete pure prevents a metadata-only delete from silently
+// replacing standalone ownership and its frame release acknowledgements.
+static_assert(std::is_same_v<decltype(&PrivateAnimationFactoryManagerReceiver::BeginCustomAnimationSequenceCleanup),
+                             decltype(&CAnimManagerDE::BeginCustomAnimationSequenceCleanup)>);
+static_assert(std::is_same_v<decltype(&PrivateAnimationFactoryManagerReceiver::BeginCustomAnimationSequenceTransfer),
+                             decltype(&CAnimManagerDE::BeginCustomAnimationSequenceTransfer)>);
+static_assert(std::is_same_v<decltype(&PrivateAnimationFactoryManagerReceiver::BeginCustomAnimationFrameAttachment),
+                             decltype(&CAnimManagerDE::BeginCustomAnimationFrameAttachment)>);
+static_assert(std::is_abstract_v<CAnimManagerDE> &&
+              std::is_same_v<decltype(&CAnimManagerDE::DeleteCustomAnimSequenceInterface), decltype(&CAnimManager::DeleteCustomAnimSequenceInterface)>);
 
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool     standaloneSequenceOperationsOnly = argc == 3 && std::strncmp(argv[2], "--standalone-sequence-operations-", 33) == 0;
+    const unsigned standaloneSequenceOperationsScenario = !standaloneSequenceOperationsOnly                                            ? 0u
+                                                          : std::strcmp(argv[2], "--standalone-sequence-operations-unknown") == 0      ? 1u
+                                                          : std::strcmp(argv[2], "--standalone-sequence-operations-foreign-drop") == 0 ? 2u
+                                                          : std::strcmp(argv[2], "--standalone-sequence-operations-bind-loss") == 0    ? 3u
+                                                          : std::strcmp(argv[2], "--standalone-sequence-operations-copy-loss") == 0    ? 4u
+                                                                                                                                       : 0u;
     const bool     customAnimationCleanupOnly = argc == 3 && std::strncmp(argv[2], "--custom-animation-cleanup-", 27) == 0;
     const unsigned customAnimationCleanupScenario = !customAnimationCleanupOnly                                             ? 0u
                                                     : std::strcmp(argv[2], "--custom-animation-cleanup-returned-loss") == 0 ? 1u
@@ -8480,9 +8500,19 @@ int main(int argc, char** argv)
            animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly || animationHierarchyBankOnly ||
            customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly ||
            privateHierarchyParentOnly || privateHierarchyEmptyOnly || freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly ||
-           privateAnimationFactoriesOnly || customAnimationCleanupOnly) &&
+           privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (standaloneSequenceOperationsOnly)
+    {
+        StandaloneSequenceOperationsOwnerFixture::scenario = standaloneSequenceOperationsScenario;
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        NativeAnimationBlocksOwnedSdk(fixture, &StandaloneSequenceOperationsOwnerFixture::Run);
+        std::puts("Production standalone strict factory dispatch and pure raw delete verified");
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (customAnimationCleanupOnly)
     {
         CustomAnimationCleanupOwnerFixture::scenario = customAnimationCleanupScenario;

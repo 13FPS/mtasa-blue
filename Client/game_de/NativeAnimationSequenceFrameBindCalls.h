@@ -14,7 +14,7 @@ namespace mta::game_de::NativeAnimationSequenceFrameBindCalls
     using Write = ClockResult (*)(std::uintptr_t row, const Value& target, std::uint32_t& exception) noexcept;
     struct Receipt
     {
-        Record         before{}, after{};
+        Record         before{}, after{}, intended{};
         std::uintptr_t row = 0, frames = 0;
         std::size_t    count = 0, bytes = 0;
         std::uint32_t  exceptionCode = 0;

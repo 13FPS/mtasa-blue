@@ -13,6 +13,7 @@
 #include "NativeAnimationSequenceDependencyCalls.h"
 #include "NativeAnimationSequenceFactoryCalls.h"
 #include "NativeAnimationSequenceCleanupCalls.h"
+#include "NativeAnimationSequenceOperationCalls.h"
 #include "NativeAnimationSequencePayloadCalls.h"
 #include "NativeAnimationSequenceNameCalls.h"
 #include "NativeAnimationSequenceNameProfile.h"
@@ -479,13 +480,15 @@ namespace mta::game_de
             receipt.verified = true;
             return finish(ClockResult::Ok);
         }
-        static ClockResult RowResourceShape(const Storage& storage, std::uint64_t generation, Kind kind) noexcept
+        static ClockResult RowResourceShape(const Storage& storage, std::uint64_t generation, Kind kind, bool acceptedPrivateDebt = false) noexcept
         {
             namespace Detail = CustomAnimSequenceStorageDetail;
             if (!generation || generation != storage.generation)
                 return ClockResult::OwnerConflict;
-            if (storage.kind != kind || storage.GetState() != State::LiveUnpublished || storage.hierarchyAffinity || !storage.base || !storage.tag ||
-                !storage.bytes || !(storage.effects & Detail::AllocReturned))
+            if (storage.kind != kind ||
+                (storage.GetState() != State::LiveUnpublished &&
+                 !(acceptedPrivateDebt && storage.GetState() == State::FaultDebt && storage.CanFreeStorage())) ||
+                storage.hierarchyAffinity || !storage.base || !storage.tag || !storage.bytes || !(storage.effects & Detail::AllocReturned))
                 return ClockResult::BindingChanged;
             if (storage.base % alignof(std::uintptr_t) || storage.bytes > (std::numeric_limits<std::uintptr_t>::max)() - storage.base)
                 return ClockResult::BindingChanged;
@@ -772,6 +775,7 @@ namespace mta::game_de
 #else
             const auto entry = write ? write : &Detail::CopyRow;
 #endif
+            receipt.copiedRecord = intent;
             receipt.entered = true;
             result = entry(receipt.targetRow, intent, receipt.exceptionCode);
             // This flag acknowledges the complete raw80 copy, independent of
@@ -992,6 +996,7 @@ namespace mta::game_de
 #else
             const auto entry = write ? write : &Detail::WriteCompressedFrames;
 #endif
+            receipt.intended = expected;
             receipt.entered = true;
             result = entry(receipt.row, target, receipt.exceptionCode);
             receipt.accepted = result == ClockResult::Ok;
@@ -1013,6 +1018,74 @@ namespace mta::game_de
                 return finish(result);
             receipt.verified = true;
             return finish(ClockResult::Ok);
+        }
+        static ClockResult AcknowledgePrivateRow(std::uintptr_t image, Storage& array, std::uint64_t generation, std::size_t index,
+                                                 const NativeAnimationSequenceCopyCalls::Record& intent, bool frameBinding, CheckOwner owner) noexcept
+        {
+            namespace Detail = CustomAnimSequenceStorageDetail;
+            auto result = RowResourceShape(array, generation, Kind::SequenceArray, true);
+            if (result != ClockResult::Ok || index >= array.capacity)
+                return result != ClockResult::Ok ? result : ClockResult::InvalidArgument;
+            if (!Detail::Context::TryEnter())
+                return ClockResult::Busy;
+            Detail::Context::Scope gate;
+            Detail::Heap::Value    before, after;
+            if ((result = Detail::Capture(image, owner, before)) != ClockResult::Ok)
+                return result;
+            if (before.authority != array.origin.authority || before.authorityVtable != array.origin.authorityVtable || !Detail::RowProfileMatches(image) ||
+                (frameBinding && !Detail::FrameBindProfileMatches(image)))
+                return ClockResult::BindingChanged;
+            const auto observe = [&]() noexcept
+            {
+                if (!Detail::Heap::M::PrivateWritable(array.base, array.bytes))
+                    return ClockResult::BindingChanged;
+                std::uint64_t                            cookie = 0;
+                NativeAnimationSequenceCopyCalls::Record current;
+                if (!Detail::Heap::M::Copy(array.base, &cookie, sizeof(cookie)) ||
+                    !Detail::Heap::M::Copy(array.tag + index * Detail::Profile::RowBytes, current.bytes.data(), current.bytes.size()))
+                    return ClockResult::ReadFailure;
+                return cookie == array.capacity && current.bytes == intent.bytes ? ClockResult::Ok : ClockResult::BindingChanged;
+            };
+            if ((result = observe()) != ClockResult::Ok || (result = Detail::Capture(image, owner, after)) != ClockResult::Ok ||
+                (result = observe()) != ClockResult::Ok)
+                return result;
+            if (!Detail::Heap::Same(before, after) || !Detail::RowProfileMatches(image) || (frameBinding && !Detail::FrameBindProfileMatches(image)))
+                return ClockResult::BindingChanged;
+            if ((result = Detail::Context::Owner(image, owner)) != ClockResult::Ok)
+                return result;
+            // Only the controller's actual accepted writer receipt admits this
+            // exact raw intent. Unknown/partial or publication states cannot
+            // reach this read-only ACK, and no field store is ever replayed.
+            auto expected = State::FaultDebt;
+            if (!array.state.compare_exchange_strong(expected, State::LiveUnpublished, std::memory_order_acq_rel) && expected != State::LiveUnpublished)
+                return ClockResult::OwnerConflict;
+            return ClockResult::Ok;
+        }
+        static ClockResult QualifyStandaloneRetirement(std::uintptr_t image, const Storage& array, std::uint64_t generation, CheckOwner owner) noexcept
+        {
+            namespace Detail = CustomAnimSequenceStorageDetail;
+            auto result = RowResourceShape(array, generation, Kind::SequenceArray, true);
+            if (result != ClockResult::Ok)
+                return result;
+            if (!Detail::Context::TryEnter())
+                return ClockResult::Busy;
+            Detail::Context::Scope gate;
+            Detail::Heap::Value    before, after;
+            if ((result = Detail::Capture(image, owner, before)) != ClockResult::Ok)
+                return result;
+            if (before.authority != array.origin.authority || before.authorityVtable != array.origin.authorityVtable ||
+                !Detail::Heap::M::PrivateWritable(array.base, array.bytes))
+                return ClockResult::BindingChanged;
+            std::uint64_t first = 0, last = 0;
+            if (!Detail::Heap::M::Copy(array.base, &first, sizeof(first)))
+                return ClockResult::ReadFailure;
+            if ((result = Detail::Capture(image, owner, after)) != ClockResult::Ok)
+                return result;
+            if (!Detail::Heap::M::Copy(array.base, &last, sizeof(last)))
+                return ClockResult::ReadFailure;
+            if (first != array.capacity || last != first || !Detail::Heap::Same(before, after) || !Detail::Heap::M::PrivateWritable(array.base, array.bytes))
+                return ClockResult::BindingChanged;
+            return Detail::Context::Owner(image, owner);
         }
         static ClockResult WithCleanupArray(std::uintptr_t image, Storage& array, std::uint64_t generation, CheckOwner owner,
                                             NativeAnimationSequenceDependencyCalls::ResolveFrame resolve, void* resolveContext,
@@ -1395,6 +1468,20 @@ namespace mta::game_de
         {
             return NativeCustomAnimSequenceStorageAccess::AttachFreshFrames(image, array, generation, rowIndex, frames, count, root, false, owner, output,
                                                                             write);
+        }
+    }
+    namespace NativeAnimationSequenceOperationCalls
+    {
+        ClockResult AcknowledgeAcceptedRow(std::uintptr_t image, NativeCustomAnimSequenceStorage& array, std::uint64_t generation, std::size_t index,
+                                           const NativeAnimationSequenceCopyCalls::Record& intent, bool frameBinding,
+                                           NativeCustomAnimSequenceStorageCalls::CheckOwner owner) noexcept
+        {
+            return NativeCustomAnimSequenceStorageAccess::AcknowledgePrivateRow(image, array, generation, index, intent, frameBinding, owner);
+        }
+        ClockResult QualifyStandaloneRetirement(std::uintptr_t image, const NativeCustomAnimSequenceStorage& array, std::uint64_t generation,
+                                                NativeCustomAnimSequenceStorageCalls::CheckOwner owner) noexcept
+        {
+            return NativeCustomAnimSequenceStorageAccess::QualifyStandaloneRetirement(image, array, generation, owner);
         }
     }
     namespace NativeAnimationSequenceCleanupCalls

@@ -9,7 +9,9 @@
 #include <cstdint>
 #include <SharedUtil.Defines.h>
 #include "Client/game_sa/CCustomAnimationCleanupSA.h"
+#include "Client/game_sa/CCustomAnimationSequenceOperationSA.h"
 #include "ClassicCleanupFixture.generated.h"
+#include "ClassicAnimationOperationEntries.generated.h"
 #include <cstdio>
 #include <cstdlib>
 #include <new>
@@ -64,17 +66,31 @@ namespace
         } kind;
         void* pointer;
     };
+    void WriteClassicFrames(CAnimBlendSequenceSAInterface* row, std::size_t count, bool root, bool compressed, void* frames)
+    {
+        // Only the native field-write boundary is substituted. The real SA
+        // operation owner creates and retires all ownership/ACK records.
+        row->sNumKeyFrames = static_cast<std::uint16_t>(count);
+        row->sFlags = static_cast<unsigned short>((row->sFlags & ~7u) | 1u | (root ? 2u : 0u) | (compressed ? 4u : 0u));
+        row->pKeyFrames = static_cast<BYTE*>(frames);
+    }
     class Manager final : public ClassicCleanupRejectingManager
     {
     public:
-        Manager() : owner(std::make_shared<Owner>(*this)) { events.reserve(32); }
+        Manager() : owner(std::make_shared<Owner>(*this)), operations(std::make_shared<MtaGame::CustomAnimationSequenceSA::Owner>(*this, &WriteClassicFrames))
+        {
+            events.reserve(32);
+        }
         ~Manager()
         {
             owner->liveOrigin = nullptr;
             // These are only this fixture's unconsumed CPU buffers. Production
             // entered debt is never retried or discharged through this path.
             for (auto* value : frames)
-                delete[] value;
+                if (virtualFrames.count(value))
+                    VirtualFree(value, 0, MEM_RELEASE);
+                else
+                    delete[] value;
             for (auto* value : arrays)
                 MtaGame::CAnimSequenceStorageSA::Free(value);
             for (auto* value : outers)
@@ -90,7 +106,29 @@ namespace
         {
             auto* value = MtaGame::CAnimSequenceStorageSA::Allocate(count);
             arrays.push_back(value);
+            MtaGame::CustomAnimationSequenceSA::RegisterArray(*operations, value, count);
             return value;
+        }
+        std::shared_ptr<MtaGame::CustomAnimationSequenceSA::Frame> IssuedFrame(void* requested = nullptr)
+        {
+            auto frame = MtaGame::CustomAnimationSequenceSA::ReserveFrame(*operations);
+            frame->entered = true;
+            void* memory = VirtualAlloc(requested, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+            Check(memory && (!requested || memory == requested));
+            frames.push_back(static_cast<BYTE*>(memory));
+            virtualFrames.insert(memory);
+            frame->address = memory;
+            frame->returned = true;
+            return frame;
+        }
+        void Attach(CAnimBlendSequenceSAInterface* array, std::size_t index, const std::shared_ptr<MtaGame::CustomAnimationSequenceSA::Frame>& frame)
+        {
+            auto  issued = MtaGame::CustomAnimationSequenceSA::FindArray(*operations, array);
+            auto* row = MtaGame::CAnimSequenceStorageSA::At(array, static_cast<std::uint32_t>(index));
+            MtaGame::CustomAnimationSequenceSA::RegisterBorrowedRow(*operations, issued, row);
+            auto ticket = MtaGame::CustomAnimationSequenceSA::Begin(operations, MtaGame::CustomAnimationSequenceSA::Kind::Attachment, row, nullptr, 1, false,
+                                                                    true, frame->address);
+            Check(ticket->Resume().status == ECustomAnimationSequenceStatus::Complete);
         }
         CAnimBlendHierarchySAInterface* Hierarchy()
         {
@@ -106,13 +144,18 @@ namespace
             // same helper boundary; it does not supply a fake whole game.
             return Begin(owner, request, beginHierarchy);
         }
-        bool HasPendingCustomAnimationCleanup() const noexcept override { return owner->HasPending(); }
+        bool HasPendingCustomAnimationCleanup() const noexcept override { return owner->HasPending() || operations->HasPending(); }
         void RemoveFromUncompressedCache(CAnimBlendHierarchySAInterface* value) override { After({Event::Cache, value}); }
-        void FreeKeyFramesMemory(void* value) override
+        void FreeKeyFramesMemory(void* pKeyFrames) override;
+        void NativeFreeEntry(void* value, DWORD entry)
         {
+            Check(entry == FUNC_CAnimManager_FreeKeyFramesMemory);
             const auto found = std::find(frames.begin(), frames.end(), value);
             Check(found != frames.end());
-            delete[] *found;
+            if (virtualFrames.erase(value))
+                Check(VirtualFree(value, 0, MEM_RELEASE) != FALSE);
+            else
+                delete[] *found;
             frames.erase(found);
             After({Event::Frame, value});
         }
@@ -121,6 +164,8 @@ namespace
             const auto found = std::find(arrays.begin(), arrays.end(), value);
             Check(found != arrays.end());
             MtaGame::CAnimSequenceStorageSA::Free(value);
+            if (const auto issued = MtaGame::CustomAnimationSequenceSA::FindArray(*operations, value))
+                issued->released = true;
             arrays.erase(found);
             After({Event::Array, value});
         }
@@ -144,17 +189,21 @@ namespace
             if (failAfter == events.size())
                 throw std::runtime_error("Fixture operation returned no acknowledgement after its effect");
         }
-        std::shared_ptr<Owner>          owner;
-        CAnimBlendHierarchySAInterface* beginHierarchy = nullptr;
-        std::vector<Event>              events;
-        std::size_t                     failAfter = 0;
-        CCustomAnimationCleanup*        reenter = nullptr;
+        std::shared_ptr<Owner>                                      owner;
+        std::shared_ptr<MtaGame::CustomAnimationSequenceSA::Owner>  operations;
+        std::shared_ptr<MtaGame::CustomAnimationSequenceSA::Owner>& customSequenceOwner = operations;
+        CAnimBlendHierarchySAInterface*                             beginHierarchy = nullptr;
+        std::vector<Event>                                          events;
+        std::size_t                                                 failAfter = 0;
+        CCustomAnimationCleanup*                                    reenter = nullptr;
 
     private:
         std::vector<BYTE*>                           frames;
+        std::set<void*>                              virtualFrames;
         std::vector<CAnimBlendSequenceSAInterface*>  arrays;
         std::vector<CAnimBlendHierarchySAInterface*> outers;
     };
+#include "ClassicAnimationOperationBridge.generated.inl"
     struct Scenario
     {
         explicit Scenario(Manager& manager) : raw(manager.Hierarchy()), array(manager.Array(5))
@@ -327,5 +376,98 @@ int main()
         Check(!manager.owner->codeLifetimeUncertain && manager.owner->liveTickets == 0);
         Check(!manager.HasPendingCustomAnimationCleanup());
     }
+    {
+        Manager manager;
+        auto*   array = manager.Array(1);
+        auto*   hierarchy = manager.Hierarchy();
+        auto    oldFrame = manager.IssuedFrame();
+        manager.Attach(array, 0, oldFrame);
+        MtaGame::CustomAnimationSequenceSA::BeforeInitialize(*manager.operations, array);
+        MtaGame::CAnimSequenceStorageSA::Initialize(*array);
+        MtaGame::CustomAnimationSequenceSA::Initialized(*manager.operations, array);
+        auto ticket = Begin(manager.owner, {&manager, nullptr, array, 1, false}, hierarchy);
+        auto record = manager.owner->records.back();
+        record->frameContext = manager.operations.get();
+        record->identifyFrame = &MtaGame::CustomAnimationSequenceSA::IdentifyFrame;
+        record->releaseFrame = &MtaGame::CustomAnimationSequenceSA::ReleaseFrame;
+        record->extraFrames = MtaGame::CustomAnimationSequenceSA::SnapshotArrayFrames(*manager.operations, array);
+        Check(record->extraFrames.size() == 1 && record->extraFrames[0].identity == oldFrame);
+        Gather(*record);
+        MtaGame::CustomAnimationSequenceSA::CloseArrayClaims(*manager.operations, array);
+        void* base = oldFrame->address;
+        manager.FreeKeyFramesMemory(base);
+        Check(oldFrame->release == Progress::Returned);
+        auto reused = manager.IssuedFrame(base);
+        Check(reused->address == base && reused != oldFrame);
+        const auto before = manager.events.size();
+        Check(ticket->Resume().status == ECustomAnimationCleanupStatus::Complete);
+        Check(manager.events.size() == before + 2 && reused->release == Progress::Waiting);
+        Check(manager.events[before].kind == Event::Array && manager.events[before + 1].kind == Event::Outer);
+        ticket.reset();
+        manager.FreeKeyFramesMemory(reused->address);
+        Check(reused->release == Progress::Returned && !manager.HasPendingCustomAnimationCleanup());
+    }
+    {
+        Manager manager;
+        auto*   first = manager.Array(1);
+        auto*   related = manager.Array(1);
+        auto*   hierarchy = manager.Hierarchy();
+        auto    frame = manager.IssuedFrame();
+        manager.Attach(first, 0, frame);
+        manager.Attach(related, 0, frame);
+        bool roleRefused = false;
+        try
+        {
+            MtaGame::CustomAnimationSequenceSA::Begin(manager.operations, MtaGame::CustomAnimationSequenceSA::Kind::Cleanup, first);
+        }
+        catch (const std::invalid_argument&)
+        {
+            roleRefused = true;
+        }
+        Check(roleRefused);  // Capacity one never changes an ArrayRow purpose.
+        auto ticket = Begin(manager.owner, {&manager, nullptr, first, 1, false}, hierarchy);
+        auto record = manager.owner->records.back();
+        record->frameContext = manager.operations.get();
+        record->identifyFrame = &MtaGame::CustomAnimationSequenceSA::IdentifyFrame;
+        record->releaseFrame = &MtaGame::CustomAnimationSequenceSA::ReleaseFrame;
+        record->extraFrames = MtaGame::CustomAnimationSequenceSA::SnapshotArrayFrames(*manager.operations, first);
+        Gather(*record);
+        MtaGame::CustomAnimationSequenceSA::CloseArrayClaims(*manager.operations, first);
+        const auto before = manager.events.size();
+        Check(ticket->Resume().status == ECustomAnimationCleanupStatus::Pending);
+        Check(manager.events.size() == before && frame->release == Progress::Waiting);
+        MtaGame::CustomAnimationSequenceSA::CloseArrayClaims(*manager.operations, related);
+        Check(ticket->Resume().status == ECustomAnimationCleanupStatus::Complete);
+        ticket.reset();
+        manager.FreeCustomAnimSequences(related);
+        Check(frame->release == Progress::Returned && !manager.HasPendingCustomAnimationCleanup());
+    }
+    {
+        Manager manager;
+        auto    retired = manager.IssuedFrame();
+        void*   base = retired->address;
+        manager.FreeKeyFramesMemory(base);
+        auto  replacement = manager.IssuedFrame(base);
+        auto* array = manager.Array(1);
+        auto* hierarchy = manager.Hierarchy();
+        array->pKeyFrames = static_cast<BYTE*>(replacement->address);
+        auto ticket = Begin(manager.owner, {&manager, nullptr, array, 1, false}, hierarchy);
+        auto record = manager.owner->records.back();
+        record->frameContext = manager.operations.get();
+        record->identifyFrame = &MtaGame::CustomAnimationSequenceSA::IdentifyFrame;
+        record->releaseFrame = &MtaGame::CustomAnimationSequenceSA::ReleaseFrame;
+        Release conflicting;
+        conflicting.address = base;
+        conflicting.identity = retired;
+        record->extraFrames.push_back(conflicting);
+        const auto before = manager.events.size();
+        Check(ticket->Resume().status == ECustomAnimationCleanupStatus::Refused);
+        Check(manager.events.size() == before && !record->gathered && replacement->release == Progress::Waiting);
+        ticket.reset();
+        // The real owner rejected this inconsistent identity set; fixture-only
+        // CPU buffer destruction below is not a fabricated native ACK.
+    }
+    std::puts("Actual classic operation ownership fixture completed");
     std::printf("Passed %u actual classic cleanup journal checks (x86; native engine code not executed)\n", checks);
+    return 0;
 }

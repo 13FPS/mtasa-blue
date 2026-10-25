@@ -31,6 +31,7 @@ namespace mta::game_de
         ClockResult RemoveEmptySequences(std::uintptr_t, const Token&, CheckOwner, Receipt* = nullptr) noexcept;
         ClockResult RemoveQuaternionFlips(std::uintptr_t, const Token&, CheckOwner, PostProcessReceipt* = nullptr, InvokePostProcess = nullptr) noexcept;
         ClockResult CalculateTotalTime(std::uintptr_t, const Token&, CheckOwner, PostProcessReceipt* = nullptr, InvokePostProcess = nullptr) noexcept;
+        ClockResult ResolvePrivate(std::uintptr_t, std::uint64_t, std::uintptr_t, CheckOwner, Token&) noexcept;
         ClockResult Create(std::uintptr_t image, std::uint64_t generation, CheckOwner, Token& output, Receipt* = nullptr) noexcept;
         ClockResult Initialize(std::uintptr_t image, const Token&, CheckOwner, Receipt* = nullptr) noexcept;
         ClockResult Destroy(std::uintptr_t image, const Token&, CheckOwner, Receipt* = nullptr) noexcept;

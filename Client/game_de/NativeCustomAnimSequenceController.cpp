@@ -5,6 +5,7 @@
  ****************************************************************************/
 #include "NativeCustomAnimSequenceController.h"
 #include "NativeCustomAnimSequenceStorageProfile.h"
+#include "NativeAnimationSequenceFactoryCalls.h"
 #include <algorithm>
 #include <iterator>
 #include <limits>
@@ -83,6 +84,36 @@ namespace mta::game_de
             if (entry->issued && entry->storage.OwnerGeneration() == generation && entry->storage.IssuedTag() == issuedTag)
                 return entry;
         return entries.end();
+    }
+    ClockResult NativeCustomAnimSequenceController::ResolveRowAt(std::uintptr_t image, std::uint64_t generation, std::uintptr_t originalArray,
+                                                                 std::uint32_t index, CheckOwner owner, bool& present,
+                                                                 NativeAnimationSequenceReferenceToken& output) noexcept
+    {
+        const auto requestedGeneration = generation;
+        const auto requestedArray = originalArray;
+        const auto requestedIndex = index;
+        if (operation.test_and_set(std::memory_order_acquire))
+            return ClockResult::Busy;
+        const CustomAnimSequenceControllerDetail::Operation held{operation};
+        if (!requestedGeneration || ownerGeneration != requestedGeneration || stopping)
+            return ClockResult::OwnerConflict;
+        if (!owner)
+            return ClockResult::NotInitialized;
+        const auto checked = owner();
+        if (checked != ClockResult::Ok)
+            return checked;
+        const auto array = Find(requestedGeneration, requestedArray);
+        if (array == entries.end() || array->storage.GetKind() != Storage::Kind::SequenceArray)
+            return ClockResult::BindingChanged;
+        std::size_t capacity = 0;
+        const auto  result = NativeAnimationSequenceFactoryCalls::ReadCapacity(image, array->storage, requestedGeneration, owner, capacity);
+        if (result != ClockResult::Ok)
+            return result;
+        const bool found = static_cast<std::size_t>(requestedIndex) < capacity;
+        if (found)
+            output = {requestedGeneration, requestedArray, static_cast<std::size_t>(requestedIndex)};
+        present = found;
+        return ClockResult::Ok;
     }
     ClockResult NativeCustomAnimSequenceController::Allocate(std::uintptr_t image, std::uint64_t generation, std::size_t capacity, CheckOwner owner,
                                                              std::uintptr_t& output, Receipt* receipt, InvokeMalloc invoke) noexcept

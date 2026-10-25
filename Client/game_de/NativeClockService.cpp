@@ -251,6 +251,9 @@ namespace mta::game_de
             ClockResult ReadAnimationSequenceHash(const NativeAnimationSequenceReferenceToken&, std::uint32_t&) noexcept override;
             ClockResult CopyAnimationSequenceProperties(const NativeAnimationSequenceReferenceToken&, std::uintptr_t) noexcept override;
             ClockResult ReadAnimationSequenceFrame(const NativeAnimationSequenceReferenceToken&, std::size_t, std::uint32_t, std::uintptr_t&) noexcept override;
+            ClockResult ResolvePrivateAnimationHierarchyReference(std::uint64_t, std::uintptr_t, NativeAnimationHierarchyReferenceToken&) noexcept override;
+            ClockResult ResolvePrivateAnimationSequenceAt(std::uint64_t, std::uintptr_t, std::uint32_t, bool&,
+                                                          NativeAnimationSequenceReferenceToken&) noexcept override;
             ClockResult CreatePrivateAnimationHierarchy(std::uint64_t, NativeAnimationHierarchyReferenceToken&) noexcept override;
             ClockResult InitializePrivateAnimationHierarchy(const NativeAnimationHierarchyReferenceToken&) noexcept override;
             ClockResult DestroyPrivateAnimationHierarchy(const NativeAnimationHierarchyReferenceToken&) noexcept override;
@@ -2856,6 +2859,55 @@ namespace mta::game_de
                 return result;
             return request.ownerGeneration && request.ownerGeneration == runtime.generation.load() ? ClockResult::Ok : ClockResult::OwnerConflict;
         }
+        ClockResult NativeAccess::ResolvePrivateAnimationHierarchyReference(std::uint64_t generation, std::uintptr_t locator,
+                                                                            NativeAnimationHierarchyReferenceToken& output) noexcept
+        {
+            // A generic bank read cannot adopt a private CPU hierarchy. The
+            // owning controller must resolve this original issued record.
+            const NativeAnimationHierarchyReferenceToken request{generation, locator};
+            auto                                         result = CheckAnimationHierarchyRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            NativeAnimationHierarchyReferenceToken next;
+            result = runtime.privateHierarchies.ResolvePrivate(runtime.image, request.ownerGeneration, request.locator, &CheckTimingOwner, next);
+            PublishCustomAnimationSequenceDebt(request.ownerGeneration);
+            if (result == ClockResult::Ok)
+                result = CheckAnimationHierarchyRequest(request);
+            if (runtime.privateHierarchies.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            if (result == ClockResult::Ok)
+                output = next;
+            return result;
+        }
+
+        ClockResult NativeAccess::ResolvePrivateAnimationSequenceAt(std::uint64_t generation, std::uintptr_t firstTag, std::uint32_t index, bool& present,
+                                                                    NativeAnimationSequenceReferenceToken& output) noexcept
+        {
+            // Source At returns null for an out-of-capacity index only on a
+            // qualified original array. Keep that separate from owner loss.
+            const auto                                  requestedIndex = index;
+            const NativeAnimationSequenceReferenceToken request{generation, firstTag, requestedIndex};
+            auto                                        result = CheckCustomSequenceRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            bool                                  found = false;
+            NativeAnimationSequenceReferenceToken next;
+            result =
+                runtime.customSequences.ResolveRowAt(runtime.image, request.ownerGeneration, request.firstTag, requestedIndex, &CheckTimingOwner, found, next);
+            PublishCustomAnimationSequenceDebt(request.ownerGeneration);
+            if (result == ClockResult::Ok)
+                result = CheckCustomSequenceRequest(request);
+            if (runtime.customSequences.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            if (result == ClockResult::Ok)
+            {
+                present = found;
+                if (found)
+                    output = next;
+            }
+            return result;
+        }
+
         ClockResult NativeAccess::CreatePrivateAnimationHierarchy(std::uint64_t generation, NativeAnimationHierarchyReferenceToken& output) noexcept
         {
             auto result = CheckTimingOwner();

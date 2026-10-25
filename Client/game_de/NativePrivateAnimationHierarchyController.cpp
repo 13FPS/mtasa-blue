@@ -60,6 +60,24 @@ namespace mta::game_de
                                        });
         recovery.store(!entries.empty() && (stopping || fault), std::memory_order_release);
     }
+    ClockResult NativePrivateAnimationHierarchyController::ResolvePrivate(std::uintptr_t image, std::uint64_t generation, std::uintptr_t locator,
+                                                                          CheckOwner owner, Token& output) noexcept
+    {
+        const Token request{generation, locator};
+        if (!request.ownerGeneration || !request.locator)
+            return ClockResult::InvalidArgument;
+        Values values;
+        // This controller's Read begins at its actual private list. Generic
+        // bank routing is deliberately unavailable to a custom factory; a
+        // matching readable image address cannot substitute for ownership.
+        const auto result = Read(image, request, owner, values);
+        if (result != ClockResult::Ok)
+            return result;
+        if (values.interfaceAddress != request.locator)
+            return ClockResult::BindingChanged;
+        output = request;
+        return ClockResult::Ok;
+    }
     ClockResult NativePrivateAnimationHierarchyController::Create(std::uintptr_t image, std::uint64_t generation, CheckOwner owner, Token& output,
                                                                   Receipt* receipt) noexcept
     {

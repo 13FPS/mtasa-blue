@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess')]
+    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -54,6 +54,9 @@ $record['privateHierarchyScalarPinnedRefusalTested']=$false
 $record['nativePrivateHierarchyOwnerTested']=$false
 $record['actualPrivateHierarchySdkOwnerTested']=$false
 $record['privateHierarchyRetainedLifetimeTested']=$false
+$record['nativePrivateAnimationFactoryOwnerTested']=$false
+$record['actualPrivateAnimationFactorySdkOwnerTested']=$false
+$record['privateAnimationFactoryOutputBookendsTested']=$false
 $record['nativePrivateHierarchyPostprocessOwnerTested']=$false
 $record['actualPrivateHierarchyPostprocessSdkOwnerTested']=$false
 $record['privateHierarchyPostprocessRecoveryTested']=$false
@@ -453,6 +456,7 @@ try {
     $sourceNames += @('Client/game_de/NativeAnimationSequenceName.h','Client/game_de/NativeAnimationSequenceName.cpp','Client/game_de/NativeAnimationSequenceNameCalls.h','Client/game_de/NativeAnimationSequenceNameProfile.h','Tests/definitive/NativeCustomAnimationSequenceNameOwnerTests.inl')
     $sourceNames += @('Client/game_de/NativeAnimationSequenceFrameBindCalls.h','Client/game_de/NativeAnimationSequenceFrameBindProfile.h','Tests/definitive/NativeFreshCompressedSequenceOwnerTests.inl')
     $sourceNames += @('Client/game_de/NativePrivateAnimationHierarchyStorage.h','Client/game_de/NativePrivateAnimationHierarchyStorage.cpp','Client/game_de/NativePrivateAnimationHierarchyController.h','Client/game_de/NativePrivateAnimationHierarchyController.cpp','Tests/definitive/NativePrivateHierarchyOwnerTests.inl')
+    $sourceNames += @('Tests/definitive/NativePrivateAnimationFactoryOwnerTests.inl','Tests/definitive/Write-PrivateAnimationFactoryFixture.ps1','Client/game_de/NativeAnimationSequenceFactoryCalls.h','Client/game_de/NativeModelReferenceMap.h')
     $sourceNames += @('Tests/definitive/NativePrivateHierarchyPostProcessOwnerTests.inl','Client/game_de/NativePrivateAnimationHierarchyPostProcessProfile.h','Client/game_de/NativeAnimationSequencePayloadCalls.h')
     $sourceNames += @('Tests/definitive/NativeFreshUncompressedSequenceOwnerTests.inl')
     $sourceNames += @('Tests/definitive/NativePrivateHierarchyEmptyOwnerTests.inl')
@@ -669,6 +673,15 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
 
     # Use the actual qualified profile literal; keep generated fixture bytes
     # and their production source hash as durable evidence after formatting.
+    . (Join-Path $PSScriptRoot 'Write-PrivateAnimationFactoryFixture.ps1')
+    $factoryFixture=Write-PrivateAnimationFactoryFixture $taskRoot (Join-Path $scratchRoot 'PrivateAnimationFactoryManager.generated.h')
+    $factoryEvidence=@()
+    foreach($generated in @(Get-ChildItem -LiteralPath $scratchRoot -File | Where-Object{$_.Name -like 'PrivateAnimationFactoryManager.generated.h*'})){
+        $durable=Join-Path $outputRoot $generated.Name
+        Copy-Item -LiteralPath $generated.FullName -Destination $durable
+        $factoryEvidence+=@{path=$durable;sha256=(Sha $durable)}
+    }
+    $record['privateAnimationFactoryManagerFixture']=[ordered]@{metadata=$factoryFixture;files=$factoryEvidence}
     $privateSource=Join-Path $taskRoot 'Client/game_de/NativePrivateAnimationHierarchyStorage.cpp'
     $privateText=[IO.File]::ReadAllText($privateSource)
     $privateMatch=[regex]::Match($privateText,'(?s)inline\s+constexpr\s+unsigned\s+char\s+CacheProof\s*\[\s*\]\s*=\s*\{(?<values>.*?)\};')
@@ -855,6 +868,7 @@ namespace ClockPrivateHierarchyParentWriteFixture {
     if ($Scope -eq 'WorldLine') { $fixtureArguments += '--world-line' }
     if ($Scope -eq 'WorldGround') { $fixtureArguments += '--world-ground' }
     if ($Scope -eq 'ConstructorServices') { $fixtureArguments += '--constructor-services' }
+    if ($Scope -eq 'PrivateAnimationFactories') { $fixtureArguments += '--private-animation-factories' }
     if ($Scope -eq 'FreshUncompressedSequence') { $fixtureArguments += '--fresh-uncompressed-sequence' }
     if ($Scope -eq 'FreshCompressedSequence') { $fixtureArguments += '--fresh-compressed-sequence' }
     if ($Scope -eq 'CustomAnimationSequenceName') { $fixtureArguments += '--custom-animation-sequence-name' }
@@ -1097,7 +1111,13 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
         if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
     }
-    if($Scope -in @('PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess')){
+    if($Scope -eq 'PrivateAnimationFactories'){
+        $record.nativePrivateAnimationFactoryOwnerTested=$text.Contains('Production native private animation factory owner fixture completed')
+        $record.actualPrivateAnimationFactorySdkOwnerTested=$text.Contains('Production actual private animation factory SDK owner fixture completed')
+        $record.privateAnimationFactoryOutputBookendsTested=$text.Contains('Production private animation factory output bookends completed')
+        if(-not($record.nativePrivateAnimationFactoryOwnerTested -and $record.actualPrivateAnimationFactorySdkOwnerTested -and $record.privateAnimationFactoryOutputBookendsTested)){throw 'Private factory selected scope incomplete'}
+        $record.productionNativeCallbackTested=$true
+    } elseif($Scope -in @('PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess')){
         $record.nativePrivateHierarchyPostprocessOwnerTested=$text.Contains('Production native private hierarchy postprocess owner fixture completed')
         $record.actualPrivateHierarchyPostprocessSdkOwnerTested=$text.Contains('Production actual private hierarchy postprocess SDK owner fixture completed')
         $record.privateHierarchyPostprocessRecoveryTested=(@($texts|Where-Object{$_.Contains('Production private hierarchy postprocess entered failure recovered without replay')}).Count -eq 2)

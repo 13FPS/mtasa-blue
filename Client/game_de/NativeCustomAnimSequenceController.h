@@ -60,6 +60,8 @@ namespace mta::game_de
         NativeCustomAnimSequenceController(NativeCustomAnimSequenceController&&) = delete;
         NativeCustomAnimSequenceController& operator=(NativeCustomAnimSequenceController&&) = delete;
 
+        ClockResult ResolveRowAt(std::uintptr_t, std::uint64_t, std::uintptr_t, std::uint32_t, CheckOwner, bool&,
+                                 NativeAnimationSequenceReferenceToken&) noexcept;
         ClockResult Allocate(std::uintptr_t image, std::uint64_t generation, std::size_t capacity, CheckOwner, std::uintptr_t& output, Receipt* = nullptr,
                              InvokeMalloc = nullptr) noexcept;
         ClockResult FreeStorage(std::uintptr_t image, std::uint64_t generation, std::uintptr_t issuedTag, CheckOwner, Receipt* = nullptr,

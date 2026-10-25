@@ -43,6 +43,22 @@ namespace mta::game_de
         Require(native.SetAnimationSequenceBoneTag(token, value), "SetBoneTag");
     }
 
+    void CAnimBlendSequenceDE::SetKeyFrames(std::size_t count, bool root, bool compressed, void* frames)
+    {
+        const auto token = reference;
+        const auto requestedCount = count;
+        const bool requestedRoot = root;
+        const bool requestedCompressed = compressed;
+        const auto originalBase = reinterpret_cast<std::uintptr_t>(frames);
+        // Current MTA construction supplies fresh rows and original buffers.
+        // Delegate only to independently qualified backend itineraries: the
+        // owner refuses replacement/allocation/unknown state, validates full
+        // extent before WORD storage and retains entered-failure debt.
+        const auto result = requestedCompressed ? native.PrepareFreshCompressedAnimationSequence(token, requestedCount, requestedRoot, originalBase)
+                                                : native.PrepareFreshUncompressedAnimationSequence(token, requestedCount, requestedRoot, originalBase);
+        Require(result, "SetKeyFrames");
+    }
+
     std::uint32_t CAnimBlendSequenceDE::GetHash()
     {
         const auto    token = reference;

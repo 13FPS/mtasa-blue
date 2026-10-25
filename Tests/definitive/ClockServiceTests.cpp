@@ -3384,6 +3384,49 @@ namespace ClockAnimationHierarchyBankOwnerTest
     }
 }
 
+#include "../../Client/game_de/NativeModelReferenceMap.h"
+#include "../../Client/game_de/NativeModelReferenceHeap.h"
+namespace ClockPrivateFactoryOwnerReadFixture
+{
+    std::uintptr_t address = 0;
+    unsigned       reads = 0;
+    void (*afterCopy)() noexcept = nullptr;
+}
+namespace mta::game_de::NativeModelReferenceMap
+{
+    bool PrivateFactoryOwnerFixtureCopy(std::uintptr_t address, void* output, std::size_t bytes) noexcept
+    {
+        if (!Copy(address, output, bytes))
+            return false;
+        if (address == ClockPrivateFactoryOwnerReadFixture::address && bytes == sizeof(std::uint64_t))
+        {
+            ++ClockPrivateFactoryOwnerReadFixture::reads;
+            if (const auto after = ClockPrivateFactoryOwnerReadFixture::afterCopy)
+            {
+                ClockPrivateFactoryOwnerReadFixture::afterCopy = nullptr;
+                after();
+            }
+        }
+        return true;
+    }
+}
+
+namespace mta::game_de::PrivateFactoryOwnerFixtureMap
+{
+    using namespace NativeModelReferenceMap;
+    bool Copy(std::uintptr_t address, void* output, std::size_t bytes) noexcept
+    {
+        return NativeModelReferenceMap::PrivateFactoryOwnerFixtureCopy(address, output, bytes);
+    }
+}
+namespace mta::game_de::PrivateFactoryOwnerFixtureHeap
+{
+    // Reuse every genuine heap function and Value type. Only direct private
+    // copies in this included fixture TU select the observing map alias.
+    using namespace NativeModelReferenceHeap;
+    namespace M = PrivateFactoryOwnerFixtureMap;
+}
+
 #define MTA_DE_CUSTOM_ANIM_SEQUENCE_MALLOC_INVOKE  ::NativeCustomAnimSequenceStorageFixture::Malloc
 #define MTA_DE_CUSTOM_ANIM_SEQUENCE_FREE_INVOKE    ::NativeCustomAnimSequenceStorageFixture::Free
 #define MTA_DE_ANIMATION_SEQUENCE_ROW_WRITE        ClockSequenceRowOwnerTest::Write
@@ -3391,7 +3434,11 @@ namespace ClockAnimationHierarchyBankOwnerTest
 #define MTA_DE_ANIMATION_SEQUENCE_NAME_WRITE       ClockSequenceNameOwnerTest::Write
 #define MTA_DE_ANIMATION_SEQUENCE_FRAME_BIND_WRITE ClockFreshCompressedSequenceOwnerTest::Write
 #define CheckFramePointer                          ClockRowsOriginalFrameQualifier
+// Delegate actual private-page copying; only this selected fixture cookie
+// schedules deterministic caller/admission changes after a real OS read.
+#define NativeModelReferenceHeap PrivateFactoryOwnerFixtureHeap
 #include "../../Client/game_de/NativeCustomAnimSequenceStorage.cpp"
+#undef NativeModelReferenceHeap
 #undef CheckFramePointer
 #undef MTA_DE_ANIMATION_SEQUENCE_ROW_WRITE
 #undef MTA_DE_ANIMATION_SEQUENCE_COPY_WRITE
@@ -8322,10 +8369,13 @@ namespace
 #include "NativePrivateHierarchyEmptyOwnerTests.inl"
 #include "NativeFreshUncompressedSequenceOwnerTests.inl"
 #include "NativePrivateHierarchyPostProcessOwnerTests.inl"
+#include "PrivateAnimationFactoryManager.generated.h"
+#include "NativePrivateAnimationFactoryOwnerTests.inl"
 
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool     privateAnimationFactoriesOnly = argc == 3 && std::strcmp(argv[2], "--private-animation-factories") == 0;
     const bool     privateHierarchyPostprocessOnly = argc == 3 && std::strncmp(argv[2], "--private-hierarchy-postprocess-", 32) == 0;
     const unsigned privateHierarchyPostprocessScenario = !privateHierarchyPostprocessOnly                                       ? 0u
                                                          : std::strcmp(argv[2], "--private-hierarchy-postprocess-unknown") == 0 ? 1u
@@ -8421,9 +8471,18 @@ int main(int argc, char** argv)
            animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly ||
            animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly || animationHierarchyBankOnly ||
            customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly ||
-           privateHierarchyParentOnly || privateHierarchyEmptyOnly || freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly) &&
+           privateHierarchyParentOnly || privateHierarchyEmptyOnly || freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly ||
+           privateAnimationFactoriesOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (privateAnimationFactoriesOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        NativeAnimationBlocksOwnedSdk(fixture, &PrivateAnimationFactoryOwnerFixture::Run<PrivateAnimationFactoryManagerReceiver>);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (privateHierarchyPostprocessOnly)
     {
         PrivateHierarchyPostProcessOwnerFixture::scenario = privateHierarchyPostprocessScenario;

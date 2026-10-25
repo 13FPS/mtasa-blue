@@ -82,5 +82,13 @@ namespace mta::game_de
         {
             return ClockResult::NotInitialized;
         }
+        // Only a qualified current original allocation can report an absent
+        // row for a full DWORD index. Owner/profile failure is not absence.
+        // A false present result leaves the output token unchanged.
+        virtual ClockResult ResolvePrivateAnimationSequenceAt(std::uint64_t, std::uintptr_t, std::uint32_t, bool&,
+                                                              NativeAnimationSequenceReferenceToken&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
     };
 }

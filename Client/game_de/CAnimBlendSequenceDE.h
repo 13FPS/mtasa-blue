@@ -17,6 +17,7 @@ namespace mta::game_de
         void                           Initialize() override;
         void                           SetName(const char*) override;
         void                           SetBoneTag(std::int32_t) override;
+        void                           SetKeyFrames(std::size_t, bool, bool, void*) override;
         void                           CopySequenceProperties(CAnimBlendSequenceSAInterface*) override;
         void*                          GetKeyFrame(std::size_t, std::uint32_t) override;
         std::uint32_t                  GetHash() override;
@@ -25,6 +26,10 @@ namespace mta::game_de
         unsigned short                 GetKeyFramesCount() override;
         bool                           IsBigChunkForAllSequences() override;
         CAnimBlendSequenceSAInterface* GetInterface() override;
+
+        // Only the actual same-owner manager factory can create this CPU
+        // facade. Its destructor never retires native hierarchy/frame data.
+        friend class CAnimManagerDE;
 
     protected:
         CAnimBlendSequenceDE(NativeAnimationSequenceAccess& value, const NativeAnimationSequenceReferenceToken& token) noexcept
@@ -38,7 +43,11 @@ namespace mta::game_de
         const NativeAnimationSequenceReferenceToken reference;
     };
 
-    // General frame assignment retains its genuine pure contract. These
-    // qualified private-row operations expose no complete custom factory.
-    static_assert(std::is_abstract_v<CAnimBlendSequenceDE> && std::is_base_of_v<CAnimBlendSequence, CAnimBlendSequenceDE>);
+    // SetKeyFrames supports only qualified fresh supplied-buffer construction;
+    // repeated/unknown/native-allocation domains explicitly refuse. This does
+    // not reconstruct the original general compression predicate or publish a
+    // factory. The complete method surface keeps construction protected.
+    static_assert(!std::is_abstract_v<CAnimBlendSequenceDE> && std::is_base_of_v<CAnimBlendSequence, CAnimBlendSequenceDE>);
+    static_assert(!std::is_default_constructible_v<CAnimBlendSequenceDE> &&
+                  !std::is_constructible_v<CAnimBlendSequenceDE, NativeAnimationSequenceAccess&, const NativeAnimationSequenceReferenceToken&>);
 }

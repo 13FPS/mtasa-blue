@@ -5,11 +5,14 @@
  ****************************************************************************/
 #include "CAnimManagerDE.h"
 #include "CAnimBlockRequestDE.h"
+#include "CAnimBlendHierarchyDE.h"
+#include "CAnimBlendSequenceDE.h"
 #include "CKeyGenDE.h"
 #include <algorithm>
 #include <cstring>
 #include <game/CAnimGatewayNames.h>
 #include <stdexcept>
+#include <exception>
 #include <string>
 namespace mta::game_de
 {
@@ -76,6 +79,89 @@ namespace mta::game_de
         if (dynamic_cast<void*>(&manager) != dynamic_cast<void*>(&storage))
             throw std::invalid_argument("DE custom animation storage requires one native owner for manager and storage");
         storageAccess = &storage;
+    }
+    CAnimManagerDE::CAnimManagerDE(NativeAnimationManagerAccess& manager, NativeAnimationHierarchyAccess& hierarchy, NativeAnimationSequenceAccess& sequence,
+                                   NativeAnimationSequenceStorageAccess& storage, std::uint64_t generation)
+        : CAnimManagerDE(manager, storage, generation)
+    {
+        const auto completeOwner = dynamic_cast<void*>(&manager);
+        if (completeOwner != dynamic_cast<void*>(&hierarchy) || completeOwner != dynamic_cast<void*>(&sequence))
+            throw std::invalid_argument("DE private animation factories require one native owner for every service");
+        hierarchyAccess = &hierarchy;
+        sequenceAccess = &sequence;
+    }
+    std::unique_ptr<CAnimBlendHierarchy> CAnimManagerDE::GetCustomAnimBlendHierarchy()
+    {
+        if (!hierarchyAccess)
+            Require(ClockResult::NotInitialized, "GetCustomAnimBlendHierarchy");
+        const auto                             generation = ownerGeneration;
+        NativeAnimationHierarchyReferenceToken token;
+        Require(hierarchyAccess->CreatePrivateAnimationHierarchy(generation, token), "GetCustomAnimBlendHierarchy");
+        if (!generation || token.ownerGeneration != generation || !token.locator)
+            Require(ClockResult::BindingChanged, "GetCustomAnimBlendHierarchy");
+        try
+        {
+            return std::unique_ptr<CAnimBlendHierarchy>(new CAnimBlendHierarchyDE(*hierarchyAccess, token));
+        }
+        catch (...)
+        {
+            // The owner issued a real CPU40 record before facade allocation.
+            // Its matching service owns cleanup and any still-outstanding
+            // debt after lost acknowledgement; absence is not cleanup success.
+            const auto cleanup = hierarchyAccess->DestroyPrivateAnimationHierarchy(token);
+            if (cleanup != ClockResult::Ok)
+                std::throw_with_nested(std::runtime_error("DE hierarchy facade construction failed; owner cleanup acknowledgement refused: " +
+                                                          std::to_string(static_cast<unsigned>(cleanup))));
+            throw;
+        }
+    }
+    std::unique_ptr<CAnimBlendHierarchy> CAnimManagerDE::GetCustomAnimBlendHierarchy(CAnimBlendHierarchySAInterface* hierarchy)
+    {
+        if (!hierarchy)
+            return nullptr;
+        if (!hierarchyAccess)
+            Require(ClockResult::NotInitialized, "GetCustomAnimBlendHierarchy");
+        const auto                             generation = ownerGeneration;
+        const auto                             locator = reinterpret_cast<std::uintptr_t>(hierarchy);
+        NativeAnimationHierarchyReferenceToken token;
+        Require(hierarchyAccess->ResolvePrivateAnimationHierarchyReference(generation, locator, token), "GetCustomAnimBlendHierarchy");
+        if (!generation || token.ownerGeneration != generation || token.locator != locator)
+            Require(ClockResult::BindingChanged, "GetCustomAnimBlendHierarchy");
+        // This is a CPU-only borrowed clone. Allocation failure cannot delete
+        // the pre-existing native owner's record or grant a new lifetime.
+        return std::unique_ptr<CAnimBlendHierarchy>(new CAnimBlendHierarchyDE(*hierarchyAccess, token));
+    }
+    void CAnimManagerDE::DeleteCustomAnimHierarchyInterface(CAnimBlendHierarchySAInterface* hierarchy)
+    {
+        // Preserve classic delete-null's no-resource CPU path. A nonnull tag
+        // must reach the actual private command/retirement service.
+        if (!hierarchy)
+            return;
+        if (!hierarchyAccess)
+            Require(ClockResult::NotInitialized, "DeleteCustomAnimHierarchyInterface");
+        const NativeAnimationHierarchyReferenceToken token{ownerGeneration, reinterpret_cast<std::uintptr_t>(hierarchy)};
+        Require(hierarchyAccess->DestroyPrivateAnimationHierarchy(token), "DeleteCustomAnimHierarchyInterface");
+    }
+    std::unique_ptr<CAnimBlendSequence> CAnimManagerDE::GetCustomAnimBlendSequenceAt(CAnimBlendSequenceSAInterface* originalArray, DWORD index)
+    {
+        if (!originalArray)
+            return nullptr;
+        if (!sequenceAccess)
+            Require(ClockResult::NotInitialized, "GetCustomAnimBlendSequenceAt");
+        static_assert(sizeof(index) == sizeof(std::uint32_t));
+        const auto                            generation = ownerGeneration;
+        const auto                            firstTag = reinterpret_cast<std::uintptr_t>(originalArray);
+        const auto                            ordinal = static_cast<std::uint32_t>(index);
+        bool                                  present = false;
+        NativeAnimationSequenceReferenceToken token;
+        Require(sequenceAccess->ResolvePrivateAnimationSequenceAt(generation, firstTag, ordinal, present, token), "GetCustomAnimBlendSequenceAt");
+        // Only the qualified owner's explicit successful absence represents
+        // source At's out-of-capacity null. Binding failures remain failures.
+        if (!present)
+            return nullptr;
+        if (!generation || token.ownerGeneration != generation || token.firstTag != firstTag || token.index != static_cast<std::size_t>(ordinal))
+            Require(ClockResult::BindingChanged, "GetCustomAnimBlendSequenceAt");
+        return std::unique_ptr<CAnimBlendSequence>(new CAnimBlendSequenceDE(*sequenceAccess, token));
     }
     CAnimBlendSequenceSAInterface* CAnimManagerDE::AllocateCustomAnimSequences(std::size_t capacity)
     {

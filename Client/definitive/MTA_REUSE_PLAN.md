@@ -5,6 +5,22 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+MTA's current fresh `SetKeyFrames` construction now selects the existing
+compressed or uncompressed owner builder. It preserves full counts and the
+original buffer owner, with explicit refusal for repeated, null or foreign
+requests. This covers the actual common `AttachFrames` and `SequenceOwner`
+path without inventing the original general setter's removed condition.
+
+Four manager methods create, borrow and delete private hierarchy facades or
+return a row facade from the original owned array. All providers must belong
+to the same backend owner. Hierarchy resolution excludes bank adoption;
+row resolution qualifies the original cookie, full capacity and heap without
+reading child-zero metadata. A legitimate DWORD out-of-range result remains
+distinct from owner failure. CPU allocation failure cleans a newly created
+hierarchy through its real owner, while cloning failure preserves existing
+resources. The manager is still partial, and parser exposure remains gated on
+the separate durable cleanup ticket and standalone sequence lifetime boundary.
+
 The same private frame builder also accepts the saved loader's separate
 uncompressed representation: 20 bytes per child frame and 32 per root frame.
 It qualifies the original live frame allocation and full-width extent before
@@ -20,7 +36,7 @@ records. The signed native count domains and full frame spans are checked
 before entry. Empty receivers use the helpers' own empty branches. An entered
 failure keeps its effects and blocks replay; acknowledged cleanup can still
 detach the known private edge. This completes the facade's method surface,
-while its public factory and engine publication remain separate requirements.
+while manager completeness and engine publication remain separate requirements.
 
 MTA's cache removal and sequence removal now have qualified empty domains.
 A current private hierarchy with a zero cache link needs no cache operation;
@@ -32,7 +48,7 @@ failed postflight acknowledgement without replay or rollback.
 
 This implements the source's empty branches without entering a native cache
 or heap routine. Nonempty child disposal still requires its own acknowledged
-resource cleanup protocol. No public factory is completed here.
+resource cleanup protocol. These empty branches do not provide that protocol.
 
 Private hierarchy count and pointer setters now use a durable parent command.
 The full WORD count remains independent of array capacity. Attachment holds
@@ -44,7 +60,7 @@ preserving the source count. Linked initialization is refused.
 
 The runtime co-owns both controllers. Retirement follows sequence-then-parent
 lock order within one shared gate and retains foreign/publication uncertainty.
-These operations complete no public DE factory or engine publication path.
+These operations grant no engine publication or complete MTA startup.
 
 The actual IFP parser now populates rows through their original owned array
 before attaching that array to its hierarchy. The SDK requires an owned-array
@@ -57,7 +73,7 @@ before parent operations. Held resources cannot be freed or have their
 frame pointers replaced; row frame spans are checked against the real owned
 buffer. A borrowed epoch shares one native gate. Callback success supplies no
 parent acknowledgement; the physical parent protocol supplies its own durable
-receipt. The public DE factory remains separate work. The SDK addition requires
+receipt. Complete manager integration remains separate work. The SDK addition requires
 rebuilt source consumers.
 
 Hierarchy naming now uses the addressed classic `SetName` body: ASCII name
@@ -84,8 +100,8 @@ These records share the existing callback generation and cleanup debt group.
 Only a known empty receiver that has never been published can be deleted;
 unknown children, cache links or publication intent retain its owner. This
 receiver uses plain CPU deletion after the private parent protocol detaches
-its known edge. It supplies no native destructor or complete public hierarchy
-factory. The common parser's child-detachment protocol remains separate work.
+its known edge. It supplies no native destructor or complete parser cleanup.
+The common parser's child-detachment protocol remains separate work.
 
 An explicit private builder now prepares fresh compressed sequence frames on
 the same allocation owner. It requires a fresh row, the exact original owned
@@ -96,9 +112,9 @@ name, bone, unrelated bytes and both allocation journals intact.
 
 The builder does not infer shared-memory bit08 from a supplied pointer, read
 or initialize payload, allocate/free buffers, or publish to the engine. It is
-separate from the general `SetKeyFrames` operation, which remains pure while
-its original removed compression condition is unresolved. Entered failure
-retains cleanup authority and prevents replay.
+used by the SDK only for qualified fresh construction. The original general
+replacement/compression condition remains unresolved, and those domains
+refuse. Entered failure retains cleanup authority and prevents replay.
 
 Private sequence naming preserves raw NUL-terminated spelling within the
 native 64-byte field; overlong names are refused without truncation. The
@@ -112,7 +128,8 @@ This operation uses the existing private allocation journal and shared row
 state. It does not run the association initializer, name matcher, fallback
 name-pool machinery or a cache update. Accepted stores remain acknowledged
 after a later refusal, with no replay or rollback. General frame assignment
-remains pure; naming does not complete a custom factory or native publication.
+outside the qualified fresh domain refuses; naming does not complete a public
+custom factory or native publication.
 
 The native-bank hierarchy facade supplies the nine existing read operations
 through the current callback owner. Scalar snapshots preserve raw hash, WORD

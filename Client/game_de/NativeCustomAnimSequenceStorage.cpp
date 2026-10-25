@@ -11,6 +11,7 @@
 #include "NativeAnimationSequenceCopyCalls.h"
 #include "NativeAnimationSequenceFrameViewCalls.h"
 #include "NativeAnimationSequenceDependencyCalls.h"
+#include "NativeAnimationSequenceFactoryCalls.h"
 #include "NativeAnimationSequencePayloadCalls.h"
 #include "NativeAnimationSequenceNameCalls.h"
 #include "NativeAnimationSequenceNameProfile.h"
@@ -497,6 +498,45 @@ namespace mta::game_de
             }
             else if (storage.tag != storage.base)
                 return ClockResult::BindingChanged;
+            return ClockResult::Ok;
+        }
+        static ClockResult ReadArrayCapacity(std::uintptr_t image, const Storage& storage, std::uint64_t generation, CheckOwner owner,
+                                             std::size_t& output) noexcept
+        {
+            namespace Detail = CustomAnimSequenceStorageDetail;
+            if (!owner)
+                return ClockResult::NotInitialized;
+            auto result = RowResourceShape(storage, generation, Kind::SequenceArray);
+            if (result != ClockResult::Ok)
+                return result;
+            if (!Detail::Context::TryEnter())
+                return ClockResult::Busy;
+            Detail::Context::Scope held;
+            Detail::Heap::Value    first, after;
+            if ((result = Detail::Capture(image, owner, first)) != ClockResult::Ok)
+                return result;
+            if (first.authority != storage.origin.authority || first.authorityVtable != storage.origin.authorityVtable ||
+                !Detail::Heap::M::PrivateWritable(storage.base, storage.bytes))
+                return ClockResult::BindingChanged;
+            std::uint64_t cookie = 0, confirmed = 0;
+            // Source At reads only the original allocation's capacity cookie.
+            // In particular a legitimate OOB lookup never inspects row0's
+            // flags/frame/count or turns their unrelated state into absence.
+            if (!Detail::Heap::M::Copy(storage.base, &cookie, sizeof(cookie)))
+                return ClockResult::ReadFailure;
+            if (cookie != storage.capacity)
+                return ClockResult::BindingChanged;
+            if ((result = Detail::Capture(image, owner, after)) != ClockResult::Ok)
+                return result;
+            if (!Detail::Heap::Same(first, after) || !Detail::Heap::M::PrivateWritable(storage.base, storage.bytes))
+                return ClockResult::BindingChanged;
+            if (!Detail::Heap::M::Copy(storage.base, &confirmed, sizeof(confirmed)))
+                return ClockResult::ReadFailure;
+            if (confirmed != cookie || (result = RowResourceShape(storage, generation, Kind::SequenceArray)) != ClockResult::Ok)
+                return confirmed != cookie ? ClockResult::BindingChanged : result;
+            if ((result = Detail::Context::Owner(image, owner)) != ClockResult::Ok)
+                return result;
+            output = storage.capacity;
             return ClockResult::Ok;
         }
         static ClockResult CaptureRow(std::uintptr_t image, const Storage& storage, std::uint64_t generation, std::size_t index, CheckOwner owner,
@@ -1280,6 +1320,13 @@ namespace mta::game_de
                                 void* context) noexcept
         {
             return NativeCustomAnimSequenceStorageAccess::QualifyPayloadHeld(epoch, array, count, operation, owner, resolve, context);
+        }
+    }
+    namespace NativeAnimationSequenceFactoryCalls
+    {
+        ClockResult ReadCapacity(std::uintptr_t image, const Storage& storage, std::uint64_t generation, CheckOwner owner, std::size_t& output) noexcept
+        {
+            return NativeCustomAnimSequenceStorageAccess::ReadArrayCapacity(image, storage, generation, owner, output);
         }
     }
     namespace NativeAnimationSequenceDependencyCalls

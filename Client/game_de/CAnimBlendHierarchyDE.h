@@ -34,6 +34,10 @@ namespace mta::game_de
         CAnimBlendHierarchySAInterface* GetInterface() override;
         unsigned int                    GetNameHashKey() override;
 
+        // Only the actual same-owner manager factory can create this CPU
+        // facade. Its destructor never retires native hierarchy/frame data.
+        friend class CAnimManagerDE;
+
     protected:
         CAnimBlendHierarchyDE(NativeAnimationHierarchyAccess& owner, const NativeAnimationHierarchyReferenceToken& token) noexcept
             : native(owner), reference(token)

@@ -103,5 +103,11 @@ namespace mta::game_de
         {
             return ClockResult::NotInitialized;
         }
+        // Custom factories must resolve an actual issued private record,
+        // never adopt an ordinary native-bank locator through generic Read.
+        virtual ClockResult ResolvePrivateAnimationHierarchyReference(std::uint64_t, std::uintptr_t, NativeAnimationHierarchyReferenceToken&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
     };
 }

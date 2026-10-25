@@ -68,5 +68,12 @@ namespace mta::game_de
         // No name lookup, association pointer or unavailable-owner false may
         // substitute for this independently qualified current-array channel.
         virtual ClockResult ReadAnimationGroupCreated(std::uint64_t, std::uint32_t, bool&) noexcept { return ClockResult::NotInitialized; }
+        // This ID-only observation retains the actual current group precheck
+        // and native modular selector. Unsafe/torn child bounds are refusals,
+        // not a fabricated default association or an ordinary mismatch.
+        virtual ClockResult ReadAnimationStaticAssociationAnimID(std::uint64_t, std::uint32_t, std::uint32_t, std::int16_t&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
     };
 }

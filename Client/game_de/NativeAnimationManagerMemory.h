@@ -25,6 +25,7 @@ namespace mta::game_de
         // Read only the current native array's source DWORD Created value;
         // a copied bool grants no group, child-array or release ownership.
         ClockResult ReadGroupCreated(std::uint32_t, bool&) const noexcept;
+        ClockResult ReadStaticAssociationAnimID(std::uint32_t, std::uint32_t, std::int16_t&) const noexcept;
         ClockResult FindBlockIndex(const NativeAnimationBlockName&, std::int32_t&) const noexcept;
 
     private:

@@ -13,6 +13,7 @@
 #include <cstring>
 #include <game/CAnimGatewayNames.h>
 #include <game/CAnimGroupValidationPolicy.h>
+#include <game/CAnimValidityPolicy.h>
 #include <stdexcept>
 #include <exception>
 #include <new>
@@ -798,6 +799,21 @@ namespace mta::game_de
                                                                      Require(native.ReadAnimationGroupCreated(generation, id, created), "IsValidGroup");
                                                                      return created;
                                                                  });
+    }
+    bool CAnimManagerDE::IsValidAnim(std::uint32_t group, std::uint32_t animation) const
+    {
+        const auto generation = ownerGeneration;
+        return MtaGame::CAnimValidityPolicy::IsValidAnim(
+            group, animation,
+            [this, generation](std::uint32_t copiedGroup, std::uint32_t copiedAnimation, std::int16_t& selected)
+            {
+                // Match the actual GetAnimStaticAssociation group precheck.
+                // Only its admitted current group may select a child ID.
+                if (!IsValidGroup(copiedGroup))
+                    return false;
+                Require(native.ReadAnimationStaticAssociationAnimID(generation, copiedGroup, copiedAnimation, selected), "IsValidAnim");
+                return true;
+            });
     }
     int CAnimManagerDE::GetAnimationBlockIndex(const char* name)
     {

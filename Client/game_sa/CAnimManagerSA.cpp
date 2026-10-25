@@ -19,6 +19,7 @@
 #include "CAnimManagerSA.h"
 #include <game/CAnimGatewayNames.h>
 #include <game/CAnimGroupValidationPolicy.h>
+#include <game/CAnimValidityPolicy.h>
 #include "CGameSA.h"
 #include "CKeyGenSA.h"
 
@@ -1078,17 +1079,21 @@ bool CAnimManagerSA::IsValidGroup(std::uint32_t uiAnimGroup) const
 
 bool CAnimManagerSA::IsValidAnim(std::uint32_t uiAnimGroup, std::uint32_t uiAnimID) const
 {
-    if ((eAnimID)uiAnimID <= eAnimID::ANIM_ID_UNDEFINED || (eAnimID)uiAnimID >= eAnimID::ANIM_ID_MAX)
-        return false;
-
-    // We get an animation for the checks
-    const auto pAnim = GetAnimStaticAssociation((eAnimGroup)uiAnimGroup, (eAnimID)uiAnimID);
-    if (!pAnim)
-        return false;
-
-    // We check the interface and sAnimID, if AnimID is not in GTA:SA, it will differ from our indicators in sAnimID
-    const auto pInterface = pAnim->GetInterface();
-    return pInterface && pInterface->sAnimID == uiAnimID;
+    return MtaGame::CAnimValidityPolicy::IsValidAnim(uiAnimGroup, uiAnimID,
+                                                     [this](std::uint32_t group, std::uint32_t animation, std::int16_t& selected)
+                                                     {
+                                                         // Keep GetAnimStaticAssociation's actual IsValidGroup precheck;
+                                                         // a missing interface remains an ordinary false result.
+                                                         const auto pAnim =
+                                                             GetAnimStaticAssociation(static_cast<eAnimGroup>(group), static_cast<eAnimID>(animation));
+                                                         if (!pAnim)
+                                                             return false;
+                                                         const auto pInterface = pAnim->GetInterface();
+                                                         if (!pInterface)
+                                                             return false;
+                                                         selected = pInterface->sAnimID;
+                                                         return true;
+                                                     });
 }
 
 CAnimBlendSequenceSAInterface* CAnimManagerSA::AllocateCustomAnimSequences(size_t capacity)

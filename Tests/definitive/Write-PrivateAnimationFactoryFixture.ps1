@@ -15,14 +15,14 @@ function Write-PrivateAnimationFactoryFixture([string]$RepositoryRoot,[string]$O
         $bankOrdinal = $name -eq 'GetAnimation' -and $signature -match '\bGetAnimation\s*\(\s*int\s+\w+\s*\)\s*$'
         $blockHash = $name -eq 'GetAnimation' -and $signature -match '\bGetAnimation\s*\(\s*unsigned\s+int\s+\w+\s*,'
         $blockName = $name -eq 'GetAnimation' -and $signature -match '\bGetAnimation\s*\(\s*const\s+char\s*\*'
-        if($bankOrdinal -or $blockHash -or $blockName -or $name -eq 'GetAnimBlendHierarchy' -or $name -in @('GetCustomAnimBlendHierarchy','DeleteCustomAnimHierarchyInterface','DeleteCustomAnimSequenceInterface','RemoveFromUncompressedCache','GetNumAnimAssocDefinitions','GetAnimGroupName','GetAnimBlockName','GetFirstAssocGroup','IsValidGroup','GetCustomAnimBlendSequenceAt','BeginCustomAnimationCleanup','HasPendingCustomAnimationCleanup','GetCustomAnimBlendSequence','BeginCustomAnimationSequenceCleanup','BeginCustomAnimationSequenceTransfer','BeginCustomAnimationFrameAttachment')) {
+        if($bankOrdinal -or $blockHash -or $blockName -or $name -eq 'GetAnimBlendHierarchy' -or $name -in @('GetCustomAnimBlendHierarchy','DeleteCustomAnimHierarchyInterface','DeleteCustomAnimSequenceInterface','RemoveFromUncompressedCache','GetNumAnimAssocDefinitions','GetAnimGroupName','GetAnimBlockName','GetFirstAssocGroup','IsValidGroup','IsValidAnim','GetCustomAnimBlendSequenceAt','BeginCustomAnimationCleanup','HasPendingCustomAnimationCleanup','GetCustomAnimBlendSequence','BeginCustomAnimationSequenceCleanup','BeginCustomAnimationSequenceTransfer','BeginCustomAnimationFrameAttachment')) {
             $provided+= $signature
         } else {
             $signature=[regex]::Replace($signature,'\s*=\s*[^,)]+','')
             [regex]::Replace($signature,'\s+',' ')
         }
     })
-    if($provided.Count -ne 23 -or $methods.Count -ne 49 -or
+    if($provided.Count -ne 24 -or $methods.Count -ne 48 -or
        @($provided|Where-Object{$_ -match '\bGetCustomAnimBlendHierarchy\s*\('}).Count -ne 2) {
         throw 'Exact actual private factory and standalone operation contracts changed'
     }
@@ -47,7 +47,7 @@ function Write-PrivateAnimationFactoryFixture([string]$RepositoryRoot,[string]$O
     if(@($provided|Where-Object{$_ -match '\bRemoveFromUncompressedCache\s*\('}).Count -ne 2) {
         throw 'Both actual manager cache overloads must be inherited'
     }
-    foreach($required in @('GetNumAnimAssocDefinitions','GetAnimGroupName','GetAnimBlockName','GetFirstAssocGroup','IsValidGroup')) {
+    foreach($required in @('GetNumAnimAssocDefinitions','GetAnimGroupName','GetAnimBlockName','GetFirstAssocGroup','IsValidGroup','IsValidAnim')) {
         if(@($provided|Where-Object{$_ -match ('\b'+$required+'\s*\(')}).Count -ne 1) {
             throw ('Missing actual definition observation: '+$required)
         }

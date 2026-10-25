@@ -100,6 +100,7 @@
 #include "../../Client/game_de/NativeAnimationManagerMemory.h"
 #include "../../Client/game_de/NativeAnimationManagerProfile.h"
 #include "../../Client/game_de/NativeAnimationGroupArrayProfile.h"
+#include "../../Client/game_de/NativeAnimationStaticAssociationProfile.h"
 #include "../../Client/game_de/CAnimBlockDE.h"
 #include "../../Client/game_de/NativePedPlacementMemory.h"
 #include "../../Client/game_de/NativePedPoseMutation.h"
@@ -8386,6 +8387,7 @@ namespace
 #include "NativeAnimationDefinitionsOwnerTests.inl"
 #include "NativeAnimationDefinitionBlockNamesOwnerTests.inl"
 #include "NativeAnimationGroupValidityOwnerTests.inl"
+#include "NativeAnimationIdValidityOwnerTests.inl"
 
 // The strict receiver must execute production typed tickets and the distinct
 // metadata-only delete route. Deleting an interface acknowledges only its own
@@ -8407,6 +8409,7 @@ static_assert(std::is_same_v<decltype(&PrivateAnimationFactoryManagerReceiver::G
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool     animationIdValidityOnly = argc == 3 && std::strcmp(argv[2], "--animation-id-validity") == 0;
     const bool     animationGroupValidityOnly = argc == 3 && std::strcmp(argv[2], "--animation-group-validity") == 0;
     const bool     animationDefinitionBlockNamesOnly = argc == 3 && std::strcmp(argv[2], "--animation-definition-block-names") == 0;
     const bool     animationDefinitionsOnly = argc == 3 && std::strcmp(argv[2], "--animation-definitions") == 0;
@@ -8528,9 +8531,17 @@ int main(int argc, char** argv)
            privateHierarchyParentOnly || privateHierarchyEmptyOnly || freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly ||
            privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly || animationBankFactoriesOnly ||
            sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly || animationDefinitionsOnly ||
-           animationDefinitionBlockNamesOnly || animationGroupValidityOnly) &&
+           animationDefinitionBlockNamesOnly || animationGroupValidityOnly || animationIdValidityOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (animationIdValidityOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        NativeAnimationBlocksOwnedSdk(fixture, &AnimationIdValidityOwnerFixture::RunPrepared);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (animationGroupValidityOnly)
     {
         ClockImageFixture fixture;

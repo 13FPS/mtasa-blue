@@ -5,6 +5,15 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+Both existing MTA cache-removal overloads now reach the qualified DE private
+hierarchy service. Typed dispatch copies the actual same-provider facade's
+immutable identity; raw dispatch first resolves a current issued private row.
+Only the already-proven zero-cache domain is admitted, including its original
+linked array/frame epoch. Bank, foreign, stale and nonzero-cache observations
+cannot grant cache ownership. Observed foreign cache state stays retained even
+if its visible cell later clears; no cache splice, frame free or new binding is
+invented. The manager remains partial.
+
 Raw custom-sequence lookup now borrows either an actual owned array row or an
 explicit Standalone record through a qualified physical identity. The client
 uses no row-stride arithmetic. Raw standalone deletion now preserves SA's
@@ -37,8 +46,8 @@ native allocation, and operation facades adopt accepted views even after a
 late refusal. The same existing journal, active callback pump and teardown
 gates retain historical frame obligations and completed CPU views. Classic SA
 shares original frame identities between sequence operations and hierarchy
-cleanup. Raw interface-only deletion remains pure on the partial DE manager:
-mapping it to frame cleanup would change MTA's source behavior. These paths
+cleanup. Raw interface-only deletion uses the metadata-only owner path described
+above; mapping it to frame cleanup would change MTA's source behavior. These paths
 do not advertise a complete manager, full parser exposure or CGame readiness.
 
 Animation cleanup now stays with its backend through a required ticket.
@@ -1359,7 +1368,7 @@ Nine streaming-ID getters use verified DE operands and the full 26316-row count,
 without exposing DE rows through classic structures. These new pause and
 streaming paths have not yet been exercised through a live full `CGame`.
 `GetSystemState` separately maps the proved native frontend/loading/gameplay
-states through a checked reader. Early native states 0–5 and lifecycle writes
+states through a checked reader. Early native states 0â€“5 and lifecycle writes
 remain unsupported; native indices are never blindly cast into the SDK enum.
 `IsAtMenu` observes both the typed SA menu-widget owner and legacy frontend
 screens. It keeps their read qualification separate from native lifecycle calls;
@@ -2008,7 +2017,7 @@ passes through the canonical C++ type and is read back before logging alongside
 native velocity and position. Previous state means the previous probe sample,
 not GTA's previous frame. Start and cleanup reset the snapshot masks.
 
-The pinned 0.500 definitions expose pad indices 0–19 and `GET_CHAR_VELOCITY`.
+The pinned 0.500 definitions expose pad indices 0â€“19 and `GET_CHAR_VELOCITY`.
 The four MTA-specific logical fields remain explicitly unknown, and velocity
 units remain unknown. Metadata support is not runtime verification. The saved
 log reader checks ownership, masks, provenance, clocks, bounds and cleanup;

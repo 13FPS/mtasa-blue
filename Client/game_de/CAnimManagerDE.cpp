@@ -628,6 +628,39 @@ namespace mta::game_de
         CKeyGenDE keys;
         return keys.GetUppercaseKey(MtaGame::CAnimGatewayNames::GetAnimationName()) == actualHash;
     }
+    void CAnimManagerDE::RemoveFromUncompressedCache(CAnimBlendHierarchy* hierarchy)
+    {
+        if (!hierarchyAccess || !ownerGeneration)
+            Require(ClockResult::NotInitialized, "RemoveFromUncompressedCache");
+        auto* facade = dynamic_cast<CAnimBlendHierarchyDE*>(hierarchy);
+        if (!facade || dynamic_cast<void*>(&facade->native) != dynamic_cast<void*>(&native))
+            throw std::invalid_argument("DE cache removal requires its same-owner hierarchy facade");
+        const auto token = facade->reference;
+        if (token.ownerGeneration != ownerGeneration || !token.locator)
+            Require(ClockResult::BindingChanged, "RemoveFromUncompressedCache");
+        // Copy immutable facade affinity directly. A virtual GetInterface
+        // observation cannot grant ownership or turn a foreign/bank cache
+        // into the qualified private cache0 domain supplied by this service.
+        Require(hierarchyAccess->RemovePrivateAnimationHierarchyFromUncompressedCache(token), "RemoveFromUncompressedCache");
+    }
+    void CAnimManagerDE::RemoveFromUncompressedCache(CAnimBlendHierarchySAInterface* hierarchy)
+    {
+        if (!hierarchyAccess || !ownerGeneration)
+            Require(ClockResult::NotInitialized, "RemoveFromUncompressedCache");
+        const auto generation = ownerGeneration;
+        const auto locator = reinterpret_cast<std::uintptr_t>(hierarchy);
+        if (!locator)
+            Require(ClockResult::InvalidArgument, "RemoveFromUncompressedCache");
+        NativeAnimationHierarchyReferenceToken token;
+        Require(hierarchyAccess->ResolvePrivateAnimationHierarchyReference(generation, locator, token), "RemoveFromUncompressedCache");
+        if (token.ownerGeneration != generation || token.locator != locator)
+            Require(ClockResult::BindingChanged, "RemoveFromUncompressedCache");
+        // A raw interface must first resolve to a current issued private row.
+        // Only the existing cache0/linked-child gate may admit the operation;
+        // no bank adoption, cache splice, uncompress or frame release is added.
+        Require(hierarchyAccess->RemovePrivateAnimationHierarchyFromUncompressedCache(token), "RemoveFromUncompressedCache");
+    }
+
     NativeAnimationManagerCounts CAnimManagerDE::Read(const char* operation) const
     {
         NativeAnimationManagerCounts next;

@@ -13,14 +13,14 @@ function Write-PrivateAnimationFactoryFixture([string]$RepositoryRoot,[string]$O
         $name=[regex]::Match($signature,'(?<name>\w+)\s*\(').Groups['name'].Value
         if(-not $name){throw "Cannot derive private manager fixture from $signature"}
         $bankOrdinal = $name -eq 'GetAnimation' -and $signature -match '\bGetAnimation\s*\(\s*int\s+\w+\s*\)\s*$'
-        if($bankOrdinal -or $name -eq 'GetAnimBlendHierarchy' -or $name -in @('GetCustomAnimBlendHierarchy','DeleteCustomAnimHierarchyInterface','DeleteCustomAnimSequenceInterface','GetCustomAnimBlendSequenceAt','BeginCustomAnimationCleanup','HasPendingCustomAnimationCleanup','GetCustomAnimBlendSequence','BeginCustomAnimationSequenceCleanup','BeginCustomAnimationSequenceTransfer','BeginCustomAnimationFrameAttachment')) {
+        if($bankOrdinal -or $name -eq 'GetAnimBlendHierarchy' -or $name -in @('GetCustomAnimBlendHierarchy','DeleteCustomAnimHierarchyInterface','DeleteCustomAnimSequenceInterface','RemoveFromUncompressedCache','GetCustomAnimBlendSequenceAt','BeginCustomAnimationCleanup','HasPendingCustomAnimationCleanup','GetCustomAnimBlendSequence','BeginCustomAnimationSequenceCleanup','BeginCustomAnimationSequenceTransfer','BeginCustomAnimationFrameAttachment')) {
             $provided+= $signature
         } else {
             $signature=[regex]::Replace($signature,'\s*=\s*[^,)]+','')
             [regex]::Replace($signature,'\s+',' ')
         }
     })
-    if($provided.Count -ne 14 -or $methods.Count -ne 58 -or
+    if($provided.Count -ne 16 -or $methods.Count -ne 56 -or
        @($provided|Where-Object{$_ -match '\bGetCustomAnimBlendHierarchy\s*\('}).Count -ne 2) {
         throw 'Exact actual private factory and standalone operation contracts changed'
     }
@@ -41,6 +41,9 @@ function Write-PrivateAnimationFactoryFixture([string]$RepositoryRoot,[string]$O
     if(@($provided|Where-Object{$_ -match '\bGetCustomAnimBlendSequence\s*\('}).Count -ne 2 -or
        @($provided|Where-Object{$_ -match '\bDeleteCustomAnimSequenceInterface\s*\('}).Count -ne 1) {
         throw 'Standalone and generic borrow plus dedicated metadata-only delete must remain inherited'
+    }
+    if(@($provided|Where-Object{$_ -match '\bRemoveFromUncompressedCache\s*\('}).Count -ne 2) {
+        throw 'Both actual manager cache overloads must be inherited'
     }
     # Only the integer ordinal overload is implemented in this bank slice.
     # Retaining the other two abortors must not hide the inherited overload.

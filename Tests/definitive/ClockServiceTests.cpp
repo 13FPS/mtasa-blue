@@ -8376,6 +8376,7 @@ namespace
 #include "NativeStandaloneSequenceOperationsTests.inl"
 #include "NativeBankAnimationFactoryOwnerTests.inl"
 #include "NativeSequenceInterfaceOwnerTests.inl"
+#include "NativeAnimationManagerCacheOwnerTests.inl"
 
 // The strict receiver must execute production typed tickets and the distinct
 // metadata-only delete route. Deleting an interface acknowledges only its own
@@ -8397,6 +8398,8 @@ static_assert(std::is_same_v<decltype(&PrivateAnimationFactoryManagerReceiver::G
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool     animationManagerCacheForeign = argc == 3 && std::strcmp(argv[2], "--animation-manager-cache-foreign") == 0;
+    const bool     animationManagerCacheOnly = animationManagerCacheForeign || (argc == 3 && std::strcmp(argv[2], "--animation-manager-cache-success") == 0);
     const bool     sequenceInterfaceUnknown = argc == 3 && std::strcmp(argv[2], "--sequence-interface-unknown") == 0;
     const bool     sequenceInterfaceOnly = sequenceInterfaceUnknown || (argc == 3 && std::strcmp(argv[2], "--sequence-interface-success") == 0);
     const bool     animationBankFactoriesOnly = argc == 3 && std::strcmp(argv[2], "--animation-bank-factory") == 0;
@@ -8511,9 +8514,18 @@ int main(int argc, char** argv)
            customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly ||
            privateHierarchyParentOnly || privateHierarchyEmptyOnly || freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly ||
            privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly || animationBankFactoriesOnly ||
-           sequenceInterfaceOnly) &&
+           sequenceInterfaceOnly || animationManagerCacheOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (animationManagerCacheOnly)
+    {
+        AnimationManagerCacheOwnerFixture::scenario = animationManagerCacheForeign ? 1u : 0u;
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        NativeAnimationBlocksOwnedSdk(fixture, &AnimationManagerCacheOwnerFixture::RunPrepared);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (sequenceInterfaceOnly)
     {
         SequenceInterfaceOwnerFixture::scenario = sequenceInterfaceUnknown ? 1u : 0u;

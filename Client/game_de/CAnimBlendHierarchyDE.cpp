@@ -85,6 +85,20 @@ namespace mta::game_de
         const auto token = reference;
         Require(native.RemoveEmptyPrivateAnimationHierarchySequences(token), "RemoveAnimSequences");
     }
+    void CAnimBlendHierarchyDE::RemoveQuaternionFlips()
+    {
+        // The whole native entry preserves its own float/sign behavior. Only
+        // the current owner can qualify and hold all traversed payload spans.
+        const auto token = reference;
+        Require(native.RemovePrivateAnimationHierarchyQuaternionFlips(token), "RemoveQuaternionFlips");
+    }
+    void CAnimBlendHierarchyDE::CalculateTotalTime()
+    {
+        // This also changes absolute keyframe timestamps into deltas. A cached
+        // float, read-only reduction or automatic retry is not the operation.
+        const auto token = reference;
+        Require(native.CalculatePrivateAnimationHierarchyTotalTime(token), "CalculateTotalTime");
+    }
     NativeAnimationHierarchyValues CAnimBlendHierarchyDE::Read(const char* operation) const
     {
         const auto                     token = reference;

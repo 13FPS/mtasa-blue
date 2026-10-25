@@ -17,6 +17,9 @@ namespace mta::game_de
         using Storage = NativePrivateAnimationHierarchyStorage;
         using CheckOwner = NativePrivateAnimationHierarchyCalls::CheckOwner;
         using Receipt = NativePrivateAnimationHierarchyCalls::Receipt;
+        using PostProcessOperation = NativePrivateAnimationHierarchyCalls::PostProcessOperation;
+        using PostProcessReceipt = NativePrivateAnimationHierarchyCalls::PostProcessReceipt;
+        using InvokePostProcess = NativePrivateAnimationHierarchyCalls::InvokePostProcess;
         struct RetireProgress
         {
             std::size_t scanned = 0, attempted = 0, released = 0, retained = 0;
@@ -26,6 +29,8 @@ namespace mta::game_de
         ClockResult SetSequences(std::uintptr_t, const Token&, std::uintptr_t, CheckOwner, Receipt* = nullptr) noexcept;
         ClockResult CheckCacheZero(std::uintptr_t, const Token&, CheckOwner) noexcept;
         ClockResult RemoveEmptySequences(std::uintptr_t, const Token&, CheckOwner, Receipt* = nullptr) noexcept;
+        ClockResult RemoveQuaternionFlips(std::uintptr_t, const Token&, CheckOwner, PostProcessReceipt* = nullptr, InvokePostProcess = nullptr) noexcept;
+        ClockResult CalculateTotalTime(std::uintptr_t, const Token&, CheckOwner, PostProcessReceipt* = nullptr, InvokePostProcess = nullptr) noexcept;
         ClockResult Create(std::uintptr_t image, std::uint64_t generation, CheckOwner, Token& output, Receipt* = nullptr) noexcept;
         ClockResult Initialize(std::uintptr_t image, const Token&, CheckOwner, Receipt* = nullptr) noexcept;
         ClockResult Destroy(std::uintptr_t image, const Token&, CheckOwner, Receipt* = nullptr) noexcept;
@@ -84,7 +89,8 @@ namespace mta::game_de
             Read,
             ReadSequences,
             ReadSequence,
-            Scalar
+            Scalar,
+            PostProcess
         };
         struct ActionContext
         {
@@ -98,7 +104,12 @@ namespace mta::game_de
             Receipt                                               receipt{};
             Values                                                values{};
             std::uintptr_t                                        pointer = 0;
+            PostProcessOperation                                  postProcess{PostProcessOperation::RemoveQuaternionFlips};
+            PostProcessReceipt                                    postReceipt{};
+            InvokePostProcess                                     invokePostProcess = nullptr;
         };
+        static ClockResult ValidatePayloadHeld(const Epoch&, std::uint16_t, PostProcessOperation, void*) noexcept;
+        ClockResult        ProcessPayload(std::uintptr_t, const Token&, PostProcessOperation, CheckOwner, PostProcessReceipt*, InvokePostProcess) noexcept;
         static ClockResult ParentAction(NativeCustomAnimSequenceStorage&, const Epoch&, void*) noexcept;
         ClockResult        SetSequencesImpl(std::uintptr_t, const Token&, std::uintptr_t, CheckOwner, Receipt*, bool retirement) noexcept;
         ClockResult        DestroyImpl(std::uintptr_t, const Token&, CheckOwner, Receipt*, bool retirement) noexcept;

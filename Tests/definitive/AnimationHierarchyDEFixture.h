@@ -1,11 +1,10 @@
 /****************************************************************************
  * PROJECT: Multi Theft Auto
  * LICENSE: See LICENSE in the repository root
- * PURPOSE: Reject the two remaining hierarchy mutation operations in tests
+ * PURPOSE: Constructor-only actual hierarchy test receiver; no method overrides
  ****************************************************************************/
 #pragma once
 #include "../../Client/game_de/CAnimBlendHierarchyDE.h"
-#include <cstdlib>
 
 namespace animation_hierarchy_fixture
 {
@@ -17,9 +16,6 @@ namespace animation_hierarchy_fixture
             : CAnimBlendHierarchyDE(owner, token)
         {
         }
-        // These are unavailable contracts, not successful no-op mutations.
-        void RemoveQuaternionFlips() override { std::abort(); }
-        void CalculateTotalTime() override { std::abort(); }
     };
     static_assert(!std::is_abstract_v<AnimationHierarchyReceiver>);
 }

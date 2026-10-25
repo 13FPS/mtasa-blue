@@ -72,6 +72,7 @@
 #include "../../Client/game_de/NativeAnimationHierarchyMemory.h"
 #include "../../Client/game_de/NativePrivateAnimationHierarchyStorage.h"
 #include "../../Client/game_de/NativePrivateAnimationHierarchyController.h"
+#include "../../Client/game_de/NativePrivateAnimationHierarchyPostProcessProfile.h"
 #include "PrivateHierarchyProfile.generated.h"
 #include "../../Client/game_de/NativeAnimationHierarchyReadProfile.h"
 #include "AnimationHierarchyDEFixture.h"
@@ -8319,10 +8320,18 @@ namespace
 #include "NativePrivateHierarchyNameOwnerTests.inl"
 #include "NativePrivateHierarchyParentOwnerTests.inl"
 #include "NativePrivateHierarchyEmptyOwnerTests.inl"
+#include "NativeFreshUncompressedSequenceOwnerTests.inl"
+#include "NativePrivateHierarchyPostProcessOwnerTests.inl"
 
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool     privateHierarchyPostprocessOnly = argc == 3 && std::strncmp(argv[2], "--private-hierarchy-postprocess-", 32) == 0;
+    const unsigned privateHierarchyPostprocessScenario = !privateHierarchyPostprocessOnly                                       ? 0u
+                                                         : std::strcmp(argv[2], "--private-hierarchy-postprocess-unknown") == 0 ? 1u
+                                                         : std::strcmp(argv[2], "--private-hierarchy-postprocess-lostack") == 0 ? 2u
+                                                                                                                                : 0u;
+    const bool     freshUncompressedSequenceOnly = argc == 3 && std::strcmp(argv[2], "--fresh-uncompressed-sequence") == 0;
     const bool     privateHierarchyEmptyOnly = argc == 3 && std::strncmp(argv[2], "--private-hierarchy-empty-", 26) == 0;
     const unsigned privateHierarchyEmptyScenario = !privateHierarchyEmptyOnly                                             ? 0u
                                                    : std::strcmp(argv[2], "--private-hierarchy-empty-accepted-loss") == 0 ? 1u
@@ -8412,9 +8421,26 @@ int main(int argc, char** argv)
            animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly ||
            animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly || animationHierarchyBankOnly ||
            customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly ||
-           privateHierarchyParentOnly || privateHierarchyEmptyOnly) &&
+           privateHierarchyParentOnly || privateHierarchyEmptyOnly || freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (privateHierarchyPostprocessOnly)
+    {
+        PrivateHierarchyPostProcessOwnerFixture::scenario = privateHierarchyPostprocessScenario;
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        NativeAnimationBlocksOwnedSdk(fixture, &PrivateHierarchyPostProcessOwnerFixture::Run);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (freshUncompressedSequenceOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        FreshUncompressedSequenceOwnerFixture::Run(fixture);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (privateHierarchyEmptyOnly)
     {
         PrivateHierarchyEmptyOwnerFixture::scenario = privateHierarchyEmptyScenario;

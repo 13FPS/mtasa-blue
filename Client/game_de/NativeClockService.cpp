@@ -261,12 +261,16 @@ namespace mta::game_de
             ClockResult SetPrivateAnimationHierarchySequences(const NativeAnimationHierarchyReferenceToken&, std::uintptr_t) noexcept override;
             ClockResult RemovePrivateAnimationHierarchyFromUncompressedCache(const NativeAnimationHierarchyReferenceToken&) noexcept override;
             ClockResult RemoveEmptyPrivateAnimationHierarchySequences(const NativeAnimationHierarchyReferenceToken&) noexcept override;
+            ClockResult RemovePrivateAnimationHierarchyQuaternionFlips(const NativeAnimationHierarchyReferenceToken&) noexcept override;
+            ClockResult CalculatePrivateAnimationHierarchyTotalTime(const NativeAnimationHierarchyReferenceToken&) noexcept override;
             ClockResult ReadAnimationHierarchy(const NativeAnimationHierarchyReferenceToken&, NativeAnimationHierarchyValues&) noexcept override;
             ClockResult ReadAnimationHierarchySequences(const NativeAnimationHierarchyReferenceToken&, std::uintptr_t&) noexcept override;
             ClockResult ReadAnimationHierarchySequence(const NativeAnimationHierarchyReferenceToken&, std::uint32_t, std::uintptr_t&) noexcept override;
             ClockResult SetAnimationSequenceName(const NativeAnimationSequenceReferenceToken&, const NativeAnimationSequenceName&) noexcept override;
             ClockResult PrepareFreshCompressedAnimationSequence(const NativeAnimationSequenceReferenceToken&, std::size_t, bool,
                                                                 std::uintptr_t) noexcept override;
+            ClockResult PrepareFreshUncompressedAnimationSequence(const NativeAnimationSequenceReferenceToken&, std::size_t, bool,
+                                                                  std::uintptr_t) noexcept override;
             ClockResult AllocateAnimationKeyFrames(std::uint64_t, std::uint32_t, std::uintptr_t&) noexcept override;
             ClockResult FreeAnimationKeyFrames(std::uint64_t, std::uintptr_t) noexcept override;
             ClockResult AllocateAnimationSequences(std::uint64_t, std::size_t, std::uintptr_t&) noexcept override;
@@ -3041,6 +3045,44 @@ namespace mta::game_de
             return result;
         }
 
+        ClockResult NativeAccess::RemovePrivateAnimationHierarchyQuaternionFlips(const NativeAnimationHierarchyReferenceToken& token) noexcept
+        {
+            // Only the existing owner can qualify the attached uncompressed
+            // payload and its native entry. A failed entered operation keeps
+            // its effects; Stop retires ownership without replaying the code.
+            const auto request = token;
+            auto       result = CheckAnimationHierarchyRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            NativePrivateAnimationHierarchyController::PostProcessReceipt receipt;
+            result = runtime.privateHierarchies.RemoveQuaternionFlips(runtime.image, request, &CheckTimingOwner, &receipt);
+            PublishCustomAnimationSequenceDebt(request.ownerGeneration);
+            if (result == ClockResult::Ok)
+                result = CheckAnimationHierarchyRequest(request);
+            if ((receipt.entered && result != ClockResult::Ok) || runtime.privateHierarchies.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            return result;
+        }
+
+        ClockResult NativeAccess::CalculatePrivateAnimationHierarchyTotalTime(const NativeAnimationHierarchyReferenceToken& token) noexcept
+        {
+            // Only the existing owner can qualify the attached uncompressed
+            // payload and its native entry. A failed entered operation keeps
+            // its effects; Stop retires ownership without replaying the code.
+            const auto request = token;
+            auto       result = CheckAnimationHierarchyRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            NativePrivateAnimationHierarchyController::PostProcessReceipt receipt;
+            result = runtime.privateHierarchies.CalculateTotalTime(runtime.image, request, &CheckTimingOwner, &receipt);
+            PublishCustomAnimationSequenceDebt(request.ownerGeneration);
+            if (result == ClockResult::Ok)
+                result = CheckAnimationHierarchyRequest(request);
+            if ((receipt.entered && result != ClockResult::Ok) || runtime.privateHierarchies.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            return result;
+        }
+
         ClockResult NativeAccess::ReadAnimationHierarchy(const NativeAnimationHierarchyReferenceToken& token, NativeAnimationHierarchyValues& output) noexcept
         {
             const auto request = token;
@@ -3145,6 +3187,30 @@ namespace mta::game_de
             NativeCustomAnimSequenceController::FrameBindReceipt receipt;
             result = runtime.customSequences.PrepareFreshCompressedSequence(runtime.image, request, requestedCount, requestedRoot, requestedBase,
                                                                             &CheckTimingOwner, &receipt);
+            PublishCustomAnimationSequenceDebt(request.ownerGeneration);
+            if (result == ClockResult::Ok)
+                result = CheckCustomSequenceRequest(request);
+            if ((receipt.entered && result != ClockResult::Ok) || runtime.customSequences.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            return result;
+        }
+
+        ClockResult NativeAccess::PrepareFreshUncompressedAnimationSequence(const NativeAnimationSequenceReferenceToken& token, std::size_t count, bool root,
+                                                                            std::uintptr_t originalFrameBase) noexcept
+        {
+            // The saved DE loader has a separate float-frame producer.
+            // Bind it through this same owner without inferring format
+            // from a parent compression flag or converting its payload.
+            const auto request = token;
+            const auto requestedCount = count;
+            const auto requestedRoot = root;
+            const auto requestedBase = originalFrameBase;
+            auto       result = CheckCustomSequenceRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            NativeCustomAnimSequenceController::FrameBindReceipt receipt;
+            result = runtime.customSequences.PrepareFreshUncompressedSequence(runtime.image, request, requestedCount, requestedRoot, requestedBase,
+                                                                              &CheckTimingOwner, &receipt);
             PublishCustomAnimationSequenceDebt(request.ownerGeneration);
             if (result == ClockResult::Ok)
                 result = CheckCustomSequenceRequest(request);

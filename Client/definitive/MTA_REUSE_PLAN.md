@@ -5,6 +5,23 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+The same private frame builder also accepts the saved loader's separate
+uncompressed representation: 20 bytes per child frame and 32 per root frame.
+It qualifies the original live frame allocation and full-width extent before
+narrowing the stored count. Accepted format, count and root layout belong to
+the actual allocation owner. Physical flags alone cannot create this authority.
+Initialize clears it; Copy transfers it only with the exact copied snapshot;
+frame retirement invalidates every referring descriptor before record reuse.
+
+Quaternion repair and total-time calculation use the saved DE helpers only
+through that typed owner. Positive sequence counts require the matching
+attached parent command, actual held array and qualified uncompressed frame
+records. The signed native count domains and full frame spans are checked
+before entry. Empty receivers use the helpers' own empty branches. An entered
+failure keeps its effects and blocks replay; acknowledged cleanup can still
+detach the known private edge. This completes the facade's method surface,
+while its public factory and engine publication remain separate requirements.
+
 MTA's cache removal and sequence removal now have qualified empty domains.
 A current private hierarchy with a zero cache link needs no cache operation;
 linked observations borrow the actual held array epoch. An empty, unlinked
@@ -14,8 +31,8 @@ commands and nonempty receivers refuse this path. Accepted stores survive a
 failed postflight acknowledgement without replay or rollback.
 
 This implements the source's empty branches without entering a native cache
-or heap routine. Quaternion/time payload operations remain pure until actual
-uncompressed row authority is available. No public factory is completed here.
+or heap routine. Nonempty child disposal still requires its own acknowledged
+resource cleanup protocol. No public factory is completed here.
 
 Private hierarchy count and pointer setters now use a durable parent command.
 The full WORD count remains independent of array capacity. Attachment holds
@@ -35,12 +52,13 @@ row factory, with a real SA implementation using its existing cookie and row
 layout. Cleanup gathers the full owned capacity even when parsing failed
 before attachment, preserving initialized dummy rows and retained replacements.
 
-The DE controller also reserves prepared-array and frame-record dependencies
-before future parent operations. Held resources cannot be freed or have their
+The DE controller reserves prepared-array and frame-record dependencies
+before parent operations. Held resources cannot be freed or have their
 frame pointers replaced; row frame spans are checked against the real owned
 buffer. A borrowed epoch shares one native gate. Callback success supplies no
-parent acknowledgement, and the physical parent protocol and DE factory remain
-separate requirements. The SDK addition requires rebuilt source consumers.
+parent acknowledgement; the physical parent protocol supplies its own durable
+receipt. The public DE factory remains separate work. The SDK addition requires
+rebuilt source consumers.
 
 Hierarchy naming now uses the addressed classic `SetName` body: ASCII name
 normalization followed by the existing raw key generator. Its input has no
@@ -65,7 +83,8 @@ that field without hiding valid time, block, count or interface observations.
 These records share the existing callback generation and cleanup debt group.
 Only a known empty receiver that has never been published can be deleted;
 unknown children, cache links or publication intent retain its owner. This
-slice supplies no child attachment, native destructor or complete hierarchy
+receiver uses plain CPU deletion after the private parent protocol detaches
+its known edge. It supplies no native destructor or complete public hierarchy
 factory. The common parser's child-detachment protocol remains separate work.
 
 An explicit private builder now prepares fresh compressed sequence frames on

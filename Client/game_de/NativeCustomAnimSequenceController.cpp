@@ -20,6 +20,42 @@ namespace mta::game_de
             ~Operation() { value.clear(std::memory_order_release); }
         };
     }
+    bool NativeCustomAnimSequenceController::FrameDescriptor::Matches(const NativeAnimationSequenceRowCalls::Value& physical) const noexcept
+    {
+        if (format == FrameFormat::Unknown || !record || !base || !count)
+            return false;
+        const auto flags = static_cast<std::uint16_t>(0x01u | (root ? 0x02u : 0u) | (format == FrameFormat::Compressed ? 0x04u : 0u));
+        return physical.keyFrames == base && physical.frameCount == static_cast<std::uint16_t>(count) && (physical.flags & ~std::uint16_t{0x10}) == flags;
+    }
+    bool NativeCustomAnimSequenceController::CurrentFrameDescriptor(const FrameDescriptor& descriptor) const noexcept
+    {
+        if (descriptor.format == FrameFormat::Unknown || !descriptor.record || !descriptor.count)
+            return false;
+        const std::size_t stride = descriptor.format == FrameFormat::Compressed ? (descriptor.root ? 16u : 10u) : (descriptor.root ? 32u : 20u);
+        for (const auto& entry : entries)
+        {
+            const auto& storage = entry.storage;
+            if (&storage != descriptor.record)
+                continue;
+            // Compare a live CPU record before dereferencing its metadata;
+            // known retirement invalidates every referring descriptor below.
+            return entry.issued && storage.GetKind() == Storage::Kind::KeyFrames && storage.OwnerGeneration() == ownerGeneration &&
+                   storage.GetState() == Storage::State::LiveUnpublished && storage.IssuedTag() == descriptor.base &&
+                   descriptor.count <= storage.ByteSize() / stride;
+        }
+        return false;
+    }
+    void NativeCustomAnimSequenceController::ForgetFrameAuthority(const Storage& retired) noexcept
+    {
+        if (retired.GetKind() != Storage::Kind::KeyFrames)
+            return;
+        for (auto& entry : entries)
+            for (auto& row : entry.rows)
+                if (row.frames.record == &retired)
+                    row.frames = {};
+        // This forgets only format affinity after a known consumed record.
+        // It neither frees aliases nor erases any other allocation journal.
+    }
     void NativeCustomAnimSequenceController::Publish() noexcept
     {
         retained.store(!entries.empty(), std::memory_order_release);
@@ -101,7 +137,10 @@ namespace mta::game_de
         if (result == ClockResult::Ok && local.readyTag)
             entry->issued = true;
         if (entry->storage.CanDiscard())
+        {
+            ForgetFrameAuthority(entry->storage);
             entries.erase(entry);
+        }
         Publish();
         if (receipt)
             *receipt = local;
@@ -149,7 +188,10 @@ namespace mta::game_de
         // acknowledgement failed. Erasing that released record cannot replay
         // free or infer anything by probing a possibly reused native address.
         if (entry->storage.CanDiscard())
+        {
+            ForgetFrameAuthority(entry->storage);
             entries.erase(entry);
+        }
         Publish();
         if (receipt)
             *receipt = local;
@@ -262,6 +304,45 @@ namespace mta::game_de
     {
         return ReadSequenceValue(image, token, owner, nullptr, &output);
     }
+    ClockResult NativeCustomAnimSequenceController::ReadSequenceFrameFormat(std::uintptr_t image, const NativeAnimationSequenceReferenceToken& token,
+                                                                            CheckOwner owner, AcceptedFrameFormat& output) noexcept
+    {
+        const auto request = token;
+        if (operation.test_and_set(std::memory_order_acquire))
+            return ClockResult::Busy;
+        const CustomAnimSequenceControllerDetail::Operation held{operation};
+        if (!owner)
+            return ClockResult::NotInitialized;
+        auto result = owner();
+        if (result != ClockResult::Ok)
+            return result;
+        auto      array = entries.end();
+        RowState* row = nullptr;
+        if ((result = SelectRow(request, array, row)) != ClockResult::Ok)
+            return result;
+        const auto descriptor = row->frames;
+        if (descriptor.format == FrameFormat::Unknown)
+            return ClockResult::NotInitialized;
+        if (!CurrentFrameDescriptor(descriptor))
+            return ClockResult::BindingChanged;
+        NativeAnimationSequenceRowCalls::Value first, after;
+        result = NativeAnimationSequenceRowCalls::Read(image, array->storage, request.ownerGeneration, request.index, owner, first);
+        if (result != ClockResult::Ok)
+            return result;
+        if (!descriptor.Matches(first))
+            return ClockResult::BindingChanged;
+        result = NativeAnimationSequenceRowCalls::CheckFramePointer(image, *descriptor.record, request.ownerGeneration, descriptor.base, owner);
+        if (result != ClockResult::Ok)
+            return result;
+        result = NativeAnimationSequenceRowCalls::Read(image, array->storage, request.ownerGeneration, request.index, owner, after);
+        if (result != ClockResult::Ok)
+            return result;
+        if (!descriptor.Matches(after) || first.row != after.row || first.keyFrames != after.keyFrames || first.flags != after.flags ||
+            first.frameCount != after.frameCount || first.boneTag != after.boneTag || !CurrentFrameDescriptor(descriptor))
+            return ClockResult::BindingChanged;
+        output = {descriptor.format, descriptor.base, descriptor.count, descriptor.root};
+        return ClockResult::Ok;
+    }
     ClockResult NativeCustomAnimSequenceController::InitializeSequence(std::uintptr_t image, const NativeAnimationSequenceReferenceToken& token,
                                                                        CheckOwner owner, RowReceipt* receipt) noexcept
     {
@@ -288,7 +369,10 @@ namespace mta::game_de
         // acknowledgement. Keep logical state and all allocation journals;
         // the runtime stops rather than replaying or rewinding the write.
         if (local.accepted)
+        {
             row->logical.Initialize();
+            row->frames = {};
+        }
         Publish();
         if (receipt)
             *receipt = local;
@@ -369,11 +453,18 @@ namespace mta::game_de
         // CPU row nodes before entry, and retain overwritten/aliased frame
         // journals instead of interpreting shallow copy as native retirement.
         const auto  logical = sourceState->logical;
+        const auto  frames = sourceState->frames;
         CopyReceipt local;
         result = NativeAnimationSequenceCopyCalls::Copy(image, targetEntry->storage, request.index, sourceEntry->storage, sourceToken.index,
                                                         request.ownerGeneration, owner, &local);
         if (local.rawCopied || (result == ClockResult::Ok && local.selfCopy))
+        {
             targetState->logical = logical;
+            // Transfer only accepted authority matching the actual raw-copy
+            // intent. Raw flags, a parent bool or a different pre-read cannot
+            // fabricate a format; Unknown copies as Unknown as well.
+            targetState->frames = frames.Matches(local.sourceValue) && CurrentFrameDescriptor(frames) ? frames : FrameDescriptor{};
+        }
         Publish();
         if (receipt)
             *receipt = local;
@@ -459,10 +550,23 @@ namespace mta::game_de
                                                                                    std::size_t count, bool root, std::uintptr_t originalFrameBase,
                                                                                    CheckOwner owner, FrameBindReceipt* receipt) noexcept
     {
+        return PrepareFreshSequence(image, token, count, root, originalFrameBase, true, owner, receipt);
+    }
+    ClockResult NativeCustomAnimSequenceController::PrepareFreshUncompressedSequence(std::uintptr_t image, const NativeAnimationSequenceReferenceToken& token,
+                                                                                     std::size_t count, bool root, std::uintptr_t originalFrameBase,
+                                                                                     CheckOwner owner, FrameBindReceipt* receipt) noexcept
+    {
+        return PrepareFreshSequence(image, token, count, root, originalFrameBase, false, owner, receipt);
+    }
+    ClockResult NativeCustomAnimSequenceController::PrepareFreshSequence(std::uintptr_t image, const NativeAnimationSequenceReferenceToken& token,
+                                                                         std::size_t count, bool root, std::uintptr_t originalFrameBase, bool compressed,
+                                                                         CheckOwner owner, FrameBindReceipt* receipt) noexcept
+    {
         const auto request = token;
         const auto requestedCount = count;
         const auto requestedRoot = root;
         const auto requestedBase = originalFrameBase;
+        const auto requestedCompressed = compressed;
         if (receipt)
             *receipt = {};
         if (operation.test_and_set(std::memory_order_acquire))
@@ -486,12 +590,50 @@ namespace mta::game_de
         // does not implement the general setter, publish to GTA, infer shared
         // bit08 from a pointer or transfer either allocation's free authority.
         FrameBindReceipt local;
-        result = NativeAnimationSequenceFrameBindCalls::AttachCompressed(image, array->storage, request.ownerGeneration, request.index, frames->storage,
-                                                                         requestedCount, requestedRoot, owner, &local);
+        result = requestedCompressed ? NativeAnimationSequenceFrameBindCalls::AttachCompressed(image, array->storage, request.ownerGeneration, request.index,
+                                                                                               frames->storage, requestedCount, requestedRoot, owner, &local)
+                                     : NativeAnimationSequenceFrameBindCalls::AttachUncompressed(image, array->storage, request.ownerGeneration, request.index,
+                                                                                                 frames->storage, requestedCount, requestedRoot, owner, &local);
+        if (local.accepted)
+            state->frames = {requestedCompressed ? FrameFormat::Compressed : FrameFormat::Uncompressed, &frames->storage, requestedBase, requestedCount,
+                             requestedRoot};
         Publish();
         if (receipt)
             *receipt = local;
         return result;
+    }
+    ClockResult NativeCustomAnimSequenceController::ResolveUncompressedFrame(std::size_t index, const NativeAnimationSequenceRowCalls::Value& physical,
+                                                                             const Storage*& output, void* opaque) noexcept
+    {
+        auto& context = *static_cast<PayloadVisitContext*>(opaque);
+        for (const auto& row : context.array->rows)
+        {
+            if (row.index != index)
+                continue;
+            if (row.frames.format != FrameFormat::Uncompressed)
+                return ClockResult::NotInitialized;
+            if (!row.frames.Matches(physical) || !context.self->CurrentFrameDescriptor(row.frames))
+                return ClockResult::BindingChanged;
+            output = row.frames.record;
+            return ClockResult::Ok;
+        }
+        // No row node/descriptor is allocated during a borrowed native gate.
+        // A raw uncompressed-looking flag is never a producer of authority.
+        return ClockResult::NotInitialized;
+    }
+    ClockResult NativeCustomAnimSequenceController::QualifyUncompressedRowsHeld(const NativeAnimationSequenceDependencyCalls::Epoch& epoch,
+                                                                                const PrivateDependencyKey& key, std::uint16_t count,
+                                                                                NativeAnimationSequencePayloadCalls::Operation operationValue,
+                                                                                CheckOwner                                     owner) noexcept
+    {
+        if (epoch.Generation() != key.ownerGeneration || ownerGeneration != key.ownerGeneration || epoch.ArrayTag() != key.arrayTag)
+            return ClockResult::OwnerConflict;
+        auto array = Find(key.ownerGeneration, key.arrayTag);
+        if (array == entries.end() || !array->privateDependency || !SamePrivateKey(array->privateDependency->key, key) ||
+            array->privateDependency->phase != PrivatePhase::AttachedAccepted)
+            return ClockResult::OwnerConflict;
+        PayloadVisitContext context{this, &*array};
+        return NativeAnimationSequencePayloadCalls::QualifyHeld(epoch, array->storage, count, operationValue, owner, &ResolveUncompressedFrame, &context);
     }
     bool NativeCustomAnimSequenceController::SamePrivateKey(const PrivateDependencyKey& a, const PrivateDependencyKey& b) noexcept
     {
@@ -787,6 +929,7 @@ namespace mta::game_de
             }
             if (entry->storage.CanDiscard())
             {
+                ForgetFrameAuthority(entry->storage);
                 entry = entries.erase(entry);
                 ++progress.released;
                 continue;
@@ -806,6 +949,7 @@ namespace mta::game_de
                          : NativeAnimationKeyFrameStorageCalls::FreeStorage(image, entry->storage, generation, owner, &receipt, invoke);
             if (entry->storage.CanDiscard())
             {
+                ForgetFrameAuthority(entry->storage);
                 entry = entries.erase(entry);
                 ++progress.released;
             }

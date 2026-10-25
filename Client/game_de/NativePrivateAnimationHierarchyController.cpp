@@ -224,6 +224,79 @@ namespace mta::game_de
         Publish();
         return result;
     }
+    ClockResult NativePrivateAnimationHierarchyController::ValidatePayloadHeld(const Epoch& epoch, std::uint16_t count, PostProcessOperation operation,
+                                                                               void* opaque) noexcept
+    {
+        auto& context = *static_cast<ActionContext*>(opaque);
+        return context.self->sequences->QualifyUncompressedRowsHeld(epoch, context.key, count, operation, context.owner);
+    }
+    ClockResult NativePrivateAnimationHierarchyController::RemoveQuaternionFlips(std::uintptr_t image, const Token& token, CheckOwner owner,
+                                                                                 PostProcessReceipt* receipt, InvokePostProcess invoke) noexcept
+    {
+        return ProcessPayload(image, token, PostProcessOperation::RemoveQuaternionFlips, owner, receipt, invoke);
+    }
+    ClockResult NativePrivateAnimationHierarchyController::CalculateTotalTime(std::uintptr_t image, const Token& token, CheckOwner owner,
+                                                                              PostProcessReceipt* receipt, InvokePostProcess invoke) noexcept
+    {
+        return ProcessPayload(image, token, PostProcessOperation::CalculateTotalTime, owner, receipt, invoke);
+    }
+    ClockResult NativePrivateAnimationHierarchyController::ProcessPayload(std::uintptr_t image, const Token& value, PostProcessOperation operationValue,
+                                                                          CheckOwner owner, PostProcessReceipt* output, InvokePostProcess invoke) noexcept
+    {
+        const auto token = value;
+        const auto requested = operationValue;
+        const auto requestedInvoke = invoke;
+        if (output)
+            *output = {};
+        {
+            if (operation.test_and_set(std::memory_order_acquire))
+                return ClockResult::Busy;
+            PrivateHierarchyControllerDetail::Scope held{operation};
+            if (stopping)
+                return ClockResult::OwnerConflict;
+            const auto entry = Find(token);
+            if (entry == entries.end())
+                return ClockResult::BindingChanged;
+            if (!entry->link.active)
+            {
+                // The genuine count0 branches touch no sequence/frame. A
+                // positive count without an acknowledged link is refused by
+                // the native qualifier rather than treated as an empty no-op.
+                const auto result = PrivateHierarchyControllerDetail::Calls::PostProcessEmpty(image, entry->storage, token.ownerGeneration, requested, owner,
+                                                                                              output, requestedInvoke);
+                Publish();
+                return result;
+            }
+        }
+        ActionContext context{this, token, {}, owner, Action::PostProcess};
+        context.postProcess = requested;
+        context.invokePostProcess = requestedInvoke;
+        auto result = LinkedAction(image, token, owner, context, nullptr);
+        if (result == ClockResult::Ok)
+        {
+            if (operation.test_and_set(std::memory_order_acquire))
+                result = ClockResult::Busy;
+            else
+            {
+                PrivateHierarchyControllerDetail::Scope held{operation};
+                const auto                              entry = Find(token);
+                if (entry == entries.end() || !entry->link.active || !SequenceOwner::SamePrivateKey(entry->link.key, context.key) ||
+                    entry->link.phase != LinkPhase::AttachedAccepted)
+                    result = ClockResult::OwnerConflict;
+                else
+                    result = PrivateHierarchyControllerDetail::Calls::AcknowledgePostProcess(entry->storage, token.ownerGeneration, context.postReceipt);
+                Publish();
+            }
+        }
+        // This is the actual whole owner acknowledgement. Failed outer
+        // bookends leave the dedicated pending command blocked; they neither
+        // poison successful allocation records nor replay the native entry.
+        if (result != ClockResult::Ok)
+            context.postReceipt.verified = false;
+        if (output)
+            *output = context.postReceipt;
+        return result;
+    }
     ClockResult NativePrivateAnimationHierarchyController::ParentAction(NativeCustomAnimSequenceStorage& array, const Epoch& epoch, void* opaque) noexcept
     {
         auto& context = *static_cast<ActionContext*>(opaque);
@@ -358,6 +431,9 @@ namespace mta::game_de
         }
         if (link.phase != LinkPhase::AttachedAccepted)
             return finish(ClockResult::OwnerConflict);
+        if (context.action == Action::PostProcess)
+            return finish(Native::PostProcessHeld(epoch, entry->storage, context.postProcess, context.owner, &ValidatePayloadHeld, &context,
+                                                  &context.postReceipt, context.invokePostProcess));
         if (context.action == Action::Scalar)
             return finish(Native::SetScalarHeld(epoch, entry->storage, context.scalar, context.bits, context.owner, &context.receipt));
         auto result = Native::ReadHeld(epoch, entry->storage, context.owner, context.values);

@@ -92,5 +92,16 @@ namespace mta::game_de
         {
             return ClockResult::NotInitialized;
         }
+        // Genuine payload operations require the owner's attached-command
+        // holds and accepted uncompressed row/frame authority. Neither a
+        // compressed bool nor readable bytes supplies that admission.
+        virtual ClockResult RemovePrivateAnimationHierarchyQuaternionFlips(const NativeAnimationHierarchyReferenceToken&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
+        virtual ClockResult CalculatePrivateAnimationHierarchyTotalTime(const NativeAnimationHierarchyReferenceToken&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
     };
 }

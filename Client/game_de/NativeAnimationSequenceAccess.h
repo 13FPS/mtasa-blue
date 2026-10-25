@@ -74,5 +74,13 @@ namespace mta::game_de
         {
             return ClockResult::NotInitialized;
         }
+        // Explicit backend construction of an already-native uncompressed
+        // buffer, separate from the unresolved general SetKeyFrames policy.
+        // Only a fresh issued row and its same-owner original frame base may
+        // acquire the accepted 20/32-byte encoding descriptor.
+        virtual ClockResult PrepareFreshUncompressedAnimationSequence(const NativeAnimationSequenceReferenceToken&, std::size_t, bool, std::uintptr_t) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
     };
 }

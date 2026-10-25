@@ -1,7 +1,7 @@
 /****************************************************************************
  * PROJECT: Multi Theft Auto
  * LICENSE: See LICENSE in the repository root
- * PURPOSE: Genuine fresh compressed sequence representation producers
+ * PURPOSE: Genuine fresh compressed and uncompressed representation producers
  ****************************************************************************/
 #pragma once
 #include "NativeCustomAnimSequenceStorageProfile.h"
@@ -9,8 +9,11 @@
 namespace mta::game_de::NativeAnimationSequenceFrameBindProfile
 {
     inline constexpr std::size_t ChildStride = 10, RootStride = 16;
+    inline constexpr std::size_t UncompressedChildStride = 20, UncompressedRootStride = 32;
     // The actual fresh native loader establishes flags01/root02/compressed04,
-    // countWORD44 and frameQWORD48. This is no general setter or bit08 rule.
+    // countWORD44 and frameQWORD48. The same saved branches separately
+    // allocate uncompressed root32/child20 without compressed04. Neither
+    // itinerary proves a general setter, conversion or pointer-to-bit08 rule.
     inline constexpr std::array<unsigned char, 126> Bytesff2fff{
         {0x66, 0x41, 0x83, 0x4e, 0x42, 0x03, 0x48, 0x8b, 0xfe, 0x48, 0x8b, 0x0d, 0x21, 0x11, 0x77, 0x04, 0x45, 0x84, 0xe4, 0x74, 0x3a,
          0x48, 0xc1, 0xe7, 0x04, 0x48, 0x85, 0xc9, 0x75, 0x0c, 0xe8, 0x4e, 0x40, 0x98, 0x00, 0x48, 0x8b, 0x0d, 0x07, 0x11, 0x77, 0x04,

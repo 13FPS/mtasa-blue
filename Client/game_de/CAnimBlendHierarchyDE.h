@@ -22,6 +22,8 @@ namespace mta::game_de
         void                            SetAnimationBlockID(int) override;
         void                            RemoveAnimSequences() override;
         void                            RemoveFromUncompressedCache() override;
+        void                            RemoveQuaternionFlips() override;
+        void                            CalculateTotalTime() override;
         float                           GetTotalTime() const override;
         CAnimBlendSequenceSAInterface*  GetSequence(DWORD) override;
         CAnimBlendSequenceSAInterface*  GetSequences() override;
@@ -43,8 +45,10 @@ namespace mta::game_de
         NativeAnimationHierarchyAccess&              native;
         const NativeAnimationHierarchyReferenceToken reference;
     };
-    // Quaternion/time postprocessing retain their genuine pure contracts.
-    // Implemented mutations require the same private owner and their exact
-    // qualified domains; this is not a complete hierarchy factory.
-    static_assert(std::is_abstract_v<CAnimBlendHierarchyDE> && std::is_base_of_v<CAnimBlendHierarchy, CAnimBlendHierarchyDE>);
+    // All actual hierarchy operations dispatch to their qualified owner.
+    // The complete method surface does not publish a factory or grant native
+    // lifetime; construction remains protected and resource ownership explicit.
+    static_assert(!std::is_abstract_v<CAnimBlendHierarchyDE> && std::is_base_of_v<CAnimBlendHierarchy, CAnimBlendHierarchyDE>);
+    static_assert(!std::is_default_constructible_v<CAnimBlendHierarchyDE> &&
+                  !std::is_constructible_v<CAnimBlendHierarchyDE, NativeAnimationHierarchyAccess&, const NativeAnimationHierarchyReferenceToken&>);
 }

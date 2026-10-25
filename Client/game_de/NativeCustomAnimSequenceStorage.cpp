@@ -11,6 +11,7 @@
 #include "NativeAnimationSequenceCopyCalls.h"
 #include "NativeAnimationSequenceFrameViewCalls.h"
 #include "NativeAnimationSequenceDependencyCalls.h"
+#include "NativeAnimationSequencePayloadCalls.h"
 #include "NativeAnimationSequenceNameCalls.h"
 #include "NativeAnimationSequenceNameProfile.h"
 #include "NativeAnimationSequenceFrameBindCalls.h"
@@ -181,9 +182,9 @@ namespace mta::game_de
             }
             return true;
         }
-        // This is only the restricted private compressed builder's CPU
-        // writer. It does not implement the general SDK SetKeyFrames policy.
-        // Keep it available for safe actual owned-buffer test delegation.
+        // Retain the existing writer name/test seam while sharing exactly
+        // these metadata stores between explicit fresh encoded itineraries.
+        // No payload conversion or general SDK SetKeyFrames policy is implied.
         ClockResult WriteCompressedFrames(std::uintptr_t row, const NativeAnimationSequenceRowCalls::Value& target, std::uint32_t& exception) noexcept
         {
             __try
@@ -713,6 +714,11 @@ namespace mta::game_de
             if (result != ClockResult::Ok ||
                 (result = CaptureWholeRow(image, target, generation, targetIndex, owner, before, receipt.targetRow)) != ClockResult::Ok)
                 return finish(result);
+            receipt.sourceValue.row = receipt.sourceRow;
+            std::memcpy(&receipt.sourceValue.keyFrames, intent.bytes.data() + Detail::Profile::FramePointerOffset, sizeof(receipt.sourceValue.keyFrames));
+            std::memcpy(&receipt.sourceValue.boneTag, intent.bytes.data() + Detail::Profile::BoneOffset, sizeof(receipt.sourceValue.boneTag));
+            std::memcpy(&receipt.sourceValue.flags, intent.bytes.data() + Detail::Profile::FlagsOffset, sizeof(receipt.sourceValue.flags));
+            std::memcpy(&receipt.sourceValue.frameCount, intent.bytes.data() + Detail::Profile::FrameCountOffset, sizeof(receipt.sourceValue.frameCount));
             if (receipt.sourceRow == receipt.targetRow)
             {
                 receipt.selfCopy = receipt.verified = true;
@@ -855,15 +861,17 @@ namespace mta::game_de
             output = second;
             return ClockResult::Ok;
         }
-        static ClockResult AttachCompressedFrames(std::uintptr_t image, Storage& array, std::uint64_t generation, std::size_t rowIndex, const Storage& frames,
-                                                  std::size_t count, bool root, CheckOwner owner, NativeAnimationSequenceFrameBindCalls::Receipt* output,
-                                                  NativeAnimationSequenceFrameBindCalls::Write write) noexcept
+        static ClockResult AttachFreshFrames(std::uintptr_t image, Storage& array, std::uint64_t generation, std::size_t rowIndex, const Storage& frames,
+                                             std::size_t count, bool root, bool compressed, CheckOwner owner,
+                                             NativeAnimationSequenceFrameBindCalls::Receipt* output,
+                                             NativeAnimationSequenceFrameBindCalls::Write    write) noexcept
         {
             namespace Detail = CustomAnimSequenceStorageDetail;
             namespace Bind = NativeAnimationSequenceFrameBindCalls;
             namespace BindProfile = NativeAnimationSequenceFrameBindProfile;
             const auto    requestedCount = count;
             const auto    requestedRoot = root;
+            const auto    requestedCompressed = compressed;
             Bind::Receipt receipt;
             receipt.count = requestedCount;
             const auto finish = [&](ClockResult result)
@@ -877,7 +885,8 @@ namespace mta::game_de
                     *output = receipt;
                 return result;
             };
-            const auto stride = requestedRoot ? BindProfile::RootStride : BindProfile::ChildStride;
+            const auto stride = requestedCompressed ? (requestedRoot ? BindProfile::RootStride : BindProfile::ChildStride)
+                                                    : (requestedRoot ? BindProfile::UncompressedRootStride : BindProfile::UncompressedChildStride);
             if (!requestedCount || requestedCount > (std::numeric_limits<std::size_t>::max)() / stride)
                 return finish(ClockResult::InvalidArgument);
             receipt.bytes = requestedCount * stride;
@@ -923,7 +932,10 @@ namespace mta::game_de
             if (!Detail::Heap::M::PrivateWritable(frames.base, frames.bytes) || !Detail::FrameBindProfileMatches(image))
                 return finish(ClockResult::BindingChanged);
             receipt.frames = frames.base;
-            target.flags = static_cast<std::uint16_t>(target.flags | 0x05u | (requestedRoot ? 0x02u : 0u));
+            // Each fresh producer begins without a frame or format flags.
+            // The explicit uncompressed path adds no04 and never converts
+            // existing compressed bytes or infers shared08 from a pointer.
+            target.flags = static_cast<std::uint16_t>(target.flags | 0x01u | (requestedRoot ? 0x02u : 0u) | (requestedCompressed ? 0x04u : 0u));
             // Full source count already qualified the allocation byte span;
             // only this actual native field deliberately narrows to WORD.
             target.frameCount = static_cast<std::uint16_t>(requestedCount);
@@ -1038,6 +1050,72 @@ namespace mta::game_de
             if ((result = RowResourceShape(array, generation, Kind::SequenceArray)) != ClockResult::Ok)
                 return result;
             return Detail::Context::Owner(image, owner);
+        }
+        static ClockResult QualifyPayloadHeld(const NativeAnimationSequencePayloadCalls::Epoch& epoch, const Storage& array, std::uint16_t count,
+                                              NativeAnimationSequencePayloadCalls::Operation operation, CheckOwner owner,
+                                              NativeAnimationSequencePayloadCalls::ResolveFrame resolve, void* context) noexcept
+        {
+            namespace Detail = CustomAnimSequenceStorageDetail;
+            namespace Payload = NativeAnimationSequencePayloadCalls;
+            const auto logicalCount = count;
+            const auto requestedOperation = operation;
+            if (!owner || !resolve)
+                return ClockResult::NotInitialized;
+            if (requestedOperation != Payload::Operation::RemoveQuaternionFlips && requestedOperation != Payload::Operation::CalculateTotalTime)
+                return ClockResult::InvalidArgument;
+            if (epoch.ArrayTag() != array.tag || epoch.Capacity() != array.capacity)
+                return ClockResult::BindingChanged;
+            if (logicalCount > 0x7fffu || static_cast<std::size_t>(logicalCount) > array.capacity)
+                return ClockResult::InvalidArgument;
+            auto result = RowResourceShape(array, epoch.Generation(), Kind::SequenceArray);
+            if (result != ClockResult::Ok)
+                return result;
+            Detail::Heap::Value firstHeap, afterHeap;
+            if ((result = Detail::Capture(epoch.Image(), owner, firstHeap)) != ClockResult::Ok)
+                return result;
+            if (firstHeap.authority != array.origin.authority || firstHeap.authorityVtable != array.origin.authorityVtable)
+                return ClockResult::BindingChanged;
+            const auto validate = [&]() noexcept
+            {
+                for (std::size_t index = 0; index != logicalCount; ++index)
+                {
+                    NativeAnimationSequenceRowCalls::Value row;
+                    auto                                   checked = CaptureRow(epoch.Image(), array, epoch.Generation(), index, owner, row);
+                    if (checked != ClockResult::Ok)
+                        return checked;
+                    if (row.frameCount > 0x7fffu)
+                        return ClockResult::InvalidArgument;
+                    if (requestedOperation == Payload::Operation::RemoveQuaternionFlips && row.frameCount < 2)
+                        continue;
+                    // Time reads frameCount-1 before its loop guard. Count0
+                    // cannot be laundered into an empty safe timestamp call.
+                    if (!row.frameCount)
+                        return ClockResult::InvalidArgument;
+                    const Storage* frames = nullptr;
+                    if ((checked = resolve(index, row, frames, context)) != ClockResult::Ok)
+                        return checked;
+                    if (!frames || !row.keyFrames || frames->tag != row.keyFrames || (row.flags & 0x0cu) ||
+                        frames->origin.authority != array.origin.authority || frames->origin.authorityVtable != array.origin.authorityVtable)
+                        return ClockResult::BindingChanged;
+                    const std::size_t stride = (row.flags & 0x02u) ? 32u : 20u;
+                    if (static_cast<std::size_t>(row.frameCount) > frames->bytes / stride)
+                        return ClockResult::InvalidArgument;
+                    Detail::Heap::Value frameHeap;
+                    if ((checked = CaptureFrameBuffer(epoch.Image(), *frames, epoch.Generation(), owner, frameHeap)) != ClockResult::Ok)
+                        return checked;
+                    if (!Detail::Heap::Same(firstHeap, frameHeap))
+                        return ClockResult::BindingChanged;
+                }
+                return ClockResult::Ok;
+            };
+            // Borrow the existing gate; all pointer-changing controller paths
+            // remain frozen by the active parent reservation and Seq flag.
+            if ((result = validate()) != ClockResult::Ok || (result = validate()) != ClockResult::Ok ||
+                (result = Detail::Capture(epoch.Image(), owner, afterHeap)) != ClockResult::Ok)
+                return result;
+            if (!Detail::Heap::Same(firstHeap, afterHeap))
+                return ClockResult::BindingChanged;
+            return Detail::Context::Owner(epoch.Image(), owner);
         }
         static ClockResult ReadSequenceFrame(std::uintptr_t image, const Storage& array, std::uint64_t generation, std::size_t rowIndex, const Storage& frames,
                                              std::size_t frameIndex, std::uint32_t stride, CheckOwner owner, std::uintptr_t& output) noexcept
@@ -1183,7 +1261,25 @@ namespace mta::game_de
         ClockResult AttachCompressed(std::uintptr_t image, Storage& array, std::uint64_t generation, std::size_t rowIndex, const Storage& frames,
                                      std::size_t count, bool root, CheckOwner owner, Receipt* output, Write write) noexcept
         {
-            return NativeCustomAnimSequenceStorageAccess::AttachCompressedFrames(image, array, generation, rowIndex, frames, count, root, owner, output, write);
+            return NativeCustomAnimSequenceStorageAccess::AttachFreshFrames(image, array, generation, rowIndex, frames, count, root, true, owner, output,
+                                                                            write);
+        }
+    }
+    namespace NativeAnimationSequenceFrameBindCalls
+    {
+        ClockResult AttachUncompressed(std::uintptr_t image, Storage& array, std::uint64_t generation, std::size_t rowIndex, const Storage& frames,
+                                       std::size_t count, bool root, CheckOwner owner, Receipt* output, Write write) noexcept
+        {
+            return NativeCustomAnimSequenceStorageAccess::AttachFreshFrames(image, array, generation, rowIndex, frames, count, root, false, owner, output,
+                                                                            write);
+        }
+    }
+    namespace NativeAnimationSequencePayloadCalls
+    {
+        ClockResult QualifyHeld(const Epoch& epoch, const Storage& array, std::uint16_t count, Operation operation, CheckOwner owner, ResolveFrame resolve,
+                                void* context) noexcept
+        {
+            return NativeCustomAnimSequenceStorageAccess::QualifyPayloadHeld(epoch, array, count, operation, owner, resolve, context);
         }
     }
     namespace NativeAnimationSequenceDependencyCalls

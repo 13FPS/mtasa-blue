@@ -5,6 +5,7 @@
  ****************************************************************************/
 #include "NativePrivateAnimationHierarchyStorage.h"
 #include "NativeAnimationHierarchyReadProfile.h"
+#include "NativePrivateAnimationHierarchyPostProcessProfile.h"
 #include "NativeAnimationManagerMemory.h"
 #include "NativeStreamingCompletionContext.h"
 #include "NativeModelReferenceMap.h"
@@ -40,6 +41,40 @@ namespace mta::game_de
             }
             std::array<unsigned char, sizeof(CacheProof)> cache{};
             return Image::ReadImage(image, image + 0xfec67a, cache.data(), cache.size(), false, true) && !std::memcmp(cache.data(), CacheProof, cache.size());
+        }
+        bool PostProcessProfileMatches(std::uintptr_t image, NativePrivateAnimationHierarchyCalls::PostProcessOperation operation) noexcept
+        {
+            namespace Post = NativePrivateAnimationHierarchyPostProcessProfile;
+            using Operation = NativePrivateAnimationHierarchyCalls::PostProcessOperation;
+            const auto index = operation == Operation::RemoveQuaternionFlips ? 0u : operation == Operation::CalculateTotalTime ? 1u : 2u;
+            if (index >= Post::Code.size())
+                return false;
+            const auto&                                      pin = Post::Code[index];
+            std::array<unsigned char, Post::MaximumPinBytes> actual{};
+            if (!Image::ReadImage(image, image + pin.rva, actual.data(), pin.size, false, true) || std::memcmp(actual.data(), pin.bytes, pin.size))
+                return false;
+            if (operation == Operation::RemoveQuaternionFlips)
+            {
+                const auto&                                                        mask = Post::SignMask;
+                std::array<unsigned char, NativeWorldLineProfile::SignMask.size()> bytes{};
+                if (!Image::ReadImage(image, image + mask.rva, bytes.data(), bytes.size()) || std::memcmp(bytes.data(), mask.bytes, bytes.size()))
+                    return false;
+            }
+            return true;
+        }
+        ClockResult NativePostProcessCall(NativePrivateAnimationHierarchyCalls::NativePostProcessFunction function, std::uintptr_t hierarchy,
+                                          std::uint32_t& exception) noexcept
+        {
+            __try
+            {
+                function(hierarchy);
+                return ClockResult::Ok;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                exception = GetExceptionCode();
+                return ClockResult::OriginalException;
+            }
         }
         template <class T>
         T Field(const Bytes& bytes, std::size_t at) noexcept
@@ -284,6 +319,10 @@ namespace mta::game_de
             {
                 storage.expectedSequences = 0;
                 storage.expectedCount = 0;
+                // Explicit empty Initialize is a new source intent, never a
+                // replay/rollback of already-mutated child payload.
+                storage.postProcessBlocked = storage.postProcessVerified = false;
+                storage.postProcessEntry = 0;
             }
             if (result != ClockResult::Ok)
                 return finish(result);
@@ -560,6 +599,119 @@ namespace mta::game_de
             receipt.verified = true;
             return finish(ClockResult::Ok);
         }
+        static ClockResult AcknowledgePostProcess(Storage& storage, std::uint64_t generation,
+                                                  const NativePrivateAnimationHierarchyCalls::PostProcessReceipt& receipt) noexcept
+        {
+            if (storage.generation != generation || !receipt.entered || !receipt.returned || !receipt.accepted || !receipt.verified ||
+                receipt.hierarchy != storage.Address() || receipt.entryRva != storage.postProcessEntry || !storage.postProcessBlocked ||
+                !storage.postProcessVerified)
+                return ClockResult::OwnerConflict;
+            auto expected = State::Entered;
+            if (!storage.state.compare_exchange_strong(expected, State::Ready, std::memory_order_acq_rel))
+                return ClockResult::OwnerConflict;
+            storage.postProcessBlocked = storage.postProcessVerified = false;
+            storage.postProcessEntry = 0;
+            return ClockResult::Ok;
+        }
+        static ClockResult PostProcessWithin(std::uintptr_t image, Storage& storage, std::uint64_t generation,
+                                             NativePrivateAnimationHierarchyCalls::PostProcessOperation operation, CheckOwner owner,
+                                             const NativePrivateAnimationHierarchyCalls::Epoch* epoch, NativePrivateAnimationHierarchyCalls::PayloadCheck check,
+                                             void* context, NativePrivateAnimationHierarchyCalls::PostProcessReceipt* output,
+                                             NativePrivateAnimationHierarchyCalls::InvokePostProcess invoke) noexcept
+        {
+            namespace Detail = PrivateHierarchyStorageDetail;
+            namespace Post = NativePrivateAnimationHierarchyPostProcessProfile;
+            using Operation = NativePrivateAnimationHierarchyCalls::PostProcessOperation;
+            using NativeFunction = NativePrivateAnimationHierarchyCalls::NativePostProcessFunction;
+            const auto                                               requested = operation;
+            NativePrivateAnimationHierarchyCalls::PostProcessReceipt receipt;
+            const auto                                               finish = [&](ClockResult result)
+            {
+                // These entries never allocate/free. Retain actual partial
+                // quaternion/time effects and every child/free journal. Only
+                // this failed H command blocks; detach still qualifies the
+                // unchanged expected pointer/count for storage-only cleanup.
+                if (receipt.entered && result != ClockResult::Ok)
+                {
+                    auto current = storage.GetState();
+                    while ((current == State::Ready || current == State::Entered) &&
+                           !storage.state.compare_exchange_weak(current, State::Entered, std::memory_order_acq_rel))
+                    {
+                    }
+                }
+                if (output)
+                    *output = receipt;
+                return result;
+            };
+            if (!owner)
+                return finish(ClockResult::NotInitialized);
+            if (requested != Operation::RemoveQuaternionFlips && requested != Operation::CalculateTotalTime)
+                return finish(ClockResult::InvalidArgument);
+            if (storage.postProcessBlocked || storage.pointerAckPending)
+                return finish(ClockResult::OwnerConflict);
+            Detail::Bytes before, confirmed;
+            auto          result = Snapshot(image, storage, generation, owner, before);
+            if (result != ClockResult::Ok)
+                return finish(result);
+            const auto count = Detail::Field<std::uint16_t>(before, 0x10);
+            if (count > 0x7fffu)
+                return finish(ClockResult::InvalidArgument);
+            if (epoch)
+            {
+                if (epoch->Image() != image || epoch->Generation() != generation || epoch->ArrayTag() != storage.expectedSequences ||
+                    static_cast<std::size_t>(count) > epoch->Capacity())
+                    return finish(ClockResult::BindingChanged);
+                if (!check)
+                    return finish(ClockResult::NotInitialized);
+                if ((result = check(*epoch, count, requested, context)) != ClockResult::Ok)
+                    return finish(result);
+            }
+            else if (count || storage.expectedSequences)
+                return finish(ClockResult::InvalidArgument);
+            if (!Detail::PostProcessProfileMatches(image, requested))
+                return finish(ClockResult::BindingChanged);
+            if ((result = Snapshot(image, storage, generation, owner, confirmed)) != ClockResult::Ok)
+                return finish(result);
+            if (std::memcmp(before.data(), confirmed.data(), before.size()))
+                return finish(ClockResult::BindingChanged);
+            receipt.hierarchy = storage.Address();
+            receipt.entryRva = requested == Operation::RemoveQuaternionFlips ? Post::QuaternionRva : Post::TimeRva;
+#if defined(MTA_DE_PRIVATE_ANIMATION_HIERARCHY_POSTPROCESS_INVOKE)
+            const auto entry = invoke ? invoke : &MTA_DE_PRIVATE_ANIMATION_HIERARCHY_POSTPROCESS_INVOKE;
+#else
+            const auto entry = invoke ? invoke : &Detail::NativePostProcessCall;
+#endif
+            storage.postProcessBlocked = true;
+            storage.postProcessVerified = false;
+            storage.postProcessEntry = static_cast<std::uint32_t>(receipt.entryRva);
+            storage.state.store(State::Entered, std::memory_order_release);
+            receipt.entered = true;
+            result = entry(reinterpret_cast<NativeFunction>(image + receipt.entryRva), storage.Address(), receipt.exceptionCode);
+            receipt.returned = receipt.accepted = result == ClockResult::Ok;
+            if (result != ClockResult::Ok)
+                return finish(result);
+            Detail::Bytes after, final;
+            if ((result = Snapshot(image, storage, generation, owner, after, true)) != ClockResult::Ok)
+                return finish(result);
+            auto expected = before;
+            if (requested == Operation::CalculateTotalTime)
+                std::memcpy(expected.data() + 0x18, after.data() + 0x18, sizeof(std::uint32_t));
+            if (std::memcmp(expected.data(), after.data(), after.size()))
+                return finish(ClockResult::BindingChanged);
+            if (epoch && (result = check(*epoch, count, requested, context)) != ClockResult::Ok)
+                return finish(result);
+            if ((result = Snapshot(image, storage, generation, owner, final, true)) != ClockResult::Ok)
+                return finish(result);
+            if (std::memcmp(after.data(), final.data(), final.size()) || !Detail::PostProcessProfileMatches(image, requested))
+                return finish(ClockResult::BindingChanged);
+            if ((result = Detail::Context::Owner(image, owner)) != ClockResult::Ok)
+                return finish(result);
+            // Stay Entered until actual outer array/owner bookends return.
+            // Lost outer acknowledgement cannot replay the time conversion.
+            storage.postProcessVerified = true;
+            receipt.verified = true;
+            return finish(ClockResult::Ok);
+        }
         static ClockResult Retire(std::uintptr_t image, Storage& storage, std::uint64_t generation, CheckOwner owner, Receipt* output) noexcept
         {
             Receipt    receipt;
@@ -639,6 +791,35 @@ namespace mta::game_de
     };
     namespace NativePrivateAnimationHierarchyCalls
     {
+        ClockResult PostProcessEmpty(std::uintptr_t image, Storage& storage, std::uint64_t generation, PostProcessOperation operation, CheckOwner owner,
+                                     PostProcessReceipt* output, InvokePostProcess invoke) noexcept
+        {
+            if (output)
+                *output = {};
+            if (!PrivateHierarchyStorageDetail::Context::TryEnter())
+                return ClockResult::Busy;
+            PrivateHierarchyStorageDetail::Context::Scope held;
+            PostProcessReceipt                            receipt;
+            auto result = NativePrivateAnimationHierarchyStorageAccess::PostProcessWithin(image, storage, generation, operation, owner, nullptr, nullptr,
+                                                                                          nullptr, &receipt, invoke);
+            if (result == ClockResult::Ok)
+                result = NativePrivateAnimationHierarchyStorageAccess::AcknowledgePostProcess(storage, generation, receipt);
+            if (result != ClockResult::Ok)
+                receipt.verified = false;
+            if (output)
+                *output = receipt;
+            return result;
+        }
+        ClockResult PostProcessHeld(const Epoch& epoch, Storage& storage, PostProcessOperation operation, CheckOwner owner, PayloadCheck check, void* context,
+                                    PostProcessReceipt* receipt, InvokePostProcess invoke) noexcept
+        {
+            return NativePrivateAnimationHierarchyStorageAccess::PostProcessWithin(epoch.Image(), storage, epoch.Generation(), operation, owner, &epoch, check,
+                                                                                   context, receipt, invoke);
+        }
+        ClockResult AcknowledgePostProcess(Storage& storage, std::uint64_t generation, const PostProcessReceipt& receipt) noexcept
+        {
+            return NativePrivateAnimationHierarchyStorageAccess::AcknowledgePostProcess(storage, generation, receipt);
+        }
         ClockResult Initialize(std::uintptr_t image, Storage& storage, std::uint64_t generation, CheckOwner owner, Receipt* receipt, Write write) noexcept
         {
             return NativePrivateAnimationHierarchyStorageAccess::Initialize(image, storage, generation, owner, receipt, write);

@@ -13,6 +13,7 @@
 #include "NativeAnimationSequenceAccess.h"
 #include "NativeAnimationSequenceLogicalState.h"
 #include "NativeAnimationSequenceDependencyCalls.h"
+#include "NativeAnimationSequencePayloadCalls.h"
 #include <atomic>
 #include <list>
 #include <memory>
@@ -33,6 +34,22 @@ namespace mta::game_de
         using CheckOwner = NativeCustomAnimSequenceStorageCalls::CheckOwner;
         using InvokeMalloc = NativeCustomAnimSequenceStorageCalls::InvokeMalloc;
         using InvokeFree = NativeCustomAnimSequenceStorageCalls::InvokeFree;
+        enum class FrameFormat : std::uint32_t
+        {
+            Unknown,
+            Compressed,
+            Uncompressed
+        };
+        struct AcceptedFrameFormat
+        {
+            FrameFormat    format{FrameFormat::Unknown};
+            std::uintptr_t frameBase = 0;
+            std::size_t    count = 0;
+            bool           root = false;
+        };
+        // Current owner observation only, not a lease or permission to run a
+        // payload operation later without its own held native qualification.
+        ClockResult ReadSequenceFrameFormat(std::uintptr_t, const NativeAnimationSequenceReferenceToken&, CheckOwner, AcceptedFrameFormat&) noexcept;
         struct RetireProgress
         {
             std::size_t scanned = 0, attempted = 0, released = 0, retained = 0;
@@ -67,6 +84,8 @@ namespace mta::game_de
                                     NameReceipt* = nullptr) noexcept;
         ClockResult PrepareFreshCompressedSequence(std::uintptr_t, const NativeAnimationSequenceReferenceToken&, std::size_t, bool, std::uintptr_t, CheckOwner,
                                                    FrameBindReceipt* = nullptr) noexcept;
+        ClockResult PrepareFreshUncompressedSequence(std::uintptr_t, const NativeAnimationSequenceReferenceToken&, std::size_t, bool, std::uintptr_t,
+                                                     CheckOwner, FrameBindReceipt* = nullptr) noexcept;
         struct PrivateDependencyKey
         {
             std::uint64_t  ownerGeneration = 0, command = 0;
@@ -127,11 +146,24 @@ namespace mta::game_de
         ClockResult RequestPrivateDetachReleaseHeld(const PrivateDependencyKey&) noexcept;
         ClockResult RequestPrivateReservationCancelHeld(const PrivateDependencyKey&) noexcept;
         void        RetainPrivateDependencyHeld(const PrivateDependencyKey&) noexcept;
+        struct FrameDescriptor
+        {
+            FrameFormat    format{FrameFormat::Unknown};
+            const Storage* record = nullptr;
+            std::uintptr_t base = 0;
+            std::size_t    count = 0;
+            bool           root = false;
+            bool           Matches(const NativeAnimationSequenceRowCalls::Value&) const noexcept;
+        };
         struct RowState
         {
             explicit RowState(std::size_t value) noexcept : index(value) { logical.Initialize(); }
             std::size_t                         index;
             NativeAnimationSequenceLogicalState logical;
+            // Accepted format belongs to this issued row and exact original
+            // frame record; raw flags/parent bool cannot manufacture it. No
+            // payload content validity or lifetime lease is implied.
+            FrameDescriptor frames;
         };
         struct Entry
         {
@@ -151,6 +183,14 @@ namespace mta::game_de
         ClockResult ReadSequenceValue(std::uintptr_t, const NativeAnimationSequenceReferenceToken&, CheckOwner, NativeAnimationSequenceValues*,
                                       std::uint32_t*) noexcept;
         ClockResult CheckSequenceFramePointer(std::uintptr_t, std::uint64_t, std::uintptr_t, CheckOwner) noexcept;
+        struct PayloadVisitContext
+        {
+            NativeCustomAnimSequenceController* self;
+            Entry*                              array;
+        };
+        static ClockResult ResolveUncompressedFrame(std::size_t, const NativeAnimationSequenceRowCalls::Value&, const Storage*&, void*) noexcept;
+        ClockResult        QualifyUncompressedRowsHeld(const NativeAnimationSequenceDependencyCalls::Epoch&, const PrivateDependencyKey&, std::uint16_t,
+                                                       NativeAnimationSequencePayloadCalls::Operation, CheckOwner) noexcept;
         struct PrivateVisitContext
         {
             NativeCustomAnimSequenceController* self;
@@ -162,11 +202,15 @@ namespace mta::game_de
         ClockResult        WithPrivateArray(std::uintptr_t, const PrivateDependencyKey&, CheckOwner, PrivatePreparedAction, void*, PrivateDependencyReceipt*,
                                             bool) noexcept;
         ClockResult        ReleasePrivateDependencyHeld(Entry&) noexcept;
-        void               Publish() noexcept;
-        Entries            entries;
-        std::uint64_t      ownerGeneration = 0;
-        bool               stopping = false;
-        std::atomic_flag   operation = ATOMIC_FLAG_INIT;
-        std::atomic<bool>  retained{false}, recovery{false};
+        ClockResult       PrepareFreshSequence(std::uintptr_t, const NativeAnimationSequenceReferenceToken&, std::size_t, bool, std::uintptr_t, bool compressed,
+                                               CheckOwner, FrameBindReceipt*) noexcept;
+        bool              CurrentFrameDescriptor(const FrameDescriptor&) const noexcept;
+        void              ForgetFrameAuthority(const Storage&) noexcept;
+        void              Publish() noexcept;
+        Entries           entries;
+        std::uint64_t     ownerGeneration = 0;
+        bool              stopping = false;
+        std::atomic_flag  operation = ATOMIC_FLAG_INIT;
+        std::atomic<bool> retained{false}, recovery{false};
     };
 }

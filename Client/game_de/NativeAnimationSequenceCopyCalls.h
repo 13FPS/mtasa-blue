@@ -18,8 +18,12 @@ namespace mta::game_de::NativeAnimationSequenceCopyCalls
     struct Receipt
     {
         std::uintptr_t sourceRow = 0, targetRow = 0;
-        std::uint32_t  exceptionCode = 0;
-        bool           entered = false, rawCopied = false, verified = false, selfCopy = false;
+        // The actual raw-copy intent's qualified physical fields let the
+        // controller transfer accepted format metadata without trusting a
+        // separate pre-read that could differ before the copied snapshot.
+        NativeAnimationSequenceRowCalls::Value sourceValue{};
+        std::uint32_t                          exceptionCode = 0;
+        bool                                   entered = false, rawCopied = false, verified = false, selfCopy = false;
     };
     // Both records must be genuine current LiveUnpublished arrays, with full
     // row/cookie/range/heap admission. No child allocation is freed, adopted

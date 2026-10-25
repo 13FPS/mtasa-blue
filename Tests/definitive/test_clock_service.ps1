@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations')]
+    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -54,6 +54,11 @@ $record['privateHierarchyScalarPinnedRefusalTested']=$false
 $record['nativePrivateHierarchyOwnerTested']=$false
 $record['actualPrivateHierarchySdkOwnerTested']=$false
 $record['privateHierarchyRetainedLifetimeTested']=$false
+$record['nativePrivateHierarchyPostprocessOwnerTested']=$false
+$record['actualPrivateHierarchyPostprocessSdkOwnerTested']=$false
+$record['privateHierarchyPostprocessRecoveryTested']=$false
+$record['nativeFreshUncompressedSequenceOwnerTested']=$false
+$record['actualFreshUncompressedSequenceServiceOwnerTested']=$false
 $record['nativeFreshCompressedSequenceOwnerTested']=$false
 $record['actualFreshCompressedSequenceServiceOwnerTested']=$false
 $record['nativeCustomAnimationSequenceNameOwnerTested']=$false
@@ -448,6 +453,8 @@ try {
     $sourceNames += @('Client/game_de/NativeAnimationSequenceName.h','Client/game_de/NativeAnimationSequenceName.cpp','Client/game_de/NativeAnimationSequenceNameCalls.h','Client/game_de/NativeAnimationSequenceNameProfile.h','Tests/definitive/NativeCustomAnimationSequenceNameOwnerTests.inl')
     $sourceNames += @('Client/game_de/NativeAnimationSequenceFrameBindCalls.h','Client/game_de/NativeAnimationSequenceFrameBindProfile.h','Tests/definitive/NativeFreshCompressedSequenceOwnerTests.inl')
     $sourceNames += @('Client/game_de/NativePrivateAnimationHierarchyStorage.h','Client/game_de/NativePrivateAnimationHierarchyStorage.cpp','Client/game_de/NativePrivateAnimationHierarchyController.h','Client/game_de/NativePrivateAnimationHierarchyController.cpp','Tests/definitive/NativePrivateHierarchyOwnerTests.inl')
+    $sourceNames += @('Tests/definitive/NativePrivateHierarchyPostProcessOwnerTests.inl','Client/game_de/NativePrivateAnimationHierarchyPostProcessProfile.h','Client/game_de/NativeAnimationSequencePayloadCalls.h')
+    $sourceNames += @('Tests/definitive/NativeFreshUncompressedSequenceOwnerTests.inl')
     $sourceNames += @('Tests/definitive/NativePrivateHierarchyEmptyOwnerTests.inl')
     $sourceNames += @('Tests/definitive/NativePrivateHierarchyParentOwnerTests.inl','Client/game_de/NativeAnimationSequenceDependencyCalls.h')
     $sourceNames += @('Tests/definitive/NativePrivateHierarchyScalarOwnerTests.inl')
@@ -777,6 +784,24 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         (Join-Path $taskRoot 'Client/game_de/NativePedReferenceController.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeImageAccess.cpp')) +
         $runtimeDependencies + @(('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'fixture.pdb')),('/Fe'+$executable),'/link','bcrypt.lib','user32.lib') + $objects
+    if($Scope -in @('PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess')){
+        # All selected positive calls execute the real admitted saved body;
+        # the same delegate schedules intentional post-return failures only.
+        $postHook=Join-Path $scratchRoot 'PrivateHierarchyPostprocessHook.generated.h'
+        $postHookText=@'
+#pragma once
+#include <game/CGameClockService.h>
+#include <cstdint>
+namespace ClockPrivateHierarchyPostProcessFixture {
+ mta::game_de::ClockResult Invoke(void(*)(std::uintptr_t),std::uintptr_t,std::uint32_t&) noexcept;
+}
+'@
+        [IO.File]::WriteAllText($postHook,$postHookText,[Text.UTF8Encoding]::new($false))
+        $postEvidence=Join-Path $outputRoot 'PrivateHierarchyPostprocessHook.generated.h'
+        Copy-Item -LiteralPath $postHook -Destination $postEvidence
+        $record['privateHierarchyPostprocessInvokerFixture']=[ordered]@{path=$postEvidence;sha256=(Sha $postEvidence);productionInvoker='PrivateAnimationHierarchyDetail::NativePostProcessCall';production=(Join-Path $taskRoot 'Client/game_de/NativePrivateAnimationHierarchyStorage.cpp');productionSha256=(Sha (Join-Path $taskRoot 'Client/game_de/NativePrivateAnimationHierarchyStorage.cpp'));profileSha256=(Sha (Join-Path $taskRoot 'Client/game_de/NativePrivateAnimationHierarchyPostProcessProfile.h'))}
+        $arguments=@('/DMTA_DE_PRIVATE_ANIMATION_HIERARCHY_POSTPROCESS_INVOKE=::ClockPrivateHierarchyPostProcessFixture::Invoke',('/FI'+$postHook))+$arguments
+    }
     if($Scope -eq 'PrivateHierarchyEmptyOperations'){
         # Keep the actual empty-store implementation linked once and observe
         # only its completed guarded CPU stores and post-acknowledgement loss.
@@ -830,6 +855,7 @@ namespace ClockPrivateHierarchyParentWriteFixture {
     if ($Scope -eq 'WorldLine') { $fixtureArguments += '--world-line' }
     if ($Scope -eq 'WorldGround') { $fixtureArguments += '--world-ground' }
     if ($Scope -eq 'ConstructorServices') { $fixtureArguments += '--constructor-services' }
+    if ($Scope -eq 'FreshUncompressedSequence') { $fixtureArguments += '--fresh-uncompressed-sequence' }
     if ($Scope -eq 'FreshCompressedSequence') { $fixtureArguments += '--fresh-compressed-sequence' }
     if ($Scope -eq 'CustomAnimationSequenceName') { $fixtureArguments += '--custom-animation-sequence-name' }
     if ($Scope -eq 'AnimationHierarchyBank') { $fixtureArguments += '--animation-hierarchy-bank' }
@@ -869,7 +895,28 @@ namespace ClockPrivateHierarchyParentWriteFixture {
     if ($Scope -eq 'GarageNamed') { $fixtureArguments += '--garage-named' }
     if ($Scope -eq 'GaragePools') { $fixtureArguments += '--garage-pools' }
     if ($Scope -eq 'PedPoolRegistry') { $fixtureArguments += '--ped-pool-registry' }
-    if($Scope -eq 'PrivateHierarchyEmptyOperations'){
+    if($Scope -in @('PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess')){
+        $record['testRuns']=@();$record['testScenarioExecutables']=@();$texts=@()
+        $scenarios=@('success','unknown','lostack')
+        if($Scope -eq 'FramesAndHierarchyPostprocess'){$scenarios=@('fresh')+$scenarios}
+        foreach($scenario in $scenarios){
+            $scenarioRoot=Join-Path $outputRoot ('scenario-private-hierarchy-postprocess-'+$scenario)
+            [IO.Directory]::CreateDirectory($scenarioRoot)|Out-Null
+            $scenarioExecutable=Join-Path $scenarioRoot ([IO.Path]::GetFileName($executable))
+            if(Test-Path -LiteralPath $scenarioExecutable){throw 'Postprocess evidence already exists'}
+            Copy-Item -LiteralPath $executable -Destination $scenarioExecutable
+            $scenarioHash=Sha $scenarioExecutable
+            if($scenarioHash -cne (Sha $executable)){throw 'Postprocess scenario executable changed'}
+            $record.testScenarioExecutables+=@{scenario=$scenario;path=$scenarioExecutable;sha256=$scenarioHash}
+            $selector=if($scenario -eq 'fresh'){'--fresh-uncompressed-sequence'}else{'--private-hierarchy-postprocess-'+$scenario}
+            $run=RunBounded $scenarioExecutable @($scenarioRoot,$selector) ('test-private-hierarchy-postprocess-'+$scenario) 60000
+            $record.testRuns+=$run
+            $part=[IO.File]::ReadAllText($run.stdout)+[IO.File]::ReadAllText($run.stderr)
+            if($run.exitCode -ne 0 -or $run.timedOut -or $part -notmatch 'Passed (\d+) production clock service checks'){throw ('Private postprocess '+$scenario+' failed')}
+            $record.checks+=[int]$Matches[1];$texts+=$part
+        }
+        $record.testRun=$record.testRuns[-1];$text=$texts -join [Environment]::NewLine
+    } elseif($Scope -eq 'PrivateHierarchyEmptyOperations'){
         $record['testRuns']=@();$record['testScenarioExecutables']=@();$texts=@()
         foreach($scenario in @('success','accepted-loss','unknown-count','foreign-cache')){
             $scenarioRoot=Join-Path $outputRoot ('scenario-private-hierarchy-empty-'+$scenario)
@@ -1050,7 +1097,23 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
         if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
     }
-    if($Scope -eq 'PrivateHierarchyEmptyOperations'){
+    if($Scope -in @('PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess')){
+        $record.nativePrivateHierarchyPostprocessOwnerTested=$text.Contains('Production native private hierarchy postprocess owner fixture completed')
+        $record.actualPrivateHierarchyPostprocessSdkOwnerTested=$text.Contains('Production actual private hierarchy postprocess SDK owner fixture completed')
+        $record.privateHierarchyPostprocessRecoveryTested=(@($texts|Where-Object{$_.Contains('Production private hierarchy postprocess entered failure recovered without replay')}).Count -eq 2)
+        if(-not($record.nativePrivateHierarchyPostprocessOwnerTested -and $record.actualPrivateHierarchyPostprocessSdkOwnerTested -and $record.privateHierarchyPostprocessRecoveryTested)){throw 'Private postprocess selected scope incomplete'}
+        if($Scope -eq 'FramesAndHierarchyPostprocess'){
+            $record.nativeFreshUncompressedSequenceOwnerTested=$text.Contains('Production native fresh uncompressed sequence owner fixture completed')
+            $record.actualFreshUncompressedSequenceServiceOwnerTested=$text.Contains('Production actual fresh uncompressed sequence service owner fixture completed')
+            if(-not($record.nativeFreshUncompressedSequenceOwnerTested -and $record.actualFreshUncompressedSequenceServiceOwnerTested)){throw 'Combined fresh uncompressed scope incomplete'}
+        }
+        $record.productionNativeCallbackTested=$true
+    } elseif($Scope -eq 'FreshUncompressedSequence'){
+        $record.nativeFreshUncompressedSequenceOwnerTested=$text.Contains('Production native fresh uncompressed sequence owner fixture completed')
+        $record.actualFreshUncompressedSequenceServiceOwnerTested=$text.Contains('Production actual fresh uncompressed sequence service owner fixture completed')
+        if(-not($record.nativeFreshUncompressedSequenceOwnerTested -and $record.actualFreshUncompressedSequenceServiceOwnerTested)){throw 'Fresh uncompressed selected scope incomplete'}
+        $record.productionNativeCallbackTested=$true
+    } elseif($Scope -eq 'PrivateHierarchyEmptyOperations'){
         $record.nativePrivateHierarchyEmptyOperationsOwnerTested=$text.Contains('Production native private hierarchy empty operations owner fixture completed')
         $record.actualPrivateHierarchyEmptyOperationsSdkOwnerTested=$text.Contains('Production actual private hierarchy empty operations SDK owner fixture completed')
         $record.privateHierarchyEmptyRecoveryTested=$text.Contains('Production private hierarchy empty accepted cleanup recovered')

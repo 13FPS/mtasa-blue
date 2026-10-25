@@ -6,6 +6,7 @@
 #pragma once
 #include "NativeAnimationHierarchyAccess.h"
 #include "NativeAnimationSequenceDependencyCalls.h"
+#include "NativeAnimationSequencePayloadCalls.h"
 #include <array>
 #include <atomic>
 namespace mta::game_de
@@ -47,8 +48,14 @@ namespace mta::game_de
         mutable std::atomic<State> state{State::Fresh};
         std::uint16_t              expectedCount = 0;
         bool                       hashDefined = false, pointerAckPending = false;
+        // A normal native return still needs the outer array/owner bookends.
+        // Failed/unknown payload effects are never replayed automatically;
+        // pointer detach and ordinary known storage retirement remain possible.
+        bool                         postProcessBlocked = false, postProcessVerified = false;
+        std::array<unsigned char, 2> postProcessPadding{};
+        std::uint32_t                postProcessEntry = 0;
         static_assert(sizeof(std::atomic<State>) == 4);
-        // Explicitly laid out40+8+8+4+2+1+1 CPU bytes avoid implicit padding.
+        // Explicitly laid out40+8+8+4+2+1+1+8 CPU bytes avoid implicit padding.
     };
     namespace NativePrivateAnimationHierarchyCalls
     {
@@ -71,6 +78,23 @@ namespace mta::game_de
             std::uint32_t  exceptionCode = 0;
             bool           entered = false, accepted = false, retired = false, verified = false, acknowledged = false;
         };
+        using PostProcessOperation = NativeAnimationSequencePayloadCalls::Operation;
+        using NativePostProcessFunction = void (*)(std::uintptr_t hierarchy);
+        using InvokePostProcess = ClockResult (*)(NativePostProcessFunction, std::uintptr_t, std::uint32_t&) noexcept;
+        using PayloadCheck = ClockResult (*)(const Epoch&, std::uint16_t, PostProcessOperation, void*) noexcept;
+        struct PostProcessReceipt
+        {
+            std::uintptr_t hierarchy = 0, entryRva = 0;
+            std::uint32_t  exceptionCode = 0;
+            bool           entered = false, returned = false, accepted = false, verified = false;
+        };
+        ClockResult PostProcessEmpty(std::uintptr_t, Storage&, std::uint64_t, PostProcessOperation, CheckOwner, PostProcessReceipt* = nullptr,
+                                     InvokePostProcess = nullptr) noexcept;
+        ClockResult PostProcessHeld(const Epoch&, Storage&, PostProcessOperation, CheckOwner, PayloadCheck, void*, PostProcessReceipt* = nullptr,
+                                    InvokePostProcess = nullptr) noexcept;
+        // Only the actual outer returned array/owner receipt calls this CPU
+        // acknowledgement. It cannot clear PublicationPinned or replay code.
+        ClockResult AcknowledgePostProcess(Storage&, std::uint64_t, const PostProcessReceipt&) noexcept;
         ClockResult Initialize(std::uintptr_t image, Storage&, std::uint64_t, CheckOwner, Receipt* = nullptr, Write = nullptr) noexcept;
         // Source-owned private scalar assignments only; all other40 bytes and
         // hash definedness survive, including accepted writes with lost ack.

@@ -56,7 +56,8 @@ namespace mta::game_de
         enum class ScalarOperation : std::uint32_t
         {
             RunningCompressed,
-            AnimationBlockID
+            AnimationBlockID,
+            NameHash
         };
         using ScalarWrite = ClockResult (*)(std::uintptr_t, ScalarOperation, std::uint32_t, std::uint32_t&) noexcept;
         struct Receipt
@@ -71,6 +72,9 @@ namespace mta::game_de
         ClockResult SetRunningCompressed(std::uintptr_t image, Storage&, std::uint64_t, bool, CheckOwner, Receipt* = nullptr, ScalarWrite = nullptr) noexcept;
         ClockResult SetAnimationBlockID(std::uintptr_t image, Storage&, std::uint64_t, std::int32_t, CheckOwner, Receipt* = nullptr,
                                         ScalarWrite = nullptr) noexcept;
+        // The addressed classic hierarchy setter defines only this DWORD.
+        // Define knownness on accepted writes even if postflight later fails.
+        ClockResult SetNameHash(std::uintptr_t image, Storage&, std::uint64_t, std::uint32_t, CheckOwner, Receipt* = nullptr, ScalarWrite = nullptr) noexcept;
         ClockResult Read(std::uintptr_t image, const Storage&, std::uint64_t, CheckOwner, NativeAnimationHierarchyValues&) noexcept;
         // Only a known neverpublished empty/cache0 receiver may retire. The
         // controller performs plain CPU deletion after a retired receipt,

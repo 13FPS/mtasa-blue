@@ -20,7 +20,7 @@ $record = [ordered]@{
     schema='mta_private_hierarchy_scalar_sdk_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     results=@();failure=$null;scratchDirectory=$scratchRoot;scratchFilesRemaining=$null;scratchRemoved=$false;
-    scope='Actual MTA bool/int private scalar setter dispatch only, full token/value widths, channel isolation and exact refusal statuses. Seven mandatory mutations abort; no native engine code, factory or old suite replay.';
+    scope='Actual MTA bool/int private scalar setter dispatch only, full token/value widths, channel isolation and exact refusal statuses. Unsupported mutations abort in the strict fixture; no native engine code, factory or old suite replay.';
     ownedBuffersOnly=$true;nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;
     completeAnimationHierarchyReady=$false;fullMtaReady=$false;installationChanged=$false;
     actualPrivateHierarchyScalarSettersSdkTested=$false
@@ -78,7 +78,7 @@ function RunOwned([string]$Executable,[string[]]$Arguments,[string]$Directory,[s
 }
 
 try {
-    $productionSources=@('Client/game_de/CAnimBlendHierarchyDE.cpp')
+    $productionSources=@('Client/game_de/CAnimBlendHierarchyDE.cpp','Client/game_de/NativeClassicAnimationNameHash.cpp','Client/game_de/CKeyGenDE.cpp')
     $sourceNames=$productionSources+@('Tests/definitive/PrivateHierarchyScalarDETests.cpp','Tests/definitive/AnimationHierarchyDEFixture.h','Tests/definitive/test_private_hierarchy_scalar_de.ps1','Build/definitive-recovery/mta-private-hierarchy-scalar-sdk-20261024/private-hierarchy-scalar-access-source-ready.json','Build/definitive-recovery/mta-private-hierarchy-scalar-sdk-20261024/private-hierarchy-scalar-sdk-source-ready.json','Build/definitive-recovery/mta-private-hierarchy-scalar-sdk-20261024/private-hierarchy-scalar-fixture-source-ready.json','Build/definitive-recovery/mta-private-hierarchy-scalar-sdk-20261024/private-hierarchy-scalar-sdk-tests-source-ready.json')
     $pending=[Collections.Generic.Queue[string]]::new()
     $seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
@@ -134,7 +134,7 @@ try {
         $executable = Join-Path $directory 'private_hierarchy_scalar_sdk_tests.exe'
         $arguments = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/MD','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN',
             ('/I'+(Join-Path $taskRoot 'Shared/sdk')),('/I'+(Join-Path $taskRoot 'Client/sdk')),
-            (Join-Path $PSScriptRoot 'PrivateHierarchyScalarDETests.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimBlendHierarchyDE.cpp'),
+            (Join-Path $PSScriptRoot 'PrivateHierarchyScalarDETests.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimBlendHierarchyDE.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeClassicAnimationNameHash.cpp'),(Join-Path $taskRoot 'Client/game_de/CKeyGenDE.cpp'),
             ('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'compiler.pdb')),('/Fe'+$executable))
         $result = [ordered]@{architecture=$architecture;environment=$environmentResult;compile=$null;test=$null;
             checks=0;pointerBits=$null;executable=$executable;executableSha256=$null;actualPrivateHierarchyScalarSettersSdkTested=$false}

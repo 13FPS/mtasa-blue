@@ -64,5 +64,11 @@ namespace mta::game_de
         {
             return ClockResult::NotInitialized;
         }
+        // Hierarchy SetName stores only its already-computed source key.
+        // Names are not retained, truncated or interned by the native owner.
+        virtual ClockResult SetPrivateAnimationHierarchyNameHash(const NativeAnimationHierarchyReferenceToken&, std::uint32_t) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
     };
 }

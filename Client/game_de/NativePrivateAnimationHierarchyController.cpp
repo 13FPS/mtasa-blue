@@ -122,12 +122,16 @@ namespace mta::game_de
         if (requestedOperation == Operation::RunningCompressed)
             result =
                 PrivateHierarchyControllerDetail::Calls::SetRunningCompressed(image, entry->storage, token.ownerGeneration, requestedBits != 0, owner, receipt);
-        else
+        else if (requestedOperation == Operation::AnimationBlockID)
         {
             std::int32_t block;
             std::memcpy(&block, &requestedBits, sizeof(block));
             result = PrivateHierarchyControllerDetail::Calls::SetAnimationBlockID(image, entry->storage, token.ownerGeneration, block, owner, receipt);
         }
+        else if (requestedOperation == Operation::NameHash)
+            result = PrivateHierarchyControllerDetail::Calls::SetNameHash(image, entry->storage, token.ownerGeneration, requestedBits, owner, receipt);
+        else
+            result = ClockResult::InvalidArgument;
         Publish();
         return result;
     }
@@ -146,6 +150,13 @@ namespace mta::game_de
         std::uint32_t bits;
         std::memcpy(&bits, &requested, sizeof(bits));
         return SetScalar(image, token, NativePrivateAnimationHierarchyCalls::ScalarOperation::AnimationBlockID, bits, owner, receipt);
+    }
+    ClockResult NativePrivateAnimationHierarchyController::SetNameHash(std::uintptr_t image, const Token& value, std::uint32_t hash, CheckOwner owner,
+                                                                       Receipt* receipt) noexcept
+    {
+        const auto token = value;
+        const auto requested = hash;
+        return SetScalar(image, token, NativePrivateAnimationHierarchyCalls::ScalarOperation::NameHash, requested, owner, receipt);
     }
     ClockResult NativePrivateAnimationHierarchyController::Destroy(std::uintptr_t image, const Token& value, CheckOwner owner, Receipt* receipt) noexcept
     {

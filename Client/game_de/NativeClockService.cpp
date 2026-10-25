@@ -256,6 +256,7 @@ namespace mta::game_de
             ClockResult DestroyPrivateAnimationHierarchy(const NativeAnimationHierarchyReferenceToken&) noexcept override;
             ClockResult SetPrivateAnimationHierarchyRunningCompressed(const NativeAnimationHierarchyReferenceToken&, bool) noexcept override;
             ClockResult SetPrivateAnimationHierarchyBlockID(const NativeAnimationHierarchyReferenceToken&, std::int32_t) noexcept override;
+            ClockResult SetPrivateAnimationHierarchyNameHash(const NativeAnimationHierarchyReferenceToken&, std::uint32_t) noexcept override;
             ClockResult ReadAnimationHierarchy(const NativeAnimationHierarchyReferenceToken&, NativeAnimationHierarchyValues&) noexcept override;
             ClockResult ReadAnimationHierarchySequences(const NativeAnimationHierarchyReferenceToken&, std::uintptr_t&) noexcept override;
             ClockResult ReadAnimationHierarchySequence(const NativeAnimationHierarchyReferenceToken&, std::uint32_t, std::uintptr_t&) noexcept override;
@@ -2932,6 +2933,26 @@ namespace mta::game_de
                 return result;
             NativePrivateAnimationHierarchyController::Receipt receipt;
             result = runtime.privateHierarchies.SetAnimationBlockID(runtime.image, request, requestedValue, &CheckTimingOwner, &receipt);
+            PublishCustomAnimationSequenceDebt(request.ownerGeneration);
+            if (result == ClockResult::Ok)
+                result = CheckAnimationHierarchyRequest(request);
+            if ((receipt.entered && result != ClockResult::Ok) || runtime.privateHierarchies.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            return result;
+        }
+
+        ClockResult NativeAccess::SetPrivateAnimationHierarchyNameHash(const NativeAnimationHierarchyReferenceToken& token, std::uint32_t hash) noexcept
+        {
+            // The SDK already owns and hashes the complete source name. Keep
+            // that exact key and token stable across owner callbacks; this
+            // operation grants no native name-pool or publication authority.
+            const auto request = token;
+            const auto requestedHash = hash;
+            auto       result = CheckAnimationHierarchyRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            NativePrivateAnimationHierarchyController::Receipt receipt;
+            result = runtime.privateHierarchies.SetNameHash(runtime.image, request, requestedHash, &CheckTimingOwner, &receipt);
             PublishCustomAnimationSequenceDebt(request.ownerGeneration);
             if (result == ClockResult::Ok)
                 result = CheckAnimationHierarchyRequest(request);

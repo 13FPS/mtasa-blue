@@ -20,7 +20,7 @@ $record = [ordered]@{
     schema='mta_private_anim_hierarchy_de_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     results=@();failure=$null;scratchDirectory=$scratchRoot;scratchFilesRemaining=$null;scratchRemoved=$false;
-    scope='Actual Initialize copied-token/refusal dispatch and field-specific undefined hash refusal. Existing independent getter observations remain usable. Nine remaining mutations abort; no factory, native engine code, full CGame or previous SDK suite replay.';
+    scope='Actual Initialize copied-token/refusal dispatch and field-specific undefined hash refusal. Existing independent getter observations remain usable. Unsupported mutations abort in the strict fixture; no factory, native engine code, full CGame or previous SDK suite replay.';
     ownedBuffersOnly=$true;nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;
     completeAnimationHierarchyReady=$false;fullMtaReady=$false;installationChanged=$false;
     actualPrivateHierarchySdkInitializationTested=$false;actualHierarchyUnknownHashRefusalTested=$false
@@ -78,7 +78,7 @@ function RunOwned([string]$Executable,[string[]]$Arguments,[string]$Directory,[s
 }
 
 try {
-    $productionSources=@('Client/game_de/CAnimBlendHierarchyDE.cpp')
+    $productionSources=@('Client/game_de/CAnimBlendHierarchyDE.cpp','Client/game_de/NativeClassicAnimationNameHash.cpp','Client/game_de/CKeyGenDE.cpp')
     $sourceNames=$productionSources+@('Tests/definitive/PrivateAnimationHierarchyDETests.cpp','Tests/definitive/AnimationHierarchyDEFixture.h',
         'Tests/definitive/test_private_anim_hierarchy_de.ps1',
         'Build/definitive-recovery/mta-private-animation-hierarchy-sdk-20261024/private-animation-hierarchy-access-source-ready.json',
@@ -139,7 +139,7 @@ try {
         $executable = Join-Path $directory 'private_anim_hierarchy_de_tests.exe'
         $arguments = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/MD','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN',
             ('/I'+(Join-Path $taskRoot 'Shared/sdk')),('/I'+(Join-Path $taskRoot 'Client/sdk')),
-            (Join-Path $PSScriptRoot 'PrivateAnimationHierarchyDETests.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimBlendHierarchyDE.cpp'),
+            (Join-Path $PSScriptRoot 'PrivateAnimationHierarchyDETests.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimBlendHierarchyDE.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeClassicAnimationNameHash.cpp'),(Join-Path $taskRoot 'Client/game_de/CKeyGenDE.cpp'),
             ('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'compiler.pdb')),('/Fe'+$executable))
         $result = [ordered]@{architecture=$architecture;environment=$environmentResult;compile=$null;test=$null;
             checks=0;pointerBits=$null;executable=$executable;executableSha256=$null;actualPrivateHierarchySdkInitializationTested=$false}

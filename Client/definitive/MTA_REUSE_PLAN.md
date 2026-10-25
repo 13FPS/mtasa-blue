@@ -5,6 +5,13 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+Hierarchy naming now uses the addressed classic `SetName` body: ASCII name
+normalization followed by the existing raw key generator. Its input has no
+sequence-row 64-byte limit, and high bytes remain unchanged. Only the hierarchy
+hash DWORD is written. Accepted writes define the hash even if a later owner
+acknowledgement fails; initialization preserves both the hash and its defined
+state. Other native bytes and publication retention remain intact.
+
 The existing hierarchy facade now forwards MTA's compression and block-ID
 setters to the same private owner. They write only the compression byte or
 signed block DWORD, preserving every other native byte and hash definedness.

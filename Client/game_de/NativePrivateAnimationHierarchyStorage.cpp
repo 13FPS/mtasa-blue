@@ -83,6 +83,8 @@ namespace mta::game_de
                 }
                 else if (operation == Operation::AnimationBlockID)
                     std::memcpy(reinterpret_cast<void*>(address + 0x14), &bits, sizeof(bits));
+                else if (operation == Operation::NameHash)
+                    std::memcpy(reinterpret_cast<void*>(address), &bits, sizeof(bits));
                 else
                     return ClockResult::InvalidArgument;
                 return ClockResult::Ok;
@@ -278,6 +280,8 @@ namespace mta::game_de
                 expected[0x12] = static_cast<unsigned char>(requestedBits);
             else if (requestedOperation == Operation::AnimationBlockID)
                 std::memcpy(expected.data() + 0x14, &requestedBits, sizeof(requestedBits));
+            else if (requestedOperation == Operation::NameHash)
+                std::memcpy(expected.data(), &requestedBits, sizeof(requestedBits));
             else
                 return finish(ClockResult::InvalidArgument);
 #if defined(MTA_DE_PRIVATE_ANIMATION_HIERARCHY_SCALAR_WRITE)
@@ -290,6 +294,11 @@ namespace mta::game_de
             receipt.entered = true;
             result = entry(storage.Address(), requestedOperation, requestedBits, receipt.exceptionCode);
             receipt.accepted = result == ClockResult::Ok;
+            // This source-defined value exists as soon as its complete DWORD
+            // write is acknowledged. A later lost owner/read acknowledgement
+            // must not roll its definedness back. Initialize preserves it.
+            if (receipt.accepted && requestedOperation == Operation::NameHash)
+                storage.hashDefined = true;
             if (result != ClockResult::Ok)
                 return finish(result);
             // Only this acknowledged CPU store can restore its entered state.
@@ -426,6 +435,13 @@ namespace mta::game_de
             std::uint32_t bits;
             std::memcpy(&bits, &value, sizeof(bits));
             return NativePrivateAnimationHierarchyStorageAccess::SetScalar(image, storage, generation, ScalarOperation::AnimationBlockID, bits, owner, receipt,
+                                                                           write);
+        }
+        ClockResult SetNameHash(std::uintptr_t image, Storage& storage, std::uint64_t generation, std::uint32_t hash, CheckOwner owner, Receipt* receipt,
+                                ScalarWrite write) noexcept
+        {
+            const auto requested = hash;
+            return NativePrivateAnimationHierarchyStorageAccess::SetScalar(image, storage, generation, ScalarOperation::NameHash, requested, owner, receipt,
                                                                            write);
         }
         ClockResult Read(std::uintptr_t image, const Storage& storage, std::uint64_t generation, CheckOwner owner,

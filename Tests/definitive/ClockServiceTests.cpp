@@ -8316,10 +8316,13 @@ namespace
 #include "NativeFreshCompressedSequenceOwnerTests.inl"
 #include "NativePrivateHierarchyOwnerTests.inl"
 #include "NativePrivateHierarchyScalarOwnerTests.inl"
+#include "NativePrivateHierarchyNameOwnerTests.inl"
 
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool privateHierarchyNamePinned = argc == 3 && std::strcmp(argv[2], "--private-hierarchy-name-pinned") == 0;
+    const bool privateHierarchyNameOnly = privateHierarchyNamePinned || (argc == 3 && std::strcmp(argv[2], "--private-hierarchy-name-success") == 0);
     const bool privateHierarchyScalarPinned = argc == 3 && std::strcmp(argv[2], "--private-hierarchy-scalars-pinned") == 0;
     const bool privateHierarchyScalarsOnly = privateHierarchyScalarPinned || (argc == 3 && std::strcmp(argv[2], "--private-hierarchy-scalars-success") == 0);
     const bool privateHierarchyPublished = argc == 3 && std::strcmp(argv[2], "--private-hierarchy-published") == 0;
@@ -8392,9 +8395,18 @@ int main(int argc, char** argv)
            cameraSphereOnly || pedWeaponClearOnly || pedClothesOnly || pedRebuildOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly ||
            animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly ||
            animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly || animationHierarchyBankOnly ||
-           customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly) &&
+           customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (privateHierarchyNameOnly)
+    {
+        PrivateHierarchyNameOwnerFixture::pinned = privateHierarchyNamePinned;
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        NativeAnimationBlocksOwnedSdk(fixture, &PrivateHierarchyNameOwnerFixture::Prepared);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (privateHierarchyScalarsOnly)
     {
         PrivateHierarchyScalarOwnerFixture::pinned = privateHierarchyScalarPinned;

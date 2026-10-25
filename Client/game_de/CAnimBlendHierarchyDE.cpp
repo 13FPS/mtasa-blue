@@ -4,6 +4,7 @@
  * PURPOSE: Preserve hierarchy scalar bits and current nested-pointer admission
  ****************************************************************************/
 #include "CAnimBlendHierarchyDE.h"
+#include "NativeClassicAnimationNameHash.h"
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -40,6 +41,17 @@ namespace mta::game_de
         const auto token = reference;
         const auto value = static_cast<std::int32_t>(blockId);
         Require(native.SetPrivateAnimationHierarchyBlockID(token, value), "SetAnimationBlockID");
+    }
+    void CAnimBlendHierarchyDE::SetName(const char* name)
+    {
+        const auto token = reference;
+        if (!name)
+            throw std::invalid_argument("DE animation hierarchy SetName requires a nonnull name");
+        // Addressed classic 4CF2D0 assigns only the uppercase source key. Hash
+        // the entire NUL string before callback; hierarchy names have no
+        // sequence row's 64-byte bound and perform no native name/cache work.
+        const auto hash = NativeClassicAnimationNamePolicy::Hash(name);
+        Require(native.SetPrivateAnimationHierarchyNameHash(token, hash), "SetName");
     }
     NativeAnimationHierarchyValues CAnimBlendHierarchyDE::Read(const char* operation) const
     {

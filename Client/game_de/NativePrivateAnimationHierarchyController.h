@@ -25,6 +25,7 @@ namespace mta::game_de
         ClockResult Destroy(std::uintptr_t image, const Token&, CheckOwner, Receipt* = nullptr) noexcept;
         ClockResult SetRunningCompressed(std::uintptr_t image, const Token&, bool, CheckOwner, Receipt* = nullptr) noexcept;
         ClockResult SetAnimationBlockID(std::uintptr_t image, const Token&, std::int32_t, CheckOwner, Receipt* = nullptr) noexcept;
+        ClockResult SetNameHash(std::uintptr_t image, const Token&, std::uint32_t, CheckOwner, Receipt* = nullptr) noexcept;
         ClockResult Read(std::uintptr_t image, const Token&, CheckOwner, Values&) noexcept;
         ClockResult ReadSequences(std::uintptr_t image, const Token&, CheckOwner, std::uintptr_t&) noexcept;
         ClockResult ReadSequence(std::uintptr_t image, const Token&, std::uint32_t index, CheckOwner, std::uintptr_t&) noexcept;

@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cstring>
 #include <game/CAnimGatewayNames.h>
+#include <game/CAnimGroupValidationPolicy.h>
 #include <stdexcept>
 #include <exception>
 #include <new>
@@ -783,6 +784,20 @@ namespace mta::game_de
         if (group > NativeAnimationAssociationGroupPrefixCount)
             Require(ClockResult::BindingChanged, "GetFirstAssocGroup");
         return static_cast<AssocGroupId>(group);
+    }
+    bool CAnimManagerDE::IsValidGroup(std::uint32_t group) const
+    {
+        const auto generation = ownerGeneration;
+        return MtaGame::CAnimGroupValidationPolicy::IsValidGroup(group,
+                                                                 [this, generation](std::uint32_t id)
+                                                                 {
+                                                                     bool created = false;
+                                                                     // The actual current group-array owner supplies NumAnims!=0.
+                                                                     // A missing/foreign lifetime is a refusal, never an unavailable
+                                                                     // provider's false or a guessed association-pointer predicate.
+                                                                     Require(native.ReadAnimationGroupCreated(generation, id, created), "IsValidGroup");
+                                                                     return created;
+                                                                 });
     }
     int CAnimManagerDE::GetAnimationBlockIndex(const char* name)
     {

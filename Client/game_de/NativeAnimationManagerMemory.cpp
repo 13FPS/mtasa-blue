@@ -6,6 +6,8 @@
 #include "NativeAnimationManagerMemory.h"
 #include "NativeAnimationManagerProfile.h"
 #include "NativeAnimationAssocDefinitionProfile.h"
+#include "NativeAnimationGroupArrayProfile.h"
+#include "NativeModelReferenceMap.h"
 #include "NativeAnimationBlockMemory.h"
 #include "NativeAnimationBlockProfile.h"
 #include "NativeGameStateMemory.h"
@@ -569,6 +571,148 @@ namespace mta::game_de
         if ((result = Detail::Begin(binding, owner, 0, true)) != ClockResult::Ok)
             return result;
         output = selected;
+        return ClockResult::Ok;
+    }
+
+    namespace AnimationGroupCreatedDetail
+    {
+        namespace Group = NativeAnimationGroupArrayProfile;
+        namespace Image = NativeImageAccess;
+        namespace Memory = NativeModelReferenceMap;
+        using Binding = NativeAnimationManagerMemory::Binding;
+        using CheckOwner = NativeAnimationManagerMemory::CheckOwner;
+        bool Profile(Binding binding) noexcept
+        {
+            if (!NativePedPoolReader::Revalidate(binding))
+                return false;
+            IMAGE_DOS_HEADER   dos{};
+            IMAGE_NT_HEADERS64 nt{};
+            if (!Image::ReadImage(binding.image, binding.image, &dos, sizeof(dos)) || dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew <= 0 ||
+                static_cast<std::size_t>(dos.e_lfanew) > NativePedPoolProfile::ImageSize - sizeof(nt) ||
+                !Image::ReadImage(binding.image, binding.image + static_cast<std::uintptr_t>(dos.e_lfanew), &nt, sizeof(nt)) ||
+                nt.Signature != IMAGE_NT_SIGNATURE || nt.FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 ||
+                nt.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC || nt.OptionalHeader.SizeOfImage != NativePedPoolProfile::ImageSize ||
+                nt.FileHeader.SizeOfOptionalHeader < sizeof(IMAGE_OPTIONAL_HEADER64))
+                return false;
+            const auto at = static_cast<std::uintptr_t>(dos.e_lfanew) + offsetof(IMAGE_NT_HEADERS64, OptionalHeader) + nt.FileHeader.SizeOfOptionalHeader;
+            std::array<IMAGE_SECTION_HEADER, 96> sections{};
+            const auto                           bytes = static_cast<std::size_t>(nt.FileHeader.NumberOfSections) * sizeof(IMAGE_SECTION_HEADER);
+            if (!nt.FileHeader.NumberOfSections || nt.FileHeader.NumberOfSections > sections.size() || at > NativePedPoolProfile::ImageSize ||
+                bytes > NativePedPoolProfile::ImageSize - at || !Image::ReadImage(binding.image, binding.image + at, sections.data(), bytes))
+                return false;
+            const auto contains = [&](std::uintptr_t rva, std::size_t size, DWORD required, DWORD forbidden)
+            {
+                for (std::size_t i = 0; i != nt.FileHeader.NumberOfSections; ++i)
+                    if (Image::SectionContains(sections[i], rva, size, required, forbidden))
+                        return true;
+                return false;
+            };
+            // The writable mask carries the unsigned high bit; use the Win32
+            // flag type so both declarators retain the same explicit type.
+            constexpr DWORD rw = IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE, rx = IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE;
+            if (!contains(Group::GlobalRva, 8, rw, IMAGE_SCN_MEM_EXECUTE) || !contains(Group::CountRva, 4, rw, IMAGE_SCN_MEM_EXECUTE))
+                return false;
+            for (const auto& pin : Group::Code)
+            {
+                std::array<unsigned char, Group::MaximumPinBytes> actual{};
+                if (!pin.size || pin.size > actual.size() || !contains(pin.rva, pin.size, rx, IMAGE_SCN_MEM_WRITE) ||
+                    !Image::ReadImage(binding.image, binding.image + pin.rva, actual.data(), pin.size, false, true) ||
+                    std::memcmp(actual.data(), pin.bytes, pin.size))
+                    return false;
+            }
+            return true;
+        }
+        ClockResult Begin(Binding binding, CheckOwner owner) noexcept
+        {
+            const auto result = AnimationManagerDetail::Owner(binding, owner);
+            return result != ClockResult::Ok ? result : Profile(binding) ? ClockResult::Ok : ClockResult::BindingChanged;
+        }
+        bool HeapSpan(std::uintptr_t address, std::size_t bytes) noexcept
+        {
+            if (!Memory::PrivateWritable(address, bytes))
+                return false;
+            const auto end = address + bytes;
+            while (address < end)
+            {
+                MEMORY_BASIC_INFORMATION page{};
+                if (VirtualQuery(reinterpret_cast<void*>(address), &page, sizeof(page)) != sizeof(page) || page.Type != MEM_PRIVATE || !page.RegionSize)
+                    return false;
+                const auto begin = reinterpret_cast<std::uintptr_t>(page.BaseAddress);
+                if (begin > address || page.RegionSize > (std::numeric_limits<std::uintptr_t>::max)() - begin || begin + page.RegionSize <= address)
+                    return false;
+                address = (std::min)(end, begin + page.RegionSize);
+            }
+            return true;
+        }
+        struct Snapshot
+        {
+            std::uintptr_t rows = 0;
+            std::uint64_t  capacity = 0;
+            std::int32_t   count = 0;
+            std::uint32_t  value = 0;
+        };
+        ClockResult Capture(Binding binding, CheckOwner owner, std::uint32_t index, Snapshot& output) noexcept
+        {
+            auto result = Begin(binding, owner);
+            if (result != ClockResult::Ok)
+                return result;
+            Snapshot next;
+            if (!Image::ReadImage(binding.image, binding.image + Group::CountRva, &next.count, sizeof(next.count), true) ||
+                !Image::ReadImage(binding.image, binding.image + Group::GlobalRva, &next.rows, sizeof(next.rows), true))
+                return ClockResult::ReadFailure;
+            if (next.count <= 0 || !next.rows)
+                return ClockResult::NotInitialized;
+            if (next.rows < Group::CookieBytes || next.rows % alignof(std::uint64_t))
+                return ClockResult::BindingChanged;
+            const auto base = next.rows - Group::CookieBytes;
+            if (!HeapSpan(base, Group::CookieBytes) || !Memory::Copy(base, &next.capacity, sizeof(next.capacity)))
+                return ClockResult::ReadFailure;
+            // The producer captures a nonnegative signed32 n into this64-bit
+            // cookie. Current mutable count is a separate logical boundary;
+            // neither its equality with capacity nor a fabricated maxgroup is
+            // assumed. Only this actual current allocation grants row extent.
+            if (next.capacity > static_cast<std::uint64_t>((std::numeric_limits<std::int32_t>::max)()) ||
+                next.capacity > ((std::numeric_limits<std::size_t>::max)() - Group::CookieBytes) / Group::RowBytes)
+                return ClockResult::BindingChanged;
+            if (index >= static_cast<std::uint32_t>(next.count) || index >= next.capacity)
+                return ClockResult::InvalidArgument;
+            const auto span = Group::CookieBytes + static_cast<std::size_t>(next.capacity) * Group::RowBytes;
+            if (!HeapSpan(base, span))
+                return ClockResult::ReadFailure;
+            const auto field = next.rows + static_cast<std::uintptr_t>(index) * Group::RowBytes + Group::CreatedOffset;
+            if (!Memory::Copy(field, &next.value, sizeof(next.value)))
+                return ClockResult::ReadFailure;
+            std::uintptr_t rowsAfter = 0;
+            std::uint64_t  capacityAfter = 0;
+            std::int32_t   countAfter = 0;
+            if (!Image::ReadImage(binding.image, binding.image + Group::GlobalRva, &rowsAfter, sizeof(rowsAfter), true) ||
+                !Memory::Copy(base, &capacityAfter, sizeof(capacityAfter)) ||
+                !Image::ReadImage(binding.image, binding.image + Group::CountRva, &countAfter, sizeof(countAfter), true))
+                return ClockResult::ReadFailure;
+            if (rowsAfter != next.rows || capacityAfter != next.capacity || countAfter != next.count || !HeapSpan(base, span))
+                return ClockResult::BindingChanged;
+            if ((result = Begin(binding, owner)) != ClockResult::Ok)
+                return result;
+            output = next;
+            return ClockResult::Ok;
+        }
+    }
+    ClockResult NativeAnimationManagerMemory::ReadGroupCreated(std::uint32_t requestedIndex, bool& output) const noexcept
+    {
+        namespace Detail = AnimationGroupCreatedDetail;
+        const auto       index = requestedIndex;
+        Detail::Snapshot first, second;
+        auto             result = Detail::Capture(binding, owner, index, first);
+        if (result != ClockResult::Ok || (result = Detail::Capture(binding, owner, index, second)) != ClockResult::Ok)
+            return result;
+        if (first.rows != second.rows || first.capacity != second.capacity || first.count != second.count || first.value != second.value)
+            return ClockResult::BindingChanged;
+        if ((result = Detail::Begin(binding, owner)) != ClockResult::Ok)
+            return result;
+        // Exact primary4D37A0 IsCreated policy observes DWORDNumAnims!=0.
+        // Negative representations are nonzero too; child pointer+8 is not
+        // this predicate and grants no borrowed association object lifetime.
+        output = second.value != 0;
         return ClockResult::Ok;
     }
 }

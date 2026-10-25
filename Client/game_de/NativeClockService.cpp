@@ -316,6 +316,7 @@ namespace mta::game_de
             ClockResult ReadAnimationManagerCounts(std::uint64_t, NativeAnimationManagerCounts&) noexcept override;
             ClockResult ReadAnimationAssocDefinitionCount(std::uint64_t, std::int32_t&) noexcept override;
             ClockResult ReadAnimationGroupName(std::uint64_t, std::uint32_t, std::uintptr_t&) noexcept override;
+            ClockResult ReadAnimationGroupCreated(std::uint64_t, std::uint32_t, bool&) noexcept override;
             ClockResult ReadAnimationGroupBlockName(std::uint64_t, std::uint32_t, std::uintptr_t&) noexcept override;
             ClockResult FindFirstAnimationGroupByBlockName(std::uint64_t, const std::string&, std::uint32_t&) noexcept override;
             ClockResult FindAnimationBlockIndex(std::uint64_t, const NativeAnimationBlockName&, std::int32_t&) noexcept override;
@@ -5707,6 +5708,24 @@ namespace mta::game_de
                 return ClockResult::OwnerConflict;
             std::int32_t next = 0;
             result = NativeAnimationManagerMemory({runtime.image}, &CheckTimingOwner).ReadDefinitionCount(next);
+            if (result != ClockResult::Ok || (result = CheckTimingOwner()) != ClockResult::Ok)
+                return result;
+            if (generation != runtime.generation.load())
+                return ClockResult::OwnerConflict;
+            output = next;
+            return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::ReadAnimationGroupCreated(std::uint64_t requestedGeneration, std::uint32_t requestedIndex, bool& output) noexcept
+        {
+            const auto generation = requestedGeneration;
+            const auto index = requestedIndex;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            if (!generation || generation != runtime.generation.load())
+                return ClockResult::OwnerConflict;
+            bool next = false;
+            result = NativeAnimationManagerMemory({runtime.image}, &CheckTimingOwner).ReadGroupCreated(index, next);
             if (result != ClockResult::Ok || (result = CheckTimingOwner()) != ClockResult::Ok)
                 return result;
             if (generation != runtime.generation.load())

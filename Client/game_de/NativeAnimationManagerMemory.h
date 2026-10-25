@@ -22,6 +22,9 @@ namespace mta::game_de
         ClockResult ReadGroupName(std::uint32_t, std::uintptr_t&) const noexcept;
         ClockResult ReadGroupBlockName(std::uint32_t, std::uintptr_t&) const noexcept;
         ClockResult FindFirstGroupByBlockName(const std::string&, std::uint32_t&) const noexcept;
+        // Read only the current native array's source DWORD Created value;
+        // a copied bool grants no group, child-array or release ownership.
+        ClockResult ReadGroupCreated(std::uint32_t, bool&) const noexcept;
         ClockResult FindBlockIndex(const NativeAnimationBlockName&, std::int32_t&) const noexcept;
 
     private:

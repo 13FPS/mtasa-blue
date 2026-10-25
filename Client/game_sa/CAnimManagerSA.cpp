@@ -18,6 +18,7 @@
 #include "CAnimBlockSA.h"
 #include "CAnimManagerSA.h"
 #include <game/CAnimGatewayNames.h>
+#include <game/CAnimGroupValidationPolicy.h>
 #include "CGameSA.h"
 #include "CKeyGenSA.h"
 
@@ -1067,11 +1068,12 @@ const char* CAnimManagerSA::GetGateWayAnimationName() const
 
 bool CAnimManagerSA::IsValidGroup(std::uint32_t uiAnimGroup) const
 {
-    if ((eAnimGroup)uiAnimGroup <= eAnimGroup::ANIM_GROUP_NONE || (eAnimGroup)uiAnimGroup >= eAnimGroup::ANIM_TOTAL_GROUPS)
-        return false;
-
-    const auto pGroup = GetAnimBlendAssoc(uiAnimGroup);
-    return pGroup && pGroup->IsCreated();
+    return MtaGame::CAnimGroupValidationPolicy::IsValidGroup(uiAnimGroup,
+                                                             [this](std::uint32_t group)
+                                                             {
+                                                                 const auto pGroup = GetAnimBlendAssoc(static_cast<AssocGroupId>(group));
+                                                                 return pGroup && pGroup->IsCreated();
+                                                             });
 }
 
 bool CAnimManagerSA::IsValidAnim(std::uint32_t uiAnimGroup, std::uint32_t uiAnimID) const

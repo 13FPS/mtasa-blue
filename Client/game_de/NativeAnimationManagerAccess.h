@@ -64,5 +64,9 @@ namespace mta::game_de
         {
             return ClockResult::NotInitialized;
         }
+        // Source IsCreated observes NumAnims!=0 on a current real group row.
+        // No name lookup, association pointer or unavailable-owner false may
+        // substitute for this independently qualified current-array channel.
+        virtual ClockResult ReadAnimationGroupCreated(std::uint64_t, std::uint32_t, bool&) noexcept { return ClockResult::NotInitialized; }
     };
 }

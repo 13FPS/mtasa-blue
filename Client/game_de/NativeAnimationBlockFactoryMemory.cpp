@@ -7,9 +7,11 @@
 #include "NativeAnimationBlockHierarchyProfile.h"
 #include "NativeAnimationManagerMemory.h"
 #include "NativeImageAccess.h"
+#include "NativeAnimationHierarchyOrigin.h"
 #include <array>
 #include <cstring>
 #include <limits>
+#include <vector>
 namespace mta::game_de
 {
     namespace AnimationBlockFactoryDetail
@@ -187,6 +189,135 @@ namespace mta::game_de
         // state may change; this neither freezes it nor retains it past the
         // current callback or a subsequent native operation/unload/reload.
         output = binding.image + rva;
+        return ClockResult::Ok;
+    }
+
+    namespace AnimationBlockHashDetail
+    {
+        namespace Origin = NativeAnimationHierarchyOrigin;
+        namespace Hierarchy = NativeAnimationBlockHierarchyProfile;
+        using Binding = NativeAnimationBlockFactoryMemory::Binding;
+        using CheckOwner = NativeAnimationBlockFactoryMemory::CheckOwner;
+        struct Range
+        {
+            NativeAnimationBlockValues   block{};
+            NativeAnimationManagerCounts extent{};
+        };
+        bool Same(const Range& first, const Range& next) noexcept
+        {
+            return first.block.index == next.block.index && first.block.idOffset == next.block.idOffset &&
+                   first.block.animationCount == next.block.animationCount && first.block.loaded == next.block.loaded &&
+                   first.extent.blocks == next.extent.blocks && first.extent.animations == next.extent.animations;
+        }
+        ClockResult CaptureRange(Binding binding, CheckOwner owner, const NativeAnimationBlockIdentity& expected, Range& output) noexcept
+        {
+            Range next;
+            auto  result = NativeAnimationBlockMemory(binding, owner).Read(expected, next.block);
+            if (result != ClockResult::Ok || (result = NativeAnimationManagerMemory(binding, owner).ReadCounts(next.extent)) != ClockResult::Ok)
+                return result;
+            if (next.extent.blocks < 0 || static_cast<std::uint32_t>(next.extent.blocks) > NativeAnimationBlockProfile::ObservationLimit ||
+                expected.index >= static_cast<std::uint32_t>(next.extent.blocks) || next.extent.animations < 0)
+                return ClockResult::BindingChanged;
+            if (next.block.animationCount)
+            {
+                if (next.block.idOffset < 0)
+                    return ClockResult::BindingChanged;
+                const auto start = static_cast<std::uint32_t>(next.block.idOffset);
+                const auto highwater = static_cast<std::uint32_t>(next.extent.animations);
+                if (start >= highwater || next.block.animationCount > highwater - start)
+                    return ClockResult::BindingChanged;
+                const auto     last = static_cast<std::uintptr_t>(start) + next.block.animationCount - 1;
+                constexpr auto maximum = (NativePedPoolProfile::ImageSize - Hierarchy::BankRva - Hierarchy::RowBytes) / Hierarchy::RowBytes;
+                if (last > maximum ||
+                    binding.image > (std::numeric_limits<std::uintptr_t>::max)() - Hierarchy::BankRva - last * Hierarchy::RowBytes - Hierarchy::RowBytes)
+                    return ClockResult::BindingChanged;
+            }
+            // Zero count searches no hierarchy cell. No pointer arithmetic or
+            // invented loaded-state predicate is necessary to acknowledge it.
+            if ((result = Origin::Owner(binding, owner)) != ClockResult::Ok)
+                return result;
+            output = next;
+            return ClockResult::Ok;
+        }
+        ClockResult ObserveHash(Binding binding, std::uintptr_t row, std::uint32_t& output) noexcept
+        {
+            return NativeImageAccess::ReadImage(binding.image, row, &output, sizeof(output), true) ? ClockResult::Ok : ClockResult::ReadFailure;
+        }
+        ClockResult CaptureHash(Binding binding, CheckOwner owner, const NativeAnimationBlockIdentity& expected, const Range& range, std::size_t index,
+                                std::uint32_t& output) noexcept
+        {
+            const auto                         ordinal = static_cast<std::uintptr_t>(range.block.idOffset) + index;
+            const auto                         rva = Hierarchy::BankRva + ordinal * Hierarchy::RowBytes;
+            Origin::Observation<std::uint32_t> current;
+            auto                               result = Origin::Capture(binding, owner, ordinal, rva, &ObserveHash, current);
+            if (result != ClockResult::Ok)
+                return result;
+            if (current.origin.block != expected.index || current.origin.start != range.block.idOffset || current.origin.count != range.block.animationCount ||
+                current.origin.extent.blocks != range.extent.blocks || current.origin.extent.animations != range.extent.animations)
+                return ClockResult::BindingChanged;
+            output = current.payload;
+            return ClockResult::Ok;
+        }
+    }
+    ClockResult NativeAnimationBlockFactoryMemory::FindHierarchyByHash(const NativeAnimationBlockIdentity& identity, std::uint32_t requestedHash,
+                                                                       std::uintptr_t& output) const noexcept
+    {
+        namespace Detail = AnimationBlockHashDetail;
+        namespace Hierarchy = NativeAnimationBlockHierarchyProfile;
+        const auto    expected = identity;
+        const auto    hash = requestedHash;
+        Detail::Range first, middle, final;
+        auto          result = Detail::CaptureRange(binding, owner, expected, first);
+        if (result != ClockResult::Ok)
+            return result;
+        std::vector<std::uint32_t> prefix;
+        std::uintptr_t             selected = 0;
+        for (std::uint32_t index = 0; index != first.block.animationCount; ++index)
+        {
+            std::uint32_t current = 0;
+            if ((result = Detail::CaptureHash(binding, owner, expected, first, index, current)) != ClockResult::Ok)
+                return result;
+            // Only the actually searched prefix is retained. This transient
+            // CPU allocation is neither a native bank copy nor a new owner.
+            // Failure must refuse instead of escaping this noexcept boundary.
+            try
+            {
+                prefix.push_back(current);
+            }
+            catch (...)
+            {
+                return ClockResult::WriteFailure;
+            }
+            if (current == hash)
+            {
+                const auto ordinal = static_cast<std::uintptr_t>(first.block.idOffset) + index;
+                selected = binding.image + Hierarchy::BankRva + ordinal * Hierarchy::RowBytes;
+                break;
+            }
+        }
+        if ((result = Detail::CaptureRange(binding, owner, expected, middle)) != ClockResult::Ok)
+            return result;
+        if (!Detail::Same(first, middle))
+            return ClockResult::BindingChanged;
+        // Reobserve every searched row, not only the eventual match. A torn
+        // earlier match or incomplete miss must never select the wrong facade.
+        for (std::size_t index = 0; index != prefix.size(); ++index)
+        {
+            std::uint32_t current = 0;
+            if ((result = Detail::CaptureHash(binding, owner, expected, first, index, current)) != ClockResult::Ok)
+                return result;
+            if (current != prefix[index])
+                return ClockResult::BindingChanged;
+        }
+        if ((result = Detail::CaptureRange(binding, owner, expected, final)) != ClockResult::Ok)
+            return result;
+        if (!Detail::Same(first, final))
+            return ClockResult::BindingChanged;
+        if ((result = Detail::Origin::Owner(binding, owner)) != ClockResult::Ok)
+            return result;
+        // Full uint32 hashes, including0/ffffffff, are values. Only the exact
+        // qualified first match or complete no-match result is published.
+        output = selected;
         return ClockResult::Ok;
     }
 }

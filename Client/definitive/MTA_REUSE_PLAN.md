@@ -5,6 +5,17 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+MTA's unsigned animation lookup within a block now keeps the source method's
+hash semantics, despite its old `uiIndex` parameter name. The same native owner
+searches the current qualified bank range for the first matching DWORD hash.
+It reobserves the complete searched prefix and block/name/range/extent before
+publishing a match or null miss. An unloaded flag alone does not erase this
+lookup's current-range result, and zero count reads no hierarchy cell. Returned
+facades borrow the qualified bank identity; no virtual raw getter, client row
+stride, native allocation or ownership adoption is involved. Name lookup reuses MTA's existing source-exact ASCII uppercase key policy,
+then calls the same hash overload without a native name cache or artificial
+16/64-byte limit. Unrelated methods remain genuinely unimplemented.
+
 Both existing MTA cache-removal overloads now reach the qualified DE private
 hierarchy service. Typed dispatch copies the actual same-provider facade's
 immutable identity; raw dispatch first resolves a current issued private row.
@@ -1368,7 +1379,7 @@ Nine streaming-ID getters use verified DE operands and the full 26316-row count,
 without exposing DE rows through classic structures. These new pause and
 streaming paths have not yet been exercised through a live full `CGame`.
 `GetSystemState` separately maps the proved native frontend/loading/gameplay
-states through a checked reader. Early native states 0â€“5 and lifecycle writes
+states through a checked reader. Early native states 0ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“5 and lifecycle writes
 remain unsupported; native indices are never blindly cast into the SDK enum.
 `IsAtMenu` observes both the typed SA menu-widget owner and legacy frontend
 screens. It keeps their read qualification separate from native lifecycle calls;
@@ -2017,7 +2028,7 @@ passes through the canonical C++ type and is read back before logging alongside
 native velocity and position. Previous state means the previous probe sample,
 not GTA's previous frame. Start and cleanup reset the snapshot masks.
 
-The pinned 0.500 definitions expose pad indices 0â€“19 and `GET_CHAR_VELOCITY`.
+The pinned 0.500 definitions expose pad indices 0ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“19 and `GET_CHAR_VELOCITY`.
 The four MTA-specific logical fields remain explicitly unknown, and velocity
 units remain unknown. Metadata support is not runtime verification. The saved
 log reader checks ownership, masks, provenance, clocks, bounds and cleanup;

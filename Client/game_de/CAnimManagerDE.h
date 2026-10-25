@@ -32,6 +32,8 @@ namespace mta::game_de
         std::unique_ptr<CCustomAnimationSequenceOperation> BeginCustomAnimationFrameAttachment(const SCustomAnimationFrameAttachmentRequest&) override;
         using CAnimManager::GetAnimation;
         std::unique_ptr<CAnimBlendHierarchy> GetAnimation(int) override;
+        std::unique_ptr<CAnimBlendHierarchy> GetAnimation(unsigned int, std::unique_ptr<CAnimBlock>&) override;
+        std::unique_ptr<CAnimBlendHierarchy> GetAnimation(const char*, std::unique_ptr<CAnimBlock>&) override;
         std::unique_ptr<CAnimBlendHierarchy> GetAnimBlendHierarchy(CAnimBlendHierarchySAInterface*) override;
         std::unique_ptr<CAnimBlendHierarchy> GetCustomAnimBlendHierarchy() override;
         std::unique_ptr<CAnimBlendHierarchy> GetCustomAnimBlendHierarchy(CAnimBlendHierarchySAInterface*) override;
@@ -61,6 +63,9 @@ namespace mta::game_de
         // Integer counters need only the same borrowed native owner, not a
         // game, a streaming provider or permission to publish block facades.
         CAnimManagerDE(NativeAnimationManagerAccess&, NativeAnimationBlockAccess&, std::uint64_t);
+        // A hash lookup borrows an existing same-owner block and returns a
+        // bank facade. It needs no CGame, streaming or block creation provider.
+        CAnimManagerDE(NativeAnimationManagerAccess&, NativeAnimationBlockAccess&, NativeAnimationHierarchyAccess&, std::uint64_t);
         // Factory products borrow these exact providers. They must outlive
         // every returned block; no global game or second native owner is used.
         CAnimManagerDE(NativeAnimationManagerAccess&, NativeAnimationBlockAccess&, CGame&, std::uint64_t);

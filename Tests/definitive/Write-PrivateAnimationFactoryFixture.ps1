@@ -13,14 +13,16 @@ function Write-PrivateAnimationFactoryFixture([string]$RepositoryRoot,[string]$O
         $name=[regex]::Match($signature,'(?<name>\w+)\s*\(').Groups['name'].Value
         if(-not $name){throw "Cannot derive private manager fixture from $signature"}
         $bankOrdinal = $name -eq 'GetAnimation' -and $signature -match '\bGetAnimation\s*\(\s*int\s+\w+\s*\)\s*$'
-        if($bankOrdinal -or $name -eq 'GetAnimBlendHierarchy' -or $name -in @('GetCustomAnimBlendHierarchy','DeleteCustomAnimHierarchyInterface','DeleteCustomAnimSequenceInterface','RemoveFromUncompressedCache','GetCustomAnimBlendSequenceAt','BeginCustomAnimationCleanup','HasPendingCustomAnimationCleanup','GetCustomAnimBlendSequence','BeginCustomAnimationSequenceCleanup','BeginCustomAnimationSequenceTransfer','BeginCustomAnimationFrameAttachment')) {
+        $blockHash = $name -eq 'GetAnimation' -and $signature -match '\bGetAnimation\s*\(\s*unsigned\s+int\s+\w+\s*,'
+        $blockName = $name -eq 'GetAnimation' -and $signature -match '\bGetAnimation\s*\(\s*const\s+char\s*\*'
+        if($bankOrdinal -or $blockHash -or $blockName -or $name -eq 'GetAnimBlendHierarchy' -or $name -in @('GetCustomAnimBlendHierarchy','DeleteCustomAnimHierarchyInterface','DeleteCustomAnimSequenceInterface','RemoveFromUncompressedCache','GetCustomAnimBlendSequenceAt','BeginCustomAnimationCleanup','HasPendingCustomAnimationCleanup','GetCustomAnimBlendSequence','BeginCustomAnimationSequenceCleanup','BeginCustomAnimationSequenceTransfer','BeginCustomAnimationFrameAttachment')) {
             $provided+= $signature
         } else {
             $signature=[regex]::Replace($signature,'\s*=\s*[^,)]+','')
             [regex]::Replace($signature,'\s+',' ')
         }
     })
-    if($provided.Count -ne 16 -or $methods.Count -ne 56 -or
+    if($provided.Count -ne 18 -or $methods.Count -ne 54 -or
        @($provided|Where-Object{$_ -match '\bGetCustomAnimBlendHierarchy\s*\('}).Count -ne 2) {
         throw 'Exact actual private factory and standalone operation contracts changed'
     }
@@ -45,17 +47,18 @@ function Write-PrivateAnimationFactoryFixture([string]$RepositoryRoot,[string]$O
     if(@($provided|Where-Object{$_ -match '\bRemoveFromUncompressedCache\s*\('}).Count -ne 2) {
         throw 'Both actual manager cache overloads must be inherited'
     }
-    # Only the integer ordinal overload is implemented in this bank slice.
-    # Retaining the other two abortors must not hide the inherited overload.
-    if(@($provided|Where-Object{$_ -match '\bGetAnimation\s*\('}).Count -ne 1 -or
+    # All three actual hierarchy factories are inherited: absolute ordinal,
+    # raw hash/block and source-name/block composition. No abortor may mask one.
+    if(@($provided|Where-Object{$_ -match '\bGetAnimation\s*\('}).Count -ne 3 -or
        @($provided|Where-Object{$_ -match '\bGetAnimBlendHierarchy\s*\('}).Count -ne 1 -or
-       @($methods|Where-Object{$_ -match '\bGetAnimation\s*\('}).Count -ne 2) {
-        throw 'Bank factories must preserve both unsupported name/block overloads'
+       @($methods|Where-Object{$_ -match '\bGetAnimation\s*\('}).Count -ne 0) {
+        throw 'All actual bank hierarchy factories must remain inherited'
     }
     $lines=@('#pragma once','#include <cstdlib>','#pragma warning(push)','#pragma warning(disable : 4100)',
         'class PrivateAnimationFactoryManagerReceiver final : public mta::game_de::CAnimManagerDE { public:',
         'using CAnimManagerDE::GetAnimation;',
         'PrivateAnimationFactoryManagerReceiver(mta::game_de::NativeAnimationManagerAccess& manager,mta::game_de::NativeAnimationHierarchyAccess& hierarchy,mta::game_de::NativeAnimationSequenceAccess& sequence,mta::game_de::NativeAnimationSequenceStorageAccess& storage,std::uint64_t generation) : CAnimManagerDE(manager,hierarchy,sequence,storage,generation) {}',
+        'PrivateAnimationFactoryManagerReceiver(mta::game_de::NativeAnimationManagerAccess& manager,mta::game_de::NativeAnimationBlockAccess& blocks,mta::game_de::NativeAnimationHierarchyAccess& hierarchy,std::uint64_t generation) : CAnimManagerDE(manager,blocks,hierarchy,generation) {}',
         'PrivateAnimationFactoryManagerReceiver(mta::game_de::NativeAnimationManagerAccess& manager,std::uint64_t generation) noexcept : CAnimManagerDE(manager,generation) {}')
     $lines+=@($methods|ForEach-Object{$_+' override {std::abort();}'})
     $lines+=@('};','#pragma warning(pop)')

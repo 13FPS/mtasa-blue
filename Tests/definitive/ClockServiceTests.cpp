@@ -77,6 +77,7 @@
 #include "../../Client/game_de/NativeAnimationHierarchyReadProfile.h"
 #include "AnimationHierarchyDEFixture.h"
 #include "../../Client/game_de/CKeyGenDE.h"
+#include "../../Client/game_de/NativeClassicAnimationNameHash.h"
 #include <game/CAnimGatewayNames.h>
 #include "../../Client/game_de/CAnimBlockRequestDE.h"
 #include "NativeAnimationBlockFactoryFixture.h"
@@ -8377,6 +8378,7 @@ namespace
 #include "NativeBankAnimationFactoryOwnerTests.inl"
 #include "NativeSequenceInterfaceOwnerTests.inl"
 #include "NativeAnimationManagerCacheOwnerTests.inl"
+#include "NativeAnimationBlockHashFactoryOwnerTests.inl"
 
 // The strict receiver must execute production typed tickets and the distinct
 // metadata-only delete route. Deleting an interface acknowledges only its own
@@ -8398,6 +8400,7 @@ static_assert(std::is_same_v<decltype(&PrivateAnimationFactoryManagerReceiver::G
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool     animationBlockHashFactoryOnly = argc == 3 && std::strcmp(argv[2], "--animation-block-hash-factory") == 0;
     const bool     animationManagerCacheForeign = argc == 3 && std::strcmp(argv[2], "--animation-manager-cache-foreign") == 0;
     const bool     animationManagerCacheOnly = animationManagerCacheForeign || (argc == 3 && std::strcmp(argv[2], "--animation-manager-cache-success") == 0);
     const bool     sequenceInterfaceUnknown = argc == 3 && std::strcmp(argv[2], "--sequence-interface-unknown") == 0;
@@ -8514,9 +8517,17 @@ int main(int argc, char** argv)
            customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly ||
            privateHierarchyParentOnly || privateHierarchyEmptyOnly || freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly ||
            privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly || animationBankFactoriesOnly ||
-           sequenceInterfaceOnly || animationManagerCacheOnly) &&
+           sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (animationBlockHashFactoryOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        NativeAnimationBlocksOwnedSdk(fixture, &AnimationBlockHashFactoryOwnerFixture::RunPrepared);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (animationManagerCacheOnly)
     {
         AnimationManagerCacheOwnerFixture::scenario = animationManagerCacheForeign ? 1u : 0u;

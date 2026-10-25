@@ -8,6 +8,7 @@
 #include "CAnimBlendHierarchyDE.h"
 #include "CAnimBlendSequenceDE.h"
 #include "CKeyGenDE.h"
+#include "NativeClassicAnimationNameHash.h"
 #include <algorithm>
 #include <cstring>
 #include <game/CAnimGatewayNames.h>
@@ -154,6 +155,14 @@ namespace mta::game_de
     {
         if (dynamic_cast<void*>(&manager) != dynamic_cast<void*>(&blocks))
             throw std::invalid_argument("DE animation references require one native owner for manager and blocks");
+    }
+    CAnimManagerDE::CAnimManagerDE(NativeAnimationManagerAccess& manager, NativeAnimationBlockAccess& blocks, NativeAnimationHierarchyAccess& hierarchy,
+                                   std::uint64_t generation)
+        : CAnimManagerDE(manager, blocks, generation)
+    {
+        if (dynamic_cast<void*>(&manager) != dynamic_cast<void*>(&hierarchy))
+            throw std::invalid_argument("DE animation hash lookup requires one native owner for manager, blocks and hierarchies");
+        hierarchyAccess = &hierarchy;
     }
     CAnimManagerDE::CAnimManagerDE(NativeAnimationManagerAccess& manager, NativeAnimationBlockAccess& blocks, CGame& game, std::uint64_t generation)
         : native(manager), ownerGeneration(generation), blockAccess(&blocks), gameProvider(&game)
@@ -365,6 +374,42 @@ namespace mta::game_de
         return nullptr;
     }
 
+    std::unique_ptr<CAnimBlendHierarchy> CAnimManagerDE::GetAnimation(const char* name, std::unique_ptr<CAnimBlock>& block)
+    {
+        // Addressed classic 4D42F0 hashes the entire source name then calls
+        // the hash-in-block search. Reuse its ASCII normalization/raw key;
+        // native interning/CRT folding and sequence/block name limits differ.
+        const auto hash = NativeClassicAnimationNamePolicy::Hash(name);
+        return CAnimManagerDE::GetAnimation(hash, block);
+    }
+    std::unique_ptr<CAnimBlendHierarchy> CAnimManagerDE::GetAnimation(unsigned int sourceHash, std::unique_ptr<CAnimBlock>& block)
+    {
+        if (!blockAccess || !hierarchyAccess || !ownerGeneration)
+            Require(ClockResult::NotInitialized, "GetAnimation(hash, block)");
+        auto* facade = dynamic_cast<CAnimBlockDE*>(block.get());
+        if (!facade || dynamic_cast<void*>(&facade->native) != dynamic_cast<void*>(&native))
+            throw std::invalid_argument("DE animation hash lookup requires its same-owner block facade");
+        static_assert(sizeof(sourceHash) == sizeof(std::uint32_t));
+        const auto generation = ownerGeneration;
+        const auto expected = facade->identity;
+        const auto hash = static_cast<std::uint32_t>(sourceHash);
+        if (expected.ownerGeneration != generation)
+            Require(ClockResult::BindingChanged, "GetAnimation(hash, block)");
+        std::uintptr_t address = 0;
+        // The classic entry 4D39F0 takes a hash despite the SDK parameter's
+        // old uiIndex name. Only the current complete owner may scan its block
+        // range and prove the first match or a coherent missing result.
+        Require(blockAccess->FindAnimationBlockHierarchy(expected, hash, address), "GetAnimation(hash, block)");
+        if (!address)
+            return nullptr;
+        NativeAnimationHierarchyReferenceToken reference;
+        Require(hierarchyAccess->ResolveBankAnimationHierarchyReference(generation, address, reference), "GetAnimation(hash, block)");
+        if (reference.ownerGeneration != generation || reference.locator != address)
+            Require(ClockResult::BindingChanged, "GetAnimation(hash, block)");
+        // No virtual raw-interface getter, client row arithmetic, load/ref
+        // change or lifetime adoption is needed to create this CPU borrow.
+        return std::unique_ptr<CAnimBlendHierarchy>(new CAnimBlendHierarchyDE(*hierarchyAccess, reference));
+    }
     std::unique_ptr<CAnimBlendHierarchy> CAnimManagerDE::GetAnimation(int index)
     {
         if (!hierarchyAccess || !ownerGeneration)

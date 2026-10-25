@@ -312,6 +312,7 @@ namespace mta::game_de
             ClockResult ReadAnimationBlockIdentity(std::uint64_t, std::uint32_t, NativeAnimationBlockIdentity&) noexcept override;
             ClockResult ReadAnimationBlockInterfaceIdentity(std::uint64_t, std::uintptr_t, NativeAnimationBlockIdentity&) noexcept override;
             ClockResult ReadAnimationBlockHierarchy(const NativeAnimationBlockIdentity&, std::size_t, std::uintptr_t&) noexcept override;
+            ClockResult FindAnimationBlockHierarchy(const NativeAnimationBlockIdentity&, std::uint32_t, std::uintptr_t&) noexcept override;
             ClockResult ReadAnimationManagerCounts(std::uint64_t, NativeAnimationManagerCounts&) noexcept override;
             ClockResult FindAnimationBlockIndex(std::uint64_t, const NativeAnimationBlockName&, std::int32_t&) noexcept override;
             ClockResult ReadPedInWater(const NativePedReferenceToken&, bool&) noexcept override;
@@ -5500,6 +5501,28 @@ namespace mta::game_de
             return ClockResult::Ok;
         }
 
+        ClockResult NativeAccess::FindAnimationBlockHierarchy(const NativeAnimationBlockIdentity& expected, std::uint32_t requestedHash,
+                                                              std::uintptr_t& output) noexcept
+        {
+            const auto identity = expected;
+            const auto hash = requestedHash;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto generation = runtime.generation.load();
+            if (!identity.ownerGeneration || identity.ownerGeneration != generation)
+                return ClockResult::OwnerConflict;
+            std::uintptr_t next = 0;
+            result = NativeAnimationBlockFactoryMemory({runtime.image}, &CheckTimingOwner).FindHierarchyByHash(identity, hash, next);
+            if (result != ClockResult::Ok)
+                return result;
+            if ((result = CheckTimingOwner()) != ClockResult::Ok)
+                return result;
+            if (runtime.generation.load() != generation)
+                return ClockResult::OwnerConflict;
+            output = next;
+            return ClockResult::Ok;
+        }
         ClockResult NativeAccess::ReadAnimationBlockHierarchy(const NativeAnimationBlockIdentity& expected, std::size_t index, std::uintptr_t& output) noexcept
         {
             const auto identity = expected;

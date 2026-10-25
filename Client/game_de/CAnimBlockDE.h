@@ -27,6 +27,9 @@ namespace mta::game_de
         CAnimBlockDE(NativeAnimationBlockAccess&, const NativeAnimationBlockIdentity&);
 
     private:
+        // The same-owner manager reads this immutable CPU affinity directly;
+        // a virtual GetInterface call cannot certify a hash-search lifetime.
+        friend class CAnimManagerDE;
         NativeAnimationBlockValues         Read(const char* operation) const;
         NativeAnimationBlockAccess&        native;
         const NativeAnimationBlockIdentity identity;

@@ -20,6 +20,8 @@ namespace mta::game_de
         // not couple ordinary block/animation reads to definition metadata.
         ClockResult ReadDefinitionCount(std::int32_t&) const noexcept;
         ClockResult ReadGroupName(std::uint32_t, std::uintptr_t&) const noexcept;
+        ClockResult ReadGroupBlockName(std::uint32_t, std::uintptr_t&) const noexcept;
+        ClockResult FindFirstGroupByBlockName(const std::string&, std::uint32_t&) const noexcept;
         ClockResult FindBlockIndex(const NativeAnimationBlockName&, std::int32_t&) const noexcept;
 
     private:

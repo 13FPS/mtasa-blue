@@ -755,6 +755,35 @@ namespace mta::game_de
         // Native count/row/name bookends own the full-ID range admission.
         return reinterpret_cast<const char*>(address);
     }
+    const char* CAnimManagerDE::GetAnimBlockName(AssocGroupId group)
+    {
+        static_assert(sizeof(group) == sizeof(std::uint32_t));
+        const auto     generation = ownerGeneration;
+        const auto     id = static_cast<std::uint32_t>(group);
+        std::uintptr_t address = 0;
+        Require(native.ReadAnimationGroupBlockName(generation, id, address), "GetAnimBlockName");
+        if (!address)
+            Require(ClockResult::BindingChanged, "GetAnimBlockName");
+        // This is definition.BlockName, distinct from its GroupName or a
+        // separately indexed animation block. Only the owner knows its row.
+        return reinterpret_cast<const char*>(address);
+    }
+    AssocGroupId CAnimManagerDE::GetFirstAssocGroup(const char* name)
+    {
+        static_assert(sizeof(AssocGroupId) == sizeof(std::uint32_t));
+        if (!name)
+            throw std::invalid_argument("DE first association-group lookup requires a nonnull name");
+        const auto        generation = ownerGeneration;
+        const std::string copied(name);
+        std::uint32_t     group = 0;
+        // FF1070 searches the fixed first118 definition BlockNames and returns
+        // 118 on a qualified miss. Copy the entire source input before callbacks;
+        // the mutable definition count cannot substitute for that prefix.
+        Require(native.FindFirstAnimationGroupByBlockName(generation, copied, group), "GetFirstAssocGroup");
+        if (group > NativeAnimationAssociationGroupPrefixCount)
+            Require(ClockResult::BindingChanged, "GetFirstAssocGroup");
+        return static_cast<AssocGroupId>(group);
+    }
     int CAnimManagerDE::GetAnimationBlockIndex(const char* name)
     {
         const auto   copied = CopyName(name);

@@ -227,7 +227,8 @@ namespace mta::game_de
         namespace Image = NativeImageAccess;
         using Binding = NativeAnimationManagerMemory::Binding;
         using CheckOwner = NativeAnimationManagerMemory::CheckOwner;
-        bool Sections(Binding binding, std::uintptr_t rowRva) noexcept
+        bool Sections(Binding binding, std::uintptr_t rowRva, const NativePedMoveAnimProfile::Pin* extra = nullptr, std::size_t extraCount = 0,
+                      bool fold = false) noexcept
         {
             IMAGE_DOS_HEADER   dos{};
             IMAGE_NT_HEADERS64 nt{};
@@ -260,7 +261,11 @@ namespace mta::game_de
             for (const auto& pin : Definition::Code)
                 if (!contains(pin.rva, pin.size, rx, IMAGE_SCN_MEM_WRITE))
                     return false;
-            return true;
+            for (std::size_t index = 0; index != extraCount; ++index)
+                if (!contains(extra[index].rva, extra[index].size, rx, IMAGE_SCN_MEM_WRITE))
+                    return false;
+            return !fold || contains(NativeAnimationManagerProfile::NameFoldRva, NativeAnimationManagerProfile::NameFold.size(), IMAGE_SCN_MEM_READ,
+                                     IMAGE_SCN_MEM_WRITE | IMAGE_SCN_MEM_EXECUTE);
         }
         bool Profile(Binding binding, std::uintptr_t rowRva = 0) noexcept
         {
@@ -368,6 +373,202 @@ namespace mta::game_de
         // This is the current row's native NUL string, not a CPU string cache
         // or an association/group/block facade with new native lifetime.
         output = binding.image + second.rva;
+        return ClockResult::Ok;
+    }
+
+    namespace AnimationDefinitionBlockNameDetail
+    {
+        namespace Definition = NativeAnimationAssocDefinitionProfile;
+        namespace Image = NativeImageAccess;
+        using Binding = NativeAnimationManagerMemory::Binding;
+        using CheckOwner = NativeAnimationManagerMemory::CheckOwner;
+        bool Profile(Binding binding, std::uintptr_t rowRva, bool fold) noexcept
+        {
+            if (!AnimationDefinitionDetail::Profile(binding, rowRva) ||
+                !AnimationDefinitionDetail::Sections(binding, rowRva, Definition::BlockNameCode.data(), Definition::BlockNameCode.size(), fold))
+                return false;
+            for (const auto& pin : Definition::BlockNameCode)
+            {
+                std::array<unsigned char, Definition::MaximumPinBytes> bytes{};
+                if (!pin.size || pin.size > bytes.size() || !Image::ReadImage(binding.image, binding.image + pin.rva, bytes.data(), pin.size, false, true) ||
+                    std::memcmp(bytes.data(), pin.bytes, pin.size))
+                    return false;
+            }
+            if (fold)
+            {
+                std::array<unsigned char, NativeAnimationManagerProfile::NameFold.size()> table{};
+                if (!Image::ReadImage(binding.image, binding.image + NativeAnimationManagerProfile::NameFoldRva, table.data(), table.size()) ||
+                    table != NativeAnimationManagerProfile::NameFold)
+                    return false;
+            }
+            return true;
+        }
+        ClockResult Begin(Binding binding, CheckOwner owner, std::uintptr_t rowRva = 0, bool fold = false) noexcept
+        {
+            const auto result = AnimationManagerDetail::Owner(binding, owner);
+            return result != ClockResult::Ok ? result : Profile(binding, rowRva, fold) ? ClockResult::Ok : ClockResult::BindingChanged;
+        }
+        struct Name
+        {
+            std::uintptr_t                                        rva = 0;
+            std::size_t                                           length = 0;
+            std::array<unsigned char, Definition::BlockNameBytes> bytes{};
+            std::int32_t                                          count = 0;
+            std::uint32_t                                         reserved = 0;
+        };
+        ClockResult Capture(Binding binding, CheckOwner owner, std::uint32_t index, bool currentExtent, Name& output) noexcept
+        {
+            auto result = Begin(binding, owner, 0, !currentExtent);
+            if (result != ClockResult::Ok)
+                return result;
+            Name           next;
+            constexpr auto maximum = (NativePedPoolProfile::ImageSize - Definition::BankRva - Definition::RowBytes) / Definition::RowBytes;
+            if (currentExtent)
+            {
+                if (!Image::ReadImage(binding.image, binding.image + Definition::CountRva, &next.count, sizeof(next.count), true))
+                    return ClockResult::ReadFailure;
+                if (next.count <= 0)
+                    return ClockResult::NotInitialized;
+                if (static_cast<std::uint32_t>(next.count) > maximum + 1)
+                    return ClockResult::BindingChanged;
+                if (index >= static_cast<std::uint32_t>(next.count))
+                    return ClockResult::InvalidArgument;
+            }
+            else if (index >= Definition::BlockNamePrefixCount)
+                return ClockResult::InvalidArgument;
+            if (index > maximum)
+                return ClockResult::BindingChanged;
+            next.rva = Definition::BankRva + static_cast<std::uintptr_t>(index) * Definition::RowBytes;
+            if (binding.image > (std::numeric_limits<std::uintptr_t>::max)() - next.rva - Definition::RowBytes || !Profile(binding, next.rva, !currentExtent))
+                return ClockResult::BindingChanged;
+            if (!Image::ReadImage(binding.image, binding.image + next.rva + Definition::BlockNameOffset, next.bytes.data(), next.bytes.size(), true))
+                return ClockResult::ReadFailure;
+            while (next.length != next.bytes.size() && next.bytes[next.length])
+                ++next.length;
+            if (next.length == next.bytes.size())
+                return ClockResult::BindingChanged;
+            if (currentExtent)
+            {
+                std::int32_t after = 0;
+                if (!Image::ReadImage(binding.image, binding.image + Definition::CountRva, &after, sizeof(after), true))
+                    return ClockResult::ReadFailure;
+                if (after != next.count)
+                    return ClockResult::BindingChanged;
+            }
+            if ((result = Begin(binding, owner, next.rva, !currentExtent)) != ClockResult::Ok)
+                return result;
+            output = next;
+            return ClockResult::Ok;
+        }
+        ClockResult CapturePrefix(Binding binding, std::uint32_t index, Name& output) noexcept
+        {
+            if (index >= Definition::BlockNamePrefixCount)
+                return ClockResult::InvalidArgument;
+            constexpr auto last = Definition::BankRva + (Definition::BlockNamePrefixCount - 1) * Definition::RowBytes;
+            static_assert(last + Definition::RowBytes <= NativePedPoolProfile::ImageSize);
+            Name next;
+            next.rva = Definition::BankRva + static_cast<std::uintptr_t>(index) * Definition::RowBytes;
+            if (binding.image > (std::numeric_limits<std::uintptr_t>::max)() - next.rva - Definition::RowBytes ||
+                !AnimationDefinitionDetail::Sections(binding, next.rva, Definition::BlockNameCode.data(), Definition::BlockNameCode.size(), true))
+                return ClockResult::BindingChanged;
+            // Code/fold/owner surround the whole finite prefix pass. Each
+            // actual row still requires genuine PE/page origin independently;
+            // no mutable current-count predicate is imported into FF1070.
+            if (!Image::ReadImage(binding.image, binding.image + next.rva + Definition::BlockNameOffset, next.bytes.data(), next.bytes.size(), true))
+                return ClockResult::ReadFailure;
+            while (next.length != next.bytes.size() && next.bytes[next.length])
+                ++next.length;
+            if (next.length == next.bytes.size())
+                return ClockResult::BindingChanged;
+            output = next;
+            return ClockResult::Ok;
+        }
+        bool Same(const Name& first, const Name& second) noexcept
+        {
+            return first.rva == second.rva && first.length == second.length && first.count == second.count &&
+                   !std::memcmp(first.bytes.data(), second.bytes.data(), first.length + 1);
+        }
+        bool Equal(const Name& name, const std::string& query) noexcept
+        {
+            for (std::size_t index = 0; index <= name.length; ++index)
+            {
+                const auto row = name.bytes[index];
+                const auto source = index < query.size() ? static_cast<unsigned char>(query[index]) : static_cast<unsigned char>(0);
+                if (row == source)
+                {
+                    if (!row)
+                        return true;
+                    continue;
+                }
+                // Saved FF1070 folds only unequal seven-bit bytes. High
+                // bytes compare equal only through the exact-byte branch.
+                if ((row | source) & 0x80)
+                    return false;
+                if (NativeAnimationManagerProfile::NameFold[row] != NativeAnimationManagerProfile::NameFold[source])
+                    return false;
+            }
+            return false;
+        }
+    }
+    ClockResult NativeAnimationManagerMemory::ReadGroupBlockName(std::uint32_t requestedIndex, std::uintptr_t& output) const noexcept
+    {
+        namespace Detail = AnimationDefinitionBlockNameDetail;
+        const auto   index = requestedIndex;
+        Detail::Name first, second;
+        auto         result = Detail::Capture(binding, owner, index, true, first);
+        if (result != ClockResult::Ok || (result = Detail::Capture(binding, owner, index, true, second)) != ClockResult::Ok)
+            return result;
+        if (!Detail::Same(first, second))
+            return ClockResult::BindingChanged;
+        if ((result = Detail::Begin(binding, owner, second.rva)) != ClockResult::Ok)
+            return result;
+        output = binding.image + second.rva + Detail::Definition::BlockNameOffset;
+        return ClockResult::Ok;
+    }
+    ClockResult NativeAnimationManagerMemory::FindFirstGroupByBlockName(const std::string& sourceName, std::uint32_t& output) const noexcept
+    {
+        namespace Detail = AnimationDefinitionBlockNameDetail;
+        std::string query;
+        try
+        {
+            query = sourceName;
+        }
+        catch (...)
+        {
+            return ClockResult::WriteFailure;
+        }
+        // This bounded stack is the exact genuine118-row prefix, not a
+        // guessed association count/capacity or a new global registry.
+        auto result = Detail::Begin(binding, owner, 0, true);
+        if (result != ClockResult::Ok)
+            return result;
+        std::array<Detail::Name, Detail::Definition::BlockNamePrefixCount> prefix{};
+        std::size_t                                                        observed = 0;
+        std::uint32_t                                                      selected = Detail::Definition::BlockNamePrefixCount;
+        for (std::uint32_t index = 0; index != Detail::Definition::BlockNamePrefixCount; ++index)
+        {
+            if ((result = Detail::CapturePrefix(binding, index, prefix[index])) != ClockResult::Ok)
+                return result;
+            ++observed;
+            if (Detail::Equal(prefix[index], query))
+            {
+                selected = index;
+                break;
+            }
+        }
+        if ((result = Detail::Begin(binding, owner, 0, true)) != ClockResult::Ok)
+            return result;
+        for (std::size_t index = 0; index != observed; ++index)
+        {
+            Detail::Name current;
+            if ((result = Detail::CapturePrefix(binding, static_cast<std::uint32_t>(index), current)) != ClockResult::Ok)
+                return result;
+            if (!Detail::Same(prefix[index], current))
+                return ClockResult::BindingChanged;
+        }
+        if ((result = Detail::Begin(binding, owner, 0, true)) != ClockResult::Ok)
+            return result;
+        output = selected;
         return ClockResult::Ok;
     }
 }

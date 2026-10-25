@@ -2834,9 +2834,12 @@ namespace ClockAnimationHierarchyHashOwnerTest
 namespace ClockAnimationManagerOwnerTest
 {
     std::uintptr_t watched = 0, changedAddress = 0;
-    std::uint32_t  changedValue = 0;
-    unsigned       reads = 0;
-    bool           failNext = false;
+    // Name-cell bookends read the full field; existing scalar watchers retain
+    // their four-byte selection unless the focused fixture changes the width.
+    std::size_t   watchedBytes = sizeof(std::int32_t);
+    std::uint32_t changedValue = 0;
+    unsigned      reads = 0;
+    bool          failNext = false;
     void (*afterRead)() = nullptr;
     mta::game_de::NativeAnimationBlockName* query = nullptr;
     void                                    ChangeQuery() noexcept
@@ -2999,7 +3002,7 @@ namespace mta::game_de::NativeImageAccess
     bool AnimationManagerOwnerFixtureReadImage(std::uintptr_t image, std::uintptr_t address, void* destination, std::size_t bytes, bool writable = false,
                                                bool executable = false) noexcept
     {
-        const bool selected = address == ClockAnimationManagerOwnerTest::watched && bytes == sizeof(std::int32_t);
+        const bool selected = address == ClockAnimationManagerOwnerTest::watched && bytes == ClockAnimationManagerOwnerTest::watchedBytes;
         if (selected && ClockAnimationManagerOwnerTest::failNext)
         {
             ClockAnimationManagerOwnerTest::failNext = false;
@@ -8380,6 +8383,7 @@ namespace
 #include "NativeAnimationManagerCacheOwnerTests.inl"
 #include "NativeAnimationBlockHashFactoryOwnerTests.inl"
 #include "NativeAnimationDefinitionsOwnerTests.inl"
+#include "NativeAnimationDefinitionBlockNamesOwnerTests.inl"
 
 // The strict receiver must execute production typed tickets and the distinct
 // metadata-only delete route. Deleting an interface acknowledges only its own
@@ -8401,6 +8405,7 @@ static_assert(std::is_same_v<decltype(&PrivateAnimationFactoryManagerReceiver::G
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool     animationDefinitionBlockNamesOnly = argc == 3 && std::strcmp(argv[2], "--animation-definition-block-names") == 0;
     const bool     animationDefinitionsOnly = argc == 3 && std::strcmp(argv[2], "--animation-definitions") == 0;
     const bool     animationBlockHashFactoryOnly = argc == 3 && std::strcmp(argv[2], "--animation-block-hash-factory") == 0;
     const bool     animationManagerCacheForeign = argc == 3 && std::strcmp(argv[2], "--animation-manager-cache-foreign") == 0;
@@ -8519,9 +8524,18 @@ int main(int argc, char** argv)
            customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly ||
            privateHierarchyParentOnly || privateHierarchyEmptyOnly || freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly ||
            privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly || animationBankFactoriesOnly ||
-           sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly || animationDefinitionsOnly) &&
+           sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly || animationDefinitionsOnly ||
+           animationDefinitionBlockNamesOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (animationDefinitionBlockNamesOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        NativeAnimationBlocksOwnedSdk(fixture, &AnimationDefinitionBlockNamesOwnerFixture::RunPrepared);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (animationDefinitionsOnly)
     {
         ClockImageFixture fixture;

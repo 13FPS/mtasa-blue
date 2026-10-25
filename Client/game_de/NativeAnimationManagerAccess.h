@@ -6,8 +6,13 @@
 #pragma once
 #include "NativeAnimationBlockAccess.h"
 #include <cstdint>
+#include <string>
 namespace mta::game_de
 {
+    // The saved genuine FF1070 search has an exact fixed prefix/default,
+    // independently of the mutable current association-definition count.
+    inline constexpr std::uint32_t NativeAnimationAssociationGroupPrefixCount = 118;
+
     struct NativeAnimationManagerCounts
     {
         std::int32_t blocks = 0;
@@ -51,5 +56,13 @@ namespace mta::game_de
         // full uint32 group IDs are qualified against its current definition
         // extent. A name borrow adds no lifetime or copied-string facade.
         virtual ClockResult ReadAnimationGroupName(std::uint64_t, std::uint32_t, std::uintptr_t&) noexcept { return ClockResult::NotInitialized; }
+        virtual ClockResult ReadAnimationGroupBlockName(std::uint64_t, std::uint32_t, std::uintptr_t&) noexcept { return ClockResult::NotInitialized; }
+        // The SDK lends an already copied unbounded source string. A native
+        // owner must snapshot it before callbacks and explicitly refuse CPU
+        // allocation failure; noexcept cannot turn that into termination.
+        virtual ClockResult FindFirstAnimationGroupByBlockName(std::uint64_t, const std::string&, std::uint32_t&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
     };
 }

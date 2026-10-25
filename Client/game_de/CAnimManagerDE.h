@@ -56,6 +56,8 @@ namespace mta::game_de
         int                                  GetNumAnimBlocks() override;
         int                                  GetNumAnimAssocDefinitions() override;
         const char*                          GetAnimGroupName(AssocGroupId) override;
+        const char*                          GetAnimBlockName(AssocGroupId) override;
+        AssocGroupId                         GetFirstAssocGroup(const char*) override;
         int                                  GetAnimationBlockIndex(const char*) override;
         const char*                          GetGateWayBlockName() const override;
         const char*                          GetGateWayAnimationName() const override;

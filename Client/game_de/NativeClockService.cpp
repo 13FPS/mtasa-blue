@@ -316,6 +316,8 @@ namespace mta::game_de
             ClockResult ReadAnimationManagerCounts(std::uint64_t, NativeAnimationManagerCounts&) noexcept override;
             ClockResult ReadAnimationAssocDefinitionCount(std::uint64_t, std::int32_t&) noexcept override;
             ClockResult ReadAnimationGroupName(std::uint64_t, std::uint32_t, std::uintptr_t&) noexcept override;
+            ClockResult ReadAnimationGroupBlockName(std::uint64_t, std::uint32_t, std::uintptr_t&) noexcept override;
+            ClockResult FindFirstAnimationGroupByBlockName(std::uint64_t, const std::string&, std::uint32_t&) noexcept override;
             ClockResult FindAnimationBlockIndex(std::uint64_t, const NativeAnimationBlockName&, std::int32_t&) noexcept override;
             ClockResult ReadPedInWater(const NativePedReferenceToken&, bool&) noexcept override;
             ClockResult ReadPedAreaCode(const NativePedReferenceToken&, std::uint8_t&) noexcept override;
@@ -5650,6 +5652,51 @@ namespace mta::game_de
             return ClockResult::Ok;
         }
 
+        ClockResult NativeAccess::ReadAnimationGroupBlockName(std::uint64_t requestedGeneration, std::uint32_t requestedIndex, std::uintptr_t& output) noexcept
+        {
+            const auto generation = requestedGeneration;
+            const auto index = requestedIndex;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            if (!generation || generation != runtime.generation.load())
+                return ClockResult::OwnerConflict;
+            std::uintptr_t next = 0;
+            result = NativeAnimationManagerMemory({runtime.image}, &CheckTimingOwner).ReadGroupBlockName(index, next);
+            if (result != ClockResult::Ok || (result = CheckTimingOwner()) != ClockResult::Ok)
+                return result;
+            if (generation != runtime.generation.load())
+                return ClockResult::OwnerConflict;
+            output = next;
+            return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::FindFirstAnimationGroupByBlockName(std::uint64_t requestedGeneration, const std::string& sourceName,
+                                                                     std::uint32_t& output) noexcept
+        {
+            const auto  generation = requestedGeneration;
+            std::string query;
+            try
+            {
+                query = sourceName;
+            }
+            catch (...)
+            {
+                return ClockResult::WriteFailure;
+            }
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            if (!generation || generation != runtime.generation.load())
+                return ClockResult::OwnerConflict;
+            std::uint32_t next = NativeAnimationAssociationGroupPrefixCount;
+            result = NativeAnimationManagerMemory({runtime.image}, &CheckTimingOwner).FindFirstGroupByBlockName(query, next);
+            if (result != ClockResult::Ok || (result = CheckTimingOwner()) != ClockResult::Ok)
+                return result;
+            if (generation != runtime.generation.load())
+                return ClockResult::OwnerConflict;
+            output = next;
+            return ClockResult::Ok;
+        }
         ClockResult NativeAccess::ReadAnimationAssocDefinitionCount(std::uint64_t requestedGeneration, std::int32_t& output) noexcept
         {
             const auto generation = requestedGeneration;

@@ -5,6 +5,7 @@
  ****************************************************************************/
 #pragma once
 #include "NativeAnimationManagerAccess.h"
+#include "NativeAnimationAssociationGroupAccess.h"
 namespace mta::game_de
 {
     class NativeAnimationManagerMemory
@@ -26,6 +27,9 @@ namespace mta::game_de
         // a copied bool grants no group, child-array or release ownership.
         ClockResult ReadGroupCreated(std::uint32_t, bool&) const noexcept;
         ClockResult ReadStaticAssociationAnimID(std::uint32_t, std::uint32_t, std::int16_t&) const noexcept;
+        ClockResult ResolveAssociationGroup(std::uint32_t, NativeAnimationAssociationGroupReferenceToken&) const noexcept;
+        ClockResult ReadAssociationGroup(const NativeAnimationAssociationGroupReferenceToken&, NativeAnimationAssociationGroupValues&) const noexcept;
+        ClockResult ReadAssociationGroupLoaded(const NativeAnimationAssociationGroupReferenceToken&, bool&) const noexcept;
         ClockResult FindBlockIndex(const NativeAnimationBlockName&, std::int32_t&) const noexcept;
 
     private:

@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity')]
+    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -57,6 +57,8 @@ $record['privateHierarchyRetainedLifetimeTested']=$false
 $record['nativePrivateAnimationFactoryOwnerTested']=$false
 $record['actualPrivateAnimationFactorySdkOwnerTested']=$false
 $record['privateAnimationFactoryOutputBookendsTested']=$false
+$record['nativeAnimationAssociationGroupOwnerTested']=$false
+$record['actualAnimationAssociationGroupSdkOwnerTested']=$false
 $record['nativeAnimationIdValidityOwnerTested']=$false
 $record['actualAnimationIdValiditySdkOwnerTested']=$false
 $record['nativeAnimationGroupValidityOwnerTested']=$false
@@ -488,6 +490,7 @@ try {
     $sourceNames += @('Client/game_de/NativeAnimationSequenceName.h','Client/game_de/NativeAnimationSequenceName.cpp','Client/game_de/NativeAnimationSequenceNameCalls.h','Client/game_de/NativeAnimationSequenceNameProfile.h','Tests/definitive/NativeCustomAnimationSequenceNameOwnerTests.inl')
     $sourceNames += @('Client/game_de/NativeAnimationSequenceFrameBindCalls.h','Client/game_de/NativeAnimationSequenceFrameBindProfile.h','Tests/definitive/NativeFreshCompressedSequenceOwnerTests.inl')
     $sourceNames += @('Client/game_de/NativePrivateAnimationHierarchyStorage.h','Client/game_de/NativePrivateAnimationHierarchyStorage.cpp','Client/game_de/NativePrivateAnimationHierarchyController.h','Client/game_de/NativePrivateAnimationHierarchyController.cpp','Tests/definitive/NativePrivateHierarchyOwnerTests.inl')
+    $sourceNames += @('Tests/definitive/NativeAnimationAssociationGroupOwnerTests.inl','Tests/definitive/Write-AnimationAssociationGroupFixture.ps1','Client/game_de/NativeAnimationAssociationGroupAccess.h','Client/game_de/CAnimBlendAssocGroupDE.h','Client/game_de/CAnimBlendAssocGroupDE.cpp','Client/sdk/game/CAnimBlendAssocGroup.h')
     $sourceNames += @('Tests/definitive/NativeAnimationIdValidityOwnerTests.inl','Client/game_de/NativeAnimationStaticAssociationProfile.h','Client/sdk/game/CAnimValidityPolicy.h')
     $sourceNames += @('Tests/definitive/NativeAnimationGroupValidityOwnerTests.inl','Client/game_de/NativeAnimationGroupArrayProfile.h','Client/sdk/game/CAnimGroupValidationPolicy.h')
     $sourceNames += @('Tests/definitive/NativeAnimationDefinitionBlockNamesOwnerTests.inl')
@@ -724,6 +727,14 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         $factoryEvidence+=@{path=$durable;sha256=(Sha $durable)}
     }
     $record['privateAnimationFactoryManagerFixture']=[ordered]@{metadata=$factoryFixture;files=$factoryEvidence}
+    # This stack-only receiver inherits the real five group reads; the remaining
+    # mandatory operations reject and no native factory/base deletion is faked.
+    . (Join-Path $PSScriptRoot 'Write-AnimationAssociationGroupFixture.ps1')
+    $associationGroupFixture=Write-AnimationAssociationGroupFixture $taskRoot (Join-Path $scratchRoot 'AnimationAssociationGroupFixture.generated.h')
+    $associationGroupEvidence=Join-Path $outputRoot 'AnimationAssociationGroupFixture.generated.h'
+    Copy-Item -LiteralPath $associationGroupFixture.path -Destination $associationGroupEvidence
+    $record['animationAssociationGroupFixture']=$associationGroupFixture
+    $record.animationAssociationGroupFixture.path=$associationGroupEvidence
     $privateSource=Join-Path $taskRoot 'Client/game_de/NativePrivateAnimationHierarchyStorage.cpp'
     $privateText=[IO.File]::ReadAllText($privateSource)
     $privateMatch=[regex]::Match($privateText,'(?s)inline\s+constexpr\s+unsigned\s+char\s+CacheProof\s*\[\s*\]\s*=\s*\{(?<values>.*?)\};')
@@ -830,6 +841,7 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         (Join-Path $taskRoot 'Client/game_de/NativePrivateAnimationHierarchyController.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CAnimBlockDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CAnimManagerDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CAnimBlendAssocGroupDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CAnimBlockRequestDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CModelInfoRequestDE.cpp'),
 
@@ -913,6 +925,7 @@ namespace ClockPrivateHierarchyParentWriteFixture {
     if ($Scope -eq 'WorldLine') { $fixtureArguments += '--world-line' }
     if ($Scope -eq 'WorldGround') { $fixtureArguments += '--world-ground' }
     if ($Scope -eq 'ConstructorServices') { $fixtureArguments += '--constructor-services' }
+    if ($Scope -eq 'AnimationAssociationGroupReads') { $fixtureArguments += '--animation-association-group-reads' }
     if ($Scope -eq 'AnimationIdValidity') { $fixtureArguments += '--animation-id-validity' }
     if ($Scope -eq 'AnimationGroupValidity') { $fixtureArguments += '--animation-group-validity' }
     if ($Scope -eq 'AnimationDefinitionBlockNames') { $fixtureArguments += '--animation-definition-block-names' }
@@ -1278,7 +1291,12 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
         if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
     }
-    if($Scope -eq 'AnimationIdValidity'){
+    if($Scope -eq 'AnimationAssociationGroupReads'){
+        $record.nativeAnimationAssociationGroupOwnerTested=$text.Contains('Production animation association group owner fixture completed')
+        $record.actualAnimationAssociationGroupSdkOwnerTested=$text.Contains('Production actual animation association group SDK fixture completed')
+        if(-not($record.nativeAnimationAssociationGroupOwnerTested -and $record.actualAnimationAssociationGroupSdkOwnerTested)){throw 'Animation association group selected scope incomplete'}
+        $record.productionNativeCallbackTested=$true
+    } elseif($Scope -eq 'AnimationIdValidity'){
         $record.nativeAnimationIdValidityOwnerTested=$text.Contains('Production animation ID validity owner fixture completed')
         $record.actualAnimationIdValiditySdkOwnerTested=$text.Contains('Production actual animation ID validity SDK fixture completed')
         if(-not($record.nativeAnimationIdValidityOwnerTested -and $record.actualAnimationIdValiditySdkOwnerTested)){throw 'Animation ID validity selected scope incomplete'}

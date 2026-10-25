@@ -69,6 +69,7 @@
 #include "NativeCustomAnimationCleanupAccess.h"
 #include "NativeCustomAnimationSequenceOperationAccess.h"
 #include "NativeAnimationManagerMemory.h"
+#include "NativeAnimationAssociationGroupAccess.h"
 #include "NativePedVelocityMemory.h"
 #include "NativePedReferenceController.h"
 #include "NativePedVitalsMemory.h"
@@ -162,9 +163,14 @@ namespace mta::game_de
                                    public NativeAnimationSequenceAccess,
                                    public NativeAnimationHierarchyAccess,
                                    public NativeCustomAnimationCleanupAccess,
-                                   public NativeCustomAnimationSequenceOperationAccess
+                                   public NativeCustomAnimationSequenceOperationAccess,
+                                   public NativeAnimationAssociationGroupAccess
         {
         public:
+            ClockResult ResolveAnimationAssociationGroup(std::uint64_t, std::uint32_t, NativeAnimationAssociationGroupReferenceToken&) noexcept override;
+            ClockResult ReadAnimationAssociationGroup(const NativeAnimationAssociationGroupReferenceToken&,
+                                                      NativeAnimationAssociationGroupValues&) noexcept override;
+            ClockResult ReadAnimationAssociationGroupLoaded(const NativeAnimationAssociationGroupReferenceToken&, bool&) noexcept override;
             ClockResult BeginPrivateAnimationCleanup(const NativeCustomAnimationCleanupRequest&, NativeCustomAnimationCleanupBeginReceipt&) noexcept override;
             ClockResult ResumePrivateAnimationCleanup(const NativeCustomAnimationCleanupToken&, SCustomAnimationCleanupResult&) noexcept override;
             bool        HasPendingPrivateAnimationCleanup() const noexcept override;
@@ -5731,6 +5737,61 @@ namespace mta::game_de
             if (result != ClockResult::Ok || (result = CheckTimingOwner()) != ClockResult::Ok)
                 return result;
             if (generation != runtime.generation.load())
+                return ClockResult::OwnerConflict;
+            output = next;
+            return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::ResolveAnimationAssociationGroup(std::uint64_t requestedGeneration, std::uint32_t requestedIndex,
+                                                                   NativeAnimationAssociationGroupReferenceToken& output) noexcept
+        {
+            const auto generation = requestedGeneration;
+            const auto index = requestedIndex;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            if (!generation || generation != runtime.generation.load())
+                return ClockResult::OwnerConflict;
+            NativeAnimationAssociationGroupReferenceToken next;
+            result = NativeAnimationManagerMemory({runtime.image}, &CheckTimingOwner).ResolveAssociationGroup(index, next);
+            if (result != ClockResult::Ok || (result = CheckTimingOwner()) != ClockResult::Ok)
+                return result;
+            if (generation != runtime.generation.load())
+                return ClockResult::OwnerConflict;
+            next.ownerGeneration = generation;
+            output = next;
+            return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::ReadAnimationAssociationGroup(const NativeAnimationAssociationGroupReferenceToken& source,
+                                                                NativeAnimationAssociationGroupValues&               output) noexcept
+        {
+            const auto expected = source;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            if (!expected.ownerGeneration || expected.ownerGeneration != runtime.generation.load())
+                return ClockResult::OwnerConflict;
+            NativeAnimationAssociationGroupValues next;
+            result = NativeAnimationManagerMemory({runtime.image}, &CheckTimingOwner).ReadAssociationGroup(expected, next);
+            if (result != ClockResult::Ok || (result = CheckTimingOwner()) != ClockResult::Ok)
+                return result;
+            if (expected.ownerGeneration != runtime.generation.load())
+                return ClockResult::OwnerConflict;
+            output = next;
+            return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::ReadAnimationAssociationGroupLoaded(const NativeAnimationAssociationGroupReferenceToken& source, bool& output) noexcept
+        {
+            const auto expected = source;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            if (!expected.ownerGeneration || expected.ownerGeneration != runtime.generation.load())
+                return ClockResult::OwnerConflict;
+            bool next = false;
+            result = NativeAnimationManagerMemory({runtime.image}, &CheckTimingOwner).ReadAssociationGroupLoaded(expected, next);
+            if (result != ClockResult::Ok || (result = CheckTimingOwner()) != ClockResult::Ok)
+                return result;
+            if (expected.ownerGeneration != runtime.generation.load())
                 return ClockResult::OwnerConflict;
             output = next;
             return ClockResult::Ok;

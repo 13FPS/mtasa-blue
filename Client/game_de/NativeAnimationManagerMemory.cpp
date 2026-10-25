@@ -582,7 +582,7 @@ namespace mta::game_de
         namespace Memory = NativeModelReferenceMap;
         using Binding = NativeAnimationManagerMemory::Binding;
         using CheckOwner = NativeAnimationManagerMemory::CheckOwner;
-        bool Profile(Binding binding, const Group::Pin* extra = nullptr, std::size_t extraCount = 0) noexcept
+        bool Profile(Binding binding, const Group::Pin* extra = nullptr, std::size_t extraCount = 0, std::uintptr_t blockRva = 0) noexcept
         {
             if (!NativePedPoolReader::Revalidate(binding))
                 return false;
@@ -612,6 +612,10 @@ namespace mta::game_de
             // flag type so both declarators retain the same explicit type.
             constexpr DWORD rw = IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE, rx = IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE;
             if (!contains(Group::GlobalRva, 8, rw, IMAGE_SCN_MEM_EXECUTE) || !contains(Group::CountRva, 4, rw, IMAGE_SCN_MEM_EXECUTE))
+                return false;
+            // Only the coupled loaded channel needs a native block row. Other
+            // source group scalars retain their independent parent-only domain.
+            if (blockRva && !contains(blockRva, NativeAnimationBlockProfile::RowBytes, rw, IMAGE_SCN_MEM_EXECUTE))
                 return false;
             for (std::size_t index = 0; index != Group::Code.size() + extraCount; ++index)
             {
@@ -835,6 +839,150 @@ namespace mta::game_de
         // Preserve signedWORD semantics, including originalffff==-1, rather
         // than converting it into an unsigned valid ID or a fallback row.
         output = value;
+        return ClockResult::Ok;
+    }
+
+    namespace AnimationAssociationGroupReadDetail
+    {
+        namespace Group = AnimationGroupCreatedDetail;
+        namespace P = NativeAnimationGroupArrayProfile;
+        namespace B = NativeAnimationBlockProfile;
+        namespace Image = NativeImageAccess;
+        namespace Memory = NativeModelReferenceMap;
+        using Binding = NativeAnimationManagerMemory::Binding;
+        using CheckOwner = NativeAnimationManagerMemory::CheckOwner;
+        struct Snapshot
+        {
+            Group::Snapshot parent{};
+            std::uint32_t   groupId = 0;
+            std::uintptr_t  block = 0;
+            std::int32_t    blockCount = 0;
+            std::uint8_t    loaded = 0;
+        };
+        bool Same(const Snapshot& a, const Snapshot& b) noexcept
+        {
+            return a.parent.rows == b.parent.rows && a.parent.capacity == b.parent.capacity && a.parent.count == b.parent.count &&
+                   a.parent.value == b.parent.value && a.groupId == b.groupId && a.block == b.block && a.blockCount == b.blockCount && a.loaded == b.loaded;
+        }
+        ClockResult Capture(Binding binding, CheckOwner owner, std::uint32_t index, std::uintptr_t locator, bool withLoaded, Snapshot& output) noexcept
+        {
+            Snapshot next;
+            auto     result = Group::Capture(binding, owner, index, next.parent);
+            if (result != ClockResult::Ok)
+                return result;
+            const auto row = next.parent.rows + static_cast<std::uintptr_t>(index) * P::RowBytes;
+            if (locator && locator != row)
+                return ClockResult::BindingChanged;
+            if (!Memory::Copy(row + 0x18, &next.groupId, sizeof(next.groupId)))
+                return ClockResult::ReadFailure;
+            if (withLoaded)
+            {
+                if (!Memory::Copy(row, &next.block, sizeof(next.block)))
+                    return ClockResult::ReadFailure;
+                // Actual typed IsLoaded is false for a null block, regardless
+                // of Created. Nonnull pointers must belong to the real bank;
+                // arbitrary private pages or a classic C struct cannot qualify.
+                if (next.block)
+                {
+                    const auto bank = binding.image + B::BankRva;
+                    if (next.block < bank || (next.block - bank) % B::RowBytes)
+                        return ClockResult::BindingChanged;
+                    const auto blockIndex = (next.block - bank) / B::RowBytes;
+                    if (blockIndex >= B::ObservationLimit || !NativeAnimationBlockMemory::Revalidate(binding) ||
+                        !Group::Profile(binding, nullptr, 0, B::BankRva + blockIndex * B::RowBytes))
+                        return ClockResult::BindingChanged;
+                    if (!Image::ReadImage(binding.image, binding.image + B::CountRva, &next.blockCount, sizeof(next.blockCount), true))
+                        return ClockResult::ReadFailure;
+                    if (next.blockCount < 0 || static_cast<std::uint32_t>(next.blockCount) > B::ObservationLimit)
+                        return ClockResult::BindingChanged;
+                    if (blockIndex >= static_cast<std::uint32_t>(next.blockCount))
+                        return ClockResult::NotInitialized;
+                    if (!Image::ReadImage(binding.image, next.block + B::LoadedOffset, &next.loaded, sizeof(next.loaded), true))
+                        return ClockResult::ReadFailure;
+                    std::int32_t countAfter = 0;
+                    if (!Image::ReadImage(binding.image, binding.image + B::CountRva, &countAfter, sizeof(countAfter), true))
+                        return ClockResult::ReadFailure;
+                    if (countAfter != next.blockCount || !NativeAnimationBlockMemory::Revalidate(binding))
+                        return ClockResult::BindingChanged;
+                }
+            }
+            Group::Snapshot parentAfter;
+            if ((result = Group::Capture(binding, owner, index, parentAfter)) != ClockResult::Ok)
+                return result;
+            std::uint32_t  idAfter = 0;
+            std::uintptr_t blockAfter = 0;
+            if (!Memory::Copy(row + 0x18, &idAfter, sizeof(idAfter)) || (withLoaded && !Memory::Copy(row, &blockAfter, sizeof(blockAfter))))
+                return ClockResult::ReadFailure;
+            if (parentAfter.rows != next.parent.rows || parentAfter.capacity != next.parent.capacity || parentAfter.count != next.parent.count ||
+                parentAfter.value != next.parent.value || idAfter != next.groupId || (withLoaded && blockAfter != next.block))
+                return ClockResult::BindingChanged;
+            if ((result = Group::Begin(binding, owner)) != ClockResult::Ok)
+                return result;
+            output = next;
+            return ClockResult::Ok;
+        }
+        ClockResult Read(Binding binding, CheckOwner owner, const NativeAnimationAssociationGroupReferenceToken& expected, bool loaded,
+                         Snapshot& output) noexcept
+        {
+            if (!expected.locator)
+                return ClockResult::InvalidArgument;
+            Snapshot first, second;
+            auto     result = Capture(binding, owner, expected.index, expected.locator, loaded, first);
+            if (result != ClockResult::Ok || (result = Capture(binding, owner, expected.index, expected.locator, loaded, second)) != ClockResult::Ok)
+                return result;
+            if (!Same(first, second))
+                return ClockResult::BindingChanged;
+            if ((result = Group::Begin(binding, owner)) != ClockResult::Ok)
+                return result;
+            output = second;
+            return ClockResult::Ok;
+        }
+    }
+    ClockResult NativeAnimationManagerMemory::ResolveAssociationGroup(std::uint32_t                                  requestedIndex,
+                                                                      NativeAnimationAssociationGroupReferenceToken& output) const noexcept
+    {
+        namespace D = AnimationAssociationGroupReadDetail;
+        const auto  index = requestedIndex;
+        D::Snapshot first, second;
+        auto        result = D::Capture(binding, owner, index, 0, false, first);
+        if (result != ClockResult::Ok || (result = D::Capture(binding, owner, index, 0, false, second)) != ClockResult::Ok)
+            return result;
+        if (!D::Same(first, second))
+            return ClockResult::BindingChanged;
+        if ((result = AnimationGroupCreatedDetail::Begin(binding, owner)) != ClockResult::Ok)
+            return result;
+        NativeAnimationAssociationGroupReferenceToken next;
+        next.index = index;
+        next.locator = second.parent.rows + static_cast<std::uintptr_t>(index) * NativeAnimationGroupArrayProfile::RowBytes;
+        // Memory proves current origin only. CPU generation is stamped solely
+        // by the actual runtime after its final owner checks.
+        output = next;
+        return ClockResult::Ok;
+    }
+    ClockResult NativeAnimationManagerMemory::ReadAssociationGroup(const NativeAnimationAssociationGroupReferenceToken& source,
+                                                                   NativeAnimationAssociationGroupValues&               output) const noexcept
+    {
+        const auto                                    expected = source;
+        AnimationAssociationGroupReadDetail::Snapshot observed;
+        const auto                                    result = AnimationAssociationGroupReadDetail::Read(binding, owner, expected, false, observed);
+        if (result != ClockResult::Ok)
+            return result;
+        NativeAnimationAssociationGroupValues next;
+        next.interfaceAddress = expected.locator;
+        std::memcpy(&next.numAnimations, &observed.parent.value, sizeof(next.numAnimations));
+        std::memcpy(&next.groupId, &observed.groupId, sizeof(next.groupId));
+        output = next;
+        return ClockResult::Ok;
+    }
+    ClockResult NativeAnimationManagerMemory::ReadAssociationGroupLoaded(const NativeAnimationAssociationGroupReferenceToken& source,
+                                                                         bool&                                                output) const noexcept
+    {
+        const auto                                    expected = source;
+        AnimationAssociationGroupReadDetail::Snapshot observed;
+        const auto                                    result = AnimationAssociationGroupReadDetail::Read(binding, owner, expected, true, observed);
+        if (result != ClockResult::Ok)
+            return result;
+        output = observed.loaded != 0;
         return ClockResult::Ok;
     }
 }

@@ -6,6 +6,7 @@
 #pragma once
 #include "StdInc.h"
 #include "CAnimSequenceStorageSA.h"
+#include "CCustomAnimationCleanupSA.h"
 #include "CAnimBlendHierarchySA.h"
 #include <game/CAnimBlock.h>
 #include <game/CAnimBlendAssociation.h>
@@ -88,7 +89,9 @@ namespace ifp_parser_tests
     class Manager final : public CAnimManager
     {
     public:
-        explicit Manager(bool alternate = false) noexcept : alternateLayout(alternate) {}
+        explicit Manager(bool alternate = false) : alternateLayout(alternate), cleanupOwner(std::make_shared<MtaGame::CustomAnimationCleanupSA::Owner>(*this))
+        {
+        }
         std::set<CAnimBlendHierarchySAInterface*>             hierarchies;
         std::set<CAnimBlendSequenceSAInterface*>              detached;
         std::map<CAnimBlendSequenceSAInterface*, std::size_t> arrays;
@@ -122,6 +125,72 @@ namespace ifp_parser_tests
         std::size_t failArrayRowAt = 0, hierarchyAttachAttempts = 0, hierarchyAttachAccepted = 0, failHierarchyAttachAt = 0;
         bool        hierarchyAttachFailureAfterWrite = false, requireConstructedBeforeAttach = false, allCapacityInitialized = true;
         const bool  alternateLayout;
+        std::shared_ptr<MtaGame::CustomAnimationCleanupSA::Owner> cleanupOwner;
+        std::size_t                                               cleanupBegins = 0, cleanupResumes = 0, cleanupTicketDrops = 0;
+        std::size_t                                               cleanupGatheredCapacity = 0;
+        bool cleanupPause = false, cleanupBeginThrow = false, cleanupUnknownDisposition = false, cleanupThrowAfterFrame = false;
+        class CleanupTicket final : public CCustomAnimationCleanup
+        {
+        public:
+            CleanupTicket(Manager& manager, std::unique_ptr<CCustomAnimationCleanup> actual) noexcept : manager(manager), actual(std::move(actual)) {}
+            ~CleanupTicket() override { ++manager.cleanupTicketDrops; }
+            SCustomAnimationCleanupResult Resume() noexcept override
+            {
+                ++manager.cleanupResumes;
+                if (manager.cleanupPause)
+                    return {ECustomAnimationCleanupStatus::Pending, ECustomAnimationCleanupDisposition::Unresolved};
+                auto result = actual->Resume();
+                // Cleanup rows now belong to the actual backend snapshot,
+                // independently of parser factory calls before attachment.
+                for (const auto& record : manager.cleanupOwner->records)
+                    if (record->gathered && record->capacity > manager.cleanupGatheredCapacity)
+                        manager.cleanupGatheredCapacity = record->capacity;
+                if (manager.cleanupUnknownDisposition && result.status == ECustomAnimationCleanupStatus::Complete)
+                    result.disposition = ECustomAnimationCleanupDisposition::Unresolved;
+                return result;
+            }
+
+        private:
+            Manager&                                 manager;
+            std::unique_ptr<CCustomAnimationCleanup> actual;
+        };
+        bool                                     HasPendingCustomAnimationCleanup() const noexcept override { return cleanupOwner->HasPending(); }
+        std::unique_ptr<CCustomAnimationCleanup> BeginCustomAnimationCleanup(const SCustomAnimationCleanupRequest& request) override
+        {
+            ++cleanupBegins;
+            if (cleanupBeginThrow)
+                throw std::bad_alloc();
+            auto* hierarchy = request.hierarchy ? request.hierarchy->GetInterface() : nullptr;
+            auto  actual = MtaGame::CustomAnimationCleanupSA::Begin(cleanupOwner, request, hierarchy);
+            if (alternateLayout && request.originalArray)
+            {
+                // The existing opaque layout is instrumentation, not DE. Adapt
+                // only its owned row observations into actual classic rows so
+                // real SA Gather/Resume still choose all release/progress policy.
+                for (auto& record : cleanupOwner->records)
+                {
+                    if (record->hierarchy != hierarchy || record->sequences != request.originalArray || record->gathered)
+                        continue;
+                    auto* rows = MtaGame::CAnimSequenceStorageSA::Allocate(request.capacity);
+                    struct RowsGuard
+                    {
+                        CAnimBlendSequenceSAInterface* rows;
+                        ~RowsGuard() { MtaGame::CAnimSequenceStorageSA::Free(rows); }
+                    } guard{rows};
+                    for (std::size_t index = 0; index != request.capacity; ++index)
+                        rows[index] = *Row(request.originalArray, index);
+                    auto view = *record;
+                    view.sequences = rows;
+                    MtaGame::CustomAnimationCleanupSA::Gather(view);
+                    record->individuals.swap(view.individuals);
+                    record->shared = view.shared;
+                    record->array.address = request.originalArray;
+                    record->outer.address = hierarchy;
+                    record->gathered = true;
+                }
+            }
+            return std::make_unique<CleanupTicket>(*this, std::move(actual));
+        }
         std::map<CAnimBlendSequenceSAInterface*, BYTE*> alternateAllocations;
         bool                                            Empty() const
         {
@@ -187,9 +256,22 @@ namespace ifp_parser_tests
         std::unique_ptr<CAnimBlendHierarchy> GetCustomAnimBlendHierarchy() override
         {
             auto* row = new CAnimBlendHierarchySAInterface{};
-            hierarchies.insert(row);
-            ++hierarchyAllocations;
-            return std::make_unique<Hierarchy>(*this, *row);
+            // Match the real factory reservation before exposing its facade.
+            auto record = MtaGame::CustomAnimationCleanupSA::Reserve(*cleanupOwner, row);
+            try
+            {
+                hierarchies.insert(row);
+                auto facade = std::make_unique<Hierarchy>(*this, *row);
+                ++hierarchyAllocations;
+                return facade;
+            }
+            catch (...)
+            {
+                hierarchies.erase(row);
+                MtaGame::CustomAnimationCleanupSA::CancelUnexposed(*cleanupOwner, record);
+                delete row;
+                throw;
+            }
         }
         std::unique_ptr<CAnimBlendHierarchy> GetCustomAnimBlendHierarchy(CAnimBlendHierarchySAInterface* row) override
         {
@@ -335,6 +417,8 @@ namespace ifp_parser_tests
             ++frameFrees;
             events.push_back({EventKind::FreeFrame, reinterpret_cast<CAnimBlendSequenceSAInterface*>(row), 0, false});
             delete[] row;
+            if (cleanupThrowAfterFrame)
+                throw std::runtime_error("injected release acknowledgement loss after actual frame free");
         }
         void RemoveFromUncompressedCache(CAnimBlendHierarchySAInterface* row) override
         {

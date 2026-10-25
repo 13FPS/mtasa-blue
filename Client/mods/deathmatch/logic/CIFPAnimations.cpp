@@ -17,14 +17,20 @@
 
 CIFPAnimations::~CIFPAnimations()
 {
+    // A pending accepted ticket leaves the copied request/resources with the
+    // original backend owner. Destruction drops only CPU facades, not debt.
     DeleteAnimations();
 }
 
-void CIFPAnimations::DeleteAnimations()
+bool CIFPAnimations::DeleteAnimations()
 {
-    // Storage capacity is valid even when parsing stopped before publishing
-    // the final logical count. Unvisited vector entries and null rows are safe.
+    // Completed entries stay empty and stable while another entry waits for its
+    // actual backend. The durable ticket, never vector/map absence, owns debt.
+    bool complete = true;
     for (auto& animation : vecAnimations)
-        MtaGame::IfpStorage::DestroyAnimation(manager, animation);
-    vecAnimations.clear();
+        if (!MtaGame::IfpStorage::DestroyAnimation(manager, animation))
+            complete = false;
+    if (complete)
+        vecAnimations.clear();
+    return complete;
 }

@@ -20,8 +20,8 @@ $record=[ordered]@{
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     result=$null;checks=0;failure=$null;scratchDirectory=$scratchRoot;scratchRemoved=$false;
     generatedFixture=$null;actualHeadersConsumed=@();
-    actualCommonIfpParserRuntimeTested=$false;actualIfpOwnershipFailurePathsTested=$false;actualIfpOpaqueLayoutVariantsTested=$false;actualIfpDetachedConstructionTested=$false;actualIfpUnattachedCleanupTested=$false;
-    scope='Actual common CClientIFP/CIFPAnimations/CFileReader TUs and unchanged actual class headers, x86 CPU runtime; only unrelated entity/string/game shell substituted. Genuine classic storage12/4 At and instrumented opaque80/8 owned-array views share the same parser and cleanup. This affected module reruns codec/transaction paths plus construction-before-hierarchy-attach and failure-before-attach cleanup; no other old suites replay. No duplicated parser or cleanup model, native engine execution or concrete DE factory claim.';
+    actualCommonIfpParserRuntimeTested=$false;actualIfpOwnershipFailurePathsTested=$false;actualIfpOpaqueLayoutVariantsTested=$false;actualIfpDetachedConstructionTested=$false;actualIfpUnattachedCleanupTested=$false;actualIfpDurableCleanupTicketTested=$false;actualIfpCleanupAcknowledgementRetentionTested=$false;
+    scope='Actual common CClientIFP/CIFPAnimations/CFileReader TUs and unchanged actual class headers, x86 CPU runtime; only unrelated entity/string/game shell substituted. Genuine classic storage12/4 At and instrumented opaque80/8 owned-array views share the same parser; actual SA cleanup journal owns release policy, with opaque instrumentation adapting owned row observations to its Gather. This affected module reruns codec/transaction paths plus construction-before-hierarchy-attach and failure-before-attach cleanup; no other old suites replay. No duplicated parser or cleanup model, native engine execution or concrete DE factory claim.';
     nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;installationChanged=$false;
     classDeclarationsMirrored=$false;completeCGameReady=$false;completeNativeDEAnimationFactoryReady=$false;fullMtaReady=$false
 }
@@ -129,7 +129,7 @@ try {
         ('/I'+(Join-Path $taskRoot 'Client/mods/deathmatch/logic')),(Join-Path $PSScriptRoot 'IFPParserRuntimeTests.cpp'))+
         @($productionSources|ForEach-Object{Join-Path $taskRoot $_})+
         @(('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'compiler.pdb')),('/Fe'+$executable))
-    $record.result=[ordered]@{architecture='x86';environment=$environmentResult;compile=$null;test=$null;executableSha256=$null;checks=0;pointerBits=$null}
+    $record.result=[ordered]@{architecture='x86';environment=$environmentResult;compile=$null;test=$null;retainedCleanup=$null;executableSha256=$null;checks=0;retainedChecks=0;pointerBits=$null}
     $record.result.compile=RunOwned $compiler $arguments $outputRoot 'compile' 60000
     if($record.result.compile.exitCode -ne 0 -or $record.result.compile.timedOut){throw 'Actual common IFP fixture compilation failed'}
     $includeLog=[IO.File]::ReadAllText($record.result.compile.stdout)
@@ -141,7 +141,8 @@ try {
     }
     foreach($relative in @('Client/mods/deathmatch/logic/CClientIFP.h','Client/mods/deathmatch/logic/CIFPAnimations.h',
         'Client/mods/deathmatch/logic/CFileReader.h','Client/mods/deathmatch/logic/CIFPAnimationStorage.h',
-        'Client/mods/deathmatch/logic/CIFPReadGuard.h','Client/sdk/game/CAnimManager.h','Client/game_sa/CAnimSequenceStorageSA.h')){
+        'Client/mods/deathmatch/logic/CIFPReadGuard.h','Client/sdk/game/CAnimManager.h','Client/game_sa/CAnimSequenceStorageSA.h','Client/game_sa/CCustomAnimationCleanupSA.h',
+        'Client/sdk/game/CCustomAnimationCleanup.h')){
         $actual=[IO.Path]::GetFullPath((Join-Path $taskRoot $relative))
         if(-not $consumed.Contains($actual)){throw "Compiler did not consume exact actual header: $relative"}
         $record.actualHeadersConsumed+=@([ordered]@{path=$relative;sha256=(Sha $actual)})
@@ -160,11 +161,21 @@ try {
         $stdout.Contains('IFP phase: transactional reload, retained old set and shared chunk cleanup') -and $record.actualCommonIfpParserRuntimeTested
     $record.actualIfpDetachedConstructionTested=$stdout.Contains('Actual common IFP detached construction order fixture completed')
     $record.actualIfpUnattachedCleanupTested=$stdout.Contains('Actual common IFP unattached cleanup and retained set fixture completed')
-    $record.checks=$record.result.checks
+    $record.actualIfpDurableCleanupTicketTested=$stdout.Contains('Actual common IFP durable cleanup ticket fixture completed')
+    if($record.result.test.exitCode -ne 0 -or $record.result.test.timedOut){throw 'Actual common IFP main process failed'}
+    $record.result.retainedCleanup=RunOwned $executable @('--retained-cleanup') $outputRoot 'retained-cleanup' 15000
+    $retainedOutput=[IO.File]::ReadAllText($record.result.retainedCleanup.stdout)
+    $retainedSummary=[regex]::Match($retainedOutput,'Passed (\d+) retained common IFP cleanup checks')
+    if($retainedSummary.Success){$record.result.retainedChecks=[int]$retainedSummary.Groups[1].Value}
+    $record.actualIfpCleanupAcknowledgementRetentionTested=$record.result.retainedCleanup.exitCode -eq 0 -and
+        -not $record.result.retainedCleanup.timedOut -and $record.result.retainedChecks -gt 0 -and
+        $retainedOutput.Contains('Actual common IFP cleanup acknowledgement retention fixture completed')
+    $record.checks=$record.result.checks+$record.result.retainedChecks
     $record.success=$record.result.test.exitCode -eq 0 -and -not $record.result.test.timedOut -and $record.checks -gt 0 -and
         $record.result.pointerBits -eq 32 -and $record.actualCommonIfpParserRuntimeTested -and
         $record.actualIfpOpaqueLayoutVariantsTested -and $record.actualIfpOwnershipFailurePathsTested -and
-        $record.actualIfpDetachedConstructionTested -and $record.actualIfpUnattachedCleanupTested
+        $record.actualIfpDetachedConstructionTested -and $record.actualIfpUnattachedCleanupTested -and
+        $record.actualIfpDurableCleanupTicketTested -and $record.actualIfpCleanupAcknowledgementRetentionTested
     if(-not $record.success){throw 'Actual common IFP runtime/evidence failed'}
 } catch { AddFailure ($_.Exception.ToString()) }
 finally {

@@ -12,6 +12,7 @@
 #pragma once
 
 #include <memory>
+#include "CCustomAnimationCleanup.h"
 
 // Get correct values
 #define MAX_ANIM_GROUPS 200
@@ -143,4 +144,10 @@ public:
     // allocation before any hierarchy points at it. Only the backend knows
     // its row stride/cookie; this is not adoption of an arbitrary native tag.
     virtual std::unique_ptr<CAnimBlendSequence> GetCustomAnimBlendSequenceAt(CAnimBlendSequenceSAInterface* originalArray, DWORD index) = 0;
+    // Cleanup stays on the creating backend, including unresolved entered
+    // effects. No absent-provider fallback may authorize resource release.
+    virtual std::unique_ptr<CCustomAnimationCleanup> BeginCustomAnimationCleanup(const SCustomAnimationCleanupRequest&) = 0;
+    // Teardown must retain both this owner and its module while commands or
+    // CPU ticket vtables remain live; a default false would lose that debt.
+    virtual bool HasPendingCustomAnimationCleanup() const noexcept = 0;
 };

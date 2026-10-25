@@ -77,4 +77,8 @@ public:
     bool                                 IsValidGroup(std::uint32_t) const override { Unsupported(); }
     bool                                 IsValidAnim(std::uint32_t, std::uint32_t) const override { Unsupported(); }
     std::unique_ptr<CAnimBlendSequence>  GetCustomAnimBlendSequenceAt(CAnimBlendSequenceSAInterface*, DWORD) override { Unsupported(); }
+    // This observation-only fixture never exercises cleanup. Required lifetime
+    // operations must reject visibly, not pretend debt or tickets completed.
+    std::unique_ptr<CCustomAnimationCleanup> BeginCustomAnimationCleanup(const SCustomAnimationCleanupRequest&) override { Unsupported(); }
+    bool                                     HasPendingCustomAnimationCleanup() const noexcept override { Unsupported(); }
 };

@@ -31,12 +31,15 @@ extern CGameSA* pGame;
 // but I've tested with this one mostly, so let's stick to this.
 static const char* const kGateWayAnimationName = MtaGame::CAnimGatewayNames::GetAnimationName();
 
-CAnimManagerSA::CAnimManagerSA()
+CAnimManagerSA::CAnimManagerSA() : customCleanupOwner(std::make_shared<MtaGame::CustomAnimationCleanupSA::Owner>(*this))
 {
 }
 
 CAnimManagerSA::~CAnimManagerSA()
 {
+    // Core must check HasPending before destroying the Game/manager or
+    // unloading game_sa. This is only a defensive post-lifetime fence.
+    customCleanupOwner->liveOrigin = nullptr;
 }
 
 void CAnimManagerSA::Initialize()
@@ -928,8 +931,19 @@ std::unique_ptr<CAnimBlendSequence> CAnimManagerSA::GetCustomAnimBlendSequence(C
 
 std::unique_ptr<CAnimBlendHierarchy> CAnimManagerSA::GetCustomAnimBlendHierarchy()
 {
-    auto pInterface = new CAnimBlendHierarchySAInterface;
-    return std::make_unique<CAnimBlendHierarchySA>(pInterface);
+    std::unique_ptr<CAnimBlendHierarchySAInterface> pInterface(new CAnimBlendHierarchySAInterface);
+    auto                                            reservation = MtaGame::CustomAnimationCleanupSA::Reserve(*customCleanupOwner, pInterface.get());
+    try
+    {
+        auto facade = std::make_unique<CAnimBlendHierarchySA>(pInterface.get());
+        pInterface.release();
+        return facade;
+    }
+    catch (...)
+    {
+        MtaGame::CustomAnimationCleanupSA::CancelUnexposed(*customCleanupOwner, reservation);
+        throw;
+    }
 }
 
 std::unique_ptr<CAnimBlendSequence> CAnimManagerSA::GetCustomAnimBlendSequence()
@@ -940,7 +954,30 @@ std::unique_ptr<CAnimBlendSequence> CAnimManagerSA::GetCustomAnimBlendSequence()
 
 void CAnimManagerSA::DeleteCustomAnimHierarchyInterface(CAnimBlendHierarchySAInterface* pInterface)
 {
+    std::shared_ptr<MtaGame::CustomAnimationCleanupSA::Record> reserved;
+    for (const auto& record : customCleanupOwner->records)
+        if (record->hierarchy == pInterface && !record->complete)
+        {
+            reserved = record;
+            break;
+        }
+    if (reserved)
+    {
+        if (reserved->begun && (!reserved->active || reserved->outer.progress != MtaGame::CustomAnimationCleanupSA::Progress::Entered))
+            throw std::runtime_error("Classic hierarchy release belongs to its cleanup ticket");
+        if (!reserved->begun && reserved->outer.progress != MtaGame::CustomAnimationCleanupSA::Progress::Waiting)
+            throw std::runtime_error("Classic hierarchy release has no returned acknowledgement");
+        reserved->outer.progress = MtaGame::CustomAnimationCleanupSA::Progress::Entered;
+    }
+    // Preserve the actual source operation: plain outer-interface deletion,
+    // without adopting children or invoking an engine hierarchy destructor.
     delete pInterface;
+    if (reserved)
+    {
+        reserved->outer.progress = MtaGame::CustomAnimationCleanupSA::Progress::Returned;
+        if (!reserved->begun)
+            reserved->complete = true;
+    }
 }
 
 void CAnimManagerSA::DeleteCustomAnimSequenceInterface(CAnimBlendSequenceSAInterface* pInterface)
@@ -1001,4 +1038,26 @@ std::unique_ptr<CAnimBlendSequence> CAnimManagerSA::GetCustomAnimBlendSequenceAt
 {
     static_assert(sizeof(index) == sizeof(std::uint32_t));
     return GetCustomAnimBlendSequence(MtaGame::CAnimSequenceStorageSA::At(originalArray, static_cast<std::uint32_t>(index)));
+}
+
+std::unique_ptr<CCustomAnimationCleanup> CAnimManagerSA::BeginCustomAnimationCleanup(const SCustomAnimationCleanupRequest& request)
+{
+    if (request.origin != this)
+        throw std::invalid_argument("Classic cleanup requires the creating manager");
+    CAnimBlendHierarchySAInterface* hierarchy = nullptr;
+    if (request.hierarchy)
+    {
+        auto* classic = dynamic_cast<CAnimBlendHierarchySA*>(request.hierarchy);
+        if (!classic)
+            throw std::invalid_argument("Classic cleanup requires its actual backend hierarchy facade");
+        // The source custom-storage contract already owns this plain outer
+        // interface. Copy it during Begin; never retain the CPU facade.
+        hierarchy = classic->GetInterface();
+    }
+    return MtaGame::CustomAnimationCleanupSA::Begin(customCleanupOwner, request, hierarchy);
+}
+
+bool CAnimManagerSA::HasPendingCustomAnimationCleanup() const noexcept
+{
+    return !customCleanupOwner || customCleanupOwner->HasPending();
 }

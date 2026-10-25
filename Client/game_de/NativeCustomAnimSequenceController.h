@@ -14,6 +14,8 @@
 #include "NativeAnimationSequenceLogicalState.h"
 #include "NativeAnimationSequenceDependencyCalls.h"
 #include "NativeAnimationSequencePayloadCalls.h"
+#include "NativeCustomAnimationCleanupAccess.h"
+#include "NativePrivateAnimationHierarchyStorage.h"
 #include <atomic>
 #include <list>
 #include <memory>
@@ -54,6 +56,22 @@ namespace mta::game_de
         {
             std::size_t scanned = 0, attempted = 0, released = 0, retained = 0;
         };
+        struct CleanupProgress
+        {
+            std::size_t scanned = 0, attempted = 0, released = 0, retained = 0;
+            bool        pending = false, unknown = false;
+            ClockResult ownerStatus = ClockResult::Ok;
+        };
+        // Begin reserves only CPU intent and actual issued-record claims. It
+        // is legal before native admission; Resume performs every native read,
+        // matching detach and destructive acknowledgement on a real callback.
+        ClockResult BeginCleanup(std::uintptr_t, const NativeCustomAnimationCleanupRequest&, NativePrivateAnimationHierarchyController&, CheckOwner,
+                                 NativeCustomAnimationCleanupBeginReceipt&) noexcept;
+        ClockResult ResumeCleanup(std::uintptr_t, const NativeCustomAnimationCleanupToken&, NativePrivateAnimationHierarchyController&, std::size_t, CheckOwner,
+                                  SCustomAnimationCleanupResult&) noexcept;
+        ClockResult ResumePendingCleanups(std::uintptr_t, std::uint64_t, NativePrivateAnimationHierarchyController&, std::size_t, CheckOwner,
+                                          CleanupProgress&) noexcept;
+        bool        HasPendingCleanup() const noexcept;
         NativeCustomAnimSequenceController() noexcept = default;
         NativeCustomAnimSequenceController(const NativeCustomAnimSequenceController&) = delete;
         NativeCustomAnimSequenceController& operator=(const NativeCustomAnimSequenceController&) = delete;
@@ -133,6 +151,40 @@ namespace mta::game_de
             Uncertain
         };
         struct Entry;
+        enum class CleanupStage : std::uint32_t
+        {
+            Prepared,
+            Entered,
+            Returned,
+            Unknown
+        };
+        struct CleanupResource
+        {
+            Entry*         live = nullptr;
+            Storage::Kind  kind{Storage::Kind::SequenceArray};
+            std::uint64_t  generation = 0;
+            std::uintptr_t tag = 0;
+            std::size_t    claims = 0;
+            CleanupStage   stage{CleanupStage::Prepared};
+            Receipt        receipt{};
+        };
+        struct CleanupRecord
+        {
+            NativeCustomAnimationCleanupRequest        request{};
+            NativeCustomAnimationCleanupToken          token{};
+            NativePrivateAnimationHierarchyController* hierarchyOwner = nullptr;
+            Entry*                                     array = nullptr;
+            // Internal producer identity only. Raw SDK tags retain their
+            // documented currently-issued/no-ABA limitation.
+            std::uint64_t                                         hierarchyIssue = 0, arrayIssue = 0;
+            std::shared_ptr<NativeCustomAnimationCleanupLifetime> lifetime;
+            std::shared_ptr<CleanupResource>                      arrayAck;
+            std::vector<std::shared_ptr<CleanupResource>>         frames;
+            std::vector<NativeAnimationSequenceRowCalls::Value>   rows;
+            NativePrivateAnimationHierarchyCalls::Receipt         detach{}, outer{};
+            bool                                                  snapshotVerified = false, dependencyReleased = false;
+            std::atomic<bool>                                     resuming{false}, refused{false}, complete{false};
+        };
         struct PrivateDependency
         {
             PrivateDependencyKey                                key;
@@ -169,13 +221,18 @@ namespace mta::game_de
         };
         struct Entry
         {
-            Storage storage;
+            Storage       storage;
+            std::uint64_t issue = 0;
             // Logical state belongs to the allocation, not a CPU facade.
             // Reserve a lazy row node before a qualified write can enter.
             std::list<RowState>                rows;
             bool                               issued = false;
             std::unique_ptr<PrivateDependency> privateDependency;
             std::size_t                        privateHolds = 0;
+            // Claims live on these same allocation records. Shared returned
+            // receipts outlive native consumption; no missing-map inference.
+            std::uint64_t                    cleanupOwner = 0;
+            std::shared_ptr<CleanupResource> cleanupAck;
         };
         using Entries = std::list<Entry>;
         Entries::iterator Find(std::uint64_t generation, std::uintptr_t issuedTag) noexcept;
@@ -204,15 +261,21 @@ namespace mta::game_de
         ClockResult        WithPrivateArray(std::uintptr_t, const PrivateDependencyKey&, CheckOwner, PrivatePreparedAction, void*, PrivateDependencyReceipt*,
                                             bool) noexcept;
         ClockResult        ReleasePrivateDependencyHeld(Entry&) noexcept;
-        ClockResult       PrepareFreshSequence(std::uintptr_t, const NativeAnimationSequenceReferenceToken&, std::size_t, bool, std::uintptr_t, bool compressed,
-                                               CheckOwner, FrameBindReceipt*) noexcept;
-        bool              CurrentFrameDescriptor(const FrameDescriptor&) const noexcept;
-        void              ForgetFrameAuthority(const Storage&) noexcept;
-        void              Publish() noexcept;
-        Entries           entries;
-        std::uint64_t     ownerGeneration = 0;
-        bool              stopping = false;
-        std::atomic_flag  operation = ATOMIC_FLAG_INIT;
-        std::atomic<bool> retained{false}, recovery{false};
+        ClockResult PrepareFreshSequence(std::uintptr_t, const NativeAnimationSequenceReferenceToken&, std::size_t, bool, std::uintptr_t, bool compressed,
+                                         CheckOwner, FrameBindReceipt*) noexcept;
+        bool        CurrentFrameDescriptor(const FrameDescriptor&) const noexcept;
+        void        ForgetFrameAuthority(const Storage&) noexcept;
+        static ClockResult ResolveCleanupFrame(std::size_t, const NativeAnimationSequenceRowCalls::Value&, const Storage*&, void*) noexcept;
+        static ClockResult VerifyCleanupAction(Storage&, const NativeAnimationSequenceDependencyCalls::Epoch&, void*) noexcept;
+        bool               CleanupResourceBlocked(const CleanupResource&) const noexcept;
+        void               PruneCleanupHeld() noexcept;
+        void               Publish() noexcept;
+        Entries            entries;
+        std::list<std::shared_ptr<CleanupRecord>> cleanups;
+        std::uint64_t                             nextCleanupCommand = 0, nextResourceIssue = 0;
+        std::uint64_t                             ownerGeneration = 0;
+        bool                                      stopping = false;
+        mutable std::atomic_flag                  operation = ATOMIC_FLAG_INIT;
+        std::atomic<bool>                         retained{false}, recovery{false};
     };
 }

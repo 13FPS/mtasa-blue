@@ -12,6 +12,7 @@
 #include "NativeAnimationSequenceFrameViewCalls.h"
 #include "NativeAnimationSequenceDependencyCalls.h"
 #include "NativeAnimationSequenceFactoryCalls.h"
+#include "NativeAnimationSequenceCleanupCalls.h"
 #include "NativeAnimationSequencePayloadCalls.h"
 #include "NativeAnimationSequenceNameCalls.h"
 #include "NativeAnimationSequenceNameProfile.h"
@@ -1013,6 +1014,88 @@ namespace mta::game_de
             receipt.verified = true;
             return finish(ClockResult::Ok);
         }
+        static ClockResult WithCleanupArray(std::uintptr_t image, Storage& array, std::uint64_t generation, CheckOwner owner,
+                                            NativeAnimationSequenceDependencyCalls::ResolveFrame resolve, void* resolveContext,
+                                            NativeAnimationSequenceDependencyCalls::Action action, void* actionContext) noexcept
+        {
+            namespace Detail = CustomAnimSequenceStorageDetail;
+            if (!owner || !resolve || !action)
+                return ClockResult::NotInitialized;
+            auto result = RowResourceShape(array, generation, Kind::SequenceArray);
+            if (result != ClockResult::Ok)
+                return result;
+            if (!Detail::Context::TryEnter())
+                return ClockResult::Busy;
+            Detail::Context::Scope gate;
+            Detail::Heap::Value    before, after;
+            if ((result = Detail::Capture(image, owner, before)) != ClockResult::Ok)
+                return result;
+            if (before.authority != array.origin.authority || before.authorityVtable != array.origin.authorityVtable || !Detail::RowProfileMatches(image))
+                return ClockResult::BindingChanged;
+            const auto snapshot = [&]() noexcept
+            {
+                if (!Detail::Heap::M::PrivateWritable(array.base, array.bytes))
+                    return ClockResult::BindingChanged;
+                std::uint64_t cookie = 0, confirmed = 0;
+                if (!Detail::Heap::M::Copy(array.base, &cookie, sizeof(cookie)))
+                    return ClockResult::ReadFailure;
+                if (cookie != array.capacity)
+                    return ClockResult::BindingChanged;
+                for (std::size_t index = 0; index != array.capacity; ++index)
+                {
+                    NativeAnimationSequenceRowCalls::Value row;
+                    row.row = array.tag + index * Detail::Profile::RowBytes;
+                    std::array<unsigned char, 16> tail{};
+                    if (!Detail::Heap::M::Copy(row.row + Detail::Profile::BoneOffset, tail.data(), tail.size()))
+                        return ClockResult::ReadFailure;
+                    std::memcpy(&row.boneTag, tail.data(), sizeof(row.boneTag));
+                    std::memcpy(&row.flags, tail.data() + Detail::Profile::FlagsOffset - Detail::Profile::BoneOffset, sizeof(row.flags));
+                    std::memcpy(&row.frameCount, tail.data() + Detail::Profile::FrameCountOffset - Detail::Profile::BoneOffset, sizeof(row.frameCount));
+                    std::memcpy(&row.keyFrames, tail.data() + Detail::Profile::FramePointerOffset - Detail::Profile::BoneOffset, sizeof(row.keyFrames));
+                    const Storage* frames = nullptr;
+                    auto           checked = resolve(index, row, frames, resolveContext);
+                    if (checked != ClockResult::Ok)
+                        return checked;
+                    if (row.flags & 0x08u)
+                        return ClockResult::InvalidArgument;
+                    if (!row.keyFrames)
+                    {
+                        if (frames || row.frameCount)
+                            return ClockResult::BindingChanged;
+                        continue;
+                    }
+                    if (!frames || frames->tag != row.keyFrames)
+                        return ClockResult::BindingChanged;
+                    if ((checked = RowResourceShape(*frames, generation, Kind::KeyFrames)) != ClockResult::Ok)
+                        return checked;
+                    if (frames->origin.authority != before.authority || frames->origin.authorityVtable != before.authorityVtable ||
+                        !Detail::Heap::M::PrivateWritable(frames->base, frames->bytes))
+                        return ClockResult::BindingChanged;
+                    const std::size_t stride = (row.flags & 0x04u) ? ((row.flags & 0x02u) ? 16u : 10u) : ((row.flags & 0x02u) ? 32u : 20u);
+                    if (static_cast<std::size_t>(row.frameCount) > frames->bytes / stride)
+                        return ClockResult::InvalidArgument;
+                }
+                if (!Detail::Heap::M::Copy(array.base, &confirmed, sizeof(confirmed)))
+                    return ClockResult::ReadFailure;
+                if (confirmed != cookie)
+                    return ClockResult::BindingChanged;
+                return Detail::Context::Owner(image, owner);
+            };
+            // Reuse one admitted heap/profile rather than restarting the full
+            // graph for every initialized capacity row. All tails/origins and
+            // the cookie are still observed before/after the borrowed action.
+            if ((result = snapshot()) != ClockResult::Ok || (result = snapshot()) != ClockResult::Ok)
+                return result;
+            NativeAnimationSequenceDependencyCalls::Epoch epoch(image, generation, array.tag, array.capacity);
+            if ((result = action(array, epoch, actionContext)) != ClockResult::Ok || (result = snapshot()) != ClockResult::Ok ||
+                (result = Detail::Capture(image, owner, after)) != ClockResult::Ok)
+                return result;
+            if (!Detail::Heap::Same(before, after) || !Detail::RowProfileMatches(image))
+                return ClockResult::BindingChanged;
+            if ((result = RowResourceShape(array, generation, Kind::SequenceArray)) != ClockResult::Ok)
+                return result;
+            return Detail::Context::Owner(image, owner);
+        }
         static ClockResult WithDependency(std::uintptr_t image, Storage& array, std::uint64_t generation, CheckOwner owner,
                                           NativeAnimationSequenceDependencyCalls::ResolveFrame resolve, void* resolveContext,
                                           NativeAnimationSequenceDependencyCalls::Action action, void* actionContext) noexcept
@@ -1312,6 +1395,15 @@ namespace mta::game_de
         {
             return NativeCustomAnimSequenceStorageAccess::AttachFreshFrames(image, array, generation, rowIndex, frames, count, root, false, owner, output,
                                                                             write);
+        }
+    }
+    namespace NativeAnimationSequenceCleanupCalls
+    {
+        ClockResult WithArray(std::uintptr_t image, NativeCustomAnimSequenceStorage& array, std::uint64_t generation,
+                              NativeAnimationSequenceDependencyCalls::CheckOwner owner, NativeAnimationSequenceDependencyCalls::ResolveFrame resolve,
+                              void* resolver, NativeAnimationSequenceDependencyCalls::Action action, void* context) noexcept
+        {
+            return NativeCustomAnimSequenceStorageAccess::WithCleanupArray(image, array, generation, owner, resolve, resolver, action, context);
         }
     }
     namespace NativeAnimationSequencePayloadCalls

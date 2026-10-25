@@ -66,6 +66,7 @@
 #include "NativeAnimationHierarchyMemory.h"
 #include "NativeCustomAnimSequenceController.h"
 #include "NativePrivateAnimationHierarchyController.h"
+#include "NativeCustomAnimationCleanupAccess.h"
 #include "NativeAnimationManagerMemory.h"
 #include "NativePedVelocityMemory.h"
 #include "NativePedReferenceController.h"
@@ -158,9 +159,13 @@ namespace mta::game_de
                                    public NativeGameTimingAccess,
                                    public NativeAnimationSequenceStorageAccess,
                                    public NativeAnimationSequenceAccess,
-                                   public NativeAnimationHierarchyAccess
+                                   public NativeAnimationHierarchyAccess,
+                                   public NativeCustomAnimationCleanupAccess
         {
         public:
+            ClockResult BeginPrivateAnimationCleanup(const NativeCustomAnimationCleanupRequest&, NativeCustomAnimationCleanupBeginReceipt&) noexcept override;
+            ClockResult ResumePrivateAnimationCleanup(const NativeCustomAnimationCleanupToken&, SCustomAnimationCleanupResult&) noexcept override;
+            bool        HasPendingPrivateAnimationCleanup() const noexcept override;
             ClockResult Read(ClockValues& values) noexcept override;
             ClockResult Set(std::uint8_t hour, std::uint8_t minute) noexcept override;
             ClockResult Freeze(bool frozen) noexcept override;
@@ -602,7 +607,7 @@ namespace mta::game_de
         bool NativeLifetimeRetained() noexcept
         {
             return runtime.pedReferences.IsRetained() || WorldIgnoreRetained() || runtime.customSequences.IsRetained() ||
-                   runtime.privateHierarchies.IsRetained();
+                   runtime.privateHierarchies.IsRetained() || runtime.customSequences.HasPendingCleanup();
         }
 
         bool WeatherOverrideRetained() noexcept
@@ -2653,7 +2658,7 @@ namespace mta::game_de
 
         void PublishCustomAnimationSequenceDebt(std::uint64_t generation) noexcept
         {
-            if (runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained())
+            if (runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained() || runtime.customSequences.HasPendingCleanup())
             {
                 runtime.customSequenceGeneration.store(generation);
                 runtime.restored.store(false);
@@ -3271,12 +3276,93 @@ namespace mta::game_de
             return result;
         }
 
+        ClockResult CheckCleanupProducer(std::uint64_t generation) noexcept
+        {
+            // Begin records CPU intent only. Destructors can run between native
+            // callbacks, so no lease, GC or native-entry admission is borrowed.
+            if (!generation || generation != runtime.generation.load() || !runtime.bound.load() || generation != runtime.customSequenceGeneration.load() ||
+                (!runtime.active.load() && !runtime.stopping.load()))
+                return ClockResult::OwnerConflict;
+            return GetCurrentThreadId() == runtime.engineThread.load() ? ClockResult::Ok : ClockResult::WrongThread;
+        }
+
+        ClockResult NativeAccess::BeginPrivateAnimationCleanup(const NativeCustomAnimationCleanupRequest& value,
+                                                               NativeCustomAnimationCleanupBeginReceipt&  output) noexcept
+        {
+            const auto request = value;
+            auto       result = CheckCleanupProducer(request.generation);
+            if (result != ClockResult::Ok)
+                return result;
+            NativeCustomAnimationCleanupBeginReceipt next;
+            result = runtime.customSequences.BeginCleanup(runtime.image, request, runtime.privateHierarchies, &CheckTimingOwner, next);
+            PublishCustomAnimationSequenceDebt(request.generation);
+            if (result == ClockResult::Ok)
+                result = CheckCleanupProducer(request.generation);
+            // An accepted CPU command is durable even when its final producer
+            // acknowledgement fails. Never destroy its only issued handle.
+            if (next.accepted || next.view.IsIssued() || result == ClockResult::Ok)
+                output = std::move(next);
+            if (runtime.customSequences.RecoveryPending() || runtime.privateHierarchies.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            return result;
+        }
+
+        ClockResult NativeAccess::ResumePrivateAnimationCleanup(const NativeCustomAnimationCleanupToken& value, SCustomAnimationCleanupResult& output) noexcept
+        {
+            const auto token = value;
+            if (!token.generation || token.generation != runtime.generation.load() || token.generation != runtime.customSequenceGeneration.load())
+                return ClockResult::OwnerConflict;
+            SCustomAnimationCleanupResult next;
+            // The controller can return a saved completed CPU receipt without
+            // native admission. Every unfinished effect qualifies this checker.
+            auto result = runtime.customSequences.ResumeCleanup(runtime.image, token, runtime.privateHierarchies, 32, &CheckTimingOwner, next);
+            PublishCustomAnimationSequenceDebt(token.generation);
+            if (runtime.customSequences.RecoveryPending() || runtime.privateHierarchies.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            if (result == ClockResult::Ok)
+                output = next;
+            return result;
+        }
+
+        bool NativeAccess::HasPendingPrivateAnimationCleanup() const noexcept
+        {
+            // Live records and completed CPU views both keep backend code alive.
+            return runtime.customSequences.HasPendingCleanup() || runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained();
+        }
+
+        void ProgressCustomAnimationCleanup() noexcept
+        {
+            if (!runtime.active.load() || runtime.stopping.load() || !runtime.customSequences.HasPendingCleanup() || CheckTimingOwner() != ClockResult::Ok)
+                return;
+            // A common destructor may drop its CPU ticket after committing
+            // cleanup intent. Continue that exact command on later admitted
+            // callbacks; unrelated live hierarchies are never retired here.
+            NativeCustomAnimSequenceController::CleanupProgress progress;
+            const auto result = runtime.customSequences.ResumePendingCleanups(runtime.image, runtime.generation.load(), runtime.privateHierarchies, 32,
+                                                                              &CheckTimingOwner, progress);
+            PublishCustomAnimationSequenceDebt(runtime.generation.load());
+            if (progress.ownerStatus != ClockResult::Ok || runtime.customSequences.RecoveryPending() || runtime.privateHierarchies.RecoveryPending())
+                Stop(progress.ownerStatus != ClockResult::Ok ? progress.ownerStatus : result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+        }
+
         bool RestoreCustomAnimationSequences() noexcept
         {
-            if (!runtime.customSequences.IsRetained() && !runtime.privateHierarchies.IsRetained())
+            if (!runtime.customSequences.IsRetained() && !runtime.privateHierarchies.IsRetained() && !runtime.customSequences.HasPendingCleanup())
                 return true;
             if (CheckCustomAnimationSequenceRecoveryOwner() != ClockResult::Ok)
                 return false;
+            if (runtime.customSequences.HasPendingCleanup())
+            {
+                NativeCustomAnimSequenceController::CleanupProgress cleanup;
+                runtime.customSequences.ResumePendingCleanups(runtime.image, runtime.generation.load(), runtime.privateHierarchies, 32,
+                                                              &CheckCustomAnimationSequenceRecoveryOwner, cleanup);
+                PublishCustomAnimationSequenceDebt(runtime.generation.load());
+                if (cleanup.ownerStatus != ClockResult::Ok)
+                    return false;
+                // Known waits must still allow unrelated H retirement below:
+                // those detach acknowledgements can release a shared-frame hold.
+                // Claimed records are skipped by generic retirement itself.
+            }
             // Retire only acknowledged empty, never-published CPU receivers.
             // Unknown children/cache or an irreversible publication pin retain
             // this owner instead of being mistaken for a native detach.
@@ -3293,12 +3379,12 @@ namespace mta::game_de
             // generation. An empty sequence journal has no work left to admit;
             // calling its owner now would reject that already-discharged debt.
             if (!runtime.customSequences.IsRetained())
-                return true;
+                return !runtime.customSequences.HasPendingCleanup();
             NativeCustomAnimSequenceController::RetireProgress progress;
             const auto                                         result =
                 runtime.customSequences.Retire(runtime.image, runtime.generation.load(), 32, &CheckCustomAnimationSequenceRecoveryOwner, progress);
             PublishCustomAnimationSequenceDebt(runtime.generation.load());
-            return result == ClockResult::Ok && !runtime.customSequences.IsRetained();
+            return result == ClockResult::Ok && !runtime.customSequences.IsRetained() && !runtime.customSequences.HasPendingCleanup();
         }
 
         ClockResult NativeAccess::AcquirePedReference(std::uint32_t handle, NativePedReferenceToken& output) noexcept
@@ -5923,6 +6009,7 @@ namespace mta::game_de
                 else if (runtime.active.load())
                     runtime.observed = observed;
             }
+            ProgressCustomAnimationCleanup();
             if (runtime.stopping.load())
             {
                 if ((runtime.captured.load() && !runtime.restored.load()) || runtime.weatherRecovery.load() || runtime.weatherGeneration.load() ||
@@ -6014,6 +6101,7 @@ namespace mta::game_de
                     runtime.timerReady.store(true);
                 if (runtime.active.load() && runtime.timerReady.load() && runtime.timingHandler)
                     runtime.timingHandler(runtime.access, runtime.timingContext);
+                ProgressCustomAnimationCleanup();
                 if (runtime.stopping.load())
                 {
                     if ((runtime.captured.load() && !runtime.restored.load()) || runtime.timingDirty.load() || runtime.timingRecovery.load() ||

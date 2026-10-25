@@ -12,7 +12,7 @@ function Write-IFPParserFixture([string]$Root,[string]$Directory) {
     $manager=[regex]::Replace($manager,'(?s)/\*.*?\*/|//[^\r\n]*','')
     $allowed=@('GetCustomAnimBlendHierarchy','GetCustomAnimBlendSequence','GetCustomAnimBlendSequenceAt','DeleteCustomAnimHierarchyInterface',
         'DeleteCustomAnimSequenceInterface','AllocateKeyFramesMemory','FreeKeyFramesMemory','AllocateCustomAnimSequences',
-        'FreeCustomAnimSequences','RemoveFromUncompressedCache')
+        'FreeCustomAnimSequences','RemoveFromUncompressedCache','BeginCustomAnimationCleanup','HasPendingCustomAnimationCleanup')
     $rejectors=@('#pragma warning(push)','#pragma warning(disable : 4100)')
     foreach($match in [regex]::Matches($manager,'virtual\s+(?<signature>[^;{}]+);')) {
         $signature=[regex]::Replace($match.Groups['signature'].Value,'\s*=\s*0\s*$','').Trim()

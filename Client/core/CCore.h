@@ -197,7 +197,7 @@ public:
     void CreateXML();
     void InitGUI(IDirect3DDevice9* pDevice);
     void CreateGUI();
-    void DestroyGame();
+    void DestroyGame(bool earlierPendingCustomCleanup = false);
     void DestroyMultiplayer();
     void DestroyNetwork();
     void DestroyXML();

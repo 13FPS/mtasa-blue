@@ -10,7 +10,9 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include "ClassicCustomAnimationTeardown.h"
 #include <game/CGame.h>
+#include <game/CAnimManager.h>  // Teardown queries need the complete cleanup owner interface.
 #include <game/CSettings.h>
 #include <Accctrl.h>
 #include <Aclapi.h>
@@ -4312,11 +4314,16 @@ CCore::~CCore()
 
     SAFE_DELETE(m_pModelCacheManager);
 
+    // Capture cleanup debt before dependent modules or a self-deleting game
+    // can disappear. This classic path is process teardown; returning DE
+    // frontend retirement continues through its adapter's existing End gate.
+    const bool pendingCustomCleanup =
+        m_GameInterfaceOwnership == GameInterfaceOwnership::ClassicModule && MtaGame::ClassicCustomAnimationTeardown::NeedsRetention(m_pGame);
     // Destroy early subsystems
     m_bModulesLoaded = false;
     DestroyNetwork();
     DestroyMultiplayer();
-    DestroyGame();
+    DestroyGame(pendingCustomCleanup);
 
     // Remove global events
     g_pCore->m_pGUI->ClearInputHandlers(INPUT_CORE);
@@ -5330,7 +5337,7 @@ void CCore::CreateXML()
     m_ClientVariables.Load();
 }
 
-void CCore::DestroyGame()
+void CCore::DestroyGame(bool earlierPendingCustomCleanup)
 {
     WriteDebugEvent("CCore::DestroyGame");
 
@@ -5345,14 +5352,9 @@ void CCore::DestroyGame()
 #endif
         return;
     }
-    if (m_pGame)
-    {
-        m_pGame->Terminate();
-        m_pGame = NULL;
-    }
+    MtaGame::ClassicCustomAnimationTeardown::Finish(
+        m_pGame, earlierPendingCustomCleanup, [this] { m_GameModule.UnloadModule(); }, [this] { m_GameModule.RetainForProcessTeardown(); });
     m_GameInterfaceOwnership = GameInterfaceOwnership::None;
-
-    m_GameModule.UnloadModule();
 }
 
 void CCore::DestroyMultiplayer()

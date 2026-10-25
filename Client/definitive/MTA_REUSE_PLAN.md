@@ -5,6 +5,22 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+Animation cleanup now stays with its backend through a required ticket.
+Classic SA reserves its owner journal before exposing a hierarchy, gathers
+the original full-capacity rows before effects, and remembers each returned
+release. DE records CPU-only intent, claims the actual array/frame records
+before matching parent detach, and preserves shared per-resource receipts.
+Qualified callbacks continue accepted work after the caller drops its ticket.
+Known holder waits preserve unrelated IFPs; unknown entered frees never replay.
+
+Common animations clear their fields only on an explicit completed disposition.
+Pending native work and completed live tickets retain backend code. Off-thread
+terminal ticket drops retain code conservatively. Core preflights cleanup
+before dependent teardown; GameSA closes its creator before deleting services,
+and module quarantine survives automatic member destruction. This classic
+shutdown path does not claim support for returning to active GTA after Core
+unloads. Standalone sequence lifetime and complete parser exposure remain gated.
+
 MTA's current fresh `SetKeyFrames` construction now selects the existing
 compressed or uncompressed owner builder. It preserves full counts and the
 original buffer owner, with explicit refusal for repeated, null or foreign
@@ -19,7 +35,7 @@ reading child-zero metadata. A legitimate DWORD out-of-range result remains
 distinct from owner failure. CPU allocation failure cleans a newly created
 hierarchy through its real owner, while cloning failure preserves existing
 resources. The manager is still partial, and parser exposure remains gated on
-the separate durable cleanup ticket and standalone sequence lifetime boundary.
+the remaining standalone sequence lifetime and complete manager boundaries.
 
 The same private frame builder also accepts the saved loader's separate
 uncompressed representation: 20 bytes per child frame and 32 per root frame.
@@ -101,7 +117,7 @@ Only a known empty receiver that has never been published can be deleted;
 unknown children, cache links or publication intent retain its owner. This
 receiver uses plain CPU deletion after the private parent protocol detaches
 its known edge. It supplies no native destructor or complete parser cleanup.
-The common parser's child-detachment protocol remains separate work.
+The common parser now delegates that progress to its backend cleanup ticket.
 
 An explicit private builder now prepares fresh compressed sequence frames on
 the same allocation owner. It requires a fresh row, the exact original owned

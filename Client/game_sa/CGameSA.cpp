@@ -418,6 +418,16 @@ void CGameSA::Reset()
 
 void CGameSA::Terminate()
 {
+    if (m_pAnimManager)
+    {
+        // The creator closes before the query, before Streaming/KeyGen or
+        // this manager can be deleted. Pending tickets keep their real owner;
+        // Core independently retains the DLL reference for their vtables.
+        auto* manager = static_cast<CAnimManagerSA*>(m_pAnimManager);
+        manager->CloseCustomAnimationCleanup();
+        if (manager->HasPendingCustomAnimationCleanup())
+            return;
+    }
     // Initiate the destruction
     delete this;
 

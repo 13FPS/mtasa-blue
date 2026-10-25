@@ -53,6 +53,14 @@ bool CModuleLoader::LoadModule(const string& ModuleName)
     return m_bStatus;
 }
 
+void CModuleLoader::RetainForProcessTeardown() noexcept
+{
+    // The underlying owner must also relinquish its automatic destructor
+    // path; merely skipping this UnloadModule call would still release it.
+    m_module.RetainForProcessTeardown();
+    m_bStatus = false;
+}
+
 void CModuleLoader::UnloadModule()
 {
     if (m_module.Unload())

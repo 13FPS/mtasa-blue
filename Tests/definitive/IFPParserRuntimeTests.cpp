@@ -4,6 +4,7 @@
  * PURPOSE: Execute real common IFP parsing, transactions and resource cleanup
  ****************************************************************************/
 #include "IFPParserBackendFixture.h"
+#include "CIFPAnimationStorage.h"
 #include <initializer_list>
 namespace
 {
@@ -150,6 +151,7 @@ namespace
     void Balanced(const Manager& manager)
     {
         Check(manager.Empty());
+        Check(!manager.HasPendingCustomAnimationCleanup());
         Check(manager.frameAllocations == manager.frameFrees);
         Check(manager.hierarchyAllocations == manager.hierarchyFrees);
         Check(manager.detachedAllocations == manager.detachedFrees);
@@ -362,7 +364,7 @@ namespace
                     Check(manager.arrayAllocations == 1 && manager.arrayFrees == 1 && manager.hierarchyAllocations == 1 && manager.hierarchyFrees == 1);
                     Check(manager.allCapacityInitialized && !manager.cacheRemovals && !manager.hierarchyRowRequests);
                     if (!failure)
-                        Check(!manager.hierarchyAttachAttempts && manager.atBeforeAttachment >= 65);
+                        Check(!manager.hierarchyAttachAttempts && manager.atBeforeAttachment == 2 && manager.cleanupGatheredCapacity == 65);
                     else
                         Check(manager.hierarchyAttachAttempts == 1 && manager.hierarchyAttachAccepted == (failure == 2 ? 1u : 0u));
                 }
@@ -442,15 +444,115 @@ namespace
         }
         Balanced(shared);
     }
+    void PopulateCleanup(CIFPAnimations& animations, Manager& manager)
+    {
+        animations.vecAnimations.emplace_back();
+        auto& animation = animations.vecAnimations.back();
+        animation.pHierarchy = manager.GetCustomAnimBlendHierarchy();
+        animation.pHierarchy->Initialize();
+        animation.pSequences = manager.AllocateCustomAnimSequences(2);
+        animation.sequenceCapacity = 2;
+        auto* frames = manager.AllocateKeyFramesMemory(16);
+        manager.Row(animation.pSequences, 1)->pKeyFrames = frames;
+        // Deliberately never attach: capacity ownership must survive a failed
+        // parse before publication, independently of logical hierarchy count.
+    }
+    void DurableCleanupProgress()
+    {
+        Phase("durable backend ticket and complete-only common ownership");
+        for (const bool alternate : {false, true})
+        {
+            Manager        manager(alternate);
+            CIFPAnimations animations(manager);
+            PopulateCleanup(animations, manager);
+            auto& animation = animations.vecAnimations.front();
+            auto* facade = animation.pHierarchy.get();
+            auto* original = animation.pSequences;
+            manager.cleanupBeginThrow = true;
+            Check(!animations.DeleteAnimations());
+            Check(animation.pHierarchy.get() == facade && animation.pSequences == original && animation.sequenceCapacity == 2);
+            Check(!animation.cleanupTicket && manager.frameFrees == 0 && manager.arrayFrees == 0);
+            Check(manager.HasPendingCustomAnimationCleanup());
+            manager.cleanupBeginThrow = false;
+            manager.cleanupPause = true;
+            Check(!animations.DeleteAnimations());
+            auto* ticket = animation.cleanupTicket.get();
+            Check(ticket && manager.cleanupBegins == 2 && animation.pHierarchy.get() == facade && animation.pSequences == original);
+            Check(!animations.DeleteAnimations() && animation.cleanupTicket.get() == ticket && manager.cleanupBegins == 2);
+            Check(manager.frameFrees == 0 && manager.arrayFrees == 0 && manager.hierarchyFrees == 0);
+            manager.cleanupPause = false;
+            manager.cleanupUnknownDisposition = true;
+            Check(!animations.DeleteAnimations());
+            Check(animation.cleanupTicket.get() == ticket && animation.pHierarchy.get() == facade && animation.pSequences == original);
+            Check(manager.frameFrees == 1 && manager.arrayFrees == 1 && manager.hierarchyFrees == 1);
+            // Even actual Complete cannot clear common ownership without an
+            // explicit disposition. The same completed receipt later clears it
+            // without a second native observation, release or backend Begin.
+            Check(manager.HasPendingCustomAnimationCleanup());
+            manager.cleanupUnknownDisposition = false;
+            Check(animations.DeleteAnimations() && animations.vecAnimations.empty());
+            Check(manager.cleanupBegins == 2 && manager.cleanupTicketDrops == 1);
+            Check(manager.frameFrees == 1 && manager.arrayFrees == 1 && manager.hierarchyFrees == 1);
+            Balanced(manager);
+        }
+        Manager retained;
+        {
+            CIFPAnimations animations(retained);
+            PopulateCleanup(animations, retained);
+            retained.cleanupPause = true;
+            Check(!animations.DeleteAnimations());
+            Check(retained.cleanupOwner->liveTickets == 1);
+        }
+        Check(retained.cleanupOwner->liveTickets == 0 && retained.cleanupTicketDrops == 1);
+        Check(retained.HasPendingCustomAnimationCleanup() && !retained.Empty());
+        Check(retained.cleanupOwner->records.size() == 1 && retained.cleanupOwner->records.front()->begun);
+        const auto recovered = MtaGame::CustomAnimationCleanupSA::Resume(*retained.cleanupOwner, *retained.cleanupOwner->records.front());
+        Check(recovered.status == ECustomAnimationCleanupStatus::Complete &&
+              recovered.disposition == ECustomAnimationCleanupDisposition::ClassicExternalChildren);
+        Balanced(retained);
+        std::puts("Actual common IFP durable cleanup ticket fixture completed");
+    }
+    void RetainedReleaseAcknowledgement()
+    {
+        Phase("actual backend release acknowledgement loss remains retained");
+        auto* manager = new Manager;
+        auto  animations = std::make_unique<CIFPAnimations>(*manager);
+        PopulateCleanup(*animations, *manager);
+        auto* original = animations->vecAnimations.front().pSequences;
+        auto* hierarchy = animations->vecAnimations.front().pHierarchy.get();
+        manager->cleanupThrowAfterFrame = true;
+        Check(!animations->DeleteAnimations());
+        Check(manager->frameFrees == 1 && manager->arrayFrees == 0 && manager->hierarchyFrees == 0);
+        Check(animations->vecAnimations.front().pSequences == original && animations->vecAnimations.front().pHierarchy.get() == hierarchy);
+        manager->cleanupThrowAfterFrame = false;
+        Check(!animations->DeleteAnimations());
+        Check(manager->frameFrees == 1 && manager->arrayFrees == 0 && manager->hierarchyFrees == 0 && manager->cleanupBegins == 1);
+        animations.reset();
+        Check(manager->cleanupOwner->liveTickets == 0 && manager->cleanupTicketDrops == 1);
+        Check(manager->HasPendingCustomAnimationCleanup());
+        Check(manager->arrays.count(original) == 1 && manager->hierarchies.size() == 1 && manager->frames.empty());
+        const auto result = MtaGame::CustomAnimationCleanupSA::Resume(*manager->cleanupOwner, *manager->cleanupOwner->records.front());
+        Check(result.status == ECustomAnimationCleanupStatus::Refused && manager->frameFrees == 1 && manager->arrayFrees == 0);
+        std::puts("Actual common IFP cleanup acknowledgement retention fixture completed");
+        std::printf("Passed %u retained common IFP cleanup checks (backend retained until owned process exit)\n", checks);
+        std::fflush(stdout);
+        // This isolated process intentionally retains unknown-effect debt.
+        // Process teardown, never a fabricated free acknowledgement, retires
+        // its test address space after the module-lifetime predicate is proved.
+        std::_Exit(0);
+    }
 }
-int main()
+int main(int argc, char** argv)
 {
+    if (argc == 2 && std::strcmp(argv[1], "--retained-cleanup") == 0)
+        RetainedReleaseAcknowledgement();
     NormalFormats();
     TruncatedAndMalformed();
     ResourceFailures();
     ReloadAndSharedCleanup();
     DetachedConstruction();
     DetachedFailureCleanup();
+    DurableCleanupProgress();
     std::puts("Actual common IFP parser, transaction and cleanup fixture completed");
     std::printf("Passed %u actual common IFP runtime checks (%zu-bit; test animation environment, no native engine code)\n", checks, sizeof(void*) * 8);
     return 0;

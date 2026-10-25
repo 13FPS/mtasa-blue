@@ -10,9 +10,9 @@
 #include <game/CAnimBlendHierarchy.h>
 #include <game/CAnimBlendSequence.h>
 #include <game/CAnimManager.h>
+#include <game/CCustomAnimationCleanup.h>
 #include <memory>
 #include <limits>
-#include <set>
 #include <stdexcept>
 #include <utility>
 namespace MtaGame::IfpStorage
@@ -110,54 +110,46 @@ namespace MtaGame::IfpStorage
     }
 
     template <class Manager, class Animation>
-    void DestroyAnimation(Manager& manager, Animation& animation)
+    bool DestroyAnimation(Manager& manager, Animation& animation)
     {
-        auto*           currentHierarchy = animation.pHierarchy.get();
-        auto*           sequences = animation.pSequences;
-        const auto      capacity = animation.sequenceCapacity;
-        const bool      attached = animation.sequencesAttached;
-        std::set<void*> individualFrames;
-        void*           sharedBase = nullptr;
-        if (sequences)
+        if (!animation.cleanupTicket && !animation.pHierarchy && !animation.pSequences && !animation.sequenceCapacity)
+            return true;
+        if (!animation.cleanupTicket)
         {
-            if (capacity && capacity - 1 > (std::numeric_limits<DWORD>::max)())
-                throw std::runtime_error("IFP sequence capacity exceeds the backend row index domain");
-            // Failed parsing may leave fully owned rows unattached. Gather
-            // every initialized capacity row from its original allocation,
-            // including unknown/dummy rows beyond the logical input count.
-            for (std::size_t index = 0; index != capacity; ++index)
+            SCustomAnimationCleanupRequest request;
+            request.origin = &manager;
+            request.hierarchy = animation.pHierarchy.get();
+            request.originalArray = animation.pSequences;
+            request.capacity = animation.sequenceCapacity;
+            request.cacheWasAttached = animation.sequencesAttached;
+            // Begin copies backend identity and persists the source ownership
+            // before anything can detach or free. A null ticket grants nothing.
+            try
             {
-                auto sequence = manager.GetCustomAnimBlendSequenceAt(sequences, static_cast<DWORD>(index));
-                if (!sequence)
-                    throw std::runtime_error("IFP backend returned no initialized sequence row");
-                auto* frames = sequence->GetKeyFrames();
-                if (sequence->IsBigChunkForAllSequences())
-                {
-                    // Only row0 supplies the original shared allocation base.
-                    // Other flagged rows can be arbitrary interior slices.
-                    if (!index)
-                        sharedBase = frames;
-                }
-                else if (frames)
-                    individualFrames.insert(frames);
+                animation.cleanupTicket = manager.BeginCustomAnimationCleanup(request);
             }
+            catch (...)
+            {
+                // Factories reserve backend ownership before exposure. Ticket
+                // allocation/refusal must not terminate a destructor or grant
+                // permission to forget those retained native resources.
+                return false;
+            }
+            if (!animation.cleanupTicket)
+                return false;
         }
-        individualFrames.erase(sharedBase);
-        // Finish potentially allocating observations before relinquishing any
-        // record ownership. A failed gather can still be retried by its owner.
-        if (currentHierarchy && sequences && attached)
-            manager.RemoveFromUncompressedCache(currentHierarchy->GetInterface());
-        auto hierarchy = std::move(animation.pHierarchy);
+        const auto result = animation.cleanupTicket->Resume();
+        if (result.status != ECustomAnimationCleanupStatus::Complete || (result.disposition != ECustomAnimationCleanupDisposition::ClassicExternalChildren &&
+                                                                         result.disposition != ECustomAnimationCleanupDisposition::PrivateDetached))
+            return false;
+        // Only real per-original release/outer-delete acknowledgements permit
+        // CPU ownership reset. Pending work survives in the same backend owner;
+        // no cleared parent is regathered and no void free is replayed here.
+        animation.pHierarchy.reset();
         animation.pSequences = nullptr;
         animation.sequenceCapacity = 0;
         animation.sequencesAttached = false;
-        for (auto* frames : individualFrames)
-            manager.FreeKeyFramesMemory(frames);
-        if (sequences)
-            manager.FreeCustomAnimSequences(sequences);
-        if (sharedBase)
-            manager.FreeKeyFramesMemory(sharedBase);
-        if (hierarchy)
-            manager.DeleteCustomAnimHierarchyInterface(hierarchy->GetInterface());
+        animation.cleanupTicket.reset();
+        return true;
     }
 }

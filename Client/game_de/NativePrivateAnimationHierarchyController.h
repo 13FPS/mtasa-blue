@@ -50,6 +50,12 @@ namespace mta::game_de
         bool RecoveryPending() const noexcept { return recovery.load(std::memory_order_acquire); }
 
     private:
+        friend class NativeCustomAnimSequenceController;
+        ClockResult ReadCleanupIssue(const Token&, std::uint64_t&) noexcept;
+        ClockResult ClaimCleanupIntent(const Token&, std::uintptr_t, std::uint64_t) noexcept;
+        ClockResult VerifyCleanupHeld(const NativeAnimationSequenceDependencyCalls::Epoch&, const Token&, std::uint64_t, CheckOwner) noexcept;
+        ClockResult DetachCleanup(std::uintptr_t, const Token&, std::uint64_t, CheckOwner, Receipt&, bool&) noexcept;
+        ClockResult RetireCleanup(std::uintptr_t, const Token&, std::uint64_t, CheckOwner, Receipt&) noexcept;
         using SequenceOwner = NativeCustomAnimSequenceController;
         using Key = SequenceOwner::PrivateDependencyKey;
         using Epoch = NativeAnimationSequenceDependencyCalls::Epoch;
@@ -74,9 +80,13 @@ namespace mta::game_de
         struct Entry
         {
             explicit Entry(std::uint64_t generation) noexcept : storage(generation) {}
-            Storage storage;
-            Link    link;
-            bool    issued = false;
+            Storage           storage;
+            std::uint64_t     issue = 0;
+            Link              link;
+            bool              issued = false;
+            std::uint64_t     cleanupCommand = 0;
+            bool              cleanupHadLink = false;
+            std::atomic<bool> cleanupReleased{false};
         };
         using Entries = std::list<Entry>;
         Entries::iterator Find(const Token&) noexcept;
@@ -105,6 +115,7 @@ namespace mta::game_de
             Receipt                                               receipt{};
             Values                                                values{};
             std::uintptr_t                                        pointer = 0;
+            std::uint64_t                                         cleanupCommand = 0;
             PostProcessOperation                                  postProcess{PostProcessOperation::RemoveQuaternionFlips};
             PostProcessReceipt                                    postReceipt{};
             InvokePostProcess                                     invokePostProcess = nullptr;
@@ -112,15 +123,16 @@ namespace mta::game_de
         static ClockResult ValidatePayloadHeld(const Epoch&, std::uint16_t, PostProcessOperation, void*) noexcept;
         ClockResult        ProcessPayload(std::uintptr_t, const Token&, PostProcessOperation, CheckOwner, PostProcessReceipt*, InvokePostProcess) noexcept;
         static ClockResult ParentAction(NativeCustomAnimSequenceStorage&, const Epoch&, void*) noexcept;
-        ClockResult        SetSequencesImpl(std::uintptr_t, const Token&, std::uintptr_t, CheckOwner, Receipt*, bool retirement) noexcept;
-        ClockResult        DestroyImpl(std::uintptr_t, const Token&, CheckOwner, Receipt*, bool retirement) noexcept;
-        ClockResult        LinkedAction(std::uintptr_t, const Token&, CheckOwner, ActionContext&, Receipt*) noexcept;
-        void               Publish() noexcept;
-        Entries            entries;
+        ClockResult SetSequencesImpl(std::uintptr_t, const Token&, std::uintptr_t, CheckOwner, Receipt*, bool retirement, std::uint64_t cleanupCommand = 0,
+                                     bool* releaseAcknowledged = nullptr) noexcept;
+        ClockResult DestroyImpl(std::uintptr_t, const Token&, CheckOwner, Receipt*, bool retirement) noexcept;
+        ClockResult LinkedAction(std::uintptr_t, const Token&, CheckOwner, ActionContext&, Receipt*) noexcept;
+        void        Publish() noexcept;
+        Entries     entries;
         // Runtime owns both controllers for the same callback/module lifetime.
         // A default-null provider preserves the prior empty-only product.
         NativeCustomAnimSequenceController* sequences;
-        std::uint64_t                       nextCommand = 0;
+        std::uint64_t                       nextCommand = 0, nextIssue = 0;
         bool                                stopping = false;
         std::atomic_flag                    operation = ATOMIC_FLAG_INIT;
         std::atomic<bool>                   retained{false}, recovery{false};

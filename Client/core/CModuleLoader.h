@@ -25,6 +25,7 @@ public:
 
     bool LoadModule(const std::string& ModuleName);
     void UnloadModule();
+    void RetainForProcessTeardown() noexcept;
 
     bool           IsOk() const { return m_bStatus; }
     const SString& GetLastErrorMessage() const;

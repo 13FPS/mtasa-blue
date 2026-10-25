@@ -17,6 +17,7 @@
 #include <windows.h>
 #include <SString.h>
 #include <game/CAnimBlendHierarchy.h>
+#include <game/CCustomAnimationCleanup.h>
 class CAnimManager;
 
 class CIFPAnimations
@@ -30,6 +31,9 @@ public:
         CAnimBlendSequenceSAInterface*       pSequences = nullptr;
         std::size_t                          sequenceCapacity = 0;
         bool                                 sequencesAttached = false;
+        // The facade is CPU-only; its same backend keeps incomplete native
+        // ownership and acknowledgements after the final shared owner drops.
+        std::unique_ptr<CCustomAnimationCleanup> cleanupTicket;
 
         // Bit i is set when bone i (see CClientIFP::m_karruBoneIds) is actually driven by this
         // animation's own IFP data, as opposed to being padded out with a fixed pose because the
@@ -42,10 +46,10 @@ public:
 public:
     explicit CIFPAnimations(CAnimManager& manager) noexcept : manager(manager) {}
     ~CIFPAnimations();
-    void DeleteAnimations();
+    bool DeleteAnimations();
 
 private:
-    // The existing backend outlives its IFP owners; never reselect a different
-    // global manager while destroying transferred native allocations.
+    // Cleanup uses the creating backend; its pending-record/ticket gate keeps
+    // that manager and module alive rather than reselecting a global provider.
     CAnimManager& manager;
 };

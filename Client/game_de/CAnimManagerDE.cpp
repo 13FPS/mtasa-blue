@@ -45,6 +45,49 @@ namespace mta::game_de
             }
             return false;
         }
+        class CustomAnimationCleanupDE final : public CCustomAnimationCleanup
+        {
+        public:
+            CustomAnimationCleanupDE(NativeCustomAnimationCleanupAccess& owner, std::uint64_t generation) noexcept : owner(owner), generation(generation) {}
+            void Adopt(NativeCustomAnimationCleanupView&& issued, bool admitted) noexcept
+            {
+                view = std::move(issued);
+                accepted = admitted;
+            }
+            SCustomAnimationCleanupResult Resume() noexcept override
+            {
+                constexpr SCustomAnimationCleanupResult refused{ECustomAnimationCleanupStatus::Refused, ECustomAnimationCleanupDisposition::Unresolved};
+                const auto                              token = view.Token();
+                if (!accepted || !view.IsIssued() || !generation || token.generation != generation || !token.command)
+                    return refused;
+                SCustomAnimationCleanupResult result;
+                if (owner.ResumePrivateAnimationCleanup(token, result) != ClockResult::Ok)
+                    return refused;
+                // Generic status Ok is not resource disposal. Only the exact
+                // provider's matching private detach and all release receipts
+                // may authorize the common caller to drop CPU ownership.
+                if (result.disposition != ECustomAnimationCleanupDisposition::Unresolved &&
+                    result.disposition != ECustomAnimationCleanupDisposition::PrivateDetached)
+                    return refused;
+                switch (result.status)
+                {
+                    case ECustomAnimationCleanupStatus::Complete:
+                        return result.disposition == ECustomAnimationCleanupDisposition::PrivateDetached ? result : refused;
+                    case ECustomAnimationCleanupStatus::Pending:
+                    case ECustomAnimationCleanupStatus::Refused:
+                        return result;
+                    default:
+                        return refused;
+                }
+            }
+            // The move-only view only decrements CPU facade-code lifetime.
+            // No native release, command erasure or own-module unload runs.
+        private:
+            NativeCustomAnimationCleanupAccess& owner;
+            const std::uint64_t                 generation;
+            NativeCustomAnimationCleanupView    view;
+            bool                                accepted = false;
+        };
         void Require(ClockResult result, const char* operation)
         {
             if (result != ClockResult::Ok)
@@ -89,6 +132,44 @@ namespace mta::game_de
             throw std::invalid_argument("DE private animation factories require one native owner for every service");
         hierarchyAccess = &hierarchy;
         sequenceAccess = &sequence;
+        // Cross-cast only from the already matched complete CPU owner. Old
+        // observation constructors never silently acquire teardown authority.
+        cleanupAccess = dynamic_cast<NativeCustomAnimationCleanupAccess*>(&manager);
+    }
+    std::unique_ptr<CCustomAnimationCleanup> CAnimManagerDE::BeginCustomAnimationCleanup(const SCustomAnimationCleanupRequest& request)
+    {
+        const auto copied = request;
+        if (copied.origin != this)
+            throw std::invalid_argument("DE cleanup requires the creating manager");
+        if (!cleanupAccess || !hierarchyAccess)
+            Require(ClockResult::NotInitialized, "BeginCustomAnimationCleanup");
+        auto* hierarchy = dynamic_cast<CAnimBlendHierarchyDE*>(copied.hierarchy);
+        if (!hierarchy || dynamic_cast<void*>(&hierarchy->native) != dynamic_cast<void*>(&native))
+            throw std::invalid_argument("DE cleanup requires its same-owner private hierarchy facade");
+        const auto generation = ownerGeneration;
+        const auto reference = hierarchy->reference;
+        if (!generation || reference.ownerGeneration != generation || !reference.locator)
+            Require(ClockResult::BindingChanged, "BeginCustomAnimationCleanup");
+        const NativeCustomAnimationCleanupRequest intent{generation, reference, reinterpret_cast<std::uintptr_t>(copied.originalArray), copied.capacity};
+        // Reserve the actual CPU facade before any owner can accept native
+        // claims. Adoption is noexcept, including an accepted late refusal.
+        auto                                     ticket = std::make_unique<CustomAnimationCleanupDE>(*cleanupAccess, generation);
+        NativeCustomAnimationCleanupBeginReceipt receipt;
+        const auto                               result = cleanupAccess->BeginPrivateAnimationCleanup(intent, receipt);
+        if (receipt.accepted || receipt.view.IsIssued())
+        {
+            ticket->Adopt(std::move(receipt.view), receipt.accepted);
+            return ticket;
+        }
+        Require(result, "BeginCustomAnimationCleanup");
+        Require(ClockResult::BindingChanged, "BeginCustomAnimationCleanup");
+        return nullptr;
+    }
+    bool CAnimManagerDE::HasPendingCustomAnimationCleanup() const noexcept
+    {
+        // Missing/busy proof is retention, including partial observation-only
+        // receivers. The actual owner counts commands and live completed views.
+        return !cleanupAccess || cleanupAccess->HasPendingPrivateAnimationCleanup();
     }
     std::unique_ptr<CAnimBlendHierarchy> CAnimManagerDE::GetCustomAnimBlendHierarchy()
     {

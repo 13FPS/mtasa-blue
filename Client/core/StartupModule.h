@@ -32,6 +32,11 @@ namespace MtaStartup
 
         bool Load(const std::wstring& path)
         {
+            if (m_retainedForProcessTeardown)
+            {
+                m_error = ERROR_SHUTDOWN_IN_PROGRESS;
+                return false;
+            }
             if (m_module)
             {
                 m_error = ERROR_ALREADY_EXISTS;
@@ -100,6 +105,17 @@ namespace MtaStartup
             m_machine = 0;
             return true;
         }
+        void RetainForProcessTeardown() noexcept
+        {
+            // Pending native work and CPU ticket vtables still reference this
+            // DLL. Transfer its loader reference to process lifetime without
+            // calling FreeLibrary from this owner or its member destructor.
+            // This is shutdown quarantine, never a live-game reload protocol.
+            m_retainedForProcessTeardown = true;
+            m_module = nullptr;
+            m_error = ERROR_SUCCESS;
+            m_machine = 0;
+        }
         HMODULE Get() const noexcept { return m_module; }
         DWORD   Error() const noexcept { return m_error; }
         WORD    Machine() const noexcept { return m_machine; }
@@ -115,5 +131,6 @@ namespace MtaStartup
         HMODULE m_module = nullptr;
         DWORD   m_error = ERROR_SUCCESS;
         WORD    m_machine = 0;
+        bool    m_retainedForProcessTeardown = false;
     };
 }

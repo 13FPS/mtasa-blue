@@ -8371,10 +8371,18 @@ namespace
 #include "NativePrivateHierarchyPostProcessOwnerTests.inl"
 #include "PrivateAnimationFactoryManager.generated.h"
 #include "NativePrivateAnimationFactoryOwnerTests.inl"
+#include "NativeCustomAnimationCleanupControllerTests.inl"
+#include "NativeCustomAnimationCleanupOwnerTests.inl"
 
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool     customAnimationCleanupOnly = argc == 3 && std::strncmp(argv[2], "--custom-animation-cleanup-", 27) == 0;
+    const unsigned customAnimationCleanupScenario = !customAnimationCleanupOnly                                             ? 0u
+                                                    : std::strcmp(argv[2], "--custom-animation-cleanup-returned-loss") == 0 ? 1u
+                                                    : std::strcmp(argv[2], "--custom-animation-cleanup-unknown") == 0       ? 2u
+                                                    : std::strcmp(argv[2], "--custom-animation-cleanup-foreign-drop") == 0  ? 3u
+                                                                                                                            : 0u;
     const bool     privateAnimationFactoriesOnly = argc == 3 && std::strcmp(argv[2], "--private-animation-factories") == 0;
     const bool     privateHierarchyPostprocessOnly = argc == 3 && std::strncmp(argv[2], "--private-hierarchy-postprocess-", 32) == 0;
     const unsigned privateHierarchyPostprocessScenario = !privateHierarchyPostprocessOnly                                       ? 0u
@@ -8472,9 +8480,18 @@ int main(int argc, char** argv)
            animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly || animationHierarchyBankOnly ||
            customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly ||
            privateHierarchyParentOnly || privateHierarchyEmptyOnly || freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly ||
-           privateAnimationFactoriesOnly) &&
+           privateAnimationFactoriesOnly || customAnimationCleanupOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (customAnimationCleanupOnly)
+    {
+        CustomAnimationCleanupOwnerFixture::scenario = customAnimationCleanupScenario;
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        NativeAnimationBlocksOwnedSdk(fixture, &CustomAnimationCleanupOwnerFixture::Run);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (privateAnimationFactoriesOnly)
     {
         ClockImageFixture fixture;

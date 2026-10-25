@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories')]
+    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -57,6 +57,13 @@ $record['privateHierarchyRetainedLifetimeTested']=$false
 $record['nativePrivateAnimationFactoryOwnerTested']=$false
 $record['actualPrivateAnimationFactorySdkOwnerTested']=$false
 $record['privateAnimationFactoryOutputBookendsTested']=$false
+$record['actualPrivateAnimationCleanupControllerTested']=$false
+$record['actualPrivateAnimationCleanupSdkOwnerTested']=$false
+$record['privateAnimationCleanupEndLifetimeTested']=$false
+$record['privateAnimationCleanupReturnedAckRecoveryTested']=$false
+$record['privateAnimationCleanupUnknownDebtRetained']=$false
+$record['privateAnimationCleanupForeignDropRetained']=$false
+$record['privateAnimationCleanupActivePumpTested']=$false
 $record['nativePrivateHierarchyPostprocessOwnerTested']=$false
 $record['actualPrivateHierarchyPostprocessSdkOwnerTested']=$false
 $record['privateHierarchyPostprocessRecoveryTested']=$false
@@ -456,6 +463,7 @@ try {
     $sourceNames += @('Client/game_de/NativeAnimationSequenceName.h','Client/game_de/NativeAnimationSequenceName.cpp','Client/game_de/NativeAnimationSequenceNameCalls.h','Client/game_de/NativeAnimationSequenceNameProfile.h','Tests/definitive/NativeCustomAnimationSequenceNameOwnerTests.inl')
     $sourceNames += @('Client/game_de/NativeAnimationSequenceFrameBindCalls.h','Client/game_de/NativeAnimationSequenceFrameBindProfile.h','Tests/definitive/NativeFreshCompressedSequenceOwnerTests.inl')
     $sourceNames += @('Client/game_de/NativePrivateAnimationHierarchyStorage.h','Client/game_de/NativePrivateAnimationHierarchyStorage.cpp','Client/game_de/NativePrivateAnimationHierarchyController.h','Client/game_de/NativePrivateAnimationHierarchyController.cpp','Tests/definitive/NativePrivateHierarchyOwnerTests.inl')
+    $sourceNames += @('Tests/definitive/NativeCustomAnimationCleanupControllerTests.inl','Tests/definitive/NativeCustomAnimationCleanupOwnerTests.inl','Client/game_de/NativeCustomAnimationCleanupAccess.h','Client/sdk/game/CCustomAnimationCleanup.h')
     $sourceNames += @('Tests/definitive/NativePrivateAnimationFactoryOwnerTests.inl','Tests/definitive/Write-PrivateAnimationFactoryFixture.ps1','Client/game_de/NativeAnimationSequenceFactoryCalls.h','Client/game_de/NativeModelReferenceMap.h')
     $sourceNames += @('Tests/definitive/NativePrivateHierarchyPostProcessOwnerTests.inl','Client/game_de/NativePrivateAnimationHierarchyPostProcessProfile.h','Client/game_de/NativeAnimationSequencePayloadCalls.h')
     $sourceNames += @('Tests/definitive/NativeFreshUncompressedSequenceOwnerTests.inl')
@@ -857,6 +865,7 @@ namespace ClockPrivateHierarchyParentWriteFixture {
     # Its measured build exceeded 60s without a diagnostic. Extend only the
     # compiler allowance; executable test budgets and compiler flags stay fixed.
     $record['compileDeadlineMs']=120000
+    if ($Scope -eq 'CustomAnimationCleanup') { $arguments=@('/DMTA_TEST_CUSTOM_ANIMATION_CLEANUP')+$arguments }
     $record.compileRuns += RunBounded $compiler $arguments 'compile' 120000
     if ($record.compileRuns[-1].exitCode -ne 0 -or $record.compileRuns[-1].timedOut) { throw 'Clock SDK/runtime fixture compilation failed.' }
     # The cumulative callback fixture includes current owner and retirement cases.
@@ -909,7 +918,36 @@ namespace ClockPrivateHierarchyParentWriteFixture {
     if ($Scope -eq 'GarageNamed') { $fixtureArguments += '--garage-named' }
     if ($Scope -eq 'GaragePools') { $fixtureArguments += '--garage-pools' }
     if ($Scope -eq 'PedPoolRegistry') { $fixtureArguments += '--ped-pool-registry' }
-    if($Scope -in @('PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess')){
+    if($Scope -eq 'CustomAnimationCleanup'){
+        $record['testRuns']=@();$record['testScenarioExecutables']=@();$texts=@()
+        foreach($scenario in @('success','returned-loss','unknown','foreign-drop')){
+            $scenarioRoot=Join-Path $outputRoot ('scenario-custom-animation-cleanup-'+$scenario)
+            [IO.Directory]::CreateDirectory($scenarioRoot)|Out-Null
+            $scenarioExecutable=Join-Path $scenarioRoot ([IO.Path]::GetFileName($executable))
+            if(Test-Path -LiteralPath $scenarioExecutable){throw 'Cleanup scenario evidence already exists'}
+            Copy-Item -LiteralPath $executable -Destination $scenarioExecutable
+            $scenarioHash=Sha $scenarioExecutable
+            if($scenarioHash -cne (Sha $executable)){throw 'Cleanup scenario executable changed'}
+            $entry=[ordered]@{scenario=$scenario;path=$scenarioExecutable;sha256=$scenarioHash;copyRetired=$false}
+            $record.testScenarioExecutables+=@($entry)
+            try{
+                $run=RunBounded $scenarioExecutable @($scenarioRoot,('--custom-animation-cleanup-'+$scenario)) ('test-custom-animation-cleanup-'+$scenario) 60000
+                $record.testRuns+=$run
+                $part=[IO.File]::ReadAllText($run.stdout)+[IO.File]::ReadAllText($run.stderr)
+                if($run.exitCode -ne 0 -or $run.timedOut -or $part -notmatch 'Passed (\d+) production clock service checks'){throw ('Private cleanup '+$scenario+' failed')}
+                $record.checks+=[int]$Matches[1];$texts+=$part
+            }finally{
+                # The original executable and exact hash remain durable. Only
+                # this task-created identical scenario payload is disposable.
+                $expected=(Resolve-Path -LiteralPath $scenarioRoot).Path.TrimEnd('\')+'\'
+                $resolved=(Resolve-Path -LiteralPath $scenarioExecutable).Path
+                if(-not $resolved.StartsWith($expected,[StringComparison]::OrdinalIgnoreCase) -or (Sha $scenarioExecutable) -cne $scenarioHash){throw 'Cleanup scenario executable ownership changed'}
+                Remove-Item -LiteralPath $scenarioExecutable -Force
+                $entry.copyRetired=$true
+            }
+        }
+        $record.testRun=$record.testRuns[-1];$text=$texts -join [Environment]::NewLine
+    } elseif($Scope -in @('PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess')){
         $record['testRuns']=@();$record['testScenarioExecutables']=@();$texts=@()
         $scenarios=@('success','unknown','lostack')
         if($Scope -eq 'FramesAndHierarchyPostprocess'){$scenarios=@('fresh')+$scenarios}
@@ -1111,7 +1149,17 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
         if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
     }
-    if($Scope -eq 'PrivateAnimationFactories'){
+    if($Scope -eq 'CustomAnimationCleanup'){
+        $record.actualPrivateAnimationCleanupControllerTested=$text.Contains('Production actual private cleanup controller acknowledgements fixture completed')
+        $record.actualPrivateAnimationCleanupSdkOwnerTested=$text.Contains('Production actual private cleanup runtime ticket fixture completed')
+        $record.privateAnimationCleanupEndLifetimeTested=$text.Contains('Production private cleanup live ticket End gate fixture completed')
+        $record.privateAnimationCleanupReturnedAckRecoveryTested=$text.Contains('Production private cleanup returned acknowledgement recovered without replay')
+        $record.privateAnimationCleanupUnknownDebtRetained=$text.Contains('Production private cleanup unknown acknowledgement retained without replay')
+        $record.privateAnimationCleanupForeignDropRetained=$text.Contains('Production private cleanup foreign thread ticket drop retained provider lifetime')
+        $record.privateAnimationCleanupActivePumpTested=$text.Contains('Production private cleanup abandoned intent progressed during active callbacks')
+        if(-not($record.actualPrivateAnimationCleanupControllerTested -and $record.actualPrivateAnimationCleanupSdkOwnerTested -and $record.privateAnimationCleanupEndLifetimeTested -and $record.privateAnimationCleanupReturnedAckRecoveryTested -and $record.privateAnimationCleanupUnknownDebtRetained -and $record.privateAnimationCleanupForeignDropRetained -and $record.privateAnimationCleanupActivePumpTested)){throw 'Private cleanup selected scope incomplete'}
+        $record.productionNativeCallbackTested=$true
+    } elseif($Scope -eq 'PrivateAnimationFactories'){
         $record.nativePrivateAnimationFactoryOwnerTested=$text.Contains('Production native private animation factory owner fixture completed')
         $record.actualPrivateAnimationFactorySdkOwnerTested=$text.Contains('Production actual private animation factory SDK owner fixture completed')
         $record.privateAnimationFactoryOutputBookendsTested=$text.Contains('Production private animation factory output bookends completed')

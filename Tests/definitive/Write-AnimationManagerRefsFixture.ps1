@@ -18,7 +18,14 @@ function Write-AnimationManagerRefsFixture([string]$RepositoryRoot,[string]$Outp
             [regex]::Replace($signature,'\s+',' ')
         }
     })
-    if($methods.Count -ne 52 -or @($methods|Where-Object {$_ -match '\bGetCustomAnimBlendSequenceAt\s*\('}).Count -ne 1){throw 'Remaining actual manager reference fixture methods changed'}
+    if($methods.Count -ne 54 -or @($methods|Where-Object {$_ -match '\bGetCustomAnimBlendSequenceAt\s*\('}).Count -ne 1){throw 'Remaining actual manager reference fixture methods changed'}
+    # These fixtures do not test cleanup. Keep both required operations as
+    # explicit abortors so no fallback can falsely authorize owner teardown.
+    foreach($required in @('BeginCustomAnimationCleanup','HasPendingCustomAnimationCleanup')) {
+        if(@($methods|Where-Object {$_ -match ('\b'+$required+'\s*\(')}).Count -ne 1) {
+            throw ('Missing required rejecting cleanup operation: '+$required)
+        }
+    }
     $lines=@('#pragma once','#pragma warning(push)','#pragma warning(disable : 4100)',
         'class AnimationManagerRefsReceiver final : public mta::game_de::CAnimManagerDE { public:',
         'AnimationManagerRefsReceiver(mta::game_de::NativeAnimationManagerAccess& manager,mta::game_de::NativeAnimationBlockAccess& blocks,std::uint64_t generation) : CAnimManagerDE(manager,blocks,generation) {}',

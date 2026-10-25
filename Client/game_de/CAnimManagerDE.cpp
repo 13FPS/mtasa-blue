@@ -731,6 +731,30 @@ namespace mta::game_de
     {
         return MtaGame::CAnimGatewayNames::GetAnimationName();
     }
+    int CAnimManagerDE::GetNumAnimAssocDefinitions()
+    {
+        static_assert(sizeof(int) == sizeof(std::int32_t));
+        const auto   generation = ownerGeneration;
+        std::int32_t count = 0;
+        Require(native.ReadAnimationAssocDefinitionCount(generation, count), "GetNumAnimAssocDefinitions");
+        // This source getter reads a signed scalar. A positive name-table
+        // extent is a separate admission rule, not a clamp on these bits.
+        return static_cast<int>(count);
+    }
+    const char* CAnimManagerDE::GetAnimGroupName(AssocGroupId group)
+    {
+        static_assert(sizeof(group) == sizeof(std::uint32_t));
+        const auto     generation = ownerGeneration;
+        const auto     id = static_cast<std::uint32_t>(group);
+        std::uintptr_t address = 0;
+        Require(native.ReadAnimationGroupName(generation, id, address), "GetAnimGroupName");
+        if (!address)
+            Require(ClockResult::BindingChanged, "GetAnimGroupName");
+        // This is the current native descriptor's exact borrowed name, not
+        // a retained CPU copy or authority to publish an association group.
+        // Native count/row/name bookends own the full-ID range admission.
+        return reinterpret_cast<const char*>(address);
+    }
     int CAnimManagerDE::GetAnimationBlockIndex(const char* name)
     {
         const auto   copied = CopyName(name);

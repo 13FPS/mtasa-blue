@@ -15,14 +15,14 @@ function Write-PrivateAnimationFactoryFixture([string]$RepositoryRoot,[string]$O
         $bankOrdinal = $name -eq 'GetAnimation' -and $signature -match '\bGetAnimation\s*\(\s*int\s+\w+\s*\)\s*$'
         $blockHash = $name -eq 'GetAnimation' -and $signature -match '\bGetAnimation\s*\(\s*unsigned\s+int\s+\w+\s*,'
         $blockName = $name -eq 'GetAnimation' -and $signature -match '\bGetAnimation\s*\(\s*const\s+char\s*\*'
-        if($bankOrdinal -or $blockHash -or $blockName -or $name -eq 'GetAnimBlendHierarchy' -or $name -in @('GetCustomAnimBlendHierarchy','DeleteCustomAnimHierarchyInterface','DeleteCustomAnimSequenceInterface','RemoveFromUncompressedCache','GetCustomAnimBlendSequenceAt','BeginCustomAnimationCleanup','HasPendingCustomAnimationCleanup','GetCustomAnimBlendSequence','BeginCustomAnimationSequenceCleanup','BeginCustomAnimationSequenceTransfer','BeginCustomAnimationFrameAttachment')) {
+        if($bankOrdinal -or $blockHash -or $blockName -or $name -eq 'GetAnimBlendHierarchy' -or $name -in @('GetCustomAnimBlendHierarchy','DeleteCustomAnimHierarchyInterface','DeleteCustomAnimSequenceInterface','RemoveFromUncompressedCache','GetNumAnimAssocDefinitions','GetAnimGroupName','GetCustomAnimBlendSequenceAt','BeginCustomAnimationCleanup','HasPendingCustomAnimationCleanup','GetCustomAnimBlendSequence','BeginCustomAnimationSequenceCleanup','BeginCustomAnimationSequenceTransfer','BeginCustomAnimationFrameAttachment')) {
             $provided+= $signature
         } else {
             $signature=[regex]::Replace($signature,'\s*=\s*[^,)]+','')
             [regex]::Replace($signature,'\s+',' ')
         }
     })
-    if($provided.Count -ne 18 -or $methods.Count -ne 54 -or
+    if($provided.Count -ne 20 -or $methods.Count -ne 52 -or
        @($provided|Where-Object{$_ -match '\bGetCustomAnimBlendHierarchy\s*\('}).Count -ne 2) {
         throw 'Exact actual private factory and standalone operation contracts changed'
     }
@@ -46,6 +46,11 @@ function Write-PrivateAnimationFactoryFixture([string]$RepositoryRoot,[string]$O
     }
     if(@($provided|Where-Object{$_ -match '\bRemoveFromUncompressedCache\s*\('}).Count -ne 2) {
         throw 'Both actual manager cache overloads must be inherited'
+    }
+    foreach($required in @('GetNumAnimAssocDefinitions','GetAnimGroupName')) {
+        if(@($provided|Where-Object{$_ -match ('\b'+$required+'\s*\(')}).Count -ne 1) {
+            throw ('Missing actual definition observation: '+$required)
+        }
     }
     # All three actual hierarchy factories are inherited: absolute ordinal,
     # raw hash/block and source-name/block composition. No abortor may mask one.

@@ -16,6 +16,10 @@ namespace mta::game_de
         static bool Qualify(Binding&) noexcept;
         static bool Revalidate(const Binding&) noexcept;
         ClockResult ReadCounts(NativeAnimationManagerCounts&) const noexcept;
+        // Separate source observations preserve the old count contract and do
+        // not couple ordinary block/animation reads to definition metadata.
+        ClockResult ReadDefinitionCount(std::int32_t&) const noexcept;
+        ClockResult ReadGroupName(std::uint32_t, std::uintptr_t&) const noexcept;
         ClockResult FindBlockIndex(const NativeAnimationBlockName&, std::int32_t&) const noexcept;
 
     private:

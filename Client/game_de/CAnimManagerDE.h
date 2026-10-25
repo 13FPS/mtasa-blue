@@ -54,6 +54,8 @@ namespace mta::game_de
         std::unique_ptr<CAnimBlock>          GetAnimBlock(CAnimBlockSAInterface*) override;
         int                                  GetNumAnimations() override;
         int                                  GetNumAnimBlocks() override;
+        int                                  GetNumAnimAssocDefinitions() override;
+        const char*                          GetAnimGroupName(AssocGroupId) override;
         int                                  GetAnimationBlockIndex(const char*) override;
         const char*                          GetGateWayBlockName() const override;
         const char*                          GetGateWayAnimationName() const override;

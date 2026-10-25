@@ -8379,6 +8379,7 @@ namespace
 #include "NativeSequenceInterfaceOwnerTests.inl"
 #include "NativeAnimationManagerCacheOwnerTests.inl"
 #include "NativeAnimationBlockHashFactoryOwnerTests.inl"
+#include "NativeAnimationDefinitionsOwnerTests.inl"
 
 // The strict receiver must execute production typed tickets and the distinct
 // metadata-only delete route. Deleting an interface acknowledges only its own
@@ -8400,6 +8401,7 @@ static_assert(std::is_same_v<decltype(&PrivateAnimationFactoryManagerReceiver::G
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool     animationDefinitionsOnly = argc == 3 && std::strcmp(argv[2], "--animation-definitions") == 0;
     const bool     animationBlockHashFactoryOnly = argc == 3 && std::strcmp(argv[2], "--animation-block-hash-factory") == 0;
     const bool     animationManagerCacheForeign = argc == 3 && std::strcmp(argv[2], "--animation-manager-cache-foreign") == 0;
     const bool     animationManagerCacheOnly = animationManagerCacheForeign || (argc == 3 && std::strcmp(argv[2], "--animation-manager-cache-success") == 0);
@@ -8517,9 +8519,17 @@ int main(int argc, char** argv)
            customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly ||
            privateHierarchyParentOnly || privateHierarchyEmptyOnly || freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly ||
            privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly || animationBankFactoriesOnly ||
-           sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly) &&
+           sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly || animationDefinitionsOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (animationDefinitionsOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        NativeAnimationBlocksOwnedSdk(fixture, &AnimationDefinitionsOwnerFixture::RunPrepared);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (animationBlockHashFactoryOnly)
     {
         ClockImageFixture fixture;

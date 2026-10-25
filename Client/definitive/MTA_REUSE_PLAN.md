@@ -5,6 +5,15 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+MTA's association-definition count and group-name getters now use separate
+current native observations backed by the saved named0245 evidence. The count
+preserves its original signed32 scalar, independently of the positive table
+extent required by name lookup. Group IDs retain their full32-bit domain;
+count, exact row, name-through-NUL and owner are rechecked before borrowing the
+native string. The safety bound is the actual56-byte descriptor span, with no
+invented16-byte name field. No association object, table mutation or lifetime
+lease is created, and the existing animation/block count channel is unchanged.
+
 MTA's unsigned animation lookup within a block now keeps the source method's
 hash semantics, despite its old `uiIndex` parameter name. The same native owner
 searches the current qualified bank range for the first matching DWORD hash.
@@ -40,7 +49,7 @@ row, owning-block, range and highwater observations qualify the result. This
 preserves the reader's current-range behavior when the block loaded flag is
 false. Private allocations cannot become bank products. Returned facades borrow
 the same provider, reacquire their native observations and own no native row,
-frame or deletion right. Other lookup overloads remain pure.
+frame or deletion right. These channels do not implement association factories.
 
 Standalone sequence construction now has three required owner operations:
 original-frame attachment, source cleanup and Copy transfer. The actual common
@@ -1379,7 +1388,7 @@ Nine streaming-ID getters use verified DE operands and the full 26316-row count,
 without exposing DE rows through classic structures. These new pause and
 streaming paths have not yet been exercised through a live full `CGame`.
 `GetSystemState` separately maps the proved native frontend/loading/gameplay
-states through a checked reader. Early native states 0ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“5 and lifecycle writes
+states through a checked reader. Early native states 0ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ5 and lifecycle writes
 remain unsupported; native indices are never blindly cast into the SDK enum.
 `IsAtMenu` observes both the typed SA menu-widget owner and legacy frontend
 screens. It keeps their read qualification separate from native lifecycle calls;
@@ -2028,7 +2037,7 @@ passes through the canonical C++ type and is read back before logging alongside
 native velocity and position. Previous state means the previous probe sample,
 not GTA's previous frame. Start and cleanup reset the snapshot masks.
 
-The pinned 0.500 definitions expose pad indices 0ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“19 and `GET_CHAR_VELOCITY`.
+The pinned 0.500 definitions expose pad indices 0ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ19 and `GET_CHAR_VELOCITY`.
 The four MTA-specific logical fields remain explicitly unknown, and velocity
 units remain unknown. Metadata support is not runtime verification. The saved
 log reader checks ownership, masks, provenance, clocks, bounds and cleanup;

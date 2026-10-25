@@ -43,5 +43,13 @@ namespace mta::game_de
         // The hierarchy tag is only a caller locator. The runtime qualifies
         // its current raw hash cell; no factory, string or FName is created.
         virtual ClockResult ReadAnimationHierarchyHash(std::uint64_t, std::uintptr_t, std::uint32_t&) noexcept { return ClockResult::NotInitialized; }
+        // Association definitions have their own signed current count and
+        // source name rows. Keep this channel separate from block/hierarchy
+        // counts, association instances and a fabricated complete group SDK.
+        virtual ClockResult ReadAnimationAssocDefinitionCount(std::uint64_t, std::int32_t&) noexcept { return ClockResult::NotInitialized; }
+        // The owner returns the current exact native row's borrowed name;
+        // full uint32 group IDs are qualified against its current definition
+        // extent. A name borrow adds no lifetime or copied-string facade.
+        virtual ClockResult ReadAnimationGroupName(std::uint64_t, std::uint32_t, std::uintptr_t&) noexcept { return ClockResult::NotInitialized; }
     };
 }

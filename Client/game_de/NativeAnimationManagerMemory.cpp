@@ -5,6 +5,7 @@
  ****************************************************************************/
 #include "NativeAnimationManagerMemory.h"
 #include "NativeAnimationManagerProfile.h"
+#include "NativeAnimationAssocDefinitionProfile.h"
 #include "NativeAnimationBlockMemory.h"
 #include "NativeAnimationBlockProfile.h"
 #include "NativeGameStateMemory.h"
@@ -12,6 +13,7 @@
 #include "NativeStartGameCalls.h"
 #include <array>
 #include <cstring>
+#include <limits>
 namespace mta::game_de
 {
     namespace AnimationManagerDetail
@@ -216,6 +218,156 @@ namespace mta::game_de
         if (name != query)
             return ClockResult::BindingChanged;
         output = selected;
+        return ClockResult::Ok;
+    }
+
+    namespace AnimationDefinitionDetail
+    {
+        namespace Definition = NativeAnimationAssocDefinitionProfile;
+        namespace Image = NativeImageAccess;
+        using Binding = NativeAnimationManagerMemory::Binding;
+        using CheckOwner = NativeAnimationManagerMemory::CheckOwner;
+        bool Sections(Binding binding, std::uintptr_t rowRva) noexcept
+        {
+            IMAGE_DOS_HEADER   dos{};
+            IMAGE_NT_HEADERS64 nt{};
+            if (!Image::ReadImage(binding.image, binding.image, &dos, sizeof(dos)) || dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew <= 0 ||
+                static_cast<std::size_t>(dos.e_lfanew) > NativePedPoolProfile::ImageSize - sizeof(nt) ||
+                !Image::ReadImage(binding.image, binding.image + static_cast<std::uintptr_t>(dos.e_lfanew), &nt, sizeof(nt)) ||
+                nt.Signature != IMAGE_NT_SIGNATURE || nt.FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 ||
+                nt.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC || nt.OptionalHeader.SizeOfImage != NativePedPoolProfile::ImageSize ||
+                nt.FileHeader.SizeOfOptionalHeader < sizeof(IMAGE_OPTIONAL_HEADER64))
+                return false;
+            const auto at = static_cast<std::uintptr_t>(dos.e_lfanew) + offsetof(IMAGE_NT_HEADERS64, OptionalHeader) + nt.FileHeader.SizeOfOptionalHeader;
+            std::array<IMAGE_SECTION_HEADER, 96> sections{};
+            const auto                           bytes = static_cast<std::size_t>(nt.FileHeader.NumberOfSections) * sizeof(IMAGE_SECTION_HEADER);
+            if (!nt.FileHeader.NumberOfSections || nt.FileHeader.NumberOfSections > sections.size() || at > NativePedPoolProfile::ImageSize ||
+                bytes > NativePedPoolProfile::ImageSize - at || !Image::ReadImage(binding.image, binding.image + at, sections.data(), bytes))
+                return false;
+            const auto contains = [&](std::uintptr_t rva, std::size_t size, DWORD required, DWORD forbidden)
+            {
+                for (std::size_t index = 0; index != nt.FileHeader.NumberOfSections; ++index)
+                    if (Image::SectionContains(sections[index], rva, size, required, forbidden))
+                        return true;
+                return false;
+            };
+            constexpr auto rw = IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE;
+            constexpr auto rx = IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE;
+            if (!contains(Definition::CountRva, sizeof(std::int32_t), rw, IMAGE_SCN_MEM_EXECUTE) ||
+                !contains(Definition::GroupSlotRva, sizeof(std::uintptr_t), IMAGE_SCN_MEM_READ, IMAGE_SCN_MEM_WRITE | IMAGE_SCN_MEM_EXECUTE) ||
+                (rowRva && !contains(rowRva, Definition::RowBytes, rw, IMAGE_SCN_MEM_EXECUTE)))
+                return false;
+            for (const auto& pin : Definition::Code)
+                if (!contains(pin.rva, pin.size, rx, IMAGE_SCN_MEM_WRITE))
+                    return false;
+            return true;
+        }
+        bool Profile(Binding binding, std::uintptr_t rowRva = 0) noexcept
+        {
+            if (!NativePedPoolReader::Revalidate(binding) || !Sections(binding, rowRva))
+                return false;
+            for (const auto& pin : Definition::Code)
+            {
+                std::array<unsigned char, Definition::MaximumPinBytes> bytes{};
+                if (!pin.size || pin.size > bytes.size() || !Image::ReadImage(binding.image, binding.image + pin.rva, bytes.data(), pin.size, false, true) ||
+                    std::memcmp(bytes.data(), pin.bytes, pin.size))
+                    return false;
+            }
+            std::uintptr_t group = 0;
+            return Image::ReadImage(binding.image, binding.image + Definition::GroupSlotRva, &group, sizeof(group)) &&
+                   group == binding.image + Definition::GroupRva;
+        }
+        ClockResult Begin(Binding binding, CheckOwner owner, std::uintptr_t rowRva = 0) noexcept
+        {
+            const auto result = AnimationManagerDetail::Owner(binding, owner);
+            return result != ClockResult::Ok ? result : Profile(binding, rowRva) ? ClockResult::Ok : ClockResult::BindingChanged;
+        }
+        struct NameObservation
+        {
+            std::int32_t                                    count = 0;
+            std::uintptr_t                                  rva = 0;
+            std::array<unsigned char, Definition::RowBytes> bytes{};
+            std::size_t                                     length = 0;
+        };
+        ClockResult CaptureName(Binding binding, CheckOwner owner, std::uint32_t index, NameObservation& output) noexcept
+        {
+            auto result = Begin(binding, owner);
+            if (result != ClockResult::Ok)
+                return result;
+            NameObservation next;
+            if (!Image::ReadImage(binding.image, binding.image + Definition::CountRva, &next.count, sizeof(next.count), true))
+                return ClockResult::ReadFailure;
+            if (next.count <= 0)
+                return ClockResult::NotInitialized;
+            constexpr auto maximum = (NativePedPoolProfile::ImageSize - Definition::BankRva - Definition::RowBytes) / Definition::RowBytes;
+            // The physical image is a safety bound, not a guessed definition
+            // capacity. The raw count getter above keeps every signed bit.
+            if (static_cast<std::uint32_t>(next.count) > maximum + 1)
+                return ClockResult::BindingChanged;
+            if (index >= static_cast<std::uint32_t>(next.count))
+                return ClockResult::InvalidArgument;
+            if (index > maximum)
+                return ClockResult::BindingChanged;
+            next.rva = Definition::BankRva + static_cast<std::uintptr_t>(index) * Definition::RowBytes;
+            if (binding.image > (std::numeric_limits<std::uintptr_t>::max)() - next.rva - Definition::RowBytes || !Profile(binding, next.rva))
+                return ClockResult::BindingChanged;
+            if (!Image::ReadImage(binding.image, binding.image + next.rva, next.bytes.data(), next.bytes.size(), true))
+                return ClockResult::ReadFailure;
+            while (next.length != next.bytes.size() && next.bytes[next.length])
+                ++next.length;
+            // Only the exact known row span is borrowed. Do not invent an SA
+            // name-field size or read a string across another native row.
+            if (next.length == next.bytes.size())
+                return ClockResult::BindingChanged;
+            std::int32_t after = 0;
+            if (!Image::ReadImage(binding.image, binding.image + Definition::CountRva, &after, sizeof(after), true))
+                return ClockResult::ReadFailure;
+            if (after != next.count)
+                return ClockResult::BindingChanged;
+            if ((result = Begin(binding, owner, next.rva)) != ClockResult::Ok)
+                return result;
+            output = next;
+            return ClockResult::Ok;
+        }
+    }
+    ClockResult NativeAnimationManagerMemory::ReadDefinitionCount(std::int32_t& output) const noexcept
+    {
+        namespace Detail = AnimationDefinitionDetail;
+        auto result = Detail::Begin(binding, owner);
+        if (result != ClockResult::Ok)
+            return result;
+        std::int32_t first = 0, second = 0;
+        if (!Detail::Image::ReadImage(binding.image, binding.image + Detail::Definition::CountRva, &first, sizeof(first), true))
+            return ClockResult::ReadFailure;
+        if ((result = Detail::Begin(binding, owner)) != ClockResult::Ok)
+            return result;
+        if (!Detail::Image::ReadImage(binding.image, binding.image + Detail::Definition::CountRva, &second, sizeof(second), true))
+            return ClockResult::ReadFailure;
+        if (first != second)
+            return ClockResult::BindingChanged;
+        if ((result = Detail::Begin(binding, owner)) != ClockResult::Ok)
+            return result;
+        // Actual MTA returns a raw signed32 scalar: negative/zero are observed
+        // values, not a name-range prerequisite or an invented missing state.
+        output = second;
+        return ClockResult::Ok;
+    }
+    ClockResult NativeAnimationManagerMemory::ReadGroupName(std::uint32_t requestedIndex, std::uintptr_t& output) const noexcept
+    {
+        namespace Detail = AnimationDefinitionDetail;
+        const auto              index = requestedIndex;
+        Detail::NameObservation first, second;
+        auto                    result = Detail::CaptureName(binding, owner, index, first);
+        if (result != ClockResult::Ok || (result = Detail::CaptureName(binding, owner, index, second)) != ClockResult::Ok)
+            return result;
+        if (first.count != second.count || first.rva != second.rva || first.length != second.length ||
+            std::memcmp(first.bytes.data(), second.bytes.data(), first.length + 1))
+            return ClockResult::BindingChanged;
+        if ((result = Detail::Begin(binding, owner, second.rva)) != ClockResult::Ok)
+            return result;
+        // This is the current row's native NUL string, not a CPU string cache
+        // or an association/group/block facade with new native lifetime.
+        output = binding.image + second.rva;
         return ClockResult::Ok;
     }
 }

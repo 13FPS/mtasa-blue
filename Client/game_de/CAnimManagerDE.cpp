@@ -262,19 +262,42 @@ namespace mta::game_de
         return std::unique_ptr<CAnimBlendSequence>(facade);
     }
 
+    NativeAnimationSequenceReferenceToken CAnimManagerDE::ResolveCustomSequenceInterface(std::uintptr_t locator, const char* operation) const
+    {
+        if (!sequenceOperationAccess || !ownerGeneration)
+            Require(ClockResult::NotInitialized, operation);
+        const auto                              generation = ownerGeneration;
+        const auto                              requestedAddress = locator;
+        NativeAnimationSequenceResolvedIdentity identity;
+        Require(sequenceOperationAccess->ResolvePrivateAnimationSequenceReference(generation, requestedAddress, identity), operation);
+        if (identity.reference.ownerGeneration != generation || !identity.reference.firstTag || identity.interfaceAddress != requestedAddress)
+            Require(ClockResult::BindingChanged, operation);
+        // The provider resolved the actual row and full index. A raw locator
+        // never authorizes client-side row arithmetic or native-bank adoption.
+        return identity.reference;
+    }
     std::unique_ptr<CAnimBlendSequence> CAnimManagerDE::GetCustomAnimBlendSequence(CAnimBlendSequenceSAInterface* raw)
     {
         if (!raw)
             return nullptr;
-        if (!sequenceOperationAccess || !sequenceAccess || !ownerGeneration)
+        if (!sequenceAccess)
             Require(ClockResult::NotInitialized, "GetCustomAnimBlendSequence");
-        const auto                            locator = reinterpret_cast<std::uintptr_t>(raw);
-        NativeAnimationSequenceReferenceToken reference;
-        Require(sequenceOperationAccess->ResolvePrivateStandaloneAnimationSequence(ownerGeneration, locator, reference), "GetCustomAnimBlendSequence");
-        if (reference.ownerGeneration != ownerGeneration || reference.firstTag != locator || reference.index)
-            Require(ClockResult::BindingChanged, "GetCustomAnimBlendSequence");
-        // A borrowed clone never changes the original resource's ownership.
+        const auto locator = reinterpret_cast<std::uintptr_t>(raw);
+        const auto reference = ResolveCustomSequenceInterface(locator, "GetCustomAnimBlendSequence");
+        // This current same-owner borrow may identify an ArrayRow or a genuine
+        // Standalone purpose. CPU allocation failure deletes neither resource.
         return std::unique_ptr<CAnimBlendSequence>(new CAnimBlendSequenceDE(*sequenceAccess, reference));
+    }
+    void CAnimManagerDE::DeleteCustomAnimSequenceInterface(CAnimBlendSequenceSAInterface* raw)
+    {
+        if (!raw)
+            return;
+        const auto locator = reinterpret_cast<std::uintptr_t>(raw);
+        const auto reference = ResolveCustomSequenceInterface(locator, "DeleteCustomAnimSequenceInterface");
+        // Only the dedicated service can authorize standalone metadata release.
+        // Frames stay live/unbound/otherwise held; typed cleanup is a different
+        // contract and must never substitute for this legacy void operation.
+        Require(sequenceOperationAccess->DeletePrivateStandaloneAnimationSequenceInterface(reference), "DeleteCustomAnimSequenceInterface");
     }
 
     std::unique_ptr<CCustomAnimationSequenceOperation> CAnimManagerDE::BeginCustomAnimationSequenceCleanup(

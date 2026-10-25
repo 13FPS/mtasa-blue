@@ -26,6 +26,7 @@ namespace mta::game_de
         bool                                               HasPendingCustomAnimationCleanup() const noexcept override;
         std::unique_ptr<CAnimBlendSequence>                GetCustomAnimBlendSequence() override;
         std::unique_ptr<CAnimBlendSequence>                GetCustomAnimBlendSequence(CAnimBlendSequenceSAInterface*) override;
+        void                                               DeleteCustomAnimSequenceInterface(CAnimBlendSequenceSAInterface*) override;
         std::unique_ptr<CCustomAnimationSequenceOperation> BeginCustomAnimationSequenceCleanup(const SCustomAnimationSequenceCleanupRequest&) override;
         std::unique_ptr<CCustomAnimationSequenceOperation> BeginCustomAnimationSequenceTransfer(const SCustomAnimationSequenceTransferRequest&) override;
         std::unique_ptr<CCustomAnimationSequenceOperation> BeginCustomAnimationFrameAttachment(const SCustomAnimationFrameAttachmentRequest&) override;
@@ -73,6 +74,7 @@ namespace mta::game_de
 
     private:
         NativeAnimationSequenceReferenceToken SequenceOperationIdentity(CAnimBlendSequence*, const char*) const;
+        NativeAnimationSequenceReferenceToken ResolveCustomSequenceInterface(std::uintptr_t, const char*) const;
         NativeAnimationBlockIdentity          ReadCounterIdentity(int, const char*) const;
         void                                  RequireFactory(const char*) const;
         std::unique_ptr<CAnimBlock>           MakeBlock(const NativeAnimationBlockIdentity&, const char*);
@@ -91,7 +93,7 @@ namespace mta::game_de
     };
     // These factories create actual borrowed CPU facades over issued owner
     // records. Standalone creation and typed owner operations require the
-    // explicit same-provider service. Raw interface-only deletion and
+    // explicit same-provider service. Raw interface deletion is metadata-only;
     // unrelated manager operations retain their genuine pure contracts;
     // full parser exposure is not implied by these factory products.
     static_assert(std::is_abstract_v<CAnimManagerDE> && std::is_base_of_v<CAnimManager, CAnimManagerDE>);

@@ -13,6 +13,11 @@ namespace mta::game_de
     // A raw row remains a locator, not a standalone allocation capability.
     using NativeCustomAnimationSequenceOperationToken = NativeCustomAnimationCleanupToken;
     using NativeCustomAnimationSequenceOperationBeginReceipt = NativeCustomAnimationCleanupBeginReceipt;
+    struct NativeAnimationSequenceResolvedIdentity
+    {
+        NativeAnimationSequenceReferenceToken reference{};
+        std::uintptr_t                        interfaceAddress = 0;
+    };
     class NativeCustomAnimationSequenceOperationAccess
     {
     public:
@@ -47,5 +52,17 @@ namespace mta::game_de
         }
         // Includes pending commands and every live completed CPU ticket.
         virtual bool HasPendingPrivateAnimationSequenceOperations() const noexcept { return true; }
+        // Generic private row borrow qualifies the actual original allocation,
+        // cookie, full capacity and physical identity. It grants no deletion.
+        virtual ClockResult ResolvePrivateAnimationSequenceReference(std::uint64_t, std::uintptr_t, NativeAnimationSequenceResolvedIdentity&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
+        // Source-compatible interface-only deletion. No frame ownership/free
+        // acknowledgement or typed SourceReleased result is implied.
+        virtual ClockResult DeletePrivateStandaloneAnimationSequenceInterface(const NativeAnimationSequenceReferenceToken&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
     };
 }

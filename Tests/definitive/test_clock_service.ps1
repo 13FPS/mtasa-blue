@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories')]
+    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -57,6 +57,9 @@ $record['privateHierarchyRetainedLifetimeTested']=$false
 $record['nativePrivateAnimationFactoryOwnerTested']=$false
 $record['actualPrivateAnimationFactorySdkOwnerTested']=$false
 $record['privateAnimationFactoryOutputBookendsTested']=$false
+$record['nativeSequenceInterfaceOwnerTested']=$false
+$record['actualSequenceInterfaceSdkOwnerTested']=$false
+$record['sequenceInterfaceUnknownMetadataFreeRetained']=$false
 $record['nativeBankAnimationFactoryOwnerTested']=$false
 $record['actualBankAnimationFactorySdkOwnerTested']=$false
 $record['bankAnimationFactoryGenerationBookendsTested']=$false
@@ -472,6 +475,7 @@ try {
     $sourceNames += @('Client/game_de/NativeAnimationSequenceName.h','Client/game_de/NativeAnimationSequenceName.cpp','Client/game_de/NativeAnimationSequenceNameCalls.h','Client/game_de/NativeAnimationSequenceNameProfile.h','Tests/definitive/NativeCustomAnimationSequenceNameOwnerTests.inl')
     $sourceNames += @('Client/game_de/NativeAnimationSequenceFrameBindCalls.h','Client/game_de/NativeAnimationSequenceFrameBindProfile.h','Tests/definitive/NativeFreshCompressedSequenceOwnerTests.inl')
     $sourceNames += @('Client/game_de/NativePrivateAnimationHierarchyStorage.h','Client/game_de/NativePrivateAnimationHierarchyStorage.cpp','Client/game_de/NativePrivateAnimationHierarchyController.h','Client/game_de/NativePrivateAnimationHierarchyController.cpp','Tests/definitive/NativePrivateHierarchyOwnerTests.inl')
+    $sourceNames += @('Tests/definitive/NativeSequenceInterfaceOwnerTests.inl')
     $sourceNames += @('Tests/definitive/NativeBankAnimationFactoryOwnerTests.inl')
     $sourceNames += @('Tests/definitive/NativeStandaloneSequenceOperationsTests.inl','Client/game_de/NativeCustomAnimationSequenceOperationAccess.h','Client/sdk/game/CCustomAnimationSequenceOperation.h','Client/mods/deathmatch/logic/CIFPAnimationStorage.h')
     $sourceNames += @('Tests/definitive/NativeCustomAnimationCleanupControllerTests.inl','Tests/definitive/NativeCustomAnimationCleanupOwnerTests.inl','Client/game_de/NativeCustomAnimationCleanupAccess.h','Client/sdk/game/CCustomAnimationCleanup.h')
@@ -932,7 +936,36 @@ namespace ClockPrivateHierarchyParentWriteFixture {
     if ($Scope -eq 'GarageNamed') { $fixtureArguments += '--garage-named' }
     if ($Scope -eq 'GaragePools') { $fixtureArguments += '--garage-pools' }
     if ($Scope -eq 'PedPoolRegistry') { $fixtureArguments += '--ped-pool-registry' }
-    if($Scope -eq 'StandaloneSequenceOperations'){
+    if($Scope -eq 'SequenceInterfaceCompatibility'){
+        $record['testRuns']=@();$record['testScenarioExecutables']=@();$texts=@()
+        foreach($scenario in @('success','unknown')){
+            $scenarioRoot=Join-Path $outputRoot ('scenario-sequence-interface-'+$scenario)
+            [IO.Directory]::CreateDirectory($scenarioRoot)|Out-Null
+            $scenarioExecutable=Join-Path $scenarioRoot ([IO.Path]::GetFileName($executable))
+            if(Test-Path -LiteralPath $scenarioExecutable){throw 'Sequence interface scenario evidence already exists'}
+            Copy-Item -LiteralPath $executable -Destination $scenarioExecutable
+            $scenarioHash=Sha $scenarioExecutable
+            if($scenarioHash -cne (Sha $executable)){throw 'Sequence interface scenario executable changed'}
+            $entry=[ordered]@{scenario=$scenario;path=$scenarioExecutable;sha256=$scenarioHash;copyRetired=$false}
+            $record.testScenarioExecutables+=@($entry)
+            try{
+                $run=RunBounded $scenarioExecutable @($scenarioRoot,('--sequence-interface-'+$scenario)) ('test-sequence-interface-'+$scenario) 60000
+                $record.testRuns+=$run
+                $part=[IO.File]::ReadAllText($run.stdout)+[IO.File]::ReadAllText($run.stderr)
+                if($run.exitCode -ne 0 -or $run.timedOut -or $part -notmatch 'Passed (\d+) production clock service checks'){throw ('Sequence interface '+$scenario+' failed')}
+                $record.checks+=[int]$Matches[1];$texts+=$part
+            }finally{
+                # The original executable and exact hash remain durable. Only
+                # this task-created identical sequence-interface scenario payload is disposable.
+                $expected=(Resolve-Path -LiteralPath $scenarioRoot).Path.TrimEnd('\')+'\'
+                $resolved=(Resolve-Path -LiteralPath $scenarioExecutable).Path
+                if(-not $resolved.StartsWith($expected,[StringComparison]::OrdinalIgnoreCase) -or (Sha $scenarioExecutable) -cne $scenarioHash){throw 'Sequence interface scenario executable ownership changed'}
+                Remove-Item -LiteralPath $scenarioExecutable -Force
+                $entry.copyRetired=$true
+            }
+        }
+        $record.testRun=$record.testRuns[-1];$text=$texts -join [Environment]::NewLine
+    } elseif($Scope -eq 'StandaloneSequenceOperations'){
         $record['testRuns']=@();$record['testScenarioExecutables']=@();$texts=@()
         foreach($scenario in @('success','bind-loss','copy-loss','unknown','foreign-drop')){
             $scenarioRoot=Join-Path $outputRoot ('scenario-standalone-sequence-operations-'+$scenario)
@@ -1192,7 +1225,13 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
         if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
     }
-    if($Scope -eq 'AnimationBankFactories'){
+    if($Scope -eq 'SequenceInterfaceCompatibility'){
+        $record.nativeSequenceInterfaceOwnerTested=$text.Contains('Production sequence interface compatibility owner fixture completed')
+        $record.actualSequenceInterfaceSdkOwnerTested=$text.Contains('Production sequence interface compatibility SDK fixture completed')
+        $record.sequenceInterfaceUnknownMetadataFreeRetained=$text.Contains('Production sequence interface unknown metadata free retained')
+        if(-not($record.nativeSequenceInterfaceOwnerTested -and $record.actualSequenceInterfaceSdkOwnerTested -and $record.sequenceInterfaceUnknownMetadataFreeRetained)){throw 'Sequence interface selected scope incomplete'}
+        $record.productionNativeCallbackTested=$true
+    } elseif($Scope -eq 'AnimationBankFactories'){
         $record.nativeBankAnimationFactoryOwnerTested=$text.Contains('Production native bank animation factory owner fixture completed')
         $record.actualBankAnimationFactorySdkOwnerTested=$text.Contains('Production actual bank animation factory SDK owner fixture completed')
         $record.bankAnimationFactoryGenerationBookendsTested=$text.Contains('Production bank animation factory generation bookends completed')
@@ -1204,7 +1243,7 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         $record.standaloneSequenceCopyLostAckTested=$text.Contains('Production standalone sequence operations copy lost acknowledgement verified')
         $record.standaloneSequenceUnknownWriteRetained=$text.Contains('Production standalone sequence operations unknown write retained')
         $record.standaloneSequenceForeignDropRetained=$text.Contains('Production standalone sequence operations foreign ticket drop quarantined')
-        $record.standaloneSequenceStrictFactoryDispatchTested=$text.Contains('Production standalone strict factory dispatch and pure raw delete verified')
+        $record.standaloneSequenceStrictFactoryDispatchTested=$text.Contains('Production standalone strict factory dispatch and metadata delete routing verified')
         if(-not($record.actualStandaloneSequenceOperationsOwnerTested -and $record.standaloneSequenceBindLostAckTested -and $record.standaloneSequenceCopyLostAckTested -and $record.standaloneSequenceUnknownWriteRetained -and $record.standaloneSequenceForeignDropRetained -and $record.standaloneSequenceStrictFactoryDispatchTested)){throw 'Standalone sequence selected scope incomplete'}
         $record.productionNativeCallbackTested=$true
     } elseif($Scope -eq 'CustomAnimationCleanup'){

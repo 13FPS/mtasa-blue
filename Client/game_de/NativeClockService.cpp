@@ -179,6 +179,8 @@ namespace mta::game_de
             ClockResult ResumePrivateAnimationSequenceOperation(const NativeCustomAnimationSequenceOperationToken&,
                                                                 SCustomAnimationSequenceResult&) noexcept override;
             bool        HasPendingPrivateAnimationSequenceOperations() const noexcept override;
+            ClockResult ResolvePrivateAnimationSequenceReference(std::uint64_t, std::uintptr_t, NativeAnimationSequenceResolvedIdentity&) noexcept override;
+            ClockResult DeletePrivateStandaloneAnimationSequenceInterface(const NativeAnimationSequenceReferenceToken&) noexcept override;
             ClockResult Read(ClockValues& values) noexcept override;
             ClockResult Set(std::uint8_t hour, std::uint8_t minute) noexcept override;
             ClockResult Freeze(bool frozen) noexcept override;
@@ -3497,6 +3499,55 @@ namespace mta::game_de
                 Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
             if (result == ClockResult::Ok)
                 output = next;
+            return result;
+        }
+
+        ClockResult NativeAccess::ResolvePrivateAnimationSequenceReference(std::uint64_t generation, std::uintptr_t locator,
+                                                                           NativeAnimationSequenceResolvedIdentity& output) noexcept
+        {
+            const auto                                  requested = locator;
+            const NativeAnimationSequenceReferenceToken request{generation, 0, 0};
+            auto                                        result = CheckCustomSequenceRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            NativeAnimationSequenceResolvedIdentity next;
+            // Reverse lookup belongs to the actual issued allocation owner.
+            // Native origin/cookie/full-capacity/row alignment qualify this
+            // identity; neither the client nor a raw locator supplies a stride.
+            result = runtime.customSequences.ResolveSequenceReference(runtime.image, generation, requested, &CheckTimingOwner, next);
+            PublishCustomAnimationSequenceDebt(generation);
+            if (result == ClockResult::Ok)
+                result = CheckCustomSequenceRequest(request);
+            if (runtime.customSequences.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            if (result == ClockResult::Ok)
+                output = next;
+            return result;
+        }
+
+        ClockResult NativeAccess::DeletePrivateStandaloneAnimationSequenceInterface(const NativeAnimationSequenceReferenceToken& value) noexcept
+        {
+            const auto request = value;
+            auto       result = CheckCustomSequenceRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            NativeCustomAnimSequenceController::Receipt receipt;
+            // Preserve SA's raw interface-only delete. This qualified native
+            // entry never frees a frame or fabricates typed SourceReleased;
+            // only the original metadata free ACK releases source-held claims.
+            result = runtime.customSequences.DeleteStandaloneSequenceInterface(runtime.image, request, &CheckTimingOwner, &receipt);
+            PublishCustomAnimationSequenceDebt(request.ownerGeneration);
+            if (result == ClockResult::Ok)
+            {
+                result = CheckTimingOwner();
+                // Releasing the last empty source correctly clears native
+                // resource debt. Postflight must not require that old debt
+                // generation to remain live after its successful discharge.
+                if (result == ClockResult::Ok && request.ownerGeneration != runtime.generation.load())
+                    result = ClockResult::OwnerConflict;
+            }
+            if ((receipt.entered && result != ClockResult::Ok) || runtime.customSequences.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
             return result;
         }
 

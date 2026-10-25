@@ -5,6 +5,15 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+Raw custom-sequence lookup now borrows either an actual owned array row or an
+explicit Standalone record through a qualified physical identity. The client
+uses no row-stride arithmetic. Raw standalone deletion now preserves SA's
+interface-only behavior: the original metadata free ACK releases source-held
+claims, while frame allocations remain independent or held by other arrays.
+It neither frees frames nor reports typed full cleanup. Pending, foreign,
+published and unknown records refuse, and capacity one grants no standalone
+deletion authority. The raw locator ABI still makes no stale-address ABA promise.
+
 MTA's integer animation lookup and raw bank-hierarchy wrapper now use the
 existing DE bank reader. Ordinal arithmetic selects a request; repeated current
 row, owning-block, range and highwater observations qualify the result. This

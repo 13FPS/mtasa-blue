@@ -73,6 +73,13 @@ namespace mta::game_de
         ClockResult ResumePendingCleanups(std::uintptr_t, std::uint64_t, NativePrivateAnimationHierarchyController&, std::size_t, CheckOwner,
                                           CleanupProgress&) noexcept;
         bool        HasPendingCleanup() const noexcept;
+        // A raw interface is only a current locator inside an actual issued
+        // allocation. Physical identity is returned so clients need no stride.
+        ClockResult ResolveSequenceReference(std::uintptr_t, std::uint64_t, std::uintptr_t, CheckOwner, NativeAnimationSequenceResolvedIdentity&) noexcept;
+        // Actual SA raw delete retires only standalone interface storage.
+        // Its original frame records are never freed by this operation.
+        ClockResult DeleteStandaloneSequenceInterface(std::uintptr_t, const NativeAnimationSequenceReferenceToken&, CheckOwner, Receipt* = nullptr,
+                                                      InvokeFree = nullptr) noexcept;
         ClockResult AllocateStandaloneSequence(std::uintptr_t, std::uint64_t, CheckOwner, NativeAnimationSequenceReferenceToken&, Receipt* = nullptr,
                                                InvokeMalloc = nullptr) noexcept;
         ClockResult ResolveStandaloneSequence(std::uintptr_t, std::uint64_t, std::uintptr_t, CheckOwner, NativeAnimationSequenceReferenceToken&) noexcept;

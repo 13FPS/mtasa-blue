@@ -2101,4 +2101,94 @@ namespace mta::game_de
         return status;
     }
 
+    ClockResult NativeCustomAnimSequenceController::ResolveSequenceReference(std::uintptr_t image, std::uint64_t generation, std::uintptr_t locator,
+                                                                             CheckOwner owner, NativeAnimationSequenceResolvedIdentity& output) noexcept
+    {
+        const auto requestedGeneration = generation;
+        const auto requestedLocator = locator;
+        if (!requestedGeneration || !requestedLocator)
+            return ClockResult::InvalidArgument;
+        if (operation.test_and_set(std::memory_order_acquire))
+            return ClockResult::Busy;
+        const CustomAnimSequenceControllerDetail::Operation held{operation};
+        if (requestedGeneration != ownerGeneration || stopping)
+            return ClockResult::OwnerConflict;
+        if (!owner)
+            return ClockResult::NotInitialized;
+        const auto checked = owner();
+        if (checked != ClockResult::Ok)
+            return checked;
+        for (auto& entry : entries)
+        {
+            const auto& storage = entry.storage;
+            if (!entry.issued || storage.OwnerGeneration() != requestedGeneration || storage.GetKind() != Storage::Kind::SequenceArray ||
+                storage.GetState() != Storage::State::LiveUnpublished || entry.cleanupOwner || entry.operationOwner || requestedLocator < storage.IssuedTag())
+                continue;
+            if (entry.privateDependency && entry.privateDependency->phase != PrivatePhase::AttachedAccepted)
+                continue;
+            const auto displacement = requestedLocator - storage.IssuedTag();
+            if (displacement % NativeCustomAnimSequenceStorageProfile::RowBytes)
+                continue;
+            const auto index = displacement / NativeCustomAnimSequenceStorageProfile::RowBytes;
+            if (index >= storage.Capacity())
+                continue;
+            const auto  originalTag = storage.IssuedTag();
+            std::size_t capacity = 0;
+            const auto  result = NativeAnimationSequenceFactoryCalls::ReadCapacity(image, storage, requestedGeneration, owner, capacity);
+            if (result != ClockResult::Ok)
+                return result;
+            if (index >= capacity || capacity != storage.Capacity() || originalTag != storage.IssuedTag() ||
+                storage.GetState() != Storage::State::LiveUnpublished || entry.cleanupOwner || entry.operationOwner)
+                return ClockResult::BindingChanged;
+            // ReadCapacity supplies both original heap/cookie bookends. This
+            // exact native stride is used only here; no client arithmetic or
+            // frame/name read can grant allocation or deletion authority.
+            output = {{requestedGeneration, originalTag, index}, requestedLocator};
+            return ClockResult::Ok;
+        }
+        return ClockResult::BindingChanged;
+    }
+    ClockResult NativeCustomAnimSequenceController::DeleteStandaloneSequenceInterface(std::uintptr_t image, const NativeAnimationSequenceReferenceToken& value,
+                                                                                      CheckOwner owner, Receipt* output, InvokeFree invoke) noexcept
+    {
+        const auto request = value;
+        if (output)
+            *output = {};
+        if (!request.ownerGeneration || !request.firstTag || request.index)
+            return ClockResult::InvalidArgument;
+        if (operation.test_and_set(std::memory_order_acquire))
+            return ClockResult::Busy;
+        const CustomAnimSequenceControllerDetail::Operation held{operation};
+        if (request.ownerGeneration != ownerGeneration || stopping)
+            return ClockResult::OwnerConflict;
+        if (!owner)
+            return ClockResult::NotInitialized;
+        const auto checked = owner();
+        if (checked != ClockResult::Ok)
+            return checked;
+        const auto entry = Find(request.ownerGeneration, request.firstTag);
+        if (entry == entries.end() || entry->purpose != SequencePurpose::StandaloneSequence || entry->storage.GetKind() != Storage::Kind::SequenceArray ||
+            entry->storage.Capacity() != 1)
+            return ClockResult::BindingChanged;
+        if (entry->storage.GetState() != Storage::State::LiveUnpublished || entry->operationOwner || entry->cleanupOwner || entry->privateDependency ||
+            entry->privateHolds || (entry->cleanupAck && entry->cleanupAck->claims))
+            return ClockResult::OwnerConflict;
+        for (const auto& frame : entry->frameObligations)
+            if (frame->stage != CleanupStage::Prepared)
+                return ClockResult::OwnerConflict;
+        Receipt    receipt;
+        const auto result = NativeCustomAnimSequenceStorageCalls::FreeStorage(image, entry->storage, request.ownerGeneration, owner, &receipt, invoke);
+        RecordResourceReceipt(*entry, receipt);
+        // Only the real returned metadata-free acknowledgement permits this
+        // source Entry to disappear. Dropping its CPU obligation references
+        // frees no frames: original buffers remain issued and other arrays'
+        // references/holds remain intact. An unknown free preserves everything.
+        if (receipt.released)
+            entries.erase(entry);
+        Publish();
+        if (output)
+            *output = receipt;
+        return result;
+    }
+
 }

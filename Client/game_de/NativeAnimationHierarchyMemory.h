@@ -18,6 +18,9 @@ namespace mta::game_de
         // Each operation reacquires row/block ownership; none issues a custom
         // allocation, a sequence lease or permission to retire native children.
         ClockResult Read(std::uintptr_t locator, NativeAnimationHierarchyValues& output) const noexcept;
+        // Ordinal arithmetic only selects a request. Read still proves the
+        // current logical highwater and actual owning-block range.
+        ClockResult ReadAt(std::uint32_t ordinal, std::uintptr_t& output) const noexcept;
         ClockResult ReadSequences(std::uintptr_t locator, std::uintptr_t& output) const noexcept;
         ClockResult ReadSequence(std::uintptr_t locator, std::uint32_t index, std::uintptr_t& output) const noexcept;
 

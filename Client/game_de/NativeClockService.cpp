@@ -272,6 +272,8 @@ namespace mta::game_de
             ClockResult ResolvePrivateAnimationHierarchyReference(std::uint64_t, std::uintptr_t, NativeAnimationHierarchyReferenceToken&) noexcept override;
             ClockResult ResolvePrivateAnimationSequenceAt(std::uint64_t, std::uintptr_t, std::uint32_t, bool&,
                                                           NativeAnimationSequenceReferenceToken&) noexcept override;
+            ClockResult ResolveBankAnimationHierarchyReference(std::uint64_t, std::uintptr_t, NativeAnimationHierarchyReferenceToken&) noexcept override;
+            ClockResult ResolveBankAnimationHierarchyAt(std::uint64_t, std::uint32_t, NativeAnimationHierarchyReferenceToken&) noexcept override;
             ClockResult CreatePrivateAnimationHierarchy(std::uint64_t, NativeAnimationHierarchyReferenceToken&) noexcept override;
             ClockResult InitializePrivateAnimationHierarchy(const NativeAnimationHierarchyReferenceToken&) noexcept override;
             ClockResult DestroyPrivateAnimationHierarchy(const NativeAnimationHierarchyReferenceToken&) noexcept override;
@@ -2877,6 +2879,43 @@ namespace mta::game_de
                 return result;
             return request.ownerGeneration && request.ownerGeneration == runtime.generation.load() ? ClockResult::Ok : ClockResult::OwnerConflict;
         }
+        ClockResult NativeAccess::ResolveBankAnimationHierarchyReference(std::uint64_t generation, std::uintptr_t locator,
+                                                                         NativeAnimationHierarchyReferenceToken& output) noexcept
+        {
+            const NativeAnimationHierarchyReferenceToken request{generation, locator};
+            auto                                         result = CheckAnimationHierarchyRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            NativeAnimationHierarchyMemory memory({runtime.image}, &CheckTimingOwner);
+            NativeAnimationHierarchyValues values;
+            // The bank memory qualifier is explicit: the generic Read route
+            // can also serve private records and cannot establish bank origin.
+            result = memory.Read(request.locator, values);
+            if (result == ClockResult::Ok)
+                result = CheckAnimationHierarchyRequest(request);
+            if (result == ClockResult::Ok)
+                output = {generation, values.interfaceAddress};
+            return result;
+        }
+
+        ClockResult NativeAccess::ResolveBankAnimationHierarchyAt(std::uint64_t generation, std::uint32_t index,
+                                                                  NativeAnimationHierarchyReferenceToken& output) noexcept
+        {
+            const auto                                   requested = index;
+            const NativeAnimationHierarchyReferenceToken request{generation, 0};
+            auto                                         result = CheckAnimationHierarchyRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            NativeAnimationHierarchyMemory memory({runtime.image}, &CheckTimingOwner);
+            std::uintptr_t                 locator = 0;
+            result = memory.ReadAt(requested, locator);
+            if (result == ClockResult::Ok)
+                result = CheckAnimationHierarchyRequest(request);
+            if (result == ClockResult::Ok)
+                output = {generation, locator};
+            return result;
+        }
+
         ClockResult NativeAccess::ResolvePrivateAnimationHierarchyReference(std::uint64_t generation, std::uintptr_t locator,
                                                                             NativeAnimationHierarchyReferenceToken& output) noexcept
         {

@@ -1,5 +1,5 @@
 # Derive unsupported operations from the real common SDK. Only actual current
-# private factories and owner-receipt operations remain inherited; raw sequence
+# private/bank factories and owner-receipt operations remain inherited; raw sequence
 # interface delete still rejects and no complete Game/provider is supplied.
 function Write-PrivateAnimationFactoryFixture([string]$RepositoryRoot,[string]$OutputPath) {
     $source='Client/sdk/game/CAnimManager.h'
@@ -12,14 +12,15 @@ function Write-PrivateAnimationFactoryFixture([string]$RepositoryRoot,[string]$O
         $signature=[regex]::Replace($signature,'\s*=\s*0\s*$','').Trim()
         $name=[regex]::Match($signature,'(?<name>\w+)\s*\(').Groups['name'].Value
         if(-not $name){throw "Cannot derive private manager fixture from $signature"}
-        if($name -in @('GetCustomAnimBlendHierarchy','DeleteCustomAnimHierarchyInterface','GetCustomAnimBlendSequenceAt','BeginCustomAnimationCleanup','HasPendingCustomAnimationCleanup','GetCustomAnimBlendSequence','BeginCustomAnimationSequenceCleanup','BeginCustomAnimationSequenceTransfer','BeginCustomAnimationFrameAttachment')) {
+        $bankOrdinal = $name -eq 'GetAnimation' -and $signature -match '\bGetAnimation\s*\(\s*int\s+\w+\s*\)\s*$'
+        if($bankOrdinal -or $name -eq 'GetAnimBlendHierarchy' -or $name -in @('GetCustomAnimBlendHierarchy','DeleteCustomAnimHierarchyInterface','GetCustomAnimBlendSequenceAt','BeginCustomAnimationCleanup','HasPendingCustomAnimationCleanup','GetCustomAnimBlendSequence','BeginCustomAnimationSequenceCleanup','BeginCustomAnimationSequenceTransfer','BeginCustomAnimationFrameAttachment')) {
             $provided+= $signature
         } else {
             $signature=[regex]::Replace($signature,'\s*=\s*[^,)]+','')
             [regex]::Replace($signature,'\s+',' ')
         }
     })
-    if($provided.Count -ne 11 -or $methods.Count -ne 61 -or
+    if($provided.Count -ne 13 -or $methods.Count -ne 59 -or
        @($provided|Where-Object{$_ -match '\bGetCustomAnimBlendHierarchy\s*\('}).Count -ne 2) {
         throw 'Exact actual private factory and standalone operation contracts changed'
     }
@@ -41,8 +42,16 @@ function Write-PrivateAnimationFactoryFixture([string]$RepositoryRoot,[string]$O
        @($methods|Where-Object{$_ -match '\bDeleteCustomAnimSequenceInterface\s*\('}).Count -ne 1) {
         throw 'Standalone new/borrow factories must inherit while raw interface-only delete stays rejecting'
     }
+    # Only the integer ordinal overload is implemented in this bank slice.
+    # Retaining the other two abortors must not hide the inherited overload.
+    if(@($provided|Where-Object{$_ -match '\bGetAnimation\s*\('}).Count -ne 1 -or
+       @($provided|Where-Object{$_ -match '\bGetAnimBlendHierarchy\s*\('}).Count -ne 1 -or
+       @($methods|Where-Object{$_ -match '\bGetAnimation\s*\('}).Count -ne 2) {
+        throw 'Bank factories must preserve both unsupported name/block overloads'
+    }
     $lines=@('#pragma once','#include <cstdlib>','#pragma warning(push)','#pragma warning(disable : 4100)',
         'class PrivateAnimationFactoryManagerReceiver final : public mta::game_de::CAnimManagerDE { public:',
+        'using CAnimManagerDE::GetAnimation;',
         'PrivateAnimationFactoryManagerReceiver(mta::game_de::NativeAnimationManagerAccess& manager,mta::game_de::NativeAnimationHierarchyAccess& hierarchy,mta::game_de::NativeAnimationSequenceAccess& sequence,mta::game_de::NativeAnimationSequenceStorageAccess& storage,std::uint64_t generation) : CAnimManagerDE(manager,hierarchy,sequence,storage,generation) {}',
         'PrivateAnimationFactoryManagerReceiver(mta::game_de::NativeAnimationManagerAccess& manager,std::uint64_t generation) noexcept : CAnimManagerDE(manager,generation) {}')
     $lines+=@($methods|ForEach-Object{$_+' override {std::abort();}'})

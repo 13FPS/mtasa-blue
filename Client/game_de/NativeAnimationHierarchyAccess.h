@@ -103,6 +103,17 @@ namespace mta::game_de
         {
             return ClockResult::NotInitialized;
         }
+        // Current-bank products are immediate observations only. The same
+        // existing row/block qualifier must resolve them; private custom
+        // records cannot enter this factory through a readable raw locator.
+        virtual ClockResult ResolveBankAnimationHierarchyReference(std::uint64_t, std::uintptr_t, NativeAnimationHierarchyReferenceToken&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
+        virtual ClockResult ResolveBankAnimationHierarchyAt(std::uint64_t, std::uint32_t, NativeAnimationHierarchyReferenceToken&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
         // Custom factories must resolve an actual issued private record,
         // never adopt an ordinary native-bank locator through generic Read.
         virtual ClockResult ResolvePrivateAnimationHierarchyReference(std::uint64_t, std::uintptr_t, NativeAnimationHierarchyReferenceToken&) noexcept

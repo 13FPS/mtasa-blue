@@ -203,6 +203,26 @@ namespace mta::game_de
         output = next;
         return ClockResult::Ok;
     }
+    ClockResult NativeAnimationHierarchyMemory::ReadAt(std::uint32_t ordinal, std::uintptr_t& output) const noexcept
+    {
+        namespace Profile = NativeAnimationBlockHierarchyProfile;
+        const auto requested = static_cast<std::uintptr_t>(ordinal);
+        // This bound only prevents address arithmetic from leaving the pinned
+        // image. It is not a guessed native table capacity or loaded extent.
+        constexpr auto maximum = (NativePedPoolProfile::ImageSize - Profile::BankRva - Profile::RowBytes) / Profile::RowBytes;
+        if (requested > maximum)
+            return ClockResult::InvalidArgument;
+        const auto rva = Profile::BankRva + requested * Profile::RowBytes;
+        if (binding.image > (std::numeric_limits<std::uintptr_t>::max)() - rva - Profile::RowBytes)
+            return ClockResult::InvalidArgument;
+        NativeAnimationHierarchyValues values;
+        // Reuse both complete current row/block/extent captures. In-range
+        // geometry alone cannot borrow an out-of-range, moved or foreign row.
+        const auto result = Read(binding.image + rva, values);
+        if (result == ClockResult::Ok)
+            output = values.interfaceAddress;
+        return result;
+    }
     ClockResult NativeAnimationHierarchyMemory::ReadSequences(std::uintptr_t locator, std::uintptr_t& output) const noexcept
     {
         const auto requested = locator;

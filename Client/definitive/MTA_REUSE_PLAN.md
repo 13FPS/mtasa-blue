@@ -5,6 +5,14 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+MTA's integer animation lookup and raw bank-hierarchy wrapper now use the
+existing DE bank reader. Ordinal arithmetic selects a request; repeated current
+row, owning-block, range and highwater observations qualify the result. This
+preserves the reader's current-range behavior when the block loaded flag is
+false. Private allocations cannot become bank products. Returned facades borrow
+the same provider, reacquire their native observations and own no native row,
+frame or deletion right. Other lookup overloads remain pure.
+
 Standalone sequence construction now has three required owner operations:
 original-frame attachment, source cleanup and Copy transfer. The actual common
 parser retains their CPU tickets across interrupted construction. TransferTo

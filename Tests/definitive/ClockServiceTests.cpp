@@ -8374,6 +8374,7 @@ namespace
 #include "NativeCustomAnimationCleanupControllerTests.inl"
 #include "NativeCustomAnimationCleanupOwnerTests.inl"
 #include "NativeStandaloneSequenceOperationsTests.inl"
+#include "NativeBankAnimationFactoryOwnerTests.inl"
 
 // The strict receiver must execute the production typed tickets. Keeping the
 // raw interface-only delete pure prevents a metadata-only delete from silently
@@ -8387,9 +8388,14 @@ static_assert(std::is_same_v<decltype(&PrivateAnimationFactoryManagerReceiver::B
 static_assert(std::is_abstract_v<CAnimManagerDE> &&
               std::is_same_v<decltype(&CAnimManagerDE::DeleteCustomAnimSequenceInterface), decltype(&CAnimManager::DeleteCustomAnimSequenceInterface)>);
 
+// A bank observer is supplied by the same actual owner as the other factories;
+// the strict receiver must not replace its raw locator route with an abortor.
+static_assert(std::is_same_v<decltype(&PrivateAnimationFactoryManagerReceiver::GetAnimBlendHierarchy), decltype(&CAnimManagerDE::GetAnimBlendHierarchy)>);
+
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool     animationBankFactoriesOnly = argc == 3 && std::strcmp(argv[2], "--animation-bank-factory") == 0;
     const bool     standaloneSequenceOperationsOnly = argc == 3 && std::strncmp(argv[2], "--standalone-sequence-operations-", 33) == 0;
     const unsigned standaloneSequenceOperationsScenario = !standaloneSequenceOperationsOnly                                            ? 0u
                                                           : std::strcmp(argv[2], "--standalone-sequence-operations-unknown") == 0      ? 1u
@@ -8500,9 +8506,17 @@ int main(int argc, char** argv)
            animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly || animationHierarchyBankOnly ||
            customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly ||
            privateHierarchyParentOnly || privateHierarchyEmptyOnly || freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly ||
-           privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly) &&
+           privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly || animationBankFactoriesOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (animationBankFactoriesOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        NativeAnimationBlocksOwnedSdk(fixture, &BankAnimationFactoryOwnerFixture::RunPrepared);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (standaloneSequenceOperationsOnly)
     {
         StandaloneSequenceOperationsOwnerFixture::scenario = standaloneSequenceOperationsScenario;

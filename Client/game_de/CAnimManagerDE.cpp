@@ -342,6 +342,38 @@ namespace mta::game_de
         return nullptr;
     }
 
+    std::unique_ptr<CAnimBlendHierarchy> CAnimManagerDE::GetAnimation(int index)
+    {
+        if (!hierarchyAccess || !ownerGeneration)
+            Require(ClockResult::NotInitialized, "GetAnimation");
+        // The proven domain is a current bank ordinal/range. Preserve refusal
+        // for negative, out-of-range or stale requests instead of inventing the
+        // original engine's behavior outside that qualified domain.
+        if (index < 0)
+            Require(ClockResult::InvalidArgument, "GetAnimation");
+        NativeAnimationHierarchyReferenceToken reference;
+        Require(hierarchyAccess->ResolveBankAnimationHierarchyAt(ownerGeneration, static_cast<std::uint32_t>(index), reference), "GetAnimation");
+        if (reference.ownerGeneration != ownerGeneration || !reference.locator)
+            Require(ClockResult::BindingChanged, "GetAnimation");
+        return std::unique_ptr<CAnimBlendHierarchy>(new CAnimBlendHierarchyDE(*hierarchyAccess, reference));
+    }
+
+    std::unique_ptr<CAnimBlendHierarchy> CAnimManagerDE::GetAnimBlendHierarchy(CAnimBlendHierarchySAInterface* raw)
+    {
+        if (!raw)
+            return nullptr;
+        if (!hierarchyAccess || !ownerGeneration)
+            Require(ClockResult::NotInitialized, "GetAnimBlendHierarchy");
+        const auto                             locator = reinterpret_cast<std::uintptr_t>(raw);
+        NativeAnimationHierarchyReferenceToken reference;
+        Require(hierarchyAccess->ResolveBankAnimationHierarchyReference(ownerGeneration, locator, reference), "GetAnimBlendHierarchy");
+        if (reference.ownerGeneration != ownerGeneration || reference.locator != locator)
+            Require(ClockResult::BindingChanged, "GetAnimBlendHierarchy");
+        // This CPU facade borrows the bank through the same native service.
+        // It owns no row, child buffer, cache entry or native deletion right.
+        return std::unique_ptr<CAnimBlendHierarchy>(new CAnimBlendHierarchyDE(*hierarchyAccess, reference));
+    }
+
     std::unique_ptr<CAnimBlendHierarchy> CAnimManagerDE::GetCustomAnimBlendHierarchy()
     {
         if (!hierarchyAccess)

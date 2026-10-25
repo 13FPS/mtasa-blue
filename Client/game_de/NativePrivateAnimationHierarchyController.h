@@ -5,6 +5,7 @@
  ****************************************************************************/
 #pragma once
 #include "NativePrivateAnimationHierarchyStorage.h"
+#include "NativeCustomAnimSequenceController.h"
 #include <list>
 namespace mta::game_de
 {
@@ -20,6 +21,9 @@ namespace mta::game_de
         {
             std::size_t scanned = 0, attempted = 0, released = 0, retained = 0;
         };
+        explicit NativePrivateAnimationHierarchyController(NativeCustomAnimSequenceController* sequences = nullptr) noexcept : sequences(sequences) {}
+        ClockResult SetSequenceCount(std::uintptr_t, const Token&, std::uint16_t, CheckOwner, Receipt* = nullptr) noexcept;
+        ClockResult SetSequences(std::uintptr_t, const Token&, std::uintptr_t, CheckOwner, Receipt* = nullptr) noexcept;
         ClockResult Create(std::uintptr_t image, std::uint64_t generation, CheckOwner, Token& output, Receipt* = nullptr) noexcept;
         ClockResult Initialize(std::uintptr_t image, const Token&, CheckOwner, Receipt* = nullptr) noexcept;
         ClockResult Destroy(std::uintptr_t image, const Token&, CheckOwner, Receipt* = nullptr) noexcept;
@@ -38,20 +42,73 @@ namespace mta::game_de
         bool RecoveryPending() const noexcept { return recovery.load(std::memory_order_acquire); }
 
     private:
+        using SequenceOwner = NativeCustomAnimSequenceController;
+        using Key = SequenceOwner::PrivateDependencyKey;
+        using Epoch = NativeAnimationSequenceDependencyCalls::Epoch;
+        enum class LinkPhase : std::uint32_t
+        {
+            Planned,
+            AttachEntered,
+            AttachedAccepted,
+            DetachEntered,
+            DetachAccepted,
+            Uncertain
+        };
+        struct Link
+        {
+            Key       key{};
+            LinkPhase phase{LinkPhase::Planned};
+            // The sequence owner writes the actual release receipt directly
+            // into this durable journal. No absent map/raw-null inference.
+            SequenceOwner::PrivateDependencyReceipt dependency{};
+            bool                                    active = false;
+        };
         struct Entry
         {
             explicit Entry(std::uint64_t generation) noexcept : storage(generation) {}
             Storage storage;
+            Link    link;
             bool    issued = false;
         };
         using Entries = std::list<Entry>;
         Entries::iterator Find(const Token&) noexcept;
         ClockResult       SetScalar(std::uintptr_t, const Token&, NativePrivateAnimationHierarchyCalls::ScalarOperation, std::uint32_t, CheckOwner,
                                     Receipt*) noexcept;
-        void              Publish() noexcept;
-        Entries           entries;
-        bool              stopping = false;
-        std::atomic_flag  operation = ATOMIC_FLAG_INIT;
-        std::atomic<bool> retained{false}, recovery{false};
+        enum class Action : std::uint32_t
+        {
+            Attach,
+            Detach,
+            Cancel,
+            Read,
+            ReadSequences,
+            ReadSequence,
+            Scalar
+        };
+        struct ActionContext
+        {
+            NativePrivateAnimationHierarchyController*            self;
+            Token                                                 token;
+            Key                                                   key;
+            CheckOwner                                            owner;
+            Action                                                action;
+            NativePrivateAnimationHierarchyCalls::ScalarOperation scalar{NativePrivateAnimationHierarchyCalls::ScalarOperation::SequenceCount};
+            std::uint32_t                                         bits = 0, index = 0;
+            Receipt                                               receipt{};
+            Values                                                values{};
+            std::uintptr_t                                        pointer = 0;
+        };
+        static ClockResult ParentAction(NativeCustomAnimSequenceStorage&, const Epoch&, void*) noexcept;
+        ClockResult        SetSequencesImpl(std::uintptr_t, const Token&, std::uintptr_t, CheckOwner, Receipt*, bool retirement) noexcept;
+        ClockResult        DestroyImpl(std::uintptr_t, const Token&, CheckOwner, Receipt*, bool retirement) noexcept;
+        ClockResult        LinkedAction(std::uintptr_t, const Token&, CheckOwner, ActionContext&, Receipt*) noexcept;
+        void               Publish() noexcept;
+        Entries            entries;
+        // Runtime owns both controllers for the same callback/module lifetime.
+        // A default-null provider preserves the prior empty-only product.
+        NativeCustomAnimSequenceController* sequences;
+        std::uint64_t                       nextCommand = 0;
+        bool                                stopping = false;
+        std::atomic_flag                    operation = ATOMIC_FLAG_INIT;
+        std::atomic<bool>                   retained{false}, recovery{false};
     };
 }

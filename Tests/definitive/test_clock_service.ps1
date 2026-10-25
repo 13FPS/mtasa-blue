@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName')]
+    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -37,6 +37,10 @@ $record['actualWorldLineSdkOwnerTested'] = $false
 $record['nativeWorldGroundOwnerTested'] = $false
 $record['actualWorldGroundSdkOwnerTested'] = $false
 $record['nativePedWeaponGrantOwnerTested'] = $false
+$record['nativePrivateHierarchyParentOwnerTested']=$false
+$record['actualPrivateHierarchyParentSdkOwnerTested']=$false
+$record['privateHierarchyParentRecoveryTested']=$false
+$record['privateHierarchyParentRetainedLifetimeTested']=$false
 $record['nativePrivateHierarchyNameOwnerTested']=$false
 $record['actualPrivateHierarchyNameSdkOwnerTested']=$false
 $record['privateHierarchyNamePinnedRefusalTested']=$false
@@ -440,6 +444,7 @@ try {
     $sourceNames += @('Client/game_de/NativeAnimationSequenceName.h','Client/game_de/NativeAnimationSequenceName.cpp','Client/game_de/NativeAnimationSequenceNameCalls.h','Client/game_de/NativeAnimationSequenceNameProfile.h','Tests/definitive/NativeCustomAnimationSequenceNameOwnerTests.inl')
     $sourceNames += @('Client/game_de/NativeAnimationSequenceFrameBindCalls.h','Client/game_de/NativeAnimationSequenceFrameBindProfile.h','Tests/definitive/NativeFreshCompressedSequenceOwnerTests.inl')
     $sourceNames += @('Client/game_de/NativePrivateAnimationHierarchyStorage.h','Client/game_de/NativePrivateAnimationHierarchyStorage.cpp','Client/game_de/NativePrivateAnimationHierarchyController.h','Client/game_de/NativePrivateAnimationHierarchyController.cpp','Tests/definitive/NativePrivateHierarchyOwnerTests.inl')
+    $sourceNames += @('Tests/definitive/NativePrivateHierarchyParentOwnerTests.inl','Client/game_de/NativeAnimationSequenceDependencyCalls.h')
     $sourceNames += @('Tests/definitive/NativePrivateHierarchyScalarOwnerTests.inl')
     $sourceNames += @('Tests/definitive/NativePrivateHierarchyNameOwnerTests.inl','Client/game_de/NativeClassicAnimationNameHash.h','Client/game_de/NativeClassicAnimationNameHash.cpp')
     $sourceNames += @('Client/game_de/NativeAnimationHierarchyHashMemory.h','Client/game_de/NativeAnimationHierarchyHashMemory.cpp','Tests/definitive/NativeAnimationGatewayOwnerTests.inl','Tests/definitive/Write-AnimationGatewayFixture.ps1')
@@ -767,9 +772,31 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         (Join-Path $taskRoot 'Client/game_de/NativePedReferenceController.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeImageAccess.cpp')) +
         $runtimeDependencies + @(('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'fixture.pdb')),('/Fe'+$executable),'/link','bcrypt.lib','user32.lib') + $objects
+    if($Scope -eq 'PrivateHierarchyParent'){
+        # The normal production storage TU stays linked once. Only its final
+        # guarded CPU pointer writer is observed; real epoch/ACK code runs.
+        $parentHook=Join-Path $scratchRoot 'PrivateHierarchyParentHook.generated.h'
+        $parentHookText=@'
+#pragma once
+#include <game/CGameClockService.h>
+#include <cstdint>
+namespace ClockPrivateHierarchyParentWriteFixture {
+ mta::game_de::ClockResult Write(std::uintptr_t,std::uintptr_t,std::uint32_t&) noexcept;
+}
+'@
+        [IO.File]::WriteAllText($parentHook,$parentHookText,[Text.UTF8Encoding]::new($false))
+        $parentEvidence=Join-Path $outputRoot 'PrivateHierarchyParentHook.generated.h'
+        Copy-Item -LiteralPath $parentHook -Destination $parentEvidence
+        $record['privateHierarchyParentWriterFixture']=[ordered]@{path=$parentEvidence;sha256=(Sha $parentEvidence);productionWriter='PrivateAnimationHierarchyDetail::WriteSequences';production=(Join-Path $taskRoot 'Client/game_de/NativePrivateAnimationHierarchyStorage.cpp');productionSha256=(Sha (Join-Path $taskRoot 'Client/game_de/NativePrivateAnimationHierarchyStorage.cpp'))}
+        $arguments=@('/DMTA_DE_PRIVATE_ANIMATION_HIERARCHY_SEQUENCES_WRITE=::ClockPrivateHierarchyParentWriteFixture::Write',('/FI'+$parentHook))+$arguments
+    }
     [ordered]@{compiler=$record.compiler;detoursArguments=$detoursArguments;arguments=$arguments} | ConvertTo-Json -Depth 5 |
         Set-Content -LiteralPath (Join-Path $outputRoot 'compile-command.json') -Encoding utf8NoBOM
-    $record.compileRuns += RunBounded $compiler $arguments 'compile' 60000
+    # Every selected scope compiles the cumulative fixture/native source graph.
+    # Its measured build exceeded 60s without a diagnostic. Extend only the
+    # compiler allowance; executable test budgets and compiler flags stay fixed.
+    $record['compileDeadlineMs']=120000
+    $record.compileRuns += RunBounded $compiler $arguments 'compile' 120000
     if ($record.compileRuns[-1].exitCode -ne 0 -or $record.compileRuns[-1].timedOut) { throw 'Clock SDK/runtime fixture compilation failed.' }
     # The cumulative callback fixture includes current owner and retirement cases.
     # Keep it bounded while allowing the full set to finish on a busy build host.
@@ -819,7 +846,25 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
     if ($Scope -eq 'GarageNamed') { $fixtureArguments += '--garage-named' }
     if ($Scope -eq 'GaragePools') { $fixtureArguments += '--garage-pools' }
     if ($Scope -eq 'PedPoolRegistry') { $fixtureArguments += '--ped-pool-registry' }
-    if($Scope -eq 'PrivateHierarchyName'){
+    if($Scope -eq 'PrivateHierarchyParent'){
+        $record['testRuns']=@();$record['testScenarioExecutables']=@();$texts=@()
+        foreach($scenario in @('success','lost-detach','unknown-attach','foreign-pointer','foreign-cache','published')){
+            $scenarioRoot=Join-Path $outputRoot ('scenario-private-hierarchy-parent-'+$scenario)
+            [IO.Directory]::CreateDirectory($scenarioRoot)|Out-Null
+            $scenarioExecutable=Join-Path $scenarioRoot ([IO.Path]::GetFileName($executable))
+            if(Test-Path -LiteralPath $scenarioExecutable){throw 'Parent scenario evidence already exists'}
+            Copy-Item -LiteralPath $executable -Destination $scenarioExecutable
+            $scenarioHash=Sha $scenarioExecutable
+            if($scenarioHash -cne (Sha $executable)){throw 'Parent scenario executable changed'}
+            $record.testScenarioExecutables+=@{scenario=$scenario;path=$scenarioExecutable;sha256=$scenarioHash}
+            $run=RunBounded $scenarioExecutable @($scenarioRoot,('--private-hierarchy-parent-'+$scenario)) ('test-private-hierarchy-parent-'+$scenario) 60000
+            $record.testRuns+=$run
+            $part=[IO.File]::ReadAllText($run.stdout)+[IO.File]::ReadAllText($run.stderr)
+            if($run.exitCode -ne 0 -or $run.timedOut -or $part -notmatch 'Passed (\d+) production clock service checks'){throw ('Private parent '+$scenario+' failed')}
+            $record.checks+=[int]$Matches[1];$texts+=$part
+        }
+        $record.testRun=$record.testRuns[-1];$text=$texts -join [Environment]::NewLine
+    } elseif($Scope -eq 'PrivateHierarchyName'){
         $record['testRuns']=@();$record['testScenarioExecutables']=@();$texts=@()
         foreach($scenario in @('success','pinned')){
             $scenarioRoot=Join-Path $outputRoot ('scenario-private-hierarchy-name-'+$scenario)
@@ -964,7 +1009,14 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
         if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
     }
-    if($Scope -eq 'PrivateHierarchyName'){
+    if($Scope -eq 'PrivateHierarchyParent'){
+        $record.nativePrivateHierarchyParentOwnerTested=$text.Contains('Production native private hierarchy parent owner fixture completed')
+        $record.actualPrivateHierarchyParentSdkOwnerTested=$text.Contains('Production actual private hierarchy parent SDK owner fixture completed')
+        $record.privateHierarchyParentRecoveryTested=$text.Contains('Production private hierarchy parent lost acknowledgement recovered')
+        $record.privateHierarchyParentRetainedLifetimeTested=(@($texts|Where-Object{$_.Contains('Production private hierarchy parent unresolved lifetime retained')}).Count -eq 4)
+        if(-not($record.nativePrivateHierarchyParentOwnerTested -and $record.actualPrivateHierarchyParentSdkOwnerTested -and $record.privateHierarchyParentRecoveryTested -and $record.privateHierarchyParentRetainedLifetimeTested)){throw 'Private parent selected scope incomplete'}
+        $record.productionNativeCallbackTested=$true
+    } elseif($Scope -eq 'PrivateHierarchyName'){
         $record.nativePrivateHierarchyNameOwnerTested=$text.Contains('Production native private hierarchy name owner fixture completed')
         $record.actualPrivateHierarchyNameSdkOwnerTested=$text.Contains('Production actual private hierarchy name SDK owner fixture completed')
         $record.privateHierarchyNamePinnedRefusalTested=$text.Contains('Production private hierarchy name publication refusal retained')

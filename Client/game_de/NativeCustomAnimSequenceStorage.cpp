@@ -1027,7 +1027,7 @@ namespace mta::game_de
             };
             if ((result = validate()) != ClockResult::Ok || (result = validate()) != ClockResult::Ok)
                 return result;
-            Dependency::Epoch epoch(image, generation);
+            Dependency::Epoch epoch(image, generation, array.tag, array.capacity);
             result = action(array, epoch, actionContext);
             if (result != ClockResult::Ok)
                 return result;

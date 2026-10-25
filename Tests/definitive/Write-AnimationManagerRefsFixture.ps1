@@ -18,7 +18,7 @@ function Write-AnimationManagerRefsFixture([string]$RepositoryRoot,[string]$Outp
             [regex]::Replace($signature,'\s+',' ')
         }
     })
-    if($methods.Count -ne 51){throw 'Remaining actual manager reference fixture methods changed'}
+    if($methods.Count -ne 52 -or @($methods|Where-Object {$_ -match '\bGetCustomAnimBlendSequenceAt\s*\('}).Count -ne 1){throw 'Remaining actual manager reference fixture methods changed'}
     $lines=@('#pragma once','#pragma warning(push)','#pragma warning(disable : 4100)',
         'class AnimationManagerRefsReceiver final : public mta::game_de::CAnimManagerDE { public:',
         'AnimationManagerRefsReceiver(mta::game_de::NativeAnimationManagerAccess& manager,mta::game_de::NativeAnimationBlockAccess& blocks,std::uint64_t generation) : CAnimManagerDE(manager,blocks,generation) {}',

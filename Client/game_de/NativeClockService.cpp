@@ -257,6 +257,8 @@ namespace mta::game_de
             ClockResult SetPrivateAnimationHierarchyRunningCompressed(const NativeAnimationHierarchyReferenceToken&, bool) noexcept override;
             ClockResult SetPrivateAnimationHierarchyBlockID(const NativeAnimationHierarchyReferenceToken&, std::int32_t) noexcept override;
             ClockResult SetPrivateAnimationHierarchyNameHash(const NativeAnimationHierarchyReferenceToken&, std::uint32_t) noexcept override;
+            ClockResult SetPrivateAnimationHierarchySequenceCount(const NativeAnimationHierarchyReferenceToken&, std::uint16_t) noexcept override;
+            ClockResult SetPrivateAnimationHierarchySequences(const NativeAnimationHierarchyReferenceToken&, std::uintptr_t) noexcept override;
             ClockResult ReadAnimationHierarchy(const NativeAnimationHierarchyReferenceToken&, NativeAnimationHierarchyValues&) noexcept override;
             ClockResult ReadAnimationHierarchySequences(const NativeAnimationHierarchyReferenceToken&, std::uintptr_t&) noexcept override;
             ClockResult ReadAnimationHierarchySequence(const NativeAnimationHierarchyReferenceToken&, std::uint32_t, std::uintptr_t&) noexcept override;
@@ -468,7 +470,7 @@ namespace mta::game_de
             NativeCustomAnimSequenceController customSequences;
             // Empty module-owned hierarchy interfaces share this callback debt
             // group; no native publication or child-release authority is implied.
-            NativePrivateAnimationHierarchyController privateHierarchies;
+            NativePrivateAnimationHierarchyController privateHierarchies{&customSequences};
             std::atomic<std::uint64_t>                customSequenceGeneration{0};
             // One native address filter is the only retained pointer intent.
             // Keep both CAS candidates when an interrupted replacement cannot
@@ -2953,6 +2955,46 @@ namespace mta::game_de
                 return result;
             NativePrivateAnimationHierarchyController::Receipt receipt;
             result = runtime.privateHierarchies.SetNameHash(runtime.image, request, requestedHash, &CheckTimingOwner, &receipt);
+            PublishCustomAnimationSequenceDebt(request.ownerGeneration);
+            if (result == ClockResult::Ok)
+                result = CheckAnimationHierarchyRequest(request);
+            if ((receipt.entered && result != ClockResult::Ok) || runtime.privateHierarchies.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            return result;
+        }
+
+        ClockResult NativeAccess::SetPrivateAnimationHierarchySequenceCount(const NativeAnimationHierarchyReferenceToken& token, std::uint16_t value) noexcept
+        {
+            // The same runtime owns both controllers. Capture the full source
+            // count/tag before callbacks; only its recorded parent command
+            // can acknowledge attachment or release the exact child holds.
+            const auto request = token;
+            const auto requestedValue = value;
+            auto       result = CheckAnimationHierarchyRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            NativePrivateAnimationHierarchyController::Receipt receipt;
+            result = runtime.privateHierarchies.SetSequenceCount(runtime.image, request, requestedValue, &CheckTimingOwner, &receipt);
+            PublishCustomAnimationSequenceDebt(request.ownerGeneration);
+            if (result == ClockResult::Ok)
+                result = CheckAnimationHierarchyRequest(request);
+            if ((receipt.entered && result != ClockResult::Ok) || runtime.privateHierarchies.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            return result;
+        }
+
+        ClockResult NativeAccess::SetPrivateAnimationHierarchySequences(const NativeAnimationHierarchyReferenceToken& token, std::uintptr_t value) noexcept
+        {
+            // The same runtime owns both controllers. Capture the full source
+            // count/tag before callbacks; only its recorded parent command
+            // can acknowledge attachment or release the exact child holds.
+            const auto request = token;
+            const auto requestedValue = value;
+            auto       result = CheckAnimationHierarchyRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            NativePrivateAnimationHierarchyController::Receipt receipt;
+            result = runtime.privateHierarchies.SetSequences(runtime.image, request, requestedValue, &CheckTimingOwner, &receipt);
             PublishCustomAnimationSequenceDebt(request.ownerGeneration);
             if (result == ClockResult::Ok)
                 result = CheckAnimationHierarchyRequest(request);

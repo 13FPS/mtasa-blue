@@ -55,7 +55,7 @@ namespace mta::game_de
         virtual ClockResult InitializePrivateAnimationHierarchy(const NativeAnimationHierarchyReferenceToken&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult DestroyPrivateAnimationHierarchy(const NativeAnimationHierarchyReferenceToken&) noexcept { return ClockResult::NotInitialized; }
         // Genuine MTA scalar setters remain restricted to issued private,
-        // empty/cache-free records. They do not attach children or define names.
+        // cache-free records. Linked children retain their own qualified holds.
         virtual ClockResult SetPrivateAnimationHierarchyRunningCompressed(const NativeAnimationHierarchyReferenceToken&, bool) noexcept
         {
             return ClockResult::NotInitialized;
@@ -67,6 +67,17 @@ namespace mta::game_de
         // Hierarchy SetName stores only its already-computed source key.
         // Names are not retained, truncated or interned by the native owner.
         virtual ClockResult SetPrivateAnimationHierarchyNameHash(const NativeAnimationHierarchyReferenceToken&, std::uint32_t) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
+        // Preserve the source WORD separately from capacity. Array changes
+        // require the owner's prepared-child/acknowledged-detach protocol;
+        // a null tag is an explicit request, never generic unpin permission.
+        virtual ClockResult SetPrivateAnimationHierarchySequenceCount(const NativeAnimationHierarchyReferenceToken&, std::uint16_t) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
+        virtual ClockResult SetPrivateAnimationHierarchySequences(const NativeAnimationHierarchyReferenceToken&, std::uintptr_t) noexcept
         {
             return ClockResult::NotInitialized;
         }

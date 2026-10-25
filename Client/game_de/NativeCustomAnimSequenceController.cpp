@@ -547,12 +547,22 @@ namespace mta::game_de
             context.array->privateDependency->phase = PrivatePhase::Reserved;
         return ClockResult::Ok;
     }
-    ClockResult NativeCustomAnimSequenceController::ReservePrivatePreparedArray(std::uintptr_t image, const PrivateDependencyKey& value,
-                                                                                std::size_t expectedCapacity, CheckOwner owner,
-                                                                                PrivateDependencyReceipt* receipt) noexcept
+    ClockResult NativeCustomAnimSequenceController::ReservePrivatePreparedArray(std::uintptr_t image, const PrivateDependencyKey& key, std::size_t capacity,
+                                                                                CheckOwner owner, PrivateDependencyReceipt* receipt) noexcept
+    {
+        return ReservePrivatePreparedArrayImpl(image, key, capacity, owner, receipt, false);
+    }
+    ClockResult NativeCustomAnimSequenceController::ReserveIssuedPrivatePreparedArray(std::uintptr_t image, const PrivateDependencyKey& key, CheckOwner owner,
+                                                                                      PrivateDependencyReceipt* receipt) noexcept
+    {
+        return ReservePrivatePreparedArrayImpl(image, key, 0, owner, receipt, true);
+    }
+    ClockResult NativeCustomAnimSequenceController::ReservePrivatePreparedArrayImpl(std::uintptr_t image, const PrivateDependencyKey& value,
+                                                                                    std::size_t expectedCapacity, CheckOwner owner,
+                                                                                    PrivateDependencyReceipt* receipt, bool actualCapacity) noexcept
     {
         const auto key = value;
-        const auto capacity = expectedCapacity;
+        auto       capacity = expectedCapacity;
         if (receipt)
             *receipt = {};
         if (operation.test_and_set(std::memory_order_acquire))
@@ -565,6 +575,8 @@ namespace mta::game_de
         auto array = Find(key.ownerGeneration, key.arrayTag);
         if (array == entries.end() || array->storage.GetKind() != Storage::Kind::SequenceArray || array->storage.GetState() != Storage::State::LiveUnpublished)
             return ClockResult::BindingChanged;
+        if (actualCapacity)
+            capacity = array->storage.Capacity();
         if (!capacity || capacity != array->storage.Capacity())
             return ClockResult::InvalidArgument;
         if (array->privateDependency)

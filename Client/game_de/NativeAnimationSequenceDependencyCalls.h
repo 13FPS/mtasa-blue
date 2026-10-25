@@ -17,12 +17,19 @@ namespace mta::game_de::NativeAnimationSequenceDependencyCalls
         Epoch&         operator=(const Epoch&) = delete;
         std::uintptr_t Image() const noexcept { return image; }
         std::uint64_t  Generation() const noexcept { return generation; }
+        std::uintptr_t ArrayTag() const noexcept { return arrayTag; }
+        std::size_t    Capacity() const noexcept { return capacity; }
 
     private:
         friend struct ::mta::game_de::NativeCustomAnimSequenceStorageAccess;
-        Epoch(std::uintptr_t image, std::uint64_t generation) noexcept : image(image), generation(generation) {}
+        Epoch(std::uintptr_t image, std::uint64_t generation, std::uintptr_t arrayTag, std::size_t capacity) noexcept
+            : image(image), generation(generation), arrayTag(arrayTag), capacity(capacity)
+        {
+        }
         std::uintptr_t image;
         std::uint64_t  generation;
+        std::uintptr_t arrayTag;
+        std::size_t    capacity;
     };
     using ResolveFrame = ClockResult (*)(std::size_t, const Row&, const Storage*&, void*) noexcept;
     using Action = ClockResult (*)(Storage&, const Epoch&, void*) noexcept;

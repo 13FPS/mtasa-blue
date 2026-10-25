@@ -5,6 +5,7 @@
  ****************************************************************************/
 #pragma once
 #include "NativeAnimationHierarchyAccess.h"
+#include "NativeAnimationSequenceDependencyCalls.h"
 #include <array>
 #include <atomic>
 namespace mta::game_de
@@ -39,14 +40,15 @@ namespace mta::game_de
         friend struct NativePrivateAnimationHierarchyStorageAccess;
         alignas(std::uintptr_t) std::array<unsigned char, 40> bytes;
         std::uint64_t generation;
-        // Even a const read must retain an observed foreign child/cache.
-        // Clearing those raw fields later never proves native detachment.
+        // These acknowledged source-owned fields distinguish legitimate private
+        // links/counts from an observed foreign write. They grant no engine
+        // publication, association lifetime or native child-free authority.
+        std::uintptr_t             expectedSequences = 0;
         mutable std::atomic<State> state{State::Fresh};
-        bool                       hashDefined = false;
+        std::uint16_t              expectedCount = 0;
+        bool                       hashDefined = false, pointerAckPending = false;
         static_assert(sizeof(std::atomic<State>) == 4);
-        // Explicit CPU bookkeeping padding keeps the native view exactly40B
-        // and avoids implicit alignas tail padding under the normal /WX build.
-        std::array<unsigned char, 3> padding{};
+        // Explicitly laid out40+8+8+4+2+1+1 CPU bytes avoid implicit padding.
     };
     namespace NativePrivateAnimationHierarchyCalls
     {
@@ -57,14 +59,17 @@ namespace mta::game_de
         {
             RunningCompressed,
             AnimationBlockID,
-            NameHash
+            NameHash,
+            SequenceCount
         };
+        using SequenceWrite = ClockResult (*)(std::uintptr_t, std::uintptr_t, std::uint32_t&) noexcept;
+        using Epoch = NativeAnimationSequenceDependencyCalls::Epoch;
         using ScalarWrite = ClockResult (*)(std::uintptr_t, ScalarOperation, std::uint32_t, std::uint32_t&) noexcept;
         struct Receipt
         {
             std::uintptr_t hierarchy = 0;
             std::uint32_t  exceptionCode = 0;
-            bool           entered = false, accepted = false, retired = false, verified = false;
+            bool           entered = false, accepted = false, retired = false, verified = false, acknowledged = false;
         };
         ClockResult Initialize(std::uintptr_t image, Storage&, std::uint64_t, CheckOwner, Receipt* = nullptr, Write = nullptr) noexcept;
         // Source-owned private scalar assignments only; all other40 bytes and
@@ -75,6 +80,15 @@ namespace mta::game_de
         // The addressed classic hierarchy setter defines only this DWORD.
         // Define knownness on accepted writes even if postflight later fails.
         ClockResult SetNameHash(std::uintptr_t image, Storage&, std::uint64_t, std::uint32_t, CheckOwner, Receipt* = nullptr, ScalarWrite = nullptr) noexcept;
+        ClockResult SetSequenceCount(std::uintptr_t, Storage&, std::uint64_t, std::uint16_t, CheckOwner, Receipt* = nullptr, ScalarWrite = nullptr) noexcept;
+        // Epoch is issued only by the actual qualified array owner. These
+        // helpers borrow its existing gate; they never reacquire it or grant
+        // permission to release sequence/frame journals themselves.
+        ClockResult SetScalarHeld(const Epoch&, Storage&, ScalarOperation, std::uint32_t, CheckOwner, Receipt* = nullptr, ScalarWrite = nullptr) noexcept;
+        ClockResult SetEmptySequences(std::uintptr_t, Storage&, std::uint64_t, CheckOwner, Receipt* = nullptr, SequenceWrite = nullptr) noexcept;
+        ClockResult SetSequencesHeld(const Epoch&, Storage&, std::uintptr_t, CheckOwner, Receipt* = nullptr, SequenceWrite = nullptr) noexcept;
+        ClockResult AcknowledgeSequencesHeld(const Epoch&, Storage&, std::uintptr_t, CheckOwner, Receipt* = nullptr) noexcept;
+        ClockResult ReadHeld(const Epoch&, const Storage&, CheckOwner, NativeAnimationHierarchyValues&) noexcept;
         ClockResult Read(std::uintptr_t image, const Storage&, std::uint64_t, CheckOwner, NativeAnimationHierarchyValues&) noexcept;
         // Only a known neverpublished empty/cache0 receiver may retire. The
         // controller performs plain CPU deletion after a retired receipt,

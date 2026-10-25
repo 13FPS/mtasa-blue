@@ -5,6 +5,18 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+Private hierarchy count and pointer setters now use a durable parent command.
+The full WORD count remains independent of array capacity. Attachment holds
+the actual array and frame records before writing the pointer; linked reads
+borrow that same qualified array. Accepted writes resume acknowledgement
+without repeating stores. Only the child owner's final release receipt clears
+the command, and a null request detaches its matching private edge while
+preserving the source count. Linked initialization is refused.
+
+The runtime co-owns both controllers. Retirement follows sequence-then-parent
+lock order within one shared gate and retains foreign/publication uncertainty.
+These operations complete no public DE factory or engine publication path.
+
 The actual IFP parser now populates rows through their original owned array
 before attaching that array to its hierarchy. The SDK requires an owned-array
 row factory, with a real SA implementation using its existing cookie and row

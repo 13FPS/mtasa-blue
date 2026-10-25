@@ -98,6 +98,9 @@ namespace mta::game_de
 
     private:
         friend class NativePrivateAnimationHierarchyController;
+        ClockResult ReserveIssuedPrivatePreparedArray(std::uintptr_t, const PrivateDependencyKey&, CheckOwner, PrivateDependencyReceipt*) noexcept;
+        ClockResult ReservePrivatePreparedArrayImpl(std::uintptr_t, const PrivateDependencyKey&, std::size_t, CheckOwner, PrivateDependencyReceipt*,
+                                                    bool actualCapacity) noexcept;
         enum class PrivatePhase : std::uint32_t
         {
             Preparing,

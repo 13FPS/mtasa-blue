@@ -53,6 +53,23 @@ namespace mta::game_de
         const auto hash = NativeClassicAnimationNamePolicy::Hash(name);
         Require(native.SetPrivateAnimationHierarchyNameHash(token, hash), "SetName");
     }
+    void CAnimBlendHierarchyDE::SetSequences(CAnimBlendSequenceSAInterface* sequences)
+    {
+        const auto token = reference;
+        const auto locator = reinterpret_cast<std::uintptr_t>(sequences);
+        // The legacy tag is same-backend opaque input. Only its owner may
+        // admit prepared storage or acknowledge null as a safe private detach.
+        Require(native.SetPrivateAnimationHierarchySequences(token, locator), "SetSequences");
+    }
+    void CAnimBlendHierarchyDE::SetNumSequences(unsigned short count)
+    {
+        static_assert(sizeof(count) == sizeof(std::uint16_t));
+        const auto token = reference;
+        const auto value = static_cast<std::uint16_t>(count);
+        // Actual MTA assigns the complete WORD; capacity is a separate owner
+        // concern and cannot silently clamp this caller's source value.
+        Require(native.SetPrivateAnimationHierarchySequenceCount(token, value), "SetNumSequences");
+    }
     NativeAnimationHierarchyValues CAnimBlendHierarchyDE::Read(const char* operation) const
     {
         const auto                     token = reference;

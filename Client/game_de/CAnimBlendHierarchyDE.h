@@ -16,6 +16,8 @@ namespace mta::game_de
     public:
         void                            Initialize() override;
         void                            SetName(const char*) override;
+        void                            SetSequences(CAnimBlendSequenceSAInterface*) override;
+        void                            SetNumSequences(unsigned short) override;
         void                            SetRunningCompressed(bool) override;
         void                            SetAnimationBlockID(int) override;
         float                           GetTotalTime() const override;
@@ -39,7 +41,7 @@ namespace mta::game_de
         NativeAnimationHierarchyAccess&              native;
         const NativeAnimationHierarchyReferenceToken reference;
     };
-    // Six mutations retain their genuine pure contracts. Mutations require
-    // an admitted private empty record; this is not a complete factory.
+    // Four mutations retain their genuine pure contracts. Setters require
+    // the same current private owner; this is not a complete factory.
     static_assert(std::is_abstract_v<CAnimBlendHierarchyDE> && std::is_base_of_v<CAnimBlendHierarchy, CAnimBlendHierarchyDE>);
 }

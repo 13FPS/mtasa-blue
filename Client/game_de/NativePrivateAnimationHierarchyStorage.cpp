@@ -51,9 +51,9 @@ namespace mta::game_de
         // Snapshots contain intentionally undefined hash/alignment bytes. Use
         // object-representation comparison below instead of evaluating those
         // bytes as semantic scalar or array-element values.
-        bool Empty(const Bytes& bytes) noexcept
+        bool Matches(const Bytes& bytes, std::uintptr_t sequences, std::uint16_t count) noexcept
         {
-            return !Field<std::uintptr_t>(bytes, 8) && !Field<std::uint16_t>(bytes, 0x10) && !Field<std::uintptr_t>(bytes, 0x20);
+            return Field<std::uintptr_t>(bytes, 8) == sequences && Field<std::uint16_t>(bytes, 0x10) == count && !Field<std::uintptr_t>(bytes, 0x20);
         }
         void InitializeImage(Bytes& bytes) noexcept
         {
@@ -85,8 +85,28 @@ namespace mta::game_de
                     std::memcpy(reinterpret_cast<void*>(address + 0x14), &bits, sizeof(bits));
                 else if (operation == Operation::NameHash)
                     std::memcpy(reinterpret_cast<void*>(address), &bits, sizeof(bits));
+                else if (operation == Operation::SequenceCount)
+                {
+                    const auto count = static_cast<std::uint16_t>(bits);
+                    std::memcpy(reinterpret_cast<void*>(address + 0x10), &count, sizeof(count));
+                }
                 else
                     return ClockResult::InvalidArgument;
+                return ClockResult::Ok;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                exception = GetExceptionCode();
+                return ClockResult::OriginalException;
+            }
+        }
+        ClockResult WriteSequences(std::uintptr_t address, std::uintptr_t sequences, std::uint32_t& exception) noexcept
+        {
+            __try
+            {
+                // The source setter assigns only the pointer. Count and every
+                // allocation journal survive both attachment and detachment.
+                std::memcpy(reinterpret_cast<void*>(address + 8), &sequences, sizeof(sequences));
                 return ClockResult::Ok;
             }
             __except (EXCEPTION_EXECUTE_HANDLER)
@@ -130,11 +150,15 @@ namespace mta::game_de
         using Receipt = NativePrivateAnimationHierarchyCalls::Receipt;
         using CheckOwner = NativePrivateAnimationHierarchyCalls::CheckOwner;
         using Write = NativePrivateAnimationHierarchyCalls::Write;
-        static ClockResult Check(const Storage& storage, std::uint64_t generation) noexcept
+        static bool        Unlinked(const Storage& storage) noexcept { return !storage.expectedSequences && !storage.pointerAckPending; }
+        static bool        NoChild(const Storage& storage) noexcept { return !storage.expectedSequences; }
+        static bool        PointerPending(const Storage& storage) noexcept { return storage.pointerAckPending; }
+        static ClockResult Check(const Storage& storage, std::uint64_t generation, bool allowEntered = false) noexcept
         {
             if (!generation || storage.generation != generation)
                 return ClockResult::BindingChanged;
-            return storage.GetState() == State::Ready ? ClockResult::Ok : ClockResult::NotInitialized;
+            const auto state = storage.GetState();
+            return state == State::Ready || (allowEntered && state == State::Entered) ? ClockResult::Ok : ClockResult::NotInitialized;
         }
         static void RetainForeign(const Storage& storage) noexcept
         {
@@ -146,9 +170,9 @@ namespace mta::game_de
                     return;
         }
         static ClockResult Snapshot(std::uintptr_t image, const Storage& storage, std::uint64_t generation, CheckOwner owner,
-                                    PrivateHierarchyStorageDetail::Bytes& output) noexcept
+                                    PrivateHierarchyStorageDetail::Bytes& output, bool allowEntered = false) noexcept
         {
-            auto result = Check(storage, generation);
+            auto result = Check(storage, generation, allowEntered);
             if (result != ClockResult::Ok || (result = PrivateHierarchyStorageDetail::Context::Owner(image, owner)) != ClockResult::Ok)
                 return result;
             if (!PrivateHierarchyStorageDetail::ProfileMatches(image))
@@ -156,7 +180,7 @@ namespace mta::game_de
             PrivateHierarchyStorageDetail::Bytes first, second;
             if (!NativeModelReferenceMap::Copy(storage.Address(), first.data(), first.size()))
                 return ClockResult::ReadFailure;
-            if (!PrivateHierarchyStorageDetail::Empty(first))
+            if (!PrivateHierarchyStorageDetail::Matches(first, storage.expectedSequences, storage.expectedCount))
             {
                 RetainForeign(storage);
                 return ClockResult::BindingChanged;
@@ -165,7 +189,7 @@ namespace mta::game_de
                 return result;
             if (!NativeModelReferenceMap::Copy(storage.Address(), second.data(), second.size()))
                 return ClockResult::ReadFailure;
-            if (!PrivateHierarchyStorageDetail::Empty(second))
+            if (!PrivateHierarchyStorageDetail::Matches(second, storage.expectedSequences, storage.expectedCount))
             {
                 RetainForeign(storage);
                 return ClockResult::BindingChanged;
@@ -173,7 +197,7 @@ namespace mta::game_de
             if (std::memcmp(first.data(), second.data(), first.size()) || !PrivateHierarchyStorageDetail::ProfileMatches(image))
                 return ClockResult::BindingChanged;
             if ((result = PrivateHierarchyStorageDetail::Context::Owner(image, owner)) != ClockResult::Ok ||
-                (result = Check(storage, generation)) != ClockResult::Ok)
+                (result = Check(storage, generation, allowEntered)) != ClockResult::Ok)
                 return result;
             output = second;
             return ClockResult::Ok;
@@ -205,6 +229,8 @@ namespace mta::game_de
                 return finish(ClockResult::NotInitialized);
             if (state != State::Fresh && state != State::Ready)
                 return finish(ClockResult::NotInitialized);
+            if (storage.expectedSequences || storage.pointerAckPending)
+                return finish(ClockResult::OwnerConflict);
             if (!PrivateHierarchyStorageDetail::Context::TryEnter())
                 return finish(ClockResult::Busy);
             PrivateHierarchyStorageDetail::Context::Scope scope;
@@ -233,6 +259,11 @@ namespace mta::game_de
             receipt.hierarchy = storage.Address();
             result = entry(storage.Address(), receipt.exceptionCode);
             receipt.accepted = result == ClockResult::Ok;
+            if (receipt.accepted)
+            {
+                storage.expectedSequences = 0;
+                storage.expectedCount = 0;
+            }
             if (result != ClockResult::Ok)
                 return finish(result);
             storage.state.store(State::Ready, std::memory_order_release);
@@ -245,8 +276,21 @@ namespace mta::game_de
             return finish(ClockResult::Ok);
         }
         static ClockResult SetScalar(std::uintptr_t image, Storage& storage, std::uint64_t generation,
-                                     NativePrivateAnimationHierarchyCalls::ScalarOperation operation, std::uint32_t bits, CheckOwner owner, Receipt* output,
+                                     NativePrivateAnimationHierarchyCalls::ScalarOperation operation, std::uint32_t bits, CheckOwner owner, Receipt* receipt,
                                      NativePrivateAnimationHierarchyCalls::ScalarWrite write) noexcept
+        {
+            if (receipt)
+                *receipt = {};
+            if (storage.expectedSequences || storage.pointerAckPending)
+                return ClockResult::OwnerConflict;
+            if (!PrivateHierarchyStorageDetail::Context::TryEnter())
+                return ClockResult::Busy;
+            PrivateHierarchyStorageDetail::Context::Scope scope;
+            return SetScalarWithin(image, storage, generation, operation, bits, owner, receipt, write);
+        }
+        static ClockResult SetScalarWithin(std::uintptr_t image, Storage& storage, std::uint64_t generation,
+                                           NativePrivateAnimationHierarchyCalls::ScalarOperation operation, std::uint32_t bits, CheckOwner owner,
+                                           Receipt* output, NativePrivateAnimationHierarchyCalls::ScalarWrite write) noexcept
         {
             using Operation = NativePrivateAnimationHierarchyCalls::ScalarOperation;
             const auto requestedOperation = operation;
@@ -268,11 +312,8 @@ namespace mta::game_de
             };
             if (!owner)
                 return finish(ClockResult::NotInitialized);
-            if (!PrivateHierarchyStorageDetail::Context::TryEnter())
-                return finish(ClockResult::Busy);
-            PrivateHierarchyStorageDetail::Context::Scope scope;
-            PrivateHierarchyStorageDetail::Bytes          before;
-            auto                                          result = Snapshot(image, storage, generation, owner, before);
+            PrivateHierarchyStorageDetail::Bytes before;
+            auto                                 result = Snapshot(image, storage, generation, owner, before);
             if (result != ClockResult::Ok)
                 return finish(result);
             auto expected = before;
@@ -282,6 +323,11 @@ namespace mta::game_de
                 std::memcpy(expected.data() + 0x14, &requestedBits, sizeof(requestedBits));
             else if (requestedOperation == Operation::NameHash)
                 std::memcpy(expected.data(), &requestedBits, sizeof(requestedBits));
+            else if (requestedOperation == Operation::SequenceCount)
+            {
+                const auto count = static_cast<std::uint16_t>(requestedBits);
+                std::memcpy(expected.data() + 0x10, &count, sizeof(count));
+            }
             else
                 return finish(ClockResult::InvalidArgument);
 #if defined(MTA_DE_PRIVATE_ANIMATION_HIERARCHY_SCALAR_WRITE)
@@ -299,6 +345,8 @@ namespace mta::game_de
             // must not roll its definedness back. Initialize preserves it.
             if (receipt.accepted && requestedOperation == Operation::NameHash)
                 storage.hashDefined = true;
+            if (receipt.accepted && requestedOperation == Operation::SequenceCount)
+                storage.expectedCount = static_cast<std::uint16_t>(requestedBits);
             if (result != ClockResult::Ok)
                 return finish(result);
             // Only this acknowledged CPU store can restore its entered state.
@@ -317,13 +365,20 @@ namespace mta::game_de
         static ClockResult Read(std::uintptr_t image, const Storage& storage, std::uint64_t generation, CheckOwner owner,
                                 NativeAnimationHierarchyValues& output) noexcept
         {
-            if (!owner)
-                return ClockResult::NotInitialized;
+            if (storage.expectedSequences || storage.pointerAckPending)
+                return ClockResult::OwnerConflict;
             if (!PrivateHierarchyStorageDetail::Context::TryEnter())
                 return ClockResult::Busy;
             PrivateHierarchyStorageDetail::Context::Scope scope;
-            PrivateHierarchyStorageDetail::Bytes          bytes;
-            auto                                          result = Snapshot(image, storage, generation, owner, bytes);
+            return ReadWithin(image, storage, generation, owner, output);
+        }
+        static ClockResult ReadWithin(std::uintptr_t image, const Storage& storage, std::uint64_t generation, CheckOwner owner,
+                                      NativeAnimationHierarchyValues& output) noexcept
+        {
+            if (!owner)
+                return ClockResult::NotInitialized;
+            PrivateHierarchyStorageDetail::Bytes bytes;
+            auto                                 result = Snapshot(image, storage, generation, owner, bytes);
             if (result != ClockResult::Ok)
                 return result;
             NativeAnimationHierarchyValues next;
@@ -340,6 +395,86 @@ namespace mta::game_de
             output = next;
             return ClockResult::Ok;
         }
+        static ClockResult SetSequencesWithin(std::uintptr_t image, Storage& storage, std::uint64_t generation, std::uintptr_t requested, CheckOwner owner,
+                                              Receipt* output, NativePrivateAnimationHierarchyCalls::SequenceWrite write) noexcept
+        {
+            const auto target = requested;
+            Receipt    receipt;
+            const auto finish = [&](ClockResult result)
+            {
+                if (receipt.entered && result != ClockResult::Ok)
+                {
+                    auto       current = storage.GetState();
+                    const auto failed = receipt.accepted ? State::Entered : State::PublicationPinned;
+                    while ((current == State::Ready || current == State::Entered) &&
+                           !storage.state.compare_exchange_weak(current, failed, std::memory_order_acq_rel))
+                    {
+                    }
+                }
+                if (output)
+                    *output = receipt;
+                return result;
+            };
+            if (generation != storage.generation || storage.pointerAckPending)
+                return finish(ClockResult::OwnerConflict);
+            PrivateHierarchyStorageDetail::Bytes before;
+            auto                                 result = Snapshot(image, storage, generation, owner, before);
+            if (result != ClockResult::Ok)
+                return finish(result);
+            auto expected = before;
+            std::memcpy(expected.data() + 8, &target, sizeof(target));
+#if defined(MTA_DE_PRIVATE_ANIMATION_HIERARCHY_SEQUENCES_WRITE)
+            const auto entry = write ? write : &MTA_DE_PRIVATE_ANIMATION_HIERARCHY_SEQUENCES_WRITE;
+#else
+            const auto entry = write ? write : &PrivateHierarchyStorageDetail::WriteSequences;
+#endif
+            storage.state.store(State::Entered, std::memory_order_release);
+            receipt.hierarchy = storage.Address();
+            receipt.entered = true;
+            result = entry(storage.Address(), target, receipt.exceptionCode);
+            receipt.accepted = result == ClockResult::Ok;
+            if (receipt.accepted)
+            {
+                // This is the durable actual-store receipt, before postflight.
+                // Only its same-command read-only ACK can finish the operation.
+                storage.expectedSequences = target;
+                storage.pointerAckPending = true;
+            }
+            if (result != ClockResult::Ok)
+                return finish(result);
+            PrivateHierarchyStorageDetail::Bytes after;
+            result = Snapshot(image, storage, generation, owner, after, true);
+            if (result != ClockResult::Ok)
+                return finish(result);
+            if (std::memcmp(expected.data(), after.data(), after.size()))
+                return finish(ClockResult::BindingChanged);
+            receipt.verified = true;
+            return finish(ClockResult::Ok);
+        }
+        static ClockResult AcknowledgeSequencesWithin(std::uintptr_t image, Storage& storage, std::uint64_t generation, std::uintptr_t expected,
+                                                      CheckOwner owner, Receipt* output) noexcept
+        {
+            Receipt receipt;
+            receipt.hierarchy = storage.Address();
+            const auto finish = [&](ClockResult result)
+            {
+                if (output)
+                    *output = receipt;
+                return result;
+            };
+            if (generation != storage.generation || storage.expectedSequences != expected)
+                return finish(ClockResult::BindingChanged);
+            PrivateHierarchyStorageDetail::Bytes bytes;
+            auto                                 result = Snapshot(image, storage, generation, owner, bytes, true);
+            if (result != ClockResult::Ok)
+                return finish(result);
+            auto current = storage.GetState();
+            if (current == State::Entered && !storage.state.compare_exchange_strong(current, State::Ready, std::memory_order_acq_rel))
+                return finish(ClockResult::OwnerConflict);
+            storage.pointerAckPending = false;
+            receipt.accepted = receipt.verified = receipt.acknowledged = true;
+            return finish(ClockResult::Ok);
+        }
         static ClockResult Retire(std::uintptr_t image, Storage& storage, std::uint64_t generation, CheckOwner owner, Receipt* output) noexcept
         {
             Receipt    receipt;
@@ -353,6 +488,8 @@ namespace mta::game_de
                 return finish(ClockResult::BindingChanged);
             if (!owner)
                 return finish(ClockResult::NotInitialized);
+            if (storage.expectedSequences || storage.pointerAckPending)
+                return finish(ClockResult::OwnerConflict);
             const auto state = storage.GetState();
             if (state == State::PublicationPinned || state == State::Retired)
                 return finish(ClockResult::OwnerConflict);
@@ -378,7 +515,7 @@ namespace mta::game_de
                     return finish(ClockResult::BindingChanged);
                 if (!NativeModelReferenceMap::Copy(storage.Address(), first.data(), first.size()))
                     return finish(ClockResult::ReadFailure);
-                if (!PrivateHierarchyStorageDetail::Empty(first))
+                if (!PrivateHierarchyStorageDetail::Matches(first, storage.expectedSequences, storage.expectedCount))
                 {
                     RetainForeign(storage);
                     return finish(ClockResult::BindingChanged);
@@ -387,7 +524,7 @@ namespace mta::game_de
                     return finish(result);
                 if (!NativeModelReferenceMap::Copy(storage.Address(), second.data(), second.size()))
                     return finish(ClockResult::ReadFailure);
-                if (!PrivateHierarchyStorageDetail::Empty(second))
+                if (!PrivateHierarchyStorageDetail::Matches(second, storage.expectedSequences, storage.expectedCount))
                 {
                     RetainForeign(storage);
                     return finish(ClockResult::BindingChanged);
@@ -443,6 +580,72 @@ namespace mta::game_de
             const auto requested = hash;
             return NativePrivateAnimationHierarchyStorageAccess::SetScalar(image, storage, generation, ScalarOperation::NameHash, requested, owner, receipt,
                                                                            write);
+        }
+        ClockResult SetSequenceCount(std::uintptr_t image, Storage& storage, std::uint64_t generation, std::uint16_t count, CheckOwner owner, Receipt* receipt,
+                                     ScalarWrite write) noexcept
+        {
+            return NativePrivateAnimationHierarchyStorageAccess::SetScalar(image, storage, generation, ScalarOperation::SequenceCount, count, owner, receipt,
+                                                                           write);
+        }
+        ClockResult SetScalarHeld(const Epoch& epoch, Storage& storage, ScalarOperation operation, std::uint32_t bits, CheckOwner owner, Receipt* receipt,
+                                  ScalarWrite write) noexcept
+        {
+            if (epoch.Generation() != storage.OwnerGeneration())
+                return ClockResult::BindingChanged;
+            return NativePrivateAnimationHierarchyStorageAccess::SetScalarWithin(epoch.Image(), storage, epoch.Generation(), operation, bits, owner, receipt,
+                                                                                 write);
+        }
+        ClockResult SetEmptySequences(std::uintptr_t image, Storage& storage, std::uint64_t generation, CheckOwner owner, Receipt* output,
+                                      SequenceWrite write) noexcept
+        {
+            if (output)
+                *output = {};
+            if (!NativePrivateAnimationHierarchyStorageAccess::NoChild(storage))
+                return ClockResult::OwnerConflict;
+            if (!PrivateHierarchyStorageDetail::Context::TryEnter())
+                return ClockResult::Busy;
+            PrivateHierarchyStorageDetail::Context::Scope held;
+            Receipt                                       receipt, ack;
+            auto                                          result = NativePrivateAnimationHierarchyStorageAccess::PointerPending(storage)
+                                                                       ? NativePrivateAnimationHierarchyStorageAccess::AcknowledgeSequencesWithin(image, storage, generation, 0, owner, &receipt)
+                                                                       : NativePrivateAnimationHierarchyStorageAccess::SetSequencesWithin(image, storage, generation, 0, owner, &receipt, write);
+            if (result == ClockResult::Ok)
+            {
+                result = NativePrivateAnimationHierarchyStorageAccess::AcknowledgeSequencesWithin(image, storage, generation, 0, owner, &ack);
+                receipt.acknowledged = ack.acknowledged;
+                receipt.verified = result == ClockResult::Ok;
+            }
+            if (output)
+                *output = receipt;
+            return result;
+        }
+        ClockResult SetSequencesHeld(const Epoch& epoch, Storage& storage, std::uintptr_t target, CheckOwner owner, Receipt* receipt,
+                                     SequenceWrite write) noexcept
+        {
+            if (target && target != epoch.ArrayTag())
+            {
+                if (receipt)
+                    *receipt = {};
+                return ClockResult::BindingChanged;
+            }
+            return NativePrivateAnimationHierarchyStorageAccess::SetSequencesWithin(epoch.Image(), storage, epoch.Generation(), target, owner, receipt, write);
+        }
+        ClockResult AcknowledgeSequencesHeld(const Epoch& epoch, Storage& storage, std::uintptr_t expected, CheckOwner owner, Receipt* receipt) noexcept
+        {
+            if (expected && expected != epoch.ArrayTag())
+            {
+                if (receipt)
+                    *receipt = {};
+                return ClockResult::BindingChanged;
+            }
+            return NativePrivateAnimationHierarchyStorageAccess::AcknowledgeSequencesWithin(epoch.Image(), storage, epoch.Generation(), expected, owner,
+                                                                                            receipt);
+        }
+        ClockResult ReadHeld(const Epoch& epoch, const Storage& storage, CheckOwner owner, NativeAnimationHierarchyValues& output) noexcept
+        {
+            if (epoch.Generation() != storage.OwnerGeneration())
+                return ClockResult::BindingChanged;
+            return NativePrivateAnimationHierarchyStorageAccess::ReadWithin(epoch.Image(), storage, epoch.Generation(), owner, output);
         }
         ClockResult Read(std::uintptr_t image, const Storage& storage, std::uint64_t generation, CheckOwner owner,
                          NativeAnimationHierarchyValues& output) noexcept

@@ -985,4 +985,148 @@ namespace mta::game_de
         output = observed.loaded != 0;
         return ClockResult::Ok;
     }
+
+    namespace AnimationStaticAssociationReadDetail
+    {
+        namespace Group = AnimationGroupCreatedDetail;
+        namespace P = NativeAnimationStaticAssociationProfile;
+        namespace Memory = NativeModelReferenceMap;
+        using Binding = NativeAnimationManagerMemory::Binding;
+        using CheckOwner = NativeAnimationManagerMemory::CheckOwner;
+        ClockResult Begin(Binding binding, CheckOwner owner) noexcept
+        {
+            const auto result = AnimationManagerDetail::Owner(binding, owner);
+            return result != ClockResult::Ok                                         ? result
+                   : Group::Profile(binding, P::ReadCode.data(), P::ReadCode.size()) ? ClockResult::Ok
+                                                                                     : ClockResult::BindingChanged;
+        }
+        struct Parent
+        {
+            Group::Snapshot array{};
+            std::uintptr_t  child = 0;
+        };
+        ClockResult CaptureParent(Binding binding, CheckOwner owner, std::uint32_t group, Parent& output) noexcept
+        {
+            Parent next;
+            auto   result = Group::Capture(binding, owner, group, next.array);
+            if (result != ClockResult::Ok)
+                return result;
+            const auto row = next.array.rows + static_cast<std::uintptr_t>(group) * NativeAnimationGroupArrayProfile::RowBytes;
+            if (!Memory::Copy(row + 8, &next.child, sizeof(next.child)))
+                return ClockResult::ReadFailure;
+            if (!next.child)
+                return ClockResult::NotInitialized;
+            if (next.child < P::CookieBytes || next.child % alignof(std::uint64_t))
+                return ClockResult::BindingChanged;
+            output = next;
+            return ClockResult::Ok;
+        }
+        bool SameParent(const Parent& a, const Parent& b) noexcept
+        {
+            return a.array.rows == b.array.rows && a.array.capacity == b.array.capacity && a.array.count == b.array.count && a.array.value == b.array.value &&
+                   a.child == b.child;
+        }
+        struct Snapshot
+        {
+            Parent                       parent{};
+            std::uint64_t                capacity = 0;
+            std::array<unsigned char, 8> scalars{};
+            std::uintptr_t               hierarchy = 0;
+        };
+        bool Same(const Snapshot& a, const Snapshot& b) noexcept
+        {
+            return SameParent(a.parent, b.parent) && a.capacity == b.capacity && a.scalars == b.scalars && a.hierarchy == b.hierarchy;
+        }
+        ClockResult Capture(Binding binding, CheckOwner owner, std::uint32_t group, std::size_t index, std::uintptr_t locator, Snapshot& output) noexcept
+        {
+            auto result = Begin(binding, owner);
+            if (result != ClockResult::Ok)
+                return result;
+            Snapshot next;
+            if ((result = CaptureParent(binding, owner, group, next.parent)) != ClockResult::Ok)
+                return result;
+            const auto base = next.parent.child - P::CookieBytes;
+            if (!Group::HeapSpan(base, P::CookieBytes) || !Memory::Copy(base, &next.capacity, sizeof(next.capacity)))
+                return ClockResult::ReadFailure;
+            if (next.capacity > static_cast<std::uint64_t>((std::numeric_limits<std::int32_t>::max)()) ||
+                next.capacity > ((std::numeric_limits<std::size_t>::max)() - P::CookieBytes) / P::RowBytes)
+                return ClockResult::BindingChanged;
+            if (index >= next.capacity)
+                return ClockResult::InvalidArgument;
+            const auto span = P::CookieBytes + static_cast<std::size_t>(next.capacity) * P::RowBytes;
+            const auto outerBase = next.parent.array.rows - NativeAnimationGroupArrayProfile::CookieBytes;
+            const auto outerSpan = NativeAnimationGroupArrayProfile::CookieBytes +
+                                   static_cast<std::size_t>(next.parent.array.capacity) * NativeAnimationGroupArrayProfile::RowBytes;
+            if (!Group::HeapSpan(base, span) || !Memory::Disjoint(base, span, outerBase, outerSpan))
+                return ClockResult::BindingChanged;
+            const auto row = next.parent.child + static_cast<std::uintptr_t>(index) * P::RowBytes;
+            if (locator && locator != row)
+                return ClockResult::BindingChanged;
+            // Observe only the six actual source getter fields. Neither the
+            // node array at10 nor the hierarchy target is dereferenced/adopted.
+            if (!Memory::Copy(row + 8, next.scalars.data(), next.scalars.size()) || !Memory::Copy(row + 0x18, &next.hierarchy, sizeof(next.hierarchy)))
+                return ClockResult::ReadFailure;
+            Parent after;
+            if ((result = CaptureParent(binding, owner, group, after)) != ClockResult::Ok)
+                return result;
+            std::uint64_t capacityAfter = 0;
+            if (!Memory::Copy(base, &capacityAfter, sizeof(capacityAfter)))
+                return ClockResult::ReadFailure;
+            if (!SameParent(next.parent, after) || capacityAfter != next.capacity || !Group::HeapSpan(base, span))
+                return ClockResult::BindingChanged;
+            if ((result = Begin(binding, owner)) != ClockResult::Ok)
+                return result;
+            output = next;
+            return ClockResult::Ok;
+        }
+        ClockResult Read(Binding binding, CheckOwner owner, std::uint32_t group, std::size_t index, std::uintptr_t locator, Snapshot& output) noexcept
+        {
+            Snapshot first, second;
+            auto     result = Capture(binding, owner, group, index, locator, first);
+            if (result != ClockResult::Ok || (result = Capture(binding, owner, group, index, locator, second)) != ClockResult::Ok)
+                return result;
+            if (!Same(first, second))
+                return ClockResult::BindingChanged;
+            if ((result = Begin(binding, owner)) != ClockResult::Ok)
+                return result;
+            output = second;
+            return ClockResult::Ok;
+        }
+    }
+    ClockResult NativeAnimationManagerMemory::ResolveStaticAssociation(std::uint32_t requestedGroup, std::size_t requestedIndex,
+                                                                       NativeAnimationStaticAssociationReferenceToken& output) const noexcept
+    {
+        const auto                                     group = requestedGroup;
+        const auto                                     index = requestedIndex;
+        AnimationStaticAssociationReadDetail::Snapshot observed;
+        const auto                                     result = AnimationStaticAssociationReadDetail::Read(binding, owner, group, index, 0, observed);
+        if (result != ClockResult::Ok)
+            return result;
+        NativeAnimationStaticAssociationReferenceToken next;
+        next.groupIndex = group;
+        next.index = index;
+        next.locator = observed.parent.child + static_cast<std::uintptr_t>(index) * NativeAnimationStaticAssociationProfile::RowBytes;
+        output = next;
+        return ClockResult::Ok;
+    }
+    ClockResult NativeAnimationManagerMemory::ReadStaticAssociation(const NativeAnimationStaticAssociationReferenceToken& source,
+                                                                    NativeAnimationStaticAssociationValues&               output) const noexcept
+    {
+        const auto expected = source;
+        if (!expected.locator)
+            return ClockResult::InvalidArgument;
+        AnimationStaticAssociationReadDetail::Snapshot observed;
+        const auto result = AnimationStaticAssociationReadDetail::Read(binding, owner, expected.groupIndex, expected.index, expected.locator, observed);
+        if (result != ClockResult::Ok)
+            return result;
+        NativeAnimationStaticAssociationValues next;
+        next.interfaceAddress = expected.locator;
+        std::memcpy(&next.numBlendNodes, observed.scalars.data(), 2);
+        std::memcpy(&next.animId, observed.scalars.data() + 2, 2);
+        std::memcpy(&next.animGroup, observed.scalars.data() + 4, 2);
+        std::memcpy(&next.flags, observed.scalars.data() + 6, 2);
+        next.hierarchyAddress = observed.hierarchy;
+        output = next;
+        return ClockResult::Ok;
+    }
 }

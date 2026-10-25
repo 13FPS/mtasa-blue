@@ -24,4 +24,14 @@ namespace mta::game_de::NativeAnimationStaticAssociationProfile
         0xe8, 0xac, 0xba, 0x98, 0x00, 0x48, 0x8b, 0x0d, 0x65, 0x8b, 0x77, 0x04, 0x48, 0x8b, 0x01, 0x48, 0x8b, 0xd3, 0xff, 0x50, 0x30,
         0x48, 0x8b, 0x5c, 0x24, 0x30, 0x33, 0xc0, 0x48, 0x89, 0x47, 0x08, 0x89, 0x47, 0x10, 0x48, 0x83, 0xc4, 0x20, 0x5f, 0xc3};
     inline constexpr std::array<Pin, 2> Code{{{0xff1120, Select.data(), Select.size()}, {0xfeb580, Retire.data(), Retire.size()}}};
+    // The saved genuine initializer stores Num at8, allocated node pointers
+    // at10 and the hierarchy at18. This distinct read profile preserves the
+    // existing ID-only channel and prevents mechanical SA pointer widening.
+    inline constexpr std::array<unsigned char, 9> NodeCountStore{0x48, 0x0f, 0xbf, 0x46, 0x10, 0x66, 0x89, 0x41, 0x08};
+    inline constexpr std::array<unsigned char, 7> HierarchyStore{0x41, 0x8b, 0xfa, 0x4d, 0x89, 0x7e, 0x18};
+    inline constexpr std::array<unsigned char, 4> NullModelHierarchyStore{0x4c, 0x89, 0x41, 0x18};
+    inline constexpr std::array<Pin, 4>           ReadCode{{{0xfeb580, Retire.data(), Retire.size()},
+                                                            {0xfeb637, NodeCountStore.data(), NodeCountStore.size()},
+                                                            {0xfeb705, HierarchyStore.data(), HierarchyStore.size()},
+                                                            {0xfeb608, NullModelHierarchyStore.data(), NullModelHierarchyStore.size()}}};
 }

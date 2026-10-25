@@ -6,6 +6,7 @@
 #pragma once
 #include "NativeAnimationManagerAccess.h"
 #include "NativeAnimationAssociationGroupAccess.h"
+#include "NativeAnimationStaticAssociationAccess.h"
 namespace mta::game_de
 {
     class NativeAnimationManagerMemory
@@ -30,6 +31,8 @@ namespace mta::game_de
         ClockResult ResolveAssociationGroup(std::uint32_t, NativeAnimationAssociationGroupReferenceToken&) const noexcept;
         ClockResult ReadAssociationGroup(const NativeAnimationAssociationGroupReferenceToken&, NativeAnimationAssociationGroupValues&) const noexcept;
         ClockResult ReadAssociationGroupLoaded(const NativeAnimationAssociationGroupReferenceToken&, bool&) const noexcept;
+        ClockResult ResolveStaticAssociation(std::uint32_t, std::size_t, NativeAnimationStaticAssociationReferenceToken&) const noexcept;
+        ClockResult ReadStaticAssociation(const NativeAnimationStaticAssociationReferenceToken&, NativeAnimationStaticAssociationValues&) const noexcept;
         ClockResult FindBlockIndex(const NativeAnimationBlockName&, std::int32_t&) const noexcept;
 
     private:

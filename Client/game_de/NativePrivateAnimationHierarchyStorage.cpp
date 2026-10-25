@@ -70,6 +70,29 @@ namespace mta::game_de
             std::memcpy(bytes.data() + 0x18, &time, sizeof(time));
             std::memcpy(bytes.data() + 0x20, &pointer, sizeof(pointer));
         }
+        ClockResult WriteScalar(std::uintptr_t address, NativePrivateAnimationHierarchyCalls::ScalarOperation operation, std::uint32_t bits,
+                                std::uint32_t& exception) noexcept
+        {
+            using Operation = NativePrivateAnimationHierarchyCalls::ScalarOperation;
+            __try
+            {
+                if (operation == Operation::RunningCompressed)
+                {
+                    const auto value = static_cast<std::uint8_t>(bits);
+                    std::memcpy(reinterpret_cast<void*>(address + 0x12), &value, sizeof(value));
+                }
+                else if (operation == Operation::AnimationBlockID)
+                    std::memcpy(reinterpret_cast<void*>(address + 0x14), &bits, sizeof(bits));
+                else
+                    return ClockResult::InvalidArgument;
+                return ClockResult::Ok;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                exception = GetExceptionCode();
+                return ClockResult::OriginalException;
+            }
+        }
         ClockResult InitializeFields(std::uintptr_t address, std::uint32_t& exception) noexcept
         {
             // Source Initialize deliberately preserves the hash and alignment
@@ -219,6 +242,69 @@ namespace mta::game_de
             receipt.verified = true;
             return finish(ClockResult::Ok);
         }
+        static ClockResult SetScalar(std::uintptr_t image, Storage& storage, std::uint64_t generation,
+                                     NativePrivateAnimationHierarchyCalls::ScalarOperation operation, std::uint32_t bits, CheckOwner owner, Receipt* output,
+                                     NativePrivateAnimationHierarchyCalls::ScalarWrite write) noexcept
+        {
+            using Operation = NativePrivateAnimationHierarchyCalls::ScalarOperation;
+            const auto requestedOperation = operation;
+            const auto requestedBits = bits;
+            Receipt    receipt;
+            const auto finish = [&](ClockResult result)
+            {
+                if (receipt.entered && result != ClockResult::Ok)
+                {
+                    auto current = storage.GetState();
+                    while ((current == State::Ready || current == State::Entered) &&
+                           !storage.state.compare_exchange_weak(current, State::Entered, std::memory_order_acq_rel))
+                    {
+                    }
+                }
+                if (output)
+                    *output = receipt;
+                return result;
+            };
+            if (!owner)
+                return finish(ClockResult::NotInitialized);
+            if (!PrivateHierarchyStorageDetail::Context::TryEnter())
+                return finish(ClockResult::Busy);
+            PrivateHierarchyStorageDetail::Context::Scope scope;
+            PrivateHierarchyStorageDetail::Bytes          before;
+            auto                                          result = Snapshot(image, storage, generation, owner, before);
+            if (result != ClockResult::Ok)
+                return finish(result);
+            auto expected = before;
+            if (requestedOperation == Operation::RunningCompressed)
+                expected[0x12] = static_cast<unsigned char>(requestedBits);
+            else if (requestedOperation == Operation::AnimationBlockID)
+                std::memcpy(expected.data() + 0x14, &requestedBits, sizeof(requestedBits));
+            else
+                return finish(ClockResult::InvalidArgument);
+#if defined(MTA_DE_PRIVATE_ANIMATION_HIERARCHY_SCALAR_WRITE)
+            const auto entry = write ? write : &MTA_DE_PRIVATE_ANIMATION_HIERARCHY_SCALAR_WRITE;
+#else
+            const auto entry = write ? write : &PrivateHierarchyStorageDetail::WriteScalar;
+#endif
+            storage.state.store(State::Entered, std::memory_order_release);
+            receipt.hierarchy = storage.Address();
+            receipt.entered = true;
+            result = entry(storage.Address(), requestedOperation, requestedBits, receipt.exceptionCode);
+            receipt.accepted = result == ClockResult::Ok;
+            if (result != ClockResult::Ok)
+                return finish(result);
+            // Only this acknowledged CPU store can restore its entered state.
+            // A concurrently latched publication marker is never overwritten.
+            auto entered = State::Entered;
+            if (!storage.state.compare_exchange_strong(entered, State::Ready, std::memory_order_acq_rel))
+                return finish(ClockResult::OwnerConflict);
+            PrivateHierarchyStorageDetail::Bytes after;
+            if ((result = Snapshot(image, storage, generation, owner, after)) != ClockResult::Ok)
+                return finish(result);
+            if (std::memcmp(after.data(), expected.data(), after.size()))
+                return finish(ClockResult::BindingChanged);
+            receipt.verified = true;
+            return finish(ClockResult::Ok);
+        }
         static ClockResult Read(std::uintptr_t image, const Storage& storage, std::uint64_t generation, CheckOwner owner,
                                 NativeAnimationHierarchyValues& output) noexcept
         {
@@ -325,6 +411,22 @@ namespace mta::game_de
         ClockResult Initialize(std::uintptr_t image, Storage& storage, std::uint64_t generation, CheckOwner owner, Receipt* receipt, Write write) noexcept
         {
             return NativePrivateAnimationHierarchyStorageAccess::Initialize(image, storage, generation, owner, receipt, write);
+        }
+        ClockResult SetRunningCompressed(std::uintptr_t image, Storage& storage, std::uint64_t generation, bool compressed, CheckOwner owner, Receipt* receipt,
+                                         ScalarWrite write) noexcept
+        {
+            const auto value = compressed;
+            return NativePrivateAnimationHierarchyStorageAccess::SetScalar(image, storage, generation, ScalarOperation::RunningCompressed, value ? 1u : 0u,
+                                                                           owner, receipt, write);
+        }
+        ClockResult SetAnimationBlockID(std::uintptr_t image, Storage& storage, std::uint64_t generation, std::int32_t block, CheckOwner owner,
+                                        Receipt* receipt, ScalarWrite write) noexcept
+        {
+            const auto    value = block;
+            std::uint32_t bits;
+            std::memcpy(&bits, &value, sizeof(bits));
+            return NativePrivateAnimationHierarchyStorageAccess::SetScalar(image, storage, generation, ScalarOperation::AnimationBlockID, bits, owner, receipt,
+                                                                           write);
         }
         ClockResult Read(std::uintptr_t image, const Storage& storage, std::uint64_t generation, CheckOwner owner,
                          NativeAnimationHierarchyValues& output) noexcept

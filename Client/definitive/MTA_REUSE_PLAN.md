@@ -5,6 +5,13 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+The existing hierarchy facade now forwards MTA's compression and block-ID
+setters to the same private owner. They write only the compression byte or
+signed block DWORD, preserving every other native byte and hash definedness.
+Inputs are copied before callbacks, with no added block-ID range filter.
+Accepted stores survive failed acknowledgement without replay or rollback;
+foreign publication retention remains permanent.
+
 Private hierarchy creation and initialization reuse MTA's plain interface
 allocation policy and its existing hierarchy getters. The DE receiver has a
 40-byte native view; initialization clears the proved fields while preserving

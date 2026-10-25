@@ -26,6 +26,21 @@ namespace mta::game_de
         const auto token = reference;
         Require(native.InitializePrivateAnimationHierarchy(token), "Initialize");
     }
+    void CAnimBlendHierarchyDE::SetRunningCompressed(bool compressed)
+    {
+        // Preserve the actual MTA bool assignment; the current private owner
+        // qualifies the record and preserves every unrelated native field.
+        const auto token = reference;
+        const bool value = compressed;
+        Require(native.SetPrivateAnimationHierarchyRunningCompressed(token, value), "SetRunningCompressed");
+    }
+    void CAnimBlendHierarchyDE::SetAnimationBlockID(int blockId)
+    {
+        static_assert(sizeof(int) == sizeof(std::int32_t));
+        const auto token = reference;
+        const auto value = static_cast<std::int32_t>(blockId);
+        Require(native.SetPrivateAnimationHierarchyBlockID(token, value), "SetAnimationBlockID");
+    }
     NativeAnimationHierarchyValues CAnimBlendHierarchyDE::Read(const char* operation) const
     {
         const auto                     token = reference;

@@ -54,5 +54,15 @@ namespace mta::game_de
         }
         virtual ClockResult InitializePrivateAnimationHierarchy(const NativeAnimationHierarchyReferenceToken&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult DestroyPrivateAnimationHierarchy(const NativeAnimationHierarchyReferenceToken&) noexcept { return ClockResult::NotInitialized; }
+        // Genuine MTA scalar setters remain restricted to issued private,
+        // empty/cache-free records. They do not attach children or define names.
+        virtual ClockResult SetPrivateAnimationHierarchyRunningCompressed(const NativeAnimationHierarchyReferenceToken&, bool) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
+        virtual ClockResult SetPrivateAnimationHierarchyBlockID(const NativeAnimationHierarchyReferenceToken&, std::int32_t) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
     };
 }

@@ -254,6 +254,8 @@ namespace mta::game_de
             ClockResult CreatePrivateAnimationHierarchy(std::uint64_t, NativeAnimationHierarchyReferenceToken&) noexcept override;
             ClockResult InitializePrivateAnimationHierarchy(const NativeAnimationHierarchyReferenceToken&) noexcept override;
             ClockResult DestroyPrivateAnimationHierarchy(const NativeAnimationHierarchyReferenceToken&) noexcept override;
+            ClockResult SetPrivateAnimationHierarchyRunningCompressed(const NativeAnimationHierarchyReferenceToken&, bool) noexcept override;
+            ClockResult SetPrivateAnimationHierarchyBlockID(const NativeAnimationHierarchyReferenceToken&, std::int32_t) noexcept override;
             ClockResult ReadAnimationHierarchy(const NativeAnimationHierarchyReferenceToken&, NativeAnimationHierarchyValues&) noexcept override;
             ClockResult ReadAnimationHierarchySequences(const NativeAnimationHierarchyReferenceToken&, std::uintptr_t&) noexcept override;
             ClockResult ReadAnimationHierarchySequence(const NativeAnimationHierarchyReferenceToken&, std::uint32_t, std::uintptr_t&) noexcept override;
@@ -2892,6 +2894,44 @@ namespace mta::game_de
                 return result;
             NativePrivateAnimationHierarchyController::Receipt receipt;
             result = runtime.privateHierarchies.Destroy(runtime.image, request, &CheckTimingOwner, &receipt);
+            PublishCustomAnimationSequenceDebt(request.ownerGeneration);
+            if (result == ClockResult::Ok)
+                result = CheckAnimationHierarchyRequest(request);
+            if ((receipt.entered && result != ClockResult::Ok) || runtime.privateHierarchies.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            return result;
+        }
+
+        ClockResult NativeAccess::SetPrivateAnimationHierarchyRunningCompressed(const NativeAnimationHierarchyReferenceToken& token, bool value) noexcept
+        {
+            // Capture source intent before an owner callback can change the
+            // caller's token; the existing private receiver owns this store.
+            const auto request = token;
+            const auto requestedValue = value;
+            auto       result = CheckAnimationHierarchyRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            NativePrivateAnimationHierarchyController::Receipt receipt;
+            result = runtime.privateHierarchies.SetRunningCompressed(runtime.image, request, requestedValue, &CheckTimingOwner, &receipt);
+            PublishCustomAnimationSequenceDebt(request.ownerGeneration);
+            if (result == ClockResult::Ok)
+                result = CheckAnimationHierarchyRequest(request);
+            if ((receipt.entered && result != ClockResult::Ok) || runtime.privateHierarchies.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            return result;
+        }
+
+        ClockResult NativeAccess::SetPrivateAnimationHierarchyBlockID(const NativeAnimationHierarchyReferenceToken& token, std::int32_t value) noexcept
+        {
+            // Capture source intent before an owner callback can change the
+            // caller's token; the existing private receiver owns this store.
+            const auto request = token;
+            const auto requestedValue = value;
+            auto       result = CheckAnimationHierarchyRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            NativePrivateAnimationHierarchyController::Receipt receipt;
+            result = runtime.privateHierarchies.SetAnimationBlockID(runtime.image, request, requestedValue, &CheckTimingOwner, &receipt);
             PublishCustomAnimationSequenceDebt(request.ownerGeneration);
             if (result == ClockResult::Ok)
                 result = CheckAnimationHierarchyRequest(request);

@@ -53,6 +53,12 @@ namespace mta::game_de
         using Storage = NativePrivateAnimationHierarchyStorage;
         using CheckOwner = ClockResult (*)() noexcept;
         using Write = ClockResult (*)(std::uintptr_t, std::uint32_t&) noexcept;
+        enum class ScalarOperation : std::uint32_t
+        {
+            RunningCompressed,
+            AnimationBlockID
+        };
+        using ScalarWrite = ClockResult (*)(std::uintptr_t, ScalarOperation, std::uint32_t, std::uint32_t&) noexcept;
         struct Receipt
         {
             std::uintptr_t hierarchy = 0;
@@ -60,6 +66,11 @@ namespace mta::game_de
             bool           entered = false, accepted = false, retired = false, verified = false;
         };
         ClockResult Initialize(std::uintptr_t image, Storage&, std::uint64_t, CheckOwner, Receipt* = nullptr, Write = nullptr) noexcept;
+        // Source-owned private scalar assignments only; all other40 bytes and
+        // hash definedness survive, including accepted writes with lost ack.
+        ClockResult SetRunningCompressed(std::uintptr_t image, Storage&, std::uint64_t, bool, CheckOwner, Receipt* = nullptr, ScalarWrite = nullptr) noexcept;
+        ClockResult SetAnimationBlockID(std::uintptr_t image, Storage&, std::uint64_t, std::int32_t, CheckOwner, Receipt* = nullptr,
+                                        ScalarWrite = nullptr) noexcept;
         ClockResult Read(std::uintptr_t image, const Storage&, std::uint64_t, CheckOwner, NativeAnimationHierarchyValues&) noexcept;
         // Only a known neverpublished empty/cache0 receiver may retire. The
         // controller performs plain CPU deletion after a retired receipt,

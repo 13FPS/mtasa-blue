@@ -81,5 +81,16 @@ namespace mta::game_de
         {
             return ClockResult::NotInitialized;
         }
+        // These remain owner-qualified source operations: cache0 is the
+        // exact guarded no-op, while removal permits only a known no-child
+        // row and clears pointer/count/time without detaching or freeing.
+        virtual ClockResult RemovePrivateAnimationHierarchyFromUncompressedCache(const NativeAnimationHierarchyReferenceToken&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
+        virtual ClockResult RemoveEmptyPrivateAnimationHierarchySequences(const NativeAnimationHierarchyReferenceToken&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
     };
 }

@@ -90,6 +90,10 @@ namespace mta::game_de
         ClockResult AcknowledgeSequencesHeld(const Epoch&, Storage&, std::uintptr_t, CheckOwner, Receipt* = nullptr) noexcept;
         ClockResult ReadHeld(const Epoch&, const Storage&, CheckOwner, NativeAnimationHierarchyValues&) noexcept;
         ClockResult Read(std::uintptr_t image, const Storage&, std::uint64_t, CheckOwner, NativeAnimationHierarchyValues&) noexcept;
+        // Genuine FEC640's no-sequence/cache0 branch clears only8/10/18.
+        // This explicit restricted operation never retires children or drops
+        // an active parent dependency; the controller owns that refusal.
+        ClockResult RemoveEmptySequences(std::uintptr_t, Storage&, std::uint64_t, CheckOwner, Receipt* = nullptr, Write = nullptr) noexcept;
         // Only a known neverpublished empty/cache0 receiver may retire. The
         // controller performs plain CPU deletion after a retired receipt,
         // including a lost post-ack; no child/native destructor is invoked.

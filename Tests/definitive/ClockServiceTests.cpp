@@ -8318,10 +8318,17 @@ namespace
 #include "NativePrivateHierarchyScalarOwnerTests.inl"
 #include "NativePrivateHierarchyNameOwnerTests.inl"
 #include "NativePrivateHierarchyParentOwnerTests.inl"
+#include "NativePrivateHierarchyEmptyOwnerTests.inl"
 
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool     privateHierarchyEmptyOnly = argc == 3 && std::strncmp(argv[2], "--private-hierarchy-empty-", 26) == 0;
+    const unsigned privateHierarchyEmptyScenario = !privateHierarchyEmptyOnly                                             ? 0u
+                                                   : std::strcmp(argv[2], "--private-hierarchy-empty-accepted-loss") == 0 ? 1u
+                                                   : std::strcmp(argv[2], "--private-hierarchy-empty-unknown-count") == 0 ? 2u
+                                                   : std::strcmp(argv[2], "--private-hierarchy-empty-foreign-cache") == 0 ? 3u
+                                                                                                                          : 0u;
     const bool     privateHierarchyParentOnly = argc == 3 && std::strncmp(argv[2], "--private-hierarchy-parent-", 27) == 0;
     const unsigned privateHierarchyParentScenario = !privateHierarchyParentOnly                                               ? 0u
                                                     : std::strcmp(argv[2], "--private-hierarchy-parent-lost-detach") == 0     ? 1u
@@ -8405,9 +8412,18 @@ int main(int argc, char** argv)
            animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly ||
            animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly || animationHierarchyBankOnly ||
            customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly ||
-           privateHierarchyParentOnly) &&
+           privateHierarchyParentOnly || privateHierarchyEmptyOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (privateHierarchyEmptyOnly)
+    {
+        PrivateHierarchyEmptyOwnerFixture::scenario = privateHierarchyEmptyScenario;
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        NativeAnimationBlocksOwnedSdk(fixture, &PrivateHierarchyEmptyOwnerFixture::Run);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (privateHierarchyParentOnly)
     {
         PrivateHierarchyParentOwnerFixture::scenario = privateHierarchyParentScenario;

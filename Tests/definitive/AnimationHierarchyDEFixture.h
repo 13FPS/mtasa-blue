@@ -1,7 +1,7 @@
 /****************************************************************************
  * PROJECT: Multi Theft Auto
  * LICENSE: See LICENSE in the repository root
- * PURPOSE: Reject the four remaining hierarchy mutation operations in tests
+ * PURPOSE: Reject the two remaining hierarchy mutation operations in tests
  ****************************************************************************/
 #pragma once
 #include "../../Client/game_de/CAnimBlendHierarchyDE.h"
@@ -18,8 +18,6 @@ namespace animation_hierarchy_fixture
         {
         }
         // These are unavailable contracts, not successful no-op mutations.
-        void RemoveAnimSequences() override { std::abort(); }
-        void RemoveFromUncompressedCache() override { std::abort(); }
         void RemoveQuaternionFlips() override { std::abort(); }
         void CalculateTotalTime() override { std::abort(); }
     };

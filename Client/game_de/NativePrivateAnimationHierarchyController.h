@@ -24,6 +24,8 @@ namespace mta::game_de
         explicit NativePrivateAnimationHierarchyController(NativeCustomAnimSequenceController* sequences = nullptr) noexcept : sequences(sequences) {}
         ClockResult SetSequenceCount(std::uintptr_t, const Token&, std::uint16_t, CheckOwner, Receipt* = nullptr) noexcept;
         ClockResult SetSequences(std::uintptr_t, const Token&, std::uintptr_t, CheckOwner, Receipt* = nullptr) noexcept;
+        ClockResult CheckCacheZero(std::uintptr_t, const Token&, CheckOwner) noexcept;
+        ClockResult RemoveEmptySequences(std::uintptr_t, const Token&, CheckOwner, Receipt* = nullptr) noexcept;
         ClockResult Create(std::uintptr_t image, std::uint64_t generation, CheckOwner, Token& output, Receipt* = nullptr) noexcept;
         ClockResult Initialize(std::uintptr_t image, const Token&, CheckOwner, Receipt* = nullptr) noexcept;
         ClockResult Destroy(std::uintptr_t image, const Token&, CheckOwner, Receipt* = nullptr) noexcept;

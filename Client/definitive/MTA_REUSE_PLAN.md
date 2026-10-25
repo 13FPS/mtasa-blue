@@ -5,6 +5,18 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+MTA's cache removal and sequence removal now have qualified empty domains.
+A current private hierarchy with a zero cache link needs no cache operation;
+linked observations borrow the actual held array epoch. An empty, unlinked
+receiver can clear its sequence pointer, count and total time, preserving the
+hash, compression, block ID, padding and allocation journals. Pending parent
+commands and nonempty receivers refuse this path. Accepted stores survive a
+failed postflight acknowledgement without replay or rollback.
+
+This implements the source's empty branches without entering a native cache
+or heap routine. Quaternion/time payload operations remain pure until actual
+uncompressed row authority is available. No public factory is completed here.
+
 Private hierarchy count and pointer setters now use a durable parent command.
 The full WORD count remains independent of array capacity. Attachment holds
 the actual array and frame records before writing the pointer; linked reads

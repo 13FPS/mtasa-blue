@@ -70,6 +70,21 @@ namespace mta::game_de
         // concern and cannot silently clamp this caller's source value.
         Require(native.SetPrivateAnimationHierarchySequenceCount(token, value), "SetNumSequences");
     }
+    void CAnimBlendHierarchyDE::RemoveFromUncompressedCache()
+    {
+        // The owner must observe cache0 under its current record/child
+        // bookends. The SDK cannot replace that admission with a no-op.
+        const auto token = reference;
+        Require(native.RemovePrivateAnimationHierarchyFromUncompressedCache(token), "RemoveFromUncompressedCache");
+    }
+    void CAnimBlendHierarchyDE::RemoveAnimSequences()
+    {
+        // This source operation is supported only after the owner proves
+        // there are no child references or active commands. It may clear a
+        // nonzero count/time; it never stands in for detach or native frees.
+        const auto token = reference;
+        Require(native.RemoveEmptyPrivateAnimationHierarchySequences(token), "RemoveAnimSequences");
+    }
     NativeAnimationHierarchyValues CAnimBlendHierarchyDE::Read(const char* operation) const
     {
         const auto                     token = reference;

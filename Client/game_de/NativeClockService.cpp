@@ -259,6 +259,8 @@ namespace mta::game_de
             ClockResult SetPrivateAnimationHierarchyNameHash(const NativeAnimationHierarchyReferenceToken&, std::uint32_t) noexcept override;
             ClockResult SetPrivateAnimationHierarchySequenceCount(const NativeAnimationHierarchyReferenceToken&, std::uint16_t) noexcept override;
             ClockResult SetPrivateAnimationHierarchySequences(const NativeAnimationHierarchyReferenceToken&, std::uintptr_t) noexcept override;
+            ClockResult RemovePrivateAnimationHierarchyFromUncompressedCache(const NativeAnimationHierarchyReferenceToken&) noexcept override;
+            ClockResult RemoveEmptyPrivateAnimationHierarchySequences(const NativeAnimationHierarchyReferenceToken&) noexcept override;
             ClockResult ReadAnimationHierarchy(const NativeAnimationHierarchyReferenceToken&, NativeAnimationHierarchyValues&) noexcept override;
             ClockResult ReadAnimationHierarchySequences(const NativeAnimationHierarchyReferenceToken&, std::uintptr_t&) noexcept override;
             ClockResult ReadAnimationHierarchySequence(const NativeAnimationHierarchyReferenceToken&, std::uint32_t, std::uintptr_t&) noexcept override;
@@ -3003,6 +3005,42 @@ namespace mta::game_de
             return result;
         }
 
+        ClockResult NativeAccess::RemovePrivateAnimationHierarchyFromUncompressedCache(const NativeAnimationHierarchyReferenceToken& token) noexcept
+        {
+            // The source cache operation does nothing only after its actual
+            // link is qualified null. This still needs the current owner and
+            // any child epoch; absence of a binding is never success.
+            const auto request = token;
+            auto       result = CheckAnimationHierarchyRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            result = runtime.privateHierarchies.CheckCacheZero(runtime.image, request, &CheckTimingOwner);
+            PublishCustomAnimationSequenceDebt(request.ownerGeneration);
+            if (result == ClockResult::Ok)
+                result = CheckAnimationHierarchyRequest(request);
+            if (runtime.privateHierarchies.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            return result;
+        }
+
+        ClockResult NativeAccess::RemoveEmptyPrivateAnimationHierarchySequences(const NativeAnimationHierarchyReferenceToken& token) noexcept
+        {
+            // Empty removal has the proved native field effects, but gains
+            // no permission to detach an edge or free an allocation.
+            const auto request = token;
+            auto       result = CheckAnimationHierarchyRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            NativePrivateAnimationHierarchyController::Receipt receipt;
+            result = runtime.privateHierarchies.RemoveEmptySequences(runtime.image, request, &CheckTimingOwner, &receipt);
+            PublishCustomAnimationSequenceDebt(request.ownerGeneration);
+            if (result == ClockResult::Ok)
+                result = CheckAnimationHierarchyRequest(request);
+            if ((receipt.entered && result != ClockResult::Ok) || runtime.privateHierarchies.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            return result;
+        }
+
         ClockResult NativeAccess::ReadAnimationHierarchy(const NativeAnimationHierarchyReferenceToken& token, NativeAnimationHierarchyValues& output) noexcept
         {
             const auto request = token;
@@ -3133,6 +3171,11 @@ namespace mta::game_de
                 if (privateResult != ClockResult::Ok || runtime.privateHierarchies.IsRetained())
                     return false;
             }
+            // Retiring the last CPU hierarchy also clears its published cleanup
+            // generation. An empty sequence journal has no work left to admit;
+            // calling its owner now would reject that already-discharged debt.
+            if (!runtime.customSequences.IsRetained())
+                return true;
             NativeCustomAnimSequenceController::RetireProgress progress;
             const auto                                         result =
                 runtime.customSequences.Retire(runtime.image, runtime.generation.load(), 32, &CheckCustomAnimationSequenceRecoveryOwner, progress);

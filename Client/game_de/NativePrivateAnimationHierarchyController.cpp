@@ -193,6 +193,37 @@ namespace mta::game_de
         return SetScalar(image, token, NativePrivateAnimationHierarchyCalls::ScalarOperation::SequenceCount, value, owner, receipt);
     }
 
+    ClockResult NativePrivateAnimationHierarchyController::CheckCacheZero(std::uintptr_t image, const Token& value, CheckOwner owner) noexcept
+    {
+        const auto token = value;
+        Values     values;
+        // Actual classic4D42A0 guards every list effect with cache!=nullptr.
+        // The existing qualified snapshot proves cache0, including a linked
+        // parent's actual array epoch. No native cache entry is invoked.
+        return Read(image, token, owner, values);
+    }
+    ClockResult NativePrivateAnimationHierarchyController::RemoveEmptySequences(std::uintptr_t image, const Token& value, CheckOwner owner,
+                                                                                Receipt* output) noexcept
+    {
+        const auto token = value;
+        if (output)
+            *output = {};
+        if (operation.test_and_set(std::memory_order_acquire))
+            return ClockResult::Busy;
+        PrivateHierarchyControllerDetail::Scope held{operation};
+        if (stopping)
+            return ClockResult::OwnerConflict;
+        const auto entry = Find(token);
+        if (entry == entries.end())
+            return ClockResult::BindingChanged;
+        // Pointer0 alone is not a detach ACK. A reserved/pending/linked parent
+        // keeps all dependency journals until its separate matching command.
+        if (entry->link.active)
+            return ClockResult::OwnerConflict;
+        const auto result = PrivateHierarchyControllerDetail::Calls::RemoveEmptySequences(image, entry->storage, token.ownerGeneration, owner, output);
+        Publish();
+        return result;
+    }
     ClockResult NativePrivateAnimationHierarchyController::ParentAction(NativeCustomAnimSequenceStorage& array, const Epoch& epoch, void* opaque) noexcept
     {
         auto& context = *static_cast<ActionContext*>(opaque);

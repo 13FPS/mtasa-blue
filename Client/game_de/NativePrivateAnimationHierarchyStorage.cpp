@@ -115,6 +115,27 @@ namespace mta::game_de
                 return ClockResult::OriginalException;
             }
         }
+        ClockResult ClearEmptySequences(std::uintptr_t address, std::uint32_t& exception) noexcept
+        {
+            const std::uintptr_t none = 0;
+            const std::uint16_t  count = 0;
+            const std::uint32_t  time = 0;
+            __try
+            {
+                // This is exactly the whole saved FEC640 empty branch, after
+                // proving no sequence/cache child exists. It is not a native
+                // destructor, detach operation or allocation-journal reset.
+                std::memcpy(reinterpret_cast<void*>(address + 8), &none, sizeof(none));
+                std::memcpy(reinterpret_cast<void*>(address + 0x10), &count, sizeof(count));
+                std::memcpy(reinterpret_cast<void*>(address + 0x18), &time, sizeof(time));
+                return ClockResult::Ok;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                exception = GetExceptionCode();
+                return ClockResult::OriginalException;
+            }
+        }
         ClockResult InitializeFields(std::uintptr_t address, std::uint32_t& exception) noexcept
         {
             // Source Initialize deliberately preserves the hash and alignment
@@ -475,6 +496,70 @@ namespace mta::game_de
             receipt.accepted = receipt.verified = receipt.acknowledged = true;
             return finish(ClockResult::Ok);
         }
+        static ClockResult RemoveEmptySequences(std::uintptr_t image, Storage& storage, std::uint64_t generation, CheckOwner owner, Receipt* output,
+                                                Write write) noexcept
+        {
+            Receipt    receipt;
+            const auto finish = [&](ClockResult result)
+            {
+                if (receipt.entered && result != ClockResult::Ok)
+                {
+                    auto current = storage.GetState();
+                    while ((current == State::Ready || current == State::Entered) &&
+                           !storage.state.compare_exchange_weak(current, State::Entered, std::memory_order_acq_rel))
+                    {
+                    }
+                }
+                if (output)
+                    *output = receipt;
+                return result;
+            };
+            if (!Unlinked(storage))
+                return finish(ClockResult::OwnerConflict);
+            if (!owner)
+                return finish(ClockResult::NotInitialized);
+            if (!PrivateHierarchyStorageDetail::Context::TryEnter())
+                return finish(ClockResult::Busy);
+            PrivateHierarchyStorageDetail::Context::Scope held;
+            PrivateHierarchyStorageDetail::Bytes          before;
+            auto                                          result = Snapshot(image, storage, generation, owner, before);
+            if (result != ClockResult::Ok)
+                return finish(result);
+            auto                 expected = before;
+            const std::uintptr_t none = 0;
+            const std::uint16_t  count = 0;
+            const std::uint32_t  time = 0;
+            std::memcpy(expected.data() + 8, &none, sizeof(none));
+            std::memcpy(expected.data() + 0x10, &count, sizeof(count));
+            std::memcpy(expected.data() + 0x18, &time, sizeof(time));
+#if defined(MTA_DE_PRIVATE_ANIMATION_HIERARCHY_REMOVE_EMPTY)
+            const auto entry = write ? write : &MTA_DE_PRIVATE_ANIMATION_HIERARCHY_REMOVE_EMPTY;
+#else
+            const auto entry = write ? write : &PrivateHierarchyStorageDetail::ClearEmptySequences;
+#endif
+            storage.state.store(State::Entered, std::memory_order_release);
+            receipt.hierarchy = storage.Address();
+            receipt.entered = true;
+            result = entry(storage.Address(), receipt.exceptionCode);
+            receipt.accepted = result == ClockResult::Ok;
+            // The physical count is now source-defined even if a later owner
+            // or observation fails. Never replay the write or restore its old
+            // count; ordinary known-private retirement owns failed records.
+            if (receipt.accepted)
+                storage.expectedCount = 0;
+            if (result != ClockResult::Ok)
+                return finish(result);
+            auto entered = State::Entered;
+            if (!storage.state.compare_exchange_strong(entered, State::Ready, std::memory_order_acq_rel))
+                return finish(ClockResult::OwnerConflict);
+            PrivateHierarchyStorageDetail::Bytes after;
+            if ((result = Snapshot(image, storage, generation, owner, after)) != ClockResult::Ok)
+                return finish(result);
+            if (std::memcmp(after.data(), expected.data(), after.size()))
+                return finish(ClockResult::BindingChanged);
+            receipt.verified = true;
+            return finish(ClockResult::Ok);
+        }
         static ClockResult Retire(std::uintptr_t image, Storage& storage, std::uint64_t generation, CheckOwner owner, Receipt* output) noexcept
         {
             Receipt    receipt;
@@ -651,6 +736,11 @@ namespace mta::game_de
                          NativeAnimationHierarchyValues& output) noexcept
         {
             return NativePrivateAnimationHierarchyStorageAccess::Read(image, storage, generation, owner, output);
+        }
+        ClockResult RemoveEmptySequences(std::uintptr_t image, Storage& storage, std::uint64_t generation, CheckOwner owner, Receipt* receipt,
+                                         Write write) noexcept
+        {
+            return NativePrivateAnimationHierarchyStorageAccess::RemoveEmptySequences(image, storage, generation, owner, receipt, write);
         }
         ClockResult Retire(std::uintptr_t image, Storage& storage, std::uint64_t generation, CheckOwner owner, Receipt* receipt) noexcept
         {

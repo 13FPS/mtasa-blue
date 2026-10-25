@@ -20,8 +20,8 @@ $record=[ordered]@{
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     result=$null;checks=0;failure=$null;scratchDirectory=$scratchRoot;scratchRemoved=$false;
     generatedFixture=$null;actualHeadersConsumed=@();
-    actualCommonIfpParserRuntimeTested=$false;actualIfpOwnershipFailurePathsTested=$false;actualIfpOpaqueLayoutVariantsTested=$false;
-    scope='Actual common CClientIFP/CIFPAnimations/CFileReader TUs and unchanged actual class headers, x86 CPU runtime; only unrelated entity/string/game shell substituted. Genuine classic storage12/4 and instrumented opaque80/8 backend layouts share the same parser and cleanup. No duplicated parser or cleanup model, native engine execution or concrete DE factory claim.';
+    actualCommonIfpParserRuntimeTested=$false;actualIfpOwnershipFailurePathsTested=$false;actualIfpOpaqueLayoutVariantsTested=$false;actualIfpDetachedConstructionTested=$false;actualIfpUnattachedCleanupTested=$false;
+    scope='Actual common CClientIFP/CIFPAnimations/CFileReader TUs and unchanged actual class headers, x86 CPU runtime; only unrelated entity/string/game shell substituted. Genuine classic storage12/4 At and instrumented opaque80/8 owned-array views share the same parser and cleanup. This affected module reruns codec/transaction paths plus construction-before-hierarchy-attach and failure-before-attach cleanup; no other old suites replay. No duplicated parser or cleanup model, native engine execution or concrete DE factory claim.';
     nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;installationChanged=$false;
     classDeclarationsMirrored=$false;completeCGameReady=$false;completeNativeDEAnimationFactoryReady=$false;fullMtaReady=$false
 }
@@ -141,7 +141,7 @@ try {
     }
     foreach($relative in @('Client/mods/deathmatch/logic/CClientIFP.h','Client/mods/deathmatch/logic/CIFPAnimations.h',
         'Client/mods/deathmatch/logic/CFileReader.h','Client/mods/deathmatch/logic/CIFPAnimationStorage.h',
-        'Client/mods/deathmatch/logic/CIFPReadGuard.h','Client/sdk/game/CAnimManager.h')){
+        'Client/mods/deathmatch/logic/CIFPReadGuard.h','Client/sdk/game/CAnimManager.h','Client/game_sa/CAnimSequenceStorageSA.h')){
         $actual=[IO.Path]::GetFullPath((Join-Path $taskRoot $relative))
         if(-not $consumed.Contains($actual)){throw "Compiler did not consume exact actual header: $relative"}
         $record.actualHeadersConsumed+=@([ordered]@{path=$relative;sha256=(Sha $actual)})
@@ -158,10 +158,13 @@ try {
     $record.actualIfpOpaqueLayoutVariantsTested=$stdout.Contains('Actual common IFP opaque layout variants fixture completed')
     $record.actualIfpOwnershipFailurePathsTested=$stdout.Contains('IFP phase: allocation and before/after publication failures') -and
         $stdout.Contains('IFP phase: transactional reload, retained old set and shared chunk cleanup') -and $record.actualCommonIfpParserRuntimeTested
+    $record.actualIfpDetachedConstructionTested=$stdout.Contains('Actual common IFP detached construction order fixture completed')
+    $record.actualIfpUnattachedCleanupTested=$stdout.Contains('Actual common IFP unattached cleanup and retained set fixture completed')
     $record.checks=$record.result.checks
     $record.success=$record.result.test.exitCode -eq 0 -and -not $record.result.test.timedOut -and $record.checks -gt 0 -and
         $record.result.pointerBits -eq 32 -and $record.actualCommonIfpParserRuntimeTested -and
-        $record.actualIfpOpaqueLayoutVariantsTested -and $record.actualIfpOwnershipFailurePathsTested
+        $record.actualIfpOpaqueLayoutVariantsTested -and $record.actualIfpOwnershipFailurePathsTested -and
+        $record.actualIfpDetachedConstructionTested -and $record.actualIfpUnattachedCleanupTested
     if(-not $record.success){throw 'Actual common IFP runtime/evidence failed'}
 } catch { AddFailure ($_.Exception.ToString()) }
 finally {

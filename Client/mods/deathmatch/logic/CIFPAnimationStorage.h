@@ -11,6 +11,7 @@
 #include <game/CAnimBlendSequence.h>
 #include <game/CAnimManager.h>
 #include <memory>
+#include <limits>
 #include <set>
 #include <stdexcept>
 #include <utility>
@@ -117,13 +118,16 @@ namespace MtaGame::IfpStorage
         const bool      attached = animation.sequencesAttached;
         std::set<void*> individualFrames;
         void*           sharedBase = nullptr;
-        if (currentHierarchy && sequences && attached)
+        if (sequences)
         {
-            // Every capacity row was initialized before publication, including
-            // unknown/dummy rows beyond the temporary logical input count.
+            if (capacity && capacity - 1 > (std::numeric_limits<DWORD>::max)())
+                throw std::runtime_error("IFP sequence capacity exceeds the backend row index domain");
+            // Failed parsing may leave fully owned rows unattached. Gather
+            // every initialized capacity row from its original allocation,
+            // including unknown/dummy rows beyond the logical input count.
             for (std::size_t index = 0; index != capacity; ++index)
             {
-                auto sequence = manager.GetCustomAnimBlendSequence(currentHierarchy->GetSequence(static_cast<DWORD>(index)));
+                auto sequence = manager.GetCustomAnimBlendSequenceAt(sequences, static_cast<DWORD>(index));
                 if (!sequence)
                     throw std::runtime_error("IFP backend returned no initialized sequence row");
                 auto* frames = sequence->GetKeyFrames();

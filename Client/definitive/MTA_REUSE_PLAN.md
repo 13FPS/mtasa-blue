@@ -5,6 +5,19 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+The actual IFP parser now populates rows through their original owned array
+before attaching that array to its hierarchy. The SDK requires an owned-array
+row factory, with a real SA implementation using its existing cookie and row
+layout. Cleanup gathers the full owned capacity even when parsing failed
+before attachment, preserving initialized dummy rows and retained replacements.
+
+The DE controller also reserves prepared-array and frame-record dependencies
+before future parent operations. Held resources cannot be freed or have their
+frame pointers replaced; row frame spans are checked against the real owned
+buffer. A borrowed epoch shares one native gate. Callback success supplies no
+parent acknowledgement, and the physical parent protocol and DE factory remain
+separate requirements. The SDK addition requires rebuilt source consumers.
+
 Hierarchy naming now uses the addressed classic `SetName` body: ASCII name
 normalization followed by the existing raw key generator. Its input has no
 sequence-row 64-byte limit, and high bytes remain unchanged. Only the hierarchy

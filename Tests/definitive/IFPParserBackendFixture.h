@@ -35,7 +35,7 @@ namespace ifp_parser_tests
             row.pLinkPtr = nullptr;
         }
         void                            SetName(const char* name) override { row.uiHashKey = HashString(name); }
-        void                            SetSequences(CAnimBlendSequenceSAInterface* value) override { row.pSequences = value; }
+        void                            SetSequences(CAnimBlendSequenceSAInterface* value) override;
         void                            SetNumSequences(unsigned short value) override { row.usNumSequences = value; }
         void                            SetRunningCompressed(bool value) override { row.bRunningCompressed = value; }
         void                            SetAnimationBlockID(int value) override { row.iAnimBlockID = value; }
@@ -61,7 +61,7 @@ namespace ifp_parser_tests
     {
     public:
         Sequence(Manager& manager, CAnimBlendSequenceSAInterface& value) noexcept : owner(manager), row(value) {}
-        void Initialize() override { MtaGame::CAnimSequenceStorageSA::Initialize(row); }
+        void Initialize() override;
         void SetName(const char* name) override { row.m_hash = HashString(name); }
         void SetBoneTag(std::int32_t value) override
         {
@@ -98,9 +98,35 @@ namespace ifp_parser_tests
         std::size_t                                           copyAttempts = 0, cacheRemovals = 0, attachAttempts = 0;
         std::size_t                                           failFrameAt = 0, failCopyAt = 0, failArrayAt = 0, failAttachAt = 0;
         bool                                                  copyFailureAfterWrite = false, attachFailureAfterWrite = false;
-        const bool                                            alternateLayout;
-        std::map<CAnimBlendSequenceSAInterface*, BYTE*>       alternateAllocations;
-        bool Empty() const { return hierarchies.empty() && detached.empty() && arrays.empty() && frames.empty() && alternateAllocations.empty(); }
+        enum class EventKind
+        {
+            Lookup,
+            Populate,
+            Attach,
+            FreeFrame,
+            FreeArray,
+            DeleteHierarchy,
+            Cache
+        };
+        struct Event
+        {
+            EventKind                      kind;
+            CAnimBlendSequenceSAInterface* array;
+            std::size_t                    index;
+            bool                           attached;
+        };
+        std::vector<Event>                                              events;
+        std::map<CAnimBlendSequenceSAInterface*, std::set<std::size_t>> constructedRows;
+        std::size_t arrayAtAttempts = 0, classicAtCalls = 0, opaqueAtCalls = 0, atBeforeAttachment = 0, hierarchyRowRequests = 0,
+                    populationsAfterAttachment = 0;
+        std::size_t failArrayRowAt = 0, hierarchyAttachAttempts = 0, hierarchyAttachAccepted = 0, failHierarchyAttachAt = 0;
+        bool        hierarchyAttachFailureAfterWrite = false, requireConstructedBeforeAttach = false, allCapacityInitialized = true;
+        const bool  alternateLayout;
+        std::map<CAnimBlendSequenceSAInterface*, BYTE*> alternateAllocations;
+        bool                                            Empty() const
+        {
+            return hierarchies.empty() && detached.empty() && arrays.empty() && frames.empty() && alternateAllocations.empty() && constructedRows.empty();
+        }
         ~Manager()
         {
             if (!Empty())
@@ -119,6 +145,31 @@ namespace ifp_parser_tests
             if (index >= Capacity(first))
                 Unexpected();
             return reinterpret_cast<CAnimBlendSequenceSAInterface*>(reinterpret_cast<BYTE*>(first) + index * Stride());
+        }
+        bool ArrayAttached(CAnimBlendSequenceSAInterface* first) const
+        {
+            for (auto* hierarchy : hierarchies)
+                if (hierarchy->pSequences == first)
+                    return true;
+            return false;
+        }
+        void RecordPopulation(CAnimBlendSequenceSAInterface* value)
+        {
+            const auto address = reinterpret_cast<std::uintptr_t>(value);
+            for (const auto& array : arrays)
+            {
+                const auto begin = reinterpret_cast<std::uintptr_t>(array.first);
+                if (address >= begin && address - begin < array.second * Stride() && (address - begin) % Stride() == 0)
+                {
+                    const auto index = (address - begin) / Stride();
+                    const bool attached = ArrayAttached(array.first);
+                    constructedRows[array.first].insert(index);
+                    events.push_back({EventKind::Populate, array.first, index, attached});
+                    if (attached)
+                        ++populationsAfterAttachment;
+                    return;
+                }
+            }
         }
         bool Owns(CAnimBlendSequenceSAInterface* row) const
         {
@@ -159,11 +210,42 @@ namespace ifp_parser_tests
                 Unexpected();
             return std::make_unique<Sequence>(*this, *row);
         }
+        // Before the hierarchy edge exists, only this exact owned-array
+        // provider can identify a row. The classic branch executes real At;
+        // the existing alternate layout remains instrumentation, not DE.
+        std::unique_ptr<CAnimBlendSequence> GetCustomAnimBlendSequenceAt(CAnimBlendSequenceSAInterface* original, DWORD index) override
+        {
+            ++arrayAtAttempts;
+            const auto found = arrays.find(original);
+            if (found == arrays.end() || static_cast<std::size_t>(index) >= found->second)
+                return nullptr;
+            if (failArrayRowAt && arrayAtAttempts == failArrayRowAt)
+                return nullptr;
+            CAnimBlendSequenceSAInterface* current = nullptr;
+            if (alternateLayout)
+            {
+                current = Row(original, index);
+                ++opaqueAtCalls;
+            }
+            else
+            {
+                current = MtaGame::CAnimSequenceStorageSA::At(original, index);
+                ++classicAtCalls;
+            }
+            if (!current || current != Row(original, index))
+                Unexpected();
+            const bool attached = ArrayAttached(original);
+            if (!attached)
+                ++atBeforeAttachment;
+            events.push_back({EventKind::Lookup, original, index, attached});
+            return GetCustomAnimBlendSequence(current);
+        }
         void DeleteCustomAnimHierarchyInterface(CAnimBlendHierarchySAInterface* row) override
         {
             if (!row || hierarchies.erase(row) != 1)
                 Unexpected();
             ++hierarchyFrees;
+            events.push_back({EventKind::DeleteHierarchy, row->pSequences, 0, row->pSequences != nullptr});
             delete row;
         }
         void DeleteCustomAnimSequenceInterface(CAnimBlendSequenceSAInterface* row) override
@@ -199,6 +281,12 @@ namespace ifp_parser_tests
             {
                 arrays.emplace(row, capacity);
                 ++arrayAllocations;
+                for (std::size_t index = 0; index != capacity; ++index)
+                {
+                    const auto* current = Row(row, index);
+                    allCapacityInitialized =
+                        allCapacityInitialized && !current->pKeyFrames && !current->sFlags && !current->sNumKeyFrames && current->m_boneId == 0xffff;
+                }
             }
             return row;
         }
@@ -207,6 +295,8 @@ namespace ifp_parser_tests
             if (!row || arrays.erase(row) != 1)
                 Unexpected();
             ++arrayFrees;
+            constructedRows.erase(row);
+            events.push_back({EventKind::FreeArray, row, 0, false});
             if (alternateLayout)
             {
                 const auto found = alternateAllocations.find(row);
@@ -243,6 +333,7 @@ namespace ifp_parser_tests
                     Unexpected();
             frames.erase(found);
             ++frameFrees;
+            events.push_back({EventKind::FreeFrame, reinterpret_cast<CAnimBlendSequenceSAInterface*>(row), 0, false});
             delete[] row;
         }
         void RemoveFromUncompressedCache(CAnimBlendHierarchySAInterface* row) override
@@ -250,6 +341,7 @@ namespace ifp_parser_tests
             if (!hierarchies.count(row))
                 Unexpected();
             ++cacheRemovals;
+            events.push_back({EventKind::Cache, row->pSequences, 0, row->pSequences != nullptr});
         }
         void RemoveFromUncompressedCache(CAnimBlendHierarchy* row) override
         {
@@ -271,8 +363,37 @@ namespace ifp_parser_tests
         }
 #include "IFPManagerRejectors.generated.inl"
     };
+    // Observe the actual publication point rather than treating allocation
+    // or an initialized capacity row as completed parser construction.
+    inline void Hierarchy::SetSequences(CAnimBlendSequenceSAInterface* value)
+    {
+        ++owner.hierarchyAttachAttempts;
+        const bool fail = owner.failHierarchyAttachAt && owner.hierarchyAttachAttempts == owner.failHierarchyAttachAt;
+        if (value && owner.requireConstructedBeforeAttach)
+        {
+            if (row.usNumSequences > owner.Capacity(value))
+                Unexpected();
+            for (std::size_t index = 0; index < row.usNumSequences; ++index)
+                if (!owner.constructedRows[value].count(index))
+                    Unexpected();
+        }
+        if (fail && !owner.hierarchyAttachFailureAfterWrite)
+            throw std::runtime_error("injected hierarchy edge refusal");
+        row.pSequences = value;
+        if (value)
+            ++owner.hierarchyAttachAccepted;
+        owner.events.push_back({Manager::EventKind::Attach, value, 0, value != nullptr});
+        if (fail)
+            throw std::runtime_error("injected accepted hierarchy edge refusal");
+    }
+    inline void Sequence::Initialize()
+    {
+        MtaGame::CAnimSequenceStorageSA::Initialize(row);
+        owner.RecordPopulation(&row);
+    }
     inline CAnimBlendSequenceSAInterface* Hierarchy::GetSequence(DWORD index)
     {
+        ++owner.hierarchyRowRequests;
         return owner.Row(row.pSequences, index);
     }
     inline void Hierarchy::RemoveFromUncompressedCache()
@@ -288,6 +409,7 @@ namespace ifp_parser_tests
         row.sNumKeyFrames = static_cast<std::uint16_t>(count);
         row.sFlags = static_cast<unsigned short>((row.sFlags & ~7u) | 1u | (root ? 2u : 0u) | (compressed ? 4u : 0u));
         row.pKeyFrames = static_cast<BYTE*>(pointer);
+        owner.RecordPopulation(&row);
         if (fail)
             throw std::runtime_error("injected entered attachment refusal");
     }
@@ -307,6 +429,7 @@ namespace ifp_parser_tests
         if (fail && !owner.copyFailureAfterWrite)
             throw std::runtime_error("injected transfer refusal");
         row = *source;
+        owner.RecordPopulation(&row);
         if (fail)
             throw std::runtime_error("injected entered transfer refusal");
     }

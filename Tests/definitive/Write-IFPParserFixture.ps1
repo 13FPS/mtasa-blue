@@ -10,7 +10,7 @@ function Write-IFPParserFixture([string]$Root,[string]$Directory) {
     }
     $manager=[IO.File]::ReadAllText((Join-Path $Root 'Client/sdk/game/CAnimManager.h'))
     $manager=[regex]::Replace($manager,'(?s)/\*.*?\*/|//[^\r\n]*','')
-    $allowed=@('GetCustomAnimBlendHierarchy','GetCustomAnimBlendSequence','DeleteCustomAnimHierarchyInterface',
+    $allowed=@('GetCustomAnimBlendHierarchy','GetCustomAnimBlendSequence','GetCustomAnimBlendSequenceAt','DeleteCustomAnimHierarchyInterface',
         'DeleteCustomAnimSequenceInterface','AllocateKeyFramesMemory','FreeKeyFramesMemory','AllocateCustomAnimSequences',
         'FreeCustomAnimSequences','RemoveFromUncompressedCache')
     $rejectors=@('#pragma warning(push)','#pragma warning(disable : 4100)')

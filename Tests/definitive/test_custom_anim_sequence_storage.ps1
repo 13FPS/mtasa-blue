@@ -19,8 +19,8 @@ $record=[ordered]@{
     schema='mta_custom_animation_sequence_storage_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     results=@();checks=0;failure=$null;scratchDirectory=$scratchRoot;scratchRemoved=$false;
-    actualAnimSequenceStorageTested=$false;actualAnimHierarchySequenceSdkLifetimeTested=$false;
-    scope='Execute production CAnimSequenceStorageSA with actual SA record declarations on x86, including all-capacity initialization and frame-neutral storage free; execute actual shared SDK polymorphic CPU deletion and visible time-read refusal. Optional x64 is compile-only source coverage. No manager/engine/native ABI or complete DE factory execution.';
+    actualAnimSequenceStorageTested=$false;actualAnimHierarchySequenceSdkLifetimeTested=$false;actualClassicSequenceArrayAtTested=$false;
+    scope='Execute production CAnimSequenceStorageSA with actual SA record declarations on x86, including new original-array At capacity/null/overflow guard semantics independent of unattached hierarchy logical count, all-capacity initialization and frame-neutral storage free; execute actual shared SDK polymorphic CPU deletion and visible time-read refusal. Optional x64 is compile-only source coverage. No manager/engine/native ABI or complete DE factory execution.';
     nativeEngineCodeExecuted=$false;classicX64NativeRuntimeTested=$false;managerVtableDispatchTested=$false;
     gameLaunched=$false;gameAttached=$false;installationChanged=$false;fullMtaReady=$false
 }
@@ -142,13 +142,14 @@ try {
         if($summary.Success){$result.checks=[int]$summary.Groups[1].Value;$result.pointerBits=[int]$summary.Groups[2].Value}
         $record.actualAnimSequenceStorageTested=$stdout.Contains('Actual classic backend sequence storage policy fixture completed')
         $record.actualAnimHierarchySequenceSdkLifetimeTested=$stdout.Contains('Actual hierarchy and sequence SDK polymorphic CPU lifetime fixture completed')
+        $record.actualClassicSequenceArrayAtTested=$stdout.Contains('Actual classic sequence original-array capacity borrow fixture completed')
         $result.success=$result.test.exitCode -eq 0 -and -not $result.test.timedOut -and $result.checks -gt 0 -and $result.pointerBits -eq 32 -and
-            $record.actualAnimSequenceStorageTested -and $record.actualAnimHierarchySequenceSdkLifetimeTested
+            $record.actualAnimSequenceStorageTested -and $record.actualAnimHierarchySequenceSdkLifetimeTested -and $record.actualClassicSequenceArrayAtTested
         if(-not $result.success){throw 'Actual storage/lifetime execution or evidence failed'}
         $record.checks=$result.checks
     }
     $record.success=$record.results.Count -eq $architectures.Count -and @($record.results|Where-Object{-not $_.success}).Count -eq 0 -and
-        $record.actualAnimSequenceStorageTested -and $record.actualAnimHierarchySequenceSdkLifetimeTested
+        $record.actualAnimSequenceStorageTested -and $record.actualAnimHierarchySequenceSdkLifetimeTested -and $record.actualClassicSequenceArrayAtTested
 } catch { AddFailure ($_.Exception.ToString()) }
 finally {
     foreach ($name in $previousEnvironment.Keys) {

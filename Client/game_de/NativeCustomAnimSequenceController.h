@@ -12,11 +12,15 @@
 #include "NativeAnimationSequenceFrameViewCalls.h"
 #include "NativeAnimationSequenceAccess.h"
 #include "NativeAnimationSequenceLogicalState.h"
+#include "NativeAnimationSequenceDependencyCalls.h"
 #include <atomic>
 #include <list>
+#include <memory>
+#include <vector>
 
 namespace mta::game_de
 {
+    class NativePrivateAnimationHierarchyController;
     class NativeCustomAnimSequenceController final
     {
     public:
@@ -63,6 +67,25 @@ namespace mta::game_de
                                     NameReceipt* = nullptr) noexcept;
         ClockResult PrepareFreshCompressedSequence(std::uintptr_t, const NativeAnimationSequenceReferenceToken&, std::size_t, bool, std::uintptr_t, CheckOwner,
                                                    FrameBindReceipt* = nullptr) noexcept;
+        struct PrivateDependencyKey
+        {
+            std::uint64_t  ownerGeneration = 0, command = 0;
+            std::uintptr_t hierarchy = 0, arrayTag = 0;
+        };
+        struct PrivateDependencyReceipt
+        {
+            std::size_t capacity = 0, frameRecords = 0;
+            bool        reserved = false, verified = false, released = false, uncertain = false;
+        };
+        using PrivatePreparedAction = NativeAnimationSequenceDependencyCalls::Action;
+        // Internal owner prerequisites, not SDK attachment or detach ACK.
+        // Parent plans its durable nonzero command before reserving anything.
+        ClockResult ReservePrivatePreparedArray(std::uintptr_t, const PrivateDependencyKey&, std::size_t expectedCapacity, CheckOwner,
+                                                PrivateDependencyReceipt* = nullptr) noexcept;
+        ClockResult WithPrivatePreparedArray(std::uintptr_t, const PrivateDependencyKey&, CheckOwner, PrivatePreparedAction, void*,
+                                             PrivateDependencyReceipt* = nullptr) noexcept;
+        ClockResult CancelPrivatePreparedReservation(std::uintptr_t, const PrivateDependencyKey&, CheckOwner, PrivatePreparedAction, void*,
+                                                     PrivateDependencyReceipt* = nullptr) noexcept;
         // This is private-owner bookkeeping for a future qualified hierarchy
         // attachment, not a public raw-pointer adoption or detachment API.
         ClockResult PinPublication(std::uint64_t generation, std::uintptr_t issuedTag, std::uintptr_t hierarchyAffinity) noexcept;
@@ -74,6 +97,33 @@ namespace mta::game_de
         bool RecoveryPending() const noexcept { return recovery.load(std::memory_order_acquire); }
 
     private:
+        friend class NativePrivateAnimationHierarchyController;
+        enum class PrivatePhase : std::uint32_t
+        {
+            Preparing,
+            Reserved,
+            AttachEntered,
+            AttachedAccepted,
+            DetachEntered,
+            DetachAccepted,
+            Uncertain
+        };
+        struct Entry;
+        struct PrivateDependency
+        {
+            PrivateDependencyKey                                key;
+            PrivatePhase                                        phase{PrivatePhase::Preparing};
+            std::vector<NativeAnimationSequenceRowCalls::Value> rows;
+            std::vector<Entry*>                                 frames;
+            bool                                                releaseRequested = false, cancelRequested = false;
+        };
+        // Only the actual parent controller may advance an entered/accepted
+        // physical command or request its acknowledged release. Action Ok,
+        // raw null fields and map erasure cannot manufacture that proof.
+        ClockResult AdvancePrivateDependencyHeld(const PrivateDependencyKey&, PrivatePhase expected, PrivatePhase next) noexcept;
+        ClockResult RequestPrivateDetachReleaseHeld(const PrivateDependencyKey&) noexcept;
+        ClockResult RequestPrivateReservationCancelHeld(const PrivateDependencyKey&) noexcept;
+        void        RetainPrivateDependencyHeld(const PrivateDependencyKey&) noexcept;
         struct RowState
         {
             explicit RowState(std::size_t value) noexcept : index(value) { logical.Initialize(); }
@@ -85,22 +135,35 @@ namespace mta::game_de
             Storage storage;
             // Logical state belongs to the allocation, not a CPU facade.
             // Reserve a lazy row node before a qualified write can enter.
-            std::list<RowState> rows;
-            bool                issued = false;
+            std::list<RowState>                rows;
+            bool                               issued = false;
+            std::unique_ptr<PrivateDependency> privateDependency;
+            std::size_t                        privateHolds = 0;
         };
         using Entries = std::list<Entry>;
         Entries::iterator Find(std::uint64_t generation, std::uintptr_t issuedTag) noexcept;
-        ClockResult   AllocateResource(std::uintptr_t, std::uint64_t, std::size_t, Storage::Kind, CheckOwner, std::uintptr_t&, Receipt*, InvokeMalloc) noexcept;
-        ClockResult   FreeResource(std::uintptr_t, std::uint64_t, std::uintptr_t, Storage::Kind, CheckOwner, Receipt*, InvokeFree) noexcept;
-        ClockResult   SelectRow(const NativeAnimationSequenceReferenceToken&, Entries::iterator&, RowState*&) noexcept;
-        ClockResult   ReadSequenceValue(std::uintptr_t, const NativeAnimationSequenceReferenceToken&, CheckOwner, NativeAnimationSequenceValues*,
-                                        std::uint32_t*) noexcept;
-        ClockResult   CheckSequenceFramePointer(std::uintptr_t, std::uint64_t, std::uintptr_t, CheckOwner) noexcept;
-        void          Publish() noexcept;
-        Entries       entries;
-        std::uint64_t ownerGeneration = 0;
-        bool          stopping = false;
-        std::atomic_flag  operation = ATOMIC_FLAG_INIT;
-        std::atomic<bool> retained{false}, recovery{false};
+        ClockResult AllocateResource(std::uintptr_t, std::uint64_t, std::size_t, Storage::Kind, CheckOwner, std::uintptr_t&, Receipt*, InvokeMalloc) noexcept;
+        ClockResult FreeResource(std::uintptr_t, std::uint64_t, std::uintptr_t, Storage::Kind, CheckOwner, Receipt*, InvokeFree) noexcept;
+        ClockResult SelectRow(const NativeAnimationSequenceReferenceToken&, Entries::iterator&, RowState*&) noexcept;
+        ClockResult ReadSequenceValue(std::uintptr_t, const NativeAnimationSequenceReferenceToken&, CheckOwner, NativeAnimationSequenceValues*,
+                                      std::uint32_t*) noexcept;
+        ClockResult CheckSequenceFramePointer(std::uintptr_t, std::uint64_t, std::uintptr_t, CheckOwner) noexcept;
+        struct PrivateVisitContext
+        {
+            NativeCustomAnimSequenceController* self;
+            Entry*                              array;
+        };
+        static bool        SamePrivateKey(const PrivateDependencyKey&, const PrivateDependencyKey&) noexcept;
+        static ClockResult ResolvePrivateFrame(std::size_t, const NativeAnimationSequenceRowCalls::Value&, const Storage*&, void*) noexcept;
+        static ClockResult ReservePrivateAction(Storage&, const NativeAnimationSequenceDependencyCalls::Epoch&, void*) noexcept;
+        ClockResult        WithPrivateArray(std::uintptr_t, const PrivateDependencyKey&, CheckOwner, PrivatePreparedAction, void*, PrivateDependencyReceipt*,
+                                            bool) noexcept;
+        ClockResult        ReleasePrivateDependencyHeld(Entry&) noexcept;
+        void               Publish() noexcept;
+        Entries            entries;
+        std::uint64_t      ownerGeneration = 0;
+        bool               stopping = false;
+        std::atomic_flag   operation = ATOMIC_FLAG_INIT;
+        std::atomic<bool>  retained{false}, recovery{false};
     };
 }

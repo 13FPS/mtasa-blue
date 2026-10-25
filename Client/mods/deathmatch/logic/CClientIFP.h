@@ -293,10 +293,10 @@ private:
     void ReadIFPVersion1();
     void ReadIFPVersion2(bool bAnp3);
 
-    WORD         ReadSequencesWithDummies(std::unique_ptr<CAnimBlendHierarchy>& pAnimationHierarchy, std::bitset<64>& outAnimatedBonesMask);
-    WORD         ReadSequences(std::unique_ptr<CAnimBlendHierarchy>& pAnimationHierarchy, SequenceMapType& MapOfSequences);
-    WORD         ReadSequencesVersion1(std::unique_ptr<CAnimBlendHierarchy>& pAnimationHierarchy, SequenceMapType& MapOfSequences);
-    WORD         ReadSequencesVersion2(std::unique_ptr<CAnimBlendHierarchy>& pAnimationHierarchy, SequenceMapType& MapOfSequences);
+    WORD         ReadSequencesWithDummies(SAnimation& animation);
+    WORD         ReadSequences(SAnimation& animation, SequenceMapType& MapOfSequences);
+    WORD         ReadSequencesVersion1(SAnimation& animation, SequenceMapType& MapOfSequences);
+    WORD         ReadSequencesVersion2(SAnimation& animation, SequenceMapType& MapOfSequences);
     std::int32_t ReadSequenceVersion1(SAnim& Anim);
     void         ReadSequenceVersion2(SSequenceHeaderV2& ObjectNode);
 
@@ -329,9 +329,9 @@ private:
                                       const std::int32_t& iSequences);
     void InitializeAnimationSequence(std::unique_ptr<CAnimBlendSequence>& pAnimationSequence, const SString& strName, const std::int32_t& iBoneID);
     void PreProcessAnimationHierarchy(std::unique_ptr<CAnimBlendHierarchy>& pAnimationHierarchy);
-    void MoveSequencesWithDummies(std::unique_ptr<CAnimBlendHierarchy>& pAnimationHierarchy, SequenceMapType& mapOfSequences,
-                                  std::bitset<64>& outAnimatedBonesMask);
+    void MoveSequencesWithDummies(SAnimation& animation, SequenceMapType& mapOfSequences, std::bitset<64>& outAnimatedBonesMask);
     void AllocateSequencesMemory(SAnimation& animation);
+    void AttachSequencesMemory(SAnimation& animation);
 
     void    InsertAnimationDummySequence(std::unique_ptr<CAnimBlendSequence>& pAnimationSequence, const SString& BoneName, const DWORD& dwBoneID);
     void    CopyDummyKeyFrameByBoneID(BYTE* pKeyFrames, DWORD dwBoneID);

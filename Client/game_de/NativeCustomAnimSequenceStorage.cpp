@@ -10,6 +10,7 @@
 #include "NativeAnimationSequenceRowProfile.h"
 #include "NativeAnimationSequenceCopyCalls.h"
 #include "NativeAnimationSequenceFrameViewCalls.h"
+#include "NativeAnimationSequenceDependencyCalls.h"
 #include "NativeAnimationSequenceNameCalls.h"
 #include "NativeAnimationSequenceNameProfile.h"
 #include "NativeAnimationSequenceFrameBindCalls.h"
@@ -960,6 +961,84 @@ namespace mta::game_de
             receipt.verified = true;
             return finish(ClockResult::Ok);
         }
+        static ClockResult WithDependency(std::uintptr_t image, Storage& array, std::uint64_t generation, CheckOwner owner,
+                                          NativeAnimationSequenceDependencyCalls::ResolveFrame resolve, void* resolveContext,
+                                          NativeAnimationSequenceDependencyCalls::Action action, void* actionContext) noexcept
+        {
+            namespace Detail = CustomAnimSequenceStorageDetail;
+            namespace Dependency = NativeAnimationSequenceDependencyCalls;
+            if (!owner)
+                return ClockResult::NotInitialized;
+            if (!action)
+                return ClockResult::InvalidArgument;
+            auto result = RowResourceShape(array, generation, Kind::SequenceArray);
+            if (result != ClockResult::Ok)
+                return result;
+            if (!Detail::Context::TryEnter())
+                return ClockResult::Busy;
+            Detail::Context::Scope held;
+            Detail::Heap::Value    firstHeap, afterHeap;
+            if ((result = Detail::Capture(image, owner, firstHeap)) != ClockResult::Ok)
+                return result;
+            if (firstHeap.authority != array.origin.authority || firstHeap.authorityVtable != array.origin.authorityVtable)
+                return ClockResult::BindingChanged;
+            const auto validate = [&]() noexcept
+            {
+                const auto count = resolve ? array.capacity : std::size_t{1};
+                for (std::size_t index = 0; index != count; ++index)
+                {
+                    NativeAnimationSequenceRowCalls::Value row;
+                    auto                                   checked = CaptureRow(image, array, generation, index, owner, row);
+                    if (checked != ClockResult::Ok)
+                        return checked;
+                    if (!resolve)
+                        continue;
+                    // This first prepared-only slice owns ordinary original
+                    // frame bases, never a shared-chunk/interior adoption.
+                    const Storage* frame = nullptr;
+                    if ((checked = resolve(index, row, frame, resolveContext)) != ClockResult::Ok)
+                        return checked;
+                    if (row.flags & 0x08u)
+                        return ClockResult::InvalidArgument;
+                    if (!row.keyFrames)
+                    {
+                        if (frame || row.frameCount)
+                            return ClockResult::BindingChanged;
+                        continue;
+                    }
+                    if (!frame || frame->tag != row.keyFrames || frame->origin.authority != array.origin.authority ||
+                        frame->origin.authorityVtable != array.origin.authorityVtable)
+                        return ClockResult::BindingChanged;
+                    Detail::Heap::Value frameHeap;
+                    if ((checked = CaptureFrameBuffer(image, *frame, generation, owner, frameHeap)) != ClockResult::Ok)
+                        return checked;
+                    if (!Detail::Heap::Same(firstHeap, frameHeap))
+                        return ClockResult::BindingChanged;
+                    // The parent may consume every logical frame. Qualifying
+                    // the original allocation alone does not prove the row's
+                    // count/format still fits that owned buffer. The saved
+                    // loader and whole postprocessors establish these four
+                    // strides; zero count remains a valid empty span.
+                    const std::size_t stride = (row.flags & 0x04u) ? ((row.flags & 0x02u) ? 16u : 10u) : ((row.flags & 0x02u) ? 32u : 20u);
+                    if (static_cast<std::size_t>(row.frameCount) > frame->bytes / stride)
+                        return ClockResult::InvalidArgument;
+                }
+                return ClockResult::Ok;
+            };
+            if ((result = validate()) != ClockResult::Ok || (result = validate()) != ClockResult::Ok)
+                return result;
+            Dependency::Epoch epoch(image, generation);
+            result = action(array, epoch, actionContext);
+            if (result != ClockResult::Ok)
+                return result;
+            if ((result = validate()) != ClockResult::Ok || (result = Detail::Capture(image, owner, afterHeap)) != ClockResult::Ok)
+                return result;
+            if (!Detail::Heap::Same(firstHeap, afterHeap))
+                return ClockResult::BindingChanged;
+            if ((result = RowResourceShape(array, generation, Kind::SequenceArray)) != ClockResult::Ok)
+                return result;
+            return Detail::Context::Owner(image, owner);
+        }
         static ClockResult ReadSequenceFrame(std::uintptr_t image, const Storage& array, std::uint64_t generation, std::size_t rowIndex, const Storage& frames,
                                              std::size_t frameIndex, std::uint32_t stride, CheckOwner owner, std::uintptr_t& output) noexcept
         {
@@ -1105,6 +1184,20 @@ namespace mta::game_de
                                      std::size_t count, bool root, CheckOwner owner, Receipt* output, Write write) noexcept
         {
             return NativeCustomAnimSequenceStorageAccess::AttachCompressedFrames(image, array, generation, rowIndex, frames, count, root, owner, output, write);
+        }
+    }
+    namespace NativeAnimationSequenceDependencyCalls
+    {
+        ClockResult WithPrepared(std::uintptr_t image, Storage& array, std::uint64_t generation, CheckOwner owner, ResolveFrame resolve, void* resolveContext,
+                                 Action action, void* actionContext) noexcept
+        {
+            if (!resolve)
+                return ClockResult::InvalidArgument;
+            return NativeCustomAnimSequenceStorageAccess::WithDependency(image, array, generation, owner, resolve, resolveContext, action, actionContext);
+        }
+        ClockResult WithArray(std::uintptr_t image, Storage& array, std::uint64_t generation, CheckOwner owner, Action action, void* actionContext) noexcept
+        {
+            return NativeCustomAnimSequenceStorageAccess::WithDependency(image, array, generation, owner, nullptr, nullptr, action, actionContext);
         }
     }
     namespace NativeAnimationSequenceFrameViewCalls

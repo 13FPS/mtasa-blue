@@ -302,6 +302,99 @@ namespace
             }
         }
     }
+    void DetachedConstruction()
+    {
+        Phase("owned-array rows finish before hierarchy attachment");
+        for (const bool alternate : {false, true})
+            for (const auto* version : {"ANPK", "ANP2", "ANP3"})
+            {
+                Manager manager(alternate);
+                manager.requireConstructedBeforeAttach = true;
+                {
+                    CClientIFP ifp(nullptr, 20, manager);
+                    Check(ifp.Load("detached", true, MakeFile(version, {{0, "Normal", 1024}}).Buffer()));
+                    auto* hierarchy = ifp.GetAnimationHierarchy("walk");
+                    Check(hierarchy != nullptr);
+                    Check(manager.allCapacityInitialized && manager.hierarchyAttachAttempts == 1 && manager.hierarchyAttachAccepted == 1);
+                    Check(manager.atBeforeAttachment >= 64 && !manager.hierarchyRowRequests && !manager.populationsAfterAttachment);
+                    Check(alternate ? manager.opaqueAtCalls > 0 : manager.classicAtCalls > 0);
+                    std::size_t attachedAt = manager.events.size();
+                    for (std::size_t index = 0; index < manager.events.size(); ++index)
+                        if (manager.events[index].kind == Manager::EventKind::Attach && manager.events[index].array == hierarchy->pSequences)
+                        {
+                            attachedAt = index;
+                            break;
+                        }
+                    Check(attachedAt < manager.events.size());
+                    for (std::size_t index = 0; index < manager.events.size(); ++index)
+                        if (manager.events[index].kind == Manager::EventKind::Populate && manager.events[index].array == hierarchy->pSequences)
+                            Check(index < attachedAt);
+                    const auto capacity = manager.arrays.at(hierarchy->pSequences);
+                    Check(capacity == 65 && hierarchy->usNumSequences == 64);
+                    const auto* unused = manager.Row(hierarchy->pSequences, capacity - 1);
+                    Check(!unused->pKeyFrames && !unused->sFlags && !unused->sNumKeyFrames && unused->m_boneId == 0xffff);
+                }
+                Balanced(manager);
+                Check(!manager.hierarchyRowRequests && !manager.populationsAfterAttachment);
+            }
+        std::puts("Actual common IFP detached construction order fixture completed");
+    }
+    void DetachedFailureCleanup()
+    {
+        Phase("unattached partial construction owns frames through full capacity");
+        const auto input = MakeFile("ANP3", {{0, "Normal", 1024}});
+        for (const bool alternate : {false, true})
+            for (unsigned failure = 0; failure != 3; ++failure)
+            {
+                Manager manager(alternate);
+                manager.requireConstructedBeforeAttach = true;
+                if (!failure)
+                    manager.failArrayRowAt = 3;
+                else
+                {
+                    manager.failHierarchyAttachAt = 1;
+                    manager.hierarchyAttachFailureAfterWrite = failure == 2;
+                }
+                {
+                    CClientIFP ifp(nullptr, 21, manager);
+                    Check(!ifp.Load("unattached-failure", true, input.Buffer()));
+                    Check(manager.frameAllocations >= 2 && manager.frameAllocations == manager.frameFrees);
+                    Check(manager.arrayAllocations == 1 && manager.arrayFrees == 1 && manager.hierarchyAllocations == 1 && manager.hierarchyFrees == 1);
+                    Check(manager.allCapacityInitialized && !manager.cacheRemovals && !manager.hierarchyRowRequests);
+                    if (!failure)
+                        Check(!manager.hierarchyAttachAttempts && manager.atBeforeAttachment >= 65);
+                    else
+                        Check(manager.hierarchyAttachAttempts == 1 && manager.hierarchyAttachAccepted == (failure == 2 ? 1u : 0u));
+                }
+                Balanced(manager);
+            }
+        for (const bool alternate : {false, true})
+        {
+            Manager manager(alternate);
+            manager.requireConstructedBeforeAttach = true;
+            {
+                CClientIFP ifp(nullptr, 22, manager);
+                Check(ifp.Load("old", true, input.Buffer()));
+                auto       retained = ifp.GetIFPAnimationsPointer();
+                auto*      old = ifp.GetAnimationHierarchy("walk");
+                const auto oldFrames = manager.frames.size();
+                const auto allocations = manager.frameAllocations;
+                const auto frees = manager.frameFrees;
+                manager.failArrayRowAt = manager.arrayAtAttempts + 3;
+                Check(!ifp.Load("candidate", true, input.Buffer()));
+                Check(ifp.GetIFPAnimationsPointer() == retained && ifp.GetAnimationHierarchy("walk") == old && ifp.GetBlockName() == "old");
+                Check(manager.frames.size() == oldFrames && manager.frameAllocations - allocations == manager.frameFrees - frees &&
+                      manager.hierarchies.count(old) == 1);
+                manager.failArrayRowAt = 0;
+                Check(ifp.Load("replacement", true, MakeFile("ANP2", {{0, "Normal", 2048}}, "next").Buffer()));
+                Check(ifp.GetIFPAnimationsPointer() != retained && ifp.GetAnimationHierarchy("next") && manager.hierarchies.count(old) == 1);
+                retained.reset();
+                Check(!manager.hierarchies.count(old));
+            }
+            Balanced(manager);
+        }
+        std::puts("Actual common IFP unattached cleanup and retained set fixture completed");
+    }
     void ReloadAndSharedCleanup()
     {
         Phase("transactional reload, retained old set and shared chunk cleanup");
@@ -356,6 +449,9 @@ int main()
     TruncatedAndMalformed();
     ResourceFailures();
     ReloadAndSharedCleanup();
+    DetachedConstruction();
+    DetachedFailureCleanup();
     std::puts("Actual common IFP parser, transaction and cleanup fixture completed");
     std::printf("Passed %u actual common IFP runtime checks (%zu-bit; test animation environment, no native engine code)\n", checks, sizeof(void*) * 8);
+    return 0;
 }

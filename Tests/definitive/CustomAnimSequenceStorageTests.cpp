@@ -155,6 +155,25 @@ namespace
         }
         std::puts("Actual classic backend sequence storage policy fixture completed");
     }
+    void CapacityBorrowChecks()
+    {
+        Check(Storage::At(nullptr, 0) == nullptr);
+        auto* original = Storage::Allocate(3);
+        Check(Storage::At(original, 0) == original && Storage::At(original, 2) == original + 2);
+        Check(!Storage::At(original, 3) && !Storage::At(original, (std::numeric_limits<std::uint32_t>::max)()));
+        CAnimBlendHierarchySAInterface hierarchy{};
+        hierarchy.usNumSequences = 0;
+        Check(!hierarchy.pSequences && Storage::At(original, 2) == original + 2);
+        // A corrupted capacity must be rejected before pointer arithmetic;
+        // only this task-owned actual allocation supplies the cookie bytes.
+        const auto saved = Cookie(original);
+        const auto corrupt = (std::numeric_limits<std::size_t>::max)();
+        std::memcpy(reinterpret_cast<unsigned char*>(original) - Storage::CookieBytes, &corrupt, sizeof(corrupt));
+        Check(!Storage::At(original, 0));
+        std::memcpy(reinterpret_cast<unsigned char*>(original) - Storage::CookieBytes, &saved, sizeof(saved));
+        Storage::Free(original);
+        std::puts("Actual classic sequence original-array capacity borrow fixture completed");
+    }
     void LifetimeChecks()
     {
         unsigned                             hierarchyDestructions = 0, sequenceDestructions = 0;
@@ -181,9 +200,13 @@ static_assert(!noexcept(std::declval<const CAnimBlendHierarchy&>().GetTotalTime(
 static_assert(noexcept(std::declval<const CAnimBlendHierarchySA&>().GetTotalTime()));
 static_assert(std::is_same_v<decltype(&CAnimManager::AllocateCustomAnimSequences), CAnimBlendSequenceSAInterface* (CAnimManager::*)(std::size_t)>);
 static_assert(std::is_same_v<decltype(&CAnimManager::FreeCustomAnimSequences), void (CAnimManager::*)(CAnimBlendSequenceSAInterface*)>);
+static_assert(std::is_same_v<decltype(&CAnimManager::GetCustomAnimBlendSequenceAt),
+                             std::unique_ptr<CAnimBlendSequence> (CAnimManager::*)(CAnimBlendSequenceSAInterface*, DWORD)>);
 int main()
 {
     StorageChecks();
     LifetimeChecks();
+    CapacityBorrowChecks();
     std::printf("Passed %u custom animation storage/lifetime checks (%zu-bit; no native engine code executed)\n", checks, sizeof(void*) * 8);
+    return 0;
 }

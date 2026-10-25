@@ -76,4 +76,5 @@ public:
     const char*                          GetGateWayAnimationName() const override { Unsupported(); }
     bool                                 IsValidGroup(std::uint32_t) const override { Unsupported(); }
     bool                                 IsValidAnim(std::uint32_t, std::uint32_t) const override { Unsupported(); }
+    std::unique_ptr<CAnimBlendSequence>  GetCustomAnimBlendSequenceAt(CAnimBlendSequenceSAInterface*, DWORD) override { Unsupported(); }
 };

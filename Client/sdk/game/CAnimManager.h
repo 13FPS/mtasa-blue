@@ -139,4 +139,8 @@ public:
     // Free only releases array storage; keyframe ownership stays explicit.
     virtual CAnimBlendSequenceSAInterface* AllocateCustomAnimSequences(size_t capacity) = 0;
     virtual void                           FreeCustomAnimSequences(CAnimBlendSequenceSAInterface* sequences) = 0;
+    // Construction and partial cleanup need a row from the original owned
+    // allocation before any hierarchy points at it. Only the backend knows
+    // its row stride/cookie; this is not adoption of an arbitrary native tag.
+    virtual std::unique_ptr<CAnimBlendSequence> GetCustomAnimBlendSequenceAt(CAnimBlendSequenceSAInterface* originalArray, DWORD index) = 0;
 };

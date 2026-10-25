@@ -25,7 +25,15 @@ namespace mta::game_de
         retained.store(!entries.empty(), std::memory_order_release);
         bool needsRecovery = stopping && !entries.empty();
         for (const auto& entry : entries)
+        {
             needsRecovery = needsRecovery || (!entry.issued && entry.storage.HasOutstandingResource()) || entry.storage.GetState() == Storage::State::FaultDebt;
+            if (entry.privateDependency)
+            {
+                const auto phase = entry.privateDependency->phase;
+                needsRecovery = needsRecovery || phase == PrivatePhase::Preparing || phase == PrivatePhase::AttachEntered ||
+                                phase == PrivatePhase::DetachEntered || phase == PrivatePhase::Uncertain;
+            }
+        }
         recovery.store(needsRecovery, std::memory_order_release);
         if (entries.empty())
         {
@@ -131,6 +139,8 @@ namespace mta::game_de
         auto entry = Find(generation, issuedTag);
         if (entry == entries.end() || entry->storage.GetKind() != kind)
             return ClockResult::BindingChanged;
+        if (entry->privateDependency || entry->privateHolds)
+            return ClockResult::OwnerConflict;
         Receipt    local;
         const auto result = kind == Storage::Kind::SequenceArray
                                 ? NativeCustomAnimSequenceStorageCalls::FreeStorage(image, entry->storage, generation, owner, &local, invoke)
@@ -270,6 +280,8 @@ namespace mta::game_de
         RowState* row = nullptr;
         if ((result = SelectRow(request, entry, row)) != ClockResult::Ok)
             return result;
+        if (entry->privateDependency)
+            return ClockResult::OwnerConflict;
         RowReceipt local;
         result = NativeAnimationSequenceRowCalls::Initialize(image, entry->storage, request.ownerGeneration, request.index, owner, &local);
         // A completed physical assignment remains accepted after lost
@@ -328,6 +340,8 @@ namespace mta::game_de
         RowState* targetState = nullptr;
         if ((result = SelectRow(request, targetEntry, targetState)) != ClockResult::Ok)
             return result;
+        if (targetEntry->privateDependency)
+            return ClockResult::OwnerConflict;
         NativeAnimationSequenceReferenceToken sourceToken;
         for (const auto& candidate : entries)
         {
@@ -463,6 +477,8 @@ namespace mta::game_de
         RowState* state = nullptr;
         if ((result = SelectRow(request, array, state)) != ClockResult::Ok)
             return result;
+        if (array->privateDependency)
+            return ClockResult::OwnerConflict;
         auto frames = Find(request.ownerGeneration, requestedBase);
         if (frames == entries.end() || frames->storage.GetKind() != Storage::Kind::KeyFrames || frames->storage.GetState() != Storage::State::LiveUnpublished)
             return ClockResult::BindingChanged;
@@ -477,6 +493,243 @@ namespace mta::game_de
             *receipt = local;
         return result;
     }
+    bool NativeCustomAnimSequenceController::SamePrivateKey(const PrivateDependencyKey& a, const PrivateDependencyKey& b) noexcept
+    {
+        return a.ownerGeneration == b.ownerGeneration && a.hierarchy == b.hierarchy && a.arrayTag == b.arrayTag && a.command == b.command;
+    }
+    ClockResult NativeCustomAnimSequenceController::ResolvePrivateFrame(std::size_t index, const NativeAnimationSequenceRowCalls::Value& row,
+                                                                        const Storage*& output, void* opaque) noexcept
+    {
+        auto& context = *static_cast<PrivateVisitContext*>(opaque);
+        auto& link = *context.array->privateDependency;
+        if (index >= link.rows.size())
+            return ClockResult::BindingChanged;
+        auto& previous = link.rows[index];
+        if (previous.row)
+        {
+            if (previous.row != row.row || previous.keyFrames != row.keyFrames || previous.frameCount != row.frameCount ||
+                (previous.flags & 0x0fu) != (row.flags & 0x0fu))
+            {
+                link.phase = PrivatePhase::Uncertain;
+                return ClockResult::BindingChanged;
+            }
+        }
+        else
+            previous = row;
+        output = nullptr;
+        if (!row.keyFrames)
+            return ClockResult::Ok;
+        auto frame = context.self->Find(link.key.ownerGeneration, row.keyFrames);
+        if (frame == context.self->entries.end() || frame->storage.GetKind() != Storage::Kind::KeyFrames ||
+            frame->storage.GetState() != Storage::State::LiveUnpublished)
+        {
+            if (link.phase != PrivatePhase::Preparing)
+                link.phase = PrivatePhase::Uncertain;
+            return ClockResult::BindingChanged;
+        }
+        auto* record = &*frame;
+        if (std::find(link.frames.begin(), link.frames.end(), record) == link.frames.end())
+        {
+            if (frame->privateHolds == (std::numeric_limits<std::size_t>::max)())
+                return ClockResult::OwnerConflict;
+            // Capacity was reserved before callbacks, so this pointer push
+            // cannot allocate after native qualification has begun.
+            link.frames.push_back(record);
+            ++frame->privateHolds;
+        }
+        output = &frame->storage;
+        return ClockResult::Ok;
+    }
+    ClockResult NativeCustomAnimSequenceController::ReservePrivateAction(Storage&, const NativeAnimationSequenceDependencyCalls::Epoch&, void* opaque) noexcept
+    {
+        auto& context = *static_cast<PrivateVisitContext*>(opaque);
+        if (context.array->privateDependency->phase == PrivatePhase::Preparing)
+            context.array->privateDependency->phase = PrivatePhase::Reserved;
+        return ClockResult::Ok;
+    }
+    ClockResult NativeCustomAnimSequenceController::ReservePrivatePreparedArray(std::uintptr_t image, const PrivateDependencyKey& value,
+                                                                                std::size_t expectedCapacity, CheckOwner owner,
+                                                                                PrivateDependencyReceipt* receipt) noexcept
+    {
+        const auto key = value;
+        const auto capacity = expectedCapacity;
+        if (receipt)
+            *receipt = {};
+        if (operation.test_and_set(std::memory_order_acquire))
+            return ClockResult::Busy;
+        const CustomAnimSequenceControllerDetail::Operation held{operation};
+        if (!key.ownerGeneration || !key.hierarchy || !key.arrayTag || !key.command || ownerGeneration != key.ownerGeneration || stopping)
+            return ClockResult::OwnerConflict;
+        if (!owner)
+            return ClockResult::NotInitialized;
+        auto array = Find(key.ownerGeneration, key.arrayTag);
+        if (array == entries.end() || array->storage.GetKind() != Storage::Kind::SequenceArray || array->storage.GetState() != Storage::State::LiveUnpublished)
+            return ClockResult::BindingChanged;
+        if (!capacity || capacity != array->storage.Capacity())
+            return ClockResult::InvalidArgument;
+        if (array->privateDependency)
+        {
+            if (!SamePrivateKey(array->privateDependency->key, key) ||
+                (array->privateDependency->phase != PrivatePhase::Preparing && array->privateDependency->phase != PrivatePhase::Reserved))
+                return ClockResult::OwnerConflict;
+        }
+        else
+        {
+            try
+            {
+                auto planned = std::make_unique<PrivateDependency>();
+                planned->key = key;
+                planned->rows.resize(capacity);
+                planned->frames.reserve(capacity);
+                array->privateDependency = std::move(planned);
+            }
+            catch (...)
+            {
+                return ClockResult::WriteFailure;
+            }
+        }
+        PrivateVisitContext context{this, &*array};
+        const auto result = NativeAnimationSequenceDependencyCalls::WithPrepared(image, array->storage, key.ownerGeneration, owner, &ResolvePrivateFrame,
+                                                                                 &context, &ReservePrivateAction, &context);
+        // Even failed preparation stays with the planned parent command until
+        // its explicit no-entry cancellation. Absence/raw null is no ACK.
+        if (receipt)
+        {
+            receipt->capacity = capacity;
+            receipt->frameRecords = array->privateDependency->frames.size();
+            receipt->reserved = true;
+            receipt->verified = result == ClockResult::Ok;
+            receipt->uncertain = array->privateDependency->phase == PrivatePhase::Uncertain;
+        }
+        Publish();
+        return result;
+    }
+    ClockResult NativeCustomAnimSequenceController::WithPrivatePreparedArray(std::uintptr_t image, const PrivateDependencyKey& key, CheckOwner owner,
+                                                                             PrivatePreparedAction action, void* context,
+                                                                             PrivateDependencyReceipt* receipt) noexcept
+    {
+        return WithPrivateArray(image, key, owner, action, context, receipt, false);
+    }
+    ClockResult NativeCustomAnimSequenceController::CancelPrivatePreparedReservation(std::uintptr_t image, const PrivateDependencyKey& key, CheckOwner owner,
+                                                                                     PrivatePreparedAction action, void* context,
+                                                                                     PrivateDependencyReceipt* receipt) noexcept
+    {
+        return WithPrivateArray(image, key, owner, action, context, receipt, true);
+    }
+    ClockResult NativeCustomAnimSequenceController::WithPrivateArray(std::uintptr_t image, const PrivateDependencyKey& value, CheckOwner owner,
+                                                                     PrivatePreparedAction action, void* actionContext, PrivateDependencyReceipt* receipt,
+                                                                     bool cancel) noexcept
+    {
+        const auto key = value;
+        if (receipt)
+            *receipt = {};
+        if (!owner)
+            return ClockResult::NotInitialized;
+        if (!action)
+            return ClockResult::InvalidArgument;
+        if (operation.test_and_set(std::memory_order_acquire))
+            return ClockResult::Busy;
+        const CustomAnimSequenceControllerDetail::Operation held{operation};
+        if (!key.ownerGeneration || ownerGeneration != key.ownerGeneration)
+            return ClockResult::OwnerConflict;
+        auto array = Find(key.ownerGeneration, key.arrayTag);
+        if (array == entries.end() || !array->privateDependency || !SamePrivateKey(array->privateDependency->key, key))
+            return ClockResult::BindingChanged;
+        auto& link = *array->privateDependency;
+        if (link.phase == PrivatePhase::Uncertain)
+            return ClockResult::OwnerConflict;
+        if (!cancel && link.phase == PrivatePhase::Preparing)
+            return ClockResult::OwnerConflict;
+        if (cancel && link.phase != PrivatePhase::Preparing && link.phase != PrivatePhase::Reserved)
+            return ClockResult::OwnerConflict;
+        PrivateVisitContext visit{this, &*array};
+        const auto          capacity = array->storage.Capacity();
+        const auto          frames = link.frames.size();
+        const auto result = cancel ? NativeAnimationSequenceDependencyCalls::WithArray(image, array->storage, key.ownerGeneration, owner, action, actionContext)
+                                   : NativeAnimationSequenceDependencyCalls::WithPrepared(image, array->storage, key.ownerGeneration, owner,
+                                                                                          &ResolvePrivateFrame, &visit, action, actionContext);
+        bool       released = false;
+        ClockResult final = result;
+        if (result == ClockResult::Ok && ((cancel && link.cancelRequested) || (!cancel && link.releaseRequested)))
+        {
+            final = ReleasePrivateDependencyHeld(*array);
+            released = final == ClockResult::Ok;
+            if (!released)
+                link.phase = PrivatePhase::Uncertain;
+        }
+        if (!released && array->storage.GetState() != Storage::State::LiveUnpublished)
+            link.phase = PrivatePhase::Uncertain;
+        if (receipt)
+        {
+            receipt->capacity = capacity;
+            receipt->frameRecords = frames;
+            receipt->reserved = !released;
+            receipt->released = released;
+            receipt->verified = final == ClockResult::Ok;
+            receipt->uncertain = !released && array->privateDependency->phase == PrivatePhase::Uncertain;
+        }
+        Publish();
+        return final;
+    }
+    ClockResult NativeCustomAnimSequenceController::ReleasePrivateDependencyHeld(Entry& array) noexcept
+    {
+        auto&      link = *array.privateDependency;
+        const bool cancelled = link.cancelRequested && (link.phase == PrivatePhase::Preparing || link.phase == PrivatePhase::Reserved);
+        const bool detached = link.releaseRequested && link.phase == PrivatePhase::DetachAccepted;
+        if (!cancelled && !detached)
+            return ClockResult::OwnerConflict;
+        if (array.storage.GetState() != Storage::State::LiveUnpublished)
+            return ClockResult::OwnerConflict;
+        for (const auto* frame : link.frames)
+            if (!frame->privateHolds || frame->storage.GetState() != Storage::State::LiveUnpublished)
+                return ClockResult::OwnerConflict;
+        for (auto* frame : link.frames)
+            --frame->privateHolds;
+        array.privateDependency.reset();
+        return ClockResult::Ok;
+    }
+    ClockResult NativeCustomAnimSequenceController::AdvancePrivateDependencyHeld(const PrivateDependencyKey& key, PrivatePhase expected,
+                                                                                 PrivatePhase next) noexcept
+    {
+        auto array = Find(key.ownerGeneration, key.arrayTag);
+        if (array == entries.end() || !array->privateDependency || !SamePrivateKey(array->privateDependency->key, key) ||
+            array->privateDependency->phase != expected)
+            return ClockResult::OwnerConflict;
+        const bool allowed = (expected == PrivatePhase::Reserved && next == PrivatePhase::AttachEntered) ||
+                             (expected == PrivatePhase::AttachEntered && next == PrivatePhase::AttachedAccepted) ||
+                             (expected == PrivatePhase::AttachedAccepted && next == PrivatePhase::DetachEntered) ||
+                             (expected == PrivatePhase::DetachEntered && next == PrivatePhase::DetachAccepted);
+        if (!allowed)
+            return ClockResult::InvalidArgument;
+        array->privateDependency->phase = next;
+        return ClockResult::Ok;
+    }
+    ClockResult NativeCustomAnimSequenceController::RequestPrivateDetachReleaseHeld(const PrivateDependencyKey& key) noexcept
+    {
+        auto array = Find(key.ownerGeneration, key.arrayTag);
+        if (array == entries.end() || !array->privateDependency || !SamePrivateKey(array->privateDependency->key, key) ||
+            array->privateDependency->phase != PrivatePhase::DetachAccepted)
+            return ClockResult::OwnerConflict;
+        array->privateDependency->releaseRequested = true;
+        return ClockResult::Ok;
+    }
+    ClockResult NativeCustomAnimSequenceController::RequestPrivateReservationCancelHeld(const PrivateDependencyKey& key) noexcept
+    {
+        auto array = Find(key.ownerGeneration, key.arrayTag);
+        if (array == entries.end() || !array->privateDependency || !SamePrivateKey(array->privateDependency->key, key))
+            return ClockResult::BindingChanged;
+        auto& link = *array->privateDependency;
+        if (link.phase != PrivatePhase::Preparing && link.phase != PrivatePhase::Reserved)
+            return ClockResult::OwnerConflict;
+        link.cancelRequested = true;
+        return ClockResult::Ok;
+    }
+    void NativeCustomAnimSequenceController::RetainPrivateDependencyHeld(const PrivateDependencyKey& key) noexcept
+    {
+        auto array = Find(key.ownerGeneration, key.arrayTag);
+        if (array != entries.end() && array->privateDependency && SamePrivateKey(array->privateDependency->key, key))
+            array->privateDependency->phase = PrivatePhase::Uncertain;
+    }
     ClockResult NativeCustomAnimSequenceController::PinPublication(std::uint64_t generation, std::uintptr_t issuedTag,
                                                                    std::uintptr_t hierarchyAffinity) noexcept
     {
@@ -489,6 +742,8 @@ namespace mta::game_de
         if (entry == entries.end())
             return ClockResult::BindingChanged;
         const auto result = NativeCustomAnimSequenceStorageCalls::PinPublication(entry->storage, generation, hierarchyAffinity);
+        if (result == ClockResult::Ok && entry->privateDependency)
+            entry->privateDependency->phase = PrivatePhase::Uncertain;
         Publish();
         return result;
     }
@@ -512,6 +767,12 @@ namespace mta::game_de
         for (auto entry = entries.begin(); entry != entries.end() && progress.scanned != limit;)
         {
             ++progress.scanned;
+            if (entry->privateDependency || entry->privateHolds)
+            {
+                auto preserved = entry++;
+                entries.splice(entries.end(), entries, preserved);
+                continue;
+            }
             if (entry->storage.CanDiscard())
             {
                 entry = entries.erase(entry);

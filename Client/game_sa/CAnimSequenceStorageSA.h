@@ -6,6 +6,7 @@
 #pragma once
 #include "CAnimBlendSequenceSA.h"
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <limits>
 #include <new>
@@ -43,6 +44,19 @@ namespace MtaGame::CAnimSequenceStorageSA
         for (std::size_t index = 0; index != capacity; ++index)
             Initialize(sequences[index]);
         return sequences;
+    }
+    inline Sequence* At(Sequence* sequences, std::uint32_t index) noexcept
+    {
+        if (!sequences)
+            return nullptr;
+        // This accepts only the original still-owned Allocate result, just as
+        // Free does. It is a capacity borrow, independent of a hierarchy's
+        // logical WORD count or whether that hierarchy has been attached yet.
+        std::size_t capacity = 0;
+        std::memcpy(&capacity, reinterpret_cast<const unsigned char*>(sequences) - CookieBytes, CookieBytes);
+        if (capacity > ((std::numeric_limits<std::size_t>::max)() - CookieBytes) / sizeof(Sequence) || static_cast<std::size_t>(index) >= capacity)
+            return nullptr;
+        return sequences + index;
     }
     inline void Free(Sequence* sequences) noexcept
     {

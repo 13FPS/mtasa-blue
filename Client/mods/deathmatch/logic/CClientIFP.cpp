@@ -134,7 +134,8 @@ void CClientIFP::ReadIFPVersion1()
         Animation.pHierarchy = m_pAnimManager->GetCustomAnimBlendHierarchy();
         InitializeAnimationHierarchy(Animation.pHierarchy, Animation.Name, Dgan.Info.Entries);
         AllocateSequencesMemory(Animation);
-        ReadSequencesWithDummies(Animation.pHierarchy, Animation.AnimatedBonesMask);
+        ReadSequencesWithDummies(Animation);
+        AttachSequencesMemory(Animation);
         PreProcessAnimationHierarchy(Animation.pHierarchy);
     }
 }
@@ -161,37 +162,38 @@ void CClientIFP::ReadIFPVersion2(bool bAnp3)
         InitializeAnimationHierarchy(Animation.pHierarchy, AnimationNode.Name, AnimationNode.TotalObjects);
 
         AllocateSequencesMemory(Animation);
-        ReadSequencesWithDummies(Animation.pHierarchy, Animation.AnimatedBonesMask);
+        ReadSequencesWithDummies(Animation);
+        AttachSequencesMemory(Animation);
         PreProcessAnimationHierarchy(Animation.pHierarchy);
     }
 }
 
-WORD CClientIFP::ReadSequencesWithDummies(std::unique_ptr<CAnimBlendHierarchy>& pAnimationHierarchy, std::bitset<64>& outAnimatedBonesMask)
+WORD CClientIFP::ReadSequencesWithDummies(SAnimation& animation)
 {
     SequenceMapType MapOfSequences;
-    WORD            wUnknownSequences = ReadSequences(pAnimationHierarchy, MapOfSequences);
+    WORD            wUnknownSequences = ReadSequences(animation, MapOfSequences);
 
-    MoveSequencesWithDummies(pAnimationHierarchy, MapOfSequences, outAnimatedBonesMask);
+    MoveSequencesWithDummies(animation, MapOfSequences, animation.AnimatedBonesMask);
     WORD cSequences = m_kcIFPSequences + wUnknownSequences;
 
     // As we need support for all 64 bones (32 ped + 32 cutscene ped), we must change the total sequences count
-    pAnimationHierarchy->SetNumSequences(cSequences);
+    animation.pHierarchy->SetNumSequences(cSequences);
     return cSequences;
 }
 
-WORD CClientIFP::ReadSequences(std::unique_ptr<CAnimBlendHierarchy>& pAnimationHierarchy, SequenceMapType& MapOfSequences)
+WORD CClientIFP::ReadSequences(SAnimation& animation, SequenceMapType& MapOfSequences)
 {
     if (m_bVersion1)
     {
-        return ReadSequencesVersion1(pAnimationHierarchy, MapOfSequences);
+        return ReadSequencesVersion1(animation, MapOfSequences);
     }
-    return ReadSequencesVersion2(pAnimationHierarchy, MapOfSequences);
+    return ReadSequencesVersion2(animation, MapOfSequences);
 }
 
-WORD CClientIFP::ReadSequencesVersion1(std::unique_ptr<CAnimBlendHierarchy>& pAnimationHierarchy, SequenceMapType& MapOfSequences)
+WORD CClientIFP::ReadSequencesVersion1(SAnimation& animation, SequenceMapType& MapOfSequences)
 {
     WORD wUnknownSequences = 0;
-    for (size_t SequenceIndex = 0; SequenceIndex < pAnimationHierarchy->GetNumSequences(); SequenceIndex++)
+    for (size_t SequenceIndex = 0; SequenceIndex < animation.pHierarchy->GetNumSequences(); SequenceIndex++)
     {
         SAnim        Anim;
         std::int32_t iBoneID = ReadSequenceVersion1(Anim);
@@ -205,8 +207,7 @@ WORD CClientIFP::ReadSequencesVersion1(std::unique_ptr<CAnimBlendHierarchy>& pAn
         if (bUnknownSequence)
         {
             size_t UnkownSequenceIndex = m_kcIFPSequences + wUnknownSequences;
-            auto   pAnimationSequenceInterface = pAnimationHierarchy->GetSequence(UnkownSequenceIndex);
-            pAnimationSequence = m_pAnimManager->GetCustomAnimBlendSequence(pAnimationSequenceInterface);
+            pAnimationSequence = m_pAnimManager->GetCustomAnimBlendSequenceAt(animation.pSequences, static_cast<DWORD>(UnkownSequenceIndex));
             wUnknownSequences++;
         }
         else
@@ -229,10 +230,10 @@ WORD CClientIFP::ReadSequencesVersion1(std::unique_ptr<CAnimBlendHierarchy>& pAn
     return wUnknownSequences;
 }
 
-WORD CClientIFP::ReadSequencesVersion2(std::unique_ptr<CAnimBlendHierarchy>& pAnimationHierarchy, SequenceMapType& MapOfSequences)
+WORD CClientIFP::ReadSequencesVersion2(SAnimation& animation, SequenceMapType& MapOfSequences)
 {
     WORD wUnknownSequences = 0;
-    for (size_t SequenceIndex = 0; SequenceIndex < pAnimationHierarchy->GetNumSequences(); SequenceIndex++)
+    for (size_t SequenceIndex = 0; SequenceIndex < animation.pHierarchy->GetNumSequences(); SequenceIndex++)
     {
         SSequenceHeaderV2 ObjectNode;
         ReadSequenceVersion2(ObjectNode);
@@ -243,8 +244,7 @@ WORD CClientIFP::ReadSequencesVersion2(std::unique_ptr<CAnimBlendHierarchy>& pAn
         if (bUnknownSequence)
         {
             size_t UnkownSequenceIndex = m_kcIFPSequences + wUnknownSequences;
-            auto   pAnimationSequenceInterface = pAnimationHierarchy->GetSequence(UnkownSequenceIndex);
-            pAnimationSequence = m_pAnimManager->GetCustomAnimBlendSequence(pAnimationSequenceInterface);
+            pAnimationSequence = m_pAnimManager->GetCustomAnimBlendSequenceAt(animation.pSequences, static_cast<DWORD>(UnkownSequenceIndex));
             wUnknownSequences++;
         }
         else
@@ -565,16 +565,16 @@ void CClientIFP::PreProcessAnimationHierarchy(std::unique_ptr<CAnimBlendHierarch
     }
 }
 
-void CClientIFP::MoveSequencesWithDummies(std::unique_ptr<CAnimBlendHierarchy>& pAnimationHierarchy, SequenceMapType& mapOfSequences,
-                                          std::bitset<64>& outAnimatedBonesMask)
+void CClientIFP::MoveSequencesWithDummies(SAnimation& animation, SequenceMapType& mapOfSequences, std::bitset<64>& outAnimatedBonesMask)
 {
     for (size_t SequenceIndex = 0; SequenceIndex < m_kcIFPSequences; SequenceIndex++)
     {
         SString BoneName = m_karrstrBoneNames[SequenceIndex];
         DWORD   BoneID = m_karruBoneIds[SequenceIndex];
 
-        auto pAnimationSequenceInterface = pAnimationHierarchy->GetSequence(SequenceIndex);
-        auto pAnimationSequence = m_pAnimManager->GetCustomAnimBlendSequence(pAnimationSequenceInterface);
+        auto pAnimationSequence = m_pAnimManager->GetCustomAnimBlendSequenceAt(animation.pSequences, static_cast<DWORD>(SequenceIndex));
+        if (!pAnimationSequence)
+            throw std::runtime_error("IFP backend returned no owned sequence row");
         auto it = mapOfSequences.find(BoneID);
         if (it != mapOfSequences.end())
         {
@@ -598,7 +598,13 @@ void CClientIFP::AllocateSequencesMemory(SAnimation& animation)
         throw std::bad_alloc();
     animation.pSequences = sequences;
     animation.sequenceCapacity = capacity;
-    animation.pHierarchy->SetSequences(sequences);
+    // Populate through the original owned array. The hierarchy edge is added
+    // only after all row/frame construction and transfers have completed.
+}
+
+void CClientIFP::AttachSequencesMemory(SAnimation& animation)
+{
+    animation.pHierarchy->SetSequences(animation.pSequences);
     animation.sequencesAttached = true;
 }
 

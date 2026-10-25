@@ -996,3 +996,9 @@ void CAnimManagerSA::FreeCustomAnimSequences(CAnimBlendSequenceSAInterface* sequ
 {
     MtaGame::CAnimSequenceStorageSA::Free(sequences);
 }
+
+std::unique_ptr<CAnimBlendSequence> CAnimManagerSA::GetCustomAnimBlendSequenceAt(CAnimBlendSequenceSAInterface* originalArray, DWORD index)
+{
+    static_assert(sizeof(index) == sizeof(std::uint32_t));
+    return GetCustomAnimBlendSequence(MtaGame::CAnimSequenceStorageSA::At(originalArray, static_cast<std::uint32_t>(index)));
+}

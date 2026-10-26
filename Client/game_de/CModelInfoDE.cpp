@@ -90,6 +90,24 @@ namespace mta::game_de
             return false;
         return QueryType() == eModelInfoType::VEHICLE;
     }
+    BYTE CModelInfoDE::GetVehicleType() const
+    {
+        // Preserve the source archive/type gate before reading a vehicle
+        // field. A successful nonvehicle result owns the 0xff sentinel;
+        // owner refusal must not masquerade as that ordinary result.
+        if (!IsVehicle())
+            return static_cast<BYTE>(0xff);
+
+        const auto    index = model;
+        std::uint32_t subtype = 0;
+        const auto    status = access.ReadModelVehicleSubtype(index, subtype);
+        if (status != ClockResult::Ok)
+            throw std::runtime_error("DE model owner refused vehicle subtype: " + std::to_string(static_cast<unsigned>(status)));
+        // Genuine classifiers prove the raw DWORD+84 role. The SDK's
+        // BYTE contract consumes its low byte without inventing names
+        // or clamping subtype values outside those four classifiers.
+        return static_cast<BYTE>(subtype);
+    }
     bool CModelInfoDE::IsAllocatedInArchive() const
     {
         const auto index = model;

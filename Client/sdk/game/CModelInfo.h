@@ -159,7 +159,10 @@ public:
 
     virtual char* GetNameIfVehicle() = 0;
 
-    virtual BYTE           GetVehicleType() const noexcept = 0;
+    // The byte result includes the source nonvehicle 0xff sentinel. A
+    // native owner refusal is a separate exception, so providers and
+    // consumers must rebuild together; classic may remain noexcept.
+    virtual BYTE           GetVehicleType() const = 0;
     virtual void           Request(EModelRequestType requestType, const char* szTag /* = NULL*/) = 0;
     virtual bool           IsLoaded() = 0;
     virtual unsigned short GetFlags() = 0;

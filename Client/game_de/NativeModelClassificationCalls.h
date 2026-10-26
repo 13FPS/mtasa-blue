@@ -32,6 +32,11 @@ namespace mta::game_de::NativeModelClassificationCalls
     // bookended inside this same callback. Refusal preserves the old byte.
     ClockResult ReadType(std::uintptr_t image, std::uint32_t model, CheckOwner, NativeModelTypeObservation& output) noexcept;
 
+    // Existing four complete classifier bodies establish AL6 followed by a
+    // DWORD receiver+84 observation. Preserve that raw DWORD independently of
+    // SDK enum meanings, with no native invocation or loaded-state query.
+    ClockResult ReadVehicleSubtype(std::uintptr_t image, std::uint32_t model, CheckOwner, std::uint32_t& output) noexcept;
+
     // A bank association is borrowed only for this synchronous callback. The
     // genuine classifier owns its native virtual dispatch; no arbitrary getter
     // address or model/RwObject pointer is returned. All failures preserve output.

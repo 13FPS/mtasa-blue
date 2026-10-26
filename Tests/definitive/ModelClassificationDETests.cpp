@@ -34,6 +34,10 @@ namespace
         unsigned char               rawType = 0;
         bool                        hasModel = true;
         unsigned                    archiveCalls = 0;
+        unsigned                    subtypeCalls = 0, interfaceCalls = 0, renderCalls = 0;
+        std::uint32_t               rawSubtype = 0;
+        ClockResult                 subtypeStatus = ClockResult::Ok;
+        bool                        changeTypeAtSubtype = false;
         ClockResult                 archiveStatus = ClockResult::Ok;
         bool                        archiveValid = true;
         bool                        poisonArchiveOnRefusal = false, poisonTypeOnRefusal = false, traceEnabled = false;
@@ -85,6 +89,31 @@ namespace
                 output = value;
             return status;
         }
+        ClockResult ReadModelVehicleSubtype(std::uint32_t model, std::uint32_t& output) noexcept override
+        {
+            Mark(3);
+            ++subtypeCalls;
+            key = model;
+            // Poison even refused replies. The subtype provider independently
+            // qualifies the current vehicle; earlier type admission is no ACK.
+            output = rawSubtype;
+            if (changeTypeAtSubtype)
+            {
+                rawType = 5;
+                return ClockResult::BindingChanged;
+            }
+            return subtypeStatus;
+        }
+        ClockResult ReadModelInterface(std::uint32_t, std::uintptr_t&) noexcept override
+        {
+            ++interfaceCalls;
+            return ClockResult::NotInitialized;
+        }
+        ClockResult ReadModelRender(std::uint32_t, std::uintptr_t&) noexcept override
+        {
+            ++renderCalls;
+            return ClockResult::NotInitialized;
+        }
     };
     struct Model final : CModelInfoDE
     {
@@ -100,7 +129,6 @@ namespace
         bool                             IsBmx() override { Unavailable(); }
         bool                             IsTrailer() override { Unavailable(); }
         char*                            GetNameIfVehicle() override { Unavailable(); }
-        BYTE                             GetVehicleType() const noexcept override { std::abort(); }
         void                             Request(EModelRequestType requestType, const char* szTag /* = NULL*/) override
         {
             static_cast<void>(requestType);
@@ -362,6 +390,9 @@ namespace
     static_assert(!noexcept(std::declval<const CModelInfoDE&>().IsAllocatedInArchive()));
     static_assert(std::is_same_v<decltype(&Model::IsAllocatedInArchive), bool (CModelInfoDE::*)() const>);
     static_assert(std::is_same_v<decltype(&Model::IsVehicle), bool (CModelInfoDE::*)() const>);
+    static_assert(!noexcept(std::declval<const CModelInfo&>().GetVehicleType()));
+    static_assert(!noexcept(std::declval<const CModelInfoDE&>().GetVehicleType()));
+    static_assert(std::is_same_v<decltype(&Model::GetVehicleType), BYTE (CModelInfoDE::*)() const>);
 
     template <class Operation>
     void RefusesStatus(Operation operation, ClockResult status, const char* prefix)
@@ -454,14 +485,114 @@ namespace
         RefusesStatus([&] { static_cast<void>(unbound.IsAllocatedInArchive()); }, ClockResult::NotInitialized, "DE model owner refused archive allocation: ");
         RefusesStatus([&] { static_cast<void>(unbound.IsVehicle()); }, ClockResult::NotInitialized, "DE model owner refused archive allocation: ");
     }
+
+    struct MissingSubtypeAccess final : NativeModelClassificationAccess
+    {
+        unsigned    archives = 0, types = 0;
+        ClockResult ReadModelArchiveAllocated(std::uint32_t, bool& output) noexcept override
+        {
+            ++archives;
+            output = true;
+            return ClockResult::Ok;
+        }
+        ClockResult ReadModelType(std::uint32_t, NativeModelTypeObservation& output) noexcept override
+        {
+            ++types;
+            output = {true, 6};
+            return ClockResult::Ok;
+        }
+    };
+    void VehicleTypeChecks()
+    {
+        Access access;
+        access.traceEnabled = true;
+        access.archiveValid = true;
+        access.hasModel = true;
+        access.rawType = 6;
+        for (const auto key : std::array<std::uint32_t, 3>{20000, 65536, 0xffffffff})
+        {
+            Model model(key, access);
+            access.archiveStatus = access.status = access.subtypeStatus = ClockResult::Expired;
+            const auto archives = access.archiveCalls, types = access.typeCalls, subtypes = access.subtypeCalls;
+            Check(model.GetVehicleType() == BYTE{0xff} && access.archiveCalls == archives && access.typeCalls == types && access.subtypeCalls == subtypes,
+                  "GetVehicleType preserves the full-key CPU bound before every owner observation");
+            access.ExpectOrder({});
+        }
+        access.archiveStatus = access.status = access.subtypeStatus = ClockResult::Ok;
+        for (const auto key : std::array<std::uint32_t, 3>{0, 17, 19999})
+        {
+            Model model(key, access);
+            access.archiveValid = false;
+            const auto types = access.typeCalls, subtypes = access.subtypeCalls;
+            Check(model.GetVehicleType() == BYTE{0xff} && access.typeCalls == types && access.subtypeCalls == subtypes,
+                  "false archive admission returns ff without type or subtype");
+            access.ExpectOrder({1});
+            access.archiveValid = true;
+            access.hasModel = false;
+            access.rawType = 6;
+            Check(model.GetVehicleType() == BYTE{0xff} && access.subtypeCalls == subtypes, "qualified absent model returns ff without subtype");
+            access.ExpectOrder({1, 2});
+            access.hasModel = true;
+            access.rawType = 5;
+            Check(model.GetVehicleType() == BYTE{0xff} && access.subtypeCalls == subtypes, "qualified nonvehicle returns ff without subtype");
+            access.ExpectOrder({1, 2});
+            access.rawType = 6;
+            for (const auto raw : std::array<std::uint32_t, 5>{0, 0xff, 0x100, 0x80000042, 0xffffffff})
+            {
+                access.rawSubtype = raw;
+                const auto before = access.subtypeCalls;
+                Check(model.GetVehicleType() == static_cast<BYTE>(raw & 0xffu) && access.subtypeCalls == before + 1 && access.key == key,
+                      "vehicle6 forwards full key once and preserves low BYTE of the full raw DWORD without enum clamp");
+                access.ExpectOrder({1, 2, 3});
+            }
+        }
+        Model model(17, access);
+        access.poisonArchiveOnRefusal = access.poisonTypeOnRefusal = true;
+        access.rawSubtype = 0xffffffff;
+        for (unsigned raw = 1; raw <= static_cast<unsigned>(ClockResult::OriginalException); ++raw)
+        {
+            const auto status = static_cast<ClockResult>(raw);
+            access.archiveStatus = status;
+            access.status = access.subtypeStatus = ClockResult::Ok;
+            const auto types = access.typeCalls, subtypes = access.subtypeCalls;
+            RefusesStatus([&] { static_cast<void>(model.GetVehicleType()); }, status, "DE model owner refused archive allocation: ");
+            Check(access.typeCalls == types && access.subtypeCalls == subtypes, "archive refusal cannot become ff or reach later type/subtype");
+            access.ExpectOrder({1});
+            access.archiveStatus = ClockResult::Ok;
+            access.status = status;
+            RefusesStatus([&] { static_cast<void>(model.GetVehicleType()); }, status, "DE model owner refused model type: ");
+            Check(access.typeCalls == types + 1 && access.subtypeCalls == subtypes, "type refusal cannot become ff or reach subtype");
+            access.ExpectOrder({1, 2});
+            access.status = ClockResult::Ok;
+            access.subtypeStatus = status;
+            RefusesStatus([&] { static_cast<void>(model.GetVehicleType()); }, status, "DE model owner refused vehicle subtype: ");
+            Check(access.subtypeCalls == subtypes + 1, "all subtype refusals propagate once despite a written ff-shaped output");
+            access.ExpectOrder({1, 2, 3});
+        }
+        access.subtypeStatus = ClockResult::Ok;
+        access.changeTypeAtSubtype = true;
+        RefusesStatus([&] { static_cast<void>(model.GetVehicleType()); }, ClockResult::BindingChanged, "DE model owner refused vehicle subtype: ");
+        Check(access.rawType == 5, "late subtype refusal represents current type change after the earlier vehicle admission");
+        access.ExpectOrder({1, 2, 3});
+        Check(access.calls == 0 && access.interfaceCalls == 0 && access.renderCalls == 0,
+              "focused vehicle subtype dispatch never substitutes predicate, raw-interface or render observations");
+        NativeModelClassificationAccess missing;
+        Model                           unbound(17, missing);
+        RefusesStatus([&] { static_cast<void>(unbound.GetVehicleType()); }, ClockResult::NotInitialized, "DE model owner refused archive allocation: ");
+        MissingSubtypeAccess legacy;
+        Model                oldOwner(17, legacy);
+        RefusesStatus([&] { static_cast<void>(oldOwner.GetVehicleType()); }, ClockResult::NotInitialized, "DE model owner refused vehicle subtype: ");
+        Check(legacy.archives == 1 && legacy.types == 1, "older owner with real vehicle admission cannot fake an unsupported subtype as ff");
+    }
 }
 int main(int argc, char** argv)
 {
     try
     {
         const bool archiveOnly = argc == 2 && std::string(argv[1]) == "--archive-exceptions";
-        Check(argc == 1 || archiveOnly, "model SDK fixture accepts only the explicit archive exception scope");
-        if (!archiveOnly)
+        const bool vehicleOnly = argc == 2 && std::string(argv[1]) == "--vehicle-type";
+        Check(argc == 1 || archiveOnly || vehicleOnly, "model SDK fixture accepts only its explicit archive or vehicle type scope");
+        if (!archiveOnly && !vehicleOnly)
         {
             Access access;
             for (const auto key : std::array<std::uint32_t, 6>{0, 17, 19999, 20000, 65536, 0xffffffff})
@@ -558,9 +689,19 @@ int main(int argc, char** argv)
             }
             Check(refused, "unbound raw metadata type cannot manufacture an SDK enum result");
         }
-        ArchiveExceptionChecks();
-        std::puts("Production MTA model archive exception SDK fixture completed");
-        if (archiveOnly)
+        if (!vehicleOnly)
+        {
+            ArchiveExceptionChecks();
+            std::puts("Production MTA model archive exception SDK fixture completed");
+        }
+        if (!archiveOnly)
+        {
+            VehicleTypeChecks();
+            std::puts("Production MTA model vehicle type SDK fixture completed");
+        }
+        if (vehicleOnly)
+            std::printf("Passed %u actual MTA model vehicle-type SDK checks (%zu-bit)\n", checks, sizeof(void*) * 8);
+        else if (archiveOnly)
             std::printf("Passed %u actual MTA model archive-exception SDK checks (%zu-bit)\n", checks, sizeof(void*) * 8);
         else
         {

@@ -9,8 +9,11 @@
 #include "NativeModelBankProfile.h"
 #include "NativeStartGameCalls.h"
 #include "NativeModelTypeLeaf.h"
+#include "NativeGameStateMemory.h"
 #include <windows.h>
 #include <array>
+#include <algorithm>
+#include <limits>
 #include <cstring>
 namespace mta::game_de::NativeModelClassificationCalls
 {
@@ -27,6 +30,39 @@ namespace mta::game_de::NativeModelClassificationCalls
                     return false;
             }
             return NativeStreamingModelContext::QualifyProfile(image);
+        }
+        bool VehicleField(std::uintptr_t model, std::uint32_t& output) noexcept
+        {
+            // Classifier DWORD+84 is the only additional receiver field. The
+            // bounded prefix proves readable data pages in one allocation;
+            // it neither adopts that allocation nor follows the raw value.
+            constexpr std::size_t offset = 0x84, bytes = offset + sizeof(output);
+            if (!model || model % alignof(std::uintptr_t) || bytes > (std::numeric_limits<std::uintptr_t>::max)() - model)
+                return false;
+            const auto     end = model + bytes;
+            std::uintptr_t address = model, allocation = 0;
+            while (address < end)
+            {
+                MEMORY_BASIC_INFORMATION page{};
+                if (VirtualQuery(reinterpret_cast<void*>(address), &page, sizeof(page)) != sizeof(page) || page.State != MEM_COMMIT ||
+                    (page.Type != MEM_PRIVATE && page.Type != MEM_MAPPED && page.Type != MEM_IMAGE) || (page.Protect & (PAGE_GUARD | PAGE_NOACCESS)))
+                    return false;
+                const auto access = page.Protect & 0xff;
+                if (access != PAGE_READONLY && access != PAGE_READWRITE && access != PAGE_WRITECOPY)
+                    return false;
+                const auto begin = reinterpret_cast<std::uintptr_t>(page.BaseAddress), current = reinterpret_cast<std::uintptr_t>(page.AllocationBase);
+                if (!current || (allocation && allocation != current) || begin > address ||
+                    page.RegionSize > (std::numeric_limits<std::uintptr_t>::max)() - begin || begin + page.RegionSize <= address)
+                    return false;
+                allocation = current;
+                address = (std::min)(end, begin + page.RegionSize);
+            }
+            SIZE_T        copied = 0;
+            std::uint32_t next = 0;
+            if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(model + offset), &next, sizeof(next), &copied) || copied != sizeof(next))
+                return false;
+            output = next;
+            return true;
         }
 #if !defined(MTA_DE_MODEL_CLASSIFICATION_NATIVE_INVOKE)
         ClockResult NativeCall(NativeFunction function, std::uint32_t model, unsigned char& result, std::uint32_t& exception) noexcept
@@ -92,6 +128,67 @@ namespace mta::game_de::NativeModelClassificationCalls
         // This is the actual AL value from one proved self-contained body,
         // not a vtable identity guess or a native call through an arbitrary slot.
         output = {true, type};
+        return ClockResult::Ok;
+    }
+    ClockResult ReadVehicleSubtype(std::uintptr_t image, std::uint32_t modelIndex, CheckOwner owner, std::uint32_t& output) noexcept
+    {
+        if (modelIndex >= NativeModelBankProfile::ModelCount)
+            return ClockResult::InvalidArgument;
+        if (!owner)
+            return ClockResult::NotInitialized;
+        NativeModelBankReader        bank({image}, owner);
+        NativeModelBankReader::Value model;
+        auto                         result = bank.Read(modelIndex, model);
+        if (result != ClockResult::Ok)
+            return result;
+        if (!model.nativeModelInfo)
+            return ClockResult::NotInitialized;
+        if (!ClassificationDetail::Profile(image))
+            return ClockResult::UnsupportedBuild;
+        NativeStreamingModelContext::Value context;
+        if ((result = NativeStreamingModelContext::Capture(image, model, context)) != ClockResult::Ok)
+            return result;
+        std::array<unsigned char, 6> before{}, after{};
+        std::uint8_t                 firstType = 0, secondType = 0;
+        if (!NativeModelTypeLeaf::Read(image, context.typeMethod, before, firstType))
+            return ClockResult::UnsupportedBuild;
+        if (firstType != 6)
+            return ClockResult::NotInitialized;
+        std::uint32_t first = 0, second = 0;
+        if (!ClassificationDetail::VehicleField(model.nativeModelInfo, first))
+            return ClockResult::ReadFailure;
+        if ((result = bank.Recheck(model)) != ClockResult::Ok || (result = NativeStreamingModelContext::Recheck(image, model, context)) != ClockResult::Ok ||
+            (result = owner()) != ClockResult::Ok)
+            return result;
+        // Finish all owner callbacks before the final type/data samples.
+        // Re-admit the same provider/root/membership and exact profile, rather
+        // than treating the SDK's earlier IsVehicle query as a lasting lease.
+        if ((result = NativeStreamingModelContext::Recheck(image, model, context)) != ClockResult::Ok)
+            return result;
+        if (!NativeModelBankReader::Revalidate({image}) || !ClassificationDetail::Profile(image))
+            return ClockResult::BindingChanged;
+        if (!NativeModelTypeLeaf::Read(image, context.typeMethod, after, secondType) || before != after || secondType != firstType)
+            return ClockResult::BindingChanged;
+        if (!ClassificationDetail::VehicleField(model.nativeModelInfo, second))
+            return ClockResult::ReadFailure;
+        if (first != second)
+            return ClockResult::BindingChanged;
+        if ((result = NativeStreamingModelContext::Recheck(image, model, context)) != ClockResult::Ok)
+            return result;
+        std::uintptr_t current = 0;
+        if (!NativeImageAccess::ReadImage(image, model.slotAddress, &current, sizeof(current), true) || current != model.nativeModelInfo ||
+            !NativeStreamingModelContext::MembershipUnchanged(image, context) || !ClassificationDetail::Profile(image))
+            return ClockResult::BindingChanged;
+        std::uint32_t state = 0;
+        if (!NativeGameStateMemory::Read(image, state))
+            return ClockResult::BindingChanged;
+        if (state != 9)
+            return ClockResult::NotInitialized;
+        if ((result = NativeStartGameCalls::CheckThread(image)) != ClockResult::Ok)
+            return result;
+        // Unknown/high subtype bits are still a successful raw observation.
+        // This adds no names for the seven unqualified vehicle predicates.
+        output = second;
         return ClockResult::Ok;
     }
     ClockResult Read(std::uintptr_t image, std::uint32_t modelIndex, NativeModelVehiclePredicate predicate, CheckOwner owner, bool& output,

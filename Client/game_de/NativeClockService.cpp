@@ -281,6 +281,7 @@ namespace mta::game_de
             ClockResult RemoveStreamingModel(std::uint32_t) noexcept override;
             ClockResult ReadModelVehiclePredicate(std::uint32_t, NativeModelVehiclePredicate, bool&) noexcept override;
             ClockResult ReadModelType(std::uint32_t, NativeModelTypeObservation&) noexcept override;
+            ClockResult ReadModelVehicleSubtype(std::uint32_t, std::uint32_t&) noexcept override;
             ClockResult ReadModelInterface(std::uint32_t, std::uintptr_t&) noexcept override;
             ClockResult ReadModelRender(std::uint32_t, std::uintptr_t&) noexcept override;
             ClockResult ReadModelAnimFileIndex(std::uint32_t, std::uint32_t&) noexcept override;
@@ -4952,6 +4953,18 @@ namespace mta::game_de
             // The shared complete pure-leaf observation invokes no getter and
             // grants no model/archive lifetime beyond this current callback.
             return NativeModelClassificationCalls::ReadType(runtime.image, modelIndex, &CheckTimingOwner, output);
+        }
+        ClockResult NativeAccess::ReadModelVehicleSubtype(std::uint32_t model, std::uint32_t& output) noexcept
+        {
+            const auto    requestedModel = model;
+            std::uint32_t next = 0;
+            // A raw current subtype has no loaded/lifetime or enum authority.
+            // Independent native type/context/data checks preserve refusal and
+            // caller output without stopping an owner for a read-only request.
+            const auto result = NativeModelClassificationCalls::ReadVehicleSubtype(runtime.image, requestedModel, &CheckTimingOwner, next);
+            if (result == ClockResult::Ok)
+                output = next;
+            return result;
         }
         ClockResult NativeAccess::ReadModelInterface(std::uint32_t model, std::uintptr_t& output) noexcept
         {

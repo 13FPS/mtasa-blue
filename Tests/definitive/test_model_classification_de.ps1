@@ -4,7 +4,7 @@
 # This executes no native code, game allocation, wrapper factory or native registry owner.
 [CmdletBinding()]
 param(
-    [ValidateSet('Full','ArchiveExceptions')]
+    [ValidateSet('Full','ArchiveExceptions','VehicleType')]
     [string]$Scope = 'Full'
 )
 
@@ -23,8 +23,8 @@ foreach ($name in @('TEMP','TMP','VCToolsInstallDir','INCLUDE','LIB','LIBPATH','
 $record = [ordered]@{
     schema='mta_model_classification_sdk_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
-    results=@();actualModelClassificationSdkTested=$false;actualModelTypeSdkTested=$false;actualModelArchiveSdkTested=$false;actualModelArchiveExceptionSdkTested=$false;failure=$null;scratchDirectory=$scratchRoot;scratchFilesRemaining=$null;scratchRemoved=$false;
-    selectedScope=$Scope;scope='ArchiveExceptions executes only new archive exception/refusal and IsVehicle archive-before-type decisions on x86/x64. Default Full preserves existing classification/type/success cases and adds truthful exception-refusal coverage on its existing x64 host. No termination refusal, native factory or native helper replay.';
+    results=@();actualModelClassificationSdkTested=$false;actualModelTypeSdkTested=$false;actualModelArchiveSdkTested=$false;actualModelArchiveExceptionSdkTested=$false;actualModelVehicleTypeSdkTested=$false;failure=$null;scratchDirectory=$scratchRoot;scratchFilesRemaining=$null;scratchRemoved=$false;
+    selectedScope=$Scope;scope='VehicleType executes only actual GetVehicleType gate, ordered archive/type/subtype, raw DWORD-to-BYTE and refusal checks on x86/x64. ArchiveExceptions remains archive-only; Full preserves its existing cases and includes both focused groups on x64. No native/reporting matrix replay or native model factory.';
     ownedBuffersOnly=$true;nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;
     foreignProcessAccessed=$false;nativeLifecycleReady=$false;fullMtaReady=$false;
     clientDllLoaded=$false;installationChanged=$false
@@ -104,7 +104,10 @@ try {
     )
     $sourceNames += @(
         'Build/definitive-recovery/mta-model-archive-exceptions-sdk-20261026/model-archive-exception-source-ready.json',
-        'Build/definitive-recovery/mta-model-archive-exceptions-sdk-tests-20261026/model-archive-exceptions-sdk-tests-source-ready.json'
+        'Build/definitive-recovery/mta-model-archive-exceptions-sdk-tests-20261026/model-archive-exceptions-sdk-tests-source-ready.json',
+        'Build/definitive-recovery/mta-model-vehicle-subtype-native-20261026/model-vehicle-subtype-api-source-ready.json',
+        'Build/definitive-recovery/mta-model-vehicle-type-sdk-20261026/model-vehicle-type-sdk-source-ready.json',
+        'Build/definitive-recovery/mta-model-vehicle-type-sdk-tests-20261026/model-vehicle-type-sdk-tests-source-ready.json'
     )
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
@@ -116,7 +119,7 @@ try {
     $visualStudio = [IO.File]::ReadAllText($discovery.stdout).Trim()
     if ($discovery.exitCode -ne 0 -or $discovery.timedOut -or -not $visualStudio) { throw 'Visual Studio x86/x64 tools are required.' }
     $developerCommand = Join-Path $visualStudio 'Common7/Tools/VsDevCmd.bat'
-    $architectures = @(if ($Scope -eq 'ArchiveExceptions') { 'x86'; 'x64' } else { 'x64' })
+    $architectures = @(if ($Scope -ne 'Full') { 'x86'; 'x64' } else { 'x64' })
     foreach ($architecture in $architectures) {
         $directory = Join-Path $outputRoot $architecture
         [IO.Directory]::CreateDirectory($directory) | Out-Null
@@ -148,15 +151,16 @@ try {
             (Join-Path $PSScriptRoot 'ModelClassificationDETests.cpp'),(Join-Path $taskRoot 'Client/game_de/CModelInfoDE.cpp'),
             ('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'compiler.pdb')),('/Fe'+$executable))
         $result = [ordered]@{architecture=$architecture;environment=$environmentResult;compile=$null;test=$null;
-            checks=0;pointerBits=$null;executable=$executable;executableSha256=$null;actualModelClassificationSdkTested=$false;actualModelTypeSdkTested=$false;actualModelArchiveSdkTested=$false;actualModelArchiveExceptionSdkTested=$false}
+            checks=0;pointerBits=$null;executable=$executable;executableSha256=$null;actualModelClassificationSdkTested=$false;actualModelTypeSdkTested=$false;actualModelArchiveSdkTested=$false;actualModelArchiveExceptionSdkTested=$false;actualModelVehicleTypeSdkTested=$false}
         $record.results += $result
         $result.compile = RunOwned $compiler $arguments $directory 'compile' 60000
         if ($result.compile.exitCode -ne 0 -or $result.compile.timedOut) { throw "$architecture actual MTA model-classification SDK fixture compilation failed." }
         $result.executableSha256 = Sha $executable
-        $testArguments = @(if ($Scope -eq 'ArchiveExceptions') { '--archive-exceptions' })
+        $testArguments = @(if ($Scope -eq 'ArchiveExceptions') { '--archive-exceptions' } elseif ($Scope -eq 'VehicleType') { '--vehicle-type' })
         $result.test = RunOwned $executable $testArguments $directory 'test' 10000
         $text = [IO.File]::ReadAllText($result.test.stdout)
-        $summaryPattern = if ($Scope -eq 'ArchiveExceptions') { '(?:^|\r?\n)Passed (\d+) actual MTA model archive-exception SDK checks \((\d+)-bit\)$' }
+        $summaryPattern = if ($Scope -eq 'VehicleType') { '(?:^|\r?\n)Passed (\d+) actual MTA model vehicle-type SDK checks \((\d+)-bit\)$' }
+                          elseif ($Scope -eq 'ArchiveExceptions') { '(?:^|\r?\n)Passed (\d+) actual MTA model archive-exception SDK checks \((\d+)-bit\)$' }
                           else { '(?:^|\r?\n)Passed (\d+) actual MTA model-classification SDK checks \((\d+)-bit\)$' }
         $summary = [regex]::Match($text.TrimEnd(), $summaryPattern)
         if ($summary.Success) {
@@ -167,16 +171,24 @@ try {
         $result.actualModelTypeSdkTested = $text.Contains('Production MTA model type SDK fixture completed')
         $result.actualModelArchiveSdkTested = $text.Contains('Production MTA model archive SDK fixture completed')
         $result.actualModelArchiveExceptionSdkTested = $text.Contains('Production MTA model archive exception SDK fixture completed')
+        $result.actualModelVehicleTypeSdkTested = $text.Contains('Production MTA model vehicle type SDK fixture completed')
         if ($Scope -eq 'Full' -and -not ($result.actualModelClassificationSdkTested -and $result.actualModelTypeSdkTested -and $result.actualModelArchiveSdkTested)) {
             throw 'Default Full classification/type/archive success coverage did not execute.'
         }
         $expectedBits = if ($architecture -eq 'x86') { 32 } else { 64 }
-        if ($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -le 0 -or $result.pointerBits -ne $expectedBits -or -not $result.actualModelArchiveExceptionSdkTested) {
+        $requiredCoverage = if ($Scope -eq 'VehicleType') { $result.actualModelVehicleTypeSdkTested }
+                            elseif ($Scope -eq 'ArchiveExceptions') { $result.actualModelArchiveExceptionSdkTested }
+                            else { $result.actualModelArchiveExceptionSdkTested -and $result.actualModelVehicleTypeSdkTested }
+        if ($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -le 0 -or $result.pointerBits -ne $expectedBits -or -not $requiredCoverage) {
             throw "$architecture actual MTA model-classification SDK checks failed or summary/pointer-width evidence was missing."
         }
     }
     $record.actualModelArchiveExceptionSdkTested = @($record.results | Where-Object { -not $_.actualModelArchiveExceptionSdkTested }).Count -eq 0
-    $record.success = $record.results.Count -eq $architectures.Count -and $record.actualModelArchiveExceptionSdkTested
+    $record.actualModelVehicleTypeSdkTested = @($record.results | Where-Object { -not $_.actualModelVehicleTypeSdkTested }).Count -eq 0
+    $requiredCoverage = if ($Scope -eq 'VehicleType') { $record.actualModelVehicleTypeSdkTested }
+                        elseif ($Scope -eq 'ArchiveExceptions') { $record.actualModelArchiveExceptionSdkTested }
+                        else { $record.actualModelArchiveExceptionSdkTested -and $record.actualModelVehicleTypeSdkTested }
+    $record.success = $record.results.Count -eq $architectures.Count -and $requiredCoverage
     $record.actualModelArchiveSdkTested = $record.success -and $Scope -eq 'Full' -and $record.results[0].actualModelArchiveSdkTested
     $record.actualModelClassificationSdkTested = $record.success -and $Scope -eq 'Full' -and $record.results[0].actualModelClassificationSdkTested
     $record.actualModelTypeSdkTested = $record.success -and $Scope -eq 'Full' -and $record.results[0].actualModelTypeSdkTested

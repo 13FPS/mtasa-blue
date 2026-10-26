@@ -16,6 +16,9 @@ namespace mta::game_de
         virtual ClockResult ReadModelArchiveAllocated(std::uint32_t, bool&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult ReadModelType(std::uint32_t, NativeModelTypeObservation&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult ReadModelVehiclePredicate(std::uint32_t, NativeModelVehiclePredicate, bool&) noexcept { return ClockResult::NotInitialized; }
+        // Older owners must refuse this distinct raw DWORD observation. The
+        // SDK owns any explicit low-byte conversion, not an inferred enum map.
+        virtual ClockResult ReadModelVehicleSubtype(std::uint32_t, std::uint32_t&) noexcept { return ClockResult::NotInitialized; }
         // These current opaque observations are independent of classification
         // and loaded state. Missing authority refuses instead of manufacturing
         // null; successful null values grant no target layout or lifetime.

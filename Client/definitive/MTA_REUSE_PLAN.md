@@ -1,5 +1,25 @@
 # MTA on Definitive Edition: reuse boundary
 
+## Current offline cohort: vehicle-type getter (2026-10-26)
+
+The actual MTA model getter preserves its `IsVehicle` archive/type gate and
+returns `0xff` for a successful nonvehicle result. An admitted vehicle uses the
+existing owner's fresh raw subtype observation, then the SDK's BYTE conversion.
+The four already qualified native classifiers establish the DWORD at field0x84;
+this adds no guessed names or mappings for the seven remaining predicates.
+
+The native observation independently qualifies the current vehicle receiver,
+complete pure type getter, context/membership, profile, thread and repeated
+field samples. It neither calls a virtual target nor requires loaded state.
+Refusal preserves caller output and reaches the SDK as an exception. The Shared
+getter therefore permits throwing; classic retains its stronger `noexcept`.
+Providers and consumers require a coordinated rebuild.
+
+Focused actual SDK and owned native checks, two actual Win32 classic model/pool
+TUs with one fresh normal PCH, and the normal DE backend with its exact saved DLL
+cover the change. The installed GTA candidate is unchanged. Complete factories,
+the remaining classifiers and playable full MTA remain unfinished.
+
 ## Current offline cohort: archive query and object admission (2026-10-26)
 
 DE's archive query now propagates an owner refusal instead of terminating the

@@ -23,6 +23,7 @@ namespace mta::game_de
         DWORD                      GetModel() override { return model; }
         eModelInfoType             GetModelType() override;
         bool                       IsVehicle() const override;
+        BYTE                       GetVehicleType() const override;
         bool                       IsAllocatedInArchive() const override;
         bool                       IsBoat() override;
         bool                       IsCar() override;

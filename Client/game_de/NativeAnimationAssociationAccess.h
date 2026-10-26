@@ -99,6 +99,14 @@ namespace mta::game_de
             return ClockResult::NotInitialized;
         }
 
+        // Public node release leaves the receiver's pointer/count stale.
+        // Only the owner may retain the allocation's returned/unknown ACK,
+        // reject later node consumers, and clear the pointer during retirement.
+        virtual ClockResult FreePrivateAnimationAssociationNodeArray(const NativeAnimationAssociationReferenceToken&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
+
     protected:
         ~NativeAnimationAssociationAccess() = default;
     };

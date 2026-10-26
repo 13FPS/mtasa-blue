@@ -5,6 +5,7 @@
  ****************************************************************************/
 #include "NativeAnimationAssociationStorage.h"
 #include "NativeAnimationAssociationOuterStorageCalls.h"
+#include "NativeCustomAnimSequenceStorageProfile.h"
 #include "NativeAnimationAssociationProfile.h"
 #include "NativeAnimationAssociationProgressDetail.h"
 #include "NativeAnimationHierarchyReadProfile.h"
@@ -79,6 +80,20 @@ namespace mta::game_de
             __try
             {
                 returned = function(receiver, flags);
+                return ClockResult::Ok;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                exception = GetExceptionCode();
+                return ClockResult::OriginalException;
+            }
+        }
+        ClockResult InvokeNodeFree(NativeCustomAnimSequenceStorageCalls::FreeFunction function, std::uintptr_t heap, std::uintptr_t original,
+                                   std::uint32_t& exception) noexcept
+        {
+            __try
+            {
+                function(heap, original);
                 return ClockResult::Ok;
             }
             __except (EXCEPTION_EXECUTE_HANDLER)
@@ -335,6 +350,11 @@ namespace mta::game_de
         bool                                                          progressUnknown = false;
         std::unique_ptr<AnimationAssociationProgressDetail::Plan>     pendingProgress;
         bool knownConstructed = false, constructorEntered = false, destructorEntered = false, retirementVerified = false;
+        // These are causal command receipts, not facts inferred from a stale
+        // pointer or a readable allocation header after native release.
+        bool           nodeFreeEntered = false, nodeFreeReturned = false, nodeFreeVerified = false;
+        bool           nodeClearEntered = false, nodePointerCleared = false, nodeClearVerified = false;
+        std::uintptr_t nodeFreeEntryRva = 0;
     };
     NativeAnimationAssociationStorage::NativeAnimationAssociationStorage() noexcept = default;
     NativeAnimationAssociationStorage::~NativeAnimationAssociationStorage() = default;
@@ -357,6 +377,13 @@ namespace mta::game_de
             r.hierarchy = d.source.bank.hierarchy;
             r.constructed = d.knownConstructed;
             r.progressUnknown = d.progressUnknown;
+            r.nodeFreeEntryRva = d.nodeFreeEntryRva;
+            r.nodeFreeEntered = d.nodeFreeEntered;
+            r.nodesReleased = d.nodeFreeReturned;
+            r.nodeFreeVerified = d.nodeFreeVerified;
+            r.nodePointerClearEntered = d.nodeClearEntered;
+            r.nodePointerCleared = d.nodePointerCleared;
+            r.nodePointerClearVerified = d.nodeClearVerified;
             r.refVerified = d.knownConstructed && (!d.destructorEntered || d.retirementVerified);
         }
         static ClockResult Pin(const S& s, ClockResult result) noexcept
@@ -380,6 +407,7 @@ namespace mta::game_de
                 return result;
             return Context::Owner(image, owner);
         }
+        static bool        MetadataReadable(State state) noexcept { return state == State::LiveUnpublished || state == State::NodesReleased; }
         static ClockResult Snapshot(std::uintptr_t image, const S& s, std::uint64_t generation, C owner, AnimationAssociationStorageDetail::Bytes& bytes,
                                     NativeModelReferenceHeap::Value& heap, const AnimationAssociationProgressDetail::Plan* transition = nullptr) noexcept
         {
@@ -387,16 +415,20 @@ namespace mta::game_de
             const auto state = s.GetState();
             if (state == State::PublicationPinned)
                 return ClockResult::OwnerConflict;
-            if (!s.data || !s.data->knownConstructed || s.data->destructorEntered || (state != State::LiveUnpublished && state != State::FaultDebt))
+            if (!s.data || !s.data->knownConstructed || s.data->destructorEntered ||
+                (state != State::LiveUnpublished && state != State::FaultDebt && state != State::NodesReleased))
                 return ClockResult::NotInitialized;
+            const auto& d = *s.data;
+            if ((d.nodeFreeEntered && !d.nodeFreeReturned) || (d.nodeClearEntered && !d.nodePointerCleared))
+                return ClockResult::OwnerConflict;
             auto result = Qualify(image, s, generation, owner, heap);
             if (result != ClockResult::Ok)
                 return result;
-            const auto& d = *s.data;
             if (!M::Copy(d.receiver, bytes.data(), bytes.size()))
                 return ClockResult::ReadFailure;
             if (Field<std::uintptr_t>(bytes, 0) != image + NativeAnimationAssociationProfile::VtableRva || Field<std::uintptr_t>(bytes, 8) ||
-                Field<std::uintptr_t>(bytes, 0x10) || Field<std::uint32_t>(bytes, 0x48) || Field<std::uintptr_t>(bytes, 0x20) != d.nodes ||
+                Field<std::uintptr_t>(bytes, 0x10) || Field<std::uint32_t>(bytes, 0x48) ||
+                Field<std::uintptr_t>(bytes, 0x20) != (d.nodePointerCleared ? std::uintptr_t{0} : d.nodes) ||
                 Field<std::uintptr_t>(bytes, 0x28) != d.source.bank.hierarchy || Field<std::uint16_t>(bytes, 0x18) != d.source.count ||
                 !(Field<std::uint16_t>(bytes, 0x46) & 0x4000))
                 return Pin(s, ClockResult::BindingChanged);
@@ -405,46 +437,60 @@ namespace mta::game_de
                 return result;
             if (!SameBank(d.source.bank, bank) || !bank.refs)
                 return Pin(s, ClockResult::BindingChanged);
-            if (!M::PrivateWritable(d.nodeRaw, d.request) || d.nodes < d.nodeRaw + 8 || d.nodes % 64 || d.nodes - d.nodeRaw > d.request ||
-                static_cast<std::size_t>(d.source.count) * NativeAnimationAssociationProfile::NodeBytes > d.request - (d.nodes - d.nodeRaw))
-                return Pin(s, ClockResult::BindingChanged);
             if (d.source.sequenceCapacity && !SequenceSpan(bank, d.source.sequenceCapacity))
                 return Pin(s, ClockResult::BindingChanged);
-            std::uintptr_t original = 0;
-            if (!M::Copy(d.nodes - 8, &original, sizeof(original)))
-                return ClockResult::ReadFailure;
-            if (original != d.nodeRaw)
-                return Pin(s, ClockResult::BindingChanged);
-            if (d.suppressed.size() != d.source.count || d.cache.size() != d.source.count || (d.progressUnknown && !transition) ||
-                (transition && transition->afterNodes.size() != d.source.count))
-                return Pin(s, ClockResult::BindingChanged);
-            for (std::size_t index = 0; index != d.source.count; ++index)
+            if (d.nodeFreeReturned)
             {
-                std::array<unsigned char, 40> node{};
-                if (!M::Copy(d.nodes + index * 40, node.data(), node.size()))
-                    return ClockResult::ReadFailure;
-                if (Field<std::uintptr_t>(node, 0x10) != (d.suppressed[index] ? std::uintptr_t{0} : d.source.map[index]) ||
-                    Field<std::uintptr_t>(node, 0x18) != d.receiver || Field<std::uint32_t>(node, 0x20) != 0xffffffff)
-                    return Pin(s, ClockResult::BindingChanged);
                 if (transition)
-                {
-                    if (node != transition->afterNodes[index])
-                        return Pin(s, ClockResult::BindingChanged);
-                }
-                else
-                    for (std::size_t word = 0; word != 4; ++word)
-                        if ((d.cache[index].defined & (1u << word)) && Field<std::uint32_t>(node, word * 4) != d.cache[index].words[word])
-                            return Pin(s, ClockResult::BindingChanged);
-            }
-            if (transition)
-            {
-                if (!AnimationAssociationProgressDetail::Verify(*transition, true))
-                    return Pin(s, ClockResult::BindingChanged);
-            }
-            else
+                    return ClockResult::NotInitialized;
+                // The primary node-only release intentionally leaves pointer
+                // and count stale. Causal return, never page readability, is
+                // the reason receiver-only reads skip all freed-node access.
                 for (const auto& frame : d.frameJournal)
                     if (!AnimationAssociationProgressDetail::CopyJournal(frame))
                         return Pin(s, ClockResult::BindingChanged);
+            }
+            else
+            {
+                if (!M::PrivateWritable(d.nodeRaw, d.request) || d.nodes < d.nodeRaw + 8 || d.nodes % 64 || d.nodes - d.nodeRaw > d.request ||
+                    static_cast<std::size_t>(d.source.count) * NativeAnimationAssociationProfile::NodeBytes > d.request - (d.nodes - d.nodeRaw))
+                    return Pin(s, ClockResult::BindingChanged);
+                std::uintptr_t original = 0;
+                if (!M::Copy(d.nodes - 8, &original, sizeof(original)))
+                    return ClockResult::ReadFailure;
+                if (original != d.nodeRaw)
+                    return Pin(s, ClockResult::BindingChanged);
+                if (d.suppressed.size() != d.source.count || d.cache.size() != d.source.count || (d.progressUnknown && !transition) ||
+                    (transition && transition->afterNodes.size() != d.source.count))
+                    return Pin(s, ClockResult::BindingChanged);
+                for (std::size_t index = 0; index != d.source.count; ++index)
+                {
+                    std::array<unsigned char, 40> node{};
+                    if (!M::Copy(d.nodes + index * 40, node.data(), node.size()))
+                        return ClockResult::ReadFailure;
+                    if (Field<std::uintptr_t>(node, 0x10) != (d.suppressed[index] ? std::uintptr_t{0} : d.source.map[index]) ||
+                        Field<std::uintptr_t>(node, 0x18) != d.receiver || Field<std::uint32_t>(node, 0x20) != 0xffffffff)
+                        return Pin(s, ClockResult::BindingChanged);
+                    if (transition)
+                    {
+                        if (node != transition->afterNodes[index])
+                            return Pin(s, ClockResult::BindingChanged);
+                    }
+                    else
+                        for (std::size_t word = 0; word != 4; ++word)
+                            if ((d.cache[index].defined & (1u << word)) && Field<std::uint32_t>(node, word * 4) != d.cache[index].words[word])
+                                return Pin(s, ClockResult::BindingChanged);
+                }
+                if (transition)
+                {
+                    if (!AnimationAssociationProgressDetail::Verify(*transition, true))
+                        return Pin(s, ClockResult::BindingChanged);
+                }
+                else
+                    for (const auto& frame : d.frameJournal)
+                        if (!AnimationAssociationProgressDetail::CopyJournal(frame))
+                            return Pin(s, ClockResult::BindingChanged);
+            }
             Bank bankAfter;
             if ((result = CaptureBank(image, owner, d.source.bank.hierarchy, bankAfter)) != ClockResult::Ok)
                 return result;
@@ -619,12 +665,12 @@ namespace mta::game_de
         static ClockResult Read(std::uintptr_t image, const S& s, std::uint64_t generation, C owner, NativeAnimationAssociationValues& output) noexcept
         {
             using namespace AnimationAssociationStorageDetail;
-            if (s.GetState() != State::LiveUnpublished)
+            if (!MetadataReadable(s.GetState()))
                 return ClockResult::NotInitialized;
             if (!Context::TryEnter())
                 return ClockResult::Busy;
             Context::Scope gate;
-            if (s.GetState() != State::LiveUnpublished)
+            if (!MetadataReadable(s.GetState()))
                 return ClockResult::NotInitialized;
             Bytes                           before{}, after{};
             NativeModelReferenceHeap::Value heap, current;
@@ -650,12 +696,12 @@ namespace mta::game_de
         static ClockResult ReadLength(std::uintptr_t image, const S& s, std::uint64_t generation, C owner, std::uint32_t& output) noexcept
         {
             namespace A = AnimationAssociationStorageDetail;
-            if (s.GetState() != State::LiveUnpublished)
+            if (!MetadataReadable(s.GetState()))
                 return ClockResult::NotInitialized;
             if (!A::Context::TryEnter())
                 return ClockResult::Busy;
             A::Context::Scope gate;
-            if (s.GetState() != State::LiveUnpublished)
+            if (!MetadataReadable(s.GetState()))
                 return ClockResult::NotInitialized;
             A::Bytes                        before{}, middle{}, after{};
             NativeModelReferenceHeap::Value heap, middleHeap, afterHeap;
@@ -699,7 +745,9 @@ namespace mta::game_de
                     *output = r;
                 return result;
             };
-            if (s.GetState() != State::LiveUnpublished)
+            // Source node-only free leaves this owned receiver usable. Scalar
+            // stores need current receiver authority, not live node payload.
+            if (!MetadataReadable(s.GetState()))
                 return finish(ClockResult::NotInitialized);
             std::size_t offset = 0, width = 2;
             switch (scalar)
@@ -893,8 +941,82 @@ namespace mta::game_de
             r.accepted = r.verified = r.progressed = true;
             return finish(ClockResult::Ok);
         }
+        static ClockResult FreeNodeArray(std::uintptr_t image, S& s, std::uint64_t generation, C owner, Receipt* output,
+                                         NativeCustomAnimSequenceStorageCalls::InvokeFree invoke) noexcept
+        {
+            using namespace AnimationAssociationStorageDetail;
+            Receipt    r;
+            const auto finish = [&](ClockResult result)
+            {
+                if (s.data)
+                    Fill(*s.data, r);
+                r.pinned = s.GetState() == State::PublicationPinned;
+                if (output)
+                    *output = r;
+                return result;
+            };
+            if (s.GetState() != State::LiveUnpublished)
+                return finish(ClockResult::NotInitialized);
+            if (!Context::TryEnter())
+                return finish(ClockResult::Busy);
+            Context::Scope gate;
+            if (s.GetState() != State::LiveUnpublished || !s.data || s.data->nodeFreeEntered)
+                return finish(ClockResult::OwnerConflict);
+            Bytes                           before{}, confirmed{}, after{};
+            NativeModelReferenceHeap::Value heap, current;
+            auto                            result = Snapshot(image, s, generation, owner, before, heap);
+            if (result != ClockResult::Ok)
+                return finish(result);
+            Bank bank;
+            if ((result = CaptureBank(image, owner, s.data->source.bank.hierarchy, bank)) != ClockResult::Ok ||
+                (result = Snapshot(image, s, generation, owner, confirmed, current)) != ClockResult::Ok)
+                return finish(result);
+            if (before != confirmed || !NativeModelReferenceHeap::Same(heap, current))
+                return finish(ClockResult::BindingChanged);
+            if ((result = Context::Owner(image, owner)) != ClockResult::Ok)
+                return finish(result);
+            auto& d = *s.data;
+            d.nodeFreeEntryRva = heap.current == heap.authority ? NativeCustomAnimSequenceStorageProfile::AuthorityFreeRva
+                                                                : NativeCustomAnimSequenceStorageProfile::ProxyFreeRva;
+#if defined(MTA_DE_ANIMATION_ASSOCIATION_NODE_FREE_INVOKE)
+            const auto entry = invoke ? invoke : &MTA_DE_ANIMATION_ASSOCIATION_NODE_FREE_INVOKE;
+#else
+            const auto entry = invoke ? invoke : &AnimationAssociationStorageDetail::InvokeNodeFree;
+#endif
+            d.nodeFreeEntered = true;
+            s.state.store(State::NodeFreeEntered);
+            r.entered = true;
+            r.heap = heap.current;
+            // Even count zero has the genuine helper's nonnull 64-byte raw
+            // allocation. Free only that causally acquired original base.
+            result = entry(reinterpret_cast<NativeCustomAnimSequenceStorageCalls::FreeFunction>(image + d.nodeFreeEntryRva), heap.current, d.nodeRaw,
+                           r.exceptionCode);
+            if (result != ClockResult::Ok)
+            {
+                s.state.store(State::FaultDebt);
+                return finish(result);
+            }
+            // Publish consumption before any fallible postflight, preserving
+            // all 104 physical bytes and never reading freed nodes/header.
+            d.nodeFreeReturned = true;
+            s.state.store(State::NodesReleased);
+            r.returned = r.accepted = true;
+            if ((result = Snapshot(image, s, generation, owner, after, current)) != ClockResult::Ok)
+                return finish(result);
+            Bank bankAfter;
+            if ((result = CaptureBank(image, owner, d.source.bank.hierarchy, bankAfter)) != ClockResult::Ok)
+                return finish(result);
+            if (before != after || !NativeModelReferenceHeap::Same(heap, current) || !SameBank(bank, bankAfter) || bank.refs != bankAfter.refs)
+                return finish(Pin(s, ClockResult::BindingChanged));
+            if ((result = Context::Owner(image, owner)) != ClockResult::Ok)
+                return finish(result);
+            d.nodeFreeVerified = true;
+            r.verified = true;
+            return finish(ClockResult::Ok);
+        }
         static ClockResult Retire(std::uintptr_t image, S& s, std::uint64_t generation, C owner, Receipt* output,
-                                  NativeAnimationAssociationCalls::InvokeDestructor invoke, NativeCustomAnimSequenceStorageCalls::InvokeFree free) noexcept
+                                  NativeAnimationAssociationCalls::InvokeDestructor invoke, NativeCustomAnimSequenceStorageCalls::InvokeFree free,
+                                  NativeAnimationAssociationCalls::ExchangeNode clear) noexcept
         {
             using namespace AnimationAssociationStorageDetail;
             Receipt r;
@@ -925,7 +1047,7 @@ namespace mta::game_de
                 s.state.store(d.outer.CanDiscard() ? State::Released : State::FaultDebt);
                 return finish(result);
             }
-            if (!d.knownConstructed || d.destructorEntered)
+            if (!d.knownConstructed || d.destructorEntered || (d.nodeFreeEntered && !d.nodeFreeReturned) || (d.nodeClearEntered && !d.nodePointerCleared))
                 return finish(ClockResult::OwnerConflict);
             if (!Context::TryEnter())
                 return finish(ClockResult::Busy);
@@ -935,6 +1057,54 @@ namespace mta::game_de
             auto                            result = Snapshot(image, s, generation, owner, before, heap);
             if (result != ClockResult::Ok)
                 return finish(result);
+            if (d.nodeFreeReturned)
+            {
+                if (!d.nodePointerCleared)
+                {
+                    NativeModelReferenceHeap::Value current;
+                    if ((result = Qualify(image, s, generation, owner, current)) != ClockResult::Ok)
+                        return finish(result);
+                    if (!NativeModelReferenceHeap::Same(heap, current))
+                        return finish(ClockResult::BindingChanged);
+#if defined(MTA_DE_ANIMATION_ASSOCIATION_NODE_POINTER_CLEAR)
+                    const auto pointerClear = clear ? clear : &MTA_DE_ANIMATION_ASSOCIATION_NODE_POINTER_CLEAR;
+#else
+                    const auto pointerClear = clear ? clear : &AnimationAssociationStorageDetail::ExchangeNode;
+#endif
+                    // This is a cleanup effect with its own command receipt,
+                    // not the public FreeNodes operation. Without this known
+                    // clear the genuine destructor would double-free nodes.
+                    d.nodeClearEntered = true;
+                    s.state.store(State::NodeClearEntered);
+                    r.entered = true;
+                    std::uintptr_t observed = 0;
+                    bool           accepted = false;
+                    result = pointerClear(d.receiver + 0x20, d.nodes, 0, observed, accepted, r.exceptionCode);
+                    r.returned = result == ClockResult::Ok;
+                    d.nodePointerCleared = accepted && observed == d.nodes;
+                    if (!d.nodePointerCleared)
+                    {
+                        s.state.store(State::FaultDebt);
+                        return finish(result == ClockResult::Ok ? ClockResult::BindingChanged : result);
+                    }
+                    s.state.store(State::NodesReleased);
+                    r.accepted = true;
+                    if (result != ClockResult::Ok)
+                        return finish(result);
+                    Put(before, 0x20, std::uintptr_t{0});
+                }
+                // A known accepted clear may resume through read-only
+                // acknowledgement after owner loss; never issue its CAS again.
+                Bytes                           confirmed{};
+                NativeModelReferenceHeap::Value current;
+                if ((result = Snapshot(image, s, generation, owner, confirmed, current)) != ClockResult::Ok)
+                    return finish(result);
+                if (before != confirmed || !NativeModelReferenceHeap::Same(heap, current))
+                    return finish(Pin(s, ClockResult::BindingChanged));
+                if ((result = Context::Owner(image, owner)) != ClockResult::Ok)
+                    return finish(result);
+                d.nodeClearVerified = true;
+            }
             Bank bank;
             if ((result = CaptureBank(image, owner, d.source.bank.hierarchy, bank)) != ClockResult::Ok)
                 return finish(result);
@@ -982,12 +1152,12 @@ namespace mta::game_de
                                             NativeAnimationHierarchyReferenceToken& output) noexcept
         {
             namespace A = AnimationAssociationStorageDetail;
-            if (s.GetState() != State::LiveUnpublished)
+            if (!MetadataReadable(s.GetState()))
                 return ClockResult::NotInitialized;
             if (!A::Context::TryEnter())
                 return ClockResult::Busy;
             A::Context::Scope gate;
-            if (s.GetState() != State::LiveUnpublished)
+            if (!MetadataReadable(s.GetState()))
                 return ClockResult::NotInitialized;
             A::Bytes                        first{}, second{};
             NativeModelReferenceHeap::Value heap, after;
@@ -1247,10 +1417,15 @@ namespace mta::game_de
         {
             return NativeAnimationAssociationStorageAccess::SetCurrentProgress(image, storage, generation, bits, owner, receipt, invoke);
         }
-        ClockResult Retire(std::uintptr_t i, Storage& s, std::uint64_t g, CheckOwner o, Receipt* r, InvokeDestructor v,
-                           NativeCustomAnimSequenceStorageCalls::InvokeFree f) noexcept
+        ClockResult FreeNodeArray(std::uintptr_t i, Storage& s, std::uint64_t g, CheckOwner o, Receipt* r,
+                                  NativeCustomAnimSequenceStorageCalls::InvokeFree v) noexcept
         {
-            return NativeAnimationAssociationStorageAccess::Retire(i, s, g, o, r, v, f);
+            return NativeAnimationAssociationStorageAccess::FreeNodeArray(i, s, g, o, r, v);
+        }
+        ClockResult Retire(std::uintptr_t i, Storage& s, std::uint64_t g, CheckOwner o, Receipt* r, InvokeDestructor v,
+                           NativeCustomAnimSequenceStorageCalls::InvokeFree f, ExchangeNode c) noexcept
+        {
+            return NativeAnimationAssociationStorageAccess::Retire(i, s, g, o, r, v, f, c);
         }
         ClockResult ResolveHierarchy(std::uintptr_t image, const Storage& storage, std::uint64_t generation, CheckOwner owner,
                                      NativeAnimationHierarchyReferenceToken& output) noexcept

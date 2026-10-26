@@ -17,6 +17,7 @@ namespace mta::game_de
     public:
         using CAnimBlendAssociation::Constructor;
         CAnimBlendAssociationSAInterface*    Constructor(CAnimBlendStaticAssociationSAInterface&) override;
+        void                                 FreeAnimBlendNodeArray() override;
         CAnimBlendAssociationSAInterface*    GetInterface() override;
         eAnimGroup                           GetAnimGroup() override;
         eAnimID                              GetAnimID() override;
@@ -49,8 +50,8 @@ namespace mta::game_de
         NativeAnimationAssociationAccess&              native;
         const NativeAnimationAssociationReferenceToken reference;
     };
-    // Eighteen real operations preserve four genuine pure contracts:
-    // clump construction/Init and raw node disposal. No public dynamic factory,
-    // shared virtual destructor or SDK base deletion is supplied here.
+    // Nineteen real operations preserve three genuine pure clump construction
+    // and initialization contracts. No public dynamic factory, shared virtual
+    // destructor or SDK base deletion is supplied here.
     static_assert(std::is_abstract_v<CAnimBlendAssociationDE> && std::is_base_of_v<CAnimBlendAssociation, CAnimBlendAssociationDE>);
 }

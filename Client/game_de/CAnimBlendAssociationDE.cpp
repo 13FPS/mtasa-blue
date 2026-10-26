@@ -45,6 +45,14 @@ namespace mta::game_de
         Require(native.ConstructPrivateAnimationAssociationFromStatic(token, locator, returned), "Constructor");
         return reinterpret_cast<CAnimBlendAssociationSAInterface*>(returned);
     }
+    void CAnimBlendAssociationDE::FreeAnimBlendNodeArray()
+    {
+        const auto token = reference;
+        // Actual source frees the aligned nodes but leaves pointer/count stale.
+        // The same owner must retain that release ACK and protect later node
+        // consumers; this CPU observer neither clears fields nor retires this.
+        Require(native.FreePrivateAnimationAssociationNodeArray(token), "FreeAnimBlendNodeArray");
+    }
     NativeAnimationAssociationValues CAnimBlendAssociationDE::Read(const char* operation) const
     {
         const auto                       token = reference;

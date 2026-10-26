@@ -1,5 +1,29 @@
 # MTA on Definitive Edition: reuse boundary
 
+## Current offline cohort: actual association node-array release (2026-10-26)
+
+MTA's `FreeAnimBlendNodeArray` now dispatches once through the same private
+association owner. The source operation frees the nonnull original allocation
+while leaving the receiver's pointer and count physically unchanged. The owner
+records the native return before postflight; later metadata reads and scalar
+writes use that known release instead of touching the freed node memory.
+Node consumers and repeated release refuse before entering native code.
+
+Retirement has a separate cleanup obligation: acknowledge clearing the stale
+node pointer before invoking the genuine deleting destructor. This prevents a
+second node free while preserving the public release operation's exact fields.
+A known accepted clear can resume its read-only acknowledgement after owner
+loss; an unknown free or clear retains debt without retry, guessed cleanup or
+copyback. Bank references and the original sequence/null/frame journals keep
+their existing ownership rules.
+
+Nineteen actual association SDK methods are implemented; the three clump
+construction/initialization operations remain pure. Focused SDK and owner
+checks cover unreadable released memory, zero-count nonnull allocations,
+scalar usability, retirement and isolated acknowledgement failures. The shared
+SDK, classic behavior, installed GTA trial and incomplete factory boundary are
+unchanged. Full MTA remains experimental and unfinished.
+
 ## Current offline cohort: actual collision-scene completion (2026-10-26)
 
 MTA's `CStreaming::LoadSceneCollision` now uses one optional operation on the

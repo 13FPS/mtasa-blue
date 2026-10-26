@@ -24,7 +24,10 @@ namespace mta::game_de
             RetireEntered,
             Released,
             FaultDebt,
-            PublicationPinned
+            PublicationPinned,
+            NodeFreeEntered,
+            NodesReleased,
+            NodeClearEntered
         };
         NativeAnimationAssociationStorage() noexcept;
         ~NativeAnimationAssociationStorage();
@@ -73,6 +76,11 @@ namespace mta::game_de
             std::uint32_t progressBits = 0, absoluteTimeBits = 0;
             std::size_t   preparedFrames = 0, modifiedFrames = 0;
             bool          progressed = false, progressUnknown = false;
+            // A returned node-only free does not clear native pointer/count.
+            // Retirement has a separate causal pointer-clear acknowledgement.
+            std::uintptr_t nodeFreeEntryRva = 0;
+            bool           nodeFreeEntered = false, nodesReleased = false, nodeFreeVerified = false;
+            bool           nodePointerClearEntered = false, nodePointerCleared = false, nodePointerClearVerified = false;
         };
         ClockResult Create(std::uintptr_t, Storage&, std::uint64_t, CheckOwner, Receipt* = nullptr,
                            NativeCustomAnimSequenceStorageCalls::InvokeMalloc = nullptr) noexcept;
@@ -87,8 +95,10 @@ namespace mta::game_de
         // an unknown entered transition is never replayed or repaired by copying.
         ClockResult SetCurrentProgress(std::uintptr_t, Storage&, std::uint64_t, std::uint32_t, CheckOwner, Receipt* = nullptr,
                                        InvokeProgress = nullptr) noexcept;
+        ClockResult FreeNodeArray(std::uintptr_t, Storage&, std::uint64_t, CheckOwner, Receipt* = nullptr,
+                                  NativeCustomAnimSequenceStorageCalls::InvokeFree = nullptr) noexcept;
         ClockResult Retire(std::uintptr_t, Storage&, std::uint64_t, CheckOwner, Receipt* = nullptr, InvokeDestructor = nullptr,
-                           NativeCustomAnimSequenceStorageCalls::InvokeFree = nullptr) noexcept;
+                           NativeCustomAnimSequenceStorageCalls::InvokeFree = nullptr, ExchangeNode = nullptr) noexcept;
         // A hierarchy token remains a current borrowed bank identity, never
         // another reference or storage-release authority. Restrictions preserve
         // the immutable original map and acknowledge only null suppression.

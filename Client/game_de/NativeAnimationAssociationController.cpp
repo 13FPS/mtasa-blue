@@ -37,7 +37,8 @@ namespace mta::game_de
             any |= entry->storage.IsRetained();
             const auto state = entry->storage.GetState();
             fault |= state == NativeAnimationAssociationStorage::State::FaultDebt || state == NativeAnimationAssociationStorage::State::PublicationPinned ||
-                     state == NativeAnimationAssociationStorage::State::ConstructEntered || state == NativeAnimationAssociationStorage::State::RetireEntered;
+                     state == NativeAnimationAssociationStorage::State::ConstructEntered || state == NativeAnimationAssociationStorage::State::RetireEntered ||
+                     state == NativeAnimationAssociationStorage::State::NodeFreeEntered || state == NativeAnimationAssociationStorage::State::NodeClearEntered;
         }
         retained.store(any, std::memory_order_release);
         recovery.store(fault, std::memory_order_release);
@@ -172,6 +173,25 @@ namespace mta::game_de
         if (!entry)
             return ClockResult::OwnerConflict;
         const auto result = NativeAnimationAssociationCalls::SetCurrentProgress(image, entry->storage, generation, progress, owner, &next);
+        Publish();
+        if (receipt)
+            *receipt = next;
+        return result;
+    }
+    ClockResult NativeAnimationAssociationController::FreeNodeArray(std::uintptr_t image, std::uint64_t generation, const Token& token, CheckOwner owner,
+                                                                    Receipt* receipt) noexcept
+    {
+        const auto request = token;
+        Receipt    next;
+        if (receipt)
+            *receipt = next;
+        if (!AnimationAssociationControllerDetail::Enter(busy))
+            return ClockResult::Busy;
+        AnimationAssociationControllerDetail::Guard guard{busy};
+        auto*                                       entry = Find(generation, request);
+        if (!entry)
+            return ClockResult::OwnerConflict;
+        const auto result = NativeAnimationAssociationCalls::FreeNodeArray(image, entry->storage, generation, owner, &next);
         Publish();
         if (receipt)
             *receipt = next;

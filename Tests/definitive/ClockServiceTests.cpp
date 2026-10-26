@@ -3652,12 +3652,23 @@ namespace ClockAnimationAssociationProgressTest
 {
     mta::game_de::ClockResult Invoke(mta::game_de::NativeAnimationAssociationCalls::ProgressFunction, std::uintptr_t, float, std::uint32_t&) noexcept;
 }
+namespace ClockAnimationAssociationNodeArrayTest
+{
+    mta::game_de::ClockResult Free(mta::game_de::NativeCustomAnimSequenceStorageCalls::FreeFunction, std::uintptr_t, std::uintptr_t, std::uint32_t&) noexcept;
+    mta::game_de::ClockResult Clear(std::uintptr_t, std::uintptr_t, std::uintptr_t, std::uintptr_t&, bool&, std::uint32_t&) noexcept;
+    mta::game_de::ClockResult Destroy(mta::game_de::NativeAnimationAssociationCalls::DestructorFunction, std::uintptr_t, std::uint32_t, std::uintptr_t&,
+                                      std::uint32_t&) noexcept;
+}
+#define MTA_DE_ANIMATION_ASSOCIATION_NODE_FREE_INVOKE   ::ClockAnimationAssociationNodeArrayTest::Free
+#define MTA_DE_ANIMATION_ASSOCIATION_NODE_POINTER_CLEAR ::ClockAnimationAssociationNodeArrayTest::Clear
 #define MTA_DE_ANIMATION_ASSOCIATION_PROGRESS_INVOKE    ::ClockAnimationAssociationProgressTest::Invoke
 #define MTA_DE_ANIMATION_ASSOCIATION_NODE_EXCHANGE      ::ClockAnimationAssociationBonesTest::ExchangeNode
 #define MTA_DE_ANIMATION_ASSOCIATION_CONSTRUCTOR_INVOKE ::ClockPrivateAnimationAssociationTest::Construct
-#define MTA_DE_ANIMATION_ASSOCIATION_DESTRUCTOR_INVOKE  ::ClockPrivateAnimationAssociationTest::Destroy
+#define MTA_DE_ANIMATION_ASSOCIATION_DESTRUCTOR_INVOKE  ::ClockAnimationAssociationNodeArrayTest::Destroy
 #define MTA_DE_ANIMATION_ASSOCIATION_EXCHANGE           ::ClockPrivateAnimationAssociationTest::Exchange
 #include "../../Client/game_de/NativeAnimationAssociationStorage.cpp"
+#undef MTA_DE_ANIMATION_ASSOCIATION_NODE_FREE_INVOKE
+#undef MTA_DE_ANIMATION_ASSOCIATION_NODE_POINTER_CLEAR
 #undef MTA_DE_ANIMATION_ASSOCIATION_PROGRESS_INVOKE
 #undef MTA_DE_ANIMATION_ASSOCIATION_NODE_EXCHANGE
 #undef MTA_DE_ANIMATION_ASSOCIATION_EXCHANGE
@@ -8457,6 +8468,7 @@ namespace
 #include "NativeAnimationAssociationBonesOwnerTests.inl"
 #include "NativeAnimationAssociationFloatOwnerTests.inl"
 #include "NativeAnimationAssociationProgressOwnerTests.inl"
+#include "NativeAnimationAssociationNodeArrayOwnerTests.inl"
 
 // The strict receiver must execute production typed tickets and the distinct
 // metadata-only delete route. Deleting an interface acknowledges only its own
@@ -8478,6 +8490,11 @@ static_assert(std::is_same_v<decltype(&PrivateAnimationFactoryManagerReceiver::G
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool associationNodeArrayUnknownFree = argc == 3 && std::strcmp(argv[2], "--animation-association-node-array-unknown-free") == 0;
+    const bool associationNodeArrayUnknownClear = argc == 3 && std::strcmp(argv[2], "--animation-association-node-array-unknown-clear") == 0;
+    const bool associationNodeArrayOwnerLoss = argc == 3 && std::strcmp(argv[2], "--animation-association-node-array-clear-owner-loss") == 0;
+    const bool associationNodeArrayOnly = associationNodeArrayUnknownFree || associationNodeArrayUnknownClear || associationNodeArrayOwnerLoss ||
+                                          (argc == 3 && std::strcmp(argv[2], "--animation-association-node-array-success") == 0);
     const bool associationProgressUnknown = argc == 3 && std::strcmp(argv[2], "--animation-association-progress-unknown") == 0;
     const bool associationProgressOnly = associationProgressUnknown || (argc == 3 && std::strcmp(argv[2], "--animation-association-progress-success") == 0);
     const bool associationFloatOnly = argc == 3 && std::strcmp(argv[2], "--animation-association-float") == 0;
@@ -8617,22 +8634,34 @@ int main(int argc, char** argv)
     const bool waterOnly = orientationWithWater || (argc == 3 && std::strcmp(argv[2], "--ped-water") == 0);
     const bool poseOnly = argc == 3 && std::strcmp(argv[2], "--ped-pose") == 0;
     const bool poolRegistryOnly = argc == 3 && std::strcmp(argv[2], "--ped-pool-registry") == 0;
-    Check(
-        (argc == 2 || constructorOnly || pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly || poseOnly || waterOnly ||
-         animationOnly || animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly ||
-         fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly ||
-         worldLineOnly || worldAreaOnly || worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly ||
-         cameraSphereOnly || pedWeaponClearOnly || pedClothesOnly || pedRebuildOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly ||
-         animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly ||
-         animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly || animationHierarchyBankOnly ||
-         customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly ||
-         privateHierarchyParentOnly || privateHierarchyEmptyOnly || freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly ||
-         privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly || animationBankFactoriesOnly ||
-         sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly || animationDefinitionsOnly || animationDefinitionBlockNamesOnly ||
-         animationGroupValidityOnly || animationIdValidityOnly || animationAssociationGroupReadsOnly || animationStaticAssociationReadsOnly ||
-         staticAssociationWritesOnly || pedRenderOnly || privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly) &&
-            std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
-        "durable fixture evidence is restricted to the explicit owned executable output directory");
+    Check((argc == 2 || constructorOnly || pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly || poseOnly ||
+           waterOnly || animationOnly || animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly ||
+           fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly ||
+           worldLineOnly || worldAreaOnly || worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly ||
+           cameraSphereOnly || pedWeaponClearOnly || pedClothesOnly || pedRebuildOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly ||
+           animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly ||
+           animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly || animationHierarchyBankOnly ||
+           customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly ||
+           privateHierarchyParentOnly || privateHierarchyEmptyOnly || freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly ||
+           privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly || animationBankFactoriesOnly ||
+           sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly || animationDefinitionsOnly ||
+           animationDefinitionBlockNamesOnly || animationGroupValidityOnly || animationIdValidityOnly || animationAssociationGroupReadsOnly ||
+           animationStaticAssociationReadsOnly || staticAssociationWritesOnly || pedRenderOnly || privateAssociationsOnly || associationBonesOnly ||
+           associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
+              std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
+          "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (associationNodeArrayOnly)
+    {
+        AnimationAssociationNodeArrayOwnerFixture::scenario = associationNodeArrayUnknownFree    ? 1u
+                                                              : associationNodeArrayUnknownClear ? 2u
+                                                              : associationNodeArrayOwnerLoss    ? 3u
+                                                                                                 : 0u;
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        AnimationAssociationNodeArrayOwnerFixture::RunPrepared(fixture);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (associationProgressOnly)
     {
         // This selected process admits only the focused copied-body closure;

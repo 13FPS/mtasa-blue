@@ -186,6 +186,7 @@ namespace mta::game_de
             ClockResult SetPrivateAnimationAssociationAnimGroup(const NativeAnimationAssociationReferenceToken&, std::int16_t) noexcept override;
             ClockResult SetPrivateAnimationAssociationFlags(const NativeAnimationAssociationReferenceToken&, std::int16_t) noexcept override;
             ClockResult RetirePrivateAnimationAssociation(const NativeAnimationAssociationReferenceToken&) noexcept override;
+            ClockResult FreePrivateAnimationAssociationNodeArray(const NativeAnimationAssociationReferenceToken&) noexcept override;
             bool        HasPendingPrivateAnimationAssociations() const noexcept override;
             ClockResult ResolvePrivateAnimationAssociationHierarchy(const NativeAnimationAssociationReferenceToken&,
                                                                     NativeAnimationHierarchyReferenceToken&) noexcept override;
@@ -2913,6 +2914,23 @@ namespace mta::game_de
             const auto request = token;
             const auto requestedValue = static_cast<std::uint16_t>(value);
             return WritePrivateAnimationAssociationScalar(request, NativeAnimationAssociationController::Scalar::Flags, requestedValue);
+        }
+
+        ClockResult NativeAccess::FreePrivateAnimationAssociationNodeArray(const NativeAnimationAssociationReferenceToken& token) noexcept
+        {
+            const auto request = token;
+            auto       result = CheckPrivateAnimationAssociationRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            NativeAnimationAssociationController::Receipt receipt;
+            // Native node-only release leaves the physical pointer/count in
+            // place. Preserve its causal phase instead of making this request
+            // alias whole-association retirement or guessed pointer cleanup.
+            result = runtime.privateAssociations.FreeNodeArray(runtime.image, request.ownerGeneration, request, &CheckTimingOwner, &receipt);
+            if (result == ClockResult::Ok)
+                result = CheckPrivateAnimationAssociationRequest(request);
+            FinishPrivateAnimationAssociation(request.ownerGeneration, result, receipt);
+            return result;
         }
 
         ClockResult NativeAccess::RetirePrivateAnimationAssociation(const NativeAnimationAssociationReferenceToken& token) noexcept

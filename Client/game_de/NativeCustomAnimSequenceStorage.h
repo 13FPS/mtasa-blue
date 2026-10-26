@@ -19,7 +19,8 @@ namespace mta::game_de
         {
             SequenceArray,
             KeyFrames,
-            DynamicAnimation
+            DynamicAnimation,
+            PedModelMetadata
         };
         enum class State : std::uint32_t
         {

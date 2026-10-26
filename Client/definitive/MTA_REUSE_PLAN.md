@@ -1,6 +1,24 @@
 # MTA on Definitive Edition: reuse boundary
 
-## Current offline cohort: special-ped creation order (2026-10-26)
+## Current offline cohort: ped metadata storage (2026-10-26)
+
+Special-ped creation now has a fixed 152-byte storage path through the existing
+qualified engine heap and issued-allocation journal. A distinct metadata kind
+keeps sequence, keyframe and dynamic-animation operations from accepting it.
+The allocation has no array cookie; its tag is the original base and its row
+capacity is zero. This path supplies storage, not an initialized ped object.
+
+Allocation and free acknowledgements are retained before later checks can
+fail. Unknown entered effects remain outstanding, and publication remains a
+separate obligation. The caller must retain the record before invoking this
+path; it cannot adopt a borrowed model or free a published object as storage.
+
+The native initializer and canonical shared ped collision default are being
+qualified offline before model-bank publication is connected. `MakePedModel`
+continues to refuse at its required creation boundary. No live invocation,
+installation update, complete model factory or playable full MTA is claimed.
+
+## Special-ped creation order (2026-10-26)
 
 The actual model SDK now wires MTA's `MakePedModel` itinerary: qualified ped
 metadata creation and bank publication first, then the existing special-model

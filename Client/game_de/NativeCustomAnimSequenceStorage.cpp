@@ -6,6 +6,7 @@
 #include "NativeCustomAnimSequenceStorage.h"
 #include "NativeCustomAnimSequenceStorageProfile.h"
 #include "NativeAnimationAssociationOuterStorageCalls.h"
+#include "NativePedModelMetadataStorageCalls.h"
 #include "NativeStreamingCompletionContext.h"
 #include "NativeAnimationSequenceRowCalls.h"
 #include "NativeAnimationSequenceRowProfile.h"
@@ -1434,6 +1435,22 @@ namespace mta::game_de
                             NativeModelReferenceHeap::Value& output) noexcept
         {
             return NativeCustomAnimSequenceStorageAccess::CaptureDynamicOuter(image, storage, generation, owner, output);
+        }
+    }
+    namespace NativePedModelMetadataStorageCalls
+    {
+        ClockResult Allocate(std::uintptr_t image, Storage& storage, std::uint64_t generation, CheckOwner owner, Receipt* output, InvokeMalloc invoke) noexcept
+        {
+            // Reuse the real heap/entered/returned journal for exactly152 raw
+            // metadata bytes. A distinct kind prevents animation APIs from
+            // mistaking this allocation for rows, frames or a constructed ped.
+            return NativeCustomAnimSequenceStorageAccess::Allocate(image, storage, generation, AllocationBytes, owner, output, invoke,
+                                                                   NativeCustomAnimSequenceStorage::Kind::PedModelMetadata);
+        }
+        ClockResult FreeStorage(std::uintptr_t image, Storage& storage, std::uint64_t generation, CheckOwner owner, Receipt* output, InvokeFree invoke) noexcept
+        {
+            return NativeCustomAnimSequenceStorageAccess::FreeStorage(image, storage, generation, owner, output, invoke,
+                                                                      NativeCustomAnimSequenceStorage::Kind::PedModelMetadata);
         }
     }
     namespace NativeAnimationKeyFrameStorageCalls

@@ -583,20 +583,32 @@ bool CModelCacheManagerImpl::TryReleaseCachedModel(ushort usModelId, SModelCache
     CModelInfo*          pModelInfo = m_pGame->GetModelInfo(usModelId, true);
     const eModelInfoType modelType = pModelInfo ? pModelInfo->GetModelType() : eModelInfoType::UNKNOWN;
 
-    // If the game still tracks this model in its loaded ped group, keep it cached while
-    // the group is near empty, so we don't fight the game over which models stay loaded.
-    if (modelType == eModelInfoType::PED && pStreaming->IsModelInLoadedPedGroup(usModelId))
+    std::optional<uint> loadedVehicleCount;
+    try
     {
-        if (pStreaming->GetNumPedsLoaded() <= PED_STREAMING_FLOOR)
-            return false;
+        // If the game still tracks this model in its loaded ped group, keep it cached while
+        // the group is near empty, so we don't fight the game over which models stay loaded.
+        if (modelType == eModelInfoType::PED && pStreaming->IsModelInLoadedPedGroup(usModelId))
+        {
+            if (pStreaming->GetNumPedsLoaded() <= PED_STREAMING_FLOOR)
+                return false;
+        }
+        if (modelType == eModelInfoType::VEHICLE && pStreaming->IsModelInLoadedVehicleGroup(usModelId))
+            loadedVehicleCount = pStreaming->GetNumLoadedVehicles();
+    }
+    catch (...)
+    {
+        // A refused group observation cannot establish that release is safe.
+        // Keep our reference and cache history until a later qualified query.
+        return false;
     }
 
     // Same for the loaded vehicle group, with a smaller floor inside interiors.
     // CWorld::GetCurrentArea reads the same CGame::currArea that the game's own
     // vehicle floor logic checks, so one lookup covers both cases.
-    if (modelType == eModelInfoType::VEHICLE && pStreaming->IsModelInLoadedVehicleGroup(usModelId))
+    if (loadedVehicleCount)
     {
-        const uint vehicleCount = pStreaming->GetNumLoadedVehicles();
+        const uint vehicleCount = *loadedVehicleCount;
         const bool bIsInterior = m_pGame->GetWorld() && m_pGame->GetWorld()->GetCurrentArea() != 0;
         const uint minVehicleBudget = bIsInterior ? VEHICLE_STREAMING_FLOOR_INTERIOR : VEHICLE_STREAMING_FLOOR_EXTERIOR;
         if (vehicleCount <= minVehicleBudget)

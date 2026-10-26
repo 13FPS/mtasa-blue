@@ -27,10 +27,10 @@ namespace mta::game_de
         void                        LoadAllRequestedModels(bool onlyPriority, const char* tag) override;
         void                        LoadScene(const CVector* position) override;
         void                        LoadSceneCollision(const CVector* position) override;
-        std::uint32_t               GetNumPedsLoaded() const noexcept override;
-        bool                        IsModelInLoadedPedGroup(std::uint16_t model) const noexcept override;
-        std::uint32_t               GetNumLoadedVehicles() const noexcept override;
-        bool                        IsModelInLoadedVehicleGroup(std::uint16_t model) const noexcept override;
+        std::uint32_t               GetNumPedsLoaded() const override;
+        bool                        IsModelInLoadedPedGroup(std::uint16_t model) const override;
+        std::uint32_t               GetNumLoadedVehicles() const override;
+        bool                        IsModelInLoadedVehicleGroup(std::uint16_t model) const override;
         std::optional<std::uint8_t> GetModelStreamingFlags(std::uint32_t model) override;
 
     protected:
@@ -38,7 +38,7 @@ namespace mta::game_de
 
     private:
         static void                             Require(ClockResult result, const char* operation);
-        NativeStreamingModelGroupsReader::Value ReadGroups() const noexcept;
+        NativeStreamingModelGroupsReader::Value ReadGroups() const;
         // Borrow the existing callback owner. This wrapper owns no native
         // model, streaming row, request queue or model-reference lease.
         NativeStreamingModelAccess& access;

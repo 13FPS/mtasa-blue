@@ -143,16 +143,22 @@ int main(int argc, char** argv)
         Access      owner;
         Streaming   streaming(owner);
         CStreaming* sdk = &streaming;
-        if (argc == 2 && std::string(argv[1]) == "--noexcept-refusal")
+        if (argc == 2 && std::string(argv[1]) == "--groups-refusal")
         {
-            std::set_terminate(+[]() noexcept
-                               {
-                                   std::puts("Production MTA streaming groups noexcept refusal fixture completed");
-                                   std::fflush(stdout);
-                                   std::_Exit(86);
-                               });
             owner.groupResult = ClockResult::Expired;
-            (void)sdk->GetNumPedsLoaded();
+            // Keep the historical selected mode honest after the Shared
+            // exception contract changes: refusal must unwind to its caller.
+            try
+            {
+                (void)sdk->GetNumPedsLoaded();
+            }
+            catch (const std::runtime_error& error)
+            {
+                Check(std::string(error.what()).find("ReadStreamingModelGroups") != std::string::npos,
+                      "actual group refusal must preserve its operation context");
+                std::puts("Production MTA streaming groups owner-refusal fixture completed");
+                return 0;
+            }
             return 88;
         }
         Check(argc == 1, "streaming SDK fixture accepts only its explicit bounded child mode");

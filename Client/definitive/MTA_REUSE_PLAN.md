@@ -1,5 +1,26 @@
 # MTA on Definitive Edition: reuse boundary
 
+## Current offline cohort: loaded-group refusal and cache admission (2026-10-26)
+
+The four loaded ped/vehicle membership and count queries now expose DE owner
+refusal as an exception. A failed observation cannot become an empty tracker
+or a process termination. Their Shared base declarations permit throwing;
+classic implementations retain their stronger `noexcept` specification and
+behavior. Native observation, group selection and successful values are
+unchanged. Providers and consumers need a coordinated rebuild; older DLL
+interoperability is not claimed.
+
+MTA's actual cache caller catches only refused group membership/count admission
+and retains the cache reference and history. A present zero vehicle count stays
+distinct from absence. Successful query order and the later world/interior
+floor decision remain intact. Flags, model type, reference subtraction and all
+cache metadata mutations remain outside this narrow exception boundary.
+
+Validation includes focused real SDK checks on x86/x64, the two affected actual
+Win32 consumer/provider TUs with two fresh normal PCHs, and the normal backend
+plus exact saved DLL. No new native read, complete factory or installed trial
+is introduced. Full MTA remains experimental and unfinished.
+
 ## Current offline cohort: model policies and backing ownership (2026-10-26)
 
 The actual model SDK now reuses MTA's towing and validity decisions. Towing

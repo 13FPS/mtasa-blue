@@ -94,10 +94,12 @@ public:
     virtual void          LoadSceneCollision(const CVector* position) = 0;
     // State of the game's loaded ped/vehicle model groups. Used by the model cache
     // manager to avoid unloading models that the game itself is still tracking.
-    virtual std::uint32_t GetNumPedsLoaded() const noexcept = 0;
-    virtual bool          IsModelInLoadedPedGroup(std::uint16_t modelId) const noexcept = 0;
-    virtual std::uint32_t GetNumLoadedVehicles() const noexcept = 0;
-    virtual bool          IsModelInLoadedVehicleGroup(std::uint16_t modelId) const noexcept = 0;
+    // A current backend observation can refuse. Allow that failure to reach
+    // the caller instead of terminating or fabricating an empty tracker.
+    virtual std::uint32_t GetNumPedsLoaded() const = 0;
+    virtual bool          IsModelInLoadedPedGroup(std::uint16_t modelId) const = 0;
+    virtual std::uint32_t GetNumLoadedVehicles() const = 0;
+    virtual bool          IsModelInLoadedVehicleGroup(std::uint16_t modelId) const = 0;
 
     // Flag-only consumers must not depend on a backend's physical row layout.
     // Keep classic absence distinct from present0: the cache retains its ref

@@ -6,7 +6,6 @@
 #include "CStreamingDE.h"
 #include <game/CModelRequestPolicy.h>
 #include <stdexcept>
-#include <exception>
 #include <string>
 
 namespace mta::game_de
@@ -33,29 +32,28 @@ namespace mta::game_de
             throw std::runtime_error(std::string("DE streaming owner refused ") + operation + ": " + std::to_string(static_cast<unsigned>(result)));
     }
 
-    NativeStreamingModelGroupsReader::Value CStreamingDE::ReadGroups() const noexcept
+    NativeStreamingModelGroupsReader::Value CStreamingDE::ReadGroups() const
     {
         NativeStreamingModelGroupsReader::Value value;
-        // These real SDK signatures cannot report failure or throw. A refused
-        // owner must not masquerade as an empty tracker and permit unloading.
-        // The incomplete service remains abstract and is not factory-published.
-        if (access.ReadStreamingModelGroups(value) != ClockResult::Ok)
-            std::terminate();
+        // A refused current observation must unwind before the cache can use
+        // a count or membership result to release a tracked model reference.
+        // Keep genuine empty values distinct from failure; never retry here.
+        Require(access.ReadStreamingModelGroups(value), "ReadStreamingModelGroups");
         return value;
     }
-    std::uint32_t CStreamingDE::GetNumPedsLoaded() const noexcept
+    std::uint32_t CStreamingDE::GetNumPedsLoaded() const
     {
         return ReadGroups().pedCount;
     }
-    bool CStreamingDE::IsModelInLoadedPedGroup(std::uint16_t model) const noexcept
+    bool CStreamingDE::IsModelInLoadedPedGroup(std::uint16_t model) const
     {
         return NativeStreamingModelGroupsReader::IsPedTracked(ReadGroups(), model);
     }
-    std::uint32_t CStreamingDE::GetNumLoadedVehicles() const noexcept
+    std::uint32_t CStreamingDE::GetNumLoadedVehicles() const
     {
         return NativeStreamingModelGroupsReader::VehicleCount(ReadGroups());
     }
-    bool CStreamingDE::IsModelInLoadedVehicleGroup(std::uint16_t model) const noexcept
+    bool CStreamingDE::IsModelInLoadedVehicleGroup(std::uint16_t model) const
     {
         return NativeStreamingModelGroupsReader::IsVehicleTracked(ReadGroups(), model);
     }

@@ -4,6 +4,7 @@
  * PURPOSE: Preserve actual constructor/scalar behavior through one private owner
  ****************************************************************************/
 #include "CAnimBlendAssociationDE.h"
+#include "CAnimBlendHierarchyDE.h"
 #include <game/CAnimBlendAssocGroup.h>
 #include <cstring>
 #include <stdexcept>
@@ -57,6 +58,41 @@ namespace mta::game_de
     eAnimID CAnimBlendAssociationDE::GetAnimID()
     {
         return static_cast<eAnimID>(Read("GetAnimID").animId);
+    }
+    std::unique_ptr<CAnimBlendHierarchy> CAnimBlendAssociationDE::GetAnimHierarchy()
+    {
+        const auto  token = reference;
+        auto* const hierarchyOwner = dynamic_cast<NativeAnimationHierarchyAccess*>(&native);
+        if (!hierarchyOwner || dynamic_cast<void*>(hierarchyOwner) != dynamic_cast<void*>(&native))
+            Require(ClockResult::NotInitialized, "GetAnimHierarchy");
+        NativeAnimationHierarchyReferenceToken hierarchy;
+        // The dynamic record and its immutable bank-H origin are qualified
+        // together by one current owner. Re-reading a raw pointer then doing
+        // a separate lookup would not certify that same parent observation.
+        Require(native.ResolvePrivateAnimationAssociationHierarchy(token, hierarchy), "GetAnimHierarchy");
+        if (hierarchy.ownerGeneration != token.ownerGeneration || !hierarchy.locator)
+            Require(ClockResult::BindingChanged, "GetAnimHierarchy");
+        // A CPU allocation grants no new native reference or lifetime. Each
+        // later hierarchy operation independently re-admits its bank token.
+        return std::unique_ptr<CAnimBlendHierarchy>(new CAnimBlendHierarchyDE(*hierarchyOwner, hierarchy));
+    }
+    void CAnimBlendAssociationDE::RestrictToBones(std::bitset<64> mask)
+    {
+        const auto token = reference;
+        const auto bits = static_cast<std::uint64_t>(mask.to_ullong());
+        // Copy all source mask bits before callbacks. Only the owner may
+        // remove admitted node sequence pointers and persist accepted nulls;
+        // this observer has no node layout or allocation/free authority.
+        Require(native.RestrictPrivateAnimationAssociationToBones(token, bits), "RestrictToBones");
+    }
+    void CAnimBlendAssociationDE::RestrictToBonesOf(const CAnimBlendStaticAssociationSAInterface* source)
+    {
+        const auto token = reference;
+        const auto locator = reinterpret_cast<std::uintptr_t>(source);
+        // Null and source-no-map are genuine source no-ops after target
+        // qualification. Transport the locator unchanged so neither an early
+        // return nor client pointer arithmetic bypasses that owner decision.
+        Require(native.RestrictPrivateAnimationAssociationToBonesOf(token, locator), "RestrictToBonesOf");
     }
     float CAnimBlendAssociationDE::GetBlendAmount()
     {

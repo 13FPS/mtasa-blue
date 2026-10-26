@@ -78,7 +78,7 @@ function RunOwned([string]$Executable,[string[]]$Arguments,[string]$Directory,[s
 }
 
 try {
-    $productionSources=@('Client/game_de/CAnimBlendAssociationDE.cpp')
+    $productionSources=@('Client/game_de/CAnimBlendAssociationDE.cpp','Client/game_de/CAnimBlendHierarchyDE.cpp','Client/game_de/NativeClassicAnimationNameHash.cpp','Client/game_de/CKeyGenDE.cpp')
     $sourceNames=$productionSources+@('Tests/definitive/PrivateAnimationAssociationSdkTests.cpp','Tests/definitive/test_private_animation_association_sdk.ps1',
         'Tests/definitive/Write-PrivateAnimationAssociationFixture.ps1',
         'Build/definitive-recovery/mta-private-animation-association-sdk-20261026/private-animation-association-sdk-source-ready.json',
@@ -142,7 +142,7 @@ try {
         $executable = Join-Path $directory 'private_animation_association_sdk_tests.exe'
         $arguments = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/MD','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN',
             ('/I'+(Join-Path $taskRoot 'Shared/sdk')),('/I'+(Join-Path $taskRoot 'Client/sdk')),('/I'+$scratchRoot),
-            (Join-Path $PSScriptRoot 'PrivateAnimationAssociationSdkTests.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimBlendAssociationDE.cpp'),
+            (Join-Path $PSScriptRoot 'PrivateAnimationAssociationSdkTests.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimBlendAssociationDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimBlendHierarchyDE.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeClassicAnimationNameHash.cpp'),(Join-Path $taskRoot 'Client/game_de/CKeyGenDE.cpp'),
             ('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'compiler.pdb')),('/Fe'+$executable))
         $result = [ordered]@{architecture=$architecture;environment=$environmentResult;compile=$null;test=$null;
             checks=0;pointerBits=$null;executable=$executable;executableSha256=$null;actualPrivateAnimationAssociationSdkTested=$false}

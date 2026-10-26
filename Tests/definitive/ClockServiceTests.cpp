@@ -3643,10 +3643,16 @@ namespace ClockPrivateAnimationAssociationTest
                                       std::uint32_t&) noexcept;
     mta::game_de::ClockResult Exchange(std::uintptr_t, std::size_t, std::uint32_t, std::uint32_t, std::uint32_t&, bool&, std::uint32_t&) noexcept;
 }
+namespace ClockAnimationAssociationBonesTest
+{
+    mta::game_de::ClockResult ExchangeNode(std::uintptr_t, std::uintptr_t, std::uintptr_t, std::uintptr_t&, bool&, std::uint32_t&) noexcept;
+}
+#define MTA_DE_ANIMATION_ASSOCIATION_NODE_EXCHANGE      ::ClockAnimationAssociationBonesTest::ExchangeNode
 #define MTA_DE_ANIMATION_ASSOCIATION_CONSTRUCTOR_INVOKE ::ClockPrivateAnimationAssociationTest::Construct
 #define MTA_DE_ANIMATION_ASSOCIATION_DESTRUCTOR_INVOKE  ::ClockPrivateAnimationAssociationTest::Destroy
 #define MTA_DE_ANIMATION_ASSOCIATION_EXCHANGE           ::ClockPrivateAnimationAssociationTest::Exchange
 #include "../../Client/game_de/NativeAnimationAssociationStorage.cpp"
+#undef MTA_DE_ANIMATION_ASSOCIATION_NODE_EXCHANGE
 #undef MTA_DE_ANIMATION_ASSOCIATION_EXCHANGE
 #undef MTA_DE_ANIMATION_ASSOCIATION_DESTRUCTOR_INVOKE
 #undef MTA_DE_ANIMATION_ASSOCIATION_CONSTRUCTOR_INVOKE
@@ -8441,6 +8447,7 @@ namespace
 #include "NativeAnimationStaticAssociationWritesOwnerTests.inl"
 #include "PrivateAnimationAssociationFixture.generated.h"
 #include "NativePrivateAnimationAssociationOwnerTests.inl"
+#include "NativeAnimationAssociationBonesOwnerTests.inl"
 
 // The strict receiver must execute production typed tickets and the distinct
 // metadata-only delete route. Deleting an interface acknowledges only its own
@@ -8462,6 +8469,10 @@ static_assert(std::is_same_v<decltype(&PrivateAnimationFactoryManagerReceiver::G
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool associationBonesUnknownWrite = argc == 3 && std::strcmp(argv[2], "--animation-association-bones-unknown-write") == 0;
+    const bool associationBonesPostLoss = argc == 3 && std::strcmp(argv[2], "--animation-association-bones-post-loss") == 0;
+    const bool associationBonesOnly =
+        associationBonesUnknownWrite || associationBonesPostLoss || (argc == 3 && std::strcmp(argv[2], "--animation-association-bones-success") == 0);
     const bool privateAssociationConstructorUnknown = argc == 3 && std::strcmp(argv[2], "--private-animation-associations-constructor-unknown") == 0;
     const bool privateAssociationDestructorUnknown = argc == 3 && std::strcmp(argv[2], "--private-animation-associations-destructor-unknown") == 0;
     const bool privateAssociationPostAckLoss = argc == 3 && std::strcmp(argv[2], "--private-animation-associations-retire-owner-loss") == 0;
@@ -8606,9 +8617,18 @@ int main(int argc, char** argv)
            privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly || animationBankFactoriesOnly ||
            sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly || animationDefinitionsOnly ||
            animationDefinitionBlockNamesOnly || animationGroupValidityOnly || animationIdValidityOnly || animationAssociationGroupReadsOnly ||
-           animationStaticAssociationReadsOnly || staticAssociationWritesOnly || pedRenderOnly || privateAssociationsOnly) &&
+           animationStaticAssociationReadsOnly || staticAssociationWritesOnly || pedRenderOnly || privateAssociationsOnly || associationBonesOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (associationBonesOnly)
+    {
+        AnimationAssociationBonesOwnerFixture::scenario = associationBonesUnknownWrite ? 2u : associationBonesPostLoss ? 1u : 0u;
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        AnimationAssociationBonesOwnerFixture::RunPrepared(fixture);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (privateAssociationsOnly)
     {
         PrivateAnimationAssociationOwnerFixture::scenario = privateAssociationScenario;

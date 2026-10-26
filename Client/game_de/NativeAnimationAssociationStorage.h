@@ -5,6 +5,7 @@
  ****************************************************************************/
 #pragma once
 #include "NativeAnimationAssociationAccess.h"
+#include "NativeAnimationHierarchyAccess.h"
 #include "NativeCustomAnimSequenceStorage.h"
 #include <atomic>
 #include <memory>
@@ -56,6 +57,7 @@ namespace mta::game_de
         using InvokeConstructor = ClockResult (*)(ConstructorFunction, std::uintptr_t, std::uintptr_t, std::uintptr_t&, std::uint32_t&) noexcept;
         using InvokeDestructor = ClockResult (*)(DestructorFunction, std::uintptr_t, std::uint32_t, std::uintptr_t&, std::uint32_t&) noexcept;
         using Exchange = ClockResult (*)(std::uintptr_t, std::size_t, std::uint32_t, std::uint32_t, std::uint32_t&, bool&, std::uint32_t&) noexcept;
+        using ExchangeNode = ClockResult (*)(std::uintptr_t, std::uintptr_t, std::uintptr_t, std::uintptr_t&, bool&, std::uint32_t&) noexcept;
         struct Receipt
         {
             std::uintptr_t receiver = 0, nodes = 0, nodeRaw = 0, heap = 0, hierarchy = 0;
@@ -64,6 +66,8 @@ namespace mta::game_de
             std::uint32_t  exceptionCode = 0;
             bool           entered = false, returned = false, accepted = false, verified = false, allocated = false, constructed = false, retired = false,
                  refVerified = false, pinned = false;
+            std::uint32_t visitedNodes = 0, attemptedNodes = 0, acceptedNodes = 0;
+            bool          noOp = false;
         };
         ClockResult Create(std::uintptr_t, Storage&, std::uint64_t, CheckOwner, Receipt* = nullptr,
                            NativeCustomAnimSequenceStorageCalls::InvokeMalloc = nullptr) noexcept;
@@ -73,6 +77,12 @@ namespace mta::game_de
         ClockResult Set(std::uintptr_t, Storage&, std::uint64_t, Scalar, std::uint32_t, CheckOwner, Receipt* = nullptr, Exchange = nullptr) noexcept;
         ClockResult Retire(std::uintptr_t, Storage&, std::uint64_t, CheckOwner, Receipt* = nullptr, InvokeDestructor = nullptr,
                            NativeCustomAnimSequenceStorageCalls::InvokeFree = nullptr) noexcept;
+        // A hierarchy token remains a current borrowed bank identity, never
+        // another reference or storage-release authority. Restrictions preserve
+        // the immutable original map and acknowledge only null suppression.
+        ClockResult ResolveHierarchy(std::uintptr_t, const Storage&, std::uint64_t, CheckOwner, NativeAnimationHierarchyReferenceToken&) noexcept;
+        ClockResult RestrictToBones(std::uintptr_t, Storage&, std::uint64_t, std::uint64_t, CheckOwner, Receipt* = nullptr, ExchangeNode = nullptr) noexcept;
+        ClockResult RestrictToBonesOf(std::uintptr_t, Storage&, std::uint64_t, std::uintptr_t, CheckOwner, Receipt* = nullptr, ExchangeNode = nullptr) noexcept;
         // No destructor invokes cleanup. An entered unknown constructor or
         // retirement keeps debt; rawpointer/4000/null are never release ACKs.
     }

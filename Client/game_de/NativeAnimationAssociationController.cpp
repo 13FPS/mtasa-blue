@@ -212,4 +212,59 @@ namespace mta::game_de
         output = next;
         return result;
     }
+    ClockResult NativeAnimationAssociationController::ResolveHierarchy(std::uintptr_t image, std::uint64_t generation, const Token& token, CheckOwner owner,
+                                                                       NativeAnimationHierarchyReferenceToken& output) noexcept
+    {
+        const auto request = token;
+        if (!AnimationAssociationControllerDetail::Enter(busy))
+            return ClockResult::Busy;
+        AnimationAssociationControllerDetail::Guard guard{busy};
+        auto*                                       entry = Find(generation, request);
+        if (!entry)
+            return ClockResult::OwnerConflict;
+        const auto result = NativeAnimationAssociationCalls::ResolveHierarchy(image, entry->storage, generation, owner, output);
+        Publish();
+        return result;
+    }
+    ClockResult NativeAnimationAssociationController::RestrictToBones(std::uintptr_t image, std::uint64_t generation, const Token& token, std::uint64_t mask,
+                                                                      CheckOwner owner, Receipt* receipt) noexcept
+    {
+        const auto request = token;
+        const auto bits = mask;
+        Receipt    next;
+        if (receipt)
+            *receipt = next;
+        if (!AnimationAssociationControllerDetail::Enter(busy))
+            return ClockResult::Busy;
+        AnimationAssociationControllerDetail::Guard guard{busy};
+        auto*                                       entry = Find(generation, request);
+        if (!entry)
+            return ClockResult::OwnerConflict;
+        const auto result = NativeAnimationAssociationCalls::RestrictToBones(image, entry->storage, generation, bits, owner, &next);
+        Publish();
+        if (receipt)
+            *receipt = next;
+        return result;
+    }
+    ClockResult NativeAnimationAssociationController::RestrictToBonesOf(std::uintptr_t image, std::uint64_t generation, const Token& token,
+                                                                        std::uintptr_t original, CheckOwner owner, Receipt* receipt) noexcept
+    {
+        const auto request = token;
+        const auto source = original;
+        Receipt    next;
+        if (receipt)
+            *receipt = next;
+        if (!AnimationAssociationControllerDetail::Enter(busy))
+            return ClockResult::Busy;
+        AnimationAssociationControllerDetail::Guard guard{busy};
+        auto*                                       entry = Find(generation, request);
+        if (!entry)
+            return ClockResult::OwnerConflict;
+        const auto result = NativeAnimationAssociationCalls::RestrictToBonesOf(image, entry->storage, generation, source, owner, &next);
+        Publish();
+        if (receipt)
+            *receipt = next;
+        return result;
+    }
+
 }

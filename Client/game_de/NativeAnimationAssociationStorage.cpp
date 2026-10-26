@@ -10,6 +10,7 @@
 #include "NativeAnimationBlockRefMemory.h"
 #include "NativeStreamingCompletionContext.h"
 #include <array>
+#include <algorithm>
 #include <cstring>
 #include <limits>
 #include <new>
@@ -86,6 +87,25 @@ namespace mta::game_de
                     return ClockResult::InvalidArgument;
                 accepted = observed == expected;
                 return accepted ? ClockResult::Ok : ClockResult::BindingChanged;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                exception = GetExceptionCode();
+                return ClockResult::OriginalException;
+            }
+        }
+        // A pointer clear is the actual source operation. Keep this guarded
+        // delegate available to owner fixtures instead of duplicating stores.
+        ClockResult ExchangeNode(std::uintptr_t address, std::uintptr_t expected, std::uintptr_t target, std::uintptr_t& observed, bool& accepted,
+                                 std::uint32_t& exception) noexcept
+        {
+            accepted = false;
+            __try
+            {
+                observed = reinterpret_cast<std::uintptr_t>(InterlockedCompareExchangePointer(
+                    reinterpret_cast<void* volatile*>(address), reinterpret_cast<void*>(target), reinterpret_cast<void*>(expected)));
+                accepted = observed == expected;
+                return ClockResult::Ok;
             }
             __except (EXCEPTION_EXECUTE_HANDLER)
             {
@@ -278,6 +298,7 @@ namespace mta::game_de
         std::uintptr_t                              receiver = 0, nodes = 0, nodeRaw = 0;
         std::size_t                                 request = 0;
         AnimationAssociationStorageDetail::Prepared source;
+        std::vector<unsigned char>                  suppressed;
         bool                                        knownConstructed = false, constructorEntered = false, destructorEntered = false, retirementVerified = false;
     };
     NativeAnimationAssociationStorage::NativeAnimationAssociationStorage() noexcept = default;
@@ -358,13 +379,16 @@ namespace mta::game_de
                 return ClockResult::ReadFailure;
             if (original != d.nodeRaw)
                 return Pin(s, ClockResult::BindingChanged);
+            if (d.suppressed.size() != d.source.count)
+                return Pin(s, ClockResult::BindingChanged);
             for (std::size_t index = 0; index != d.source.count; ++index)
             {
                 std::array<unsigned char, 40> node{};
                 if (!M::Copy(d.nodes + index * 40, node.data(), node.size()))
                     return ClockResult::ReadFailure;
-                if (Field<std::uintptr_t>(node, 0x10) != d.source.map[index] || Field<std::uintptr_t>(node, 0x18) != d.receiver ||
-                    Field<std::uint32_t>(node, 8) != 0xffffffff || Field<std::uint32_t>(node, 0xc) || Field<std::uint32_t>(node, 0x20) != 0xffffffff)
+                if (Field<std::uintptr_t>(node, 0x10) != (d.suppressed[index] ? std::uintptr_t{0} : d.source.map[index]) ||
+                    Field<std::uintptr_t>(node, 0x18) != d.receiver || Field<std::uint32_t>(node, 8) != 0xffffffff || Field<std::uint32_t>(node, 0xc) ||
+                    Field<std::uint32_t>(node, 0x20) != 0xffffffff)
                     return Pin(s, ClockResult::BindingChanged);
             }
             Bank bankAfter;
@@ -449,6 +473,16 @@ namespace mta::game_de
             if ((result = CapturePrepared(image, owner, raw, prepared)) != ClockResult::Ok)
                 return finish(result);
             auto& d = *s.data;
+            // Reserve acceptance metadata before the constructor can acquire
+            // native resources. This never changes the original map journal.
+            try
+            {
+                d.suppressed.assign(prepared.count, 0);
+            }
+            catch (...)
+            {
+                return finish(ClockResult::WriteFailure);
+            }
             d.source = std::move(prepared);
             r.heap = heap.current;
             alignas(16) std::array<unsigned char, 32> input{};
@@ -727,6 +761,245 @@ namespace mta::game_de
             r.verified = true;
             return finish(ClockResult::Ok);
         }
+        static ClockResult ResolveHierarchy(std::uintptr_t image, const S& s, std::uint64_t generation, C owner,
+                                            NativeAnimationHierarchyReferenceToken& output) noexcept
+        {
+            namespace A = AnimationAssociationStorageDetail;
+            if (s.GetState() != State::LiveUnpublished)
+                return ClockResult::NotInitialized;
+            if (!A::Context::TryEnter())
+                return ClockResult::Busy;
+            A::Context::Scope gate;
+            if (s.GetState() != State::LiveUnpublished)
+                return ClockResult::NotInitialized;
+            A::Bytes                        first{}, second{};
+            NativeModelReferenceHeap::Value heap, after;
+            auto                            result = Snapshot(image, s, generation, owner, first, heap);
+            if (result != ClockResult::Ok)
+                return result;
+            if ((result = Snapshot(image, s, generation, owner, second, after)) != ClockResult::Ok)
+                return result;
+            if (first != second || !NativeModelReferenceHeap::Same(heap, after))
+                return ClockResult::BindingChanged;
+            if ((result = A::Context::Owner(image, owner)) != ClockResult::Ok)
+                return result;
+            // Snapshot already proves the original bank row, owning block,
+            // highwater, hierarchy and actual retained reference together.
+            NativeAnimationHierarchyReferenceToken next;
+            next.ownerGeneration = generation;
+            next.locator = s.data->source.bank.hierarchy;
+            output = next;
+            return ClockResult::Ok;
+        }
+        struct RestrictionSource
+        {
+            NativeAnimationStaticAssociationReferenceToken reference{};
+            std::array<unsigned char, 32>                  row{};
+            std::vector<std::uintptr_t>                    prefix;
+            bool                                           noOp = false;
+        };
+        static ClockResult CaptureRestrictionSource(std::uintptr_t image, C owner, std::uintptr_t raw, std::uint16_t targetCount,
+                                                    RestrictionSource& output) noexcept
+        {
+            namespace A = AnimationAssociationStorageDetail;
+            RestrictionSource next;
+            if (!raw)
+            {
+                next.noOp = true;
+                output = std::move(next);
+                return ClockResult::Ok;
+            }
+            NativeAnimationManagerMemory manager({image}, owner);
+            auto                         result = manager.ResolveStaticAssociationReference(raw, next.reference);
+            if (result != ClockResult::Ok)
+                return result;
+            NativeAnimationStaticAssociationValues values;
+            if ((result = manager.ReadStaticAssociation(next.reference, values)) != ClockResult::Ok)
+                return result;
+            if (!A::M::Copy(raw, next.row.data(), next.row.size()))
+                return ClockResult::ReadFailure;
+            const auto sourceCount = A::Field<std::uint16_t>(next.row, 8);
+            const auto map = A::Field<std::uintptr_t>(next.row, 0x10);
+            if (sourceCount != values.numBlendNodes)
+                return ClockResult::BindingChanged;
+            // MTA tests the pointer before using the unsigned source count.
+            // Preserve that real no-op even for a raw high-bit count. A zero
+            // target likewise never reads an original map element.
+            next.noOp = !map || !targetCount;
+            if (!next.noOp && sourceCount)
+            {
+                // Source count is an unsigned WORD. Only the prefix actually
+                // consulted by the target loop needs a map span; targetCount
+                // already bounds this work without rejecting a high-bit source.
+                const auto needed = (std::min)(static_cast<std::size_t>(sourceCount), static_cast<std::size_t>(targetCount));
+                const auto bytes = needed * sizeof(std::uintptr_t);
+                if (map % alignof(std::uintptr_t) || !A::M::PrivateWritable(map, bytes) || !A::M::Disjoint(map, bytes, raw, 32))
+                    return ClockResult::BindingChanged;
+                try
+                {
+                    next.prefix.resize(needed);
+                }
+                catch (...)
+                {
+                    return ClockResult::WriteFailure;
+                }
+                if (!A::M::Copy(map, next.prefix.data(), bytes))
+                    return ClockResult::ReadFailure;
+                std::vector<std::uintptr_t> confirmed;
+                try
+                {
+                    confirmed.resize(needed);
+                }
+                catch (...)
+                {
+                    return ClockResult::WriteFailure;
+                }
+                if (!A::M::Copy(map, confirmed.data(), bytes))
+                    return ClockResult::ReadFailure;
+                if (confirmed != next.prefix)
+                    return ClockResult::BindingChanged;
+            }
+            std::array<unsigned char, 32> after{};
+            if (!A::M::Copy(raw, after.data(), after.size()))
+                return ClockResult::ReadFailure;
+            if (after != next.row)
+                return ClockResult::BindingChanged;
+            NativeAnimationStaticAssociationReferenceToken confirmed;
+            if ((result = manager.ResolveStaticAssociationReference(raw, confirmed)) != ClockResult::Ok)
+                return result;
+            if (confirmed.groupIndex != next.reference.groupIndex || confirmed.index != next.reference.index || confirmed.locator != raw)
+                return ClockResult::BindingChanged;
+            output = std::move(next);
+            return ClockResult::Ok;
+        }
+        static bool SameRestrictionSource(const RestrictionSource& a, const RestrictionSource& b) noexcept
+        {
+            return a.reference.groupIndex == b.reference.groupIndex && a.reference.index == b.reference.index && a.reference.locator == b.reference.locator &&
+                   a.row == b.row && a.prefix == b.prefix && a.noOp == b.noOp;
+        }
+        static ClockResult Restrict(std::uintptr_t image, S& s, std::uint64_t generation, bool fromSource, std::uint64_t mask, std::uintptr_t original, C owner,
+                                    Receipt* output, NativeAnimationAssociationCalls::ExchangeNode invoke) noexcept
+        {
+            namespace A = AnimationAssociationStorageDetail;
+            Receipt r;
+            auto    finish = [&](ClockResult result)
+            {
+                if (s.data)
+                    Fill(*s.data, r);
+                r.pinned = s.GetState() == State::PublicationPinned;
+                if (output)
+                    *output = r;
+                return result;
+            };
+            if (s.GetState() != State::LiveUnpublished)
+                return finish(ClockResult::NotInitialized);
+            if (!A::Context::TryEnter())
+                return finish(ClockResult::Busy);
+            A::Context::Scope gate;
+            if (s.GetState() != State::LiveUnpublished)
+                return finish(ClockResult::NotInitialized);
+            A::Bytes                        first{}, confirmed{};
+            NativeModelReferenceHeap::Value heap, current;
+            auto                            result = Snapshot(image, s, generation, owner, first, heap);
+            if (result != ClockResult::Ok)
+                return finish(result);
+            auto&             d = *s.data;
+            RestrictionSource source;
+            if (fromSource)
+            {
+                if ((result = CaptureRestrictionSource(image, owner, original, d.source.count, source)) != ClockResult::Ok)
+                    return finish(result);
+                if (!source.prefix.empty())
+                {
+                    const auto map = A::Field<std::uintptr_t>(source.row, 0x10), bytes = source.prefix.size() * sizeof(std::uintptr_t);
+                    if (!A::M::Disjoint(map, bytes, d.nodeRaw, d.request) ||
+                        !A::M::Disjoint(map, bytes, d.receiver, NativeAnimationAssociationProfile::ReceiverBytes))
+                        return finish(ClockResult::BindingChanged);
+                }
+            }
+            if ((result = Snapshot(image, s, generation, owner, confirmed, current)) != ClockResult::Ok)
+                return finish(result);
+            if (first != confirmed || !NativeModelReferenceHeap::Same(heap, current))
+                return finish(ClockResult::BindingChanged);
+            if (fromSource && source.noOp)
+            {
+                RestrictionSource after;
+                if ((result = CaptureRestrictionSource(image, owner, original, d.source.count, after)) != ClockResult::Ok)
+                    return finish(result);
+                if (!SameRestrictionSource(source, after))
+                    return finish(ClockResult::BindingChanged);
+                if ((result = A::Context::Owner(image, owner)) != ClockResult::Ok)
+                    return finish(result);
+                r.noOp = true;
+                r.verified = true;
+                return finish(ClockResult::Ok);
+            }
+#if defined(MTA_DE_ANIMATION_ASSOCIATION_NODE_EXCHANGE)
+            const auto entry = invoke ? invoke : &MTA_DE_ANIMATION_ASSOCIATION_NODE_EXCHANGE;
+#else
+            const auto entry = invoke ? invoke : &AnimationAssociationStorageDetail::ExchangeNode;
+#endif
+            const auto failed = [&](ClockResult failure)
+            {
+                if (r.entered && s.GetState() != State::PublicationPinned)
+                    s.state.store(State::FaultDebt);
+                return finish(failure);
+            };
+            for (std::size_t index = 0; index != d.source.count; ++index)
+            {
+                ++r.visitedNodes;
+                const bool keep = fromSource ? (index < source.prefix.size() && source.prefix[index] != 0) : (index < 64 && ((mask >> index) & 1) != 0);
+                if (keep || d.suppressed[index] || !d.source.map[index])
+                    continue;
+                const auto                    node = d.nodes + index * NativeAnimationAssociationProfile::NodeBytes;
+                std::array<unsigned char, 40> before{}, after{};
+                if (!A::M::Copy(node, before.data(), before.size()))
+                    return failed(ClockResult::ReadFailure);
+                const auto expected = d.source.map[index];
+                if (A::Field<std::uintptr_t>(before, 0x10) != expected || A::Field<std::uintptr_t>(before, 0x18) != d.receiver)
+                    return failed(Pin(s, ClockResult::BindingChanged));
+                if ((result = A::Context::Owner(image, owner)) != ClockResult::Ok)
+                    return failed(result);
+                std::uintptr_t observed = 0;
+                bool           accepted = false;
+                r.entered = true;
+                ++r.attemptedNodes;
+                result = entry(node + 0x10, expected, 0, observed, accepted, r.exceptionCode);
+                r.returned = result == ClockResult::Ok;
+                if (accepted)
+                {
+                    // Persist the accepted intent before any later callback
+                    // or read can fail. The immutable baseline remains intact.
+                    d.suppressed[index] = 1;
+                    ++r.acceptedNodes;
+                    r.accepted = true;
+                }
+                if (result != ClockResult::Ok || !accepted || observed != expected)
+                    return failed(result == ClockResult::Ok ? ClockResult::BindingChanged : result);
+                if ((result = A::Context::Owner(image, owner)) != ClockResult::Ok)
+                    return failed(result);
+                if (!A::M::Copy(node, after.data(), after.size()))
+                    return failed(ClockResult::ReadFailure);
+                A::Put(before, 0x10, std::uintptr_t{0});
+                if (before != after)
+                    return failed(ClockResult::BindingChanged);
+            }
+            if (fromSource)
+            {
+                RestrictionSource after;
+                if ((result = CaptureRestrictionSource(image, owner, original, d.source.count, after)) != ClockResult::Ok)
+                    return failed(result);
+                if (!SameRestrictionSource(source, after))
+                    return failed(ClockResult::BindingChanged);
+            }
+            if ((result = Snapshot(image, s, generation, owner, confirmed, current)) != ClockResult::Ok)
+                return failed(result);
+            if (first != confirmed || !NativeModelReferenceHeap::Same(heap, current))
+                return failed(ClockResult::BindingChanged);
+            r.noOp = r.attemptedNodes == 0;
+            r.verified = true;
+            return finish(ClockResult::Ok);
+        }
     };
     namespace NativeAnimationAssociationCalls
     {
@@ -752,6 +1025,21 @@ namespace mta::game_de
                            NativeCustomAnimSequenceStorageCalls::InvokeFree f) noexcept
         {
             return NativeAnimationAssociationStorageAccess::Retire(i, s, g, o, r, v, f);
+        }
+        ClockResult ResolveHierarchy(std::uintptr_t image, const Storage& storage, std::uint64_t generation, CheckOwner owner,
+                                     NativeAnimationHierarchyReferenceToken& output) noexcept
+        {
+            return NativeAnimationAssociationStorageAccess::ResolveHierarchy(image, storage, generation, owner, output);
+        }
+        ClockResult RestrictToBones(std::uintptr_t image, Storage& storage, std::uint64_t generation, std::uint64_t mask, CheckOwner owner, Receipt* receipt,
+                                    ExchangeNode invoke) noexcept
+        {
+            return NativeAnimationAssociationStorageAccess::Restrict(image, storage, generation, false, mask, 0, owner, receipt, invoke);
+        }
+        ClockResult RestrictToBonesOf(std::uintptr_t image, Storage& storage, std::uint64_t generation, std::uintptr_t original, CheckOwner owner,
+                                      Receipt* receipt, ExchangeNode invoke) noexcept
+        {
+            return NativeAnimationAssociationStorageAccess::Restrict(image, storage, generation, true, 0, original, owner, receipt, invoke);
         }
     }
 }

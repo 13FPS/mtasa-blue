@@ -1,5 +1,30 @@
 # MTA on Definitive Edition: reuse boundary
 
+## Current offline cohort: association hierarchy and bone restrictions (2026-10-26)
+
+The actual MTA `GetAnimHierarchy`, `RestrictToBones` and `RestrictToBonesOf`
+operations now dispatch through the same private-association callback owner.
+Hierarchy access returns the existing same-provider bank facade after joint
+association/bank bookends; it acquires no native ownership. The two restriction
+methods preserve MTA's full 64-bit mask and source unsigned count/null/no-map
+semantics. Only the used source prefix is borrowed, independently of target
+count and allocation capacity.
+
+Each node retains its immutable original sequence plus a separate acknowledged
+null ledger. Restriction only clears qualified sequence pointers, preserving
+other node bytes and original allocation identity. It never restores a
+suppressed pointer. Entered uncertainty retains debt and stops the enclosing
+runtime rather than retrying or rolling back against a possibly retired row.
+
+Fourteen real association operations are implemented; eight genuine operations
+remain pure. The three `noexcept` getters remain pure because current native
+owner reads can refuse and the shared float-only contract cannot report that
+failure safely. The shared SDK and classic implementations are unchanged.
+Current checks cover the changed SDK methods, native owner transactions, one
+normal x64 backend and the exact saved DLL. This remains an offline partial
+backend, without a public association factory or a complete CGame/full-MTA claim.
+
+
 The October 13 user direction is to integrate the DE adapter into MTA. MTA owns
 startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP

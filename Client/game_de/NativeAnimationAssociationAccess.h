@@ -5,6 +5,7 @@
  ****************************************************************************/
 #pragma once
 #include <game/CGameClockService.h>
+#include "NativeAnimationHierarchyAccess.h"
 #include <cstdint>
 namespace mta::game_de
 {
@@ -62,6 +63,24 @@ namespace mta::game_de
         }
         virtual ClockResult RetirePrivateAnimationAssociation(const NativeAnimationAssociationReferenceToken&) noexcept { return ClockResult::NotInitialized; }
         virtual bool        HasPendingPrivateAnimationAssociations() const noexcept { return true; }
+        // The parent and its immutable bank-H origin are observed together;
+        // a separate raw read/resolve could publish a torn hierarchy borrow.
+        virtual ClockResult ResolvePrivateAnimationAssociationHierarchy(const NativeAnimationAssociationReferenceToken&,
+                                                                        NativeAnimationHierarchyReferenceToken&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
+        // Restriction only removes admitted node sequence pointers. The owner
+        // retains each accepted null separately from its constructor baseline;
+        // raw nulls never grant authority to change, free or adopt node storage.
+        virtual ClockResult RestrictPrivateAnimationAssociationToBones(const NativeAnimationAssociationReferenceToken&, std::uint64_t) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
+        virtual ClockResult RestrictPrivateAnimationAssociationToBonesOf(const NativeAnimationAssociationReferenceToken&, std::uintptr_t) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
 
     protected:
         ~NativeAnimationAssociationAccess() = default;

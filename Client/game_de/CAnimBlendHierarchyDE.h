@@ -34,9 +34,11 @@ namespace mta::game_de
         CAnimBlendHierarchySAInterface* GetInterface() override;
         unsigned int                    GetNameHashKey() override;
 
-        // Only the actual same-owner manager factory can create this CPU
-        // facade. Its destructor never retires native hierarchy/frame data.
+        // Same-owner SDK factory routes create only this CPU borrow. The
+        // association route receives a jointly qualified parent/bank token;
+        // neither destructor retires native hierarchy or frame data.
         friend class CAnimManagerDE;
+        friend class CAnimBlendAssociationDE;
 
     protected:
         CAnimBlendHierarchyDE(NativeAnimationHierarchyAccess& owner, const NativeAnimationHierarchyReferenceToken& token) noexcept

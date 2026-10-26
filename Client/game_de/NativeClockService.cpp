@@ -184,6 +184,10 @@ namespace mta::game_de
             ClockResult SetPrivateAnimationAssociationFlags(const NativeAnimationAssociationReferenceToken&, std::int16_t) noexcept override;
             ClockResult RetirePrivateAnimationAssociation(const NativeAnimationAssociationReferenceToken&) noexcept override;
             bool        HasPendingPrivateAnimationAssociations() const noexcept override;
+            ClockResult ResolvePrivateAnimationAssociationHierarchy(const NativeAnimationAssociationReferenceToken&,
+                                                                    NativeAnimationHierarchyReferenceToken&) noexcept override;
+            ClockResult RestrictPrivateAnimationAssociationToBones(const NativeAnimationAssociationReferenceToken&, std::uint64_t) noexcept override;
+            ClockResult RestrictPrivateAnimationAssociationToBonesOf(const NativeAnimationAssociationReferenceToken&, std::uintptr_t) noexcept override;
             ClockResult WritePrivateAnimationAssociationScalar(const NativeAnimationAssociationReferenceToken&, NativeAnimationAssociationController::Scalar,
                                                                std::uint32_t) noexcept;
             ClockResult SetAnimationStaticAssociationNumBlendNodes(const NativeAnimationStaticAssociationReferenceToken&, std::uint16_t) noexcept override;
@@ -2874,6 +2878,65 @@ namespace mta::game_de
                 return result;
             NativeAnimationAssociationController::Receipt receipt;
             result = runtime.privateAssociations.RetireOne(runtime.image, request.ownerGeneration, request, &CheckTimingOwner, &receipt);
+            if (result == ClockResult::Ok)
+                result = CheckPrivateAnimationAssociationRequest(request);
+            FinishPrivateAnimationAssociation(request.ownerGeneration, result, receipt);
+            return result;
+        }
+
+        ClockResult NativeAccess::ResolvePrivateAnimationAssociationHierarchy(const NativeAnimationAssociationReferenceToken& token,
+                                                                              NativeAnimationHierarchyReferenceToken&         output) noexcept
+        {
+            const auto request = token;
+            auto       result = CheckPrivateAnimationAssociationRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            NativeAnimationHierarchyReferenceToken next;
+            // Resolve the immutable BANK-H origin and current dynamic parent
+            // in one controller observation, never a torn raw-pointer lookup.
+            result = runtime.privateAssociations.ResolveHierarchy(runtime.image, request.ownerGeneration, request, &CheckTimingOwner, next);
+            if (result == ClockResult::Ok)
+                result = CheckPrivateAnimationAssociationRequest(request);
+            if (result == ClockResult::Ok && (next.ownerGeneration != request.ownerGeneration || !next.locator))
+                result = ClockResult::BindingChanged;
+            PublishCustomAnimationSequenceDebt(request.ownerGeneration);
+            if (runtime.privateAssociations.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            if (result == ClockResult::Ok)
+                output = next;
+            return result;
+        }
+
+        ClockResult NativeAccess::RestrictPrivateAnimationAssociationToBones(const NativeAnimationAssociationReferenceToken& token, std::uint64_t mask) noexcept
+        {
+            const auto request = token;
+            const auto requestedMask = mask;
+            auto       result = CheckPrivateAnimationAssociationRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            NativeAnimationAssociationController::Receipt receipt;
+            result = runtime.privateAssociations.RestrictToBones(runtime.image, request.ownerGeneration, request, requestedMask, &CheckTimingOwner, &receipt);
+            if (result == ClockResult::Ok)
+                result = CheckPrivateAnimationAssociationRequest(request);
+            // Each accepted node null remains in the causal journal even on
+            // partial failure. Existing Stop/End gates retain it without replay.
+            FinishPrivateAnimationAssociation(request.ownerGeneration, result, receipt);
+            return result;
+        }
+
+        ClockResult NativeAccess::RestrictPrivateAnimationAssociationToBonesOf(const NativeAnimationAssociationReferenceToken& token,
+                                                                               std::uintptr_t                                  source) noexcept
+        {
+            const auto request = token;
+            const auto requestedSource = source;
+            auto       result = CheckPrivateAnimationAssociationRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            NativeAnimationAssociationController::Receipt receipt;
+            // Null/no-map semantics still qualify this issued target. The
+            // owner resolves genuine static origin and the needed map prefix.
+            result =
+                runtime.privateAssociations.RestrictToBonesOf(runtime.image, request.ownerGeneration, request, requestedSource, &CheckTimingOwner, &receipt);
             if (result == ClockResult::Ok)
                 result = CheckPrivateAnimationAssociationRequest(request);
             FinishPrivateAnimationAssociation(request.ownerGeneration, result, receipt);

@@ -31,6 +31,9 @@ namespace mta::game_de
         ClockResult Set(std::uintptr_t, std::uint64_t, const Token&, Scalar, std::uint32_t, CheckOwner, Receipt* = nullptr) noexcept;
         ClockResult RetireOne(std::uintptr_t, std::uint64_t, const Token&, CheckOwner, Receipt* = nullptr) noexcept;
         ClockResult Retire(std::uintptr_t, std::uint64_t, CheckOwner, std::uint32_t, RetireProgress&) noexcept;
+        ClockResult ResolveHierarchy(std::uintptr_t, std::uint64_t, const Token&, CheckOwner, NativeAnimationHierarchyReferenceToken&) noexcept;
+        ClockResult RestrictToBones(std::uintptr_t, std::uint64_t, const Token&, std::uint64_t, CheckOwner, Receipt* = nullptr) noexcept;
+        ClockResult RestrictToBonesOf(std::uintptr_t, std::uint64_t, const Token&, std::uintptr_t, CheckOwner, Receipt* = nullptr) noexcept;
         bool        IsRetained() const noexcept { return busy.load() || retained.load(); }
         bool        HasPending() const noexcept { return IsRetained(); }
         bool        RecoveryPending() const noexcept { return recovery.load(); }

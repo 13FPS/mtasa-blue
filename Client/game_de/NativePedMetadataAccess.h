@@ -19,6 +19,11 @@ namespace mta::game_de
     {
     public:
         virtual ClockResult ReadPedMetadata(const NativePedReferenceToken&, NativePedMetadata&) noexcept { return ClockResult::NotInitialized; }
+        // The source GetRpClump returns the current opaque render tag, even
+        // when null. This separate channel must not add renderer bindings to
+        // model/type reads or grant pointee, node, initialization or lease
+        // authority merely because an entity's field was observed.
+        virtual ClockResult ReadPedRender(const NativePedReferenceToken&, std::uintptr_t&) noexcept { return ClockResult::NotInitialized; }
 
     protected:
         ~NativePedMetadataAccess() = default;

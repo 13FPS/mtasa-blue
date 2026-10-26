@@ -9,13 +9,14 @@
 
 namespace mta::game_de
 {
-    // This adds only the two qualified inherited SDK readers. No model bank,
+    // These qualified inherited SDK readers share the registered owner. No model bank,
     // concrete ped factory or native lifetime is supplied by an abstract layer.
     class CPedMetadataDE : public CPedVitalsDE
     {
     public:
         WORD        GetModelIndex() override;
         eEntityType GetEntityType() override;
+        RpClump*    GetRpClump() override;
 
     protected:
         CPedMetadataDE(NativePedVitalsAccess& vitals, NativePedMetadataAccess& metadata, const NativePedReferenceToken& token) noexcept

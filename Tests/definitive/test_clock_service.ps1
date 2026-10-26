@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites')]
+    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -57,6 +57,8 @@ $record['privateHierarchyRetainedLifetimeTested']=$false
 $record['nativePrivateAnimationFactoryOwnerTested']=$false
 $record['actualPrivateAnimationFactorySdkOwnerTested']=$false
 $record['privateAnimationFactoryOutputBookendsTested']=$false
+$record['nativePedRenderOwnerTested']=$false
+$record['actualPedRenderSdkOwnerTested']=$false
 $record['nativeAnimationStaticAssociationWritesOwnerTested']=$false
 $record['actualAnimationStaticAssociationWritesSdkOwnerTested']=$false
 $record['animationStaticAssociationWriteConflictTested']=$false
@@ -497,6 +499,7 @@ try {
     $sourceNames += @('Client/game_de/NativeAnimationSequenceName.h','Client/game_de/NativeAnimationSequenceName.cpp','Client/game_de/NativeAnimationSequenceNameCalls.h','Client/game_de/NativeAnimationSequenceNameProfile.h','Tests/definitive/NativeCustomAnimationSequenceNameOwnerTests.inl')
     $sourceNames += @('Client/game_de/NativeAnimationSequenceFrameBindCalls.h','Client/game_de/NativeAnimationSequenceFrameBindProfile.h','Tests/definitive/NativeFreshCompressedSequenceOwnerTests.inl')
     $sourceNames += @('Client/game_de/NativePrivateAnimationHierarchyStorage.h','Client/game_de/NativePrivateAnimationHierarchyStorage.cpp','Client/game_de/NativePrivateAnimationHierarchyController.h','Client/game_de/NativePrivateAnimationHierarchyController.cpp','Tests/definitive/NativePrivateHierarchyOwnerTests.inl')
+    $sourceNames += @('Tests/definitive/NativePedRenderOwnerTests.inl','Tests/definitive/Write-PedRenderFixture.ps1','Client/game_de/NativePedRenderMemory.h','Client/game_de/NativePedRenderMemory.cpp','Client/game_de/NativePedRenderProfile.h','Client/game_de/NativePedMetadataAccess.h','Client/game_de/CPedMetadataDE.h','Client/game_de/CPedMetadataDE.cpp')
     $sourceNames += @('Tests/definitive/NativeAnimationStaticAssociationWritesOwnerTests.inl')
     $sourceNames += @('Tests/definitive/NativeAnimationStaticAssociationOwnerTests.inl','Tests/definitive/Write-AnimationStaticAssociationFixture.ps1','Client/game_de/NativeAnimationStaticAssociationAccess.h','Client/game_de/CAnimBlendStaticAssociationDE.h','Client/game_de/CAnimBlendStaticAssociationDE.cpp','Client/sdk/game/CAnimBlendStaticAssociation.h')
     $sourceNames += @('Tests/definitive/NativeAnimationAssociationGroupOwnerTests.inl','Tests/definitive/Write-AnimationAssociationGroupFixture.ps1','Client/game_de/NativeAnimationAssociationGroupAccess.h','Client/game_de/CAnimBlendAssocGroupDE.h','Client/game_de/CAnimBlendAssocGroupDE.cpp','Client/sdk/game/CAnimBlendAssocGroup.h')
@@ -752,6 +755,14 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
     Copy-Item -LiteralPath $staticAssociationFixture.path -Destination $staticAssociationEvidence
     $record['animationStaticAssociationFixture']=$staticAssociationFixture
     $record.animationStaticAssociationFixture.path=$staticAssociationEvidence
+    # Preserve the actual seven-method ped receiver as evidence; unsupported
+    # inherited entity operations reject instead of manufacturing a full CGame.
+    . (Join-Path $PSScriptRoot 'Write-PedRenderFixture.ps1')
+    $pedRenderFixture=Write-PedRenderFixture $taskRoot (Join-Path $scratchRoot 'PedRenderFixture.generated.h')
+    $pedRenderEvidence=Join-Path $outputRoot 'PedRenderFixture.generated.h'
+    Copy-Item -LiteralPath $pedRenderFixture.path -Destination $pedRenderEvidence
+    $record['pedRenderFixture']=$pedRenderFixture
+    $record.pedRenderFixture.path=$pedRenderEvidence
     $privateSource=Join-Path $taskRoot 'Client/game_de/NativePrivateAnimationHierarchyStorage.cpp'
     $privateText=[IO.File]::ReadAllText($privateSource)
     $privateMatch=[regex]::Match($privateText,'(?s)inline\s+constexpr\s+unsigned\s+char\s+CacheProof\s*\[\s*\]\s*=\s*\{(?<values>.*?)\};')
@@ -937,6 +948,7 @@ namespace ClockPrivateHierarchyParentWriteFixture {
     # The cumulative callback fixture includes current owner and retirement cases.
     # Keep it bounded while allowing the full set to finish on a busy build host.
     $fixtureArguments = @($outputRoot)
+    if ($Scope -eq 'PedRender') { $fixtureArguments += '--ped-render' }
     if ($Scope -eq 'WorldJetpack') { $fixtureArguments += '--world-jetpack' }
     if ($Scope -eq 'WorldArea') { $fixtureArguments += '--world-area' }
     if ($Scope -eq 'WorldQueries') { $fixtureArguments += '--world-queries' }
@@ -1339,7 +1351,12 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
         if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
     }
-    if($Scope -eq 'AnimationStaticAssociationWrites'){
+    if($Scope -eq 'PedRender'){
+        $record.nativePedRenderOwnerTested=$text.Contains('Production native ped render owner fixture completed')
+        $record.actualPedRenderSdkOwnerTested=$text.Contains('Production actual ped render SDK fixture completed')
+        if(-not($record.nativePedRenderOwnerTested -and $record.actualPedRenderSdkOwnerTested)){throw 'Ped render selected scope incomplete'}
+        $record.productionNativeCallbackTested=$true
+    } elseif($Scope -eq 'AnimationStaticAssociationWrites'){
         $record.nativeAnimationStaticAssociationWritesOwnerTested=$text.Contains('Production static association scalar writes owner fixture completed')
         $record.actualAnimationStaticAssociationWritesSdkOwnerTested=$text.Contains('Production actual static association scalar SDK fixture completed')
         $record.animationStaticAssociationWriteConflictTested=$text.Contains('Production static association scalar conflict stop fixture completed')

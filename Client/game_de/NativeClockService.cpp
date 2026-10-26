@@ -88,6 +88,7 @@
 #include "NativePedCurrentWeaponSlotMemory.h"
 #include "NativeNamedGarageMemory.h"
 #include "NativePedMetadataMemory.h"
+#include "NativePedRenderMemory.h"
 #include "NativeTaskRemovalCalls.h"
 #include "NativeStreamingRequestCalls.h"
 #include "NativeModelReferenceMemory.h"
@@ -230,6 +231,7 @@ namespace mta::game_de
             ClockResult ReadPedVital(const NativePedReferenceToken&, NativePedVitalField, float&) noexcept override;
             ClockResult SetPedVital(const NativePedReferenceToken&, NativePedVitalField, float) noexcept override;
             ClockResult ReadPedMetadata(const NativePedReferenceToken&, NativePedMetadata&) noexcept override;
+            ClockResult ReadPedRender(const NativePedReferenceToken&, std::uintptr_t&) noexcept override;
             ClockResult ReadPedMoveAnim(const NativePedReferenceToken&, std::int32_t&) noexcept override;
             ClockResult InitializePedClothesDescriptor(NativeClothesDescriptorStorage&) noexcept override;
             ClockResult ReadReferencedPedIntelligence(const NativePedReferenceToken&, NativePedIntelligenceReader::Value&) noexcept override;
@@ -4847,6 +4849,37 @@ namespace mta::game_de
             // MTA reads the current native group directly. Custom animation
             // intent, range checks, loading and reapplication belong to its
             // separate setter policy and must not replace this observation.
+            output = next;
+            return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::ReadPedRender(const NativePedReferenceToken& source, std::uintptr_t& output) noexcept
+        {
+            const auto token = source;
+            const auto generation = token.ownerGeneration;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            if (!generation || generation != runtime.generation.load())
+                return ClockResult::OwnerConflict;
+            NativePedPoolReader::Value before, after;
+            if ((result = ResolvePedReference(token, before)) != ClockResult::Ok)
+                return result;
+            std::uintptr_t next = 0;
+            if ((result = NativePedRenderMemory({runtime.image}, &CheckTimingOwner).Read(before, next)) != ClockResult::Ok)
+                return result;
+            if ((result = ResolvePedReference(token, after)) != ClockResult::Ok)
+                return result;
+            if (before.handle != after.handle || before.slot != after.slot || before.pool != after.pool || before.objects != after.objects ||
+                before.flags != after.flags || before.nativePed != after.nativePed || before.vtable != after.vtable ||
+                before.firstMethod != after.firstMethod || before.capacity != after.capacity || before.cursor != after.cursor ||
+                before.generation != after.generation || before.ownsAllocations != after.ownsAllocations)
+                return ClockResult::BindingChanged;
+            if ((result = CheckTimingOwner()) != ClockResult::Ok)
+                return result;
+            if (runtime.generation.load() != generation)
+                return ClockResult::OwnerConflict;
+            // The registered receiver survived; only its raw field is copied.
+            // The target, including null/poison, grants no clump or node lease.
             output = next;
             return ClockResult::Ok;
         }

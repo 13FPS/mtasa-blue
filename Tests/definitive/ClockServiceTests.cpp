@@ -152,6 +152,9 @@
 #include "../../Client/game_de/CGarageNamedDE.h"
 #include "../../Client/game_de/NativePedVitalsProfile.h"
 #include "../../Client/game_de/NativePedMetadataMemory.h"
+#include "../../Client/game_de/CPedMetadataDE.h"
+#include "../../Client/game_de/NativePedRenderMemory.h"
+#include "../../Client/game_de/NativePedRenderProfile.h"
 #include "../../Client/game_de/NativePedMetadataProfile.h"
 #include "../../Client/game_de/NativePedIntelligenceReader.h"
 #include "../../Client/game_de/NativePedIntelligenceProfile.h"
@@ -3189,6 +3192,16 @@ namespace mta::game_de::NativeImageAccess
 #define MTA_DE_PED_REFERENCE_UNREGISTER_INVOKE ClockPedReferenceOwnerTest::Unregister
 #include "../../Client/game_de/NativePedReferenceMemory.cpp"
 #include "../../Client/game_de/NativePedMetadataMemory.cpp"
+// Observe only the qualified ped's raw render field. This hook delegates the
+// actual process copy before scheduling fixture faults, never reading its target.
+namespace ClockPedRenderOwnerTest
+{
+    BOOL WINAPI Read(HANDLE, LPCVOID, LPVOID, SIZE_T, SIZE_T*);
+}
+#pragma push_macro("ReadProcessMemory")
+#define ReadProcessMemory ClockPedRenderOwnerTest::Read
+#include "../../Client/game_de/NativePedRenderMemory.cpp"
+#pragma pop_macro("ReadProcessMemory")
 #pragma push_macro("ReadProcessMemory")
 #define ReadProcessMemory ClockPedMoveAnimOwnerTest::Read
 #include "../../Client/game_de/NativePedMoveAnimReader.cpp"
@@ -8330,6 +8343,8 @@ namespace
 #include "NativePedPhysicalScalarsOwnerTests.inl"
 #include "NativePedPhysicalDynamicsOwnerTests.inl"
 #include "NativePedMetadataOwnerTests.inl"
+#include "PedRenderFixture.generated.h"
+#include "NativePedRenderOwnerTests.inl"
 #include "NativePedObservationOwnerTests.inl"
 #include "NativePedIntelligenceOwnerTests.inl"
 #include "NativeTaskPoolOwnerTests.inl"
@@ -8424,6 +8439,7 @@ static_assert(std::is_same_v<decltype(&PrivateAnimationFactoryManagerReceiver::G
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool pedRenderOnly = argc == 3 && std::strcmp(argv[2], "--ped-render") == 0;
     const bool staticAssociationWriteConflict = argc == 3 && std::strcmp(argv[2], "--animation-static-association-writes-conflict") == 0;
     const bool staticAssociationWriteLostAck = argc == 3 && std::strcmp(argv[2], "--animation-static-association-writes-lost-ack") == 0;
     const bool staticAssociationWriteUnknown = argc == 3 && std::strcmp(argv[2], "--animation-static-association-writes-unknown") == 0;
@@ -8558,9 +8574,17 @@ int main(int argc, char** argv)
            privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly || animationBankFactoriesOnly ||
            sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly || animationDefinitionsOnly ||
            animationDefinitionBlockNamesOnly || animationGroupValidityOnly || animationIdValidityOnly || animationAssociationGroupReadsOnly ||
-           animationStaticAssociationReadsOnly || staticAssociationWritesOnly) &&
+           animationStaticAssociationReadsOnly || staticAssociationWritesOnly || pedRenderOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (pedRenderOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        PedRenderOwnerFixture::RunPrepared(fixture);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (staticAssociationWritesOnly)
     {
         AnimationStaticAssociationWritesOwnerFixture::scenario = staticAssociationWriteScenario;

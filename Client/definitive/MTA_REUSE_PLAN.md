@@ -5,6 +5,17 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+MTA's inherited GetRpClump getter now uses the existing registered DE ped
+owner through an independent render-read channel on the metadata provider.
+It observes the current common-entity render field at offset0x20, preserving null
+and opaque pointer bits without dereferencing the target. Native publication,
+retirement, pool identity and callback bookends qualify the read. No loaded
+model, local-CJ, container or target-registry predicate is added to the source
+getter, and the existing model/type metadata channel keeps its prerequisites.
+This connects the actual client GetClump handoff; it grants no skeleton/node
+allocation, clump initialization or render-object lifetime ownership. Each
+downstream animation consumer must re-admit its own native inputs.
+
 The static-association SDK now has six partial DE read getters over the
 original physical child row. The immutable index/locator does not reselect a
 row when animation offsets change. WORD8/A/C/E retain their unsigned-node or

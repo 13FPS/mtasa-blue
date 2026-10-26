@@ -36,5 +36,8 @@ namespace mta::game_de
         // distinct prevents an older owner from accepting only half the work.
         virtual ClockResult RequestStreamingUpgrade(std::uint32_t, std::uint32_t) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult ReadStreamingUpgradeLoaded(std::uint32_t, bool&) noexcept { return ClockResult::NotInitialized; }
+        // Collision-only completion has its own source-ordered COL/IPL/load-all
+        // effects. An older owner must refuse instead of loading an entire scene.
+        virtual ClockResult LoadStreamingSceneCollision(const CVector*) noexcept { return ClockResult::NotInitialized; }
     };
 }

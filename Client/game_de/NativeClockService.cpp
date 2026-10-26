@@ -99,6 +99,7 @@
 #include "NativeStreamingUpgradeCalls.h"
 #include "NativeStreamingLoadAllCalls.h"
 #include "NativeStreamingSceneCalls.h"
+#include "NativeStreamingCollisionSceneCalls.h"
 #include "NativeStreamingCompletionContext.h"
 #include "NativeStreamingPriorityCalls.h"
 #include "NativeStreamingRemoveCalls.h"
@@ -264,6 +265,7 @@ namespace mta::game_de
             ClockResult RequestStreamingModel(std::uint32_t, std::uint32_t) noexcept override;
             ClockResult LoadStreamingModels(bool) noexcept override;
             ClockResult LoadStreamingScene(const CVector*) noexcept override;
+            ClockResult LoadStreamingSceneCollision(const CVector*) noexcept override;
             ClockResult FindWorldGroundZ(const CVector&, float&) noexcept override;
             ClockResult IsWorldLineOfSightClear(const CVector&, const CVector&, const SLineOfSightFlags&, bool&) noexcept override;
             ClockResult ReadWorldCurrentArea(std::uint32_t&) noexcept override;
@@ -5010,6 +5012,18 @@ namespace mta::game_de
             // Scene callbacks can already change streaming/world state before
             // a lost return acknowledgement. Retire this same owner without
             // replay, restoring old settings or guessing collision effects.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+        ClockResult NativeAccess::LoadStreamingSceneCollision(const CVector* position) noexcept
+        {
+            const auto* const                           intent = position;
+            NativeStreamingCollisionSceneCalls::Receipt receipt;
+            // The native owner copies this exact XYZ intent before callbacks.
+            // Entered collision/IPL loading can persist after a lost return;
+            // stop this same owner without a retry or stale state copyback.
+            const auto result = NativeStreamingCollisionSceneCalls::Load(runtime.image, intent, &CheckTimingOwner, &receipt);
             if (receipt.entered && result != ClockResult::Ok)
                 Stop(result);
             return result;

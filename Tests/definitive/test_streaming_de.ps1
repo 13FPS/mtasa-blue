@@ -3,11 +3,15 @@
 # Compile the actual MTA streaming SDK overrides against an owned CPU fixture.
 # This executes no native code, game allocation, wrapper factory or native registry owner.
 [CmdletBinding()]
-param()
+param(
+    [ValidateSet('Full','SceneCollision')]
+    [string]$Scope = 'Full'
+)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $taskRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
+$fixtureSourceName = if ($Scope -eq 'SceneCollision') { 'StreamingSceneCollisionSDKTests.cpp' } else { 'StreamingDETests.cpp' }
 $id = (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N')
 $outputRoot = Join-Path $taskRoot ('Build/mta-streaming-sdk/' + $id)
 $scratchRoot = Join-Path $taskRoot ('Build/tmp/streaming-sdk-' + $id)
@@ -25,6 +29,12 @@ $record = [ordered]@{
     ownedBuffersOnly=$true;nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;
     foreignProcessAccessed=$false;nativeLifecycleReady=$false;fullMtaReady=$false;
     clientDllLoaded=$false;installationChanged=$false
+}
+
+$record['selectedScope'] = $Scope
+$record['actualStreamingSceneCollisionSdkTested'] = $false
+if ($Scope -eq 'SceneCollision') {
+    $record.scope = 'Focused actual CStreaming LoadSceneCollision pointer transport and explicit owner refusal. Inherits11 real SDK methods with10 unrelated pure-method rejectors. No old SDK matrix, game/native engine code or wrapper factory execution.'
 }
 
 function Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
@@ -84,7 +94,7 @@ try {
         'Client/game_de/NativePedPoolReader.h','Client/game_de/NativePedPoolProfile.h',
         'Client/sdk/game/CStreaming.h','Client/sdk/game/CModelRequestPolicy.h','Client/sdk/game/CGameClockService.h','Client/sdk/game/CGameAdapter.h',
         'Shared/sdk/SharedUtil.Defines.h','Shared/sdk/SharedUtil.IntTypes.h','Shared/sdk/CVector.h',
-        'Tests/definitive/StreamingDETests.cpp','Tests/definitive/test_streaming_de.ps1')
+        ('Tests/definitive/'+$fixtureSourceName),'Tests/definitive/test_streaming_de.ps1')
     $sourceNames += @(
         'Client/game_de/NativeStreamingModelGroupsReader.h',
         'Client/game_de/NativeStreamingModelGroupsProfile.h'
@@ -124,49 +134,58 @@ try {
         $env:TEMP = $scratchRoot
         $env:TMP = $scratchRoot
         $compiler = Join-Path $env:VCToolsInstallDir "bin/Hostx64/$architecture/cl.exe"
-        $executable = Join-Path $directory 'streaming_sdk_tests.exe'
+        $executableName = if ($Scope -eq 'SceneCollision') { 'streaming_scene_collision_sdk_tests.exe' } else { 'streaming_sdk_tests.exe' }
+        $executable = Join-Path $directory $executableName
         $arguments = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/MD','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN',
             ('/I'+(Join-Path $taskRoot 'Shared/sdk')),('/I'+(Join-Path $taskRoot 'Client/sdk')),
-            (Join-Path $PSScriptRoot 'StreamingDETests.cpp'),(Join-Path $taskRoot 'Client/game_de/CStreamingDE.cpp'),
+            (Join-Path $PSScriptRoot $fixtureSourceName),(Join-Path $taskRoot 'Client/game_de/CStreamingDE.cpp'),
             ('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'compiler.pdb')),('/Fe'+$executable))
         $result = [ordered]@{architecture=$architecture;environment=$environmentResult;compile=$null;test=$null;
             checks=0;pointerBits=$null;executable=$executable;executableSha256=$null;actualStreamingSdkSliceTested=$false;actualStreamingLoadAllSdkTested=$false;actualStreamingPrioritySdkTested=$false;actualStreamingRemoveSdkTested=$false;actualStreamingSceneSdkTested=$false;actualStreamingSpecialModelSdkTested=$false;actualStreamingGroupsSdkTested=$false;actualStreamingGroupsNoexceptRefusalTested=$false;noexceptRefusal=$null}
+        $result['actualStreamingSceneCollisionSdkTested'] = $false
         $record.results += $result
         $result.compile = RunOwned $compiler $arguments $directory 'compile' 60000
         if ($result.compile.exitCode -ne 0 -or $result.compile.timedOut) { throw "$architecture actual MTA streaming SDK fixture compilation failed." }
         $result.executableSha256 = Sha $executable
         $result.test = RunOwned $executable @() $directory 'test' 10000
         $text = [IO.File]::ReadAllText($result.test.stdout)
-        $summary = [regex]::Match($text.TrimEnd(), '(?:^|\r?\n)Passed (\d+) actual MTA streaming SDK checks \((\d+)-bit\)$')
+        $summary = [regex]::Match($text.TrimEnd(), $(if ($Scope -eq 'SceneCollision') { '(?:^|\r?\n)Passed (\d+) actual MTA streaming collision SDK checks \((\d+)-bit\)$' } else { '(?:^|\r?\n)Passed (\d+) actual MTA streaming SDK checks \((\d+)-bit\)$' }))
         if ($summary.Success) {
             $result.checks = [int]$summary.Groups[1].Value
             $result.pointerBits = [int]$summary.Groups[2].Value
         }
-        $result.actualStreamingSdkSliceTested = $text.Contains('Production MTA streaming SDK slice fixture completed')
-        $result.actualStreamingLoadAllSdkTested = $text.Contains('Production MTA streaming load-all SDK fixture completed')
-        $result.actualStreamingPrioritySdkTested = $text.Contains('Production MTA streaming priority SDK fixture completed')
-        $result.actualStreamingRemoveSdkTested = $text.Contains('Production MTA streaming remove SDK fixture completed')
-        if (-not ($result.actualStreamingLoadAllSdkTested -and $result.actualStreamingPrioritySdkTested -and $result.actualStreamingRemoveSdkTested)) {
-            throw 'Actual priority/all completion and direct-removal SDK overrides did not execute.'
-        }
-        $result.actualStreamingSpecialModelSdkTested = $text.Contains('Production MTA streaming special-model SDK fixture completed')
-        if (-not $result.actualStreamingSpecialModelSdkTested) { throw 'Actual RequestSpecialModel SDK override did not execute.' }
-        $result.actualStreamingSceneSdkTested = $text.Contains('Production MTA streaming scene SDK fixture completed')
-        if (-not $result.actualStreamingSceneSdkTested) { throw 'Actual LoadScene SDK override did not execute.' }
-        $result.actualStreamingGroupsSdkTested = $text.Contains('Production MTA streaming groups SDK fixture completed')
-        $result.noexceptRefusal = RunOwned $executable @('--noexcept-refusal') $directory 'noexcept-refusal' 10000
-        $refusalText = [IO.File]::ReadAllText($result.noexceptRefusal.stdout)
-        $result.actualStreamingGroupsNoexceptRefusalTested = $result.noexceptRefusal.exitCode -eq 86 -and -not $result.noexceptRefusal.timedOut -and
-            $refusalText.Contains('Production MTA streaming groups noexcept refusal fixture completed')
-        if (-not ($result.actualStreamingGroupsSdkTested -and $result.actualStreamingGroupsNoexceptRefusalTested)) {
-            throw 'Actual SDK observer or explicit noexcept owner-refusal path did not execute.'
+        if ($Scope -eq 'SceneCollision') {
+            $result.actualStreamingSceneCollisionSdkTested = $text.Contains('Production MTA streaming scene-collision SDK contract fixture completed')
+            if (-not $result.actualStreamingSceneCollisionSdkTested) { throw 'Actual LoadSceneCollision SDK override did not execute.' }
+        } else {
+            $result.actualStreamingSdkSliceTested = $text.Contains('Production MTA streaming SDK slice fixture completed')
+            $result.actualStreamingLoadAllSdkTested = $text.Contains('Production MTA streaming load-all SDK fixture completed')
+            $result.actualStreamingPrioritySdkTested = $text.Contains('Production MTA streaming priority SDK fixture completed')
+            $result.actualStreamingRemoveSdkTested = $text.Contains('Production MTA streaming remove SDK fixture completed')
+            if (-not ($result.actualStreamingLoadAllSdkTested -and $result.actualStreamingPrioritySdkTested -and $result.actualStreamingRemoveSdkTested)) {
+                throw 'Actual priority/all completion and direct-removal SDK overrides did not execute.'
+            }
+            $result.actualStreamingSpecialModelSdkTested = $text.Contains('Production MTA streaming special-model SDK fixture completed')
+            if (-not $result.actualStreamingSpecialModelSdkTested) { throw 'Actual RequestSpecialModel SDK override did not execute.' }
+            $result.actualStreamingSceneSdkTested = $text.Contains('Production MTA streaming scene SDK fixture completed')
+            if (-not $result.actualStreamingSceneSdkTested) { throw 'Actual LoadScene SDK override did not execute.' }
+            $result.actualStreamingGroupsSdkTested = $text.Contains('Production MTA streaming groups SDK fixture completed')
+            $result.noexceptRefusal = RunOwned $executable @('--noexcept-refusal') $directory 'noexcept-refusal' 10000
+            $refusalText = [IO.File]::ReadAllText($result.noexceptRefusal.stdout)
+            $result.actualStreamingGroupsNoexceptRefusalTested = $result.noexceptRefusal.exitCode -eq 86 -and -not $result.noexceptRefusal.timedOut -and
+                $refusalText.Contains('Production MTA streaming groups noexcept refusal fixture completed')
+            if (-not ($result.actualStreamingGroupsSdkTested -and $result.actualStreamingGroupsNoexceptRefusalTested)) {
+                throw 'Actual SDK observer or explicit noexcept owner-refusal path did not execute.'
+            }
         }
         $expectedBits = if ($architecture -eq 'x86') { 32 } else { 64 }
-        if ($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -le 0 -or $result.pointerBits -ne $expectedBits -or -not $result.actualStreamingSdkSliceTested) {
+        $selectedSdkTested = if ($Scope -eq 'SceneCollision') { $result.actualStreamingSceneCollisionSdkTested } else { $result.actualStreamingSdkSliceTested }
+        if ($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -le 0 -or $result.pointerBits -ne $expectedBits -or -not $selectedSdkTested) {
             throw "$architecture actual MTA streaming SDK checks failed or summary/pointer-width evidence was missing."
         }
     }
     $record.success = $record.results.Count -eq 1
+    $record.actualStreamingSceneCollisionSdkTested = $record.success -and $record.results[0].actualStreamingSceneCollisionSdkTested
     $record.actualStreamingGroupsSdkTested = $record.success -and $record.results[0].actualStreamingGroupsSdkTested
     $record.actualStreamingGroupsNoexceptRefusalTested = $record.success -and $record.results[0].actualStreamingGroupsNoexceptRefusalTested
     $record.noexceptRefusal = $record.results[0].noexceptRefusal

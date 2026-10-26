@@ -120,7 +120,6 @@ namespace
         void                     MakeSpaceFor(std::uint32_t) override { Unavailable(); }
         std::uint32_t            GetMemoryUsed() const override { Unavailable(); }
         void                     RemoveBigBuildings() override { Unavailable(); }
-        void                     LoadSceneCollision(const CVector*) override { Unavailable(); }
     };
     template <class Action>
     void Refuses(Action action, const char* operation)

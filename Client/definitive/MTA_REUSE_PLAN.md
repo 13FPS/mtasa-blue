@@ -1,5 +1,28 @@
 # MTA on Definitive Edition: reuse boundary
 
+## Current offline cohort: actual collision-scene completion (2026-10-26)
+
+MTA's `CStreaming::LoadSceneCollision` now uses one optional operation on the
+existing streaming owner. The native transaction calls the genuine collision
+store, IPL store and blocking-all loader in that source order. The two store
+stages receive independent copies of the same raw XYZ intent and the original
+true flag. Full-scene target transforms, coordinate scaling and priority-only
+loading are separate operations and are not substituted here.
+
+One existing completion gate covers all three stages. The adapter reuses the
+current world, thread, GC and owner admission used by full-scene loading;
+genuine engine stages keep their internal pool and tree traversal. Each stage
+records entry and return, and fresh owner/profile/graph checks acknowledge its
+effects. An entered failure stops that owner without replaying a completed
+prefix or restoring old streaming state. The public blocking loader is not
+reentered under its already-held gate.
+
+Eleven actual streaming SDK methods are implemented and ten remain pure. The
+focused SDK and native transaction checks, normal backend build and exact DLL
+contract cover this batch. Shared SDK and classic consumers are unchanged;
+the installed GTA trial stays deferred. Complete streaming/model/game factories
+and playable full MTA remain unfinished.
+
 ## Current offline cohort: actual association progress updates (2026-10-26)
 
 MTA's `SetCurrentProgress` now sends one raw float intent through the existing

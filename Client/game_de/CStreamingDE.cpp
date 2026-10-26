@@ -19,6 +19,14 @@ namespace mta::game_de
         Require(access.LoadStreamingScene(position), "LoadScene");
     }
 
+    void CStreamingDE::LoadSceneCollision(const CVector* position)
+    {
+        // The same owner copies the intent and runs the exact COL/IPL/load-all
+        // sequence. Keep one request: a full-scene load or a request-only marker
+        // would change the real collision-only SDK operation's effects.
+        Require(access.LoadStreamingSceneCollision(position), "LoadSceneCollision");
+    }
+
     void CStreamingDE::Require(ClockResult result, const char* operation)
     {
         if (result != ClockResult::Ok)

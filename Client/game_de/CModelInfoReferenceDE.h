@@ -9,8 +9,9 @@
 
 namespace mta::game_de
 {
-    // Acquire-only partial layer: removal/custom replacement/dependencies and
+    // Generic reference-cycle layer: removal/custom replacement/dependencies and
     // reporting stay mandatory. No complete model/game factory is published.
+    class CModelInfoUnmodifiedDE;
     class CModelInfoReferenceDE : public CModelInfoRequestDE
     {
     protected:
@@ -20,9 +21,13 @@ namespace mta::game_de
         void IncrementNativeModelInterfaceReference() final override;
 
     private:
-        static void                            Require(ClockResult, const char*);
-        NativeModelBackingReferenceAccess&     referenceOwner;
-        const NativeModelBackingReferenceToken reference;
+        friend class CModelInfoUnmodifiedDE;
+        NativeModelBackingReferenceState   ReadReferenceState();
+        void                               ClaimUnmodifiedFamily();
+        void                               ReleaseUnmodifiedBackingReference();
+        static void                        Require(ClockResult, const char*);
+        NativeModelBackingReferenceAccess& referenceOwner;
+        NativeModelBackingReferenceToken   reference;
     };
     static_assert(std::is_abstract_v<CModelInfoReferenceDE>);
 }

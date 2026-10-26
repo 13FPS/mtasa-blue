@@ -35,6 +35,8 @@ namespace mta::game_de
         std::uint32_t                           releaseSelectedCount = 0;
         NativeModelReferenceRelease::ZeroPolicy releasePolicy = NativeModelReferenceRelease::ZeroPolicy::KeepResident;
         bool                                    releaseFinal = false;
+        std::uint64_t                           familySerial = 0, successorSerial = 0;
+        bool                                    unmodifiedFamily = false;
     };
     class NativeModelBackingReferenceAccess
     {
@@ -48,6 +50,11 @@ namespace mta::game_de
         }
         virtual ClockResult BindModelBackingReference(const NativeModelBackingReferenceToken&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult AcquireModelBackingReference(const NativeModelBackingReferenceToken&) noexcept { return ClockResult::NotInitialized; }
+        virtual ClockResult ClaimUnmodifiedModelFamily(const NativeModelBackingReferenceToken&) noexcept { return ClockResult::NotInitialized; }
+        virtual ClockResult RenewModelBackingReferenceCycle(const NativeModelBackingReferenceToken&, NativeModelBackingReferenceToken&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
         // Explicit caller-selected zero policy does not prove custom-clump/COL
         // absence. SDK automatic removal remains mandatory and unsupported.
         virtual ClockResult ReleaseModelBackingReference(const NativeModelBackingReferenceToken&, NativeModelReferenceRelease::ZeroPolicy) noexcept

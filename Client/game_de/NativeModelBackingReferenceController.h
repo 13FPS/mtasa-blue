@@ -23,6 +23,8 @@ namespace mta::game_de
         NativeModelBackingReferenceController& operator=(const NativeModelBackingReferenceController&) = delete;
         ClockResult                            Reserve(std::uint64_t generation, std::uint32_t model, CheckOwner, Token&) noexcept;
         ClockResult                            Bind(std::uint64_t generation, const Token&, CheckOwner) noexcept;
+        ClockResult                            ClaimUnmodifiedFamily(std::uint64_t generation, const Token&, CheckOwner) noexcept;
+        ClockResult                            RenewCycle(std::uint64_t generation, const Token&, CheckOwner, Token&) noexcept;
         ClockResult                            Acquire(std::uintptr_t image, std::uint64_t generation, const Token&, CheckOwner,
                                                        const NativeModelReferenceTransactions::Calls* = nullptr) noexcept;
         ClockResult Release(std::uintptr_t image, std::uint64_t generation, const Token&, NativeModelReferenceRelease::ZeroPolicy, CheckOwner,

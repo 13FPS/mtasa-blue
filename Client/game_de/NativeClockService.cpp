@@ -286,6 +286,8 @@ namespace mta::game_de
             ClockResult AdjustModelReference(std::uint32_t, int) noexcept override;
             ClockResult ReserveModelBackingReference(std::uint64_t, std::uint32_t, NativeModelBackingReferenceToken&) noexcept override;
             ClockResult BindModelBackingReference(const NativeModelBackingReferenceToken&) noexcept override;
+            ClockResult ClaimUnmodifiedModelFamily(const NativeModelBackingReferenceToken&) noexcept override;
+            ClockResult RenewModelBackingReferenceCycle(const NativeModelBackingReferenceToken&, NativeModelBackingReferenceToken&) noexcept override;
             ClockResult AcquireModelBackingReference(const NativeModelBackingReferenceToken&) noexcept override;
             ClockResult ReleaseModelBackingReference(const NativeModelBackingReferenceToken&, NativeModelReferenceRelease::ZeroPolicy) noexcept override;
             ClockResult ReadModelBackingReference(const NativeModelBackingReferenceToken&, NativeModelBackingReferenceState&) noexcept override;
@@ -5154,6 +5156,28 @@ namespace mta::game_de
                 return ClockResult::BindingChanged;
             return runtime.modelBackingReferences.Bind(runtime.generation.load(), token, &CheckTimingOwner);
         }
+        ClockResult NativeAccess::ClaimUnmodifiedModelFamily(const NativeModelBackingReferenceToken& input) noexcept
+        {
+            const auto token = input;
+            const auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            if (!token.ownerGeneration || token.ownerGeneration != runtime.generation.load())
+                return ClockResult::BindingChanged;
+            return runtime.modelBackingReferences.ClaimUnmodifiedFamily(runtime.generation.load(), token, &CheckTimingOwner);
+        }
+        ClockResult NativeAccess::RenewModelBackingReferenceCycle(const NativeModelBackingReferenceToken& input,
+                                                                  NativeModelBackingReferenceToken&       output) noexcept
+        {
+            const auto token = input;
+            const auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            if (!token.ownerGeneration || token.ownerGeneration != runtime.generation.load())
+                return ClockResult::BindingChanged;
+            return runtime.modelBackingReferences.RenewCycle(runtime.generation.load(), token, &CheckTimingOwner, output);
+        }
+
         ClockResult NativeAccess::AcquireModelBackingReference(const NativeModelBackingReferenceToken& input) noexcept
         {
             const auto token = input;

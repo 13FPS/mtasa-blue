@@ -1,5 +1,29 @@
 # MTA on Definitive Edition: reuse boundary
 
+## Current offline cohort: unmodified model families and reference cycles (2026-10-26)
+
+A separate partial model layer now owns the source constructor's two null MTA
+replacement fields. Its five replacement entry points explicitly refuse, so
+derived implementations cannot invalidate that initialized-empty domain. This
+proves the wrapper's own state, without claiming engine-wide or native replacement
+absence. The layer uses the actual native removal hook only under that positive
+domain and inherits the existing real Core reporting layer without a diamond or
+another logger. Replacement features remain unsupported.
+
+One owner-issued model family spans ordinary acknowledged reference cycles.
+Release consumes a serial; the actual next acquisition obtains one fresh bound
+successor in the same generation/family. Retried CPU renewal acknowledgement
+returns that same unentered successor instead of forking. Held or uncertain
+effects cannot renew, and an old consumed serial cannot acquire again. Source
+wrapper counters, pending acknowledgement and the CJ/unloaded removal exceptions
+remain in MTA's actual policy. Reusing an unreleased held cycle is explicitly
+unsupported in this bounded layer; destruction supplies no native cleanup.
+
+Focused SDK lifecycle/Core composition and owned native cycle checks, followed
+by the normal backend and exact saved DLL, cover the change. Shared SDK and
+classic implementations are unchanged. Complete factories and full MTA remain
+unfinished, and the installed GTA trial is unchanged.
+
 ## Current offline cohort: loaded-group refusal and cache admission (2026-10-26)
 
 The four loaded ped/vehicle membership and count queries now expose DE owner

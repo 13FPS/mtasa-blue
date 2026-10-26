@@ -25,23 +25,61 @@ namespace mta::game_de
         // Bind consumes only its CPU claim; failure performs no native cleanup.
         Require(referenceOwner.BindModelBackingReference(reference), "Bind");
     }
-    bool CModelInfoReferenceDE::DoIsLoaded()
+    NativeModelBackingReferenceState CModelInfoReferenceDE::ReadReferenceState()
     {
         NativeModelBackingReferenceState state;
         Require(referenceOwner.ReadModelBackingReference(reference, state), "Read");
         if (state.reference.ownerGeneration != reference.ownerGeneration || state.reference.serial != reference.serial ||
-            state.reference.modelIndex != reference.modelIndex ||
-            (state.phase != NativeModelBackingReferencePhase::Bound && state.phase != NativeModelBackingReferencePhase::Held))
+            state.reference.modelIndex != reference.modelIndex)
+            throw std::runtime_error("DE model backing owner returned a different capability");
+        return state;
+    }
+    bool CModelInfoReferenceDE::DoIsLoaded()
+    {
+        const auto state = ReadReferenceState();
+        if (state.phase != NativeModelBackingReferencePhase::Bound && state.phase != NativeModelBackingReferencePhase::Held &&
+            state.phase != NativeModelBackingReferencePhase::Released)
             throw std::runtime_error("DE model backing reference is not a current usable issued capability");
-        // Preserve the existing streaming/category/render policy after the
-        // facade lifetime gate. CPU GetRefCount needs no native observation.
+        // Readiness alone needs no backing acquire. A consumed serial stays
+        // consumed; the actual Increment hook reserves the next cycle only
+        // when the unchanged source policy is ready to acquire it.
         return CModelInfoRequestDE::DoIsLoaded();
     }
     void CModelInfoReferenceDE::IncrementNativeModelInterfaceReference()
     {
-        // Source counter/pending acknowledgement commits only after this
-        // returns. The durable owner, not those unchanged CPU counters, records
-        // accepted/lost-ACK effects and prevents acquisition in a later epoch.
+        auto state = ReadReferenceState();
+        if (state.phase == NativeModelBackingReferencePhase::Released)
+        {
+            NativeModelBackingReferenceToken next;
+            Require(referenceOwner.RenewModelBackingReferenceCycle(reference, next), "RenewCycle");
+            if (!next.serial || next.serial == reference.serial || next.ownerGeneration != reference.ownerGeneration || next.modelIndex != reference.modelIndex)
+                throw std::runtime_error("DE model backing renewal returned an invalid cycle");
+            NativeModelBackingReferenceState prepared;
+            Require(referenceOwner.ReadModelBackingReference(next, prepared), "ReadRenewedCycle");
+            if (prepared.reference.ownerGeneration != next.ownerGeneration || prepared.reference.serial != next.serial ||
+                prepared.reference.modelIndex != next.modelIndex || !state.familySerial || prepared.familySerial != state.familySerial ||
+                prepared.phase != NativeModelBackingReferencePhase::Bound)
+                throw std::runtime_error("DE model backing renewal crossed its issued family");
+            reference = next;
+            state = prepared;
+        }
+        if (state.phase != NativeModelBackingReferencePhase::Bound)
+            throw std::runtime_error("DE model backing cycle is unreleased or uncertain; acquisition cannot replay");
+        // Source CPU refs/pending commit only after the durable owner returns.
         Require(referenceOwner.AcquireModelBackingReference(reference), "Acquire");
+    }
+    void CModelInfoReferenceDE::ClaimUnmodifiedFamily()
+    {
+        Require(referenceOwner.ClaimUnmodifiedModelFamily(reference), "ClaimUnmodifiedFamily");
+        const auto state = ReadReferenceState();
+        if (!state.familySerial || !state.unmodifiedFamily || state.phase != NativeModelBackingReferencePhase::Bound)
+            throw std::runtime_error("DE model owner did not issue an unmodified family");
+    }
+    void CModelInfoReferenceDE::ReleaseUnmodifiedBackingReference()
+    {
+        const auto state = ReadReferenceState();
+        if (!state.familySerial || !state.unmodifiedFamily || state.phase != NativeModelBackingReferencePhase::Held)
+            throw std::runtime_error("DE unmodified model has no acknowledged held cycle to release");
+        Require(referenceOwner.ReleaseModelBackingReference(reference, NativeModelReferenceRelease::ZeroPolicy::RemoveAtZero), "ReleaseUnmodified");
     }
 }

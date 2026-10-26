@@ -68,6 +68,12 @@ namespace mta::game_de
         auto result = owner();
         if (result != ClockResult::Ok)
             return result;
+        // A model facade owns one family for this generation, matching the
+        // source model-wrapper identity rather than creating conflicting
+        // initialized-empty ownership claims for the same model.
+        for (const auto& existing : records)
+            if (existing.reference.ownerGeneration == currentGeneration && existing.reference.modelIndex == modelIndex)
+                return ClockResult::OwnerConflict;
         if (serial == (std::numeric_limits<std::uint64_t>::max)())
             return ClockResult::UnsupportedBuild;
         try
@@ -76,6 +82,7 @@ namespace mta::game_de
             // reach a partially constructed facade or enter native acquisition.
             State prepared;
             prepared.reference = {currentGeneration, ++serial, modelIndex};
+            prepared.familySerial = prepared.reference.serial;
             records.push_back(prepared);
             auto& record = records.back();
             result = owner();
@@ -118,6 +125,83 @@ namespace mta::game_de
         Publish();
         return owner();
     }
+    ClockResult NativeModelBackingReferenceController::ClaimUnmodifiedFamily(std::uint64_t generation, const Token& input, CheckOwner owner) noexcept
+    {
+        const auto token = input;
+        Operation  operation(busy);
+        if (!operation.acquired)
+            return ClockResult::Busy;
+        auto* record = Find(generation, token);
+        if (!record)
+            return ClockResult::BindingChanged;
+        if (record->phase != Phase::Bound || record->familySerial != record->reference.serial || record->unmodifiedFamily)
+            return ClockResult::OwnerConflict;
+        if (!owner)
+            return ClockResult::NotInitialized;
+        auto result = owner();
+        if (result != ClockResult::Ok)
+            return result;
+        // The closed SDK layer owns its initialized-null replacement fields.
+        // This labels that one model family, not engine/gamewide absence.
+        record->unmodifiedFamily = true;
+        result = owner();
+        Publish();
+        return result;
+    }
+    ClockResult NativeModelBackingReferenceController::RenewCycle(std::uint64_t generation, const Token& input, CheckOwner owner, Token& output) noexcept
+    {
+        const auto token = input;
+        Operation  operation(busy);
+        if (!operation.acquired)
+            return ClockResult::Busy;
+        auto* record = Find(generation, token);
+        if (!record)
+            return ClockResult::BindingChanged;
+        if (record->phase != Phase::Released || !record->familySerial)
+            return ClockResult::OwnerConflict;
+        if (!owner)
+            return ClockResult::NotInitialized;
+        auto result = owner();
+        if (result != ClockResult::Ok)
+            return result;
+        if (record->successorSerial)
+        {
+            const Token issued{generation, record->successorSerial, token.modelIndex};
+            auto*       successor = Find(generation, issued);
+            if (!successor || successor->familySerial != record->familySerial || successor->phase != Phase::Bound || successor->successorSerial)
+                return ClockResult::OwnerConflict;
+            result = owner();
+            if (result == ClockResult::Ok)
+                output = successor->reference;
+            return result;
+        }
+        if (serial == (std::numeric_limits<std::uint64_t>::max)())
+            return ClockResult::UnsupportedBuild;
+        try
+        {
+            State next;
+            next.reference = {generation, ++serial, token.modelIndex};
+            next.familySerial = record->familySerial;
+            next.unmodifiedFamily = record->unmodifiedFamily;
+            next.phase = Phase::Bound;
+            records.push_back(next);
+            // Publish the CPU successor before a fallible acknowledgement.
+            // A repeated renewal returns that same unentered serial, never a
+            // fork/new native acquire after lost acknowledgement or FaultDebt.
+            record->successorSerial = next.reference.serial;
+            Publish();
+            result = owner();
+            if (result == ClockResult::Ok)
+                output = next.reference;
+            return result;
+        }
+        catch (...)
+        {
+            Publish();
+            return ClockResult::ReadFailure;
+        }
+    }
+
     ClockResult NativeModelBackingReferenceController::Acquire(std::uintptr_t image, std::uint64_t generation, const Token& input, CheckOwner owner,
                                                                const NativeModelReferenceTransactions::Calls* calls) noexcept
     {

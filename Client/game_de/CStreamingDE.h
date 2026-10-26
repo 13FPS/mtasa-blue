@@ -20,17 +20,18 @@ namespace mta::game_de
     class CStreamingDE : public CStreaming
     {
     public:
-        void          RequestModel(DWORD model, DWORD flags) override;
-        void          RequestSpecialModel(DWORD model, const char* name, DWORD channel) override;
-        void          RemoveModel(std::uint32_t model) override;
-        bool          HasModelLoaded(DWORD model) override;
-        void          LoadAllRequestedModels(bool onlyPriority, const char* tag) override;
-        void          LoadScene(const CVector* position) override;
-        void          LoadSceneCollision(const CVector* position) override;
-        std::uint32_t GetNumPedsLoaded() const noexcept override;
-        bool          IsModelInLoadedPedGroup(std::uint16_t model) const noexcept override;
-        std::uint32_t GetNumLoadedVehicles() const noexcept override;
-        bool          IsModelInLoadedVehicleGroup(std::uint16_t model) const noexcept override;
+        void                        RequestModel(DWORD model, DWORD flags) override;
+        void                        RequestSpecialModel(DWORD model, const char* name, DWORD channel) override;
+        void                        RemoveModel(std::uint32_t model) override;
+        bool                        HasModelLoaded(DWORD model) override;
+        void                        LoadAllRequestedModels(bool onlyPriority, const char* tag) override;
+        void                        LoadScene(const CVector* position) override;
+        void                        LoadSceneCollision(const CVector* position) override;
+        std::uint32_t               GetNumPedsLoaded() const noexcept override;
+        bool                        IsModelInLoadedPedGroup(std::uint16_t model) const noexcept override;
+        std::uint32_t               GetNumLoadedVehicles() const noexcept override;
+        bool                        IsModelInLoadedVehicleGroup(std::uint16_t model) const noexcept override;
+        std::optional<std::uint8_t> GetModelStreamingFlags(std::uint32_t model) override;
 
     protected:
         explicit CStreamingDE(NativeStreamingModelAccess& access) noexcept : access(access) {}

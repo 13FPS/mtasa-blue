@@ -1,5 +1,26 @@
 # MTA on Definitive Edition: reuse boundary
 
+## Current offline cohort: model-cache streaming flags (2026-10-26)
+
+MTA's actual cache release policy now asks the SDK for streaming flags instead
+of reading a backend's physical streaming row. The appended optional-valued
+getter preserves classic behavior: a missing row keeps the cache reference,
+while a present zero flag byte remains a real observation. The mission/game
+required mask and the remaining release policy stay in MTA.
+
+DE reuses the current native flags/state observation and returns its raw flag
+byte without requiring loaded state. Owner refusal remains visible; it is not
+converted into a missing row or zero. No new native channel or classic-sized
+view over DE's different row layout is introduced. Raw row/archive operations
+remain unimplemented rather than returning a fabricated view.
+
+This appends a virtual SDK slot, so providers and consumers must be rebuilt
+together. Current checks include the actual Shared default and DE SDK method
+on x86/x64, the two affected classic Win32 consumer TUs with fresh normal PCHs,
+and the normal DE backend plus exact saved DLL. No compatibility with older
+DLLs is claimed. Twelve streaming methods are implemented; ten remain pure.
+Complete game/streaming factories and playable full MTA remain unfinished.
+
 ## Current offline cohort: actual association node-array release (2026-10-26)
 
 MTA's `FreeAnimBlendNodeArray` now dispatches once through the same private

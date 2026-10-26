@@ -65,8 +65,8 @@ namespace
         void                     MakeSpaceFor(std::uint32_t) override { Unavailable(); }
         std::uint32_t            GetMemoryUsed() const override { Unavailable(); }
         void                     RemoveBigBuildings() override { Unavailable(); }
-        // Inherit all ten existing production overrides and the real
-        // collision override. A test-owned collision override would hide the
+        // Inherit all12 production overrides, including collision and flags.
+        // A test-owned collision override would hide the
         // production dispatch this contract needs to exercise.
     };
     static_assert(std::is_abstract_v<CStreamingDE> && !std::is_abstract_v<CollisionObserver>);

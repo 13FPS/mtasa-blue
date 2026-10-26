@@ -94,6 +94,17 @@ namespace mta::game_de
         Require(access.RemoveStreamingModel(model), "RemoveModel");
     }
 
+    std::optional<std::uint8_t> CStreamingDE::GetModelStreamingFlags(std::uint32_t model)
+    {
+        const auto                     index = model;
+        NativeModelLoadedReader::Value value;
+        // The existing owner observes flags and load state together for every
+        // resource row. Flags remain meaningful while unloaded; do not gate
+        // them through HasModelLoaded or invent a classic20-byte row view.
+        Require(access.ReadStreamingModelLoaded(index, value), "GetModelStreamingFlags");
+        return value.rawFlags;
+    }
+
     bool CStreamingDE::HasModelLoaded(DWORD model)
     {
         if (MtaGame::CModelRequestPolicy::IsUpgradeModel(model))

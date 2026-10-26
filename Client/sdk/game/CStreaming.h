@@ -12,6 +12,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <optional>
 
 #define INVALID_ARCHIVE_ID 0xFF
 #define INVALID_STREAM_ID  0xFF
@@ -97,4 +98,15 @@ public:
     virtual bool          IsModelInLoadedPedGroup(std::uint16_t modelId) const noexcept = 0;
     virtual std::uint32_t GetNumLoadedVehicles() const noexcept = 0;
     virtual bool          IsModelInLoadedVehicleGroup(std::uint16_t modelId) const noexcept = 0;
+
+    // Flag-only consumers must not depend on a backend's physical row layout.
+    // Keep classic absence distinct from present0: the cache retains its ref
+    // when GetStreamingInfo returns null. Append this slot; recompile providers.
+    virtual std::optional<std::uint8_t> GetModelStreamingFlags(std::uint32_t model)
+    {
+        const auto* info = GetStreamingInfo(model);
+        if (!info)
+            return std::nullopt;
+        return info->flg;
+    }
 };

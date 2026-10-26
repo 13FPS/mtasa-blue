@@ -566,13 +566,14 @@ bool CModelCacheManagerImpl::TryReleaseCachedModel(ushort usModelId, SModelCache
     if (!pStreaming)
         return false;
 
-    CStreamingInfo* pStreamingInfo = pStreaming->GetStreamingInfo(usModelId);
-    if (!pStreamingInfo)
+    const auto streamingFlags = pStreaming->GetModelStreamingFlags(usModelId);
+    if (!streamingFlags)
         return false;
 
     // The game marks models that it must keep loaded for missions or its own systems.
     // Dropping our ref on those would only cause the game to stream them right back in.
-    if (pStreamingInfo->flg & (STREAMING_FLAG_MISSION_REQUIRED | STREAMING_FLAG_GAME_REQUIRED))
+    // Optional absence preserves the original null-row keep-cache decision.
+    if (*streamingFlags & (STREAMING_FLAG_MISSION_REQUIRED | STREAMING_FLAG_GAME_REQUIRED))
         return false;
 
     // Someone else still holds a ref, so our release would not free the model anyway.

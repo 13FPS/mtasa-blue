@@ -6,6 +6,7 @@
 #include "NativeAnimationAssociationStorage.h"
 #include "NativeAnimationAssociationOuterStorageCalls.h"
 #include "NativeAnimationAssociationProfile.h"
+#include "NativeAnimationHierarchyReadProfile.h"
 #include "NativeAnimationHierarchyOrigin.h"
 #include "NativeAnimationBlockRefMemory.h"
 #include "NativeStreamingCompletionContext.h"
@@ -125,6 +126,20 @@ namespace mta::game_de
             return NativeModelReferenceHeap::ReadOnlyImage(image, image + NativeAnimationAssociationProfile::VtableRva, sizeof(destructor)) &&
                    Image::ReadImage(image, image + NativeAnimationAssociationProfile::VtableRva, &destructor, sizeof(destructor)) &&
                    destructor == image + NativeAnimationAssociationProfile::DestructorRva;
+        }
+        bool QualifyAssociationLengthProfile(std::uintptr_t image, std::uintptr_t hierarchyRva) noexcept
+        {
+            namespace LengthLayout = NativeAnimationHierarchyReadProfile;
+            if (!Origin::Sections({image}, hierarchyRva, 0, LengthLayout::Code.data(), LengthLayout::Code.size()))
+                return false;
+            for (const auto& pin : LengthLayout::Code)
+            {
+                std::array<unsigned char, LengthLayout::MaximumPinBytes> bytes{};
+                if (!pin.size || pin.size > bytes.size() || !Image::ReadImage(image, image + pin.rva, bytes.data(), pin.size, false, true) ||
+                    std::memcmp(bytes.data(), pin.bytes, pin.size))
+                    return false;
+            }
+            return true;
         }
         struct Hierarchy
         {
@@ -587,7 +602,47 @@ namespace mta::game_de
             next.flags = Field<std::int16_t>(before, 0x46);
             next.blendAmountBits = Field<std::uint32_t>(before, 0x30);
             next.speedBits = Field<std::uint32_t>(before, 0x3c);
+            // Source progress is the absolute current time, not a ratio.
+            next.currentTimeBits = Field<std::uint32_t>(before, 0x38);
             output = next;
+            return ClockResult::Ok;
+        }
+        static ClockResult ReadLength(std::uintptr_t image, const S& s, std::uint64_t generation, C owner, std::uint32_t& output) noexcept
+        {
+            namespace A = AnimationAssociationStorageDetail;
+            if (s.GetState() != State::LiveUnpublished)
+                return ClockResult::NotInitialized;
+            if (!A::Context::TryEnter())
+                return ClockResult::Busy;
+            A::Context::Scope gate;
+            if (s.GetState() != State::LiveUnpublished)
+                return ClockResult::NotInitialized;
+            A::Bytes                        before{}, middle{}, after{};
+            NativeModelReferenceHeap::Value heap, middleHeap, afterHeap;
+            auto                            result = Snapshot(image, s, generation, owner, before, heap);
+            if (result != ClockResult::Ok)
+                return result;
+            const auto hierarchy = s.data->source.bank.hierarchy, rva = s.data->source.bank.location.rva;
+            if (!A::QualifyAssociationLengthProfile(image, rva))
+                return ClockResult::BindingChanged;
+            std::uint32_t first = 0, second = 0;
+            if (!NativeImageAccess::ReadImage(image, hierarchy + 0x18, &first, sizeof(first), true))
+                return ClockResult::ReadFailure;
+            if ((result = Snapshot(image, s, generation, owner, middle, middleHeap)) != ClockResult::Ok)
+                return result;
+            if (before != middle || !NativeModelReferenceHeap::Same(heap, middleHeap) || !A::QualifyAssociationLengthProfile(image, rva))
+                return ClockResult::BindingChanged;
+            if (!NativeImageAccess::ReadImage(image, hierarchy + 0x18, &second, sizeof(second), true))
+                return ClockResult::ReadFailure;
+            if ((result = Snapshot(image, s, generation, owner, after, afterHeap)) != ClockResult::Ok)
+                return result;
+            if (before != after || first != second || !NativeModelReferenceHeap::Same(heap, afterHeap) || !A::QualifyAssociationLengthProfile(image, rva))
+                return ClockResult::BindingChanged;
+            if ((result = A::Context::Owner(image, owner)) != ClockResult::Ok)
+                return result;
+            // Zero, signed zero and NaN payloads are legitimate field bits.
+            // Guard failure never becomes a fabricated numeric duration.
+            output = second;
             return ClockResult::Ok;
         }
         static ClockResult Set(std::uintptr_t image, S& s, std::uint64_t generation, Scalar scalar, std::uint32_t bits, C owner, Receipt* output,
@@ -1016,6 +1071,10 @@ namespace mta::game_de
         ClockResult Read(std::uintptr_t i, const Storage& s, std::uint64_t g, CheckOwner o, NativeAnimationAssociationValues& result) noexcept
         {
             return NativeAnimationAssociationStorageAccess::Read(i, s, g, o, result);
+        }
+        ClockResult ReadLength(std::uintptr_t image, const Storage& storage, std::uint64_t generation, CheckOwner owner, std::uint32_t& output) noexcept
+        {
+            return NativeAnimationAssociationStorageAccess::ReadLength(image, storage, generation, owner, output);
         }
         ClockResult Set(std::uintptr_t i, Storage& s, std::uint64_t g, Scalar f, std::uint32_t b, CheckOwner o, Receipt* r, Exchange v) noexcept
         {

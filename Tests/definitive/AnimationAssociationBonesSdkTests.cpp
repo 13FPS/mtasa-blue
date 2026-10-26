@@ -19,9 +19,9 @@ static_assert(std::is_same_v<decltype(&PrivateAnimationAssociationReceiver::GetA
 static_assert(std::is_same_v<decltype(&PrivateAnimationAssociationReceiver::RestrictToBones), decltype(&CAnimBlendAssociationDE::RestrictToBones)>);
 static_assert(std::is_same_v<decltype(&PrivateAnimationAssociationReceiver::RestrictToBonesOf), decltype(&CAnimBlendAssociationDE::RestrictToBonesOf)>);
 static_assert(std::is_abstract_v<CAnimBlendAssociationDE> && !std::is_abstract_v<PrivateAnimationAssociationReceiver>);
-static_assert(noexcept(std::declval<const CAnimBlendAssociation&>().GetCurrentProgress()));
-static_assert(noexcept(std::declval<const CAnimBlendAssociation&>().GetCurrentSpeed()));
-static_assert(noexcept(std::declval<const CAnimBlendAssociation&>().GetLength()));
+static_assert(!noexcept(std::declval<const CAnimBlendAssociation&>().GetCurrentProgress()));
+static_assert(!noexcept(std::declval<const CAnimBlendAssociation&>().GetCurrentSpeed()));
+static_assert(!noexcept(std::declval<const CAnimBlendAssociation&>().GetLength()));
 namespace
 {
     unsigned checks = 0;

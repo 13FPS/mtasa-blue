@@ -19,6 +19,13 @@ namespace mta::game_de
                 throw std::runtime_error(std::string("DE private animation-association owner refused ") + operation + ": " +
                                          std::to_string(static_cast<unsigned>(result)));
         }
+        float FloatValue(std::uint32_t bits)
+        {
+            float value;
+            static_assert(sizeof(value) == sizeof(bits));
+            std::memcpy(&value, &bits, sizeof(value));
+            return value;
+        }
         std::uint32_t FloatBits(float value)
         {
             std::uint32_t bits;
@@ -113,6 +120,26 @@ namespace mta::game_de
         const auto token = reference;
         const auto bits = FloatBits(amount);
         Require(native.SetPrivateAnimationAssociationBlendAmount(token, bits), "SetBlendAmount");
+    }
+    float CAnimBlendAssociationDE::GetCurrentProgress() const
+    {
+        // Despite the SDK name, actual MTA returns absolute current time.
+        // Lua computes its ratio separately; preserve every source float bit.
+        return FloatValue(Read("GetCurrentProgress").currentTimeBits);
+    }
+    float CAnimBlendAssociationDE::GetCurrentSpeed() const
+    {
+        return FloatValue(Read("GetCurrentSpeed").speedBits);
+    }
+    float CAnimBlendAssociationDE::GetLength() const
+    {
+        const auto    token = reference;
+        std::uint32_t bits = 0;
+        // Current hierarchy time is mutable. Read it with this owned parent
+        // under one bank/owner observation rather than caching a constructor
+        // value, dividing, or inventing zero for an unsupported missing H.
+        Require(native.ReadPrivateAnimationAssociationLength(token, bits), "GetLength");
+        return FloatValue(bits);
     }
     void CAnimBlendAssociationDE::SetCurrentSpeed(float speed)
     {

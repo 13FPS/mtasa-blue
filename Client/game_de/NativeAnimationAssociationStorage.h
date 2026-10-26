@@ -74,6 +74,9 @@ namespace mta::game_de
         ClockResult Construct(std::uintptr_t, Storage&, std::uint64_t, std::uintptr_t, CheckOwner, std::uintptr_t&, Receipt* = nullptr,
                               InvokeConstructor = nullptr) noexcept;
         ClockResult Read(std::uintptr_t, const Storage&, std::uint64_t, CheckOwner, NativeAnimationAssociationValues&) noexcept;
+        // Duration is a separate joint bank-H observation. Ordinary receiver
+        // metadata does not acquire this extra field/profile dependency.
+        ClockResult ReadLength(std::uintptr_t, const Storage&, std::uint64_t, CheckOwner, std::uint32_t&) noexcept;
         ClockResult Set(std::uintptr_t, Storage&, std::uint64_t, Scalar, std::uint32_t, CheckOwner, Receipt* = nullptr, Exchange = nullptr) noexcept;
         ClockResult Retire(std::uintptr_t, Storage&, std::uint64_t, CheckOwner, Receipt* = nullptr, InvokeDestructor = nullptr,
                            NativeCustomAnimSequenceStorageCalls::InvokeFree = nullptr) noexcept;

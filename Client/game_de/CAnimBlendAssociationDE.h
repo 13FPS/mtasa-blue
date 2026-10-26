@@ -26,7 +26,10 @@ namespace mta::game_de
         bool                                 IsPartial() const override;
         void                                 RestrictToBonesOf(const CAnimBlendStaticAssociationSAInterface*) override;
         void                                 RestrictToBones(std::bitset<64>) override;
+        float                                GetCurrentProgress() const override;
         void                                 SetCurrentSpeed(float) override;
+        float                                GetCurrentSpeed() const override;
+        float                                GetLength() const override;
         void                                 SetAnimID(short) override;
         void                                 SetAnimGroup(short) override;
         void                                 SetFlags(short) override;
@@ -45,8 +48,8 @@ namespace mta::game_de
         NativeAnimationAssociationAccess&              native;
         const NativeAnimationAssociationReferenceToken reference;
     };
-    // Fourteen real operations preserve eight genuine pure contracts:
-    // clump construction/Init, node disposal, progress mutation and all three
-    // noexcept getters. No public dynamic factory or SDK base deletion.
+    // Seventeen real operations preserve five genuine pure contracts:
+    // clump construction/Init, node disposal and progress mutation. No public
+    // dynamic factory, shared virtual destructor or SDK base deletion.
     static_assert(std::is_abstract_v<CAnimBlendAssociationDE> && std::is_base_of_v<CAnimBlendAssociation, CAnimBlendAssociationDE>);
 }

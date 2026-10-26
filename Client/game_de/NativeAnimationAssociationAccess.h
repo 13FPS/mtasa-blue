@@ -18,6 +18,7 @@ namespace mta::game_de
         std::uintptr_t interfaceAddress = 0;
         std::int16_t   animId = 0, animGroup = 0, flags = 0;
         std::uint32_t  blendAmountBits = 0, speedBits = 0;
+        std::uint32_t  currentTimeBits = 0;
     };
     class NativeAnimationAssociationAccess
     {
@@ -63,6 +64,14 @@ namespace mta::game_de
         }
         virtual ClockResult RetirePrivateAnimationAssociation(const NativeAnimationAssociationReferenceToken&) noexcept { return ClockResult::NotInitialized; }
         virtual bool        HasPendingPrivateAnimationAssociations() const noexcept { return true; }
+        // Length is a separate jointly qualified parent/BANK-H observation.
+        // Mutable hierarchy time is neither an immutable constructor identity
+        // nor a prerequisite for unrelated association scalar reads.
+        virtual ClockResult ReadPrivateAnimationAssociationLength(const NativeAnimationAssociationReferenceToken&, std::uint32_t&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
+
         // The parent and its immutable bank-H origin are observed together;
         // a separate raw read/resolve could publish a torn hierarchy borrow.
         virtual ClockResult ResolvePrivateAnimationAssociationHierarchy(const NativeAnimationAssociationReferenceToken&,

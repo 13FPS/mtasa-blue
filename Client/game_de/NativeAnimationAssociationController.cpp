@@ -122,6 +122,20 @@ namespace mta::game_de
         Publish();
         return result;
     }
+    ClockResult NativeAnimationAssociationController::ReadLength(std::uintptr_t image, std::uint64_t generation, const Token& token, CheckOwner owner,
+                                                                 std::uint32_t& output) noexcept
+    {
+        const auto request = token;
+        if (!AnimationAssociationControllerDetail::Enter(busy))
+            return ClockResult::Busy;
+        AnimationAssociationControllerDetail::Guard guard{busy};
+        auto*                                       entry = Find(generation, request);
+        if (!entry)
+            return ClockResult::OwnerConflict;
+        const auto result = NativeAnimationAssociationCalls::ReadLength(image, entry->storage, generation, owner, output);
+        Publish();
+        return result;
+    }
     ClockResult NativeAnimationAssociationController::Set(std::uintptr_t image, std::uint64_t generation, const Token& token, Scalar scalar, std::uint32_t bits,
                                                           CheckOwner owner, Receipt* receipt) noexcept
     {

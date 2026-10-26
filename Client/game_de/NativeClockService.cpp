@@ -177,6 +177,7 @@ namespace mta::game_de
             ClockResult ConstructPrivateAnimationAssociationFromStatic(const NativeAnimationAssociationReferenceToken&, std::uintptr_t,
                                                                        std::uintptr_t&) noexcept override;
             ClockResult ReadPrivateAnimationAssociation(const NativeAnimationAssociationReferenceToken&, NativeAnimationAssociationValues&) noexcept override;
+            ClockResult ReadPrivateAnimationAssociationLength(const NativeAnimationAssociationReferenceToken&, std::uint32_t&) noexcept override;
             ClockResult SetPrivateAnimationAssociationBlendAmount(const NativeAnimationAssociationReferenceToken&, std::uint32_t) noexcept override;
             ClockResult SetPrivateAnimationAssociationCurrentSpeed(const NativeAnimationAssociationReferenceToken&, std::uint32_t) noexcept override;
             ClockResult SetPrivateAnimationAssociationAnimID(const NativeAnimationAssociationReferenceToken&, std::int16_t) noexcept override;
@@ -2806,6 +2807,24 @@ namespace mta::game_de
                 return result;
             NativeAnimationAssociationValues next;
             result = runtime.privateAssociations.Read(runtime.image, request.ownerGeneration, request, &CheckTimingOwner, next);
+            if (result == ClockResult::Ok)
+                result = CheckPrivateAnimationAssociationRequest(request);
+            PublishCustomAnimationSequenceDebt(request.ownerGeneration);
+            if (runtime.privateAssociations.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            if (result == ClockResult::Ok)
+                output = next;
+            return result;
+        }
+
+        ClockResult NativeAccess::ReadPrivateAnimationAssociationLength(const NativeAnimationAssociationReferenceToken& token, std::uint32_t& output) noexcept
+        {
+            const auto request = token;
+            auto       result = CheckPrivateAnimationAssociationRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            std::uint32_t next = 0;
+            result = runtime.privateAssociations.ReadLength(runtime.image, request.ownerGeneration, request, &CheckTimingOwner, next);
             if (result == ClockResult::Ok)
                 result = CheckPrivateAnimationAssociationRequest(request);
             PublishCustomAnimationSequenceDebt(request.ownerGeneration);

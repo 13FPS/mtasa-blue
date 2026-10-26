@@ -1,4 +1,4 @@
-# Derive all22actual SDK operations. Only the fourteen implemented operations
+# Derive all22actual SDK operations. Only the seventeen implemented operations
 # remain inherited; no clump/noexcept/factory behavior is faked by this leaf.
 function Write-PrivateAnimationAssociationFixture([string]$RepositoryRoot,[string]$OutputPath) {
     $source='Client/sdk/game/CAnimBlendAssociation.h'
@@ -9,12 +9,12 @@ function Write-PrivateAnimationAssociationFixture([string]$RepositoryRoot,[strin
         $signature=[regex]::Replace($match.Groups['signature'].Value,'\s*=\s*0\s*$','').Trim()
         $name=[regex]::Match($signature,'(?<name>\w+)\s*\(').Groups['name'].Value
         $staticCtor=$name -eq 'Constructor' -and $signature -match 'CAnimBlendStaticAssociationSAInterface\s*&'
-        if($staticCtor -or $name -in @('GetInterface','GetAnimGroup','GetAnimID','GetBlendAmount','SetBlendAmount','IsPartial','SetCurrentSpeed','SetAnimID','SetAnimGroup','SetFlags','GetAnimHierarchy','RestrictToBones','RestrictToBonesOf')) {$provided+=$signature}
+        if($staticCtor -or $name -in @('GetInterface','GetAnimGroup','GetAnimID','GetBlendAmount','SetBlendAmount','IsPartial','SetCurrentSpeed','SetAnimID','SetAnimGroup','SetFlags','GetAnimHierarchy','RestrictToBones','RestrictToBonesOf','GetCurrentProgress','GetCurrentSpeed','GetLength')) {$provided+=$signature}
         else {[regex]::Replace($signature,'\s+',' ')}
     })
-    if($provided.Count -ne 14 -or $methods.Count -ne 8){throw 'Actual private association14/8partition changed'}
+    if($provided.Count -ne 17 -or $methods.Count -ne 5){throw 'Actual private association17/5partition changed'}
     foreach($pure in @('GetCurrentProgress','GetCurrentSpeed','GetLength')) {
-        if(@($methods|Where-Object {$_ -match ('\b'+$pure+'\s*\(') -and $_ -match '\bnoexcept\b'}).Count -ne 1){throw ('Missing actual noexcept pure getter: '+$pure)}
+        if(@($provided|Where-Object {$_ -match ('\b'+$pure+'\s*\(') -and $_ -notmatch '\bnoexcept\b'}).Count -ne 1){throw ('Missing actual throwing-contract getter: '+$pure)}
     }
     $lines=@('#pragma once','#include <windows.h>','#include <game/CAnimBlendHierarchy.h>','#include <cstdlib>','#pragma warning(push)','#pragma warning(disable : 4100)',
         'class PrivateAnimationAssociationReceiver final : public mta::game_de::CAnimBlendAssociationDE { public:',

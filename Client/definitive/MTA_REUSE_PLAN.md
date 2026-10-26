@@ -1,5 +1,26 @@
 # MTA on Definitive Edition: reuse boundary
 
+## Current offline cohort: actual association float getters (2026-10-26)
+
+`GetCurrentProgress`, `GetCurrentSpeed` and `GetLength` now use the existing
+qualified private-association owner. MTA progress means raw current animation
+time, not a ratio. Speed and hierarchy length retain their raw float semantics,
+including zero, signed zero and NaN. Rejected ownership reports an error rather
+than returning a fabricated value.
+
+Only these three Shared base declarations drop `noexcept`; classic derived
+implementations keep their stronger specification and behavior. This changes
+the C++ exception contract and requires recompilation against the current SDK.
+No interoperability with older DLLs is claimed. Current validation includes
+the three actual affected classic caller TUs and two fresh normal PCHs.
+
+Time uses the existing receiver snapshot. Length has a separate joint bank/H
+read with owner/profile/origin bookends; duration is neither cached as immutable
+identity nor added as an unrelated dependency of ordinary reads. Seventeen real
+association methods are implemented and five genuine operations remain pure.
+The backend remains partial, without a public association factory or full MTA.
+
+
 ## Current offline cohort: association hierarchy and bone restrictions (2026-10-26)
 
 The actual MTA `GetAnimHierarchy`, `RestrictToBones` and `RestrictToBonesOf`

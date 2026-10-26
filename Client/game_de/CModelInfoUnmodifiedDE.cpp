@@ -25,6 +25,17 @@ namespace mta::game_de
             throw std::logic_error("DE unmodified model replacement ownership changed");
         ReleaseUnmodifiedBackingReference();
     }
+    bool CModelInfoUnmodifiedDE::UnloadUnused()
+    {
+        // Source UnloadUnused tests its own replacement fields, never the
+        // wrapper CPU refcount. The same owner distinguishes a positive native
+        // count (false) from a verified zero-count removal (true) or refusal.
+        if (replacements.customClump || replacements.customCollision)
+            throw std::logic_error("DE unmodified model replacement ownership changed");
+        bool removed = false;
+        Require(referenceOwner.UnloadUnusedModelFamily(reference, removed), "UnloadUnused");
+        return removed;
+    }
     [[noreturn]] void CModelInfoUnmodifiedDE::ReplacementUnsupported(const char* operation)
     {
         throw std::runtime_error(std::string("DE unmodified model does not support ") + operation);

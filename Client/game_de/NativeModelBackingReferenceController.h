@@ -30,6 +30,8 @@ namespace mta::game_de
         ClockResult Release(std::uintptr_t image, std::uint64_t generation, const Token&, NativeModelReferenceRelease::ZeroPolicy, CheckOwner,
                             NativeModelReferenceRelease::Receipt* = nullptr, NativeModelReferenceMemory::Exchange = nullptr,
                             NativeStreamingRemoveCalls::Invoke = nullptr) noexcept;
+        ClockResult UnloadUnused(std::uintptr_t image, std::uint64_t generation, const Token&, CheckOwner, bool& removed,
+                                 NativeModelUnusedRemoval::Receipt* = nullptr, NativeStreamingRemoveCalls::Invoke = nullptr) noexcept;
         ClockResult Read(std::uint64_t generation, const Token&, CheckOwner, State&) noexcept;
         // End may erase no-effect CPU records and acknowledged Released
         // records only. Held/unknown references never receive automatic release.

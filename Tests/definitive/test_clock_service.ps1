@@ -382,6 +382,8 @@ try {
         'Client/game_de/NativeModelBackingReferenceAccess.h',
         'Client/game_de/NativeModelBackingReferenceController.h',
         'Client/game_de/NativeModelBackingReferenceController.cpp',
+        'Client/game_de/NativeModelUnusedRemoval.h',
+        'Client/game_de/NativeModelUnusedRemoval.cpp',
         'Client/game_de/NativeModelArchiveProfile.h',
         'Tests/definitive/NativeStreamingObserversOwnerTests.inl'
     )
@@ -911,6 +913,8 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         # pin their complete inputs above and link each implementation once.
         (Join-Path $taskRoot 'Client/game_de/NativeModelAnimationReader.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeModelBackingReferenceController.cpp'),
+        # The shared controller now calls the separate zero-only removal helper.
+        (Join-Path $taskRoot 'Client/game_de/NativeModelUnusedRemoval.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGameInitializationDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGameDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGameWeaponInfoDE.cpp'),

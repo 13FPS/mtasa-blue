@@ -111,6 +111,7 @@
 #include "NativeStreamingResourceCalls.h"
 #include "NativeModelReferenceTransactions.h"
 #include "NativeModelBackingReferenceController.h"
+#include "NativeModelUnusedRemoval.h"
 #include "NativeModelBankProfile.h"
 #include <game/CModelRequestPolicy.h>
 #include "NativeStartGameCalls.h"
@@ -290,6 +291,7 @@ namespace mta::game_de
             ClockResult RenewModelBackingReferenceCycle(const NativeModelBackingReferenceToken&, NativeModelBackingReferenceToken&) noexcept override;
             ClockResult AcquireModelBackingReference(const NativeModelBackingReferenceToken&) noexcept override;
             ClockResult ReleaseModelBackingReference(const NativeModelBackingReferenceToken&, NativeModelReferenceRelease::ZeroPolicy) noexcept override;
+            ClockResult UnloadUnusedModelFamily(const NativeModelBackingReferenceToken&, bool&) noexcept override;
             ClockResult ReadModelBackingReference(const NativeModelBackingReferenceToken&, NativeModelBackingReferenceState&) noexcept override;
             bool        HasPendingModelBackingReferences() const noexcept override;
             ClockResult ReleaseFinalModelReference(std::uint32_t, NativeModelReferenceRelease::ZeroPolicy) noexcept override;
@@ -5215,6 +5217,32 @@ namespace mta::game_de
             if (result != ClockResult::Ok &&
                 (receipt.reference.entered || receipt.reference.accepted || receipt.removal.entered || runtime.modelBackingReferences.RecoveryPending()))
                 Stop(result);
+            return result;
+        }
+
+        ClockResult NativeAccess::UnloadUnusedModelFamily(const NativeModelBackingReferenceToken& input, bool& output) noexcept
+        {
+            const auto token = input;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            if (!token.ownerGeneration || token.ownerGeneration != runtime.generation.load())
+                return ClockResult::BindingChanged;
+            NativeModelUnusedRemoval::Receipt receipt;
+            bool                              removed = false;
+            result = runtime.modelBackingReferences.UnloadUnused(runtime.image, runtime.generation.load(), token, &CheckTimingOwner, removed, &receipt);
+            if (runtime.modelBackingReferences.IsRetained())
+                runtime.restored.store(false);
+            if (result == ClockResult::Ok)
+                result = CheckTimingOwner();
+            if (result == ClockResult::Ok && token.ownerGeneration != runtime.generation.load())
+                result = ClockResult::BindingChanged;
+            // A removal may have changed assets without any preceding acquire.
+            // Preserve its independent debt and stop without decrement/replay.
+            if (result != ClockResult::Ok && (receipt.removal.entered || runtime.modelBackingReferences.RecoveryPending()))
+                Stop(result);
+            if (result == ClockResult::Ok)
+                output = removed;
             return result;
         }
 

@@ -47,7 +47,8 @@ namespace mta::game_de
         for (const auto& record : records)
         {
             debt = debt ||
-                   (record.phase != Phase::Released && (record.phase == Phase::Acquiring || record.phase == Phase::Releasing || Effect(record.acquisition)));
+                   (record.phase != Phase::Released && (record.phase == Phase::Acquiring || record.phase == Phase::Releasing || Effect(record.acquisition))) ||
+                   (record.unusedRemoval.removal.entered && !record.unusedRemovalCompleted);
             fault = fault || record.phase == Phase::FaultDebt;
         }
         retained.store(debt);
@@ -327,6 +328,58 @@ namespace mta::game_de
         return finish(result);
     }
 
+    ClockResult NativeModelBackingReferenceController::UnloadUnused(std::uintptr_t image, std::uint64_t generation, const Token& input, CheckOwner owner,
+                                                                    bool& removed, NativeModelUnusedRemoval::Receipt* output,
+                                                                    NativeStreamingRemoveCalls::Invoke invoke) noexcept
+    {
+        const auto                        token = input;
+        NativeModelUnusedRemoval::Receipt receipt;
+        const auto                        finish = [&](ClockResult result) noexcept
+        {
+            if (output)
+                *output = receipt;
+            return result;
+        };
+        Operation operation(busy);
+        if (!operation.acquired)
+            return finish(ClockResult::Busy);
+        auto* record = Find(generation, token);
+        if (!record)
+            return finish(ClockResult::BindingChanged);
+        if (!record->unmodifiedFamily || (record->phase != Phase::Bound && record->phase != Phase::Released))
+            return finish(ClockResult::OwnerConflict);
+        if (!owner)
+            return finish(ClockResult::NotInitialized);
+        auto result = owner();
+        if (result != ClockResult::Ok)
+            return finish(result);
+        const auto previous = record->phase;
+        const auto origin = record->acquisition.origin;
+        record->phase = Phase::Releasing;
+        record->unusedRemoval = {};
+        record->unusedRemovalCompleted = false;
+        Publish();
+        bool next = false;
+        result = NativeModelUnusedRemoval::RemoveIfZero(image, token.modelIndex, owner, next, &receipt, invoke, origin.root ? &origin : nullptr);
+        // Commit this separate resource receipt before another callback. It
+        // must survive even when no native acquisition effect ever existed.
+        record->unusedRemoval = receipt;
+        record->unusedRemovalCompleted = result == ClockResult::Ok && receipt.verified;
+        record->lastResult = result;
+        if (result == ClockResult::Ok)
+        {
+            record->phase = previous;
+            result = owner();
+            record->lastResult = result;
+            if (result == ClockResult::Ok)
+                removed = next;
+        }
+        else
+            record->phase = receipt.removal.entered ? Phase::FaultDebt : previous;
+        Publish();
+        return finish(result);
+    }
+
     ClockResult NativeModelBackingReferenceController::Read(std::uint64_t generation, const Token& input, CheckOwner owner, State& output) noexcept
     {
         const auto token = input;
@@ -356,7 +409,7 @@ namespace mta::game_de
             return ClockResult::InvalidArgument;
         for (auto it = records.begin(); it != records.end();)
         {
-            if (it->reference.ownerGeneration == generation &&
+            if (it->reference.ownerGeneration == generation && !(it->unusedRemoval.removal.entered && !it->unusedRemovalCompleted) &&
                 (it->phase == Phase::Released || (!Effect(it->acquisition) && it->phase != Phase::Acquiring && it->phase != Phase::Releasing)))
                 it = records.erase(it);
             else

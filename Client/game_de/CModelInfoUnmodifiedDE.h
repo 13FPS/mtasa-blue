@@ -21,6 +21,7 @@ namespace mta::game_de
         void SetColModel(CColModel*) final override;
         void RestoreColModel() final override;
         void MakeCustomModel() final override;
+        bool UnloadUnused() final override;
 
     protected:
         CModelInfoUnmodifiedDE(std::uint32_t model, NativeModelClassificationAccess& classification, CGame& game, NativeModelBackingReferenceAccess& owner,

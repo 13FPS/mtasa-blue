@@ -6,6 +6,7 @@
 #pragma once
 #include "NativeModelReferenceAcquisitionReceipt.h"
 #include "NativeModelReferenceRelease.h"
+#include "NativeModelUnusedRemoval.h"
 #include <game/CGameClockService.h>
 
 namespace mta::game_de
@@ -37,6 +38,8 @@ namespace mta::game_de
         bool                                    releaseFinal = false;
         std::uint64_t                           familySerial = 0, successorSerial = 0;
         bool                                    unmodifiedFamily = false;
+        NativeModelUnusedRemoval::Receipt       unusedRemoval{};
+        bool                                    unusedRemovalCompleted = false;
     };
     class NativeModelBackingReferenceAccess
     {
@@ -61,6 +64,9 @@ namespace mta::game_de
         {
             return ClockResult::NotInitialized;
         }
+        // The closed unmodified family owns its custom-resource absence.
+        // This operation only observes zero then removes; it never decrements.
+        virtual ClockResult UnloadUnusedModelFamily(const NativeModelBackingReferenceToken&, bool&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult ReadModelBackingReference(const NativeModelBackingReferenceToken&, NativeModelBackingReferenceState&) noexcept
         {
             return ClockResult::NotInitialized;

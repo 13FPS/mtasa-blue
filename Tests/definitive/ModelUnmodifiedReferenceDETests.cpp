@@ -18,6 +18,7 @@
     #pragma warning(pop)
 #endif
 #include <game/CGame.h>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <initializer_list>
@@ -133,6 +134,16 @@ namespace
             phase = releaseFailure ? Phase::FaultDebt : Phase::Released;
             return releaseFailure ? ClockResult::OriginalException : ClockResult::Ok;
         }
+        ClockResult UnloadUnusedModelFamily(const Token& token, bool& removed) noexcept override
+        {
+            ++unloads;
+            unloadedToken = token;
+            cpuAtUnload = model ? model->GetRefCount() : -1;
+            // Deliberately write even on refusal. The real SDK must map the
+            // status before returning this output or applying any fallback.
+            removed = unloadReply;
+            return Same(token, current) ? unloadStatus : ClockResult::BindingChanged;
+        }
         ClockResult ReadModelInterface(std::uint32_t, std::uintptr_t& output) noexcept override
         {
             ++classificationReads;
@@ -145,13 +156,17 @@ namespace
             output = 1;
             return ClockResult::Ok;
         }
-        Token         current{};
+        Token         current{}, unloadedToken{};
         Phase         phase = Phase::Bound;
         CModelInfo*   model = nullptr;
         std::uint64_t family = 0, acquiredSerial = 0;
         unsigned      binds = 0, claims = 0, reads = 0, acquires = 0, releases = 0, renews = 0, classificationReads = 0;
+        unsigned      unloads = 0;
         int           cpuAtAcquire = -1, cpuAtRelease = -1;
+        int           cpuAtUnload = -1;
         bool          claimed = false, policyPreserved = true, acquireFailure = false, releaseFailure = false;
+        bool          unloadReply = false;
+        ClockResult   unloadStatus = ClockResult::Ok;
     };
     class StreamingOwner final : public NativeStreamingModelAccess
     {
@@ -180,14 +195,24 @@ namespace
     class Game final : public fixture::GameFixtureBase
     {
     public:
-        CStreaming*   GetStreaming() override { return streaming; }
-        std::uint32_t GetBaseIDforTXD() override { return 20000; }
-        bool          IsASyncLoadingEnabled(bool ignoreSuspend) override
+        CStreaming* GetStreaming() override
         {
+            ++streamingReads;
+            return streaming;
+        }
+        std::uint32_t GetBaseIDforTXD() override
+        {
+            ++txdReads;
+            return 20000;
+        }
+        bool IsASyncLoadingEnabled(bool ignoreSuspend) override
+        {
+            ++asyncReads;
             Check(!ignoreSuspend, "actual async default argument remains false");
             return true;
         }
         CStreaming* streaming = nullptr;
+        unsigned    streamingReads = 0, txdReads = 0, asyncReads = 0;
     };
     class Core final : public fixture::CoreFixtureBase
     {
@@ -218,6 +243,7 @@ namespace
     static_assert(std::is_same_v<decltype(&Model::SetColModel), void (CModelInfoUnmodifiedDE::*)(CColModel*)>);
     static_assert(std::is_same_v<decltype(&Model::RestoreColModel), void (CModelInfoUnmodifiedDE::*)()>);
     static_assert(std::is_same_v<decltype(&Model::MakeCustomModel), void (CModelInfoUnmodifiedDE::*)()>);
+    static_assert(std::is_same_v<decltype(&Model::UnloadUnused), bool (CModelInfoUnmodifiedDE::*)()>);
     struct Scenario
     {
         Owner          owner;
@@ -320,6 +346,116 @@ namespace
             Check(s.owner.acquires == 1 && s.owner.releases == 1 && s.owner.renews == 0, "lost release acknowledgement never authorizes renewal or replay");
         }
     }
+
+    struct UnloadEffects
+    {
+        int                      references;
+        Phase                    phase;
+        std::array<unsigned, 13> calls;
+    };
+    UnloadEffects ObserveUnloadEffects(Scenario& s)
+    {
+        return {s.model.GetRefCount(),
+                s.owner.phase,
+                {s.owner.binds, s.owner.claims, s.owner.reads, s.owner.acquires, s.owner.releases, s.owner.renews, s.owner.classificationReads,
+                 s.streamingOwner.queries, s.streamingOwner.requests, s.game.streamingReads, s.game.txdReads, s.game.asyncReads, s.model.dependencies}};
+    }
+    void UnloadEffectsUnchanged(Scenario& s, const UnloadEffects& before)
+    {
+        const auto after = ObserveUnloadEffects(s);
+        Check(after.references == before.references && after.phase == before.phase && after.calls == before.calls,
+              "UnloadUnused preserves CPU refs and owner phase with no readiness/request/load/acquire/release/renew/report fallback");
+    }
+    template <class Operation>
+    void UnloadRefuses(Operation operation)
+    {
+        try
+        {
+            operation();
+        }
+        catch (const std::runtime_error&)
+        {
+            Check(true, "existing Reference Require maps every refused unload status to an exception");
+            return;
+        }
+        Check(false, "refused unload status cannot return a provider-written boolean");
+    }
+    void UnloadUnusedChecks()
+    {
+        {
+            Scenario    s;
+            CModelInfo& sdk = s.model;
+            const auto  issued = s.token;
+            s.token = {29, 99, 88};
+            const auto before = ObserveUnloadEffects(s);
+            Check(!sdk.UnloadUnused() && s.owner.unloads == 1 && Same(s.owner.unloadedToken, issued),
+                  "successful false is forwarded from exactly one owner call using the constructor's copied token");
+            UnloadEffectsUnchanged(s, before);
+            s.owner.unloadReply = true;
+            Check(sdk.UnloadUnused() && s.owner.unloads == 2 && Same(s.owner.unloadedToken, issued),
+                  "successful true is forwarded exactly without an extra capability or readiness query");
+            UnloadEffectsUnchanged(s, before);
+        }
+        {
+            Scenario s;
+            for (unsigned cycle = 0; cycle != 2; ++cycle)
+            {
+                s.model.ModelAddRef(NON_BLOCKING, nullptr);
+                s.model.RemoveRef();
+            }
+            const auto before = ObserveUnloadEffects(s);
+            s.owner.unloadReply = true;
+            Check(s.model.UnloadUnused() && s.owner.unloads == 1 && s.owner.unloadedToken.serial == 91 && Same(s.owner.unloadedToken, s.owner.current),
+                  "unload after acknowledged renewal uses the current cycle token rather than the constructor's consumed serial");
+            UnloadEffectsUnchanged(s, before);
+        }
+        {
+            Scenario   s;
+            const auto before = ObserveUnloadEffects(s);
+            for (unsigned raw = 1; raw <= static_cast<unsigned>(ClockResult::OriginalException); ++raw)
+            {
+                s.owner.unloadStatus = static_cast<ClockResult>(raw);
+                s.owner.unloadReply = (raw & 1) != 0;
+                const auto calls = s.owner.unloads;
+                UnloadRefuses([&] { static_cast<void>(s.model.UnloadUnused()); });
+                Check(s.owner.unloads == calls + 1 && Same(s.owner.unloadedToken, s.owner.current),
+                      "each Clock refusal performs exactly one current-token owner call despite a written output");
+                UnloadEffectsUnchanged(s, before);
+            }
+        }
+        {
+            Scenario s;
+            s.streamingOwner.loaded = false;
+            s.model.ModelAddRef(NON_BLOCKING, nullptr);
+            const auto before = ObserveUnloadEffects(s);
+            Check(!s.model.UnloadUnused() && s.owner.unloads == 1 && s.owner.cpuAtUnload == 1,
+                  "pending CPU ref does not replace the owner's actual unused-family decision");
+            UnloadEffectsUnchanged(s, before);
+            s.streamingOwner.loaded = true;
+            Check(s.model.IsLoaded() && s.owner.acquires == 1 && s.model.GetRefCount() == 1,
+                  "unload query leaves the actual pending acknowledgement intact for later IsLoaded");
+        }
+        {
+            Scenario s;
+            s.model.ModelAddRef(NON_BLOCKING, nullptr);
+            s.owner.unloadStatus = ClockResult::OwnerConflict;
+            s.owner.unloadReply = true;
+            auto before = ObserveUnloadEffects(s);
+            UnloadRefuses([&] { static_cast<void>(s.model.UnloadUnused()); });
+            Check(s.owner.unloads == 1 && s.owner.cpuAtUnload == 1, "Held owner refusal is dispatched without changing positive CPU refs");
+            UnloadEffectsUnchanged(s, before);
+            s.owner.phase = Phase::FaultDebt;
+            s.owner.unloadStatus = ClockResult::BindingChanged;
+            before = ObserveUnloadEffects(s);
+            UnloadRefuses([&] { static_cast<void>(s.model.UnloadUnused()); });
+            Check(s.owner.unloads == 2, "faulted owner still owns the explicit refusal decision without SDK state substitution");
+            UnloadEffectsUnchanged(s, before);
+        }
+        NativeModelBackingReferenceAccess missing;
+        bool                              removed = true;
+        Check(missing.UnloadUnusedModelFamily(Token{19, 71, 45}, removed) == ClockResult::NotInitialized && removed,
+              "older optional owner refuses unload without overwriting its caller's output");
+    }
 }
 int main()
 {
@@ -327,6 +463,8 @@ int main()
     CycleChecks();
     PendingAndBoundedEdges();
     FailureChecks();
+    UnloadUnusedChecks();
+    std::puts("Actual MTA model unmodified UnloadUnused SDK fixture completed");
     std::puts("Actual MTA unmodified diagnostics composition SDK fixture completed");
     std::puts("Actual MTA model unmodified reference SDK fixture completed");
     std::printf("Passed %u actual MTA model unmodified reference SDK checks (%zu-bit; unmodified cycles)\n", checks, sizeof(void*) * 8);

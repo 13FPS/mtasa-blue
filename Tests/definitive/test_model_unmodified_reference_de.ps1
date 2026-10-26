@@ -8,8 +8,8 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $taskRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
 $id = (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N')
-$outputRoot = Join-Path $taskRoot ('Build/mta-model-unmodified-reference-sdk/' + $id)
-$scratchRoot = Join-Path $taskRoot ('Build/tmp/model-unmodified-reference-sdk-' + $id)
+$outputRoot = Join-Path $taskRoot ('Build/mta-model-unmodified-unload-sdk/' + $id)
+$scratchRoot = Join-Path $taskRoot ('Build/tmp/model-unmodified-unload-sdk-' + $id)
 [IO.Directory]::CreateDirectory($outputRoot) | Out-Null
 [IO.Directory]::CreateDirectory($scratchRoot) | Out-Null
 $previousEnvironment = @{}
@@ -20,10 +20,10 @@ $record = [ordered]@{
     schema='mta_model_unmodified_reference_sdk_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     results=@();failure=$null;scratchDirectory=$scratchRoot;scratchFilesRemaining=$null;scratchRemoved=$false;
-    scope='Focused acquire-side SDK dispatch: same complete owner and immutable token construction, inherited public request/ref policy, actual streaming/readiness, one backing acquisition for positive CPU refs, pending acknowledgement and exception order, accepted-lost-ACK and stale-owner refusal. The access spy supplies owner responses only; no copied policy/counter implementation, release provider or complete game/model factory is claimed.';
+    scope='Preserve the prior62 unmodified reference/Core composition checks and add actual final UnloadUnused one-shot current-token dispatch. Owner boundary replies prove false/true forwarding, all Clock refusals including written output, and no CPU/pending/readiness/request/load/acquire/release/renew/report substitution. No native count model or native removal implementation in this SDK fixture.';
     ownedBuffersOnly=$true;nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;
     completeModelInfoReady=$false;fullMtaReady=$false;installationChanged=$false;
-    actualModelUnmodifiedReferenceSdkTested=$false;actualUnmodifiedDiagnosticsCompositionSdkTested=$false
+    actualModelUnmodifiedReferenceSdkTested=$false;actualUnmodifiedDiagnosticsCompositionSdkTested=$false;actualModelUnmodifiedUnloadUnusedSdkTested=$false
 
 }
 
@@ -99,7 +99,10 @@ try {
         'Build/definitive-recovery/mta-model-unmodified-reference-20261026/model-unmodified-reference-sdk-source-ready.json',
         'Build/definitive-recovery/mta-model-unmodified-reference-sdk-tests-20261026/model-unmodified-reference-sdk-tests-source-ready.json',
         'Build/definitive-recovery/mta-model-unmodified-diagnostics-composition-20261026/model-unmodified-diagnostics-composition-source-ready.json',
-        'Build/definitive-recovery/mta-model-unmodified-diagnostics-sdk-tests-20261026/model-unmodified-diagnostics-sdk-tests-source-ready.json')
+        'Build/definitive-recovery/mta-model-unmodified-diagnostics-sdk-tests-20261026/model-unmodified-diagnostics-sdk-tests-source-ready.json',
+        'Build/definitive-recovery/mta-model-unused-family-native-20261026/model-unused-family-api-source-ready.json',
+        'Build/definitive-recovery/mta-model-unmodified-unload-sdk-20261026/model-unmodified-unload-sdk-source-ready.json',
+        'Build/definitive-recovery/mta-model-unmodified-unload-sdk-tests-20261026/model-unmodified-unload-sdk-tests-source-ready.json')
     $pending=[Collections.Generic.Queue[string]]::new()
     $seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach($name in $sourceNames){$pending.Enqueue($name)}
@@ -117,7 +120,7 @@ try {
     }
     $record.sourceHashes=@($seen|Sort-Object|ForEach-Object{[ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}})
     $modelProvided = @('GetInterface','GetRwObject','GetModel','GetModelType','IsVehicle','IsAllocatedInArchive','IsBoat','IsCar','IsPlane','IsHeli',
-        'Request','IsLoaded','ModelAddRef','RemoveRef','GetRefCount','IsValid','SetCustomModel','RestoreOriginalModel','SetColModel','RestoreColModel','MakeCustomModel')
+        'Request','IsLoaded','ModelAddRef','RemoveRef','GetRefCount','IsValid','SetCustomModel','RestoreOriginalModel','SetColModel','RestoreColModel','MakeCustomModel','UnloadUnused')
     $streamingProvided = @('RequestSpecialModel','LoadSceneCollision','GetModelStreamingFlags','RequestModel','RemoveModel','HasModelLoaded','LoadAllRequestedModels','LoadScene',
         'GetNumPedsLoaded','IsModelInLoadedPedGroup','GetNumLoadedVehicles','IsModelInLoadedVehicleGroup')
     $gameMethods = @(InterfaceMethods 'Client/sdk/game/CGame.h' | Where-Object { $_.name -notin @('GetStreaming','GetBaseIDforTXD','IsASyncLoadingEnabled') })
@@ -147,7 +150,7 @@ try {
     Copy-Item -LiteralPath $generated -Destination $durableGenerated
     $record.generatedFixture = [ordered]@{path=$durableGenerated;sha256=(Sha $generated);gameRejectingOverrides=$gameMethods.Count;
         modelRejectingOverrides=$modelMethods.Count;streamingRejectingOverrides=$streamingMethods.Count;coreRejectingOverrides=$coreMethods.Count;
-        productionMethodsNotOverridden=$modelProvided;testedMethods=$testedMethods;reportingMethodsMasked=$false;actualReadinessInherited=$true;
+        productionMethodsNotOverridden=$modelProvided;testedMethods=$testedMethods;reportingMethodsMasked=$false;actualReadinessInherited=$true;unloadUnusedInherited=$true;
         inheritedReportingMethods=@('ReportMissingAnimationModel','ReportBlockingModelLoad','ReportRequestingAnimationModel')}
 
     $referenceHeader = [IO.File]::ReadAllText((Join-Path $taskRoot 'Client/game_de/CModelInfoReferenceDE.h'))
@@ -157,11 +160,12 @@ try {
     if ($referenceHeader -notmatch 'DoIsLoaded\s*\(\s*\)\s*(?:final\s+)?override' -or $referenceHeader -notmatch 'IncrementNativeModelInterfaceReference\s*\(\s*\)\s*(?:final\s+)?override') { throw 'Acquire layer must provide only its readiness/reference protected hooks.' }
     $unmodifiedHeader = [IO.File]::ReadAllText((Join-Path $taskRoot 'Client/game_de/CModelInfoUnmodifiedDE.h'))
     if ($unmodifiedHeader -notmatch 'CModelInfoUnmodifiedDE\s*:\s*public\s+CModelInfoDiagnosticsDE') { throw 'Unmodified layer must compose the actual diagnostics base.' }
+    if ($unmodifiedHeader -notmatch 'UnloadUnused\s*\(\s*\)\s*final\s+override') { throw 'Actual final UnloadUnused must remain inherited by the fixture.' }
     foreach ($method in @('SetCustomModel','RestoreOriginalModel','SetColModel','RestoreColModel','MakeCustomModel')) {
         if ($unmodifiedHeader -notmatch ('\b'+$method+'\s*\([^;{}]*\)\s*final\s+override')) { throw ('Unmodified replacement refusal must be final: '+$method) }
     }
     if ($unmodifiedHeader -notmatch 'const\s+ReplacementState\s+replacements\s*\{\s*\}') { throw 'Unmodified layer must own initialized-empty immutable replacement state.' }
-    if ($modelMethods.Count -ne 71 -or $streamingMethods.Count -ne 10) { throw 'Actual model21/71 or streaming12/10 fixture partition changed' }
+    if ($modelMethods.Count -ne 70 -or $streamingMethods.Count -ne 10) { throw 'Actual model22/70 or streaming12/10 fixture partition changed' }
 
     $env:TEMP = $scratchRoot
     $env:TMP = $scratchRoot
@@ -203,7 +207,7 @@ try {
             (Join-Path $taskRoot 'Client/game_de/CModelInfoRequestDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CStreamingDE.cpp'),
             ('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'compiler.pdb')),('/Fe'+$executable),'/link','bcrypt.lib')
         $result = [ordered]@{architecture=$architecture;environment=$environmentResult;compile=$null;test=$null;
-            checks=0;pointerBits=$null;executable=$executable;executableSha256=$null;actualModelUnmodifiedReferenceSdkTested=$false;actualUnmodifiedDiagnosticsCompositionSdkTested=$false}
+            checks=0;pointerBits=$null;executable=$executable;executableSha256=$null;actualModelUnmodifiedReferenceSdkTested=$false;actualUnmodifiedDiagnosticsCompositionSdkTested=$false;actualModelUnmodifiedUnloadUnusedSdkTested=$false}
         $record.results += $result
         $result.compile = RunOwned $compiler $arguments $directory 'compile' 60000
         if ($result.compile.exitCode -ne 0 -or $result.compile.timedOut) { throw "$architecture actual model backing reference SDK fixture compilation failed." }
@@ -217,16 +221,18 @@ try {
         }
         $result.actualModelUnmodifiedReferenceSdkTested=$text.Contains('Actual MTA model unmodified reference SDK fixture completed')
         $result.actualUnmodifiedDiagnosticsCompositionSdkTested=$text.Contains('Actual MTA unmodified diagnostics composition SDK fixture completed')
+        $result.actualModelUnmodifiedUnloadUnusedSdkTested=$text.Contains('Actual MTA model unmodified UnloadUnused SDK fixture completed')
 
         $expectedBits = if ($architecture -eq 'x86') { 32 } else { 64 }
-        if ($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -le 0 -or $result.pointerBits -ne $expectedBits -or -not $result.actualModelUnmodifiedReferenceSdkTested -or -not $result.actualUnmodifiedDiagnosticsCompositionSdkTested) {
+        if ($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -le 0 -or $result.pointerBits -ne $expectedBits -or -not $result.actualModelUnmodifiedReferenceSdkTested -or -not $result.actualUnmodifiedDiagnosticsCompositionSdkTested -or -not $result.actualModelUnmodifiedUnloadUnusedSdkTested) {
             throw "$architecture actual MTA model unmodified reference SDK checks failed or summary/pointer-width evidence was missing."
         }
     }
     $record.actualModelUnmodifiedReferenceSdkTested=@($record.results|Where-Object{-not $_.actualModelUnmodifiedReferenceSdkTested}).Count -eq 0
     $record.actualUnmodifiedDiagnosticsCompositionSdkTested=@($record.results|Where-Object{-not $_.actualUnmodifiedDiagnosticsCompositionSdkTested}).Count -eq 0
+    $record.actualModelUnmodifiedUnloadUnusedSdkTested=@($record.results|Where-Object{-not $_.actualModelUnmodifiedUnloadUnusedSdkTested}).Count -eq 0
 
-    $record.success = $record.results.Count -eq 2 -and $record.actualModelUnmodifiedReferenceSdkTested -and $record.actualUnmodifiedDiagnosticsCompositionSdkTested
+    $record.success = $record.results.Count -eq 2 -and $record.actualModelUnmodifiedReferenceSdkTested -and $record.actualUnmodifiedDiagnosticsCompositionSdkTested -and $record.actualModelUnmodifiedUnloadUnusedSdkTested
 } catch { AddFailure ($_.Exception.ToString()) }
 finally {
     foreach ($name in $previousEnvironment.Keys) {

@@ -1,5 +1,26 @@
 # MTA on Definitive Edition: reuse boundary
 
+## Current offline cohort: unused model removal (2026-10-26)
+
+The closed unmodified model layer now supplies MTA's actual `UnloadUnused`
+decision through its existing reference owner. A freshly observed positive
+native count returns false. An occupied, loaded zero-count model reaches the
+existing guarded native removal and returns true only after acknowledgement.
+This operation never decrements a count. Missing or unloaded keys remain an
+explicit refusal, rather than being treated as zero or as successful removal.
+
+The controller admits only the positively claimed unmodified family in its
+bound or acknowledged released state. Its separate removal receipt retains
+uncertain entered effects even when no acquisition preceded them; End cannot
+erase that obligation or manufacture a retry. The existing weak origin, map,
+model and stream observations qualify entry and completion. The SDK preserves
+its real Core reporting base and initialized-empty replacement state.
+
+Focused actual SDK checks and owned native removal/controller checks cover the
+changed paths, followed by the normal backend and exact saved DLL. Shared SDK,
+classic behavior and the installed GTA candidate are unchanged. Full factories,
+replacement features and playable full MTA remain unfinished.
+
 ## Current offline cohort: unmodified model families and reference cycles (2026-10-26)
 
 A separate partial model layer now owns the source constructor's two null MTA

@@ -26,6 +26,7 @@ namespace mta::game_de
         void RemoveRef() override;
         int  GetRefCount() override;
         bool IsValid() override;
+        void MakePedModel(const char* texture) override;
 
         // A positive wrapper count has one backing interface reference; a
         // copied facade cannot duplicate that obligation without acquisition.
@@ -39,6 +40,11 @@ namespace mta::game_de
             : CModelInfoDE(model, classification), game(game)
         {
         }
+
+        // MakePedModel must create and publish the native ped metadata
+        // before its special request. A missing native owner refuses
+        // explicitly here; request-only code cannot replace that effect.
+        virtual void CreateAndPublishNativePedModel(std::uint32_t model);
 
         // Preserve streaming's real paired-upgrade policy before qualifying
         // the current DFF interface and render handles. Owner refusals remain

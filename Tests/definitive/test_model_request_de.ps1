@@ -3,14 +3,14 @@
 # Compile actual model request/ref SDK orchestration; no historical aggregate suite replay.
 [CmdletBinding()]
 param(
-    [ValidateSet('Request','Validity','Dependencies')]
+    [ValidateSet('Request','Validity','Dependencies','MakePedModel')]
     [string]$Scope = 'Request'
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $taskRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
-$fixtureSource = if ($Scope -eq 'Validity') { 'ModelValidityDETests.cpp' } elseif ($Scope -eq 'Dependencies') { 'ModelDependencyDETests.cpp' } else { 'ModelRequestDETests.cpp' }
+$fixtureSource = if ($Scope -eq 'Validity') { 'ModelValidityDETests.cpp' } elseif ($Scope -eq 'Dependencies') { 'ModelDependencyDETests.cpp' } elseif ($Scope -eq 'MakePedModel') { 'ModelMakePedDETests.cpp' } else { 'ModelRequestDETests.cpp' }
 $id = (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N')
 $outputRoot = Join-Path $taskRoot ('Build/mta-model-request-de/' + $id)
 $scratchRoot = Join-Path $taskRoot ('Build/tmp/model-request-de-' + $id)
@@ -33,11 +33,17 @@ $record = [ordered]@{
 $record['selectedScope']=$Scope
 $record['actualModelValiditySdkTested']=$false
 $record['actualModelDependencySdkTested']=$false
+$record['actualModelMakePedSdkTested']=$false
 if ($Scope -eq 'Dependencies') {
     $record.scope='Actual Request dependency order and protected RequestModelDependencies/GetAnimFileIndex through current classification and required game/model/streaming interfaces. Focused vehicle animation wrap/sentinel/base queries, skin7 source lookups, diagnostic defaults/refusals and actual nested asynchronous requests; no request retry/reference or historical matrix replay.'
 }
 if ($Scope -eq 'Validity') {
     $record.scope='Actual IsValid fixed-TXD occupancy, dynamic file bounds and current opaque-interface policy through existing CGame/CPools/CTxdPool virtuals. One focused CPU fixture; no request/ref/loaded/classification matrix or complete native pool/factory.'
+}
+
+if ($Scope -eq 'MakePedModel') {
+    $record.scope='Actual MakePedModel creation/publication boundary followed by the existing real streaming special request, source pointer/full model key/channel zero and irreversible accepted prefix on failure. x86/x64 only this new focused SDK fixture; no old request/validity/dependency matrix, native creation implementation or complete model factory claim.'
+    $record['results']=@()
 }
 
 function Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
@@ -112,6 +118,11 @@ try {
         ('Tests/definitive/'+$fixtureSource),'Tests/definitive/test_model_request_de.ps1')
     $sourceNames += @('Client/sdk/game/CPools.h','Client/sdk/game/CTxdPool.h','Client/sdk/game/CPoolClientEntity.h',
         'Client/sdk/game/CBuildingsPool.h','Client/sdk/game/CDummyPool.h','Client/sdk/game/CPtrNodeSingleLinkPool.h')
+    if ($Scope -eq 'MakePedModel') {
+        $sourceNames += @(
+            'Build/definitive-recovery/mta-model-make-ped-sdk-20261026/model-make-ped-sdk-source-ready.json',
+            'Build/definitive-recovery/mta-model-make-ped-sdk-tests-20261026/model-make-ped-sdk-tests-source-ready.json')
+    }
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
     })
@@ -119,7 +130,7 @@ try {
         'Request','IsLoaded','ModelAddRef','RemoveRef','GetRefCount')
     $streamingProvided = @('RequestModel','RemoveModel','HasModelLoaded','LoadAllRequestedModels','LoadScene',
         'GetNumPedsLoaded','IsModelInLoadedPedGroup','GetNumLoadedVehicles','IsModelInLoadedVehicleGroup')
-    if ($Scope -in @('Validity','Dependencies')) {
+    if ($Scope -in @('Validity','Dependencies','MakePedModel')) {
         # Inherit the actual methods present in the coherent production headers;
         # do not hide IsValid/GetInterface or a separately added towing policy.
         $modelProvided=@()
@@ -133,12 +144,19 @@ try {
             $gameMethods=@(InterfaceMethods 'Client/sdk/game/CGame.h'|Where-Object{$_.name -notin @('GetPools','GetBaseIDforTXD','GetCountOfAllFileIDs')})
             $poolMethods=@(InterfaceMethods 'Client/sdk/game/CPools.h'|Where-Object{$_.name -ne 'GetTxdPool'})
             $txdMethods=@(InterfaceMethods 'Client/sdk/game/CTxdPool.h'|Where-Object{$_.name -ne 'IsFreeTextureDictonarySlot'})
-        } else {
+        } elseif ($Scope -eq 'Dependencies') {
             $gameMethods=@(InterfaceMethods 'Client/sdk/game/CGame.h'|Where-Object{$_.name -notin @('GetStreaming','GetBaseIDforTXD','GetBaseIDforIFP','GetModelInfo')})
             $dependencyMethods=@(InterfaceMethods 'Client/sdk/game/CModelInfo.h'|Where-Object{$_.name -notin @('Request','IsLoaded')})
             # Preserve all current real streaming overrides in this focused scope.
             $streamingText=[regex]::Replace([IO.File]::ReadAllText((Join-Path $taskRoot 'Client/game_de/CStreamingDE.h')),'(?s)/\*.*?\*/|//[^\r\n]*','')
             $streamingProvided=@([regex]::Matches($streamingText,'\b(?<name>\w+)\s*\([^;{}]*\)\s*(?:const\s*)?(?:noexcept\s*)?override\b')|ForEach-Object{$_.Groups['name'].Value})
+        } else {
+            $gameMethods=@(InterfaceMethods 'Client/sdk/game/CGame.h'|Where-Object{$_.name -ne 'GetStreaming'})
+            # Inherit real RequestSpecialModel; an aborting override here would
+            # mask the actual source effect boundary under test.
+            $streamingText=[regex]::Replace([IO.File]::ReadAllText((Join-Path $taskRoot 'Client/game_de/CStreamingDE.h')),'(?s)/\*.*?\*/|//[^\r\n]*','')
+            $streamingProvided=@([regex]::Matches($streamingText,'\b(?<name>\w+)\s*\([^;{}]*\)\s*(?:const\s*)?(?:noexcept\s*)?override\b')|ForEach-Object{$_.Groups['name'].Value})
+            if('MakePedModel' -notin $modelProvided -or 'RequestSpecialModel' -notin $streamingProvided){throw 'Actual MakePedModel/special-model streaming overrides missing'}
         }
     } else {
         $gameMethods = @(InterfaceMethods 'Client/sdk/game/CGame.h' | Where-Object { $_.name -notin @('GetStreaming','IsASyncLoadingEnabled') })
@@ -149,7 +167,7 @@ try {
     } else {
         $streamingMethods=@(InterfaceMethods 'Client/sdk/game/CStreaming.h' | Where-Object { $streamingProvided -notcontains $_.name })
     }
-    $testedMethods = @(if ($Scope -eq 'Validity') { 'IsValid' } elseif ($Scope -eq 'Dependencies') { 'Request','IsLoaded' } else { 'Request','IsLoaded','ModelAddRef','RemoveRef','GetRefCount' })
+    $testedMethods = @(if ($Scope -eq 'Validity') { 'IsValid' } elseif ($Scope -eq 'Dependencies') { 'Request','IsLoaded' } elseif ($Scope -eq 'MakePedModel') { 'MakePedModel' } else { 'Request','IsLoaded','ModelAddRef','RemoveRef','GetRefCount' })
     $headerText = [IO.File]::ReadAllText((Join-Path $taskRoot 'Client/game_de/CModelInfoRequestDE.h'))
     foreach ($method in $testedMethods) {
         if ($headerText -notmatch ('\b'+[regex]::Escape($method)+'\s*\([^;{}]*\)\s*override\s*;')) { throw "Actual model SDK override is missing: $method" }
@@ -159,6 +177,10 @@ try {
             $headerText -match 'RequestModelDependencies\s*\([^;{}]*\)\s*=\s*0') { throw 'Actual nonpure dependency policy is missing' }
         $modelHeader=[IO.File]::ReadAllText((Join-Path $taskRoot 'Client/game_de/CModelInfoDE.h'))
         if ($modelHeader -notmatch 'std::uint32_t\s+GetAnimFileIndex\s*\(\s*\)\s*;') { throw 'Actual protected animation getter is missing' }
+    }
+    if ($Scope -eq 'MakePedModel') {
+        if ($headerText -notmatch 'virtual\s+void\s+CreateAndPublishNativePedModel\s*\(\s*std::uint32_t\s+[^)]*\)\s*;' -or
+            $headerText -match 'CreateAndPublishNativePedModel\s*\([^;{}]*\)\s*=\s*0') { throw 'Actual required creation/publication default-refusal boundary missing' }
     }
     $generated = Join-Path $scratchRoot 'ModelRequestFixture.generated.h'
     $lines = @('#pragma once','#pragma warning(push)','#pragma warning(disable : 4100)','namespace fixture {',
@@ -206,6 +228,14 @@ try {
         $record.generatedFixture['optionalAnimationOwnerDefaultRefusalCovered']=$false
     }
 
+    if ($Scope -eq 'MakePedModel') {
+        $record.generatedFixture['actualMakePedModelInherited']=$true
+        $record.generatedFixture['actualSpecialModelRequestInherited']=$true
+        $record.generatedFixture['selectedProtectedOperations']=@('CreateAndPublishNativePedModel')
+        $record.generatedFixture['nativePedCreatorImplemented']=$false
+        $record.generatedFixture['defaultCreatorRefusalCovered']=$false
+    }
+
     $env:TEMP = $scratchRoot
     $env:TMP = $scratchRoot
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
@@ -213,6 +243,46 @@ try {
     $visualStudio = [IO.File]::ReadAllText($discovery.stdout).Trim()
     if ($discovery.exitCode -ne 0 -or $discovery.timedOut -or -not $visualStudio) { throw 'Visual Studio x64 tools are required.' }
     $developerCommand = Join-Path $visualStudio 'Common7/Tools/VsDevCmd.bat'
+    if ($Scope -eq 'MakePedModel') {
+        foreach($architecture in @('x86','x64')) {
+            $directory=Join-Path $outputRoot $architecture
+            [IO.Directory]::CreateDirectory($directory)|Out-Null
+            $environmentScript=Join-Path $directory 'capture-msvc.cmd'
+            @('@echo off',('call "{0}" -no_logo -arch={1} -host_arch=x64 >nul' -f $developerCommand,$architecture),
+                'if errorlevel 1 exit /b 1','set VCToolsInstallDir','set INCLUDE','set LIB','set PATH','exit /b 0')|
+                Set-Content -LiteralPath $environmentScript -Encoding ascii
+            $environmentResult=RunOwned $env:ComSpec @('/d','/s','/c','capture-msvc.cmd') $directory 'msvc-environment' 30000
+            if($environmentResult.exitCode -ne 0 -or $environmentResult.timedOut){throw "$architecture MSVC environment initialization failed."}
+            foreach($entry in [IO.File]::ReadAllLines($environmentResult.stdout)) {
+                if($entry -match '^(VCToolsInstallDir|INCLUDE|LIB|LIBPATH|PATH)=(.*)$'){
+                    [Environment]::SetEnvironmentVariable($Matches[1],$Matches[2],'Process')
+                }
+            }
+            $compiler=Join-Path $env:VCToolsInstallDir "bin/Hostx64/$architecture/cl.exe"
+            $executable=Join-Path $directory 'model_make_ped_de_tests.exe'
+            $arguments=@('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/MD','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN',
+                ('/I'+(Join-Path $taskRoot 'Shared/sdk')),('/I'+(Join-Path $taskRoot 'Client/sdk')),('/I'+$scratchRoot),
+                (Join-Path $PSScriptRoot $fixtureSource))+@($productionSources|ForEach-Object{Join-Path $taskRoot $_})+
+                @(('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'fixture.pdb')),('/Fe'+$executable),'/link','bcrypt.lib')
+            $result=[ordered]@{architecture=$architecture;environment=$environmentResult;compile=$null;test=$null;checks=0;
+                pointerBits=$null;executable=$executable;executableSha256=$null;actualModelMakePedSdkTested=$false}
+            $record.results+=$result
+            $result.compile=RunOwned $compiler $arguments $directory 'compile' 60000
+            if($result.compile.exitCode -ne 0 -or $result.compile.timedOut){throw "$architecture actual MakePedModel SDK compilation failed."}
+            $result.executableSha256=Sha $executable
+            $result.test=RunOwned $executable @() $directory 'test' 10000
+            $stdout=[IO.File]::ReadAllText($result.test.stdout)
+            $summary=[regex]::Match($stdout.TrimEnd(),'(?:^|\r?\n)Passed (\d+) actual model MakePedModel SDK checks \((\d+)-bit\)$')
+            if($summary.Success){$result.checks=[int]$summary.Groups[1].Value;$result.pointerBits=[int]$summary.Groups[2].Value}
+            $result.actualModelMakePedSdkTested=$stdout.Contains('Production actual model MakePedModel SDK fixture completed')
+            $expectedBits=if($architecture -eq 'x86'){32}else{64}
+            if($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -le 0 -or $result.pointerBits -ne $expectedBits -or
+                -not $result.actualModelMakePedSdkTested){throw "$architecture actual MakePedModel SDK execution evidence missing or failed."}
+        }
+        $record.actualModelMakePedSdkTested=@($record.results|Where-Object{-not $_.actualModelMakePedSdkTested}).Count -eq 0
+        $record.generatedFixture.defaultCreatorRefusalCovered=$record.actualModelMakePedSdkTested
+        $record.success=$record.results.Count -eq 2 -and $record.actualModelMakePedSdkTested
+    } else {
     $environmentScript = Join-Path $outputRoot 'capture-msvc.cmd'
     @('@echo off',('call "{0}" -no_logo -arch=x64 -host_arch=x64 >nul' -f $developerCommand),
         'if errorlevel 1 exit /b 1','set VCToolsInstallDir','set INCLUDE','set LIB','set PATH','exit /b 0') |
@@ -257,6 +327,7 @@ try {
     $record.success = $record.success -and $selectedSdkTested
     if (-not $record.success) { throw 'Actual model request/ref SDK checks failed or execution evidence was missing.' }
 
+    }
 } catch { AddFailure ($_.Exception.ToString()) }
 finally {
     foreach ($name in $previousEnvironment.Keys) {

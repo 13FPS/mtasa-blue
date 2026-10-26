@@ -23,6 +23,23 @@ namespace mta::game_de
         return *streaming;
     }
 
+    void CModelInfoRequestDE::MakePedModel(const char* texture)
+    {
+        // The source publishes new ped metadata before resolving the
+        // streaming service. Preserve that irreversible prefix if the
+        // later request refuses; do not validate, retry or roll it back.
+        CreateAndPublishNativePedModel(GetModel());
+        RequireStreaming().RequestSpecialModel(GetModel(), texture, 0);
+    }
+
+    void CModelInfoRequestDE::CreateAndPublishNativePedModel(std::uint32_t)
+    {
+        // No existing read/reference provider proves creation or bank
+        // publication. A concrete native owner must provide both before
+        // this orchestration can issue even its first special request.
+        throw std::runtime_error("DE MakePedModel requires qualified native ped metadata creation and bank publication");
+    }
+
     void CModelInfoRequestDE::Request(EModelRequestType type, const char* tag)
     {
         MtaGame::CModelRequestPolicy::Request(

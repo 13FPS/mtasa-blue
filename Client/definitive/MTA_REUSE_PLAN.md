@@ -1,5 +1,24 @@
 # MTA on Definitive Edition: reuse boundary
 
+## Current offline cohort: special-ped creation order (2026-10-26)
+
+The actual model SDK now wires MTA's `MakePedModel` itinerary: qualified ped
+metadata creation and bank publication first, then the existing special-model
+request with the full model key, original texture pointer and channel zero.
+The required creation boundary explicitly refuses until a real native owner
+supplies it. A streaming request alone cannot stand in for model creation.
+
+If the later streaming lookup or request fails, the accepted creation prefix
+remains owned by that provider. The SDK adds no validation before creation,
+retry, rollback, load or once guard. This connects the existing MTA special-
+character schedule to the model method while leaving native creation and
+publication as an explicit dependency. The class remains abstract.
+
+Focused actual SDK checks on x86/x64 cover refusal and accepted prefixes,
+followed by one normal backend and its exact saved DLL. Shared SDK, classic
+source, native operations and the installed GTA candidate are unchanged. Native
+ped creation, complete factories and playable full MTA remain unfinished.
+
 ## Current offline cohort: vehicle-type getter (2026-10-26)
 
 The actual MTA model getter preserves its `IsVehicle` archive/type gate and

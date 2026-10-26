@@ -12,20 +12,22 @@
 #include <type_traits>
 namespace mta::game_de
 {
-    // The remaining model, reference, render/collision and mutation operations
-    // stay pure. This is a reusable SDK slice, not a CGame model factory or a
-    // classic-model/RwObject pointer cast from DE's metadata bank.
+    // Remaining reference, collision and mutation contracts stay pure. The
+    // raw handles below are current opaque observations, not classic layouts
+    // or a complete CGame model factory/native lifetime lease.
     class CModelInfoDE : public CModelInfo
     {
     public:
-        DWORD          GetModel() override { return model; }
-        eModelInfoType GetModelType() override;
-        bool           IsVehicle() const override;
-        bool           IsAllocatedInArchive() const noexcept override;
-        bool           IsBoat() override;
-        bool           IsCar() override;
-        bool           IsPlane() override;
-        bool           IsHeli() override;
+        CBaseModelInfoSAInterface* GetInterface() override;
+        RwObject*                  GetRwObject() override;
+        DWORD                      GetModel() override { return model; }
+        eModelInfoType             GetModelType() override;
+        bool                       IsVehicle() const override;
+        bool                       IsAllocatedInArchive() const noexcept override;
+        bool                       IsBoat() override;
+        bool                       IsCar() override;
+        bool                       IsPlane() override;
+        bool                       IsHeli() override;
 
     protected:
         CModelInfoDE(std::uint32_t index, NativeModelClassificationAccess& owner) noexcept : model(index), access(owner) {}

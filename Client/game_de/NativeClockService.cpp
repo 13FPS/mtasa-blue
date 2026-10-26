@@ -105,6 +105,7 @@
 #include "NativeStreamingRemoveCalls.h"
 #include "NativeModelClassificationCalls.h"
 #include "NativeModelArchiveReader.h"
+#include "NativeModelObjectReader.h"
 #include "NativeStreamingModelGroupsReader.h"
 #include "NativeStreamingResourceCalls.h"
 #include "NativeModelReferenceTransactions.h"
@@ -277,6 +278,8 @@ namespace mta::game_de
             ClockResult RemoveStreamingModel(std::uint32_t) noexcept override;
             ClockResult ReadModelVehiclePredicate(std::uint32_t, NativeModelVehiclePredicate, bool&) noexcept override;
             ClockResult ReadModelType(std::uint32_t, NativeModelTypeObservation&) noexcept override;
+            ClockResult ReadModelInterface(std::uint32_t, std::uintptr_t&) noexcept override;
+            ClockResult ReadModelRender(std::uint32_t, std::uintptr_t&) noexcept override;
             ClockResult AdjustModelReference(std::uint32_t, int) noexcept override;
             ClockResult ReleaseFinalModelReference(std::uint32_t, NativeModelReferenceRelease::ZeroPolicy) noexcept override;
             ClockResult RequestStreamingUpgrade(std::uint32_t, std::uint32_t) noexcept override;
@@ -4931,6 +4934,30 @@ namespace mta::game_de
             // The shared complete pure-leaf observation invokes no getter and
             // grants no model/archive lifetime beyond this current callback.
             return NativeModelClassificationCalls::ReadType(runtime.image, modelIndex, &CheckTimingOwner, output);
+        }
+        ClockResult NativeAccess::ReadModelInterface(std::uint32_t model, std::uintptr_t& output) noexcept
+        {
+            const auto     requestedModel = model;
+            std::uintptr_t next = 0;
+            // Preserve the complete SDK key before owner callbacks. This
+            // current bank word stays opaque, including null/poison values;
+            // no type, loaded-state or provider query belongs in this read.
+            const auto result = NativeModelObjectReader({runtime.image}, &CheckTimingOwner).ReadInterface(requestedModel, next);
+            if (result == ClockResult::Ok)
+                output = next;
+            return result;
+        }
+        ClockResult NativeAccess::ReadModelRender(std::uint32_t model, std::uintptr_t& output) noexcept
+        {
+            const auto     requestedModel = model;
+            std::uintptr_t next = 0;
+            // The reader bookends the current receiver and raw field40 under
+            // this same owner. Refusal preserves caller output and never
+            // turns a render tag into a native operation or retained lease.
+            const auto result = NativeModelObjectReader({runtime.image}, &CheckTimingOwner).ReadRender(requestedModel, next);
+            if (result == ClockResult::Ok)
+                output = next;
+            return result;
         }
         ClockResult NativeAccess::ReadStreamingModelGroups(NativeStreamingModelGroupsReader::Value& output) noexcept
         {

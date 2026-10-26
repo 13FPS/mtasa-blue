@@ -39,10 +39,10 @@ namespace mta::game_de
         {
         }
 
-        // This must qualify BOTH real streaming readiness and, for DFFs, usable
-        // render data. A non-null metadata/bundle or raw loaded byte is not the
-        // missing second gate; native owner loss must refuse, not return false.
-        virtual bool DoIsLoaded() = 0;
+        // Preserve streaming's real paired-upgrade policy before qualifying
+        // the current DFF interface and render handles. Owner refusals remain
+        // visible; the separate dependency/reference bridges stay mandatory.
+        virtual bool DoIsLoaded();
         // Preserve the actual vehicle-animation/skin7 dependencies before the
         // selected streaming request. No default successful no-op is supplied.
         virtual void RequestModelDependencies(EModelRequestType type, const char* tag) = 0;

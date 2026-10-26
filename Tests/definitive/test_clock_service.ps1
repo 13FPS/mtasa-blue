@@ -371,6 +371,9 @@ try {
         'Client/game_de/NativeStreamingModelGroupsProfile.h',
         'Client/game_de/NativeModelArchiveReader.h',
         'Client/game_de/NativeModelArchiveReader.cpp',
+        'Client/game_de/NativeModelObjectReader.h',
+        'Client/game_de/NativeModelObjectReader.cpp',
+        'Client/game_de/NativeModelObjectProfile.h',
         'Client/game_de/NativeModelArchiveProfile.h',
         'Tests/definitive/NativeStreamingObserversOwnerTests.inl'
     )
@@ -893,6 +896,9 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         # Runtime also references collision-only loading. Link its separate
         # production TU once; the full-scene fixture keeps its aggregate seam.
         (Join-Path $taskRoot 'Client/game_de/NativeStreamingCollisionSceneCalls.cpp'),
+        # Runtime's opaque model observers reference this real reader even
+        # when a selected Clock scope never calls those optional methods.
+        (Join-Path $taskRoot 'Client/game_de/NativeModelObjectReader.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGameInitializationDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGameDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGameWeaponInfoDE.cpp'),

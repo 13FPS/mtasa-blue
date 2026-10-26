@@ -16,5 +16,10 @@ namespace mta::game_de
         virtual ClockResult ReadModelArchiveAllocated(std::uint32_t, bool&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult ReadModelType(std::uint32_t, NativeModelTypeObservation&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult ReadModelVehiclePredicate(std::uint32_t, NativeModelVehiclePredicate, bool&) noexcept { return ClockResult::NotInitialized; }
+        // These current opaque observations are independent of classification
+        // and loaded state. Missing authority refuses instead of manufacturing
+        // null; successful null values grant no target layout or lifetime.
+        virtual ClockResult ReadModelInterface(std::uint32_t, std::uintptr_t&) noexcept { return ClockResult::NotInitialized; }
+        virtual ClockResult ReadModelRender(std::uint32_t, std::uintptr_t&) noexcept { return ClockResult::NotInitialized; }
     };
 }

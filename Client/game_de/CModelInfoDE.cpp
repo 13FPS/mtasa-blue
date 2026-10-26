@@ -9,6 +9,30 @@
 #include <string>
 namespace mta::game_de
 {
+    CBaseModelInfoSAInterface* CModelInfoDE::GetInterface()
+    {
+        const auto     index = model;
+        std::uintptr_t value = 0;
+        const auto     status = access.ReadModelInterface(index, value);
+        if (status != ClockResult::Ok)
+            throw std::runtime_error("DE model owner refused GetInterface: " + std::to_string(static_cast<unsigned>(status)));
+        // The source SDK spelling is only an opaque handle here. DE's
+        // immutable-index facade observes its current owner each call; it
+        // owns no classic interface layout or persistent cached pointer.
+        return reinterpret_cast<CBaseModelInfoSAInterface*>(value);
+    }
+    RwObject* CModelInfoDE::GetRwObject()
+    {
+        const auto     index = model;
+        std::uintptr_t value = 0;
+        const auto     status = access.ReadModelRender(index, value);
+        if (status != ClockResult::Ok)
+            throw std::runtime_error("DE model owner refused GetRwObject: " + std::to_string(static_cast<unsigned>(status)));
+        // Classic reads its cached interface; this DE representation instead
+        // re-admits current bank/field40. Preserve raw null/poison tag bits with
+        // no loaded/type/bundle query, target dereference or ownership claim.
+        return reinterpret_cast<RwObject*>(value);
+    }
     eModelInfoType CModelInfoDE::QueryType() const
     {
         NativeModelTypeObservation type;

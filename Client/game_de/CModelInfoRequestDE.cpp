@@ -30,6 +30,20 @@ namespace mta::game_de
             [this](bool loaded, int attempts, const char* reportTag) { ReportBlockingModelLoad(loaded, attempts, reportTag); });
     }
 
+    bool CModelInfoRequestDE::DoIsLoaded()
+    {
+        // Keep the actual streaming operation: an upgrade can require its
+        // paired resource, so selected-row flags cannot replace this query.
+        if (!RequireStreaming().HasModelLoaded(GetModel()))
+            return false;
+        if (GetModel() >= game.GetBaseIDforTXD())
+            return true;
+        // Classic refreshes a cached interface even while unloaded. This DE
+        // facade deliberately has no cache; these two current opaque borrows
+        // preserve the loaded-DFF decisions without dereferencing SA layouts.
+        return GetInterface() != nullptr && GetRwObject() != nullptr;
+    }
+
     bool CModelInfoRequestDE::IsLoaded()
     {
         return MtaGame::CModelRequestPolicy::IsLoaded(

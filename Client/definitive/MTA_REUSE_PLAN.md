@@ -1,5 +1,31 @@
 # MTA on Definitive Edition: reuse boundary
 
+## Current offline cohort: model handles and loaded readiness (2026-10-26)
+
+The actual DE model facade now supplies `GetInterface` and `GetRwObject` through
+two optional operations on its existing owner. Interface reads only the current
+model-bank word. Render observes the current receiver's proved field0x40 with
+bank/profile/owner bookends; it does not require loaded state, model type or the
+different archive bundle field. Null and opaque pointer bits remain unchanged,
+and the returned target is never dereferenced or retained by these getters.
+
+DE's immutable-index facade deliberately reads its current owner each call.
+The classic implementation keeps its CPU-cached interface behavior unchanged;
+DE claims no matching cache side effects, classic layout or persistent native
+lease. Render receiver data can be private, mapped or image-backed readable
+storage. The native model-bank domain remains bounded without narrowing keys.
+
+`CModelInfoRequestDE::DoIsLoaded` now reuses the actual streaming query first,
+including its paired-upgrade policy. An unloaded result stops there. Otherwise
+the real game TXD boundary selects resource readiness or the DFF interface and
+render presence checks. Four dependency/reference bridges remain mandatory;
+no default successful native hook or complete model factory is introduced.
+
+Current checks cover both real SDK getters and readiness branches on x86/x64,
+the native opaque observations, the normal backend and its exact saved DLL.
+Shared SDK, classic implementations and the installed GTA trial are unchanged.
+Full MTA and complete model/game factories remain unfinished.
+
 ## Current offline cohort: model-cache streaming flags (2026-10-26)
 
 MTA's actual cache release policy now asks the SDK for streaming flags instead

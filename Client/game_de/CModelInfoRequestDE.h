@@ -16,7 +16,7 @@ namespace mta::game_de
 {
     // A partial actual CModelInfo SDK layer. This owns only the classic wrapper
     // DWORD counters, not DE model metadata, a native lease or a second engine
-    // owner. Missing render/dependency/reference effects remain mandatory.
+    // owner. Missing reporting/reference effects remain mandatory.
     class CModelInfoRequestDE : public CModelInfoDE
     {
     public:
@@ -25,6 +25,7 @@ namespace mta::game_de
         void ModelAddRef(EModelRequestType type, const char* tag) override;
         void RemoveRef() override;
         int  GetRefCount() override;
+        bool IsValid() override;
 
         // A positive wrapper count has one backing interface reference; a
         // copied facade cannot duplicate that obligation without acquisition.
@@ -44,8 +45,14 @@ namespace mta::game_de
         // visible; the separate dependency/reference bridges stay mandatory.
         virtual bool DoIsLoaded();
         // Preserve the actual vehicle-animation/skin7 dependencies before the
-        // selected streaming request. No default successful no-op is supplied.
-        virtual void RequestModelDependencies(EModelRequestType type, const char* tag) = 0;
+        // selected streaming request, including recursive type/tag ordering.
+        virtual void RequestModelDependencies(EModelRequestType type, const char* tag);
+        // Missing animation rows are an actual Core event, not silent success.
+        // A complete diagnostic owner must override this refusal and report505.
+        virtual void ReportMissingAnimationModel(std::uint32_t animation);
+#ifdef MTA_DEBUG
+        virtual void ReportRequestingAnimationModel(std::uint32_t animation);
+#endif
         virtual void ReportBlockingModelLoad(bool loaded, int attempts, const char* tag) = 0;
         // These genuine interface effects must freshly qualify their native
         // lifetime and custom-clump/custom-collision policy. Neither the CPU

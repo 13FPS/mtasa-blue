@@ -9,6 +9,33 @@
 #include <string>
 namespace mta::game_de
 {
+    bool CModelInfoDE::IsTowableBy(CModelInfo* towingModel)
+    {
+        // Preserve MTA's portable towing policy and virtual-call order. The
+        // selected classifiers remain genuine backend obligations: refusal
+        // must propagate rather than silently permitting a trailer link.
+        bool       isTowable = true;
+        const bool isTowTruck = towingModel->GetModel() == 525;
+        const bool isTractor = towingModel->GetModel() == 531;
+        if (IsTrain() || towingModel->IsTrain())
+        {
+            isTowable = false;
+        }
+        else if (isTowTruck || isTractor)
+        {
+            const bool isFarmTrailer = GetModel() == 610;
+            if (IsBoat() || IsBike() || IsBmx())
+            {
+                isTowable = false;
+            }
+            else if (IsTrailer() && !(isTractor && isFarmTrailer))
+            {
+                isTowable = false;
+            }
+        }
+        return isTowable;
+    }
+
     CBaseModelInfoSAInterface* CModelInfoDE::GetInterface()
     {
         const auto     index = model;
@@ -33,6 +60,16 @@ namespace mta::game_de
         // no loaded/type/bundle query, target dereference or ownership claim.
         return reinterpret_cast<RwObject*>(value);
     }
+    std::uint32_t CModelInfoDE::GetAnimFileIndex()
+    {
+        const auto    index = model;
+        std::uint32_t animation = 0;
+        const auto    status = access.ReadModelAnimFileIndex(index, animation);
+        if (status != ClockResult::Ok)
+            throw std::runtime_error("DE model owner refused animation file index: " + std::to_string(static_cast<unsigned>(status)));
+        return animation;
+    }
+
     eModelInfoType CModelInfoDE::QueryType() const
     {
         NativeModelTypeObservation type;

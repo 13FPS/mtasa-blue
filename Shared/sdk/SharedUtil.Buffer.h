@@ -52,7 +52,9 @@ namespace SharedUtil
         CBuffer() {}
         CBuffer(const void* pData, uint uiSize) { AddBytes(pData, uiSize, 0); }
 
-        void ZeroClear() { std::fill(begin(), end(), 0); }
+        // Match the byte element type so delayed template instantiation does
+        // not narrow an int literal in consumers built with strict warnings.
+        void ZeroClear() { std::fill(begin(), end(), char{}); }
         void Clear() { clear(); }
 
         bool IsEmpty() const { return empty(); }

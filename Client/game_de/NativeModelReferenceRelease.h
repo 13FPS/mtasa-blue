@@ -27,5 +27,6 @@ namespace mta::game_de::NativeModelReferenceRelease
     // with the genuine shared MTA wrapper policy. An entered failure retires
     // the owner without replay or rolling back an accepted zero/removal.
     ClockResult ReleaseFinal(std::uintptr_t image, std::uint32_t modelIndex, ZeroPolicy, NativeModelReferenceMemory::CheckOwner, Receipt* = nullptr,
-                             NativeModelReferenceMemory::Exchange = nullptr, NativeStreamingRemoveCalls::Invoke = nullptr) noexcept;
+                             NativeModelReferenceMemory::Exchange = nullptr, NativeStreamingRemoveCalls::Invoke = nullptr,
+                             const NativeModelReferenceMemory::RequiredIdentity* = nullptr) noexcept;
 }

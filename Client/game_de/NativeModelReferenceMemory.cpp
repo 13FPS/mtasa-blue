@@ -50,9 +50,60 @@ namespace mta::game_de::NativeModelReferenceMemory
         }
 #endif
     }
-    ClockResult Adjust(std::uintptr_t image, std::uint32_t modelIndex, int delta, CheckOwner owner, Receipt* output, Exchange exchange) noexcept
+    ClockResult ReadCount(std::uintptr_t image, std::uint32_t modelIndex, CheckOwner owner, std::uint32_t& output,
+                          const RequiredIdentity* inputIdentity) noexcept
     {
-        Receipt receipt;
+        const bool             requireIdentity = inputIdentity != nullptr;
+        const RequiredIdentity identity = inputIdentity ? *inputIdentity : RequiredIdentity{};
+        if (modelIndex >= NativeModelBankProfile::ModelCount)
+            return ClockResult::InvalidArgument;
+        if (!owner)
+            return ClockResult::NotInitialized;
+        try
+        {
+            NativeModelBankReader          bank({image}, owner);
+            NativeModelLoadedReader        loaded({image}, owner);
+            NativeModelBankReader::Value   model;
+            NativeModelLoadedReader::Value state;
+            auto                           result = bank.Read(modelIndex, model);
+            if (result != ClockResult::Ok || (result = loaded.Read(modelIndex, state)) != ClockResult::Ok)
+                return result;
+            if (!state.streamedIn || !model.nativeModelInfo)
+                return ClockResult::NotInitialized;
+            if (!M::QualifyProfile(image))
+                return ClockResult::UnsupportedBuild;
+            C::Value context;
+            Snapshot first, second;
+            if ((result = C::Capture(image, model, context)) != ClockResult::Ok || (result = Capture(context, model, first)) != ClockResult::Ok)
+                return result;
+            if (requireIdentity && (!identity.root || !identity.map || context.root != identity.root || first.map != identity.map ||
+                                    !NativeUObjectMembershipAccess::MatchesWeak(context.rootMembership, identity.rootIndex, identity.rootSerial)))
+                return ClockResult::BindingChanged;
+            if ((result = bank.Recheck(model)) != ClockResult::Ok || (result = loaded.Recheck(state)) != ClockResult::Ok ||
+                (result = C::Recheck(image, model, context)) != ClockResult::Ok || (result = Capture(context, model, second)) != ClockResult::Ok)
+                return result;
+            if (!Same(first, second, false, 0) || !M::QualifyProfile(image))
+                return ClockResult::BindingChanged;
+            if ((result = owner()) != ClockResult::Ok)
+                return result;
+            // This is an occupied current-key observation, not a count lease.
+            // The chosen mutation must independently re-admit its own domain;
+            // failed adjustment never authorizes a different release path.
+            output = second.rows[static_cast<std::size_t>(second.selected)].count;
+            return ClockResult::Ok;
+        }
+        catch (...)
+        {
+            return ClockResult::ReadFailure;
+        }
+    }
+
+    ClockResult Adjust(std::uintptr_t image, std::uint32_t modelIndex, int delta, CheckOwner owner, Receipt* output, Exchange exchange,
+                       const RequiredIdentity* inputIdentity, bool requirePersistentOrigin) noexcept
+    {
+        const bool             requireIdentity = inputIdentity != nullptr;
+        const RequiredIdentity identity = inputIdentity ? *inputIdentity : RequiredIdentity{};
+        Receipt                receipt;
         receipt.modelIndex = modelIndex;
         const auto finish = [&](ClockResult result)
         {
@@ -85,8 +136,15 @@ namespace mta::game_de::NativeModelReferenceMemory
             Snapshot first, second;
             if ((result = Capture(context, model, first)) != ClockResult::Ok)
                 return finish(result);
+            if (requireIdentity && (!identity.root || !identity.map || context.root != identity.root || first.map != identity.map ||
+                                    !NativeUObjectMembershipAccess::MatchesWeak(context.rootMembership, identity.rootIndex, identity.rootSerial)))
+                return finish(ClockResult::BindingChanged);
             receipt.root = context.root;
             receipt.map = first.map;
+            receipt.origin = {context.root, first.map, context.rootMembership.index, context.rootMembership.serial};
+            if (requirePersistentOrigin &&
+                !NativeUObjectMembershipAccess::MatchesWeak(context.rootMembership, receipt.origin.rootIndex, receipt.origin.rootSerial))
+                return finish(ClockResult::BindingChanged);
             receipt.row = first.rowsAddress + static_cast<std::uintptr_t>(first.selected) * P::RowBytes;
             receipt.before = first.rows[static_cast<std::size_t>(first.selected)].count;
             if ((delta < 0 && !receipt.before) || (delta > 0 && receipt.before == (std::numeric_limits<std::uint32_t>::max)()))

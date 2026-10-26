@@ -106,9 +106,11 @@
 #include "NativeModelClassificationCalls.h"
 #include "NativeModelArchiveReader.h"
 #include "NativeModelObjectReader.h"
+#include "NativeModelAnimationReader.h"
 #include "NativeStreamingModelGroupsReader.h"
 #include "NativeStreamingResourceCalls.h"
 #include "NativeModelReferenceTransactions.h"
+#include "NativeModelBackingReferenceController.h"
 #include "NativeModelBankProfile.h"
 #include <game/CModelRequestPolicy.h>
 #include "NativeStartGameCalls.h"
@@ -280,7 +282,14 @@ namespace mta::game_de
             ClockResult ReadModelType(std::uint32_t, NativeModelTypeObservation&) noexcept override;
             ClockResult ReadModelInterface(std::uint32_t, std::uintptr_t&) noexcept override;
             ClockResult ReadModelRender(std::uint32_t, std::uintptr_t&) noexcept override;
+            ClockResult ReadModelAnimFileIndex(std::uint32_t, std::uint32_t&) noexcept override;
             ClockResult AdjustModelReference(std::uint32_t, int) noexcept override;
+            ClockResult ReserveModelBackingReference(std::uint64_t, std::uint32_t, NativeModelBackingReferenceToken&) noexcept override;
+            ClockResult BindModelBackingReference(const NativeModelBackingReferenceToken&) noexcept override;
+            ClockResult AcquireModelBackingReference(const NativeModelBackingReferenceToken&) noexcept override;
+            ClockResult ReleaseModelBackingReference(const NativeModelBackingReferenceToken&, NativeModelReferenceRelease::ZeroPolicy) noexcept override;
+            ClockResult ReadModelBackingReference(const NativeModelBackingReferenceToken&, NativeModelBackingReferenceState&) noexcept override;
+            bool        HasPendingModelBackingReferences() const noexcept override;
             ClockResult ReleaseFinalModelReference(std::uint32_t, NativeModelReferenceRelease::ZeroPolicy) noexcept override;
             ClockResult RequestStreamingUpgrade(std::uint32_t, std::uint32_t) noexcept override;
             ClockResult ReadStreamingUpgradeLoaded(std::uint32_t, bool&) noexcept override;
@@ -549,7 +558,11 @@ namespace mta::game_de
             // controller and callback generation until every exact cell
             // address has disappeared from the native reference bank.
             NativePedReferenceController pedReferences;
-            std::atomic<std::uint64_t>   referenceGeneration{0};
+            // Keep backing acquisition in this same owner when source CPU
+            // counters cannot acknowledge it. No release/custom absence is
+            // inferred by construction, destruction or another generation.
+            NativeModelBackingReferenceController modelBackingReferences;
+            std::atomic<std::uint64_t>            referenceGeneration{0};
             // Native buffers remain with this runtime even if their SDK
             // publication fails. No producer/destructor may free them or
             // discard unknown entered effects while removing the callback.
@@ -682,8 +695,9 @@ namespace mta::game_de
 
         bool NativeLifetimeRetained() noexcept
         {
-            return runtime.pedReferences.IsRetained() || WorldIgnoreRetained() || runtime.customSequences.IsRetained() ||
-                   runtime.privateHierarchies.IsRetained() || runtime.privateAssociations.IsRetained() || runtime.customSequences.HasPendingCleanup();
+            return runtime.modelBackingReferences.IsRetained() || runtime.pedReferences.IsRetained() || WorldIgnoreRetained() ||
+                   runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained() || runtime.privateAssociations.IsRetained() ||
+                   runtime.customSequences.HasPendingCleanup();
         }
 
         bool WeatherOverrideRetained() noexcept
@@ -4959,6 +4973,17 @@ namespace mta::game_de
                 output = next;
             return result;
         }
+        ClockResult NativeAccess::ReadModelAnimFileIndex(std::uint32_t model, std::uint32_t& output) noexcept
+        {
+            const auto    requestedModel = model;
+            std::uint32_t next = 0;
+            // The reader validates current bank/slot/whole leaf and both
+            // QWORD samples. Its EAX result is an index, never a pointee lease.
+            const auto result = NativeModelAnimationReader({runtime.image}, &CheckTimingOwner).Read(requestedModel, next);
+            if (result == ClockResult::Ok)
+                output = next;
+            return result;
+        }
         ClockResult NativeAccess::ReadStreamingModelGroups(NativeStreamingModelGroupsReader::Value& output) noexcept
         {
             // Immediate tracker values confer no model or streaming-row lease.
@@ -5102,6 +5127,88 @@ namespace mta::game_de
             if (receipt.reference.entered && result != ClockResult::Ok)
                 Stop(result);
             return result;
+        }
+
+        ClockResult NativeAccess::ReserveModelBackingReference(std::uint64_t generation, std::uint32_t model, NativeModelBackingReferenceToken& output) noexcept
+        {
+            const auto requestedGeneration = generation;
+            const auto modelIndex = model;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            if (!requestedGeneration || requestedGeneration != runtime.generation.load())
+                return ClockResult::BindingChanged;
+            NativeModelBackingReferenceToken issued;
+            result = runtime.modelBackingReferences.Reserve(requestedGeneration, modelIndex, &CheckTimingOwner, issued);
+            if (result == ClockResult::Ok)
+                output = issued;
+            return result;
+        }
+        ClockResult NativeAccess::BindModelBackingReference(const NativeModelBackingReferenceToken& input) noexcept
+        {
+            const auto token = input;
+            const auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            if (!token.ownerGeneration || token.ownerGeneration != runtime.generation.load())
+                return ClockResult::BindingChanged;
+            return runtime.modelBackingReferences.Bind(runtime.generation.load(), token, &CheckTimingOwner);
+        }
+        ClockResult NativeAccess::AcquireModelBackingReference(const NativeModelBackingReferenceToken& input) noexcept
+        {
+            const auto token = input;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            if (!token.ownerGeneration || token.ownerGeneration != runtime.generation.load())
+                return ClockResult::BindingChanged;
+            result = runtime.modelBackingReferences.Acquire(runtime.image, runtime.generation.load(), token, &CheckTimingOwner);
+            // The permanent receipt precedes Stop. Counter/publication effects
+            // cannot be replayed or undone by End, facade drop or later Begin.
+            if (runtime.modelBackingReferences.IsRetained())
+                runtime.restored.store(false);
+            if (result != ClockResult::Ok && runtime.modelBackingReferences.RecoveryPending())
+                Stop(result);
+            return result;
+        }
+        ClockResult NativeAccess::ReleaseModelBackingReference(const NativeModelBackingReferenceToken& input,
+                                                               NativeModelReferenceRelease::ZeroPolicy inputPolicy) noexcept
+        {
+            const auto token = input;
+            const auto policy = inputPolicy;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            if (!token.ownerGeneration || token.ownerGeneration != runtime.generation.load())
+                return ClockResult::BindingChanged;
+            NativeModelReferenceRelease::Receipt receipt;
+            result = runtime.modelBackingReferences.Release(runtime.image, runtime.generation.load(), token, policy, &CheckTimingOwner, &receipt);
+            if (runtime.modelBackingReferences.IsRetained())
+                runtime.restored.store(false);
+            // Complete native release already has a permanent receipt, even
+            // if this command's final owner acknowledgement is lost. Stop may
+            // not replay it, resurrect its ref or erase unknown release debt.
+            if (result != ClockResult::Ok &&
+                (receipt.reference.entered || receipt.reference.accepted || receipt.removal.entered || runtime.modelBackingReferences.RecoveryPending()))
+                Stop(result);
+            return result;
+        }
+
+        ClockResult NativeAccess::ReadModelBackingReference(const NativeModelBackingReferenceToken& input, NativeModelBackingReferenceState& output) noexcept
+        {
+            const auto token = input;
+            const auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            if (!token.ownerGeneration || token.ownerGeneration != runtime.generation.load())
+                return ClockResult::BindingChanged;
+            return runtime.modelBackingReferences.Read(runtime.generation.load(), token, &CheckTimingOwner, output);
+        }
+        bool NativeAccess::HasPendingModelBackingReferences() const noexcept
+        {
+            // Nonblocking CPU query. A busy controller or live record cannot
+            // certify teardown, including completed held backing references.
+            return runtime.modelBackingReferences.HasPending();
         }
 
         ClockResult NativeAccess::AdjustModelReference(std::uint32_t modelIndex, int delta) noexcept
@@ -6731,6 +6838,13 @@ namespace mta::game_de
                 clean = RestorePedReferences();
             if (clean && (runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained() || runtime.privateAssociations.IsRetained()))
                 clean = RestoreCustomAnimationSequences();
+            if (clean && runtime.modelBackingReferences.IsRetained())
+            {
+                // Acquire-only cannot certify release/custom eligibility.
+                // Retain this owner/module after unrelated cleanup succeeds.
+                runtime.restored.store(false);
+                return false;
+            }
             if (clean && !clockChanged && !timingChanged)
             {
                 ClockValues current;
@@ -8100,6 +8214,10 @@ namespace mta::game_de
         // A failed resume may retain the very callback counted inFlight.
         // Retire that suspend debt first so its finally block can finish.
         if ((runtime.peersRetained.load() && !RetryPeerHoldsBounded()) || runtime.inFlight.load())
+            return false;
+        // Stop has revoked SDK entry and no callback remains in flight.
+        // Only no-effect CPU records may disappear; serials never reset.
+        if (runtime.modelBackingReferences.RevokeUnacquired(generation) != ClockResult::Ok)
             return false;
         AcquireSRWLockExclusive(&runtime.mailboxLock);
         runtime.hasPending = false;

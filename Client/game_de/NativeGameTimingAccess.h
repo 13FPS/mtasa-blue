@@ -45,6 +45,7 @@
 #include "NativeTaskRemovalAccess.h"
 #include "NativeModelBankReader.h"
 #include "NativeModelReferenceRelease.h"
+#include "NativeModelBackingReferenceAccess.h"
 #include "NativeStreamingModelAccess.h"
 #include "NativeWorldGroundAccess.h"
 #include "NativeWorldLineAccess.h"
@@ -138,6 +139,7 @@ namespace mta::game_de
                                    public NativeWorldIgnoreEntityAccess,
                                    public NativeCameraSphereVisibleAccess,
                                    public NativeModelClassificationAccess,
+                                   public NativeModelBackingReferenceAccess,
                                    public NativeNamedGarageAccess,
                                    public NativeAnimationBlockAccess,
                                    public NativeAnimationManagerAccess

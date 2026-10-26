@@ -5,20 +5,27 @@
  ****************************************************************************/
 #pragma once
 #include "NativeModelBankReader.h"
+#include "NativeModelReferenceOrigin.h"
 namespace mta::game_de::NativeModelReferenceMemory
 {
     using CheckOwner = NativeModelBankReader::CheckOwner;
     using Exchange = ClockResult (*)(std::uintptr_t, std::uint32_t, std::uint32_t, std::uint32_t&, std::uint32_t&) noexcept;
+    using RequiredIdentity = NativeModelReferenceOrigin;
+    // Fresh occupied-key count observation only; no native mutation or lease.
+    // Refusal preserves output and cannot select a speculative fallback path.
+    ClockResult ReadCount(std::uintptr_t image, std::uint32_t modelIndex, CheckOwner, std::uint32_t& output, const RequiredIdentity* = nullptr) noexcept;
     struct Receipt
     {
-        std::uintptr_t root = 0, map = 0, row = 0;
-        std::uint32_t  modelIndex = 0, before = 0, target = 0, observed = 0, exceptionCode = 0;
-        bool           entered = false, accepted = false;
+        std::uintptr_t             root = 0, map = 0, row = 0;
+        std::uint32_t              modelIndex = 0, before = 0, target = 0, observed = 0, exceptionCode = 0;
+        bool                       entered = false, accepted = false;
+        NativeModelReferenceOrigin origin{};
     };
     // This is the interior DWORD operation shared by the native assignment and
     // destruction paths. It cannot create a map entry, reach zero, run the
     // destructor's removal continuation, or hand out a retained model lease.
     // An entered failure requires the owning runtime to stop without replay;
     // accepted native effects are never undone by a bookkeeping rollback.
-    ClockResult Adjust(std::uintptr_t image, std::uint32_t modelIndex, int delta, CheckOwner, Receipt* = nullptr, Exchange = nullptr) noexcept;
+    ClockResult Adjust(std::uintptr_t image, std::uint32_t modelIndex, int delta, CheckOwner, Receipt* = nullptr, Exchange = nullptr,
+                       const RequiredIdentity* = nullptr, bool requirePersistentOrigin = false) noexcept;
 }

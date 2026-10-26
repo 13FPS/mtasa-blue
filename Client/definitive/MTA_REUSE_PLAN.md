@@ -1,5 +1,42 @@
 # MTA on Definitive Edition: reuse boundary
 
+## Current offline cohort: model policies and backing ownership (2026-10-26)
+
+The actual model SDK now reuses MTA's towing and validity decisions. Towing
+keeps its required virtual classifier calls and special truck/tractor rules;
+unsupported native classifiers remain pure. Validity checks the real TXD pool
+before dynamic file bounds and the current opaque model interface. It does not
+substitute loaded state, wrapper references or archive membership for validity.
+
+Vehicle-animation and skin7 dependencies now run before the selected model
+request, with the original request type/tag, lookup ordering and sentinel/wrap
+behavior. The animation observation qualifies the actual current virtual slot
+and captured getter, bookends its full native QWORD, then returns the EAX value
+used by the native consumer. It invokes no virtual target or pointee. Missing
+diagnostics refuse unless a real reporting owner supplies them. The Core-bound
+reporting layer uses the existing Core service and event/report IDs, including
+the debug failure assertion. Core's combined report format uses `context - body`
+instead of classic's separate `context: body` report text.
+
+Native backing references now have owner-issued generation/serial records in
+the existing runtime. Acquisition receipts survive failed CPU acknowledgement.
+Durable acquisition requires an existing nonzero native weak identity for its
+application origin; subsequent release re-admits that identity and map before
+changing a count. This observes native identity without allocating a weak token
+or pinning a UObject across callbacks. Explicit caller-selected release takes
+one fresh interior or final path, with no fallback after refusal. A lost/zero
+backing count and uncertain entered effects retain debt without replay. Known
+release consumes the token permanently. Destruction and End supply no implicit
+native release or custom-model eligibility.
+
+The automatic SDK removal hook still needs actual custom-clump/collision
+ownership. Complete model/game factories and full MTA remain unfinished.
+Validation covers the affected real SDK policies, owned native observations and
+reference transactions, the normal backend and its exact saved DLL. Shared game
+SDK interfaces and classic backend implementations are unchanged. A shared byte
+buffer now spells its zero as `char{}` to avoid a compiler narrowing warning;
+its byte-zero behavior is unchanged. The installed GTA trial is unchanged.
+
 ## Current offline cohort: model handles and loaded readiness (2026-10-26)
 
 The actual DE model facade now supplies `GetInterface` and `GetRwObject` through

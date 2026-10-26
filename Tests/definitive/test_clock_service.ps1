@@ -374,6 +374,14 @@ try {
         'Client/game_de/NativeModelObjectReader.h',
         'Client/game_de/NativeModelObjectReader.cpp',
         'Client/game_de/NativeModelObjectProfile.h',
+        'Client/game_de/NativeModelAnimationReader.h',
+        'Client/game_de/NativeModelAnimationReader.cpp',
+        'Client/game_de/NativeModelAnimationProfile.h',
+        'Client/game_de/NativeModelReferenceOrigin.h',
+        'Client/game_de/NativeModelReferenceAcquisitionReceipt.h',
+        'Client/game_de/NativeModelBackingReferenceAccess.h',
+        'Client/game_de/NativeModelBackingReferenceController.h',
+        'Client/game_de/NativeModelBackingReferenceController.cpp',
         'Client/game_de/NativeModelArchiveProfile.h',
         'Tests/definitive/NativeStreamingObserversOwnerTests.inl'
     )
@@ -899,6 +907,10 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         # Runtime's opaque model observers reference this real reader even
         # when a selected Clock scope never calls those optional methods.
         (Join-Path $taskRoot 'Client/game_de/NativeModelObjectReader.cpp'),
+        # Runtime now owns these optional services in every selected scope;
+        # pin their complete inputs above and link each implementation once.
+        (Join-Path $taskRoot 'Client/game_de/NativeModelAnimationReader.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativeModelBackingReferenceController.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGameInitializationDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGameDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGameWeaponInfoDE.cpp'),

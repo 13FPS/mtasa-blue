@@ -5,6 +5,7 @@
  ****************************************************************************/
 #pragma once
 #include "NativeModelReferenceMemory.h"
+#include "NativeModelReferenceAcquisitionReceipt.h"
 #include <cstddef>
 namespace mta::game_de::NativeModelReferenceTransactions
 {
@@ -23,17 +24,12 @@ namespace mta::game_de::NativeModelReferenceTransactions
         ReserveFunction reserve = nullptr;
         PublishFunction publish = nullptr;
     };
-    struct Receipt
-    {
-        std::uintptr_t root = 0, map = 0, row = 0, heap = 0;
-        std::uint32_t  modelIndex = 0, before = 0, target = 0, observed = 0, exceptionCode = 0;
-        std::int32_t   reservedIndex = -1, publishedIndex = -1;
-        bool           entered = false, reserved = false, published = false, accepted = false;
-    };
+    using Receipt = NativeModelReferenceAcquisitionReceipt;
     // An existing key uses the real current count adjustment. An absent key
     // uses the native reserve/init/publish protocol inside one admitted call.
     // No owner acknowledgement interrupts an unpublished reservation. Native
     // effects survive failures; entered failures require Stop without replay.
     // This internal operation does not publish a CModelInfo or lifetime lease.
-    ClockResult Acquire(std::uintptr_t image, std::uint32_t modelIndex, CheckOwner, Receipt* = nullptr, const Calls* = nullptr) noexcept;
+    ClockResult Acquire(std::uintptr_t image, std::uint32_t modelIndex, CheckOwner, Receipt* = nullptr, const Calls* = nullptr,
+                        bool requirePersistentOrigin = false) noexcept;
 }

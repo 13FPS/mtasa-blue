@@ -84,9 +84,12 @@ namespace mta::game_de::NativeModelReferenceRelease
 #endif
     }
     ClockResult ReleaseFinal(std::uintptr_t image, std::uint32_t modelIndex, ZeroPolicy policy, NativeModelReferenceMemory::CheckOwner owner, Receipt* output,
-                             NativeModelReferenceMemory::Exchange exchange, RC::Invoke invoke) noexcept
+                             NativeModelReferenceMemory::Exchange exchange, RC::Invoke invoke,
+                             const NativeModelReferenceMemory::RequiredIdentity* inputIdentity) noexcept
     {
-        Receipt receipt;
+        const bool                                         requireIdentity = inputIdentity != nullptr;
+        const NativeModelReferenceMemory::RequiredIdentity identity = inputIdentity ? *inputIdentity : NativeModelReferenceMemory::RequiredIdentity{};
+        Receipt                                            receipt;
         receipt.reference.modelIndex = modelIndex;
         const auto finish = [&](ClockResult result)
         {
@@ -111,9 +114,16 @@ namespace mta::game_de::NativeModelReferenceRelease
             if ((result = C::Capture(image, current.model, current.context)) != ClockResult::Ok ||
                 (result = M::Capture(current.context, current.model, current.first)) != ClockResult::Ok)
                 return finish(result);
+            // An issued capability belongs to the original embedded map.
+            // Existing rechecks fence this origin through CAS and removal;
+            // current readability alone cannot adopt a replacement application.
+            if (requireIdentity && (!identity.root || !identity.map || current.context.root != identity.root || current.first.map != identity.map ||
+                                    !NativeUObjectMembershipAccess::MatchesWeak(current.context.rootMembership, identity.rootIndex, identity.rootSerial)))
+                return finish(ClockResult::BindingChanged);
             auto& ref = receipt.reference;
             ref.root = current.context.root;
             ref.map = current.first.map;
+            ref.origin = {current.context.root, current.first.map, current.context.rootMembership.index, current.context.rootMembership.serial};
             ref.row = current.first.rowsAddress + static_cast<std::uintptr_t>(current.first.selected) * P::RowBytes;
             ref.before = current.first.rows[static_cast<std::size_t>(current.first.selected)].count;
             if (ref.before != 1)

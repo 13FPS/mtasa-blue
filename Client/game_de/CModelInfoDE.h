@@ -28,8 +28,14 @@ namespace mta::game_de
         bool                       IsCar() override;
         bool                       IsPlane() override;
         bool                       IsHeli() override;
+        bool                       IsTowableBy(CModelInfo* towingModel) override;
 
     protected:
+        // Request dependencies consume the native getter's EAX result. Keep
+        // that observation in this same owner rather than dereferencing an
+        // opaque interface as a classic model or caching the animation value.
+        std::uint32_t GetAnimFileIndex();
+
         CModelInfoDE(std::uint32_t index, NativeModelClassificationAccess& owner) noexcept : model(index), access(owner) {}
 
     private:

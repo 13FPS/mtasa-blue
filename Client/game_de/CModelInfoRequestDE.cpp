@@ -4,7 +4,9 @@
  * PURPOSE: Preserve model request/refcount effects at their original boundaries
  *****************************************************************************/
 #include "CModelInfoRequestDE.h"
+#include <vector>
 #include <game/CGame.h>
+#include <game/CPools.h>
 #include <game/CStreaming.h>
 #include <game/CModelRequestPolicy.h>
 #include <stdexcept>
@@ -30,6 +32,64 @@ namespace mta::game_de
             [this](bool loaded, int attempts, const char* reportTag) { ReportBlockingModelLoad(loaded, attempts, reportTag); });
     }
 
+    void CModelInfoRequestDE::RequestModelDependencies(EModelRequestType type, const char* tag)
+    {
+        // Keep the bike-animation workaround before the selected request.
+        // The engine's internal request recursion uses different flags and
+        // timing, so it cannot replace MTA's dependency type/tag policy.
+        if (IsVehicle())
+        {
+            const auto animation = GetAnimFileIndex();
+            if (animation != 0xffffffffu)
+            {
+                const auto animationId = animation + game.GetBaseIDforIFP();
+                auto*      dependency = game.GetModelInfo(animationId);
+                if (!dependency)
+                {
+                    if (animationId != game.GetBaseIDforIFP() + 139u)
+                        ReportMissingAnimationModel(animationId);
+                }
+                else if (!dependency->IsLoaded())
+                {
+#ifdef MTA_DEBUG
+                    ReportRequestingAnimationModel(animationId);
+#endif
+                    dependency->Request(type, tag);
+                }
+            }
+        }
+        else
+        {
+            const auto modelIndex = GetModel();
+            if (modelIndex <= 288u && modelIndex != 7u)
+            {
+                auto* skin = game.GetModelInfo(7);
+                if (!skin)
+                    throw std::runtime_error("DE model dependencies require the real skin7 facade");
+                if (!skin->IsLoaded())
+                {
+                    // The source resolves skin7 again at its request boundary.
+                    // Do not turn a missing required receiver into readiness.
+                    skin = game.GetModelInfo(7);
+                    if (!skin)
+                        throw std::runtime_error("DE model dependencies lost the real skin7 facade");
+                    skin->Request(type, "Model 7");
+                }
+            }
+        }
+    }
+
+    void CModelInfoRequestDE::ReportMissingAnimationModel(std::uint32_t)
+    {
+        throw std::runtime_error("DE model dependencies require the actual Core model-no-animation report505");
+    }
+#ifdef MTA_DEBUG
+    void CModelInfoRequestDE::ReportRequestingAnimationModel(std::uint32_t)
+    {
+        throw std::runtime_error("DE model dependencies require the actual requesting-animation debug report");
+    }
+#endif
+
     bool CModelInfoRequestDE::DoIsLoaded()
     {
         // Keep the actual streaming operation: an upgrade can require its
@@ -42,6 +102,27 @@ namespace mta::game_de
         // facade deliberately has no cache; these two current opaque borrows
         // preserve the loaded-DFF decisions without dereferencing SA layouts.
         return GetInterface() != nullptr && GetRwObject() != nullptr;
+    }
+
+    bool CModelInfoRequestDE::IsValid()
+    {
+        const auto modelIndex = GetModel();
+        // Preserve MTA's fixed TXD-slot policy before dynamic file bounds.
+        // The actual pool decides occupancy; an archive/type/loaded query
+        // would change valid-but-unloaded and allocated custom-TXD behavior.
+        constexpr std::uint32_t dffLimit = 20000, txdLimit = 25000;
+        if (modelIndex >= dffLimit && modelIndex < txdLimit)
+        {
+            auto* pools = game.GetPools();
+            if (!pools)
+                throw std::runtime_error("DE model IsValid requires the qualified TXD pool service");
+            return !pools->GetTxdPool().IsFreeTextureDictonarySlot(modelIndex - dffLimit);
+        }
+        if (modelIndex >= game.GetBaseIDforTXD() && modelIndex < game.GetCountOfAllFileIDs())
+            return true;
+        // This DE facade has no cached classic interface layout. Its current
+        // opaque bank observation preserves the source's nonnull decision.
+        return GetInterface() != nullptr;
     }
 
     bool CModelInfoRequestDE::IsLoaded()

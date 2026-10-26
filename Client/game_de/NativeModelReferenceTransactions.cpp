@@ -123,7 +123,8 @@ namespace mta::game_de::NativeModelReferenceTransactions
             return true;
         }
     }
-    ClockResult Acquire(std::uintptr_t image, std::uint32_t modelIndex, CheckOwner owner, Receipt* output, const Calls* overrideCalls) noexcept
+    ClockResult Acquire(std::uintptr_t image, std::uint32_t modelIndex, CheckOwner owner, Receipt* output, const Calls* overrideCalls,
+                        bool requirePersistentOrigin) noexcept
     {
         Receipt receipt;
         receipt.modelIndex = modelIndex;
@@ -159,13 +160,19 @@ namespace mta::game_de::NativeModelReferenceTransactions
                 return finish(result);
             receipt.root = context.root;
             receipt.map = first.map;
+            receipt.origin = {context.root, first.map, context.rootMembership.index, context.rootMembership.serial};
             if (first.selected >= 0)
             {
                 // Existing native row semantics, width and zero/wrap guards
                 // stay in their real shared operation rather than a second
                 // counter implementation added for the acquisition route.
                 NativeModelReferenceMemory::Receipt adjusted;
-                result = NativeModelReferenceMemory::Adjust(image, modelIndex, 1, owner, &adjusted);
+                result = NativeModelReferenceMemory::Adjust(image, modelIndex, 1, owner, &adjusted, nullptr, nullptr, requirePersistentOrigin);
+                // Nested Adjust owns the actual native entry. Do not retain
+                // the earlier outer Context as though it acquired this ref.
+                receipt.root = adjusted.root;
+                receipt.map = adjusted.map;
+                receipt.origin = adjusted.origin;
                 receipt.row = adjusted.row;
                 receipt.before = adjusted.before;
                 receipt.target = adjusted.target;
@@ -175,6 +182,12 @@ namespace mta::game_de::NativeModelReferenceTransactions
                 receipt.accepted = adjusted.accepted;
                 return finish(result);
             }
+            // Durable capabilities require an already-issued nonzero weak
+            // identity before native reserve. Never allocate one here; old
+            // immediate callers deliberately keep their serial-zero domain.
+            if (requirePersistentOrigin &&
+                !NativeUObjectMembershipAccess::MatchesWeak(context.rootMembership, receipt.origin.rootIndex, receipt.origin.rootSerial))
+                return finish(ClockResult::BindingChanged);
             // Existing rows require no allocator admission. Only a genuine
             // absent-key insertion depends on the current initialized heap.
             if (!H::QualifyProfile(image))

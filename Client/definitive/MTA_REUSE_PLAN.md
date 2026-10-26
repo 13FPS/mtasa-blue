@@ -1,5 +1,21 @@
 # MTA on Definitive Edition: reuse boundary
 
+## Current offline cohort: archive query and object admission (2026-10-26)
+
+DE's archive query now propagates an owner refusal instead of terminating the
+process. Successful true/false results and MTA's `IsVehicle` archive/type order
+are unchanged. The Shared base permits throwing; classic keeps its stronger
+`noexcept` implementation. Providers and consumers require a coordinated
+rebuild, without a claim for mixing older DLLs.
+
+The actual object and building validity callers catch only refused archive
+admission and reject creation. Their existing interface, parent, bounds and
+type decisions remain in their original order and outside that catch.
+Validation covers focused SDK behavior on x86/x64, three actual Win32 provider
+and consumer TUs with two fresh normal PCHs, and one normal DE backend with its
+exact saved DLL. Native observation and the installed GTA candidate are
+unchanged. Full factories and playable full MTA remain unfinished.
+
 ## Current offline cohort: unused model removal (2026-10-26)
 
 The closed unmodified model layer now supplies MTA's actual `UnloadUnused`

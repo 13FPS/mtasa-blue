@@ -79,8 +79,17 @@ bool CClientBuildingManager::IsValidModel(uint16_t modelId)
     if (!pModelInfo || !pModelInfo->GetInterface())
         return false;
 
-    if (!pModelInfo->IsAllocatedInArchive())
+    try
+    {
+        if (!pModelInfo->IsAllocatedInArchive())
+            return false;
+    }
+    catch (...)
+    {
+        // Refused archive admission cannot establish that this model is safe
+        // for building creation. Keep type selection outside this boundary.
         return false;
+    }
 
     eModelInfoType eType = pModelInfo->GetModelType();
 

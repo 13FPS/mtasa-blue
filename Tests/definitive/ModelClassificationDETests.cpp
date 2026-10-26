@@ -4,11 +4,15 @@
  * PURPOSE: Actual MTA model predicate virtual dispatch without a native model factory
  ****************************************************************************/
 #include "../../Client/game_de/CModelInfoDE.h"
+#include <array>
+#include <initializer_list>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
+#include <utility>
 namespace
 {
     using namespace mta::game_de;
@@ -32,20 +36,43 @@ namespace
         unsigned                    archiveCalls = 0;
         ClockResult                 archiveStatus = ClockResult::Ok;
         bool                        archiveValid = true;
-        ClockResult                 ReadModelArchiveAllocated(std::uint32_t model, bool& output) noexcept override
+        bool                        poisonArchiveOnRefusal = false, poisonTypeOnRefusal = false, traceEnabled = false;
+        std::array<unsigned, 4>     events{};
+        unsigned                    eventCount = 0;
+        void                        Mark(unsigned event) noexcept
         {
+            if (!traceEnabled)
+                return;
+            if (eventCount == events.size())
+                std::abort();
+            events[eventCount++] = event;
+        }
+        void ExpectOrder(std::initializer_list<unsigned> expected)
+        {
+            Check(eventCount == expected.size(), "archive/type observation has only the source-required calls");
+            unsigned index = 0;
+            for (const auto event : expected)
+                Check(events[index++] == event, "actual archive admission precedes the native type observation");
+            eventCount = 0;
+        }
+        ClockResult ReadModelArchiveAllocated(std::uint32_t model, bool& output) noexcept override
+        {
+            Mark(1);
             ++archiveCalls;
             key = model;
-            if (archiveStatus == ClockResult::Ok)
+            // Refused output is intentionally poisoned in the focused scope:
+            // the SDK must validate status before consuming the observation.
+            if (archiveStatus == ClockResult::Ok || poisonArchiveOnRefusal)
                 output = archiveValid;
             return archiveStatus;
         }
 
         ClockResult ReadModelType(std::uint32_t model, NativeModelTypeObservation& output) noexcept override
         {
+            Mark(2);
             ++typeCalls;
             key = model;
-            if (status == ClockResult::Ok)
+            if (status == ClockResult::Ok || poisonTypeOnRefusal)
                 output = {hasModel, rawType};
             return status;
         }
@@ -331,124 +358,217 @@ namespace
         }
         throw std::logic_error("invalid fixture predicate");
     }
+    static_assert(!noexcept(std::declval<const CModelInfo&>().IsAllocatedInArchive()));
+    static_assert(!noexcept(std::declval<const CModelInfoDE&>().IsAllocatedInArchive()));
+    static_assert(std::is_same_v<decltype(&Model::IsAllocatedInArchive), bool (CModelInfoDE::*)() const>);
+    static_assert(std::is_same_v<decltype(&Model::IsVehicle), bool (CModelInfoDE::*)() const>);
+
+    template <class Operation>
+    void RefusesStatus(Operation operation, ClockResult status, const char* prefix)
+    {
+        try
+        {
+            operation();
+        }
+        catch (const std::runtime_error& error)
+        {
+            Check(std::string(error.what()) == std::string(prefix) + std::to_string(static_cast<unsigned>(status)),
+                  "owner refusal preserves its exact SDK operation and status without returning a negative result");
+            return;
+        }
+        Check(false, "owner refusal must throw instead of consuming a poisoned observation");
+    }
+
+    void ArchiveExceptionChecks()
+    {
+        Access access;
+        access.traceEnabled = true;
+        for (const auto key : std::array<std::uint32_t, 6>{0, 17, 19999, 20000, 65536, 0xffffffff})
+        {
+            Model       model(key, access);
+            CModelInfo& sdk = model;
+            for (const bool allocated : {false, true})
+            {
+                access.archiveValid = allocated;
+                const auto archives = access.archiveCalls, types = access.typeCalls;
+                Check(sdk.IsAllocatedInArchive() == allocated && access.archiveCalls == archives + 1 && access.typeCalls == types && access.key == key,
+                      "successful archive observation forwards the full key once and preserves both actual boolean values");
+                access.ExpectOrder({1});
+            }
+        }
+        for (const auto key : std::array<std::uint32_t, 3>{20000, 65536, 0xffffffff})
+        {
+            Model model(key, access);
+            access.archiveStatus = access.status = ClockResult::Expired;
+            const auto archives = access.archiveCalls, types = access.typeCalls;
+            Check(!model.IsVehicle() && access.archiveCalls == archives && access.typeCalls == types,
+                  "model bound rejects IsVehicle on CPU before either archive or type owner can refuse");
+            access.ExpectOrder({});
+        }
+        access.archiveStatus = access.status = ClockResult::Ok;
+        for (const auto key : std::array<std::uint32_t, 3>{0, 17, 19999})
+        {
+            Model model(key, access);
+            access.archiveValid = false;
+            access.rawType = 6;
+            const auto types = access.typeCalls;
+            Check(!model.IsVehicle() && access.typeCalls == types, "false archive admission stops IsVehicle before a known vehicle byte");
+            access.ExpectOrder({1});
+            access.archiveValid = true;
+            access.hasModel = false;
+            Check(!model.IsVehicle(), "qualified type absence remains a genuine nonvehicle result after archive admission");
+            access.ExpectOrder({1, 2});
+            access.hasModel = true;
+            access.rawType = 5;
+            Check(!model.IsVehicle(), "qualified nonvehicle type remains false after exactly one ordered type observation");
+            access.ExpectOrder({1, 2});
+            access.rawType = 6;
+            Check(model.IsVehicle() && access.key == key, "vehicle type6 becomes true only after successful archive admission");
+            access.ExpectOrder({1, 2});
+        }
+        Model model(17, access);
+        access.poisonArchiveOnRefusal = access.poisonTypeOnRefusal = true;
+        access.archiveValid = true;
+        access.hasModel = true;
+        access.rawType = 6;
+        for (unsigned raw = 1; raw <= static_cast<unsigned>(ClockResult::OriginalException); ++raw)
+        {
+            const auto status = static_cast<ClockResult>(raw);
+            access.archiveStatus = status;
+            const auto types = access.typeCalls, archives = access.archiveCalls;
+            RefusesStatus([&] { static_cast<void>(model.IsAllocatedInArchive()); }, status, "DE model owner refused archive allocation: ");
+            Check(access.archiveCalls == archives + 1 && access.typeCalls == types, "every archive refusal is one call and does not query type");
+            access.ExpectOrder({1});
+            RefusesStatus([&] { static_cast<void>(model.IsVehicle()); }, status, "DE model owner refused archive allocation: ");
+            Check(access.archiveCalls == archives + 2 && access.typeCalls == types, "IsVehicle archive refusal cannot consume poisoned true or enter type");
+            access.ExpectOrder({1});
+            access.archiveStatus = ClockResult::Ok;
+            access.status = status;
+            RefusesStatus([&] { static_cast<void>(model.IsVehicle()); }, status, "DE model owner refused model type: ");
+            Check(access.archiveCalls == archives + 3 && access.typeCalls == types + 1,
+                  "type owner refusal propagates after one admitted archive and type call");
+            access.ExpectOrder({1, 2});
+        }
+        NativeModelClassificationAccess missing;
+        Model                           unbound(17, missing);
+        RefusesStatus([&] { static_cast<void>(unbound.IsAllocatedInArchive()); }, ClockResult::NotInitialized, "DE model owner refused archive allocation: ");
+        RefusesStatus([&] { static_cast<void>(unbound.IsVehicle()); }, ClockResult::NotInitialized, "DE model owner refused archive allocation: ");
+    }
 }
 int main(int argc, char** argv)
 {
     try
     {
-        Access access;
-        if (argc == 2 && std::string(argv[1]) == "--noexcept-refusal")
+        const bool archiveOnly = argc == 2 && std::string(argv[1]) == "--archive-exceptions";
+        Check(argc == 1 || archiveOnly, "model SDK fixture accepts only the explicit archive exception scope");
+        if (!archiveOnly)
         {
-            std::set_terminate(+[]() noexcept
-                               {
-                                   std::puts("Production MTA model archive noexcept refusal fixture completed");
-                                   std::fflush(stdout);
-                                   std::_Exit(86);
-                               });
-            Model model(17, access);
-            access.archiveStatus = ClockResult::Expired;
-            (void)model.IsAllocatedInArchive();
-            return 88;
-        }
-        Check(argc == 1, "model SDK fixture accepts only its explicit bounded child mode");
+            Access access;
+            for (const auto key : std::array<std::uint32_t, 6>{0, 17, 19999, 20000, 65536, 0xffffffff})
+            {
+                Model       model(key, access);
+                CModelInfo& sdk = model;
+                Check(sdk.GetModel() == key, "actual MTA model identifier preserves the entire DWORD without indexing native arrays");
+                for (bool allocated : {false, true})
+                {
+                    access.archiveValid = allocated;
+                    const auto before = access.archiveCalls;
+                    Check(sdk.IsAllocatedInArchive() == allocated && access.archiveCalls == before + 1 && access.key == key,
+                          "actual SDK forwards complete archive key once and preserves genuine true and false owner results");
+                }
 
-        for (const auto key : std::array<std::uint32_t, 6>{0, 17, 19999, 20000, 65536, 0xffffffff})
-        {
-            Model       model(key, access);
-            CModelInfo& sdk = model;
-            Check(sdk.GetModel() == key, "actual MTA model identifier preserves the entire DWORD without indexing native arrays");
-            for (bool allocated : {false, true})
-            {
-                access.archiveValid = allocated;
-                const auto before = access.archiveCalls;
-                Check(sdk.IsAllocatedInArchive() == allocated && access.archiveCalls == before + 1 && access.key == key,
-                      "actual SDK forwards complete archive key once and preserves genuine true and false owner results");
-            }
-
-            for (const auto& entry : NativeModelClassificationProfile::Entries)
-                for (bool value : {false, true})
-                {
-                    access.value = value;
-                    const auto calls = access.calls;
-                    Check(Query(sdk, entry.predicate) == value && access.calls == calls + 1 && access.key == key && access.predicate == entry.predicate,
-                          "actual SDK classifier method forwards full key and exact named predicate once, preserving true and false");
-                }
-            for (unsigned char rawType : std::array<unsigned char, 8>{0, 1, 3, 5, 6, 7, 8, 255})
-            {
-                access.rawType = rawType;
-                const auto types = access.typeCalls;
-                Check(static_cast<unsigned char>(sdk.GetModelType()) == rawType && access.typeCalls == types + 1 && access.key == key,
-                      "actual SDK GetModelType preserves the current native AL byte without vtable identity substitution");
-                const auto beforeType = access.typeCalls, beforeArchive = access.archiveCalls;
-                const bool vehicle = sdk.IsVehicle();
-                Check(vehicle == (key < 20000 && rawType == 6) && access.typeCalls == beforeType + (key < 20000 ? 1 : 0) &&
-                          access.archiveCalls == beforeArchive + (key < 20000 ? 1 : 0),
-                      "actual MTA IsVehicle preserves model bounds and archive admission before native type comparison");
-            }
-            access.hasModel = false;
-            Check(sdk.GetModelType() == eModelInfoType::UNKNOWN, "actual classic absent-interface GetModelType maps only qualified absence to UNKNOWN");
-            access.hasModel = true;
-            access.archiveValid = false;
-            const auto beforeType = access.typeCalls;
-            Check(!sdk.IsVehicle() && access.typeCalls == beforeType, "unallocated archive cannot be replaced by a known vehicle-type byte");
-            access.archiveValid = true;
-            for (unsigned status = 1; status <= static_cast<unsigned>(ClockResult::OriginalException); ++status)
-            {
-                access.status = static_cast<ClockResult>(status);
-                const auto typeCalls = access.typeCalls;
-                bool       typeRefused = false;
-                try
-                {
-                    (void)sdk.GetModelType();
-                }
-                catch (const std::runtime_error&)
-                {
-                    typeRefused = true;
-                }
-                Check(typeRefused && access.typeCalls == typeCalls + 1, "actual GetModelType preserves owner failure without fabricating Unknown or retry");
                 for (const auto& entry : NativeModelClassificationProfile::Entries)
+                    for (bool value : {false, true})
+                    {
+                        access.value = value;
+                        const auto calls = access.calls;
+                        Check(Query(sdk, entry.predicate) == value && access.calls == calls + 1 && access.key == key && access.predicate == entry.predicate,
+                              "actual SDK classifier method forwards full key and exact named predicate once, preserving true and false");
+                    }
+                for (unsigned char rawType : std::array<unsigned char, 8>{0, 1, 3, 5, 6, 7, 8, 255})
                 {
-                    const auto calls = access.calls;
-                    bool       refused = false;
+                    access.rawType = rawType;
+                    const auto types = access.typeCalls;
+                    Check(static_cast<unsigned char>(sdk.GetModelType()) == rawType && access.typeCalls == types + 1 && access.key == key,
+                          "actual SDK GetModelType preserves the current native AL byte without vtable identity substitution");
+                    const auto beforeType = access.typeCalls, beforeArchive = access.archiveCalls;
+                    const bool vehicle = sdk.IsVehicle();
+                    Check(vehicle == (key < 20000 && rawType == 6) && access.typeCalls == beforeType + (key < 20000 ? 1 : 0) &&
+                              access.archiveCalls == beforeArchive + (key < 20000 ? 1 : 0),
+                          "actual MTA IsVehicle preserves model bounds and archive admission before native type comparison");
+                }
+                access.hasModel = false;
+                Check(sdk.GetModelType() == eModelInfoType::UNKNOWN, "actual classic absent-interface GetModelType maps only qualified absence to UNKNOWN");
+                access.hasModel = true;
+                access.archiveValid = false;
+                const auto beforeType = access.typeCalls;
+                Check(!sdk.IsVehicle() && access.typeCalls == beforeType, "unallocated archive cannot be replaced by a known vehicle-type byte");
+                access.archiveValid = true;
+                for (unsigned status = 1; status <= static_cast<unsigned>(ClockResult::OriginalException); ++status)
+                {
+                    access.status = static_cast<ClockResult>(status);
+                    const auto typeCalls = access.typeCalls;
+                    bool       typeRefused = false;
                     try
                     {
-                        (void)Query(sdk, entry.predicate);
+                        (void)sdk.GetModelType();
                     }
-                    catch (const std::runtime_error& e)
+                    catch (const std::runtime_error&)
                     {
-                        refused = std::string(e.what()).find("DE model owner refused vehicle predicate") != std::string::npos;
+                        typeRefused = true;
                     }
-                    Check(refused && access.calls == calls + 1, "all owner refusals remain explicit SDK errors without a negative result or retry");
+                    Check(typeRefused && access.typeCalls == typeCalls + 1, "actual GetModelType preserves owner failure without fabricating Unknown or retry");
+                    for (const auto& entry : NativeModelClassificationProfile::Entries)
+                    {
+                        const auto calls = access.calls;
+                        bool       refused = false;
+                        try
+                        {
+                            (void)Query(sdk, entry.predicate);
+                        }
+                        catch (const std::runtime_error& e)
+                        {
+                            refused = std::string(e.what()).find("DE model owner refused vehicle predicate") != std::string::npos;
+                        }
+                        Check(refused && access.calls == calls + 1, "all owner refusals remain explicit SDK errors without a negative result or retry");
+                    }
                 }
+                access.status = ClockResult::Ok;
             }
-            access.status = ClockResult::Ok;
+            NativeModelClassificationAccess absent;
+            Model                           unbound(17, absent);
+            bool                            refused = false;
+            try
+            {
+                (void)unbound.IsBoat();
+            }
+            catch (const std::runtime_error&)
+            {
+                refused = true;
+            }
+            Check(refused, "old/default owner cannot fake a supported false model classification");
+            refused = false;
+            try
+            {
+                (void)unbound.GetModelType();
+            }
+            catch (const std::runtime_error&)
+            {
+                refused = true;
+            }
+            Check(refused, "unbound raw metadata type cannot manufacture an SDK enum result");
         }
-        NativeModelClassificationAccess absent;
-        Model                           unbound(17, absent);
-        bool                            refused = false;
-        try
+        ArchiveExceptionChecks();
+        std::puts("Production MTA model archive exception SDK fixture completed");
+        if (archiveOnly)
+            std::printf("Passed %u actual MTA model archive-exception SDK checks (%zu-bit)\n", checks, sizeof(void*) * 8);
+        else
         {
-            (void)unbound.IsBoat();
+            std::puts("Production MTA model archive SDK fixture completed");
+            std::puts("Production MTA model type SDK fixture completed");
+            std::puts("Production MTA model classification SDK fixture completed");
+            std::printf("Passed %u actual MTA model-classification SDK checks (%zu-bit)\n", checks, sizeof(void*) * 8);
         }
-        catch (const std::runtime_error&)
-        {
-            refused = true;
-        }
-        Check(refused, "old/default owner cannot fake a supported false model classification");
-        refused = false;
-        try
-        {
-            (void)unbound.GetModelType();
-        }
-        catch (const std::runtime_error&)
-        {
-            refused = true;
-        }
-        Check(refused, "unbound raw metadata type cannot manufacture an SDK enum result");
-        std::puts("Production MTA model archive SDK fixture completed");
-        std::puts("Production MTA model type SDK fixture completed");
-        std::puts("Production MTA model classification SDK fixture completed");
-        std::printf("Passed %u actual MTA model-classification SDK checks (%zu-bit)\n", checks, sizeof(void*) * 8);
         return 0;
     }
     catch (const std::exception& e)

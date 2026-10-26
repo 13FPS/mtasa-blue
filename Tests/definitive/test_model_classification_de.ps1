@@ -1,16 +1,19 @@
 #!/usr/bin/env pwsh
 #requires -Version 7.0
-# Compile the actual MTA streaming SDK overrides against an owned CPU fixture.
+# Compile actual model SDK archive/classification overrides against an owned CPU fixture.
 # This executes no native code, game allocation, wrapper factory or native registry owner.
 [CmdletBinding()]
-param()
+param(
+    [ValidateSet('Full','ArchiveExceptions')]
+    [string]$Scope = 'Full'
+)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $taskRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
 $id = (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N')
-$outputRoot = Join-Path $taskRoot ('Build/mta-model-classification-sdk/' + $id)
-$scratchRoot = Join-Path $taskRoot ('Build/tmp/model-classification-sdk-' + $id)
+$outputRoot = Join-Path $taskRoot ('Build/mta-model-classification-sdk/' + $Scope + '/' + $id)
+$scratchRoot = Join-Path $taskRoot ('Build/tmp/model-classification-sdk-' + $Scope + '-' + $id)
 [IO.Directory]::CreateDirectory($outputRoot) | Out-Null
 [IO.Directory]::CreateDirectory($scratchRoot) | Out-Null
 $previousEnvironment = @{}
@@ -20,8 +23,8 @@ foreach ($name in @('TEMP','TMP','VCToolsInstallDir','INCLUDE','LIB','LIBPATH','
 $record = [ordered]@{
     schema='mta_model_classification_sdk_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
-    results=@();actualModelClassificationSdkTested=$false;actualModelTypeSdkTested=$false;actualModelArchiveSdkTested=$false;actualModelArchiveNoexceptRefusalTested=$false;noexceptRefusal=$null;failure=$null;scratchDirectory=$scratchRoot;scratchFilesRemaining=$null;scratchRemoved=$false;
-    scope='Actual MTA CModelInfo GetModel/IsBoat/IsCar/IsPlane/IsHeli virtual overrides through a borrowed owner. Full DWORD model key and exact named predicate are forwarded once, both true and false results are preserved, every owner refusal remains explicit and default owners refuse. Other model operations remain pure in production and unavailable in test-only concrete fixture. No native model factory or render/collision/model pointer is published';
+    results=@();actualModelClassificationSdkTested=$false;actualModelTypeSdkTested=$false;actualModelArchiveSdkTested=$false;actualModelArchiveExceptionSdkTested=$false;failure=$null;scratchDirectory=$scratchRoot;scratchFilesRemaining=$null;scratchRemoved=$false;
+    selectedScope=$Scope;scope='ArchiveExceptions executes only new archive exception/refusal and IsVehicle archive-before-type decisions on x86/x64. Default Full preserves existing classification/type/success cases and adds truthful exception-refusal coverage on its existing x64 host. No termination refusal, native factory or native helper replay.';
     ownedBuffersOnly=$true;nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;
     foreignProcessAccessed=$false;nativeLifecycleReady=$false;fullMtaReady=$false;
     clientDllLoaded=$false;installationChanged=$false
@@ -99,6 +102,10 @@ try {
         'Client/game_de/NativeStreamingModelGroupsReader.h',
         'Client/game_de/NativeStreamingModelGroupsProfile.h'
     )
+    $sourceNames += @(
+        'Build/definitive-recovery/mta-model-archive-exceptions-sdk-20261026/model-archive-exception-source-ready.json',
+        'Build/definitive-recovery/mta-model-archive-exceptions-sdk-tests-20261026/model-archive-exceptions-sdk-tests-source-ready.json'
+    )
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
     })
@@ -109,7 +116,8 @@ try {
     $visualStudio = [IO.File]::ReadAllText($discovery.stdout).Trim()
     if ($discovery.exitCode -ne 0 -or $discovery.timedOut -or -not $visualStudio) { throw 'Visual Studio x86/x64 tools are required.' }
     $developerCommand = Join-Path $visualStudio 'Common7/Tools/VsDevCmd.bat'
-    foreach ($architecture in @('x64')) {
+    $architectures = @(if ($Scope -eq 'ArchiveExceptions') { 'x86'; 'x64' } else { 'x64' })
+    foreach ($architecture in $architectures) {
         $directory = Join-Path $outputRoot $architecture
         [IO.Directory]::CreateDirectory($directory) | Out-Null
         # Capture toolchain paths only; a full environment dump could contain
@@ -140,40 +148,38 @@ try {
             (Join-Path $PSScriptRoot 'ModelClassificationDETests.cpp'),(Join-Path $taskRoot 'Client/game_de/CModelInfoDE.cpp'),
             ('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'compiler.pdb')),('/Fe'+$executable))
         $result = [ordered]@{architecture=$architecture;environment=$environmentResult;compile=$null;test=$null;
-            checks=0;pointerBits=$null;executable=$executable;executableSha256=$null;actualModelClassificationSdkTested=$false;actualModelTypeSdkTested=$false;actualModelArchiveSdkTested=$false;actualModelArchiveNoexceptRefusalTested=$false;noexceptRefusal=$null}
+            checks=0;pointerBits=$null;executable=$executable;executableSha256=$null;actualModelClassificationSdkTested=$false;actualModelTypeSdkTested=$false;actualModelArchiveSdkTested=$false;actualModelArchiveExceptionSdkTested=$false}
         $record.results += $result
         $result.compile = RunOwned $compiler $arguments $directory 'compile' 60000
         if ($result.compile.exitCode -ne 0 -or $result.compile.timedOut) { throw "$architecture actual MTA model-classification SDK fixture compilation failed." }
         $result.executableSha256 = Sha $executable
-        $result.test = RunOwned $executable @() $directory 'test' 10000
+        $testArguments = @(if ($Scope -eq 'ArchiveExceptions') { '--archive-exceptions' })
+        $result.test = RunOwned $executable $testArguments $directory 'test' 10000
         $text = [IO.File]::ReadAllText($result.test.stdout)
-        $summary = [regex]::Match($text.TrimEnd(), '(?:^|\r?\n)Passed (\d+) actual MTA model-classification SDK checks \((\d+)-bit\)$')
+        $summaryPattern = if ($Scope -eq 'ArchiveExceptions') { '(?:^|\r?\n)Passed (\d+) actual MTA model archive-exception SDK checks \((\d+)-bit\)$' }
+                          else { '(?:^|\r?\n)Passed (\d+) actual MTA model-classification SDK checks \((\d+)-bit\)$' }
+        $summary = [regex]::Match($text.TrimEnd(), $summaryPattern)
         if ($summary.Success) {
             $result.checks = [int]$summary.Groups[1].Value
             $result.pointerBits = [int]$summary.Groups[2].Value
         }
         $result.actualModelClassificationSdkTested = $text.Contains('Production MTA model classification SDK fixture completed')
         $result.actualModelTypeSdkTested = $text.Contains('Production MTA model type SDK fixture completed')
-        if (-not $result.actualModelTypeSdkTested) { throw 'Actual model type SDK methods did not execute.' }
         $result.actualModelArchiveSdkTested = $text.Contains('Production MTA model archive SDK fixture completed')
-        $result.noexceptRefusal = RunOwned $executable @('--noexcept-refusal') $directory 'noexcept-refusal' 10000
-        $refusalText = [IO.File]::ReadAllText($result.noexceptRefusal.stdout)
-        $result.actualModelArchiveNoexceptRefusalTested = $result.noexceptRefusal.exitCode -eq 86 -and -not $result.noexceptRefusal.timedOut -and
-            $refusalText.Contains('Production MTA model archive noexcept refusal fixture completed')
-        if (-not ($result.actualModelArchiveSdkTested -and $result.actualModelArchiveNoexceptRefusalTested)) {
-            throw 'Actual SDK observer or explicit noexcept owner-refusal path did not execute.'
+        $result.actualModelArchiveExceptionSdkTested = $text.Contains('Production MTA model archive exception SDK fixture completed')
+        if ($Scope -eq 'Full' -and -not ($result.actualModelClassificationSdkTested -and $result.actualModelTypeSdkTested -and $result.actualModelArchiveSdkTested)) {
+            throw 'Default Full classification/type/archive success coverage did not execute.'
         }
         $expectedBits = if ($architecture -eq 'x86') { 32 } else { 64 }
-        if ($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -le 0 -or $result.pointerBits -ne $expectedBits -or -not $result.actualModelClassificationSdkTested) {
+        if ($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -le 0 -or $result.pointerBits -ne $expectedBits -or -not $result.actualModelArchiveExceptionSdkTested) {
             throw "$architecture actual MTA model-classification SDK checks failed or summary/pointer-width evidence was missing."
         }
     }
-    $record.success = $record.results.Count -eq 1
-    $record.actualModelArchiveSdkTested = $record.success -and $record.results[0].actualModelArchiveSdkTested
-    $record.actualModelArchiveNoexceptRefusalTested = $record.success -and $record.results[0].actualModelArchiveNoexceptRefusalTested
-    $record.noexceptRefusal = $record.results[0].noexceptRefusal
-    $record.actualModelClassificationSdkTested = $record.success -and $record.results[0].actualModelClassificationSdkTested
-    $record.actualModelTypeSdkTested = $record.success -and $record.results[0].actualModelTypeSdkTested
+    $record.actualModelArchiveExceptionSdkTested = @($record.results | Where-Object { -not $_.actualModelArchiveExceptionSdkTested }).Count -eq 0
+    $record.success = $record.results.Count -eq $architectures.Count -and $record.actualModelArchiveExceptionSdkTested
+    $record.actualModelArchiveSdkTested = $record.success -and $Scope -eq 'Full' -and $record.results[0].actualModelArchiveSdkTested
+    $record.actualModelClassificationSdkTested = $record.success -and $Scope -eq 'Full' -and $record.results[0].actualModelClassificationSdkTested
+    $record.actualModelTypeSdkTested = $record.success -and $Scope -eq 'Full' -and $record.results[0].actualModelTypeSdkTested
 } catch { AddFailure ($_.Exception.ToString()) }
 finally {
     foreach ($name in $previousEnvironment.Keys) {
@@ -211,4 +217,4 @@ finally {
     $record | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $outputRoot 'test-result.json') -Encoding utf8NoBOM
 }
 [ordered]@{success=$record.success;receipt=(Join-Path $outputRoot 'test-result.json');failure=$record.failure} | ConvertTo-Json -Compress
-if (-not $record.success) { throw "Actual MTA streaming SDK checks failed; see $outputRoot" }
+if (-not $record.success) { throw "Actual MTA model archive/classification SDK checks failed; see $outputRoot" }

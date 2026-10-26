@@ -90,15 +90,16 @@ namespace mta::game_de
             return false;
         return QueryType() == eModelInfoType::VEHICLE;
     }
-    bool CModelInfoDE::IsAllocatedInArchive() const noexcept
+    bool CModelInfoDE::IsAllocatedInArchive() const
     {
-        bool allocated = false;
-        // The genuine DE named predicate is the counterpart of this SDK
-        // intent, not a fabricated classic physical sizeInBlocks field.
-        // noexcept offers no refusal value: do not turn owner loss into an
-        // apparently successful absent archive. This slice stays unpublished.
-        if (access.ReadModelArchiveAllocated(model, allocated) != ClockResult::Ok)
-            std::terminate();
+        const auto index = model;
+        bool       allocated = false;
+        // Preserve the genuine named predicate, including successful false.
+        // Owner refusal must remain catchable rather than terminate the client
+        // or masquerade as absence and permit model-removal policy to continue.
+        const auto status = access.ReadModelArchiveAllocated(index, allocated);
+        if (status != ClockResult::Ok)
+            throw std::runtime_error("DE model owner refused archive allocation: " + std::to_string(static_cast<unsigned>(status)));
         return allocated;
     }
     bool CModelInfoDE::Query(NativeModelVehiclePredicate predicate)

@@ -117,8 +117,17 @@ bool CClientObjectManager::IsValidModel(unsigned long ulObjectModel)
     if (300 <= ulObjectModel && ulObjectModel <= 314)
         return false;
 
-    if (!pModelInfo->IsAllocatedInArchive())
+    try
+    {
+        if (!pModelInfo->IsAllocatedInArchive())
+            return false;
+    }
+    catch (...)
+    {
+        // Refused archive admission cannot establish that this model is safe
+        // for object creation. Keep type selection outside this boundary.
         return false;
+    }
 
     eModelInfoType eType = pModelInfo->GetModelType();
     return (eType == eModelInfoType::CLUMP || eType == eModelInfoType::ATOMIC || eType == eModelInfoType::WEAPON || eType == eModelInfoType::TIME);

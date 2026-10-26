@@ -11,8 +11,21 @@ row when animation offsets change. WORD8/A/C/E retain their unsigned-node or
 signed-ID/group/flags types. The actual hierarchy pointer is at18;10 is the
 node-sequence pointer. Neither target is dereferenced or adopted by these
 getters. Original parent/child cookies and owner bookends qualify each read,
-without an added Created, node or hierarchy predicate. Initialization and four
-setters remain pure, and no static-association factory is published.
+without an added Created, node or hierarchy predicate. Initialization remains
+pure, and no static-association factory is published.
+
+The four source static-association scalar setters now forward their exact
+WORD values through that same physical-row owner. ID, group and flags preserve
+all signed-short bits. Node-count mutation is admitted only when both counts
+are in the native signed-positive domain and the requested count does not grow
+the freshly observed count; a positive current node range must also qualify.
+Zero count needs no node dereference. This grants no node allocation, capacity
+lease or free authority. A single guarded compare/exchange reports entry,
+acceptance and verified completion, with full-row and ownership bookends.
+After an entered failure the runtime stops; it never retries or rolls back into
+storage that may have been retired and reused. Unsupported count growth or
+high-bit counts refuse explicitly. These are the real low-level static setters,
+distinct from the dynamic-association setters used during animation replacement.
 
 The actual association-group SDK now has a partial DE implementation for
 IsCreated, GetNumAnimations, GetGroupID, IsLoaded and the opaque GetInterface

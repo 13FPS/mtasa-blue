@@ -12,6 +12,10 @@ namespace mta::game_de
     class CAnimBlendStaticAssociationDE : public CAnimBlendStaticAssociation
     {
     public:
+        void                                    SetNumBlendNodes(unsigned short) override;
+        void                                    SetAnimID(short) override;
+        void                                    SetAnimGroup(short) override;
+        void                                    SetFlags(short) override;
         unsigned short                          GetNumBlendNodes() override;
         short                                   GetAnimID() override;
         short                                   GetAnimGroup() override;
@@ -30,8 +34,9 @@ namespace mta::game_de
         NativeAnimationStaticAssociationAccess&              native;
         const NativeAnimationStaticAssociationReferenceToken reference;
     };
-    // All five real initialization/setter contracts remain pure. There is no
-    // public factory or deletion through the SDK base without a virtual dtor.
+    // Initialize still needs genuine clump/node/hierarchy authority and stays
+    // pure. Scalar writes grant no child ownership or complete factory; no
+    // deletion through the SDK base without a virtual dtor is introduced.
     static_assert(std::is_abstract_v<CAnimBlendStaticAssociationDE> && std::is_base_of_v<CAnimBlendStaticAssociation, CAnimBlendStaticAssociationDE>);
     static_assert(!std::is_default_constructible_v<CAnimBlendStaticAssociationDE>);
 }

@@ -43,5 +43,25 @@ namespace mta::game_de
         {
             return ClockResult::NotInitialized;
         }
+        // Source setters store exactly one WORD. The owner must re-admit the
+        // physical row before/after; borrowing it grants no node allocation,
+        // initialization or free rights. Count growth needs separate payload
+        // authority and is explicitly refused in the supported domain.
+        virtual ClockResult SetAnimationStaticAssociationNumBlendNodes(const NativeAnimationStaticAssociationReferenceToken&, std::uint16_t) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
+        virtual ClockResult SetAnimationStaticAssociationAnimID(const NativeAnimationStaticAssociationReferenceToken&, std::int16_t) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
+        virtual ClockResult SetAnimationStaticAssociationAnimGroup(const NativeAnimationStaticAssociationReferenceToken&, std::int16_t) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
+        virtual ClockResult SetAnimationStaticAssociationFlags(const NativeAnimationStaticAssociationReferenceToken&, std::int16_t) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
     };
 }

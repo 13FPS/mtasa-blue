@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads')]
+    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -57,6 +57,11 @@ $record['privateHierarchyRetainedLifetimeTested']=$false
 $record['nativePrivateAnimationFactoryOwnerTested']=$false
 $record['actualPrivateAnimationFactorySdkOwnerTested']=$false
 $record['privateAnimationFactoryOutputBookendsTested']=$false
+$record['nativeAnimationStaticAssociationWritesOwnerTested']=$false
+$record['actualAnimationStaticAssociationWritesSdkOwnerTested']=$false
+$record['animationStaticAssociationWriteConflictTested']=$false
+$record['animationStaticAssociationWriteLostAckTested']=$false
+$record['animationStaticAssociationWriteUnknownRetained']=$false
 $record['nativeAnimationStaticAssociationOwnerTested']=$false
 $record['actualAnimationStaticAssociationSdkOwnerTested']=$false
 $record['nativeAnimationAssociationGroupOwnerTested']=$false
@@ -492,6 +497,7 @@ try {
     $sourceNames += @('Client/game_de/NativeAnimationSequenceName.h','Client/game_de/NativeAnimationSequenceName.cpp','Client/game_de/NativeAnimationSequenceNameCalls.h','Client/game_de/NativeAnimationSequenceNameProfile.h','Tests/definitive/NativeCustomAnimationSequenceNameOwnerTests.inl')
     $sourceNames += @('Client/game_de/NativeAnimationSequenceFrameBindCalls.h','Client/game_de/NativeAnimationSequenceFrameBindProfile.h','Tests/definitive/NativeFreshCompressedSequenceOwnerTests.inl')
     $sourceNames += @('Client/game_de/NativePrivateAnimationHierarchyStorage.h','Client/game_de/NativePrivateAnimationHierarchyStorage.cpp','Client/game_de/NativePrivateAnimationHierarchyController.h','Client/game_de/NativePrivateAnimationHierarchyController.cpp','Tests/definitive/NativePrivateHierarchyOwnerTests.inl')
+    $sourceNames += @('Tests/definitive/NativeAnimationStaticAssociationWritesOwnerTests.inl')
     $sourceNames += @('Tests/definitive/NativeAnimationStaticAssociationOwnerTests.inl','Tests/definitive/Write-AnimationStaticAssociationFixture.ps1','Client/game_de/NativeAnimationStaticAssociationAccess.h','Client/game_de/CAnimBlendStaticAssociationDE.h','Client/game_de/CAnimBlendStaticAssociationDE.cpp','Client/sdk/game/CAnimBlendStaticAssociation.h')
     $sourceNames += @('Tests/definitive/NativeAnimationAssociationGroupOwnerTests.inl','Tests/definitive/Write-AnimationAssociationGroupFixture.ps1','Client/game_de/NativeAnimationAssociationGroupAccess.h','Client/game_de/CAnimBlendAssocGroupDE.h','Client/game_de/CAnimBlendAssocGroupDE.cpp','Client/sdk/game/CAnimBlendAssocGroup.h')
     $sourceNames += @('Tests/definitive/NativeAnimationIdValidityOwnerTests.inl','Client/game_de/NativeAnimationStaticAssociationProfile.h','Client/sdk/game/CAnimValidityPolicy.h')
@@ -986,7 +992,36 @@ namespace ClockPrivateHierarchyParentWriteFixture {
     if ($Scope -eq 'GarageNamed') { $fixtureArguments += '--garage-named' }
     if ($Scope -eq 'GaragePools') { $fixtureArguments += '--garage-pools' }
     if ($Scope -eq 'PedPoolRegistry') { $fixtureArguments += '--ped-pool-registry' }
-    if($Scope -eq 'AnimationManagerCache'){
+    if($Scope -eq 'AnimationStaticAssociationWrites'){
+        $record['testRuns']=@();$record['testScenarioExecutables']=@();$texts=@()
+        foreach($scenario in @('success','conflict','lost-ack','unknown')){
+            $scenarioRoot=Join-Path $outputRoot ('scenario-animation-static-association-writes-'+$scenario)
+            [IO.Directory]::CreateDirectory($scenarioRoot)|Out-Null
+            $scenarioExecutable=Join-Path $scenarioRoot ([IO.Path]::GetFileName($executable))
+            if(Test-Path -LiteralPath $scenarioExecutable){throw 'Static association write scenario evidence already exists'}
+            Copy-Item -LiteralPath $executable -Destination $scenarioExecutable
+            $scenarioHash=Sha $scenarioExecutable
+            if($scenarioHash -cne (Sha $executable)){throw 'Static association write scenario executable changed'}
+            $entry=[ordered]@{scenario=$scenario;path=$scenarioExecutable;sha256=$scenarioHash;copyRetired=$false}
+            $record.testScenarioExecutables+=@($entry)
+            try{
+                $run=RunBounded $scenarioExecutable @($scenarioRoot,('--animation-static-association-writes-'+$scenario)) ('test-animation-static-association-writes-'+$scenario) 60000
+                $record.testRuns+=$run
+                $part=[IO.File]::ReadAllText($run.stdout)+[IO.File]::ReadAllText($run.stderr)
+                if($run.exitCode -ne 0 -or $run.timedOut -or $part -notmatch 'Passed (\d+) production clock service checks'){throw ('Static association write '+$scenario+' failed')}
+                $record.checks+=[int]$Matches[1];$texts+=$part
+            }finally{
+                # The original executable and exact hash remain durable. Only
+                # this task-created identical animation-static-association-writes scenario payload is disposable.
+                $expected=(Resolve-Path -LiteralPath $scenarioRoot).Path.TrimEnd('\')+'\'
+                $resolved=(Resolve-Path -LiteralPath $scenarioExecutable).Path
+                if(-not $resolved.StartsWith($expected,[StringComparison]::OrdinalIgnoreCase) -or (Sha $scenarioExecutable) -cne $scenarioHash){throw 'Static association write scenario executable ownership changed'}
+                Remove-Item -LiteralPath $scenarioExecutable -Force
+                $entry.copyRetired=$true
+            }
+        }
+        $record.testRun=$record.testRuns[-1];$text=$texts -join [Environment]::NewLine
+    } elseif($Scope -eq 'AnimationManagerCache'){
         $record['testRuns']=@();$record['testScenarioExecutables']=@();$texts=@()
         foreach($scenario in @('success','foreign')){
             $scenarioRoot=Join-Path $outputRoot ('scenario-animation-manager-cache-'+$scenario)
@@ -1304,7 +1339,15 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
         if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
     }
-    if($Scope -eq 'AnimationStaticAssociationReads'){
+    if($Scope -eq 'AnimationStaticAssociationWrites'){
+        $record.nativeAnimationStaticAssociationWritesOwnerTested=$text.Contains('Production static association scalar writes owner fixture completed')
+        $record.actualAnimationStaticAssociationWritesSdkOwnerTested=$text.Contains('Production actual static association scalar SDK fixture completed')
+        $record.animationStaticAssociationWriteConflictTested=$text.Contains('Production static association scalar conflict stop fixture completed')
+        $record.animationStaticAssociationWriteLostAckTested=$text.Contains('Production static association scalar lost acknowledgement fixture completed')
+        $record.animationStaticAssociationWriteUnknownRetained=$text.Contains('Production static association scalar unknown write fixture completed')
+        if(-not($record.nativeAnimationStaticAssociationWritesOwnerTested -and $record.actualAnimationStaticAssociationWritesSdkOwnerTested -and $record.animationStaticAssociationWriteConflictTested -and $record.animationStaticAssociationWriteLostAckTested -and $record.animationStaticAssociationWriteUnknownRetained)){throw 'Static association write selected scope incomplete'}
+        $record.productionNativeCallbackTested=$true
+    } elseif($Scope -eq 'AnimationStaticAssociationReads'){
         $record.nativeAnimationStaticAssociationOwnerTested=$text.Contains('Production animation static association owner fixture completed')
         $record.actualAnimationStaticAssociationSdkOwnerTested=$text.Contains('Production actual animation static association SDK fixture completed')
         if(-not($record.nativeAnimationStaticAssociationOwnerTested -and $record.actualAnimationStaticAssociationSdkOwnerTested)){throw 'Animation static association selected scope incomplete'}

@@ -16,6 +16,7 @@
 #include "NativeStartGameCalls.h"
 #include <array>
 #include <cstring>
+#include <intrin.h>
 #include <limits>
 namespace mta::game_de
 {
@@ -1128,5 +1129,182 @@ namespace mta::game_de
         next.hierarchyAddress = observed.hierarchy;
         output = next;
         return ClockResult::Ok;
+    }
+
+    namespace AnimationStaticAssociationWriteDetail
+    {
+        namespace Read = AnimationStaticAssociationReadDetail;
+        namespace Group = AnimationGroupCreatedDetail;
+        namespace P = NativeAnimationStaticAssociationProfile;
+        namespace Memory = NativeModelReferenceMap;
+        using Binding = NativeAnimationManagerMemory::Binding;
+        using CheckOwner = NativeAnimationManagerMemory::CheckOwner;
+        using Field = NativeAnimationManagerMemory::StaticAssociationScalar;
+        thread_local bool writing = false;
+        struct WriteScope
+        {
+            WriteScope() noexcept { writing = true; }
+            ~WriteScope() { writing = false; }
+        };
+        bool Offset(Field field, std::size_t& offset) noexcept
+        {
+            switch (field)
+            {
+                case Field::NumBlendNodes:
+                    offset = P::NumBlendNodesOffset;
+                    return true;
+                case Field::AnimID:
+                    offset = P::IdOffset;
+                    return true;
+                case Field::AnimGroup:
+                    offset = P::AnimGroupOffset;
+                    return true;
+                case Field::Flags:
+                    offset = P::FlagsOffset;
+                    return true;
+                default:
+                    return false;
+            }
+        }
+        struct Snapshot
+        {
+            Read::Snapshot                identity{};
+            std::array<unsigned char, 32> row{};
+        };
+        ClockResult Capture(Binding binding, CheckOwner owner, const NativeAnimationStaticAssociationReferenceToken& token, Snapshot& output) noexcept
+        {
+            Snapshot next;
+            auto     result = Read::Read(binding, owner, token.groupIndex, token.index, token.locator, next.identity);
+            if (result != ClockResult::Ok)
+                return result;
+            if (!Memory::Copy(token.locator, next.row.data(), next.row.size()))
+                return ClockResult::ReadFailure;
+            if (std::memcmp(next.row.data() + 8, next.identity.scalars.data(), next.identity.scalars.size()) ||
+                std::memcmp(next.row.data() + 0x18, &next.identity.hierarchy, sizeof(next.identity.hierarchy)))
+                return ClockResult::BindingChanged;
+            output = next;
+            return ClockResult::Ok;
+        }
+        bool Same(const Snapshot& a, const Snapshot& b) noexcept
+        {
+            return Read::Same(a.identity, b.identity) && a.row == b.row;
+        }
+        ClockResult CountDomain(const Snapshot& state, std::uint16_t target) noexcept
+        {
+            std::uint16_t  current = 0;
+            std::uintptr_t nodes = 0;
+            std::memcpy(&current, state.row.data() + P::NumBlendNodesOffset, sizeof(current));
+            std::memcpy(&nodes, state.row.data() + P::NodesOffset, sizeof(nodes));
+            // The engine stores a signed-domain native node count and allocates
+            // exactly count*8 in FEB5F0. No payload cookie is available here:
+            // current pages are only necessary validation, never a capacity
+            // lease. Refuse growth and high-bit counts instead of guessing one.
+            if (current > 0x7fffu || target > current)
+                return ClockResult::InvalidArgument;
+            if (!current)
+                return ClockResult::Ok;
+            const auto bytes = static_cast<std::size_t>(current) * sizeof(std::uintptr_t);
+            const auto childBase = state.identity.parent.child - NativeAnimationStaticAssociationProfile::CookieBytes;
+            const auto childBytes = NativeAnimationStaticAssociationProfile::CookieBytes +
+                                    static_cast<std::size_t>(state.identity.capacity) * NativeAnimationStaticAssociationProfile::RowBytes;
+            const auto outerBase = state.identity.parent.array.rows - NativeAnimationGroupArrayProfile::CookieBytes;
+            const auto outerBytes = NativeAnimationGroupArrayProfile::CookieBytes +
+                                    static_cast<std::size_t>(state.identity.parent.array.capacity) * NativeAnimationGroupArrayProfile::RowBytes;
+            if (!nodes || nodes % alignof(std::uintptr_t) || !Group::HeapSpan(nodes, bytes) || !Memory::Disjoint(nodes, bytes, childBase, childBytes) ||
+                !Memory::Disjoint(nodes, bytes, outerBase, outerBytes))
+                return ClockResult::BindingChanged;
+            return ClockResult::Ok;
+        }
+        // Retained even when a fixture supplies the optional seam: tests can
+        // delegate the actual guarded CAS rather than mirror its effects.
+        ClockResult ExchangeWord(std::uintptr_t address, std::uint16_t expected, std::uint16_t target, std::uint16_t& observed, bool& accepted,
+                                 std::uint32_t& exception) noexcept
+        {
+            static_assert(sizeof(SHORT) == sizeof(std::uint16_t));
+            SHORT before = 0, desired = 0;
+            std::memcpy(&before, &expected, 2);
+            std::memcpy(&desired, &target, 2);
+            accepted = false;
+            __try
+            {
+                const auto previous = InterlockedCompareExchange16(reinterpret_cast<volatile SHORT*>(address), desired, before);
+                std::memcpy(&observed, &previous, 2);
+                accepted = observed == expected;
+                return ClockResult::Ok;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                exception = GetExceptionCode();
+                return ClockResult::OriginalException;
+            }
+        }
+    }
+    ClockResult NativeAnimationManagerMemory::WriteStaticAssociation(const NativeAnimationStaticAssociationReferenceToken& source,
+                                                                     StaticAssociationScalar requestedField, std::uint16_t requestedValue,
+                                                                     StaticAssociationWriteReceipt* output, StaticAssociationExchange exchange) const noexcept
+    {
+        namespace D = AnimationStaticAssociationWriteDetail;
+        const auto                    token = source;
+        const auto                    field = requestedField;
+        const auto                    target = requestedValue;
+        StaticAssociationWriteReceipt receipt;
+        receipt.field = field;
+        receipt.target = target;
+        const auto finish = [&](ClockResult result)
+        {
+            if (output)
+                *output = receipt;
+            return result;
+        };
+        std::size_t offset = 0;
+        if (!token.locator || !D::Offset(field, offset))
+            return finish(ClockResult::InvalidArgument);
+        if (D::writing)
+            return finish(ClockResult::Busy);
+        D::WriteScope scope;
+        D::Snapshot   first, second;
+        auto          result = D::Capture(binding, owner, token, first);
+        if (result != ClockResult::Ok)
+            return finish(result);
+        if ((result = D::Capture(binding, owner, token, second)) != ClockResult::Ok)
+            return finish(result);
+        if (!D::Same(first, second))
+            return finish(ClockResult::BindingChanged);
+        if (field == StaticAssociationScalar::NumBlendNodes && (result = D::CountDomain(second, target)) != ClockResult::Ok)
+            return finish(result);
+        receipt.address = token.locator + offset;
+        std::memcpy(&receipt.before, second.row.data() + offset, 2);
+        if (receipt.address % alignof(std::uint16_t) || !D::Group::HeapSpan(receipt.address, 2))
+            return finish(ClockResult::WriteFailure);
+        if ((result = D::Read::Begin(binding, owner)) != ClockResult::Ok)
+            return finish(result);
+#if defined(MTA_DE_ANIMATION_STATIC_ASSOCIATION_EXCHANGE)
+        const auto entry = exchange ? exchange : &MTA_DE_ANIMATION_STATIC_ASSOCIATION_EXCHANGE;
+#else
+        const auto entry = exchange ? exchange : &D::ExchangeWord;
+#endif
+        // A scalar setter is persistent intent. Mark entry before the sole CAS:
+        // after owner loss this borrowed child may be retired/reused, so an
+        // apparent rollback could overwrite a different live native object.
+        receipt.entered = true;
+        result = entry(receipt.address, receipt.before, target, receipt.observed, receipt.accepted, receipt.exceptionCode);
+        if (result != ClockResult::Ok)
+            return finish(result);
+        if (!receipt.accepted || receipt.observed != receipt.before)
+            return finish(ClockResult::OwnerConflict);
+        D::Snapshot after;
+        if ((result = D::Capture(binding, owner, token, after)) != ClockResult::Ok)
+            return finish(result);
+        auto expected = second;
+        std::memcpy(expected.row.data() + offset, &target, 2);
+        std::memcpy(expected.identity.scalars.data() + offset - 8, &target, 2);
+        if (!D::Same(expected, after))
+            return finish(ClockResult::BindingChanged);
+        if (field == StaticAssociationScalar::NumBlendNodes && (result = D::CountDomain(after, target)) != ClockResult::Ok)
+            return finish(result);
+        if ((result = D::Read::Begin(binding, owner)) != ClockResult::Ok)
+            return finish(result);
+        receipt.verified = true;
+        return finish(ClockResult::Ok);
     }
 }

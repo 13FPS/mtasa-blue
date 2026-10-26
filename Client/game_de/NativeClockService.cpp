@@ -169,6 +169,12 @@ namespace mta::game_de
                                    public NativeAnimationStaticAssociationAccess
         {
         public:
+            ClockResult SetAnimationStaticAssociationNumBlendNodes(const NativeAnimationStaticAssociationReferenceToken&, std::uint16_t) noexcept override;
+            ClockResult SetAnimationStaticAssociationAnimID(const NativeAnimationStaticAssociationReferenceToken&, std::int16_t) noexcept override;
+            ClockResult SetAnimationStaticAssociationAnimGroup(const NativeAnimationStaticAssociationReferenceToken&, std::int16_t) noexcept override;
+            ClockResult SetAnimationStaticAssociationFlags(const NativeAnimationStaticAssociationReferenceToken&, std::int16_t) noexcept override;
+            ClockResult WriteStaticAssociationWord(const NativeAnimationStaticAssociationReferenceToken&, NativeAnimationManagerMemory::StaticAssociationScalar,
+                                                   std::uint16_t) noexcept;
             ClockResult ResolveAnimationStaticAssociation(std::uint64_t, std::uint32_t, std::size_t,
                                                           NativeAnimationStaticAssociationReferenceToken&) noexcept override;
             ClockResult ReadAnimationStaticAssociation(const NativeAnimationStaticAssociationReferenceToken&,
@@ -5840,6 +5846,67 @@ namespace mta::game_de
                 return ClockResult::OwnerConflict;
             output = next;
             return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::WriteStaticAssociationWord(const NativeAnimationStaticAssociationReferenceToken& source,
+                                                             NativeAnimationManagerMemory::StaticAssociationScalar requestedField,
+                                                             std::uint16_t                                         requestedValue) noexcept
+        {
+            const auto token = source;
+            const auto field = requestedField;
+            const auto value = requestedValue;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto generation = runtime.generation.load();
+            if (!token.ownerGeneration || token.ownerGeneration != generation)
+                return ClockResult::OwnerConflict;
+            NativeAnimationManagerMemory::StaticAssociationWriteReceipt receipt;
+            result = NativeAnimationManagerMemory({runtime.image}, &CheckTimingOwner).WriteStaticAssociation(token, field, value, &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = CheckTimingOwner();
+                if (result == ClockResult::Ok && runtime.generation.load() != generation)
+                    result = ClockResult::OwnerConflict;
+            }
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+        ClockResult NativeAccess::SetAnimationStaticAssociationNumBlendNodes(const NativeAnimationStaticAssociationReferenceToken& source,
+                                                                             std::uint16_t                                         requestedValue) noexcept
+        {
+            const auto    token = source;
+            const auto    value = requestedValue;
+            std::uint16_t bits = 0;
+            std::memcpy(&bits, &value, sizeof(bits));
+            return WriteStaticAssociationWord(token, NativeAnimationManagerMemory::StaticAssociationScalar::NumBlendNodes, bits);
+        }
+        ClockResult NativeAccess::SetAnimationStaticAssociationAnimID(const NativeAnimationStaticAssociationReferenceToken& source,
+                                                                      std::int16_t                                          requestedValue) noexcept
+        {
+            const auto    token = source;
+            const auto    value = requestedValue;
+            std::uint16_t bits = 0;
+            std::memcpy(&bits, &value, sizeof(bits));
+            return WriteStaticAssociationWord(token, NativeAnimationManagerMemory::StaticAssociationScalar::AnimID, bits);
+        }
+        ClockResult NativeAccess::SetAnimationStaticAssociationAnimGroup(const NativeAnimationStaticAssociationReferenceToken& source,
+                                                                         std::int16_t                                          requestedValue) noexcept
+        {
+            const auto    token = source;
+            const auto    value = requestedValue;
+            std::uint16_t bits = 0;
+            std::memcpy(&bits, &value, sizeof(bits));
+            return WriteStaticAssociationWord(token, NativeAnimationManagerMemory::StaticAssociationScalar::AnimGroup, bits);
+        }
+        ClockResult NativeAccess::SetAnimationStaticAssociationFlags(const NativeAnimationStaticAssociationReferenceToken& source,
+                                                                     std::int16_t                                          requestedValue) noexcept
+        {
+            const auto    token = source;
+            const auto    value = requestedValue;
+            std::uint16_t bits = 0;
+            std::memcpy(&bits, &value, sizeof(bits));
+            return WriteStaticAssociationWord(token, NativeAnimationManagerMemory::StaticAssociationScalar::Flags, bits);
         }
         ClockResult NativeAccess::ReadAnimationGroupCreated(std::uint64_t requestedGeneration, std::uint32_t requestedIndex, bool& output) noexcept
         {

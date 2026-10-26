@@ -33,6 +33,26 @@ namespace mta::game_de
         ClockResult ReadAssociationGroupLoaded(const NativeAnimationAssociationGroupReferenceToken&, bool&) const noexcept;
         ClockResult ResolveStaticAssociation(std::uint32_t, std::size_t, NativeAnimationStaticAssociationReferenceToken&) const noexcept;
         ClockResult ReadStaticAssociation(const NativeAnimationStaticAssociationReferenceToken&, NativeAnimationStaticAssociationValues&) const noexcept;
+        enum class StaticAssociationScalar : std::uint8_t
+        {
+            NumBlendNodes,
+            AnimID,
+            AnimGroup,
+            Flags
+        };
+        struct StaticAssociationWriteReceipt
+        {
+            StaticAssociationScalar field = StaticAssociationScalar::NumBlendNodes;
+            std::uintptr_t          address = 0;
+            std::uint16_t           before = 0, target = 0, observed = 0;
+            std::uint32_t           exceptionCode = 0;
+            bool                    entered = false, accepted = false, verified = false;
+        };
+        using StaticAssociationExchange = ClockResult (*)(std::uintptr_t, std::uint16_t, std::uint16_t, std::uint16_t&, bool&, std::uint32_t&) noexcept;
+        // One persistent WORD store, never node-vector allocation authority.
+        // A lost post-entry acknowledgement must stop without replay/rollback.
+        ClockResult WriteStaticAssociation(const NativeAnimationStaticAssociationReferenceToken&, StaticAssociationScalar, std::uint16_t,
+                                           StaticAssociationWriteReceipt* = nullptr, StaticAssociationExchange = nullptr) const noexcept;
         ClockResult FindBlockIndex(const NativeAnimationBlockName&, std::int32_t&) const noexcept;
 
     private:

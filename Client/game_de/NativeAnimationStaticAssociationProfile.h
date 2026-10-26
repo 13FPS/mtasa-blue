@@ -8,6 +8,9 @@
 namespace mta::game_de::NativeAnimationStaticAssociationProfile
 {
     inline constexpr std::size_t RowBytes = 32, CookieBytes = 8, IdOffset = 0x0a, MaximumPinBytes = 110;
+    // These are independent native WORD fields, not the classic structure's
+    // pointer-width-adjusted layout. FEB5F0 distinguishes nodes10/hierarchy18.
+    inline constexpr std::size_t NumBlendNodesOffset = 8, AnimGroupOffset = 0x0c, FlagsOffset = 0x0e, NodesOffset = 0x10, HierarchyOffset = 0x18;
     using Pin = NativeAnimationGroupArrayProfile::Pin;
     // FF1120 subtracts rawDWORD parent offset in32 bits, zeroextends the
     // result and scales32; no fallback/default-group or NumAnims clamp exists.

@@ -24,6 +24,38 @@ namespace mta::game_de
         Require(native.ReadAnimationStaticAssociation(token, value), operation);
         return value;
     }
+    void CAnimBlendStaticAssociationDE::SetNumBlendNodes(unsigned short count)
+    {
+        static_assert(sizeof(count) == sizeof(std::uint16_t));
+        const auto token = reference;
+        const auto value = static_cast<std::uint16_t>(count);
+        // This preserves the source WORD. Only the current native owner can
+        // establish a safe count domain; the SDK neither infers node capacity
+        // from readable pages nor clamps an unsupported growth request.
+        Require(native.SetAnimationStaticAssociationNumBlendNodes(token, value), "SetNumBlendNodes");
+    }
+    void CAnimBlendStaticAssociationDE::SetAnimID(short id)
+    {
+        static_assert(sizeof(id) == sizeof(std::int16_t));
+        const auto token = reference;
+        const auto value = static_cast<std::int16_t>(id);
+        Require(native.SetAnimationStaticAssociationAnimID(token, value), "SetAnimID");
+    }
+    void CAnimBlendStaticAssociationDE::SetAnimGroup(short group)
+    {
+        const auto token = reference;
+        const auto value = static_cast<std::int16_t>(group);
+        Require(native.SetAnimationStaticAssociationAnimGroup(token, value), "SetAnimGroup");
+    }
+    void CAnimBlendStaticAssociationDE::SetFlags(short flags)
+    {
+        const auto token = reference;
+        const auto value = static_cast<std::int16_t>(flags);
+        // Source accepts every signed16 flag pattern. Native entry/failure
+        // disposition belongs to this same owner; never retry or restore a
+        // potentially retired borrowed row from a facade destructor.
+        Require(native.SetAnimationStaticAssociationFlags(token, value), "SetFlags");
+    }
     unsigned short CAnimBlendStaticAssociationDE::GetNumBlendNodes()
     {
         static_assert(sizeof(unsigned short) == sizeof(std::uint16_t));

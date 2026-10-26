@@ -91,6 +91,14 @@ namespace mta::game_de
             return ClockResult::NotInitialized;
         }
 
+        // Copy raw source progress once. This same owner must qualify the
+        // current parent/H time, multiply one float and run the genuine native
+        // helper; separate public duration and mutation calls would tear it.
+        virtual ClockResult SetPrivateAnimationAssociationCurrentProgress(const NativeAnimationAssociationReferenceToken&, std::uint32_t) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
+
     protected:
         ~NativeAnimationAssociationAccess() = default;
     };

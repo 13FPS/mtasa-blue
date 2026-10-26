@@ -53,6 +53,8 @@ namespace mta::game_de
             Flags
         };
         using ConstructorFunction = std::uintptr_t (*)(std::uintptr_t, std::uintptr_t);
+        using ProgressFunction = void (*)(std::uintptr_t, float);
+        using InvokeProgress = ClockResult (*)(ProgressFunction, std::uintptr_t, float, std::uint32_t&) noexcept;
         using DestructorFunction = std::uintptr_t (*)(std::uintptr_t, std::uint32_t);
         using InvokeConstructor = ClockResult (*)(ConstructorFunction, std::uintptr_t, std::uintptr_t, std::uintptr_t&, std::uint32_t&) noexcept;
         using InvokeDestructor = ClockResult (*)(DestructorFunction, std::uintptr_t, std::uint32_t, std::uintptr_t&, std::uint32_t&) noexcept;
@@ -68,6 +70,9 @@ namespace mta::game_de
                  refVerified = false, pinned = false;
             std::uint32_t visitedNodes = 0, attemptedNodes = 0, acceptedNodes = 0;
             bool          noOp = false;
+            std::uint32_t progressBits = 0, absoluteTimeBits = 0;
+            std::size_t   preparedFrames = 0, modifiedFrames = 0;
+            bool          progressed = false, progressUnknown = false;
         };
         ClockResult Create(std::uintptr_t, Storage&, std::uint64_t, CheckOwner, Receipt* = nullptr,
                            NativeCustomAnimSequenceStorageCalls::InvokeMalloc = nullptr) noexcept;
@@ -78,6 +83,10 @@ namespace mta::game_de
         // metadata does not acquire this extra field/profile dependency.
         ClockResult ReadLength(std::uintptr_t, const Storage&, std::uint64_t, CheckOwner, std::uint32_t&) noexcept;
         ClockResult Set(std::uintptr_t, Storage&, std::uint64_t, Scalar, std::uint32_t, CheckOwner, Receipt* = nullptr, Exchange = nullptr) noexcept;
+        // Progress calls the genuine time helper after a bounded payload plan;
+        // an unknown entered transition is never replayed or repaired by copying.
+        ClockResult SetCurrentProgress(std::uintptr_t, Storage&, std::uint64_t, std::uint32_t, CheckOwner, Receipt* = nullptr,
+                                       InvokeProgress = nullptr) noexcept;
         ClockResult Retire(std::uintptr_t, Storage&, std::uint64_t, CheckOwner, Receipt* = nullptr, InvokeDestructor = nullptr,
                            NativeCustomAnimSequenceStorageCalls::InvokeFree = nullptr) noexcept;
         // A hierarchy token remains a current borrowed bank identity, never

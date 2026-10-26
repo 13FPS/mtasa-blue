@@ -6,6 +6,7 @@
 #include "NativeAnimationAssociationStorage.h"
 #include "NativeAnimationAssociationOuterStorageCalls.h"
 #include "NativeAnimationAssociationProfile.h"
+#include "NativeAnimationAssociationProgressDetail.h"
 #include "NativeAnimationHierarchyReadProfile.h"
 #include "NativeAnimationHierarchyOrigin.h"
 #include "NativeAnimationBlockRefMemory.h"
@@ -51,6 +52,19 @@ namespace mta::game_de
             __try
             {
                 returned = function(receiver, input);
+                return ClockResult::Ok;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                exception = GetExceptionCode();
+                return ClockResult::OriginalException;
+            }
+        }
+        ClockResult InvokeProgress(ProgressFunction function, std::uintptr_t receiver, float absoluteTime, std::uint32_t& exception) noexcept
+        {
+            __try
+            {
+                function(receiver, absoluteTime);
                 return ClockResult::Ok;
             }
             __except (EXCEPTION_EXECUTE_HANDLER)
@@ -314,7 +328,13 @@ namespace mta::game_de
         std::size_t                                 request = 0;
         AnimationAssociationStorageDetail::Prepared source;
         std::vector<unsigned char>                  suppressed;
-        bool                                        knownConstructed = false, constructorEntered = false, destructorEntered = false, retirementVerified = false;
+        // Cache definedness follows exact returned native effects. Borrowed
+        // frame entries record only accepted quaternion writes, never ownership.
+        std::vector<AnimationAssociationProgressDetail::Cache>        cache;
+        std::vector<AnimationAssociationProgressDetail::FrameJournal> frameJournal;
+        bool                                                          progressUnknown = false;
+        std::unique_ptr<AnimationAssociationProgressDetail::Plan>     pendingProgress;
+        bool knownConstructed = false, constructorEntered = false, destructorEntered = false, retirementVerified = false;
     };
     NativeAnimationAssociationStorage::NativeAnimationAssociationStorage() noexcept = default;
     NativeAnimationAssociationStorage::~NativeAnimationAssociationStorage() = default;
@@ -336,6 +356,7 @@ namespace mta::game_de
             r.nodeCount = d.source.count;
             r.hierarchy = d.source.bank.hierarchy;
             r.constructed = d.knownConstructed;
+            r.progressUnknown = d.progressUnknown;
             r.refVerified = d.knownConstructed && (!d.destructorEntered || d.retirementVerified);
         }
         static ClockResult Pin(const S& s, ClockResult result) noexcept
@@ -360,7 +381,7 @@ namespace mta::game_de
             return Context::Owner(image, owner);
         }
         static ClockResult Snapshot(std::uintptr_t image, const S& s, std::uint64_t generation, C owner, AnimationAssociationStorageDetail::Bytes& bytes,
-                                    NativeModelReferenceHeap::Value& heap) noexcept
+                                    NativeModelReferenceHeap::Value& heap, const AnimationAssociationProgressDetail::Plan* transition = nullptr) noexcept
         {
             using namespace AnimationAssociationStorageDetail;
             const auto state = s.GetState();
@@ -394,7 +415,8 @@ namespace mta::game_de
                 return ClockResult::ReadFailure;
             if (original != d.nodeRaw)
                 return Pin(s, ClockResult::BindingChanged);
-            if (d.suppressed.size() != d.source.count)
+            if (d.suppressed.size() != d.source.count || d.cache.size() != d.source.count || (d.progressUnknown && !transition) ||
+                (transition && transition->afterNodes.size() != d.source.count))
                 return Pin(s, ClockResult::BindingChanged);
             for (std::size_t index = 0; index != d.source.count; ++index)
             {
@@ -402,10 +424,27 @@ namespace mta::game_de
                 if (!M::Copy(d.nodes + index * 40, node.data(), node.size()))
                     return ClockResult::ReadFailure;
                 if (Field<std::uintptr_t>(node, 0x10) != (d.suppressed[index] ? std::uintptr_t{0} : d.source.map[index]) ||
-                    Field<std::uintptr_t>(node, 0x18) != d.receiver || Field<std::uint32_t>(node, 8) != 0xffffffff || Field<std::uint32_t>(node, 0xc) ||
-                    Field<std::uint32_t>(node, 0x20) != 0xffffffff)
+                    Field<std::uintptr_t>(node, 0x18) != d.receiver || Field<std::uint32_t>(node, 0x20) != 0xffffffff)
+                    return Pin(s, ClockResult::BindingChanged);
+                if (transition)
+                {
+                    if (node != transition->afterNodes[index])
+                        return Pin(s, ClockResult::BindingChanged);
+                }
+                else
+                    for (std::size_t word = 0; word != 4; ++word)
+                        if ((d.cache[index].defined & (1u << word)) && Field<std::uint32_t>(node, word * 4) != d.cache[index].words[word])
+                            return Pin(s, ClockResult::BindingChanged);
+            }
+            if (transition)
+            {
+                if (!AnimationAssociationProgressDetail::Verify(*transition, true))
                     return Pin(s, ClockResult::BindingChanged);
             }
+            else
+                for (const auto& frame : d.frameJournal)
+                    if (!AnimationAssociationProgressDetail::CopyJournal(frame))
+                        return Pin(s, ClockResult::BindingChanged);
             Bank bankAfter;
             if ((result = CaptureBank(image, owner, d.source.bank.hierarchy, bankAfter)) != ClockResult::Ok)
                 return result;
@@ -493,6 +532,7 @@ namespace mta::game_de
             try
             {
                 d.suppressed.assign(prepared.count, 0);
+                d.cache.assign(prepared.count, AnimationAssociationProgressDetail::Cache{});
             }
             catch (...)
             {
@@ -729,6 +769,128 @@ namespace mta::game_de
                 return finish(ClockResult::BindingChanged);
             }
             r.verified = true;
+            return finish(ClockResult::Ok);
+        }
+        static ClockResult SetCurrentProgress(std::uintptr_t image, S& s, std::uint64_t generation, std::uint32_t bits, C owner, Receipt* output,
+                                              NativeAnimationAssociationCalls::InvokeProgress invoke) noexcept
+        {
+            namespace Progress = AnimationAssociationProgressDetail;
+            using namespace AnimationAssociationStorageDetail;
+            Receipt r;
+            r.progressBits = bits;
+            auto finish = [&](ClockResult result)
+            {
+                if (s.data)
+                    Fill(*s.data, r);
+                r.pinned = s.GetState() == State::PublicationPinned;
+                if (output)
+                    *output = r;
+                return result;
+            };
+            if (s.GetState() != State::LiveUnpublished)
+                return finish(ClockResult::NotInitialized);
+            if (!Context::TryEnter())
+                return finish(ClockResult::Busy);
+            Context::Scope                  gate;
+            Bytes                           before{}, confirmed{}, after{};
+            NativeModelReferenceHeap::Value heap, current;
+            auto                            result = Snapshot(image, s, generation, owner, before, heap);
+            if (result != ClockResult::Ok)
+                return finish(result);
+            Progress::Math math, mathAfter;
+            if (!Progress::Qualify(image, math))
+                return finish(ClockResult::BindingChanged);
+            auto&                           d = *s.data;
+            std::unique_ptr<Progress::Plan> prepared;
+            try
+            {
+                prepared = std::make_unique<Progress::Plan>();
+            }
+            catch (...)
+            {
+                return finish(ClockResult::WriteFailure);
+            }
+            auto& plan = *prepared;
+            try
+            {
+                result = Progress::Build(image, d.source.bank.hierarchy, d.source.bank.observation.payload.sequences, d.source.sequenceCapacity, d.receiver,
+                                         d.nodeRaw, d.request, d.source.count, bits, d.frameJournal, math, plan);
+            }
+            catch (...)
+            {
+                return finish(ClockResult::WriteFailure);
+            }
+            if (result != ClockResult::Ok)
+                return finish(result);
+            r.absoluteTimeBits = plan.absoluteBits;
+            r.preparedFrames = plan.preparedFrames;
+            r.modifiedFrames = plan.modifiedFrames;
+            if (plan.receiverBefore != before)
+                return finish(ClockResult::BindingChanged);
+            if ((result = Snapshot(image, s, generation, owner, confirmed, current)) != ClockResult::Ok)
+                return finish(result);
+            if (before != confirmed || !NativeModelReferenceHeap::Same(heap, current) || !Progress::Verify(plan, false))
+                return finish(ClockResult::BindingChanged);
+            // The known cache fields were checked by Snapshot; also bookend the
+            // previously undefined raw cache/padding bytes copied into this plan.
+            for (std::size_t index = 0; index < plan.beforeNodes.size(); ++index)
+            {
+                Progress::Node node{};
+                if (!M::Copy(d.nodes + index * 40, node.data(), node.size()))
+                    return finish(ClockResult::ReadFailure);
+                if (node != plan.beforeNodes[index])
+                    return finish(ClockResult::BindingChanged);
+            }
+            if (!Progress::Qualify(image, mathAfter) || !(math == mathAfter))
+                return finish(ClockResult::BindingChanged);
+            if ((result = Context::Owner(image, owner)) != ClockResult::Ok)
+                return finish(result);
+#if defined(MTA_DE_ANIMATION_ASSOCIATION_PROGRESS_INVOKE)
+            const auto entry = invoke ? invoke : &MTA_DE_ANIMATION_ASSOCIATION_PROGRESS_INVOKE;
+#else
+            const auto entry = invoke ? invoke : &AnimationAssociationStorageDetail::InvokeProgress;
+#endif
+            // Reserve the unknown state before the first38 store. An exception
+            // may already have modified bank frame quaternions and owned caches;
+            // neither visible bytes nor a later callback may invent their ACK.
+            // The owner, not this stack frame, retains prospective originals,
+            // predicted effects and frame/node origins if execution is unknown.
+            d.pendingProgress = std::move(prepared);
+            d.progressUnknown = true;
+            s.state.store(State::FaultDebt);
+            r.entered = true;
+            result = entry(reinterpret_cast<NativeAnimationAssociationCalls::ProgressFunction>(image + NativeAnimationAssociationProgressProfile::SetTimeRva),
+                           d.receiver, Progress::Float(plan.absoluteBits), r.exceptionCode);
+            r.returned = result == ClockResult::Ok;
+            if (result != ClockResult::Ok)
+                return finish(result);
+            // Snapshot accepts a fully specified alternate transition, not a
+            // waiver of node checks: every40B node and every borrowed payload
+            // byte must match the precomputed result before any journal changes.
+            if ((result = Snapshot(image, s, generation, owner, after, current, &plan)) != ClockResult::Ok)
+                return finish(result);
+            auto expected = before;
+            Put(expected, 0x38, plan.finalTimeBits);
+            if (after != expected || !NativeModelReferenceHeap::Same(heap, current) || !Progress::Qualify(image, mathAfter) || !(math == mathAfter))
+                return finish(ClockResult::BindingChanged);
+            if ((result = Context::Owner(image, owner)) != ClockResult::Ok)
+                return finish(result);
+            // These vectors and their capacity were reserved before entry. Only
+            // actually written cache words become defined; ignored native bytes
+            // keep their prior state. No post-entry allocation can lose effects.
+            for (std::size_t index = 0; index < d.cache.size(); ++index)
+            {
+                auto& cache = d.cache[index];
+                for (std::size_t word = 0; word != 4; ++word)
+                    if (plan.written[index] & (1u << word))
+                        cache.words[word] = Progress::At<std::uint32_t>(plan.afterNodes[index], word * 4);
+                cache.defined |= plan.written[index];
+            }
+            d.frameJournal.swap(plan.journal);
+            d.pendingProgress.reset();
+            d.progressUnknown = false;
+            s.state.store(State::LiveUnpublished);
+            r.accepted = r.verified = r.progressed = true;
             return finish(ClockResult::Ok);
         }
         static ClockResult Retire(std::uintptr_t image, S& s, std::uint64_t generation, C owner, Receipt* output,
@@ -1079,6 +1241,11 @@ namespace mta::game_de
         ClockResult Set(std::uintptr_t i, Storage& s, std::uint64_t g, Scalar f, std::uint32_t b, CheckOwner o, Receipt* r, Exchange v) noexcept
         {
             return NativeAnimationAssociationStorageAccess::Set(i, s, g, f, b, o, r, v);
+        }
+        ClockResult SetCurrentProgress(std::uintptr_t image, Storage& storage, std::uint64_t generation, std::uint32_t bits, CheckOwner owner, Receipt* receipt,
+                                       InvokeProgress invoke) noexcept
+        {
+            return NativeAnimationAssociationStorageAccess::SetCurrentProgress(image, storage, generation, bits, owner, receipt, invoke);
         }
         ClockResult Retire(std::uintptr_t i, Storage& s, std::uint64_t g, CheckOwner o, Receipt* r, InvokeDestructor v,
                            NativeCustomAnimSequenceStorageCalls::InvokeFree f) noexcept

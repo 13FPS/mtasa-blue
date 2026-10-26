@@ -121,6 +121,15 @@ namespace mta::game_de
         const auto bits = FloatBits(amount);
         Require(native.SetPrivateAnimationAssociationBlendAmount(token, bits), "SetBlendAmount");
     }
+    void CAnimBlendAssociationDE::SetCurrentProgress(float progress)
+    {
+        const auto token = reference;
+        const auto bits = FloatBits(progress);
+        // Actual MTA multiplies current hierarchy duration by this progress
+        // before its native set-time helper. Keep both observations/effects
+        // with one owner; no observer-side clamp, default or duration lookup.
+        Require(native.SetPrivateAnimationAssociationCurrentProgress(token, bits), "SetCurrentProgress");
+    }
     float CAnimBlendAssociationDE::GetCurrentProgress() const
     {
         // Despite the SDK name, actual MTA returns absolute current time.

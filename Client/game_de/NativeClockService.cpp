@@ -179,6 +179,7 @@ namespace mta::game_de
             ClockResult ReadPrivateAnimationAssociation(const NativeAnimationAssociationReferenceToken&, NativeAnimationAssociationValues&) noexcept override;
             ClockResult ReadPrivateAnimationAssociationLength(const NativeAnimationAssociationReferenceToken&, std::uint32_t&) noexcept override;
             ClockResult SetPrivateAnimationAssociationBlendAmount(const NativeAnimationAssociationReferenceToken&, std::uint32_t) noexcept override;
+            ClockResult SetPrivateAnimationAssociationCurrentProgress(const NativeAnimationAssociationReferenceToken&, std::uint32_t) noexcept override;
             ClockResult SetPrivateAnimationAssociationCurrentSpeed(const NativeAnimationAssociationReferenceToken&, std::uint32_t) noexcept override;
             ClockResult SetPrivateAnimationAssociationAnimID(const NativeAnimationAssociationReferenceToken&, std::int16_t) noexcept override;
             ClockResult SetPrivateAnimationAssociationAnimGroup(const NativeAnimationAssociationReferenceToken&, std::int16_t) noexcept override;
@@ -2858,6 +2859,29 @@ namespace mta::game_de
             const auto request = token;
             const auto requestedValue = value;
             return WritePrivateAnimationAssociationScalar(request, NativeAnimationAssociationController::Scalar::BlendAmount, requestedValue);
+        }
+
+        ClockResult NativeAccess::SetPrivateAnimationAssociationCurrentProgress(const NativeAnimationAssociationReferenceToken& token,
+                                                                                std::uint32_t                                   progressBits) noexcept
+        {
+            const auto request = token;
+            const auto requestedProgressBits = progressBits;
+            auto       result = CheckPrivateAnimationAssociationRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            NativeAnimationAssociationController::Receipt receipt;
+            // Duration multiplication and native set-time/node/frame effects
+            // form one qualified command. A separate public duration read or
+            // scalar store here would lose the causal parent/H observation.
+            result = runtime.privateAssociations.SetCurrentProgress(runtime.image, request.ownerGeneration, request, requestedProgressBits, &CheckTimingOwner,
+                                                                    &receipt);
+            if (result == ClockResult::Ok)
+                result = CheckPrivateAnimationAssociationRequest(request);
+            // The existing journal retains any entered/accepted effects and
+            // stops after lost acknowledgement; End and SDK never replay this
+            // progress command. Explicit native retirement keeps its own ACK.
+            FinishPrivateAnimationAssociation(request.ownerGeneration, result, receipt);
+            return result;
         }
 
         ClockResult NativeAccess::SetPrivateAnimationAssociationCurrentSpeed(const NativeAnimationAssociationReferenceToken& token,

@@ -157,6 +157,26 @@ namespace mta::game_de
             *receipt = next;
         return result;
     }
+    ClockResult NativeAnimationAssociationController::SetCurrentProgress(std::uintptr_t image, std::uint64_t generation, const Token& token, std::uint32_t bits,
+                                                                         CheckOwner owner, Receipt* receipt) noexcept
+    {
+        const auto request = token;
+        const auto progress = bits;
+        Receipt    next;
+        if (receipt)
+            *receipt = next;
+        if (!AnimationAssociationControllerDetail::Enter(busy))
+            return ClockResult::Busy;
+        AnimationAssociationControllerDetail::Guard guard{busy};
+        auto*                                       entry = Find(generation, request);
+        if (!entry)
+            return ClockResult::OwnerConflict;
+        const auto result = NativeAnimationAssociationCalls::SetCurrentProgress(image, entry->storage, generation, progress, owner, &next);
+        Publish();
+        if (receipt)
+            *receipt = next;
+        return result;
+    }
     ClockResult NativeAnimationAssociationController::RetireOne(std::uintptr_t image, std::uint64_t generation, const Token& token, CheckOwner owner,
                                                                 Receipt* receipt) noexcept
     {

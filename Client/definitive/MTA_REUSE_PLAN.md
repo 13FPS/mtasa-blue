@@ -1,5 +1,31 @@
 # MTA on Definitive Edition: reuse boundary
 
+## Current offline cohort: actual association progress updates (2026-10-26)
+
+MTA's `SetCurrentProgress` now sends one raw float intent through the existing
+private-association owner. That owner multiplies the current hierarchy duration
+and enters DE's genuine time setter once; the SDK does not split the operation
+into a length read and a later write. Eighteen actual association methods are
+implemented, with four genuine operations still pure. Shared SDK declarations
+and classic consumers are unchanged in this cohort.
+
+The native admission covers both verified warm hierarchy branches and both
+frame formats. It bounds the actual scalar time loops before entry and predicts
+the node cache and compressed quaternion effects before the first native store.
+Receiver, node, hierarchy, sequence, borrowed frame, owner and code/import
+bookends must agree before accepting the result. A durable prospective journal
+retains unknown entered effects without replay, rollback or guessed cleanup.
+Cold decompression/cache ownership remains unimplemented and refuses before
+entry. Work budgets grant no native capacity or publication authority.
+
+Focused checks exercise the actual MTA dispatch on x86 and x64 and execute the
+captured native bodies in owned synthetic fixtures. They cover wrap/clamp,
+normal quaternion interpolation and packed rewrites, accepted cache journals,
+bone suppression, explicit retirement and isolated lost acknowledgement.
+One normal x64 backend build and its exact saved DLL complete this batch.
+The installed GTA trial and private reverse-engineering folder are untouched;
+a complete CGame, public association factory and full MTA remain unfinished.
+
 ## Current offline cohort: actual association float getters (2026-10-26)
 
 `GetCurrentProgress`, `GetCurrentSpeed` and `GetLength` now use the existing

@@ -157,6 +157,7 @@
 #include "../../Client/game_de/NativeAnimationAssociationStorage.h"
 #include "../../Client/game_de/NativeAnimationAssociationController.h"
 #include "../../Client/game_de/NativeAnimationAssociationProfile.h"
+#include "../../Client/game_de/NativeAnimationAssociationProgressProfile.h"
 #include "../../Client/game_de/CAnimBlendAssociationDE.h"
 #include "../../Client/game_de/NativePedRenderProfile.h"
 #include "../../Client/game_de/NativePedMetadataProfile.h"
@@ -3647,11 +3648,17 @@ namespace ClockAnimationAssociationBonesTest
 {
     mta::game_de::ClockResult ExchangeNode(std::uintptr_t, std::uintptr_t, std::uintptr_t, std::uintptr_t&, bool&, std::uint32_t&) noexcept;
 }
+namespace ClockAnimationAssociationProgressTest
+{
+    mta::game_de::ClockResult Invoke(mta::game_de::NativeAnimationAssociationCalls::ProgressFunction, std::uintptr_t, float, std::uint32_t&) noexcept;
+}
+#define MTA_DE_ANIMATION_ASSOCIATION_PROGRESS_INVOKE    ::ClockAnimationAssociationProgressTest::Invoke
 #define MTA_DE_ANIMATION_ASSOCIATION_NODE_EXCHANGE      ::ClockAnimationAssociationBonesTest::ExchangeNode
 #define MTA_DE_ANIMATION_ASSOCIATION_CONSTRUCTOR_INVOKE ::ClockPrivateAnimationAssociationTest::Construct
 #define MTA_DE_ANIMATION_ASSOCIATION_DESTRUCTOR_INVOKE  ::ClockPrivateAnimationAssociationTest::Destroy
 #define MTA_DE_ANIMATION_ASSOCIATION_EXCHANGE           ::ClockPrivateAnimationAssociationTest::Exchange
 #include "../../Client/game_de/NativeAnimationAssociationStorage.cpp"
+#undef MTA_DE_ANIMATION_ASSOCIATION_PROGRESS_INVOKE
 #undef MTA_DE_ANIMATION_ASSOCIATION_NODE_EXCHANGE
 #undef MTA_DE_ANIMATION_ASSOCIATION_EXCHANGE
 #undef MTA_DE_ANIMATION_ASSOCIATION_DESTRUCTOR_INVOKE
@@ -8449,6 +8456,7 @@ namespace
 #include "NativePrivateAnimationAssociationOwnerTests.inl"
 #include "NativeAnimationAssociationBonesOwnerTests.inl"
 #include "NativeAnimationAssociationFloatOwnerTests.inl"
+#include "NativeAnimationAssociationProgressOwnerTests.inl"
 
 // The strict receiver must execute production typed tickets and the distinct
 // metadata-only delete route. Deleting an interface acknowledges only its own
@@ -8470,6 +8478,8 @@ static_assert(std::is_same_v<decltype(&PrivateAnimationFactoryManagerReceiver::G
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool associationProgressUnknown = argc == 3 && std::strcmp(argv[2], "--animation-association-progress-unknown") == 0;
+    const bool associationProgressOnly = associationProgressUnknown || (argc == 3 && std::strcmp(argv[2], "--animation-association-progress-success") == 0);
     const bool associationFloatOnly = argc == 3 && std::strcmp(argv[2], "--animation-association-float") == 0;
     const bool associationBonesUnknownWrite = argc == 3 && std::strcmp(argv[2], "--animation-association-bones-unknown-write") == 0;
     const bool associationBonesPostLoss = argc == 3 && std::strcmp(argv[2], "--animation-association-bones-post-loss") == 0;
@@ -8620,9 +8630,20 @@ int main(int argc, char** argv)
          privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly || animationBankFactoriesOnly ||
          sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly || animationDefinitionsOnly || animationDefinitionBlockNamesOnly ||
          animationGroupValidityOnly || animationIdValidityOnly || animationAssociationGroupReadsOnly || animationStaticAssociationReadsOnly ||
-         staticAssociationWritesOnly || pedRenderOnly || privateAssociationsOnly || associationBonesOnly || associationFloatOnly) &&
+         staticAssociationWritesOnly || pedRenderOnly || privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly) &&
             std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
         "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (associationProgressOnly)
+    {
+        // This selected process admits only the focused copied-body closure;
+        // unknown entered effects retain every live fixture until process exit.
+        AnimationAssociationProgressOwnerFixture::scenario = associationProgressUnknown ? 1u : 0u;
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        AnimationAssociationProgressOwnerFixture::RunPrepared(fixture);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (associationFloatOnly)
     {
         // One focused owned process executes the genuine private constructor,

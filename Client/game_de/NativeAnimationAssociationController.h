@@ -30,6 +30,7 @@ namespace mta::game_de
         ClockResult Read(std::uintptr_t, std::uint64_t, const Token&, CheckOwner, Values&) noexcept;
         ClockResult ReadLength(std::uintptr_t, std::uint64_t, const Token&, CheckOwner, std::uint32_t&) noexcept;
         ClockResult Set(std::uintptr_t, std::uint64_t, const Token&, Scalar, std::uint32_t, CheckOwner, Receipt* = nullptr) noexcept;
+        ClockResult SetCurrentProgress(std::uintptr_t, std::uint64_t, const Token&, std::uint32_t, CheckOwner, Receipt* = nullptr) noexcept;
         ClockResult RetireOne(std::uintptr_t, std::uint64_t, const Token&, CheckOwner, Receipt* = nullptr) noexcept;
         ClockResult Retire(std::uintptr_t, std::uint64_t, CheckOwner, std::uint32_t, RetireProgress&) noexcept;
         ClockResult ResolveHierarchy(std::uintptr_t, std::uint64_t, const Token&, CheckOwner, NativeAnimationHierarchyReferenceToken&) noexcept;

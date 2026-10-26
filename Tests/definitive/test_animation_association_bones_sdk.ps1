@@ -20,7 +20,7 @@ $record = [ordered]@{
     schema='mta_animation_association_bones_sdk_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     results=@();failure=$null;scratchDirectory=$scratchRoot;scratchFilesRemaining=$null;scratchRemoved=$false;
-    scope='Actual three SDK routes only: same-complete typed parent-bankH token to CPU hierarchy facade; fullmask64 and originalraw/null restriction transport beforecallbacks, error/refusal/default behavior.14inherited/8strictrejectors, three noexcept getters pure. No mirrored native null-mask authority/factory/fullGame or old336test replay.';
+    scope='Actual three SDK routes only: same-complete typed parent-bankH token to CPU hierarchy facade; fullmask64 and originalraw/null restriction transport beforecallbacks, error/refusal/default behavior.18inherited/4strictrejectors, existing float getter exception contract preserved. No mirrored native null-mask authority/factory/fullGame or old336test replay.';
     ownedBuffersOnly=$true;nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;
     completeAnimationHierarchyReady=$false;fullMtaReady=$false;installationChanged=$false;
     actualAnimationAssociationBonesSdkTested=$false
@@ -102,7 +102,7 @@ try {
     . (Join-Path $PSScriptRoot 'Write-PrivateAnimationAssociationFixture.ps1')
     $generated=Join-Path $scratchRoot 'PrivateAnimationAssociationFixture.generated.h'
     $record['generatedFixture']=Write-PrivateAnimationAssociationFixture $taskRoot $generated
-    if($record.generatedFixture.rejectingMethods -ne 5 -or @($record.generatedFixture.inheritedProductionMethods).Count -ne 17){throw 'Actual association17/5fixture partition changed'}
+    if($record.generatedFixture.rejectingMethods -ne 4 -or @($record.generatedFixture.inheritedProductionMethods).Count -ne 18){throw 'Actual association18/4fixture partition changed'}
     $durableGenerated=Join-Path $outputRoot 'PrivateAnimationAssociationFixture.generated.h'
     Copy-Item -LiteralPath $generated -Destination $durableGenerated
     if((Sha $durableGenerated) -ne $record.generatedFixture.sha256){throw 'Generated group SDK fixture changed'}

@@ -154,6 +154,10 @@
 #include "../../Client/game_de/NativePedMetadataMemory.h"
 #include "../../Client/game_de/CPedMetadataDE.h"
 #include "../../Client/game_de/NativePedRenderMemory.h"
+#include "../../Client/game_de/NativeAnimationAssociationStorage.h"
+#include "../../Client/game_de/NativeAnimationAssociationController.h"
+#include "../../Client/game_de/NativeAnimationAssociationProfile.h"
+#include "../../Client/game_de/CAnimBlendAssociationDE.h"
 #include "../../Client/game_de/NativePedRenderProfile.h"
 #include "../../Client/game_de/NativePedMetadataProfile.h"
 #include "../../Client/game_de/NativePedIntelligenceReader.h"
@@ -3629,6 +3633,23 @@ namespace ClockFreshCompressedSequenceOwnerTest
 #undef MTA_DE_CUSTOM_ANIM_SEQUENCE_FREE_INVOKE
 #undef MTA_DE_CUSTOM_ANIM_SEQUENCE_MALLOC_INVOKE
 #include "../../Client/game_de/NativeCustomAnimSequenceController.cpp"
+// The new owner fixture executes the exact admitted copied bodies. Its hooks
+// route only the owned native heap and inject failures after actual return.
+namespace ClockPrivateAnimationAssociationTest
+{
+    mta::game_de::ClockResult Construct(mta::game_de::NativeAnimationAssociationCalls::ConstructorFunction, std::uintptr_t, std::uintptr_t, std::uintptr_t&,
+                                        std::uint32_t&) noexcept;
+    mta::game_de::ClockResult Destroy(mta::game_de::NativeAnimationAssociationCalls::DestructorFunction, std::uintptr_t, std::uint32_t, std::uintptr_t&,
+                                      std::uint32_t&) noexcept;
+    mta::game_de::ClockResult Exchange(std::uintptr_t, std::size_t, std::uint32_t, std::uint32_t, std::uint32_t&, bool&, std::uint32_t&) noexcept;
+}
+#define MTA_DE_ANIMATION_ASSOCIATION_CONSTRUCTOR_INVOKE ::ClockPrivateAnimationAssociationTest::Construct
+#define MTA_DE_ANIMATION_ASSOCIATION_DESTRUCTOR_INVOKE  ::ClockPrivateAnimationAssociationTest::Destroy
+#define MTA_DE_ANIMATION_ASSOCIATION_EXCHANGE           ::ClockPrivateAnimationAssociationTest::Exchange
+#include "../../Client/game_de/NativeAnimationAssociationStorage.cpp"
+#undef MTA_DE_ANIMATION_ASSOCIATION_EXCHANGE
+#undef MTA_DE_ANIMATION_ASSOCIATION_DESTRUCTOR_INVOKE
+#undef MTA_DE_ANIMATION_ASSOCIATION_CONSTRUCTOR_INVOKE
 #undef MTA_DE_PED_WATER_FLAGS_EXCHANGE
 #define MTA_DE_PED_PLACEMENT_EXCHANGE ClockPedPhysicalScalarsOwnerTest::Exchange
 #include "../../Client/game_de/NativePedPlacementMemory.cpp"
@@ -8418,6 +8439,8 @@ namespace
 #include "AnimationStaticAssociationFixture.generated.h"
 #include "NativeAnimationStaticAssociationOwnerTests.inl"
 #include "NativeAnimationStaticAssociationWritesOwnerTests.inl"
+#include "PrivateAnimationAssociationFixture.generated.h"
+#include "NativePrivateAnimationAssociationOwnerTests.inl"
 
 // The strict receiver must execute production typed tickets and the distinct
 // metadata-only delete route. Deleting an interface acknowledges only its own
@@ -8439,11 +8462,20 @@ static_assert(std::is_same_v<decltype(&PrivateAnimationFactoryManagerReceiver::G
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
-    const bool pedRenderOnly = argc == 3 && std::strcmp(argv[2], "--ped-render") == 0;
-    const bool staticAssociationWriteConflict = argc == 3 && std::strcmp(argv[2], "--animation-static-association-writes-conflict") == 0;
-    const bool staticAssociationWriteLostAck = argc == 3 && std::strcmp(argv[2], "--animation-static-association-writes-lost-ack") == 0;
-    const bool staticAssociationWriteUnknown = argc == 3 && std::strcmp(argv[2], "--animation-static-association-writes-unknown") == 0;
-    const bool staticAssociationWritesOnly = staticAssociationWriteConflict || staticAssociationWriteLostAck || staticAssociationWriteUnknown ||
+    const bool privateAssociationConstructorUnknown = argc == 3 && std::strcmp(argv[2], "--private-animation-associations-constructor-unknown") == 0;
+    const bool privateAssociationDestructorUnknown = argc == 3 && std::strcmp(argv[2], "--private-animation-associations-destructor-unknown") == 0;
+    const bool privateAssociationPostAckLoss = argc == 3 && std::strcmp(argv[2], "--private-animation-associations-retire-owner-loss") == 0;
+    const bool privateAssociationsOnly = privateAssociationConstructorUnknown || privateAssociationDestructorUnknown || privateAssociationPostAckLoss ||
+                                         (argc == 3 && std::strcmp(argv[2], "--private-animation-associations-success") == 0);
+    const unsigned privateAssociationScenario = privateAssociationConstructorUnknown  ? 1u
+                                                : privateAssociationDestructorUnknown ? 2u
+                                                : privateAssociationPostAckLoss       ? 3u
+                                                                                      : 0u;
+    const bool     pedRenderOnly = argc == 3 && std::strcmp(argv[2], "--ped-render") == 0;
+    const bool     staticAssociationWriteConflict = argc == 3 && std::strcmp(argv[2], "--animation-static-association-writes-conflict") == 0;
+    const bool     staticAssociationWriteLostAck = argc == 3 && std::strcmp(argv[2], "--animation-static-association-writes-lost-ack") == 0;
+    const bool     staticAssociationWriteUnknown = argc == 3 && std::strcmp(argv[2], "--animation-static-association-writes-unknown") == 0;
+    const bool     staticAssociationWritesOnly = staticAssociationWriteConflict || staticAssociationWriteLostAck || staticAssociationWriteUnknown ||
                                              (argc == 3 && std::strcmp(argv[2], "--animation-static-association-writes-success") == 0);
     const unsigned staticAssociationWriteScenario = staticAssociationWriteConflict  ? 1u
                                                     : staticAssociationWriteLostAck ? 2u
@@ -8574,9 +8606,18 @@ int main(int argc, char** argv)
            privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly || animationBankFactoriesOnly ||
            sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly || animationDefinitionsOnly ||
            animationDefinitionBlockNamesOnly || animationGroupValidityOnly || animationIdValidityOnly || animationAssociationGroupReadsOnly ||
-           animationStaticAssociationReadsOnly || staticAssociationWritesOnly || pedRenderOnly) &&
+           animationStaticAssociationReadsOnly || staticAssociationWritesOnly || pedRenderOnly || privateAssociationsOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (privateAssociationsOnly)
+    {
+        PrivateAnimationAssociationOwnerFixture::scenario = privateAssociationScenario;
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        PrivateAnimationAssociationOwnerFixture::RunPrepared(fixture);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (pedRenderOnly)
     {
         ClockImageFixture fixture;

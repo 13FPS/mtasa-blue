@@ -71,6 +71,8 @@
 #include "NativeAnimationManagerMemory.h"
 #include "NativeAnimationAssociationGroupAccess.h"
 #include "NativeAnimationStaticAssociationAccess.h"
+#include "NativeAnimationAssociationAccess.h"
+#include "NativeAnimationAssociationController.h"
 #include "NativePedVelocityMemory.h"
 #include "NativePedReferenceController.h"
 #include "NativePedVitalsMemory.h"
@@ -167,9 +169,23 @@ namespace mta::game_de
                                    public NativeCustomAnimationCleanupAccess,
                                    public NativeCustomAnimationSequenceOperationAccess,
                                    public NativeAnimationAssociationGroupAccess,
-                                   public NativeAnimationStaticAssociationAccess
+                                   public NativeAnimationStaticAssociationAccess,
+                                   public NativeAnimationAssociationAccess
         {
         public:
+            ClockResult CreatePrivateAnimationAssociation(std::uint64_t, NativeAnimationAssociationReferenceToken&) noexcept override;
+            ClockResult ConstructPrivateAnimationAssociationFromStatic(const NativeAnimationAssociationReferenceToken&, std::uintptr_t,
+                                                                       std::uintptr_t&) noexcept override;
+            ClockResult ReadPrivateAnimationAssociation(const NativeAnimationAssociationReferenceToken&, NativeAnimationAssociationValues&) noexcept override;
+            ClockResult SetPrivateAnimationAssociationBlendAmount(const NativeAnimationAssociationReferenceToken&, std::uint32_t) noexcept override;
+            ClockResult SetPrivateAnimationAssociationCurrentSpeed(const NativeAnimationAssociationReferenceToken&, std::uint32_t) noexcept override;
+            ClockResult SetPrivateAnimationAssociationAnimID(const NativeAnimationAssociationReferenceToken&, std::int16_t) noexcept override;
+            ClockResult SetPrivateAnimationAssociationAnimGroup(const NativeAnimationAssociationReferenceToken&, std::int16_t) noexcept override;
+            ClockResult SetPrivateAnimationAssociationFlags(const NativeAnimationAssociationReferenceToken&, std::int16_t) noexcept override;
+            ClockResult RetirePrivateAnimationAssociation(const NativeAnimationAssociationReferenceToken&) noexcept override;
+            bool        HasPendingPrivateAnimationAssociations() const noexcept override;
+            ClockResult WritePrivateAnimationAssociationScalar(const NativeAnimationAssociationReferenceToken&, NativeAnimationAssociationController::Scalar,
+                                                               std::uint32_t) noexcept;
             ClockResult SetAnimationStaticAssociationNumBlendNodes(const NativeAnimationStaticAssociationReferenceToken&, std::uint16_t) noexcept override;
             ClockResult SetAnimationStaticAssociationAnimID(const NativeAnimationStaticAssociationReferenceToken&, std::int16_t) noexcept override;
             ClockResult SetAnimationStaticAssociationAnimGroup(const NativeAnimationStaticAssociationReferenceToken&, std::int16_t) noexcept override;
@@ -525,7 +541,11 @@ namespace mta::game_de
             // Native buffers remain with this runtime even if their SDK
             // publication fails. No producer/destructor may free them or
             // discard unknown entered effects while removing the callback.
-            NativeCustomAnimSequenceController customSequences;
+            // Genuine dynamic constructors own a native104 receiver, aligned
+            // node storage and a bank-H reference. Retire this causal record
+            // before dependent animation storage; CPU destruction never frees it.
+            NativeAnimationAssociationController privateAssociations;
+            NativeCustomAnimSequenceController   customSequences;
             // Empty module-owned hierarchy interfaces share this callback debt
             // group; no native publication or child-release authority is implied.
             NativePrivateAnimationHierarchyController privateHierarchies{&customSequences};
@@ -651,7 +671,7 @@ namespace mta::game_de
         bool NativeLifetimeRetained() noexcept
         {
             return runtime.pedReferences.IsRetained() || WorldIgnoreRetained() || runtime.customSequences.IsRetained() ||
-                   runtime.privateHierarchies.IsRetained() || runtime.customSequences.HasPendingCleanup();
+                   runtime.privateHierarchies.IsRetained() || runtime.privateAssociations.IsRetained() || runtime.customSequences.HasPendingCleanup();
         }
 
         bool WeatherOverrideRetained() noexcept
@@ -2702,13 +2722,169 @@ namespace mta::game_de
 
         void PublishCustomAnimationSequenceDebt(std::uint64_t generation) noexcept
         {
-            if (runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained() || runtime.customSequences.HasPendingCleanup())
+            if (runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained() || runtime.privateAssociations.IsRetained() ||
+                runtime.customSequences.HasPendingCleanup())
             {
                 runtime.customSequenceGeneration.store(generation);
                 runtime.restored.store(false);
             }
             else
                 runtime.customSequenceGeneration.store(0);
+        }
+
+        ClockResult CheckPrivateAnimationAssociationRequest(const NativeAnimationAssociationReferenceToken& request) noexcept
+        {
+            const auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            return request.ownerGeneration && request.ownerGeneration == runtime.generation.load() && request.serial ? ClockResult::Ok
+                                                                                                                     : ClockResult::OwnerConflict;
+        }
+
+        void FinishPrivateAnimationAssociation(std::uint64_t generation, ClockResult result,
+                                               const NativeAnimationAssociationController::Receipt& receipt) noexcept
+        {
+            // A returned allocation or accepted persistent store remains owned
+            // even if the final caller acknowledgement loses its admission.
+            // Publish the same cleanup epoch before stopping further SDK work.
+            PublishCustomAnimationSequenceDebt(generation);
+            const bool knownEffect = receipt.entered || receipt.returned || receipt.accepted || receipt.allocated || receipt.constructed || receipt.retired;
+            if ((knownEffect && result != ClockResult::Ok) || runtime.privateAssociations.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+        }
+
+        ClockResult NativeAccess::CreatePrivateAnimationAssociation(std::uint64_t generation, NativeAnimationAssociationReferenceToken& output) noexcept
+        {
+            const auto requestedGeneration = generation;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto retained = runtime.customSequenceGeneration.load();
+            if (!requestedGeneration || requestedGeneration != runtime.generation.load() || (retained && retained != requestedGeneration))
+                return ClockResult::OwnerConflict;
+            runtime.customSequenceGeneration.store(requestedGeneration);
+            NativeAnimationAssociationReferenceToken      next;
+            NativeAnimationAssociationController::Receipt receipt;
+            result = runtime.privateAssociations.Create(runtime.image, requestedGeneration, &CheckTimingOwner, next, &receipt);
+            if (result == ClockResult::Ok)
+                result = CheckPrivateAnimationAssociationRequest(next);
+            FinishPrivateAnimationAssociation(requestedGeneration, result, receipt);
+            if (result == ClockResult::Ok)
+                output = next;
+            return result;
+        }
+
+        ClockResult NativeAccess::ConstructPrivateAnimationAssociationFromStatic(const NativeAnimationAssociationReferenceToken& token, std::uintptr_t source,
+                                                                                 std::uintptr_t& output) noexcept
+        {
+            const auto request = token;
+            const auto requestedSource = source;
+            auto       result = CheckPrivateAnimationAssociationRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            NativeAnimationAssociationController::Receipt receipt;
+            std::uintptr_t                                next = 0;
+            result = runtime.privateAssociations.Construct(runtime.image, request.ownerGeneration, request, requestedSource, &CheckTimingOwner, next, &receipt);
+            if (result == ClockResult::Ok)
+                result = CheckPrivateAnimationAssociationRequest(request);
+            FinishPrivateAnimationAssociation(request.ownerGeneration, result, receipt);
+            if (result == ClockResult::Ok)
+                output = next;
+            return result;
+        }
+
+        ClockResult NativeAccess::ReadPrivateAnimationAssociation(const NativeAnimationAssociationReferenceToken& token,
+                                                                  NativeAnimationAssociationValues&               output) noexcept
+        {
+            const auto request = token;
+            auto       result = CheckPrivateAnimationAssociationRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            NativeAnimationAssociationValues next;
+            result = runtime.privateAssociations.Read(runtime.image, request.ownerGeneration, request, &CheckTimingOwner, next);
+            if (result == ClockResult::Ok)
+                result = CheckPrivateAnimationAssociationRequest(request);
+            PublishCustomAnimationSequenceDebt(request.ownerGeneration);
+            if (runtime.privateAssociations.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            if (result == ClockResult::Ok)
+                output = next;
+            return result;
+        }
+
+        ClockResult NativeAccess::WritePrivateAnimationAssociationScalar(const NativeAnimationAssociationReferenceToken& token,
+                                                                         NativeAnimationAssociationController::Scalar field, std::uint32_t value) noexcept
+        {
+            const auto request = token;
+            const auto requestedField = field;
+            const auto requestedValue = value;
+            auto       result = CheckPrivateAnimationAssociationRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            NativeAnimationAssociationController::Receipt receipt;
+            result =
+                runtime.privateAssociations.Set(runtime.image, request.ownerGeneration, request, requestedField, requestedValue, &CheckTimingOwner, &receipt);
+            if (result == ClockResult::Ok)
+                result = CheckPrivateAnimationAssociationRequest(request);
+            FinishPrivateAnimationAssociation(request.ownerGeneration, result, receipt);
+            return result;
+        }
+
+        ClockResult NativeAccess::SetPrivateAnimationAssociationBlendAmount(const NativeAnimationAssociationReferenceToken& token, std::uint32_t value) noexcept
+        {
+            const auto request = token;
+            const auto requestedValue = value;
+            return WritePrivateAnimationAssociationScalar(request, NativeAnimationAssociationController::Scalar::BlendAmount, requestedValue);
+        }
+
+        ClockResult NativeAccess::SetPrivateAnimationAssociationCurrentSpeed(const NativeAnimationAssociationReferenceToken& token,
+                                                                             std::uint32_t                                   value) noexcept
+        {
+            const auto request = token;
+            const auto requestedValue = value;
+            return WritePrivateAnimationAssociationScalar(request, NativeAnimationAssociationController::Scalar::CurrentSpeed, requestedValue);
+        }
+
+        ClockResult NativeAccess::SetPrivateAnimationAssociationAnimID(const NativeAnimationAssociationReferenceToken& token, std::int16_t value) noexcept
+        {
+            const auto request = token;
+            const auto requestedValue = static_cast<std::uint16_t>(value);
+            return WritePrivateAnimationAssociationScalar(request, NativeAnimationAssociationController::Scalar::AnimID, requestedValue);
+        }
+
+        ClockResult NativeAccess::SetPrivateAnimationAssociationAnimGroup(const NativeAnimationAssociationReferenceToken& token, std::int16_t value) noexcept
+        {
+            const auto request = token;
+            const auto requestedValue = static_cast<std::uint16_t>(value);
+            return WritePrivateAnimationAssociationScalar(request, NativeAnimationAssociationController::Scalar::AnimGroup, requestedValue);
+        }
+
+        ClockResult NativeAccess::SetPrivateAnimationAssociationFlags(const NativeAnimationAssociationReferenceToken& token, std::int16_t value) noexcept
+        {
+            const auto request = token;
+            const auto requestedValue = static_cast<std::uint16_t>(value);
+            return WritePrivateAnimationAssociationScalar(request, NativeAnimationAssociationController::Scalar::Flags, requestedValue);
+        }
+
+        ClockResult NativeAccess::RetirePrivateAnimationAssociation(const NativeAnimationAssociationReferenceToken& token) noexcept
+        {
+            const auto request = token;
+            auto       result = CheckPrivateAnimationAssociationRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            NativeAnimationAssociationController::Receipt receipt;
+            result = runtime.privateAssociations.RetireOne(runtime.image, request.ownerGeneration, request, &CheckTimingOwner, &receipt);
+            if (result == ClockResult::Ok)
+                result = CheckPrivateAnimationAssociationRequest(request);
+            FinishPrivateAnimationAssociation(request.ownerGeneration, result, receipt);
+            return result;
+        }
+
+        bool NativeAccess::HasPendingPrivateAnimationAssociations() const noexcept
+        {
+            // The controller query is atomic and includes unconstructed,
+            // entered-unknown and busy records. A query never frees storage.
+            return runtime.privateAssociations.IsRetained();
         }
 
         // The actual MTA frame allocator is nullable. A verified native
@@ -3408,7 +3584,8 @@ namespace mta::game_de
         bool NativeAccess::HasPendingPrivateAnimationCleanup() const noexcept
         {
             // Live records and completed CPU views both keep backend code alive.
-            return runtime.customSequences.HasPendingCleanup() || runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained();
+            return runtime.customSequences.HasPendingCleanup() || runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained() ||
+                   runtime.privateAssociations.IsRetained();
         }
 
         ClockResult NativeAccess::AllocatePrivateStandaloneAnimationSequence(std::uint64_t generation, NativeAnimationSequenceReferenceToken& output) noexcept
@@ -3582,7 +3759,8 @@ namespace mta::game_de
         {
             // The existing owner includes both command families and every live
             // completed view. Existing active/End pumps and module gates apply.
-            return runtime.customSequences.HasPendingCleanup() || runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained();
+            return runtime.customSequences.HasPendingCleanup() || runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained() ||
+                   runtime.privateAssociations.IsRetained();
         }
 
         void ProgressCustomAnimationCleanup() noexcept
@@ -3602,10 +3780,25 @@ namespace mta::game_de
 
         bool RestoreCustomAnimationSequences() noexcept
         {
-            if (!runtime.customSequences.IsRetained() && !runtime.privateHierarchies.IsRetained() && !runtime.customSequences.HasPendingCleanup())
+            if (!runtime.customSequences.IsRetained() && !runtime.privateHierarchies.IsRetained() && !runtime.privateAssociations.IsRetained() &&
+                !runtime.customSequences.HasPendingCleanup())
                 return true;
             if (CheckCustomAnimationSequenceRecoveryOwner() != ClockResult::Ok)
                 return false;
+            // Dynamic destruction consumes its causal node allocation and
+            // bank-H reference. An unknown/published association must retain
+            // the callback before any dependent H/sequence journal can drain.
+            if (runtime.privateAssociations.IsRetained())
+            {
+                NativeAnimationAssociationController::RetireProgress associations;
+                const auto                                           result =
+                    runtime.privateAssociations.Retire(runtime.image, runtime.generation.load(), &CheckCustomAnimationSequenceRecoveryOwner, 32, associations);
+                PublishCustomAnimationSequenceDebt(runtime.generation.load());
+                if (result != ClockResult::Ok || runtime.privateAssociations.RecoveryPending())
+                    Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+                if (result != ClockResult::Ok || runtime.privateAssociations.IsRetained())
+                    return false;
+            }
             if (runtime.customSequences.HasPendingCleanup())
             {
                 NativeCustomAnimSequenceController::CleanupProgress cleanup;
@@ -6371,7 +6564,7 @@ namespace mta::game_de
             // bounded work before parking peers for clock patch restoration.
             if (clean && (runtime.pedReferences.IsRetained() || WorldIgnoreRetained()))
                 clean = RestorePedReferences();
-            if (clean && (runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained()))
+            if (clean && (runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained() || runtime.privateAssociations.IsRetained()))
                 clean = RestoreCustomAnimationSequences();
             if (clean && !clockChanged && !timingChanged)
             {
@@ -7367,7 +7560,7 @@ namespace mta::game_de
             next.ready = runtime.ready.load() && !runtime.timingRecovery.load() && !runtime.weatherRecovery.load() && !runtime.weatherGeneration.load() &&
                          !runtime.weaponVectorRecovery.load() && !runtime.weaponVectorGeneration.load() && !WeatherOverridePending() &&
                          !runtime.pedReferences.RecoveryPending() && !runtime.worldIgnoreRecovery.load() && !runtime.customSequences.RecoveryPending() &&
-                         !runtime.privateHierarchies.RecoveryPending();
+                         !runtime.privateHierarchies.RecoveryPending() && !runtime.privateAssociations.RecoveryPending();
             next.stopping = runtime.stopping.load();
             next.restored = runtime.restored.load() && !runtime.timingDirty.load() && !runtime.timingRecovery.load() && !runtime.weatherRecovery.load() &&
                             !runtime.weatherSuperseded.load() && !runtime.weatherGeneration.load() && !runtime.weaponVectorRecovery.load() &&
@@ -7396,7 +7589,8 @@ namespace mta::game_de
             next.dataRecoveryPending = runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() ||
                                        runtime.weatherRecovery.load() || runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() ||
                                        runtime.weaponVectorGeneration.load() || WeatherOverridePending() || runtime.pedReferences.RecoveryPending() ||
-                                       runtime.worldIgnoreRecovery.load() || (runtime.stopping.load() && NativeLifetimeRetained());
+                                       runtime.worldIgnoreRecovery.load() || runtime.privateAssociations.RecoveryPending() ||
+                                       (runtime.stopping.load() && NativeLifetimeRetained());
             next.protectionRestorePending = runtime.protectionPending.load();
             state = next;
             return true;

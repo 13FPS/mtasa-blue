@@ -18,6 +18,7 @@
 #include <cstring>
 #include <intrin.h>
 #include <limits>
+#include <vector>
 namespace mta::game_de
 {
     namespace AnimationManagerDetail
@@ -1306,5 +1307,125 @@ namespace mta::game_de
             return finish(result);
         receipt.verified = true;
         return finish(ClockResult::Ok);
+    }
+
+    namespace AnimationStaticAssociationLocatorDetail
+    {
+        namespace G = AnimationGroupCreatedDetail;
+        namespace P = NativeAnimationGroupArrayProfile;
+        namespace M = NativeModelReferenceMap;
+        namespace I = NativeImageAccess;
+        using Binding = NativeAnimationManagerMemory::Binding;
+        using CheckOwner = NativeAnimationManagerMemory::CheckOwner;
+        struct Child
+        {
+            std::uintptr_t                rows = 0;
+            std::uint64_t                 capacity = 0;
+            std::array<unsigned char, 32> parent{};
+            bool operator==(const Child& other) const noexcept { return rows == other.rows && capacity == other.capacity && parent == other.parent; }
+        };
+        struct Snapshot
+        {
+            std::uintptr_t     rows = 0;
+            std::uint64_t      capacity = 0;
+            std::int32_t       count = 0;
+            std::vector<Child> children;
+            std::uint32_t      group = 0;
+            std::size_t        index = 0;
+            unsigned           matches = 0;
+        };
+        ClockResult Capture(Binding binding, CheckOwner owner, std::uintptr_t raw, Snapshot& output) noexcept
+        {
+            auto result = G::Begin(binding, owner);
+            if (result != ClockResult::Ok)
+                return result;
+            Snapshot next;
+            if (!I::ReadImage(binding.image, binding.image + P::GlobalRva, &next.rows, 8, true) ||
+                !I::ReadImage(binding.image, binding.image + P::CountRva, &next.count, 4, true))
+                return ClockResult::ReadFailure;
+            if (!next.rows || next.count <= 0)
+                return ClockResult::NotInitialized;
+            // Work admission only, never a native capacity/enum claim.
+            if (next.count > 4096)
+                return ClockResult::Busy;
+            if (next.rows < 8 || next.rows % 8)
+                return ClockResult::BindingChanged;
+            const auto base = next.rows - 8;
+            if (!G::HeapSpan(base, 8) || !M::Copy(base, &next.capacity, 8))
+                return ClockResult::ReadFailure;
+            if (next.capacity > static_cast<std::uint64_t>((std::numeric_limits<std::int32_t>::max)()) ||
+                next.capacity > ((std::numeric_limits<std::size_t>::max)() - 8) / 32 || static_cast<std::uint64_t>(next.count) > next.capacity ||
+                !G::HeapSpan(base, 8 + static_cast<std::size_t>(next.capacity) * 32))
+                return ClockResult::BindingChanged;
+            try
+            {
+                next.children.resize(static_cast<std::size_t>(next.count));
+            }
+            catch (...)
+            {
+                return ClockResult::WriteFailure;
+            }
+            for (std::uint32_t group = 0; group != static_cast<std::uint32_t>(next.count); ++group)
+            {
+                auto& child = next.children[group];
+                if (!M::Copy(next.rows + static_cast<std::uintptr_t>(group) * 32, child.parent.data(), child.parent.size()))
+                    return ClockResult::ReadFailure;
+                std::memcpy(&child.rows, child.parent.data() + 8, 8);
+                if (!child.rows)
+                    continue;
+                if (child.rows < 8 || child.rows % 8 || !G::HeapSpan(child.rows - 8, 8) || !M::Copy(child.rows - 8, &child.capacity, 8))
+                    return ClockResult::ReadFailure;
+                if (child.capacity > static_cast<std::uint64_t>((std::numeric_limits<std::int32_t>::max)()) ||
+                    child.capacity > ((std::numeric_limits<std::size_t>::max)() - 8) / 32 ||
+                    !G::HeapSpan(child.rows - 8, 8 + static_cast<std::size_t>(child.capacity) * 32) ||
+                    !M::Disjoint(base, 8 + static_cast<std::size_t>(next.capacity) * 32, child.rows - 8, 8 + static_cast<std::size_t>(child.capacity) * 32))
+                    return ClockResult::BindingChanged;
+                if (raw >= child.rows && (raw - child.rows) % 32 == 0 && (raw - child.rows) / 32 < child.capacity)
+                {
+                    ++next.matches;
+                    next.group = group;
+                    next.index = static_cast<std::size_t>((raw - child.rows) / 32);
+                }
+            }
+            std::uintptr_t rowsAfter = 0;
+            std::int32_t   countAfter = 0;
+            std::uint64_t  capacityAfter = 0;
+            if (!I::ReadImage(binding.image, binding.image + P::GlobalRva, &rowsAfter, 8, true) ||
+                !I::ReadImage(binding.image, binding.image + P::CountRva, &countAfter, 4, true) || !M::Copy(base, &capacityAfter, 8))
+                return ClockResult::ReadFailure;
+            if (rowsAfter != next.rows || countAfter != next.count || capacityAfter != next.capacity)
+                return ClockResult::BindingChanged;
+            if ((result = G::Begin(binding, owner)) != ClockResult::Ok)
+                return result;
+            output = std::move(next);
+            return ClockResult::Ok;
+        }
+    }
+    ClockResult NativeAnimationManagerMemory::ResolveStaticAssociationReference(std::uintptr_t                                  requested,
+                                                                                NativeAnimationStaticAssociationReferenceToken& output) const noexcept
+    {
+        namespace D = AnimationStaticAssociationLocatorDetail;
+        const auto raw = requested;
+        if (!raw)
+            return ClockResult::InvalidArgument;
+        D::Snapshot first, second;
+        auto        result = D::Capture(binding, owner, raw, first);
+        if (result != ClockResult::Ok || (result = D::Capture(binding, owner, raw, second)) != ClockResult::Ok)
+            return result;
+        if (first.rows != second.rows || first.capacity != second.capacity || first.count != second.count || first.children != second.children ||
+            first.matches != second.matches || first.group != second.group || first.index != second.index)
+            return ClockResult::BindingChanged;
+        if (second.matches > 1)
+            return ClockResult::OwnerConflict;
+        if (!second.matches)
+            return ClockResult::InvalidArgument;
+        NativeAnimationStaticAssociationReferenceToken next;
+        next.groupIndex = second.group;
+        next.index = second.index;
+        next.locator = raw;
+        if ((result = AnimationGroupCreatedDetail::Begin(binding, owner)) != ClockResult::Ok)
+            return result;
+        output = next;
+        return ClockResult::Ok;
     }
 }

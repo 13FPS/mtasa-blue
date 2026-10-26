@@ -18,7 +18,8 @@ namespace mta::game_de
         enum class Kind : std::uint32_t
         {
             SequenceArray,
-            KeyFrames
+            KeyFrames,
+            DynamicAnimation
         };
         enum class State : std::uint32_t
         {
@@ -56,6 +57,7 @@ namespace mta::game_de
 
     private:
         friend struct NativeCustomAnimSequenceStorageAccess;
+        friend struct NativeAnimationAssociationStorageAccess;
         NativeModelReferenceHeap::Value origin{};
         std::uintptr_t                  base = 0, tag = 0, hierarchyAffinity = 0;
         std::size_t                     capacity = 0, bytes = 0;

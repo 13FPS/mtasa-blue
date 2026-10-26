@@ -53,6 +53,7 @@ namespace mta::game_de
         // A lost post-entry acknowledgement must stop without replay/rollback.
         ClockResult WriteStaticAssociation(const NativeAnimationStaticAssociationReferenceToken&, StaticAssociationScalar, std::uint16_t,
                                            StaticAssociationWriteReceipt* = nullptr, StaticAssociationExchange = nullptr) const noexcept;
+        ClockResult ResolveStaticAssociationReference(std::uintptr_t, NativeAnimationStaticAssociationReferenceToken&) const noexcept;
         ClockResult FindBlockIndex(const NativeAnimationBlockName&, std::int32_t&) const noexcept;
 
     private:

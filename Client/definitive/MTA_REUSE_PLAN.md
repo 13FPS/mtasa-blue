@@ -5,6 +5,35 @@ startup, input policy, gameplay, resources and networking. New backend work is
 under `Client/game_de`, with Core consuming its SDK interface. The CLEO/UDP
 experiment remains historical compatibility evidence.
 
+The actual dynamic-association SDK now has eleven partial DE operations
+through a privately issued generation/serial token: static-copy construction,
+interface/ID/group/blend/partial reads, and blend/speed/ID/group/flags setters.
+The shared SDK and its three noexcept getters stay unchanged; the remaining
+eleven operations remain pure. No public association factory is published.
+
+One existing heap owner issues unconstructed 104-byte receiver storage using an
+explicit DynamicAnimation kind. Construction copies a qualified current static
+row and node map into immutable CPU input, admits bank hierarchy/sequence
+membership, and calls the genuine constructor once. Raw source lookup requires
+a unique current parent/child interval match within a 4096-parent work budget;
+that budget is not a native array capacity or a GroupID ownership rule.
+
+Captured native allocation aligns 40-byte nodes to 64 bytes and stores the
+original raw allocation pointer at nodes[-8]; it is not a count cookie. The
+native block-reference effect is acknowledged separately from the visible
+0x4000 flag. Scalar flags cannot silently transfer that resource bit. Explicit
+retirement invokes the genuine deleting destructor once and acknowledges its
+consumption of the existing outer-storage journal without a second free.
+Buffer consumption and reference retirement have separate acknowledgements:
+post-return uncertainty retains the remaining record and callback, even after
+the buffers have been freed. Publication or unknown entered effects never grant
+permission to replay cleanup. Associations retire before dependent storage.
+
+Offline ownership checks execute the exact captured constructor, node allocator
+and destructor bytes only in an owned synthetic image with bounded heap
+callbacks. The original GTA process is never launched or accessed. Clump init,
+private IFP hierarchy publication and a complete CGame remain unfinished.
+
 MTA's inherited GetRpClump getter now uses the existing registered DE ped
 owner through an independent render-read channel on the metadata provider.
 It observes the current common-entity render field at offset0x20, preserving null

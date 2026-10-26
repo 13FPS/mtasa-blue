@@ -5,6 +5,7 @@
  ****************************************************************************/
 #include "NativeCustomAnimSequenceStorage.h"
 #include "NativeCustomAnimSequenceStorageProfile.h"
+#include "NativeAnimationAssociationOuterStorageCalls.h"
 #include "NativeStreamingCompletionContext.h"
 #include "NativeAnimationSequenceRowCalls.h"
 #include "NativeAnimationSequenceRowProfile.h"
@@ -347,7 +348,7 @@ namespace mta::game_de
             if (!base)
             {
                 storage.state.store(State::Released, std::memory_order_release);
-                if (kind == Kind::SequenceArray)
+                if (kind != Kind::KeyFrames)
                     return finish(ClockResult::WriteFailure);
                 // MTA's frame allocator is nullable. A real null return owns
                 // no storage, but still needs the same actual owner/heap
@@ -502,6 +503,24 @@ namespace mta::game_de
             }
             else if (storage.tag != storage.base)
                 return ClockResult::BindingChanged;
+            return ClockResult::Ok;
+        }
+        static ClockResult CaptureDynamicOuter(std::uintptr_t image, const Storage& storage, std::uint64_t generation, CheckOwner owner,
+                                               NativeModelReferenceHeap::Value& output) noexcept
+        {
+            namespace Detail = CustomAnimSequenceStorageDetail;
+            auto result = RowResourceShape(storage, generation, Kind::DynamicAnimation, true);
+            if (result != ClockResult::Ok)
+                return result;
+            if (storage.bytes != 104 || storage.tag != storage.base)
+                return ClockResult::BindingChanged;
+            Detail::Heap::Value current;
+            if ((result = Detail::Capture(image, owner, current)) != ClockResult::Ok)
+                return result;
+            if (current.authority != storage.origin.authority || current.authorityVtable != storage.origin.authorityVtable ||
+                !Detail::Heap::M::PrivateWritable(storage.base, storage.bytes))
+                return ClockResult::BindingChanged;
+            output = current;
             return ClockResult::Ok;
         }
         static ClockResult ReadArrayCapacity(std::uintptr_t image, const Storage& storage, std::uint64_t generation, CheckOwner owner,
@@ -1395,6 +1414,26 @@ namespace mta::game_de
         ClockResult PinPublication(NativeCustomAnimSequenceStorage& storage, std::uint64_t generation, std::uintptr_t affinity) noexcept
         {
             return NativeCustomAnimSequenceStorageAccess::PinPublication(storage, generation, affinity);
+        }
+    }
+    namespace NativeAnimationAssociationOuterStorageCalls
+    {
+        ClockResult Allocate(std::uintptr_t image, NativeCustomAnimSequenceStorage& storage, std::uint64_t generation, CheckOwner owner, Receipt* output,
+                             InvokeMalloc invoke) noexcept
+        {
+            return NativeCustomAnimSequenceStorageAccess::Allocate(image, storage, generation, 104, owner, output, invoke,
+                                                                   NativeCustomAnimSequenceStorage::Kind::DynamicAnimation);
+        }
+        ClockResult FreeUnconstructed(std::uintptr_t image, NativeCustomAnimSequenceStorage& storage, std::uint64_t generation, CheckOwner owner,
+                                      Receipt* output, InvokeFree invoke) noexcept
+        {
+            return NativeCustomAnimSequenceStorageAccess::FreeStorage(image, storage, generation, owner, output, invoke,
+                                                                      NativeCustomAnimSequenceStorage::Kind::DynamicAnimation);
+        }
+        ClockResult Qualify(std::uintptr_t image, const NativeCustomAnimSequenceStorage& storage, std::uint64_t generation, CheckOwner owner,
+                            NativeModelReferenceHeap::Value& output) noexcept
+        {
+            return NativeCustomAnimSequenceStorageAccess::CaptureDynamicOuter(image, storage, generation, owner, output);
         }
     }
     namespace NativeAnimationKeyFrameStorageCalls
